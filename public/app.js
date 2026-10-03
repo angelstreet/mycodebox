@@ -782,11 +782,6 @@ function syncTabs() {
 }
 
 // ---------- sidebar ----------
-const SIDE_GROUPS = [['waiting', 'Needs you'], ['done', 'Done'], ['working', 'Working'], ['idle', 'Idle']];
-function sideGroupOf(n) {
-  const s = stateOf(n);
-  return s === 'waiting' || s === 'done' || s === 'working' ? s : 'idle';
-}
 function repoBranch(n) {
   const st = state.status[n] || {};
   return [st.repo, st.branch].filter(Boolean).join(' · ');
@@ -794,12 +789,11 @@ function repoBranch(n) {
 function sideSig() {
   return state.sessions.map((s) => `${s.name}:${customFor(s.name)}`).join(',');
 }
-// Full rebuild only when the session set / names change; group moves are done in layoutSide().
+// Full rebuild only when the session set / names change; ordering is done in layoutSide().
 function renderSide() {
   const list = els.sessionList;
   if (list.querySelector('li.editing')) return;   // never wipe an in-progress rename
   list.innerHTML = '';
-  state.sideHdr = {};
   els.sessionCount.textContent = `${state.sessions.length}`;
   list.dataset.sig = sideSig();
   for (const s of state.sessions) list.appendChild(buildSideRow(s));
@@ -808,24 +802,14 @@ function renderSide() {
 }
 function layoutSide() {
   const list = els.sessionList;
-  const hdrs = state.sideHdr || (state.sideHdr = {});
   const rows = new Map([...list.children].filter((li) => li.dataset.session).map((li) => [li.dataset.session, li]));
   let cursor = list.firstChild;
   const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
-  for (const [g, label] of SIDE_GROUPS) {
-    const members = state.sessions.filter((s) => sideGroupOf(s.name) === g && matchesFilter(s.name));
-    if (!members.length) {
-      const old = hdrs[g];
-      if (old) { if (old === cursor) cursor = cursor.nextSibling; old.remove(); delete hdrs[g]; }
-      continue;
-    }
-    let h = hdrs[g];
-    if (!h) { h = hdrs[g] = document.createElement('li'); h.className = `grp ${g}`; }
-    const t = `${label} \u00b7 ${members.length}`;
-    if (h.textContent !== t) h.textContent = t;
-    place(h);
-    for (const m of members) { const row = rows.get(m.name); if (row) place(row); }
-  }
+  // flat, alphabetical by shown name: the state badge says the rest, so rows never jump around
+  for (const h of [...list.querySelectorAll('li.grp')]) { if (h === cursor) cursor = cursor.nextSibling; h.remove(); }
+  const shown = (s) => displayName(s.name).toLowerCase();
+  const sorted = [...state.sessions].sort((x, y) => shown(x).localeCompare(shown(y), undefined, { numeric: true }));
+  for (const m of sorted) { const row = rows.get(m.name); if (row) place(row); }
   for (const [n, row] of rows) row.hidden = !matchesFilter(n);
 }
 function buildSideRow(s) {
