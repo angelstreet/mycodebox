@@ -116,17 +116,31 @@ function buildPreview(paneText) {
 }
 
 // ---------- xterm setup ----------
+const MIN_FONT = 6, MAX_FONT = 14;
+const FONT_FAMILY = "'JetBrains Mono', monospace";
+let _charRatio = 0;
+function charRatio() {
+  if (_charRatio) return _charRatio;
+  try {
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = `100px ${FONT_FAMILY}`;
+    const w = ctx.measureText('M').width / 100;
+    if (w > 0.3 && w < 0.9) return (_charRatio = w);
+  } catch {}
+  return 0.6;
+}
+
 function getTerm(session) {
   let entry = state.terms.get(session);
   if (entry) return entry;
   const term = new Terminal({
-    fontFamily: "'JetBrains Mono', monospace",
+    fontFamily: FONT_FAMILY,
     fontSize: 12,
-    lineHeight: 1.25,
-    cursorBlink: true,
+    lineHeight: 1.2,
+    cursorBlink: false,
     cursorStyle: 'bar',
-    convertEol: false,
-    scrollback: 4000,
+    convertEol: true,
+    scrollback: 1000,
     disableStdin: true,
     allowProposedApi: true,
     theme: {
@@ -141,36 +155,128 @@ function getTerm(session) {
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
-  entry = { term, fit };
+  entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, laidOut: '' };
   state.terms.set(session, entry);
   return entry;
 }
 
-function mountTerm(session, host) {
-  const { term, fit } = getTerm(session);
-  host.innerHTML = '';
-  // xterm.js exposes `term.element` only after the first open().
-  // On the first move we let open() create + attach it; on later moves
-  // we reparent the existing element (the safer pattern).
-  if (term.element) {
-    if (term.element.parentNode !== host) host.appendChild(term.element);
-  } else {
-    term.open(host);
+// Size the xterm to the tmux pane's cols exactly; scale the font so those
+// cols fit the host width (crop horizontally below MIN_FONT). Rows come from
+// FitAddon. Returns true if the grid dimensions changed (=> content must be
+// rewritten, since reflow is lossy).
+function layoutTerm(session) {
+  const entry = state.terms.get(session);
+  if (!entry || !entry.host || !entry.term.element || !entry.host.isConnected) return false;
+  const { term, fit, host } = entry;
+  const w = host.clientWidth, h = host.clientHeight;
+  if (w < 20 || h < 20) return false;
+  const cols = entry.paneCols || state.status?.[session]?.cols || 80;
+  host.style.overflow = 'hidden';
+  let fs = Math.floor((w / (cols * charRatio())) * 2) / 2;
+  fs = Math.max(MIN_FONT, Math.min(MAX_FONT, fs));
+  if (term.options.fontSize !== fs) term.options.fontSize = fs;
+  // Verify with xterm's own measurement and step down until the cols fit.
+  for (let i = 0; i < 6 && fs > MIN_FONT; i++) {
+    let p = null;
+    try { p = fit.proposeDimensions(); } catch {}
+    if (!p || p.cols >= cols) break;
+    fs = Math.max(MIN_FONT, fs - 0.5);
+    term.options.fontSize = fs;
   }
-  requestAnimationFrame(() => { try { fit.fit(); } catch {} });
-  setTimeout(() => { try { fit.fit(); } catch {} }, 80);
+  let rows = term.rows;
+  try {
+    const p = fit.proposeDimensions();
+    if (p && p.rows) rows = p.rows;
+  } catch {}
+  rows = Math.max(2, rows);
+  const key = `${cols}x${rows}`;
+  if (term.cols === cols && term.rows === rows) { entry.laidOut = key; return false; }
+  try { term.resize(cols, rows); } catch { return false; }
+  entry.laidOut = key;
+  return true;
 }
 
-function writeToTerm(session, pane) {
-  state.paneText.set(session, pane);
+function relayoutTerm(session) {
   const entry = state.terms.get(session);
   if (!entry) return;
-  // rewrite whole visible pane each tick — xterm.js handles ANSI efficiently
-  entry.term.write('\x1b[2J\x1b[H');
-  entry.term.write(pane);
-  // also refresh preview in grid cards without re-mounting xterm
-  if (state.mode === 'grid') updatePreviewForCell(session, pane);
+  if (layoutTerm(session) && entry.lastPane != null) paintTerm(session, true);
 }
+
+function mountTerm(session, host) {
+  if (!host) return;
+  const entry = getTerm(session);
+  const { term } = entry;
+  try {
+    if (term.element && term.element.parentNode === host && entry.host === host) {
+      // already mounted here
+    } else {
+      // Clear anything else in the host except our own element.
+      for (const ch of Array.from(host.childNodes)) {
+        if (ch !== term.element) host.removeChild(ch);
+      }
+      if (term.element) {
+        host.appendChild(term.element);
+      } else {
+        term.open(host);
+      }
+    }
+  } catch (err) {
+    console.warn('[mountTerm]', session, err);
+    return;
+  }
+  if (entry.host !== host) {
+    entry.host = host;
+    if (entry.ro) entry.ro.disconnect();
+    if (typeof ResizeObserver !== 'undefined') {
+      let raf = 0;
+      entry.ro = new ResizeObserver(() => {
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => relayoutTerm(session));
+      });
+      entry.ro.observe(host);
+    }
+  }
+  requestAnimationFrame(() => relayoutTerm(session));
+  setTimeout(() => relayoutTerm(session), 120);
+  if (entry.lastPane != null) paintTerm(session, true);
+}
+
+// Write clear + content in ONE write() so there is never a blank frame, and
+// keep the user's scroll position if they had scrolled up.
+function paintTerm(session, force) {
+  const entry = state.terms.get(session);
+  if (!entry || entry.lastPane == null || !entry.term.element) return;
+  const { term } = entry;
+  const buf = term.buffer.active;
+  const atBottom = buf.viewportY >= buf.baseY;
+  const fromBottom = buf.baseY - buf.viewportY;
+  let text = entry.lastPane.replace(/\n+$/, '');
+  term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + text, () => {
+    const b = term.buffer.active;
+    if (atBottom) term.scrollToBottom();
+    else term.scrollToLine(Math.max(0, b.baseY - fromBottom));
+  });
+}
+
+function writeToTerm(session, pane, dims) {
+  state.paneText.set(session, pane);
+  const entry = state.terms.get(session);
+  if (entry) {
+    let relaid = false;
+    if (dims && dims.cols && dims.cols !== entry.paneCols) {
+      entry.paneCols = dims.cols;
+      relaid = layoutTerm(session);
+    }
+    if (force_skip(entry, pane) && !relaid) {
+      // identical text and same grid: nothing to do
+    } else {
+      entry.lastPane = pane;
+      paintTerm(session);
+    }
+  }
+  onPane(session, pane);
+}
+function force_skip(entry, pane) { return entry.lastPane === pane; }
 
 function updatePreviewForCell(session, pane) {
   const cell = els.gridPane.querySelector(`[data-session="${cssEscape(session)}"]`);
@@ -182,24 +288,56 @@ function updatePreviewForCell(session, pane) {
 }
 
 // ---------- WebSocket ----------
+function wantSession(session) {
+  // Before the first status/session list we can't know; after, only connect
+  // sockets for sessions that exist.
+  const known = Object.keys(state.status || {});
+  return !known.length || known.includes(session);
+}
+
+function closeStale() {
+  const known = Object.keys(state.status || {});
+  if (!known.length) return;
+  for (const [name, ws] of Array.from(state.ws.entries())) {
+    if (!known.includes(name)) {
+      state.ws.delete(name);
+      try { ws.close(); } catch {}
+    }
+  }
+}
+
 function connectSession(session) {
-  if (state.ws.get(session)?.readyState === 1) return;
+  if (!wantSession(session)) return;
+  const cur = state.ws.get(session);
+  if (cur && (cur.readyState === 0 || cur.readyState === 1)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(session)}`);
-  ws.binaryType = 'arraybuffer';
+  let tries = (cur && cur._tries) || 0;
+  ws._tries = tries;
+  ws.onopen = () => { ws._tries = 0; };
   ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data);
-      if (msg.type === 'snapshot') writeToTerm(msg.session, msg.pane);
+      if (msg.type === 'snapshot') writeToTerm(msg.session, msg.pane, { cols: msg.cols, rows: msg.rows });
     } catch {}
   };
-  ws.onclose = () => { state.ws.delete(session); setTimeout(() => connectSession(session), 2000); };
-  ws.onerror = () => ws.close();
+  ws.onclose = () => {
+    if (state.ws.get(session) === ws) state.ws.delete(session);
+    else return;               // superseded / intentionally closed
+    if (!wantSession(session)) return;
+    const delay = Math.min(15000, 2000 * Math.pow(1.6, ws._tries || 0));
+    setTimeout(() => {
+      connectSession(session);
+      const next = state.ws.get(session);
+      if (next) next._tries = (ws._tries || 0) + 1;
+    }, delay);
+  };
+  ws.onerror = () => { try { ws.close(); } catch {} };
   state.ws.set(session, ws);
 }
 
 function connectStatus() {
-  if (state.statusWs?.readyState === 1) return;
+  if (state.statusWs && (state.statusWs.readyState === 0 || state.statusWs.readyState === 1)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/status`);
   ws.onmessage = (ev) => {
@@ -207,14 +345,16 @@ function connectStatus() {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'status') {
         state.status = msg.status;
-        renderTabs();
-        renderSideList();
-        updateAllHeaders();
-        renderDocState();
+        closeStale();
+        for (const name of state.terms.keys()) relayoutTerm(name);
+        onStatus();
+      } else if (msg.type === 'leases') {
+        onLeases(msg.leases);
       }
     } catch {}
   };
   ws.onclose = () => { state.statusWs = null; setTimeout(connectStatus, 2000); };
+  ws.onerror = () => { try { ws.close(); } catch {} };
   state.statusWs = ws;
 }
 
@@ -571,9 +711,7 @@ els.sendInput.onkeydown = (e) => {
 };
 
 window.addEventListener('resize', () => {
-  for (const { fit } of state.terms.values()) {
-    try { fit.fit(); } catch {}
-  }
+  for (const name of state.terms.keys()) relayoutTerm(name);
 });
 
 document.addEventListener('visibilitychange', () => {
