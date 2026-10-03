@@ -1,17 +1,22 @@
 // Subscription quota (TASK-44 phase 5): how full the plans' windows are, read-only and cheap.
-//   codex    newest `rate_limits` event at the tail of the newest ~/.codex/sessions/**/*.jsonl
+//   codex    `codex app-server` (JSON-RPC over stdio), method account/rateLimits/read: the account's live
+//            5 h / weekly windows. Makes no model call. Polled every 5 minutes.
 //   claude   $GHOSTY_STATE_DIR/claude-rate-limits.json, written by scripts/claude-statusline-ratelimits.sh
 //            (Claude Code hands `rate_limits` to a status-line command; there is no limit file on disk)
-//   minimax  token counts from ~/.minimax/v2/sqlite/runtime-state.sqlite (it stores no plan limit,
-//            so usedPercent is null and the tokens are reported instead)
-// Each plan: { plan, label, price, windows:[{name, usedPercent, resetsAt, ...}], source, at, stale, note? }
-// Never reads credentials and never types into a session.
+//   minimax  the HTTPS calls mcode's /usage makes, with mcode's stored login (read at request time, in
+//            memory only). Polled every 5 minutes. It never refreshes the login: an expired one is
+//            reported as stale until mcode is opened once.
+// Each plan: { plan, label, price, windows:[{name, usedPercent, resetsAt, unlimited?}], source, at, stale, error?, note? }
+// A failed read keeps the last good value with stale:true and an error. Never types into a session.
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 
-const TAIL_BYTES = 256 * 1024;
-const HOUR = 3600e3;
+export const POLL_MS = 5 * 60e3;   // Codex and MiniMax are asked at most this often; polls in between serve the cache
+const CODEX_TIMEOUT_MS = 20e3;
+const HTTP_TIMEOUT_MS = 10e3;
 
 export const WARN_PCT = 80;     // alert when a window crosses this
 export const REARM_PCT = 70;    // and again only after it dropped below this
@@ -20,9 +25,10 @@ export function defaults(env = process.env) {
   const home = homedir();
   const stateDir = env.GHOSTY_STATE_DIR || join(home, '.local/state/ghosty');
   return {
-    codexDir: env.CODEX_SESSIONS_DIR || join(home, '.codex/sessions'),
-    minimaxDb: env.MINIMAX_DB || join(home, '.minimax/v2/sqlite/runtime-state.sqlite'),
+    codexCmd: { file: env.CODEX_BIN || join(home, '.local/bin/codex'), args: ['app-server'] },
+    minimaxAuthFile: env.MINIMAX_AUTH_FILE || join(home, '.minimax/auth/prod/en/mcode-public/auth.json'),
     claudeFile: env.CLAUDE_RATE_LIMITS_FILE || join(stateDir, 'claude-rate-limits.json'),
+    fetch: (...a) => fetch(...a),
     now: () => Date.now(),
   };
 }
@@ -32,69 +38,88 @@ const pctOf = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 
 // A window whose reset time has passed has been refilled since the reading: report it as 0 / expired.
 function finishWindow(w, now) {
+  if (w.unlimited) return w;
   if (w.resetsAt != null && w.resetsAt * 1000 <= now) return { ...w, usedPercent: 0, resetsAt: null, expired: true };
   return w;
 }
 
-// Newest `rate_limits` object in a chunk of rollout text: { at, plan_type, windows[] } | null.
-export function parseCodexRateLimits(text) {
-  const lines = String(text).split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const l = lines[i];
-    if (!l.includes('"rate_limits"')) continue;
-    let o; try { o = JSON.parse(l); } catch { continue; }   // the first line of a tail can be cut off
-    const rl = o?.payload?.rate_limits || o?.rate_limits;
-    if (!rl || typeof rl !== 'object') continue;
-    const windows = [];
-    for (const k of ['primary', 'secondary']) {
-      const w = rl[k];
-      if (!w || !Number.isFinite(w.window_minutes)) continue;
-      windows.push({ name: winName(w.window_minutes), minutes: w.window_minutes, usedPercent: pctOf(w.used_percent), resetsAt: Number.isFinite(w.resets_at) ? w.resets_at : null });
-    }
-    if (windows.length) return { at: Date.parse(o.timestamp) || null, planType: rl.plan_type || null, windows };
+// ---- Codex ----
+function windowsOf(rl) {
+  const windows = [];
+  for (const k of ['primary', 'secondary']) {
+    const w = rl?.[k];
+    if (!w || !Number.isFinite(w.windowDurationMins)) continue;
+    windows.push({ name: winName(w.windowDurationMins), minutes: w.windowDurationMins, usedPercent: pctOf(w.usedPercent), resetsAt: Number.isFinite(w.resetsAt) ? w.resetsAt : null });
   }
-  return null;
+  return windows;
 }
 
-async function readTail(path, bytes = TAIL_BYTES) {
-  const fh = await fs.open(path, 'r');
+// One round trip with `codex app-server`: initialize -> initialized -> account/rateLimits/read, then the
+// child is killed. Resolves to result.rateLimits. No shell; the child never sees a model request.
+export function askCodex(cmd, { timeoutMs = CODEX_TIMEOUT_MS, cwd = homedir() } = {}) {
+  return new Promise((resolve, reject) => {
+    let child, done = false;
+    const finish = (err, val) => {
+      if (done) return; done = true;
+      clearTimeout(timer);
+      try { child?.kill('SIGKILL'); } catch {}
+      err ? reject(err) : resolve(val);
+    };
+    const timer = setTimeout(() => finish(new Error(`codex app-server timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+    try { child = spawn(cmd.file, cmd.args || ['app-server'], { cwd, stdio: ['pipe', 'pipe', 'ignore'], shell: false }); }
+    catch (e) { return finish(e); }
+    child.on('error', (e) => finish(e));
+    child.on('exit', (code) => finish(new Error(`codex app-server exited (${code}) before answering`)));
+    child.stdin.on('error', () => {});
+    const send = (o) => child.stdin.write(JSON.stringify(o) + '\n');
+    createInterface({ input: child.stdout }).on('line', (line) => {
+      let m; try { m = JSON.parse(line); } catch { return; }
+      if (m.id === 1) {
+        if (m.error) return finish(new Error(`codex initialize: ${m.error.message || 'error'}`));
+        send({ jsonrpc: '2.0', method: 'initialized' });
+        send({ jsonrpc: '2.0', id: 2, method: 'account/rateLimits/read' });
+      } else if (m.id === 2) {
+        if (m.error) return finish(new Error(`codex rateLimits: ${m.error.message || 'error'}`));
+        const rl = m.result?.rateLimits;
+        rl ? finish(null, rl) : finish(new Error('codex rateLimits: no rateLimits in the reply'));
+      }
+    });
+    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'ghosty-quota', version: '0.1' } } });
+  });
+}
+
+// Last good reading per source, so a failed poll can still show it (stale) with the error.
+const good = new WeakMap();   // keyed per cfg object
+const stateOf = (cfg, key) => {
+  let m = good.get(cfg); if (!m) good.set(cfg, m = {});
+  return (m[key] ||= { value: null, at: 0 });
+};
+// Serve the cached reading inside POLL_MS; otherwise ask. On failure: last good + stale + error.
+async function cachedRead(cfg, key, now, base, ask) {
+  const st = stateOf(cfg, key);
+  if (st.value && now - st.at < POLL_MS) return st.value;
   try {
-    const { size } = await fh.stat();
-    const len = Math.min(size, bytes);
-    const buf = Buffer.alloc(len);
-    await fh.read(buf, 0, len, size - len);
-    return buf.toString('utf8');
-  } finally { await fh.close(); }
-}
-
-// Rollout files, newest day directory first (YYYY/MM/DD), each day's files newest mtime first.
-async function* rolloutsNewestFirst(root) {
-  const sub = async (d) => { try { return (await fs.readdir(d)).filter((x) => /^\d+$/.test(x)).sort().reverse(); } catch { return []; } };
-  for (const y of await sub(root)) for (const m of await sub(join(root, y))) for (const d of await sub(join(root, y, m))) {
-    const dir = join(root, y, m, d);
-    let files = [];
-    try { files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
-    const withTime = [];
-    for (const f of files) { try { withTime.push([f, (await fs.stat(join(dir, f))).mtimeMs]); } catch {} }
-    withTime.sort((a, b) => b[1] - a[1]);
-    for (const [f, mtime] of withTime) yield { path: join(dir, f), mtime };
+    const value = await ask();
+    st.value = value; st.at = now;
+    return value;
+  } catch (e) {
+    const err = e?.message || String(e);
+    if (!st.value) return { ...base, error: err };
+    st.value = { ...st.value, stale: true, error: err };
+    st.at = now - POLL_MS;   // a failure is not cached: the next poll asks again
+    return st.value;
   }
 }
 
 export async function readCodex(cfg, now) {
-  const base = { plan: 'codex', label: 'Codex', price: '20 EUR/month (ChatGPT Plus)', windows: [], source: 'codex rollout', at: null, stale: true };
-  try {
-    let tried = 0;
-    for await (const f of rolloutsNewestFirst(cfg.codexDir)) {
-      const r = parseCodexRateLimits(await readTail(f.path));
-      if (r) {
-        const at = r.at || f.mtime;
-        return { ...base, windows: r.windows.map((w) => finishWindow(w, now)), at, stale: now - at > 10 * 60e3, planType: r.planType };
-      }
-      if (++tried >= 5) break;   // the newest few rollouts without a rate_limits event: give up for this poll
-    }
-    return { ...base, note: 'no rate_limits event in the newest Codex sessions' };
-  } catch (e) { return { ...base, note: e.code === 'ENOENT' ? 'no Codex sessions directory' : `codex: ${e.message}` }; }
+  const base = { plan: 'codex', label: 'Codex', price: '20 EUR/month (ChatGPT Plus)', windows: [], source: 'codex app-server', at: null, stale: true };
+  const out = await cachedRead(cfg, 'codex', now, base, async () => {
+    const rl = await askCodex(cfg.codexCmd);
+    const windows = windowsOf(rl);
+    if (!windows.length) throw new Error('codex rateLimits: no windows in the reply');
+    return { ...base, windows, at: now, stale: false, planType: rl.planType || null };
+  });
+  return { ...out, windows: out.windows.map((w) => finishWindow(w, now)) };
 }
 
 export async function readClaude(cfg, now) {
@@ -112,22 +137,61 @@ export async function readClaude(cfg, now) {
   return { ...base, windows, at, stale: !at || now - at > 30 * 60e3, note: windows.length ? undefined : 'no rate_limits in the last status-line input (needs a Pro/Max login and one reply)' };
 }
 
-export async function readMinimax(cfg, now) {
-  const base = { plan: 'minimax', label: 'MiniMax', price: '40 EUR/month (Token Plan)', windows: [], source: 'minimax runtime sqlite', at: null, stale: true,
-    note: 'no plan limit is stored locally - tokens only' };
+// ---- MiniMax ----
+// The usage call mcode's /usage makes: a plain bearer-token GET on platform.minimax.io. (Plan name and
+// expiry would need mcode's signed client calls; deliberately not replicated.)
+const MM_QUOTA_URL = 'https://platform.minimax.io/v1/api/openplatform/coding_plan/remains';
+const isObj = (o) => o && typeof o === 'object' && !Array.isArray(o);
+
+// Default token reader: mcode's login file, read now and never kept. { accessToken, expiresAtMs } | null.
+export async function readMinimaxLogin(file) {
+  const j = JSON.parse(await fs.readFile(file, 'utf8'));
+  const rec = Object.entries(j?.records || {}).find(([k, v]) => k.startsWith('com.minimax.mcode.oauth.') && typeof v?.accessToken === 'string');
+  return rec ? { accessToken: rec[1].accessToken, expiresAtMs: Number(rec[1].expiresAtMs) || null } : null;
+}
+
+async function httpJson(cfg, url, init) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), HTTP_TIMEOUT_MS);
   try {
-    await fs.access(cfg.minimaxDb);
-    const { DatabaseSync } = await import('node:sqlite');
-    const db = new DatabaseSync(cfg.minimaxDb, { readOnly: true });
-    try {
-      const d = new Date(now);
-      const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-      const q = db.prepare('SELECT COALESCE(SUM(input_tokens),0) AS input, COALESCE(SUM(output_tokens),0) AS output, COALESCE(SUM(cache_read_tokens),0) AS cacheRead, COUNT(*) AS turns FROM local_runtime_token_usage WHERE ts >= ?');
-      const last = db.prepare('SELECT MAX(ts) AS ts FROM local_runtime_token_usage').get().ts;
-      const win = (name, since) => ({ name, usedPercent: null, resetsAt: null, ...q.get(since) });
-      return { ...base, windows: [win('5h', now - 5 * HOUR), win('month', monthStart)], at: now, stale: false, lastUsedAt: last || null };
-    } finally { db.close(); }
-  } catch (e) { return { ...base, note: e.code === 'ENOENT' ? 'no MiniMax database' : `minimax: ${e.message}` }; }
+    const r = await cfg.fetch(url, { ...init, signal: ac.signal });
+    if (r.status === 401 || r.status === 403) throw new Error('mcode login expired — open mcode once');
+    if (!r.ok) throw new Error(`minimax HTTP ${r.status}`);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+// One interval/weekly entry of model_remains -> window. status 3 = unlimited.
+export function minimaxWindow(e, name, kind) {
+  const p = kind === 'interval' ? 'current_interval' : 'current_weekly';
+  const end = Number(e[kind === 'interval' ? 'end_time' : 'weekly_end_time']);
+  const resetsAt = end > 0 ? Math.round(end / 1000) : null;
+  if (e[`${p}_status`] === 3) return { name, usedPercent: null, resetsAt, unlimited: true };
+  let remaining = Number(e[`${p}_remaining_percent`]);
+  if (!Number.isFinite(remaining)) {
+    const total = Number(e[`${p}_total_count`]), used = Number(e[`${p}_usage_count`]);
+    remaining = total > 0 && Number.isFinite(used) ? 100 - (used / total) * 100 : NaN;
+  }
+  return { name, usedPercent: Number.isFinite(remaining) ? pctOf(100 - Math.min(100, Math.max(0, remaining))) : null, resetsAt };
+}
+
+export function parseMinimaxRemains(body) {
+  const code = body?.base_resp?.status_code;
+  if (typeof code === 'number' && code !== 0) throw new Error(`minimax status ${code}`);
+  const e = Array.isArray(body?.model_remains) ? body.model_remains.find(isObj) : null;
+  if (!e) throw new Error('minimax: no model_remains in the reply');
+  return [minimaxWindow(e, '5h', 'interval'), minimaxWindow(e, 'week', 'weekly')];
+}
+
+export async function readMinimax(cfg, now) {
+  const base = { plan: 'minimax', label: 'MiniMax', price: '40 EUR/month (Token Plan)', windows: [], source: 'minimax coding_plan/remains', at: null, stale: true };
+  return cachedRead(cfg, 'minimax', now, base, async () => {
+    const login = await (cfg.minimaxLogin ? cfg.minimaxLogin() : readMinimaxLogin(cfg.minimaxAuthFile));
+    if (!login?.accessToken) throw new Error('mcode login expired — open mcode once');
+    if (login.expiresAtMs && login.expiresAtMs <= now) throw new Error('mcode login expired — open mcode once');
+    const body = await httpJson(cfg, MM_QUOTA_URL, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${login.accessToken}` } });
+    return { ...base, windows: parseMinimaxRemains(body), at: now, stale: false };
+  }).then((out) => ({ ...out, windows: out.windows.map((w) => finishWindow(w, now)) }));
 }
 
 // Edge-triggered alerts: one when a window crosses WARN_PCT, re-armed only after it is back under

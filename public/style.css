@@ -987,3 +987,4 @@ button.prio{ cursor:pointer; }
 .ubar .uw2 i{ display:block; height:100%; background:var(--working); }
 .ubar .uv{ width:76px; text-align:right; white-space:nowrap; }
 a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-decoration:none; color:inherit; }
+.mnote.warn{ color:var(--accent); }

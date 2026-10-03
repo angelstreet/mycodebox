@@ -122,7 +122,6 @@ a waiting session is covered by the existing "needs you" push.
 | `disabledSessions` | `[]` | sessions the manager ignores (tick them off in the panel) |
 | `policyEnabled` | `true` | quota policy by priority (below) |
 | `p1MaxPct` / `p2MaxPct` | `80` / `80` | 5 h fill at which P1 / P2 sessions are held |
-| `minimaxMonthlyTokenBudget` | `null` | MiniMax tokens per month; with it set, month tokens / budget counts as MiniMax's fill, without it MiniMax quota is unknown and never holds |
 
 The robot icon in the top bar opens the manager panel: global auto-answer switch, per-case
 checkboxes, per-session on/off, today's answered / cancelled / escalated counts and the last 30
@@ -176,18 +175,22 @@ does not ping you about it. `{"paused":false}` clears the hold and types `contin
 logged to `stalls.jsonl` as `{type:'pause'|'resume', session, by:'owner'}`. Ghosty never kills, renames or
 starts sessions on its own.
 
-**Quota.** `quota.js` polls every 60 s (`GET /api/quota`, also pushed on `/ws/status` as `{type:'quota'}`);
-the row under the health strip reads `codex 5h 2% wk 0% . claude ? . minimax ...`, amber from 80 %, red
+**Quota.** `quota.js` runs every 60 s, Codex and MiniMax are really asked only every 5 minutes (cached in between) (`GET /api/quota`, also pushed on `/ws/status` as `{type:'quota'}`);
+the row under the health strip reads `codex 5h 0% wk 32% . claude ? . minimax 5h 2% wk ∞`, amber from 80 %, red
 from 95 %, tap for reset times. One push alert when a window crosses 80 %, re-armed below 70 % (the first
 reading after a restart only seeds, it does not alert).
 
 | plan | source | notes |
 |---|---|---|
-| Codex (Plus, 20 EUR/month) | newest `rate_limits` at the tail of the newest `~/.codex/sessions/**/*.jsonl` | 5h = `primary` (300 min), week = `secondary` (10080 min); a window whose reset time has passed reads 0 % (`expired`) |
+| Codex (Plus, 20 EUR/month) | live account read: `codex app-server` over stdio JSON-RPC (`initialize`, `initialized`, `account/rateLimits/read`), killed after the answer, 20 s timeout, no model call | 5h = `primary` (300 min), week = `secondary` (10080 min); a window whose reset time has passed reads 0 % (`expired`) |
 | Claude Max (200 EUR/month) | `$GHOSTY_STATE_DIR/claude-rate-limits.json` written by `scripts/claude-statusline-ratelimits.sh` | no limit file exists on disk; Claude Code passes `rate_limits` (`five_hour`, `seven_day`: `used_percentage`, `resets_at`, Pro/Max logins, after the first reply) to its status-line command. Shows `?` until the script is installed as the status line |
-| MiniMax (Token Plan, 40 EUR/month) | token sums from `~/.minimax/v2/sqlite/runtime-state.sqlite` (read-only) | the runtime stores no plan limit, so `usedPercent` is `null`: tokens in the last 5 h and this calendar month are shown instead |
+| MiniMax (Token Plan) | the calls mcode's `/usage` makes: `GET platform.minimax.io/v1/api/openplatform/coding_plan/remains` with mcode's stored login as bearer token (read per request, in memory, never logged or kept) (plan name/expiry are not read: that needs mcode's signed client calls, deliberately not replicated) | 5h used % = 100 - remaining %; week is `unlimited:true` (no %, never triggers the weekly-projection hold) or a %. The login is never refreshed: when mcode's access token has expired the plan shows the last value as stale with `mcode login expired — open mcode once` |
 
-Env: `CODEX_SESSIONS_DIR`, `MINIMAX_DB`, `CLAUDE_RATE_LIMITS_FILE` override the paths.
+A failed read keeps the last good value with `stale:true` and an `error` (the quota sheet shows it); a stale plan
+never holds a session. The quota sheet shows each plan's subscription and "unlimited" weekly windows.
+
+Env: `CODEX_BIN` (default `~/.local/bin/codex`), `MINIMAX_AUTH_FILE` (mcode login file, default the `en`/prod one),
+`CLAUDE_RATE_LIMITS_FILE` override the paths.
 
 Claude status line: in `~/.claude/settings.json` set
 `"statusLine": {"type": "command", "command": "/home/<user>/ghosty-sessions/scripts/claude-statusline-ratelimits.sh"}`

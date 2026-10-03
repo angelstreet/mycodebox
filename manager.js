@@ -5,7 +5,7 @@
 //
 // State lives in $GHOSTY_STATE_DIR (default ~/.local/state/ghosty):
 //   manager.json   { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, disabledSessions,
-//                    policyEnabled, p1MaxPct, p2MaxPct, minimaxMonthlyTokenBudget }  (policy: public/policy.js)
+//                    policyEnabled, p1MaxPct, p2MaxPct }  (policy: public/policy.js)
 //   stalls.jsonl   {type:'stall'} per stall, {type:'answer'} / {type:'answer_cancelled'} / {type:'escalated'},
 //                  {type:'hold'|'resume', by:'manager'|'owner'} for quota holds (phase 6),
 //                  and one {type:'outcome'} line when the session moves on
@@ -64,7 +64,7 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, log ${LOG_FILE}`);
 }
 
-export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct, minimaxMonthlyTokenBudget: config.minimaxMonthlyTokenBudget });
+export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct });
 
 export function managerConfig() {
   return { ...config, validCases: AUTO_CASES, jev: !!JEV_URL, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS } };
@@ -77,7 +77,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, minimaxMonthlyTokenBudget } = b;
+  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -90,7 +90,6 @@ export async function setManagerConfig(b = {}) {
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
   if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');
   if (p2MaxPct !== undefined) config.p2MaxPct = num(p2MaxPct, 1, 100, 'p2MaxPct');
-  if (minimaxMonthlyTokenBudget !== undefined) config.minimaxMonthlyTokenBudget = minimaxMonthlyTokenBudget === null ? null : num(minimaxMonthlyTokenBudget, 1, 1e15, 'minimaxMonthlyTokenBudget');
   if (session && typeof sessionEnabled === 'boolean') {
     const set = new Set(config.disabledSessions);
     if (sessionEnabled) set.delete(session); else set.add(session);

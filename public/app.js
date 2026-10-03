@@ -1744,7 +1744,7 @@ function pickPriority(n) {
   });
 }
 
-// Quota row: "codex 5h 2% · wk 0% · claude ? · minimax 1.2M/5h". Amber >= 80 %, red >= 95 %.
+// Quota row: "codex 5h 2% · wk 32% · claude ? · minimax 5h 2% wk ∞". Amber >= 80 %, red >= 95 %.
 const qLevel = (p) => (p == null ? 'na' : p >= 95 ? 'crit' : p >= 80 ? 'warn' : 'ok');
 const winShort = (n) => (n === 'week' ? 'wk' : n === 'month' ? 'mo' : n);
 function onQuota(q) {
@@ -1755,7 +1755,7 @@ function onQuota(q) {
     const short = p.plan;
     if (!p.windows.length) return `<span class="qi na"><b>${short}</b> ?</span>`;
     const ws = p.windows.map((w) => {
-      if (w.usedPercent == null) return `<span class="qi na">${winShort(w.name)} ${fmtTok((w.input || 0) + (w.output || 0))} tok</span>`;
+      if (w.usedPercent == null) return `<span class="qi na">${winShort(w.name)} ${w.unlimited ? '&infin;' : '?'}</span>`;
       return `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`;
     });
     return `<b>${short}</b> ${ws.join(' ')}`;
@@ -1780,11 +1780,13 @@ function openQuota() {
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     body.innerHTML = q.plans.map((p) => `
       <div class="qplan">
-        <div class="qh"><b>${escapeHtml(p.label)}</b><span class="dim">${escapeHtml(p.price)}</span></div>
+        <div class="qh"><b>${escapeHtml(p.label)}</b><span class="dim">${escapeHtml(p.planName || p.price)}</span></div>
+        ${p.expires ? `<div class="mnote">plan expires ${new Date(p.expires).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}</div>` : ''}
         ${p.windows.map((w) => w.usedPercent == null
-          ? `<div class="qw na"><span>${escapeHtml(w.name)}</span><span>${fmtTok(w.input || 0)} in / ${fmtTok(w.output || 0)} out${w.cacheRead ? ` / ${fmtTok(w.cacheRead)} cache` : ''} - ${w.turns} turns</span></div>`
+          ? `<div class="qw na"><span>${escapeHtml(w.name)}</span><span>${w.unlimited ? 'unlimited' : 'unknown'}</span>${w.unlimited ? '' : `<span class="dim">${escapeHtml(resetText(w))}</span>`}</div>`
           : `<div class="qw ${qLevel(w.usedPercent)}"><span>${escapeHtml(w.name)}</span><span class="qbar"><i style="width:${Math.min(100, w.usedPercent)}%"></i></span><span>${Math.round(w.usedPercent)}%</span><span class="dim">${escapeHtml(resetText(w))}</span></div>`).join('')}
         ${p.note ? `<div class="mnote">${escapeHtml(p.note)}</div>` : ''}
+        ${p.error ? `<div class="mnote warn">${escapeHtml(p.error)}</div>` : ''}
         <div class="mnote">${escapeHtml(p.source)}${p.at ? `, read ${new Date(p.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}` : ''}${p.stale && p.windows.length ? ' (not live)' : ''}</div>
       </div>`).join('');
   });
@@ -1861,7 +1863,7 @@ function openManager() {
         <div class="mnote">sends after ${Math.round(cfg.delayMs / 1000)}s (cancel from the pill) · Jev answers need ≥ ${cfg.minConfidence} · max ${cfg.maxPerSessionPerHour}/h per session · never deploy / push / delete / secrets / money</div>
         <div class="side-sub">Quota policy</div>
         <button class="mswitch${cfg.policyEnabled ? ' on' : ''}" data-set="policyEnabled"><i></i><span>Policy <b>${cfg.policyEnabled ? 'ON' : 'OFF'}</b></span></button>
-        <div class="mnote">P0 always continues · P1 while the 5h window is under ${cfg.p1MaxPct}% · P2 is held at its next stop when 5h ≥ ${cfg.p2MaxPct}% or the week would run out before reset${cfg.minimaxMonthlyTokenBudget ? ` · MiniMax budget ${fmtTok(cfg.minimaxMonthlyTokenBudget)} tok/month` : ' · MiniMax has no limit set (never held)'} · a hold never interrupts a working session</div>
+        <div class="mnote">P0 always continues · P1 while the 5h window is under ${cfg.p1MaxPct}% · P2 is held at its next stop when 5h ≥ ${cfg.p2MaxPct}% or the week would run out before reset · a hold never interrupts a working session</div>
         <div class="mheld">${heldNow.map((n) => `<div class="mh"><b>${escapeHtml(displayName(n))}</b> ${escapeHtml(prioOf(n))} <span class="dim">${escapeHtml(state.status[n].held.reason)}</span></div>`).join('') || '<div class="dim">no session held</div>'}</div>
         <div class="mcounts"><span class="sent"><b>${t.answered ?? 0}</b> answered</span><span class="canc"><b>${t.cancelled ?? 0}</b> cancelled</span><span class="esc"><b>${t.escalated ?? 0}</b> escalated</span><span class="dim">today</span></div>
         <div class="side-sub">Last ${entries.length}</div>
@@ -1897,7 +1899,7 @@ function quotaOfAgent(a) {
   const p = state.quota?.plans?.find((x) => x.plan === a);
   if (!p || !p.windows?.length) return `<span class="dim">quota ?</span>`;
   return p.windows.map((w) => w.usedPercent == null
-    ? `<span class="qi na">${winShort(w.name)} ${fmtTok((w.input || 0) + (w.output || 0))} tok</span>`
+    ? `<span class="qi na">${winShort(w.name)} ${w.unlimited ? '&infin;' : '?'}</span>`
     : `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`).join(' ');
 }
 function usageHtml(u, tab) {

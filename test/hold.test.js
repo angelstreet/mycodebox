@@ -139,7 +139,6 @@ test('hold survives a restart (persisted in session-meta)', () => {
 
 test('config validation', async () => {
   await assert.rejects(m.setManagerConfig({ p2MaxPct: 500 }), /p2MaxPct/);
-  const c = await m.setManagerConfig({ minimaxMonthlyTokenBudget: 5e6 });
-  assert.equal(c.minimaxMonthlyTokenBudget, 5e6);
-  assert.equal((await m.setManagerConfig({ minimaxMonthlyTokenBudget: null })).minimaxMonthlyTokenBudget, null);
+  assert.equal((await m.setManagerConfig({ p2MaxPct: 70 })).p2MaxPct, 70);
+  await m.setManagerConfig({ p2MaxPct: 80 });
 });

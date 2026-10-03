@@ -106,7 +106,7 @@ MiniMax has no stored plan limit: tokens only. Deploy = merge + restart `ghosty-
 pressure gets a manager hold (`held` in `sessions.json`, apart from the owner's `paused`), logged
 `{type:'hold'|'resume', by:'manager'}` and pushed; released on every 60 s quota poll when the policy allows.
 The new-session dialog has a priority picker (default P2, saved) and preselects the suggested agent
-(suggestion only). Config keys `policyEnabled`, `p1MaxPct`, `p2MaxPct`, `minimaxMonthlyTokenBudget` in
+(suggestion only). Config keys `policyEnabled`, `p1MaxPct`, `p2MaxPct` in
 `manager.json`. Deploy = merge + restart `ghosty-sessions`; SW cache is v11.
 
 **Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,

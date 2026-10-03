@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { evaluatePolicy as ev, suggestAgent, shortPercent } from '../public/policy.js';
+import { evaluatePolicy as ev, suggestAgent, shortPercent, weeklyProjection } from '../public/policy.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const DAY = 86400;
@@ -78,16 +78,23 @@ test('policy is per agent: codex quota does not hold a claude session', () => {
   assert.equal(run('P2', q(cx, claude(10)), 'codex').action, 'hold');
 });
 
-test('minimax: tokens only, unknown unless a monthly budget is set', () => {
-  const mm = plan('minimax', 'MiniMax', [{ name: '5h', usedPercent: null, input: 1e6, output: 1e6 }, { name: 'month', usedPercent: null, input: 4e6, output: 4.5e6 }]);
-  assert.equal(shortPercent(mm, {}), null);
-  assert.equal(run('P2', q(mm), 'minimax').reason, 'quota unknown');
-  const cfg = { minimaxMonthlyTokenBudget: 10e6 };
-  assert.equal(shortPercent(mm, cfg), 85);
-  assert.equal(run('P2', q(mm), 'minimax', cfg).action, 'hold');
-  assert.equal(run('P1', q(mm), 'minimax', cfg).action, 'hold');
-  assert.equal(run('P0', q(mm), 'minimax', cfg).action, 'allow');
-  assert.equal(run('P2', q(mm), 'minimax', { minimaxMonthlyTokenBudget: 20e6 }).action, 'allow');
+test('minimax: 5h percent drives the policy like any plan', () => {
+  const mm = (p) => plan('minimax', 'MiniMax', [win('5h', p), { name: 'week', usedPercent: null, unlimited: true, resetsAt: nowS + 3 * DAY }]);
+  assert.equal(shortPercent(mm(85)), 85);
+  assert.equal(run('P2', q(mm(85)), 'minimax').action, 'hold');
+  assert.equal(run('P1', q(mm(85)), 'minimax').action, 'hold');
+  assert.equal(run('P0', q(mm(85)), 'minimax').action, 'allow');
+  assert.equal(run('P2', q(mm(10)), 'minimax').action, 'allow');
+});
+
+test('an unlimited weekly window never triggers the weekly-projection hold', () => {
+  const unl = (resetsIn) => plan('minimax', 'MiniMax', [win('5h', 2), { name: 'week', usedPercent: null, unlimited: true, resetsAt: nowS + resetsIn }]);
+  for (const resetsIn of [6.9 * DAY, 3.5 * DAY, 0.5 * DAY]) {
+    const r = run('P2', q(unl(resetsIn)), 'minimax');
+    assert.equal(r.action, 'allow');
+    assert.doesNotMatch(r.reason, /run out/);
+  }
+  assert.equal(weeklyProjection(unl(3 * DAY), NOW), null);
 });
 
 test('policyEnabled false allows everything', () => {
@@ -96,14 +103,13 @@ test('policyEnabled false allows everything', () => {
 
 // ---- agent suggestion ----
 const cx = (h) => plan('codex', 'Codex', [win('5h', h)]);
-const mmp = (tokens) => plan('minimax', 'MiniMax', [{ name: 'month', usedPercent: null, input: tokens, output: 0 }]);
+const mmp = (h) => plan('minimax', 'MiniMax', [win('5h', h)]);
 const sg = (p, quota, cfg) => suggestAgent(p, quota, cfg).agent;
 
 test('suggest P2: MiniMax unless known to be under pressure', () => {
-  assert.equal(sg('P2', q(claude(10), cx(10), mmp(1e6))), 'minimax');             // budget unset: unknown -> minimax
-  assert.equal(sg('P2', q(claude(10), cx(10), mmp(1e6)), { minimaxMonthlyTokenBudget: 10e6 }), 'minimax');
-  assert.equal(sg('P2', q(claude(40), cx(20), mmp(9e6)), { minimaxMonthlyTokenBudget: 10e6 }), 'codex');   // minimax at 90 %
-  assert.equal(sg('P2', q(claude(10), cx(10), mmp(9e6)), { minimaxMonthlyTokenBudget: 10e6 }), 'claude');  // tie -> claude
+  assert.equal(sg('P2', q(claude(10), cx(10), mmp(10))), 'minimax');
+  assert.equal(sg('P2', q(claude(40), cx(20), mmp(90))), 'codex');
+  assert.equal(sg('P2', q(claude(10), cx(10), mmp(90))), 'claude');                // tie -> claude
   assert.equal(sg('P2', q()), 'minimax');
 });
 test('suggest P0: Claude unless it is at 95 % or more', () => {

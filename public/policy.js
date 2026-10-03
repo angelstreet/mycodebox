@@ -5,7 +5,7 @@
 // P0 is always allowed (the Phase 4 safety gates still apply elsewhere). Missing / stale / expired data
 // never holds anything. The policy only decides whether a stopped session is continued; it never interrupts.
 
-export const POLICY_DEFAULTS = { policyEnabled: true, p1MaxPct: 80, p2MaxPct: 80, minimaxMonthlyTokenBudget: null };
+export const POLICY_DEFAULTS = { policyEnabled: true, p1MaxPct: 80, p2MaxPct: 80 };
 export const PLAN_OF_AGENT = { claude: 'claude', codex: 'codex', minimax: 'minimax' };
 const WEEK_MS = 7 * 86400e3;
 const MIN_ELAPSED = 0.1;       // weekly projection needs at least 10 % of the window behind it
@@ -14,21 +14,14 @@ const CLAUDE_FULL_PCT = 95;    // P0 suggestion leaves Claude only above this
 const cfgOf = (c) => ({ ...POLICY_DEFAULTS, ...(c || {}) });
 const usable = (plan, w) => !!plan && !plan.stale && w && !w.expired && Number.isFinite(w.usedPercent);
 
-// Short-term (5 h) fill of a plan in %, or null when unknown. MiniMax has tokens only: with a monthly
-// budget configured, month tokens / budget stands in for it.
-export function shortPercent(plan, config) {
-  if (!plan) return null;
-  if (plan.plan === 'minimax') {
-    const budget = Number(cfgOf(config).minimaxMonthlyTokenBudget);
-    const mo = (plan.windows || []).find((w) => w.name === 'month');
-    if (!(budget > 0) || !mo || plan.stale) return null;
-    return Math.round(((mo.input || 0) + (mo.output || 0)) / budget * 1000) / 10;
-  }
-  const w = (plan.windows || []).find((x) => x.name === '5h');
+// Short-term (5 h) fill of a plan in %, or null when unknown (stale, expired window, no percent).
+export function shortPercent(plan) {
+  const w = (plan?.windows || []).find((x) => x.name === '5h');
   return usable(plan, w) ? w.usedPercent : null;
 }
 
 // Weekly window projected to run out before its reset: linear extrapolation of the usage so far.
+// An unlimited weekly window (usedPercent null, unlimited:true) is never usable, so it never projects.
 export function weeklyProjection(plan, now) {
   const w = (plan?.windows || []).find((x) => x.name === 'week');
   if (!usable(plan, w) || !Number.isFinite(w.resetsAt)) return null;
@@ -48,7 +41,7 @@ export function evaluatePolicy({ priority = 'P2', agent, quota, now = Date.now()
   const plan = planOf(quota, agent);
   if (!plan) return { action: 'allow', reason: 'quota unknown' };
   const label = plan.label || plan.plan;
-  const pct = shortPercent(plan, c);
+  const pct = shortPercent(plan);
   if (priority === 'P1') {
     if (pct == null) return { action: 'allow', reason: 'quota unknown' };
     return pct >= c.p1MaxPct
@@ -68,7 +61,7 @@ export function suggestAgent(priority, quota, config) {
   const c = cfgOf(config);
   const info = ['claude', 'codex', 'minimax'].map((a) => {
     const p = planOf(quota, a);
-    const pct = shortPercent(p, c);
+    const pct = shortPercent(p);
     return { agent: a, pct, label: p?.label || a };
   });
   const by = Object.fromEntries(info.map((i) => [i.agent, i]));

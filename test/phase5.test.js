@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { byPriority, prioRank, DEFAULT_PRIORITY } from '../public/prio.js';
 import { createSessionMeta } from '../session-meta.js';
-import { parseCodexRateLimits, readCodex, readClaude, createQuotaAlerts } from '../quota.js';
+import { readClaude, createQuotaAlerts } from '../quota.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'ghosty-p5-'));
 
@@ -115,35 +115,6 @@ test('pause persists across a restart', () => {
 });
 
 // ---- quota ----
-const rollout = (primary, secondary, ts = '2026-10-03T10:00:00.000Z') => JSON.stringify({ timestamp: ts, type: 'event_msg', payload: { type: 'token_count', info: null,
-  rate_limits: { limit_id: 'codex', primary: { used_percent: primary, window_minutes: 300, resets_at: 1791100000 }, secondary: { used_percent: secondary, window_minutes: 10080, resets_at: 1791600000 }, plan_type: 'plus' } } });
-
-test('codex: newest rate_limits is parsed from the tail of a rollout', () => {
-  const text = ['{"cut-off-line', rollout(1, 1), '{"type":"other"}', rollout(37.5, 12), '{"type":"event_msg","payload":{"type":"agent_message"}}'].join('\n');
-  const r = parseCodexRateLimits(text);
-  assert.deepEqual(r.windows.map((w) => [w.name, w.usedPercent, w.resetsAt]), [['5h', 37.5, 1791100000], ['week', 12, 1791600000]]);
-  assert.equal(r.planType, 'plus');
-  assert.equal(r.at, Date.parse('2026-10-03T10:00:00.000Z'));
-  assert.equal(parseCodexRateLimits('nothing here\n{}'), null);
-});
-
-test('codex: reads the most recently modified rollout; a passed reset reads as 0 / expired', async () => {
-  const root = join(dir, 'codex');
-  const day = join(root, '2026', '10', '03');
-  mkdirSync(day, { recursive: true });
-  writeFileSync(join(day, 'rollout-old.jsonl'), rollout(90, 90) + '\n');
-  writeFileSync(join(day, 'rollout-new.jsonl'), `{"x":1}\n${rollout(5, 2)}\n{"type":"noise"}\n`);
-  utimesSync(join(day, 'rollout-old.jsonl'), new Date(Date.now() - 3600e3), new Date(Date.now() - 3600e3));
-  const cfg = { codexDir: root };
-  const live = await readCodex(cfg, 1791099000 * 1000);   // before resets_at
-  assert.equal(live.plan, 'codex');
-  assert.deepEqual(live.windows.map((w) => [w.name, w.usedPercent]), [['5h', 5], ['week', 2]]);
-  const later = await readCodex(cfg, 1791100500 * 1000);  // 5h window passed, week not
-  assert.deepEqual(later.windows.map((w) => [w.name, w.usedPercent, !!w.expired]), [['5h', 0, true], ['week', 2, false]]);
-  const none = await readCodex({ codexDir: join(dir, 'nope') }, Date.now());
-  assert.deepEqual(none.windows, []);
-});
-
 test('claude: reads the status-line hook file; missing file says how to enable it', async () => {
   const f = join(dir, 'claude-rate-limits.json');
   const now = Date.now();
