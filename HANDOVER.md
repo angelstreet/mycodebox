@@ -76,7 +76,16 @@ board, tabs, sidebar. Card headers show project · ⎇ branch(*) · ⑂ worktree
 
 **Dock** — chevron bottom-left collapses quick prompts + keys (remembered).
 
-**Alerts** — bell = in-page notification; set `NTFY_TOPIC` (see README) for real push to the phone.
+**Alerts** — bell = in-page notification. Phone push via ntfy: the secret `NTFY_TOPIC` + `PUBLIC_URL` are in
+the gitignored `~/ghosty-sessions/.env` (loaded by the unit's `EnvironmentFile=`); pushes on "needs you" and on
+disk critical (≥ 95 %, repeated every 6 h). `NTFY_DONE=1` adds turn-finished pushes.
+
+**Health strip** (TASK-44 phase 1) — under the top bar: CPU %, load 1-min / cores, RAM used, disk used + free.
+Amber ≥ 85 %, red ≥ 95 % (load: amber at 1x cores, red at 2x). `health.js` samples /proc + statfs every 5 s,
+pushed as `{type:'health'}` on `/ws/status`, also `GET /api/vm`. Tests: `npm test`.
+
+**AI Manager** — plan is TASK-44 in virtualpytest (`docs/tasks/TASK-44-ai-manager.md`); dev worktree
+`~/ghosty-sessions-task44`, branch `task44-ai-manager`.
 
 **Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,
 exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only.

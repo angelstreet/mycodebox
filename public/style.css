@@ -103,6 +103,23 @@ button{ font-family:inherit; cursor:pointer; }
 .fontpop .fit.on i::after{ left:15px; background:var(--accent); }
 @media (max-width: 720px){ .fdesk{ display:none; } .fontbox{ padding:2px 1px; } }
 
+/* ------------ Health strip ------------ */
+.health{
+  display:flex; align-items:center; gap:14px; padding:3px 10px; flex-shrink:0;
+  overflow-x:auto; scrollbar-width:none; white-space:nowrap;
+  font-size:11px; color:var(--ink-2); border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;
+}
+.health::-webkit-scrollbar{ display:none; }
+.health.warn{ background:rgba(232,154,74,0.08); }
+.health.crit{ background:rgba(255,95,95,0.12); }
+.health .hi b{ font-weight:400; color:var(--ink-3); margin-right:4px; text-transform:uppercase; font-size:9.5px; letter-spacing:.1em; }
+.health .hi i{ font-style:normal; color:var(--ink-3); margin-left:3px; }
+.health .hi.ok{ color:var(--ink-2); }
+.health .hi.warn{ color:var(--accent); }
+.health .hi.crit{ color:var(--waiting); font-weight:700; }
+@media (max-width: 720px){ .health{ gap:10px; padding:2px 8px; font-size:10.5px; } .health .hi i{ display:none; } .health .hi.warn i, .health .hi.crit i{ display:inline; } }
+
 /* ------------ Attention banner ------------ */
 .attention{
   display:flex; gap:6px; align-items:center;

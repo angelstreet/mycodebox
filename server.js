@@ -12,6 +12,7 @@
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/sessions          → {name, agent, cwd} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
+//   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
 //   GET  /*                     → static files in ./public
@@ -27,6 +28,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { sampleHealth } from './health.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -448,29 +450,66 @@ function leaseFor(session, branch) {
 const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
 const NTFY_URL = (process.env.NTFY_URL || 'https://ntfy.sh').replace(/\/+$/, '');
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+const NTFY_DONE = process.env.NTFY_DONE === '1';   // also push when a turn finishes (off: only 'needs you' + disk)
 const NTFY_DEBOUNCE_MS = 60000;
 const ntfyLast = new Map(); // session -> ms
 
-function ntfy(session, kind, body) {
+function ntfyPush(key, { title, priority = 'default', tags = '', body = '', click = '' }, debounceMs = NTFY_DEBOUNCE_MS) {
   if (!NTFY_TOPIC) return;
   const now = Date.now();
-  // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
-  const key = `${session}:${kind}`;
-  if (now - (ntfyLast.get(key) || 0) < NTFY_DEBOUNCE_MS) return;
+  if (now - (ntfyLast.get(key) || 0) < debounceMs) return;
   ntfyLast.set(key, now);
   const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
-  const headers = {
-    Title: ascii(kind === 'waiting' ? `${session} needs you` : `${session} is done`),
-    Priority: kind === 'waiting' ? 'high' : 'default',
-    Tags: kind === 'waiting' ? 'warning' : 'white_check_mark',
-  };
-  if (PUBLIC_URL) headers.Click = `${PUBLIC_URL}/?s=${encodeURIComponent(session)}`;
+  const headers = { Title: ascii(title), Priority: priority };
+  if (tags) headers.Tags = tags;
+  if (PUBLIC_URL) headers.Click = `${PUBLIC_URL}/${click}`;
   try {
     fetch(`${NTFY_URL}/${encodeURIComponent(NTFY_TOPIC)}`, {
-      method: 'POST', headers, body: String(body || kind).slice(0, 500),
+      method: 'POST', headers, body: String(body || title).slice(0, 500),
       signal: AbortSignal.timeout(8000),
     }).catch((e) => console.error('[ntfy]', e.message));
   } catch (e) { console.error('[ntfy]', e.message); }
+}
+
+// Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
+function ntfy(session, kind, body) {
+  const waiting = kind === 'waiting';
+  ntfyPush(`${session}:${kind}`, {
+    title: waiting ? `${session} needs you` : `${session} is done`,
+    priority: waiting ? 'high' : 'default',
+    tags: waiting ? 'warning' : 'white_check_mark',
+    body: body || kind,
+    click: `?s=${encodeURIComponent(session)}`,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Codebox health (CPU / load / RAM / disk) + disk-critical push
+// ---------------------------------------------------------------------------
+
+const HEALTH_MS = Number(process.env.HEALTH_MS || 5000);
+const HEALTH_DISKS = (process.env.HEALTH_DISKS || '/').split(',').map((d) => d.trim()).filter(Boolean);
+const DISK_ALERT_REPEAT_MS = 6 * 3600 * 1000;   // remind every 6 h while a disk stays critical
+let health = null;
+const diskCrit = new Set();   // paths currently critical
+
+async function healthTick() {
+  try { health = await sampleHealth(HEALTH_DISKS); }
+  catch (err) { console.error('[health]', err.message); return; }
+  const gb = (b) => `${(b / 2 ** 30).toFixed(1)}G`;
+  for (const d of health.disks) {
+    if (d.level === 'crit') {
+      // First crossing pushes at once; while it stays critical, ntfyPush's debounce paces reminders.
+      if (!diskCrit.has(d.path)) ntfyLast.delete(`disk:${d.path}`);
+      diskCrit.add(d.path);
+      ntfyPush(`disk:${d.path}`, {
+        title: `codebox disk ${d.path} ${Math.round(d.pct)}% full`,
+        priority: 'urgent', tags: 'rotating_light',
+        body: `${gb(d.free)} free of ${gb(d.total)} on ${d.path}`,
+      }, DISK_ALERT_REPEAT_MS);
+    } else diskCrit.delete(d.path);
+  }
+  broadcastStatus({ type: 'health', health });
 }
 
 // ---------------------------------------------------------------------------
@@ -563,7 +602,7 @@ async function pollOnce() {
     // Notifications: transitions only, never on first sight.
     if (t.prevState !== undefined && t.prevState !== state) {
       if (state === 'waiting') ntfy(s.name, 'waiting', waitReason || 'needs input');
-      else if (state === 'done' && t.realWork) ntfy(s.name, 'done', lastMessage || 'turn finished');
+      else if (state === 'done' && t.realWork && NTFY_DONE) ntfy(s.name, 'done', lastMessage || 'turn finished');
     }
     if (state === 'done') t.realWork = false;
     t.prevState = state;
@@ -993,6 +1032,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await sendMany(payload.sessions, payload));
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
+  if (req.method === 'GET' && p === '/api/vm') {
+    return json(res, 200, health || await sampleHealth(HEALTH_DISKS));
+  }
   if (req.method === 'GET' && p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, sessions: lastSnapshots.size, port: PORT }));
@@ -1024,6 +1066,7 @@ server.on('upgrade', (req, socket, head) => {
       statusSubs.add(ws);
       if (leaseCache.value?.ok) ws.send(JSON.stringify({ type: 'leases', leases: leaseCache.value.leases }));
       if (latest) ws.send(JSON.stringify({ type: 'status', status: latest.status }));
+      if (health) ws.send(JSON.stringify({ type: 'health', health }));
       ws.on('close', () => statusSubs.delete(ws));
       ws.on('message', () => {}); // no-op
     });
@@ -1090,6 +1133,8 @@ server.listen(PORT, HOST, async () => {
   setInterval(tick, TICK_MS);
   leaseTick();
   setInterval(leaseTick, 15000);
+  healthTick();
+  setInterval(healthTick, HEALTH_MS);
 });
 
 // Optional TLS listener — required for PWA install on most browsers.

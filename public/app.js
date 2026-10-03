@@ -11,6 +11,7 @@ const els = {
   appTitle:    $('#appTitle'),
   summary:     $('#summary'),
   attention:   $('#attention'),
+  health:      $('#health'),
   tabs:        $('#tabs'),
   main:        $('#main'),
   cardPane:    $('#cardPane'),
@@ -484,6 +485,8 @@ function connectStatus() {
         onStatus();
       } else if (msg.type === 'leases') {
         onLeases(msg.leases);
+      } else if (msg.type === 'health') {
+        onHealth(msg.health);
       }
     } catch {}
   };
@@ -612,6 +615,29 @@ async function fetchLeases() {
   } catch (err) {
     onLeases({ error: err.message });
   }
+}
+
+// ---------- codebox health strip ----------
+
+function onHealth(h) {
+  const el = els.health;
+  if (!h) { el.classList.add('hidden'); return; }
+  const pct = (v) => (v == null ? '–' : `${Math.round(v)}%`);
+  const gb = (b) => `${(b / 2 ** 30).toFixed(b < 10 * 2 ** 30 ? 1 : 0)}G`;
+  const item = (level, label, main, sub, title) =>
+    `<span class="hi ${level}" title="${escapeHtml(title)}"><b>${label}</b>${main}${sub ? `<i>${sub}</i>` : ''}</span>`;
+  const parts = [
+    item(h.cpu.level, 'cpu', pct(h.cpu.pct), '', 'CPU busy, all cores'),
+    item(h.load.level, 'load', h.load.avg[0].toFixed(1), `/${h.load.cores}`,
+      `load average 1/5/15 min: ${h.load.avg.map((v) => v.toFixed(2)).join(' ')} on ${h.load.cores} cores`),
+  ];
+  if (h.mem) parts.push(item(h.mem.level, 'ram', pct(h.mem.pct), `${gb(h.mem.used)}/${gb(h.mem.total)}`,
+    `RAM used ${gb(h.mem.used)} of ${gb(h.mem.total)} (${gb(h.mem.free)} available)`));
+  for (const d of h.disks) parts.push(item(d.level, d.path === '/' ? 'disk' : `disk ${d.path}`, pct(d.pct), `${gb(d.free)} free`,
+    `${d.path}: ${gb(d.used)} used, ${gb(d.free)} free of ${gb(d.total)}`));
+  const worst = ['crit', 'warn'].find((l) => [h.cpu, h.load, h.mem, ...h.disks].some((x) => x?.level === l)) || 'ok';
+  el.className = `health ${worst}`;
+  el.innerHTML = parts.join('');
 }
 
 // ---------- summary + attention ----------

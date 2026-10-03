@@ -19,6 +19,8 @@ Environment=PANE_LINES=2000
 Environment=TLS_KEY=/home/jndoye/ghosty-sessions/certs/key.pem
 Environment=TLS_CERT=/home/jndoye/ghosty-sessions/certs/cert.pem
 Environment=TLS_PORT=7443
+# Secrets (NTFY_TOPIC, PUBLIC_URL) live in the gitignored .env next to server.js; optional.
+EnvironmentFile=-/home/jndoye/ghosty-sessions/.env
 # Bind to tailscale0 only — replace HOST with Tailscale IP after a restart
 # if you want the strongest posture. Listening on 0.0.0.0 is fine inside the
 # tailnet since the Proxmox firewall on vmbr0 doesn't expose :7777 to LAN guests.

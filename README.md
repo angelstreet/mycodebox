@@ -36,7 +36,14 @@ If you don't want systemd, just `npm start` in a tmux session — the same `serv
 
 ## Configuration
 
-Env vars (defaults shown):
+Env vars (defaults shown). The unit sets the non-secret ones and loads the gitignored
+`~/ghosty-sessions/.env` for the rest:
+
+```bash
+# ~/ghosty-sessions/.env  (chmod 600, never committed)
+NTFY_TOPIC=ghosty-codebox-<random>      # subscribe to the same topic in the ntfy phone app
+PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
+```
 
 | var | default | meaning |
 |---|---|---|
@@ -44,9 +51,13 @@ Env vars (defaults shown):
 | `HOST`        | `0.0.0.0` | listen addr (`tailscale0` is the safest) |
 | `TICK_MS`     | `1000`  | pane capture cadence |
 | `PANE_LINES`  | `2000`  | scrollback lines per pane |
-| `NTFY_TOPIC`  | unset   | enable ntfy push; notifies when a session starts waiting (high priority) or finishes a turn |
+| `NTFY_TOPIC`  | unset   | enable ntfy push: a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
+| `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
 | `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
 | `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
+| `HEALTH_MS`   | `5000`  | codebox health sample cadence (CPU, load, RAM, disk) |
+| `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
+| `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
 | `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
 | `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude` / `codex` / `minimax-code` / (none) | command typed into a session created via `POST /api/sessions` |
 
