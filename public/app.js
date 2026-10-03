@@ -142,6 +142,8 @@ function fmtShort(sec) {
 //   working  → time since the last command was sent (or since it started working)
 //   waiting  → how long it has been waiting on you
 //   idle     → time since last output
+// card / board badge: the pulsing dot already says "working", so show only the elapsed time
+function badgeText(name) { return stateText(name).replace(/^working ?/, ''); }
 function stateText(name) {
   const st = state.status[name] || {};
   const s = stateOf(name);
@@ -161,7 +163,7 @@ function stateText(name) {
 
 function stateBadgeHtml(name) {
   const s = stateOf(name);
-  return `<span class="state ${s}"><i class="dot ${s}"></i><span class="st">${escapeHtml(stateText(name))}</span></span>`;
+  return `<span class="state ${s}"><i class="dot ${s}"></i><span class="st">${escapeHtml(badgeText(name))}</span></span>`;
 }
 function agentBadgeHtml(name) {
   const a = agentOf(name);
@@ -1147,7 +1149,7 @@ function syncCell(cell) {
   if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
   const stw = cell.querySelector('.stw');
   if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
-  else stw.querySelector('.st').textContent = stateText(n);
+  else stw.querySelector('.st').textContent = badgeText(n);
   const ask = cell.querySelector('.ask');
   ask.classList.toggle('hidden', s !== 'waiting');
   if (s === 'waiting') ask.querySelector('.q').textContent = state.status[n]?.waitReason || 'waiting for your answer';
@@ -1462,7 +1464,7 @@ function syncList() {
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
     const stw = row.querySelector('.stw');
     if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
-    else stw.querySelector('.st').textContent = stateText(n);
+    else stw.querySelector('.st').textContent = badgeText(n);
     syncAutoPill(row.querySelector('.apill'), n);
     const last = row.querySelector('.last'), lt = rowLast(n);
     if (last.textContent !== lt) last.textContent = lt;
@@ -1490,7 +1492,7 @@ function tickClock() {
   for (const el of document.querySelectorAll('.apill [data-at]')) el.textContent = autoLeft(Number(el.dataset.at));
   for (const el of document.querySelectorAll('.stw[data-s] .st')) {
     const host = el.closest('[data-session]');
-    if (host) el.textContent = stateText(host.dataset.session);
+    if (host) el.textContent = badgeText(host.dataset.session);
   }
 }
 
