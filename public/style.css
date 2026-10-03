@@ -804,3 +804,4 @@ body{ display:flex; flex-direction:column; }
 .title:has(+ .health.inbar){ flex:0 0 auto; }
 /* phones: only the 2 and 4 grids */
 @media (max-width: 720px){ .gridsizes .size-btn[data-size="8"], .gridsizes .size-btn[data-size="16"]{ display:none; } }
+.agent-model{ color:var(--ink-3); font-size:10.5px; white-space:nowrap; }
