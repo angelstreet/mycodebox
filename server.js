@@ -23,7 +23,7 @@ import { readFile, stat, readdir, realpath } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { basename, extname, join, normalize, sep } from 'node:path';
+import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -384,12 +384,24 @@ const metaCache = new Map(); // session -> { at, cwd, repo, branch, dirty, busy 
 async function gitInfo(cwd) {
   try {
     const run = (args) => exec('git', ['-C', cwd, ...args], { timeout: 4000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).then((r) => r.stdout.trim());
-    const [top, branch] = (await run(['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD'])).split('\n');
+    const [top, gitDir, commonDir, branch] = (await run(['rev-parse', '--path-format=absolute',
+      '--show-toplevel', '--git-dir', '--git-common-dir', '--abbrev-ref', 'HEAD'])).split('\n');
     let dirty = false;
     try { dirty = (await run(['status', '--porcelain', '-uno'])).length > 0; } catch {}
-    return { repo: basename(top), branch: branch === 'HEAD' ? null : branch, dirty };
+    // project = GitHub repo name from origin (owner/name), else the main checkout's folder
+    let project = null, github = false;
+    try {
+      const url = await run(['remote', 'get-url', 'origin']);
+      const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?\/?$/);
+      if (m) { project = m[2]; github = true; }
+      else project = basename(url.replace(/\.git\/?$/, ''));
+    } catch {}
+    // linked worktree: its git dir lives under the main repo's .git/worktrees/
+    const worktree = gitDir && commonDir && gitDir !== commonDir ? basename(top) : null;
+    if (!project) project = basename(worktree ? dirname(commonDir) : top);
+    return { repo: basename(top), project, github, worktree, branch: branch === 'HEAD' ? null : branch, dirty };
   } catch {
-    return { repo: null, branch: null, dirty: null };
+    return { repo: null, project: null, github: false, worktree: null, branch: null, dirty: null };
   }
 }
 
@@ -578,6 +590,7 @@ async function pollOnce() {
       lastMessage,
       replyHash: t.replyHash,
       cwd: meta.cwd, repo: meta.repo, branch: meta.branch, dirty: meta.dirty,
+      project: meta.project ?? null, github: !!meta.github, worktree: meta.worktree ?? null,
       contextLeft: t.contextLeft, model: t.model,
       lease: leaseFor(s.name, meta.branch),
       cols: p.cols, rows: p.rows,

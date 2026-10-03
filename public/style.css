@@ -685,3 +685,52 @@ body{ display:flex; flex-direction:column; }
 .dock .dtoggle svg{ transition: transform 160ms ease; }
 .dock.collapsed .dtoggle svg{ transform: rotate(180deg); }
 .dock.collapsed .dtoggle{ color:var(--accent); }
+
+/* ------------ Filter bar ------------ */
+.filterbar{
+  display:flex; align-items:center; gap:5px; padding:6px 8px;
+  overflow-x:auto; scrollbar-width:none; border-bottom:1px solid var(--line);
+  background:var(--bg); flex-shrink:0;
+}
+.filterbar::-webkit-scrollbar{ display:none; }
+.filterbar .fl{ font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); flex-shrink:0; margin:0 2px 0 4px; }
+.filterbar .fsep{ width:1px; height:20px; background:var(--line-2); flex-shrink:0; margin:0 4px; }
+.filterbar .fchip, .filterbar .fclear{
+  display:inline-flex; align-items:center; gap:5px; flex-shrink:0;
+  padding:4px 9px; border-radius:999px; font-size:11px; min-height:28px;
+  background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line);
+}
+.filterbar .fchip .n{ color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.filterbar .fchip.on{ border-color:var(--accent); color:var(--ink); background:rgba(232,154,74,0.10); }
+.filterbar .fchip .agent{ padding:1px 4px; }
+.filterbar .fclear{ color:var(--accent); border-color:rgba(232,154,74,0.4); }
+#filterBtn.on{ color:var(--accent); }
+
+/* ------------ Card header: project · branch · worktree, centred ------------ */
+/* In-flow middle slot: name block and a spacer share the free space equally,
+   so the label sits in the middle and pushes (never covers) the sides. */
+.cell .h .ag{ order:0; } .cell .h .nm{ order:1; flex:1 1 0; } .cell .h .proj{ order:2; }
+.cell .h::after{ content:''; order:3; flex:1 1 0; min-width:0; }
+.cell .h > :not(.ag):not(.nm):not(.proj){ order:4; }
+.cell .h .proj{
+  flex:0 1 auto; min-width:0; max-width:46%;
+  display:inline-flex; align-items:center; gap:6px;
+  padding:3px 9px; border-radius:999px;
+  background:var(--bg-3); border:1px solid var(--line);
+  font-size:11px; color:var(--ink-2); white-space:nowrap; overflow:hidden;
+}
+.cell .h .proj:empty{ display:none; }
+.cell .h .proj .gh{ color:var(--ink); flex-shrink:0; }
+.cell .h .proj .pj{ color:var(--ink); font-weight:600; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:3ch; }
+.cell .h .proj .br{ color:var(--a-codex); overflow:hidden; text-overflow:ellipsis; flex-shrink:2; min-width:3ch; }
+.cell .h .proj .dirty{ color:var(--accent); font-weight:700; }
+.cell .h .proj .wt{ color:var(--a-minimax); overflow:hidden; text-overflow:ellipsis; flex-shrink:3; min-width:3ch; }
+@media (max-width: 720px){
+  .grid-pane .cell .h .proj, .grid-pane .cell .h::after{ display:none; }
+}
+/* phone card view: project label on its own line under the name row */
+@media (max-width: 720px){
+  .card-pane .cell .h{ flex-wrap:wrap; row-gap:4px; }
+  .card-pane .cell .h::after{ display:none; }
+  .card-pane .cell .h .proj{ order:5; flex:1 1 100%; max-width:100%; justify-content:center; }
+}

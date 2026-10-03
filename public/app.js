@@ -33,6 +33,8 @@ const els = {
   gridSizes:   $('#gridSizes'),
   toast:       $('#toast'),
   installBtn:  $('#installBtn'),
+  filterBtn:   $('#filterBtn'),
+  filterBar:   $('#filterBar'),
 };
 
 const state = {
@@ -503,9 +505,20 @@ function byUrgency(list) {
     (STATE_RANK[stateOf(a.name)] - STATE_RANK[stateOf(b.name)]) ||
     displayName(a.name).localeCompare(displayName(b.name)));
 }
+// Filters: status (state.filter, also set by the top-bar count chips),
+// project (GitHub repo / folder) and agent. All views show only matches.
+const LS_FILTERS = 'ghosty.filters';
+function projectOf(n) { return state.status[n]?.project || state.status[n]?.repo || ''; }
+function matchesFilter(n) {
+  if (state.filter && stateOf(n) !== state.filter) return false;
+  if (state.fProject && projectOf(n) !== (state.fProject === '-' ? '' : state.fProject)) return false;
+  if (state.fAgent && agentOf(n) !== state.fAgent) return false;
+  return true;
+}
+function anyFilter() { return !!(state.filter || state.fProject || state.fAgent); }
 function visibleSessions() {
-  if (!state.filter) return state.sessions;
-  return state.sessions.filter((s) => stateOf(s.name) === state.filter);
+  if (!anyFilter()) return state.sessions;
+  return state.sessions.filter((s) => matchesFilter(s.name));
 }
 
 // ---------- data ----------
@@ -579,11 +592,56 @@ function setFilter(f) {
   state.filter = f;
   renderAll();
 }
+function setFilters(patch) {
+  Object.assign(state, patch);
+  lsSet(LS_FILTERS, JSON.stringify({ p: state.fProject || null, a: state.fAgent || null }));
+  renderAll();
+}
+function loadFilters() {
+  try { const f = JSON.parse(lsGet(LS_FILTERS, '{}')) || {}; state.fProject = f.p || null; state.fAgent = f.a || null; }
+  catch { state.fProject = state.fAgent = null; }
+}
+
+// Filter bar: one horizontal row of chip groups. Rebuilt only when its
+// content (counts / options / selection) changes.
+function renderFilterBar() {
+  const bar = els.filterBar;
+  const show = state.filterOpen || anyFilter();
+  bar.classList.toggle('hidden', !show);
+  els.filterBtn.classList.toggle('on', anyFilter());
+  if (!show) return;
+  const all = state.sessions.map((s) => s.name);
+  const count = (pred) => all.filter(pred).length;
+  const chip = (group, val, label, n, cls = '') =>
+    `<button class="fchip ${cls}${(state[group] || null) === val ? ' on' : ''}" data-g="${group}" data-v="${val ?? ''}">${label}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
+  const states = ['waiting', 'done', 'working', 'idle', 'offline'];
+  const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
+  const agents = ['claude', 'codex', 'minimax', 'bash'].filter((a) => all.some((n) => agentOf(n) === a));
+  const html =
+    `<span class="fl">status</span>` + chip('filter', null, 'all') +
+    states.filter((k) => count((n) => stateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => stateOf(n) === k))).join('') +
+    `<span class="fsep"></span><span class="fl">project</span>` + chip('fProject', null, 'all') +
+    projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i>no git</i>', count((n) => projectOf(n) === p))).join('') +
+    `<span class="fsep"></span><span class="fl">agent</span>` + chip('fAgent', null, 'all') +
+    agents.map((a) => chip('fAgent', a, `<span class="agent ${a}">${AGENT_LABEL[a]}</span>`, count((n) => agentOf(n) === a))).join('') +
+    (anyFilter() ? `<span class="fsep"></span><button class="fclear">clear ×</button>` : '');
+  if (bar.dataset.h === html) return;
+  bar.dataset.h = html;
+  bar.innerHTML = html;
+  for (const b of bar.querySelectorAll('.fchip')) {
+    b.onclick = () => {
+      const g = b.dataset.g, v = b.dataset.v || null;
+      const next = state[g] === v ? null : v;
+      if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
+    };
+  }
+  bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); });
+}
 
 // ---------- tabs ----------
 function renderTabStrip() {
   els.tabs.innerHTML = '';
-  for (const s of state.sessions) {
+  for (const s of visibleSessions()) {
     const tab = document.createElement('div');
     tab.dataset.session = s.name;
     tab.className = 'tab';
@@ -639,7 +697,7 @@ function layoutSide() {
   let cursor = list.firstChild;
   const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
   for (const [g, label] of SIDE_GROUPS) {
-    const members = state.sessions.filter((s) => sideGroupOf(s.name) === g);
+    const members = state.sessions.filter((s) => sideGroupOf(s.name) === g && matchesFilter(s.name));
     if (!members.length) {
       const old = hdrs[g];
       if (old) { if (old === cursor) cursor = cursor.nextSibling; old.remove(); delete hdrs[g]; }
@@ -652,6 +710,7 @@ function layoutSide() {
     place(h);
     for (const m of members) { const row = rows.get(m.name); if (row) place(row); }
   }
+  for (const [n, row] of rows) row.hidden = !matchesFilter(n);
 }
 function buildSideRow(s) {
   const custom = customFor(s.name);
@@ -763,6 +822,7 @@ function buildCell(s) {
     <div class="h">
       <span class="ag"></span>
       <div class="nm"><span class="name">${escapeHtml(displayName(s.name))}</span><span class="mt">&nbsp;</span></div>
+      <span class="proj"></span>
       <span class="pos"></span>
       <span class="tgt">&rarr; send target</span>
       <span class="mv" title="Move card">
@@ -863,6 +923,8 @@ function syncCell(cell) {
   const ask = cell.querySelector('.ask');
   ask.classList.toggle('hidden', s !== 'waiting');
   if (s === 'waiting') ask.querySelector('.q').textContent = state.status[n]?.waitReason || 'waiting for your answer';
+  const pj = cell.querySelector('.proj'), ph = projHtml(n);
+  if (pj.dataset.h !== ph) { pj.dataset.h = ph; pj.innerHTML = ph; }
   const mt = cell.querySelector('.mt'), mh = headMetaHtml(n);
   if (mt.dataset.h !== mh) { mt.dataset.h = mh; mt.innerHTML = mh; }
   const rd = cell.querySelector('.rd');
@@ -892,10 +954,18 @@ function headMetaHtml(n) {
   const parts = [];
   const c = ctxHtml(st);
   if (c) parts.push(c);
-  const loc = locText(st);
-  if (loc) parts.push(`<span class="loc">${escapeHtml(loc)}</span>`);
   if (stateOf(n) === 'working' && st.activity) parts.push(`<span class="act">${escapeHtml(st.activity)}</span>`);
   return parts.join(' · ') || '&nbsp;';
+}
+// Centre label of a card header: project · branch · worktree.
+function projHtml(n) {
+  const st = state.status[n] || {};
+  const project = st.project || st.repo;
+  if (!project) return '';
+  const gh = st.github ? '<svg class="gh" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>' : '';
+  const br = st.branch ? `<span class="br">\u2387 ${escapeHtml(st.branch)}${st.dirty ? '<b class="dirty">*</b>' : ''}</span>` : '';
+  const wt = st.worktree ? `<span class="wt" title="git worktree">\u2442 ${escapeHtml(st.worktree)}</span>` : '';
+  return `${gh}<b class="pj">${escapeHtml(project)}</b>${br}${wt}`;
 }
 function rowChipsHtml(n) {
   const st = state.status[n] || {};
@@ -1054,10 +1124,10 @@ function renderList() {
   const rows = byUrgency(visibleSessions());
   if (!rows.length) {
     els.listPane.innerHTML = `<div class="empty">${state.sessions.length
-      ? `Nothing ${escapeHtml(STATE_LABEL[state.filter] || state.filter)} right now.<br><button class="clear-f">show all ${state.sessions.length}</button>`
+      ? `No session matches the filter.<br><button class="clear-f">show all ${state.sessions.length}</button>`
       : 'No tmux sessions yet.<br>Start one from the sidebar, or run <code>tmux new -s name</code>.'}</div>`;
     const cf = els.listPane.querySelector('.clear-f');
-    if (cf) cf.onclick = () => setFilter(null);
+    if (cf) cf.onclick = () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); };
     return;
   }
   for (const s of rows) {
@@ -1131,12 +1201,13 @@ function syncList() {
 // ---------- sync (status tick) ----------
 function syncAll() {
   renderSummary();
+  renderFilterBar();
   renderAttention();
   syncTabs();
   syncSide();
   for (const host of [els.cardPane, els.gridPane]) for (const c of host.children) syncCell(c);
   if (state.mode === 'list') syncList();
-  if (state.filter && state.mode === 'grid') renderGrid();
+  if (anyFilter() && state.mode === 'grid') renderGrid();
   syncDock();
 }
 
@@ -1909,6 +1980,7 @@ els.menuBtn.onclick   = openSide;
 els.backBtn.onclick   = () => setMode(state.prevMode || (isPhone() ? 'list' : 'grid'));
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();
+els.filterBtn.onclick = () => { state.filterOpen = !state.filterOpen; renderFilterBar(); };
 els.notifyBtn.onclick = () => toggleNotify();
 for (const b of $$('.mode-btn')) b.onclick = () => setMode(b.dataset.mode);
 // tapping a size always shows the grid at that size
@@ -1979,6 +2051,7 @@ if ('serviceWorker' in navigator) {
 (async function boot() {
   loadRenames();
   loadPrefs();
+  loadFilters();
   els.notifyBtn.classList.toggle('on', state.notify);
   setGridSize(state.gridSize);
   const wanted = new URLSearchParams(location.search).get('s');
