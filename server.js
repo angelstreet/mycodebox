@@ -40,7 +40,7 @@ const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
 const HOST = process.env.HOST || '0.0.0.0';
 const TICK_MS = Number(process.env.TICK_MS || 1000);
-const PANE_LINES = Number(process.env.PANE_LINES || 300);
+const PANE_LINES = Number(process.env.PANE_LINES || 1000);
 const PUBLIC_DIR = fileURLToPath(new URL('./public', import.meta.url));
 
 // HTTPS support. If both TLS_KEY and TLS_CERT exist, we listen on TLS too.
