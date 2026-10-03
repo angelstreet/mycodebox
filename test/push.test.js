@@ -42,7 +42,10 @@ test('VAPID JWT is valid ES256 with aud/exp/sub', () => {
   assert.equal(b.sub, 'mailto:admin@codebox.local');
   assert.ok(b.exp > now && b.exp - now <= 12 * 3600);
   // tampering breaks it
-  const bad = jwt.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'));
+  // flip a char in the middle of the signature (the last base64url char partly holds padding bits)
+  const sig = jwt.split('.')[2];
+  const i = Math.floor(sig.length / 2);
+  const bad = jwt.slice(0, jwt.length - sig.length) + sig.slice(0, i) + (sig[i] === 'A' ? 'B' : 'A') + sig.slice(i + 1);
   assert.equal(verifyVapidJwt(bad, keys.publicKey), false);
 });
 
