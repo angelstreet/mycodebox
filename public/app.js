@@ -165,7 +165,8 @@ function stateBadgeHtml(name) {
 }
 function agentBadgeHtml(name) {
   const a = agentOf(name);
-  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>`;
+  const m = (state.status[name] || {}).model;
+  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>${m ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}`;
 }
 
 // Strip ANSI control sequences.
@@ -1104,7 +1105,6 @@ function rowChipsHtml(n) {
   const c = ctxHtml(st);
   if (c) chips.push(c.replace('class="ctx', 'class="chip-m ctx'));
   if (st.lease?.resource) chips.push(`<span class="chip-m lease">&#128274; ${escapeHtml(st.lease.resource)}${st.lease.ttlLeftMin != null ? ` ${st.lease.ttlLeftMin}m` : ''}</span>`);
-  if (st.model) chips.push(`<span class="chip-m">${escapeHtml(st.model)}</span>`);
   return chips.join('');
 }
 
@@ -1234,8 +1234,16 @@ function renderGrid() {
   const limit = state.gridSize;
   // Keep the active session on screen when the grid is limited.
   let targets = all.slice(0, limit);
+  // Once a tab swapped a card in, keep that arrangement (slot order) instead of snapping back.
+  if (state.gridView) {
+    const byName = new Map(all.map((s) => [s.name, s]));
+    const kept = state.gridView.filter((n) => byName.has(n)).map((n) => byName.get(n));
+    for (const s of all) if (kept.length < limit && !kept.includes(s)) kept.push(s);
+    targets = kept.slice(0, limit);
+  }
   const act = all.find((s) => s.name === state.active);
   if (act && !targets.includes(act) && limit > 0) targets = [...targets.slice(0, limit - 1), act];
+  state.gridView = state.gridView ? targets.map((s) => s.name) : null;
   renderInto(els.gridPane, targets);
 }
 
@@ -1354,7 +1362,14 @@ function tickClock() {
 // ---------- focus ----------
 function focusSession(name) {
   if (!name) return;
+  const prev = state.active;
   state.active = name;
+  // grid: a session that isn't on screen takes the slot of the selected card, not the last one
+  if (state.mode === 'grid' && prev && prev !== name
+      && !els.gridPane.querySelector(`[data-session="${cssEscape(name)}"]`)
+      && els.gridPane.querySelector(`[data-session="${cssEscape(prev)}"]`)) {
+    state.gridView = [...els.gridPane.children].map((c) => (c.dataset.session === prev ? name : c.dataset.session));
+  }
   els.appTitle.textContent = displayName(name);
   connectSession(name);
   if (state.mode === 'card') renderCard();

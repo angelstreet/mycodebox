@@ -379,8 +379,8 @@ function footerInfo(lines) {
   let contextLeft = null, model = null;
   let m = foot.match(/Context (\d+)% left/i) || foot.match(/(\d+)%\s+context left/i) || foot.match(/Context left until auto-compact:\s*(\d+)%/i) || foot.match(/auto-compact[^\n]*?(\d+)%/i);
   if (m) contextLeft = Number(m[1]);
-  m = foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b(opus|sonnet|haiku)(?:[ -]?\d[\d.]*)?/i);
-  if (m) model = m[1];
+  m = foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b((?:opus|sonnet|haiku|fable)(?:[ -]\d+(?:[.-]\d+)?)?)/i);
+  if (m) model = m[1].replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/-/g, ' ');
   return { contextLeft, model };
 }
 
@@ -743,6 +743,7 @@ const MIME = {
   '.js':   'text/javascript; charset=utf-8',
   '.css':  'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.apk':  'application/vnd.android.package-archive',
   '.svg':  'image/svg+xml',
   '.png':  'image/png',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
