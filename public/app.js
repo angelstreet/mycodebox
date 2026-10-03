@@ -95,8 +95,9 @@ function toast(msg, ms=1800) {
 function stateOf(name) {
   return state.status[name]?.state || 'offline';
 }
-const STATE_RANK = { waiting: 0, working: 1, idle: 2, offline: 3 };
-const STATE_LABEL = { working: 'working', waiting: 'needs you', idle: 'idle', offline: 'offline' };
+const STATE_RANK = { waiting: 0, done: 1, working: 2, idle: 3, offline: 4 };
+const STATE_LABEL = { working: 'working', waiting: 'needs you', done: 'done', idle: 'idle', offline: 'offline' };
+const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 
 function agentOf(name) {
   const st = state.status[name] || {};
@@ -118,6 +119,15 @@ function fmtDur(sec) {
   return `${Math.floor(sec/86400)}d`;
 }
 
+// Compact duration for 'done 12m'.
+function fmtShort(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  if (sec < 60)    return `${sec}s`;
+  if (sec < 3600)  return `${Math.floor(sec/60)}m`;
+  if (sec < 86400) return `${Math.floor(sec/3600)}h`;
+  return `${Math.floor(sec/86400)}d`;
+}
+
 // Text for the state badge, including elapsed time.
 //   working  → time since the last command was sent (or since it started working)
 //   waiting  → how long it has been waiting on you
@@ -133,6 +143,7 @@ function stateText(name) {
     return from ? `working ${fmtDur((now - from) / 1000)}` : 'working';
   }
   const idleFor = (st.lastActivitySec ?? 0) + drift;
+  if (s === 'done') return `done ${fmtShort(st.doneAt ? (now - st.doneAt) / 1000 : idleFor)}`;
   if (s === 'waiting') return `needs you ${fmtDur(idleFor)}`;
   if (s === 'idle')    return `idle ${fmtDur(idleFor)}`;
   return 'offline';
@@ -441,7 +452,7 @@ function onLeases(leases) {
 function onPane(session, pane) {
   if (state.mode !== 'list') return;
   const row = els.listPane.querySelector(`[data-session="${cssEscape(session)}"] .last`);
-  if (row) row.textContent = lastLine(pane) || ' ';
+  if (row) row.textContent = rowLast(session);
 }
 
 // Stable alphabetical order by display name. Cards must not jump around
@@ -491,10 +502,11 @@ async function fetchLeases() {
 
 // ---------- summary + attention ----------
 function renderSummary() {
-  const counts = { waiting: 0, working: 0, idle: 0, offline: 0 };
+  const counts = { waiting: 0, done: 0, working: 0, idle: 0, offline: 0 };
   for (const s of state.sessions) counts[stateOf(s.name)]++;
   const chips = [
     ['waiting', counts.waiting, 'need you'],
+    ['done',    counts.done,    'done'],
     ['working', counts.working, 'working'],
     ['idle',    counts.idle,    'idle'],
   ];
@@ -650,8 +662,11 @@ function buildCell(s) {
   cell.innerHTML = `
     <div class="h">
       <span class="ag"></span>
-      <span class="name">${escapeHtml(displayName(s.name))}</span>
+      <div class="nm"><span class="name">${escapeHtml(displayName(s.name))}</span><span class="mt">&nbsp;</span></div>
+      <span class="pos"></span>
+      <span class="tgt">&rarr; send target</span>
       <span class="stw"></span>
+      <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
       <button class="open" aria-label="Open full screen" title="Open">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
       </button>
@@ -663,7 +678,9 @@ function buildCell(s) {
       <button data-key="3">3</button>
       <button data-key="Escape">esc</button>
     </div>
+    <div class="reader"></div>
     <div class="b"></div>`;
+  cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); toggleReader(); };
   wireTap(cell, () => focusSession(s.name), () => { if (state.mode !== 'card') openCard(s.name); });
   cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
   for (const b of cell.querySelectorAll('.ask button')) {
@@ -696,7 +713,8 @@ function wireTap(el, onSingle, onDouble) {
 function syncCell(cell) {
   const n = cell.dataset.session;
   const s = stateOf(n);
-  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}`;
+  const inCard = cell.parentElement === els.cardPane;
+  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}`;
   const ag = agentBadgeHtml(n);
   const agEl = cell.querySelector('.ag');
   if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
@@ -706,6 +724,118 @@ function syncCell(cell) {
   const ask = cell.querySelector('.ask');
   ask.classList.toggle('hidden', s !== 'waiting');
   if (s === 'waiting') ask.querySelector('.q').textContent = state.status[n]?.waitReason || 'waiting for your answer';
+  const mt = cell.querySelector('.mt'), mh = headMetaHtml(n);
+  if (mt.dataset.h !== mh) { mt.dataset.h = mh; mt.innerHTML = mh; }
+  const rd = cell.querySelector('.rd');
+  rd.textContent = state.reader ? '>_' : 'Aa';
+  const pos = cell.querySelector('.pos');
+  if (inCard) {
+    const order = byUrgency(visibleSessions()), i = order.findIndex((x) => x.name === n);
+    pos.textContent = order.length > 1 && i >= 0 ? `${i + 1} / ${order.length}` : '';
+  } else pos.textContent = '';
+  if (inCard && state.reader) syncReader(cell, n);
+}
+
+// ---------- meta (repo / branch / ctx / activity) ----------
+function locText(st) {
+  if (!st.repo && !st.branch) return '';
+  const b = st.branch ? `${st.branch}${st.dirty ? '*' : ''}` : (st.dirty ? '*' : '');
+  return st.repo && b ? `${st.repo}/${b}` : (st.repo || b);
+}
+function ctxHtml(st) {
+  const v = st.contextLeft;
+  if (v == null || isNaN(v)) return '';
+  const cls = v < 15 ? ' crit' : v < 30 ? ' warn' : '';
+  return `<span class="ctx${cls}">ctx ${Math.round(v)}%</span>`;
+}
+function headMetaHtml(n) {
+  const st = state.status[n] || {};
+  const parts = [];
+  const c = ctxHtml(st);
+  if (c) parts.push(c);
+  const loc = locText(st);
+  if (loc) parts.push(`<span class="loc">${escapeHtml(loc)}</span>`);
+  if (stateOf(n) === 'working' && st.activity) parts.push(`<span class="act">${escapeHtml(st.activity)}</span>`);
+  return parts.join(' · ') || '&nbsp;';
+}
+function rowChipsHtml(n) {
+  const st = state.status[n] || {};
+  const chips = [];
+  const loc = locText(st);
+  if (loc) chips.push(`<span class="chip-m">${escapeHtml(loc)}</span>`);
+  const c = ctxHtml(st);
+  if (c) chips.push(c.replace('class="ctx', 'class="chip-m ctx'));
+  if (st.lease?.resource) chips.push(`<span class="chip-m lease">&#128274; ${escapeHtml(st.lease.resource)}${st.lease.ttlLeftMin != null ? ` ${st.lease.ttlLeftMin}m` : ''}</span>`);
+  if (st.model) chips.push(`<span class="chip-m">${escapeHtml(st.model)}</span>`);
+  return chips.join('');
+}
+
+// ---------- reader (rendered last reply) ----------
+const LS_READER = 'ghosty.reader';
+state.reader = false;
+state.replies = new Map();     // session -> { hash, at, text, failed, busy }
+function toggleReader() {
+  state.reader = !state.reader;
+  lsSet(LS_READER, state.reader ? '1' : '0');
+  for (const c of els.cardPane.children) syncCell(c);
+  const a = state.active;
+  if (a) { relayoutTerm(a); setTimeout(() => relayoutTerm(a), 60); }
+}
+function syncReader(cell, n) {
+  const st = state.status[n] || {};
+  const hash = st.replyHash ?? '';
+  let c = state.replies.get(n);
+  const stale = !c || c.hash !== hash || (hash === '' && Date.now() - c.at > 5000);
+  if (stale && !(c && c.busy)) {
+    c = c || { hash: null, at: 0, text: '' };
+    c.busy = true; state.replies.set(n, c);
+    fetch(`/api/reply/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((d) => { c.text = String(d.reply ?? ''); c.failed = false; })
+      .catch(() => { c.failed = true; })
+      .finally(() => {
+        c.busy = false; c.hash = hash; c.at = Date.now();
+        const cur = els.cardPane.querySelector(`[data-session="${cssEscape(n)}"]`);
+        if (cur) paintReader(cur, n);
+      });
+  }
+  paintReader(cell, n);
+}
+function paintReader(cell, n) {
+  const c = state.replies.get(n);
+  const el = cell.querySelector('.reader');
+  let text = c ? c.text : '';
+  if (c && (c.failed || !text) && state.paneText.has(n)) text = stripAnsi(state.paneText.get(n)).replace(/\n+$/, '');
+  const html = renderReply(text);
+  if (el.dataset.h !== html) { el.dataset.h = html; el.innerHTML = html; }
+}
+function inlineMd(t) {
+  return escapeHtml(t)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+}
+function renderReply(text) {
+  if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
+  const lines = String(text).replace(/\t/g, '    ').split('\n');
+  const out = [];
+  let para = [], code = null, fence = false;
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.join('<br>')}</p>`); para = []; } };
+  const flushCode = () => { if (code) { out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); code = null; } };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    if (/^\s*```/.test(line)) {
+      if (fence) { fence = false; flushCode(); } else { flushPara(); flushCode(); fence = true; code = []; }
+      continue;
+    }
+    if (fence) { code.push(line); continue; }
+    if (/^ {4,}\S/.test(line)) { flushPara(); (code ||= []).push(line.slice(4)); continue; }
+    if (code) { if (!line.trim()) { code.push(''); continue; } flushCode(); }
+    if (!line.trim()) { flushPara(); continue; }
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (h) { flushPara(); out.push(`<div class="rh">${inlineMd(h[2])}</div>`); continue; }
+    para.push(inlineMd(line.replace(/^(\s*)[-*] /, '$1\u2022 ')));
+  }
+  flushPara(); flushCode();
+  return out.join('');
 }
 
 function renderInto(host, sessions) {
@@ -745,30 +875,67 @@ function renderGrid() {
 }
 
 // ---------- board (list view) ----------
+// line 2 of a board row: what is it doing / what did it last say
+function rowLast(n) {
+  const st = state.status[n] || {};
+  const s = stateOf(n);
+  if (s === 'waiting' && st.waitReason) return st.waitReason;
+  if (s === 'working' && st.activity) return st.activity;
+  return st.lastMessage || lastLine(state.paneText.get(n) || '') || ' ';
+}
 function renderList() {
   els.listPane.innerHTML = '';
-  for (const s of byUrgency(visibleSessions())) {
+  const rows = byUrgency(visibleSessions());
+  if (!rows.length) {
+    els.listPane.innerHTML = `<div class="empty">${state.sessions.length
+      ? `Nothing ${escapeHtml(STATE_LABEL[state.filter] || state.filter)} right now.<br><button class="clear-f">show all ${state.sessions.length}</button>`
+      : 'No tmux sessions yet.<br>Start one from the sidebar, or run <code>tmux new -s name</code>.'}</div>`;
+    const cf = els.listPane.querySelector('.clear-f');
+    if (cf) cf.onclick = () => setFilter(null);
+    return;
+  }
+  for (const s of rows) {
     const row = document.createElement('div');
     row.className = 'row-item';
     row.dataset.session = s.name;
     row.innerHTML = `
-      <div class="top"><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span></div>
-      <span class="stw"></span>
-      <div class="last"></div>`;
-    row.querySelector('.last').textContent = (stateOf(s.name) === 'waiting' && state.status[s.name]?.waitReason)
-      || lastLine(state.paneText.get(s.name) || '') || ' ';
-    row.onclick = () => { focusSession(s.name); openCard(s.name); };
+      <div class="l1"><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="stw"></span></div>
+      <div class="last"></div>
+      <div class="meta"></div>`;
+    row.querySelector('.last').textContent = rowLast(s.name);
+    wireRow(row, s.name);
     els.listPane.appendChild(row);
     connectSession(s.name);
   }
   syncList();
 }
+// tap = open card, long-press = select as send target without opening
+function wireRow(row, name) {
+  let timer = 0, sx = 0, sy = 0, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = 0; };
+  row.addEventListener('pointerdown', (e) => {
+    fired = false; sx = e.clientX; sy = e.clientY; cancel();
+    timer = setTimeout(() => {
+      timer = 0; fired = true;
+      focusSession(name);
+      if (navigator.vibrate) navigator.vibrate(10);
+      toast(`\u2192 ${displayName(name)}`, 1000);
+    }, 450);
+  });
+  row.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) row.addEventListener(t, cancel);
+  row.addEventListener('contextmenu', (e) => e.preventDefault());
+  row.addEventListener('click', () => {
+    if (fired) { fired = false; return; }
+    focusSession(name); openCard(name);
+  });
+}
 function syncList() {
   // Reorder only when urgency order changed; otherwise update text in place.
   const order = byUrgency(visibleSessions()).map((s) => s.name).join('|');
-  const cur = [...els.listPane.children].map((r) => r.dataset.session).join('|');
-  if (order !== cur) { renderList(); return; }
-  for (const row of els.listPane.children) {
+  const cur = [...els.listPane.querySelectorAll('.row-item')].map((r) => r.dataset.session).join('|');
+  if (order !== cur || (!order && !els.listPane.querySelector('.empty'))) { renderList(); return; }
+  for (const row of els.listPane.querySelectorAll('.row-item')) {
     const n = row.dataset.session;
     const s = stateOf(n);
     row.className = `row-item ${s}${n === state.active ? ' focus' : ''}`;
@@ -778,7 +945,11 @@ function syncList() {
     const stw = row.querySelector('.stw');
     if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
     else stw.querySelector('.st').textContent = stateText(n);
-    if (s === 'waiting' && state.status[n]?.waitReason) row.querySelector('.last').textContent = state.status[n].waitReason;
+    const last = row.querySelector('.last'), lt = rowLast(n);
+    if (last.textContent !== lt) last.textContent = lt;
+    const mh = rowChipsHtml(n), meta = row.querySelector('.meta');
+    if (meta.dataset.h !== mh) { meta.dataset.h = mh; meta.innerHTML = mh; }
+    meta.classList.toggle('hidden', !mh);
   }
 }
 
@@ -826,11 +997,13 @@ function openCard(name) {
 
 // ---------- mode switching ----------
 function setMode(mode) {
+  if (mode === 'grid' && isPhone()) mode = 'list';      // grid is desktop-only
   if (mode !== 'card') state.prevMode = mode;
   state.mode = mode;
   lsSet(LS_MODE, mode);
   els.main.classList.remove('view-card','view-grid','view-list');
   els.main.classList.add(`view-${mode}`);
+  document.body.dataset.mode = mode;
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
   els.gridSizes.classList.toggle('hidden', mode !== 'grid');
   els.backBtn.classList.toggle('hidden', mode !== 'card');
@@ -1014,6 +1187,38 @@ function wireSwipe() {
   document.addEventListener('touchend',   onTouchEnd,   { passive: true });
 }
 
+// ---------- card: swipe left/right = next/prev session (board order) ----------
+function stepSession(dir) {
+  const order = byUrgency(visibleSessions());
+  const i = order.findIndex((x) => x.name === state.active);
+  const next = order[i + dir];
+  if (i < 0 || !next) return;
+  focusSession(next.name);
+  els.cardPane.classList.remove('sl-l', 'sl-r');
+  void els.cardPane.offsetWidth;
+  els.cardPane.classList.add(dir > 0 ? 'sl-r' : 'sl-l');
+  clearTimeout(stepSession.t);
+  stepSession.t = setTimeout(() => els.cardPane.classList.remove('sl-l', 'sl-r'), 260);
+  if (navigator.vibrate) navigator.vibrate(8);
+}
+function wireCardSwipe() {
+  let sx = 0, sy = 0, on = false;
+  els.cardPane.addEventListener('touchstart', (e) => {
+    on = false;
+    if (state.mode !== 'card' || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (t.clientX < 24) return;                          // left edge belongs to the sidebar
+    if (!e.target.closest('.h, .reader') || e.target.closest('pre, button')) return;
+    sx = t.clientX; sy = t.clientY; on = true;
+  }, { passive: true });
+  els.cardPane.addEventListener('touchend', (e) => {
+    if (!on) return; on = false;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx, dy = t.clientY - sy;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepSession(dx < 0 ? 1 : -1);
+  }, { passive: true });
+}
+
 // ---------- helpers ----------
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -1022,7 +1227,7 @@ function cssEscape(s) { return (window.CSS?.escape) ? CSS.escape(s) : String(s).
 
 // ---------- wire up ----------
 els.menuBtn.onclick   = openSide;
-els.backBtn.onclick   = () => setMode(state.prevMode || 'grid');
+els.backBtn.onclick   = () => setMode(isPhone() ? 'list' : (state.prevMode || 'grid'));
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();
 els.notifyBtn.onclick = () => toggleNotify();
@@ -1099,6 +1304,9 @@ if ('serviceWorker' in navigator) {
   els.notifyBtn.classList.toggle('on', state.notify);
   setGridSize(state.gridSize);
   const wanted = new URLSearchParams(location.search).get('s');
+  if (isPhone()) { state.mode = 'list'; state.prevMode = 'list'; }   // phone home = board
+  const rd = lsGet(LS_READER, null);
+  state.reader = rd == null ? isPhone() : rd === '1';
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   const view = new URLSearchParams(location.search).get('view');
   if (['card', 'grid', 'list'].includes(view)) state.mode = view;
@@ -1107,6 +1315,8 @@ if ('serviceWorker' in navigator) {
   await fetchInitial();
   connectStatus();
   wireSwipe();
+  wireCardSwipe();
+  window.matchMedia('(max-width: 720px)').addEventListener?.('change', () => { if (isPhone() && state.mode === 'grid') setMode('list'); });
   setInterval(tickClock, 1000);
   setInterval(fetchLeases, 60000);
 })();
