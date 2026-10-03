@@ -1,16 +1,19 @@
 {
-  "name": "Ghosty Sessions",
-  "short_name": "Ghosty",
-  "description": "Mobile dashboard for tmux Claude/Codex sessions on codebox",
+  "name": "codebox — ghosty sessions",
+  "short_name": "codebox",
+  "description": "Mobile-first tmux dashboard for Claude / Codex sessions. Tabs, grid, send-keys — over Tailscale.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#0f1014",
   "theme_color": "#0f1014",
+  "categories": ["developer", "productivity", "utilities"],
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/icon.svg",     "sizes": "any",     "type": "image/svg+xml" }
+    { "src": "/icon.svg",     "sizes": "any",     "type": "image/svg+xml" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

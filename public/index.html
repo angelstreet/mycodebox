@@ -6,41 +6,52 @@
   <meta name="theme-color" content="#0f1014" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Ghosty" />
+  <meta name="apple-mobile-web-app-title" content="codebox" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="application-name" content="codebox" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/icon-192.png" />
   <link rel="stylesheet" href="/vendor/xterm.css" />
   <link rel="stylesheet" href="/style.css" />
-  <title>Ghosty Sessions</title>
+  <title>codebox</title>
 </head>
 <body>
   <header class="topbar" id="topbar">
     <button class="icon-btn" id="menuBtn" aria-label="Sessions">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7"  x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
     </button>
-    <div class="title" id="appTitle">Ghosty Sessions</div>
-    <div class="modes">
-      <button data-mode="focus" class="mode-btn on">focus</button>
-      <button data-mode="grid"  class="mode-btn">grid</button>
-      <button data-mode="list"  class="mode-btn">list</button>
+    <button class="icon-btn back-btn hidden" id="backBtn" aria-label="Back to grid">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div class="title" id="appTitle">codebox</div>
+    <div class="modes" id="modeBar">
+      <button data-mode="terminal" class="mode-btn on">terminal</button>
+      <button data-mode="grid"     class="mode-btn">grid</button>
+    </div>
+    <div class="gridsizes hidden" id="gridSizes">
+      <button data-size="4"  class="size-btn">4</button>
+      <button data-size="8"  class="size-btn on">8</button>
+      <button data-size="12" class="size-btn">12</button>
+      <button data-size="16" class="size-btn">16</button>
     </div>
     <button class="icon-btn" id="refreshBtn" aria-label="Refresh">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
+    <button class="icon-btn install-btn" id="installBtn" aria-label="Install app" title="Add to Home Screen">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
     </button>
   </header>
 
   <nav id="tabs" class="tabs" aria-label="Active sessions"></nav>
 
-  <main id="main" class="main view-focus">
-    <!-- focus view: single big xterm -->
-    <section class="focus-pane" id="focusPane">
+  <main id="main" class="main view-terminal">
+    <!-- terminal view: single big xterm for the active session -->
+    <section class="term-pane" id="termPane">
       <div class="term-host" id="termHost"></div>
     </section>
-    <!-- grid view: tiled xterm panes -->
+    <!-- grid view: tiled previews with live tail text -->
     <section class="grid-pane" id="gridPane"></section>
-    <!-- list view: session rows -->
-    <section class="list-pane" id="listPane"></section>
   </main>
 
   <footer class="dock" id="dock">
@@ -50,6 +61,9 @@
            placeholder="type a message…  ⏎ to send" />
     <button id="sendBtn" class="send">Send</button>
   </footer>
+
+  <!-- swipe affordance on the left edge -->
+  <div class="edge-swipe" id="edgeSwipe" aria-hidden="true"></div>
 
   <aside id="side" class="side" aria-hidden="true">
     <div class="side-head">
@@ -62,6 +76,9 @@
       <span class="dot dot-busy"></span> typing
       <span class="dot dot-wait"></span> needs you
       <span class="dot dot-offline"></span> offline
+    </div>
+    <div class="legend dim">
+      Tap pencil to rename · stored on this device.
     </div>
   </aside>
 
