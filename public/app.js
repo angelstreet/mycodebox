@@ -30,6 +30,7 @@ const els = {
   menuBtn:     $('#menuBtn'),
   backBtn:     $('#backBtn'),
   notifyBtn:   $('#notifyBtn'),
+  mgrBtn:      $('#mgrBtn'),
   edgeSwipe:   $('#edgeSwipe'),
   gridSizes:   $('#gridSizes'),
   toast:       $('#toast'),
@@ -947,6 +948,7 @@ function buildCell(s) {
       <button data-key="3">3</button>
       <button data-key="Escape">esc</button>
     </div>
+    <div class="apill hidden"></div>
     <div class="reader"></div>
     <div class="b"></div>
     <div class="jump">
@@ -1049,6 +1051,7 @@ function syncCell(cell) {
   const ask = cell.querySelector('.ask');
   ask.classList.toggle('hidden', s !== 'waiting');
   if (s === 'waiting') ask.querySelector('.q').textContent = state.status[n]?.waitReason || 'waiting for your answer';
+  syncAutoPill(cell.querySelector('.apill'), n);
   const pj = cell.querySelector('.proj'), ph = projHtml(n);
   if (pj.dataset.h !== ph) { pj.dataset.h = ph; pj.innerHTML = ph; }
   const mt = cell.querySelector('.mt'), mh = headMetaHtml(n);
@@ -1263,6 +1266,7 @@ function renderList() {
     row.innerHTML = `
       <div class="l1"><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="stw"></span></div>
       <div class="last"></div>
+      <div class="apill hidden"></div>
       <div class="meta"></div>`;
     row.querySelector('.last').textContent = rowLast(s.name);
     wireRow(row, s.name);
@@ -1316,6 +1320,7 @@ function syncList() {
     const stw = row.querySelector('.stw');
     if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
     else stw.querySelector('.st').textContent = stateText(n);
+    syncAutoPill(row.querySelector('.apill'), n);
     const last = row.querySelector('.last'), lt = rowLast(n);
     if (last.textContent !== lt) last.textContent = lt;
     const mh = rowChipsHtml(n), meta = row.querySelector('.meta');
@@ -1339,6 +1344,7 @@ function syncAll() {
 
 // Elapsed timers tick locally between server updates.
 function tickClock() {
+  for (const el of document.querySelectorAll('.apill [data-at]')) el.textContent = autoLeft(Number(el.dataset.at));
   for (const el of document.querySelectorAll('.stw[data-s] .st')) {
     const host = el.closest('[data-session]');
     if (host) el.textContent = stateText(host.dataset.session);
@@ -1448,6 +1454,96 @@ function pushHist(text) {
   lsSet(LS_HIST, JSON.stringify(dock.hist));
   dock.hidx = -1;
 }
+
+// ---------- AI manager: auto-answer countdown + panel ----------
+const autoLeft = (at) => `${Math.max(0, Math.ceil((at - Date.now()) / 1000))}s`;
+// Pill on a card / board row while an automatic answer is pending: "auto: Yes, continue. in 23s ✕".
+function syncAutoPill(el, n) {
+  const a = state.status[n]?.auto;
+  if (!a) { if (!el.classList.contains('hidden')) { el.classList.add('hidden'); el.dataset.id = ''; el.innerHTML = ''; } return; }
+  el.classList.remove('hidden');
+  if (el.dataset.id !== a.id) {
+    el.dataset.id = a.id;
+    el.innerHTML = `<span class="ap"><b>auto:</b> <span class="aa">${escapeHtml(a.answer)}</span> in <i data-at="${a.sendAt}">${autoLeft(a.sendAt)}</i><button class="ax" data-cancel="${escapeHtml(n)}" aria-label="Cancel auto answer" title="Cancel">&#10005;</button></span>`;
+  }
+}
+// capture phase: a tap on the pill must not open the card / select the row
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-cancel]');
+  if (!b) return;
+  e.stopPropagation(); e.preventDefault();
+  const n = b.dataset.cancel;
+  b.disabled = true;
+  try {
+    const r = await fetch(`/api/manager/cancel/${encodeURIComponent(n)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    toast(r.ok ? `auto answer cancelled — ${displayName(n)}` : 'too late, already sent');
+    if (r.ok && state.status[n]) { state.status[n].auto = null; syncAll(); }
+  } catch { toast('cancel failed'); }
+}, true);
+
+async function mgrPost(body) {
+  const r = await fetch('/api/manager', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+const CASE_LABEL = { continue: 'continue? → "Yes, continue."', menu_recommended: 'recommended option' };
+const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
+function logLine(r) {
+  const sess = displayName(r.session || '');
+  if (r.type === 'stall') {
+    const w = r.wouldSend ? (r.wouldSend.text != null ? r.wouldSend.text : `option ${r.wouldSend.key}`) : null;
+    return { cls: w ? 'would' : 'owner', tag: w ? 'would' : 'owner', sess, case: r.case, text: w || r.why || '' };
+  }
+  if (r.type === 'answer') return { cls: 'sent', tag: 'answered', sess, case: r.case, text: r.answer?.text ?? `option ${r.answer?.key}` };
+  if (r.type === 'answer_cancelled') return { cls: 'canc', tag: 'cancelled', sess, case: r.case || '', text: r.reason || '' };
+  if (r.type === 'escalated') return { cls: 'esc', tag: 'escalated', sess, case: r.case || '', text: r.reason || '' };
+  return null;
+}
+function openManager() {
+  openSheet('AI manager', async ({ body, foot, close }) => {
+    body.innerHTML = '<div class="sheet-empty">loading…</div>';
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    const draw = async () => {
+      let cfg, log;
+      try {
+        [cfg, log] = await Promise.all([
+          fetch('/api/manager').then((r) => r.json()),
+          fetch('/api/manager/log?limit=200').then((r) => r.json()),
+        ]);
+      } catch { body.innerHTML = '<div class="sheet-empty">could not load</div>'; return; }
+      const off = new Set(cfg.disabledSessions || []);
+      const t = cfg.today || {};
+      const entries = (log.entries || []).filter((r) => logLine(r)).slice(-30).reverse();
+      body.innerHTML = `
+        <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend"><i></i><span>Auto-answer <b>${cfg.autoSend ? 'ON' : 'OFF'}</b></span></button>
+        <div class="mcases">${(cfg.validCases || []).map((c) => `<label class="mchk"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span>${escapeHtml(CASE_LABEL[c] || c)}</span></label>`).join('')}</div>
+        <div class="mnote">sends after ${Math.round(cfg.delayMs / 1000)}s (cancel from the pill) · Jev answers need ≥ ${cfg.minConfidence} · max ${cfg.maxPerSessionPerHour}/h per session · never deploy / push / delete / secrets / money</div>
+        <div class="mcounts"><span class="sent"><b>${t.answered ?? 0}</b> answered</span><span class="canc"><b>${t.cancelled ?? 0}</b> cancelled</span><span class="esc"><b>${t.escalated ?? 0}</b> escalated</span><span class="dim">today</span></div>
+        <div class="side-sub">Last ${entries.length}</div>
+        <div class="mlog">${entries.map((r) => { const l = logLine(r); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
+        <div class="side-sub">Sessions</div>
+        <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
+    };
+    body.onclick = async (e) => {
+      const sw = e.target.closest('[data-set="autoSend"]');
+      if (sw) { try { await mgrPost({ autoSend: !sw.classList.contains('on') }); } catch { toast('save failed'); } draw(); }
+    };
+    body.onchange = async (e) => {
+      const i = e.target;
+      try {
+        if (i.dataset.case) {
+          const cases = [...body.querySelectorAll('[data-case]')].filter((x) => x.checked).map((x) => x.dataset.case);
+          await mgrPost({ autoCases: cases });
+        } else if (i.dataset.sess) await mgrPost({ session: i.dataset.sess, sessionEnabled: i.checked });
+      } catch { toast('save failed'); }
+      draw();
+    };
+    draw();
+  });
+}
+els.mgrBtn.onclick = openManager;
 
 // ----- generic bottom sheet -----
 let sheetEl = null;

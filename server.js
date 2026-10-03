@@ -12,8 +12,10 @@
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/sessions          → {name, agent, cwd} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
-//   GET  /api/manager           → AI manager config (enabled, shadow, disabled sessions, Jev budget)
-//   POST /api/manager           → {enabled?} global on/off, {session, sessionEnabled} per session
+//   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
+//   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
+//                                 global settings, {session, sessionEnabled} per session
+//   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
@@ -32,7 +34,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
-import { initManager, observe, forget as managerForget, prune as pruneManager, stallOf, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
+import { initManager, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -635,6 +637,7 @@ async function pollOnce() {
     status[s.name] = {
       state, agent, agentCmd, waitReason,
       stall: stallOf(s.name),
+      auto: autoOf(s.name),
       lastActivitySec: s.lastActivitySec,
       lastSendAt: sentAt,
       lastSendAck: sentAt && t.ackFor === sentAt ? t.ackAt : null,
@@ -1050,7 +1053,13 @@ const server = http.createServer(async (req, res) => {
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager') {
-    return json(res, 200, managerConfig());
+    return json(res, 200, { ...managerConfig(), today: await todayCounts() });
+  }
+  if (req.method === 'POST' && p.startsWith('/api/manager/cancel/')) {
+    const name = decodeURIComponent(p.slice('/api/manager/cancel/'.length));
+    if (!cancelAuto(name)) return json(res, 404, { ok: false, error: 'no pending auto answer' });
+    latest = null;
+    return json(res, 200, { ok: true, session: name });
   }
   if (req.method === 'POST' && p === '/api/manager') {
     try { return json(res, 200, await setManagerConfig(await readJsonBody(req))); }
@@ -1158,7 +1167,8 @@ async function leaseTick() {
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
   await initManager({
-    onOwnerNeeded: (session, stall) => ntfy(session, 'asks', stall.question || stall.case),
+    onOwnerNeeded: (session, stall, reason) => ntfy(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
+    sendKey, sendKeys,
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.
