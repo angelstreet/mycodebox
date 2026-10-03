@@ -248,7 +248,7 @@ async function postBatch(cfg, batch) {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from(`${cfg.publicKey}:${cfg.secretKey}`).toString('base64') },
     body: JSON.stringify({ batch }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(120000),
   });
   if (!res.ok && res.status !== 207) throw new Error(`langfuse ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const body = await res.json().catch(() => ({}));
