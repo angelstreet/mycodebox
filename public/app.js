@@ -30,6 +30,7 @@ const els = {
   menuBtn:     $('#menuBtn'),
   backBtn:     $('#backBtn'),
   notifyBtn:   $('#notifyBtn'),
+  mgrBtn:      $('#mgrBtn'),
   edgeSwipe:   $('#edgeSwipe'),
   gridSizes:   $('#gridSizes'),
   toast:       $('#toast'),
@@ -56,6 +57,7 @@ const state = {
   prevState: {},                // session -> last seen state (for transition alerts)
   leases:    null,
   notify:    false,
+  pushOn:    false,
   toastTimer:null,
   side:      false,
   installPrompt: null,
@@ -141,6 +143,8 @@ function fmtShort(sec) {
 //   working  → time since the last command was sent (or since it started working)
 //   waiting  → how long it has been waiting on you
 //   idle     → time since last output
+// card / board badge: the pulsing dot already says "working", so show only the elapsed time
+function badgeText(name) { return stateText(name).replace(/^working ?/, ''); }
 function stateText(name) {
   const st = state.status[name] || {};
   const s = stateOf(name);
@@ -160,11 +164,12 @@ function stateText(name) {
 
 function stateBadgeHtml(name) {
   const s = stateOf(name);
-  return `<span class="state ${s}"><i class="dot ${s}"></i><span class="st">${escapeHtml(stateText(name))}</span></span>`;
+  return `<span class="state ${s}"><i class="dot ${s}"></i><span class="st">${escapeHtml(badgeText(name))}</span></span>`;
 }
 function agentBadgeHtml(name) {
   const a = agentOf(name);
-  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>`;
+  const m = (state.status[name] || {}).model;
+  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>${m ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}`;
 }
 
 // Strip ANSI control sequences.
@@ -200,10 +205,18 @@ function lastLine(paneText) {
 // ---------- xterm setup ----------
 const FONT_MIN = 8, FONT_MAX = 20;
 const FONT_FAMILY = "'JetBrains Mono', monospace";
-const LS_FONT = 'ghosty.font', LS_FIT = 'ghosty.fit';
+const LS_FONT = 'ghosty.font', LS_FIT = 'ghosty.fit', LS_CTRL = 'ghosty.cardctl';
 const clampFont = (n) => Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(n)));
 state.font = clampFont(Number(lsGet(LS_FONT, 0)) || (matchMedia('(max-width: 720px)').matches ? 11 : 12));
 state.fit = lsGet(LS_FIT, '1') !== '0';
+state.cardCtl = lsGet(LS_CTRL, '1') !== '0';
+document.body.classList.toggle('no-cardctl', !state.cardCtl);
+function setCardCtl(on) {
+  state.cardCtl = on;
+  lsSet(LS_CTRL, on ? '1' : '0');
+  document.body.classList.toggle('no-cardctl', !on);
+  $('#ctlToggle')?.classList.toggle('on', on);
+}
 document.documentElement.style.setProperty('--tf', String(state.font));
 
 function getTerm(session) {
@@ -744,6 +757,108 @@ function renderFilterBar() {
   bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); });
 }
 
+// ---------- task document (.md) ----------
+// Sessions named taskNN get an MD button when the server finds a TASK-NN*.md (or task.md) for them.
+state.taskDocs = new Map();   // session -> { files: [] , at }
+function probeTaskDoc(cell, n) {
+  const btn = cell.querySelector('.td');
+  if (!btn) return;
+  let d = state.taskDocs.get(n);
+  if (!/^task\d+/i.test(n)) { btn.classList.add('hidden'); return; }
+  if (!d || (!d.busy && Date.now() - d.at > 120000)) {
+    d = d || { files: [], at: 0 };
+    d.busy = true; state.taskDocs.set(n, d);
+    fetch(`/api/taskdocs/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((j) => { d.files = j.files || []; })
+      .catch(() => {})
+      .finally(() => { d.busy = false; d.at = Date.now(); const c = document.querySelector(`.cell[data-session="${cssEscape(n)}"]`); if (c) probeTaskDoc(c, n); });
+  }
+  btn.classList.toggle('hidden', !d.files.length);
+}
+function mdInline(t) {
+  return escapeHtml(t)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:]|$)/g, '$1<i>$2</i>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function renderMd(src) {
+  const lines = String(src).replace(/\t/g, '    ').split('\n');
+  const out = [];
+  let i = 0, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${mdInline(para.join(' '))}</p>`); para = []; } };
+  const row = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {
+      flush(); const code = []; i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
+      i++; out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); continue;
+    }
+    if (!l.trim()) { flush(); i++; continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) { flush(); out.push(`<div class="mdh h${Math.min(h[1].length, 4)}">${mdInline(h[2])}</div>`); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { flush(); out.push('<hr>'); i++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || '')) {
+      flush(); const head = row(l); i += 2; const body = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(row(lines[i++]));
+      out.push(`<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${mdInline(c)}</th>`).join('')}</tr></thead><tbody>${
+        body.map((r) => `<tr>${r.map((c) => `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*>\s?/.test(l)) {
+      flush(); const q = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
+      out.push(`<blockquote>${mdInline(q.join(' '))}</blockquote>`); continue;
+    }
+    const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(l);
+    if (li) {
+      flush();
+      const items = [];
+      while (i < lines.length) {
+        const m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
+        if (m) { items.push({ d: Math.min(Math.floor(m[1].length / 2), 4), num: /\d/.test(m[2]), t: m[3] }); i++; }
+        else if (lines[i].trim() && /^\s{2,}\S/.test(lines[i]) && items.length) { items[items.length - 1].t += ' ' + lines[i].trim(); i++; }
+        else break;
+      }
+      out.push('<div class="mdl">' + items.map((it) => {
+        const cb = /^\[( |x|X)\]\s+(.*)$/.exec(it.t);
+        const mark = cb ? `<span class="cb${cb[1] === ' ' ? '' : ' on'}"></span>` : `<span class="bu">${it.num ? '\u2022' : '\u2022'}</span>`;
+        return `<div class="mdi" style="margin-left:${it.d * 14}px">${mark}<span>${mdInline(cb ? cb[2] : it.t)}</span></div>`;
+      }).join('') + '</div>');
+      continue;
+    }
+    para.push(l.trim()); i++;
+  }
+  flush();
+  return out.join('');
+}
+async function toggleTaskDoc(cell, n, file) {
+  if (cell.classList.contains('doc-on') && !file) { cell.classList.remove('doc-on'); return; }
+  const dv = cell.querySelector('.docview');
+  const d = state.taskDocs.get(n) || { files: [] };
+  const cur = file || dv.dataset.file || d.files[0];
+  if (!cur) return;
+  dv.dataset.file = cur;
+  cell.classList.add('doc-on');
+  dv.innerHTML = '<div class="rd-empty">loading\u2026</div>';
+  try {
+    const r = await fetch(`/api/taskdoc/${encodeURIComponent(n)}?f=${encodeURIComponent(cur)}`);
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    const opts = d.files.length > 1
+      ? `<select class="mdsel">${d.files.map((f) => `<option value="${escapeHtml(f)}"${f === j.name ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('')}</select>`
+      : `<span class="mdname">${escapeHtml(j.name)}</span>`;
+    dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}</div><div class="mdbody">${renderMd(j.text)}</div>`;
+    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+    const sel = dv.querySelector('.mdsel');
+    if (sel) sel.onchange = () => toggleTaskDoc(cell, n, sel.value);
+  } catch {
+    dv.innerHTML = '<div class="mdbar"><button class="mdback">\u2190 session</button></div><div class="rd-empty">could not load the task document</div>';
+    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+  }
+}
+
 // ---------- tabs ----------
 function renderTabStrip() {
   els.tabs.innerHTML = '';
@@ -772,11 +887,6 @@ function syncTabs() {
 }
 
 // ---------- sidebar ----------
-const SIDE_GROUPS = [['waiting', 'Needs you'], ['done', 'Done'], ['working', 'Working'], ['idle', 'Idle']];
-function sideGroupOf(n) {
-  const s = stateOf(n);
-  return s === 'waiting' || s === 'done' || s === 'working' ? s : 'idle';
-}
 function repoBranch(n) {
   const st = state.status[n] || {};
   return [st.repo, st.branch].filter(Boolean).join(' · ');
@@ -784,12 +894,11 @@ function repoBranch(n) {
 function sideSig() {
   return state.sessions.map((s) => `${s.name}:${customFor(s.name)}`).join(',');
 }
-// Full rebuild only when the session set / names change; group moves are done in layoutSide().
+// Full rebuild only when the session set / names change; ordering is done in layoutSide().
 function renderSide() {
   const list = els.sessionList;
   if (list.querySelector('li.editing')) return;   // never wipe an in-progress rename
   list.innerHTML = '';
-  state.sideHdr = {};
   els.sessionCount.textContent = `${state.sessions.length}`;
   list.dataset.sig = sideSig();
   for (const s of state.sessions) list.appendChild(buildSideRow(s));
@@ -798,24 +907,14 @@ function renderSide() {
 }
 function layoutSide() {
   const list = els.sessionList;
-  const hdrs = state.sideHdr || (state.sideHdr = {});
   const rows = new Map([...list.children].filter((li) => li.dataset.session).map((li) => [li.dataset.session, li]));
   let cursor = list.firstChild;
   const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
-  for (const [g, label] of SIDE_GROUPS) {
-    const members = state.sessions.filter((s) => sideGroupOf(s.name) === g && matchesFilter(s.name));
-    if (!members.length) {
-      const old = hdrs[g];
-      if (old) { if (old === cursor) cursor = cursor.nextSibling; old.remove(); delete hdrs[g]; }
-      continue;
-    }
-    let h = hdrs[g];
-    if (!h) { h = hdrs[g] = document.createElement('li'); h.className = `grp ${g}`; }
-    const t = `${label} \u00b7 ${members.length}`;
-    if (h.textContent !== t) h.textContent = t;
-    place(h);
-    for (const m of members) { const row = rows.get(m.name); if (row) place(row); }
-  }
+  // flat, alphabetical by shown name: the state badge says the rest, so rows never jump around
+  for (const h of [...list.querySelectorAll('li.grp')]) { if (h === cursor) cursor = cursor.nextSibling; h.remove(); }
+  const shown = (s) => displayName(s.name).toLowerCase();
+  const sorted = [...state.sessions].sort((x, y) => shown(x).localeCompare(shown(y), undefined, { numeric: true }));
+  for (const m of sorted) { const row = rows.get(m.name); if (row) place(row); }
   for (const [n, row] of rows) row.hidden = !matchesFilter(n);
 }
 function buildSideRow(s) {
@@ -935,6 +1034,7 @@ function buildCell(s) {
         <button data-dir="left" aria-label="Move left">&#9664;</button><button data-dir="up" aria-label="Move up">&#9650;</button><button data-dir="down" aria-label="Move down">&#9660;</button><button data-dir="right" aria-label="Move right">&#9654;</button>
       </span>
       <span class="stw"></span>
+      <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
       <button class="open" aria-label="Open full screen" title="Open">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
@@ -947,13 +1047,16 @@ function buildCell(s) {
       <button data-key="3">3</button>
       <button data-key="Escape">esc</button>
     </div>
+    <div class="apill hidden"></div>
     <div class="reader"></div>
     <div class="b"></div>
+    <div class="docview"></div>
     <div class="jump">
       <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">&#10514;</button>
       <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">&#10515;</button>
     </div>`;
-  cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); toggleReader(); };
+  cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
+  cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
   for (const b of cell.querySelectorAll('.jump button')) {
     b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
@@ -1039,16 +1142,19 @@ function syncCell(cell) {
   const n = cell.dataset.session;
   const s = stateOf(n);
   const inCard = cell.parentElement === els.cardPane;
-  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}`;
+  const docOn = inCard && cell.classList.contains('doc-on');
+  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
+  probeTaskDoc(cell, n);
   const ag = agentBadgeHtml(n);
   const agEl = cell.querySelector('.ag');
   if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
   const stw = cell.querySelector('.stw');
   if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
-  else stw.querySelector('.st').textContent = stateText(n);
+  else stw.querySelector('.st').textContent = badgeText(n);
   const ask = cell.querySelector('.ask');
   ask.classList.toggle('hidden', s !== 'waiting');
   if (s === 'waiting') ask.querySelector('.q').textContent = state.status[n]?.waitReason || 'waiting for your answer';
+  syncAutoPill(cell.querySelector('.apill'), n);
   const pj = cell.querySelector('.proj'), ph = projHtml(n);
   if (pj.dataset.h !== ph) { pj.dataset.h = ph; pj.innerHTML = ph; }
   const mt = cell.querySelector('.mt'), mh = headMetaHtml(n);
@@ -1101,7 +1207,6 @@ function rowChipsHtml(n) {
   const c = ctxHtml(st);
   if (c) chips.push(c.replace('class="ctx', 'class="chip-m ctx'));
   if (st.lease?.resource) chips.push(`<span class="chip-m lease">&#128274; ${escapeHtml(st.lease.resource)}${st.lease.ttlLeftMin != null ? ` ${st.lease.ttlLeftMin}m` : ''}</span>`);
-  if (st.model) chips.push(`<span class="chip-m">${escapeHtml(st.model)}</span>`);
   return chips.join('');
 }
 
@@ -1115,6 +1220,11 @@ function toggleReader() {
   for (const c of els.cardPane.children) syncCell(c);
   const a = state.active;
   if (a) { relayoutTerm(a); setTimeout(() => relayoutTerm(a), 60); }
+}
+// "earlier conversation": the whole captured history (prompts, replies, tool names) instead of just the last reply
+function loadTranscript(n, c) {
+  return fetch(`/api/transcript/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+    .then((d) => { c.full = d.text || ''; }).catch(() => {});
 }
 function syncReader(cell, n) {
   const st = state.status[n] || {};
@@ -1130,6 +1240,7 @@ function syncReader(cell, n) {
         // keep the last good reply when the server has none right now (tool line is last)
         if (d.reply) c.text = String(d.reply);
         c.failed = false; c.hash = hash;
+        if (c.full != null) return loadTranscript(n, c);
       })
       .catch(() => { c.failed = true; })
       .finally(() => {
@@ -1151,8 +1262,33 @@ function paintReader(cell, n) {
       .map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim() && !RULE_RE.test(l)).slice(-24).join('\n');
     if (tail) text = `${text}\n\n\`\`\`\n${tail.replace(/```/g, "'''")}\n\`\`\``;
   }
-  const html = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const full = c && c.full != null;
+  if (full && c.full) text = c.full;
+  const body = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${body}`;
   if (el.dataset.h === html) return;
+  // never swap the content under a finger / a fling: that cancels touch scrolling. Retry once it settles.
+  if (el._busyUntil && Date.now() < el._busyUntil) {
+    clearTimeout(el._retry);
+    el._retry = setTimeout(() => paintReader(cell, n), el._busyUntil - Date.now() + 50);
+    return;
+  }
+  if (!el._wired) {
+    el._wired = true;
+    el.addEventListener('click', async (e) => {
+      const b = e.target.closest('.rd-more');
+      if (!b) return;
+      e.stopPropagation();
+      const cc = state.replies.get(n);
+      if (!cc) return;
+      if (b.dataset.act === 'more') { await loadTranscript(n, cc); } else { cc.full = null; }
+      el.dataset.h = '';
+      paintReader(cell, n);
+      el.scrollTop = b.dataset.act === 'more' ? el.scrollHeight : 0;
+    });
+    const busy = () => { el._busyUntil = Date.now() + 1200; };
+    for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, busy, { passive: true });
+  }
   const first = el.dataset.h === undefined;
   const top = el.scrollTop;
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
@@ -1165,6 +1301,29 @@ function inlineMd(t) {
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
 }
+// Box-drawn tables (┌─┬─┐ │ a │ b │ ├─┼─┤ └─┘) -> HTML. A narrow tmux pane splits rows across lines, so
+// fragments that don't start with a box character are glued onto the previous line first.
+function boxTable(block) {
+  const logical = [];
+  for (const l of block) {
+    const t = l.trim();
+    if (!t) continue;
+    if (/^[\u250c\u251c\u2514\u2502]/.test(t) || !logical.length) logical.push(t);
+    else logical[logical.length - 1] += (/^[\u2500\u252c\u2534\u253c\u2510\u2518\u2524]/.test(t) ? '' : ' ') + t;
+  }
+  const rows = [];
+  let cur = null;
+  for (const t of logical) {
+    if (/^[\u250c\u251c\u2514]/.test(t)) { if (cur) { rows.push(cur); cur = null; } continue; }
+    const cells = t.replace(/^\u2502|\u2502$/g, '').split('\u2502').map((c) => c.trim());
+    if (!cur) cur = cells; else cells.forEach((c, i) => { if (c) cur[i] = ((cur[i] || '') + ' ' + c).trim(); });
+  }
+  if (cur) rows.push(cur);
+  if (!rows.length) return '';
+  const [head, ...body] = rows;
+  return `<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${inlineMd(c)}</th>`).join('')}</tr></thead><tbody>${
+    body.map((r) => `<tr>${r.map((c) => `<td>${inlineMd(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
 function renderReply(text) {
   if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
   const lines = String(text).replace(/\t/g, '    ').split('\n');
@@ -1172,8 +1331,16 @@ function renderReply(text) {
   let para = [], code = null, fence = false;
   const flushPara = () => { if (para.length) { out.push(`<p>${para.join('<br>')}</p>`); para = []; } };
   const flushCode = () => { if (code) { out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); code = null; } };
-  for (const raw of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
     const line = raw.replace(/\s+$/, '');
+    if (!fence && /^\s*\u250c/.test(line)) {
+      let k = li;
+      while (k < lines.length && !/^\s*\u2514/.test(lines[k]) && k - li < 200) k++;
+      const html = boxTable(lines.slice(li, k + 1));
+      // an unfinished table (still being typed) falls through as plain lines
+      if (html && k < lines.length) { flushPara(); flushCode(); out.push(html); li = k; continue; }
+    }
     if (/^\s*```/.test(line)) {
       if (fence) { fence = false; flushCode(); } else { flushPara(); flushCode(); fence = true; code = []; }
       continue;
@@ -1184,7 +1351,12 @@ function renderReply(text) {
     if (!line.trim()) { flushPara(); continue; }
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) { flushPara(); out.push(`<div class="rh">${inlineMd(h[2])}</div>`); continue; }
-    para.push(inlineMd(line.replace(/^(\s*)[-*] /, '$1\u2022 ')));
+    // tmux hard-wraps at the pane width (can be ~20 cols): glue wrapped lines back together,
+    // but keep list items and table/box rows on their own line
+    const item = /^\s*(?:[-*\u2022]|\d+[.)]) /.test(line);
+    const boxy = /^\s*[\u2500-\u257f|]/.test(line) || (line.match(/[\u2500-\u257f]/g) || []).length > 2;
+    if (para.length && !item && !boxy && !para.boxy) para[para.length - 1] += ' ' + inlineMd(line.trim());
+    else { para.push(inlineMd(line.replace(/^(\s*)[-*] /, '$1\u2022 '))); para.boxy = boxy; }
   }
   flushPara(); flushCode();
   return out.join('');
@@ -1231,8 +1403,16 @@ function renderGrid() {
   const limit = state.gridSize;
   // Keep the active session on screen when the grid is limited.
   let targets = all.slice(0, limit);
+  // Once a tab swapped a card in, keep that arrangement (slot order) instead of snapping back.
+  if (state.gridView) {
+    const byName = new Map(all.map((s) => [s.name, s]));
+    const kept = state.gridView.filter((n) => byName.has(n)).map((n) => byName.get(n));
+    for (const s of all) if (kept.length < limit && !kept.includes(s)) kept.push(s);
+    targets = kept.slice(0, limit);
+  }
   const act = all.find((s) => s.name === state.active);
   if (act && !targets.includes(act) && limit > 0) targets = [...targets.slice(0, limit - 1), act];
+  state.gridView = state.gridView ? targets.map((s) => s.name) : null;
   renderInto(els.gridPane, targets);
 }
 
@@ -1263,6 +1443,7 @@ function renderList() {
     row.innerHTML = `
       <div class="l1"><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="stw"></span></div>
       <div class="last"></div>
+      <div class="apill hidden"></div>
       <div class="meta"></div>`;
     row.querySelector('.last').textContent = rowLast(s.name);
     wireRow(row, s.name);
@@ -1315,7 +1496,8 @@ function syncList() {
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
     const stw = row.querySelector('.stw');
     if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
-    else stw.querySelector('.st').textContent = stateText(n);
+    else stw.querySelector('.st').textContent = badgeText(n);
+    syncAutoPill(row.querySelector('.apill'), n);
     const last = row.querySelector('.last'), lt = rowLast(n);
     if (last.textContent !== lt) last.textContent = lt;
     const mh = rowChipsHtml(n), meta = row.querySelector('.meta');
@@ -1339,16 +1521,24 @@ function syncAll() {
 
 // Elapsed timers tick locally between server updates.
 function tickClock() {
+  for (const el of document.querySelectorAll('.apill [data-at]')) el.textContent = autoLeft(Number(el.dataset.at));
   for (const el of document.querySelectorAll('.stw[data-s] .st')) {
     const host = el.closest('[data-session]');
-    if (host) el.textContent = stateText(host.dataset.session);
+    if (host) el.textContent = badgeText(host.dataset.session);
   }
 }
 
 // ---------- focus ----------
 function focusSession(name) {
   if (!name) return;
+  const prev = state.active;
   state.active = name;
+  // grid: a session that isn't on screen takes the slot of the selected card, not the last one
+  if (state.mode === 'grid' && prev && prev !== name
+      && !els.gridPane.querySelector(`[data-session="${cssEscape(name)}"]`)
+      && els.gridPane.querySelector(`[data-session="${cssEscape(prev)}"]`)) {
+    state.gridView = [...els.gridPane.children].map((c) => (c.dataset.session === prev ? name : c.dataset.session));
+  }
   els.appTitle.textContent = displayName(name);
   connectSession(name);
   if (state.mode === 'card') renderCard();
@@ -1448,6 +1638,96 @@ function pushHist(text) {
   lsSet(LS_HIST, JSON.stringify(dock.hist));
   dock.hidx = -1;
 }
+
+// ---------- AI manager: auto-answer countdown + panel ----------
+const autoLeft = (at) => `${Math.max(0, Math.ceil((at - Date.now()) / 1000))}s`;
+// Pill on a card / board row while an automatic answer is pending: "auto: Yes, continue. in 23s ✕".
+function syncAutoPill(el, n) {
+  const a = state.status[n]?.auto;
+  if (!a) { if (!el.classList.contains('hidden')) { el.classList.add('hidden'); el.dataset.id = ''; el.innerHTML = ''; } return; }
+  el.classList.remove('hidden');
+  if (el.dataset.id !== a.id) {
+    el.dataset.id = a.id;
+    el.innerHTML = `<span class="ap"><b>auto:</b> <span class="aa">${escapeHtml(a.answer)}</span> in <i data-at="${a.sendAt}">${autoLeft(a.sendAt)}</i><button class="ax" data-cancel="${escapeHtml(n)}" aria-label="Cancel auto answer" title="Cancel">&#10005;</button></span>`;
+  }
+}
+// capture phase: a tap on the pill must not open the card / select the row
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-cancel]');
+  if (!b) return;
+  e.stopPropagation(); e.preventDefault();
+  const n = b.dataset.cancel;
+  b.disabled = true;
+  try {
+    const r = await fetch(`/api/manager/cancel/${encodeURIComponent(n)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    toast(r.ok ? `auto answer cancelled — ${displayName(n)}` : 'too late, already sent');
+    if (r.ok && state.status[n]) { state.status[n].auto = null; syncAll(); }
+  } catch { toast('cancel failed'); }
+}, true);
+
+async function mgrPost(body) {
+  const r = await fetch('/api/manager', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+const CASE_LABEL = { continue: 'continue? → "Yes, continue."', menu_recommended: 'recommended option' };
+const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
+function logLine(r) {
+  const sess = displayName(r.session || '');
+  if (r.type === 'stall') {
+    const w = r.wouldSend ? (r.wouldSend.text != null ? r.wouldSend.text : `option ${r.wouldSend.key}`) : null;
+    return { cls: w ? 'would' : 'owner', tag: w ? 'would' : 'owner', sess, case: r.case, text: w || r.why || '' };
+  }
+  if (r.type === 'answer') return { cls: 'sent', tag: 'answered', sess, case: r.case, text: r.answer?.text ?? `option ${r.answer?.key}` };
+  if (r.type === 'answer_cancelled') return { cls: 'canc', tag: 'cancelled', sess, case: r.case || '', text: r.reason || '' };
+  if (r.type === 'escalated') return { cls: 'esc', tag: 'escalated', sess, case: r.case || '', text: r.reason || '' };
+  return null;
+}
+function openManager() {
+  openSheet('AI manager', async ({ body, foot, close }) => {
+    body.innerHTML = '<div class="sheet-empty">loading…</div>';
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    const draw = async () => {
+      let cfg, log;
+      try {
+        [cfg, log] = await Promise.all([
+          fetch('/api/manager').then((r) => r.json()),
+          fetch('/api/manager/log?limit=200').then((r) => r.json()),
+        ]);
+      } catch { body.innerHTML = '<div class="sheet-empty">could not load</div>'; return; }
+      const off = new Set(cfg.disabledSessions || []);
+      const t = cfg.today || {};
+      const entries = (log.entries || []).filter((r) => logLine(r)).slice(-30).reverse();
+      body.innerHTML = `
+        <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend"><i></i><span>Auto-answer <b>${cfg.autoSend ? 'ON' : 'OFF'}</b></span></button>
+        <div class="mcases">${(cfg.validCases || []).map((c) => `<label class="mchk"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span>${escapeHtml(CASE_LABEL[c] || c)}</span></label>`).join('')}</div>
+        <div class="mnote">sends after ${Math.round(cfg.delayMs / 1000)}s (cancel from the pill) · Jev answers need ≥ ${cfg.minConfidence} · max ${cfg.maxPerSessionPerHour}/h per session · never deploy / push / delete / secrets / money</div>
+        <div class="mcounts"><span class="sent"><b>${t.answered ?? 0}</b> answered</span><span class="canc"><b>${t.cancelled ?? 0}</b> cancelled</span><span class="esc"><b>${t.escalated ?? 0}</b> escalated</span><span class="dim">today</span></div>
+        <div class="side-sub">Last ${entries.length}</div>
+        <div class="mlog">${entries.map((r) => { const l = logLine(r); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
+        <div class="side-sub">Sessions</div>
+        <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
+    };
+    body.onclick = async (e) => {
+      const sw = e.target.closest('[data-set="autoSend"]');
+      if (sw) { try { await mgrPost({ autoSend: !sw.classList.contains('on') }); } catch { toast('save failed'); } draw(); }
+    };
+    body.onchange = async (e) => {
+      const i = e.target;
+      try {
+        if (i.dataset.case) {
+          const cases = [...body.querySelectorAll('[data-case]')].filter((x) => x.checked).map((x) => x.dataset.case);
+          await mgrPost({ autoCases: cases });
+        } else if (i.dataset.sess) await mgrPost({ session: i.dataset.sess, sessionEnabled: i.checked });
+      } catch { toast('save failed'); }
+      draw();
+    };
+    draw();
+  });
+}
+els.mgrBtn.onclick = openManager;
 
 // ----- generic bottom sheet -----
 let sheetEl = null;
@@ -2004,7 +2284,7 @@ function alertTransitions() {
     toast(`${fresh.map(displayName).join(', ')} needs you`, 3000);
     return;
   }
-  if (!state.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!state.notify || state.pushOn || !('Notification' in window) || Notification.permission !== 'granted') return;
   navigator.serviceWorker?.ready.then((reg) => {
     for (const n of fresh) {
       reg.showNotification(`${displayName(n)} needs you`, {
@@ -2015,19 +2295,80 @@ function alertTransitions() {
   }).catch(() => {});
 }
 
+// ---------- Web Push (bell) ----------
+// The bell is "on" when this browser holds a real push subscription (works with the app closed).
+// Without push support (plain HTTP, old browser) it falls back to in-page notifications.
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+function urlB64ToBytes(s) {
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+function paintBell() {
+  els.notifyBtn.classList.toggle('on', state.notify || state.pushOn);
+}
+async function postJson(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+}
+async function pushSubscribe(reg) {
+  const { key } = await (await fetch('/api/push/key')).json();
+  let sub = await reg.pushManager.getSubscription();
+  // A subscription made with a different server key can never receive our pushes.
+  if (sub && sub.options?.applicationServerKey) {
+    const cur = new Uint8Array(sub.options.applicationServerKey);
+    const want = urlB64ToBytes(key);
+    if (cur.length !== want.length || cur.some((b, i) => b !== want[i])) { await sub.unsubscribe(); sub = null; }
+  }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToBytes(key) });
+  await postJson('/api/push/subscribe', { subscription: sub.toJSON() });
+  return sub;
+}
+async function pushUnsubscribe(reg) {
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return;
+  await postJson('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+  await sub.unsubscribe();
+}
+// On load: reflect the real subscription, and silently re-subscribe if permission is granted
+// and the user had notifications on but the subscription went missing.
+async function syncPush() {
+  if (!pushSupported()) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if ((sub || state.notify) && Notification.permission === 'granted') {
+      sub = await pushSubscribe(reg);   // also re-registers with the server (e.g. after its subs file was lost)
+    }
+    state.pushOn = !!sub;
+  } catch (err) { console.warn('[push] sync failed:', err.message); state.pushOn = false; }
+  paintBell();
+}
+
 async function toggleNotify() {
-  if (!state.notify) {
-    if (!('Notification' in window)) { toast('notifications not supported here'); return; }
+  if (!('Notification' in window)) { toast('notifications not supported here'); return; }
+  if (!(state.notify || state.pushOn)) {
     const p = await Notification.requestPermission();
-    if (p !== 'granted') { toast('notifications blocked (needs HTTPS URL)'); return; }
+    if (p !== 'granted') {
+      toast(!window.isSecureContext ? 'needs the https://<tailnet-host>:7443 address'
+        : Notification.permission === 'denied' ? 'notifications are off for this app - Android: App info > Notifications > allow, then tap the bell again'
+        : 'permission not given - tap the bell again', 5000);
+      return;
+    }
     state.notify = true;
-    toast('will alert when a session needs you');
+    if (pushSupported()) {
+      try { await pushSubscribe(await navigator.serviceWorker.ready); state.pushOn = true; toast('push alerts on - works with the app closed'); }
+      catch (err) { toast(`push failed: ${err.message}`, 5000); }
+    } else toast('will alert when a session needs you');
   } else {
     state.notify = false;
+    if (pushSupported()) { try { await pushUnsubscribe(await navigator.serviceWorker.ready); } catch {} }
+    state.pushOn = false;
     toast('alerts off');
   }
   lsSet(LS_NOTIFY, state.notify ? '1' : '0');
-  els.notifyBtn.classList.toggle('on', state.notify);
+  paintBell();
 }
 
 // ---------- swipe from left edge ----------
@@ -2135,6 +2476,8 @@ function wireFontUi() {
   $('#fontInc2').onclick = () => setFont(state.font + 1);
   $('#fontReset').onclick = () => setFont(isPhone() ? 11 : 12);
   $('#fitToggle').onclick = () => setFit(!state.fit);
+  $('#ctlToggle').onclick = () => setCardCtl(!state.cardCtl);
+  $('#ctlToggle').classList.toggle('on', state.cardCtl);
   $('#fontBtn').onclick = (e) => { e.stopPropagation(); pop.classList.toggle('hidden'); };
   pop.onclick = (e) => e.stopPropagation();
   document.addEventListener('click', () => pop.classList.add('hidden'));
@@ -2147,6 +2490,32 @@ function wireFontUi() {
   syncFontUi();
 }
 wireFontUi();
+
+// ---------- Android back button ----------
+// The app is one page, so back would leave it. Keep a sentinel history entry and use each back press
+// to close the topmost thing (sheet, menu, task doc, card view); at the top level, press twice to exit.
+function handleBack() {
+  if (sheetEl) { closeSheet(); return true; }
+  const pop = $('#fontPop');
+  if (pop && !pop.classList.contains('hidden')) { pop.classList.add('hidden'); return true; }
+  if (state.side) { closeSide(); return true; }
+  const doc = document.querySelector('.cell.doc-on');
+  if (doc) { doc.classList.remove('doc-on'); return true; }
+  if (state.mode === 'card') { setMode(state.prevMode || (isPhone() ? 'list' : 'grid')); return true; }
+  return false;
+}
+{
+  let lastBack = 0;
+  history.replaceState({ root: 1 }, '');
+  history.pushState({ app: 1 }, '');
+  window.addEventListener('popstate', () => {
+    if (handleBack()) { history.pushState({ app: 1 }, ''); return; }
+    if (Date.now() - lastBack < 2000) { history.back(); return; }   // second press: leave the app
+    lastBack = Date.now();
+    toast('press back again to exit');
+    history.pushState({ app: 1 }, '');
+  });
+}
 
 window.addEventListener('resize', () => {
   for (const name of state.terms.keys()) relayoutTerm(name);
@@ -2169,13 +2538,21 @@ window.addEventListener('appinstalled', () => {
   toast('installed — open codebox from your home screen');
 });
 
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    || document.referrer.startsWith('android-app://');
+}
 function hideInstallIfInstalled() {
-  const standalone = window.matchMedia('(display-mode: standalone)').matches
-                  || window.navigator.standalone === true;
-  if (standalone) els.installBtn.classList.add('hidden');
+  if (isStandalone()) els.installBtn.classList.add('hidden');
 }
 
 async function promptInstall() {
+  // Android browser: offer the real app (APK wrapper); the PWA prompt stays the fallback
+  if (/Android/i.test(navigator.userAgent) && !isStandalone()) {
+    toast('downloading codebox.apk — open it to install');
+    location.href = '/codebox.apk';
+    return;
+  }
   if (!state.installPrompt) {
     toast('use browser menu → “Add to Home Screen”');
     return;
@@ -2205,7 +2582,8 @@ if ('serviceWorker' in navigator) {
   loadRenames();
   loadPrefs();
   loadFilters();
-  els.notifyBtn.classList.toggle('on', state.notify);
+  paintBell();
+  syncPush();
   setGridSize(state.gridSize);
   const wanted = new URLSearchParams(location.search).get('s');
   // phone home = board, unless the grid was the last view used

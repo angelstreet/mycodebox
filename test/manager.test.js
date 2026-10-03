@@ -27,8 +27,14 @@ await m.initManager({ onOwnerNeeded: (s, st) => pushes.push([s, st.case]) });
 const RULE = '─'.repeat(40);
 const pane = (body, prompt = '❯ ') => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, prompt, RULE, '  ⏵⏵ bypass permissions on'];
 const tick = (name, state, plain, now, extra = {}) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, project: 'p', now, ...extra });
-const records = () => (existsSync(m.LOG_FILE) ? readFileSync(m.LOG_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
-const settle = () => new Promise((r) => setTimeout(r, 50));
+const records = () => (existsSync(m.LOG_FILE) ? readFileSync(m.LOG_FILE, 'utf8').split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }) : []);   // a line may be mid-write
+const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
+// Log writes are async (Jev round trip, appendFile): wait for the record instead of a fixed sleep.
+async function until(pred, ms = 5000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { const r = records().find(pred); if (r) return r; await settle(20); }
+  throw new Error('timed out waiting for a log record');
+}
 
 test('a stall is logged once after it settles, then its outcome when work resumes', async () => {
   const p = pane('Phase 1 is done.\nShall I continue with phase 2?');
@@ -38,7 +44,7 @@ test('a stall is logged once after it settles, then its outcome when work resume
   assert.equal(records().length, 0, 'not settled yet');
   tick('s1', 'done', p, 2100);
   tick('s1', 'done', p, 3000);
-  await settle();
+  await until((r) => r.type === 'stall' && r.session === 's1');
   const stalls = records().filter((r) => r.type === 'stall' && r.session === 's1');
   assert.equal(stalls.length, 1);
   assert.equal(stalls[0].case, 'continue');
@@ -47,7 +53,7 @@ test('a stall is logged once after it settles, then its outcome when work resume
 
   const after = [...p.slice(0, -4), '❯ yes', '⏺ Working on phase 2', '✶ Thinking…', RULE, '❯ ', RULE, 'x'];
   tick('s1', 'working', after, 9000);
-  await settle();
+  await until((r) => r.type === 'outcome' && r.session === 's1');
   const out = records().find((r) => r.type === 'outcome' && r.id === stalls[0].id);
   assert.equal(out.via, 'terminal');
   assert.equal(out.reply, 'yes');
@@ -58,7 +64,7 @@ test('ambiguous stall goes to Jev; the forbidden gate still wins', async () => {
   tick('s2', 'working', ['busy'], 0);
   const p = pane('Branch is ready.\nNext I will deploy it to the hosts.');
   tick('s2', 'done', p, 1000); tick('s2', 'done', p, 2500);
-  await settle();
+  await until((r) => r.type === 'stall' && r.session === 's2');
   const r = records().find((x) => x.type === 'stall' && x.session === 's2');
   assert.equal(r.source, 'jev');
   assert.equal(r.jev.choice, 'continue');
@@ -71,7 +77,7 @@ test('daily Jev budget stops calls', async () => {
   tick('s3', 'working', ['busy'], 0);
   const p = pane('All good.\nNext is the cleanup of the cache code.');
   tick('s3', 'done', p, 1000); tick('s3', 'done', p, 2500);
-  await settle();
+  await until((r) => r.type === 'stall' && r.session === 's3');
   const r = records().find((x) => x.type === 'stall' && x.session === 's3');
   assert.equal(jevCalls, before);
   assert.equal(r.jev.skipped, 'daily budget reached');

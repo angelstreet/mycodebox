@@ -50,8 +50,9 @@ PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
 | `PORT`        | `7777` | listen port |
 | `HOST`        | `0.0.0.0` | listen addr (`tailscale0` is the safest) |
 | `TICK_MS`     | `1000`  | pane capture cadence |
-| `PANE_LINES`  | `2000`  | scrollback lines per pane |
-| `NTFY_TOPIC`  | unset   | enable ntfy push: a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
+| `PANE_LINES`  | `1000`  | scrollback lines captured for a session with an open card (a WebSocket viewer); the unit sets 2000 |
+| `PANE_LINES_BG` | `300` | scrollback lines for every other session (state, reply and manager only need the tail) |
+| `NTFY_TOPIC`  | unset   | enable optional ntfy push (Web Push is always on): a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
 | `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
 | `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
 | `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
@@ -66,21 +67,70 @@ PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
 | `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
 | `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude` / `codex` / `minimax-code` / (none) | command typed into a session created via `POST /api/sessions` |
 
-## AI manager (shadow mode)
+## Web Push (phone notifications, no extra app)
+
+The bell button subscribes the browser / installed Android app (TWA) to Web Push. Alerts - a session
+waiting ("needs you"), the manager asking you, a disk reaching critical, optionally "done" - reach the
+phone even with the app closed.
+
+- Payload-less push: the server POSTs an empty request signed with a VAPID ES256 key (node:crypto, no
+  dependencies) to the browser's push service (FCM on Android). The service worker wakes up and reads
+  `GET /api/push/feed?since=<last id>` to learn what to show, then calls `showNotification`. Tapping
+  opens `/?s=<session>`.
+- Needs a secure context (the https:// address). Notification permission must be allowed for the app.
+- State in `$GHOSTY_STATE_DIR` (default `~/.local/state/ghosty`): `vapid.json` (private key, chmod 600,
+  never commit), `push-subs.json` (subscriptions; dropped when the push service answers 404/410),
+  `push-feed.json` (last 50 alerts).
+- Routes: `GET /api/push/key`, `GET /api/push/feed`, `POST /api/push/subscribe|unsubscribe|test`.
+- Test: `curl -XPOST -H 'content-type: application/json' -d '{}' https://<host>:<port>/api/push/test`
+- ntfy is now optional; with `NTFY_TOPIC` set, every alert is also sent there (same debounce).
+- Code: `push.js` (VAPID, subscriptions, feed, `createAlerts().alert()` fan-out), `public/sw.js`, bell in `public/app.js`.
+
+## AI manager
 
 `stall.js` classifies why an agent stopped — `continue`, `menu_recommended`, `permission`,
 `owner_decision`, `done`, `error` — with rules first and Jev (closed choice
 `continue | take_recommended | ask_owner`) for the ambiguous ones. `manager.js` logs every stall
-with what it **would** answer to `stalls.jsonl`, then the owner's real reply as its outcome. It
-types nothing. A forbidden topic (deploy, push/merge to main, delete/remove, migration, `.env`,
-credentials, money, customer) or an unsent draft in the input box always means "ask the owner",
-whatever Jev says. A finished turn that asks something is pushed via ntfy ("X asks you").
+to `stalls.jsonl` with what it would answer, then the owner's real reply as its outcome.
+
+**Sending is off by default.** Turn it on (`autoSend`) and only the cases in `autoCases` are typed
+(`continue` -> "Yes, continue."; `menu_recommended` -> the option's number in a live menu, or "Yes,
+go with your recommendation." after a finished turn). A forbidden topic (deploy, push/merge to
+main, delete/remove, migration, `.env`, credentials, money, customer) or an unsent draft in the
+input box always means "ask the owner", whatever Jev says. The manager never starts, kills or
+renames sessions.
+
+An answer is not typed at once: it is shown on the card / board row as a pill
+**"auto: Yes, continue. in 23s ✕"** (✕ or `POST /api/manager/cancel/:session` cancels). When the
+delay is up everything is checked again against the live pane (same stall, session still waiting or
+done, no draft typed, still not forbidden, session still enabled, under the cap) and only then
+typed, through the same send code as the dock. Every answer, cancellation and escalation is logged.
+Anything not auto-answered (owner case, forbidden, draft, low Jev confidence, cap reached, auto
+off) goes to the owner via ntfy with a deep link and the reason ("deploy question — needs you");
+a waiting session is covered by the existing "needs you" push.
+
+`manager.json` (in `GHOSTY_STATE_DIR`; also `GET/POST /api/manager`):
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `true` | watch and log stalls at all |
+| `autoSend` | `false` | global switch for typing answers |
+| `autoCases` | `[]` | cases allowed to auto-send; valid: `continue`, `menu_recommended` |
+| `minConfidence` | `0.8` | Jev-derived answers need this probability for the chosen option (rule answers count 1.0) |
+| `delayMs` | `30000` | countdown before an answer is typed |
+| `maxPerSessionPerHour` | `4` | auto answers per session per rolling hour |
+| `disabledSessions` | `[]` | sessions the manager ignores (tick them off in the panel) |
+
+The robot icon in the top bar opens the manager panel: global auto-answer switch, per-case
+checkboxes, per-session on/off, today's answered / cancelled / escalated counts and the last 30
+log entries.
 
 ```bash
 npm run stall-report -- --days 3 --list      # precision per case vs. what the owner answered
-curl -s localhost:7777/api/manager            # config + Jev budget
+curl -s localhost:7777/api/manager            # config + Jev budget + today's counts
 curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
-  -H 'origin: http://localhost:7777' -d '{"session":"task05","sessionEnabled":false}'
+  -d '{"autoSend":true,"autoCases":["continue"],"delayMs":30000}'
+curl -s -XPOST localhost:7777/api/manager/cancel/task05 -H 'content-type: application/json' -d '{}'
 ```
 
 ## Usage (Langfuse)

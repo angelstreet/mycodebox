@@ -12,8 +12,10 @@
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/sessions          → {name, agent, cwd} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
-//   GET  /api/manager           → AI manager config (enabled, shadow, disabled sessions, Jev budget)
-//   POST /api/manager           → {enabled?} global on/off, {session, sessionEnabled} per session
+//   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
+//   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
+//                                 global settings, {session, sessionEnabled} per session
+//   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
@@ -32,13 +34,15 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
-import { initManager, observe, forget as managerForget, prune as pruneManager, stallOf, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
+import { createPush, createAlerts } from './push.js';
+import { initManager, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
 const HOST = process.env.HOST || '0.0.0.0';
 const TICK_MS = Number(process.env.TICK_MS || 1000);
-const PANE_LINES = Number(process.env.PANE_LINES || 300);
+const PANE_LINES = Number(process.env.PANE_LINES || 1000);            // depth for a session someone has open
+const PANE_LINES_BG = Number(process.env.PANE_LINES_BG || 300);         // depth for the rest (state only needs the tail)
 const PUBLIC_DIR = fileURLToPath(new URL('./public', import.meta.url));
 
 // HTTPS support. If both TLS_KEY and TLS_CERT exist, we listen on TLS too.
@@ -166,11 +170,11 @@ function agentFromText(text) {
 const tgt = (s) => `=${s}:`;
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
 
-async function capturePane(session) {
-  // Visible pane + modest scrollback. No -J: keep tmux's own line breaks so
+async function capturePane(session, lines = PANE_LINES) {
+  // Visible pane + scrollback. No -J: keep tmux's own line breaks so
   // the client can size xterm to the pane's cols. -e keeps colour escapes.
   const { stdout } = await exec(TMUX, [
-    'capture-pane', '-t', tgt(session), '-p', '-e', '-S', `-${PANE_LINES}`,
+    'capture-pane', '-t', tgt(session), '-p', '-e', '-S', `-${lines}`,
   ], { maxBuffer: 16 * 1024 * 1024 });
   return stdout;
 }
@@ -339,6 +343,12 @@ function doneClockMs(lines, end, now) {
 
 // The agent's last reply block as plain text for a mobile reader.
 function replyOf(lines, end) {
+  // a long "Tip: …" wraps onto indented continuation lines that are not noise by themselves: blank them (keeps indexes)
+  lines = lines.slice();
+  for (let i = 0; i < end; i++) {
+    if (!/^\s*(?:⎿\s*)?Tip:/.test(lines[i])) continue;
+    for (let j = i + 1; j < Math.min(end, i + 3) && /^\s{3,}\S/.test(lines[j]) && !BULLET_RE.test(lines[j]); j++) lines[j] = '';
+  }
   let hi = end - 1;
   while (hi >= 0) {
     const l = lines[hi];
@@ -371,14 +381,54 @@ function replyOf(lines, end) {
   return text;
 }
 
+// Markdown for a task session: taskNN[-x] -> docs/tasks/TASK-NN*.md in the repo of its cwd (or ~/virtualpytest), or a task.md in cwd.
+async function taskDocFiles(session) {
+  const out = [], seen = new Set();
+  const add = (dir, name) => { const path = join(dir, name); if (!seen.has(name)) { seen.add(name); out.push({ name, path }); } };
+  let cwd = '';
+  try { cwd = (await exec(TMUX, ['display-message', '-p', '-t', tgt(session), '#{pane_current_path}'])).stdout.trim(); } catch { return out; }
+  const m = /^task0*(\d+)/i.exec(session);
+  const dirs = [cwd, join(cwd, 'docs', 'tasks'), join(HOME, 'virtualpytest', 'docs', 'tasks')];
+  try { const top = (await exec('git', ['-C', cwd, 'rev-parse', '--show-toplevel'])).stdout.trim(); if (top) dirs.splice(1, 0, join(top, 'docs', 'tasks')); } catch { /* not a repo */ }
+  for (const d of dirs) {
+    let names = [];
+    try { names = await readdir(d); } catch { continue; }
+    for (const n of names.sort()) {
+      if (!/\.md$/i.test(n)) continue;
+      if (/^task\.md$/i.test(n) && d === cwd) add(d, n);
+      else if (m && new RegExp(`^TASK-0*${m[1]}(?!\\d)`, 'i').test(n)) add(d, n);
+    }
+  }
+  return out;
+}
+
+// The whole captured conversation as readable text: prompts, replies, and tool names only.
+function transcriptOf(lines, end) {
+  const out = [];
+  let inTool = false;
+  for (let i = 0; i < end; i++) {
+    const l = lines[i];
+    if (!l.trim()) { if (!inTool) out.push(''); continue; }
+    if (RULE_LINE.test(l) || CHROME_LINE.test(l.replace(/[│┃]/g, ' ')) || NOISE_LINE.test(l)) continue;
+    if (/^\s*[❯›>]\s/.test(l)) { inTool = false; out.push('', '**You:** ' + l.replace(/^\s*[❯›>]\s+/, '').trim()); continue; }
+    if (TOOL_LINE_RE.test(l)) { inTool = true; out.push('', '`' + l.replace(BULLET_RE, '').trim().slice(0, 100).replace(/`/g, "'") + '`'); continue; }
+    if (BULLET_RE.test(l)) { inTool = false; out.push('', l.replace(BULLET_RE, '$1')); continue; }
+    if (inTool) continue;
+    out.push(l.replace(/\s+$/, ''));
+  }
+  let text = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (text.length > 60000) { text = text.slice(-60000); text = '…' + text.slice(text.indexOf('\n') + 1 || 0); }
+  return text;
+}
+
 // Footer facts: context left %, model name.
 function footerInfo(lines) {
   const foot = lines.slice(-12).join('\n');
   let contextLeft = null, model = null;
   let m = foot.match(/Context (\d+)% left/i) || foot.match(/(\d+)%\s+context left/i) || foot.match(/Context left until auto-compact:\s*(\d+)%/i) || foot.match(/auto-compact[^\n]*?(\d+)%/i);
   if (m) contextLeft = Number(m[1]);
-  m = foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b(opus|sonnet|haiku)(?:[ -]?\d[\d.]*)?/i);
-  if (m) model = m[1];
+  m = foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b((?:opus|sonnet|haiku|fable)(?:[ -]\d+(?:[.-]\d+)?)?)/i);
+  if (m) model = m[1].replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/-/g, ' ');
   return { contextLeft, model };
 }
 
@@ -451,42 +501,28 @@ function leaseFor(session, branch) {
 }
 
 // ---------------------------------------------------------------------------
-// ntfy push (optional)
+// Alerts: Web Push (always) + ntfy (optional, only when NTFY_TOPIC is set)
 // ---------------------------------------------------------------------------
 
 const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
 const NTFY_URL = (process.env.NTFY_URL || 'https://ntfy.sh').replace(/\/+$/, '');
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
-const NTFY_DONE = process.env.NTFY_DONE === '1';   // also push when a turn finishes (off: only 'needs you' + disk)
+const NTFY_DONE = process.env.NTFY_DONE === '1';   // also alert when a turn finishes (off: only 'needs you' + disk)
 const NTFY_DEBOUNCE_MS = 60000;
-const ntfyLast = new Map(); // session -> ms
-
-function ntfyPush(key, { title, priority = 'default', tags = '', body = '', click = '' }, debounceMs = NTFY_DEBOUNCE_MS) {
-  if (!NTFY_TOPIC) return;
-  const now = Date.now();
-  if (now - (ntfyLast.get(key) || 0) < debounceMs) return;
-  ntfyLast.set(key, now);
-  const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
-  const headers = { Title: ascii(title), Priority: priority };
-  if (tags) headers.Tags = tags;
-  if (PUBLIC_URL) headers.Click = `${PUBLIC_URL}/${click}`;
-  try {
-    fetch(`${NTFY_URL}/${encodeURIComponent(NTFY_TOPIC)}`, {
-      method: 'POST', headers, body: String(body || title).slice(0, 500),
-      signal: AbortSignal.timeout(8000),
-    }).catch((e) => console.error('[ntfy]', e.message));
-  } catch (e) { console.error('[ntfy]', e.message); }
-}
+const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
+const push = createPush({ stateDir: STATE_DIR });
+const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
-function ntfy(session, kind, body) {
+function notifySession(session, kind, body) {
   const waiting = kind === 'waiting' || kind === 'asks';
-  ntfyPush(`${session}:${kind}`, {
+  alert(`${session}:${kind}`, {
     title: kind === 'asks' ? `${session} asks you` : waiting ? `${session} needs you` : `${session} is done`,
     priority: waiting ? 'high' : 'default',
-    tags: waiting ? 'warning' : 'white_check_mark',
+    ntfyTags: waiting ? 'warning' : 'white_check_mark',
     body: body || kind,
-    click: `?s=${encodeURIComponent(session)}`,
+    url: `/?s=${encodeURIComponent(session)}`,
+    tag: `ghosty-${session}`,
   });
 }
 
@@ -506,12 +542,12 @@ async function healthTick() {
   const gb = (b) => `${(b / 2 ** 30).toFixed(1)}G`;
   for (const d of health.disks) {
     if (d.level === 'crit') {
-      // First crossing pushes at once; while it stays critical, ntfyPush's debounce paces reminders.
-      if (!diskCrit.has(d.path)) ntfyLast.delete(`disk:${d.path}`);
+      // First crossing pushes at once; while it stays critical, alert()'s debounce paces reminders.
+      if (!diskCrit.has(d.path)) resetDebounce(`disk:${d.path}`);
       diskCrit.add(d.path);
-      ntfyPush(`disk:${d.path}`, {
+      alert(`disk:${d.path}`, {
         title: `codebox disk ${d.path} ${Math.round(d.pct)}% full`,
-        priority: 'urgent', tags: 'rotating_light',
+        priority: 'urgent', ntfyTags: 'rotating_light', tag: `ghosty-disk-${d.path}`, url: '/',
         body: `${gb(d.free)} free of ${gb(d.total)} on ${d.path}`,
       }, DISK_ALERT_REPEAT_MS);
     } else diskCrit.delete(d.path);
@@ -544,8 +580,11 @@ async function pollOnce() {
     const p = panes.get(s.name) || { pid: 0, cmd: '', cols: 0, rows: 0, dead: false };
     let pane = null;
     let failed = false;
+    // Full scrollback only for sessions with an open card/cell (a WebSocket viewer); the rest
+    // get the tail, which is all the state, reply and manager parsing need. Saves tmux CPU.
+    const depth = wsBySession.has(s.name) ? PANE_LINES : PANE_LINES_BG;
     if (!p.dead) {
-      try { pane = await capturePane(s.name); } catch { failed = true; }
+      try { pane = await capturePane(s.name, depth); } catch { failed = true; }
     }
     const offline = p.dead || failed;
     const prev = lastSnapshots.get(s.name);
@@ -553,12 +592,13 @@ async function pollOnce() {
     if (!offline) {
       changed = !prev || prev.pane !== pane || prev.cols !== p.cols || prev.rows !== p.rows;
       if (changed) {
-        lastSnapshots.set(s.name, { pane, cols: p.cols, rows: p.rows });
+        lastSnapshots.set(s.name, { pane, cols: p.cols, rows: p.rows, depth });
         changedSessions.push(s.name);
       }
     }
     const t = track.get(s.name) || { changeAt: 0, workingSince: null, lastWorkAt: 0, realWork: false, prevState: undefined, doneAt: null, ackFor: null, ackAt: null, reply: null, replyHash: null, contextLeft: null, model: null };
-    const paneChanged = !!(changed && prev && prev.pane !== pane);
+    // A change of capture depth (card opened/closed) is not activity.
+    const paneChanged = !!(changed && prev && prev.pane !== pane && prev.depth === depth);
     if (paneChanged) t.changeAt = now;   // first sight is not activity
     track.set(s.name, t);
     // Delivery ack: first pane change after the most recent send.
@@ -608,8 +648,8 @@ async function pollOnce() {
 
     // Notifications: transitions only, never on first sight.
     if (t.prevState !== undefined && t.prevState !== state) {
-      if (state === 'waiting') ntfy(s.name, 'waiting', waitReason || 'needs input');
-      else if (state === 'done' && t.realWork && NTFY_DONE) ntfy(s.name, 'done', lastMessage || 'turn finished');
+      if (state === 'waiting') notifySession(s.name, 'waiting', waitReason || 'needs input');
+      else if (state === 'done' && t.realWork && NTFY_DONE) notifySession(s.name, 'done', lastMessage || 'turn finished');
     }
     if (state === 'done') t.realWork = false;
     t.prevState = state;
@@ -635,6 +675,7 @@ async function pollOnce() {
     status[s.name] = {
       state, agent, agentCmd, waitReason,
       stall: stallOf(s.name),
+      auto: autoOf(s.name),
       lastActivitySec: s.lastActivitySec,
       lastSendAt: sentAt,
       lastSendAck: sentAt && t.ackFor === sentAt ? t.ackAt : null,
@@ -740,6 +781,7 @@ const MIME = {
   '.js':   'text/javascript; charset=utf-8',
   '.css':  'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.apk':  'application/vnd.android.package-archive',
   '.svg':  'image/svg+xml',
   '.png':  'image/png',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
@@ -971,6 +1013,26 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ sessions: r.sessions, status }));
     return;
   }
+  if (req.method === 'GET' && (p.startsWith('/api/taskdocs/') || p.startsWith('/api/taskdoc/'))) {
+    const one = p.startsWith('/api/taskdoc/');
+    const session = decodeURIComponent(p.slice(one ? '/api/taskdoc/'.length : '/api/taskdocs/'.length));
+    const files = await taskDocFiles(session);
+    if (!one) return json(res, 200, { session, files: files.map((f) => f.name) });
+    const want = new URL(req.url, 'http://x').searchParams.get('f');
+    const f = files.find((x) => x.name === want) || files[0];
+    if (!f) return json(res, 404, { ok: false, error: 'no task doc' });
+    return json(res, 200, { session, name: f.name, text: (await readFile(f.path, 'utf8')).slice(0, 400000) });
+  }
+  if (req.method === 'GET' && p.startsWith('/api/transcript/')) {
+    const session = decodeURIComponent(p.slice('/api/transcript/'.length));
+    try {
+      const lines = plainLines(await capturePane(session));
+      const text = transcriptOf(lines, bodyEnd(lines));
+      return json(res, 200, { session, text, hash: shortHash(text) });
+    } catch {
+      return json(res, 404, { ok: false, error: 'no such session' });
+    }
+  }
   if (req.method === 'GET' && p.startsWith('/api/reply/')) {
     const session = decodeURIComponent(p.slice('/api/reply/'.length));
     const t = track.get(session);
@@ -1050,7 +1112,33 @@ const server = http.createServer(async (req, res) => {
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager') {
-    return json(res, 200, managerConfig());
+    return json(res, 200, { ...managerConfig(), today: await todayCounts() });
+  }
+  if (p.startsWith('/api/push/')) {
+    try {
+      if (req.method === 'GET' && p === '/api/push/key') return json(res, 200, { key: push.publicKey });
+      if (req.method === 'GET' && p === '/api/push/feed') {
+        const since = url.searchParams.get('since');
+        return json(res, 200, { items: push.feedSince(since === null || since === '' ? undefined : since) });
+      }
+      if (req.method === 'POST' && p === '/api/push/subscribe') {
+        push.subscribe((await readJsonBody(req)).subscription);
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && p === '/api/push/unsubscribe') {
+        return json(res, 200, { ok: true, removed: push.unsubscribe((await readJsonBody(req)).endpoint) });
+      }
+      if (req.method === 'POST' && p === '/api/push/test') {
+        const { results } = await push.notify({ title: 'codebox: test notification', body: 'Web Push is working.', url: '/', tag: 'ghosty-test', priority: 'high' });
+        return json(res, 200, { ok: true, subscriptions: results.length, results });
+      }
+    } catch (err) { return json(res, err.status || 400, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p.startsWith('/api/manager/cancel/')) {
+    const name = decodeURIComponent(p.slice('/api/manager/cancel/'.length));
+    if (!cancelAuto(name)) return json(res, 404, { ok: false, error: 'no pending auto answer' });
+    latest = null;
+    return json(res, 200, { ok: true, session: name });
   }
   if (req.method === 'POST' && p === '/api/manager') {
     try { return json(res, 200, await setManagerConfig(await readJsonBody(req))); }
@@ -1111,7 +1199,12 @@ server.on('upgrade', (req, socket, head) => {
       // Send the cached snapshot on open so the pane is never blank.
       const send = (c) => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'snapshot', session, pane: c.pane, cols: c.cols, rows: c.rows }));
       const cache = lastSnapshots.get(session);
-      if (cache) send(cache);
+      if (cache && cache.depth >= PANE_LINES) send(cache);
+      else if (cache) {
+        // The cached capture is the short background one: paint it at once, then the full history.
+        send(cache);
+        capturePane(session).then((pane) => send({ pane, cols: cache.cols, rows: cache.rows }), () => {});
+      }
       else {
         capturePane(session).then((pane) => send({ pane }), () => {});
       }
@@ -1158,7 +1251,8 @@ async function leaseTick() {
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
   await initManager({
-    onOwnerNeeded: (session, stall) => ntfy(session, 'asks', stall.question || stall.case),
+    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
+    sendKey, sendKeys,
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.

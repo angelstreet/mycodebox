@@ -80,7 +80,7 @@ board, tabs, sidebar. Card headers show project · ⎇ branch(*) · ⑂ worktree
 
 **Dock** — chevron bottom-left collapses quick prompts + keys (remembered).
 
-**Alerts** — bell = in-page notification. Phone push via ntfy: the secret `NTFY_TOPIC` + `PUBLIC_URL` are in
+**Alerts** — bell = Web Push subscription (see README "Web Push"; state in the state dir: vapid.json, push-subs.json, push-feed.json). Optional extra phone push via ntfy: the secret `NTFY_TOPIC` + `PUBLIC_URL` are in
 the gitignored `~/ghosty-sessions/.env` (loaded by the unit's `EnvironmentFile=`); pushes on "needs you" and on
 disk critical (≥ 95 %, repeated every 6 h). `NTFY_DONE=1` adds turn-finished pushes.
 
