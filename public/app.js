@@ -754,6 +754,108 @@ function renderFilterBar() {
   bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); });
 }
 
+// ---------- task document (.md) ----------
+// Sessions named taskNN get an MD button when the server finds a TASK-NN*.md (or task.md) for them.
+state.taskDocs = new Map();   // session -> { files: [] , at }
+function probeTaskDoc(cell, n) {
+  const btn = cell.querySelector('.td');
+  if (!btn) return;
+  let d = state.taskDocs.get(n);
+  if (!/^task\d+/i.test(n)) { btn.classList.add('hidden'); return; }
+  if (!d || (!d.busy && Date.now() - d.at > 120000)) {
+    d = d || { files: [], at: 0 };
+    d.busy = true; state.taskDocs.set(n, d);
+    fetch(`/api/taskdocs/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((j) => { d.files = j.files || []; })
+      .catch(() => {})
+      .finally(() => { d.busy = false; d.at = Date.now(); const c = document.querySelector(`.cell[data-session="${cssEscape(n)}"]`); if (c) probeTaskDoc(c, n); });
+  }
+  btn.classList.toggle('hidden', !d.files.length);
+}
+function mdInline(t) {
+  return escapeHtml(t)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:]|$)/g, '$1<i>$2</i>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function renderMd(src) {
+  const lines = String(src).replace(/\t/g, '    ').split('\n');
+  const out = [];
+  let i = 0, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${mdInline(para.join(' '))}</p>`); para = []; } };
+  const row = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {
+      flush(); const code = []; i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
+      i++; out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); continue;
+    }
+    if (!l.trim()) { flush(); i++; continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) { flush(); out.push(`<div class="mdh h${Math.min(h[1].length, 4)}">${mdInline(h[2])}</div>`); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { flush(); out.push('<hr>'); i++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || '')) {
+      flush(); const head = row(l); i += 2; const body = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(row(lines[i++]));
+      out.push(`<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${mdInline(c)}</th>`).join('')}</tr></thead><tbody>${
+        body.map((r) => `<tr>${r.map((c) => `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*>\s?/.test(l)) {
+      flush(); const q = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
+      out.push(`<blockquote>${mdInline(q.join(' '))}</blockquote>`); continue;
+    }
+    const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(l);
+    if (li) {
+      flush();
+      const items = [];
+      while (i < lines.length) {
+        const m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
+        if (m) { items.push({ d: Math.min(Math.floor(m[1].length / 2), 4), num: /\d/.test(m[2]), t: m[3] }); i++; }
+        else if (lines[i].trim() && /^\s{2,}\S/.test(lines[i]) && items.length) { items[items.length - 1].t += ' ' + lines[i].trim(); i++; }
+        else break;
+      }
+      out.push('<div class="mdl">' + items.map((it) => {
+        const cb = /^\[( |x|X)\]\s+(.*)$/.exec(it.t);
+        const mark = cb ? `<span class="cb${cb[1] === ' ' ? '' : ' on'}"></span>` : `<span class="bu">${it.num ? '\u2022' : '\u2022'}</span>`;
+        return `<div class="mdi" style="margin-left:${it.d * 14}px">${mark}<span>${mdInline(cb ? cb[2] : it.t)}</span></div>`;
+      }).join('') + '</div>');
+      continue;
+    }
+    para.push(l.trim()); i++;
+  }
+  flush();
+  return out.join('');
+}
+async function toggleTaskDoc(cell, n, file) {
+  if (cell.classList.contains('doc-on') && !file) { cell.classList.remove('doc-on'); return; }
+  const dv = cell.querySelector('.docview');
+  const d = state.taskDocs.get(n) || { files: [] };
+  const cur = file || dv.dataset.file || d.files[0];
+  if (!cur) return;
+  dv.dataset.file = cur;
+  cell.classList.add('doc-on');
+  dv.innerHTML = '<div class="rd-empty">loading\u2026</div>';
+  try {
+    const r = await fetch(`/api/taskdoc/${encodeURIComponent(n)}?f=${encodeURIComponent(cur)}`);
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    const opts = d.files.length > 1
+      ? `<select class="mdsel">${d.files.map((f) => `<option value="${escapeHtml(f)}"${f === j.name ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('')}</select>`
+      : `<span class="mdname">${escapeHtml(j.name)}</span>`;
+    dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}</div><div class="mdbody">${renderMd(j.text)}</div>`;
+    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+    const sel = dv.querySelector('.mdsel');
+    if (sel) sel.onchange = () => toggleTaskDoc(cell, n, sel.value);
+  } catch {
+    dv.innerHTML = '<div class="mdbar"><button class="mdback">\u2190 session</button></div><div class="rd-empty">could not load the task document</div>';
+    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+  }
+}
+
 // ---------- tabs ----------
 function renderTabStrip() {
   els.tabs.innerHTML = '';
@@ -929,6 +1031,7 @@ function buildCell(s) {
         <button data-dir="left" aria-label="Move left">&#9664;</button><button data-dir="up" aria-label="Move up">&#9650;</button><button data-dir="down" aria-label="Move down">&#9660;</button><button data-dir="right" aria-label="Move right">&#9654;</button>
       </span>
       <span class="stw"></span>
+      <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
       <button class="open" aria-label="Open full screen" title="Open">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
@@ -944,11 +1047,13 @@ function buildCell(s) {
     <div class="apill hidden"></div>
     <div class="reader"></div>
     <div class="b"></div>
+    <div class="docview"></div>
     <div class="jump">
       <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">&#10514;</button>
       <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">&#10515;</button>
     </div>`;
-  cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); toggleReader(); };
+  cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
+  cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
   for (const b of cell.querySelectorAll('.jump button')) {
     b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
@@ -1034,7 +1139,9 @@ function syncCell(cell) {
   const n = cell.dataset.session;
   const s = stateOf(n);
   const inCard = cell.parentElement === els.cardPane;
-  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}`;
+  const docOn = inCard && cell.classList.contains('doc-on');
+  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
+  probeTaskDoc(cell, n);
   const ag = agentBadgeHtml(n);
   const agEl = cell.querySelector('.ag');
   if (agEl.innerHTML !== ag) agEl.innerHTML = ag;

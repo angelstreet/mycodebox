@@ -379,6 +379,27 @@ function replyOf(lines, end) {
   return text;
 }
 
+// Markdown for a task session: taskNN[-x] -> docs/tasks/TASK-NN*.md in the repo of its cwd (or ~/virtualpytest), or a task.md in cwd.
+async function taskDocFiles(session) {
+  const out = [], seen = new Set();
+  const add = (dir, name) => { const path = join(dir, name); if (!seen.has(name)) { seen.add(name); out.push({ name, path }); } };
+  let cwd = '';
+  try { cwd = (await exec(TMUX, ['display-message', '-p', '-t', tgt(session), '#{pane_current_path}'])).stdout.trim(); } catch { return out; }
+  const m = /^task0*(\d+)/i.exec(session);
+  const dirs = [cwd, join(cwd, 'docs', 'tasks'), join(HOME, 'virtualpytest', 'docs', 'tasks')];
+  try { const top = (await exec('git', ['-C', cwd, 'rev-parse', '--show-toplevel'])).stdout.trim(); if (top) dirs.splice(1, 0, join(top, 'docs', 'tasks')); } catch { /* not a repo */ }
+  for (const d of dirs) {
+    let names = [];
+    try { names = await readdir(d); } catch { continue; }
+    for (const n of names.sort()) {
+      if (!/\.md$/i.test(n)) continue;
+      if (/^task\.md$/i.test(n) && d === cwd) add(d, n);
+      else if (m && new RegExp(`^TASK-0*${m[1]}(?!\\d)`, 'i').test(n)) add(d, n);
+    }
+  }
+  return out;
+}
+
 // The whole captured conversation as readable text: prompts, replies, and tool names only.
 function transcriptOf(lines, end) {
   const out = [];
@@ -999,6 +1020,16 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ sessions: r.sessions, status }));
     return;
+  }
+  if (req.method === 'GET' && (p.startsWith('/api/taskdocs/') || p.startsWith('/api/taskdoc/'))) {
+    const one = p.startsWith('/api/taskdoc/');
+    const session = decodeURIComponent(p.slice(one ? '/api/taskdoc/'.length : '/api/taskdocs/'.length));
+    const files = await taskDocFiles(session);
+    if (!one) return json(res, 200, { session, files: files.map((f) => f.name) });
+    const want = new URL(req.url, 'http://x').searchParams.get('f');
+    const f = files.find((x) => x.name === want) || files[0];
+    if (!f) return json(res, 404, { ok: false, error: 'no task doc' });
+    return json(res, 200, { session, name: f.name, text: (await readFile(f.path, 'utf8')).slice(0, 400000) });
   }
   if (req.method === 'GET' && p.startsWith('/api/transcript/')) {
     const session = decodeURIComponent(p.slice('/api/transcript/'.length));
