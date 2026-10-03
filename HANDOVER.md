@@ -47,31 +47,40 @@ ssh codebox 'tmux new-session -A -s ghosty -c ~/ghosty-sessions'
 The session starts with `claude --dangerously-skip-permissions; bash -l` so when
 Claude exits you land in a shell at the repo root, not kicked out of the session.
 
-## What's done (v1 — cockpit)
+## What's done (v2 — cockpit)
 
-- Server: one `list-panes` + one `ps` per tick, parallel captures, broadcasts only changed panes
-- Status contract per session: `state` (working / waiting / idle / offline), `agent`
-  (claude / codex / minimax / bash via process tree), `waitReason`, `lastSendAt`,
-  `workingSinceMs`, `cols`/`rows`
-- Cards: agent badge, state badge with elapsed timer (working = since last send),
-  red "needs you" card with the prompt text + one-tap 1 / 2 / 3 / esc answers
-- "NEEDS YOU" banner + count chips in the topbar (tap a chip = filter); `(n) codebox` tab title
-- xterm sized to the tmux pane's cols with scaled font (6–14px) — no rewrap, no staircase, no flash
-- Views: card / grid (2·4·6·9·all, one column on phones) / board (rows sorted by urgency, last agent line)
-- Dock: full-width auto-growing input + quick keys (esc ⏎ ↑ ↓ tab 1 2 3 y n ^C) via `{key}` sends
-- Leases from `vpt-lease` on proxmox in the sidebar (`/api/leases`, 15s cache)
-- Bell = browser notification + vibrate when a session flips to "needs you" (HTTPS URL only)
-- `?s=<session>` opens a session, `?view=card|grid|list` picks the view
+**States** — working (pulsing green + current step), needs you (red, prompt + 1/2/3/esc), done
+(blue, agent finished its turn), idle (grey), offline. Agent badge (claude/codex/minimax/bash via
+process tree), repo/branch*, context left, model, linked lease.
+
+**Phone (≤720px)** — board is home (sorted needs you > done > working > idle); tap row = card,
+long-press = set send target. Card: swipe header/reader left/right = next/prev session, "Aa / >_"
+toggles reader (last reply as readable text) vs raw terminal. Tabs + grid hidden.
+
+**Desktop** — grid 2/4/6/9/all; tap = send target ("→ send target" pill), double-tap = open card.
+
+**Dock** — fixed-width target chip (tap = picker), quick-prompt chips (long-press edit, + adds),
+history, quick keys, sent ✓ / delivered ✓✓, multi-target send.
+
+**Sidebar** — grouped by state, rename, kill (type name to confirm), "+" new session (agent + dir
+from `/api/dirs` + name), collapsible leases.
+
+**Alerts** — bell = in-page notification; set `NTFY_TOPIC` (see README) for real push to the phone.
+
+**Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,
+exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only.
 
 ## Known issues / not done
 
 | # | Issue | Notes |
 |---|---|---|
-| 1 | 221-col panes render at the 6px floor and crop on phones | add a "reader" mode (ANSI-stripped, reflowed text) for card view on mobile |
-| 2 | "waiting" can false-positive when prompt-like text sits in the last ~15 lines (e.g. a quoted "Do you want to proceed?") | Codex / MiniMax prompt wording in `WAIT_RE` is a best guess — calibrate on a real prompt |
-| 3 | No HTTPS via `tailscale serve` (free plan) | self-signed works on Android after manual accept; Cloudflare Tunnel for prod-grade |
-| 4 | Notifications only fire while the page/PWA is alive | real background alerts need Web Push or `ntfy` from the server |
-| 5 | SW cache bumped to v4 | if stale JS ever shows, bump again and force-refresh |
+| 1 | Codex prompt/done/activity patterns untested (no live Codex pane) | calibrate `WAIT_RE` / done markers on a real codex session |
+| 2 | "waiting" can false-positive on prompt-like text in the last ~15 lines | e.g. a quoted "Do you want to proceed?" |
+| 3 | `ntfy` not configured yet | add `Environment=NTFY_TOPIC=<secret-topic>` + `PUBLIC_URL` to the systemd unit |
+| 4 | Board reorders when states change | by design (urgency sort); rows are moved in place, not rebuilt |
+| 5 | Dock is 3 rows tall on phones | consider collapsing quick keys until the input is focused |
+| 6 | No HTTPS via `tailscale serve` (free plan) | self-signed on :7443 works after manual accept |
+| 7 | SW cache v5 | bump again if stale JS ever shows |
 
 ## Files of interest
 
@@ -80,7 +89,7 @@ server.js                       # Node 20+, ws, no framework
 public/app.js                   # controller, three view renderers, swipe, SW reg
 public/index.html               # shell
 public/style.css                # ghosty dark
-public/sw.js                    # PWA service worker, cache v4, notification click
+public/sw.js                    # PWA service worker, cache v5, notification click
 public/manifest.webmanifest     # installable as "codebox"
 public/certs/  (git-ignored)    # self-signed PEMs
 public/vendor/                  # xterm.js v5.3.0 + addon-fit
