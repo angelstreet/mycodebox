@@ -521,7 +521,7 @@ function renderAttention() {
   els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${escapeHtml(displayName(s.name))}</button>`).join('');
   for (const b of els.attention.querySelectorAll('button')) {
-    b.onclick = () => { focusSession(b.dataset.session); if (state.mode === 'list') setMode('card'); };
+    b.onclick = () => openCard(b.dataset.session);
   }
 }
 
@@ -538,7 +538,12 @@ function renderTabStrip() {
     tab.dataset.session = s.name;
     tab.className = 'tab';
     tab.innerHTML = `<i class="dot"></i><span class="label">${escapeHtml(displayName(s.name))}</span>`;
-    tab.onclick = () => focusSession(s.name);
+    // grid: select + bring the card on screen; elsewhere: open the card
+    tab.onclick = () => {
+      if (state.mode !== 'grid') return openCard(s.name);
+      focusSession(s.name);
+      els.gridPane.querySelector(`[data-session="${cssEscape(s.name)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
     els.tabs.appendChild(tab);
   }
   syncTabs();
@@ -571,9 +576,8 @@ function renderSide() {
       </button>`;
     li.querySelector('.meta').onclick = (e) => {
       e.stopPropagation();
-      focusSession(s.name);
-      if (state.mode === 'list') setMode('card');
       closeSide();
+      openCard(s.name);
     };
     li.querySelector('.edit').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
     els.sessionList.appendChild(li);
