@@ -1190,7 +1190,12 @@ function renderReply(text) {
     if (!line.trim()) { flushPara(); continue; }
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) { flushPara(); out.push(`<div class="rh">${inlineMd(h[2])}</div>`); continue; }
-    para.push(inlineMd(line.replace(/^(\s*)[-*] /, '$1\u2022 ')));
+    // tmux hard-wraps at the pane width (can be ~20 cols): glue wrapped lines back together,
+    // but keep list items and table/box rows on their own line
+    const item = /^\s*(?:[-*\u2022]|\d+[.)]) /.test(line);
+    const boxy = /[\u2500-\u257f|]/.test(line);
+    if (para.length && !item && !boxy && !para.boxy) para[para.length - 1] += ' ' + inlineMd(line.trim());
+    else { para.push(inlineMd(line.replace(/^(\s*)[-*] /, '$1\u2022 '))); para.boxy = boxy; }
   }
   flushPara(); flushCode();
   return out.join('');
