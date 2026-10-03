@@ -1684,6 +1684,11 @@ setDockCollapsed(lsGet(LS_DOCK_COLLAPSED, '0') === '1');
 
 function onDockKey(e) {
   if (e.isComposing) return;
+  // Empty input: Enter / Escape go straight to the session as keys (confirm a
+  // prompt, interrupt the agent). Escape is always passed through.
+  const empty = els.sendInput.value.trim() === '';
+  if (e.key === 'Escape') { e.preventDefault(); for (const t of dockTargets()) sendKey(t, 'Escape'); toast('esc →', 700); return; }
+  if (e.key === 'Enter' && !e.shiftKey && empty) { e.preventDefault(); for (const t of dockTargets()) sendKey(t, 'Enter'); toast('⏎ →', 700); return; }
   if (e.key === 'Enter' && !e.shiftKey && !COARSE) { e.preventDefault(); send(); return; }
   if (e.key === 'ArrowUp' && (els.sendInput.value === '' || els.sendInput.value === dock.recalled) && dock.hist.length) {
     e.preventDefault();
