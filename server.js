@@ -9,6 +9,7 @@
 //   GET  /api/snapshot/:session → last full pane snapshot (for first paint)
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
 //   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
+//   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/sessions          → {name, agent, cwd} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
@@ -749,6 +750,23 @@ const AGENT_CMDS = {
   minimax: process.env.AGENT_CMD_MINIMAX ?? 'minimax-code',
   bash:    process.env.AGENT_CMD_BASH    ?? '',
 };
+const RESIZE_ALLOW = process.env.GHOSTY_RESIZE_ALLOW ? new RegExp(process.env.GHOSTY_RESIZE_ALLOW) : null;
+
+// Resize a DETACHED session's window to cols x rows so the agent re-renders
+// (SIGWINCH) at the card's size. `resize-window` flips the window to
+// window-size=manual; we immediately unset that per-window option so a later
+// real `tmux attach` resizes the window to the attaching terminal again (the
+// current size just stays until then).
+async function resizeSession(name, cols, rows) {
+  if (RESIZE_ALLOW && !RESIZE_ALLOW.test(name)) throw Object.assign(httpError(403, 'resize not allowed for this session'), { reason: 'forbidden' });
+  if (!(await sessionExists(name))) throw httpError(404, 'no such session');
+  const target = `=${name}:`;
+  const { stdout } = await exec(TMUX, ['display-message', '-p', '-t', target, '#{session_attached}']);
+  if (Number(stdout.trim()) > 0) throw Object.assign(httpError(409, 'session is attached'), { reason: 'attached' });
+  await exec(TMUX, ['resize-window', '-t', target, '-x', String(cols), '-y', String(rows)]);
+  try { await exec(TMUX, ['set-option', '-w', '-u', '-t', target, 'window-size']); } catch {}
+  return { ok: true, cols, rows };
+}
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 async function sessionExists(name) {
@@ -945,6 +963,17 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: false, error: err.message }));
     }
     return;
+  }
+  if (req.method === 'POST' && p.startsWith('/api/resize/')) {
+    const session = decodeURIComponent(p.slice('/api/resize/'.length));
+    try {
+      const b = await readJsonBody(req);
+      const cols = b.cols, rows = b.rows;
+      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || cols > 400 || rows < 5 || rows > 200) throw httpError(400, 'cols 20-400 and rows 5-200 required');
+      return json(res, 200, await resizeSession(session, cols, rows));
+    } catch (err) {
+      return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message, reason: err.reason });
+    }
   }
   if (req.method === 'POST' && p === '/api/sessions') {
     try { return json(res, 200, await createSession(await readJsonBody(req))); }
