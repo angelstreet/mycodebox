@@ -341,6 +341,12 @@ function doneClockMs(lines, end, now) {
 
 // The agent's last reply block as plain text for a mobile reader.
 function replyOf(lines, end) {
+  // a long "Tip: …" wraps onto indented continuation lines that are not noise by themselves: blank them (keeps indexes)
+  lines = lines.slice();
+  for (let i = 0; i < end; i++) {
+    if (!/^\s*(?:⎿\s*)?Tip:/.test(lines[i])) continue;
+    for (let j = i + 1; j < Math.min(end, i + 3) && /^\s{3,}\S/.test(lines[j]) && !BULLET_RE.test(lines[j]); j++) lines[j] = '';
+  }
   let hi = end - 1;
   while (hi >= 0) {
     const l = lines[hi];
