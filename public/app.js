@@ -1,6 +1,7 @@
 // Ghosty Sessions — app.js
-// Mobile-first tmux pane controller. terminal | grid | sidebar.
-// Custom names in localStorage. Swipe-from-edge to open sidebar.
+// Mobile-first dev cockpit over tmux: card | grid | board, plus send dock.
+// State-first UI: every session shows agent, state (working / needs you /
+// idle / offline) and elapsed time. Custom names live in localStorage.
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -8,23 +9,27 @@ const $$ = (q) => Array.from(document.querySelectorAll(q));
 const els = {
   topbar:      $('#topbar'),
   appTitle:    $('#appTitle'),
+  summary:     $('#summary'),
+  attention:   $('#attention'),
   tabs:        $('#tabs'),
   main:        $('#main'),
   cardPane:    $('#cardPane'),
   gridPane:    $('#gridPane'),
   listPane:    $('#listPane'),
   dock:        $('#dock'),
-  dockTarget:  $('#dockTarget'),
+  keys:        $('#keys'),
   sendInput:   $('#sendInput'),
   sendBtn:     $('#sendBtn'),
   side:        $('#side'),
   sessionList: $('#sessionList'),
   sessionCount:$('#sessionCount'),
+  leaseList:   $('#leaseList'),
+  leaseCount:  $('#leaseCount'),
   refreshBtn:  $('#refreshBtn'),
   menuBtn:     $('#menuBtn'),
   backBtn:     $('#backBtn'),
+  notifyBtn:   $('#notifyBtn'),
   edgeSwipe:   $('#edgeSwipe'),
-  modeBar:     $('#modeBar'),
   gridSizes:   $('#gridSizes'),
   toast:       $('#toast'),
   installBtn:  $('#installBtn'),
@@ -33,38 +38,51 @@ const els = {
 const state = {
   sessions:   [],
   status:     {},
+  statusAt:   Date.now(),       // when state.status was received (for local elapsed ticking)
   active:     null,
-  mode:       'card',          // card | grid | list
-  gridSize:   8,               // 2 | 4 | 8 | 12 | 16
+  mode:       'grid',           // card | grid | list
+  prevMode:   'grid',           // where the back arrow returns to
+  gridSize:   4,                // 2 | 4 | 6 | 9 | 16 (all)
+  filter:     null,             // null | 'waiting' | 'working'
   ws:        new Map(),
   statusWs:  null,
   terms:     new Map(),
-  paneText:  new Map(),       // session -> latest ANSI text (for preview)
-  rename:    {},              // tmux session name -> custom display name
+  paneText:  new Map(),         // session -> latest ANSI text
+  rename:    {},                // tmux session name -> custom display name
+  sentAt:    {},                // session -> ms epoch of last send from this device
+  prevState: {},                // session -> last seen state (for transition alerts)
+  leases:    null,
+  notify:    false,
   toastTimer:null,
   side:      false,
-  installPrompt: null,        // beforeinstallprompt event
+  installPrompt: null,
 };
 
-// ---------- localStorage: custom names ----------
+// ---------- localStorage ----------
 const LS_RENAMES = 'ghosty.renames';
 const LS_GRID    = 'ghosty.gridSize';
+const LS_MODE    = 'ghosty.mode';
+const LS_NOTIFY  = 'ghosty.notify';
+const GRID_SIZES = [2, 4, 6, 9, 16];
+
+function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 
 function loadRenames() {
-  try { state.rename = JSON.parse(localStorage.getItem(LS_RENAMES) || '{}') || {}; }
+  try { state.rename = JSON.parse(lsGet(LS_RENAMES, '{}')) || {}; }
   catch { state.rename = {}; }
 }
-function saveRenames() {
-  localStorage.setItem(LS_RENAMES, JSON.stringify(state.rename));
-}
+function saveRenames() { lsSet(LS_RENAMES, JSON.stringify(state.rename)); }
 function customFor(name) { return state.rename[name] || ''; }
 function displayName(name) { return customFor(name) || name; }
 
-function loadGrid() {
-  const v = Number(localStorage.getItem(LS_GRID) || 8);
-  state.gridSize = [4, 8, 12, 16].includes(v) ? v : 8;
+function loadPrefs() {
+  const g = Number(lsGet(LS_GRID, 4));
+  state.gridSize = GRID_SIZES.includes(g) ? g : 4;
+  const m = lsGet(LS_MODE, 'grid');
+  state.mode = ['card', 'grid', 'list'].includes(m) ? m : 'grid';
+  state.notify = lsGet(LS_NOTIFY, '0') === '1';
 }
-function saveGrid() { localStorage.setItem(LS_GRID, String(state.gridSize)); }
 
 // ---------- utilities ----------
 function toast(msg, ms=1800) {
@@ -74,21 +92,66 @@ function toast(msg, ms=1800) {
   state.toastTimer = setTimeout(() => els.toast.classList.remove('on'), ms);
 }
 
-function pillClass(s) {
-  if (s === 'idle') return 'idle';
-  if (s === 'busy') return 'busy';
-  if (s === 'wait') return 'wait';
+// Normalise server state names (old server: busy/wait) to the UI vocabulary.
+const STATE_ALIAS = { busy: 'working', wait: 'waiting' };
+function stateOf(name) {
+  const s = state.status[name]?.state;
+  if (!s) return 'offline';
+  return STATE_ALIAS[s] || s;
+}
+const STATE_RANK = { waiting: 0, working: 1, idle: 2, offline: 3 };
+const STATE_LABEL = { working: 'working', waiting: 'needs you', idle: 'idle', offline: 'offline' };
+
+function agentOf(name) {
+  const st = state.status[name] || {};
+  if (st.agent) return st.agent;
+  // fallback for the old server: guess from pane_current_command
+  const cmd = (st.cmd || state.sessions.find((s) => s.name === name)?.cmd || '').toLowerCase();
+  if (cmd.includes('claude')) return 'claude';
+  if (cmd.includes('codex'))  return 'codex';
+  if (cmd.includes('minimax') || cmd.includes('mcode')) return 'minimax';
+  return 'bash';
+}
+const AGENT_LABEL = { claude: 'claude', codex: 'codex', minimax: 'minimax', bash: 'bash', other: 'sh' };
+
+function fmtDur(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  if (sec < 60)    return `${sec}s`;
+  if (sec < 3600)  return `${Math.floor(sec/60)}m${String(sec%60).padStart(2,'0')}s`;
+  if (sec < 86400) return `${Math.floor(sec/3600)}h${String(Math.floor(sec%3600/60)).padStart(2,'0')}m`;
+  return `${Math.floor(sec/86400)}d`;
+}
+
+// Text for the state badge, including elapsed time.
+//   working  → time since the last command was sent (or since it started working)
+//   waiting  → how long it has been waiting on you
+//   idle     → time since last output
+function stateText(name) {
+  const st = state.status[name] || {};
+  const s = stateOf(name);
+  const now = Date.now();
+  const drift = (now - state.statusAt) / 1000;
+  if (s === 'working') {
+    const sent = Math.max(st.lastSendAt || 0, state.sentAt[name] || 0);
+    const from = (sent && (!st.workingSinceMs || sent <= st.workingSinceMs + 5000)) ? sent : st.workingSinceMs;
+    return from ? `working ${fmtDur((now - from) / 1000)}` : 'working';
+  }
+  const idleFor = (st.lastActivitySec ?? 0) + drift;
+  if (s === 'waiting') return `needs you ${fmtDur(idleFor)}`;
+  if (s === 'idle')    return `idle ${fmtDur(idleFor)}`;
   return 'offline';
 }
 
-function fmtIdle(sec) {
-  if (sec < 5)   return 'just now';
-  if (sec < 60)  return `${Math.floor(sec)}s ago`;
-  if (sec < 3600) return `${Math.floor(sec/60)}m ago`;
-  return `${Math.floor(sec/3600)}h ago`;
+function stateBadgeHtml(name) {
+  const s = stateOf(name);
+  return `<span class="state ${s}"><i class="dot ${s}"></i><span class="st">${escapeHtml(stateText(name))}</span></span>`;
+}
+function agentBadgeHtml(name) {
+  const a = agentOf(name);
+  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>`;
 }
 
-// Strip ANSI control sequences + collapse whitespace.
+// Strip ANSI control sequences.
 function stripAnsi(s) {
   return String(s || '')
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')   // CSI
@@ -97,22 +160,18 @@ function stripAnsi(s) {
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
 }
 
-// Build a short preview from the last visible pane text.
-// Shows the prompt + last ~3 lines, trimmed to ~80 chars.
-function buildPreview(paneText) {
-  const text = stripAnsi(paneText);
-  // split on lines and trim trailing blanks
-  const lines = text.split('\n').map((l) => l.replace(/\s+$/g, ''));
-  // find last non-empty block (max 3 lines)
-  const tail = [];
-  for (let i = lines.length - 1; i >= 0 && tail.length < 3; i--) {
-    if (lines[i].length || tail.length) tail.unshift(lines[i]);
+// Last meaningful line of a pane, for the board view. Skips box-drawing
+// chrome and empty prompt lines so it shows what the agent last said.
+const CHROME_RE = /^[\s─━│┃╭╮╰╯┌┐└┘├┤┬┴┼═║>❯›$#%·•\-_=]*$/;
+function lastLine(paneText) {
+  const lines = stripAnsi(paneText).split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].replace(/[│┃]/g, ' ').trim();
+    if (l && !CHROME_RE.test(l) && !/^\? for shortcuts|bypass permissions|Context \d+% left|esc to interrupt/i.test(l)) {
+      return l.replace(/\s{2,}/g, ' ').slice(0, 200);
+    }
   }
-  // fall back to last 80 chars if we still have nothing useful
-  const joined = tail.join('\n').trim();
-  const out = (joined || text).slice(-160);
-  // collapse excess whitespace within lines
-  return out.replace(/[ \t]{2,}/g, ' ');
+  return '';
 }
 
 // ---------- xterm setup ----------
@@ -163,23 +222,15 @@ function mountTerm(session, host) {
 
 function writeToTerm(session, pane) {
   state.paneText.set(session, pane);
+  onPane(session, pane);
   const entry = state.terms.get(session);
   if (!entry) return;
   // rewrite whole visible pane each tick — xterm.js handles ANSI efficiently
   entry.term.write('\x1b[2J\x1b[H');
   entry.term.write(pane);
-  // also refresh preview in grid cards without re-mounting xterm
-  if (state.mode === 'grid') updatePreviewForCell(session, pane);
 }
 
-function updatePreviewForCell(session, pane) {
-  const cell = els.gridPane.querySelector(`[data-session="${cssEscape(session)}"]`);
-  if (!cell) return;
-  const pv = cell.querySelector('.preview');
-  if (!pv) return;
-  const prev = buildPreview(pane);
-  pv.textContent = prev;
-}
+function updatePreviewForCell(session, pane) { onPane(session, pane); }
 
 // ---------- WebSocket ----------
 function connectSession(session) {
@@ -218,6 +269,61 @@ function connectStatus() {
   state.statusWs = ws;
 }
 
+
+// ---------- server event hooks ----------
+// Called by connectStatus / writeToTerm. Everything below updates the DOM in
+// place (no innerHTML rebuild per tick) so cards never flash or remount.
+
+function onStatus() {
+  state.statusAt = Date.now();
+  // Session set comes from the status keys; keep our stable order.
+  const names = Object.keys(state.status);
+  const known = state.sessions.map((s) => s.name);
+  const changedSet = names.length !== known.length || names.some((n) => !known.includes(n));
+  if (changedSet) {
+    state.sessions = names.map((n) => state.sessions.find((s) => s.name === n) || { name: n, cmd: state.status[n].cmd || '' });
+    sortSessions();
+    if (state.active && !names.includes(state.active)) state.active = null;
+    if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
+    renderAll();
+  } else {
+    syncAll();
+  }
+  alertTransitions();
+}
+
+function onLeases(leases) {
+  state.leases = leases;
+  renderLeases();
+}
+
+function onPane(session, pane) {
+  if (state.mode !== 'list') return;
+  const row = els.listPane.querySelector(`[data-session="${cssEscape(session)}"] .last`);
+  if (row) row.textContent = lastLine(pane) || ' ';
+}
+
+// Legacy names the terminal/WebSocket layer calls (pre status-contract server).
+function renderTabs() { onStatus(); }
+function renderSideList() {}
+function updateAllHeaders() {}
+function renderDocState() {}
+
+// Stable alphabetical order by display name. Cards must not jump around
+// under your thumb; "needs you" is surfaced by the banner, not by reordering.
+function sortSessions() {
+  state.sessions.sort((a, b) => displayName(a.name).localeCompare(displayName(b.name)));
+}
+function byUrgency(list) {
+  return [...list].sort((a, b) =>
+    (STATE_RANK[stateOf(a.name)] - STATE_RANK[stateOf(b.name)]) ||
+    displayName(a.name).localeCompare(displayName(b.name)));
+}
+function visibleSessions() {
+  if (!state.filter) return state.sessions;
+  return state.sessions.filter((s) => stateOf(s.name) === state.filter);
+}
+
 // ---------- data ----------
 async function fetchInitial() {
   try {
@@ -225,43 +331,105 @@ async function fetchInitial() {
     const data = await r.json();
     state.sessions = data.sessions || [];
     state.status   = data.status   || {};
+    state.statusAt = Date.now();
+    sortSessions();
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
+    for (const s of state.sessions) state.prevState[s.name] = stateOf(s.name);
     renderAll();
   } catch (err) {
     toast('failed to load — retrying');
     setTimeout(fetchInitial, 2000);
   }
+  fetchLeases();
 }
 
-// ---------- rendering: tabs ----------
-function renderTabs() {
-  els.tabs.innerHTML = '';
-  for (const s of state.sessions) {
-    const cls = pillClass(state.status[s.name]?.state);
-    const tab = document.createElement('div');
-    tab.className = `tab ${cls}${s.name === state.active ? ' active' : ''}`;
-    const label = displayName(s.name);
-    tab.innerHTML = `<span class="pill"></span><span class="label">${escapeHtml(label)}</span>`;
-    tab.onclick = () => focusSession(s.name);
-    els.tabs.appendChild(tab);
+async function fetchLeases() {
+  try {
+    const r = await fetch('/api/leases');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    onLeases(data.ok ? (data.leases || []) : { error: data.error || 'unavailable' });
+  } catch (err) {
+    onLeases({ error: err.message });
   }
 }
 
-// ---------- rendering: sidebar session list (the "home" list) ----------
-function renderSideList() {
-  els.sessionList.innerHTML = '';
-  els.sessionCount.textContent = `${state.sessions.length} active`;
+// ---------- summary + attention ----------
+function renderSummary() {
+  const counts = { waiting: 0, working: 0, idle: 0, offline: 0 };
+  for (const s of state.sessions) counts[stateOf(s.name)]++;
+  const chips = [
+    ['waiting', counts.waiting, 'need you'],
+    ['working', counts.working, 'working'],
+    ['idle',    counts.idle,    'idle'],
+  ];
+  const html = chips
+    .filter(([k, n]) => n > 0 || k === 'working')
+    .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}"><i class="dot ${k}"></i>${n}<span class="t">&nbsp;${t}</span></button>`)
+    .join('');
+  if (els.summary.innerHTML !== html) {
+    els.summary.innerHTML = html;
+    for (const b of els.summary.querySelectorAll('.chip')) {
+      b.onclick = () => setFilter(state.filter === b.dataset.filter ? null : b.dataset.filter);
+    }
+  }
+  // tab title badge so the PWA / browser tab shows how many need you
+  document.title = counts.waiting ? `(${counts.waiting}) codebox` : 'codebox';
+}
+
+function renderAttention() {
+  const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting');
+  els.attention.classList.toggle('hidden', waiting.length === 0);
+  const key = waiting.map((s) => s.name).join('|');
+  if (els.attention.dataset.key === key) return;
+  els.attention.dataset.key = key;
+  els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
+    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${escapeHtml(displayName(s.name))}</button>`).join('');
+  for (const b of els.attention.querySelectorAll('button')) {
+    b.onclick = () => { focusSession(b.dataset.session); if (state.mode === 'list') setMode('card'); };
+  }
+}
+
+function setFilter(f) {
+  state.filter = f;
+  renderAll();
+}
+
+// ---------- tabs ----------
+function renderTabStrip() {
+  els.tabs.innerHTML = '';
   for (const s of state.sessions) {
-    const cls = pillClass(state.status[s.name]?.state);
+    const tab = document.createElement('div');
+    tab.dataset.session = s.name;
+    tab.className = 'tab';
+    tab.innerHTML = `<i class="dot"></i><span class="label">${escapeHtml(displayName(s.name))}</span>`;
+    tab.onclick = () => focusSession(s.name);
+    els.tabs.appendChild(tab);
+  }
+  syncTabs();
+}
+function syncTabs() {
+  for (const tab of els.tabs.children) {
+    const n = tab.dataset.session;
+    const s = stateOf(n);
+    tab.className = `tab ${s}${n === state.active ? ' active' : ''}`;
+    tab.querySelector('.dot').className = `dot ${s}`;
+  }
+}
+
+// ---------- sidebar ----------
+function renderSide() {
+  els.sessionList.innerHTML = '';
+  els.sessionCount.textContent = `${state.sessions.length}`;
+  for (const s of state.sessions) {
     const custom = customFor(s.name);
     const li = document.createElement('li');
-    if (s.name === state.active) li.classList.add('active');
     li.dataset.session = s.name;
     li.innerHTML = `
-      <span class="pill ${cls}"></span>
+      <i class="dot"></i>
       <div class="meta">
-        <div class="name ${custom ? 'has-custom' : ''}">${escapeHtml(custom || s.name)}</div>
-        <div class="sub">${escapeHtml(custom ? s.name : (s.cmd || '—'))}</div>
+        <div class="name">${escapeHtml(custom || s.name)}</div>
+        <div class="sub"><span class="ag"></span><span class="st"></span>${custom ? `<span>· ${escapeHtml(s.name)}</span>` : ''}</div>
       </div>
       <button class="edit" aria-label="Rename">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -269,14 +437,38 @@ function renderSideList() {
     li.querySelector('.meta').onclick = (e) => {
       e.stopPropagation();
       focusSession(s.name);
+      if (state.mode === 'list') setMode('card');
       closeSide();
     };
-    li.querySelector('.edit').onclick = (e) => {
-      e.stopPropagation();
-      beginRename(li, s.name);
-    };
+    li.querySelector('.edit').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
     els.sessionList.appendChild(li);
   }
+  syncSide();
+}
+function syncSide() {
+  for (const li of els.sessionList.children) {
+    const n = li.dataset.session;
+    if (!n || li.classList.contains('editing')) continue;
+    li.classList.toggle('active', n === state.active);
+    li.querySelector('.dot').className = `dot ${stateOf(n)}`;
+    li.querySelector('.ag').innerHTML = agentBadgeHtml(n);
+    li.querySelector('.st').textContent = stateText(n);
+  }
+}
+
+function renderLeases() {
+  const l = state.leases;
+  if (!l) return;
+  if (l.error) {
+    els.leaseCount.textContent = '';
+    els.leaseList.innerHTML = `<li class="dim">registry unreachable · ${escapeHtml(l.error)}</li>`;
+    return;
+  }
+  els.leaseCount.textContent = l.length ? `${l.length}` : '';
+  els.leaseList.innerHTML = l.length
+    ? l.map((x) => `<li><b>${escapeHtml(x.resource || '*')}</b> @ ${escapeHtml(x.env || '')}<br>
+        ${escapeHtml(x.agent || '?')} <span class="ttl">· ${x.ttlLeftMin != null ? `${x.ttlLeftMin}m left` : ''}${x.purpose ? ` · ${escapeHtml(x.purpose)}` : ''}</span></li>`).join('')
+    : '<li class="dim">no active leases — platforms free</li>';
 }
 
 function beginRename(li, name) {
@@ -292,21 +484,18 @@ function beginRename(li, name) {
   meta.appendChild(inp);
   setTimeout(() => { inp.focus(); inp.select(); }, 0);
 
+  let done = false;
   const commit = () => {
+    if (done) return; done = true;
     const v = inp.value.trim();
     if (v && v !== name) state.rename[name] = v;
-    else if (!v) delete state.rename[name];
+    else delete state.rename[name];
     saveRenames();
-    li.classList.remove('editing');
-    renderSideList();
-    renderTabs();
-    renderGrid();
+    sortSessions();
+    renderAll();
     toast(v && v !== name ? `renamed to "${v}"` : 'name reset');
   };
-  const cancel = () => {
-    li.classList.remove('editing');
-    renderSideList();
-  };
+  const cancel = () => { if (done) return; done = true; renderSide(); };
   inp.onkeydown = (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
     else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
@@ -314,131 +503,198 @@ function beginRename(li, name) {
   inp.onblur = commit;
 }
 
-// ---------- rendering: card / grid / list ----------
-// All three views use the same card markup. The host element decides the layout.
+// ---------- cards (card + grid views) ----------
 function buildCell(s) {
-  const cls = pillClass(state.status[s.name]?.state);
   const cell = document.createElement('div');
   cell.dataset.session = s.name;
-  cell.className = `cell${s.name === state.active ? ' focus' : ''}`;
-  const preview = buildPreview(state.paneText.get(s.name) || '');
+  cell.className = 'cell';
   cell.innerHTML = `
-    <div class="h ${cls}">
+    <div class="h">
+      <span class="ag"></span>
       <span class="name">${escapeHtml(displayName(s.name))}</span>
-      <span class="pill"></span>
+      <span class="stw"></span>
+      <button class="open" aria-label="Open full screen" title="Open">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+      </button>
     </div>
-    <div class="preview">${escapeHtml(preview)}</div>
+    <div class="ask hidden">
+      <span class="q"></span>
+      <button class="yes" data-key="1">1 · yes</button>
+      <button data-key="2">2</button>
+      <button data-key="3">3</button>
+      <button data-key="Escape">esc</button>
+    </div>
     <div class="b"></div>`;
-  cell.onclick = (e) => {
-    e.stopPropagation();
-    // single tap → select this card (route send-keys here, stay in current view)
-    selectSession(s.name);
-  };
-  cell.ondblclick = (e) => {
-    e.stopPropagation();
-    // double tap → focus + go to single-card view
-    focusSession(s.name);
-    setMode('card');
-  };
+  cell.onclick = (e) => { e.stopPropagation(); focusSession(s.name); };
+  cell.ondblclick = (e) => { e.stopPropagation(); openCard(s.name); };
+  cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
+  for (const b of cell.querySelectorAll('.ask button')) {
+    b.onclick = (e) => { e.stopPropagation(); focusSession(s.name); sendKey(s.name, b.dataset.key); };
+  }
+  syncCell(cell);
   return cell;
 }
 
+function syncCell(cell) {
+  const n = cell.dataset.session;
+  const s = stateOf(n);
+  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}`;
+  const ag = agentBadgeHtml(n);
+  const agEl = cell.querySelector('.ag');
+  if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
+  const stw = cell.querySelector('.stw');
+  if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
+  else stw.querySelector('.st').textContent = stateText(n);
+  const ask = cell.querySelector('.ask');
+  ask.classList.toggle('hidden', s !== 'waiting');
+  if (s === 'waiting') ask.querySelector('.q').textContent = state.status[n]?.waitReason || 'waiting for your answer';
+}
+
 function renderInto(host, sessions) {
-  host.innerHTML = '';
-  for (const s of sessions) {
-    const cell = buildCell(s);
-    host.appendChild(cell);
-    mountTerm(s.name, cell.querySelector('.b'));
+  // Reuse existing cells (and their mounted xterm) where possible.
+  const existing = new Map([...host.children].map((c) => [c.dataset.session, c]));
+  const want = sessions.map((s) => s.name);
+  for (const [n, c] of existing) if (!want.includes(n)) c.remove();
+  sessions.forEach((s, i) => {
+    let cell = existing.get(s.name);
+    if (!cell) {
+      cell = buildCell(s);
+      host.insertBefore(cell, host.children[i] || null);
+      mountTerm(s.name, cell.querySelector('.b'));
+    } else {
+      cell.querySelector('.name').textContent = displayName(s.name);
+      if (host.children[i] !== cell) host.insertBefore(cell, host.children[i] || null);
+      syncCell(cell);
+    }
     connectSession(s.name);
-  }
+  });
 }
 
 function renderCard() {
-  // card mode = one big card for the active session
   const active = state.sessions.find((s) => s.name === state.active) || state.sessions[0];
   if (active) state.active = active.name;
   renderInto(els.cardPane, active ? [active] : []);
-  renderDocState();
 }
 function renderGrid() {
   els.gridPane.className = `grid-pane size-${state.gridSize}`;
-  const targets = state.sessions.slice(0, state.gridSize);
+  const all = visibleSessions();
+  const limit = state.gridSize >= 16 ? all.length : state.gridSize;
+  // Keep the active session on screen when the grid is limited.
+  let targets = all.slice(0, limit);
+  const act = all.find((s) => s.name === state.active);
+  if (act && !targets.includes(act) && limit > 0) targets = [...targets.slice(0, limit - 1), act];
   renderInto(els.gridPane, targets);
 }
-function renderList() {
-  // list mode = cards stacked vertically, full width
-  renderInto(els.listPane, state.sessions);
-}
 
-function updateAllHeaders() {
-  // update header pills + focus ring without remounting xterm
-  for (const host of [els.cardPane, els.gridPane, els.listPane]) {
-    for (const cell of host.children) {
-      const name = cell.dataset.session;
-      if (!name) continue;
-      const cls = pillClass(state.status[name]?.state);
-      cell.querySelector('.h').classList.remove('idle','busy','wait','offline');
-      cell.querySelector('.h').classList.add(cls);
-      cell.classList.toggle('focus', name === state.active);
-    }
+// ---------- board (list view) ----------
+function renderList() {
+  els.listPane.innerHTML = '';
+  for (const s of byUrgency(visibleSessions())) {
+    const row = document.createElement('div');
+    row.className = 'row-item';
+    row.dataset.session = s.name;
+    row.innerHTML = `
+      <div class="top"><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span></div>
+      <span class="stw"></span>
+      <div class="last"></div>`;
+    row.querySelector('.last').textContent = (stateOf(s.name) === 'waiting' && state.status[s.name]?.waitReason)
+      || lastLine(state.paneText.get(s.name) || '') || ' ';
+    row.onclick = () => { focusSession(s.name); openCard(s.name); };
+    els.listPane.appendChild(row);
+    connectSession(s.name);
+  }
+  syncList();
+}
+function syncList() {
+  // Reorder only when urgency order changed; otherwise update text in place.
+  const order = byUrgency(visibleSessions()).map((s) => s.name).join('|');
+  const cur = [...els.listPane.children].map((r) => r.dataset.session).join('|');
+  if (order !== cur) { renderList(); return; }
+  for (const row of els.listPane.children) {
+    const n = row.dataset.session;
+    const s = stateOf(n);
+    row.className = `row-item ${s}${n === state.active ? ' focus' : ''}`;
+    const ag = agentBadgeHtml(n);
+    const agEl = row.querySelector('.ag');
+    if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
+    const stw = row.querySelector('.stw');
+    if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
+    else stw.querySelector('.st').textContent = stateText(n);
+    if (s === 'waiting' && state.status[n]?.waitReason) row.querySelector('.last').textContent = state.status[n].waitReason;
   }
 }
 
-// ---------- focus session ----------
+// ---------- sync (status tick) ----------
+function syncAll() {
+  renderSummary();
+  renderAttention();
+  syncTabs();
+  syncSide();
+  for (const host of [els.cardPane, els.gridPane]) for (const c of host.children) syncCell(c);
+  if (state.mode === 'list') syncList();
+  if (state.filter && state.mode === 'grid') renderGrid();
+  syncDock();
+}
+
+// Elapsed timers tick locally between server updates.
+function tickClock() {
+  for (const el of document.querySelectorAll('.stw[data-s] .st')) {
+    const host = el.closest('[data-session]');
+    if (host) el.textContent = stateText(host.dataset.session);
+  }
+  for (const li of els.sessionList.children) {
+    const st = li.querySelector('.st');
+    if (st && li.dataset.session) st.textContent = stateText(li.dataset.session);
+  }
+}
+
+// ---------- focus ----------
 function focusSession(name) {
+  if (!name) return;
   state.active = name;
-  els.dockTarget.textContent = displayName(name);
   els.appTitle.textContent = displayName(name);
   connectSession(name);
-  // mount in whichever host is currently visible (so card mode swaps content too)
-  const host = (state.mode === 'card') ? els.cardPane.querySelector('.b')
-            : (state.mode === 'list') ? els.listPane.querySelector(`.cell[data-session="${cssEscape(name)}"] .b`)
-            : els.gridPane.querySelector(`.cell[data-session="${cssEscape(name)}"] .b`);
-  if (host) {
-    const entry = state.terms.get(name);
-    if (!entry || !entry.term.element || !host.contains(entry.term.element)) {
-      mountTerm(name, host);
-    }
-  }
-  renderTabs();
-  renderSideList();
-  updateAllHeaders();
-  renderDocState();
+  if (state.mode === 'card') renderCard();
+  if (state.mode === 'grid' && !els.gridPane.querySelector(`[data-session="${cssEscape(name)}"]`)) renderGrid();
+  const tab = els.tabs.querySelector(`[data-session="${cssEscape(name)}"]`);
+  if (tab) tab.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  syncAll();
 }
 
-// Select = activate that card for send-keys without leaving the current view.
-// In grid mode this puts the focus ring on the card; in terminal mode it's a no-op
-// since you're already on the focused session.
-function selectSession(name) {
+function openCard(name) {
   focusSession(name);
+  setMode('card');
 }
 
 // ---------- mode switching ----------
 function setMode(mode) {
+  if (mode !== 'card') state.prevMode = mode;
   state.mode = mode;
+  lsSet(LS_MODE, mode);
   els.main.classList.remove('view-card','view-grid','view-list');
   els.main.classList.add(`view-${mode}`);
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
-  // grid size picker is meaningful in grid mode, hidden otherwise
   els.gridSizes.classList.toggle('hidden', mode !== 'grid');
-  // back arrow only in card mode (to return to grid/list)
   els.backBtn.classList.toggle('hidden', mode !== 'card');
-  // dock visible whenever there is a session to send keys to
-  els.dock.classList.toggle('hidden', mode === 'list');
-  if (mode === 'card')  renderCard();
-  if (mode === 'grid')  renderGrid();
-  if (mode === 'list')  renderList();
-  renderDocState();
+  els.menuBtn.classList.toggle('hidden', mode === 'card');
+  // Leaving a view: free its cells so xterm instances are reparented, not duplicated.
+  if (mode !== 'card') els.cardPane.innerHTML = '';
+  if (mode !== 'grid') els.gridPane.innerHTML = '';
+  if (mode !== 'list') els.listPane.innerHTML = '';
+  if (mode === 'card') renderCard();
+  if (mode === 'grid') renderGrid();
+  if (mode === 'list') renderList();
+  syncAll();
 }
 
 function setGridSize(n) {
   state.gridSize = n;
-  saveGrid();
+  lsSet(LS_GRID, String(n));
   for (const b of $$('.size-btn')) b.classList.toggle('on', Number(b.dataset.size) === n);
-  if (state.mode === 'grid') renderGrid();
+  if (state.mode === 'grid') { els.gridPane.innerHTML = ''; renderGrid(); }
 }
 
-// ---------- sidebar (the "home" list) ----------
+// ---------- sidebar ----------
 function openSide() {
   if (state.side) return;
   state.side = true;
@@ -451,6 +707,7 @@ function openSide() {
     document.body.appendChild(back);
   }
   requestAnimationFrame(() => back.classList.add('on'));
+  fetchLeases();
 }
 function closeSide() {
   if (!state.side) return;
@@ -460,41 +717,105 @@ function closeSide() {
   if (back) back.classList.remove('on');
 }
 
-// ---------- send-keys ----------
+// ---------- send ----------
+async function postSend(name, body) {
+  const r = await fetch(`/api/send/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  state.sentAt[name] = Date.now();
+}
+
 async function send() {
   const keys = els.sendInput.value;
-  if (!state.active || !keys) return;
+  const name = state.active;
+  if (!name || !keys.trim()) return;
   els.sendBtn.disabled = true;
   try {
-    const r = await fetch(`/api/send/${encodeURIComponent(state.active)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ keys }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    await postSend(name, { keys });
     els.sendInput.value = '';
-    toast(`sent to ${displayName(state.active)}`);
+    autoGrow();
+    toast(`→ ${displayName(name)}`, 1000);
   } catch (err) {
     toast(`send failed: ${err.message}`);
   } finally {
-    setTimeout(renderDocState, 600);
+    els.sendBtn.disabled = false;
   }
 }
 
-function renderDocState() {
-  const s = state.status[state.active];
-  const enabled = !!state.active && s?.state !== 'busy';
-  els.sendBtn.disabled = !enabled;
-  els.sendInput.disabled = !state.active;
+async function sendKey(name, key) {
+  if (!name) return;
+  try {
+    await postSend(name, { key });
+    if (navigator.vibrate) navigator.vibrate(10);
+  } catch (err) {
+    toast(`key failed: ${err.message}`);
+  }
+}
+
+function syncDock() {
+  const n = state.active;
+  els.sendInput.disabled = !n;
+  els.sendBtn.disabled = !n;
+  els.sendInput.placeholder = n ? `→ ${displayName(n)}` : 'no session';
+  els.dock.classList.toggle('target-waiting', !!n && stateOf(n) === 'waiting');
+}
+
+function autoGrow() {
+  els.sendInput.style.height = 'auto';
+  els.sendInput.style.height = `${Math.min(els.sendInput.scrollHeight, window.innerHeight * 0.3)}px`;
 }
 
 function renderAll() {
-  renderTabs();
-  renderSideList();
+  renderTabStrip();
+  renderSide();
   if (state.mode === 'card') renderCard();
   if (state.mode === 'grid') renderGrid();
   if (state.mode === 'list') renderList();
-  renderDocState();
+  renderLeases();
+  syncAll();
+}
+
+// ---------- alerts: "needs you" transitions ----------
+function alertTransitions() {
+  const fresh = [];
+  for (const s of state.sessions) {
+    const now = stateOf(s.name);
+    if (now === 'waiting' && state.prevState[s.name] && state.prevState[s.name] !== 'waiting') fresh.push(s.name);
+    state.prevState[s.name] = now;
+  }
+  if (!fresh.length) return;
+  if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
+  if (!document.hidden) {
+    toast(`${fresh.map(displayName).join(', ')} needs you`, 3000);
+    return;
+  }
+  if (!state.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+  navigator.serviceWorker?.ready.then((reg) => {
+    for (const n of fresh) {
+      reg.showNotification(`${displayName(n)} needs you`, {
+        body: state.status[n]?.waitReason || 'waiting for your answer',
+        tag: `ghosty-${n}`, renotify: true, icon: '/icon-192.png', data: { session: n },
+      });
+    }
+  }).catch(() => {});
+}
+
+async function toggleNotify() {
+  if (!state.notify) {
+    if (!('Notification' in window)) { toast('notifications not supported here'); return; }
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') { toast('notifications blocked (needs HTTPS URL)'); return; }
+    state.notify = true;
+    toast('will alert when a session needs you');
+  } else {
+    state.notify = false;
+    toast('alerts off');
+  }
+  lsSet(LS_NOTIFY, state.notify ? '1' : '0');
+  els.notifyBtn.classList.toggle('on', state.notify);
 }
 
 // ---------- swipe from left edge ----------
@@ -504,10 +825,8 @@ function wireSwipe() {
   const onTouchStart = (e) => {
     if (!e.touches || e.touches.length !== 1) return;
     const t = e.touches[0];
-    // only initiate from the left 24px OR when sidebar is open
     const fromEdge = t.clientX < 24;
-    const onOpen   = state.side;
-    if (!fromEdge && !onOpen) return;
+    if (!fromEdge && !state.side) return;
     startX = t.clientX; startY = t.clientY; started = true; swiping = false;
   };
   const onTouchMove = (e) => {
@@ -517,7 +836,6 @@ function wireSwipe() {
     const dy = t.clientY - startY;
     if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       swiping = true;
-      // open affordance while swiping right from edge
       if (dx > 40 && startX < 24) els.edgeSwipe.classList.add('active');
     }
   };
@@ -536,38 +854,32 @@ function wireSwipe() {
   document.addEventListener('touchstart', onTouchStart, { passive: true });
   document.addEventListener('touchmove',  onTouchMove,  { passive: true });
   document.addEventListener('touchend',   onTouchEnd,   { passive: true });
-
-  // mouse-drag fallback (so desktop dev also works)
-  let md = null;
-  document.addEventListener('mousedown', (e) => {
-    if (e.clientX > 24 && !state.side) return;
-    md = { x: e.clientX };
-  });
-  document.addEventListener('mouseup', (e) => {
-    if (!md) return;
-    const dx = e.clientX - md.x;
-    if (state.side && dx < -80) closeSide();
-    else if (!state.side && dx > 60) openSide();
-    md = null;
-  });
 }
 
 // ---------- helpers ----------
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
-function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
+function cssEscape(s) { return (window.CSS?.escape) ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); }
 
 // ---------- wire up ----------
 els.menuBtn.onclick   = openSide;
-els.backBtn.onclick   = () => setMode('grid');
+els.backBtn.onclick   = () => setMode(state.prevMode || 'grid');
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();
+els.notifyBtn.onclick = () => toggleNotify();
 for (const b of $$('.mode-btn')) b.onclick = () => setMode(b.dataset.mode);
 for (const b of $$('.size-btn')) b.onclick = () => setGridSize(Number(b.dataset.size));
+for (const b of els.keys.querySelectorAll('button')) {
+  // keep the soft keyboard open when tapping a quick key
+  b.onpointerdown = (e) => e.preventDefault();
+  b.onclick = () => sendKey(state.active, b.dataset.key);
+}
+els.sendBtn.onpointerdown = (e) => e.preventDefault();
 els.sendBtn.onclick   = send;
+els.sendInput.oninput = autoGrow;
 els.sendInput.onkeydown = (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 };
 
 window.addEventListener('resize', () => {
@@ -576,13 +888,13 @@ window.addEventListener('resize', () => {
   }
 });
 
+
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) connectStatus();
 });
 
 // ---------- PWA install prompt ----------
 window.addEventListener('beforeinstallprompt', (e) => {
-  // stash the prompt so we can fire it from a button
   e.preventDefault();
   state.installPrompt = e;
 });
@@ -593,7 +905,6 @@ window.addEventListener('appinstalled', () => {
   toast('installed — open codebox from your home screen');
 });
 
-// If running already as installed (display-mode = standalone), no install button.
 function hideInstallIfInstalled() {
   const standalone = window.matchMedia('(display-mode: standalone)').matches
                   || window.navigator.standalone === true;
@@ -602,8 +913,6 @@ function hideInstallIfInstalled() {
 
 async function promptInstall() {
   if (!state.installPrompt) {
-    // Either already installed, or browser doesn't expose the prompt
-    // (HTTP / Tailscale IP / no SW). Show instructions instead.
     toast('use browser menu → “Add to Home Screen”');
     return;
   }
@@ -621,16 +930,25 @@ if ('serviceWorker' in navigator) {
       .then((reg) => console.log('[sw] registered scope=', reg.scope))
       .catch((err) => console.warn('[sw] failed:', err.message));
   });
+  // notification tap → focus that session
+  navigator.serviceWorker.addEventListener('message', (ev) => {
+    if (ev.data?.type === 'focus' && ev.data.session) openCard(ev.data.session);
+  });
 }
 
 // boot
 (async function boot() {
   loadRenames();
-  loadGrid();
-  setGridSize(state.gridSize);   // applies .on to the right button
-  setMode('card');
+  loadPrefs();
+  els.notifyBtn.classList.toggle('on', state.notify);
+  setGridSize(state.gridSize);
+  const wanted = new URLSearchParams(location.search).get('s');
+  if (wanted) { state.active = wanted; state.mode = 'card'; }
+  setMode(state.mode);
   hideInstallIfInstalled();
   await fetchInitial();
   connectStatus();
   wireSwipe();
+  setInterval(tickClock, 1000);
+  setInterval(fetchLeases, 60000);
 })();

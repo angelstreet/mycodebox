@@ -1,7 +1,7 @@
 // Ghosty Sessions — service worker
 // Cache the shell so the PWA launches offline (and reloads fast over Tailscale).
 
-const SHELL_CACHE = 'ghosty-shell-v3';
+const SHELL_CACHE = 'ghosty-shell-v4';
 const SHELL_FILES = [
   '/',
   '/index.html',
@@ -61,4 +61,19 @@ self.addEventListener('fetch', (e) => {
 
 self.addEventListener('message', (e) => {
   if (e.data === 'SKIP_WAITING') self.skipWaiting();
+});
+// Tap on a "needs you" notification → focus an open window on that session,
+// or open one.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const session = e.notification.data?.session;
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        c.postMessage({ type: 'focus', session });
+        return c.focus();
+      }
+      return self.clients.openWindow(session ? `/?s=${encodeURIComponent(session)}` : '/');
+    })
+  );
 });
