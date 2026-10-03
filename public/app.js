@@ -263,7 +263,7 @@ function renderSideList() {
         <div class="name ${custom ? 'has-custom' : ''}">${escapeHtml(custom || s.name)}</div>
         <div class="sub">${escapeHtml(custom ? s.name : (s.cmd || '—'))}</div>
       </div>
-      <button class="edit" aria-label="Rename ${escapeHtml(s.name)}">
+      <button class="edit" aria-label="Rename">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
       </button>`;
     li.querySelector('.meta').onclick = (e) => {
@@ -333,7 +333,17 @@ function renderGrid() {
       </div>
       <div class="preview">${escapeHtml(preview)}</div>
       <div class="b"></div>`;
-    cell.onclick = () => focusSession(s.name);
+    cell.onclick = (e) => {
+      // single tap → select this card (route send-keys here)
+      e.stopPropagation();
+      selectSession(s.name);
+    };
+    cell.ondblclick = (e) => {
+      // double tap → go fullscreen on this session
+      e.stopPropagation();
+      focusSession(s.name);
+      setMode('terminal');
+    };
     els.gridPane.appendChild(cell);
     mountTerm(s.name, cell.querySelector('.b'));
     connectSession(s.name);
@@ -357,14 +367,23 @@ function focusSession(name) {
   state.active = name;
   els.dockTarget.textContent = displayName(name);
   els.appTitle.textContent = displayName(name);
-  if (!state.terms.has(name) || !els.termHost.contains(state.terms.get(name).term.element)) {
+  const entry = state.terms.get(name);
+  if (!entry || !entry.term.element || !els.termHost.contains(entry.term.element)) {
     mountTerm(name, els.termHost);
   }
   connectSession(name);
   renderTabs();
   renderSideList();
   updateAllHeaders();
+  renderDocState();
   // if we were in grid, leave it; if terminal, just refresh.
+}
+
+// Select = activate that card for send-keys without leaving the current view.
+// In grid mode this puts the focus ring on the card; in terminal mode it's a no-op
+// since you're already on the focused session.
+function selectSession(name) {
+  focusSession(name);
 }
 
 // ---------- mode switching ----------

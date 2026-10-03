@@ -193,8 +193,11 @@ async function serveStatic(req, res, urlPath) {
   }
   const body = await readFile(full);
   const type = MIME[extname(full)] || 'application/octet-stream';
-  // Cache PWA shell aggressively, but not the HTML (so updates roll out).
-  const cache = rel === '/index.html' || rel === '/sw.js' || rel === '/manifest.webmanifest'
+  // No-cache for everything the browser might serve stale. The PWA shell is
+  // small enough that the extra round-trip costs nothing; xterm.js is the only
+  // big file and we still cache it (long max-age) because it changes rarely.
+  const noCacheExts = new Set(['.html', '.js', '.css', '.webmanifest', '.json']);
+  const cache = noCacheExts.has(extname(full)) || rel === '/sw.js' || rel === '/manifest.webmanifest'
     ? 'no-cache'
     : 'public, max-age=3600';
   res.writeHead(200, { 'content-type': type, 'cache-control': cache });

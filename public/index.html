@@ -26,14 +26,15 @@
     </button>
     <div class="title" id="appTitle">codebox</div>
     <div class="modes" id="modeBar">
-      <button data-mode="terminal" class="mode-btn on">terminal</button>
-      <button data-mode="grid"     class="mode-btn">grid</button>
+      <button data-mode="card" class="mode-btn on">card</button>
+      <button data-mode="grid" class="mode-btn">grid</button>
     </div>
-    <div class="gridsizes hidden" id="gridSizes">
-      <button data-size="4"  class="size-btn">4</button>
-      <button data-size="8"  class="size-btn on">8</button>
-      <button data-size="12" class="size-btn">12</button>
-      <button data-size="16" class="size-btn">16</button>
+    <div class="gridsizes" id="gridSizes">
+      <button data-size="1"  class="size-btn" title="1 card">1</button>
+      <button data-size="4"  class="size-btn" title="4 cards">4</button>
+      <button data-size="8"  class="size-btn on" title="8 cards">8</button>
+      <button data-size="12" class="size-btn" title="12 cards">12</button>
+      <button data-size="16" class="size-btn" title="16 cards">16</button>
     </div>
     <button class="icon-btn" id="refreshBtn" aria-label="Refresh">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -55,11 +56,13 @@
   </main>
 
   <footer class="dock" id="dock">
-    <div class="target">→ <b id="dockTarget">—</b></div>
+    <div class="target" title="active session">→ <b id="dockTarget">—</b></div>
     <input id="sendInput" type="text" autocomplete="off" autocorrect="off"
            autocapitalize="off" spellcheck="false"
-           placeholder="type a message…  ⏎ to send" />
-    <button id="sendBtn" class="send">Send</button>
+           placeholder="type…" />
+    <button id="sendBtn" class="send" aria-label="Send">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+    </button>
   </footer>
 
   <!-- swipe affordance on the left edge -->
