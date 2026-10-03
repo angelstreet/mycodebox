@@ -575,10 +575,6 @@ function sideGroupOf(n) {
   const s = stateOf(n);
   return s === 'waiting' || s === 'done' || s === 'working' ? s : 'idle';
 }
-function sideStateText(n) {
-  if (stateOf(n) === 'done') return `done ${fmtDur(((state.status[n]?.lastActivitySec ?? 0) + (Date.now() - state.statusAt) / 1000))}`;
-  return stateText(n);
-}
 function repoBranch(n) {
   const st = state.status[n] || {};
   return [st.repo, st.branch].filter(Boolean).join(' · ');
@@ -637,7 +633,7 @@ function syncSide() {
     const ag = agentBadgeHtml(n);
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
-    li.querySelector('.sst').textContent = sideStateText(n);
+    li.querySelector('.sst').textContent = stateText(n);
     const rb = li.querySelector('.rb');
     const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
@@ -647,7 +643,7 @@ function syncSide() {
 function tickSide() {
   for (const li of els.sessionList.children) {
     const st = li.querySelector('.sst');
-    if (st && li.dataset.session && !li.classList.contains('editing')) st.textContent = sideStateText(li.dataset.session);
+    if (st && li.dataset.session && !li.classList.contains('editing')) st.textContent = stateText(li.dataset.session);
   }
 }
 
@@ -1462,7 +1458,7 @@ function openPicker() {
         const rb = repoBranch(n);
         return `<button class="prow-s${on ? ' on' : ''}" data-n="${escapeHtml(n)}">${agentDotHtml(n)}
           <span class="pn"><b>${escapeHtml(displayName(n))}</b>${rb ? `<small>${escapeHtml(rb)}</small>` : ''}</span>
-          <span class="state ${stateOf(n)}"><i class="dot ${stateOf(n)}"></i>${escapeHtml(sideStateText(n).split(' ')[0])}</span>
+          <span class="state ${stateOf(n)}"><i class="dot ${stateOf(n)}"></i>${escapeHtml(stateText(n).split(' ')[0])}</span>
           ${dock.multi ? `<span class="chk">${on ? '✓' : ''}</span>` : ''}</button>`;
       }).join('') || '<div class="sheet-empty">no sessions</div>';
     };
