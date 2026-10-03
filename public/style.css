@@ -849,3 +849,6 @@ body{ display:flex; flex-direction:column; }
   .mlog .ml .x{ grid-column:auto; }
 }
 .agent-model{ color:var(--ink-3); font-size:10.5px; white-space:nowrap; }
+
+/* hide the per-card move arrows and top/bottom jump buttons (Aa menu toggle) */
+body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !important; }

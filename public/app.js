@@ -202,10 +202,18 @@ function lastLine(paneText) {
 // ---------- xterm setup ----------
 const FONT_MIN = 8, FONT_MAX = 20;
 const FONT_FAMILY = "'JetBrains Mono', monospace";
-const LS_FONT = 'ghosty.font', LS_FIT = 'ghosty.fit';
+const LS_FONT = 'ghosty.font', LS_FIT = 'ghosty.fit', LS_CTRL = 'ghosty.cardctl';
 const clampFont = (n) => Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(n)));
 state.font = clampFont(Number(lsGet(LS_FONT, 0)) || (matchMedia('(max-width: 720px)').matches ? 11 : 12));
 state.fit = lsGet(LS_FIT, '1') !== '0';
+state.cardCtl = lsGet(LS_CTRL, '1') !== '0';
+document.body.classList.toggle('no-cardctl', !state.cardCtl);
+function setCardCtl(on) {
+  state.cardCtl = on;
+  lsSet(LS_CTRL, on ? '1' : '0');
+  document.body.classList.toggle('no-cardctl', !on);
+  $('#ctlToggle')?.classList.toggle('on', on);
+}
 document.documentElement.style.setProperty('--tf', String(state.font));
 
 function getTerm(session) {
@@ -2246,6 +2254,8 @@ function wireFontUi() {
   $('#fontInc2').onclick = () => setFont(state.font + 1);
   $('#fontReset').onclick = () => setFont(isPhone() ? 11 : 12);
   $('#fitToggle').onclick = () => setFit(!state.fit);
+  $('#ctlToggle').onclick = () => setCardCtl(!state.cardCtl);
+  $('#ctlToggle').classList.toggle('on', state.cardCtl);
   $('#fontBtn').onclick = (e) => { e.stopPropagation(); pop.classList.toggle('hidden'); };
   pop.onclick = (e) => e.stopPropagation();
   document.addEventListener('click', () => pop.classList.add('hidden'));
