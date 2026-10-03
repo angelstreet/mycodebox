@@ -34,6 +34,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
+import { createPush, createAlerts } from './push.js';
 import { initManager, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
 
 const exec = promisify(execFile);
@@ -499,42 +500,28 @@ function leaseFor(session, branch) {
 }
 
 // ---------------------------------------------------------------------------
-// ntfy push (optional)
+// Alerts: Web Push (always) + ntfy (optional, only when NTFY_TOPIC is set)
 // ---------------------------------------------------------------------------
 
 const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
 const NTFY_URL = (process.env.NTFY_URL || 'https://ntfy.sh').replace(/\/+$/, '');
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
-const NTFY_DONE = process.env.NTFY_DONE === '1';   // also push when a turn finishes (off: only 'needs you' + disk)
+const NTFY_DONE = process.env.NTFY_DONE === '1';   // also alert when a turn finishes (off: only 'needs you' + disk)
 const NTFY_DEBOUNCE_MS = 60000;
-const ntfyLast = new Map(); // session -> ms
-
-function ntfyPush(key, { title, priority = 'default', tags = '', body = '', click = '' }, debounceMs = NTFY_DEBOUNCE_MS) {
-  if (!NTFY_TOPIC) return;
-  const now = Date.now();
-  if (now - (ntfyLast.get(key) || 0) < debounceMs) return;
-  ntfyLast.set(key, now);
-  const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
-  const headers = { Title: ascii(title), Priority: priority };
-  if (tags) headers.Tags = tags;
-  if (PUBLIC_URL) headers.Click = `${PUBLIC_URL}/${click}`;
-  try {
-    fetch(`${NTFY_URL}/${encodeURIComponent(NTFY_TOPIC)}`, {
-      method: 'POST', headers, body: String(body || title).slice(0, 500),
-      signal: AbortSignal.timeout(8000),
-    }).catch((e) => console.error('[ntfy]', e.message));
-  } catch (e) { console.error('[ntfy]', e.message); }
-}
+const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
+const push = createPush({ stateDir: STATE_DIR });
+const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
-function ntfy(session, kind, body) {
+function notifySession(session, kind, body) {
   const waiting = kind === 'waiting' || kind === 'asks';
-  ntfyPush(`${session}:${kind}`, {
+  alert(`${session}:${kind}`, {
     title: kind === 'asks' ? `${session} asks you` : waiting ? `${session} needs you` : `${session} is done`,
     priority: waiting ? 'high' : 'default',
-    tags: waiting ? 'warning' : 'white_check_mark',
+    ntfyTags: waiting ? 'warning' : 'white_check_mark',
     body: body || kind,
-    click: `?s=${encodeURIComponent(session)}`,
+    url: `/?s=${encodeURIComponent(session)}`,
+    tag: `ghosty-${session}`,
   });
 }
 
@@ -554,12 +541,12 @@ async function healthTick() {
   const gb = (b) => `${(b / 2 ** 30).toFixed(1)}G`;
   for (const d of health.disks) {
     if (d.level === 'crit') {
-      // First crossing pushes at once; while it stays critical, ntfyPush's debounce paces reminders.
-      if (!diskCrit.has(d.path)) ntfyLast.delete(`disk:${d.path}`);
+      // First crossing pushes at once; while it stays critical, alert()'s debounce paces reminders.
+      if (!diskCrit.has(d.path)) resetDebounce(`disk:${d.path}`);
       diskCrit.add(d.path);
-      ntfyPush(`disk:${d.path}`, {
+      alert(`disk:${d.path}`, {
         title: `codebox disk ${d.path} ${Math.round(d.pct)}% full`,
-        priority: 'urgent', tags: 'rotating_light',
+        priority: 'urgent', ntfyTags: 'rotating_light', tag: `ghosty-disk-${d.path}`, url: '/',
         body: `${gb(d.free)} free of ${gb(d.total)} on ${d.path}`,
       }, DISK_ALERT_REPEAT_MS);
     } else diskCrit.delete(d.path);
@@ -656,8 +643,8 @@ async function pollOnce() {
 
     // Notifications: transitions only, never on first sight.
     if (t.prevState !== undefined && t.prevState !== state) {
-      if (state === 'waiting') ntfy(s.name, 'waiting', waitReason || 'needs input');
-      else if (state === 'done' && t.realWork && NTFY_DONE) ntfy(s.name, 'done', lastMessage || 'turn finished');
+      if (state === 'waiting') notifySession(s.name, 'waiting', waitReason || 'needs input');
+      else if (state === 'done' && t.realWork && NTFY_DONE) notifySession(s.name, 'done', lastMessage || 'turn finished');
     }
     if (state === 'done') t.realWork = false;
     t.prevState = state;
@@ -1122,6 +1109,26 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && p === '/api/manager') {
     return json(res, 200, { ...managerConfig(), today: await todayCounts() });
   }
+  if (p.startsWith('/api/push/')) {
+    try {
+      if (req.method === 'GET' && p === '/api/push/key') return json(res, 200, { key: push.publicKey });
+      if (req.method === 'GET' && p === '/api/push/feed') {
+        const since = url.searchParams.get('since');
+        return json(res, 200, { items: push.feedSince(since === null || since === '' ? undefined : since) });
+      }
+      if (req.method === 'POST' && p === '/api/push/subscribe') {
+        push.subscribe((await readJsonBody(req)).subscription);
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && p === '/api/push/unsubscribe') {
+        return json(res, 200, { ok: true, removed: push.unsubscribe((await readJsonBody(req)).endpoint) });
+      }
+      if (req.method === 'POST' && p === '/api/push/test') {
+        const { results } = await push.notify({ title: 'codebox: test notification', body: 'Web Push is working.', url: '/', tag: 'ghosty-test', priority: 'high' });
+        return json(res, 200, { ok: true, subscriptions: results.length, results });
+      }
+    } catch (err) { return json(res, err.status || 400, { ok: false, error: err.message }); }
+  }
   if (req.method === 'POST' && p.startsWith('/api/manager/cancel/')) {
     const name = decodeURIComponent(p.slice('/api/manager/cancel/'.length));
     if (!cancelAuto(name)) return json(res, 404, { ok: false, error: 'no pending auto answer' });
@@ -1234,7 +1241,7 @@ async function leaseTick() {
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
   await initManager({
-    onOwnerNeeded: (session, stall, reason) => ntfy(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
+    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
     sendKey, sendKeys,
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);

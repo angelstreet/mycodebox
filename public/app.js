@@ -57,6 +57,7 @@ const state = {
   prevState: {},                // session -> last seen state (for transition alerts)
   leases:    null,
   notify:    false,
+  pushOn:    false,
   toastTimer:null,
   side:      false,
   installPrompt: null,
@@ -2283,7 +2284,7 @@ function alertTransitions() {
     toast(`${fresh.map(displayName).join(', ')} needs you`, 3000);
     return;
   }
-  if (!state.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!state.notify || state.pushOn || !('Notification' in window) || Notification.permission !== 'granted') return;
   navigator.serviceWorker?.ready.then((reg) => {
     for (const n of fresh) {
       reg.showNotification(`${displayName(n)} needs you`, {
@@ -2294,19 +2295,80 @@ function alertTransitions() {
   }).catch(() => {});
 }
 
+// ---------- Web Push (bell) ----------
+// The bell is "on" when this browser holds a real push subscription (works with the app closed).
+// Without push support (plain HTTP, old browser) it falls back to in-page notifications.
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+function urlB64ToBytes(s) {
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+function paintBell() {
+  els.notifyBtn.classList.toggle('on', state.notify || state.pushOn);
+}
+async function postJson(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+}
+async function pushSubscribe(reg) {
+  const { key } = await (await fetch('/api/push/key')).json();
+  let sub = await reg.pushManager.getSubscription();
+  // A subscription made with a different server key can never receive our pushes.
+  if (sub && sub.options?.applicationServerKey) {
+    const cur = new Uint8Array(sub.options.applicationServerKey);
+    const want = urlB64ToBytes(key);
+    if (cur.length !== want.length || cur.some((b, i) => b !== want[i])) { await sub.unsubscribe(); sub = null; }
+  }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToBytes(key) });
+  await postJson('/api/push/subscribe', { subscription: sub.toJSON() });
+  return sub;
+}
+async function pushUnsubscribe(reg) {
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return;
+  await postJson('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+  await sub.unsubscribe();
+}
+// On load: reflect the real subscription, and silently re-subscribe if permission is granted
+// and the user had notifications on but the subscription went missing.
+async function syncPush() {
+  if (!pushSupported()) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if ((sub || state.notify) && Notification.permission === 'granted') {
+      sub = await pushSubscribe(reg);   // also re-registers with the server (e.g. after its subs file was lost)
+    }
+    state.pushOn = !!sub;
+  } catch (err) { console.warn('[push] sync failed:', err.message); state.pushOn = false; }
+  paintBell();
+}
+
 async function toggleNotify() {
-  if (!state.notify) {
-    if (!('Notification' in window)) { toast('notifications not supported here'); return; }
+  if (!('Notification' in window)) { toast('notifications not supported here'); return; }
+  if (!(state.notify || state.pushOn)) {
     const p = await Notification.requestPermission();
-    if (p !== 'granted') { toast('notifications blocked (needs HTTPS URL)'); return; }
+    if (p !== 'granted') {
+      toast(!window.isSecureContext ? 'needs the https://<tailnet-host>:7443 address'
+        : Notification.permission === 'denied' ? 'notifications are off for this app - Android: App info > Notifications > allow, then tap the bell again'
+        : 'permission not given - tap the bell again', 5000);
+      return;
+    }
     state.notify = true;
-    toast('will alert when a session needs you');
+    if (pushSupported()) {
+      try { await pushSubscribe(await navigator.serviceWorker.ready); state.pushOn = true; toast('push alerts on - works with the app closed'); }
+      catch (err) { toast(`push failed: ${err.message}`, 5000); }
+    } else toast('will alert when a session needs you');
   } else {
     state.notify = false;
+    if (pushSupported()) { try { await pushUnsubscribe(await navigator.serviceWorker.ready); } catch {} }
+    state.pushOn = false;
     toast('alerts off');
   }
   lsSet(LS_NOTIFY, state.notify ? '1' : '0');
-  els.notifyBtn.classList.toggle('on', state.notify);
+  paintBell();
 }
 
 // ---------- swipe from left edge ----------
@@ -2520,7 +2582,8 @@ if ('serviceWorker' in navigator) {
   loadRenames();
   loadPrefs();
   loadFilters();
-  els.notifyBtn.classList.toggle('on', state.notify);
+  paintBell();
+  syncPush();
   setGridSize(state.gridSize);
   const wanted = new URLSearchParams(location.search).get('s');
   // phone home = board, unless the grid was the last view used
