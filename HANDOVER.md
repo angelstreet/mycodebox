@@ -66,6 +66,16 @@ history, quick keys, sent ✓ / delivered ✓✓, multi-target send.
 **Sidebar** — grouped by state, rename, kill (type name to confirm), "+" new session (agent + dir
 from `/api/dirs` + name), collapsible leases.
 
+**Font & fit** — one global terminal font (A− / A+ / Aa popover, Ctrl+= / − / 0); detached sessions
+are resized (`tmux resize-window`, then `window-size` unset so a later attach still resizes) to fill
+their card — `POST /api/resize/:s`, 409 when a client is attached (then h-scroll), `GHOSTY_RESIZE_ALLOW`
+regex limits which sessions may be resized. Toggle "Fit sessions to cards" in the Aa popover.
+
+**Filters** — funnel button: status / project (GitHub repo from `origin`) / agent; applies to grid,
+board, tabs, sidebar. Card headers show project · ⎇ branch(*) · ⑂ worktree in the middle.
+
+**Dock** — chevron bottom-left collapses quick prompts + keys (remembered).
+
 **Alerts** — bell = in-page notification; set `NTFY_TOPIC` (see README) for real push to the phone.
 
 **Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,
@@ -79,9 +89,9 @@ exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only
 | 2 | "waiting" can false-positive on prompt-like text in the last ~15 lines | e.g. a quoted "Do you want to proceed?" |
 | 3 | `ntfy` not configured yet | add `Environment=NTFY_TOPIC=<secret-topic>` + `PUBLIC_URL` to the systemd unit |
 | 4 | Board reorders when states change | by design (urgency sort); rows are moved in place, not rebuilt |
-| 5 | Dock is 3 rows tall on phones | consider collapsing quick keys until the input is focused |
+| 5 | Phone top bar is full at 360px — count chips get squeezed (they scroll) | hides less once installed (no install button) |
 | 6 | No HTTPS via `tailscale serve` (free plan) | self-signed on :7443 works after manual accept |
-| 7 | SW cache v5 | bump again if stale JS ever shows |
+| 7 | SW cache v6 | bump again if stale JS ever shows |
 
 ## Files of interest
 
