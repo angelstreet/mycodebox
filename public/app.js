@@ -149,8 +149,14 @@ function getTerm(session) {
 function mountTerm(session, host) {
   const { term, fit } = getTerm(session);
   host.innerHTML = '';
-  host.appendChild(term.element);
-  term.open(host);
+  // xterm.js exposes `term.element` only after the first open().
+  // On the first move we let open() create + attach it; on later moves
+  // we reparent the existing element (the safer pattern).
+  if (term.element) {
+    if (term.element.parentNode !== host) host.appendChild(term.element);
+  } else {
+    term.open(host);
+  }
   requestAnimationFrame(() => { try { fit.fit(); } catch {} });
   setTimeout(() => { try { fit.fit(); } catch {} }, 80);
 }
