@@ -887,3 +887,10 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 /* no meta line (idle / done sessions): drop its reserved row so the name centres with the other header items */
 .cell .h .mt:empty{ display:none; }
 .cell .h .nm{ justify-content:center; }
+
+.reader .mdt{ overflow-x:auto; margin:0 0 .9em; -webkit-overflow-scrolling:touch; touch-action:pan-x pan-y; }
+.reader table{ border-collapse:collapse; font-size:.88em; }
+.reader th, .reader td{ border:1px solid var(--line-2); padding:4px 8px; text-align:left; vertical-align:top; min-width:60px; }
+.reader th{ background:var(--bg-2); color:#fff; }
+/* phones: a working session is just the pulsing dot (no elapsed time) */
+@media (max-width: 720px){ .cell .state.working .st, .row-item .state.working .st{ display:none; } }

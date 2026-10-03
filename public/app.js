@@ -1300,6 +1300,29 @@ function inlineMd(t) {
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
 }
+// Box-drawn tables (┌─┬─┐ │ a │ b │ ├─┼─┤ └─┘) -> HTML. A narrow tmux pane splits rows across lines, so
+// fragments that don't start with a box character are glued onto the previous line first.
+function boxTable(block) {
+  const logical = [];
+  for (const l of block) {
+    const t = l.trim();
+    if (!t) continue;
+    if (/^[\u250c\u251c\u2514\u2502]/.test(t) || !logical.length) logical.push(t);
+    else logical[logical.length - 1] += (/^[\u2500\u252c\u2534\u253c\u2510\u2518\u2524]/.test(t) ? '' : ' ') + t;
+  }
+  const rows = [];
+  let cur = null;
+  for (const t of logical) {
+    if (/^[\u250c\u251c\u2514]/.test(t)) { if (cur) { rows.push(cur); cur = null; } continue; }
+    const cells = t.replace(/^\u2502|\u2502$/g, '').split('\u2502').map((c) => c.trim());
+    if (!cur) cur = cells; else cells.forEach((c, i) => { if (c) cur[i] = ((cur[i] || '') + ' ' + c).trim(); });
+  }
+  if (cur) rows.push(cur);
+  if (!rows.length) return '';
+  const [head, ...body] = rows;
+  return `<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${inlineMd(c)}</th>`).join('')}</tr></thead><tbody>${
+    body.map((r) => `<tr>${r.map((c) => `<td>${inlineMd(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
 function renderReply(text) {
   if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
   const lines = String(text).replace(/\t/g, '    ').split('\n');
@@ -1307,8 +1330,16 @@ function renderReply(text) {
   let para = [], code = null, fence = false;
   const flushPara = () => { if (para.length) { out.push(`<p>${para.join('<br>')}</p>`); para = []; } };
   const flushCode = () => { if (code) { out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); code = null; } };
-  for (const raw of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
     const line = raw.replace(/\s+$/, '');
+    if (!fence && /^\s*\u250c/.test(line)) {
+      let k = li;
+      while (k < lines.length && !/^\s*\u2514/.test(lines[k]) && k - li < 200) k++;
+      const html = boxTable(lines.slice(li, k + 1));
+      // an unfinished table (still being typed) falls through as plain lines
+      if (html && k < lines.length) { flushPara(); flushCode(); out.push(html); li = k; continue; }
+    }
     if (/^\s*```/.test(line)) {
       if (fence) { fence = false; flushCode(); } else { flushPara(); flushCode(); fence = true; code = []; }
       continue;
