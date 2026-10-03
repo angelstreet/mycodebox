@@ -884,3 +884,6 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 .mdbody table{ border-collapse:collapse; font-size:.9em; }
 .mdbody th, .mdbody td{ border:1px solid var(--line-2); padding:4px 8px; text-align:left; vertical-align:top; }
 .mdbody th{ background:var(--bg-2); color:#fff; }
+/* no meta line (idle / done sessions): drop its reserved row so the name centres with the other header items */
+.cell .h .mt:empty{ display:none; }
+.cell .h .nm{ justify-content:center; }
