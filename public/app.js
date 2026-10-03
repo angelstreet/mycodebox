@@ -2591,8 +2591,16 @@ async function syncPush() {
 async function toggleNotify() {
   if (!('Notification' in window)) { toast('notifications not supported here'); return; }
   if (!(state.notify || state.pushOn)) {
+    const before = Notification.permission;
     const p = await Notification.requestPermission();
     if (p !== 'granted') {
+      // Tell the server what this browser reports, so a blocked bell in the APK can be diagnosed.
+      fetch('/api/push/diag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        before, after: p, now: Notification.permission, secure: window.isSecureContext,
+        standalone: matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches,
+        referrer: document.referrer, ua: navigator.userAgent, origin: location.origin,
+        push: pushSupported(), sw: !!navigator.serviceWorker?.controller,
+      }) }).catch(() => {});
       toast(!window.isSecureContext ? 'needs the https://<tailnet-host>:7443 address'
         : Notification.permission === 'denied' ? 'notifications are off for this app - Android: App info > Notifications > allow, then tap the bell again'
         : 'permission not given - tap the bell again', 5000);

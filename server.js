@@ -1170,6 +1170,11 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && p === '/api/push/unsubscribe') {
         return json(res, 200, { ok: true, removed: push.unsubscribe((await readJsonBody(req)).endpoint) });
       }
+      if (req.method === 'POST' && p === '/api/push/diag') {
+        const d = await readJsonBody(req);
+        console.log('[push] diag', JSON.stringify(d).slice(0, 800));
+        return json(res, 200, { ok: true });
+      }
       if (req.method === 'POST' && p === '/api/push/test') {
         const { results } = await push.notify({ title: 'codebox: test notification', body: 'Web Push is working.', url: '/', tag: 'ghosty-test', priority: 'high' });
         return json(res, 200, { ok: true, subscriptions: results.length, results });
