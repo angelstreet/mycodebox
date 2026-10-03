@@ -91,6 +91,12 @@ pushed as `{type:'health'}` on `/ws/status`, also `GET /api/vm`. Tests: `npm tes
 **AI Manager** — plan is TASK-44 in virtualpytest (`docs/tasks/TASK-44-ai-manager.md`); dev worktree
 `~/ghosty-sessions-task44`, branch `task44-ai-manager`.
 
+**TASK-44 phase 5** (branch `task44-priority`) — per-session priority P0/P1/P2 and owner pause/resume
+(`session-meta.js`, `/api/session-meta/:s`, state in `sessions.json`), quota row (`quota.js`, `/api/quota`).
+Claude Max quota is `?` until `scripts/claude-statusline-ratelimits.sh` is set as the Claude Code
+`statusLine` command (owner edits `~/.claude/settings.json`; see README "Priority, pause and quota").
+MiniMax has no stored plan limit: tokens only. Deploy = merge + restart `ghosty-sessions`; SW cache is v10.
+
 **Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,
 exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only.
 

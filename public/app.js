@@ -3,6 +3,8 @@
 // State-first UI: every session shows agent, state (working / needs you /
 // idle / offline) and elapsed time. Custom names live in localStorage.
 
+import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
+
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
 
@@ -12,6 +14,7 @@ const els = {
   summary:     $('#summary'),
   attention:   $('#attention'),
   health:      $('#health'),
+  quota:       $('#quota'),
   tabs:        $('#tabs'),
   main:        $('#main'),
   cardPane:    $('#cardPane'),
@@ -106,6 +109,9 @@ function toast(msg, ms=1800) {
 function stateOf(name) {
   return state.status[name]?.state || 'offline';
 }
+const prioOf = (n) => state.status[n]?.priority || DEFAULT_PRIORITY;
+const pausedOf = (n) => !!state.status[n]?.paused;
+const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${escapeHtml(n)}" aria-label="Priority ${prioOf(n)}, tap to change" title="Priority ${prioOf(n)}">${prioOf(n)}</button>`;
 const STATE_RANK = { waiting: 0, done: 1, working: 2, idle: 3, offline: 4 };
 const STATE_LABEL = { working: 'working', waiting: 'needs you', done: 'done', idle: 'idle', offline: 'offline' };
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
@@ -500,6 +506,8 @@ function connectStatus() {
         onLeases(msg.leases);
       } else if (msg.type === 'health') {
         onHealth(msg.health);
+      } else if (msg.type === 'quota') {
+        onQuota(msg.quota);
       }
     } catch {}
   };
@@ -581,6 +589,7 @@ function moveSession(name, dir) {
 }
 function byUrgency(list) {
   return [...list].sort((a, b) =>
+    byPriority(prioOf(a.name), prioOf(b.name)) ||
     (STATE_RANK[stateOf(a.name)] - STATE_RANK[stateOf(b.name)]) ||
     displayName(a.name).localeCompare(displayName(b.name)));
 }
@@ -636,8 +645,8 @@ async function fetchLeases() {
 {
   const mq = window.matchMedia('(min-width: 721px)');
   const place = () => {
-    if (mq.matches) els.health.classList.add('inbar'), $('#appTitle').after(els.health);
-    else els.health.classList.remove('inbar'), $('#topbar').after(els.health);
+    if (mq.matches) els.health.classList.add('inbar'), $('#appTitle').after(els.health), $('#topbar').after(els.quota);
+    else els.health.classList.remove('inbar'), $('#topbar').after(els.health), els.health.after(els.quota);
   };
   mq.addEventListener('change', place);
   place();
@@ -695,13 +704,13 @@ function renderSummary() {
 }
 
 function renderAttention() {
-  const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting');
+  const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting').sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
   els.attention.classList.toggle('hidden', waiting.length === 0);
-  const key = waiting.map((s) => s.name).join('|');
+  const key = waiting.map((s) => s.name + prioOf(s.name)).join('|');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
-    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${escapeHtml(displayName(s.name))}</button>`).join('');
+    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}</button>`).join('');
   for (const b of els.attention.querySelectorAll('button')) {
     b.onclick = () => openCard(b.dataset.session);
   }
@@ -925,7 +934,7 @@ function buildSideRow(s) {
     <i class="dot"></i>
     <div class="meta">
       <div class="name">${escapeHtml(custom || s.name)}</div>
-      <div class="sub"><span class="ag"></span><span class="sst"></span></div>
+      <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="pp hidden">paused</span></div>
       <div class="sub rb"></div>
     </div>
     <button class="edit" aria-label="Rename">
@@ -956,6 +965,9 @@ function syncSide() {
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
     li.querySelector('.sst').textContent = stateText(n);
+    const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
+    if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
+    li.querySelector('.pp').classList.toggle('hidden', !pausedOf(n));
     const rb = li.querySelector('.rb');
     const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
@@ -1025,6 +1037,7 @@ function buildCell(s) {
   cell.className = 'cell';
   cell.innerHTML = `
     <div class="h">
+      <span class="pr"></span>
       <span class="ag"></span>
       <div class="nm"><span class="name">${escapeHtml(displayName(s.name))}</span><span class="mt">&nbsp;</span></div>
       <span class="proj"></span>
@@ -1034,6 +1047,8 @@ function buildCell(s) {
         <button data-dir="left" aria-label="Move left">&#9664;</button><button data-dir="up" aria-label="Move up">&#9650;</button><button data-dir="down" aria-label="Move down">&#9660;</button><button data-dir="right" aria-label="Move right">&#9654;</button>
       </span>
       <span class="stw"></span>
+      <span class="pp hidden">paused</span>
+      <button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button>
       <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
       <button class="open" aria-label="Open full screen" title="Open">
@@ -1148,6 +1163,7 @@ function syncCell(cell) {
   const ag = agentBadgeHtml(n);
   const agEl = cell.querySelector('.ag');
   if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
+  syncPrioPause(cell, n);
   const stw = cell.querySelector('.stw');
   if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
   else stw.querySelector('.st').textContent = badgeText(n);
@@ -1441,7 +1457,7 @@ function renderList() {
     row.className = 'row-item';
     row.dataset.session = s.name;
     row.innerHTML = `
-      <div class="l1"><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="stw"></span></div>
+      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button></div>
       <div class="last"></div>
       <div class="apill hidden"></div>
       <div class="meta"></div>`;
@@ -1494,6 +1510,7 @@ function syncList() {
     const ag = agentBadgeHtml(n);
     const agEl = row.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
+    syncPrioPause(row, n);
     const stw = row.querySelector('.stw');
     if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
     else stw.querySelector('.st').textContent = badgeText(n);
@@ -1639,6 +1656,107 @@ function pushHist(text) {
   dock.hidx = -1;
 }
 
+// ---------- priority + pause + quota (TASK-44 phase 5) ----------
+// Badge (P0 red / P1 amber / P2 grey) and the pause button on a card header or board row.
+function syncPrioPause(el, n) {
+  const pr = el.querySelector('.pr'), ph = prioBadgeHtml(n);
+  if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
+  const paused = pausedOf(n);
+  el.classList.toggle('paused', paused);
+  el.querySelector('.pp').classList.toggle('hidden', !paused);
+  const pz = el.querySelector('.pz');
+  const glyph = paused ? '▶' : '⏸';
+  if (pz.textContent !== glyph) {
+    pz.textContent = glyph;
+    pz.title = paused ? 'Resume (sends "continue")' : 'Pause (Esc, then hold)';
+    pz.setAttribute('aria-label', paused ? 'Resume session' : 'Pause session');
+  }
+  pz.dataset.pause = n;
+  pz.classList.toggle('on', paused);
+}
+async function metaPost(n, body) {
+  const r = await fetch(`/api/session-meta/${encodeURIComponent(n)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  if (state.status[n]) { state.status[n].priority = j.priority; state.status[n].paused = j.paused; }
+  return j;
+}
+// capture phase: these buttons sit inside cards / rows that open on tap
+document.addEventListener('click', async (e) => {
+  const pb = e.target.closest('[data-prio]');
+  const zb = e.target.closest('[data-pause]');
+  if (!pb && !zb) return;
+  e.stopPropagation(); e.preventDefault();
+  if (pb) { pickPriority(pb.dataset.prio); return; }
+  const n = zb.dataset.pause;
+  zb.disabled = true;
+  try {
+    const want = !pausedOf(n);
+    await metaPost(n, { paused: want });
+    toast(want ? `paused ${displayName(n)} (Esc sent)` : `resumed ${displayName(n)}`);
+    syncAll();
+  } catch (err) { toast(`failed: ${err.message}`, 2500); }
+  zb.disabled = false;
+}, true);
+function pickPriority(n) {
+  openSheet(`Priority - ${displayName(n)}`, ({ body, close }) => {
+    body.innerHTML = `<div class="prio-pick">${PRIORITIES.map((p) => `<button class="sbtn prio-opt ${p}${prioOf(n) === p ? ' cur' : ''}" data-p="${p}">${p}<span>${{ P0: 'urgent', P1: 'important', P2: 'normal' }[p]}</span></button>`).join('')}</div>`;
+    body.onclick = async (e) => {
+      const b = e.target.closest('[data-p]');
+      if (!b) return;
+      try { await metaPost(n, { priority: b.dataset.p }); close(); renderAll(); } catch (err) { toast(`failed: ${err.message}`, 2500); }
+    };
+  });
+}
+
+// Quota row: "codex 5h 2% · wk 0% · claude ? · minimax 1.2M/5h". Amber >= 80 %, red >= 95 %.
+const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
+const qLevel = (p) => (p == null ? 'na' : p >= 95 ? 'crit' : p >= 80 ? 'warn' : 'ok');
+const winShort = (n) => (n === 'week' ? 'wk' : n === 'month' ? 'mo' : n);
+function onQuota(q) {
+  state.quota = q;
+  const el = els.quota;
+  if (!q || !q.plans?.length) { el.classList.add('hidden'); return; }
+  const parts = q.plans.map((p) => {
+    const short = p.plan;
+    if (!p.windows.length) return `<span class="qi na"><b>${short}</b> ?</span>`;
+    const ws = p.windows.map((w) => {
+      if (w.usedPercent == null) return `<span class="qi na">${winShort(w.name)} ${fmtTok((w.input || 0) + (w.output || 0))} tok</span>`;
+      return `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`;
+    });
+    return `<b>${short}</b> ${ws.join(' ')}`;
+  });
+  const worst = ['crit', 'warn'].find((l) => q.plans.some((p) => p.windows.some((w) => qLevel(w.usedPercent) === l))) || 'ok';
+  el.className = `quota ${worst}`;
+  el.innerHTML = parts.join('<i class="sep">&middot;</i>');
+}
+const resetText = (w) => {
+  if (w.expired) return 'window has reset';
+  if (!w.resetsAt) return 'reset time unknown';
+  const left = Math.max(0, w.resetsAt * 1000 - Date.now()), h = Math.floor(left / 3600e3), m = Math.floor((left % 3600e3) / 60e3);
+  const when = new Date(w.resetsAt * 1000);
+  return `resets in ${h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${h}h ${m}m`} (${when.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })})`;
+};
+function openQuota() {
+  const q = state.quota;
+  if (!q) return;
+  openSheet('Subscription quota', ({ body, foot, close }) => {
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    body.innerHTML = q.plans.map((p) => `
+      <div class="qplan">
+        <div class="qh"><b>${escapeHtml(p.label)}</b><span class="dim">${escapeHtml(p.price)}</span></div>
+        ${p.windows.map((w) => w.usedPercent == null
+          ? `<div class="qw na"><span>${escapeHtml(w.name)}</span><span>${fmtTok(w.input || 0)} in / ${fmtTok(w.output || 0)} out${w.cacheRead ? ` / ${fmtTok(w.cacheRead)} cache` : ''} - ${w.turns} turns</span></div>`
+          : `<div class="qw ${qLevel(w.usedPercent)}"><span>${escapeHtml(w.name)}</span><span class="qbar"><i style="width:${Math.min(100, w.usedPercent)}%"></i></span><span>${Math.round(w.usedPercent)}%</span><span class="dim">${escapeHtml(resetText(w))}</span></div>`).join('')}
+        ${p.note ? `<div class="mnote">${escapeHtml(p.note)}</div>` : ''}
+        <div class="mnote">${escapeHtml(p.source)}${p.at ? `, read ${new Date(p.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}` : ''}${p.stale && p.windows.length ? ' (not live)' : ''}</div>
+      </div>`).join('');
+  });
+}
+els.quota.onclick = openQuota;
+
 // ---------- AI manager: auto-answer countdown + panel ----------
 const autoLeft = (at) => `${Math.max(0, Math.ceil((at - Date.now()) / 1000))}s`;
 // Pill on a card / board row while an automatic answer is pending: "auto: Yes, continue. in 23s ✕".
@@ -1759,6 +1877,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sheetEl)
 const RANK2 = { waiting: 0, done: 1, working: 2, idle: 3, offline: 4 };
 function sortedByNeed() {
   return [...state.sessions].sort((a, b) =>
+    byPriority(prioOf(a.name), prioOf(b.name)) ||
     ((RANK2[stateOf(a.name)] ?? 5) - (RANK2[stateOf(b.name)] ?? 5)) ||
     displayName(a.name).localeCompare(displayName(b.name)));
 }

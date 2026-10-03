@@ -17,6 +17,8 @@
 //                                 global settings, {session, sessionEnabled} per session
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
+//   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
+//   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
@@ -35,7 +37,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
 import { createPush, createAlerts } from './push.js';
-import { initManager, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
+import { createSessionMeta } from './session-meta.js';
+import { createQuota } from './quota.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -513,6 +517,9 @@ const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'sta
 const push = createPush({ stateDir: STATE_DIR });
 const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
 
+const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
+const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
+
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
 function notifySession(session, kind, body) {
   const waiting = kind === 'waiting' || kind === 'asks';
@@ -697,6 +704,8 @@ async function pollOnce() {
   for (const k of [...metaCache.keys()]) if (!status[k]) metaCache.delete(k);
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set(Object.keys(status)));
+  sessionMeta.sync(Object.keys(status));
+  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); }
   return { sessions, status, changedSessions };
 }
 
@@ -893,8 +902,10 @@ async function createSession({ name, agent, cwd }) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
+  sessionMeta.reset(real);
+  sessionMeta.sync([real]);   // a new session starts at P2, not paused
   latest = null;
-  return { ok: true, name: real, agent, cwd: dir };
+  return { ok: true, name: real, agent, cwd: dir, priority: sessionMeta.priority(real) };
 }
 
 async function killSession(name, confirm) {
@@ -903,8 +914,29 @@ async function killSession(name, confirm) {
   await exec(TMUX, ['kill-session', '-t', `=${name}`]);
   lastSendAt.delete(name);
   managerForget(name);
+  sessionMeta.reset(name);
   latest = null;
   return { ok: true, name };
+}
+
+// Owner settings of one session: { priority } and / or { paused }.
+// paused:true  -> hold first (so the manager stops at once), then Escape once.
+// paused:false -> release, then "continue" + Enter.
+async function setSessionMeta(session, body) {
+  if (!(await sessionExists(session))) throw httpError(404, 'no such session');
+  sessionMeta.sync([session]);
+  const changed = sessionMeta.set(session, body || {});
+  if (changed.paused === true) {
+    cancelAuto(session, 'paused by owner');
+    logEvent({ type: 'pause', session, by: 'owner' });
+    try { await sendKey(session, 'Escape'); }
+    catch (e) { sessionMeta.set(session, { paused: false }); throw e; }
+  } else if (changed.paused === false) {
+    logEvent({ type: 'resume', session, by: 'owner' });
+    await sendKeys(session, 'continue', true);
+  }
+  latest = null;
+  return { ok: true, session, priority: sessionMeta.priority(session), paused: sessionMeta.isPaused(session), changed };
 }
 
 async function sendMany(sessions, payload) {
@@ -1134,6 +1166,11 @@ const server = http.createServer(async (req, res) => {
       }
     } catch (err) { return json(res, err.status || 400, { ok: false, error: err.message }); }
   }
+  if (req.method === 'POST' && p.startsWith('/api/session-meta/')) {
+    try { return json(res, 200, await setSessionMeta(decodeURIComponent(p.slice('/api/session-meta/'.length)), await readJsonBody(req))); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/quota') return json(res, 200, quota.get());
   if (req.method === 'POST' && p.startsWith('/api/manager/cancel/')) {
     const name = decodeURIComponent(p.slice('/api/manager/cancel/'.length));
     if (!cancelAuto(name)) return json(res, 404, { ok: false, error: 'no pending auto answer' });
@@ -1185,6 +1222,7 @@ server.on('upgrade', (req, socket, head) => {
       if (leaseCache.value?.ok) ws.send(JSON.stringify({ type: 'leases', leases: leaseCache.value.leases }));
       if (latest) ws.send(JSON.stringify({ type: 'status', status: latest.status }));
       if (health) ws.send(JSON.stringify({ type: 'health', health }));
+      if (quota.get().at) ws.send(JSON.stringify({ type: 'quota', quota: quota.get() }));
       ws.on('close', () => statusSubs.delete(ws));
       ws.on('message', () => {}); // no-op
     });
@@ -1252,7 +1290,7 @@ server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
   await initManager({
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
-    sendKey, sendKeys,
+    sendKey, sendKeys, paused: (n) => sessionMeta.isPaused(n),
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.
@@ -1262,6 +1300,9 @@ server.listen(PORT, HOST, async () => {
   setInterval(leaseTick, 15000);
   healthTick();
   setInterval(healthTick, HEALTH_MS);
+  const quotaTick = () => quota.poll().catch((e) => console.error('[quota]', e.message));
+  quotaTick();
+  setInterval(quotaTick, 60000);
 });
 
 // Optional TLS listener — required for PWA install on most browsers.

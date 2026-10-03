@@ -38,11 +38,12 @@ const watch = new Map();   // session -> { since, hash, stall, pending: {id, at,
 const sentLog = new Map(); // session -> [ms epoch of each auto answer] (hourly cap)
 let notify = () => {};
 let send = { key: null, keys: null };   // injected by server.js: the one tmux code path
+let isPaused = () => false;             // injected by server.js: the owner's pause hold (session-meta.js)
 
 const today = () => new Date().toISOString().slice(0, 10);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ onOwnerNeeded, sendKey, sendKeys } = {}) {
+export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { budget = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); } catch {}
@@ -50,6 +51,7 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys } = {}) {
   if (onOwnerNeeded) notify = onOwnerNeeded;
   if (sendKey) send.key = sendKey;
   if (sendKeys) send.keys = sendKeys;
+  if (paused) isPaused = paused;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, log ${LOG_FILE}`);
 }
 
@@ -90,6 +92,8 @@ async function log(rec) {
 }
 
 const logLater = (rec) => log({ at: new Date().toISOString(), ...rec });
+// Owner actions that are not stalls ({type:'pause'|'resume', session, by:'owner'}).
+export const logEvent = logLater;
 
 const answerText = (a) => (a.text != null ? a.text : `option ${a.key}`);
 const hourCount = (name) => {
@@ -112,6 +116,7 @@ function humanWhy(final, ws) {
 
 // Why an otherwise-sendable answer must not go out automatically, or null.
 function autoBlock(name, final, confidence) {
+  if (isPaused(name)) return 'session paused by owner';
   if (!config.autoSend) return 'auto-answer is off';
   if (!config.autoCases.includes(final.case)) return `${final.case} is not an auto-answer case`;
   if (confidence < config.minConfidence) return `confidence ${confidence.toFixed(2)} below ${config.minConfidence}`;
@@ -123,6 +128,7 @@ function autoBlock(name, final, confidence) {
 // ghosty's own 'waiting' alert, so only a finished turn that asks something is pushed here.
 function escalate(name, state, final, id, reason) {
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
+  if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
   if (state === 'done' && final.case !== 'done') notify(name, final, reason);
 }
 
@@ -150,7 +156,8 @@ async function fire(name, auto) {
   const last = w.last;
   const ws = w.stall && w.cls ? wouldSend({ ...w.stall, draft: w.cls.draft, forbidden: w.stall.forbidden || w.cls.forbidden }) : { send: null, why: 'owner' };
   let reason = null, esc = false;
-  if (!config.autoSend) reason = 'auto-answer turned off';
+  if (isPaused(name)) reason = 'session paused by owner';
+  else if (!config.autoSend) reason = 'auto-answer turned off';
   else if (!sessionOn(name)) reason = 'manager disabled for this session';
   else if (!config.autoCases.includes(auto.case)) reason = `${auto.case} no longer an auto-answer case`;
   else if (auto.confidence < config.minConfidence) reason = `confidence ${auto.confidence.toFixed(2)} below ${config.minConfidence}`;

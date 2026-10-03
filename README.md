@@ -133,6 +133,39 @@ curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
 curl -s -XPOST localhost:7777/api/manager/cancel/task05 -H 'content-type: application/json' -d '{}'
 ```
 
+## Priority, pause and quota
+
+**Priority.** Every session is `P0`, `P1` or `P2` (default `P2`, also for a session seen for the first
+time or created with `POST /api/sessions`). The badge on the card header, board row and sidebar is a
+button: tap it to pick. P0 sorts first on the board, in the needs-you banner and in the card order, then
+the usual order. `POST /api/session-meta/:session {"priority":"P0"}`. Stored in
+`$GHOSTY_STATE_DIR/sessions.json` keyed by tmux session name; an entry is dropped after the session has
+been gone for more than 7 days. The status payload carries `priority` and `paused`.
+
+**Pause / resume (owner).** The pause button (pause glyph, card header and board row) calls
+`POST /api/session-meta/:session {"paused":true}`: Escape is sent once, then the hold is kept (persisted).
+While held the manager never auto-answers or continues that session, cancels a pending auto answer, and
+does not ping you about it. `{"paused":false}` clears the hold and types `continue` + Enter. Both are
+logged to `stalls.jsonl` as `{type:'pause'|'resume', session, by:'owner'}`. Ghosty never kills, renames or
+starts sessions on its own.
+
+**Quota.** `quota.js` polls every 60 s (`GET /api/quota`, also pushed on `/ws/status` as `{type:'quota'}`);
+the row under the health strip reads `codex 5h 2% wk 0% . claude ? . minimax ...`, amber from 80 %, red
+from 95 %, tap for reset times. One push alert when a window crosses 80 %, re-armed below 70 % (the first
+reading after a restart only seeds, it does not alert).
+
+| plan | source | notes |
+|---|---|---|
+| Codex (Plus, 20 EUR/month) | newest `rate_limits` at the tail of the newest `~/.codex/sessions/**/*.jsonl` | 5h = `primary` (300 min), week = `secondary` (10080 min); a window whose reset time has passed reads 0 % (`expired`) |
+| Claude Max (200 EUR/month) | `$GHOSTY_STATE_DIR/claude-rate-limits.json` written by `scripts/claude-statusline-ratelimits.sh` | no limit file exists on disk; Claude Code passes `rate_limits` (`five_hour`, `seven_day`: `used_percentage`, `resets_at`, Pro/Max logins, after the first reply) to its status-line command. Shows `?` until the script is installed as the status line |
+| MiniMax (Token Plan, 40 EUR/month) | token sums from `~/.minimax/v2/sqlite/runtime-state.sqlite` (read-only) | the runtime stores no plan limit, so `usedPercent` is `null`: tokens in the last 5 h and this calendar month are shown instead |
+
+Env: `CODEX_SESSIONS_DIR`, `MINIMAX_DB`, `CLAUDE_RATE_LIMITS_FILE` override the paths.
+
+Claude status line: in `~/.claude/settings.json` set
+`"statusLine": {"type": "command", "command": "/home/<user>/ghosty-sessions/scripts/claude-statusline-ratelimits.sh"}`
+(needs `jq`). It reads only the JSON on stdin and prints `model 5h NN% wk NN%`.
+
 ## Usage (Langfuse)
 
 A local Langfuse (v3) on the host plus a tailer, `usage/ingest.js`, give token usage and cost per
@@ -212,11 +245,14 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 ├── public/
 │   ├── index.html                   # PWA shell
 │   ├── app.js                       # controller
+│   ├── prio.js                      # priority helpers shared with the server
 │   ├── style.css                    # ghosty dark
 │   ├── manifest.webmanifest
 │   ├── sw.js                        # service worker
 │   ├── icon.svg / icon-{192,512}.png
 │   └── vendor/                      # xterm.js + xterm-addon-fit (offline)
+├── session-meta.js                  # priority + pause hold (sessions.json)
+├── quota.js                         # Codex / Claude / MiniMax quota windows
 ├── usage/                           # Langfuse usage tailer + prices
 └── systemd/
     ├── ghosty-sessions.service
