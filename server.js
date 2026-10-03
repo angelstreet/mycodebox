@@ -19,6 +19,7 @@
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
+//   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
@@ -39,6 +40,7 @@ import { sampleHealth } from './health.js';
 import { createPush, createAlerts } from './push.js';
 import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
+import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, policyConfig, releaseHold, heldOf, reevaluateHolds, LOG_FILE } from './manager.js';
@@ -520,6 +522,7 @@ const push = createPush({ stateDir: STATE_DIR });
 const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
 
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
+const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
@@ -707,7 +710,7 @@ async function pollOnce() {
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
-  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); }
+  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); }
   return { sessions, status, changedSessions };
 }
 
@@ -1177,6 +1180,10 @@ const server = http.createServer(async (req, res) => {
     try { return json(res, 200, await setSessionMeta(decodeURIComponent(p.slice('/api/session-meta/'.length)), await readJsonBody(req))); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
+  if (req.method === 'GET' && p === '/api/usage') {
+    const b = await usage.body(Object.keys(latest?.status || {}));
+    return b ? json(res, 200, b) : json(res, 404, { error: 'no usage summary yet' });
+  }
   if (req.method === 'GET' && p === '/api/quota') return json(res, 200, quota.get());
   if (req.method === 'POST' && p.startsWith('/api/manager/cancel/')) {
     const name = decodeURIComponent(p.slice('/api/manager/cancel/'.length));
@@ -1314,6 +1321,9 @@ server.listen(PORT, HOST, async () => {
   setInterval(leaseTick, 15000);
   healthTick();
   setInterval(healthTick, HEALTH_MS);
+  const usageTick = () => usage.get().catch(() => {});   // one small file read per 30 s keeps the status field cheap
+  usageTick();
+  setInterval(usageTick, 30000);
   const quotaTick = () => quota.poll().then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
   setInterval(quotaTick, 60000);

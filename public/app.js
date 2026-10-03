@@ -5,6 +5,7 @@
 
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
+import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -35,6 +36,7 @@ const els = {
   backBtn:     $('#backBtn'),
   notifyBtn:   $('#notifyBtn'),
   mgrBtn:      $('#mgrBtn'),
+  usageBtn:    $('#usageBtn'),
   edgeSwipe:   $('#edgeSwipe'),
   gridSizes:   $('#gridSizes'),
   toast:       $('#toast'),
@@ -938,7 +940,7 @@ function buildSideRow(s) {
     <i class="dot"></i>
     <div class="meta">
       <div class="name">${escapeHtml(custom || s.name)}</div>
-      <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="pp hidden">paused</span></div>
+      <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="uc hidden"></span><span class="pp hidden">paused</span></div>
       <div class="sub rb"></div>
     </div>
     <button class="edit" aria-label="Rename">
@@ -972,6 +974,7 @@ function syncSide() {
     const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
     syncPill(li.querySelector('.pp'), n);
+    syncUsageChip(li.querySelector('.uc'), n);
     const rb = li.querySelector('.rb');
     const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
@@ -1051,7 +1054,7 @@ function buildCell(s) {
         <button data-dir="left" aria-label="Move left">&#9664;</button><button data-dir="up" aria-label="Move up">&#9650;</button><button data-dir="down" aria-label="Move down">&#9660;</button><button data-dir="right" aria-label="Move right">&#9654;</button>
       </span>
       <span class="stw"></span>
-      <span class="pp hidden">paused</span>
+      <span class="uc hidden"></span><span class="pp hidden">paused</span>
       <button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button>
       <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
@@ -1461,7 +1464,7 @@ function renderList() {
     row.className = 'row-item';
     row.dataset.session = s.name;
     row.innerHTML = `
-      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button></div>
+      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="uc hidden"></span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button></div>
       <div class="last"></div>
       <div class="apill hidden"></div>
       <div class="meta"></div>`;
@@ -1674,6 +1677,7 @@ function syncPrioPause(el, n) {
   const paused = pausedOf(n) || !!heldOf(n);   // held: the button is Resume (releases the hold, sends "continue")
   el.classList.toggle('paused', paused);
   syncPill(el.querySelector('.pp'), n);
+  syncUsageChip(el.querySelector('.uc'), n);
   const pz = el.querySelector('.pz');
   const glyph = paused ? '▶' : '⏸';
   if (pz.textContent !== glyph) {
@@ -1683,6 +1687,20 @@ function syncPrioPause(el, n) {
   }
   pz.dataset.pause = n;
   pz.classList.toggle('on', paused);
+}
+// Today's API-equivalent cost chip (card header / board row); red + warning when the session is an outlier.
+function syncUsageChip(c, n) {
+  if (!c) return;
+  const u = state.status[n]?.usage;
+  const show = !!u && (u.todayTokens > 0 || u.outlier);
+  c.classList.toggle('hidden', !show);
+  if (!show) return;
+  const t = u.todayCost != null ? `${fmtUsd(u.todayCost)} today` : `${fmtTok(u.todayTokens)} tok today`;
+  const txt = u.outlier ? `\u26A0 ${t}` : t;
+  if (c.textContent !== txt) c.textContent = txt;
+  c.classList.toggle('out', !!u.outlier);
+  c.dataset.uc = n;
+  c.title = u.outlier ? `outlier: ${u.outlier}` : 'API-equivalent cost today (list prices), tap for usage';
 }
 async function metaPost(n, body) {
   const r = await fetch(`/api/session-meta/${encodeURIComponent(n)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -1695,6 +1713,13 @@ async function metaPost(n, body) {
 document.addEventListener('click', async (e) => {
   const pb = e.target.closest('[data-prio]');
   const zb = e.target.closest('[data-pause]');
+  const ub = e.target.closest('[data-uc]');
+  if (ub) {
+    e.stopPropagation(); e.preventDefault();
+    const u = state.status[ub.dataset.uc]?.usage;
+    if (u?.outlier) toast(`outlier: ${u.outlier}`, 4000); else openUsage();
+    return;
+  }
   if (!pb && !zb) return;
   e.stopPropagation(); e.preventDefault();
   if (pb) { pickPriority(pb.dataset.prio); return; }
@@ -1720,7 +1745,6 @@ function pickPriority(n) {
 }
 
 // Quota row: "codex 5h 2% · wk 0% · claude ? · minimax 1.2M/5h". Amber >= 80 %, red >= 95 %.
-const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
 const qLevel = (p) => (p == null ? 'na' : p >= 95 ? 'crit' : p >= 80 ? 'warn' : 'ok');
 const winShort = (n) => (n === 'week' ? 'wk' : n === 'month' ? 'mo' : n);
 function onQuota(q) {
@@ -1863,6 +1887,65 @@ function openManager() {
   });
 }
 els.mgrBtn.onclick = openManager;
+
+// ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
+const LANGFUSE_URL = 'http://<tailscale-ip>:3100';   // tailnet
+const SUBSCRIPTION = { claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
+const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: no list price for this model">&mdash;</span>' : escapeHtml(fmtUsd(c)) + unit);
+const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
+function quotaOfAgent(a) {
+  const p = state.quota?.plans?.find((x) => x.plan === a);
+  if (!p || !p.windows?.length) return `<span class="dim">quota ?</span>`;
+  return p.windows.map((w) => w.usedPercent == null
+    ? `<span class="qi na">${winShort(w.name)} ${fmtTok((w.input || 0) + (w.output || 0))} tok</span>`
+    : `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`).join(' ');
+}
+function usageHtml(u, tab) {
+  const today = tab === 'today';
+  if (today && !summaryFresh(u, Date.now())) return '<div class="sheet-empty">no usage today yet (summary is from an earlier day)</div>';
+  if (today && !u.today) return '<div class="sheet-empty">today needs the updated ghosty-usage tailer (restart the unit)</div>';
+  const src = today ? u.today : u;
+  const total = today ? u.today.total : u.total;
+  const agents = topEntries(src.perAgent), projects = topEntries(src.perProject, 10), models = topEntries(src.perModel);
+  const rows = sessionRows(u, tab).slice(0, 15);
+  const sec = (t, inner) => `<div class="side-sub nocollapse">${t}</div>${inner}`;
+  const live = (name) => !!state.status[name];
+  const head = `<div class="utot"><b>${usd(total.cost === 0 && total.unpriced > 0 ? null : total.cost)}</b> <span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`} &middot; ${total.turns ?? 0} turns${total.unpriced ? ` &middot; ${total.unpriced} unpriced turns not counted` : ''}</span><br>${tokLine(total)}</div>`;
+  const agentHtml = agents.map((a) => `<div class="urow"><div class="u1"><i class="adot ${escapeHtml(a.name)}"></i><b>${escapeHtml(a.name)}</b><span class="grow"></span>${usd(a.cost)}</div>
+      <div class="u2">${escapeHtml(SUBSCRIPTION[a.name] || 'subscription ?')} &middot; ${quotaOfAgent(a.name)}</div>
+      <div class="u2">${tokLine(a)}</div></div>`).join('') || '<div class="dim">none</div>';
+  const projHtml = projects.map((p) => `<div class="urow"><div class="u1"><b>${escapeHtml(p.name)}</b><span class="grow"></span>${usd(p.cost)}</div><div class="u2">${fmtTok(p.total)} tok</div></div>`).join('') || '<div class="dim">none</div>';
+  const sessHtml = rows.map((r) => `<div class="urow${live(r.session) ? ' go' : ''}${r.outlier ? ' out' : ''}" ${live(r.session) ? `data-open="${escapeHtml(r.session)}"` : ''}>
+      <div class="u1">${r.outlier ? '<span class="uw" title="outlier">&#9888;</span>' : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span>${usd(r.cost)}</div>
+      <div class="u2">${escapeHtml(r.project)} &middot; ${escapeHtml(r.agent)} &middot; ${escapeHtml(r.models.join(', ') || '?')} &middot; ${fmtTok(r.tokens)} tok &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
+      ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">none</div>';
+  const days = today ? '' : sec('Per day', `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
+  const modelHtml = models.map((m) => `<div class="urow"><div class="u1"><b>${escapeHtml(m.name)}</b><span class="grow"></span>${usd(m.cost)}</div><div class="u2">${fmtTok(m.total)} tok</div></div>`).join('') || '<div class="dim">none</div>';
+  return head + sec('Per agent', agentHtml) + sec('Per project (top 10)', projHtml) + sec('Per session (top 15, outliers first)', sessHtml) + days + sec('Per model', modelHtml);
+}
+function openUsage() {
+  openSheet('Usage · API-equivalent', ({ body, foot, close }) => {
+    foot.classList.remove('hidden');
+    foot.innerHTML = `<a class="sbtn" href="${LANGFUSE_URL}" target="_blank" rel="noopener">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    let tab = 'today', data = null;
+    const draw = () => {
+      const note = '<div class="mnote">API-equivalent cost at list prices, not money spent: Claude Max 200 EUR, Codex/ChatGPT Plus 20 EUR and MiniMax 40 EUR are flat subscriptions. MiniMax is unpriced (&mdash;, tokens only).</div>';
+      body.innerHTML = `<div class="utabs"><button class="sbtn${tab === 'today' ? ' on' : ''}" data-tab="today">Today</button><button class="sbtn${tab === '14d' ? ' on' : ''}" data-tab="14d">14 days</button></div>${note}`
+        + (data ? usageHtml(data, tab) : '<div class="sheet-empty">loading…</div>');
+    };
+    body.onclick = (e) => {
+      const t = e.target.closest('[data-tab]');
+      if (t) { tab = t.dataset.tab; draw(); return; }
+      const o = e.target.closest('[data-open]');
+      if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); }
+    };
+    draw();
+    fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; draw(); })
+      .catch(() => { body.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
+  });
+}
+els.usageBtn.onclick = openUsage;
 
 // ----- generic bottom sheet -----
 let sheetEl = null;

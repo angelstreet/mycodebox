@@ -218,7 +218,8 @@ reply text.
 - **State**: `~/.local/state/ghosty/usage-offsets.json` (byte offsets), `usage-ledger.jsonl` (one compact
   record per turn), `usage-summary.json` (rewritten every minute: totals per session / project / agent / model /
   day for the last 14 days, plus `outliers` = sessions whose cost per active hour today is over 3x their
-  project's median; rule in `buildSummary()`).
+  project's median; rule in `buildSummary()`), a `today` block (totals / agent / project / model for the UTC day)
+  and per session `today`, `days`, `activeHours` for the usage view.
 - **Rerun the backfill**: `node usage/ingest.js --backfill` (forgets offsets, re-reads the last `BACKFILL_DAYS`
   days; Langfuse upserts by id, no duplicates). `--once` does a single pass.
 
@@ -235,6 +236,31 @@ reply text.
 
 The `session:` tag is the tmux session name (matched from the pane's current path to the transcript's
 `cwd`, only for traces active in the last 10 minutes), else the cwd's folder name.
+
+### Usage view (UI)
+
+The bar-chart icon in the topbar (next to the robot) opens **Usage - API-equivalent**: tabs **Today** (UTC day)
+and **14 days**, with totals, per agent, per project (top 10), per session (top 15, outliers first; project,
+agent, model, cost, tokens, cost per active hour), per day (CSS bars, 14 days tab) and per model, tokens as
+in / out / cache r / cache w (`12.3M`). A session row opens that session's card; the footer links to Langfuse
+(`http://<tailscale-ip>:3100`, tailnet).
+
+- **All costs are API-equivalent at list prices, not money spent.** The plans are flat subscriptions (Claude Max
+  200 EUR, Codex / ChatGPT Plus 20 EUR, MiniMax 40 EUR per month); each agent row shows its plan and the live 5 h /
+  week quota % from `/api/quota`. MiniMax has no price: cost shows `—` and tokens are shown, never `$0`
+  (`costOrNull()`: cost 0 with unpriced turns = null).
+- **Chip** on every card header, board row and sidebar entry: `$3.20 today` (or `12M tok today` when unpriced).
+  An outlier is red with a warning sign; tap = toast with the reason (`9.9x the <project> median: $4.01/h vs
+  $1.2/h`), tap on a normal chip opens the sheet.
+- **`GET /api/usage`**: the summary plus `sessions` = `{ <live tmux name>: { todayCost, todayTokens, totalCost,
+  outlier, days:[14 x {day, cost, total}] } }`; 404 when the file is absent. The file is cached 30 s
+  (`usage-view.js`); the per-tick status payload gets `usage: {todayCost, todayTokens, totalCost, outlier} | null`
+  per session from that cache (a Map lookup, no file reads). A session is matched by the summary's `session`
+  label (the tmux name, see above); several traces with one label add up.
+- `USAGE_SUMMARY` overrides the summary path (default `$GHOSTY_STATE_DIR/usage-summary.json`).
+- A summary written on an earlier UTC day (dead tailer) reports no today usage and no outliers. The Today tab and
+  per-session `today` / `days` need the tailer that writes the `today` block: after updating, restart `ghosty-usage`.
+- Helpers (pure, unit-tested): `public/usage.js`; server side `usage-view.js`; tests `test/usageview.test.js`.
 
 ## Architecture
 
@@ -274,6 +300,7 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 │   ├── app.js                       # controller
 │   ├── prio.js                      # priority helpers shared with the server
 │   ├── policy.js                    # quota policy + agent suggestion (pure, shared)
+│   ├── usage.js                     # usage view helpers: formatting, summary -> session rows (pure, shared)
 │   ├── style.css                    # ghosty dark
 │   ├── manifest.webmanifest
 │   ├── sw.js                        # service worker
@@ -282,6 +309,7 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 ├── session-meta.js                  # priority + pause hold (sessions.json)
 ├── quota.js                         # Codex / Claude / MiniMax quota windows
 ├── usage/                           # Langfuse usage tailer + prices
+├── usage-view.js                    # /api/usage + per-session status usage (cached summary)
 └── systemd/
     ├── ghosty-sessions.service
     └── ghosty-usage.service

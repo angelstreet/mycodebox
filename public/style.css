@@ -960,3 +960,30 @@ button.prio{ cursor:pointer; }
 .qw.warn .qbar i{ background:var(--accent); } .qw.crit .qbar i{ background:var(--waiting); }
 .qplan .dim, .qh .dim, .qw .dim{ color:var(--ink-3); font-size:11px; }
 .qw.na > span:last-child{ flex:1; min-width:0; }
+
+/* usage view + cost chip (TASK-44 phase 3) */
+.uc{ flex-shrink:0; font-size:10.5px; font-weight:600; padding:2px 7px; border-radius:999px; background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); cursor:pointer; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.uc.hidden{ display:none; }
+.uc.out{ color:var(--waiting); border-color:var(--waiting); background:rgba(255,95,95,0.12); }
+.utabs{ display:flex; gap:8px; }
+.utabs .sbtn{ flex:1; }
+.utabs .sbtn.on{ border-color:var(--accent); color:var(--accent); }
+.utot{ padding:6px 2px; font-size:13px; line-height:1.5; }
+.utot b{ font-size:22px; }
+.ut{ font-size:11px; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.side-sub.nocollapse{ cursor:default; } .side-sub.nocollapse::after{ content:none; }
+.urow{ padding:6px 4px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+.urow.go{ cursor:pointer; } .urow.go:active{ background:var(--bg-3); }
+.urow.out{ box-shadow:inset 2px 0 0 var(--waiting); padding-left:8px; }
+.u1{ display:flex; align-items:center; gap:6px; font-size:13px; min-width:0; }
+.u1 b{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.u1 .grow{ flex:1; }
+.u2{ font-size:11px; color:var(--ink-3); margin-top:1px; word-break:break-word; }
+.u2.uo, .uw{ color:var(--waiting); }
+.ubars{ display:flex; flex-direction:column; gap:3px; }
+.ubar{ display:flex; align-items:center; gap:8px; font-size:11px; font-variant-numeric:tabular-nums; }
+.ubar .ud{ width:38px; color:var(--ink-3); }
+.ubar .uw2{ flex:1; height:8px; background:var(--bg-3); border-radius:4px; overflow:hidden; }
+.ubar .uw2 i{ display:block; height:100%; background:var(--working); }
+.ubar .uv{ width:76px; text-align:right; white-space:nowrap; }
+a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-decoration:none; color:inherit; }

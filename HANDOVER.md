@@ -26,6 +26,10 @@ binds `0.0.0.0:7777` (HTTP) and `0.0.0.0:7443` (HTTPS, self-signed).
 **Usage / cost (TASK-44 phase 3)** — local Langfuse in `~/langfuse-codebox/` (UI `:3100`, loopback + tailnet) and
 unit `ghosty-usage` (`usage/ingest.js`); details in README "Usage (Langfuse)". Creds: `~/langfuse-codebox/.env`,
 `~/.config/ghosty/usage.env`. Summary for the UI: `~/.local/state/ghosty/usage-summary.json`.
+**Usage view** (branch `task44-usage-ui`): topbar bar-chart icon -> sheet Today / 14 days, API-equivalent costs (never money
+spent; MiniMax unpriced = `—`), cost chip on cards/rows, `GET /api/usage`, `usage` in the status payload; see README
+"Usage view (UI)". Deploy: the tailer must be restarted (`ghosty-usage`) so the summary gets the `today` block, plus a
+ghosty-sessions restart; until then the Today tab says so and 14-day data still works.
 
 ## Access URLs
 
