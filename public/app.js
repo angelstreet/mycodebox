@@ -870,14 +870,22 @@ function syncReader(cell, n) {
 function paintReader(cell, n) {
   const c = state.replies.get(n);
   const el = cell.querySelector('.reader');
-  const text = c ? c.text : '';
+  let text = c ? c.text : '';
+  // While waiting, the reply alone hides what is being asked: append the
+  // prompt itself (last lines of the pane) as a code block.
+  if (stateOf(n) === 'waiting') {
+    const tail = stripAnsi(state.paneText.get(n) || '').split('\n')
+      .map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim() && !RULE_RE.test(l)).slice(-24).join('\n');
+    if (tail) text = `${text}\n\n\`\`\`\n${tail.replace(/```/g, "'''")}\n\`\`\``;
+  }
   const html = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
   if (el.dataset.h === html) return;
   const first = el.dataset.h === undefined;
   const top = el.scrollTop;
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   el.dataset.h = html; el.innerHTML = html;
-  el.scrollTop = !first && atBottom ? el.scrollHeight : top;
+  // newest content is at the bottom: land there on first paint, then stick only if already there
+  el.scrollTop = first || atBottom ? el.scrollHeight : top;
 }
 function inlineMd(t) {
   return escapeHtml(t)
