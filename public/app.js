@@ -619,6 +619,17 @@ async function fetchLeases() {
 
 // ---------- codebox health strip ----------
 
+// web layout: health sits in the top bar next to the title; phones keep the strip below it
+{
+  const mq = window.matchMedia('(min-width: 721px)');
+  const place = () => {
+    if (mq.matches) els.health.classList.add('inbar'), $('#appTitle').after(els.health);
+    else els.health.classList.remove('inbar'), $('#topbar').after(els.health);
+  };
+  mq.addEventListener('change', place);
+  place();
+}
+
 function onHealth(h) {
   const el = els.health;
   if (!h) { el.classList.add('hidden'); return; }
@@ -626,6 +637,12 @@ function onHealth(h) {
   const gb = (b) => `${(b / 2 ** 30).toFixed(b < 10 * 2 ** 30 ? 1 : 0)}G`;
   const item = (level, label, main, sub, title) =>
     `<span class="hi ${level}" title="${escapeHtml(title)}"><b>${label}</b>${main}${sub ? `<i>${sub}</i>` : ''}</span>`;
+  // red from 90 % (stricter than the server's push thresholds)
+  const lvl = (p, l) => (p >= 90 ? 'crit' : l);
+  h = { ...h, cpu: { ...h.cpu, level: lvl(h.cpu.pct, h.cpu.level) },
+    load: { ...h.load, level: lvl((h.load.avg[0] / h.load.cores) * 100, h.load.level) },
+    mem: h.mem && { ...h.mem, level: lvl(h.mem.pct, h.mem.level) },
+    disks: h.disks.map((d) => ({ ...d, level: lvl(d.pct, d.level) })) };
   const parts = [
     item(h.cpu.level, 'cpu', pct(h.cpu.pct), '', 'CPU busy, all cores'),
     item(h.load.level, 'load', h.load.avg[0].toFixed(1), `/${h.load.cores}`,
