@@ -28,9 +28,10 @@
     <div class="modes" id="modeBar">
       <button data-mode="card" class="mode-btn on">card</button>
       <button data-mode="grid" class="mode-btn">grid</button>
+      <button data-mode="list" class="mode-btn">list</button>
     </div>
     <div class="gridsizes" id="gridSizes">
-      <button data-size="1"  class="size-btn" title="1 card">1</button>
+      <button data-size="2"  class="size-btn" title="2 cards">2</button>
       <button data-size="4"  class="size-btn" title="4 cards">4</button>
       <button data-size="8"  class="size-btn on" title="8 cards">8</button>
       <button data-size="12" class="size-btn" title="12 cards">12</button>
@@ -46,13 +47,13 @@
 
   <nav id="tabs" class="tabs" aria-label="Active sessions"></nav>
 
-  <main id="main" class="main view-terminal">
-    <!-- terminal view: single big xterm for the active session -->
-    <section class="term-pane" id="termPane">
-      <div class="term-host" id="termHost"></div>
-    </section>
-    <!-- grid view: tiled previews with live tail text -->
+  <main id="main" class="main view-card">
+    <!-- card view: a single big card for the active session -->
+    <section class="card-pane" id="cardPane"></section>
+    <!-- grid view: tiled cards -->
     <section class="grid-pane" id="gridPane"></section>
+    <!-- list view: cards stacked vertically, full width -->
+    <section class="list-pane" id="listPane"></section>
   </main>
 
   <footer class="dock" id="dock">

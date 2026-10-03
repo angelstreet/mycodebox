@@ -10,9 +10,9 @@ const els = {
   appTitle:    $('#appTitle'),
   tabs:        $('#tabs'),
   main:        $('#main'),
-  termPane:    $('#termPane'),
+  cardPane:    $('#cardPane'),
   gridPane:    $('#gridPane'),
-  termHost:    $('#termHost'),
+  listPane:    $('#listPane'),
   dock:        $('#dock'),
   dockTarget:  $('#dockTarget'),
   sendInput:   $('#sendInput'),
@@ -34,8 +34,8 @@ const state = {
   sessions:   [],
   status:     {},
   active:     null,
-  mode:       'terminal',     // terminal | grid
-  gridSize:   8,              // 4 | 8 | 12 | 16
+  mode:       'card',          // card | grid | list
+  gridSize:   8,               // 2 | 4 | 8 | 12 | 16
   ws:        new Map(),
   statusWs:  null,
   terms:     new Map(),
@@ -314,51 +314,73 @@ function beginRename(li, name) {
   inp.onblur = commit;
 }
 
-// ---------- rendering: grid (overview) ----------
-function renderGrid() {
-  els.gridPane.innerHTML = '';
-  els.gridPane.className = `grid-pane size-${state.gridSize}`;
-  const targets = state.sessions.slice(0, state.gridSize);
+// ---------- rendering: card / grid / list ----------
+// All three views use the same card markup. The host element decides the layout.
+function buildCell(s) {
+  const cls = pillClass(state.status[s.name]?.state);
+  const cell = document.createElement('div');
+  cell.dataset.session = s.name;
+  cell.className = `cell${s.name === state.active ? ' focus' : ''}`;
+  const preview = buildPreview(state.paneText.get(s.name) || '');
+  cell.innerHTML = `
+    <div class="h ${cls}">
+      <span class="name">${escapeHtml(displayName(s.name))}</span>
+      <span class="pill"></span>
+    </div>
+    <div class="preview">${escapeHtml(preview)}</div>
+    <div class="b"></div>`;
+  cell.onclick = (e) => {
+    e.stopPropagation();
+    // single tap → select this card (route send-keys here, stay in current view)
+    selectSession(s.name);
+  };
+  cell.ondblclick = (e) => {
+    e.stopPropagation();
+    // double tap → focus + go to single-card view
+    focusSession(s.name);
+    setMode('card');
+  };
+  return cell;
+}
 
-  for (const s of targets) {
-    const cls = pillClass(state.status[s.name]?.state);
-    const cell = document.createElement('div');
-    cell.dataset.session = s.name;
-    cell.className = `cell${s.name === state.active ? ' focus' : ''}`;
-    const preview = buildPreview(state.paneText.get(s.name) || '');
-    cell.innerHTML = `
-      <div class="h ${cls}">
-        <span class="name">${escapeHtml(displayName(s.name))}</span>
-        <span class="pill"></span>
-      </div>
-      <div class="preview">${escapeHtml(preview)}</div>
-      <div class="b"></div>`;
-    cell.onclick = (e) => {
-      // single tap → select this card (route send-keys here)
-      e.stopPropagation();
-      selectSession(s.name);
-    };
-    cell.ondblclick = (e) => {
-      // double tap → go fullscreen on this session
-      e.stopPropagation();
-      focusSession(s.name);
-      setMode('terminal');
-    };
-    els.gridPane.appendChild(cell);
+function renderInto(host, sessions) {
+  host.innerHTML = '';
+  for (const s of sessions) {
+    const cell = buildCell(s);
+    host.appendChild(cell);
     mountTerm(s.name, cell.querySelector('.b'));
     connectSession(s.name);
   }
 }
 
+function renderCard() {
+  // card mode = one big card for the active session
+  const active = state.sessions.find((s) => s.name === state.active) || state.sessions[0];
+  if (active) state.active = active.name;
+  renderInto(els.cardPane, active ? [active] : []);
+  renderDocState();
+}
+function renderGrid() {
+  els.gridPane.className = `grid-pane size-${state.gridSize}`;
+  const targets = state.sessions.slice(0, state.gridSize);
+  renderInto(els.gridPane, targets);
+}
+function renderList() {
+  // list mode = cards stacked vertically, full width
+  renderInto(els.listPane, state.sessions);
+}
+
 function updateAllHeaders() {
-  // update header pills + border focus without remounting xterm
-  for (const cell of els.gridPane.children) {
-    const name = cell.dataset.session;
-    if (!name) continue;
-    const cls = pillClass(state.status[name]?.state);
-    cell.querySelector('.h').classList.remove('idle','busy','wait','offline');
-    cell.querySelector('.h').classList.add(cls);
-    cell.classList.toggle('focus', name === state.active);
+  // update header pills + focus ring without remounting xterm
+  for (const host of [els.cardPane, els.gridPane, els.listPane]) {
+    for (const cell of host.children) {
+      const name = cell.dataset.session;
+      if (!name) continue;
+      const cls = pillClass(state.status[name]?.state);
+      cell.querySelector('.h').classList.remove('idle','busy','wait','offline');
+      cell.querySelector('.h').classList.add(cls);
+      cell.classList.toggle('focus', name === state.active);
+    }
   }
 }
 
@@ -367,16 +389,21 @@ function focusSession(name) {
   state.active = name;
   els.dockTarget.textContent = displayName(name);
   els.appTitle.textContent = displayName(name);
-  const entry = state.terms.get(name);
-  if (!entry || !entry.term.element || !els.termHost.contains(entry.term.element)) {
-    mountTerm(name, els.termHost);
-  }
   connectSession(name);
+  // mount in whichever host is currently visible (so card mode swaps content too)
+  const host = (state.mode === 'card') ? els.cardPane.querySelector('.b')
+            : (state.mode === 'list') ? els.listPane.querySelector(`.cell[data-session="${cssEscape(name)}"] .b`)
+            : els.gridPane.querySelector(`.cell[data-session="${cssEscape(name)}"] .b`);
+  if (host) {
+    const entry = state.terms.get(name);
+    if (!entry || !entry.term.element || !host.contains(entry.term.element)) {
+      mountTerm(name, host);
+    }
+  }
   renderTabs();
   renderSideList();
   updateAllHeaders();
   renderDocState();
-  // if we were in grid, leave it; if terminal, just refresh.
 }
 
 // Select = activate that card for send-keys without leaving the current view.
@@ -389,22 +416,19 @@ function selectSession(name) {
 // ---------- mode switching ----------
 function setMode(mode) {
   state.mode = mode;
-  els.main.classList.remove('view-terminal','view-grid');
+  els.main.classList.remove('view-card','view-grid','view-list');
   els.main.classList.add(`view-${mode}`);
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
-  // show grid size picker only in grid mode
+  // grid size picker is meaningful in grid mode, hidden otherwise
   els.gridSizes.classList.toggle('hidden', mode !== 'grid');
-  // back arrow only in terminal mode (to return to grid)
-  els.backBtn.classList.toggle('hidden', mode !== 'terminal');
-  // dock only meaningful when a session is focused, in terminal mode
-  els.dock.classList.toggle('hidden', mode === 'grid');
-  if (mode === 'grid') renderGrid();
-  if (mode === 'terminal' && state.active) {
-    // ensure terminal is mounted
-    if (!state.terms.has(state.active) || !els.termHost.contains(state.terms.get(state.active).term.element)) {
-      mountTerm(state.active, els.termHost);
-    }
-  }
+  // back arrow only in card mode (to return to grid/list)
+  els.backBtn.classList.toggle('hidden', mode !== 'card');
+  // dock visible whenever there is a session to send keys to
+  els.dock.classList.toggle('hidden', mode === 'list');
+  if (mode === 'card')  renderCard();
+  if (mode === 'grid')  renderGrid();
+  if (mode === 'list')  renderList();
+  renderDocState();
 }
 
 function setGridSize(n) {
@@ -467,11 +491,9 @@ function renderDocState() {
 function renderAll() {
   renderTabs();
   renderSideList();
-  if (state.active) {
-    mountTerm(state.active, els.termHost);
-    connectSession(state.active);
-  }
-  renderGrid();
+  if (state.mode === 'card') renderCard();
+  if (state.mode === 'grid') renderGrid();
+  if (state.mode === 'list') renderList();
   renderDocState();
 }
 
@@ -606,7 +628,7 @@ if ('serviceWorker' in navigator) {
   loadRenames();
   loadGrid();
   setGridSize(state.gridSize);   // applies .on to the right button
-  setMode('terminal');
+  setMode('card');
   hideInstallIfInstalled();
   await fetchInitial();
   connectStatus();

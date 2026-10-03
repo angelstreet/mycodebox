@@ -105,23 +105,26 @@ button{ font-family:inherit; }
 
 /* ------------ Main views ------------ */
 .main{
-  position:absolute; top:96px; bottom:60px; left:0; right:0;
+  position:absolute; top:64px; bottom:52px; left:0; right:0;
   overflow:hidden;
 }
-.term-pane, .grid-pane{
+.card-pane, .grid-pane, .list-pane{
   position:absolute; inset:0;
   display:none;
 }
-.view-terminal .term-pane{ display:block; }
-.view-grid     .grid-pane { display:grid; }
+.view-card .card-pane{ display:flex; padding:6px; }
+.view-grid .grid-pane{ display:grid; gap:5px; padding:6px; }
+.view-list .list-pane{ display:flex; flex-direction:column; gap:5px; padding:6px; overflow:auto; }
 
 .term-host{ width:100%; height:100%; padding:6px; }
 
 /* ------------ Grid ------------ */
 .grid-pane{
-  gap:5px;
-  padding:6px;
   /* defaults; set by JS via .size-N classes */
+}
+.grid-pane.size-2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
 }
 .grid-pane.size-4 {
   grid-template-columns: 1fr 1fr;
@@ -140,6 +143,19 @@ button{ font-family:inherit; }
   grid-template-rows: repeat(4, 1fr);
 }
 
+/* card view = one card with the same chrome, but filling the pane */
+.card-pane .cell{
+  flex: 1;
+  min-height: 0;
+}
+
+/* list view = cards stacked, full width, fixed row height for scrolling */
+.list-pane .cell{
+  width: 100%;
+  height: 96px;
+  flex-shrink: 0;
+}
+
 .cell{
   background: var(--bg-2);
   border: 1px solid var(--line);
@@ -148,10 +164,13 @@ button{ font-family:inherit; }
   display:flex; flex-direction:column;
   min-width:0; min-height:0;
   cursor:pointer;
-  transition: border-color 120ms ease, transform 120ms ease;
+  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
 }
 .cell:active{ transform: scale(0.98); }
-.cell.focus{ border-color:var(--accent); }
+.cell.focus{
+  border-color:var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 12px rgba(232,154,74,0.25);
+}
 .cell .h{
   display:flex; align-items:center; justify-content:space-between;
   padding:5px 8px;
