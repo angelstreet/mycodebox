@@ -1,0 +1,20 @@
+[Unit]
+Description=Ghosty usage tailer — Claude/Codex/MiniMax token usage into local Langfuse
+Documentation=file:///home/jndoye/ghosty-sessions/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jndoye
+WorkingDirectory=/home/jndoye/ghosty-sessions
+ExecStart=/usr/bin/env node /home/jndoye/ghosty-sessions/usage/ingest.js
+Restart=on-failure
+RestartSec=5
+# Secrets (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY) live outside the repo; paths only here.
+EnvironmentFile=-/home/jndoye/ghosty-sessions/.env
+EnvironmentFile=-/home/jndoye/.config/ghosty/usage.env
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

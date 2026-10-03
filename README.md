@@ -83,6 +83,49 @@ curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
   -H 'origin: http://localhost:7777' -d '{"session":"task05","sessionEnabled":false}'
 ```
 
+## Usage (Langfuse)
+
+A local Langfuse (v3) on the host plus a tailer, `usage/ingest.js`, give token usage and cost per
+session, project, agent, model and day. The tailer sends usage numbers and ids only, never prompt or
+reply text.
+
+- **Langfuse**: Docker compose in `~/langfuse-codebox/` (outside any repo; web, worker, Postgres,
+  ClickHouse, Redis, MinIO, named volumes, `restart: unless-stopped`). Only the web UI is published,
+  on `127.0.0.1:3100` and the tailnet IP `:3100` (open `http://<tailnet-ip>:3100`). Login, project
+  `codebox-usage` and its API keys come from the headless-init variables in
+  `~/langfuse-codebox/.env` (chmod 600). Telemetry and signup are off.
+- **Tailer**: unit `systemd/ghosty-usage.service` (`sudo ln -sf $PWD/systemd/ghosty-usage.service /etc/systemd/system/`,
+  `daemon-reload`, `enable --now`). It reads the API keys from `~/.config/ghosty/usage.env`
+  (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, optional `LANGFUSE_URL`), chmod 600.
+- **Sources**: Claude Code transcripts (`~/.claude/projects/**/*.jsonl`, including `subagents/`), Codex
+  rollouts (`~/.codex/sessions/**/*.jsonl`, one generation per `token_usage_record`), and MiniMax
+  (`local_runtime_token_usage` in `~/.minimax/v2/sqlite/runtime-state.sqlite`, read-only; the table has no
+  model column, so `MINIMAX_DEFAULT_MODEL` is assumed and cost stays unknown).
+- **Per message**: one trace per agent session, one generation per assistant turn (deterministic ids, so replays
+  upsert). A Claude message is logged as several lines with the same `message.id` and a growing
+  `output_tokens`; the largest wins. `usage/prices.json` holds USD per million tokens per model-id prefix
+  with `source` and `as_of`; a model without a price gets no cost (never guessed).
+- **State**: `~/.local/state/ghosty/usage-offsets.json` (byte offsets), `usage-ledger.jsonl` (one compact
+  record per turn), `usage-summary.json` (rewritten every minute: totals per session / project / agent / model /
+  day for the last 14 days, plus `outliers` = sessions whose cost per active hour today is over 3x their
+  project's median; rule in `buildSummary()`).
+- **Rerun the backfill**: `node usage/ingest.js --backfill` (forgets offsets, re-reads the last `BACKFILL_DAYS`
+  days; Langfuse upserts by id, no duplicates). `--once` does a single pass.
+
+| var | default | meaning |
+|---|---|---|
+| `LANGFUSE_URL` | `http://127.0.0.1:3100` | Langfuse base URL |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | unset (required) | project API keys |
+| `BACKFILL_DAYS` | `14` | first-run / `--backfill` window and summary window |
+| `USAGE_PACE_MS` | `1500` | pause between ingestion requests (100 events each) |
+| `USAGE_POLL_MS` / `USAGE_SUMMARY_MS` | `15000` / `60000` | tail cadence / summary cadence |
+| `CLAUDE_PROJECTS_DIR` / `CODEX_SESSIONS_DIR` / `MINIMAX_DB` | under `$HOME` | source locations |
+| `MINIMAX_DEFAULT_MODEL` | `MiniMax-M3` | model name assumed for MiniMax rows |
+| `USAGE_PRICES` | `usage/prices.json` | price table |
+
+The `session:` tag is the tmux session name (matched from the pane's current path to the transcript's
+`cwd`, only for traces active in the last 10 minutes), else the cwd's folder name.
+
 ## Architecture
 
 ```
@@ -124,8 +167,10 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 │   ├── sw.js                        # service worker
 │   ├── icon.svg / icon-{192,512}.png
 │   └── vendor/                      # xterm.js + xterm-addon-fit (offline)
+├── usage/                           # Langfuse usage tailer + prices
 └── systemd/
-    └── ghosty-sessions.service
+    ├── ghosty-sessions.service
+    └── ghosty-usage.service
 ```
 
 ## Adding xterm sessions automatically

@@ -23,6 +23,10 @@ journalctl -u ghosty-sessions -n 50 --no-pager      # recent logs
 Service runs as `jndoye` with `WorkingDirectory=/home/jndoye/ghosty-sessions`,
 binds `0.0.0.0:7777` (HTTP) and `0.0.0.0:7443` (HTTPS, self-signed).
 
+**Usage / cost (TASK-44 phase 3)** — local Langfuse in `~/langfuse-codebox/` (UI `:3100`, loopback + tailnet) and
+unit `ghosty-usage` (`usage/ingest.js`); details in README "Usage (Langfuse)". Creds: `~/langfuse-codebox/.env`,
+`~/.config/ghosty/usage.env`. Summary for the UI: `~/.local/state/ghosty/usage-summary.json`.
+
 ## Access URLs
 
 | URL | Use |

@@ -9,7 +9,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test test/*.test.js",
-    "stall-report": "node scripts/stall-report.js"
+    "stall-report": "node scripts/stall-report.js",
+    "usage": "node usage/ingest.js"
   },
   "engines": {
     "node": ">=20"
