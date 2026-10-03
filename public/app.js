@@ -62,6 +62,7 @@ const state = {
   sentAt:    {},                // session -> ms epoch of last send from this device
   prevState: {},                // session -> last seen state (for transition alerts)
   leases:    null,
+  deploys:   null,              // {ok, error, enabled, deploys[], running, lastRef} from the registry via the runner
   notify:    false,
   pushOn:    false,
   toastTimer:null,
@@ -510,6 +511,8 @@ function connectStatus() {
         onStatus();
       } else if (msg.type === 'leases') {
         onLeases(msg.leases);
+      } else if (msg.type === 'deploys') {
+        onDeploys(msg.deploys);
       } else if (msg.type === 'health') {
         onHealth(msg.health);
       } else if (msg.type === 'quota') {
@@ -543,6 +546,17 @@ function onStatus() {
     syncAll();
   }
   alertTransitions();
+}
+
+// ---------- deploy queue (TASK-44 phase 7) ----------
+const DEP_PENDING = ['queued', 'running'];
+function onDeploys(d) {
+  state.deploys = d;
+  renderLeases();
+  const waiting = (d?.deploys || []).filter((x) => x.state === 'awaiting-approval').length;
+  els.mgrBtn.classList.toggle('badge', waiting > 0);
+  els.mgrBtn.title = waiting ? `AI manager · ${waiting} deploy${waiting > 1 ? 's' : ''} need approval` : 'AI manager: auto-answers, log';
+  if (state.depSheet) state.depSheet();
 }
 
 function onLeases(leases) {
@@ -632,6 +646,7 @@ async function fetchInitial() {
     setTimeout(fetchInitial, 2000);
   }
   fetchLeases();
+  fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
 }
 
 async function fetchLeases() {
@@ -990,14 +1005,18 @@ function tickSide() {
 
 function renderLeases() {
   const l = state.leases;
+  const pend = (state.deploys?.deploys || []).filter((x) => ['awaiting-approval', ...DEP_PENDING].includes(x.state));
+  els.leaseCount.innerHTML = pend.length ? `<button class="deploy-pill${pend.some((x) => x.state === 'awaiting-approval') ? ' ask' : ''}" id="depPill">deploy ${pend.some((x) => x.state === 'running') ? 'running' : pend.some((x) => x.state === 'queued') ? 'pending' : 'to approve'}</button>` : '';
+  const pill = els.leaseCount.querySelector('#depPill');
+  if (pill) pill.onclick = (e) => { e.stopPropagation(); openManager(); };
   if (!l) return;
   if (l.error) {
-    els.leaseCount.textContent = '';
     els.leaseList.innerHTML = `<li class="dim">registry unreachable · ${escapeHtml(l.error)}</li>`;
     return;
   }
   const mine = (x) => /codebox/i.test(x.agent || '');
-  els.leaseCount.textContent = l.length ? `${l.length}${l.some(mine) ? ' · ' + l.filter(mine).length + ' here' : ''}` : '';
+  const cnt = l.length ? `${l.length}${l.some(mine) ? ' · ' + l.filter(mine).length + ' here' : ''}` : '';
+  if (cnt) els.leaseCount.append(` ${cnt}`);
   els.leaseList.innerHTML = l.length
     ? l.map((x) => `<li class="${mine(x) ? 'mine' : ''}"><b>${escapeHtml(x.resource || '*')}</b> @ ${escapeHtml(x.env || '')}<br>
         ${escapeHtml(x.agent || '?')} <span class="ttl">· ${x.ttlLeftMin != null ? `${x.ttlLeftMin}m left` : ''}${x.purpose ? ` · ${escapeHtml(x.purpose)}` : ''}</span></li>`).join('')
@@ -1839,6 +1858,31 @@ function logLine(r) {
   if (r.type === 'escalated') return { cls: 'esc', tag: 'escalated', sess, case: r.case || '', text: r.reason || '' };
   return null;
 }
+function depRow(d, d0) {
+  const last = d0?.lastRef?.[d.env];
+  const warn = ['awaiting-approval', 'queued'].includes(d.state) && last && last.ref !== d.ref;
+  const blocking = (d.blocking || []).map((l) => `${escapeHtml(l.resource)} (${escapeHtml(l.agent)}${l.ttlLeftMin != null ? ` ${l.ttlLeftMin}m` : ''})`).join(', ');
+  const btns = d.state === 'awaiting-approval' ? `<button class="sbtn on" data-dep="approve" data-id="${d.id}">Approve</button><button class="sbtn" data-dep="cancel" data-id="${d.id}">Cancel</button>`
+    : d.state === 'queued' ? `<button class="sbtn" data-dep="cancel" data-id="${d.id}">Cancel</button>` : '';
+  const tag = d.state === 'awaiting-approval' ? 'approve?' : d.state;
+  return `<div class="dep ${d.state}"><div class="d1"><span class="dtag ${d.state}">${escapeHtml(tag)}</span><b>${escapeHtml(d.env)}</b><span class="dscope">${escapeHtml(d.scope)}</span><span class="grow"></span>${btns}</div>
+    <div class="d2">${escapeHtml(d.ref)} &middot; ${escapeHtml(d.agent)}${d.purpose ? ` &middot; ${escapeHtml(d.purpose)}` : ''}</div>
+    ${blocking ? `<div class="d2 dwait">waiting on ${blocking}</div>` : ''}
+    ${warn ? `<div class="d2 dwarn">&#9888; replaces ${escapeHtml(last.ref)}${last.version ? ` (${escapeHtml(last.version)})` : ''} last deployed here</div>` : ''}
+    ${d.state === 'running' ? `<pre class="dlog" data-log="${d.id}">…</pre>` : ''}
+    ${d.coalescedInto ? `<div class="d2">merged into ${escapeHtml(d.coalescedInto)}</div>` : ''}${d.reason ? `<div class="d2">${escapeHtml(d.reason)}</div>` : ''}</div>`;
+}
+function deploysHtml(d0) {
+  if (!d0) return '<div class="dim">loading…</div>';
+  const all = d0.deploys || [];
+  const act = all.filter((x) => ['awaiting-approval', ...DEP_PENDING].includes(x.state)).sort((a, b) => a.created - b.created);
+  const recent = all.filter((x) => !['awaiting-approval', ...DEP_PENDING].includes(x.state)).sort((a, b) => (b.finished || 0) - (a.finished || 0)).slice(0, 6);
+  return `<button class="mswitch${d0.enabled ? ' on' : ''}" data-set="deployRunner"><i></i><span>Runs deploys <b>${d0.enabled ? 'ON' : 'OFF'}</b></span></button>
+    ${d0.enabled ? '' : '<div class="mnote">runner is off: requests only queue. Agents then follow the manual flow when you tell them to.</div>'}
+    ${d0.ok === false ? `<div class="mnote dwarn">registry unreachable &middot; ${escapeHtml(d0.error || '')}</div>` : ''}
+    ${act.map((x) => depRow(x, d0)).join('') || '<div class="dim">no deploy queued</div>'}
+    ${recent.length ? `<div class="mnote">recent</div>${recent.map((x) => `<div class="dep ${x.state}"><div class="d1"><span class="dtag ${x.state}">${x.state}</span><b>${escapeHtml(x.env)}</b><span class="dscope">${escapeHtml(x.scope)}</span><span class="grow"></span><span class="dim">${x.version ? escapeHtml(x.version) : ''}</span></div><div class="d2">${escapeHtml(x.ref)} &middot; ${escapeHtml(x.agent)}${x.coalescedInto ? ' &middot; merged' : ''}</div></div>`).join('')}` : ''}`;
+}
 function openManager() {
   openSheet('AI manager', async ({ body, foot, close }) => {
     body.innerHTML = '<div class="sheet-empty">loading…</div>';
@@ -1858,6 +1902,7 @@ function openManager() {
       const t = cfg.today || {};
       const entries = (log.entries || []).filter((r) => logLine(r)).slice(-30).reverse();
       body.innerHTML = `
+        <div class="side-sub nocollapse">Deploys</div><div id="depBox">${deploysHtml(state.deploys)}</div>
         <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend"><i></i><span>Auto-answer <b>${cfg.autoSend ? 'ON' : 'OFF'}</b></span></button>
         <div class="mcases">${(cfg.validCases || []).map((c) => `<label class="mchk"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span>${escapeHtml(CASE_LABEL[c] || c)}</span></label>`).join('')}</div>
         <div class="mnote">sends after ${Math.round(cfg.delayMs / 1000)}s (cancel from the pill) · Jev answers need ≥ ${cfg.minConfidence} · max ${cfg.maxPerSessionPerHour}/h per session · never deploy / push / delete / secrets / money</div>
@@ -1871,7 +1916,23 @@ function openManager() {
         <div class="side-sub">Sessions</div>
         <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
     };
+    const redrawDeploys = () => {
+      const box = body.querySelector('#depBox');
+      if (box) { box.innerHTML = deploysHtml(state.deploys); pollLogs(); }
+    };
+    const pollLogs = () => body.querySelectorAll('[data-log]').forEach(async (el) => {
+      try { el.textContent = (await (await fetch(`/api/deploys/${el.dataset.log}/log?tail=12`)).text()) || '…'; el.scrollTop = el.scrollHeight; } catch {}
+    });
+    state.depSheet = redrawDeploys;
+    const logTimer = setInterval(() => { if (!body.isConnected) { clearInterval(logTimer); state.depSheet = null; } else pollLogs(); }, 3000);
     body.onclick = async (e) => {
+      const db = e.target.closest('[data-dep]');
+      if (db) {
+        db.disabled = true;
+        try { const r = await fetch(`/api/deploys/${db.dataset.id}/${db.dataset.dep}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); if (!r.ok) toast((await r.json()).error || 'failed'); } catch { toast('failed'); }
+        fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
+        return;
+      }
       const sw = e.target.closest('[data-set]');
       if (sw) { try { await mgrPost({ [sw.dataset.set]: !sw.classList.contains('on') }); } catch { toast('save failed'); } draw(); }
     };
@@ -1885,7 +1946,7 @@ function openManager() {
       } catch { toast('save failed'); }
       draw();
     };
-    draw();
+    draw().then(pollLogs);
   });
 }
 els.mgrBtn.onclick = openManager;

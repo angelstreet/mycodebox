@@ -988,3 +988,19 @@ button.prio{ cursor:pointer; }
 .ubar .uv{ width:76px; text-align:right; white-space:nowrap; }
 a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-decoration:none; color:inherit; }
 .mnote.warn{ color:var(--accent); }
+
+/* deploy queue (TASK-44 phase 7) */
+.deploy-pill{ margin-left:6px; padding:1px 8px; border-radius:999px; border:1px solid var(--line,#444); background:transparent; color:var(--ink-2); font:inherit; font-size:10px; letter-spacing:0.04em; text-transform:none; cursor:pointer; }
+.deploy-pill.ask{ border-color:#d6a32b; color:#d6a32b; }
+#mgrBtn.badge{ position:relative; }
+#mgrBtn.badge::after{ content:''; position:absolute; top:4px; right:4px; width:8px; height:8px; border-radius:50%; background:#d6a32b; }
+.dep{ border:1px solid var(--line,#333); border-radius:8px; padding:8px 10px; margin:6px 0; font-size:12px; min-width:0; }
+.dep .d1{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.dep .d1 b{ min-width:0; overflow-wrap:anywhere; }
+.dep .d2{ color:var(--ink-3); margin-top:3px; overflow-wrap:anywhere; }
+.dep .dwait{ color:#d6a32b; } .dep .dwarn,.mnote.dwarn{ color:#e5754f; }
+.dtag{ font-size:10px; padding:1px 7px; border-radius:999px; background:var(--bg-2,#2a2a2a); color:var(--ink-2); }
+.dtag.running{ background:#1f6f43; color:#fff; } .dtag.queued{ background:#35557a; color:#fff; } .dtag.awaiting-approval{ background:#7a5a12; color:#fff; }
+.dtag.failed,.dtag.cancelled{ background:#7a2a22; color:#fff; } .dtag.done{ background:#244d33; color:#cfe9d8; }
+.dscope{ font-size:10px; color:var(--ink-3); border:1px solid var(--line,#444); border-radius:4px; padding:0 5px; }
+.dlog{ margin:6px 0 0; padding:6px 8px; max-height:140px; overflow:auto; font-size:10.5px; line-height:1.35; background:var(--bg-2,#1b1b1b); border-radius:6px; white-space:pre-wrap; overflow-wrap:anywhere; }

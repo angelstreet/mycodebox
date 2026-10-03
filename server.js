@@ -18,6 +18,10 @@
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
+//   GET  /api/deploys           → deploy queue + recent (registry on proxmox), {enabled, running, lastRef}; pushed on /ws/status as {type:'deploys'}
+//   POST /api/deploys/:id/approve | /cancel → owner action on a queued request
+//   GET  /api/deploys/:id/log?tail=200      → the runner's log of that deploy (text)
+//   (the runner itself only starts deploys when manager.json has deployRunner:true, see deploy-runner.js)
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
 //   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
@@ -43,7 +47,8 @@ import { createQuota } from './quota.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, policyConfig, releaseHold, heldOf, reevaluateHolds, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
+import { createDeployRunner } from './deploy-runner.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -523,6 +528,11 @@ const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntf
 
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
+const deployRunner = createDeployRunner({
+  stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn,
+  pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 45 * 60 * 1000),
+  onChange: (d) => broadcastStatus({ type: 'deploys', deploys: d }),
+});
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
@@ -1189,6 +1199,20 @@ const server = http.createServer(async (req, res) => {
     const b = await usage.body(Object.keys(latest?.status || {}));
     return b ? json(res, 200, b) : json(res, 404, { error: 'no usage summary yet' });
   }
+  if (req.method === 'GET' && p === '/api/deploys') return json(res, 200, deployRunner.snapshot());
+  const dm = p.match(/^\/api\/deploys\/([0-9a-f]+)\/(approve|cancel|log)$/);
+  if (dm) {
+    if (dm[2] === 'log' && req.method === 'GET') {
+      const tail = Math.min(2000, Math.max(1, Number(url.searchParams.get('tail')) || 200));
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(await deployRunner.logTail(dm[1], tail));
+      return;
+    }
+    if (dm[2] !== 'log' && req.method === 'POST') {
+      const r = await deployRunner.act(dm[1], dm[2]);
+      return json(res, r.ok ? 200 : r.status, r.ok ? { ok: true } : { ok: false, error: r.error });
+    }
+  }
   if (req.method === 'GET' && p === '/api/quota') return json(res, 200, quota.get());
   if (req.method === 'POST' && p.startsWith('/api/manager/cancel/')) {
     const name = decodeURIComponent(p.slice('/api/manager/cancel/'.length));
@@ -1197,7 +1221,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, session: name });
   }
   if (req.method === 'POST' && p === '/api/manager') {
-    try { return json(res, 200, await setManagerConfig(await readJsonBody(req))); }
+    try { const cfg = await setManagerConfig(await readJsonBody(req)); broadcastStatus({ type: 'deploys', deploys: deployRunner.snapshot() }); return json(res, 200, cfg); }
     catch (err) { return json(res, err.status || 400, { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager/log') {
@@ -1241,6 +1265,7 @@ server.on('upgrade', (req, socket, head) => {
       if (leaseCache.value?.ok) ws.send(JSON.stringify({ type: 'leases', leases: leaseCache.value.leases }));
       if (latest) ws.send(JSON.stringify({ type: 'status', status: latest.status }));
       if (health) ws.send(JSON.stringify({ type: 'health', health }));
+      ws.send(JSON.stringify({ type: 'deploys', deploys: deployRunner.snapshot() }));
       if (quota.get().at) ws.send(JSON.stringify({ type: 'quota', quota: quota.get() }));
       ws.on('close', () => statusSubs.delete(ws));
       ws.on('message', () => {}); // no-op
@@ -1331,6 +1356,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(usageTick, 30000);
   const quotaTick = () => quota.poll().then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
+  deployRunner.start();
   setInterval(quotaTick, 60000);
 });
 
