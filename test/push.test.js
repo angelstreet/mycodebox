@@ -93,6 +93,8 @@ test('subscribe validates, dedupes by endpoint, persists; unsubscribe removes', 
   assert.throws(() => push.subscribe({ endpoint: 'ftp://evil.example/x' }), /invalid/);
   push.subscribe({ endpoint: 'https://fcm.googleapis.com/a' });
   push.subscribe({ endpoint: 'https://fcm.googleapis.com/a' });
+  assert.throws(() => push.subscribe({ endpoint: 'https://example.com/hook' }), /invalid subscription/);
+  assert.throws(() => push.subscribe({ endpoint: 'https://169.254.169.254/latest' }), /invalid subscription/);
   assert.equal(push.count(), 1);
   assert.equal(createPush({ stateDir: dir, log: quiet }).count(), 1);
   assert.equal(push.unsubscribe('https://fcm.googleapis.com/a'), true);

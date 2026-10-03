@@ -35,6 +35,8 @@ export function loadOrCreateVapid(stateDir) {
   return keys;
 }
 
+const PUSH_HOSTS = /^(?:fcm\.googleapis\.com|android\.googleapis\.com|updates\.push\.services\.mozilla\.com|[\w.-]+\.notify\.windows\.com|web\.push\.apple\.com)$/;
+
 export function vapidJwt(keys, endpoint, { sub = 'mailto:admin@codebox.local', nowSec = Math.floor(Date.now() / 1000), ttlSec = 12 * 3600 - 60 } = {}) {
   const aud = new URL(endpoint).origin;
   const head = b64u(JSON.stringify({ typ: 'JWT', alg: 'ES256' }));
@@ -69,8 +71,10 @@ export function createPush({ stateDir, fetchImpl = fetch, log = console } = {}) 
   function validSub(s) {
     if (!s || typeof s.endpoint !== 'string') return false;
     try {
-      const proto = new URL(s.endpoint).protocol;
-      return proto === 'https:' || (proto === 'http:' && process.env.GHOSTY_PUSH_ALLOW_HTTP === '1');   // http only for tests
+      const u = new URL(s.endpoint);
+      if (u.protocol === 'http:') return process.env.GHOSTY_PUSH_ALLOW_HTTP === '1';   // http only for tests
+      // Only real browser push services: the server POSTs to this URL, so it must not be arbitrary.
+      return u.protocol === 'https:' && PUSH_HOSTS.test(u.hostname);
     } catch { return false; }
   }
   function subscribe(sub) {
