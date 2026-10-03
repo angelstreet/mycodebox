@@ -10,7 +10,7 @@
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
 //   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
-//   POST /api/sessions          → {name, agent, cwd} create a tmux session + start the agent
+//   POST /api/sessions          → {name, agent, cwd, priority?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
 //   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
@@ -39,7 +39,9 @@ import { sampleHealth } from './health.js';
 import { createPush, createAlerts } from './push.js';
 import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
+import { evaluatePolicy } from './public/policy.js';
+import { isPriority } from './public/prio.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, policyConfig, releaseHold, heldOf, reevaluateHolds, LOG_FILE } from './manager.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -705,7 +707,7 @@ async function pollOnce() {
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
-  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); }
+  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); }
   return { sessions, status, changedSessions };
 }
 
@@ -879,7 +881,8 @@ async function sessionExists(name) {
   try { await exec(TMUX, ['has-session', '-t', `=${name}`]); return true; } catch { return false; }
 }
 
-async function createSession({ name, agent, cwd }) {
+async function createSession({ name, agent, cwd, priority }) {
+  if (priority !== undefined && !isPriority(priority)) throw httpError(400, 'priority must be P0, P1 or P2');
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
   if (!Object.hasOwn(AGENT_CMDS, agent)) throw httpError(400, 'agent must be claude|codex|minimax|bash');
   let dir;
@@ -903,7 +906,8 @@ async function createSession({ name, agent, cwd }) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
   sessionMeta.reset(real);
-  sessionMeta.sync([real]);   // a new session starts at P2, not paused
+  sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
+  if (priority) sessionMeta.set(real, { priority });
   latest = null;
   return { ok: true, name: real, agent, cwd: dir, priority: sessionMeta.priority(real) };
 }
@@ -926,6 +930,7 @@ async function setSessionMeta(session, body) {
   if (!(await sessionExists(session))) throw httpError(404, 'no such session');
   sessionMeta.sync([session]);
   const changed = sessionMeta.set(session, body || {});
+  const released = body?.paused === false && releaseHold(session);   // Resume also clears the manager's quota hold
   if (changed.paused === true) {
     cancelAuto(session, 'paused by owner');
     logEvent({ type: 'pause', session, by: 'owner' });
@@ -934,9 +939,11 @@ async function setSessionMeta(session, body) {
   } else if (changed.paused === false) {
     logEvent({ type: 'resume', session, by: 'owner' });
     await sendKeys(session, 'continue', true);
+  } else if (released) {
+    await sendKeys(session, 'continue', true);
   }
   latest = null;
-  return { ok: true, session, priority: sessionMeta.priority(session), paused: sessionMeta.isPaused(session), changed };
+  return { ok: true, session, priority: sessionMeta.priority(session), paused: sessionMeta.isPaused(session), held: heldOf(session), changed };
 }
 
 async function sendMany(sessions, payload) {
@@ -1291,6 +1298,13 @@ server.listen(PORT, HOST, async () => {
   await initManager({
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
     sendKey, sendKeys, paused: (n) => sessionMeta.isPaused(n),
+    policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
+    heldStore: { get: (n) => sessionMeta.held(n), set: (n, h) => sessionMeta.setHeld(n, h) },
+    onHold: (n, kind, reason) => alert(`${n}:${kind}`, {
+      title: kind === 'hold' ? `${n} held: ${reason} (${sessionMeta.priority(n)})` : `${n} resumed`,
+      body: kind === 'hold' ? 'continues when the quota recovers; Resume to override' : reason,
+      priority: 'default', ntfyTags: kind === 'hold' ? 'pause_button' : 'arrow_forward', url: `/?s=${encodeURIComponent(n)}`, tag: `ghosty-hold-${n}`,
+    }, 0),
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.
@@ -1300,7 +1314,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(leaseTick, 15000);
   healthTick();
   setInterval(healthTick, HEALTH_MS);
-  const quotaTick = () => quota.poll().catch((e) => console.error('[quota]', e.message));
+  const quotaTick = () => quota.poll().then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
   setInterval(quotaTick, 60000);
 });

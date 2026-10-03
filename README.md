@@ -120,10 +120,37 @@ a waiting session is covered by the existing "needs you" push.
 | `delayMs` | `30000` | countdown before an answer is typed |
 | `maxPerSessionPerHour` | `4` | auto answers per session per rolling hour |
 | `disabledSessions` | `[]` | sessions the manager ignores (tick them off in the panel) |
+| `policyEnabled` | `true` | quota policy by priority (below) |
+| `p1MaxPct` / `p2MaxPct` | `80` / `80` | 5 h fill at which P1 / P2 sessions are held |
+| `minimaxMonthlyTokenBudget` | `null` | MiniMax tokens per month; with it set, month tokens / budget counts as MiniMax's fill, without it MiniMax quota is unknown and never holds |
 
 The robot icon in the top bar opens the manager panel: global auto-answer switch, per-case
 checkboxes, per-session on/off, today's answered / cancelled / escalated counts and the last 30
 log entries.
+
+**Policy by priority and quota** (`public/policy.js`, pure and unit-tested). At a stall the manager
+would auto-answer (all safety gates above already passed), the policy decides `allow` or `hold`:
+
+- **P0**: always allowed. The safety gates (forbidden topic, draft, confidence, cap) still apply.
+- **P1**: allowed while its agent's 5 h window is under `p1MaxPct`.
+- **P2**: held when the 5 h window is at or over `p2MaxPct`, or when the weekly window is projected to run out
+  before its reset (used % / elapsed fraction of the week > 100 %, only once 10 % of the week has elapsed).
+- Unknown quota (stale, expired window, no data, `usedPercent` null) is allowed with reason "quota unknown".
+- Plans: claude -> Claude Max, codex -> Codex, minimax -> MiniMax.
+
+A hold is stored in `sessions.json` as `held:{by:'manager',reason,at}`, separate from the owner's `paused`,
+logged `{type:'hold', by:'manager'}` and pushed once ("task05 held: Claude Max 5h 86% (P2)"). It never sends
+Esc and never interrupts a working session; it only stops the session from being continued at its stop. Every
+quota poll (60 s) re-evaluates held sessions: when the policy allows again the hold is cleared, `{type:'resume',
+by:'manager'}` is logged and pushed, and a session still stopped at the same stall is scheduled normally (usual
+countdown and cancel). The owner's Resume (play button, also shown on a held card) clears a hold too and
+sends `continue`. A held session that moves on by itself loses the hold. Cards, rows and the sidebar show
+"held: quota" (tooltip = reason); the manager panel lists held sessions. The manager never switches an agent.
+
+**New session.** The dialog has a priority picker (default P2, sent as `priority` to `POST /api/sessions`) and
+preselects the agent with the most headroom, shown as "suggested: ...": P2 prefers MiniMax unless it is known
+to be under pressure; P0 prefers Claude unless Claude is at 95 % or more; P1 takes the most headroom among
+known plans (Claude on ties). It is a suggestion only: picking an agent yourself wins.
 
 ```bash
 npm run stall-report -- --days 3 --list      # precision per case vs. what the owner answered
@@ -246,6 +273,7 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 │   ├── index.html                   # PWA shell
 │   ├── app.js                       # controller
 │   ├── prio.js                      # priority helpers shared with the server
+│   ├── policy.js                    # quota policy + agent suggestion (pure, shared)
 │   ├── style.css                    # ghosty dark
 │   ├── manifest.webmanifest
 │   ├── sw.js                        # service worker

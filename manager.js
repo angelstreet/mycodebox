@@ -4,8 +4,10 @@
 // escalated to the owner.
 //
 // State lives in $GHOSTY_STATE_DIR (default ~/.local/state/ghosty):
-//   manager.json   { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, disabledSessions }
+//   manager.json   { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, disabledSessions,
+//                    policyEnabled, p1MaxPct, p2MaxPct, minimaxMonthlyTokenBudget }  (policy: public/policy.js)
 //   stalls.jsonl   {type:'stall'} per stall, {type:'answer'} / {type:'answer_cancelled'} / {type:'escalated'},
+//                  {type:'hold'|'resume', by:'manager'|'owner'} for quota holds (phase 6),
 //                  and one {type:'outcome'} line when the session moves on
 //   jev-budget.json { day, calls, cost }
 //
@@ -15,6 +17,7 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra } from './stall.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -32,18 +35,21 @@ const AGENTS = new Set(['claude', 'codex', 'minimax']);
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [] };
+let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
 const watch = new Map();   // session -> { since, hash, stall, pending: {id, at, auto}, last, auto }
 const sentLog = new Map(); // session -> [ms epoch of each auto answer] (hourly cap)
 let notify = () => {};
 let send = { key: null, keys: null };   // injected by server.js: the one tmux code path
 let isPaused = () => false;             // injected by server.js: the owner's pause hold (session-meta.js)
+let policyOf = () => ({ action: 'allow', reason: 'no policy' });   // injected: (session, agent) -> { action, reason } (public/policy.js + quota)
+let held = { get: () => null, set: () => {} };                      // injected: the manager's own hold, kept apart from the owner's pause
+let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
 
 const today = () => new Date().toISOString().slice(0, 10);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused } = {}) {
+export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { budget = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); } catch {}
@@ -52,8 +58,13 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused } =
   if (sendKey) send.key = sendKey;
   if (sendKeys) send.keys = sendKeys;
   if (paused) isPaused = paused;
+  if (policy) policyOf = policy;
+  if (heldStore) held = heldStore;
+  if (onHold) notifyHold = onHold;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, log ${LOG_FILE}`);
 }
+
+export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct, minimaxMonthlyTokenBudget: config.minimaxMonthlyTokenBudget });
 
 export function managerConfig() {
   return { ...config, validCases: AUTO_CASES, jev: !!JEV_URL, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS } };
@@ -66,7 +77,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled } = b;
+  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, minimaxMonthlyTokenBudget } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -76,6 +87,10 @@ export async function setManagerConfig(b = {}) {
   if (minConfidence !== undefined) config.minConfidence = num(minConfidence, 0, 1, 'minConfidence');
   if (delayMs !== undefined) config.delayMs = Math.round(num(delayMs, 0, 600000, 'delayMs'));
   if (maxPerSessionPerHour !== undefined) config.maxPerSessionPerHour = Math.round(num(maxPerSessionPerHour, 0, 100, 'maxPerSessionPerHour'));
+  if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
+  if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');
+  if (p2MaxPct !== undefined) config.p2MaxPct = num(p2MaxPct, 1, 100, 'p2MaxPct');
+  if (minimaxMonthlyTokenBudget !== undefined) config.minimaxMonthlyTokenBudget = minimaxMonthlyTokenBudget === null ? null : num(minimaxMonthlyTokenBudget, 1, 1e15, 'minimaxMonthlyTokenBudget');
   if (session && typeof sessionEnabled === 'boolean') {
     const set = new Set(config.disabledSessions);
     if (sessionEnabled) set.delete(session); else set.add(session);
@@ -142,6 +157,53 @@ export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {
   return true;
 }
 
+// Quota holds (phase 6). A hold only stops a stopped session from being continued; it never types
+// and never interrupts. It lives in session-meta (apart from the owner's pause) and is released when
+// the policy allows again, on the owner's Resume, or when the session moves on by itself.
+const holdOf = (name) => held.get(name) || null;
+
+function applyHold(name, w, pending, pol) {
+  w.heldStall = pending;
+  const prev = holdOf(name);
+  if (prev && prev.reason === pol.reason) return;
+  held.set(name, { by: 'manager', reason: pol.reason, at: new Date().toISOString() });
+  if (prev) return;   // same hold, new numbers: no second alert
+  logLater({ type: 'hold', session: name, by: 'manager', reason: pol.reason });
+  notifyHold(name, 'hold', pol.reason);
+}
+
+function endHold(name, by, reason, push) {
+  const w = watch.get(name);
+  if (w) w.heldStall = null;
+  held.set(name, null);
+  logLater({ type: 'resume', session: name, by, reason });
+  if (push) notifyHold(name, 'resume', reason);
+}
+
+// The owner's Resume clears a manager hold too. Returns true when there was one.
+export function releaseHold(name) {
+  if (!holdOf(name)) return false;
+  endHold(name, 'owner', 'released by owner', false);
+  return true;
+}
+export const heldOf = (name) => holdOf(name);
+
+// Every quota poll: held sessions whose policy now allows are released, and a session still stopped at
+// the same stall with an allowed answer is scheduled normally (usual countdown / cancel).
+export function reevaluateHolds() {
+  for (const [name, w] of watch) {
+    if (!holdOf(name)) continue;
+    const pol = policyOf(name, w.agent);
+    if (pol.action === 'hold') { if (pol.reason !== holdOf(name).reason) held.set(name, { ...holdOf(name), reason: pol.reason }); continue; }
+    const p = w.heldStall;
+    endHold(name, 'manager', `quota recovered: ${pol.reason}`, true);
+    const stopped = w.last && (w.last.state === 'waiting' || w.last.state === 'done');
+    if (!p || !stopped || w.hash !== p.hash || !sessionOn(name)) continue;
+    if (autoBlock(name, { case: p.case }, p.confidence)) continue;
+    schedule(name, w, p);
+  }
+}
+
 function schedule(name, w, a) {
   cancelAuto(name, 'superseded', true);
   const auto = { ...a, sendAt: Date.now() + config.delayMs };
@@ -166,6 +228,7 @@ async function fire(name, auto) {
   else if (last.lastSendAt && w.pending && last.lastSendAt > w.pending.at) reason = 'owner sent something';
   else if (w.cls?.draft) reason = 'draft in the input box';
   else if (!ws.send) { reason = ws.why; esc = true; }
+  else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence }, pol); reason = `held: ${pol.reason}`; }
   else if (!send.key || !send.keys) reason = 'no send function';
   else if (hourCount(name) >= config.maxPerSessionPerHour) { reason = 'hourly cap reached'; esc = true; }
   if (reason) {
@@ -260,6 +323,7 @@ export function observe(s) {
   let w = watch.get(s.name);
   if (!w) { w = { since: s.now, hash: null, stall: null, pending: null, seen: false }; watch.set(s.name, w); }
 
+  w.agent = s.agent;
   w.last = { state: s.state, lastSendAt: s.lastSendAt || null, now: s.now };
   const stopped = s.state === 'waiting' || s.state === 'done';
   if (!stopped) {
@@ -273,6 +337,8 @@ export function observe(s) {
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
       w.pending = null;
     }
+    if (holdOf(s.name)) endHold(s.name, 'manager', 'session moved on', false);
+    w.heldStall = null;
     w.hash = null; w.stall = null; w.since = s.now;
     w.seen = true;
     return null;
@@ -314,7 +380,11 @@ export function observe(s) {
     }
     const block = autoBlock(s.name, final, confidence);
     if (block) { escalate(s.name, s.state, final, id, block); return; }
-    schedule(s.name, w, { id, hash: h, answer: ws.send, case: final.case, source: final.source, confidence });
+    const pending = { id, hash: h, answer: ws.send, case: final.case, source: final.source, confidence };
+    const pol = policyOf(s.name, s.agent);
+    if (pol.action === 'hold') { applyHold(s.name, w, pending, pol); return; }
+    if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false);
+    schedule(s.name, w, pending);
   })().catch((e) => console.error('[manager]', e.message));
   return w.stall;
 }

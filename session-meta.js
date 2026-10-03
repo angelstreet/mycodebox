@@ -1,6 +1,7 @@
 // Per-session owner settings (TASK-44 phase 5): priority P0|P1|P2 (default P2) and the pause hold.
 // Persisted in $GHOSTY_STATE_DIR/sessions.json keyed by tmux session name:
-//   { "<name>": { priority, paused, pausedAt, seenAt } }
+//   { "<name>": { priority, paused, pausedAt, held?, seenAt } }
+// `held` is the manager's own quota hold ({by:'manager', reason, at}); it is separate from the owner's `paused`.
 // An entry is created the first time a session is seen (P2) and dropped once the session has been
 // gone for more than 7 days. Nothing here touches tmux; server.js sends the keys.
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
@@ -34,6 +35,8 @@ export function createSessionMeta({ file, now = Date.now } = {}) {
   return {
     priority: (name) => (isPriority(data[name]?.priority) ? data[name].priority : DEFAULT_PRIORITY),
     isPaused: (name) => !!data[name]?.paused,
+    held: (name) => data[name]?.held || null,
+    setHeld(name, held) { const e = entry(name); if (held) e.held = held; else delete e.held; save(); },
     pausedAt: (name) => (data[name]?.paused ? data[name].pausedAt || null : null),
     // Called every poll with the live names: registers new sessions and prunes long-gone ones.
     sync(liveNames) {

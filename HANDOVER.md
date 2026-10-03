@@ -97,6 +97,14 @@ Claude Max quota is `?` until `scripts/claude-statusline-ratelimits.sh` is set a
 `statusLine` command (owner edits `~/.claude/settings.json`; see README "Priority, pause and quota").
 MiniMax has no stored plan limit: tokens only. Deploy = merge + restart `ghosty-sessions`; SW cache is v10.
 
+**TASK-44 phase 6** (branch `task44-policy`) — quota policy by priority (`public/policy.js`, pure; wired in
+`manager.js` + `server.js`). A P1/P2 session that would be auto-answered but whose agent's plan is under
+pressure gets a manager hold (`held` in `sessions.json`, apart from the owner's `paused`), logged
+`{type:'hold'|'resume', by:'manager'}` and pushed; released on every 60 s quota poll when the policy allows.
+The new-session dialog has a priority picker (default P2, saved) and preselects the suggested agent
+(suggestion only). Config keys `policyEnabled`, `p1MaxPct`, `p2MaxPct`, `minimaxMonthlyTokenBudget` in
+`manager.json`. Deploy = merge + restart `ghosty-sessions`; SW cache is v11.
+
 **Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,
 exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only.
 

@@ -4,6 +4,7 @@
 // idle / offline) and elapsed time. Custom names live in localStorage.
 
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
+import { suggestAgent } from '/policy.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -111,6 +112,9 @@ function stateOf(name) {
 }
 const prioOf = (n) => state.status[n]?.priority || DEFAULT_PRIORITY;
 const pausedOf = (n) => !!state.status[n]?.paused;
+const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held || null);   // the manager's quota hold
+// Pill text for the owner's pause or the manager's hold, '' when neither.
+const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? 'held: quota' : '');
 const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${escapeHtml(n)}" aria-label="Priority ${prioOf(n)}, tap to change" title="Priority ${prioOf(n)}">${prioOf(n)}</button>`;
 const STATE_RANK = { waiting: 0, done: 1, working: 2, idle: 3, offline: 4 };
 const STATE_LABEL = { working: 'working', waiting: 'needs you', done: 'done', idle: 'idle', offline: 'offline' };
@@ -967,7 +971,7 @@ function syncSide() {
     li.querySelector('.sst').textContent = stateText(n);
     const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
-    li.querySelector('.pp').classList.toggle('hidden', !pausedOf(n));
+    syncPill(li.querySelector('.pp'), n);
     const rb = li.querySelector('.rb');
     const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
@@ -1658,12 +1662,18 @@ function pushHist(text) {
 
 // ---------- priority + pause + quota (TASK-44 phase 5) ----------
 // Badge (P0 red / P1 amber / P2 grey) and the pause button on a card header or board row.
+function syncPill(pp, n) {
+  const t = holdPill(n);
+  pp.classList.toggle('hidden', !t);
+  if (t && pp.textContent !== t) pp.textContent = t;
+  pp.title = heldOf(n) ? `held by the manager: ${heldOf(n).reason}` : '';
+}
 function syncPrioPause(el, n) {
   const pr = el.querySelector('.pr'), ph = prioBadgeHtml(n);
   if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
-  const paused = pausedOf(n);
+  const paused = pausedOf(n) || !!heldOf(n);   // held: the button is Resume (releases the hold, sends "continue")
   el.classList.toggle('paused', paused);
-  el.querySelector('.pp').classList.toggle('hidden', !paused);
+  syncPill(el.querySelector('.pp'), n);
   const pz = el.querySelector('.pz');
   const glyph = paused ? '▶' : '⏸';
   if (pz.textContent !== glyph) {
@@ -1678,7 +1688,7 @@ async function metaPost(n, body) {
   const r = await fetch(`/api/session-meta/${encodeURIComponent(n)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-  if (state.status[n]) { state.status[n].priority = j.priority; state.status[n].paused = j.paused; }
+  if (state.status[n]) { state.status[n].priority = j.priority; state.status[n].paused = j.paused; state.status[n].held = j.held || null; }
   return j;
 }
 // capture phase: these buttons sit inside cards / rows that open on tap
@@ -1691,7 +1701,7 @@ document.addEventListener('click', async (e) => {
   const n = zb.dataset.pause;
   zb.disabled = true;
   try {
-    const want = !pausedOf(n);
+    const want = !(pausedOf(n) || heldOf(n));
     await metaPost(n, { paused: want });
     toast(want ? `paused ${displayName(n)} (Esc sent)` : `resumed ${displayName(n)}`);
     syncAll();
@@ -1798,6 +1808,8 @@ function logLine(r) {
   }
   if (r.type === 'answer') return { cls: 'sent', tag: 'answered', sess, case: r.case, text: r.answer?.text ?? `option ${r.answer?.key}` };
   if (r.type === 'answer_cancelled') return { cls: 'canc', tag: 'cancelled', sess, case: r.case || '', text: r.reason || '' };
+  if (r.type === 'hold') return { cls: 'canc', tag: 'held', sess, case: 'quota', text: r.reason || '' };
+  if (r.type === 'resume' && r.by === 'manager') return { cls: 'sent', tag: 'resumed', sess, case: 'quota', text: r.reason || '' };
   if (r.type === 'escalated') return { cls: 'esc', tag: 'escalated', sess, case: r.case || '', text: r.reason || '' };
   return null;
 }
@@ -1816,12 +1828,17 @@ function openManager() {
         ]);
       } catch { body.innerHTML = '<div class="sheet-empty">could not load</div>'; return; }
       const off = new Set(cfg.disabledSessions || []);
+      const heldNow = state.sessions.map((s) => s.name).filter((n) => state.status[n]?.held);
       const t = cfg.today || {};
       const entries = (log.entries || []).filter((r) => logLine(r)).slice(-30).reverse();
       body.innerHTML = `
         <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend"><i></i><span>Auto-answer <b>${cfg.autoSend ? 'ON' : 'OFF'}</b></span></button>
         <div class="mcases">${(cfg.validCases || []).map((c) => `<label class="mchk"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span>${escapeHtml(CASE_LABEL[c] || c)}</span></label>`).join('')}</div>
         <div class="mnote">sends after ${Math.round(cfg.delayMs / 1000)}s (cancel from the pill) · Jev answers need ≥ ${cfg.minConfidence} · max ${cfg.maxPerSessionPerHour}/h per session · never deploy / push / delete / secrets / money</div>
+        <div class="side-sub">Quota policy</div>
+        <button class="mswitch${cfg.policyEnabled ? ' on' : ''}" data-set="policyEnabled"><i></i><span>Policy <b>${cfg.policyEnabled ? 'ON' : 'OFF'}</b></span></button>
+        <div class="mnote">P0 always continues · P1 while the 5h window is under ${cfg.p1MaxPct}% · P2 is held at its next stop when 5h ≥ ${cfg.p2MaxPct}% or the week would run out before reset${cfg.minimaxMonthlyTokenBudget ? ` · MiniMax budget ${fmtTok(cfg.minimaxMonthlyTokenBudget)} tok/month` : ' · MiniMax has no limit set (never held)'} · a hold never interrupts a working session</div>
+        <div class="mheld">${heldNow.map((n) => `<div class="mh"><b>${escapeHtml(displayName(n))}</b> ${escapeHtml(prioOf(n))} <span class="dim">${escapeHtml(state.status[n].held.reason)}</span></div>`).join('') || '<div class="dim">no session held</div>'}</div>
         <div class="mcounts"><span class="sent"><b>${t.answered ?? 0}</b> answered</span><span class="canc"><b>${t.cancelled ?? 0}</b> cancelled</span><span class="esc"><b>${t.escalated ?? 0}</b> escalated</span><span class="dim">today</span></div>
         <div class="side-sub">Last ${entries.length}</div>
         <div class="mlog">${entries.map((r) => { const l = logLine(r); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
@@ -1829,8 +1846,8 @@ function openManager() {
         <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
     };
     body.onclick = async (e) => {
-      const sw = e.target.closest('[data-set="autoSend"]');
-      if (sw) { try { await mgrPost({ autoSend: !sw.classList.contains('on') }); } catch { toast('save failed'); } draw(); }
+      const sw = e.target.closest('[data-set]');
+      if (sw) { try { await mgrPost({ [sw.dataset.set]: !sw.classList.contains('on') }); } catch { toast('save failed'); } draw(); }
     };
     body.onchange = async (e) => {
       const i = e.target;
@@ -2251,9 +2268,12 @@ const NEW_AGENTS = ['claude', 'codex', 'minimax', 'bash'];
 function openNewSession() {
   let agent = lsGet('ghosty.newAgent', 'claude');
   if (!NEW_AGENTS.includes(agent)) agent = 'claude';
-  let dirs = null, nameTouched = false;
+  let dirs = null, nameTouched = false, agentTouched = false;
+  let priority = DEFAULT_PRIORITY, mcfg = null;
   openSheet('New session', ({ body, foot, close }) => {
     body.innerHTML = `
+      <div class="seg" id="nsPrio">${PRIORITIES.map((p) => `<button data-p="${p}" class="${p === priority ? 'on' : ''}">${p}</button>`).join('')}</div>
+      <div class="mnote" id="nsSug"></div>
       <div class="seg" id="nsAgent">${NEW_AGENTS.map((a) => `<button data-a="${a}" class="${a === agent ? 'on' : ''} ${a}">${a}</button>`).join('')}</div>
       <label class="flab">name</label>
       <input class="sheet-in" id="nsName" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="session name">
@@ -2291,9 +2311,28 @@ function openNewSession() {
     };
     cwdIn.oninput = () => { suggest(); drawDirs(); };
     nameIn.oninput = () => { nameTouched = true; };
+    // Suggestion only: preselect the agent with the most headroom for this priority until the owner picks one.
+    const showAgent = () => { for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('on', x.dataset.a === agent); };
+    const sug = body.querySelector('#nsSug');
+    const applySuggestion = () => {
+      if (!state.quota) { sug.textContent = ''; return; }
+      const sg = suggestAgent(priority, state.quota, mcfg);
+      for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('sug', x.dataset.a === sg.agent);
+      sug.textContent = `suggested: ${sg.agent} (${sg.reason})`;
+      if (!agentTouched) { agent = sg.agent; showAgent(); suggest(); }
+    };
+    fetch('/api/manager').then((r) => r.json()).then((c) => { mcfg = c; applySuggestion(); }).catch(() => {});
+    body.querySelector('#nsPrio').onclick = (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      priority = b.dataset.p;
+      for (const x of body.querySelectorAll('#nsPrio button')) x.classList.toggle('on', x === b);
+      applySuggestion();
+    };
     body.querySelector('#nsAgent').onclick = (e) => {
       const b = e.target.closest('button');
       if (!b) return;
+      agentTouched = true;
       agent = b.dataset.a; lsSet('ghosty.newAgent', agent);
       for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('on', x === b);
       suggest();
@@ -2308,7 +2347,7 @@ function openNewSession() {
       const go = foot.querySelector('#nsGo');
       go.disabled = true; go.textContent = 'creating…';
       try {
-        const r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, agent, cwd }) });
+        const r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, agent, cwd, priority }) });
         if (r.status === 404 || r.status === 405) { toast("server doesn't support this yet"); return; }
         if (r.status === 409) { toast(`"${name}" already exists`); return; }
         const j = await r.json().catch(() => ({}));
@@ -2327,6 +2366,7 @@ function openNewSession() {
       }
     };
     suggest();
+    applySuggestion();
     fetchDirs().then((d) => { dirs = d || null; if (d === null) dirs = null; drawDirs(); if (!d) list.innerHTML = '<div class="sheet-empty">dir list unavailable — type a path</div>'; });
   });
 }

@@ -630,6 +630,11 @@ body{ display:flex; flex-direction:column; }
 .seg button.on.codex{ color:var(--a-codex); border-color:var(--a-codex); background:rgba(122,167,255,.14); }
 .seg button.on.minimax{ color:var(--a-minimax); border-color:var(--a-minimax); background:rgba(192,140,240,.14); }
 .seg button.on.bash{ color:var(--ink); border-color:var(--ink-2); background:rgba(138,144,156,.14); }
+#nsPrio{ grid-template-columns:repeat(3,1fr); }
+#nsPrio button{ height:36px; }
+#nsPrio button.on{ color:var(--accent); border-color:var(--accent); background:rgba(232,154,74,.14); }
+.seg button.sug::after{ content:' \2605'; font-size:11px; }
+.mheld .mh{ font-size:12.5px; padding:3px 0; }
 .dirs{ display:flex; flex-direction:column; gap:4px; min-height:90px; max-height:34dvh; overflow-y:auto; flex-shrink:1; }
 .drow{
   display:flex; flex-direction:column; gap:1px; text-align:left; padding:7px 12px; min-height:44px; border-radius:9px; flex-shrink:0;
@@ -907,6 +912,8 @@ button.prio{ cursor:pointer; }
 .prio.P1{ background:rgba(232,154,74,0.16); color:var(--accent); border-color:rgba(232,154,74,0.5); }
 .cell .h .pr, .row-item .l1 .pr, .session-list .sub .pr{ display:inline-flex; flex-shrink:0; }
 .session-list .sub .pr .prio{ height:15px; min-width:20px; padding:0 4px; font-size:9.5px; }
+.session-list .sub .sst, .session-list .sub .ag{ min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.session-list .sub .pp{ font-size:9px; padding:1px 5px; }
 .attention .prio{ height:15px; min-width:20px; padding:0 4px; font-size:9.5px; margin-right:5px; }
 .pz{
   flex-shrink:0; min-width:32px; height:30px; padding:0 6px; border-radius:7px; font-size:13px; line-height:1;
