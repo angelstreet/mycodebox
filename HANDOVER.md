@@ -58,6 +58,7 @@ long-press = set send target. Card: swipe header/reader left/right = next/prev s
 toggles reader (last reply as readable text) vs raw terminal. Tabs + grid hidden.
 
 **Desktop** — grid 2/4/6/9/all; tap = send target ("→ send target" pill), double-tap = open card.
+Reorder: drag a card by its header (desktop), or ◀ ▲ ▼ ▶ on the selected card (touch); order saved per device.
 
 **Dock** — fixed-width target chip (tap = picker), quick-prompt chips (long-press edit, + adds),
 history, quick keys, sent ✓ / delivered ✓✓, multi-target send.

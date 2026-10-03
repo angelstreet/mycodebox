@@ -62,6 +62,7 @@ const state = {
 const LS_RENAMES = 'ghosty.renames';
 const LS_GRID    = 'ghosty.gridSize';
 const LS_MODE    = 'ghosty.mode';
+const LS_ORDER   = 'ghosty.order';
 const LS_NOTIFY  = 'ghosty.notify';
 const GRID_SIZES = [2, 4, 6, 9, 16];
 
@@ -76,7 +77,11 @@ function saveRenames() { lsSet(LS_RENAMES, JSON.stringify(state.rename)); }
 function customFor(name) { return state.rename[name] || ''; }
 function displayName(name) { return customFor(name) || name; }
 
+function loadOrder() {
+  try { state.order = JSON.parse(lsGet(LS_ORDER, '[]')) || []; } catch { state.order = []; }
+}
 function loadPrefs() {
+  loadOrder();
   const g = Number(lsGet(LS_GRID, 4));
   state.gridSize = GRID_SIZES.includes(g) ? g : 4;
   const m = lsGet(LS_MODE, 'grid');
@@ -457,8 +462,40 @@ function onPane(session, pane) {
 
 // Stable alphabetical order by display name. Cards must not jump around
 // under your thumb; "needs you" is surfaced by the banner, not by reordering.
+// Grid order: the user's saved order first (drag / arrows), then the rest
+// alphabetically. Cards never reorder on their own.
 function sortSessions() {
-  state.sessions.sort((a, b) => displayName(a.name).localeCompare(displayName(b.name)));
+  const idx = new Map((state.order || []).map((n, i) => [n, i]));
+  const rank = (n) => idx.has(n) ? idx.get(n) : Infinity;
+  state.sessions.sort((a, b) => (rank(a.name) - rank(b.name)) ||
+    displayName(a.name).localeCompare(displayName(b.name)));
+}
+
+// Move a session to index `to` in the full order and persist it.
+function moveSessionTo(name, to) {
+  const names = state.sessions.map((s) => s.name);
+  const from = names.indexOf(name);
+  if (from < 0) return;
+  to = Math.max(0, Math.min(names.length - 1, to));
+  if (to === from) return;
+  names.splice(from, 1);
+  names.splice(to, 0, name);
+  state.order = names;
+  lsSet(LS_ORDER, JSON.stringify(names));
+  sortSessions();
+  renderTabStrip();
+  if (state.mode === 'grid') renderGrid();
+  syncAll();
+}
+// Arrow move inside the grid: left/right = ±1, up/down = ± one row.
+function gridCols() {
+  const cols = getComputedStyle(els.gridPane).gridTemplateColumns.split(' ').filter(Boolean).length;
+  return Math.max(1, cols);
+}
+function moveSession(name, dir) {
+  const i = state.sessions.findIndex((s) => s.name === name);
+  const step = { left: -1, right: 1, up: -gridCols(), down: gridCols() }[dir];
+  moveSessionTo(name, i + step);
 }
 function byUrgency(list) {
   return [...list].sort((a, b) =>
@@ -727,6 +764,9 @@ function buildCell(s) {
       <div class="nm"><span class="name">${escapeHtml(displayName(s.name))}</span><span class="mt">&nbsp;</span></div>
       <span class="pos"></span>
       <span class="tgt">&rarr; send target</span>
+      <span class="mv" title="Move card">
+        <button data-dir="left" aria-label="Move left">&#9664;</button><button data-dir="up" aria-label="Move up">&#9650;</button><button data-dir="down" aria-label="Move down">&#9660;</button><button data-dir="right" aria-label="Move right">&#9654;</button>
+      </span>
       <span class="stw"></span>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
       <button class="open" aria-label="Open full screen" title="Open">
@@ -745,11 +785,47 @@ function buildCell(s) {
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); toggleReader(); };
   wireTap(cell, () => focusSession(s.name), () => { if (state.mode !== 'card') openCard(s.name); });
   cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
+  for (const b of cell.querySelectorAll('.mv button')) {
+    b.onclick = (e) => { e.stopPropagation(); moveSession(s.name, b.dataset.dir); };
+  }
+  wireDrag(cell, s.name);
   for (const b of cell.querySelectorAll('.ask button')) {
     b.onclick = (e) => { e.stopPropagation(); focusSession(s.name); sendKey(s.name, b.dataset.key); };
   }
   syncCell(cell);
   return cell;
+}
+
+// Desktop drag-to-reorder: grab a card by its header, drop it on another
+// card to take that card's place. (Touch uses the ◀ ▲ ▼ ▶ buttons.)
+function wireDrag(cell, name) {
+  const h = cell.querySelector('.h');
+  h.draggable = true;
+  h.addEventListener('dragstart', (e) => {
+    if (state.mode !== 'grid') { e.preventDefault(); return; }
+    e.dataTransfer.setData('text/x-ghosty', name);
+    e.dataTransfer.effectAllowed = 'move';
+    cell.classList.add('dragging');
+  });
+  h.addEventListener('dragend', () => {
+    cell.classList.remove('dragging');
+    for (const c of els.gridPane.querySelectorAll('.drop-over')) c.classList.remove('drop-over');
+  });
+  cell.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer.types.includes('text/x-ghosty')) return;
+    e.preventDefault();
+    cell.classList.add('drop-over');
+  });
+  cell.addEventListener('dragleave', (e) => {
+    if (!cell.contains(e.relatedTarget)) cell.classList.remove('drop-over');
+  });
+  cell.addEventListener('drop', (e) => {
+    const from = e.dataTransfer.getData('text/x-ghosty');
+    cell.classList.remove('drop-over');
+    if (!from || from === name) return;
+    e.preventDefault();
+    moveSessionTo(from, state.sessions.findIndex((s) => s.name === name));
+  });
 }
 
 // Single tap = select (send target), double tap = open the card.

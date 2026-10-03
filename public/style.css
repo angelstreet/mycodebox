@@ -631,3 +631,18 @@ body{ display:flex; flex-direction:column; }
   border-left:2px solid var(--accent); padding-left:8px; background:rgba(232,154,74,.07); border-radius:0 6px 6px 0;
 }
 .toast{ z-index:80; }
+
+/* ------------ Grid reorder: drag (desktop) + arrow buttons ------------ */
+.cell .h .mv{ display:none; gap:2px; flex-shrink:0; }
+.grid-pane .cell.focus .h .mv{ display:inline-flex; }
+@media (hover: hover){ .grid-pane .cell:hover .h .mv{ display:inline-flex; } }
+.cell .h .mv button{
+  width:26px; height:26px; padding:0; border-radius:6px;
+  background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line);
+  font-size:10px; line-height:1; display:flex; align-items:center; justify-content:center;
+}
+.cell .h .mv button:hover{ color:var(--accent); border-color:var(--accent); }
+@media (pointer: coarse){ .cell .h .mv button{ width:34px; height:34px; font-size:12px; } }
+.grid-pane .cell .h{ cursor:grab; }
+.grid-pane .cell.dragging{ opacity:.4; }
+.grid-pane .cell.drop-over{ outline:2px dashed var(--accent); outline-offset:-2px; }
