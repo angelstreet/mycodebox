@@ -379,6 +379,25 @@ function replyOf(lines, end) {
   return text;
 }
 
+// The whole captured conversation as readable text: prompts, replies, and tool names only.
+function transcriptOf(lines, end) {
+  const out = [];
+  let inTool = false;
+  for (let i = 0; i < end; i++) {
+    const l = lines[i];
+    if (!l.trim()) { if (!inTool) out.push(''); continue; }
+    if (RULE_LINE.test(l) || CHROME_LINE.test(l.replace(/[│┃]/g, ' ')) || NOISE_LINE.test(l)) continue;
+    if (/^\s*[❯›>]\s/.test(l)) { inTool = false; out.push('', '**You:** ' + l.replace(/^\s*[❯›>]\s+/, '').trim()); continue; }
+    if (TOOL_LINE_RE.test(l)) { inTool = true; out.push('', '`' + l.replace(BULLET_RE, '').trim().slice(0, 100).replace(/`/g, "'") + '`'); continue; }
+    if (BULLET_RE.test(l)) { inTool = false; out.push('', l.replace(BULLET_RE, '$1')); continue; }
+    if (inTool) continue;
+    out.push(l.replace(/\s+$/, ''));
+  }
+  let text = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (text.length > 60000) { text = text.slice(-60000); text = '…' + text.slice(text.indexOf('\n') + 1 || 0); }
+  return text;
+}
+
 // Footer facts: context left %, model name.
 function footerInfo(lines) {
   const foot = lines.slice(-12).join('\n');
@@ -980,6 +999,16 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ sessions: r.sessions, status }));
     return;
+  }
+  if (req.method === 'GET' && p.startsWith('/api/transcript/')) {
+    const session = decodeURIComponent(p.slice('/api/transcript/'.length));
+    try {
+      const lines = plainLines(await capturePane(session));
+      const text = transcriptOf(lines, bodyEnd(lines));
+      return json(res, 200, { session, text, hash: shortHash(text) });
+    } catch {
+      return json(res, 404, { ok: false, error: 'no such session' });
+    }
   }
   if (req.method === 'GET' && p.startsWith('/api/reply/')) {
     const session = decodeURIComponent(p.slice('/api/reply/'.length));

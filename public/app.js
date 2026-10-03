@@ -1111,6 +1111,11 @@ function toggleReader() {
   const a = state.active;
   if (a) { relayoutTerm(a); setTimeout(() => relayoutTerm(a), 60); }
 }
+// "earlier conversation": the whole captured history (prompts, replies, tool names) instead of just the last reply
+function loadTranscript(n, c) {
+  return fetch(`/api/transcript/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+    .then((d) => { c.full = d.text || ''; }).catch(() => {});
+}
 function syncReader(cell, n) {
   const st = state.status[n] || {};
   const hash = st.replyHash ?? '';
@@ -1125,6 +1130,7 @@ function syncReader(cell, n) {
         // keep the last good reply when the server has none right now (tool line is last)
         if (d.reply) c.text = String(d.reply);
         c.failed = false; c.hash = hash;
+        if (c.full != null) return loadTranscript(n, c);
       })
       .catch(() => { c.failed = true; })
       .finally(() => {
@@ -1146,7 +1152,10 @@ function paintReader(cell, n) {
       .map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim() && !RULE_RE.test(l)).slice(-24).join('\n');
     if (tail) text = `${text}\n\n\`\`\`\n${tail.replace(/```/g, "'''")}\n\`\`\``;
   }
-  const html = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const full = c && c.full != null;
+  if (full && c.full) text = c.full;
+  const body = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${body}`;
   if (el.dataset.h === html) return;
   // never swap the content under a finger / a fling: that cancels touch scrolling. Retry once it settles.
   if (el._busyUntil && Date.now() < el._busyUntil) {
@@ -1156,6 +1165,17 @@ function paintReader(cell, n) {
   }
   if (!el._wired) {
     el._wired = true;
+    el.addEventListener('click', async (e) => {
+      const b = e.target.closest('.rd-more');
+      if (!b) return;
+      e.stopPropagation();
+      const cc = state.replies.get(n);
+      if (!cc) return;
+      if (b.dataset.act === 'more') { await loadTranscript(n, cc); } else { cc.full = null; }
+      el.dataset.h = '';
+      paintReader(cell, n);
+      el.scrollTop = b.dataset.act === 'more' ? el.scrollHeight : 0;
+    });
     const busy = () => { el._busyUntil = Date.now() + 1200; };
     for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, busy, { passive: true });
   }
@@ -1193,7 +1213,7 @@ function renderReply(text) {
     // tmux hard-wraps at the pane width (can be ~20 cols): glue wrapped lines back together,
     // but keep list items and table/box rows on their own line
     const item = /^\s*(?:[-*\u2022]|\d+[.)]) /.test(line);
-    const boxy = /[\u2500-\u257f|]/.test(line);
+    const boxy = /^\s*[\u2500-\u257f|]/.test(line) || (line.match(/[\u2500-\u257f]/g) || []).length > 2;
     if (para.length && !item && !boxy && !para.boxy) para[para.length - 1] += ' ' + inlineMd(line.trim());
     else { para.push(inlineMd(line.replace(/^(\s*)[-*] /, '$1\u2022 '))); para.boxy = boxy; }
   }

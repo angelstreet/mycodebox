@@ -848,3 +848,6 @@ body{ display:flex; flex-direction:column; }
 body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !important; }
 /* phones: the board (list) view is reachable from the hamburger menu */
 @media (max-width: 720px){ .modes .mode-btn[data-mode="list"]{ display:none; } }
+
+.reader .rd-more{ display:block; width:100%; margin:0 0 12px; padding:8px; background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line-2); border-radius:8px; font:inherit; font-size:12px; }
+.reader .rd-more:active{ color:var(--accent); border-color:var(--accent); }
