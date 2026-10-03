@@ -6,3 +6,4 @@ node_modules/
 certs/key.pem
 certs/cert.pem
 public/codebox.apk
+.certs-bak/
