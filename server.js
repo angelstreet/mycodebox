@@ -10,10 +10,11 @@
 //   GET  /*                     → static files in ./public
 
 import http from 'node:http';
+import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -24,6 +25,12 @@ const HOST = process.env.HOST || '0.0.0.0';
 const TICK_MS = Number(process.env.TICK_MS || 1000);
 const PANE_LINES = Number(process.env.PANE_LINES || 2000);
 const PUBLIC_DIR = fileURLToPath(new URL('./public', import.meta.url));
+
+// HTTPS support. If both TLS_KEY and TLS_CERT exist, we listen on TLS too.
+// Self-signed is fine on a Tailscale tailnet — the phone accepts the cert once.
+const TLS_KEY  = process.env.TLS_KEY  || join(PUBLIC_DIR, '..', 'certs', 'key.pem');
+const TLS_CERT = process.env.TLS_CERT || join(PUBLIC_DIR, '..', 'certs', 'cert.pem');
+const TLS_PORT = Number(process.env.TLS_PORT || (Number(PORT) === 443 ? 443 : 7443));
 
 // ---------------------------------------------------------------------------
 // tmux helpers
@@ -342,6 +349,20 @@ server.listen(PORT, HOST, async () => {
   await tick();
   setInterval(tick, TICK_MS);
 });
+
+// Optional TLS listener — required for PWA install on most browsers.
+// Set TLS_KEY / TLS_CERT (or drop PEM files in ./certs/) and we listen too.
+let tlsServer = null;
+if (existsSync(TLS_KEY) && existsSync(TLS_CERT)) {
+  tlsServer = https.createServer(
+    { key: readFileSync(TLS_KEY), cert: readFileSync(TLS_CERT) },
+    server.emit.bind(server, 'request')  // share the HTTP handler
+  );
+  tlsServer.on('upgrade', server.emit.bind(server, 'upgrade'));
+  tlsServer.listen(TLS_PORT, HOST, () => {
+    console.log(`[ghosty] listening on https://${HOST}:${TLS_PORT}`);
+  });
+}
 
 // Clean shutdown
 for (const s of ['SIGINT', 'SIGTERM']) {
