@@ -664,14 +664,33 @@ function buildCell(s) {
       <button data-key="Escape">esc</button>
     </div>
     <div class="b"></div>`;
-  cell.onclick = (e) => { e.stopPropagation(); focusSession(s.name); };
-  cell.ondblclick = (e) => { e.stopPropagation(); openCard(s.name); };
+  wireTap(cell, () => focusSession(s.name), () => { if (state.mode !== 'card') openCard(s.name); });
   cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
   for (const b of cell.querySelectorAll('.ask button')) {
     b.onclick = (e) => { e.stopPropagation(); focusSession(s.name); sendKey(s.name, b.dataset.key); };
   }
   syncCell(cell);
   return cell;
+}
+
+// Single tap = select (send target), double tap = open the card.
+// Listens in the capture phase so xterm's own mouse handling (text
+// selection on the canvas) can't swallow the taps; mobile browsers don't
+// fire dblclick reliably, so the double is detected by timing.
+function wireTap(el, onSingle, onDouble) {
+  let down = null, lastUp = 0;
+  el.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: Date.now() }; }, true);
+  el.addEventListener('pointerup', (e) => {
+    if (!down || e.target.closest('button')) { down = null; return; }
+    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y) > 10;
+    const long = Date.now() - down.t > 500;
+    down = null;
+    if (moved || long) return;                 // scroll / text selection
+    const now = Date.now();
+    if (now - lastUp < 350) { lastUp = 0; onDouble(); return; }
+    lastUp = now;
+    onSingle();
+  }, true);
 }
 
 function syncCell(cell) {
