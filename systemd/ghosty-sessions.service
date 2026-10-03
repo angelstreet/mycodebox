@@ -1,0 +1,26 @@
+[Unit]
+Description=Ghosty Sessions — tmux pane dashboard for codebox
+Documentation=file:///home/jndoye/ghosty-sessions/README.md
+After=network-online.target tailscaled.service
+After=tmux.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jndoye
+WorkingDirectory=/home/jndoye/ghosty-sessions
+ExecStart=/usr/bin/env node /home/jndoye/ghosty-sessions/server.js
+Restart=on-failure
+RestartSec=3
+Environment=PORT=7777
+Environment=HOST=0.0.0.0
+Environment=TICK_MS=1000
+Environment=PANE_LINES=2000
+# Bind to tailscale0 only — replace HOST with Tailscale IP after a restart
+# if you want the strongest posture. Listening on 0.0.0.0 is fine inside the
+# tailnet since the Proxmox firewall on vmbr0 doesn't expose :7777 to LAN guests.
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

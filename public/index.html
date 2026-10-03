@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0f1014" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Ghosty" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <link rel="stylesheet" href="/style.css" />
+  <title>Ghosty Sessions</title>
+</head>
+<body>
+  <header class="topbar" id="topbar">
+    <button class="icon-btn" id="menuBtn" aria-label="Sessions">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7"  x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+    </button>
+    <div class="title" id="appTitle">Ghosty Sessions</div>
+    <div class="modes">
+      <button data-mode="focus" class="mode-btn on">focus</button>
+      <button data-mode="grid"  class="mode-btn">grid</button>
+      <button data-mode="list"  class="mode-btn">list</button>
+    </div>
+    <button class="icon-btn" id="refreshBtn" aria-label="Refresh">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
+  </header>
+
+  <nav id="tabs" class="tabs" aria-label="Active sessions"></nav>
+
+  <main id="main" class="main view-focus">
+    <!-- focus view: single big xterm -->
+    <section class="focus-pane" id="focusPane">
+      <div class="term-host" id="termHost"></div>
+    </section>
+    <!-- grid view: tiled xterm panes -->
+    <section class="grid-pane" id="gridPane"></section>
+    <!-- list view: session rows -->
+    <section class="list-pane" id="listPane"></section>
+  </main>
+
+  <footer class="dock" id="dock">
+    <div class="target">→ <b id="dockTarget">—</b></div>
+    <input id="sendInput" type="text" autocomplete="off" autocorrect="off"
+           autocapitalize="off" spellcheck="false"
+           placeholder="type a message…  ⏎ to send" />
+    <button id="sendBtn" class="send">Send</button>
+  </footer>
+
+  <aside id="side" class="side" aria-hidden="true">
+    <div class="side-head">
+      <span class="ttl">Sessions</span>
+      <span class="count" id="sessionCount">0</span>
+    </div>
+    <ul id="sessionList" class="session-list"></ul>
+    <div class="legend">
+      <span class="dot dot-idle"></span> idle
+      <span class="dot dot-busy"></span> typing
+      <span class="dot dot-wait"></span> needs you
+      <span class="dot dot-offline"></span> offline
+    </div>
+  </aside>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <!-- vendor: xterm.js (bundled locally so PWA works offline after install) -->
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
