@@ -9,12 +9,16 @@ lets you send keystrokes back, and shows status pills (idle / busy / needs you).
 
 ## Access
 
-- Phone must be on the same Tailscale tailnet as `codebox` (`angelstreet@`).
-- Open `http://<codebox-tailnet-ip>:7777/` in Chrome/Safari → "Add to Home Screen".
+- Phone must be on the same Tailscale tailnet as `codebox`.
+- **Plain HTTP**: `http://<codebox-tailnet-ip>:7777/` — works, but Chrome won't
+  show the "Install" PWA option. Use Chrome menu → "Add to Home Screen".
+- **HTTPS (recommended for PWA install)**: `https://<codebox-tailnet-ip>:7443/`
+  — accepts a self-signed cert once, after which Chrome treats it as installable
+  and the orange ↓ button in the topbar fires the system install prompt.
 
-The server listens on `0.0.0.0:7777` but is reached via `codebox`'s Tailscale IP
-(typically `<tailscale-ip>`). The Proxmox firewall on `vmbr0` does not expose
-`:7777` to LAN guests — only tailnet peers can reach it.
+The server listens on `0.0.0.0:7777` and `0.0.0.0:7443`. It is reached via
+`codebox`'s Tailscale IP (typically `<tailscale-ip>`). The Proxmox firewall on
+`vmbr0` does not expose these ports to LAN guests — only tailnet peers can reach them.
 
 ## Run on codebox
 
