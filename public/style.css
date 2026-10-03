@@ -471,13 +471,7 @@ body{ display:flex; flex-direction:column; }
 .lease-list li b{ color:var(--ink); font-weight:600; }
 .lease-list li .ttl{ color:var(--ink-3); }
 .lease-list li.dim{ color:var(--ink-3); }
-.legend{
-  padding:12px 18px; border-top:1px solid var(--line);
-  font-size:10.5px; color:var(--ink-3);
-  display:flex; flex-wrap:wrap; gap:8px 14px;
-}
-.legend span{ display:inline-flex; align-items:center; gap:6px; }
-.legend.dim{ padding-top:4px; border-top:0; padding-bottom: calc(12px + env(safe-area-inset-bottom)); font-size:9.5px; }
+.side{ padding-bottom:env(safe-area-inset-bottom); }
 
 /* ------------ Toast ------------ */
 .toast{
