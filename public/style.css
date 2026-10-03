@@ -120,6 +120,9 @@ button{ font-family:inherit; cursor:pointer; }
 .health .hi.crit{ color:var(--waiting); font-weight:700; }
 @media (max-width: 720px){ .health{ gap:10px; padding:2px 8px; font-size:10.5px; } .health .hi i{ display:none; } .health .hi.warn i, .health .hi.crit i{ display:inline; } }
 
+.health.inbar{ border-bottom:0; padding:0 4px; background:none !important; flex:0 1 auto; min-width:0; margin-right:auto; }
+.health.inbar.crit{ background:none; }
+
 /* ------------ Attention banner ------------ */
 .attention{
   display:flex; gap:6px; align-items:center;
@@ -796,3 +799,8 @@ body{ display:flex; flex-direction:column; }
 /* keep the state readable on gold: dark ring around the dot */
 .tabs .tab.active .dot{ box-shadow:0 0 0 2px #1a1206; }
 .tabs .tab.active .dot.idle{ background:#5a4630; }
+
+/* health sits right after the title in the web layout */
+.title:has(+ .health.inbar){ flex:0 0 auto; }
+/* phones: only the 2 and 4 grids */
+@media (max-width: 720px){ .gridsizes .size-btn[data-size="8"], .gridsizes .size-btn[data-size="16"]{ display:none; } }
