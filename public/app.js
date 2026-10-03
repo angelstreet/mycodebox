@@ -2280,13 +2280,21 @@ window.addEventListener('appinstalled', () => {
   toast('installed — open codebox from your home screen');
 });
 
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    || document.referrer.startsWith('android-app://');
+}
 function hideInstallIfInstalled() {
-  const standalone = window.matchMedia('(display-mode: standalone)').matches
-                  || window.navigator.standalone === true;
-  if (standalone) els.installBtn.classList.add('hidden');
+  if (isStandalone()) els.installBtn.classList.add('hidden');
 }
 
 async function promptInstall() {
+  // Android browser: offer the real app (APK wrapper); the PWA prompt stays the fallback
+  if (/Android/i.test(navigator.userAgent) && !isStandalone()) {
+    toast('downloading codebox.apk — open it to install');
+    location.href = '/codebox.apk';
+    return;
+  }
   if (!state.installPrompt) {
     toast('use browser menu → “Add to Home Screen”');
     return;
