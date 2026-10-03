@@ -58,8 +58,30 @@ PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
 | `HEALTH_MS`   | `5000`  | codebox health sample cadence (CPU, load, RAM, disk) |
 | `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
 | `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
+| `JEV_URL` / `JEV_API_KEY` | unset | AI manager: the VPT server's `POST /server/ai/decide` and its `API_KEY` (Jev for ambiguous stalls). Unset = rules only |
+| `JEV_DAILY_USD` / `JEV_DAILY_CALLS` | `0.25` / `2000` | Jev budget per UTC day; over it, ambiguous stalls stay with the owner |
+| `STALL_SETTLE_MS` | `5000` | a stopped pane must stay unchanged this long before it counts as a stall |
+| `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
+| `GHOSTY_FORBIDDEN_EXTRA` | unset | extra regex of never-auto-answer words (customer names etc. — keep them out of the public repo) |
 | `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
 | `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude` / `codex` / `minimax-code` / (none) | command typed into a session created via `POST /api/sessions` |
+
+## AI manager (shadow mode)
+
+`stall.js` classifies why an agent stopped — `continue`, `menu_recommended`, `permission`,
+`owner_decision`, `done`, `error` — with rules first and Jev (closed choice
+`continue | take_recommended | ask_owner`) for the ambiguous ones. `manager.js` logs every stall
+with what it **would** answer to `stalls.jsonl`, then the owner's real reply as its outcome. It
+types nothing. A forbidden topic (deploy, push/merge to main, delete/remove, migration, `.env`,
+credentials, money, customer) or an unsent draft in the input box always means "ask the owner",
+whatever Jev says. A finished turn that asks something is pushed via ntfy ("X asks you").
+
+```bash
+npm run stall-report -- --days 3 --list      # precision per case vs. what the owner answered
+curl -s localhost:7777/api/manager            # config + Jev budget
+curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
+  -H 'origin: http://localhost:7777' -d '{"session":"task05","sessionEnabled":false}'
+```
 
 ## Architecture
 

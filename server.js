@@ -12,6 +12,9 @@
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/sessions          → {name, agent, cwd} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
+//   GET  /api/manager           → AI manager config (enabled, shadow, disabled sessions, Jev budget)
+//   POST /api/manager           → {enabled?} global on/off, {session, sessionEnabled} per session
+//   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
@@ -29,6 +32,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
+import { initManager, observe, forget as managerForget, prune as pruneManager, stallOf, managerConfig, setManagerConfig, LOG_FILE } from './manager.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -172,6 +176,7 @@ async function capturePane(session) {
 }
 
 const lastSendAt = new Map();    // session -> ms epoch
+const lastSendText = new Map();  // session -> what was sent (for the manager's outcome log)
 
 const NAMED_KEYS = new Set(['Escape', 'Enter', 'Up', 'Down', 'Left', 'Right', 'Tab', 'BTab', 'C-c', 'C-d', 'Space', 'BSpace']);
 const LITERAL_KEYS = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9', 'y', 'n']);
@@ -185,6 +190,7 @@ async function sendKey(session, key) {
     const e = new Error('key not allowed'); e.status = 400; throw e;
   }
   lastSendAt.set(session, Date.now());
+  lastSendText.set(session, key);
   return { ok: true, key };
 }
 
@@ -200,6 +206,7 @@ async function sendKeys(session, keys, enter = true) {
     if (enter || i < lines.length - 1) await exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
   }
   lastSendAt.set(session, Date.now());
+  lastSendText.set(session, String(keys || ''));
   return { ok: true, sent: lines.length };
 }
 
@@ -473,9 +480,9 @@ function ntfyPush(key, { title, priority = 'default', tags = '', body = '', clic
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
 function ntfy(session, kind, body) {
-  const waiting = kind === 'waiting';
+  const waiting = kind === 'waiting' || kind === 'asks';
   ntfyPush(`${session}:${kind}`, {
-    title: waiting ? `${session} needs you` : `${session} is done`,
+    title: kind === 'asks' ? `${session} asks you` : waiting ? `${session} needs you` : `${session} is done`,
     priority: waiting ? 'high' : 'default',
     tags: waiting ? 'warning' : 'white_check_mark',
     body: body || kind,
@@ -619,8 +626,15 @@ async function pollOnce() {
     } else { t.contextLeft = null; t.model = null; }
     const meta = offline ? { cwd: p.cwd || null, repo: null, branch: null, dirty: null } : await getMeta(s.name, p.cwd || null);
 
+    if (!offline) {
+      observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state,
+        project: meta.project ?? null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now });
+      t.prevObserved = state;
+    }
+
     status[s.name] = {
       state, agent, agentCmd, waitReason,
+      stall: stallOf(s.name),
       lastActivitySec: s.lastActivitySec,
       lastSendAt: sentAt,
       lastSendAck: sentAt && t.ackFor === sentAt ? t.ackAt : null,
@@ -640,6 +654,8 @@ async function pollOnce() {
   for (const k of [...lastSnapshots.keys()]) if (!status[k]) lastSnapshots.delete(k);
   for (const k of [...track.keys()]) if (!status[k]) track.delete(k);
   for (const k of [...metaCache.keys()]) if (!status[k]) metaCache.delete(k);
+  for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
+  pruneManager(new Set(Object.keys(status)));
   return { sessions, status, changedSessions };
 }
 
@@ -844,6 +860,7 @@ async function killSession(name, confirm) {
   if (!(await sessionExists(name))) throw httpError(404, 'no such session');
   await exec(TMUX, ['kill-session', '-t', `=${name}`]);
   lastSendAt.delete(name);
+  managerForget(name);
   latest = null;
   return { ok: true, name };
 }
@@ -1032,6 +1049,19 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await sendMany(payload.sessions, payload));
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
+  if (req.method === 'GET' && p === '/api/manager') {
+    return json(res, 200, managerConfig());
+  }
+  if (req.method === 'POST' && p === '/api/manager') {
+    try { return json(res, 200, await setManagerConfig(await readJsonBody(req))); }
+    catch (err) { return json(res, err.status || 400, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/manager/log') {
+    const limit = Math.min(2000, Number(url.searchParams.get('limit')) || 200);
+    let lines = [];
+    try { lines = (await readFile(LOG_FILE, 'utf8')).trim().split('\n').filter(Boolean); } catch {}
+    return json(res, 200, { entries: lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) });
+  }
   if (req.method === 'GET' && p === '/api/vm') {
     return json(res, 200, health || await sampleHealth(HEALTH_DISKS));
   }
@@ -1127,6 +1157,9 @@ async function leaseTick() {
 
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
+  await initManager({
+    onOwnerNeeded: (session, stall) => ntfy(session, 'asks', stall.question || stall.case),
+  });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.
   await tick();
