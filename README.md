@@ -44,6 +44,11 @@ Env vars (defaults shown):
 | `HOST`        | `0.0.0.0` | listen addr (`tailscale0` is the safest) |
 | `TICK_MS`     | `1000`  | pane capture cadence |
 | `PANE_LINES`  | `2000`  | scrollback lines per pane |
+| `NTFY_TOPIC`  | unset   | enable ntfy push; notifies when a session starts waiting (high priority) or finishes a turn |
+| `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
+| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
+| `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
+| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude` / `codex` / `minimax-code` / (none) | command typed into a session created via `POST /api/sessions` |
 
 ## Architecture
 

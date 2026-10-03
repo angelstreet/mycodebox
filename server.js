@@ -439,8 +439,10 @@ const ntfyLast = new Map(); // session -> ms
 function ntfy(session, kind, body) {
   if (!NTFY_TOPIC) return;
   const now = Date.now();
-  if (now - (ntfyLast.get(session) || 0) < NTFY_DEBOUNCE_MS) return;
-  ntfyLast.set(session, now);
+  // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
+  const key = `${session}:${kind}`;
+  if (now - (ntfyLast.get(key) || 0) < NTFY_DEBOUNCE_MS) return;
+  ntfyLast.set(key, now);
   const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
   const headers = {
     Title: ascii(kind === 'waiting' ? `${session} needs you` : `${session} is done`),
@@ -713,6 +715,125 @@ async function readJsonBody(req) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Session lifecycle + directory picker
+// ---------------------------------------------------------------------------
+
+const HOME = homedir();
+const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
+const AGENT_CMDS = {
+  claude:  process.env.AGENT_CMD_CLAUDE  ?? 'claude',
+  codex:   process.env.AGENT_CMD_CODEX   ?? 'codex',
+  minimax: process.env.AGENT_CMD_MINIMAX ?? 'minimax-code',
+  bash:    process.env.AGENT_CMD_BASH    ?? '',
+};
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+async function sessionExists(name) {
+  try { await exec(TMUX, ['has-session', '-t', `=${name}`]); return true; } catch { return false; }
+}
+
+async function createSession({ name, agent, cwd }) {
+  if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
+  if (!Object.hasOwn(AGENT_CMDS, agent)) throw httpError(400, 'agent must be claude|codex|minimax|bash');
+  let dir;
+  try {
+    dir = await realpath(cwd || HOME);
+    if (!(await stat(dir)).isDirectory()) throw new Error();
+  } catch { throw httpError(400, 'cwd must be an existing directory'); }
+  const home = await realpath(HOME);
+  if (dir !== home && !dir.startsWith(home + sep)) throw httpError(400, 'cwd must be under $HOME');
+  // tmux silently rewrites '.' and ':' in session names to '_'.
+  const real = name.replace(/[.:]/g, '_');
+  if (await sessionExists(real)) throw httpError(409, 'session already exists');
+  try {
+    await exec(TMUX, ['new-session', '-d', '-s', real, '-c', dir, '-x', '120', '-y', '40']);
+  } catch (err) {
+    throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
+  }
+  const cmd = AGENT_CMDS[agent];
+  if (cmd) {
+    await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
+    await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
+  }
+  return { ok: true, name: real, agent, cwd: dir };
+}
+
+async function killSession(name, confirm) {
+  if (confirm !== name) throw httpError(400, 'confirm must equal the session name');
+  if (!(await sessionExists(name))) throw httpError(404, 'no such session');
+  await exec(TMUX, ['kill-session', '-t', `=${name}`]);
+  lastSendAt.delete(name);
+  return { ok: true, name };
+}
+
+async function sendMany(sessions, payload) {
+  if (!Array.isArray(sessions) || !sessions.length || sessions.length > 50) throw httpError(400, 'sessions must be a non-empty array (max 50)');
+  if (payload.key === undefined && typeof payload.keys !== 'string') throw httpError(400, 'keys (string) or key required');
+  const results = await Promise.all([...new Set(sessions.map(String))].map(async (session) => {
+    try {
+      if (!(await sessionExists(session))) return { session, ok: false, error: 'no such session' };
+      const out = payload.key !== undefined
+        ? await sendKey(session, String(payload.key))
+        : await sendKeys(session, payload.keys, payload.enter !== false);
+      return { session, ...out };
+    } catch (err) {
+      return { session, ok: false, error: err.stderr ? String(err.stderr).trim().slice(0, 120) : err.message };
+    }
+  }));
+  return { ok: results.every((r) => r.ok), results };
+}
+
+// Candidate working dirs: repos + their worktrees under $HOME (depth <= 3), plus live pane cwds.
+let dirsCache = { at: 0, value: null };
+const SKIP_DIRS = new Set(['node_modules', 'snap', 'venv', '.venv', '__pycache__', 'dist', 'build', 'target']);
+async function walkRepos(dir, depth, out) {
+  let ents;
+  try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
+  if (ents.some((e) => e.name === '.git')) { out.push(dir); return; }
+  if (depth >= 3) return;
+  for (const e of ents) {
+    if (!e.isDirectory() || e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
+    await walkRepos(join(dir, e.name), depth + 1, out);
+  }
+}
+
+async function collectDirs() {
+  if (dirsCache.value && Date.now() - dirsCache.at < 60000) return dirsCache.value;
+  const repos = [];
+  // depth counted from $HOME: ~/a (1), ~/a/b (2), ~/a/b/c (3)
+  let top = [];
+  try { top = await readdir(HOME, { withFileTypes: true }); } catch {}
+  if (existsSync(join(HOME, '.git'))) repos.push(HOME);
+  await pool(top.filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)), 6, (e) => walkRepos(join(HOME, e.name), 1, repos));
+  const paths = new Set(repos);
+  await pool(repos, 6, async (repo) => {
+    try {
+      const { stdout } = await exec('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { timeout: 4000 });
+      for (const l of stdout.split('\n')) {
+        // Skip Claude's ephemeral agent worktrees; they only show up if a pane is actually in one.
+        if (l.startsWith('worktree ') && !l.includes('/.claude/worktrees/')) paths.add(l.slice(9));
+      }
+    } catch {}
+  });
+  for (const p of (await listPanes()).values()) if (p.cwd) paths.add(p.cwd);
+  const list = [];
+  await pool([...paths], 8, async (path) => {
+    let mtime = 0;
+    for (const f of ['.git/index', '.git/HEAD', '.git', '']) {
+      try { mtime = Math.max(mtime, (await stat(join(path, f))).mtimeMs); } catch {}
+      if (mtime) break;
+    }
+    if (!mtime) return;   // vanished
+    const g = await gitInfo(path);
+    list.push({ path, name: basename(path), branch: g.branch, mtime });
+  });
+  list.sort((a, b) => b.mtime - a.mtime);
+  const value = list.map(({ path, name, branch }) => ({ path, name, branch }));
+  dirsCache = { at: Date.now(), value };
+  return value;
+}
+
 function json(res, code, obj) {
   res.writeHead(code, { 'content-type': 'application/json' });
   res.end(JSON.stringify(obj));
@@ -784,6 +905,24 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: false, error: err.message }));
     }
     return;
+  }
+  if (req.method === 'POST' && p === '/api/sessions') {
+    try { return json(res, 200, await createSession(await readJsonBody(req))); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'DELETE' && p.startsWith('/api/sessions/')) {
+    try { return json(res, 200, await killSession(decodeURIComponent(p.slice('/api/sessions/'.length)), url.searchParams.get('confirm'))); }
+    catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/dirs') {
+    try { return json(res, 200, await collectDirs()); }
+    catch (err) { return json(res, 500, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/send-many') {
+    try {
+      const payload = await readJsonBody(req);
+      return json(res, 200, await sendMany(payload.sessions, payload));
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
