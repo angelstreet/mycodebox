@@ -50,7 +50,8 @@ PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
 | `PORT`        | `7777` | listen port |
 | `HOST`        | `0.0.0.0` | listen addr (`tailscale0` is the safest) |
 | `TICK_MS`     | `1000`  | pane capture cadence |
-| `PANE_LINES`  | `2000`  | scrollback lines per pane |
+| `PANE_LINES`  | `1000`  | scrollback lines captured for a session with an open card (a WebSocket viewer); the unit sets 2000 |
+| `PANE_LINES_BG` | `300` | scrollback lines for every other session (state, reply and manager only need the tail) |
 | `NTFY_TOPIC`  | unset   | enable optional ntfy push (Web Push is always on): a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
 | `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
 | `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |

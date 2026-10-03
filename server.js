@@ -41,7 +41,8 @@ const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
 const HOST = process.env.HOST || '0.0.0.0';
 const TICK_MS = Number(process.env.TICK_MS || 1000);
-const PANE_LINES = Number(process.env.PANE_LINES || 1000);
+const PANE_LINES = Number(process.env.PANE_LINES || 1000);            // depth for a session someone has open
+const PANE_LINES_BG = Number(process.env.PANE_LINES_BG || 300);         // depth for the rest (state only needs the tail)
 const PUBLIC_DIR = fileURLToPath(new URL('./public', import.meta.url));
 
 // HTTPS support. If both TLS_KEY and TLS_CERT exist, we listen on TLS too.
@@ -169,11 +170,11 @@ function agentFromText(text) {
 const tgt = (s) => `=${s}:`;
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
 
-async function capturePane(session) {
-  // Visible pane + modest scrollback. No -J: keep tmux's own line breaks so
+async function capturePane(session, lines = PANE_LINES) {
+  // Visible pane + scrollback. No -J: keep tmux's own line breaks so
   // the client can size xterm to the pane's cols. -e keeps colour escapes.
   const { stdout } = await exec(TMUX, [
-    'capture-pane', '-t', tgt(session), '-p', '-e', '-S', `-${PANE_LINES}`,
+    'capture-pane', '-t', tgt(session), '-p', '-e', '-S', `-${lines}`,
   ], { maxBuffer: 16 * 1024 * 1024 });
   return stdout;
 }
@@ -579,8 +580,11 @@ async function pollOnce() {
     const p = panes.get(s.name) || { pid: 0, cmd: '', cols: 0, rows: 0, dead: false };
     let pane = null;
     let failed = false;
+    // Full scrollback only for sessions with an open card/cell (a WebSocket viewer); the rest
+    // get the tail, which is all the state, reply and manager parsing need. Saves tmux CPU.
+    const depth = wsBySession.has(s.name) ? PANE_LINES : PANE_LINES_BG;
     if (!p.dead) {
-      try { pane = await capturePane(s.name); } catch { failed = true; }
+      try { pane = await capturePane(s.name, depth); } catch { failed = true; }
     }
     const offline = p.dead || failed;
     const prev = lastSnapshots.get(s.name);
@@ -588,12 +592,13 @@ async function pollOnce() {
     if (!offline) {
       changed = !prev || prev.pane !== pane || prev.cols !== p.cols || prev.rows !== p.rows;
       if (changed) {
-        lastSnapshots.set(s.name, { pane, cols: p.cols, rows: p.rows });
+        lastSnapshots.set(s.name, { pane, cols: p.cols, rows: p.rows, depth });
         changedSessions.push(s.name);
       }
     }
     const t = track.get(s.name) || { changeAt: 0, workingSince: null, lastWorkAt: 0, realWork: false, prevState: undefined, doneAt: null, ackFor: null, ackAt: null, reply: null, replyHash: null, contextLeft: null, model: null };
-    const paneChanged = !!(changed && prev && prev.pane !== pane);
+    // A change of capture depth (card opened/closed) is not activity.
+    const paneChanged = !!(changed && prev && prev.pane !== pane && prev.depth === depth);
     if (paneChanged) t.changeAt = now;   // first sight is not activity
     track.set(s.name, t);
     // Delivery ack: first pane change after the most recent send.
@@ -1194,7 +1199,12 @@ server.on('upgrade', (req, socket, head) => {
       // Send the cached snapshot on open so the pane is never blank.
       const send = (c) => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'snapshot', session, pane: c.pane, cols: c.cols, rows: c.rows }));
       const cache = lastSnapshots.get(session);
-      if (cache) send(cache);
+      if (cache && cache.depth >= PANE_LINES) send(cache);
+      else if (cache) {
+        // The cached capture is the short background one: paint it at once, then the full history.
+        send(cache);
+        capturePane(session).then((pane) => send({ pane, cols: cache.cols, rows: cache.rows }), () => {});
+      }
       else {
         capturePane(session).then((pane) => send({ pane }), () => {});
       }
