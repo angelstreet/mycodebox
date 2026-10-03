@@ -712,10 +712,11 @@ async function readJsonBody(req) {
     let size = 0;
     req.on('data', (c) => {
       size += c.length;
-      if (size > MAX_BODY) { reject(Object.assign(new Error('body too large'), { status: 413 })); req.destroy(); return; }
+      if (size > MAX_BODY) { if (size - c.length <= MAX_BODY) reject(Object.assign(new Error('body too large'), { status: 413 })); chunks.length = 0; return; }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (size > MAX_BODY) return;
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
       catch (e) { reject(e); }
     });
