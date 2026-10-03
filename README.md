@@ -187,6 +187,27 @@ curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
 curl -s -XPOST localhost:7777/api/manager/cancel/task05 -H 'content-type: application/json' -d '{}'
 ```
 
+## Deploy queue (TASK-44 phase 7)
+
+Agents do not run `update_core.sh`; they queue a request in the shared lease registry (`vpt-lease deploy request ...`)
+and wait (`vpt-lease deploy wait <id>`). `deploy-runner.js` polls the queue every 30 s, shows it in the manager sheet
+(approve / cancel, what each request waits on, live log of the running one, a warning when the ref differs from the
+last one deployed) and a "deploy pending" pill in the Leases section. A request without `--approved` waits for one tap
+in the sheet and pushes an alert.
+
+- **Off by default.** The runner only starts deploys when `manager.json` has `"deployRunner": true` (switch in the
+  manager sheet or `POST /api/manager {"deployRunner":true}`). Off = it only reads the queue.
+- **Env map** (not in the repo): `$GHOSTY_STATE_DIR/deploy-envs.json`, written with defaults on first run:
+  `{ "<env>": { "ssh": "<host>", "cmd": "bash update_core.sh", "health": "<optional remote command, exit 0 = healthy>" } }`.
+  Only envs in the map are deployed. Scope to flags: `frontend` -> `--frontend`, `host` -> `--host`, `server` -> `--server`,
+  `full` -> none. The command runs as `ssh <host> "VPT_LEASE_AGENT=manager:deploy <cmd> <ref> <flags>"` (45 min timeout), output in
+  `$GHOSTY_STATE_DIR/deploys/<id>.log`. Without `health`, only update_core's exit code decides done / failed.
+- One running deploy per env. Queued requests with the same env + ref that the running scope covers (`full` covers all; other scopes only
+  themselves) are finished with its result (`coalescedInto`).
+- Registry: `ssh proxmox '~/bin/vpt-lease ...'`; `DEPLOY_REGISTRY='["python3","/path/vpt-lease"]'` runs it locally (tests, live checks).
+  `DEPLOY_POLL_MS`, `DEPLOY_TIMEOUT_MS` override the timings.
+- API: `GET /api/deploys`, `POST /api/deploys/:id/approve|cancel`, `GET /api/deploys/:id/log?tail=200`; `{type:'deploys'}` on `/ws/status`.
+
 ## Priority, pause and quota
 
 **Priority.** Every session is `P0`, `P1` or `P2` (default `P2`, also for a session seen for the first

@@ -38,7 +38,7 @@ export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], ...POLICY_DEFAULTS };
+let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
 const watch = new Map();   // session -> { since, hash, stall, pending: {id, at, auto}, last, auto }
 const sentLog = new Map(); // session -> [ms epoch of each auto answer] (hourly cap)
@@ -67,6 +67,7 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, log ${LOG_FILE}`);
 }
 
+export const deployRunnerOn = () => config.deployRunner === true;
 export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct });
 
 export function managerConfig() {
@@ -80,7 +81,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct } = b;
+  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -91,6 +92,7 @@ export async function setManagerConfig(b = {}) {
   if (delayMs !== undefined) config.delayMs = Math.round(num(delayMs, 0, 600000, 'delayMs'));
   if (maxPerSessionPerHour !== undefined) config.maxPerSessionPerHour = Math.round(num(maxPerSessionPerHour, 0, 100, 'maxPerSessionPerHour'));
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
+  if (typeof deployRunner === 'boolean') config.deployRunner = deployRunner;
   if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');
   if (p2MaxPct !== undefined) config.p2MaxPct = num(p2MaxPct, 1, 100, 'p2MaxPct');
   if (session && typeof sessionEnabled === 'boolean') {
