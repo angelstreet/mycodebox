@@ -26,7 +26,7 @@ await m.initManager({ onOwnerNeeded: (s, st) => pushes.push([s, st.case]) });
 
 const RULE = '─'.repeat(40);
 const pane = (body, prompt = '❯ ') => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, prompt, RULE, '  ⏵⏵ bypass permissions on'];
-const tick = (name, state, plain, now, extra = {}) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, project: 'p', now, ...extra });
+const tick = (name, state, plain, now, extra = {}) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, realWork: state === 'working', project: 'p', now, ...extra });
 const records = () => (existsSync(m.LOG_FILE) ? readFileSync(m.LOG_FILE, 'utf8').split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }) : []);   // a line may be mid-write
 const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
 // Log writes are async (Jev round trip, appendFile): wait for the record instead of a fixed sleep.
@@ -62,7 +62,7 @@ test('a stall is logged once after it settles, then its outcome when work resume
 
 test('ambiguous stall goes to Jev; the forbidden gate still wins', async () => {
   tick('s2', 'working', ['busy'], 0);
-  const p = pane('Branch is ready.\nNext I will deploy it to the hosts.');
+  const p = pane('Branch is ready.\nNext step: deploy it to the hosts.');
   tick('s2', 'done', p, 1000); tick('s2', 'done', p, 2500);
   await until((r) => r.type === 'stall' && r.session === 's2');
   const r = records().find((x) => x.type === 'stall' && x.session === 's2');

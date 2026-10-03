@@ -28,7 +28,7 @@ await m.initManager({
 
 const RULE = '─'.repeat(40);
 const pane = (body, prompt = '❯ ') => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, prompt, RULE, '  ⏵⏵ bypass permissions on'];
-const tick = (name, state, plain, now, extra = {}) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, project: 'p', now, ...extra });
+const tick = (name, state, plain, now, extra = {}) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, realWork: state === 'working', project: 'p', now, ...extra });
 const records = () => (existsSync(m.LOG_FILE) ? readFileSync(m.LOG_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DELAY = 150;
@@ -155,7 +155,7 @@ test('the session moving on or the owner sending cancels it', async () => {
 test('forbidden topics are never auto-answered, even when Jev says continue with probability 1', async () => {
   await on();
   jevProb = 1;
-  await stall('f1', pane('Branch is ready.\nNext I will deploy it to the hosts.'));
+  await stall('f1', pane('Branch is ready.\nNext step: deploy it to the hosts.'));
   assert.equal(m.autoOf('f1'), null);
   await stall('f2', pane('Migration written.\nShall I continue and delete the old table?'));
   assert.equal(m.autoOf('f2'), null);
@@ -225,6 +225,39 @@ test('global off or a disabled session at fire time sends nothing', async () => 
   await m.setManagerConfig({ session: 'g4', sessionEnabled: false });
   await stall('g4', pane(CONTINUE));
   assert.equal(rec('stall', 'g4').length, 0);
+});
+
+test('stopped_short and ask_status are valid autoCases, off unless enabled', async () => {
+  const SHORT = "Cache layer is in. Next I'll wire it into the reader.";
+  const NOSTATUS = 'Changed the retry delay.\nRenamed a helper.';
+  await on({ autoCases: ['continue'] });
+  await stall('ss1', pane(SHORT));
+  await stall('as1', pane(NOSTATUS));
+  await sleep(DELAY + 100);
+  assert.equal(sentTo('ss1').length + sentTo('as1').length, 0, 'not enabled');
+  assert.equal(rec('stall', 'ss1')[0].case, 'stopped_short');
+  assert.equal(rec('stall', 'as1')[0].no_status, true);
+  assert.equal(rec('escalated', 'as1').length, 0, 'a statusless finished turn is not an escalation');
+  await on({ autoCases: ['stopped_short', 'ask_status'] });
+  await stall('ss2', pane(SHORT));
+  await stall('as2', pane(NOSTATUS));
+  assert.equal(m.autoOf('ss2').case, 'stopped_short');
+  assert.equal(m.autoOf('as2').case, 'ask_status');
+  await sleep(DELAY + 100);
+  assert.deepEqual(texts.filter((x) => x[0] === 'ss2'), [['ss2', 'Yes, continue.', true]]);
+  assert.deepEqual(texts.filter((x) => x[0] === 'as2'), [['as2', 'Before stopping: what is done, what is tested, what is left?', true]]);
+});
+
+test('waiting_deploy and owner_action are never typed and are escalated with their reasons', async () => {
+  await on({ autoCases: ['continue', 'menu_recommended', 'stopped_short', 'ask_status'] });
+  await stall('wd1', pane("I'm waiting on your go-ahead for update_core main --server. Once you approve, I'll deploy."));
+  await stall('oa1', pane('Page is live, so reload it. You will see the new column.'));
+  await sleep(DELAY + 100);
+  assert.equal(sentTo('wd1').length + sentTo('oa1').length, 0);
+  assert.equal(rec('stall', 'wd1')[0].case, 'waiting_deploy');
+  assert.deepEqual(rec('stall', 'wd1')[0].deployHint, { scope: 'server', ref: 'main' });
+  assert.equal(rec('escalated', 'wd1')[0].reason, 'deploy waiting — queue it (Phase 7)');
+  assert.match(rec('escalated', 'oa1')[0].reason, /^needs you: reload/);
 });
 
 test('today counts', async () => {

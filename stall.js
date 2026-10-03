@@ -9,6 +9,11 @@
 //   owner_decision    a real choice only the owner can make
 //   done              the turn finished, nothing asked
 //   error             usage limit, rate limit, API error
+//   stopped_short     the agent announced its next step and stopped, no question, no blocker
+//   waiting_deploy    waiting for leases / a deploy / the owner's go-ahead to deploy (never auto-answered)
+//   owner_action      the agent asks the owner for a small manual thing (reload, plug, press)
+// Any finished turn also carries `no_status` (closing text gives no done / tested / left / next / blocked
+// information); that is a flag, not a case, with an `ask_status` would-answer candidate.
 //
 // Would-answer: `continue` -> "Yes, continue."; `menu_recommended` -> the option's number in a live
 // menu, or "Yes, go with your recommendation." after a finished turn; everything else -> owner.
@@ -95,6 +100,14 @@ const OPTION_RE = /^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.*)$/;
 const RECOMMENDED_RE = /\(recommended\)|\brecommended\b\s*[:)]?$|^recommended\b/i;
 const CONTINUE_Q = /\b(?:shall|should|can|may) I (?:continue|proceed|go ahead|keep going|carry on|move on|start (?:on )?(?:it|that|phase|step|the next))|\bwant me to (?:continue|proceed|go ahead|keep going|carry on|start (?:on )?(?:it|phase|step|the next)|move on)|\bready (?:to|for me to) (?:continue|proceed|move on)|\b(?:continue|proceed|go ahead)\?\s*$|\bnext (?:phase|step)\?\s*$|\bok to (?:continue|proceed)\b/i;
 const DECISION_Q = /^which\b|\bwhich (?:one|option|approach|do you|would you|should)\b|\bwould you (?:rather|prefer|like me to)\b|\bor (?:should I|do you|would you|leave|keep|wait|not)\b|\bdo you want (?:me to )?\S.*\bor\b|\byour call\b|\bprefer\b/i;
+// stopped_short: "I'll start adding X", "Next I'll ...", "Once it's built I'll rerun ...". A blocker, a wait,
+// an explicit stop or an offer ("if you want") is not a stop for no reason.
+const SHORT_RE = /\b(?:I'?ll|I will|I'?m going to|I am going to)\s+(?:now\s+|next\s+|then\s+|also\s+)?(?!wait\b|stop\b|leave\b|hold\b|pause\b|not\b|need\b)[a-z]+|\bnext(?: improvement| up)?\s*:|\bnext,? I'?ll\b|\bonce\b[^.\n]{0,60},? I'?ll\b/i;
+const SHORT_BLOCK_RE = /\bblocked\b|\bcannot\b|\bcan'?t\b|\bwaiting\b|\bI'?ll wait\b|\bwill wait\b|\bI'?m stopping\b|\bstopping here\b|\bI'?ll stop\b|\bI'?ll leave\b|\bpausing\b|\bneed(?:s)? (?:your|you|a |an )|\buntil you\b|\bonce you\b|\blet me know\b|\bif you(?:'d)? (?:want|like|prefer)\b|\bbefore (?:deploy|pushing|merging)|\bsay the word\b|\bas soon as you\b|\b(?:send|tell|give|paste) me\b|\bI'?ll (?:report|resume|let you know|review)\b|\b(?:still )?running\b|\bin the background\b|\b(?:finishes|completes|goes through)\b|\bwhen it\b/i;
+// waiting_deploy: waiting on leases, live runs, a deploy, or the owner's go-ahead for one.
+const WAIT_DEPLOY_RE = /\bwaiting (?:on|for)\b[^.\n]{0,80}(?:go-ahead|approval|approve|leases?|deploy|restart|live runs?)|\bgo-ahead (?:to|for)\b[^.\n]{0,60}(?:deploy|restart|update_core)|\bwait(?:ing)? (?:for|on) your (?:answer|ok|go-ahead|approval)\b[^.\n]{0,40}(?:deploy|restart)|\bupdate_core(?:\.sh)?\b[^.\n]{0,40}(?:go-ahead|approv|waiting)|\bblocked by\b[^.\n]{0,40}(?:live )?(?:runs?|leases?)|\b(?:once|when|after)\b[^.\n]{0,40}\bleases? (?:clear|release|free|expire)|\bnot deployed yet\b|\bneeds a (?:server |host |frontend )?restart\b/i;
+const OWNER_ACTION_RE = /(?:^|[,;:.]\s+(?:so\s+)?|\bplease\s+|\byou (?:need to|can|should|have to|must|could)\s+|\b(?:can|could|would) you\s+)(reload|refresh|hard[- ]refresh|plug(?: in)?|unplug|replug|power[- ]cycle|press|tap|click|reconnect|check (?:the |your )?(?:phone|tv|screen|device|box|remote)|(?:turn|switch) (?:on|off)|open (?:the|your) (?:app|page|phone|tv))\b([^.\n?]*)/im;
+const STATUS_RE = /\b(?:done|finished|complete[d]?|tested|verified|passed|passing|green|failing|failed|left|remaining|to do|todo|next|blocked|pending|not (?:yet )?(?:tested|deployed|done|run)|untested|still needs?|status)\b|\b\d+\s+(?:passed|failed|tests?)\b/i;
 const NEXT_STEP = /\bnext(?::| is| step| phase| I'?d| I will| I'll)|\bI'?ll (?:now|next|then)\b|\bthen I(?:'ll| will)\b|\bstill to do\b|\bremaining\b/i;
 
 export const FORBIDDEN_RE = /\bdeploy|update_core|\brollout\b|systemctl (?:restart|stop|start)|pm2 (?:restart|stop|delete)|\brestart (?:the )?(?:service|server|unit|host)|\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\bgit push\b|force[- ]?push|reset --hard|\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm -r|\bdrop (?:table|database|schema)|\bprune\b|\btruncate\b|\bmigrat(?:e|ion)|\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcustomer/i;
@@ -155,16 +168,57 @@ export function classifyStall({ plain, raw = null, state }) {
   const opts = menuOptions(close);
   const rec = opts.find((o) => RECOMMENDED_RE.test(o.text)) || (/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' ')) && { n: Number(/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' '))[1]) });
   out.forbiddenText = close.slice(-6).join('\n');
-  if (asks) {
+  // The agent's own words: lines after the last tool-output line (its "5 passed" is not a status report).
+  const toolEnd = close.reduce((k, l, i) => (/^\s*[⎿└]/.test(l) ? i : k), -1);
+  const msg = close.slice(toolEnd + 1).length ? close.slice(toolEnd + 1) : close;
+  const tailText = msg.slice(-6).join(' ').replace(/\s+/g, ' ');
+  const lastText = last.replace(/\s+/g, ' ');
+  const wait = WAIT_DEPLOY_RE.exec(tailText);
+  const act = opts.length < 2 && !wait ? OWNER_ACTION_RE.exec(lastText) || OWNER_ACTION_RE.exec(tailText) : null;
+  if (wait) {
+    out.case = 'waiting_deploy';
+    out.deployHint = deployHint(tailText);
+  } else if (act) {
+    out.case = 'owner_action';
+    out.action = actionOf(act, tailText);
+  } else if (asks) {
     if (opts.length >= 2 && rec) { out.case = 'menu_recommended'; out.answer = { text: 'Yes, go with your recommendation.' }; }
     else if (opts.length >= 2 || DECISION_Q.test(last)) out.case = 'owner_decision';
     else if (CONTINUE_Q.test(last)) { out.case = 'continue'; out.answer = { text: 'Yes, continue.' }; }
     else { out.case = 'owner_decision'; out.source = 'ambiguous'; }
+  } else if (SHORT_RE.test(lastText) && !SHORT_BLOCK_RE.test(lastText)) {
+    out.case = 'stopped_short'; out.answer = { text: 'Yes, continue.' };
   } else if (NEXT_STEP.test(close.slice(-4).join(' '))) {
     // Stopped while announcing a next step: maybe it should just carry on.
     out.case = 'done'; out.source = 'ambiguous';
   } else out.case = 'done';
+  // no_status: a closing text that never says what is done / tested / left / next / blocked. A question,
+  // a deploy wait and an owner action each state their own next step, so they are not flagged.
+  out.no_status = !asks && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
+  if (out.no_status && out.case === 'done') { out.answer = { text: ASK_STATUS_TEXT }; out.autoCase = 'ask_status'; }
   return finish(out);
+}
+
+export const ASK_STATUS_TEXT = 'Before stopping: what is done, what is tested, what is left?';
+
+// {scope?, ref?} when the closing text names them (--host / --server / --frontend, a branch).
+function deployHint(text) {
+  const hint = {};
+  const flag = /--(host|server|frontend)\b/i.exec(text) || /\b(host|server|frontend)\s+(?:deploy|restart)/i.exec(text) || /\b(?:deploy|restart)\s+(?:the |every )?(host|server|frontend)\b/i.exec(text);
+  if (flag) hint.scope = flag[1].toLowerCase();
+  const ref = /\bupdate_core(?:\.sh)?\s+(?!-)([\w./-]+)/i.exec(text) || /\bbranch\s+[`']?([\w.-]*[\/-][\w./-]*)/i.exec(text) || /\b(main|master)\b/.exec(text);
+  if (ref) hint.ref = ref[1];
+  return hint;
+}
+
+// "reload it" + "Review page" earlier -> "reload the review page".
+function actionOf(m, text) {
+  let a = `${m[1]}${(m[2] || '').split(/,|;|\s(?:to|so|and|or|because|if|—)\s|\s-\s/)[0]}`.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/\b(?:it|this|that|them)$/i.test(a)) {
+    const noun = /\b([A-Za-z-]+) page\b/.exec(text);
+    a = a.replace(/\b(?:it|this|that|them)$/i, noun ? `the ${noun[1].toLowerCase()} page` : '').trim();
+  }
+  return a.slice(0, 60);
 }
 
 function finish(out) {
@@ -175,7 +229,7 @@ function finish(out) {
 
 // Apply a Jev decision (continue | take_recommended | ask_owner) to an ambiguous stall.
 export function applyJev(stall, choice) {
-  const s = { ...stall, source: 'jev', jevChoice: choice };
+  const s = { ...stall, source: 'jev', jevChoice: choice, autoCase: undefined };
   if (choice === 'continue') { s.case = 'continue'; s.answer = { text: 'Yes, continue.' }; }
   else if (choice === 'take_recommended') { s.case = 'menu_recommended'; s.answer = { text: 'Yes, go with your recommendation.' }; }
   else { s.case = s.case === 'done' ? 'done' : 'owner_decision'; s.answer = null; }
@@ -184,10 +238,10 @@ export function applyJev(stall, choice) {
 
 // The final gate: what would actually be typed. Forbidden topics, drafts and owner cases never are.
 export function wouldSend(stall) {
-  if (!stall.answer) return { send: null, why: stall.case === 'done' ? 'finished' : 'owner' };
+  if (!stall.answer) return { send: null, why: { done: 'finished', waiting_deploy: 'deploy waiting', owner_action: 'owner action' }[stall.case] || 'owner' };
   if (stall.forbidden) return { send: null, why: `forbidden: ${stall.forbidden}` };
   if (stall.draft) return { send: null, why: 'owner has a draft in the input box' };
-  return { send: stall.answer, why: stall.case };
+  return { send: stall.answer, why: stall.autoCase || stall.case };
 }
 
 // What the owner actually did next, reduced to the same vocabulary, for the shadow-mode report.

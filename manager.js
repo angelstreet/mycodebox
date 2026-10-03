@@ -8,7 +8,8 @@
 //                    policyEnabled, p1MaxPct, p2MaxPct }  (policy: public/policy.js)
 //   stalls.jsonl   {type:'stall'} per stall, {type:'answer'} / {type:'answer_cancelled'} / {type:'escalated'},
 //                  {type:'hold'|'resume', by:'manager'|'owner'} for quota holds (phase 6),
-//                  and one {type:'outcome'} line when the session moves on
+//                  one {type:'outcome'} line when the session moves on after REAL work (a spinner, or a send),
+//                  and {type:'label'} owner labels on a stall ("this stop bothered me", POST /api/manager/label)
 //   jev-budget.json { day, calls, cost }
 //
 // It never starts, kills or renames sessions.
@@ -31,10 +32,12 @@ const JEV_API_KEY = process.env.JEV_API_KEY || '';
 const JEV_DAILY_USD = Number(process.env.JEV_DAILY_USD || 0.25);
 const JEV_DAILY_CALLS = Number(process.env.JEV_DAILY_CALLS || 2000);
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
+export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action'];
+export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
-export const AUTO_CASES = ['continue', 'menu_recommended'];   // the only cases that may ever auto-send
+export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
 let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
 const watch = new Map();   // session -> { since, hash, stall, pending: {id, at, auto}, last, auto }
@@ -67,7 +70,7 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
 export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct });
 
 export function managerConfig() {
-  return { ...config, validCases: AUTO_CASES, jev: !!JEV_URL, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS } };
+  return { ...config, validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS } };
 }
 
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
@@ -120,6 +123,8 @@ const hourCount = (name) => {
 // Owner-facing reason a stall is not auto-answered.
 function humanWhy(final, ws) {
   const w = String(ws.why || '');
+  if (final.case === 'waiting_deploy') return 'deploy waiting — queue it (Phase 7)';
+  if (final.case === 'owner_action') return `needs you: ${final.action || 'a manual step'}`;
   if (w.startsWith('forbidden: ')) return `${w.slice(11)} question — needs you`;
   if (w.includes('draft')) return 'you have a draft in the input box';
   if (final.case === 'error') return 'agent hit an error or limit — needs you';
@@ -132,7 +137,8 @@ function humanWhy(final, ws) {
 function autoBlock(name, final, confidence) {
   if (isPaused(name)) return 'session paused by owner';
   if (!config.autoSend) return 'auto-answer is off';
-  if (!config.autoCases.includes(final.case)) return `${final.case} is not an auto-answer case`;
+  const key = final.autoCase || final.case;
+  if (!config.autoCases.includes(key)) return `${key} is not an auto-answer case`;
   if (confidence < config.minConfidence) return `confidence ${confidence.toFixed(2)} below ${config.minConfidence}`;
   if (hourCount(name) >= config.maxPerSessionPerHour) return `hourly cap reached (${config.maxPerSessionPerHour})`;
   return null;
@@ -249,6 +255,20 @@ async function fire(name, auto) {
   logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence });
 }
 
+// Owner label on a logged stall ("this stop bothered me"). Appended; the newest label of an id wins.
+export async function labelStall({ id, label, note, correctCase } = {}) {
+  if (typeof id !== 'string' || !id) throw bad('id required');
+  if (!LABELS.includes(label)) throw bad(`label must be one of: ${LABELS.join(', ')}`);
+  if (note != null && (typeof note !== 'string' || note.length > 500)) throw bad('note must be a string of at most 500 characters');
+  if (correctCase != null && !CASES.includes(correctCase)) throw bad(`correctCase must be one of: ${CASES.join(', ')}`);
+  let known = false;
+  try { known = (await readFile(LOG_FILE, 'utf8')).includes(`"id":"${id.replace(/[^\w-]/g, '')}"`); } catch {}
+  if (!known) throw Object.assign(new Error('unknown stall id'), { status: 404 });
+  const rec = { type: 'label', id, label, note: note || null, correctCase: label === 'wrong_case' ? correctCase || null : null, at: new Date().toISOString() };
+  await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
+  return rec;
+}
+
 // Counts since local midnight, for the UI panel.
 export async function todayCounts() {
   const since = new Date().setHours(0, 0, 0, 0);
@@ -325,12 +345,20 @@ export function observe(s) {
   w.agent = s.agent;
   w.last = { state: s.state, lastSendAt: s.lastSendAt || null, now: s.now };
   const stopped = s.state === 'waiting' || s.state === 'done';
+  // The session only counts as moved on when real work was seen (the spinner signal ghosty computes) or
+  // somebody sent it something since the stall. A TUI that merely repaints flips ghosty's state to
+  // 'working' for a few seconds without doing anything: that must not reset the stall.
+  const sentSince = !!(w.pending && s.lastSendAt && s.lastSendAt > w.pending.at);
+  const moved = !!s.realWork || sentSince;
+  if (moved) w.moved = true;
   if (!stopped) {
+    const flicker = s.state === 'working' && !moved;
+    if (flicker) { w.seen = true; return w.stall; }
     if (w.auto) cancelAuto(s.name, 'session moved on');
-    // The session moved on: settle the outcome of the last stall.
-    if (w.pending && s.state === 'working') {
+    // The session really moved on: settle the outcome of the last stall.
+    if (w.pending && s.state === 'working' && moved) {
       const p = w.pending;
-      const sent = s.lastSendAt && s.lastSendAt > p.at ? s.lastSendText : null;
+      const sent = sentSince ? s.lastSendText : null;
       const reply = ownerReply(s.plain, sent);
       log({ type: 'outcome', id: p.id, session: s.name, at: new Date(s.now).toISOString(), afterSec: Math.round((s.now - p.at) / 1000),
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
@@ -354,6 +382,9 @@ export function observe(s) {
   if (!w.seen) { w.logged = true; w.seen = true; return w.stall; }
   if (w.logged || s.now - w.since < SETTLE_MS || !sessionOn(s.name)) return w.stall;
   w.logged = true;
+  // The very same stop as the last one logged, with no real work or send in between: not a new stop.
+  if (h === w.lastLoggedHash && !w.moved) return w.stall;
+  w.lastLoggedHash = h; w.moved = false;
 
   const id = randomUUID();
   w.pending = { id, at: s.now };
@@ -371,6 +402,7 @@ export function observe(s) {
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
       at: new Date(s.now).toISOString(), case: final.case, source: final.source, question: final.question,
       forbidden: final.forbidden, draft: final.draft, suggestion: final.suggestion,
+      no_status: !!final.no_status, ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
     });
     if (!ws.send) {
@@ -378,8 +410,8 @@ export function observe(s) {
       return;
     }
     const block = autoBlock(s.name, final, confidence);
-    if (block) { escalate(s.name, s.state, final, id, block); return; }
-    const pending = { id, hash: h, answer: ws.send, case: final.case, source: final.source, confidence };
+    if (block) { if (final.case !== 'done') escalate(s.name, s.state, final, id, block); return; }
+    const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence };
     const pol = policyOf(s.name, s.agent);
     if (pol.action === 'hold') { applyHold(s.name, w, pending, pol); return; }
     if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false);

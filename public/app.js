@@ -1824,13 +1824,15 @@ async function mgrPost(body) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
-const CASE_LABEL = { continue: 'continue? → "Yes, continue."', menu_recommended: 'recommended option' };
+const CASE_LABEL = { continue: 'continue? → "Yes, continue."', menu_recommended: 'recommended option', stopped_short: 'stopped short → "Yes, continue."', ask_status: 'no status → "what is done / tested / left?"' };
+const firstLine = (t) => (String(t || '').split('\n').map((x) => x.trim()).filter(Boolean).slice(-1)[0] || '').slice(0, 140);
+let mgrUnlabelled = false;   // panel filter: only stops the owner has not labelled yet
 const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
 function logLine(r) {
   const sess = displayName(r.session || '');
   if (r.type === 'stall') {
     const w = r.wouldSend ? (r.wouldSend.text != null ? r.wouldSend.text : `option ${r.wouldSend.key}`) : null;
-    return { cls: w ? 'would' : 'owner', tag: w ? 'would' : 'owner', sess, case: r.case, text: w || r.why || '' };
+    return { cls: w ? 'would' : 'owner', tag: w ? 'would' : 'owner', sess, case: r.case, text: w || r.why || '', stop: true };
   }
   if (r.type === 'answer') return { cls: 'sent', tag: 'answered', sess, case: r.case, text: r.answer?.text ?? `option ${r.answer?.key}` };
   if (r.type === 'answer_cancelled') return { cls: 'canc', tag: 'cancelled', sess, case: r.case || '', text: r.reason || '' };
@@ -1850,13 +1852,25 @@ function openManager() {
       try {
         [cfg, log] = await Promise.all([
           fetch('/api/manager').then((r) => r.json()),
-          fetch('/api/manager/log?limit=200').then((r) => r.json()),
+          fetch('/api/manager/log?limit=800').then((r) => r.json()),
         ]);
       } catch { body.innerHTML = '<div class="sheet-empty">could not load</div>'; return; }
       const off = new Set(cfg.disabledSessions || []);
       const heldNow = state.sessions.map((s) => s.name).filter((n) => state.status[n]?.held);
       const t = cfg.today || {};
-      const entries = (log.entries || []).filter((r) => logLine(r)).slice(-30).reverse();
+      const labels = new Map();   // stall id -> newest owner label
+      for (const r of log.entries || []) if (r.type === 'label') labels.set(r.id, r);
+      const entries = (log.entries || []).filter((r) => logLine(r) && !(mgrUnlabelled && (r.type !== 'stall' || labels.has(r.id)))).slice(-30).reverse();
+      const caseOpts = (cfg.cases || []).map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      const stopRow = (r, l) => {
+        const lab = labels.get(r.id);
+        const live = !!state.status[r.session];
+        return `<div class="ml stop ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s${live ? ' go' : ''}" ${live ? `data-open="${escapeHtml(r.session)}"` : ''}>${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span>
+          <span class="x"><b>${escapeHtml(l.case)}</b>${r.no_status ? ' <i class="ns">no status</i>' : ''} &middot; ${escapeHtml(l.text)}</span>
+          <span class="q">${escapeHtml(firstLine(r.excerpt || r.question))}</span>
+          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
+            : `<button class="sbtn lb" data-label="no_reason" data-id="${escapeHtml(r.id)}" title="stopped for no reason" aria-label="stopped for no reason">👎</button><button class="sbtn lb" data-label="legit" data-id="${escapeHtml(r.id)}" title="legit stop" aria-label="legit stop">👍</button><select class="lb" data-wrong="${escapeHtml(r.id)}" aria-label="wrong case"><option value="">wrong case…</option>${caseOpts}</select><input class="lbn" data-note="${escapeHtml(r.id)}" placeholder="note" maxlength="500">`}</span></div>`;
+      };
       body.innerHTML = `
         <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend"><i></i><span>Auto-answer <b>${cfg.autoSend ? 'ON' : 'OFF'}</b></span></button>
         <div class="mcases">${(cfg.validCases || []).map((c) => `<label class="mchk"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span>${escapeHtml(CASE_LABEL[c] || c)}</span></label>`).join('')}</div>
@@ -1867,17 +1881,38 @@ function openManager() {
         <div class="mheld">${heldNow.map((n) => `<div class="mh"><b>${escapeHtml(displayName(n))}</b> ${escapeHtml(prioOf(n))} <span class="dim">${escapeHtml(state.status[n].held.reason)}</span></div>`).join('') || '<div class="dim">no session held</div>'}</div>
         <div class="mcounts"><span class="sent"><b>${t.answered ?? 0}</b> answered</span><span class="canc"><b>${t.cancelled ?? 0}</b> cancelled</span><span class="esc"><b>${t.escalated ?? 0}</b> escalated</span><span class="dim">today</span></div>
         <div class="side-sub">Last ${entries.length}</div>
-        <div class="mlog">${entries.map((r) => { const l = logLine(r); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
+        <label class="mchk"><input type="checkbox" data-unlab ${mgrUnlabelled ? 'checked' : ''}><span>unlabelled stops only</span></label>
+        <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
         <div class="side-sub">Sessions</div>
         <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
     };
     body.onclick = async (e) => {
+      const o = e.target.closest('[data-open]');
+      if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); return; }
+      const lb = e.target.closest('[data-label]');
+      if (lb) {
+        const id = lb.dataset.id;
+        const note = body.querySelector(`[data-note="${CSS.escape(id)}"]`)?.value.trim() || undefined;
+        try {
+          const r = await fetch('/api/manager/label', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, label: lb.dataset.label, note }) });
+          if (!r.ok) throw new Error(r.status);
+        } catch { toast('label failed'); }
+        draw(); return;
+      }
       const sw = e.target.closest('[data-set]');
       if (sw) { try { await mgrPost({ [sw.dataset.set]: !sw.classList.contains('on') }); } catch { toast('save failed'); } draw(); }
     };
     body.onchange = async (e) => {
       const i = e.target;
       try {
+        if (i.dataset.unlab !== undefined) { mgrUnlabelled = i.checked; draw(); return; }
+        if (i.dataset.wrong !== undefined) {
+          if (!i.value) return;
+          const note = body.querySelector(`[data-note="${CSS.escape(i.dataset.wrong)}"]`)?.value.trim() || undefined;
+          const r = await fetch('/api/manager/label', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: i.dataset.wrong, label: 'wrong_case', correctCase: i.value, note }) });
+          if (!r.ok) throw new Error(r.status);
+          draw(); return;
+        }
         if (i.dataset.case) {
           const cases = [...body.querySelectorAll('[data-case]')].filter((x) => x.checked).map((x) => x.dataset.case);
           await mgrPost({ autoCases: cases });

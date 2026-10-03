@@ -59,7 +59,7 @@ await mgr.setManagerConfig({ enabled: true, autoSend: true, autoCases: ['continu
 
 const RULE = '─'.repeat(40);
 const pane = (body) => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'];
-const tick = (name, state, plain, now) => mgr.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, project: 'p', now });
+const tick = (name, state, plain, now) => mgr.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, realWork: state === 'working', project: 'p', now });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CONTINUE = 'Step 1 is done.\nShall I continue with step 2?';
 const records = () => (existsSync(mgr.LOG_FILE) ? readFileSync(mgr.LOG_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);

@@ -16,6 +16,7 @@
 //   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
 //                                 global settings, {session, sessionEnabled} per session
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
+//   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
@@ -43,7 +44,7 @@ import { createQuota } from './quota.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, policyConfig, releaseHold, heldOf, reevaluateHolds, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, policyConfig, releaseHold, heldOf, reevaluateHolds, LOG_FILE } from './manager.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -627,10 +628,11 @@ async function pollOnce() {
 
     let state = 'idle';
     let waitReason = null;
+    let spinning = false;   // the live spinner / WORK_RE signal this tick: real work, not just a repaint
     if (offline) state = 'offline';
     else if (agent !== 'bash' && (waitReason = findWaitReason(tail)) !== null) state = 'waiting';
     else {
-      const spinning = agent !== 'bash' && WORK_RE.test(tail.filter((l) => !/⏵⏵|bypass permissions|accept edits/.test(l)).join('\n'));
+      spinning = agent !== 'bash' && WORK_RE.test(tail.filter((l) => !/⏵⏵|bypass permissions|accept edits/.test(l)).join('\n'));
       if (spinning) t.realWork = true;
       if (now - t.changeAt < WORKING_HOLD_MS || spinning) state = 'working';
     }
@@ -679,7 +681,7 @@ async function pollOnce() {
     const meta = offline ? { cwd: p.cwd || null, repo: null, branch: null, dirty: null } : await getMeta(s.name, p.cwd || null);
 
     if (!offline) {
-      observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state,
+      observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state, realWork: spinning,
         project: meta.project ?? null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now });
       t.prevObserved = state;
     }
@@ -1199,6 +1201,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/api/manager') {
     try { return json(res, 200, await setManagerConfig(await readJsonBody(req))); }
     catch (err) { return json(res, err.status || 400, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/manager/label') {
+    try { return json(res, 200, { ok: true, label: await labelStall(await readJsonBody(req)) }); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager/log') {
     const limit = Math.min(2000, Number(url.searchParams.get('limit')) || 200);

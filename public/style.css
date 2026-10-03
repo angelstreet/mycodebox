@@ -836,11 +836,20 @@ body{ display:flex; flex-direction:column; }
 .mcounts{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--ink-2); align-items:baseline; }
 .mcounts b{ font-size:16px; margin-right:3px; }
 .mcounts .sent b{ color:var(--working); } .mcounts .canc b{ color:var(--accent); } .mcounts .esc b{ color:var(--waiting); }
-.mlog{ display:flex; flex-direction:column; gap:1px; font-size:11px; max-height:34vh; overflow-y:auto; flex-shrink:0; }
+.mlog{ display:flex; flex-direction:column; gap:1px; font-size:11px; max-height:46vh; overflow-y:auto; flex-shrink:0; }
 .mlog .ml{ display:grid; grid-template-columns:36px 108px 62px 1fr; gap:6px; padding:3px 0; border-bottom:1px solid var(--line); align-items:baseline; }
 .mlog .ml .t{ color:var(--ink-3); } .mlog .ml .s{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mlog .ml .c{ display:none; }
 .mlog .ml .x{ grid-column:2 / -1; color:var(--ink-3); overflow-wrap:anywhere; }
+/* stop rows: closing line + owner label controls */
+.mlog .ml.stop .q{ grid-column:2 / -1; color:var(--ink-2); overflow-wrap:anywhere; font-style:italic; }
+.mlog .ml.stop .lab{ grid-column:2 / -1; display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding-bottom:2px; }
+.mlog .ml.stop .lab .lb{ min-height:32px; min-width:36px; padding:2px 8px; }
+.mlog .ml.stop .lab select.lb{ background:var(--bg-2, transparent); color:var(--ink); border:1px solid var(--line); border-radius:6px; font-size:11px; }
+.mlog .ml.stop .lab .lbn{ flex:1 1 90px; min-width:0; min-height:32px; font-size:12px; background:transparent; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:0 8px; }
+.mlog .ml .s.go{ color:var(--accent); cursor:pointer; text-decoration:underline; }
+.mlog .ml .ns{ color:var(--waiting); font-style:normal; font-size:10px; }
+.mlog .lbd.no_reason{ color:var(--waiting); } .mlog .lbd.legit{ color:var(--working); } .mlog .lbd.wrong_case{ color:var(--accent); }
 .mlog .ml .g.sent{ color:var(--working); } .mlog .ml .g.canc, .mlog .ml .g.would{ color:var(--accent); } .mlog .ml .g.esc, .mlog .ml .g.owner{ color:var(--waiting); }
 @media (min-width:700px){
   .mlog .ml{ grid-template-columns:42px 90px 70px 110px 1fr; }

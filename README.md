@@ -89,12 +89,39 @@ phone even with the app closed.
 ## AI manager
 
 `stall.js` classifies why an agent stopped — `continue`, `menu_recommended`, `permission`,
-`owner_decision`, `done`, `error` — with rules first and Jev (closed choice
+`owner_decision`, `done`, `error`, plus `stopped_short`, `waiting_deploy`, `owner_action` (below) — with rules first and Jev (closed choice
 `continue | take_recommended | ask_owner`) for the ambiguous ones. `manager.js` logs every stall
 to `stalls.jsonl` with what it would answer, then the owner's real reply as its outcome.
 
+**Stops that bother the owner** (finished turns, rules only):
+
+| case | what it is | would answer / escalation |
+|---|---|---|
+| `stopped_short` | the agent says what it will do next ("I'll start adding X", "Next I'll ...", "Once it is built I'll rerun ...") and stops, no question, no blocker (a wait, "I'm stopping here", "say the word", a running background job all rule it out) | "Yes, continue." (auto case, off by default) |
+| `waiting_deploy` | waiting for leases, live runs or a go-ahead to deploy / restart | never answered; escalated "deploy waiting — queue it (Phase 7)"; the log record carries `deployHint: {scope?, ref?}` (`--host` / `--server` / `--frontend`, `update_core <ref>`, `main`) |
+| `owner_action` | the agent asks the owner for a small manual thing (reload a page, plug a device, press a button, check the phone) | never answered; escalated "needs you: <short action>" |
+
+Any finished-turn stall also carries `no_status`: the closing text (the agent's own words, not tool
+output) never says what is done / tested / left / next / blocked. It is a flag, not a case, and is not set
+for questions, deploy waits or owner actions. A `done` stall with `no_status` has the would-answer
+"Before stopping: what is done, what is tested, what is left?" (auto case `ask_status`, off by default).
+
+**One stop, one record.** A TUI that merely repaints makes ghosty show `working` for a few seconds; that
+is not progress. A session only counts as having moved on when real work was seen (the spinner signal
+ghosty already computes, passed to `observe` as `realWork`) or ghosty sent it something. An outcome is only
+logged after that, and a stall identical to the last logged one is not logged again unless one of those
+happened in between.
+
+**Owner labels.** In the manager panel every stop has 👎 (stopped for no reason) / 👍 (legit) buttons,
+a "wrong case" picker and an optional note; "unlabelled stops only" filters the list and a row's session
+name opens its card. `POST /api/manager/label {id, label: no_reason|legit|wrong_case, note?, correctCase?}`
+appends `{type:'label', ...}` to `stalls.jsonl`. `npm run stall-report` prints labels per case and the
+`no_reason` examples; `--export <file>` writes the labelled stops as JSON (pick a path outside the repo: the
+excerpts are real text) for future fixtures; `--reclassify` re-runs the current classifier over the logged
+excerpts and prints how cases change (the log is not modified).
+
 **Sending is off by default.** Turn it on (`autoSend`) and only the cases in `autoCases` are typed
-(`continue` -> "Yes, continue."; `menu_recommended` -> the option's number in a live menu, or "Yes,
+(`continue` and `stopped_short` -> "Yes, continue."; `ask_status` -> the status question; `menu_recommended` -> the option's number in a live menu, or "Yes,
 go with your recommendation." after a finished turn). A forbidden topic (deploy, push/merge to
 main, delete/remove, migration, `.env`, credentials, money, customer) or an unsent draft in the
 input box always means "ask the owner", whatever Jev says. The manager never starts, kills or
@@ -115,7 +142,7 @@ a waiting session is covered by the existing "needs you" push.
 |---|---|---|
 | `enabled` | `true` | watch and log stalls at all |
 | `autoSend` | `false` | global switch for typing answers |
-| `autoCases` | `[]` | cases allowed to auto-send; valid: `continue`, `menu_recommended` |
+| `autoCases` | `[]` | cases allowed to auto-send; valid: `continue`, `menu_recommended`, `stopped_short`, `ask_status` |
 | `minConfidence` | `0.8` | Jev-derived answers need this probability for the chosen option (rule answers count 1.0) |
 | `delayMs` | `30000` | countdown before an answer is typed |
 | `maxPerSessionPerHour` | `4` | auto answers per session per rolling hour |
@@ -152,7 +179,8 @@ to be under pressure; P0 prefers Claude unless Claude is at 95 % or more; P1 tak
 known plans (Claude on ties). It is a suggestion only: picking an agent yourself wins.
 
 ```bash
-npm run stall-report -- --days 3 --list      # precision per case vs. what the owner answered
+npm run stall-report -- --days 3 --list      # precision per case vs. what the owner answered, owner labels
+npm run stall-report -- --days 3 --reclassify --export ~/labelled-stops.json
 curl -s localhost:7777/api/manager            # config + Jev budget + today's counts
 curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
   -d '{"autoSend":true,"autoCases":["continue"],"delayMs":30000}'

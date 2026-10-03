@@ -29,7 +29,7 @@ await m.setManagerConfig({ enabled: true, autoSend: true, autoCases: ['continue'
 const RULE = '─'.repeat(40);
 const pane = (body) => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'];
 const CONTINUE = 'Step 1 is done.\nShall I continue with step 2?';
-const tick = (name, state, plain, now) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, project: 'p', now });
+const tick = (name, state, plain, now) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, realWork: state === 'working', project: 'p', now });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const flush = () => sleep(30);
 const records = () => (existsSync(m.LOG_FILE) ? readFileSync(m.LOG_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
