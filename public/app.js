@@ -2396,6 +2396,32 @@ function wireFontUi() {
 }
 wireFontUi();
 
+// ---------- Android back button ----------
+// The app is one page, so back would leave it. Keep a sentinel history entry and use each back press
+// to close the topmost thing (sheet, menu, task doc, card view); at the top level, press twice to exit.
+function handleBack() {
+  if (sheetEl) { closeSheet(); return true; }
+  const pop = $('#fontPop');
+  if (pop && !pop.classList.contains('hidden')) { pop.classList.add('hidden'); return true; }
+  if (state.side) { closeSide(); return true; }
+  const doc = document.querySelector('.cell.doc-on');
+  if (doc) { doc.classList.remove('doc-on'); return true; }
+  if (state.mode === 'card') { setMode(state.prevMode || (isPhone() ? 'list' : 'grid')); return true; }
+  return false;
+}
+{
+  let lastBack = 0;
+  history.replaceState({ root: 1 }, '');
+  history.pushState({ app: 1 }, '');
+  window.addEventListener('popstate', () => {
+    if (handleBack()) { history.pushState({ app: 1 }, ''); return; }
+    if (Date.now() - lastBack < 2000) { history.back(); return; }   // second press: leave the app
+    lastBack = Date.now();
+    toast('press back again to exit');
+    history.pushState({ app: 1 }, '');
+  });
+}
+
 window.addEventListener('resize', () => {
   for (const name of state.terms.keys()) relayoutTerm(name);
 });
