@@ -1148,6 +1148,17 @@ function paintReader(cell, n) {
   }
   const html = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
   if (el.dataset.h === html) return;
+  // never swap the content under a finger / a fling: that cancels touch scrolling. Retry once it settles.
+  if (el._busyUntil && Date.now() < el._busyUntil) {
+    clearTimeout(el._retry);
+    el._retry = setTimeout(() => paintReader(cell, n), el._busyUntil - Date.now() + 50);
+    return;
+  }
+  if (!el._wired) {
+    el._wired = true;
+    const busy = () => { el._busyUntil = Date.now() + 1200; };
+    for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, busy, { passive: true });
+  }
   const first = el.dataset.h === undefined;
   const top = el.scrollTop;
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
