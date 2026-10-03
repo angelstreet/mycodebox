@@ -558,40 +558,84 @@ function syncTabs() {
 }
 
 // ---------- sidebar ----------
+const SIDE_GROUPS = [['waiting', 'Needs you'], ['done', 'Done'], ['working', 'Working'], ['idle', 'Idle']];
+function sideGroupOf(n) {
+  const s = stateOf(n);
+  return s === 'waiting' || s === 'done' || s === 'working' ? s : 'idle';
+}
+function sideStateText(n) {
+  if (stateOf(n) === 'done') return `done ${fmtDur(((state.status[n]?.lastActivitySec ?? 0) + (Date.now() - state.statusAt) / 1000))}`;
+  return stateText(n);
+}
+function repoBranch(n) {
+  const st = state.status[n] || {};
+  return [st.repo, st.branch].filter(Boolean).join(' · ');
+}
+function sideSig() {
+  return SIDE_GROUPS.map(([g]) => state.sessions.filter((s) => sideGroupOf(s.name) === g).map((s) => `${g}:${s.name}:${customFor(s.name)}`).join(',')).join('|');
+}
 function renderSide() {
   els.sessionList.innerHTML = '';
   els.sessionCount.textContent = `${state.sessions.length}`;
-  for (const s of state.sessions) {
-    const custom = customFor(s.name);
-    const li = document.createElement('li');
-    li.dataset.session = s.name;
-    li.innerHTML = `
-      <i class="dot"></i>
-      <div class="meta">
-        <div class="name">${escapeHtml(custom || s.name)}</div>
-        <div class="sub"><span class="ag"></span><span class="st"></span>${custom ? `<span>· ${escapeHtml(s.name)}</span>` : ''}</div>
-      </div>
-      <button class="edit" aria-label="Rename">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-      </button>`;
-    li.querySelector('.meta').onclick = (e) => {
-      e.stopPropagation();
-      closeSide();
-      openCard(s.name);
-    };
-    li.querySelector('.edit').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
-    els.sessionList.appendChild(li);
+  els.sessionList.dataset.sig = sideSig();
+  for (const [g, label] of SIDE_GROUPS) {
+    const list = state.sessions.filter((s) => sideGroupOf(s.name) === g);
+    if (!list.length) continue;
+    const h = document.createElement('li');
+    h.className = `grp ${g}`;
+    h.textContent = `${label} · ${list.length}`;
+    els.sessionList.appendChild(h);
+    for (const s of list) els.sessionList.appendChild(buildSideRow(s));
   }
   syncSide();
 }
+function buildSideRow(s) {
+  const custom = customFor(s.name);
+  const li = document.createElement('li');
+  li.dataset.session = s.name;
+  li.innerHTML = `
+    <i class="dot"></i>
+    <div class="meta">
+      <div class="name">${escapeHtml(custom || s.name)}</div>
+      <div class="sub"><span class="ag"></span><span class="sst"></span></div>
+      <div class="sub rb"></div>
+    </div>
+    <button class="edit" aria-label="Rename">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+    </button>
+    <button class="edit kill" aria-label="Kill session">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+    </button>`;
+  li.querySelector('.meta').onclick = (e) => {
+    e.stopPropagation();
+    closeSide();
+    openCard(s.name);
+  };
+  li.querySelector('.edit:not(.kill)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
+  li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
+  return li;
+}
 function syncSide() {
+  if (els.sessionList.dataset.sig !== sideSig() && !els.sessionList.querySelector('li.editing')) { renderSide(); return; }
   for (const li of els.sessionList.children) {
     const n = li.dataset.session;
     if (!n || li.classList.contains('editing')) continue;
     li.classList.toggle('active', n === state.active);
     li.querySelector('.dot').className = `dot ${stateOf(n)}`;
-    li.querySelector('.ag').innerHTML = agentBadgeHtml(n);
-    li.querySelector('.st').textContent = stateText(n);
+    const ag = agentBadgeHtml(n);
+    const agEl = li.querySelector('.ag');
+    if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
+    li.querySelector('.sst').textContent = sideStateText(n);
+    const rb = li.querySelector('.rb');
+    const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
+    if (rb.textContent !== t) rb.textContent = t;
+    rb.classList.toggle('hidden', !t);
+  }
+}
+function tickSide() {
+  for (const li of els.sessionList.children) {
+    const st = li.querySelector('.sst');
+    if (st && li.dataset.session && !li.classList.contains('editing')) st.textContent = sideStateText(li.dataset.session);
   }
 }
 
@@ -603,9 +647,10 @@ function renderLeases() {
     els.leaseList.innerHTML = `<li class="dim">registry unreachable · ${escapeHtml(l.error)}</li>`;
     return;
   }
-  els.leaseCount.textContent = l.length ? `${l.length}` : '';
+  const mine = (x) => /codebox/i.test(x.agent || '');
+  els.leaseCount.textContent = l.length ? `${l.length}${l.some(mine) ? ' · ' + l.filter(mine).length + ' here' : ''}` : '';
   els.leaseList.innerHTML = l.length
-    ? l.map((x) => `<li><b>${escapeHtml(x.resource || '*')}</b> @ ${escapeHtml(x.env || '')}<br>
+    ? l.map((x) => `<li class="${mine(x) ? 'mine' : ''}"><b>${escapeHtml(x.resource || '*')}</b> @ ${escapeHtml(x.env || '')}<br>
         ${escapeHtml(x.agent || '?')} <span class="ttl">· ${x.ttlLeftMin != null ? `${x.ttlLeftMin}m left` : ''}${x.purpose ? ` · ${escapeHtml(x.purpose)}` : ''}</span></li>`).join('')
     : '<li class="dim">no active leases — platforms free</li>';
 }
@@ -875,7 +920,81 @@ function closeSide() {
   if (back) back.classList.remove('on');
 }
 
-// ---------- send ----------
+// ---------- send dock ----------
+const LS_PROMPTS = 'ghosty.prompts';
+const LS_HIST    = 'ghosty.sendHistory';
+const LS_RECENT  = 'ghosty.recentDirs';
+const LS_LEASES  = 'ghosty.leasesOpen';
+const DEFAULT_PROMPTS = ['continue', 'yes, go ahead', 'commit and push', 'run the tests and fix failures', 'summarize status in 3 lines', '/clear'];
+const HIST_MAX = 30;
+const COARSE = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+const dk = {
+  prompts: $('#prompts'), chips: $('#pchips'), histBtn: $('#histBtn'), multiBtn: $('#multiBtn'),
+  mt: $('#mtargets'), stat: $('#dstat'), tchip: $('#tchip'), tdot: $('#tdot'), tname: $('#tname'),
+};
+const dock = {
+  prompts: [], hist: [], multi: false, sel: new Set(), pending: null, hideTimer: 0,
+  hidx: -1, recalled: null, chipsKey: '', mtKey: '',
+};
+
+function loadDock() {
+  try { const p = JSON.parse(lsGet(LS_PROMPTS, 'null')); dock.prompts = Array.isArray(p) ? p.filter((x) => typeof x === 'string' && x.trim()) : DEFAULT_PROMPTS.slice(); }
+  catch { dock.prompts = DEFAULT_PROMPTS.slice(); }
+  try { const h = JSON.parse(lsGet(LS_HIST, '[]')); dock.hist = Array.isArray(h) ? h.slice(0, HIST_MAX) : []; }
+  catch { dock.hist = []; }
+}
+function savePrompts() { lsSet(LS_PROMPTS, JSON.stringify(dock.prompts)); }
+function pushHist(text) {
+  const t = text.trim();
+  if (!t) return;
+  dock.hist = [text, ...dock.hist.filter((x) => x !== text)].slice(0, HIST_MAX);
+  lsSet(LS_HIST, JSON.stringify(dock.hist));
+  dock.hidx = -1;
+}
+
+// ----- generic bottom sheet -----
+let sheetEl = null;
+function closeSheet() {
+  if (!sheetEl) return;
+  const el = sheetEl; sheetEl = null;
+  el.classList.remove('on');
+  setTimeout(() => el.remove(), 180);
+}
+function openSheet(title, build) {
+  closeSheet();
+  const back = document.createElement('div');
+  back.className = 'sheet-back';
+  back.innerHTML = `<div class="sheet" role="dialog" aria-label="${escapeHtml(title)}">
+    <div class="sheet-grab"></div>
+    <div class="sheet-title">${escapeHtml(title)}</div>
+    <div class="sheet-body"></div>
+    <div class="sheet-foot hidden"></div></div>`;
+  back.addEventListener('pointerdown', (e) => { if (e.target === back) closeSheet(); });
+  document.body.appendChild(back);
+  sheetEl = back;
+  const api = { close: closeSheet, body: back.querySelector('.sheet-body'), foot: back.querySelector('.sheet-foot'), title: back.querySelector('.sheet-title') };
+  build(api);
+  requestAnimationFrame(() => back.classList.add('on'));
+  return api;
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sheetEl) closeSheet(); });
+
+const RANK2 = { waiting: 0, done: 1, working: 2, idle: 3, offline: 4 };
+function sortedByNeed() {
+  return [...state.sessions].sort((a, b) =>
+    ((RANK2[stateOf(a.name)] ?? 5) - (RANK2[stateOf(b.name)] ?? 5)) ||
+    displayName(a.name).localeCompare(displayName(b.name)));
+}
+function agentDotHtml(n) { return `<i class="adot ${agentOf(n)}"></i>`; }
+
+// ----- targets -----
+function dockTargets() {
+  if (dock.multi) return state.sessions.map((s) => s.name).filter((n) => dock.sel.has(n));
+  return state.active ? [state.active] : [];
+}
+
+// ----- sending -----
 async function postSend(name, body) {
   const r = await fetch(`/api/send/${encodeURIComponent(name)}`, {
     method: 'POST',
@@ -886,21 +1005,64 @@ async function postSend(name, body) {
   state.sentAt[name] = Date.now();
 }
 
+// Returns the list of session names that failed.
+async function postMany(targets, keys) {
+  let r = null;
+  try {
+    r = await fetch('/api/send-many', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessions: targets, keys }),
+    });
+  } catch { r = null; }
+  if (r && r.ok) {
+    const j = await r.json().catch(() => null);
+    const now = Date.now();
+    for (const n of targets) state.sentAt[n] = now;
+    const res = j && (j.results || j);
+    const failed = [];
+    if (Array.isArray(res)) res.forEach((x, i) => { if (x && x.ok === false) failed.push(x.session || x.name || targets[i]); });
+    else if (res && typeof res === 'object') for (const [k, v] of Object.entries(res)) if (v && v.ok === false && targets.includes(k)) failed.push(k);
+    return failed;
+  }
+  if (r && r.status !== 404 && r.status !== 405) throw new Error(`HTTP ${r.status}`);
+  const settled = await Promise.allSettled(targets.map((n) => postSend(n, { keys })));
+  return targets.filter((_, i) => settled[i].status === 'rejected');
+}
+
+async function dispatch(text, targets, isRetry) {
+  if (!targets.length || !text.trim()) return false;
+  const at = Date.now();
+  clearTimeout(dock.hideTimer);
+  const snap = {};
+  for (const n of targets) snap[n] = state.paneText.get(n);
+  const p = dock.pending = { text, targets: targets.slice(), at, snap, phase: 'sending', done: new Set(), failed: [] };
+  renderDockStatus();
+  try {
+    const failed = targets.length > 1 ? await postMany(targets, text) : (await postSend(targets[0], { keys: text }), []);
+    if (dock.pending !== p) return true;
+    p.failed = failed;
+    p.phase = failed.length ? 'error' : 'sent';
+    if (failed.length === targets.length) p.phase = 'error';
+  } catch (err) {
+    if (dock.pending !== p) return false;
+    p.phase = 'error'; p.failed = targets.slice(); p.err = err.message;
+  }
+  if (p.phase !== 'error' && !isRetry) pushHist(text);
+  renderDockStatus();
+  checkDelivery();
+  return p.phase !== 'error';
+}
+
 async function send() {
   const keys = els.sendInput.value;
-  const name = state.active;
-  if (!name || !keys.trim()) return;
-  els.sendBtn.disabled = true;
-  try {
-    await postSend(name, { keys });
-    els.sendInput.value = '';
-    autoGrow();
-    toast(`→ ${displayName(name)}`, 1000);
-  } catch (err) {
-    toast(`send failed: ${err.message}`);
-  } finally {
-    els.sendBtn.disabled = false;
-  }
+  const targets = dockTargets();
+  if (!keys.trim()) return;
+  if (!targets.length) { toast(dock.multi ? 'pick at least one target' : 'no session'); return; }
+  els.sendInput.value = '';
+  autoGrow();
+  dock.recalled = null;
+  const ok = await dispatch(keys, targets);
+  if (!ok && !els.sendInput.value) { els.sendInput.value = keys; autoGrow(); }
 }
 
 async function sendKey(name, key) {
@@ -913,18 +1075,394 @@ async function sendKey(name, key) {
   }
 }
 
+// ----- delivered tick -----
+function checkDelivery() {
+  const p = dock.pending;
+  if (!p || p.phase === 'sending' || p.phase === 'error') return;
+  for (const n of p.targets) {
+    if (p.failed.includes(n) || p.done.has(n)) continue;
+    const st = state.status[n] || {};
+    const paneChanged = p.snap[n] !== undefined && state.paneText.get(n) !== undefined && state.paneText.get(n) !== p.snap[n];
+    if ((st.lastSendAck && st.lastSendAck >= p.at - 3000) || paneChanged) p.done.add(n);
+  }
+  const want = p.targets.length - p.failed.length;
+  const wasDelivered = p.phase === 'delivered';
+  if (want > 0 && p.done.size >= want) p.phase = 'delivered';
+  if (p.phase === 'delivered' && !wasDelivered) {
+    renderDockStatus();
+    dock.hideTimer = setTimeout(() => { if (dock.pending === p) { dock.pending = null; renderDockStatus(); } }, 2800);
+  } else if (!wasDelivered && Date.now() - p.at > 20000) {
+    dock.pending = null; renderDockStatus();
+  } else if (dock.pending === p) renderDockStatus();
+}
+
+function renderDockStatus() {
+  const p = dock.pending;
+  const el = dk.stat;
+  if (!p) { el.className = 'dstat'; el.textContent = ''; return; }
+  const multi = p.targets.length > 1;
+  let t = '';
+  if (p.phase === 'sending') t = 'sending…';
+  else if (p.phase === 'sent') t = multi ? `sent ✓ ${p.targets.length - p.failed.length}/${p.targets.length}` : 'sent ✓';
+  else if (p.phase === 'delivered') t = multi ? `delivered ✓✓ ${p.done.size}/${p.targets.length}` : 'delivered ✓✓';
+  else t = multi && p.failed.length < p.targets.length ? `${p.failed.length} failed · retry` : 'failed · retry';
+  if (p.phase === 'sent' && multi && p.done.size) t = `delivered ${p.done.size}/${p.targets.length}`;
+  const cls = `dstat on ${p.phase}`;
+  if (el.className !== cls) el.className = cls;
+  if (el.textContent !== t) el.textContent = t;
+}
+dk.stat.onclick = () => {
+  const p = dock.pending;
+  if (p && p.phase === 'error') dispatch(p.text, p.failed.length ? p.failed : p.targets, true);
+};
+setInterval(checkDelivery, 400);
+
+// ----- dock sync -----
 function syncDock() {
   const n = state.active;
-  els.sendInput.disabled = !n;
-  els.sendBtn.disabled = !n;
-  els.sendInput.placeholder = n ? `→ ${displayName(n)}` : 'no session';
-  els.dock.classList.toggle('target-waiting', !!n && stateOf(n) === 'waiting');
+  for (const s of Array.from(dock.sel)) if (!state.status[s]) dock.sel.delete(s);
+  const tg = dockTargets();
+  els.sendInput.disabled = !state.sessions.length;
+  els.sendBtn.disabled = !tg.length;
+  dk.multiBtn.classList.toggle('on', dock.multi);
+  dk.mt.classList.toggle('hidden', !dock.multi);
+  if (dock.multi) {
+    dk.tdot.className = 'adot multi';
+    dk.tname.textContent = `→ ${tg.length}`;
+    els.sendInput.placeholder = tg.length ? `→ ${tg.length} session${tg.length === 1 ? '' : 's'}` : 'pick targets above';
+    renderMultiRow();
+  } else {
+    dk.tdot.className = `adot ${n ? agentOf(n) : ''}`;
+    dk.tname.textContent = n ? displayName(n) : 'none';
+    els.sendInput.placeholder = n ? `→ ${displayName(n)}` : 'no session';
+  }
+  els.dock.classList.toggle('target-waiting', !!n && !dock.multi && stateOf(n) === 'waiting');
+  renderPrompts();
+  checkDelivery();
 }
+
+function renderMultiRow() {
+  const list = sortedByNeed();
+  const key = list.map((s) => `${s.name}:${dock.sel.has(s.name) ? 1 : 0}:${stateOf(s.name)}:${displayName(s.name)}`).join('|');
+  if (key === dock.mtKey) return;
+  dock.mtKey = key;
+  dk.mt.innerHTML = `<button class="mt-act" data-act="all">all</button><button class="mt-act" data-act="none">none</button>` +
+    list.map((s) => `<button class="mt-chip${dock.sel.has(s.name) ? ' on' : ''}" data-n="${escapeHtml(s.name)}">${agentDotHtml(s.name)}<span>${escapeHtml(displayName(s.name))}</span></button>`).join('');
+}
+dk.mt.onclick = (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.act === 'all') for (const s of state.sessions) dock.sel.add(s.name);
+  else if (b.dataset.act === 'none') dock.sel.clear();
+  else if (b.dataset.n) { dock.sel.has(b.dataset.n) ? dock.sel.delete(b.dataset.n) : dock.sel.add(b.dataset.n); }
+  syncDock();
+};
+dk.multiBtn.onclick = () => {
+  dock.multi = !dock.multi;
+  if (dock.multi && !dock.sel.size) dock.sel.clear();     // starts with none selected
+  dock.mtKey = '';
+  syncDock();
+  toast(dock.multi ? 'multi-send on · pick sessions' : 'multi-send off', 1200);
+};
+dk.multiBtn.onpointerdown = (e) => e.preventDefault();
+dk.histBtn.onpointerdown = (e) => e.preventDefault();
+
+// ----- quick prompts -----
+function renderPrompts() {
+  const key = dock.prompts.join('\u0001');
+  if (key === dock.chipsKey) return;
+  dock.chipsKey = key;
+  dk.chips.innerHTML = dock.prompts.map((p, i) => `<button class="pchip" data-i="${i}">${escapeHtml(p)}</button>`).join('') +
+    `<button class="pchip add" data-add="1" aria-label="Save input as prompt">+</button>`;
+}
+(function wireChips() {
+  let timer = 0, sx = 0, sy = 0, longFired = false, cur = null;
+  const stop = () => { clearTimeout(timer); timer = 0; };
+  dk.chips.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('.pchip');
+    if (!b || b.dataset.add) return;
+    e.preventDefault();                  // don't steal focus from the input
+    cur = b; longFired = false; sx = e.clientX; sy = e.clientY;
+    stop();
+    timer = setTimeout(() => { longFired = true; if (navigator.vibrate) navigator.vibrate(15); editPrompt(Number(b.dataset.i)); }, 480);
+  });
+  dk.chips.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) stop(); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) dk.chips.addEventListener(ev, stop);
+  dk.chips.addEventListener('contextmenu', (e) => e.preventDefault());
+  dk.chips.addEventListener('click', (e) => {
+    const b = e.target.closest('.pchip');
+    if (!b) return;
+    if (b.dataset.add) { addPromptFromInput(); return; }
+    if (longFired) { longFired = false; return; }
+    const text = dock.prompts[Number(b.dataset.i)];
+    const targets = dockTargets();
+    if (!targets.length) { toast(dock.multi ? 'pick at least one target' : 'no session'); return; }
+    if (navigator.vibrate) navigator.vibrate(8);
+    dispatch(text, targets);
+  });
+})();
+function addPromptFromInput() {
+  const v = els.sendInput.value.trim();
+  if (!v) { editPrompt(-1); return; }
+  if (!dock.prompts.includes(v)) { dock.prompts.push(v); savePrompts(); renderPrompts(); }
+  toast('saved as quick prompt', 1200);
+  dk.chips.scrollLeft = dk.chips.scrollWidth;
+}
+function editPrompt(i) {
+  const isNew = i < 0;
+  openSheet(isNew ? 'New quick prompt' : 'Edit quick prompt', ({ body, foot, close }) => {
+    body.innerHTML = `<textarea class="sheet-ta" rows="3" placeholder="text to send…"></textarea>`;
+    const ta = body.querySelector('textarea');
+    ta.value = isNew ? '' : dock.prompts[i];
+    foot.classList.remove('hidden');
+    foot.innerHTML = `${isNew ? '' : '<button class="sbtn danger" data-a="del">delete</button>'}<span class="grow"></span><button class="sbtn" data-a="cancel">cancel</button><button class="sbtn primary" data-a="save">save</button>`;
+    foot.onclick = (e) => {
+      const a = e.target.closest('button')?.dataset.a;
+      if (!a) return;
+      if (a === 'save') {
+        const v = ta.value.trim();
+        if (v) { if (isNew) dock.prompts.push(v); else dock.prompts[i] = v; }
+      } else if (a === 'del') dock.prompts.splice(i, 1);
+      if (a !== 'cancel') { savePrompts(); renderPrompts(); }
+      close();
+    };
+    setTimeout(() => ta.focus(), 120);
+  });
+}
+
+// ----- history -----
+function openHistory() {
+  openSheet('Sent history', ({ body, foot, close }) => {
+    if (!dock.hist.length) { body.innerHTML = '<div class="sheet-empty">nothing sent from this device yet</div>'; return; }
+    body.innerHTML = dock.hist.map((h, i) => `<button class="hrow" data-i="${i}">${escapeHtml(h)}</button>`).join('');
+    foot.classList.remove('hidden');
+    foot.innerHTML = `<button class="sbtn danger" data-a="clear">clear history</button><span class="grow"></span><button class="sbtn" data-a="cancel">close</button>`;
+    foot.onclick = (e) => {
+      const a = e.target.closest('button')?.dataset.a;
+      if (a === 'clear') { dock.hist = []; lsSet(LS_HIST, '[]'); }
+      if (a) close();
+    };
+    body.onclick = (e) => {
+      const b = e.target.closest('.hrow');
+      if (!b) return;
+      els.sendInput.value = dock.hist[Number(b.dataset.i)];
+      autoGrow();
+      close();
+      els.sendInput.focus();
+    };
+  });
+}
+dk.histBtn.onclick = openHistory;
+
+function onDockKey(e) {
+  if (e.isComposing) return;
+  if (e.key === 'Enter' && !e.shiftKey && !COARSE) { e.preventDefault(); send(); return; }
+  if (e.key === 'ArrowUp' && (els.sendInput.value === '' || els.sendInput.value === dock.recalled) && dock.hist.length) {
+    e.preventDefault();
+    dock.hidx = Math.min(dock.hidx + 1, dock.hist.length - 1);
+    els.sendInput.value = dock.recalled = dock.hist[dock.hidx];
+    autoGrow();
+  } else if (e.key === 'ArrowDown' && dock.recalled !== null && els.sendInput.value === dock.recalled) {
+    e.preventDefault();
+    dock.hidx -= 1;
+    els.sendInput.value = dock.recalled = dock.hidx >= 0 ? dock.hist[dock.hidx] : '';
+    if (dock.hidx < 0) dock.recalled = null;
+    autoGrow();
+  }
+}
+(function wireInputSwipe() {
+  let y0 = 0, x0 = 0;
+  els.sendInput.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; }, { passive: true });
+  els.sendInput.addEventListener('touchend', (e) => {
+    const t = e.changedTouches[0];
+    if (els.sendInput.value === '' && y0 - t.clientY > 45 && Math.abs(t.clientX - x0) < 35) openHistory();
+  }, { passive: true });
+})();
+
+// ----- target chip + picker -----
+function openPicker() {
+  openSheet('Send to', (api) => {
+    const draw = () => {
+      api.title.textContent = dock.multi ? `Send to · ${dock.sel.size} selected` : 'Send to';
+      api.body.innerHTML = sortedByNeed().map((s) => {
+        const n = s.name, on = dock.multi ? dock.sel.has(n) : n === state.active;
+        const rb = repoBranch(n);
+        return `<button class="prow-s${on ? ' on' : ''}" data-n="${escapeHtml(n)}">${agentDotHtml(n)}
+          <span class="pn"><b>${escapeHtml(displayName(n))}</b>${rb ? `<small>${escapeHtml(rb)}</small>` : ''}</span>
+          <span class="state ${stateOf(n)}"><i class="dot ${stateOf(n)}"></i>${escapeHtml(sideStateText(n).split(' ')[0])}</span>
+          ${dock.multi ? `<span class="chk">${on ? '✓' : ''}</span>` : ''}</button>`;
+      }).join('') || '<div class="sheet-empty">no sessions</div>';
+    };
+    draw();
+    api.body.onclick = (e) => {
+      const b = e.target.closest('.prow-s');
+      if (!b) return;
+      const n = b.dataset.n;
+      if (dock.multi) { dock.sel.has(n) ? dock.sel.delete(n) : dock.sel.add(n); draw(); syncDock(); }
+      else { focusSession(n); api.close(); }
+    };
+    if (dock.multi) {
+      api.foot.classList.remove('hidden');
+      api.foot.innerHTML = `<button class="sbtn" data-a="none">none</button><span class="grow"></span><button class="sbtn primary" data-a="ok">done</button>`;
+      api.foot.onclick = (e) => {
+        const a = e.target.closest('button')?.dataset.a;
+        if (a === 'none') { dock.sel.clear(); draw(); syncDock(); } else if (a) api.close();
+      };
+    }
+  });
+}
+dk.tchip.onpointerdown = (e) => e.preventDefault();
+dk.tchip.onclick = openPicker;
 
 function autoGrow() {
   els.sendInput.style.height = 'auto';
   els.sendInput.style.height = `${Math.min(els.sendInput.scrollHeight, window.innerHeight * 0.3)}px`;
 }
+
+// ----- new session -----
+async function fetchDirs() {
+  try {
+    const r = await fetch('/api/dirs');
+    if (!r.ok) return null;
+    const j = await r.json();
+    return Array.isArray(j) ? j : (j.dirs || null);
+  } catch { return null; }
+}
+function recentDirs() { try { return JSON.parse(lsGet(LS_RECENT, '[]')) || []; } catch { return []; } }
+function addRecentDir(d) { lsSet(LS_RECENT, JSON.stringify([d, ...recentDirs().filter((x) => x !== d)].slice(0, 12))); }
+function baseName(p) { return String(p || '').replace(/\/+$/, '').split('/').pop() || ''; }
+function safeName(s) { return String(s).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32); }
+const NEW_AGENTS = ['claude', 'codex', 'minimax', 'bash'];
+
+function openNewSession() {
+  let agent = lsGet('ghosty.newAgent', 'claude');
+  if (!NEW_AGENTS.includes(agent)) agent = 'claude';
+  let dirs = null, nameTouched = false;
+  openSheet('New session', ({ body, foot, close }) => {
+    body.innerHTML = `
+      <div class="seg" id="nsAgent">${NEW_AGENTS.map((a) => `<button data-a="${a}" class="${a === agent ? 'on' : ''} ${a}">${a}</button>`).join('')}</div>
+      <label class="flab">name</label>
+      <input class="sheet-in" id="nsName" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="session name">
+      <label class="flab">working dir <span class="dim" id="nsHint"></span></label>
+      <input class="sheet-in" id="nsCwd" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="search or type a path…">
+      <div class="dirs" id="nsDirs"><div class="sheet-empty">loading…</div></div>`;
+    foot.classList.remove('hidden');
+    foot.innerHTML = `<button class="sbtn" data-a="cancel">cancel</button><span class="grow"></span><button class="sbtn primary" id="nsGo" data-a="go">create</button>`;
+    const nameIn = body.querySelector('#nsName'), cwdIn = body.querySelector('#nsCwd'), list = body.querySelector('#nsDirs');
+    const taken = (n) => state.sessions.some((s) => s.name === n);
+    const suggest = () => {
+      if (nameTouched) return;
+      let b = safeName(baseName(cwdIn.value)) || agent;
+      if (agent === 'bash' && !baseName(cwdIn.value)) b = 'sh';
+      let n = b, i = 2;
+      while (taken(n)) n = `${b}-${i++}`;
+      nameIn.value = n;
+    };
+    const drawDirs = () => {
+      if (!dirs) { list.innerHTML = `<div class="sheet-empty">${dirs === null ? 'dir list unavailable — type a path' : 'loading…'}</div>`; return; }
+      const q = cwdIn.value.trim().toLowerCase();
+      const rec = recentDirs();
+      const rank = (d) => { const i = rec.indexOf(d.path); return i < 0 ? 99 : i; };
+      const items = dirs.filter((d) => !q || d.path.toLowerCase().includes(q) || (d.name || '').toLowerCase().includes(q))
+        .sort((a, b) => rank(a) - rank(b) || (a.name || '').localeCompare(b.name || '')).slice(0, 60);
+      list.innerHTML = items.map((d) => `<button class="drow" data-p="${escapeHtml(d.path)}"><span class="dn">${rank(d) < 99 ? '<i class="rec">●</i> ' : ''}<b>${escapeHtml(d.name || baseName(d.path))}</b>${d.branch ? `<em>${escapeHtml(d.branch)}</em>` : ''}</span><small>${escapeHtml(d.path)}</small></button>`).join('')
+        || '<div class="sheet-empty">no match — it will use the typed path</div>';
+    };
+    list.onclick = (e) => {
+      const b = e.target.closest('.drow');
+      if (!b) return;
+      cwdIn.value = b.dataset.p;
+      suggest();
+      drawDirs();
+    };
+    cwdIn.oninput = () => { suggest(); drawDirs(); };
+    nameIn.oninput = () => { nameTouched = true; };
+    body.querySelector('#nsAgent').onclick = (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      agent = b.dataset.a; lsSet('ghosty.newAgent', agent);
+      for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('on', x === b);
+      suggest();
+    };
+    foot.onclick = async (e) => {
+      const a = e.target.closest('button')?.dataset.a;
+      if (a === 'cancel') return close();
+      if (a !== 'go') return;
+      const name = safeName(nameIn.value), cwd = cwdIn.value.trim();
+      if (!name) { toast('name required'); return; }
+      if (!cwd) { toast('pick a working dir'); return; }
+      const go = foot.querySelector('#nsGo');
+      go.disabled = true; go.textContent = 'creating…';
+      try {
+        const r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, agent, cwd }) });
+        if (r.status === 404 || r.status === 405) { toast("server doesn't support this yet"); return; }
+        if (r.status === 409) { toast(`"${name}" already exists`); return; }
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) { toast(`create failed: ${j.error || 'HTTP ' + r.status}`, 3000); return; }
+        addRecentDir(cwd);
+        close(); closeSide();
+        const real = j.name || name;
+        await fetchInitial();
+        openCard(real);
+        toast(`started ${real}`);
+      } catch (err) {
+        toast(`create failed: ${err.message}`);
+      } finally {
+        go.disabled = false; go.textContent = 'create';
+      }
+    };
+    suggest();
+    fetchDirs().then((d) => { dirs = d || null; if (d === null) dirs = null; drawDirs(); if (!d) list.innerHTML = '<div class="sheet-empty">dir list unavailable — type a path</div>'; });
+  });
+}
+
+// ----- kill session -----
+function confirmKill(name) {
+  openSheet('Kill session', ({ body, foot, close }) => {
+    body.innerHTML = `<p class="warn">This ends the tmux session <b>${escapeHtml(name)}</b> and everything running in it.</p>
+      <label class="flab">type the session name to confirm</label>
+      <input class="sheet-in" id="killIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${escapeHtml(name)}">`;
+    foot.classList.remove('hidden');
+    foot.innerHTML = `<button class="sbtn" data-a="cancel">cancel</button><span class="grow"></span><button class="sbtn danger solid" id="killGo" data-a="go" disabled>kill</button>`;
+    const inp = body.querySelector('#killIn'), go = foot.querySelector('#killGo');
+    inp.oninput = () => { go.disabled = inp.value.trim() !== name; };
+    foot.onclick = async (e) => {
+      const a = e.target.closest('button')?.dataset.a;
+      if (a === 'cancel') return close();
+      if (a !== 'go' || go.disabled) return;
+      go.disabled = true;
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(name)}?confirm=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (r.status === 404 || r.status === 405) {
+          const j = await r.json().catch(() => null);
+          toast(j && j.error ? j.error : "server doesn't support this yet");
+          return;
+        }
+        if (!r.ok) { toast(`kill failed: HTTP ${r.status}`); return; }
+        close();
+        toast(`killed ${name}`);
+        dock.sel.delete(name);
+        await fetchInitial();
+      } catch (err) {
+        toast(`kill failed: ${err.message}`);
+      } finally { go.disabled = inp.value.trim() !== name; }
+    };
+    setTimeout(() => inp.focus(), 120);
+  });
+}
+
+// ----- sidebar wiring (new-session button, collapsible leases) -----
+(function wireSide() {
+  const nb = $('#newSessBtn');
+  if (nb) nb.onclick = openNewSession;
+  const sec = $('.side-sec'), sub = sec && sec.querySelector('.side-sub');
+  if (sub) {
+    sec.classList.toggle('collapsed', lsGet(LS_LEASES, '1') === '0');
+    sub.onclick = () => { sec.classList.toggle('collapsed'); lsSet(LS_LEASES, sec.classList.contains('collapsed') ? '0' : '1'); };
+  }
+  setInterval(tickSide, 1000);
+})();
+loadDock();
 
 function renderAll() {
   renderTabStrip();
@@ -1036,9 +1574,7 @@ for (const b of els.keys.querySelectorAll('button')) {
 els.sendBtn.onpointerdown = (e) => e.preventDefault();
 els.sendBtn.onclick   = send;
 els.sendInput.oninput = autoGrow;
-els.sendInput.onkeydown = (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
-};
+els.sendInput.onkeydown = onDockKey;
 
 window.addEventListener('resize', () => {
   for (const name of state.terms.keys()) relayoutTerm(name);
