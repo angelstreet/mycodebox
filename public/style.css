@@ -674,3 +674,14 @@ body{ display:flex; flex-direction:column; }
     box-shadow:0 4px 12px rgba(0,0,0,.5);
   }
 }
+
+/* ------------ Dock collapse: hide quick prompts + keys ------------ */
+.dock.collapsed .prompts, .dock.collapsed .keys{ display:none; }
+.dock .dtoggle{
+  flex-shrink:0; width:34px; height:42px; border-radius:10px;
+  background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line);
+  display:flex; align-items:center; justify-content:center;
+}
+.dock .dtoggle svg{ transition: transform 160ms ease; }
+.dock.collapsed .dtoggle svg{ transform: rotate(180deg); }
+.dock.collapsed .dtoggle{ color:var(--accent); }

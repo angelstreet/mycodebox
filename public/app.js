@@ -1553,6 +1553,20 @@ function openHistory() {
 }
 dk.histBtn.onclick = openHistory;
 
+// Collapse / expand the quick prompts + quick keys rows (remembered per device).
+const LS_DOCK_COLLAPSED = 'ghosty.dockCollapsed';
+const dockToggle = $('#dockToggle');
+function setDockCollapsed(on) {
+  els.dock.classList.toggle('collapsed', on);
+  dockToggle.setAttribute('aria-expanded', String(!on));
+  lsSet(LS_DOCK_COLLAPSED, on ? '1' : '0');
+  // the terminal area just changed height: let the xterms re-fit
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+}
+dockToggle.onpointerdown = (e) => e.preventDefault();   // keep the keyboard open
+dockToggle.onclick = () => setDockCollapsed(!els.dock.classList.contains('collapsed'));
+setDockCollapsed(lsGet(LS_DOCK_COLLAPSED, '0') === '1');
+
 function onDockKey(e) {
   if (e.isComposing) return;
   if (e.key === 'Enter' && !e.shiftKey && !COARSE) { e.preventDefault(); send(); return; }
