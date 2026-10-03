@@ -156,15 +156,22 @@ function stripAnsi(s) {
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
 }
 
-// Last meaningful line of a pane, for the board view. Skips box-drawing
-// chrome and empty prompt lines so it shows what the agent last said.
+// Last meaningful line of a pane, for the board view: what the agent last
+// said. Cuts off the input box (the last pair of ──── rules) and the footer
+// below it, then skips spinners / timing / hint lines.
+const RULE_RE  = /^\s*[─━═]{8,}/;
 const CHROME_RE = /^[\s─━│┃╭╮╰╯┌┐└┘├┤┬┴┼═║>❯›$#%·•\-_=]*$/;
+const NOISE_RE = /^\s*(?:[✻✶✳✢·*]\s+\S+ for \d|└ Completed in|⎿\s*$)|Message · Enter send|^\s*(?:⎿\s*)?Tip:|for shortcuts|bypass permissions|Context \d+% left|esc to interrupt|Update installed|\/clear to save|^\s*\/rc\s*$/i;
 function lastLine(paneText) {
   const lines = stripAnsi(paneText).split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
+  let end = lines.length;
+  for (let i = lines.length - 1, seen = 0; i >= 0 && i >= lines.length - 14; i--) {
+    if (RULE_RE.test(lines[i]) && ++seen === 2) { end = i; break; }
+  }
+  for (let i = end - 1; i >= 0; i--) {
     const l = lines[i].replace(/[│┃]/g, ' ').trim();
-    if (l && !CHROME_RE.test(l) && !/^\? for shortcuts|bypass permissions|Context \d+% left|esc to interrupt/i.test(l)) {
-      return l.replace(/\s{2,}/g, ' ').slice(0, 200);
+    if (l && !CHROME_RE.test(l) && !NOISE_RE.test(l)) {
+      return l.replace(/^[⏺●•]\s*/, '').replace(/\s{2,}/g, ' ').slice(0, 200);
     }
   }
   return '';
@@ -1070,6 +1077,8 @@ if ('serviceWorker' in navigator) {
   setGridSize(state.gridSize);
   const wanted = new URLSearchParams(location.search).get('s');
   if (wanted) { state.active = wanted; state.mode = 'card'; }
+  const view = new URLSearchParams(location.search).get('view');
+  if (['card', 'grid', 'list'].includes(view)) state.mode = view;
   setMode(state.mode);
   hideInstallIfInstalled();
   await fetchInitial();

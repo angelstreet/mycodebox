@@ -47,26 +47,31 @@ ssh codebox 'tmux new-session -A -s ghosty -c ~/ghosty-sessions'
 The session starts with `claude --dangerously-skip-permissions; bash -l` so when
 Claude exits you land in a shell at the repo root, not kicked out of the session.
 
-## What's done (v0.x)
+## What's done (v1 — cockpit)
 
-- HTTP + WebSocket + tmux capture loop (1 Hz tick)
-- Card / grid / list views, single-tap selects, double-tap goes fullscreen
-- Custom session names in `localStorage`, pencil to rename
-- Status pill: idle / busy / needs-you heuristic
-- Send-keys dock (input → tmux send-keys -l + Enter)
-- Swipe-from-left opens the sidebar; back-arrow returns from card view
-- Self-signed HTTPS for PWA install on Android
-- Public GitHub repo with runbook for others
+- Server: one `list-panes` + one `ps` per tick, parallel captures, broadcasts only changed panes
+- Status contract per session: `state` (working / waiting / idle / offline), `agent`
+  (claude / codex / minimax / bash via process tree), `waitReason`, `lastSendAt`,
+  `workingSinceMs`, `cols`/`rows`
+- Cards: agent badge, state badge with elapsed timer (working = since last send),
+  red "needs you" card with the prompt text + one-tap 1 / 2 / 3 / esc answers
+- "NEEDS YOU" banner + count chips in the topbar (tap a chip = filter); `(n) codebox` tab title
+- xterm sized to the tmux pane's cols with scaled font (6–14px) — no rewrap, no staircase, no flash
+- Views: card / grid (2·4·6·9·all, one column on phones) / board (rows sorted by urgency, last agent line)
+- Dock: full-width auto-growing input + quick keys (esc ⏎ ↑ ↓ tab 1 2 3 y n ^C) via `{key}` sends
+- Leases from `vpt-lease` on proxmox in the sidebar (`/api/leases`, 15s cache)
+- Bell = browser notification + vibrate when a session flips to "needs you" (HTTPS URL only)
+- `?s=<session>` opens a session, `?view=card|grid|list` picks the view
 
 ## Known issues / not done
 
 | # | Issue | Notes |
 |---|---|---|
-| 1 | `mountTerm` could still race on rapid focus swaps | safe for normal use; if you see `term.element is null` in console, just tap again |
-| 2 | Status pill heuristic is conservative — "needs you" only fires on hard permission prompts | tighten `WAIT_RE` in `server.js` if you want to catch softer prompts |
-| 3 | No HTTPS via `tailscale serve` (free plan blocks `tailscale cert` and `tailscale serve --https`) | self-signed works on Android after manual accept; for prod-grade, set up Cloudflare Tunnel (`cloudflared`) or pay for Tailscale |
-| 4 | No notification on "needs you" pill | currently visual only; wire up Web Push or `ntfy` later |
-| 5 | SW cached old JS once on first rollout | fixed by bumping `SHELL_CACHE` to v3 + server-side `no-cache` for `.html/.js/.css/.json/.webmanifest`; if it ever happens again, bump the version and force-refresh |
+| 1 | 221-col panes render at the 6px floor and crop on phones | add a "reader" mode (ANSI-stripped, reflowed text) for card view on mobile |
+| 2 | "waiting" can false-positive when prompt-like text sits in the last ~15 lines (e.g. a quoted "Do you want to proceed?") | Codex / MiniMax prompt wording in `WAIT_RE` is a best guess — calibrate on a real prompt |
+| 3 | No HTTPS via `tailscale serve` (free plan) | self-signed works on Android after manual accept; Cloudflare Tunnel for prod-grade |
+| 4 | Notifications only fire while the page/PWA is alive | real background alerts need Web Push or `ntfy` from the server |
+| 5 | SW cache bumped to v4 | if stale JS ever shows, bump again and force-refresh |
 
 ## Files of interest
 
@@ -75,7 +80,7 @@ server.js                       # Node 20+, ws, no framework
 public/app.js                   # controller, three view renderers, swipe, SW reg
 public/index.html               # shell
 public/style.css                # ghosty dark
-public/sw.js                    # PWA service worker, cache v3
+public/sw.js                    # PWA service worker, cache v4, notification click
 public/manifest.webmanifest     # installable as "codebox"
 public/certs/  (git-ignored)    # self-signed PEMs
 public/vendor/                  # xterm.js v5.3.0 + addon-fit
