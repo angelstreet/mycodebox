@@ -852,3 +852,5 @@ body{ display:flex; flex-direction:column; }
 
 /* hide the per-card move arrows and top/bottom jump buttons (Aa menu toggle) */
 body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !important; }
+/* phones: the board (list) view is reachable from the hamburger menu */
+@media (max-width: 720px){ .modes .mode-btn[data-mode="list"]{ display:none; } }
