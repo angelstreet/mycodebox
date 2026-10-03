@@ -7,15 +7,23 @@
 //   GET  /ws/:session           → WebSocket: streams pane content (1 Hz tick)
 //   POST /api/send/:session     → body {keys: "..."} → tmux send-keys + Enter
 //   GET  /api/snapshot/:session → last full pane snapshot (for first paint)
+//   GET  /api/sessions?full=1   → same, plus `reply` text per session
+//   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
+//   POST /api/sessions          → {name, agent, cwd} create a tmux session + start the agent
+//   DELETE /api/sessions/:name?confirm=<name> → kill session
+//   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
+//   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
 //   GET  /*                     → static files in ./public
 
 import http from 'node:http';
 import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, readdir, realpath } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, extname, join, normalize } from 'node:path';
+import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { basename, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -67,15 +75,15 @@ async function listSessions() {
 
 // session -> { pid, cmd, cols, rows, dead }  (active pane of the active window)
 async function listPanes() {
-  const fmt = '#{session_name}|#{pane_pid}|#{pane_current_command}|#{pane_width}|#{pane_height}|#{pane_dead}|#{window_active}|#{pane_active}';
+  const fmt = '#{session_name}|#{pane_pid}|#{pane_current_command}|#{pane_width}|#{pane_height}|#{pane_dead}|#{window_active}|#{pane_active}|#{pane_current_path}';
   const out = new Map();
   try {
     const { stdout } = await exec(TMUX, ['list-panes', '-a', '-F', fmt]);
     for (const line of stdout.split('\n').filter(Boolean)) {
-      const [name, pid, cmd, cols, rows, dead, wa, pa] = line.split('|');
+      const [name, pid, cmd, cols, rows, dead, wa, pa, ...cwdParts] = line.split('|');
       const active = wa === '1' && pa === '1';
       if (out.has(name) && !active) continue;
-      out.set(name, { pid: Number(pid), cmd, cols: Number(cols), rows: Number(rows), dead: dead === '1' });
+      out.set(name, { pid: Number(pid), cmd, cols: Number(cols), rows: Number(rows), dead: dead === '1', cwd: cwdParts.join('|') });
     }
   } catch {}
   return out;
@@ -222,11 +230,240 @@ function findWaitReason(lines) {
 }
 
 // ---------------------------------------------------------------------------
+// Pane parsing: turn markers, activity, last message, reply block, footer info
+// ---------------------------------------------------------------------------
+
+const DONE_IDLE_MS = Number(process.env.DONE_IDLE_HOURS || 6) * 3600 * 1000;
+const RULE_LINE = /^\s*[─━]{4,}/;
+const CHROME_LINE = /^[\s─━│┃╭╮╰╯┌┐└┘├┤┬┴┼═║>❯›$#%·•\-_=]*$/;
+// Chrome that is never "the agent's message": footers, timings, tips, spinners.
+const NOISE_LINE = /^\s*(?:[✻✶✳✢✽]\s+\S+ for \d|[✻✶✳✢✽]\s+\S+…|[*·]\s+\S+…\s*\(\d|└ Completed in|─ Worked for|⎿\s*$)|Message · Enter send|^\s*(?:⎿\s*)?Tip:|for shortcuts|bypass permissions|Context \d+% left|\d+% context left|esc to interrupt|Update installed|\/clear to save|^\s*\/rc\s*$|ctrl\+x ctrl\+s|Press up to edit queued|^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s|Ask Mcode|interrupting Claude|\(ctrl\+o to expand\)|^\s*… \+\d+ lines|\(ctrl\+b ctrl\+b|install gh for PR status|← for agents/i;
+// A finished turn: Claude "✻ Baked for 8m 10s [· done 8:12 AM]", MiniMax "└ Completed in 8min21s",
+// Codex "─ Worked for 1m 23s ───".
+const TURN_DONE_RE = /^\s*[✻✶✳✢✽]\s+\S+ for \d+\s*[smh]|^\s*└ Completed in \d|^\s*─+ Worked for \d/;
+const SPINNER_RE = /^\s*(?:[✻✶✳✢✽]\s+\S[^\n]*…[^\n]*|[*·]\s+\S+…\s*\(\d[^\n]*|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\S[^\n]*|[•◦]\s*Working\b[^\n]*|[•◦]\s*Thinking\b[^\n]*)$/;
+const TOOL_LINE_RE = /^\s*[⏺●•]\s+[A-Za-z_][\w.:-]*\(/;
+const BULLET_RE = /^(\s*)[⏺●•]\s+/;
+
+// ANSI-stripped, right-trimmed lines with the blank rows below the cursor dropped.
+function plainLines(pane) {
+  const lines = stripAnsi(pane).split('\n').map((l) => l.replace(/\s+$/, ''));
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines;
+}
+
+const oneLine = (s, n) => s.replace(/[│┃]/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, n);
+
+// lines = ANSI-stripped pane lines. Returns the index where the input box starts
+// (the second rule from the bottom, within the last 14 lines), else lines.length.
+function bodyEnd(lines) {
+  for (let i = lines.length - 1, seen = 0; i >= 0 && i >= lines.length - 14; i--) {
+    if (RULE_LINE.test(lines[i]) && ++seen === 2) return i;
+  }
+  return lines.length;
+}
+
+function lastMessageOf(lines, end) {
+  for (let i = end - 1; i >= Math.max(0, end - 200); i--) {
+    const l = lines[i].replace(/[│┃]/g, ' ').trim();
+    if (l && !CHROME_LINE.test(l) && !NOISE_LINE.test(l)) {
+      return l.replace(/^[⏺●•]\s*/, '').replace(/\s{2,}/g, ' ').slice(0, 200);
+    }
+  }
+  return null;
+}
+
+// Current step while working: the live spinner line, else the latest tool call.
+function activityOf(lines, end) {
+  const lo = Math.max(0, lines.length - 40);
+  for (let i = lines.length - 1; i >= lo; i--) {
+    const l = lines[i];
+    if (!l.trim() || RULE_LINE.test(l)) continue;
+    if (SPINNER_RE.test(l) && !/bypass permissions|accept edits/.test(l)) return oneLine(l, 120);
+  }
+  for (let i = end - 1; i >= Math.max(0, end - 60); i--) {
+    if (TOOL_LINE_RE.test(lines[i])) {
+      // Tool calls can wrap over several lines; join continuation lines (indented, no bullet/result mark).
+      let t = lines[i];
+      for (let j = i + 1; j < end && j < i + 3 && /^\s{2,}\S/.test(lines[j]) && !/^\s*[⎿├└⏺●•]/.test(lines[j]); j++) t += ' ' + lines[j];
+      return oneLine(t.replace(/^\s*[⏺●•]\s*/, ''), 120);
+    }
+    if (/^\s*[├└]\s*•\s/.test(lines[i])) return oneLine(lines[i].replace(/^\s*[├└]\s*•\s*/, ''), 120);
+  }
+  return null;
+}
+
+// Does the visible body end in a completed-turn marker (ignoring trailing noise)?
+function hasTurnMarker(lines, end) {
+  let seen = 0;
+  for (let i = end - 1; i >= 0 && seen < 8; i--) {
+    const l = lines[i];
+    if (!l.trim() || CHROME_LINE.test(l.replace(/[│┃]/g, ' '))) continue;
+    seen++;
+    if (TURN_DONE_RE.test(l)) return true;
+  }
+  return false;
+}
+
+// Claude prints "✻ Baked for 8m 10s · done 8:12 AM" (server-local clock). Returns the most recent
+// past occurrence of that time as ms epoch, or null. Ambiguous modulo 24h, which only matters for
+// markers older than a day (already "idle" by then in practice).
+function doneClockMs(lines, end, now) {
+  for (let i = end - 1, seen = 0; i >= 0 && seen < 8; i--) {
+    if (!lines[i].trim()) continue;
+    seen++;
+    const m = lines[i].match(/^\s*[✻✶✳✢✽]\s+\S+ for [^\n]*?done (\d{1,2}):(\d{2})\s*([AP]M)?/i);
+    if (!m) continue;
+    let h = Number(m[1]);
+    if (m[3]) h = (h % 12) + (/p/i.test(m[3]) ? 12 : 0);
+    const d = new Date(now);
+    d.setHours(h, Number(m[2]), 0, 0);
+    let ms = d.getTime();
+    if (ms > now + 60000) ms -= 86400000;
+    return ms;
+  }
+  return null;
+}
+
+// The agent's last reply block as plain text for a mobile reader.
+function replyOf(lines, end) {
+  let hi = end - 1;
+  while (hi >= 0) {
+    const l = lines[hi];
+    const bare = l.replace(/[│┃]/g, ' ');
+    if (!bare.trim() || CHROME_LINE.test(bare) || NOISE_LINE.test(l)) hi--; else break;
+  }
+  if (hi < 0) return null;
+  let lo = hi, first = true;
+  for (let i = hi; i >= Math.max(0, hi - 400); i--) {
+    const l = lines[i];
+    if (/^\s*(?:[❯›>]\s|⎿|[├└]\s)/.test(l) || RULE_LINE.test(l)) { if (first) { return null; } break; }
+    if (TOOL_LINE_RE.test(l) && !first) break;
+    if (TOOL_LINE_RE.test(l) && first) return null;
+    first = false;
+    lo = i;
+    if (BULLET_RE.test(l)) break;
+  }
+  const block = lines.slice(lo, hi + 1)
+    .filter((l) => !NOISE_LINE.test(l))
+    .map((l) => l.replace(/\s+$/, '').replace(/^(\s*)[⏺●•]\s+/, '$1  '));
+  // Drop table-drawing side borders but keep the content; keep code indentation via common-indent removal.
+  const indents = block.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length);
+  const cut = indents.length ? Math.min(...indents) : 0;
+  let text = block.map((l) => l.slice(cut)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!text) return null;
+  if (text.length > 6000) {
+    text = text.slice(-6000);
+    text = '…' + text.slice(text.indexOf('\n') + 1 || 0);
+  }
+  return text;
+}
+
+// Footer facts: context left %, model name.
+function footerInfo(lines) {
+  const foot = lines.slice(-12).join('\n');
+  let contextLeft = null, model = null;
+  let m = foot.match(/Context (\d+)% left/i) || foot.match(/(\d+)%\s+context left/i) || foot.match(/Context left until auto-compact:\s*(\d+)%/i) || foot.match(/auto-compact[^\n]*?(\d+)%/i);
+  if (m) contextLeft = Number(m[1]);
+  m = foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b(opus|sonnet|haiku)(?:[ -]?\d[\d.]*)?/i);
+  if (m) model = m[1];
+  return { contextLeft, model };
+}
+
+const shortHash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 8);
+
+// ---------------------------------------------------------------------------
+// Context metadata (cwd / repo / branch / dirty), cached per session
+// ---------------------------------------------------------------------------
+
+const META_TTL_MS = 10000;
+const metaCache = new Map(); // session -> { at, cwd, repo, branch, dirty, busy }
+
+async function gitInfo(cwd) {
+  try {
+    const run = (args) => exec('git', ['-C', cwd, ...args], { timeout: 4000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).then((r) => r.stdout.trim());
+    const [top, branch] = (await run(['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD'])).split('\n');
+    let dirty = false;
+    try { dirty = (await run(['status', '--porcelain', '-uno'])).length > 0; } catch {}
+    return { repo: basename(top), branch: branch === 'HEAD' ? null : branch, dirty };
+  } catch {
+    return { repo: null, branch: null, dirty: null };
+  }
+}
+
+async function getMeta(session, cwd) {
+  let m = metaCache.get(session);
+  const stale = !m || m.cwd !== cwd || Date.now() - m.at > META_TTL_MS;
+  if (stale && !(m && m.busy)) {
+    const fresh = m && m.cwd === cwd ? m : { cwd, repo: null, branch: null, dirty: null, at: 0 };
+    fresh.busy = true;
+    metaCache.set(session, fresh);
+    const job = (cwd ? gitInfo(cwd) : Promise.resolve({ repo: null, branch: null, dirty: null }))
+      .then((g) => { Object.assign(fresh, g, { cwd, at: Date.now(), busy: false }); });
+    if (!m || m.cwd !== cwd || !m.at) await job;   // first sight: wait once so the first payload is complete
+    m = fresh;
+  }
+  return m;
+}
+
+// ---------------------------------------------------------------------------
+// Lease link
+// ---------------------------------------------------------------------------
+
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const GENERIC_BRANCH = new Set(['main', 'master', 'dev', 'develop', 'head', 'trunk']);
+function leaseFor(session, branch) {
+  const leases = leaseCache.value?.ok ? leaseCache.value.leases : null;
+  if (!leases || !leases.length) return null;
+  const keys = [norm(session)];
+  if (branch && !GENERIC_BRANCH.has(branch.toLowerCase())) keys.push(norm(branch));
+  const hits = leases.filter((l) => {
+    const a = norm(l.agent);
+    return a && keys.some((k) => k.length >= 3 && a.includes(k));
+  });
+  if (!hits.length) return null;
+  const l = hits[0];
+  return { resource: l.resource, env: l.env, ttlLeftMin: l.ttlLeftMin, count: hits.length };
+}
+
+// ---------------------------------------------------------------------------
+// ntfy push (optional)
+// ---------------------------------------------------------------------------
+
+const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
+const NTFY_URL = (process.env.NTFY_URL || 'https://ntfy.sh').replace(/\/+$/, '');
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+const NTFY_DEBOUNCE_MS = 60000;
+const ntfyLast = new Map(); // session -> ms
+
+function ntfy(session, kind, body) {
+  if (!NTFY_TOPIC) return;
+  const now = Date.now();
+  if (now - (ntfyLast.get(session) || 0) < NTFY_DEBOUNCE_MS) return;
+  ntfyLast.set(session, now);
+  const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
+  const headers = {
+    Title: ascii(kind === 'waiting' ? `${session} needs you` : `${session} is done`),
+    Priority: kind === 'waiting' ? 'high' : 'default',
+    Tags: kind === 'waiting' ? 'warning' : 'white_check_mark',
+  };
+  if (PUBLIC_URL) headers.Click = `${PUBLIC_URL}/?s=${encodeURIComponent(session)}`;
+  try {
+    fetch(`${NTFY_URL}/${encodeURIComponent(NTFY_TOPIC)}`, {
+      method: 'POST', headers, body: String(body || kind).slice(0, 500),
+      signal: AbortSignal.timeout(8000),
+    }).catch((e) => console.error('[ntfy]', e.message));
+  } catch (e) { console.error('[ntfy]', e.message); }
+}
+
+// ---------------------------------------------------------------------------
 // In-memory cache + poll
 // ---------------------------------------------------------------------------
 
 const lastSnapshots = new Map(); // session -> { pane, cols, rows }
-const track = new Map();         // session -> { changeAt, workingSince }
+// session -> { changeAt, workingSince, lastWorkAt, realWork, prevState, doneAt, ackFor, ackAt,
+//              reply, replyHash, contextLeft, model }
+const track = new Map();
 
 async function pool(items, limit, fn) {
   let i = 0;
@@ -257,11 +494,17 @@ async function pollOnce() {
         changedSessions.push(s.name);
       }
     }
-    const t = track.get(s.name) || { changeAt: 0, workingSince: null };
-    if (changed && prev && prev.pane !== pane) t.changeAt = now;   // first sight is not activity
+    const t = track.get(s.name) || { changeAt: 0, workingSince: null, lastWorkAt: 0, realWork: false, prevState: undefined, doneAt: null, ackFor: null, ackAt: null, reply: null, replyHash: null, contextLeft: null, model: null };
+    const paneChanged = !!(changed && prev && prev.pane !== pane);
+    if (paneChanged) t.changeAt = now;   // first sight is not activity
     track.set(s.name, t);
+    // Delivery ack: first pane change after the most recent send.
+    const sentAt = lastSendAt.get(s.name) ?? null;
+    if (sentAt && t.ackFor !== sentAt) { t.ackFor = sentAt; t.ackAt = null; }
+    if (sentAt && t.ackAt == null && paneChanged && now > sentAt) t.ackAt = now;
 
-    const tail = tailLines(offline ? '' : pane, 15);
+    const plain = offline ? [] : plainLines(pane);
+    const tail = plain.filter((l) => l.trim()).slice(-15);
     const tailText = tail.join('\n');
     const ag = (!offline && agentFromTree(p.pid, table)) || (!offline && agentFromText(tailText)) || null;
     const agent = ag ? ag.agent : (SHELLS.has(p.cmd) || p.cmd === 'sleep' || !p.cmd ? 'bash' : 'other');
@@ -271,22 +514,75 @@ async function pollOnce() {
     let waitReason = null;
     if (offline) state = 'offline';
     else if (agent !== 'bash' && (waitReason = findWaitReason(tail)) !== null) state = 'waiting';
-    else if (now - t.changeAt < WORKING_HOLD_MS || (agent !== 'bash' && WORK_RE.test(tail.filter((l) => !/⏵⏵|bypass permissions|accept edits/.test(l)).join('\n')))) state = 'working';
+    else {
+      const spinning = agent !== 'bash' && WORK_RE.test(tail.filter((l) => !/⏵⏵|bypass permissions|accept edits/.test(l)).join('\n'));
+      if (spinning) t.realWork = true;
+      if (now - t.changeAt < WORKING_HOLD_MS || spinning) state = 'working';
+    }
     if (state !== 'waiting') waitReason = null;
-    if (state === 'working') { if (!t.workingSince) t.workingSince = now; }
+    if (state === 'waiting') t.realWork = true;
+    if (state === 'working') { t.lastWorkAt = now; if (!t.workingSince) t.workingSince = now; }
     else t.workingSince = null;
+
+    // Parse once per tick; cheap (<=300 lines).
+    const end = bodyEnd(plain);
+    const isAgent = agent === 'claude' || agent === 'codex' || agent === 'minimax';
+    if (state === 'idle' && isAgent) {
+      // tmux's session_activity only moves with client input, so prefer (1) our own pane-change
+      // clock, then (2) the "done 8:12 AM" stamp in the pane, then (3) session_activity.
+      const clockMs = doneClockMs(plain, end, now);
+      const lastAct = t.changeAt > 0 ? t.changeAt : (clockMs ?? now - s.lastActivitySec * 1000);
+      const recent = now - lastAct < DONE_IDLE_MS;
+      const after = !sentAt || t.lastWorkAt >= sentAt;
+      if (recent && after && hasTurnMarker(plain, end)) { state = 'done'; t.doneGuess = clockMs ?? lastAct; }
+    }
+    if (state === 'done') {
+      if (t.prevState !== 'done' && (t.realWork || !t.doneAt)) {
+        t.doneAt = t.prevState === undefined ? t.doneGuess : now;
+      }
+    } else if (t.realWork) t.doneAt = null;   // a genuinely new turn started
+    const lastMessage = offline ? null : lastMessageOf(plain, end);
+
+    // Notifications: transitions only, never on first sight.
+    if (t.prevState !== undefined && t.prevState !== state) {
+      if (state === 'waiting') ntfy(s.name, 'waiting', waitReason || 'needs input');
+      else if (state === 'done' && t.realWork) ntfy(s.name, 'done', lastMessage || 'turn finished');
+    }
+    if (state === 'done') t.realWork = false;
+    t.prevState = state;
+
+    if (!offline && isAgent && (paneChanged || changed || t.replyHash == null)) {
+      t.reply = replyOf(plain, end);
+      t.replyHash = t.reply ? shortHash(t.reply) : null;
+    } else if (!isAgent || offline) { t.reply = null; t.replyHash = null; }
+
+    const foot = offline ? { contextLeft: null, model: null } : footerInfo(plain.filter((l) => l.trim()));
+    if (isAgent) {
+      if (foot.contextLeft != null) t.contextLeft = foot.contextLeft;
+      if (foot.model) t.model = foot.model;
+    } else { t.contextLeft = null; t.model = null; }
+    const meta = offline ? { cwd: p.cwd || null, repo: null, branch: null, dirty: null } : await getMeta(s.name, p.cwd || null);
 
     status[s.name] = {
       state, agent, agentCmd, waitReason,
       lastActivitySec: s.lastActivitySec,
-      lastSendAt: lastSendAt.get(s.name) ?? null,
+      lastSendAt: sentAt,
+      lastSendAck: sentAt && t.ackFor === sentAt ? t.ackAt : null,
       workingSinceMs: t.workingSince,
+      doneAt: state === 'done' ? t.doneAt : null,
+      activity: state === 'working' && !offline ? activityOf(plain, end) : null,
+      lastMessage,
+      replyHash: t.replyHash,
+      cwd: meta.cwd, repo: meta.repo, branch: meta.branch, dirty: meta.dirty,
+      contextLeft: t.contextLeft, model: t.model,
+      lease: leaseFor(s.name, meta.branch),
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,
     };
   });
   for (const k of [...lastSnapshots.keys()]) if (!status[k]) lastSnapshots.delete(k);
   for (const k of [...track.keys()]) if (!status[k]) track.delete(k);
+  for (const k of [...metaCache.keys()]) if (!status[k]) metaCache.delete(k);
   return { sessions, status, changedSessions };
 }
 
@@ -417,6 +713,11 @@ async function readJsonBody(req) {
   });
 }
 
+function json(res, code, obj) {
+  res.writeHead(code, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(obj));
+}
+
 const server = http.createServer(async (req, res) => {
   // Tight CORS — bound to Tailscale only anyway, but be explicit.
   res.setHeader('referrer-policy', 'no-referrer');
@@ -427,9 +728,28 @@ const server = http.createServer(async (req, res) => {
   // --- API ---
   if (req.method === 'GET' && p === '/api/sessions') {
     const r = (latest && Date.now() - latest.at < 1500) ? latest : await poll();
+    let status = r.status;
+    if (url.searchParams.get('full') === '1') {
+      status = {};
+      for (const [k, v] of Object.entries(r.status)) status[k] = { ...v, reply: track.get(k)?.reply ?? null };
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ sessions: r.sessions, status: r.status }));
+    res.end(JSON.stringify({ sessions: r.sessions, status }));
     return;
+  }
+  if (req.method === 'GET' && p.startsWith('/api/reply/')) {
+    const session = decodeURIComponent(p.slice('/api/reply/'.length));
+    const t = track.get(session);
+    let reply = t ? t.reply : null;
+    if (!t) {
+      try {
+        const lines = plainLines(await capturePane(session));
+        reply = replyOf(lines, bodyEnd(lines));
+      } catch {
+        return json(res, 404, { ok: false, error: 'no such session' });
+      }
+    }
+    return json(res, 200, { session, reply, replyHash: reply ? shortHash(reply) : null });
   }
   if (req.method === 'GET' && p === '/api/leases') {
     res.writeHead(200, { 'content-type': 'application/json' });
