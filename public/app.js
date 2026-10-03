@@ -435,7 +435,7 @@ function onStatus() {
   if (changedSet) {
     state.sessions = names.map((n) => state.sessions.find((s) => s.name === n) || { name: n, cmd: state.status[n].cmd || '' });
     sortSessions();
-    if (state.active && !names.includes(state.active)) state.active = null;
+    if (state.active && !names.includes(state.active) && !pendingNew(state.active)) state.active = null;
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
     renderAll();
   } else {
@@ -580,22 +580,40 @@ function repoBranch(n) {
   return [st.repo, st.branch].filter(Boolean).join(' · ');
 }
 function sideSig() {
-  return SIDE_GROUPS.map(([g]) => state.sessions.filter((s) => sideGroupOf(s.name) === g).map((s) => `${g}:${s.name}:${customFor(s.name)}`).join(',')).join('|');
+  return state.sessions.map((s) => `${s.name}:${customFor(s.name)}`).join(',');
 }
+// Full rebuild only when the session set / names change; group moves are done in layoutSide().
 function renderSide() {
-  els.sessionList.innerHTML = '';
+  const list = els.sessionList;
+  if (list.querySelector('li.editing')) return;   // never wipe an in-progress rename
+  list.innerHTML = '';
+  state.sideHdr = {};
   els.sessionCount.textContent = `${state.sessions.length}`;
-  els.sessionList.dataset.sig = sideSig();
-  for (const [g, label] of SIDE_GROUPS) {
-    const list = state.sessions.filter((s) => sideGroupOf(s.name) === g);
-    if (!list.length) continue;
-    const h = document.createElement('li');
-    h.className = `grp ${g}`;
-    h.textContent = `${label} · ${list.length}`;
-    els.sessionList.appendChild(h);
-    for (const s of list) els.sessionList.appendChild(buildSideRow(s));
-  }
+  list.dataset.sig = sideSig();
+  for (const s of state.sessions) list.appendChild(buildSideRow(s));
+  layoutSide();
   syncSide();
+}
+function layoutSide() {
+  const list = els.sessionList;
+  const hdrs = state.sideHdr || (state.sideHdr = {});
+  const rows = new Map([...list.children].filter((li) => li.dataset.session).map((li) => [li.dataset.session, li]));
+  let cursor = list.firstChild;
+  const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
+  for (const [g, label] of SIDE_GROUPS) {
+    const members = state.sessions.filter((s) => sideGroupOf(s.name) === g);
+    if (!members.length) {
+      const old = hdrs[g];
+      if (old) { if (old === cursor) cursor = cursor.nextSibling; old.remove(); delete hdrs[g]; }
+      continue;
+    }
+    let h = hdrs[g];
+    if (!h) { h = hdrs[g] = document.createElement('li'); h.className = `grp ${g}`; }
+    const t = `${label} \u00b7 ${members.length}`;
+    if (h.textContent !== t) h.textContent = t;
+    place(h);
+    for (const m of members) { const row = rows.get(m.name); if (row) place(row); }
+  }
 }
 function buildSideRow(s) {
   const custom = customFor(s.name);
@@ -624,7 +642,9 @@ function buildSideRow(s) {
   return li;
 }
 function syncSide() {
-  if (els.sessionList.dataset.sig !== sideSig() && !els.sessionList.querySelector('li.editing')) { renderSide(); return; }
+  const editing = !!els.sessionList.querySelector('li.editing');
+  if (els.sessionList.dataset.sig !== sideSig() && !editing) { renderSide(); return; }
+  if (!editing) layoutSide();
   for (const li of els.sessionList.children) {
     const n = li.dataset.session;
     if (!n || li.classList.contains('editing')) continue;
@@ -680,6 +700,7 @@ function beginRename(li, name) {
   const commit = () => {
     if (done) return; done = true;
     const v = inp.value.trim();
+    li.classList.remove('editing');
     if (v && v !== name) state.rename[name] = v;
     else delete state.rename[name];
     saveRenames();
@@ -687,7 +708,7 @@ function beginRename(li, name) {
     renderAll();
     toast(v && v !== name ? `renamed to "${v}"` : 'name reset');
   };
-  const cancel = () => { if (done) return; done = true; renderSide(); };
+  const cancel = () => { if (done) return; done = true; li.classList.remove('editing'); renderSide(); };
   inp.onkeydown = (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
     else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
@@ -826,15 +847,20 @@ function syncReader(cell, n) {
   const st = state.status[n] || {};
   const hash = st.replyHash ?? '';
   let c = state.replies.get(n);
-  const stale = !c || c.hash !== hash || (hash === '' && Date.now() - c.at > 5000);
+  const now = Date.now();
+  const stale = !c || (c.failed ? now - c.at > 3000 : (c.hash !== hash || (hash === '' && now - c.at > 5000)));
   if (stale && !(c && c.busy)) {
     c = c || { hash: null, at: 0, text: '' };
     c.busy = true; state.replies.set(n, c);
     fetch(`/api/reply/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
-      .then((d) => { c.text = String(d.reply ?? ''); c.failed = false; })
+      .then((d) => {
+        // keep the last good reply when the server has none right now (tool line is last)
+        if (d.reply) c.text = String(d.reply);
+        c.failed = false; c.hash = hash;
+      })
       .catch(() => { c.failed = true; })
       .finally(() => {
-        c.busy = false; c.hash = hash; c.at = Date.now();
+        c.busy = false; c.at = Date.now();
         const cur = els.cardPane.querySelector(`[data-session="${cssEscape(n)}"]`);
         if (cur) paintReader(cur, n);
       });
@@ -844,10 +870,14 @@ function syncReader(cell, n) {
 function paintReader(cell, n) {
   const c = state.replies.get(n);
   const el = cell.querySelector('.reader');
-  let text = c ? c.text : '';
-  if (c && (c.failed || !text) && state.paneText.has(n)) text = stripAnsi(state.paneText.get(n)).replace(/\n+$/, '');
-  const html = renderReply(text);
-  if (el.dataset.h !== html) { el.dataset.h = html; el.innerHTML = html; }
+  const text = c ? c.text : '';
+  const html = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  if (el.dataset.h === html) return;
+  const first = el.dataset.h === undefined;
+  const top = el.scrollTop;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  el.dataset.h = html; el.innerHTML = html;
+  el.scrollTop = !first && atBottom ? el.scrollHeight : top;
 }
 function inlineMd(t) {
   return escapeHtml(t)
@@ -899,8 +929,18 @@ function renderInto(host, sessions) {
   });
 }
 
+// A just-created session may not be in the (cached) list yet; don't jump to another card.
+function pendingNew(name) {
+  return !!name && state.pendingNew && state.pendingNew.name === name && Date.now() - state.pendingNew.at < 20000;
+}
 function renderCard() {
-  const active = state.sessions.find((s) => s.name === state.active) || state.sessions[0];
+  let active = state.sessions.find((s) => s.name === state.active);
+  if (!active && pendingNew(state.active)) {
+    renderInto(els.cardPane, []);
+    els.cardPane.innerHTML = `<div class="empty">starting ${escapeHtml(displayName(state.active))}\u2026</div>`;
+    return;
+  }
+  if (!active) active = state.sessions[0];
   if (active) state.active = active.name;
   renderInto(els.cardPane, active ? [active] : []);
 }
@@ -975,7 +1015,16 @@ function syncList() {
   // Reorder only when urgency order changed; otherwise update text in place.
   const order = byUrgency(visibleSessions()).map((s) => s.name).join('|');
   const cur = [...els.listPane.querySelectorAll('.row-item')].map((r) => r.dataset.session).join('|');
-  if (order !== cur || (!order && !els.listPane.querySelector('.empty'))) { renderList(); return; }
+  if (order !== cur) {
+    const want = order ? order.split('|') : [], have = cur ? cur.split('|') : [];
+    if (want.length && want.length === have.length && want.every((n) => have.includes(n))) {
+      const rowsBy = new Map([...els.listPane.querySelectorAll('.row-item')].map((r) => [r.dataset.session, r]));
+      want.forEach((n, i) => {
+        const row = rowsBy.get(n);
+        if (els.listPane.children[i] !== row) els.listPane.insertBefore(row, els.listPane.children[i] || null);
+      });
+    } else { renderList(); return; }
+  } else if (!order && !els.listPane.querySelector('.empty')) { renderList(); return; }
   for (const row of els.listPane.querySelectorAll('.row-item')) {
     const n = row.dataset.session;
     const s = stateOf(n);
@@ -1011,10 +1060,6 @@ function tickClock() {
   for (const el of document.querySelectorAll('.stw[data-s] .st')) {
     const host = el.closest('[data-session]');
     if (host) el.textContent = stateText(host.dataset.session);
-  }
-  for (const li of els.sessionList.children) {
-    const st = li.querySelector('.st');
-    if (st && li.dataset.session) st.textContent = stateText(li.dataset.session);
   }
 }
 
@@ -1571,6 +1616,7 @@ function openNewSession() {
         addRecentDir(cwd);
         close(); closeSide();
         const real = j.name || name;
+        state.pendingNew = { name: real, at: Date.now() };
         await fetchInitial();
         openCard(real);
         toast(`started ${real}`);

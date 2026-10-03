@@ -615,11 +615,9 @@ body{ display:flex; flex-direction:column; }
   padding:10px 6px 4px; margin:0; cursor:default; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3);
 }
 .session-list li.grp.waiting{ color:var(--waiting); }
-.session-list li.grp.done{ color:var(--a-codex); }
+.session-list li.grp.done{ color:var(--done); }
 .session-list li.grp.working{ color:var(--working); }
 .session-list li.grp:active{ background:transparent; }
-.dot.done{ background:var(--a-codex); }
-.state.done{ color:var(--a-codex); }
 .session-list li{ padding:7px 6px 7px 10px; }
 .session-list .rb{ color:var(--ink-3); }
 .session-list .edit{ width:36px; height:36px; }
