@@ -156,13 +156,14 @@ function agentFromText(text) {
   return null;
 }
 
+const tgt = (s) => `=${s}:`;
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
 
 async function capturePane(session) {
   // Visible pane + modest scrollback. No -J: keep tmux's own line breaks so
   // the client can size xterm to the pane's cols. -e keeps colour escapes.
   const { stdout } = await exec(TMUX, [
-    'capture-pane', '-t', session, '-p', '-e', '-S', `-${PANE_LINES}`,
+    'capture-pane', '-t', tgt(session), '-p', '-e', '-S', `-${PANE_LINES}`,
   ], { maxBuffer: 16 * 1024 * 1024 });
   return stdout;
 }
@@ -174,9 +175,9 @@ const LITERAL_KEYS = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9', 'y', 
 
 async function sendKey(session, key) {
   if (NAMED_KEYS.has(key)) {
-    await exec(TMUX, ['send-keys', '-t', session, key]);
+    await exec(TMUX, ['send-keys', '-t', tgt(session), key]);
   } else if (LITERAL_KEYS.has(key)) {
-    await exec(TMUX, ['send-keys', '-t', session, '-l', '--', key]);
+    await exec(TMUX, ['send-keys', '-t', tgt(session), '-l', '--', key]);
   } else {
     const e = new Error('key not allowed'); e.status = 400; throw e;
   }
@@ -187,12 +188,13 @@ async function sendKey(session, key) {
 async function sendKeys(session, keys, enter = true) {
   // Split on \n so a multi-line paste works.
   const lines = String(keys || '').split('\n');
+  if (lines.length > 200) throw httpError(400, 'too many lines (max 200)');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.length) {
-      await exec(TMUX, ['send-keys', '-t', session, '-l', '--', line]);
+      await exec(TMUX, ['send-keys', '-t', tgt(session), '-l', '--', line]);
     }
-    if (enter || i < lines.length - 1) await exec(TMUX, ['send-keys', '-t', session, 'Enter']);
+    if (enter || i < lines.length - 1) await exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
   }
   lastSendAt.set(session, Date.now());
   return { ok: true, sent: lines.length };
@@ -703,10 +705,16 @@ async function serveStatic(req, res, urlPath) {
   res.end(body);
 }
 
+const MAX_BODY = 64 * 1024;
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > MAX_BODY) { reject(Object.assign(new Error('body too large'), { status: 413 })); req.destroy(); return; }
+      chunks.push(c);
+    });
     req.on('end', () => {
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
       catch (e) { reject(e); }
@@ -756,6 +764,7 @@ async function createSession({ name, agent, cwd }) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
+  latest = null;
   return { ok: true, name: real, agent, cwd: dir };
 }
 
@@ -764,23 +773,26 @@ async function killSession(name, confirm) {
   if (!(await sessionExists(name))) throw httpError(404, 'no such session');
   await exec(TMUX, ['kill-session', '-t', `=${name}`]);
   lastSendAt.delete(name);
+  latest = null;
   return { ok: true, name };
 }
 
 async function sendMany(sessions, payload) {
   if (!Array.isArray(sessions) || !sessions.length || sessions.length > 50) throw httpError(400, 'sessions must be a non-empty array (max 50)');
   if (payload.key === undefined && typeof payload.keys !== 'string') throw httpError(400, 'keys (string) or key required');
-  const results = await Promise.all([...new Set(sessions.map(String))].map(async (session) => {
+  const list = [...new Set(sessions.map(String))];
+  const results = new Array(list.length);
+  await pool(list.map((session, idx) => ({ session, idx })), 4, async ({ session, idx }) => {
     try {
-      if (!(await sessionExists(session))) return { session, ok: false, error: 'no such session' };
+      if (!(await sessionExists(session))) { results[idx] = { session, ok: false, error: 'no such session' }; return; }
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys, payload.enter !== false);
-      return { session, ...out };
+      results[idx] = { session, ...out };
     } catch (err) {
-      return { session, ok: false, error: err.stderr ? String(err.stderr).trim().slice(0, 120) : err.message };
+      results[idx] = { session, ok: false, error: err.stderr ? String(err.stderr).trim().slice(0, 120) : err.message };
     }
-  }));
+  });
   return { ok: results.every((r) => r.ok), results };
 }
 
@@ -816,7 +828,7 @@ async function collectDirs() {
       }
     } catch {}
   });
-  for (const p of (await listPanes()).values()) if (p.cwd) paths.add(p.cwd);
+  for (const p of (await listPanes()).values()) if (p.cwd && (p.cwd === HOME || p.cwd.startsWith(HOME + sep))) paths.add(p.cwd);
   const list = [];
   await pool([...paths], 8, async (path) => {
     let mtime = 0;
@@ -839,12 +851,25 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// Reject browser requests whose Origin host differs from the Host header (CSRF / cross-site WS).
+function originOk(req) {
+  const o = req.headers.origin;
+  if (!o) return true;
+  try { return new URL(o).host === req.headers.host; } catch { return false; }
+}
+
 const server = http.createServer(async (req, res) => {
   // Tight CORS — bound to Tailscale only anyway, but be explicit.
   res.setHeader('referrer-policy', 'no-referrer');
 
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
+
+  if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
+      && req.method !== 'OPTIONS' && !/application\/json/i.test(req.headers['content-type'] || '')) {
+    return json(res, 415, { ok: false, error: 'content-type must be application/json' });
+  }
 
   // --- API ---
   if (req.method === 'GET' && p === '/api/sessions') {
@@ -891,10 +916,11 @@ const server = http.createServer(async (req, res) => {
     const session = decodeURIComponent(p.slice('/api/send/'.length));
     let payload;
     try { payload = await readJsonBody(req); }
-    catch {
-      res.writeHead(400); res.end('bad json'); return;
+    catch (err) {
+      return json(res, err.status || 400, { ok: false, error: err.status ? err.message : 'bad json' });
     }
     try {
+      if (!(await sessionExists(session))) throw httpError(404, 'no such session');
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys || '', payload.enter !== false);
@@ -946,6 +972,7 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {
+  if (!originOk(req)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
 
