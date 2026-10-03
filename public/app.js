@@ -195,26 +195,20 @@ function lastLine(paneText) {
 }
 
 // ---------- xterm setup ----------
-const MIN_FONT = 6, MAX_FONT = 14;
+const FONT_MIN = 8, FONT_MAX = 20;
 const FONT_FAMILY = "'JetBrains Mono', monospace";
-let _charRatio = 0;
-function charRatio() {
-  if (_charRatio) return _charRatio;
-  try {
-    const ctx = document.createElement('canvas').getContext('2d');
-    ctx.font = `100px ${FONT_FAMILY}`;
-    const w = ctx.measureText('M').width / 100;
-    if (w > 0.3 && w < 0.9) return (_charRatio = w);
-  } catch {}
-  return 0.6;
-}
+const LS_FONT = 'ghosty.font', LS_FIT = 'ghosty.fit';
+const clampFont = (n) => Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(n)));
+state.font = clampFont(Number(lsGet(LS_FONT, 0)) || (matchMedia('(max-width: 720px)').matches ? 11 : 12));
+state.fit = lsGet(LS_FIT, '1') !== '0';
+document.documentElement.style.setProperty('--tf', String(state.font));
 
 function getTerm(session) {
   let entry = state.terms.get(session);
   if (entry) return entry;
   const term = new Terminal({
     fontFamily: FONT_FAMILY,
-    fontSize: 12,
+    fontSize: state.font,
     lineHeight: 1.2,
     cursorBlink: false,
     cursorStyle: 'bar',
@@ -234,45 +228,92 @@ function getTerm(session) {
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
-  entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, laidOut: '' };
+  entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, paneRows: 0, laidOut: '', reqKey: '', reqTimer: 0, noFit: false };
   state.terms.set(session, entry);
   return entry;
 }
 
-// Size the xterm to the tmux pane's cols exactly; scale the font so those
-// cols fit the host width (crop horizontally below MIN_FONT). Rows come from
-// FitAddon. Returns true if the grid dimensions changed (=> content must be
-// rewritten, since reflow is lossy).
+// One global font for every xterm. The xterm grid is always the tmux pane's
+// cols (so hard-wrapped agent output lines up); rows follow the host. When the
+// session may be resized we ask tmux to match the host (scheduleFit); otherwise
+// the host scrolls horizontally if the pane is wider than the card.
+// Returns true if the grid dimensions changed (=> content must be rewritten,
+// since reflow is lossy).
 function layoutTerm(session) {
   const entry = state.terms.get(session);
   if (!entry || !entry.host || !entry.term.element || !entry.host.isConnected) return false;
   const { term, fit, host } = entry;
   const w = host.clientWidth, h = host.clientHeight;
   if (w < 20 || h < 20) return false;
-  const cols = entry.paneCols || state.status?.[session]?.cols || 80;
-  host.style.overflow = 'hidden';
-  let fs = Math.floor((w / (cols * charRatio())) * 2) / 2;
-  fs = Math.max(MIN_FONT, Math.min(MAX_FONT, fs));
-  if (term.options.fontSize !== fs) term.options.fontSize = fs;
-  // Verify with xterm's own measurement and step down until the cols fit.
-  for (let i = 0; i < 6 && fs > MIN_FONT; i++) {
-    let p = null;
-    try { p = fit.proposeDimensions(); } catch {}
-    if (!p || p.cols >= cols) break;
-    fs = Math.max(MIN_FONT, fs - 0.5);
-    term.options.fontSize = fs;
-  }
-  let rows = term.rows;
-  try {
-    const p = fit.proposeDimensions();
-    if (p && p.rows) rows = p.rows;
-  } catch {}
-  rows = Math.max(2, rows);
+  if (term.options.fontSize !== state.font) term.options.fontSize = state.font;
+  let p = null;
+  try { p = fit.proposeDimensions(); } catch {}
+  const cols = entry.paneCols || state.status?.[session]?.cols || (p && p.cols) || 80;
+  const scrollX = !!(p && cols > p.cols);
+  // a horizontal scrollbar eats one row of the host
+  const rows = Math.max(2, ((p && p.rows) || term.rows) - (scrollX ? 1 : 0));
+  entry.fitCols = p ? p.cols : 0; entry.fitRows = p ? p.rows : 0;
+  host.style.overflowY = 'hidden';
+  host.style.overflowX = scrollX ? 'auto' : 'hidden';
+  scheduleFit(session);
   const key = `${cols}x${rows}`;
   if (term.cols === cols && term.rows === rows) { entry.laidOut = key; return false; }
   try { term.resize(cols, rows); } catch { return false; }
   entry.laidOut = key;
   return true;
+}
+
+// Ask the server to resize the (detached) tmux window to what fits the host.
+function scheduleFit(session) {
+  const entry = state.terms.get(session);
+  if (!entry) return;
+  clearTimeout(entry.reqTimer);
+  if (!state.fit || entry.noFit) return;
+  entry.reqTimer = setTimeout(() => sendFit(session), 400);
+}
+async function sendFit(session) {
+  const entry = state.terms.get(session);
+  const st = state.status?.[session];
+  if (!entry || !st || !state.fit || document.hidden) return;
+  if (st.attached) { entry.noFit = true; return; }
+  const { host } = entry;
+  if (!host || !host.isConnected || host.clientWidth < 20 || host.clientHeight < 20) return;
+  const r = host.getBoundingClientRect();
+  if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) return;
+  if (!entry.fitCols || !entry.fitRows) return;
+  const cols = Math.max(20, Math.min(400, entry.fitCols)), rows = Math.max(5, Math.min(200, entry.fitRows));
+  const key = `${cols}x${rows}`;
+  if (cols === st.cols && rows === st.rows) { entry.reqKey = key; return; }
+  if (entry.reqKey === key) return;
+  entry.reqKey = key;
+  try {
+    const res = await fetch(`/api/resize/${encodeURIComponent(session)}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cols, rows }),
+    });
+    if (res.status === 409) entry.noFit = true;
+    else if (!res.ok) setTimeout(() => { if (entry.reqKey === key) entry.reqKey = ''; }, 15000);
+  } catch { entry.reqKey = ''; }
+}
+
+function setFont(n) {
+  n = clampFont(n);
+  if (n === state.font) return;
+  state.font = n;
+  lsSet(LS_FONT, String(n));
+  document.documentElement.style.setProperty('--tf', String(n));
+  for (const name of state.terms.keys()) relayoutTerm(name);
+  syncFontUi();
+}
+function setFit(on) {
+  state.fit = !!on;
+  lsSet(LS_FIT, on ? '1' : '0');
+  for (const e of state.terms.values()) { e.noFit = false; e.reqKey = ''; }
+  for (const name of state.terms.keys()) relayoutTerm(name);
+  syncFontUi();
+}
+function syncFontUi() {
+  const sz = $('#fontSize'); if (sz) sz.textContent = String(state.font);
+  const f = $('#fitToggle'); if (f) f.classList.toggle('on', state.fit);
 }
 
 function relayoutTerm(session) {
@@ -342,8 +383,8 @@ function writeToTerm(session, pane, dims) {
   const entry = state.terms.get(session);
   if (entry) {
     let relaid = false;
-    if (dims && dims.cols && dims.cols !== entry.paneCols) {
-      entry.paneCols = dims.cols;
+    if (dims && dims.cols && (dims.cols !== entry.paneCols || dims.rows !== entry.paneRows)) {
+      entry.paneCols = dims.cols; entry.paneRows = dims.rows;
       relaid = layoutTerm(session);
     }
     if (entry.lastPane === pane && !relaid) {
@@ -415,7 +456,10 @@ function connectStatus() {
       if (msg.type === 'status') {
         state.status = msg.status;
         closeStale();
-        for (const name of state.terms.keys()) relayoutTerm(name);
+        for (const [name, e] of state.terms) {
+          if (e.noFit && !msg.status[name]?.attached) { e.noFit = false; e.reqKey = ''; }
+          relayoutTerm(name);
+        }
         onStatus();
       } else if (msg.type === 'leases') {
         onLeases(msg.leases);
@@ -1908,6 +1952,28 @@ els.sendBtn.onpointerdown = (e) => e.preventDefault();
 els.sendBtn.onclick   = send;
 els.sendInput.oninput = autoGrow;
 els.sendInput.onkeydown = onDockKey;
+
+// ---------- font size / fit controls ----------
+function wireFontUi() {
+  const pop = $('#fontPop');
+  $('#fontDec').onclick = () => setFont(state.font - 1);
+  $('#fontInc').onclick = () => setFont(state.font + 1);
+  $('#fontDec2').onclick = () => setFont(state.font - 1);
+  $('#fontInc2').onclick = () => setFont(state.font + 1);
+  $('#fontReset').onclick = () => setFont(isPhone() ? 11 : 12);
+  $('#fitToggle').onclick = () => setFit(!state.fit);
+  $('#fontBtn').onclick = (e) => { e.stopPropagation(); pop.classList.toggle('hidden'); };
+  pop.onclick = (e) => e.stopPropagation();
+  document.addEventListener('click', () => pop.classList.add('hidden'));
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (e.key === '=' || e.key === '+') { e.preventDefault(); setFont(state.font + 1); }
+    else if (e.key === '-' || e.key === '_') { e.preventDefault(); setFont(state.font - 1); }
+    else if (e.key === '0') { e.preventDefault(); setFont(isPhone() ? 11 : 12); }
+  });
+  syncFontUi();
+}
+wireFontUi();
 
 window.addEventListener('resize', () => {
   for (const name of state.terms.keys()) relayoutTerm(name);

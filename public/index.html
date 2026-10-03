@@ -41,6 +41,16 @@
     <button class="icon-btn install-btn" id="installBtn" aria-label="Install app" title="Add to Home Screen">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
     </button>
+    <!-- terminal font: A- / A+ on desktop, Aa popover (also phones) -->
+    <div class="fontbox" id="fontBox">
+      <button class="size-btn fdesk" id="fontDec" aria-label="Smaller text" title="Smaller text (Ctrl -)">A&minus;</button>
+      <button class="size-btn fdesk" id="fontInc" aria-label="Larger text" title="Larger text (Ctrl =)">A+</button>
+      <button class="size-btn" id="fontBtn" aria-label="Text size and fit" title="Text size / fit">Aa</button>
+      <div class="fontpop hidden" id="fontPop">
+        <div class="frow"><button id="fontDec2" aria-label="Smaller">&minus;</button><span id="fontSize">12</span><button id="fontInc2" aria-label="Larger">+</button><button id="fontReset" class="fr">reset</button></div>
+        <button class="frow fit" id="fitToggle" aria-label="Fit sessions to cards"><i></i>Fit sessions to cards</button>
+      </div>
+    </div>
     <!-- grid sizes: always visible, last on the right; tapping one shows the grid -->
     <div class="gridsizes" id="gridSizes" title="Grid">
       <button data-size="2"  class="size-btn" aria-label="Grid of 2">2</button>
