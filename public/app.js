@@ -64,7 +64,7 @@ const LS_GRID    = 'ghosty.gridSize';
 const LS_MODE    = 'ghosty.mode';
 const LS_ORDER   = 'ghosty.order';
 const LS_NOTIFY  = 'ghosty.notify';
-const GRID_SIZES = [2, 4, 6, 9, 16];
+const GRID_SIZES = [2, 4, 8, 16];
 
 function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
@@ -83,7 +83,8 @@ function loadOrder() {
 function loadPrefs() {
   loadOrder();
   const g = Number(lsGet(LS_GRID, 4));
-  state.gridSize = GRID_SIZES.includes(g) ? g : 4;
+  // old saved sizes (6 / 9) map to the nearest current one
+  state.gridSize = GRID_SIZES.includes(g) ? g : (g > 4 ? 8 : 4);
   const m = lsGet(LS_MODE, 'grid');
   state.mode = ['card', 'grid', 'list'].includes(m) ? m : 'grid';
   state.notify = lsGet(LS_NOTIFY, '0') === '1';
@@ -1031,7 +1032,7 @@ function renderCard() {
 function renderGrid() {
   els.gridPane.className = `grid-pane size-${state.gridSize}`;
   const all = visibleSessions();
-  const limit = state.gridSize >= 16 ? all.length : state.gridSize;
+  const limit = state.gridSize;
   // Keep the active session on screen when the grid is limited.
   let targets = all.slice(0, limit);
   const act = all.find((s) => s.name === state.active);
@@ -1167,7 +1168,6 @@ function openCard(name) {
 
 // ---------- mode switching ----------
 function setMode(mode) {
-  if (mode === 'grid' && isPhone()) mode = 'list';      // grid is desktop-only
   if (mode !== 'card') state.prevMode = mode;
   state.mode = mode;
   lsSet(LS_MODE, mode);
@@ -1175,7 +1175,8 @@ function setMode(mode) {
   els.main.classList.add(`view-${mode}`);
   document.body.dataset.mode = mode;
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
-  els.gridSizes.classList.toggle('hidden', mode !== 'grid');
+  // size buttons are always visible; highlighted only while the grid is shown
+  for (const b of $$('.size-btn')) b.classList.toggle('on', mode === 'grid' && Number(b.dataset.size) === state.gridSize);
   els.backBtn.classList.toggle('hidden', mode !== 'card');
   els.menuBtn.classList.toggle('hidden', mode === 'card');
   // Leaving a view: free its cells so xterm instances are reparented, not duplicated.
@@ -1191,7 +1192,7 @@ function setMode(mode) {
 function setGridSize(n) {
   state.gridSize = n;
   lsSet(LS_GRID, String(n));
-  for (const b of $$('.size-btn')) b.classList.toggle('on', Number(b.dataset.size) === n);
+  for (const b of $$('.size-btn')) b.classList.toggle('on', state.mode === 'grid' && Number(b.dataset.size) === n);
   if (state.mode === 'grid') { els.gridPane.innerHTML = ''; renderGrid(); }
 }
 
@@ -1891,12 +1892,13 @@ function cssEscape(s) { return (window.CSS?.escape) ? CSS.escape(s) : String(s).
 
 // ---------- wire up ----------
 els.menuBtn.onclick   = openSide;
-els.backBtn.onclick   = () => setMode(isPhone() ? 'list' : (state.prevMode || 'grid'));
+els.backBtn.onclick   = () => setMode(state.prevMode || (isPhone() ? 'list' : 'grid'));
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();
 els.notifyBtn.onclick = () => toggleNotify();
 for (const b of $$('.mode-btn')) b.onclick = () => setMode(b.dataset.mode);
-for (const b of $$('.size-btn')) b.onclick = () => setGridSize(Number(b.dataset.size));
+// tapping a size always shows the grid at that size
+for (const b of $$('.size-btn')) b.onclick = () => { setGridSize(Number(b.dataset.size)); if (state.mode !== 'grid') setMode('grid'); };
 for (const b of els.keys.querySelectorAll('button')) {
   // keep the soft keyboard open when tapping a quick key
   b.onpointerdown = (e) => e.preventDefault();
@@ -1966,7 +1968,8 @@ if ('serviceWorker' in navigator) {
   els.notifyBtn.classList.toggle('on', state.notify);
   setGridSize(state.gridSize);
   const wanted = new URLSearchParams(location.search).get('s');
-  if (isPhone()) { state.mode = 'list'; state.prevMode = 'list'; }   // phone home = board
+  // phone home = board, unless the grid was the last view used
+  if (isPhone() && state.mode !== 'grid') { state.mode = 'list'; state.prevMode = 'list'; }
   const rd = lsGet(LS_READER, null);
   state.reader = rd == null ? isPhone() : rd === '1';
   if (wanted) { state.active = wanted; state.mode = 'card'; }
@@ -1978,7 +1981,6 @@ if ('serviceWorker' in navigator) {
   connectStatus();
   wireSwipe();
   wireCardSwipe();
-  window.matchMedia('(max-width: 720px)').addEventListener?.('change', () => { if (isPhone() && state.mode === 'grid') setMode('list'); });
   setInterval(tickClock, 1000);
   setInterval(fetchLeases, 60000);
 })();

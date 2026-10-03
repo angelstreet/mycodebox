@@ -180,18 +180,20 @@ body{ display:flex; flex-direction:column; }
 
 .grid-pane.size-2  { grid-template-columns: repeat(2, minmax(0,1fr)); grid-auto-rows: minmax(0,1fr); }
 .grid-pane.size-4  { grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
-.grid-pane.size-6  { grid-template-columns: repeat(3, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
-.grid-pane.size-9  { grid-template-columns: repeat(3, minmax(0,1fr)); grid-template-rows: repeat(3, minmax(0,1fr)); }
-.grid-pane.size-16 { grid-template-columns: repeat(auto-fill, minmax(360px,1fr)); grid-auto-rows: 300px; }
-/* phones: one column, scrollable, fixed-height cards */
+.grid-pane.size-8  { grid-template-columns: repeat(4, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
+.grid-pane.size-16 { grid-template-columns: repeat(4, minmax(0,1fr)); grid-template-rows: repeat(4, minmax(0,1fr)); }
+/* phones: 2 → one column, 4 / 8 → two columns filling the screen, 16 → two columns scrolling */
 @media (max-width: 720px){
-  .grid-pane[class*="size-"]{ grid-template-columns: minmax(0,1fr); grid-template-rows:none; grid-auto-rows: 46vh; }
-  .gridsizes{ display:none; }
+  .view-grid .grid-pane{ gap:6px; padding:6px; }
+  .grid-pane.size-2 { grid-template-columns: minmax(0,1fr); grid-template-rows: repeat(2, minmax(0,1fr)); grid-auto-rows:0; }
+  .grid-pane.size-4 { grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
+  .grid-pane.size-8 { grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(4, minmax(0,1fr)); }
+  .grid-pane.size-16{ grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: none; grid-auto-rows: 24vh; }
+  .size-btn{ min-width:28px; padding:5px 4px; justify-content:center; }
   .summary .chip .t{ display:none; }
   .tabs{ display:none; }
   .title{ display:none; }
   .summary{ flex:1; }
-  .mode-btn[data-mode="grid"]{ display:none; }
   .mode-btn{ min-height:32px; min-width:34px; justify-content:center; }
   .icon-btn{ width:36px; height:36px; }
   .summary .chip{ padding:6px 8px; }
@@ -646,3 +648,29 @@ body{ display:flex; flex-direction:column; }
 .grid-pane .cell .h{ cursor:grab; }
 .grid-pane .cell.dragging{ opacity:.4; }
 .grid-pane .cell.drop-over{ outline:2px dashed var(--accent); outline-offset:-2px; }
+
+/* ------------ Phone top bar: keep 2/4/8/16 always on screen ------------ */
+@media (max-width: 720px){
+  .topbar{ gap:4px; padding:0 4px; }
+  /* card view is reached by tapping a session; the board button is enough here */
+  .mode-btn[data-mode="card"]{ display:none; }
+  /* count chips give way first: they shrink and scroll, the buttons never move */
+  .summary{ flex:1 1 auto; min-width:0; overflow-x:auto; scrollbar-width:none; }
+  .summary::-webkit-scrollbar{ display:none; }
+  .summary .chip{ flex-shrink:0; padding:5px 7px; }
+  .gridsizes, .modes{ flex-shrink:0; }
+  .icon-btn{ width:32px; height:34px; }
+
+  /* compact grid card header on phones: name + state dot only */
+  .grid-pane .cell .h{ gap:5px; padding:5px 6px; position:relative; }
+  .grid-pane .cell .h .ag, .grid-pane .cell .h .mt, .grid-pane .cell .h .tgt,
+  .grid-pane .cell .h .rd, .grid-pane .cell .h .open, .grid-pane .cell .h .pos{ display:none; }
+  .grid-pane .cell .h .state .st{ display:none; }
+  .grid-pane .cell .h .state.waiting{ padding:2px 4px; }
+  /* move arrows float over the selected card's top edge instead of squeezing the name */
+  .grid-pane .cell.focus .h .mv{
+    position:absolute; right:4px; top:100%; margin-top:4px; z-index:3;
+    background:var(--bg-2); border:1px solid var(--line-2); border-radius:8px; padding:3px;
+    box-shadow:0 4px 12px rgba(0,0,0,.5);
+  }
+}

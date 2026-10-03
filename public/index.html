@@ -31,19 +31,9 @@
       <button data-mode="card" class="mode-btn on" title="One session">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
       </button>
-      <button data-mode="grid" class="mode-btn" title="Grid">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg>
-      </button>
       <button data-mode="list" class="mode-btn" title="Board">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
       </button>
-    </div>
-    <div class="gridsizes" id="gridSizes">
-      <button data-size="2"  class="size-btn">2</button>
-      <button data-size="4"  class="size-btn">4</button>
-      <button data-size="6"  class="size-btn">6</button>
-      <button data-size="9"  class="size-btn">9</button>
-      <button data-size="16" class="size-btn">all</button>
     </div>
     <button class="icon-btn" id="notifyBtn" aria-label="Alerts" title="Alert me when a session needs you">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -51,6 +41,13 @@
     <button class="icon-btn install-btn" id="installBtn" aria-label="Install app" title="Add to Home Screen">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
     </button>
+    <!-- grid sizes: always visible, last on the right; tapping one shows the grid -->
+    <div class="gridsizes" id="gridSizes" title="Grid">
+      <button data-size="2"  class="size-btn" aria-label="Grid of 2">2</button>
+      <button data-size="4"  class="size-btn" aria-label="Grid of 4">4</button>
+      <button data-size="8"  class="size-btn" aria-label="Grid of 8">8</button>
+      <button data-size="16" class="size-btn" aria-label="Grid of 16">16</button>
+    </div>
   </header>
 
   <!-- attention banner: sessions waiting on you -->
