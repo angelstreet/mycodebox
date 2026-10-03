@@ -749,3 +749,33 @@ body{ display:flex; flex-direction:column; }
   .card-pane .cell .h::after{ display:none; }
   .card-pane .cell .h .proj{ order:5; flex:1 1 100%; max-width:100%; justify-content:center; }
 }
+
+/* ------------ Jump to top / bottom ------------ */
+.cell{ position:relative; }
+.cell .jump{
+  position:absolute; right:10px; bottom:10px; z-index:4;
+  display:flex; flex-direction:column; gap:6px;
+  opacity:.55; transition:opacity 140ms ease;
+}
+.cell:hover .jump, .cell.focus .jump, .cell .jump:focus-within{ opacity:1; }
+.cell .jump button{
+  width:34px; height:34px; border-radius:9px; padding:0;
+  background:rgba(29,32,41,.92); color:var(--ink); border:1px solid var(--line-2);
+  font-size:16px; line-height:1; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 2px 8px rgba(0,0,0,.45);
+}
+.cell .jump button:hover{ color:var(--accent); border-color:var(--accent); }
+/* small grid cards: keep it out of the way */
+.grid-pane.size-8 .cell .jump, .grid-pane.size-16 .cell .jump{ right:6px; bottom:6px; gap:4px; }
+.grid-pane.size-8 .cell .jump button, .grid-pane.size-16 .cell .jump button{ width:26px; height:26px; font-size:13px; }
+
+/* ------------ Selected session tab: solid gold, always wins over state colours ------------ */
+.tabs .tab.active,
+.tabs .tab.active.done, .tabs .tab.active.working, .tabs .tab.active.waiting,
+.tabs .tab.active.idle, .tabs .tab.active.offline{
+  background:var(--accent); border-color:var(--accent); color:#1a1206; font-weight:700;
+  box-shadow:0 0 0 1px rgba(232,154,74,.35), 0 0 10px rgba(232,154,74,.35);
+}
+/* keep the state readable on gold: dark ring around the dot */
+.tabs .tab.active .dot{ box-shadow:0 0 0 2px #1a1206; }
+.tabs .tab.active .dot.idle{ background:#5a4630; }

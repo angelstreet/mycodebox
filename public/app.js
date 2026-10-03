@@ -297,6 +297,24 @@ async function sendFit(session) {
   } catch { entry.reqKey = ''; }
 }
 
+// Several views/devices can show one session at different sizes. Each client
+// asks once per size, so a later resize from elsewhere would stick. Re-claim
+// the size whenever the user actually interacts with this client: window
+// focus, coming back to the tab, or touching a card.
+function refit(name) {
+  const e = state.terms.get(name);
+  if (!e) return;
+  e.reqKey = '';
+  scheduleFit(name);
+}
+function refitVisible() { for (const name of state.terms.keys()) refit(name); }
+window.addEventListener('focus', refitVisible);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refitVisible(); });
+document.addEventListener('pointerdown', (e) => {
+  const cell = e.target.closest?.('.cell[data-session]');
+  if (cell) refit(cell.dataset.session);
+}, true);
+
 function setFont(n) {
   n = clampFont(n);
   if (n === state.font) return;
@@ -328,6 +346,7 @@ function mountTerm(session, host) {
   if (!host) return;
   const entry = getTerm(session);
   const { term } = entry;
+  entry.reqKey = '';   // newly shown here: claim the size again (last viewer wins)
   try {
     if (term.element && term.element.parentNode === host && entry.host === host) {
       // already mounted here
@@ -886,8 +905,15 @@ function buildCell(s) {
       <button data-key="Escape">esc</button>
     </div>
     <div class="reader"></div>
-    <div class="b"></div>`;
+    <div class="b"></div>
+    <div class="jump">
+      <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">&#10514;</button>
+      <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">&#10515;</button>
+    </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); toggleReader(); };
+  for (const b of cell.querySelectorAll('.jump button')) {
+    b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
+  }
   wireTap(cell, () => focusSession(s.name), () => { if (state.mode !== 'card') openCard(s.name); });
   cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
   for (const b of cell.querySelectorAll('.mv button')) {
@@ -931,6 +957,19 @@ function wireDrag(cell, name) {
     e.preventDefault();
     moveSessionTo(from, state.sessions.findIndex((s) => s.name === name));
   });
+}
+
+// ⤒ / ⤓: jump to the oldest / newest output in whatever the card shows
+// (reader text or the terminal's scrollback).
+function jumpTo(cell, name, where) {
+  if (cell.classList.contains('rd-on')) {
+    const el = cell.querySelector('.reader');
+    el.scrollTo({ top: where === 'top' ? 0 : el.scrollHeight, behavior: 'smooth' });
+    return;
+  }
+  const term = state.terms.get(name)?.term;
+  if (!term) return;
+  if (where === 'top') term.scrollToTop(); else term.scrollToBottom();
 }
 
 // Single tap = select (send target), double tap = open the card.
