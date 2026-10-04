@@ -6,6 +6,7 @@
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
 import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
+import { deployedView, targetLabel } from '/deployed.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -1890,9 +1891,11 @@ function onQuota(q) {
 const resetText = (w) => {
   if (w.expired) return 'window has reset';
   if (!w.resetsAt) return 'reset time unknown';
-  const left = Math.max(0, w.resetsAt * 1000 - Date.now()), h = Math.floor(left / 3600e3), m = Math.floor((left % 3600e3) / 60e3);
-  const when = new Date(w.resetsAt * 1000);
-  return `resets in ${h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${h}h ${m}m`} (${when.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })})`;
+  const mins = Math.max(0, Math.floor((w.resetsAt * 1000 - Date.now()) / 60e3));
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const left = d ? `${d}d ${h}h ${m}min` : h ? `${h}h ${m}min` : `${m}min`;
+  const when = new Date(w.resetsAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+  return `reset ${when} - ${left} left`;
 };
 function openQuota() {
   const q = state.quota;
@@ -1988,6 +1991,16 @@ function depRow(d, d0) {
     ${d.state === 'running' ? `<pre class="dlog" data-log="${d.id}">…</pre>` : ''}
     ${d.coalescedInto ? `<div class="d2">merged into ${escapeHtml(d.coalescedInto)}</div>` : ''}${d.reason ? `<div class="d2">${escapeHtml(d.reason)}</div>` : ''}</div>`;
 }
+// "Deployed now": per env/target what the registry's ledger says is live (version, ref, commit, when, who, newer failed attempt).
+function deployedHtml(d0) {
+  const view = deployedView(d0?.deployed, Date.now());
+  if (!view.length) return '<div class="mnote">deployed now: nothing recorded yet</div>';
+  return `<div class="mnote">deployed now</div>${view.map((e) => `<div class="dep dnow"><div class="d1"><b>${escapeHtml(e.env)}</b></div>${e.rows.map((r) => `
+    <div class="d2 dnrow"><span class="dscope">${escapeHtml(targetLabel(r.targets))}</span> ${r.deployed
+      ? `<b>${escapeHtml(r.version || '?')}</b> &middot; ${escapeHtml(r.ref || '?')}${r.commit ? ` &middot; ${escapeHtml(r.commit)}` : ''} &middot; ${escapeHtml(r.ago)}${r.by && r.by !== 'unknown' ? ` &middot; ${escapeHtml(r.by)}` : ''}${r.backfill ? ' &middot; <i>read from the target</i>' : ''}`
+      : '<span class="dim">no successful deploy recorded</span>'}
+      ${r.failed ? `<div class="dwarn">&#9888; last attempt failed ${escapeHtml(r.failed.ago)}${r.failed.version ? ` (${escapeHtml(r.failed.version)})` : ''}${r.failed.by ? ` by ${escapeHtml(r.failed.by)}` : ''}</div>` : ''}</div>`).join('')}</div>`).join('')}`;
+}
 function deploysHtml(d0) {
   if (!d0) return '<div class="dim">loading…</div>';
   const all = d0.deploys || [];
@@ -1997,6 +2010,7 @@ function deploysHtml(d0) {
     ${d0.enabled ? '' : '<div class="mnote">runner is off: requests only queue. Agents then follow the manual flow when you tell them to.</div>'}
     ${d0.ok === false ? `<div class="mnote dwarn">registry unreachable &middot; ${escapeHtml(d0.error || '')}</div>` : ''}
     ${act.map((x) => depRow(x, d0)).join('') || '<div class="dim">no deploy queued</div>'}
+    ${deployedHtml(d0)}
     ${recent.length ? `<div class="mnote">recent</div>${recent.map((x) => `<div class="dep ${x.state}"><div class="d1"><span class="dtag ${x.state}">${x.state}</span><b>${escapeHtml(x.env)}</b><span class="dscope">${escapeHtml(x.scope)}</span><span class="grow"></span><span class="dim">${x.version ? escapeHtml(x.version) : ''}</span></div><div class="d2">${escapeHtml(x.ref)} &middot; ${escapeHtml(x.agent)}${x.coalescedInto ? ' &middot; merged' : ''}</div></div>`).join('')}` : ''}`;
 }
 function openManager() {
@@ -2146,6 +2160,34 @@ function groupRows(rows, key) {
     models: [...new Set(g.list.flatMap((r) => r.models))],
   })).sort((x, y) => ((y.cost ?? -1) - (x.cost ?? -1)) || (y.total - x.total));
 }
+// Burn-rate projection for one quota window: where usage lands at the reset if it keeps this pace.
+const WIN_MIN = { '5h': 300, week: 10080 };
+const fmtMin = (m) => { m = Math.max(0, Math.round(m)); const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; };
+function paceOf(w) {
+  const total = w.minutes || WIN_MIN[w.name];
+  if (!total || w.usedPercent == null || !w.resetsAt || w.expired) return null;
+  const left = (w.resetsAt * 1000 - Date.now()) / 60000, el = total - left;
+  if (left <= 0 || el <= 0) return null;
+  const frac = Math.min(1, el / total), rate = w.usedPercent / el;
+  const toFull = rate > 0 ? (100 - w.usedPercent) / rate : Infinity;
+  return { frac, left, proj: frac >= 0.05 ? w.usedPercent / frac : null, toFull, runsOut: frac >= 0.05 && toFull < left };
+}
+function quotaPaceHtml(q, onlyAgent) {
+  const plans = (q?.plans || []).filter((p) => !onlyAgent || p.plan === onlyAgent);
+  if (!plans.length) return '<div class="dim">no quota reading yet</div>';
+  return plans.map((p) => {
+    const head = `<div class="u1"><i class="adot ${escapeHtml(p.plan)}"></i><b>${escapeHtml(p.label || p.plan)}</b><span class="grow"></span><span class="dim">${escapeHtml(p.price || '')}</span></div>`;
+    if (!p.windows?.length) return `<div class="urow">${head}<div class="u2 uo">${escapeHtml(/login|expired/i.test(p.error || '') ? 'login expired, open mcode once to refresh' : (p.error || 'no reading yet'))}</div></div>`;
+    const rows = p.windows.map((w) => {
+      if (w.usedPercent == null) return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb na"></span><span class="qt dim">${w.unlimited ? 'unlimited' : 'unknown'}</span></div>`;
+      const pc = paceOf(w), used = Math.min(100, w.usedPercent);
+      const lvl = qLevel(w.usedPercent) === 'na' ? 'ok' : qLevel(w.usedPercent);   // from what is used, not a forecast
+      const verdict = resetText(w);
+      return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb ${lvl}"><i style="width:${used}%"></i>${pc ? `<u style="left:${Math.round(pc.frac * 100)}%" title="time elapsed in this window"></u>` : ''}</span><span class="qv ${lvl}">${Math.round(w.usedPercent)}%</span></div><div class="u2 qverdict">${verdict}</div>`;
+    }).join('');
+    return `<div class="urow">${head}${rows}</div>`;
+  }).join('');
+}
 // ui = { f: {agent, project, q}, open: {agent, project, session, day}, openAgents: Set }
 function usageHtml(u, tab, ui) {
   const today = tab === 'today';
@@ -2155,7 +2197,7 @@ function usageHtml(u, tab, ui) {
   const { agent: fa, project: fp, q } = ui.f;
   const filtered = !!(fa || fp || q);
   const allRows = sessionRows(u, tab);
-  const rows = allRows.filter((r) => (!fa || r.agent === fa) && (!fp || r.project === fp) && (!q || r.session.toLowerCase().includes(q.toLowerCase())));
+  const rows = allRows.filter((r) => (!fa || r.agent === fa) && (!fp || r.project === fp) && (!q || r.session === q));
   const live = (name) => !!state.status[name];
   const chev = (on) => `<i class="uch${on ? ' on' : ''}"></i>`;
   const sec = (key, title, count, cost, inner) => `<div class="usec-wrap"><button class="usec" data-sec="${key}">${chev(ui.open[key])}<span>${title}</span><span class="dim">${count}</span><span class="grow"></span>${cost === undefined ? '' : usd(cost)}</button>${ui.open[key] ? `<div class="usec-body">${inner}</div>` : ''}</div>`;
@@ -2167,7 +2209,8 @@ function usageHtml(u, tab, ui) {
       input: rows.reduce((s, r) => s + r.in, 0), output: rows.reduce((s, r) => s + r.out, 0),
       cache_read: rows.reduce((s, r) => s + r.cr, 0), cache_creation: rows.reduce((s, r) => s + r.cw, 0) };
   }
-  const head = `<div class="utot"><b>${usd(total.cost === 0 && total.unpriced > 0 ? null : total.cost)}</b> <span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced turns not counted` : ''}</span><br>${tokLine(total)}</div>`;
+  const totCost = total.cost === 0 && total.unpriced > 0 ? null : total.cost;
+  const totalHtml = `<div class="utot"><span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced` : ''}</span><br>${tokLine(total)}</div>`;
 
   // agents (with their models nested); derived from the filtered sessions when a project/session filter is on
   const narrowed = !!(fp || q);
@@ -2189,14 +2232,15 @@ function usageHtml(u, tab, ui) {
   const shown = rows.slice(0, 40);
   const sessHtml = shown.map((r) => `<div class="urow${live(r.session) ? ' go' : ''}${r.outlier ? ' out' : ''}" ${live(r.session) ? `data-open="${escapeHtml(r.session)}"` : ''}>
       <div class="u1">${r.outlier ? '<span class="uw" title="outlier">&#9888;</span>' : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span>${usd(r.cost)}</div>
-      <div class="u2">${escapeHtml(r.project)} &middot; ${escapeHtml(r.agent)} &middot; ${escapeHtml(r.models.join(', ') || '?')}</div>
-      <div class="u2">${tokIO({ tokens: r.tokens, in: r.in, out: r.out })} &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
+      <div class="u2">${escapeHtml(r.project)} &middot; ${tokIO({ tokens: r.tokens, in: r.in, out: r.out })} &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
       ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
   const days = today ? '' : sec('day', 'Per day', '', undefined, `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
-  return head + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
+  return sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa))
+    + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
     + sec('project', 'Projects', projects.length, undefined, projHtml)
     + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml)
+    + sec('total', 'Total', '', totCost, totalHtml)
     + (filtered ? '' : days);
 }
 function openUsage() {
@@ -2205,10 +2249,10 @@ function openUsage() {
     foot.classList.remove('hidden');
     foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
-    const ui = { f: { agent: '', project: '', q: '' }, open: { agent: true, project: true, session: true, day: true }, openAgents: new Set() };
+    const ui = { f: { agent: '', project: '', q: '' }, open: { total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set() };
     let tab = 'today', data = null;
     body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
-      <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><input data-f="q" type="search" placeholder="session…" aria-label="Filter by session name"></div>
+      <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><div class="ucombo"><button type="button" class="ucb" data-combo aria-label="Filter by session"><span class="ucl">all sessions</span></button><div class="ucpanel hidden"><input class="ucs" type="search" placeholder="search session…" aria-label="Search sessions"><div class="uclist"></div></div></div></div>
       <div class="ucontent"><div class="sheet-empty">loading…</div></div>`;
     const content = body.querySelector('.ucontent');
     const fillOptions = () => {
@@ -2221,12 +2265,33 @@ function openUsage() {
       };
       set(body.querySelector('[data-f="agent"]'), rows.map((r) => r.agent));
       set(body.querySelector('[data-f="project"]'), rows.map((r) => r.project));
+      combo.names = [...new Set(rows.map((r) => r.session))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+      drawCombo();
     };
+    const combo = { names: [], term: '' };
+    const drawCombo = () => {
+      const cur = ui.f.q, term = combo.term.toLowerCase();
+      body.querySelector('.ucl').textContent = cur || 'all sessions';
+      body.querySelector('.ucb').classList.toggle('sel', !!cur);
+      const items = [''].concat(combo.names).filter((n) => !n || !term || n.toLowerCase().includes(term));
+      body.querySelector('.uclist').innerHTML = items.map((n) => `<button type="button" class="uci${n === cur ? ' on' : ''}" data-session-pick="${escapeHtml(n)}">${n ? escapeHtml(n) : 'all sessions'}</button>`).join('') || '<div class="dim">no match</div>';
+    };
+    const closeCombo = () => body.querySelector('.ucpanel').classList.add('hidden');
     const draw = () => {
       for (const b of body.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
       content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
     body.onclick = (e) => {
+      const cb = e.target.closest('[data-combo]');
+      if (cb) {
+        const p = body.querySelector('.ucpanel'), open = p.classList.contains('hidden');
+        p.classList.toggle('hidden', !open);
+        if (open) { combo.term = ''; body.querySelector('.ucs').value = ''; drawCombo(); body.querySelector('.ucs').focus(); }
+        return;
+      }
+      const pick = e.target.closest('[data-session-pick]');
+      if (pick) { ui.f.q = pick.dataset.sessionPick; closeCombo(); drawCombo(); draw(); return; }
+      if (!e.target.closest('.ucpanel')) closeCombo();
       const t = e.target.closest('[data-tab]');
       if (t) { tab = t.dataset.tab; if (data) fillOptions(); draw(); return; }
       const s = e.target.closest('[data-sec]');
@@ -2236,7 +2301,10 @@ function openUsage() {
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); }
     };
-    body.oninput = (e) => { const f = e.target.dataset.f; if (!f) return; ui.f[f] = e.target.value.trim(); draw(); };
+    body.oninput = (e) => {
+      if (e.target.classList.contains('ucs')) { combo.term = e.target.value.trim(); drawCombo(); return; }
+      const f = e.target.dataset.f; if (!f) return; ui.f[f] = e.target.value.trim(); draw();
+    };
     draw();
     fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; fillOptions(); draw(); })
       .catch(() => { content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });

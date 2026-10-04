@@ -38,11 +38,11 @@ function defaultRegistry() {
 }
 
 // Runs the deploy command. Streams every output line to onLine; resolves {code, timedOut}.
-function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind = 'deploy' }) {
+function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind = 'deploy', id = '' }) {
   return new Promise((resolve) => {
     let child;
     if (env.argv) {
-      child = spawn(env.argv[0], env.argv.slice(1), { env: { ...process.env, VPT_DEPLOY_REF: ref, VPT_DEPLOY_SCOPE: scope, VPT_DEPLOY_KIND: kind }, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(env.argv[0], env.argv.slice(1), { env: { ...process.env, VPT_DEPLOY_REF: ref, VPT_DEPLOY_SCOPE: scope, VPT_DEPLOY_KIND: kind, VPT_DEPLOY_ID: id }, stdio: ['ignore', 'pipe', 'pipe'] });
     } else {
       child = spawn('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', env.ssh, remoteCmd], { stdio: ['ignore', 'pipe', 'pipe'] });
     }
@@ -63,7 +63,7 @@ export function createDeployRunner({
   const envsFile = join(stateDir, 'deploy-envs.json');
   const logDir = join(stateDir, 'deploys');
   let envs = {};
-  let snap = { ok: false, error: 'not polled yet', deploys: [], lastRef: {}, at: 0 };
+  let snap = { ok: false, error: 'not polled yet', deploys: [], lastRef: {}, deployed: {}, at: 0 };
   const running = new Map();          // env -> deploy id this process is running
   const seenAwaiting = new Set();
   let first = true, ticking = false, timer = null, lastJson = '';
@@ -88,8 +88,18 @@ export function createDeployRunner({
     if (r.code !== 0) { snap = { ...snap, ok: false, error: (r.stderr || `exit ${r.code}`).trim().slice(0, 200), at: Date.now() }; return null; }
     let j; try { j = JSON.parse(r.stdout); } catch { snap = { ...snap, ok: false, error: 'bad registry output', at: Date.now() }; return null; }
     const deploys = j.deploys || [];
-    snap = { ok: true, error: '', deploys, lastRef: lastRefs(deploys), at: Date.now() };
+    snap = { ok: true, error: '', deploys, lastRef: lastRefs(deploys), deployed: await pollDeployed(), at: Date.now() };
     return deploys;
+  }
+
+  // "Deployed now": per env, per target {version, ref, commit, at, agent, lastAttempt?} from `vpt-lease deploy last --json`.
+  // Best effort: an old registry without the ledger keeps the previous value instead of failing the poll.
+  async function pollDeployed() {
+    try {
+      const r = await reg(['deploy', 'last', '--json']);
+      if (r.code !== 0) return snap.deployed || {};
+      return JSON.parse(r.stdout).envs || {};
+    } catch { return snap.deployed || {}; }
   }
 
   async function logTail(id, n = 200) {
@@ -109,8 +119,8 @@ export function createDeployRunner({
     alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
     let status = 'failed', rc = null, timedOut = false;
     try {
-      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags].map(shq).join(' ')}`;
-      ({ code: rc, timedOut } = await run(envCfg, { ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs }));
+      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags].map(shq).join(' ')}`;
+      ({ code: rc, timedOut } = await run(envCfg, { id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs }));
       if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min, killed`);
       else onLine(`# update_core exit ${rc}`);
       status = rc === 0 && !timedOut ? 'done' : 'failed';
@@ -168,7 +178,7 @@ export function createDeployRunner({
       }
     } catch (e) { log.error?.('[deploy] tick', e.message); }
     finally { ticking = false; }
-    const j = JSON.stringify([snap.ok, snap.error, snap.deploys.map((d) => [d.id, d.state]), [...running]]);
+    const j = JSON.stringify([snap.ok, snap.error, snap.deploys.map((d) => [d.id, d.state]), snap.deployed, [...running]]);
     if (j !== lastJson) { lastJson = j; onChange(snapshot()); }
   }
 
