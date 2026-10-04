@@ -72,7 +72,13 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
   //   url      : string (default '/')
   //   priority : string (default 'default')
   // Returns true when written, false when skipped (manager session, own alert, 'done').
-  async function record(event) {
+  let chain = Promise.resolve();   // serialise appends: stat+rename+append must not interleave across concurrent records
+  function record(event) {
+    const p = chain.then(() => recordNow(event));
+    chain = p.catch(() => {});
+    return p;
+  }
+  async function recordNow(event) {
     if (!event || typeof event !== 'object' || typeof event.key !== 'string') return false;
     const cls = classifyKey(event.key);
     if (cls.kind === 'agent-skip') return false;
