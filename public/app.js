@@ -1074,7 +1074,7 @@ function buildCell(s) {
         <button data-dir="left" aria-label="Move left">&#9664;</button><button data-dir="up" aria-label="Move up">&#9650;</button><button data-dir="down" aria-label="Move down">&#9660;</button><button data-dir="right" aria-label="Move right">&#9654;</button>
       </span>
       <span class="stw"></span>
-      <span class="uc hidden"></span><span class="pp hidden">paused</span>
+      <span class="pp hidden">paused</span>
       <button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button>
       <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
@@ -1230,7 +1230,7 @@ function headMetaHtml(n) {
   const c = ctxHtml(st);
   if (c) parts.push(c);
   if (stateOf(n) === 'working' && st.activity) parts.push(`<span class="act">${escapeHtml(st.activity)}</span>`);
-  return parts.join(' · ') || '&nbsp;';
+  return parts.join('<span class="sep"> \u00b7 </span>');
 }
 // Centre label of a card header: project · branch · worktree.
 function projHtml(n) {
