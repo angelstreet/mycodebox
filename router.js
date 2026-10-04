@@ -150,6 +150,39 @@ const retry = {
   ruleDefault() { return 'step_up_one'; },
 };
 
+// ---- stop ----
+// Should the manager answer a stopped coding session itself, or escalate it to the owner?
+// facts shape: { session, agent, case, priority, forbidden_topic, closing_text (<= 1500 chars), proposed_reply }
+//   - session:        session id/name (string)
+//   - agent:          'claude' | 'codex' | 'minimax' (string)
+//   - case:           the stop's rule case (continue | stopped_short | menu_recommended | done | permission |
+//                     owner_decision | waiting_deploy | owner_action | error | background_wait | unknown)
+//   - priority:       'P0' | 'P1' | 'P2' (string; informational)
+//   - forbidden_topic: true when the closing text / proposed reply hits the manager's forbidden list
+//   - closing_text:   the agent's own closing text (<= 1500 chars) so Jev sees the stop
+//   - proposed_reply: the AI reviewer's candidate reply for this stop (string, optional)
+// floor: forbidden_topic OR case in {permission, owner_action, waiting_deploy} -> forced 'escalate'.
+// ruleDefault: 'escalate' (conservative), except case 'continue' -> 'answer'.
+const stop = {
+  usage: 'text.decision.manager',
+  options: {
+    answer: 'a safe reply exists that cannot make a choice the owner should make: continue a planned step, take a clearly recommended option, or give a fact the manager knows; the proposed reply (if any) is safe',
+    escalate: 'only the owner can rightly answer: a preference, an approval, credentials, a product decision, a physical action, a deploy go-ahead, or anything risky or unclear',
+  },
+  instructions: 'Should the manager answer this stopped session itself, or escalate it to the owner?',
+  floor(facts) {
+    const reasons = [];
+    const c = facts?.case;
+    let forced = null;
+    if (facts?.forbidden_topic) { forced = 'escalate'; reasons.push('forbidden topic: the manager must not answer'); }
+    else if (['permission', 'owner_action', 'waiting_deploy'].includes(c)) { forced = 'escalate'; reasons.push(`case "${c}": only the owner can answer`); }
+    return { allowed: ['answer', 'escalate'], forced, reasons };
+  },
+  ruleDefault(facts) {
+    return facts?.case === 'continue' ? 'answer' : 'escalate';
+  },
+};
+
 // ---- model (suggestion only) ----
 // A hint about which model a non-decision step should use. Suggestions only.
 const model = {
@@ -165,7 +198,7 @@ const model = {
   ruleDefault() { return 'keep'; },
 };
 
-export const POINTS = { wake, builder, reviewer, retry, model };
+export const POINTS = { wake, builder, reviewer, retry, stop, model };
 export const SUGGEST_ONLY = new Set(['model']);
 
 // ---- floor + ruleDefault for a point ----

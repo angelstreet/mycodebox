@@ -302,5 +302,66 @@
     "label": "second rejection: still keep",
     "facts": { "reject": { "round": 2 } },
     "expect": "keep"
+  },
+
+  {
+    "point": "stop",
+    "label": "case=continue: ruleDefault answers it (safe planned step)",
+    "facts": { "session": "s1", "agent": "claude", "case": "continue", "closing_text": "Done. Next I will run the tests.", "proposed_reply": "Yes, continue." },
+    "expect": "answer"
+  },
+  {
+    "point": "stop",
+    "label": "case=menu_recommended: conservative escalate",
+    "facts": { "session": "s1", "agent": "codex", "case": "menu_recommended", "closing_text": "1. rerun the deploy  2. cancel. Recommended: 1.", "proposed_reply": "Yes, go with your recommendation." },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "case=done: conservative escalate",
+    "facts": { "session": "s1", "agent": "minimax", "case": "done", "closing_text": "All tests pass. Stopping here.", "proposed_reply": "" },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "case=stopped_short: conservative escalate (rule says continue, but manager defers)",
+    "facts": { "session": "s1", "agent": "claude", "case": "stopped_short", "closing_text": "Next I'll add the failing tests." },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "case=owner_decision: floor allowed, ruleDefault escalate",
+    "facts": { "session": "s1", "agent": "claude", "case": "owner_decision", "closing_text": "Which endpoint should I migrate first?", "proposed_reply": "Migrate /v1 first." },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "case=permission: FORCED escalate regardless of rule",
+    "facts": { "session": "s1", "agent": "claude", "case": "permission", "closing_text": "Allow this tool? [y/n]", "proposed_reply": "y" },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "case=owner_action: FORCED escalate",
+    "facts": { "session": "s1", "agent": "codex", "case": "owner_action", "closing_text": "Please reload the page and tell me what you see.", "proposed_reply": "" },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "case=waiting_deploy: FORCED escalate",
+    "facts": { "session": "s1", "agent": "minimax", "case": "waiting_deploy", "closing_text": "Waiting for the deploy to finish.", "proposed_reply": "" },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "forbidden_topic on continue: FORCED escalate (forbidden wins over rule)",
+    "facts": { "session": "s1", "agent": "claude", "case": "continue", "forbidden_topic": true, "closing_text": "Proceeding with the production reset." },
+    "expect": "escalate"
+  },
+  {
+    "point": "stop",
+    "label": "empty facts: ruleDefault escalate (conservative default)",
+    "facts": {},
+    "expect": "escalate"
   }
 ]

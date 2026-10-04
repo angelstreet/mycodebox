@@ -277,6 +277,26 @@ request bodies without calling the server, and without `--dry` it POSTs each fix
 server and prints one line per state plus a per-point agreement roll-up. **Nothing live calls it yet**
 — the wiring to the manager is a later step.
 
+**Asking Jev (`jev-ask`).** "Jev makes the call when in doubt": a CLI the manager agent runs from its
+shell whenever it is unsure. Same six points as the router (`wake`, `builder`, `reviewer`, `retry`,
+`stop`, `model`), same floors. Pass facts inline (`--facts '<json>'`), from a file (`--facts-file <path>`)
+or on stdin (`--facts -`). Env: `JEV_URL` + `JEV_API_KEY` + `VPT_TEAM_ID` (process.env, else
+`<repoRoot>/.env` parsed by the script itself; the key is never printed). It POSTs one
+`/server/ai/decide` (20 s timeout, `log:true`) and prints exactly one JSON line on stdout:
+`{point, pick, confidence, source, ruleDefault, allowed, decision_id}` (`source` is `forced` | `jev` | `rule`).
+Take Jev's pick only at `confidence >= 0.7` (the default threshold); below that, the script falls
+back to the point's `ruleDefault` and continues when the network is down. Exit 0 on every printed
+pick (forced, Jev, or rule), exit 2 on bad usage. The `stop` point's floors: `forbidden_topic` or
+`case in {permission, owner_action, waiting_deploy}` are forced to `escalate`; otherwise the
+conservative ruleDefault is `escalate`, except `case = "continue"` → `answer`. Every call also appends
+one line to `<state dir>/manager-asks.jsonl` (`$GHOSTY_STATE_DIR` or `~/.local/state/ghosty`):
+
+```bash
+node scripts/jev-ask.js stop \
+  --facts '{"session":"s1","agent":"claude","case":"owner_decision","proposed_reply":"Migrate /v1 first."}'
+# -> {"point":"stop","pick":"escalate","confidence":0.83,"source":"rule","ruleDefault":"escalate","allowed":["answer","escalate"],"decision_id":"..."}
+```
+
 **Answer popup (TASK-44 phase 11).** One bottom-right popup shows every session that needs you
 (the same set the NEEDS YOU strip does — `waiting` or `done` with a non-pending triage). Each item: the
 question (max 220 chars), the answer buttons from `public/buttons.js` (`yesno` → Yes / No + Reply…,
