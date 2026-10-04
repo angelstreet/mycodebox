@@ -1326,3 +1326,7 @@ svg.ico{ display:inline-block; vertical-align:-0.18em; flex-shrink:0; }
 @keyframes spin{ to{ transform:rotate(360deg); } }
 svg.spin{ animation:spin 1.3s linear infinite; }
 @media (prefers-reduced-motion: reduce){ svg.spin{ animation:none; } }
+
+/* codebox vitals belong to the overview: hidden while a single card is open; on desktop they sit right after the title */
+body[data-mode="card"] #health{ display:none; }
+.health.inbar{ margin-left:14px; }

@@ -1713,6 +1713,10 @@ function tickClock() {
 }
 
 // ---------- focus ----------
+// title: "codebox" on the overview (grid / board), the session name only on a single card
+function syncTitle() {
+  els.appTitle.textContent = state.mode === 'card' && state.active ? displayName(state.active) : 'codebox';
+}
 function focusSession(name) {
   if (!name) return;
   const prev = state.active;
@@ -1723,7 +1727,7 @@ function focusSession(name) {
       && els.gridPane.querySelector(`[data-session="${cssEscape(prev)}"]`)) {
     state.gridView = [...els.gridPane.children].map((c) => (c.dataset.session === prev ? name : c.dataset.session));
   }
-  els.appTitle.textContent = displayName(name);
+  syncTitle();
   connectSession(name);
   if (state.mode === 'card') renderCard();
   if (state.mode === 'grid' && !els.gridPane.querySelector(`[data-session="${cssEscape(name)}"]`)) renderGrid();
@@ -1745,6 +1749,7 @@ function setMode(mode) {
   els.main.classList.remove('view-card','view-grid','view-list');
   els.main.classList.add(`view-${mode}`);
   document.body.dataset.mode = mode;
+  syncTitle();
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
   // size buttons are always visible; highlighted only while the grid is shown
   for (const b of $$('.size-btn')) b.classList.toggle('on', mode === 'grid' && Number(b.dataset.size) === state.gridSize);
