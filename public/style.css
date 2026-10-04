@@ -967,9 +967,6 @@ button.prio{ cursor:pointer; }
 .qw.na > span:last-child{ flex:1; min-width:0; }
 
 /* usage view + cost chip (TASK-44 phase 3) */
-.uc{ flex-shrink:0; font-size:10.5px; font-weight:600; padding:2px 7px; border-radius:999px; background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); cursor:pointer; white-space:nowrap; font-variant-numeric:tabular-nums; }
-.uc.hidden{ display:none; }
-.uc.out{ color:var(--waiting); border-color:var(--waiting); background:rgba(255,95,95,0.12); }
 .utabs{ display:flex; gap:8px; }
 .utabs .sbtn{ flex:1; }
 .utabs .sbtn.on{ border-color:var(--accent); color:var(--accent); }
@@ -1175,11 +1172,10 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 
 /* review page on wide screens: a centred card column instead of a full-width slab */
 .rv-stage{ width:calc(100% - 24px); max-width:760px; margin:4px auto; }
-/* phones: card / board rows show a status dot only (colour says it) and no cost chip (see Usage) */
+/* phones: card / board rows show a status dot only (colour says it) */
 @media (max-width: 720px){
   .cell .state .st, .row-item .state .st{ display:none; }
   .cell .state, .row-item .state{ padding:2px 6px; gap:0; }
-  .row-item .uc{ display:none !important; }
 }
 
 /* Jev & AI tab, decisions page */
@@ -1291,8 +1287,6 @@ tr.pf-hit{ outline-offset:-2px; }
 .nsproj .uci small{ flex-basis:100%; color:var(--ink-3); font-size:10.5px; }
 .nsproj .uci em{ color:var(--accent); font-style:normal; font-size:11px; }
 .nsproj .uci .rec{ color:var(--accent); font-style:normal; font-size:9px; }
-/* cost lives in Usage: the per-row chip only stays as a warning when the session is a cost outlier */
-.uc:not(.out){ display:none !important; }
 
 /* usage sheet keeps one height on every tab (no jump when switching Today / 14 days / Jev) */
 .sheet.usage{ height:min(86dvh, 780px); }
@@ -1418,3 +1412,14 @@ body[data-mode="card"] #health{ display:none; }
 }
 .cell .askchip:hover { background: rgba(255,95,95,0.28); }
 .cell .askchip .ai-star { color: var(--working); }
+
+/* rename in place: pencil next to the session name on card headers and board rows */
+.cell .h .nmr{ display:flex; align-items:center; gap:4px; min-width:0; }
+.cell .h .nmr .name{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rn{ flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; padding:2px; background:none; border:0; color:var(--ink-3); cursor:pointer; opacity:.55; border-radius:4px; }
+.rn:hover{ opacity:1; color:var(--ink); background:var(--bg-3); }
+@media (hover:hover){ .rn{ opacity:0; } .cell .h:hover .rn, .row-item:hover .rn, .rn:focus-visible{ opacity:.7; } }
+.name .name-input{ font:inherit; color:inherit; background:var(--bg-3); border:1px solid var(--accent); border-radius:4px; padding:1px 5px; width:min(240px, 100%); outline:none; }
+/* board row: the pencil hugs the name; it takes over the name's job of pushing status + pause right */
+.row-item .l1 .name{ flex:0 1 auto; }
+.row-item .l1 .rn{ margin-right:auto; }

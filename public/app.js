@@ -1025,7 +1025,7 @@ function buildSideRow(s) {
     <i class="dot"></i>
     <div class="meta">
       <div class="name">${escapeHtml(custom || s.name)}</div>
-      <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="uc hidden"></span><span class="pp hidden">paused</span></div>
+      <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="pp hidden">paused</span></div>
       <div class="sub rb"></div>
     </div>
     <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
@@ -1055,7 +1055,6 @@ function syncSide() {
     const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
     syncPill(li.querySelector('.pp'), n);
-    syncUsageChip(li.querySelector('.uc'), n);
     const rb = li.querySelector('.rb');
     const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
@@ -1087,12 +1086,7 @@ function beginRename(li, name) {
     if (done) return; done = true;
     const v = inp.value.trim();
     li.classList.remove('editing');
-    if (v && v !== name) state.rename[name] = v;
-    else delete state.rename[name];
-    saveRenames();
-    sortSessions();
-    renderAll();
-    toast(v && v !== name ? `renamed to "${v}"` : 'name reset');
+    applyRename(name, v);
   };
   const cancel = () => { if (done) return; done = true; li.classList.remove('editing'); renderSide(); };
   inp.onkeydown = (e) => {
@@ -1101,6 +1095,43 @@ function beginRename(li, name) {
   };
   inp.onblur = commit;
 }
+function applyRename(name, v) {
+  if (v && v !== name) state.rename[name] = v;
+  else delete state.rename[name];
+  saveRenames();
+  sortSessions();
+  renderAll();
+  toast(v && v !== name ? `renamed to "${v}"` : 'name reset');
+}
+// Rename in place on a card header or board row: the .name span becomes an input. Taps inside it
+// must not reach the card / row (open, focus, drag), and re-renders skip a name being edited.
+function beginInlineRename(nameEl, name) {
+  if (!nameEl || nameEl.querySelector('input')) return;
+  const inp = document.createElement('input');
+  inp.className = 'name-input';
+  inp.value = customFor(name) || name;
+  inp.maxLength = 40;
+  nameEl.textContent = '';
+  nameEl.appendChild(inp);
+  for (const t of ['pointerdown', 'pointerup', 'click', 'dblclick', 'mousedown', 'touchstart', 'dragstart']) {
+    inp.addEventListener(t, (e) => e.stopPropagation());
+  }
+  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+  let done = false;
+  const finish = (v) => {
+    if (done) return; done = true;
+    nameEl.textContent = v || name;       // drop the input first, or re-renders skip this name as still editing
+    if (v !== null) applyRename(name, v);
+    nameEl.textContent = displayName(name);
+  };
+  inp.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(inp.value.trim()); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+  };
+  inp.onblur = () => finish(inp.value.trim());
+}
+const renaming = (root) => !!root.querySelector('.name input.name-input');
 
 // ---------- cards (card + grid views) ----------
 function buildCell(s) {
@@ -1111,7 +1142,7 @@ function buildCell(s) {
     <div class="h">
       <span class="pr"></span>
       <span class="ag"></span>
-      <div class="nm"><span class="name">${escapeHtml(displayName(s.name))}</span><span class="mt">&nbsp;</span></div>
+      <div class="nm"><span class="nmr"><span class="name">${escapeHtml(displayName(s.name))}</span><button class="rn" aria-label="Rename session" title="Rename (or double-tap the name)">${icon('pencil', 12)}</button></span><span class="mt">&nbsp;</span></div>
       <span class="proj"></span>
       <span class="pos"></span>
       <span class="tgt">&rarr; send target</span>
@@ -1139,7 +1170,11 @@ function buildCell(s) {
   for (const b of cell.querySelectorAll('.jump button')) {
     b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
-  wireTap(cell, () => focusSession(s.name), () => { if (state.mode !== 'card') openCard(s.name); });
+  cell.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(cell.querySelector('.name'), s.name); };
+  wireTap(cell, () => focusSession(s.name), (e) => {
+    if (e.target.closest('.nm')) { beginInlineRename(cell.querySelector('.name'), s.name); return; }
+    if (state.mode !== 'card') openCard(s.name);
+  });
   cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
   for (const b of cell.querySelectorAll('.mv button')) {
     b.onclick = (e) => { e.stopPropagation(); moveSession(s.name, b.dataset.dir); };
@@ -1209,7 +1244,7 @@ function wireTap(el, onSingle, onDouble) {
     down = null;
     if (moved || long) return;                 // scroll / text selection
     const now = Date.now();
-    if (now - lastUp < 350) { lastUp = 0; onDouble(); return; }
+    if (now - lastUp < 350) { lastUp = 0; onDouble(e); return; }
     lastUp = now;
     onSingle();
   }, true);
@@ -1523,7 +1558,8 @@ function renderInto(host, sessions) {
       host.insertBefore(cell, host.children[i] || null);
       mountTerm(s.name, cell.querySelector('.b'));
     } else {
-      cell.querySelector('.name').textContent = displayName(s.name);
+      const nm = cell.querySelector('.name');
+      if (!nm.querySelector('input')) nm.textContent = displayName(s.name);
       if (host.children[i] !== cell) host.insertBefore(cell, host.children[i] || null);
       syncCell(cell);
     }
@@ -1575,6 +1611,7 @@ function rowLast(n) {
   return st.lastMessage || lastLine(state.paneText.get(n) || '') || ' ';
 }
 function renderList() {
+  if (renaming(els.listPane)) return;
   els.listPane.innerHTML = '';
   const rows = byUrgency(visibleSessions());
   if (!rows.length) {
@@ -1590,11 +1627,12 @@ function renderList() {
     row.className = 'row-item';
     row.dataset.session = s.name;
     row.innerHTML = `
-      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="uc hidden"></span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button></div>
+      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><button class="rn" aria-label="Rename session" title="Rename">${icon('pencil', 12)}</button><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button></div>
       <div class="last"></div>
       <div class="apill hidden"></div>
       <div class="meta"></div>`;
     row.querySelector('.last').textContent = rowLast(s.name);
+    row.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(row.querySelector('.name'), s.name); };
     wireRow(row, s.name);
     els.listPane.appendChild(row);
     connectSession(s.name);
@@ -1809,7 +1847,6 @@ function syncPrioPause(el, n) {
   const paused = pausedOf(n) || !!heldOf(n);   // held: the button is Resume (releases the hold, sends "continue")
   el.classList.toggle('paused', paused);
   syncPill(el.querySelector('.pp'), n);
-  syncUsageChip(el.querySelector('.uc'), n);
   const pz = el.querySelector('.pz');
   const glyph = paused ? 'play' : 'pause';
   if (pz.dataset.ic !== glyph) {
@@ -1820,20 +1857,6 @@ function syncPrioPause(el, n) {
   }
   pz.dataset.pause = n;
   pz.classList.toggle('on', paused);
-}
-// Today's API-equivalent cost chip (card header / board row); red + warning when the session is an outlier.
-function syncUsageChip(c, n) {
-  if (!c) return;
-  const u = state.status[n]?.usage;
-  const show = !!u && (u.todayTokens > 0 || u.outlier);
-  c.classList.toggle('hidden', !show);
-  if (!show) return;
-  const t = u.todayCost != null ? `${fmtUsd(u.todayCost)} today` : `${fmtTok(u.todayTokens)} tok today`;
-  const txt = u.outlier ? `\u26A0 ${t}` : t;
-  if (c.textContent !== txt) c.textContent = txt;
-  c.classList.toggle('out', !!u.outlier);
-  c.dataset.uc = n;
-  c.title = u.outlier ? `outlier: ${u.outlier}` : 'API-equivalent cost today (list prices), tap for usage';
 }
 async function metaPost(n, body) {
   const r = await fetch(`/api/session-meta/${encodeURIComponent(n)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -1846,13 +1869,6 @@ async function metaPost(n, body) {
 document.addEventListener('click', async (e) => {
   const pb = e.target.closest('[data-prio]');
   const zb = e.target.closest('[data-pause]');
-  const ub = e.target.closest('[data-uc]');
-  if (ub) {
-    e.stopPropagation(); e.preventDefault();
-    const u = state.status[ub.dataset.uc]?.usage;
-    if (u?.outlier) toast(`outlier: ${u.outlier}`, 4000); else openUsage();
-    return;
-  }
   if (!pb && !zb) return;
   e.stopPropagation(); e.preventDefault();
   if (pb) { e.stopPropagation(); e.preventDefault(); cyclePriority(pb.dataset.prio); return; }
