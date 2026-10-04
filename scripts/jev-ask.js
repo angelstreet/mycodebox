@@ -34,11 +34,11 @@ const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'sta
 const ASKS_LOG = join(STATE_DIR, 'manager-asks.jsonl');
 
 // ---- tiny .env parser (KEY=VALUE lines, # comments, no deps) ----
-// Looks only at <repoRoot>/.env when an env var is missing from process.env.
+// Looks only at <repoRoot>/.env (or GHOSTY_ENV_FILE) when an env var is missing from process.env.
 async function loadDotEnv() {
   const out = {};
   try {
-    const raw = await readFile(join(REPO_ROOT, '.env'), 'utf8');
+    const raw = await readFile(process.env.GHOSTY_ENV_FILE || join(REPO_ROOT, '.env'), 'utf8');   // GHOSTY_ENV_FILE: tests point it away from the real .env
     for (const line of raw.split(/\r?\n/)) {
       const s = line.trim();
       if (!s || s.startsWith('#')) continue;

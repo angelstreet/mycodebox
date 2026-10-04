@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,8 +172,7 @@ test('jev-ask: when the server is unreachable, falls back to ruleDefault', async
 });
 test('jev-ask: when JEV_URL is unset, falls back to ruleDefault without trying the network', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
-  const env = { GHOSTY_STATE_DIR: stateDir };
-  delete env.JEV_URL; delete env.JEV_API_KEY; delete env.VPT_TEAM_ID;
+  const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', VPT_TEAM_ID: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
   const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision' })], { env });
   assert.equal(code, 0);
   const rec = JSON.parse(stdout.trim());
@@ -269,18 +268,20 @@ test('jev-ask: never prints the API key, even on error', async () => {
 });
 
 // ---- .env fallback ----
-test('jev-ask: falls back to <repoRoot>/.env when env vars are missing', async () => {
-  // We don't write to the real repo .env; instead the test asserts the code path.
-  // Set env empty for the relevant keys and confirm the CLI still runs (it will fall back to rule).
+test('jev-ask: falls back to the .env file when env vars are missing', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
-  const env = { GHOSTY_STATE_DIR: stateDir };
-  delete env.JEV_URL; delete env.JEV_API_KEY; delete env.VPT_TEAM_ID;
-  const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision' })], { env });
-  assert.equal(code, 0);
-  const rec = JSON.parse(stdout.trim());
-  assert.equal(rec.pick, 'escalate');
-  assert.equal(rec.source, 'rule');
-  // the local log was written under stateDir
-  const log = (await readFile(join(stateDir, 'manager-asks.jsonl'), 'utf8')).trim().split('\n');
-  assert.equal(log.length, 1);
+  const mock = await startMockServer(() => ({ status: 200, json: { success: true, decision_id: 'd-env', answers: { choice: { choice: 'answer', confidence: 0.95, probabilities: { answer: 0.95, escalate: 0.05 } } } } }));
+  try {
+    const envFile = join(stateDir, 'test.env');
+    await writeFile(envFile, `# test\nJEV_URL=http://127.0.0.1:${mock.port}/server/ai/decide\nJEV_API_KEY=k\nVPT_TEAM_ID=t\n`);
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', VPT_TEAM_ID: '', GHOSTY_ENV_FILE: envFile };
+    const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision' })], { env });
+    assert.equal(code, 0);
+    const rec = JSON.parse(stdout.trim());
+    assert.equal(rec.pick, 'answer');
+    assert.equal(rec.source, 'jev');
+    assert.equal(rec.decision_id, 'd-env');
+    const log = (await readFile(join(stateDir, 'manager-asks.jsonl'), 'utf8')).trim().split('\n');
+    assert.equal(log.length, 1);
+  } finally { await mock.close(); await rm(stateDir, { recursive: true, force: true }); }
 });
