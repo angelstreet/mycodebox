@@ -2,7 +2,6 @@
 // Ownership is EXACT: a lease belongs to a session iff its agent is `<machine>:<tmux session name>` (case-insensitive),
 // where <machine> is `codebox` or this machine's hostname. No fuzzy matching: agents must use
 // AGENT="codebox:$(tmux display-message -p '#S')" (see the deploy skill).
-import { deployedView } from './deployed.js';
 
 const PENDING = ['awaiting-approval', 'queued'];            // a deploy waiting for the platform; `running` already owns it
 const ACTIVE = ['awaiting-approval', 'queued', 'running'];
@@ -80,24 +79,4 @@ export function deployWaitOf(session, { deploys = [], waiters = [], stall = null
   }
   if (stall && stall.case === 'waiting_deploy') return { kind: 'said', id: '', state: '', env: '', blocking: [], text: 'said it waits for a deploy' };
   return null;
-}
-
-// Platforms page data: per env the held resources, the deploy queue and the ledger summary.
-export function platformsView({ leases = [], deploys = [], waiters = [], deployed = {}, sessionNames = [], machines, nowMs = Date.now() }) {
-  const dv = new Map(deployedView(deployed, nowMs).map((e) => [e.env, e.rows]));
-  const envs = new Set([...leases.map((l) => l.env), ...deploys.filter((d) => ACTIVE.includes(d.state)).map((d) => d.env), ...dv.keys()]);
-  return [...envs].sort().map((env) => {
-    const resources = leases.filter((l) => l.env === env).map((l) => {
-      const s = agentSession(l.agent, sessionNames, machines);
-      return { ...slim(l, deploys), session: s, unknown: s ? null : l.agent || '?' };
-    }).sort((a, b) => a.resource.localeCompare(b.resource));
-    const queue = deploys.filter((d) => d.env === env && ACTIVE.includes(d.state)).sort((a, b) => a.created - b.created)
-      .map((d) => ({ ...d, session: agentSession(d.agent, sessionNames, machines) }));
-    const rows = dv.get(env) || [];
-    const done = rows.filter((r) => r.deployed);
-    const newest = done.reduce((m, r) => (r.at > (m?.at || 0) ? r : m), null);
-    const versions = new Set(done.map((r) => r.version || '?'));
-    const summary = !rows.length ? 'nothing recorded' : `${versions.size === 1 ? [...versions][0] : `${versions.size} versions`} · ${rows.reduce((n, r) => n + r.targets.length, 0)} targets${newest ? ` · ${newest.ago}` : ''}${rows.some((r) => r.failed) ? ' · last attempt failed' : ''}`;
-    return { env, resources, queue, waiters: waiters.filter((w) => (w.env || '') === env), deployedSummary: summary, deployedRows: rows };
-  });
 }

@@ -528,12 +528,17 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
 ## Platforms page, lease ownership, waiting for a deploy (TASK-44)
 
 Open it from the ⋮ menu -> Platforms, from a lease chip / purple badge, or `/?platforms=1` (`/?deploys=1`, the push link, opens it too).
-Per env: a table `resource · held by · left · purpose`, the **Deploy queue**, and a one-line **Deployed now** summary
-(tap to expand per target, from the registry's ledger).
+One block per platform/env, BLOCKED first, then DEPLOYING, then FREE: a status pill, **NEXT DEPLOY** in one line
+(scope, ref, who, when it can start = the end of the lease it waits on, Cancel; several queued fold under "N more"),
+**IN USE** (every lease, red when it blocks the next deploy), **LIVE** (every target in the ledger, red when its last
+attempt failed) and a collapsed **History**. Agent ids show as plain names (`codebox:TASK-28-x` -> task28,
+`claude-mac:...` -> mac, `manager:deploy` -> manager; "session gone" when a codebox holder has no live tmux session).
+What blocks follows the runner: full deploys wait on `run` and env-wide leases, host deploys on env-wide ones
+(`effectiveBlockers` in `public/platforms-view.js`, same rule as `vpt-lease` with `--skip-leased`).
 
 - **Exact ownership.** A lease belongs to a session iff its agent is `<machine>:<tmux session name>`, case-insensitive;
   `<machine>` is `codebox` or this host's name. Agents get it with `AGENT="codebox:$(tmux display-message -p '#S')"` (deploy skill).
-  There is no fuzzy guess: any other agent id shows as `unknown: <agent>`. Code: `public/platforms.js` (pure, shared with the server),
+  There is no fuzzy guess: a codebox holder without that exact session shows as "session gone". Code: `public/platforms.js` (pure, shared with the server),
   `leases.js` (reads `vpt-lease list --json`, 15 s cache, injectable `run`).
 - **Status payload.** `status[session].lease` = `[{env, resource, ttlLeftMin, purpose, blocksDeploy}]` (`blocksDeploy`: an
   awaiting-approval or queued deploy of that env whose scope touches the resource). `/api/leases` and the `leases` WS message also carry `waiters` and `hostname`.

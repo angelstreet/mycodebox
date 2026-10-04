@@ -18,7 +18,7 @@ export function createLeaseStore({ run = sshRun, ttlMs = 15000, now = Date.now }
     try {
       if (r.code !== 0) throw new Error((r.stderr || `exit ${r.code}`).trim().slice(0, 200));
       const j = JSON.parse(r.stdout);
-      value = { ok: true, leases: (j.leases || []).map((l) => ({ id: l.id, env: l.env, resource: l.resource || '*', agent: l.agent || '', purpose: l.purpose || '', ttlLeftMin: l.ttlLeftMin })), waiters: j.waiters || [] };
+      value = { ok: true, leases: (j.leases || []).map((l) => ({ id: l.id, env: l.env, resource: l.resource || '*', agent: l.agent || '', purpose: l.purpose || '', kind: l.kind || 'run', ttlLeftMin: l.ttlLeftMin })), waiters: j.waiters || [] };
     } catch (e) { value = { ok: false, error: String(e.message || e).slice(0, 200) }; }
     cache = { at: now(), value };
     return value;

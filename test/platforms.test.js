@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { agentSession, machinesOf, blocksDeploy, holdingsOf, chipModel, ttlText, deployWaitOf, platformsView } from '../public/platforms.js';
+import { agentSession, machinesOf, blocksDeploy, holdingsOf, chipModel, ttlText, deployWaitOf } from '../public/platforms.js';
 import { createLeaseStore } from '../leases.js';
 
 const M = machinesOf('Codebox-VM.lan');
@@ -66,23 +66,14 @@ test('deployWaitOf: requester, waiter, said, none; priority', () => {
   assert.equal(deployWaitOf('other', { ...ctx, deploys: [q, { ...q, id: 'd2', agent: 'codebox:other' }], waiters: [{ agent: 'codebox:other', env: 'node1-vpt' }], stall: { case: 'waiting_deploy' } }).kind, 'requested');
 });
 
-test('platforms data assembly with injected registry (leases + queue + ledger)', async () => {
+test('lease store: injected registry, cached, kind defaults to run, failure reported', async () => {
   const calls = [];
   const run = async (args) => { calls.push(args.join(' ')); return { code: 0, stdout: JSON.stringify({ now: 1, leases: [L(), L({ id: 'x', resource: 'frontend', agent: 'codebox:stb4-anchor-run', ttlLeftMin: 7 })], deploys: [], waiters: [{ agent: 'codebox:other', env: 'node1-vpt', deployId: '' }] }), stderr: '' }; };
   const store = createLeaseStore({ run });
   const v = await store.get(); await store.get();
   assert.deepEqual(calls, ['list --json']);                       // cached
   assert.equal(v.ok, true);
-  const sec = 1_800_000_000;
-  const view = platformsView({ leases: v.leases, deploys: [D({ agent: 'mac:t', blocking: [] })], waiters: v.waiters, sessionNames: NAMES, machines: M, nowMs: sec * 1000,
-    deployed: { 'node1-vpt': { frontend: { at: sec - 60, ref: 'main', commit: 'abc', version: 'v1', agent: 'x' }, server: { at: sec - 120, ref: 'main', commit: 'abc', version: 'v1', agent: 'x' } }, 'node3-qualiai': {} } });
-  assert.deepEqual(view.map((e) => e.env), ['node1-vpt', 'node3-qualiai']);
-  const e = view[0];
-  assert.deepEqual(e.resources.map((r) => [r.resource, r.session, r.unknown, r.blocksDeploy]), [['frontend', null, 'codebox:stb4-anchor-run', false], ['vpt-pi1/stb4', 'qualiai-pipeline', null, true]]);
-  assert.equal(e.queue.length, 1); assert.equal(e.queue[0].session, null);
-  assert.equal(e.waiters.length, 1);
-  assert.equal(e.deployedSummary, 'v1 · 2 targets · 60s ago');
-  assert.equal(view[1].deployedSummary, 'nothing recorded');
+  assert.equal(v.leases[0].kind, 'run');
   const bad = await createLeaseStore({ run: async () => ({ code: 255, stdout: '', stderr: 'down' }) }).get();
   assert.deepEqual(bad, { ok: false, error: 'down' });
 });
