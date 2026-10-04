@@ -123,20 +123,30 @@ export function dayBars(summary, days = 14, now = Date.now()) {
 // Manager scorecard block (the "Manager" row at the top of the Usage overview).
 // score = { score, components:{quality,coverage,efficiency}, cost:{session,subagents,workers,jev,reviewer,judge,total},
 //          perf:{stops,resolved,resolvedFast,auto,escalated,medianTtrSec,p90TtrSec,agreement,judgeMean,tokensPerResolvedStop},
-//          jev:{consulted:{count,share,ambiguousShare},errors,errorRate,p50ms,agreement,overridden,costPerDecision},
-//          budget:{session,ai} }, days: [{ score, ... }]   (oldest first)
-// helpers: { fmtTok, fmtUsd, costOrNull }  (passed in to avoid duplicating here)
+//          jev:{consulted:{count,share,ambiguousShare},errors,errorRate,p50ms,agreement,overridden},
+//          claude_weekly_pct, claude_today_pct, budget:{claudeWeeklyPct,planWeek,weights} },
+//          days: [{ score, ... }]   (oldest first)
+// Each `cost.*` bucket is { tokens:{input,output,cache_read,cache_write}, calls } — no USD. Jev / reviewer / judge
+// are OpenRouter calls (real money, not the Claude plan) and show only tokens + calls. Workers are MiniMax
+// (tokens only — the MiniMax week is unlimited). The "Claude plan" line is the manager's share of the Claude Max
+// weekly quota, with today's slice and the budget from manager.json.
+// helpers: { fmtTok, fmtUsd, costOrNull }  (passed in to avoid duplicating here; fmtUsd unused — kept for callers)
 export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull } = {}) {
   if (!score) return '';
   const tok = fmtTok || ((n) => `${Math.round(n || 0)}`);
-  const usd = (c) => c == null || !Number.isFinite(c) ? '—' : (fmtUsd ? fmtUsd(c) : `$${(c || 0).toFixed(2)}`);
+  const totalTok = (b) => b ? tok((b.tokens?.input || 0) + (b.tokens?.output || 0) + (b.tokens?.cache_read || 0) + (b.tokens?.cache_write || 0)) : '—';
   const pct = (p) => p == null ? '—' : `${Math.round(p * 100)}%`;
   const c = score.components || {};
   const bucket = (b) => b ? `<span class="ut">in ${tok(b.tokens?.input)} &middot; out ${tok(b.tokens?.output)} &middot; cr ${tok(b.tokens?.cache_read)} &middot; cw ${tok(b.tokens?.cache_write)}</span>` : '<span class="dim">—</span>';
-  const bucketUsd = (b) => b ? `${usd(b.usd)}${b.usd != null ? '' : ''} · ${b.calls} calls` : '';
-  const sessionLine = usd(score.cost.session.usd);
-  const workersLine = `${tok((score.cost.workers.tokens.input || 0) + (score.cost.workers.tokens.output || 0) + (score.cost.workers.tokens.cache_read || 0) + (score.cost.workers.tokens.cache_write || 0))} worker tokens · ${score.cost.workers.calls} calls`;
-  const jevLine = `${usd(score.cost.jev.usd)} Jev · ${usd(score.cost.reviewer.usd)} reviewer${Number.isFinite(score.cost.judge.calls) ? ` · ${usd(score.cost.judge.usd)} judge` : ''}`;
+  const workersLine = `${totalTok(score.cost.workers)} worker tokens · ${score.cost.workers.calls} calls`;
+  const jevLine = `${totalTok(score.cost.jev)} Jev · ${totalTok(score.cost.reviewer)} reviewer${Number.isFinite(score.cost.judge.calls) ? ` · ${totalTok(score.cost.judge)} judge` : ''}`;
+  const budget = score.budget || {};
+  const weeklyPct = score.claude_weekly_pct;
+  const todayPct = score.claude_today_pct;
+  const budgetPct = budget.claudeWeeklyPct;
+  const planLine = weeklyPct == null
+    ? `<span class="dim">Claude plan: quota unknown · budget ${budgetPct ?? 10} %</span>`
+    : `Claude plan: manager ${weeklyPct.toFixed(1)} % of the week (${(todayPct || 0).toFixed(1)} % today) · budget ${budgetPct ?? 10} %`;
   const jev = score.jev || {};
   const consulted = jev.consulted || {};
   const perf = score.perf || {};
@@ -148,13 +158,14 @@ export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull } = {
   }).join('');
   return `<div class="usec-wrap"><button class="usec" data-sec="manager"><i class="uch on"></i><span>Manager</span><span class="dim">today</span><span class="grow"></span><b class="tk">${scoreN}</b></button><div class="usec-body">
     <div class="mscore"><div class="mscore-num"><b>${scoreN}</b><span class="dim">/ 100</span></div><div class="mscore-comp"><div><span class="dim">quality</span><b>${pct(c.quality)}</b></div><div><span class="dim">coverage</span><b>${pct(c.coverage)}</b></div><div><span class="dim">efficiency</span><b>${pct(c.efficiency)}</b></div></div><div class="mscore-bars" aria-label="last 7 days">${miniBars || '<span class="dim">—</span>'}</div></div>
-    <div class="urow"><div class="u1"><b>Session</b><span class="grow"></span><b class="tk">${sessionLine}</b></div>${bucket(score.cost.session)}</div>
-    <div class="urow"><div class="u1"><b>Subagents</b><span class="grow"></span><b class="tk">${usd(score.cost.subagents.usd)}</b></div>${bucket(score.cost.subagents)}</div>
+    <div class="urow"><div class="u1"><b>Session</b><span class="grow"></span><b class="tk">${totalTok(score.cost.session)}</b></div>${bucket(score.cost.session)}</div>
+    <div class="urow"><div class="u1"><b>Subagents</b><span class="grow"></span><b class="tk">${totalTok(score.cost.subagents)}</b></div>${bucket(score.cost.subagents)}</div>
     <div class="urow"><div class="u1"><b>Workers (MiniMax)</b><span class="grow"></span><b class="tk">${workersLine}</b></div>${bucket(score.cost.workers)}</div>
-    <div class="urow"><div class="u1"><b>Jev</b><span class="grow"></span><b class="tk">${usd(score.cost.jev.usd)}</b></div>${bucket(score.cost.jev)}</div>
-    <div class="urow"><div class="u1"><b>Reviewer</b><span class="grow"></span><b class="tk">${usd(score.cost.reviewer.usd)}</b></div>${bucket(score.cost.reviewer)}</div>
-    <div class="urow"><div class="u1"><b>Judge</b><span class="grow"></span><b class="tk">${usd(score.cost.judge.usd)}</b></div>${bucket(score.cost.judge)}</div>
-    <div class="urow"><div class="u1"><b>Total today</b><span class="grow"></span><b class="tk">${usd(score.cost.total.usd)}</b></div>${bucket(score.cost.total)}</div>
+    <div class="urow"><div class="u1"><b>Jev</b><span class="grow"></span><b class="tk">${totalTok(score.cost.jev)}</b></div>${bucket(score.cost.jev)}</div>
+    <div class="urow"><div class="u1"><b>Reviewer</b><span class="grow"></span><b class="tk">${totalTok(score.cost.reviewer)}</b></div>${bucket(score.cost.reviewer)}</div>
+    <div class="urow"><div class="u1"><b>Judge</b><span class="grow"></span><b class="tk">${totalTok(score.cost.judge)}</b></div>${bucket(score.cost.judge)}</div>
+    <div class="urow"><div class="u1"><b>Total today</b><span class="grow"></span><b class="tk">${totalTok(score.cost.total)}</b></div>${bucket(score.cost.total)}</div>
+    <div class="urow"><div class="u1"><b>${planLine}</b></div></div>
     <div class="urow jev"><div class="u1"><b>Jev</b><span class="grow"></span><b class="tk">${pct(consulted.share)} consulted</b></div><div class="u2">consulted ${consulted.count || 0} of ${perf.stops || 0} stops${consulted.ambiguousShare != null ? ` · ${pct(consulted.ambiguousShare)} of ambiguous` : ''} · errors ${pct(jev.errorRate)} · agreement ${pct(jev.agreement)} · p50 ${jev.p50ms != null ? jev.p50ms + 'ms' : '—'}${Number.isFinite(jev.overridden) && jev.overridden ? ` · ${jev.overridden} overridden by forbidden` : ''}</div></div>
     <div class="urow"><div class="u1"><b>Performance</b><span class="grow"></span><b class="tk">${perf.stops || 0} stops</b></div><div class="u2">${perf.stops ? `${perf.resolved || 0} resolved (${pct(perf.resolvedFast != null && perf.stops ? perf.resolvedFast / perf.stops : null)} &le;5min) · ${perf.auto || 0} auto · ${perf.escalated || 0} escalated · median ${perf.medianTtrSec != null ? perf.medianTtrSec + 's' : '—'} · p90 ${perf.p90TtrSec != null ? perf.p90TtrSec + 's' : '—'}${perf.judgeMean != null ? ` · judge mean ${(perf.judgeMean).toFixed(2)}` : ''}${perf.agreement != null ? ` · agreement ${pct(perf.agreement)}` : ''}` : 'no stops today'}</div></div>
   </div></div>`;

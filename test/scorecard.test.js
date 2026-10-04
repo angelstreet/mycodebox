@@ -80,8 +80,9 @@ test('cost: manager session (claude) is counted under session, subagent under su
   assert.equal(sc.cost.reviewer.calls, 1);
   assert.equal(sc.cost.judge.calls, 1);
   assert.equal(sc.cost.workers.calls, 3, 'workers inside the active run windows only');
-  assert.ok(sc.cost.session.usd > 0);
-  assert.equal(sc.cost.workers.usd, null, 'MiniMax has no price -> cost null');
+  assert.ok(sc.cost.session.tokens.input > 0);
+  assert.equal('usd' in sc.cost.workers, false);
+  assert.equal('usd' in sc.cost.session, false);
 });
 
 test('cost: a MiniMax row outside any run window is not counted; a subagent inside the run is still counted under workers', () => {
@@ -97,23 +98,32 @@ test('cost: a MiniMax row outside any run window is not counted; a subagent insi
   assert.equal(sc.cost.workers.calls, 2, `workers.calls=${sc.cost.workers.calls}`);
 });
 
-test('cost: total.usd sums priced buckets only; MiniMax workers leave it null when session AI also unpriced', () => {
-  const ledger = [claudeRow({ id: 'a1', label: 'manager', cost: null }), minimaxRow({ id: 'w1', cwd: '/home/me/tree' })];
-  const runs = [{ id: 'r1', kind: 'minimax', worktree: '/home/me/tree', startedAt: now - 2000, endedAt: null }];
-  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: foldRuns(runs), config: {}, from: dayStart, to: now + 1 });
-  assert.equal(sc.cost.session.usd, null, 'session priced null -> usd stays null');
-  assert.equal(sc.cost.total.usd, null);
-});
-
-test('cost: total.usd is the sum of priced session/subagents/jev/reviewer/judge', () => {
+test('cost: total.tokens are the sum of every bucket (session/subagents/jev/reviewer/judge/workers); no USD anywhere', () => {
   const ledger = [
     claudeRow({ id: 'a1', label: 'manager', cost: baseCost(0.01) }),
     claudeRow({ id: 'a2', label: 'manager', subagent: true, cost: baseCost(0.005) }),
     managerRow({ id: 'j1', name: 'manager.jev', cost: baseCost(0.001) }),
     managerRow({ id: 'r1', name: 'manager.ai-review', cost: baseCost(0.002) }),
+    managerRow({ id: 'gd', name: 'manager.judge', cost: baseCost(0.003) }),
+    minimaxRow({ id: 'w1', cwd: '/home/me/tree' }),
   ];
+  const runs = [{ id: 'r1', kind: 'minimax', worktree: '/home/me/tree', startedAt: now - 2000, endedAt: null }];
+  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: foldRuns(runs), config: {}, from: dayStart, to: now + 1 });
+  assert.equal('usd' in sc.cost.total, false, 'no USD field anywhere on the bucket');
+  for (const k of ['session', 'subagents', 'workers', 'jev', 'reviewer', 'judge', 'total']) assert.equal('usd' in sc.cost[k], false, `${k} has no USD`);
+  assert.equal(sc.cost.total.tokens.input, sc.cost.session.tokens.input + sc.cost.subagents.tokens.input + sc.cost.jev.tokens.input + sc.cost.reviewer.tokens.input + sc.cost.judge.tokens.input + sc.cost.workers.tokens.input);
+  assert.equal(sc.cost.total.calls, 6);
+});
+
+test('cost: jev/reviewer/judge rows are tokens + calls only (OpenRouter calls, no USD in the manager block)', () => {
+  const ledger = [managerRow({ id: 'j1', name: 'manager.jev' }), managerRow({ id: 'r1', name: 'manager.ai-review' }), managerRow({ id: 'g1', name: 'manager.judge' })];
   const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
-  assert.equal(sc.cost.total.usd, 0.018);
+  assert.equal(sc.cost.jev.calls, 1);
+  assert.equal(sc.cost.reviewer.calls, 1);
+  assert.equal(sc.cost.judge.calls, 1);
+  assert.equal('usd' in sc.cost.jev, false);
+  assert.equal('usd' in sc.cost.reviewer, false);
+  assert.equal('usd' in sc.cost.judge, false);
 });
 
 test('cost: when manager.json sets managerSessions=["ops"], only "ops" counts', () => {
@@ -231,18 +241,19 @@ test('score: an empty day has no components -> score null (not 0)', () => {
   assert.equal(sc.score, null);
 });
 
-test('efficiency: an active day with no priced spend is 1 (within budget)', () => {
+test('efficiency: an active day with no quota data -> null (quota unknown)', () => {
   const sc = buildScorecard({ ledgerRows: [], stallRecs: [stall({ id: 'a' })], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
-  assert.equal(sc.components.efficiency, 1);
+  assert.equal(sc.components.efficiency, null);
+  assert.equal(sc.claude_weekly_pct, null);
 });
 
-test('score: quality, coverage and efficiency all 1 -> 100', () => {
+test('score: quality, coverage and efficiency all 1 -> 100 (with quota data so efficiency has a value)', () => {
   // quality is driven by popup choice records (phase 11), not labels. A single choice that
-  // agrees with the AI gives agreeAi=1, coverage=1; no priced USD -> efficiency=null.
-  // efficiency is 1 on an active day with no priced spend; quality 1, coverage 1 -> score 100
+  // agrees with the AI gives agreeAi=1, coverage=1; no Claude rows -> claude_weekly_pct=0 < budget
+  // -> efficiency=1; quality 1, coverage 1 -> score 100.
   const recs = [stall({ id: 'a' }), outcome({ id: 'a' })];
   for (let i = 0; i < 10; i++) recs.push({ type: 'choice', id: `c${i}`, at: t(now - 100 - i), session: 's', kind: 'yesno', owner: 'yes', ai: 'yes', agreeAi: true, jev: null });
-  const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
+  const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1, claudeRateLimits: { used_percentage: 50, resets_at: Math.floor((now + DAY_MS) / 1000) } });
   assert.equal(sc.components.quality, 1);
   assert.equal(sc.components.coverage, 1);
   assert.equal(sc.components.efficiency, 1);
@@ -257,32 +268,103 @@ test('score: all components null -> score null (no components)', () => {
   assert.equal(sc.score, null);
 });
 
-test('efficiency: 1x budget -> 1.0; 2x budget -> 0.5; 3x budget -> 0.0 (linearly)', () => {
-  // session USD 5, budget 10 -> ratio 0.5 -> efficiency 1
-  let sc = buildScorecard({ ledgerRows: [claudeRow({ id: 'a1', label: 'manager', cost: baseCost(5) })], stallRecs: [], runs: emptyRuns, config: { costBudget: { sessionUsd: 10, aiUsd: 1 } }, from: dayStart, to: now + 1 });
-  assert.equal(sc.components.efficiency, 1);
-  // sessionUsd 20, budget 10 -> ratio 2.0 -> efficiency (3-2)/2 = 0.5
-  sc = buildScorecard({ ledgerRows: [claudeRow({ id: 'a1', label: 'manager', cost: baseCost(20) })], stallRecs: [], runs: emptyRuns, config: { costBudget: { sessionUsd: 10, aiUsd: 1 } }, from: dayStart, to: now + 1 });
-  assert.equal(sc.components.efficiency, 0.5, '2x budget -> 0.5');
-  // 3x -> exactly 0
-  sc = buildScorecard({ ledgerRows: [claudeRow({ id: 'a1', label: 'manager', cost: baseCost(30) })], stallRecs: [], runs: emptyRuns, config: { costBudget: { sessionUsd: 10, aiUsd: 1 } }, from: dayStart, to: now + 1 });
-  assert.equal(sc.components.efficiency, 0, '3x budget -> 0');
-  // way above budget -> still 0
-  sc = buildScorecard({ ledgerRows: [claudeRow({ id: 'a1', label: 'manager', cost: baseCost(1000) })], stallRecs: [], runs: emptyRuns, config: { costBudget: { sessionUsd: 10, aiUsd: 1 } }, from: dayStart, to: now + 1 });
-  assert.equal(sc.components.efficiency, 0);
+test('efficiency: 1x pro-rated budget -> 1.0; 2x -> 0.5; 3x -> 0.0 (linearly)', () => {
+  // plan-week ends at floor(now/1s)*1s -> elapsed = 1, pro-rated budget = 10.
+  // Manager owns 1, 2, 3 of every 10 units of Claude cost this week -> weeklyPct = 10, 20, 30.
+  const weekEndSec = Math.floor(now / 1000);
+  const make = (managerCost) => buildScorecard({
+    ledgerRows: [
+      claudeRow({ id: 'm', label: 'manager', cost: baseCost(managerCost), ts: now - 1000 }),
+      claudeRow({ id: 'o', label: 'task', cost: baseCost(10 - managerCost), ts: now - 1000 }),
+    ],
+    stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1,
+    claudeRateLimits: { used_percentage: 100, resets_at: weekEndSec }, now,
+  });
+  assert.equal(Math.round(make(1).components.efficiency * 1000) / 1000, 1, '1x -> 1');
+  assert.equal(Math.round(make(2).components.efficiency * 1000) / 1000, 0.5, '2x -> 0.5');
+  assert.equal(make(3).components.efficiency, 0, '3x -> 0');
+  assert.equal(make(1000).components.efficiency, 0, 'way above -> 0');
 });
 
-test('efficiency uses the worse of sessionUsd and aiUsd ratios', () => {
-  // session 0.5x, ai 0.5x -> 0.5 ratio -> efficiency 1
-  // session 1x, ai 2x -> ratio = 2 -> efficiency = (3-2)/2 = 0.5
+// ---------------------------------------------------------------------------
+// 4b. Claude weekly plan share (no USD: weight = cost.total; never displayed)
+// ---------------------------------------------------------------------------
+
+test('claude_weekly_pct: manager share of Claude week = (manager weight / total weight) * used_percentage', () => {
+  // Plan-week ends in 4 days: window = [now-3d, now+4d). All three rows fall inside.
+  const weekEndSec = Math.floor((now + 4 * DAY_MS) / 1000);
+  // Manager owns 25% of the total Claude spend this week (cost.total):
+  //  manager rows sum to 0.025, all rows sum to 0.100. used_percentage = 40 -> 0.25 * 40 = 10.
   const ledger = [
-    claudeRow({ id: 'a1', label: 'manager', cost: baseCost(10) }),
-    managerRow({ id: 'j1', name: 'manager.jev', cost: baseCost(2) }),
-    managerRow({ id: 'r1', name: 'manager.ai-review', cost: baseCost(0) }),
+    claudeRow({ id: 'm1', label: 'manager', cost: baseCost(0.01), ts: now - 2 * DAY_MS }),
+    claudeRow({ id: 'm2', label: 'manager', cost: baseCost(0.015), ts: now - 1 * DAY_MS }),
+    claudeRow({ id: 'o1', label: 'task07', cost: baseCost(0.075), ts: now - 2 * DAY_MS + 3600000 }),
   ];
-  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: emptyRuns, config: { costBudget: { sessionUsd: 10, aiUsd: 1 } }, from: dayStart, to: now + 1 });
-  // sessionUsd ratio 1.0, aiUsd ratio 2.0 -> max=2 -> efficiency=(3-2)/2 = 0.5
-  assert.equal(sc.components.efficiency, 0.5);
+  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1, claudeRateLimits: { used_percentage: 40, resets_at: weekEndSec }, now });
+  assert.equal(sc.claude_weekly_pct, 10, `manager share = 0.25 * 40 = 10, got ${sc.claude_weekly_pct}`);
+  // Today: only m1 and o1 are in [dayStart, now+1); m2 is now-1d which is within today if dayStart is recent.
+  // dayStart = floor(now / DAY_MS) * DAY_MS; now is at noon UTC, so dayStart ≈ now - 12h.
+  // m1 is now-2d (outside today), m2 is now-1d (outside today), o1 is now-2d+1h (outside today).
+  // So manager today weight = 0, but manager weekly = 0.025, total weekly = 0.10 -> todayPct = 0.
+  assert.equal(sc.claude_today_pct, 0, `today share = 0, got ${sc.claude_today_pct}`);
+  assert.equal(sc.budget.claudeWeeklyPct, 10);
+});
+
+test('claude_weekly_pct: rows outside the plan-week are excluded from the weights', () => {
+  // Plan-week ends in 1 day (covers [now-6d, now+1d)). A row 8 days old is outside -> ignored.
+  const weekEndSec = Math.floor((now + DAY_MS) / 1000);
+  const ledger = [
+    claudeRow({ id: 'old', label: 'manager', cost: baseCost(1), ts: now - 8 * DAY_MS }),    // outside
+    claudeRow({ id: 'in',  label: 'manager', cost: baseCost(0.01), ts: now - DAY_MS }),
+  ];
+  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1, claudeRateLimits: { used_percentage: 80, resets_at: weekEndSec }, now });
+  assert.equal(sc.claude_weekly_pct, 80, 'only the in-window row counts -> manager owns all Claude spend -> weeklyPct = 80');
+});
+
+test('claude_weekly_pct: no quota data -> weekly_pct null + efficiency null', () => {
+  const ledger = [claudeRow({ id: 'm1', label: 'manager', cost: baseCost(0.01) })];
+  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
+  assert.equal(sc.claude_weekly_pct, null);
+  assert.equal(sc.claude_today_pct, null);
+  assert.equal(sc.components.efficiency, null);
+});
+
+test('claude_weekly_pct: when quota exists but no Claude rows, share is 0 (not null)', () => {
+  const ledger = [managerRow({ id: 'j1', name: 'manager.jev' })];
+  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1, claudeRateLimits: { used_percentage: 60, resets_at: Math.floor((now + 2 * DAY_MS) / 1000) }, now });
+  assert.equal(sc.claude_weekly_pct, 0);
+  assert.equal(sc.claude_today_pct, 0);
+});
+
+test('claude_weekly_pct: unknown resets_at falls back to the rolling last 7 days', () => {
+  // No resets_at -> plan-week = [now-7d, now). A row 8 days old is outside; a row 1 day old is inside.
+  const ledger = [
+    claudeRow({ id: 'm1', label: 'manager', cost: baseCost(0.01), ts: now - DAY_MS }),
+    claudeRow({ id: 'old', label: 'manager', cost: baseCost(1), ts: now - 8 * DAY_MS }),
+  ];
+  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1, claudeRateLimits: { used_percentage: 30 }, now });
+  // Only m1 counts -> manager owns all of the in-window Claude spend -> weeklyPct = 30.
+  assert.equal(sc.claude_weekly_pct, 30);
+});
+
+test('cost: no USD field anywhere in the scorecard output', () => {
+  // One of every bucket with a priced ledger row.
+  const ledger = [
+    claudeRow({ id: 'a1', label: 'manager', cost: baseCost(0.01) }),
+    claudeRow({ id: 'a2', label: 'manager', subagent: true, cost: baseCost(0.005) }),
+    managerRow({ id: 'j1', name: 'manager.jev', cost: baseCost(0.001) }),
+    managerRow({ id: 'r1', name: 'manager.ai-review', cost: baseCost(0.002) }),
+    managerRow({ id: 'gd', name: 'manager.judge', cost: baseCost(0.003) }),
+    minimaxRow({ id: 'w1', cwd: '/home/me/tree' }),
+  ];
+  const runs = [{ id: 'r1', kind: 'minimax', worktree: '/home/me/tree', startedAt: now - 2000, endedAt: null }];
+  const sc = buildScorecard({ ledgerRows: ledger, stallRecs: [], runs: foldRuns(runs), config: {}, from: dayStart, to: now + 1, claudeRateLimits: { used_percentage: 50, resets_at: Math.floor((now + 3 * DAY_MS) / 1000) }, now });
+  const asJson = JSON.stringify(sc);
+  assert.equal(/\busd\b/.test(asJson), false, 'no "usd" anywhere in the JSON: ' + asJson.slice(0, 200));
+  assert.equal(/\$\d/.test(JSON.stringify(sc.budget)), false, 'no $ in budget');
+  assert.equal('claudeWeeklyPct' in sc.budget, true);
+  assert.equal('session' in sc.budget, false, 'no budget.session anymore');
+  assert.equal('ai' in sc.budget, false, 'no budget.ai anymore');
 });
 
 // ---------------------------------------------------------------------------
@@ -370,25 +452,29 @@ test('judge.js: appends manager.judge ledger rows for each call (success + unpar
   // the scorecard picks those up as cost.judge
   const sc = buildScorecard({ ledgerRows: rows, stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
   assert.equal(sc.cost.judge.calls, 2);
-  assert.ok(sc.cost.judge.usd > 0);
+  assert.ok(sc.cost.judge.tokens.input > 0, 'judge tokens present');
 });
 
 // ---------------------------------------------------------------------------
 // 8. langfuseScoreEvents: deterministic ids, score names match the spec, null values skipped
 // ---------------------------------------------------------------------------
 
-test('langfuseScoreEvents: deterministic ids, score names from the spec; null values skipped', () => {
+test('langfuseScoreEvents: deterministic ids, score names from the spec; null values skipped; no USD', () => {
   const sc = { from: t(dayStart), to: t(dayStart + DAY_MS), score: 80, components: { quality: 0.9, coverage: 0.5, efficiency: 0.8 },
-    cost: { total: { tokens: { input: 100, output: 50, cache_read: 0, cache_write: 0 }, usd: 0.5 }, workers: { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, usd: null } },
+    cost: { total: { tokens: { input: 100, output: 50, cache_read: 0, cache_write: 0 } }, workers: { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } } },
+    claude_weekly_pct: 4.2, claude_today_pct: 0.8,
     perf: { stops: 10 } };
   const evs = langfuseScoreEvents(sc, { traceId: scorecardTraceId(now), traceName: 'manager-scorecard', sentAt: now });
-  // 1 trace-create + 5 scores (score, quality, coverage, efficiency, cost_usd); manager.tokens and manager.workers_tokens skipped when 0; jev.* skipped when null
+  // 1 trace-create + 6 scores (score, quality, coverage, efficiency, claude_weekly_pct, claude_today_pct); manager.tokens included (non-zero), manager.workers_tokens skipped when 0; jev.* skipped when null
   const names = evs.filter((e) => e.type === 'score-create').map((e) => e.body.name);
   assert.ok(names.includes('manager.score'));
   assert.ok(names.includes('manager.quality'));
   assert.ok(names.includes('manager.coverage'));
   assert.ok(names.includes('manager.efficiency'));
-  assert.ok(names.includes('manager.cost_usd'));
+  assert.ok(names.includes('manager.claude_weekly_pct'));
+  assert.ok(names.includes('manager.claude_today_pct'));
+  assert.ok(names.includes('manager.tokens'));
+  assert.equal(names.includes('manager.cost_usd'), false, 'manager.cost_usd is gone');
   // deterministic ids
   const again = langfuseScoreEvents(sc, { traceId: scorecardTraceId(now), traceName: 'manager-scorecard', sentAt: now });
   for (let i = 0; i < evs.length; i++) assert.equal(evs[i].body.id, again[i].body.id);
@@ -442,10 +528,10 @@ test('ledger dedupe by id: a row re-written with a growing id is counted once (l
     { id: 1, agent: 'manager', name: 'manager.jev', label: 'manager', subagent: false, ts: now - 9000,  usage: { input: 200, output: 0, cache_read: 0, cache_write: 0 }, cost: { total: 0.02 } },
   ];
   const sc = buildScorecard({ ledgerRows: rows, stallRecs: [], runs: [], from: dayStart, to: dayStart + DAY_MS });
-  // after dedupe: one row, 200 input, 0.02 usd
+  // after dedupe: one row, 200 input; tokens only — no USD on the bucket
   assert.equal(sc.cost.jev.tokens.input, 200);
   assert.equal(sc.cost.jev.calls, 1);
-  assert.equal(Math.round((sc.cost.jev.usd || 0) * 100) / 100, 0.02);
+  assert.equal('usd' in sc.cost.jev, false);
 });
 
 test('ledger rows without an id pass through unchanged', () => {
