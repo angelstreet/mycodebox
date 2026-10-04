@@ -1043,6 +1043,8 @@ function buildSideRow(s) {
   return li;
 }
 function syncSide() {
+  // which sessions are on screen right now: the focused one always; in the grid, every visible card
+  const shownNames = new Set(state.mode === 'grid' ? [...els.gridPane.children].map((c) => c.dataset.session) : state.mode === 'card' && state.active ? [state.active] : []);
   const editing = !!els.sessionList.querySelector('li.editing');
   if (els.sessionList.dataset.sig !== sideSig() && !editing) { renderSide(); return; }
   if (!editing) layoutSide();
@@ -1050,6 +1052,7 @@ function syncSide() {
     const n = li.dataset.session;
     if (!n || li.classList.contains('editing')) continue;
     li.classList.toggle('active', n === state.active);
+    li.classList.toggle('shown', n !== state.active && shownNames.has(n));
     li.querySelector('.dot').className = `dot ${vstateOf(n)}`;
     const ag = agentBadgeHtml(n);
     const agEl = li.querySelector('.ag');
@@ -1062,6 +1065,11 @@ function syncSide() {
     const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
     rb.classList.toggle('hidden', !t);
+  }
+  // docked list: bring the focused row into view when focus changes
+  if (docked() && state.active && state.sideActiveSeen !== state.active) {
+    state.sideActiveSeen = state.active;
+    els.sessionList.querySelector('li.active')?.scrollIntoView({ block: 'nearest' });
   }
 }
 function tickSide() {
@@ -1602,6 +1610,7 @@ function renderGrid() {
   if (act && !targets.includes(act) && limit > 0) targets = [...targets.slice(0, limit - 1), act];
   state.gridView = state.gridView ? targets.map((s) => s.name) : null;
   renderInto(els.gridPane, targets);
+  syncSide();
 }
 
 // ---------- board (list view) ----------
