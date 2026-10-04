@@ -29,6 +29,8 @@ import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, 
 import { createPromptSource } from './prompts.js';
 import { reviewerOptions } from './public/buttons.js';
 import { runShadow } from './router-shadow.js';
+import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
+import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -58,7 +60,7 @@ export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: false, routerShadow: true, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
+let config = { enabled: true, autoSend: false, routerShadow: true, wakeShadow: true, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
   jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
@@ -132,7 +134,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow } = b;
+  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -154,6 +156,7 @@ export async function setManagerConfig(b = {}) {
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
   if (typeof deployRunner === 'boolean') config.deployRunner = deployRunner;
   if (typeof routerShadow === 'boolean') config.routerShadow = routerShadow;
+  if (typeof wakeShadow === 'boolean') config.wakeShadow = wakeShadow;
   if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');
   if (p2MaxPct !== undefined) config.p2MaxPct = num(p2MaxPct, 1, 100, 'p2MaxPct');
   if (session && typeof sessionEnabled === 'boolean') {
@@ -220,7 +223,9 @@ function aiBlock(name, kase, confidence) {
 
 // A stall that is not auto-answered goes to the owner. A waiting session was already pushed by
 // ghosty's own 'waiting' alert, so only a finished turn that asks something is pushed here.
+const escalatedStops = new Set();   // stop ids the rules escalated to the owner (the wake shadow's `escalated` fact)
 function escalate(name, state, final, id, reason, aiLine = null) {
+  escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
   if (state === 'done' && final.case !== 'done') notify(name, aiLine ? { ...final, aiLine } : final, reason);
@@ -611,6 +616,55 @@ function flushRouterOutcome(id) {
   outcomeQueue.add(st.decision_id, outcomeBody(st.outcome, 'owner-reply', id)).catch((e) => console.error('[manager] router outcome', e.message));
 }
 
+// ---- wake shadow (TASK-47 G10) ----
+// Every manager-events line gets Jev's opinion on whether the event needed waking the manager agent (`jev`), asked
+// BEFORE the line is appended and capped at CAP_MS, and 15 min later what really happened (a `wake_outcome` record in
+// stalls.jsonl, posted once to the decision log). SHADOW ONLY: the rules decide; nothing here changes an alert or a send.
+// Same guards as the stop shadow: JEV configured, daily budget, no OpenRouter credit, the 402 cool-down.
+const wakeAnnotator = createWakeAnnotator({
+  enabled: () => config.wakeShadow !== false,
+  teamId: decisions.configured ? VPT_TEAM_ID : '',
+  kindOf: jevErrorKind,
+  guard: () => {
+    if (!JEV_URL || !JEV_API_KEY) return 'not configured';
+    if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
+    if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return 'daily budget reached';
+    const cr = (() => { try { return creditsPeek(); } catch { return null; } })();
+    if (cr?.ok && cr.balance != null && cr.balance <= 0) return 'no OpenRouter credit';
+    if (Date.now() < creditsDownUntil) return 'OpenRouter credit used up (402), retrying later';
+    return null;
+  },
+  onError: (kind) => { if (kind === 'credits') creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS; },
+  call: async (body) => {
+    const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(CAP_MS) });
+    const j = await r.json();
+    if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
+    budget.calls += 1; budget.cost += Number(j?.cost || 0);
+    writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
+    if (j && j.success === false && !j.error) j.error = `http ${r.status}`;
+    return j;
+  },
+});
+// facts (wake-shadow.js wakeFacts) -> the `jev` value for the event line, or undefined when the switch is off.
+export const wakeAnnotate = (facts) => wakeAnnotator(facts);
+
+// Label the events whose 15 min window is over (derived from the files on every call: restart-safe, nothing in memory).
+// Writes {type:'wake_outcome', event_key, label} to stalls.jsonl once per event and posts it to the Jev decision when
+// the event carried a decision_id. Returns how many events were labelled.
+export async function wakeOutcomeTick({ now = Date.now() } = {}) {
+  const readLines = async (f) => { try { return (await readFile(f, 'utf8')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { return []; } };
+  const events = await readLines(join(STATE_DIR, EVENTS_FILE));
+  if (!events.length) return 0;
+  const recs = await readLines(LOG_FILE);
+  const due = dueOutcomes({ events, recs, classify: classifyKey, now });
+  for (const { event, key, label } of due) {
+    await appendFile(LOG_FILE, JSON.stringify({ type: 'wake_outcome', at: new Date(now).toISOString(), event_key: key, kind: event.kind, session: event.session || null, label }) + '\n');
+    const id = event.jev?.decision_id;
+    if (id && decisions.configured) outcomeQueue.add(id, { label, by: OUTCOME_BY, event_key: key }).catch((e) => console.error('[manager] wake outcome', e.message));
+  }
+  return due.length;
+}
+
 // Index of the pane line where the stop's closing text ends (the text is compared without whitespace, so
 // a re-wrapped pane still matches), or -1 when it is not on screen.
 function closingLine(plain, key) {
@@ -785,7 +839,7 @@ export function stallOf(name) {
   return { case: st.case, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null,
     id: w.pending?.id || null,
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
-    forbidden: st.forbidden || w.cls?.forbidden || null, draft: !!(w.cls?.draft), jev: st.jev || null };
+    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending?.id), draft: !!(w.cls?.draft), jev: st.jev || null };
 }
 
 // The AI reviewer's view for the UI: { id, state: pending|done|skipped|error, ai?, skipped?, error?, ... } for the current stop, or null.

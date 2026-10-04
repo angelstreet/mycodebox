@@ -68,13 +68,14 @@ import { createCredits } from './credits.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
-import { createManagerEvents } from './manager-events.js';
+import { createManagerEvents, classifyKey } from './manager-events.js';
+import { wakeFacts, quotaPercents } from './wake-shadow.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -561,8 +562,27 @@ const loadManagerSessions = () => {
   } catch {}
   return MANAGER_SESSIONS_DEFAULT;
 };
-const managerEvents = createManagerEvents({ stateDir: STATE_DIR, managerSessions: loadManagerSessions });
-const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS, onFired: (e) => managerEvents.record(e).catch((err) => console.error('[manager-events]', err.message)) });
+// Jev's wake opinion on each event line (TASK-47 G10, shadow): the facts ghosty knows at that moment.
+const wakeAnnotateEvent = (event, cls) => {
+  const snap = deployRunner.snapshot();
+  const cr = credits.peek();
+  return wakeAnnotate(wakeFacts({
+    cls, event,
+    priority: cls.session ? sessionMeta.priority(cls.session) : null,
+    stall: cls.session ? stallOf(cls.session) : null,
+    agent: cls.session ? (latest?.status?.[cls.session]?.agent ?? null) : null,
+    deploy: cls.kind === 'deploy' ? (snap.deploys || []).find((d) => d.id === cls.deployId) || null : null,
+    quota: cls.kind === 'quota' ? quotaPercents(quota.get()) : null,
+    diskPct: cls.kind === 'disk' ? health?.disks?.find((d) => d.path === cls.diskPath)?.pct ?? null : null,
+    credits: cls.kind === 'credits' && cr?.ok ? { balance: cr.balance ?? null } : null,
+  }));
+};
+const managerEvents = createManagerEvents({ stateDir: STATE_DIR, managerSessions: loadManagerSessions, annotate: wakeAnnotateEvent });
+const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS, onFired: (e) => {
+    // The manager agent's own alerts are not fed back to it, but they are what the wake outcome looks for.
+    if (classifyKey(e.key).kind === 'agent-skip') logEvent({ type: 'agent-alert', key: e.key, title: String(e.title || '').slice(0, 120), body: String(e.body || '').slice(0, 300) });
+    managerEvents.record(e).catch((err) => console.error('[manager-events]', err.message));
+  } });
 
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
@@ -1465,6 +1485,7 @@ server.listen(PORT, HOST, async () => {
   quotaTick();
   deployRunner.start();
   credits.start();
+  setInterval(() => wakeOutcomeTick().catch((e) => console.error('[wake-outcome]', e.message)), 60000).unref?.();
   setInterval(quotaTick, 60000);
 });
 
