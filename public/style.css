@@ -1117,3 +1117,15 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
   .cell .h .mt{ flex:0 1 auto; min-width:0; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .cell .h .mt .act{ display:inline; overflow:hidden; text-overflow:ellipsis; }
 }
+
+/* quota & pace bars (usage sheet): fill = used, tick = how far through the window we are */
+.qp{ display:flex; align-items:center; gap:8px; margin-top:6px; font-size:12px; }
+.qp .qn{ width:44px; color:var(--ink-2); flex-shrink:0; }
+.qp .qb{ position:relative; flex:1; height:10px; background:var(--bg-3); border-radius:5px; overflow:visible; }
+.qp .qb i{ position:absolute; left:0; top:0; bottom:0; border-radius:5px; background:var(--working); }
+.qp .qb.warn i{ background:var(--accent); } .qp .qb.crit i{ background:var(--waiting); }
+.qp .qb u{ position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; background:var(--ink); opacity:.85; border-radius:1px; }
+.qp .qv{ width:40px; text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }
+.qp .qv.warn{ color:var(--accent); } .qp .qv.crit{ color:var(--waiting); }
+.qverdict{ margin-left:52px; }
+.qverdict .vr{ color:var(--waiting); }

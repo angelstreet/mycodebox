@@ -2058,6 +2058,37 @@ function groupRows(rows, key) {
     models: [...new Set(g.list.flatMap((r) => r.models))],
   })).sort((x, y) => ((y.cost ?? -1) - (x.cost ?? -1)) || (y.total - x.total));
 }
+// Burn-rate projection for one quota window: where usage lands at the reset if it keeps this pace.
+const WIN_MIN = { '5h': 300, week: 10080 };
+const fmtMin = (m) => { m = Math.max(0, Math.round(m)); const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; };
+function paceOf(w) {
+  const total = w.minutes || WIN_MIN[w.name];
+  if (!total || w.usedPercent == null || !w.resetsAt || w.expired) return null;
+  const left = (w.resetsAt * 1000 - Date.now()) / 60000, el = total - left;
+  if (left <= 0 || el <= 0) return null;
+  const frac = Math.min(1, el / total), rate = w.usedPercent / el;
+  const toFull = rate > 0 ? (100 - w.usedPercent) / rate : Infinity;
+  return { frac, left, proj: frac >= 0.05 ? w.usedPercent / frac : null, toFull, runsOut: frac >= 0.05 && toFull < left };
+}
+function quotaPaceHtml(q, onlyAgent) {
+  const plans = (q?.plans || []).filter((p) => !onlyAgent || p.plan === onlyAgent);
+  if (!plans.length) return '<div class="dim">no quota reading yet</div>';
+  return plans.map((p) => {
+    const head = `<div class="u1"><i class="adot ${escapeHtml(p.plan)}"></i><b>${escapeHtml(p.label || p.plan)}</b><span class="grow"></span><span class="dim">${escapeHtml(p.price || '')}</span></div>`;
+    if (!p.windows?.length) return `<div class="urow">${head}<div class="u2 uo">${escapeHtml(/login|expired/i.test(p.error || '') ? 'login expired, open mcode once to refresh' : (p.error || 'no reading yet'))}</div></div>`;
+    const rows = p.windows.map((w) => {
+      if (w.usedPercent == null) return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb na"></span><span class="qt dim">${w.unlimited ? 'unlimited' : 'unknown'}</span></div>`;
+      const pc = paceOf(w), used = Math.min(100, w.usedPercent);
+      const lvl = pc?.runsOut ? 'crit' : (pc?.proj != null && pc.proj >= 85) || w.usedPercent >= 80 ? 'warn' : 'ok';
+      const verdict = !pc ? resetText(w)
+        : pc.runsOut ? `<b class="vr">runs out in ${fmtMin(pc.toFull)}</b>, ${fmtMin(pc.left - pc.toFull)} before it resets`
+        : pc.proj == null ? `${resetText(w)} &middot; too early to project`
+        : `on track &middot; ~${Math.round(pc.proj)}% at reset &middot; ${resetText(w)}`;
+      return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb ${lvl}"><i style="width:${used}%"></i>${pc ? `<u style="left:${Math.round(pc.frac * 100)}%" title="time elapsed in this window"></u>` : ''}</span><span class="qv ${lvl}">${Math.round(w.usedPercent)}%</span></div><div class="u2 qverdict">${verdict}</div>`;
+    }).join('');
+    return `<div class="urow">${head}${rows}</div>`;
+  }).join('');
+}
 // ui = { f: {agent, project, q}, open: {agent, project, session, day}, openAgents: Set }
 function usageHtml(u, tab, ui) {
   const today = tab === 'today';
@@ -2106,7 +2137,8 @@ function usageHtml(u, tab, ui) {
       ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
   const days = today ? '' : sec('day', 'Per day', '', undefined, `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
-  return head + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
+  return head + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa))
+    + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
     + sec('project', 'Projects', projects.length, undefined, projHtml)
     + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml)
     + (filtered ? '' : days);
@@ -2117,7 +2149,7 @@ function openUsage() {
     foot.classList.remove('hidden');
     foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
-    const ui = { f: { agent: '', project: '', q: '' }, open: { agent: true, project: true, session: true, day: true }, openAgents: new Set() };
+    const ui = { f: { agent: '', project: '', q: '' }, open: { quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set() };
     let tab = 'today', data = null;
     body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
       <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><input data-f="q" type="search" placeholder="session…" aria-label="Filter by session name"></div>
