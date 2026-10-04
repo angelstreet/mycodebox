@@ -487,3 +487,16 @@ test('toggle rule: an option with a description is the only one that gets a chev
   assert.equal(needsEx(b), false);
   assert.equal(needsEx(c), false);
 });
+
+// gate: long status text / full-clause alternatives must not be split into half-sentence buttons
+test('either/or verb-phrase split: only a single short question sentence', () => {
+  const none = [
+    'Should I go with this plan, or would you rather wait for TASK-39 step 3?',
+    'Do you want me to run the deploy when those clear, or will you?',
+    'Should I make that change, and do you want to test Replay logged in (then I need the test account), or not logged in?',
+    'The answer decides whether MiniMax-first stays the default, or only for some kinds of work. For example, the scorecard needed 5 fixes.',
+    'Tell me when to retry, or if you\'d rather free some memory on codebox first.',
+  ];
+  for (const t of none) assert.deepEqual(parseAlternatives(t), [], t);
+  assert.deepEqual(parseAlternatives('Want me to fix the three stream bugs, or look at splitting vpt-monitor?').map((a) => a.phrase), ['Fix the three stream bugs', 'Look at splitting vpt-monitor']);
+});

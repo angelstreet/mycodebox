@@ -370,7 +370,16 @@ export function parseAlternatives(text) {
     const yRaw = verbMatch[2];
     const leadMatch = xRaw.match(LEAD_INS);
     const hasComma = /,\s*$/.test(xRaw);
-    if ((leadMatch || hasComma) && !INTERROG.test(xRaw)) {
+    // Guard (gate): only a SINGLE short question sentence ending in "?" qualifies. Longer text that merely has
+    // ", or" somewhere (status paragraphs, tables, quoted prose) must stay on the old path. A comma split without a
+    // lead-in is only for tiny "Run tests, or not?" shapes. Y must be a verb phrase, not a new clause ("would you
+    // rather ...", "will you?"), and X must not hold a comma (two questions glued together).
+    const qt = q.trim();
+    const singleQ = qt.length <= 200 && /\?$/.test(qt) && !/[\n]/.test(qt) && !/[.!?]\s+\S/.test(qt.slice(0, -1));
+    const tiny = !leadMatch && xRaw.trim().split(/\s+/).length <= 3 && yRaw.trim().split(/\s+/).length <= 2;
+    const yClause = /^(?:will|would|do|did|does|can|could|is|are|was|were|should|shall|you|i|we|they|it|he|she|if|and|but)\b/i.test(yRaw.trim());
+    const xBody = (leadMatch ? xRaw.trim().slice(leadMatch[0].length) : xRaw.trim()).replace(/[,;:.!?]+\s*$/, '');
+    if (singleQ && (leadMatch || (hasComma && tiny)) && !INTERROG.test(xRaw) && !yClause && !/[,;:]/.test(xBody)) {
       let x = xRaw.trim();
       if (leadMatch) x = x.slice(leadMatch[0].length).trim();
       x = x.replace(/^to\s+/, '').trim().replace(/[,;:.!?]+$/, '').trim();
