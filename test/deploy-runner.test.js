@@ -90,17 +90,26 @@ test('skips a busy request and starts a free one behind it', async () => {
   assert.deepEqual(runner.snapshot().deploys.map((d) => d.id), ['1', '2']);
 });
 
-test('unapproved requests never run; alert once for approval', async () => {
+test('runner on = standing approval: an unapproved request is approved and runs (no approval alert)', async () => {
   const reg = fakeRegistry({ deploys: [dep('1', { state: 'awaiting-approval' })] });
   const { runner, ran, alerts } = make(reg);
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done');
+  assert.equal(ran.length, 1);
+  assert.ok(reg.calls.includes('deploy approve 1'));
+  assert.equal(alerts.filter(([k]) => k.endsWith(':approve')).length, 0);
+});
+
+test('runner off: unapproved requests wait and alert once for approval', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { state: 'awaiting-approval' })] });
+  const { runner, ran, alerts } = make(reg, { enabled: false });
   await runner.tick();                                        // first poll: existing ones are not re-alerted
   reg.deploys.push(dep('2', { state: 'awaiting-approval' }));
   await runner.tick(); await runner.tick(); await sleep(50);
   assert.equal(ran.length, 0);
   assert.deepEqual(alerts.filter(([k]) => k.endsWith(':approve')).map(([k]) => k), ['deploy:2:approve']);
-  assert.equal((await runner.act('2', 'approve')).ok, true);
-  await until(() => reg.deploys[1].state === 'done');
   assert.equal(reg.deploys[0].state, 'awaiting-approval');
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy approve')));
 });
 
 test('deployRunner off: queue is read but nothing starts', async () => {

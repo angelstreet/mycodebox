@@ -155,6 +155,12 @@ export function createDeployRunner({
       const deploys = await poll();
       if (deploys) {
         for (const d of deploys) {
+          // Runner ON is the owner's standing approval (2026-10-04: "if no lease, deploy all"):
+          // an unapproved request is approved here and then waits only for its leases.
+          if (d.state === 'awaiting-approval' && isEnabled()) {
+            const r = await reg(['deploy', 'approve', d.id]);
+            if (r.code === 0) { d.state = 'queued'; log.info?.(`[deploy] auto-approved ${d.id} (runner on)`); continue; }
+          }
           if (d.state === 'awaiting-approval' && !seenAwaiting.has(d.id)) {
             seenAwaiting.add(d.id);
             if (!first) alert(`deploy:${d.id}:approve`, { title: `deploy needs approval: ${d.env} ${d.scope}`, body: `${d.ref} requested by ${d.agent}${d.purpose ? ` — ${d.purpose}` : ''}`, priority: 'high', ntfyTags: 'warning', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
