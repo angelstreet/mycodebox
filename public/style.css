@@ -1168,3 +1168,6 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .uclist{ max-height:240px; overflow-y:auto; display:flex; flex-direction:column; }
 .uci{ text-align:left; background:transparent; border:0; color:var(--ink); padding:7px 8px; border-radius:6px; font:inherit; font-size:12px; }
 .uci:hover, .uci.on{ background:var(--bg-3); } .uci.on{ color:var(--accent); }
+
+/* review page on wide screens: a centred card column instead of a full-width slab */
+.rv-stage{ width:calc(100% - 24px); max-width:760px; margin:4px auto; }

@@ -14,6 +14,18 @@ export function ago(iso, now = Date.now()) {
   if (s < 129600) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 }
+// The excerpt is hard-wrapped at the tmux pane width (can be ~20 columns): glue wrapped lines back into paragraphs.
+const unwrap = (t) => {
+  const out = [];
+  for (const raw of String(t || '').split('\n')) {
+    const l = raw.replace(/\s+$/, '');
+    const prev = out[out.length - 1];
+    const item = /^\s*(?:[-*\u2022]|\d+[.)])\s/.test(l), indented = /^\s{4,}\S/.test(l), boxy = /^\s*[\u2500-\u257f|]/.test(l);
+    if (l.trim() && prev && prev.trim() && !item && !indented && !boxy && !/^\s{4,}/.test(prev)) out[out.length - 1] = prev + ' ' + l.trim();
+    else out.push(l);
+  }
+  return out.join('\n');
+};
 const wouldText = (c) => (c.wouldSend ? (c.wouldSend.text != null ? `"${c.wouldSend.text}"` : `option ${c.wouldSend.key}`) : 'leave it to you');
 
 export function openReview({ onSession, toast = () => {}, onClose = () => {} } = {}) {
@@ -82,7 +94,7 @@ export function openReview({ onSession, toast = () => {}, onClose = () => {} } =
       ${c.ai ? `<div class="rv-ai"><div class="rv-ail">${c.jev ? `<b>Jev</b> ${esc(c.jev.choice)}${c.jev.confidence != null ? ' ' + Math.round(c.jev.confidence * 100) + '%' : ''} &middot; ` : ''}<b>AI</b> ${c.ai.proposed_reply ? `&ldquo;${esc(c.ai.proposed_reply)}&rdquo;` : 'needs you' + (c.ai.owner_needed_why ? ' &mdash; ' + esc(c.ai.owner_needed_why) : '')}</div>
         <div class="rv-air">${esc(c.ai.reasoning || '')} <i>(confidence ${Number(c.ai.confidence).toFixed(2)})</i></div>
         <div class="rv-aiv"><span>AI was</span><button class="${c.aiVerdict === 'right' ? 'on right' : ''}" data-a="aiRight" aria-label="AI proposal was right">&#10003; right</button><button class="${c.aiVerdict === 'wrong' ? 'on wrong' : ''}" data-a="aiWrong" aria-label="AI proposal was wrong">&#10005; wrong</button></div></div>` : ''}
-      <div class="rv-text">${esc(c.excerpt)}</div>
+      <div class="rv-text">${esc(unwrap(c.excerpt))}</div>
       ${c.outcome ? `<div class="rv-outcome">you replied (${esc(c.outcome.kind || '?')}${c.outcome.via ? ', ' + esc(c.outcome.via) : ''}): <b>${esc(c.outcome.reply || '–')}</b></div>` : ''}
       ${note ? `<div class="rv-notechip">&#9998; ${esc(note.correctCase ? note.correctCase + ' ' : '')}${esc(note.note || '')}</div>` : ''}
     </div>`;
