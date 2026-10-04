@@ -1850,7 +1850,7 @@ document.addEventListener('click', async (e) => {
   }
   if (!pb && !zb) return;
   e.stopPropagation(); e.preventDefault();
-  if (pb) { pickPriority(pb.dataset.prio); return; }
+  if (pb) { e.stopPropagation(); e.preventDefault(); cyclePriority(pb.dataset.prio); return; }
   const n = zb.dataset.pause;
   zb.disabled = true;
   try {
@@ -1861,15 +1861,10 @@ document.addEventListener('click', async (e) => {
   } catch (err) { toast(`failed: ${err.message}`, 2500); }
   zb.disabled = false;
 }, true);
-function pickPriority(n) {
-  openSheet(`Priority - ${displayName(n)}`, ({ body, close }) => {
-    body.innerHTML = `<div class="prio-pick">${PRIORITIES.map((p) => `<button class="sbtn prio-opt ${p}${prioOf(n) === p ? ' cur' : ''}" data-p="${p}">${p}<span>${{ P0: 'urgent', P1: 'important', P2: 'normal' }[p]}</span></button>`).join('')}</div>`;
-    body.onclick = async (e) => {
-      const b = e.target.closest('[data-p]');
-      if (!b) return;
-      try { await metaPost(n, { priority: b.dataset.p }); close(); renderAll(); } catch (err) { toast(`failed: ${err.message}`, 2500); }
-    };
-  });
+// tap the P0 / P1 / P2 badge: cycle P0 -> P1 -> P2 -> P0 (no popup)
+async function cyclePriority(n) {
+  const cur = prioOf(n), next = PRIORITIES[(PRIORITIES.indexOf(cur) + 1) % PRIORITIES.length];
+  try { await metaPost(n, { priority: next }); renderAll(); } catch (err) { toast(`failed: ${err.message}`, 2500); }
 }
 
 // Quota row: "codex 5h 2% · wk 32% · claude ? · minimax 5h 2% wk ∞". Amber >= 80 %, red >= 95 %.
