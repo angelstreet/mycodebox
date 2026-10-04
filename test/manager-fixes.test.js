@@ -81,6 +81,39 @@ test('a repeated stop of one session does not suppress the same words in another
   assert.equal(of('stall', 'q2').length, 1);
 });
 
+test('A, B, A: a stop seen among the last 5 is not logged again; real work resets the list', async () => {
+  const A = pane('Step A is in.\nNext I\'ll do B.'), B = pane('Step B is in.\nNext I\'ll do C.');
+  tick('q3', 'working', ['busy'], 0);
+  const stop = (p, t0) => { tick('q3', 'done', p, t0); tick('q3', 'done', p, t0 + 1500); };
+  stop(A, 1000); await until(() => of('stall', 'q3').length === 1);
+  tick('q3', 'done', B, 4000); tick('q3', 'done', B, 5500);     // a different stop with no work in between
+  await until(() => of('stall', 'q3').length === 2);
+  tick('q3', 'done', A, 8000); tick('q3', 'done', A, 9500);     // A again (MiniMax repaint flip)
+  await settle();
+  assert.equal(of('stall', 'q3').length, 2, 'A is among the last stops: not logged again');
+  const m4 = await import('../manager.js?restart=3');           // same across a restart
+  await m4.initManager({ onOwnerNeeded: () => {} });
+  const t4 = mk(m4);
+  t4('q3', 'working', ['busy'], 0, { realWork: false });
+  t4('q3', 'done', A, 1000); t4('q3', 'done', A, 2500);
+  await settle();
+  assert.equal(of('stall', 'q3').length, 2);
+  t4('q3', 'working', ['busy'], 5000, { realWork: true });       // real work: the list resets
+  t4('q3', 'done', A, 6000); t4('q3', 'done', A, 7500);
+  await until(() => of('stall', 'q3').length === 3);
+  assert.equal(of('stall', 'q3').length, 3);
+});
+
+test('only the last 5 stops are remembered', async () => {
+  const P = (i) => pane(`Stop number ${i} is in.\nNext I\'ll do ${i + 1}.`);
+  tick('q4', 'working', ['busy'], 0);
+  let t = 1000;
+  for (let i = 0; i < 6; i++) { tick('q4', 'done', P(i), t); tick('q4', 'done', P(i), t + 1500); t += 4000; await until(() => of('stall', 'q4').length === i + 1); }
+  tick('q4', 'done', P(0), t); tick('q4', 'done', P(0), t + 1500);   // fell out of the last 5
+  await until(() => of('stall', 'q4').length === 7);
+  assert.equal(of('stall', 'q4').length, 7);
+});
+
 // ---- 3. outcome attribution ----
 const closing = 'Merged the cache layer.\nShall I continue with the reader?';
 const stopPane = (old = []) => [...old, ...closing.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'];

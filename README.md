@@ -112,9 +112,9 @@ ghosty already computes, passed to `observe` as `realWork`) or ghosty sent it so
 logged after that, and a stall identical to the last logged one is not logged again unless one of those
 happened in between.
 
-The last logged stop (a hash of its whitespace-free closing text) is kept per session in `<state dir>/last-stops.json`,
+The last 5 logged stops (hashes of their whitespace-free closing text) are kept per session in `<state dir>/last-stops.json`,
 so a service restart or a repaint does not log it again either; real work, a send or a reporter prompt in between
-makes the same words a new stop. An `outcome` only uses a reply that came after the stop: the reporter's prompt must
+resets that list, so the same words then count as a new stop. An `outcome` only uses a reply that came after the stop: the reporter's prompt must
 be newer than the stall, and from the pane only a `❯ prompt` line below the stall's closing text counts (an older prompt
 above it, or a closing text no longer on screen, gives kind `unknown`).
 

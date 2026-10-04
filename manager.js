@@ -28,7 +28,7 @@ const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'sta
 const CONFIG_FILE = join(STATE_DIR, 'manager.json');
 export const LOG_FILE = join(STATE_DIR, 'stalls.jsonl');
 const BUDGET_FILE = join(STATE_DIR, 'jev-budget.json');
-const LAST_STOPS_FILE = join(STATE_DIR, 'last-stops.json');   // session -> key of the last stop logged (survives a restart)
+const LAST_STOPS_FILE = join(STATE_DIR, 'last-stops.json');   // session -> keys of the last 5 stops logged (survives a restart)
 const AI_BUDGET_FILE = join(STATE_DIR, 'ai-budget.json');
 
 const SETTLE_MS = Number(process.env.STALL_SETTLE_MS || 5000);       // pane unchanged this long = a stall
@@ -48,6 +48,7 @@ let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8
   aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
+const RECENT_STOPS = 5;
 let lastStops = {};
 let lastStopsWrite = Promise.resolve();
 const saveLastStops = () => { lastStopsWrite = lastStopsWrite.then(() => writeFile(LAST_STOPS_FILE, JSON.stringify(lastStops))).catch(() => {}); };
@@ -579,11 +580,15 @@ export function observe(s) {
   if (w.logged || s.now - w.since < SETTLE_MS || !sessionOn(s.name)) return w.stall;
   w.logged = true;
   // The very same stop as the last one logged, with no real work or send in between: not a new stop.
-  // The last logged stop is remembered per session on disk, so a restart or a repaint does not log it again.
+  // The last RECENT_STOPS logged stops are remembered per session on disk, so a restart, a repaint or an
+  // A, B, A flip does not log a stop again; real work, a send or a reporter prompt since resets the list.
   const stopId = hash(stopKey(stall.excerpt));
-  if (stopId === (w.lastStopId ?? lastStops[s.name]) && !w.moved) return w.stall;
-  w.lastStopId = stopId; w.moved = false;
-  lastStops[s.name] = stopId; saveLastStops();
+  const recent = w.recent ?? (w.recent = Array.isArray(lastStops[s.name]) ? [...lastStops[s.name]] : []);
+  if (w.moved) recent.length = 0;
+  if (recent.includes(stopId)) return w.stall;
+  recent.push(stopId); if (recent.length > RECENT_STOPS) recent.shift();
+  w.moved = false;
+  lastStops[s.name] = [...recent]; saveLastStops();
 
   const id = randomUUID();
   w.pending = { id, at: s.now, key: stopKey(stall.excerpt) };
