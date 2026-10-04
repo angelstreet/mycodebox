@@ -16,6 +16,7 @@ import { traceIdOf, genIdOf, postBatch as postBatchRaw } from './lf-common.js';
 import { createEvalSync } from './lfeval.js';
 import { createJudge } from './judge.js';
 import { parseManagerLine } from './manager-parse.js';
+import { cachedScorecard, langfuseScoreEvents, scorecardTraceId, foldRuns } from '../scorecard.js';
 
 const exec = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -524,6 +525,53 @@ export function createIngester(cfg, hooks = {}) {
   return { init, tick, summary, evalPass, ledger: byId };
 }
 
+// ---------------------------------------------------------------------------
+// Manager scorecard -> Langfuse scores (manager.score, manager.cost_usd, jev.*).
+// Runs in the tailer's main loop, once per cfg.pollMs * 4 (or on a hard cadence when --once).
+// Same trace id each UTC day -> Langfuse upserts (a refresh overwrites yesterday's values too).
+// ---------------------------------------------------------------------------
+const SCORECARD_MS = 15 * 60 * 1000;
+
+export function createScorecardPoster(cfg, { ing, log = console.log } = {}) {
+  let lastAt = 0;
+  return async function postScorecard({ force = false } = {}) {
+    if (!cfg.publicKey || !cfg.secretKey) return { skipped: 'no langfuse keys' };
+    const now = cfg.now ? cfg.now() : Date.now();
+    if (!force && now - lastAt < SCORECARD_MS) return { skipped: 'throttled' };
+    try {
+      // Reuse the ingester's in-memory ledger when available; otherwise read it once. Two sources are fine because
+      // the row id is the dedupe key.
+      const ledger = ing && ing.ledger ? [...ing.ledger.values()] : null;
+      let ledgerRows = ledger;
+      if (!ledgerRows) {
+        const text = await fs.readFile(cfg.ledgerFile, 'utf8').catch(() => '');
+        ledgerRows = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+      }
+      let stallRecs = [], runsLines = [];
+      try { stallRecs = (await fs.readFile(cfg.stallsFile, 'utf8')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
+      try { runsLines = (await fs.readFile(join(cfg.stateDir, 'manager-runs.jsonl'), 'utf8')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
+      const runs = foldRuns(runsLines);
+      let cfg_json = {};
+      try { cfg_json = JSON.parse(await fs.readFile(join(cfg.stateDir, 'manager.json'), 'utf8')); } catch {}
+      // today = [dayStart, now] so a fresh tailer still has *something* even mid-day.
+      const dayStart = Math.floor(now / 86400000) * 86400000;
+      const today = buildScorecard({ ledgerRows, stallRecs, runs, config: cfg_json, from: dayStart, to: now + 1 });
+      const traceId = scorecardTraceId(now);
+      const events = langfuseScoreEvents(today, { traceId, traceName: 'manager-scorecard', sentAt: now });
+      if (events.length) {
+        const errs = await postBatchRaw(cfg, events);
+        if (errs.length) log('[usage] scorecard langfuse rejected:', JSON.stringify(errs.slice(0, 3)));
+        else log(`[usage] posted ${events.length} scorecard events (${today.perf.stops} stops, score ${today.score})`);
+      }
+      lastAt = now;
+      return { traceId, posted: events.length, score: today.score };
+    } catch (e) { log('[usage] scorecard post failed:', e.message); return { error: 'failed' }; }
+  };
+}
+
+// Re-export so the scorecard tests can call buildScorecard without importing the full module.
+export { buildScorecard } from '../scorecard.js';
+
 async function atomicWrite(path, data) {
   const tmp = `${path}.${process.pid}.tmp`;
   await fs.writeFile(tmp, data);
@@ -535,11 +583,12 @@ async function main() {
   const ing = createIngester(cfg);
   await ing.init(process.argv.includes('--backfill'));
   const once = process.argv.includes('--once') || process.argv.includes('--backfill');
+  const postScore = createScorecardPoster(cfg, { ing });
   let busy = false;
   const pass = async () => {
     if (busy) return;
     busy = true;
-    try { await ing.tick(); await ing.evalPass(); await ing.summary(); } catch (e) { console.error('[usage] pass failed:', e.message); }
+    try { await ing.tick(); await ing.evalPass(); await ing.summary(); await postScore(); } catch (e) { console.error('[usage] pass failed:', e.message); }
     busy = false;
   };
   await pass();

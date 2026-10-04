@@ -323,6 +323,9 @@ a waiting session is covered by the existing "needs you" push.
 | `disabledSessions` | `[]` | sessions the manager ignores (tick them off in the panel) |
 | `policyEnabled` | `true` | quota policy by priority (below) |
 | `p1MaxPct` / `p2MaxPct` | `80` / `80` | 5 h fill at which P1 / P2 sessions are held |
+| `managerSessions` | `["manager"]` | session labels whose `claude` / `codex` runs count toward the manager's own cost in the scorecard (subagents are reported separately) |
+| `scoreWeights` | `{quality:0.4, coverage:0.3, efficiency:0.3}` | how the three components combine into the scorecard number; a component that is null drops out and the others renormalise |
+| `costBudget` | `{sessionUsd:10, aiUsd:1}` | scorecard `efficiency` is 1 at the budget and 0 at 3x; `aiUsd` covers Jev + AI reviewer + judge, MiniMax worker tokens are reported but unpriced |
 
 The robot icon in the top bar opens the manager panel: global auto-answer switch, per-case
 checkboxes, per-session on/off, today's answered / cancelled / escalated counts and the last 30
@@ -339,6 +342,47 @@ would auto-answer (all safety gates above already passed), the policy decides `a
 - Plans: claude -> Claude Max, codex -> Codex, minimax -> MiniMax.
 
 A hold is stored in `sessions.json` as `held:{by:'manager',reason,at}`, separate from the owner's `paused`,
+
+### Scorecard
+
+The Usage view's Overview (`public/usage.js` → `managerBlockHtml`) shows a **Manager** block at the
+top: a 0-100 score with its three components, every token and dollar the manager caused today,
+the Jev integration stats, and a 7-day mini bar of the score. Behind it:
+
+- `GET /api/manager/scorecard?days=7` (60 s in-process cache) returns `{ today, days:[...] }`. The
+  loader (`scorecard.js`) tails `usage-ledger.jsonl`, `stalls.jsonl` and `manager-runs.jsonl`, folds
+  them in memory, and runs `buildScorecard` per UTC day.
+- **Cost** (`cost.session` / `subagents` / `workers` / `jev` / `reviewer` / `judge` / `total`) is split
+  by who paid the token:
+  - session + subagents = `claude`/`codex` runs whose `label` is in `managerSessions`
+    (`subagent:true` rows are reported separately — that's where the Sonnet review gates show up).
+  - workers = `minimax` rows whose `cwd` is inside an open window in `<state dir>/manager-runs.jsonl`.
+    Windows are opened with `node scripts/manager-run.js start --kind minimax --worktree <abs path>
+    --task <text>` and closed with `... end <id> [--verdict accepted|fixed|rejected]`. MiniMax has no
+    price, so workers' cost is `null` and only the token counts are reported.
+  - jev = `agent:'manager', name:'manager.jev'`
+  - reviewer = `agent:'manager', name:'manager.ai-review'`
+  - judge = `agent:'manager', name:'manager.judge'` — `usage/judge.js` now appends one ledger row per
+    judged call (success or unparsable), matching the shape of the AI reviewer rows.
+- **Performance** (`perf.{stops,resolved,resolvedFast,auto,escalated,medianTtrSec,p90TtrSec,agreement}`)
+  reads `stalls.jsonl`: `auto` = send by `!= 'owner'` within 10 s before the outcome OR
+  `outcome.via === 'ghosty'`; `agreement` is the share of labelled stops whose label is `legit` or
+  `no_reason` (manager right), `wrong_case` is not right; falls back to `jevAgreement` when there
+  are no labels.
+- **Jev integration** (`jev.{consulted,errorRate,agreement,p50ms,overridden,costPerDecision}`):
+  consulted = `stall.source === 'jev'` or a `stall.jev.choice`; ambiguous = cases
+  `owner_decision|continue|menu_recommended`; agreement = Jev said `continue`/`take_recommended` and
+  the outcome matched, OR Jev said `ask_owner` and the outcome was `owner_specific`/`unknown`;
+  overridden = `stall.forbidden` blocked the Jev pick; `costPerDecision` = jev USD / jev calls.
+- **Score** is the weighted average of `quality` (owner labels, then jev agreement), `coverage`
+  (`resolvedFast / stops`) and `efficiency` (1 at the budget, 0 at 3x; `null` if both USD buckets
+  are unpriced). A null component is excluded and the remaining weights renormalise. Weights and
+  budgets live in `manager.json` (`scoreWeights`, `costBudget`).
+- **Langfuse**: once per 15 min the `usage/ingest.js` tailer calls `createScorecardPoster`, which
+  posts the current day's scorecard as `manager.score`, `manager.quality`, `manager.coverage`,
+  `manager.efficiency`, `manager.cost_usd`, `manager.tokens`, `manager.workers_tokens`,
+  `jev.consulted_rate`, `jev.error_rate`, `jev.agreement`, `jev.p50_ms` on a deterministic trace
+  `manager-scorecard-<YYYY-MM-DD>` (trace name `manager-scorecard`), upserting.
 logged `{type:'hold', by:'manager'}` and pushed once ("task05 held: Claude Max 5h 86% (P2)"). It never sends
 Esc and never interrupts a working session; it only stops the session from being continued at its stop. Every
 quota poll (60 s) re-evaluates held sessions: when the policy allows again the hold is cleared, `{type:'resume',

@@ -11,7 +11,7 @@ import { deployedView, targetLabel } from '/deployed.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
-import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
+import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -2397,7 +2397,9 @@ function usageHtml(u, tab, ui) {
     return sec('project', 'Projects', projects.length, undefined, projHtml)
       + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml);
   }
-  return valueHtml(u, tab)
+  const mgrBlock = (!filtered && tab === 'today' && ui.score) ? managerBlockHtml(ui.score.today, ui.score.days, { fmtTok, fmtUsd, costOrNull: (e) => e }) : '';
+  return mgrBlock
+    + valueHtml(u, tab)
     + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa) + (filtered ? '' : creditRowHtml(ui.jev?.credits)))
     + sec('agent', 'Agents &amp; models', agents.length + (jevRow ? 1 : 0), undefined, agentHtml + jevRow)
     + sec('total', 'Total', '', `<b class="tk">${fmtTok(total.total)}</b>`, totalHtml);
@@ -2444,6 +2446,7 @@ function openUsage() {
       body.querySelector('.ufilters').classList.toggle('hidden', !['overview', 'sessions'].includes(ui.view));
       content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
+    const loadScore = () => fetch('/api/manager/scorecard?days=7').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((sc) => { ui.score = sc; }).catch(() => {}).finally(() => draw());
     const loadJev = () => fetch('/api/jev-ai').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((jv) => { ui.jev = jv; }).catch(() => {}).finally(() => draw());
     body.onclick = (e) => {
       const cb = e.target.closest('[data-combo]');
@@ -2481,6 +2484,7 @@ function openUsage() {
     };
     draw();
     loadJev();
+    loadScore();
     if (openUsage.tab === 'jev') { ui.view = 'overview'; ui.openAgents.add('jev'); draw(); }
     fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; fillOptions(); draw(); })
       .catch(() => { content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });

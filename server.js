@@ -24,6 +24,8 @@
 //   GET  /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset= → Jev decisions, newest first (the server's log, else the manager's own; /?decisions=1)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
+//   GET  /api/manager/scorecard?days=7 → { today, days:[...] } performance + cost + Jev integration for the window
+//                                       (cached 60 s; manager sessions, subagents, workers, Jev, reviewer, judge; see scorecard.js)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
 //   GET  /api/deploys           → deploy queue + recent (registry on proxmox), {enabled, running, lastRef, deployed (ledger: per env/target version, ref, commit, at, agent, lastAttempt)}; pushed on /ws/status as {type:'deploys'}
 //   POST /api/deploys/:id/approve | /cancel → owner action on a queued request
@@ -62,6 +64,7 @@ import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
+import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
@@ -1285,6 +1288,11 @@ const server = http.createServer(async (req, res) => {
     let lines = [];
     try { lines = (await readFile(LOG_FILE, 'utf8')).trim().split('\n').filter(Boolean); } catch {}
     return json(res, 200, { entries: lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) });
+  }
+  if (req.method === 'GET' && p === '/api/manager/scorecard') {
+    // 60 s in-process cache: the file is ~35k lines and the UI re-renders on every status tick.
+    const days = Math.max(1, Math.min(30, Number(url.searchParams.get('days')) || 7));
+    return json(res, 200, await cachedScorecard({ days, ttlMs: 60000 }));
   }
   if (req.method === 'GET' && p === '/api/vm') {
     return json(res, 200, health || await sampleHealth(HEALTH_DISKS));
