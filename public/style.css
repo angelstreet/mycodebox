@@ -1354,7 +1354,7 @@ body[data-mode="card"] #health{ display:none; }
   min-width: 28px; min-height: 28px; font-size: 16px; line-height: 1; padding: 0;
 }
 #askPopup .ap-nav:hover, #askPopup .ap-x:hover { color: var(--ink); }
-#askPopup .ap-q { font-size: 13px; color: var(--ink); line-height: 1.4; max-height: 6.2em; overflow: auto; overflow-wrap: anywhere; }
+#askPopup .ap-q { font-size: 13px; color: var(--ink); line-height: 1.4; max-height: 14em; overflow-y: auto; overflow-wrap: anywhere; }
 #askPopup .ap-btns { display: flex; flex-wrap: wrap; gap: 6px; }
 #askPopup .ap-b {
   background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 8px;
@@ -1368,7 +1368,7 @@ body[data-mode="card"] #health{ display:none; }
 #askPopup .ap-b.muted { color: var(--ink-3); border-style: dashed; opacity: 0.9; }
 #askPopup .ap-b.muted .n { color: var(--ink-3); }
 #askPopup .ap-btns.menu .ap-b.rep, #askPopup .ap-btns.either .ap-b.rep, #askPopup .ap-btns.open .ap-b.rep { flex: 1 1 100%; }
-#askPopup .ap-qs { display: flex; flex-direction: column; gap: 4px; max-height: 7.2em; overflow: auto; }
+#askPopup .ap-qs { display: flex; flex-direction: column; gap: 4px; max-height: 14em; overflow-y: auto; }
 #askPopup .ap-q-row { display: flex; gap: 6px; font-size: 12px; color: var(--ink); line-height: 1.35; }
 #askPopup .ap-q-n { flex: 0 0 auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 #askPopup .ap-q-t { flex: 1 1 auto; overflow-wrap: anywhere; }
@@ -1380,7 +1380,35 @@ body[data-mode="card"] #health{ display:none; }
 #askPopup .ap-b.cf { border-color: var(--accent); }
 #askPopup .ap-b.arm { background: var(--accent); color: #1a0d00; border-color: transparent; font-weight: 700; }
 #askPopup .ap-b:active { transform: translateY(1px); }
-#askPopup .ap-meta { font-size: 11px; color: var(--ink-3); white-space: pre-wrap; overflow-wrap: anywhere; }
+#askPopup .ap-meta {
+  background: transparent; border: 0; padding: 0; margin: 0;
+  font: inherit; font-size: 11px; color: var(--ink-3);
+  text-align: left; cursor: pointer; white-space: pre-wrap; overflow-wrap: anywhere;
+  display: flex; align-items: baseline; gap: 6px;
+}
+#askPopup .ap-meta:hover { color: var(--ink-2); }
+#askPopup .ap-meta[aria-expanded="true"] { color: var(--ink-2); }
+#askPopup .ap-toggle { color: var(--ink-3); font-size: 10px; flex: 0 0 auto; }
+#askPopup .ap-why {
+  font-size: 11px; color: var(--ink-2);
+  background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+#askPopup .ap-why-row {
+  display: flex; align-items: baseline; gap: 8px;
+  flex-wrap: wrap; line-height: 1.35;
+}
+#askPopup .ap-why-name { flex: 0 0 auto; font-weight: 700; color: var(--ink); min-width: 30px; }
+#askPopup .ap-why-pick { flex: 0 1 auto; color: var(--ink); overflow-wrap: anywhere; }
+#askPopup .ap-why-conf { flex: 0 0 auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+#askPopup .ap-why-probs { flex: 0 1 100%; color: var(--ink-3); font-size: 10.5px; }
+#askPopup .ap-why-missing { flex: 0 1 auto; color: var(--ink-3); font-style: italic; }
+#askPopup .ap-why-reason {
+  color: var(--ink-2); line-height: 1.35; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; padding-left: 38px;
+}
 
 /* Slide-up only when a stop id never shown before appears; content updates in place otherwise. */
 #askPopup.ap-anim { animation: apSlideIn 200ms ease-out; }
