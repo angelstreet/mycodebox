@@ -2327,6 +2327,12 @@ loadMgrCost();
 setInterval(loadMgrCost, 60000);
 const actTime = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
 const actRow = (a) => `<div class="ml act"><span class="t">${actTime(a.at)}</span><span class="x"><b>${escapeHtml([a.trigger, a.session].filter(Boolean).join(' / '))}</b> ${a.decision ? `&middot; ${escapeHtml(String(a.decision).slice(0, 120))}` : ''}${a.action ? ` &rarr; ${escapeHtml(String(a.action).slice(0, 120))}` : ''}${a.reason ? `<br><span class="dim">${escapeHtml(String(a.reason).slice(0, 200))}</span>` : ''}</span></div>`;
+const wakeRow = (w) => `<div class="ml act"><span class="t">${actTime(w.start)}</span><span class="x"><b>${escapeHtml(w.trigger)}</b> ${escapeHtml(String(w.triggerSummary || '').slice(0, 120))} <span class="dim">${w.usd == null ? '' : '$' + Number(w.usd).toFixed(3)}${w.nothing ? ' &middot; nothing' : ''}</span></span></div>`;
+const wakesHtml = (wk) => {
+  if (!wk || !wk.summary) return '<div class="dim">wakes unavailable</div>';
+  const s = wk.summary;
+  return `<div class="mnote"><b>${s.count}</b> wakes &middot; <b>$${Number(s.usd).toFixed(2)}</b> &middot; <b>${Math.round((s.nothingShare || 0) * 100)}%</b> did nothing</div><div class="mlog">${(wk.wakes || []).slice(-30).reverse().map(wakeRow).join('') || '<div class="dim">no wakes today</div>'}</div>`;
+};
 function openManager() {
   openSheet('AI manager', async ({ body, foot, close, title }) => {
     const setChip = () => { title.innerHTML = `AI manager${mgrCostChip()}`; };
@@ -2336,12 +2342,13 @@ function openManager() {
     foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const draw = async () => {
-      let cfg, log, acts;
+      let cfg, log, acts, wk;
       try {
-        [cfg, log, acts] = await Promise.all([
+        [cfg, log, acts, wk] = await Promise.all([
           fetch('/api/manager').then((r) => r.json()),
           fetch('/api/manager/log?limit=800').then((r) => r.json()),
           fetch('/api/manager/actions?limit=50').then((r) => r.json()).catch(() => ({ actions: [] })),
+          fetch('/api/manager/wakes').then((r) => r.json()).catch(() => null),
         ]);
       } catch { body.innerHTML = '<div class="sheet-empty">could not load</div>'; return; }
       const off = new Set(cfg.disabledSessions || []);
@@ -2384,6 +2391,8 @@ function openManager() {
         <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
         <div class="side-sub">Manager actions (last ${(acts.actions || []).length})</div>
         <div class="mlog">${(acts.actions || []).slice().reverse().map(actRow).join('') || '<div class="dim">no manager actions logged yet</div>'}</div>
+        <div class="side-sub">Wakes today</div>
+        ${wakesHtml(wk)}
         <div class="side-sub">Sessions</div>
         <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
     };
