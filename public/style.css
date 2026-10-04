@@ -1300,3 +1300,9 @@ svg.ico{ display:inline-block; vertical-align:-0.18em; flex-shrink:0; }
 .state.deploy .st{ display:none; }
 .state.deploy{ padding:3px 6px; }
 .state .sticon, .chip .sticon{ color:var(--deploy); }
+
+/* Jev row inside Overview */
+.adot.jev{ background:#9ab1ff; }
+.urow.jev .jcost{ color:var(--accent); }
+.jfchip{ font-size:10.5px; padding:1px 7px; border-radius:999px; border:1px solid; font-weight:600; }
+.jfchip.warn{ color:var(--accent); border-color:var(--accent); } .jfchip.crit{ color:var(--waiting); border-color:var(--waiting); background:rgba(255,95,95,.1); }

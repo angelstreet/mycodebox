@@ -8,7 +8,7 @@ import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
 import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
-import { jevTabHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
+import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
@@ -2390,6 +2390,7 @@ function usageHtml(u, tab, ui) {
       <div class="u2">${escapeHtml(r.project)} &middot; ${ioLine({ in: r.in, out: r.out })}</div>
       ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(String(r.outlier).split(':')[0])}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
+  const jevRow = !filtered && ui.jev ? jevRowHtml(ui.jev, tab, ui.openAgents.has('jev'), chev) : '';
   if (ui.view === 'time') return overTimeHtml(u, tab, ui);
   if (ui.view === 'trend') return trendHtml(u, tab, ui);
   if (ui.view === 'sessions') {
@@ -2397,8 +2398,8 @@ function usageHtml(u, tab, ui) {
       + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml);
   }
   return valueHtml(u, tab)
-    + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa))
-    + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
+    + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa) + (filtered ? '' : creditRowHtml(ui.jev?.credits)))
+    + sec('agent', 'Agents &amp; models', agents.length + (jevRow ? 1 : 0), undefined, agentHtml + jevRow)
     + sec('total', 'Total', '', `<b class="tk">${fmtTok(total.total)}</b>`, totalHtml);
 }
 function openUsage() {
@@ -2409,7 +2410,7 @@ function openUsage() {
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', dim: 'model', range: 7, selDay: null, view: lsGet('ghosty.usageView', 'overview') };
     let tab = 'today', data = null;
-    body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button><button class="sbtn" data-tab="jev">Jev &amp; AI</button></div>
+    body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
       <div class="uviews"><button data-view="overview">Overview</button><button data-view="time">Over time</button><button data-view="trend">Trending</button><button data-view="sessions">Sessions</button></div>
       <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><div class="ucombo"><button type="button" class="ucb" data-combo aria-label="Filter by session"><span class="ucl">all sessions</span></button><div class="ucpanel hidden"><input class="ucs" type="search" placeholder="search session…" aria-label="Search sessions"><div class="uclist"></div></div></div></div>
       <div class="ucontent"><div class="sheet-empty">loading…</div></div>`;
@@ -2436,16 +2437,14 @@ function openUsage() {
       body.querySelector('.uclist').innerHTML = items.map((n) => `<button type="button" class="uci${n === cur ? ' on' : ''}" data-session-pick="${escapeHtml(n)}">${n ? escapeHtml(n) : 'all sessions'}</button>`).join('') || '<div class="dim">no match</div>';
     };
     const closeCombo = () => body.querySelector('.ucpanel').classList.add('hidden');
-    let jevData = null, jevErr = null;
     const draw = () => {
       for (const b of body.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
-      body.querySelector('.uviews').classList.toggle('hidden', tab === 'jev');
+
       for (const b of body.querySelectorAll('[data-view]')) b.classList.toggle('on', b.dataset.view === ui.view);
-      body.querySelector('.ufilters').classList.toggle('hidden', tab === 'jev' || !['overview', 'sessions'].includes(ui.view));
-      if (tab === 'jev') { content.innerHTML = jevErr ? `<div class="sheet-empty">${escapeHtml(jevErr)}</div>` : jevTabHtml(jevData); return; }
+      body.querySelector('.ufilters').classList.toggle('hidden', !['overview', 'sessions'].includes(ui.view));
       content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
-    const loadJev = () => fetch('/api/jev-ai').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { jevData = j; jevErr = null; }).catch((e) => { jevErr = `Jev & AI data unavailable (${e})`; }).finally(() => { if (tab === 'jev') draw(); });
+    const loadJev = () => fetch('/api/jev-ai').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((jv) => { ui.jev = jv; }).catch(() => {}).finally(() => draw());
     body.onclick = (e) => {
       const cb = e.target.closest('[data-combo]');
       if (cb) {
@@ -2458,7 +2457,7 @@ function openUsage() {
       if (pick) { ui.f.q = pick.dataset.sessionPick; closeCombo(); drawCombo(); draw(); return; }
       if (!e.target.closest('.ucpanel')) closeCombo();
       const t = e.target.closest('[data-tab]');
-      if (t) { tab = t.dataset.tab; if (tab === 'jev') loadJev(); else if (data) fillOptions(); draw(); return; }
+      if (t) { tab = t.dataset.tab; if (data) fillOptions(); draw(); return; }
       const vw = e.target.closest('[data-view]');
       if (vw) { ui.view = vw.dataset.view; lsSet('ghosty.usageView', ui.view); draw(); return; }
       const cd = e.target.closest('[data-cday]');
@@ -2481,9 +2480,10 @@ function openUsage() {
       const f = e.target.dataset.f; if (!f) return; ui.f[f] = e.target.value.trim(); draw();
     };
     draw();
-    if (openUsage.tab === 'jev') { tab = 'jev'; loadJev(); draw(); }
+    loadJev();
+    if (openUsage.tab === 'jev') { ui.view = 'overview'; ui.openAgents.add('jev'); draw(); }
     fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; fillOptions(); draw(); })
-      .catch(() => { if (tab !== 'jev') content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
+      .catch(() => { content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
   });
 }
 els.usageBtn.onclick = openUsage;
