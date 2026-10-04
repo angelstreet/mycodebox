@@ -12,6 +12,7 @@
 //                  and {type:'label'} owner labels on a stall ("this stop bothered me", POST /api/manager/label),
 //                  {type:'unlabel', id} withdraws the newest label of a stall (swipe page undo; the stop is unlabelled again)
 //   jev-budget.json { day, calls, cost }
+//   decision-outcomes.json  outcomes not yet accepted by the server's decision log (retried every 5 min, dropped after 7 days)
 //
 // It never starts, kills or renames sessions.
 
@@ -22,12 +23,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch } from './stall.js';
 import { AI_MODES, AI_NEVER_CASES, createBudget, callReviewer, reviewerUrl } from './triage.js';
+import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const CONFIG_FILE = join(STATE_DIR, 'manager.json');
 export const LOG_FILE = join(STATE_DIR, 'stalls.jsonl');
 const BUDGET_FILE = join(STATE_DIR, 'jev-budget.json');
 const AI_BUDGET_FILE = join(STATE_DIR, 'ai-budget.json');
+const OUTCOME_QUEUE_FILE = join(STATE_DIR, 'decision-outcomes.json');
 
 const SETTLE_MS = Number(process.env.STALL_SETTLE_MS || 5000);       // pane unchanged this long = a stall
 const JEV_URL = process.env.JEV_URL || '';                            // VPT server POST /server/ai/decide
@@ -35,6 +38,10 @@ const JEV_API_KEY = process.env.JEV_API_KEY || '';
 const JEV_DAILY_USD = Number(process.env.JEV_DAILY_USD || 0.25);
 const JEV_DAILY_CALLS = Number(process.env.JEV_DAILY_CALLS || 2000);
 const AI_URL = process.env.AI_URL || reviewerUrl(JEV_URL);          // the reviewer: POST /server/ai/complete on the same server as Jev
+const VPT_TEAM_ID = process.env.VPT_TEAM_ID || '';                    // team of the VPT server's decision log (see /server/health); unset = Jev calls are not logged
+const decisions = createDecisionsClient({ jevUrl: JEV_URL, apiKey: JEV_API_KEY, teamId: VPT_TEAM_ID });
+const outcomeQueue = createOutcomeQueue({ file: OUTCOME_QUEUE_FILE, send: (id, outcome) => decisions.postOutcome(id, outcome) });
+const decisionByStop = new Map();   // stop id -> the product's decision_id of its Jev call (outcome write-back)
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
 export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait'];
 export const LABELS = ['no_reason', 'legit', 'wrong_case'];
@@ -43,7 +50,7 @@ setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
 let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
-  aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: ['owner_decision', 'continue', 'stopped_short', 'menu_recommended'],
+  jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: ['owner_decision', 'continue', 'stopped_short', 'menu_recommended'],
   ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
 const aiBudget = createBudget(AI_BUDGET_FILE);
@@ -73,6 +80,8 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
   config.autoCases = (config.autoCases || []).filter((c) => AUTO_CASES.includes(c));
   config.aiAutoCases = (config.aiAutoCases || []).filter((c) => CASES.includes(c) && !AI_NEVER_CASES.includes(c));
   if (!AI_MODES.includes(config.aiTriage)) config.aiTriage = 'simulate';
+  if (!/^(auto|text\.decision(\.[a-z0-9_]+)*)$/.test(String(config.jevUsage))) config.jevUsage = 'auto';
+  if (decisions.configured) { outcomeQueue.flush().catch(() => {}); setInterval(() => outcomeQueue.flush().catch(() => {}), 5 * 60e3).unref(); }
   if (context) triageContext = context;
   if (onOwnerNeeded) notify = onOwnerNeeded;
   if (sendKey) send.key = sendKey;
@@ -88,7 +97,7 @@ export const deployRunnerOn = () => config.deployRunner === true;
 export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct });
 
 export function managerConfig() {
-  return { ...config, validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
+  return { ...config, validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
     ai: !!(AI_URL && JEV_API_KEY), aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
 }
 
@@ -99,7 +108,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases } = b;
+  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -109,6 +118,7 @@ export async function setManagerConfig(b = {}) {
   if (minConfidence !== undefined) config.minConfidence = num(minConfidence, 0, 1, 'minConfidence');
   if (delayMs !== undefined) config.delayMs = Math.round(num(delayMs, 0, 600000, 'delayMs'));
   if (maxPerSessionPerHour !== undefined) config.maxPerSessionPerHour = Math.round(num(maxPerSessionPerHour, 0, 100, 'maxPerSessionPerHour'));
+  if (jevUsage !== undefined) { if (!/^(auto|text\.decision(\.[a-z0-9_]+)*)$/.test(String(jevUsage))) throw bad('jevUsage must be "auto" or a text.decision usage key'); config.jevUsage = jevUsage; }
   if (aiTriage !== undefined) { if (!AI_MODES.includes(aiTriage)) throw bad(`aiTriage must be one of: ${AI_MODES.join(', ')}`); config.aiTriage = aiTriage; }
   if (aiMinConfidence !== undefined) config.aiMinConfidence = num(aiMinConfidence, 0, 1, 'aiMinConfidence');
   if (aiDailyUsd !== undefined) config.aiDailyUsd = num(aiDailyUsd, 0, 100, 'aiDailyUsd');
@@ -338,6 +348,10 @@ export async function labelStall({ id, label, note, correctCase, aiVerdict } = {
   await requireKnown(id);
   const rec = { type: 'label', id, ...(label != null ? { label, note: note || null, correctCase: correctCase || null } : {}), ...(aiVerdict ? { aiVerdict } : {}), at: new Date().toISOString() };
   await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
+  if (label != null) {
+    const stall = (await readRecs()).find((r) => r.type === 'stall' && r.id === id);
+    writeBack(id, outcomeFromLabel({ label, correctCase }), 'owner', stall?.jev?.decision_id || decisionByStop.get(id));
+  }
   return rec;
 }
 
@@ -371,6 +385,24 @@ export function effectiveAiVerdicts(recs) {
   const v = new Map();
   for (const r of recs) if (r.type === 'label' && r.aiVerdict) v.set(r.id, r.aiVerdict);
   return v;
+}
+
+// Fire-and-forget: tell the product's decision log what really happened (queued and retried while the endpoint is missing).
+// Nothing is sent for a stop whose Jev call was not logged (no decision id) or when the outcome says nothing.
+export function writeBack(stallId, label, by, decisionId) {
+  if (!decisionId || !label || !decisions.configured) return null;
+  return outcomeQueue.add(decisionId, outcomeBody(label, by, stallId)).catch((e) => console.error('[manager] outcome', e.message));
+}
+export const flushOutcomes = () => outcomeQueue.flush();
+
+// The "Jev & AI" usage tab.
+export async function jevAiTab() {
+  const remote = decisions.configured ? await decisions.summary() : { ok: false, error: VPT_TEAM_ID ? 'server not configured' : 'VPT_TEAM_ID not set' };
+  return { ...tabData({ recs: await readRecs(), remote }), usageKey: await jevUsageNow(), logged: decisions.configured, queued: outcomeQueue.size() };
+}
+// The decisions page: f = { usage, ok, hasOutcome, minConf, limit, offset }
+export async function decisionsView(f = {}) {
+  return decisionsPage({ client: decisions, recs: await readRecs(), f, usageNow: await jevUsageNow() });
 }
 
 const readRecs = async () => { try { return (await readFile(LOG_FILE, 'utf8')).split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }); } catch { return []; } };
@@ -440,7 +472,15 @@ export async function todayCounts() {
   return c;
 }
 
-async function jev(stall) {
+// The usage key the manager's Jev calls are logged under: the config, or with 'auto' the manager's own key once the
+// server's decision log answers (it ships text.decision.manager together with the log), else the generic one.
+export async function jevUsageNow() {
+  if (config.jevUsage !== 'auto') return config.jevUsage;
+  return (await decisions.available()) ? MANAGER_USAGE : FALLBACK_USAGE;
+}
+
+// ctx = { session, stallId, case }: what the product's log shows as "what this decision was about".
+async function jev(stall, ctx = {}) {
   if (!JEV_URL || !JEV_API_KEY) return { skipped: 'not configured' };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
@@ -449,8 +489,10 @@ async function jev(stall) {
     stall.excerpt,
   ];
   if (stall.suggestion) facts.push(`(The agent's own guess at the owner's next prompt: "${stall.suggestion}")`);
+  const logged = decisions.configured;   // needs VPT_TEAM_ID: the server writes no log row without a team
   const body = {
-    usage: 'text.decision', profile: 'jev', log: false, timeout_s: 20,
+    usage: await jevUsageNow(), profile: 'jev', log: logged, timeout_s: 20,
+    ...(logged ? { team_id: VPT_TEAM_ID, refs: { source: 'ghosty-manager', session: ctx.session, stall_id: ctx.stallId, case: ctx.case } } : {}),
     state: facts.join('\n\n'),
     questions: { choice: { type: 'choice',
       instructions: 'What should happen next so the work keeps moving without a wrong decision being made for the owner?',
@@ -462,17 +504,19 @@ async function jev(stall) {
   };
   const started = Date.now();
   try {
-    const r = await fetch(JEV_URL, {
+    const post = async () => { const r = await fetch(JEV_URL, {
       method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY },
       body: JSON.stringify(body), signal: AbortSignal.timeout(25000),
-    });
-    const j = await r.json();
+    }); return { r, j: await r.json() }; };
+    let { r, j } = await post();
+    // An older server that does not know the manager usage: once more under the generic one.
+    if (!j.success && body.usage !== FALLBACK_USAGE && /unknown usage/i.test(String(j.error || ''))) { body.usage = FALLBACK_USAGE; ({ r, j } = await post()); }
     budget.calls += 1;
     budget.cost += Number(j.cost || 0);
     writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
     const a = j.answers?.choice;
-    if (!j.success || !a) return { error: String(j.error || `http ${r.status}`).slice(0, 200), ms: Date.now() - started };
-    return { choice: a.choice, confidence: a.confidence, probabilities: a.probabilities, cost: j.cost, ms: j.ms ?? Date.now() - started, model: j.model };
+    if (!j.success || !a) return { error: String(j.error || `http ${r.status}`).slice(0, 200), ms: Date.now() - started, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
+    return { choice: a.choice, confidence: a.confidence, probabilities: a.probabilities, cost: j.cost, ms: j.ms ?? Date.now() - started, model: j.model, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
   } catch (e) {
     return { error: e.message, ms: Date.now() - started };
   }
@@ -523,6 +567,7 @@ export function observe(s) {
       const reply = said ? { via: 'reporter', text: said.text } : ownerReply(s.plain, sent);
       log({ type: 'outcome', id: p.id, session: s.name, at: new Date(s.now).toISOString(), afterSec: Math.round((s.now - p.at) / 1000),
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
+      writeBack(p.id, outcomeFromReplyKind(reply.text ? outcomeKind(reply.text) : 'unknown'), 'owner-reply', p.auto ? null : decisionByStop.get(p.id));
       w.pending = null;
     }
     if (holdOf(s.name)) endHold(s.name, 'manager', 'session moved on', false);
@@ -564,7 +609,8 @@ export function observe(s) {
   (async () => {
     let final = stall, jevOut = null;
     if (stall.source === 'ambiguous') {
-      jevOut = await jev(stall);
+      jevOut = await jev(stall, { session: s.name, stallId: id, case: stall.case });
+      if (jevOut.decision_id) { decisionByStop.set(id, jevOut.decision_id); if (decisionByStop.size > 500) decisionByStop.delete(decisionByStop.keys().next().value); }
       if (jevOut.choice) final = applyJev(stall, jevOut.choice);
     }
     if (w.hash !== h) return;   // the pane moved on while Jev was thinking: that stall is gone

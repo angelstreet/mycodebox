@@ -1177,3 +1177,17 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
   .cell .state, .row-item .state{ padding:2px 6px; gap:0; }
   .row-item .uc{ display:none !important; }
 }
+
+/* Jev & AI tab, decisions page */
+.jsec{ margin-top:14px; padding-top:8px; border-top:1px solid var(--line); }
+.jbanner{ margin:8px 0; padding:8px 10px; border-radius:8px; border:1px solid var(--line-2); font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
+.jbanner.bad{ border-color:var(--waiting); color:var(--waiting); background:rgba(255,95,95,.12); }
+.jbanner.ok{ color:var(--working); } .jbanner.dim{ color:var(--ink-3); }
+.jdays{ display:flex; flex-direction:column; gap:2px; font-size:12px; font-variant-numeric:tabular-nums; }
+.jday{ display:flex; gap:10px; align-items:center; } .jday .ud{ width:38px; color:var(--ink-3); }
+.jf{ color:var(--waiting); } .jok{ color:var(--working); font-size:12px; }
+.jbars{ display:flex; align-items:flex-end; gap:2px; height:26px; margin-top:6px; } .jbars i{ flex:1; background:var(--working); min-height:1px; border-radius:1px; }
+.dfilters{ display:grid; grid-template-columns:1fr 1fr; gap:6px; } .dfilters select{ min-width:0; }
+.jout.yes{ color:var(--working); } .jout.no{ color:var(--waiting); }
+.jstop{ margin:6px 0 0; padding:6px 8px; background:var(--bg-3); border-radius:6px; font-size:11px; white-space:pre-wrap; overflow-wrap:anywhere; max-height:160px; overflow:auto; }
+.jkey{ color:var(--ink); font-weight:600; }

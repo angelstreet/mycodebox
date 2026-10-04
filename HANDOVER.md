@@ -39,6 +39,7 @@ on (inert), AI triage **simulate**, deploy runner **off**.
 | Labels / swipe review | `public/review.js`, `/api/manager/review`, `/label`, `/unlabel` | left = no reason, right = legit; ✓/✗ the AI; `npm run stall-report` |
 | Priority / pause / holds | `session-meta.js`, `public/policy.js` | P0/P1/P2 (default P2); owner Pause = Esc + hold; manager holds never send Esc |
 | Quota | `quota.js` | Claude via `scripts/claude-statusline-ratelimits.sh` (status line), Codex via `codex app-server`, MiniMax via `coding_plan/remains` with mcode's login |
+| Jev decision log | `decisions.js`, `public/jev-view.js`, `manager.js` (`jev`, `writeBack`) | manager's Jev calls logged in the product (`VPT_TEAM_ID`), outcome write-back with a retry queue, usage tab "Jev & AI", decisions page `/?decisions=1`; README "Jev in the product's decision log" |
 | Usage | `usage/ingest.js` (unit `ghosty-usage`), `usage-view.js` | local Langfuse `~/langfuse-codebox/` (`:3100`); API-equivalent costs |
 | Session reporter | `claude-plugin/ghosty-reporter/`, `reporter.js` | see below |
 | Deploys | `deploy-runner.js`, `public/deployed.js` | queue + ledger live in the `vpt-lease` registry on proxmox (deploy skill) |

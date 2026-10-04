@@ -19,6 +19,8 @@
 //   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
 //   POST /api/manager/triage    → {id, action: sent|edited|dismissed} what the owner did with the AI reviewer's proposal (dismissed hides it)
 //   POST /api/manager/unlabel   → {id} withdraw the newest label of a stall (swipe page undo)
+//   GET  /api/jev-ai            → the "Jev & AI" usage tab: manager Jev + AI reviewer per day (local logs), the product's Jev uses (server summary, when it has it)
+//   GET  /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset= → Jev decisions, newest first (the server's log, else the manager's own; /?decisions=1)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
@@ -53,7 +55,7 @@ import { createQuota } from './quota.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, reviewDeck, triageOf, triageAction, aiSummary, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
@@ -1264,6 +1266,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/api/manager/unlabel') {
     try { return json(res, 200, { ok: true, unlabel: await unlabelStall(await readJsonBody(req)) }); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/jev-ai') return json(res, 200, await jevAiTab());
+  if (req.method === 'GET' && p === '/api/decisions') {
+    const q = url.searchParams;
+    return json(res, 200, await decisionsView({ usage: q.get('usage') || '', ok: q.get('ok') || '', hasOutcome: q.get('has_outcome') || '', minConf: q.get('min_conf') || '',
+      limit: q.get('limit') || 100, offset: q.get('offset') || 0 }));
   }
   if (req.method === 'GET' && p === '/api/manager/review') {
     return json(res, 200, await reviewDeck(url.searchParams.get('limit') || 50));

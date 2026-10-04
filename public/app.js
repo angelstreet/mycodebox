@@ -7,6 +7,7 @@ import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
 import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
+import { jevTabHtml, filtersHtml, decisionsHtml } from '/jev-view.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -2123,6 +2124,7 @@ function openManager() {
 }
 els.mgrBtn.onclick = openManager;
 document.getElementById('reviewBtn').onclick = startReview;
+document.getElementById('decisionsBtn').onclick = openDecisions;
 // top-bar "more" menu: AI manager, usage, alerts, install/APK, text size
 {
   const mb = $('#moreBtn'), mp = $('#morePop');
@@ -2251,7 +2253,7 @@ function openUsage() {
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const ui = { f: { agent: '', project: '', q: '' }, open: { total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set() };
     let tab = 'today', data = null;
-    body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
+    body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button><button class="sbtn" data-tab="jev">Jev &amp; AI</button></div>
       <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><div class="ucombo"><button type="button" class="ucb" data-combo aria-label="Filter by session"><span class="ucl">all sessions</span></button><div class="ucpanel hidden"><input class="ucs" type="search" placeholder="search session…" aria-label="Search sessions"><div class="uclist"></div></div></div></div>
       <div class="ucontent"><div class="sheet-empty">loading…</div></div>`;
     const content = body.querySelector('.ucontent');
@@ -2277,10 +2279,14 @@ function openUsage() {
       body.querySelector('.uclist').innerHTML = items.map((n) => `<button type="button" class="uci${n === cur ? ' on' : ''}" data-session-pick="${escapeHtml(n)}">${n ? escapeHtml(n) : 'all sessions'}</button>`).join('') || '<div class="dim">no match</div>';
     };
     const closeCombo = () => body.querySelector('.ucpanel').classList.add('hidden');
+    let jevData = null, jevErr = null;
     const draw = () => {
       for (const b of body.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
+      body.querySelector('.ufilters').classList.toggle('hidden', tab === 'jev');
+      if (tab === 'jev') { content.innerHTML = jevErr ? `<div class="sheet-empty">${escapeHtml(jevErr)}</div>` : jevTabHtml(jevData); return; }
       content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
+    const loadJev = () => fetch('/api/jev-ai').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { jevData = j; jevErr = null; }).catch((e) => { jevErr = `Jev & AI data unavailable (${e})`; }).finally(() => { if (tab === 'jev') draw(); });
     body.onclick = (e) => {
       const cb = e.target.closest('[data-combo]');
       if (cb) {
@@ -2293,7 +2299,7 @@ function openUsage() {
       if (pick) { ui.f.q = pick.dataset.sessionPick; closeCombo(); drawCombo(); draw(); return; }
       if (!e.target.closest('.ucpanel')) closeCombo();
       const t = e.target.closest('[data-tab]');
-      if (t) { tab = t.dataset.tab; if (data) fillOptions(); draw(); return; }
+      if (t) { tab = t.dataset.tab; if (tab === 'jev') loadJev(); else if (data) fillOptions(); draw(); return; }
       const s = e.target.closest('[data-sec]');
       if (s) { ui.open[s.dataset.sec] = !ui.open[s.dataset.sec]; draw(); return; }
       const g = e.target.closest('[data-agent]');
@@ -2306,11 +2312,58 @@ function openUsage() {
       const f = e.target.dataset.f; if (!f) return; ui.f[f] = e.target.value.trim(); draw();
     };
     draw();
+    if (openUsage.tab === 'jev') { tab = 'jev'; loadJev(); draw(); }
     fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; fillOptions(); draw(); })
-      .catch(() => { content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
+      .catch(() => { if (tab !== 'jev') content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
   });
 }
 els.usageBtn.onclick = openUsage;
+
+// ----- Jev decisions page (⋮ menu, /?decisions=1) -----
+function openDecisions() {
+  openSheet('Jev decisions', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('usage');
+    foot.classList.remove('hidden');
+    foot.innerHTML = `<a class="sbtn" href="#" data-a="tab">Jev &amp; AI usage</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
+    foot.onclick = (e) => {
+      if (e.target.closest('[data-a="close"]')) close();
+      else if (e.target.closest('[data-a="tab"]')) { e.preventDefault(); close(); openUsage.tab = 'jev'; openUsage(); openUsage.tab = null; }
+    };
+    const f = { usage: '', ok: '', hasOutcome: '', minConf: '' };
+    let d = null, openId = null, usages = [], busy = false, err = null;
+    body.innerHTML = '<div class="dfilterbox"></div><div class="dlist"><div class="sheet-empty">loading…</div></div>';
+    const box = body.querySelector('.dfilterbox'), list = body.querySelector('.dlist');
+    const paint = () => {
+      box.innerHTML = filtersHtml(usages, f);
+      list.innerHTML = err ? `<div class="sheet-empty">${escapeHtml(err)}</div>` : d ? decisionsHtml(d, { live: (n) => !!state.status[n], openId }) : '<div class="sheet-empty">loading…</div>';
+    };
+    const load = async (more) => {
+      if (busy) return; busy = true;
+      const q = new URLSearchParams({ limit: '100', offset: more ? String(d.rows.length) : '0' });
+      if (f.usage) q.set('usage', f.usage); if (f.ok) q.set('ok', f.ok); if (f.hasOutcome) q.set('has_outcome', f.hasOutcome); if (f.minConf) q.set('min_conf', f.minConf);
+      try {
+        const j = await fetch(`/api/decisions?${q}`).then((r) => (r.ok ? r.json() : Promise.reject(r.status)));
+        d = more && d ? { ...j, rows: d.rows.concat(j.rows) } : j; err = null;
+        for (const r of j.rows) if (r.usage && !usages.includes(r.usage)) usages.push(r.usage);
+        usages.sort();
+      } catch (e) { err = `decisions unavailable (${e})`; }
+      busy = false; paint();
+    };
+    body.onchange = (e) => { const k = e.target.dataset.df; if (!k) return; f[k] = e.target.value; d = null; paint(); load(false); };
+    body.onclick = (e) => {
+      if (e.target.closest('[data-dmore]')) { load(true); return; }
+      const row = e.target.closest('[data-did]');
+      if (!row) return;
+      const n = row.dataset.dsession;
+      if (n !== undefined) {
+        if (state.status[n]) { close(); focusSession(n); openCard(n); return; }
+        openId = openId === row.dataset.did ? null : row.dataset.did; paint(); if (openId && !d.rows.find((r) => r.id === openId)?.stop) toast('session is not running', 2500);
+      }
+    };
+    paint(); load(false);
+  });
+}
+
 
 // ----- generic bottom sheet -----
 let sheetEl = null;
@@ -3215,6 +3268,7 @@ if ('serviceWorker' in navigator) {
   state.reader = rd == null ? isPhone() : rd === '1';
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   if (new URLSearchParams(location.search).get('review')) startReview();
+  if (new URLSearchParams(location.search).get('decisions')) openDecisions();
   const view = new URLSearchParams(location.search).get('view');
   if (['card', 'grid', 'list'].includes(view)) state.mode = view;
   setMode(state.mode);

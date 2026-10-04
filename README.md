@@ -60,6 +60,7 @@ PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
 | `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
 | `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
 | `JEV_URL` / `JEV_API_KEY` | unset | AI manager: the VPT server's `POST /server/ai/decide` and its `API_KEY` (Jev for ambiguous stalls). Unset = rules only |
+| `VPT_TEAM_ID` | unset | team of the VPT server's decision log (`<team-uuid>`, shown by the server's `/server/health`). With it the manager's Jev calls are written to the product's decision log (`log:true`, `team_id`, `refs`), outcomes are written back, and the Jev & AI tab / decisions page can read the server. Unset = Jev calls are not logged, those pages use ghosty's own log |
 | `JEV_DAILY_USD` / `JEV_DAILY_CALLS` | `0.25` / `2000` | Jev budget per UTC day; over it, ambiguous stalls stay with the owner |
 | `STALL_SETTLE_MS` | `5000` | a stopped pane must stay unchanged this long before it counts as a stall |
 | `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
@@ -374,6 +375,34 @@ reply text.
 
 The `session:` tag is the tmux session name (matched from the pane's current path to the transcript's
 `cwd`, only for traces active in the last 10 minutes), else the cwd's folder name.
+
+### Jev in the product's decision log (TASK-44)
+
+`decisions.js` (server side, no new deps) and `public/jev-view.js` (HTML builders). Server-to-server calls use
+`X-API-Key: JEV_API_KEY` and the origin of `JEV_URL`; everything needs `VPT_TEAM_ID`.
+
+- **Logging**: the manager's Jev call sends `log:true`, `team_id`, `refs {source:'ghosty-manager', session, stall_id,
+  case}` and a usage key from the `jevUsage` setting (`POST /api/manager {jevUsage}`). Default `auto`: `text.decision.manager`
+  once `GET /server/ai/decisions/summary` answers (checked lazily, cached 5 min yes / 1 min no), else `text.decision`;
+  an explicit `text.decision[.x]` value pins it. A server that answers "unknown usage" gets one retry under
+  `text.decision`. The returned `decision_id` stays in the stall record (`jev.decision_id`).
+- **Outcome write-back**: the owner's real reply (kind continue / take_recommended / owner_specific -> continue /
+  take_recommended / ask_owner, `by:'owner-reply'`; not when the manager itself sent it) and an owner label (legit ->
+  ask_owner, no_reason -> continue, wrong_case + the right case -> that case's meaning, `by:'owner'`) are POSTed to
+  `/server/ai/decisions/<id>/outcome` `{team_id, outcome:{label, by, stall_id}}`, fire-and-forget. A refusal or a
+  missing endpoint keeps the item in `decision-outcomes.json` (state dir), retried every 5 min, dropped after 7 days
+  (newest per decision wins).
+- **Jev & AI tab** (usage sheet, third tab; `GET /api/jev-ai`): per day (14 UTC days) calls / failed / cost for the
+  manager's Jev and the AI reviewer, from ghosty's own `stalls.jsonl` (works without the server), a red banner with
+  the current error when the newest calls fail (e.g. OpenRouter 402), and the product's uses (Sherlock, Test Prompt,
+  ...) from the server summary, or "not available until the server is updated".
+- **Decisions page** (top-bar menu "Jev decisions", `/?decisions=1`; `GET /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset=`):
+  newest first; time, use, what it was about (session / case for the manager, `<x>_id` refs otherwise), Jev's pick +
+  confidence, ms / cost / model, ok or the error, the outcome with a check / cross when it agrees with the pick.
+  Filters: use, ok / failed, with / without outcome, minimum confidence (applied by ghosty). Source is the server's log
+  (all uses) when it answers, else ghosty's own log (manager only), labelled on the page. Tap a manager row: its
+  session card when running, otherwise the stop's text.
+- Tests: `test/jev-decisions.test.js`.
 
 ### Usage view (UI)
 
