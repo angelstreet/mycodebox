@@ -41,8 +41,8 @@ export function buildReviewerPrompt(f) {
   return lines.filter((l) => l !== null).join('\n');
 }
 
-export function reviewerRequest(f, { maxTokens = 500, timeoutS = 20 } = {}) {
-  return { usage: REVIEWER_USAGE, prompt: buildReviewerPrompt(f), system: REVIEWER_SYSTEM, max_tokens: maxTokens, timeout_s: timeoutS };
+export function reviewerRequest(f, { maxTokens = 500, timeoutS = 20, system = REVIEWER_SYSTEM } = {}) {
+  return { usage: REVIEWER_USAGE, prompt: buildReviewerPrompt(f), system, max_tokens: maxTokens, timeout_s: timeoutS };
 }
 
 // POST <base of JEV_URL>/server/ai/complete
@@ -99,12 +99,12 @@ export function createBudget(file, today = () => new Date().toISOString().slice(
 }
 
 // One reviewer call. Never throws. Returns { ai, cost, ms, model } | { error, ms } .
-export async function callReviewer({ url, apiKey, facts, fetchFn = fetch, timeoutMs = 25000 }) {
+export async function callReviewer({ url, apiKey, facts, system, fetchFn = fetch, timeoutMs = 25000 }) {
   const started = Date.now();
   try {
     const r = await fetchFn(url, {
       method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': apiKey },
-      body: JSON.stringify(reviewerRequest(facts)), signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(reviewerRequest(facts, system ? { system } : {})), signal: AbortSignal.timeout(timeoutMs),
     });
     const j = await r.json();
     const { cost, estimated } = costOf(j);

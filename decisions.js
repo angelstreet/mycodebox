@@ -238,3 +238,44 @@ export async function decisionsPage({ client, recs, f = {}, usageNow = FALLBACK_
   const limit = Math.max(1, Number(f.limit) || 100), off = Math.max(0, Number(f.offset) || 0);
   return { source: 'local', note: `the server has no decision log yet (${remote.error}); showing the manager's own Jev calls from ghosty's log`, rows: rows.slice(off, off + limit), more: rows.length > off + limit };
 }
+
+// ---- owner labels, as logged in stalls.jsonl ----
+// stall id -> its effective label record: the newest label wins, an unlabel after it removes it.
+export function effectiveLabels(recs) {
+  const labels = new Map();
+  for (const r of recs) {
+    if (r.type === 'label' && r.label) labels.set(r.id, r);   // a record with only an aiVerdict does not label the stop
+    else if (r.type === 'unlabel') labels.delete(r.id);
+  }
+  return labels;
+}
+
+// stall id -> 'right' | 'wrong': the owner's verdict on the AI's proposal (newest wins; an unlabel does not touch it).
+export function effectiveAiVerdicts(recs) {
+  const v = new Map();
+  for (const r of recs) if (r.type === 'label' && r.aiVerdict) v.set(r.id, r.aiVerdict);
+  return v;
+}
+
+// ---- the Jev request (shared by the manager and the stops experiment) ----
+// refs = { team_id, source, session, stall_id, case } when the product's decision log should record the call, else null.
+export function jevRequestBody(stall, { usage, refs = null } = {}) {
+  const facts = [
+    'A coding agent (Claude Code / Codex) running in a terminal has stopped and is waiting. Its closing text:',
+    stall.excerpt,
+  ];
+  if (stall.suggestion) facts.push(`(The agent's own guess at the owner's next prompt: "${stall.suggestion}")`);
+  const { team_id, ...rest } = refs || {};
+  return {
+    usage, profile: 'jev', log: !!refs, timeout_s: 20,
+    ...(refs ? { team_id, refs: rest } : {}),
+    state: facts.join('\n\n'),
+    questions: { choice: { type: 'choice',
+      instructions: 'What should happen next so the work keeps moving without a wrong decision being made for the owner?',
+      criteria: {
+        continue: 'The agent finished a step of work it already planned and only asks, or would only ask, whether to carry on. Saying "yes, continue" cannot make a choice the owner should make.',
+        take_recommended: 'The agent offers options and clearly marks one as its recommendation; taking it is a safe default.',
+        ask_owner: 'The agent needs information, a preference, an approval, or a choice between different directions that only the owner can give; or it is genuinely finished.',
+      } } },
+  };
+}

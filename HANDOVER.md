@@ -200,3 +200,16 @@ Or from the Mac:
 - `POST /api/alert` (loopback + reporter token, 10/h) and the `by` actor field live in `api-extras.js` (server.js starts
   listening on import, so tests cover the handlers directly; `test/manager-fixes.test.js`).
 - SW cache bumped to v25 (manager panel log shows `by`).
+
+## Langfuse evaluation (TASK-44 phase 12)
+
+- Details in README "Langfuse evaluation". Code: `usage/lf-common.js` (ids + HTTP), `usage/lfeval.js` (scores + dataset sync),
+  `usage/manager-parse.js` (stalls.jsonl -> generations), `usage/experiment.js` + `scripts/stops-experiment.js`,
+  `usage/judge.js`, `prompts.js`, `scripts/lf-setup.js` (idempotent: prompt, dataset, LLM connection, evaluator + rule).
+- Owner steps not done headlessly (they need a service restart): (1) restart `ghosty-usage` so the tailer runs the eval
+  sync; add `LFEVAL_JUDGE=1` and `OPENROUTER_API_KEY` to `~/.config/ghosty/usage.env` for the judge; (2) add that env file to
+  `ghosty-sessions.service` so the manager reads the Langfuse prompt (until then: the hard-coded fallback).
+- The real log had no owner labels yet at build time: only `jev_agreed` scores were backfilled. A demo dataset
+  `ghosty-stops-livecheck` (synthetic labels on real stops) and its run `rules-livecheck` can be deleted in the Langfuse UI.
+- Langfuse 3.x: `unstable/evaluation-rules` accept observation rules but never fire (no events tables, write mode legacy).
+- SW cache v29.

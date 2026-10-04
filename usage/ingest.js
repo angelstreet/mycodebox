@@ -5,13 +5,17 @@
 //   node usage/ingest.js            run forever (the ghosty-usage unit)
 //   node usage/ingest.js --once     one pass, then exit
 //   node usage/ingest.js --backfill rescan the last BACKFILL_DAYS days (forget offsets; ids are deterministic, so Langfuse upserts)
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { traceIdOf, genIdOf, postBatch as postBatchRaw } from './lf-common.js';
+import { createEvalSync } from './lfeval.js';
+import { createJudge } from './judge.js';
+import { parseManagerLine } from './manager-parse.js';
 
 const exec = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +37,12 @@ export function defaults(env = process.env) {
     offsetsFile: join(stateDir, 'usage-offsets.json'),
     ledgerFile: join(stateDir, 'usage-ledger.jsonl'),
     summaryFile: join(stateDir, 'usage-summary.json'),
+    evalStateFile: join(stateDir, 'lfeval-state.json'),   // scores + dataset the eval sync already sent (its own file: the tailer's offsets are never touched)
+    evalEnabled: env.LFEVAL !== '0',
+    judgeStateFile: join(stateDir, 'lfeval-judge.json'),
+    openrouterKey: env.LFEVAL_JUDGE === '1' ? env.OPENROUTER_API_KEY || '' : '',   // the in-ghosty AI-proposal judge is opt-in
+    judgeMaxPerDay: Number(env.LFEVAL_JUDGE_MAX_PER_DAY || 400),
+    judgeSampling: Number(env.LFEVAL_JUDGE_SAMPLING || 1),
     stallsFile: join(stateDir, 'stalls.jsonl'),   // the AI manager's log: its Jev and AI-reviewer calls become generations of agent "manager"
     pricesFile: env.USAGE_PRICES || join(HERE, 'prices.json'),
     backfillDays: Number(env.BACKFILL_DAYS || 14),
@@ -94,30 +104,6 @@ export function parseClaudeLine(o, { subagent = false } = {}) {
   if (!o.sessionId || !Number.isFinite(ts)) return null;
   return { id: `claude:${m.id}`, agent: 'claude', session: o.sessionId, cwd: o.cwd || null, ts, model: m.model, usage, subagent };
 }
-
-// One line of the manager's stalls.jsonl -> record | null. Jev results sit on {type:'stall'} records (jev.choice or
-// jev.error; a skipped call never reached the server), reviewer calls are {type:'triage'} records (ai or error).
-// No prompt or answer text is kept: ids, model, tokens, cost, the error message of a failure.
-export function parseManagerLine(o) {
-  if (!o || !o.id || !o.session) return null;
-  const ts = Date.parse(o.at);
-  if (!Number.isFinite(ts)) return null;
-  const base = { agent: 'manager', session: o.session, cwd: null, project: o.project || null, ts, subagent: false, label: o.session };
-  if (o.type === 'stall' && o.jev && (o.jev.choice || o.jev.error)) {
-    const j = o.jev;
-    return { ...base, id: `manager:jev:${o.id}`, name: 'manager.jev', model: j.model || 'typesafe/jev-1.13', usage: zeroUsage(), ms: j.ms ?? null,
-      cost: costFrom(j.cost, j.error), costEstimated: false, error: j.error || null, extra: { case: o.case, decision: j.choice || null, decisionId: j.decision_id || null } };
-  }
-  if (o.type === 'triage' && (o.ai || o.error)) {
-    return { ...base, id: `manager:ai:${o.id}`, name: 'manager.ai-review', model: o.model || 'unknown', ms: o.ms ?? null,
-      usage: { input: n(o.tin), output: n(o.tout), cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 },
-      cost: costFrom(o.cost, o.error), costEstimated: !!o.costEstimated, error: o.error || null, extra: { case: o.case, mode: o.mode || null } };
-  }
-  return null;
-}
-const zeroUsage = () => ({ input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 });
-// a failed call costs 0 (priced); a call that succeeded but reported no cost stays unpriced (null)
-const costFrom = (c, error) => (Number.isFinite(Number(c)) && c !== null ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: Number(c) } : error ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0 } : null);
 
 // Codex rollout file: stateful (session_meta + turn_context precede the usage lines). Feed lines in order.
 export function codexReader() {
@@ -258,9 +244,7 @@ export function buildSummary(records, now, days = 14) {
 // Langfuse
 // ---------------------------------------------------------------------------
 
-const hash = (s) => createHash('sha1').update(s).digest('hex');
-export const traceIdOf = (agent, session) => hash(`trace:${agent}:${session}`).slice(0, 32);
-export const genIdOf = (recordId) => hash(`gen:${recordId}`).slice(0, 32);
+export { traceIdOf, genIdOf, parseManagerLine };
 
 export function langfuseEvents(records, traces, sentAt = Date.now()) {
   // envelope timestamp = send time: Langfuse orders events of one entity by it, so a re-sent (updated) generation must be newer
@@ -283,6 +267,8 @@ export function langfuseEvents(records, traces, sentAt = Date.now()) {
       id: genIdOf(r.id), traceId: r.trace, name: r.name || (r.subagent ? `${r.agent}-subagent-turn` : `${r.agent}-turn`),
       ...(r.error ? { level: 'ERROR', statusMessage: String(r.error).slice(0, 500) } : {}),
       startTime: new Date(r.ts).toISOString(), endTime: new Date(r.ts).toISOString(), model: r.model, usageDetails,
+      ...(r.prompt ? { promptName: r.prompt.name, promptVersion: r.prompt.version } : {}),
+      ...(r.input !== undefined ? { input: r.input } : {}), ...(r.output !== undefined ? { output: r.output } : {}),
       ...(r.cost ? { costDetails: { input: r.cost.input, output: r.cost.output, cache_read: r.cost.cache_read, cache_creation: r.cost.cache_creation, total: r.cost.total } } : {}),
       metadata: { agent: r.agent, project: r.project || null, session: r.label, model: r.model, day: dayOf(r.ts), source: r.id.split(':')[0], subagent: !!r.subagent, priced: !!r.cost,
         ...(r.agent === 'manager' ? { ms: r.ms ?? null, costEstimated: !!r.costEstimated, ...r.extra } : {}) },
@@ -292,15 +278,8 @@ export function langfuseEvents(records, traces, sentAt = Date.now()) {
 }
 
 async function postBatch(cfg, batch) {
-  const res = await fetch(`${cfg.langfuseUrl}/api/public/ingestion`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Basic ' + Buffer.from(`${cfg.publicKey}:${cfg.secretKey}`).toString('base64') },
-    body: JSON.stringify({ batch }),
-    signal: AbortSignal.timeout(120000),
-  });
-  if (!res.ok && res.status !== 207) throw new Error(`langfuse ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const body = await res.json().catch(() => ({}));
-  if (body.errors && body.errors.length) console.error('[usage] langfuse rejected events:', JSON.stringify(body.errors.slice(0, 3)));
+  const errors = await postBatchRaw(cfg, batch);
+  if (errors.length) console.error('[usage] langfuse rejected events:', JSON.stringify(errors.slice(0, 3)));
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +500,19 @@ export function createIngester(cfg, hooks = {}) {
     return fresh.length;
   }
 
+  // Owner labels / verdicts -> Langfuse scores + the ghosty-stops dataset. Never lets a failure break the usage pass.
+  let evalSync = null, judge = null;
+  async function evalPass() {
+    if (!cfg.evalEnabled || !cfg.publicKey || !cfg.secretKey) return null;
+    try {
+      evalSync = evalSync || createEvalSync(cfg, { traceKnown: (t) => traces.has(t) });
+      const r = await evalSync.sync();
+      if (cfg.openrouterKey) { judge = judge || createJudge(cfg); const j = await judge(); if (j.judged) console.log(`[usage] judged ${j.judged} AI proposals`); }
+      if (r && !r.skipped && (r.scores || r.spans || r.items || r.deleted)) console.log(`[usage] eval sync ${JSON.stringify(r)}`);
+      return r;
+    } catch (e) { console.error('[usage] eval sync:', e.message); return null; }
+  }
+
   async function summary() {
     if (!state) await init(false);
     const s = buildSummary([...byId.values()], cfg.now(), cfg.backfillDays);
@@ -528,7 +520,7 @@ export function createIngester(cfg, hooks = {}) {
     return s;
   }
 
-  return { init, tick, summary, ledger: byId };
+  return { init, tick, summary, evalPass, ledger: byId };
 }
 
 async function atomicWrite(path, data) {
@@ -546,7 +538,7 @@ async function main() {
   const pass = async () => {
     if (busy) return;
     busy = true;
-    try { await ing.tick(); await ing.summary(); } catch (e) { console.error('[usage] pass failed:', e.message); }
+    try { await ing.tick(); await ing.evalPass(); await ing.summary(); } catch (e) { console.error('[usage] pass failed:', e.message); }
     busy = false;
   };
   await pass();

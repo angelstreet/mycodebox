@@ -4,7 +4,7 @@ import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseManagerLine, createIngester, defaults, priceFor, costOf, buildSummary, genIdOf, traceIdOf } from '../usage/ingest.js';
+import { parseManagerLine, langfuseEvents, createIngester, defaults, priceFor, costOf, buildSummary, genIdOf, traceIdOf } from '../usage/ingest.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const prices = JSON.parse(await fs.readFile(new URL('../usage/prices.json', import.meta.url), 'utf8'));
@@ -39,7 +39,7 @@ async function fixture(lf) {
     claudeDir: join(dir, 'claude'), codexDir: join(dir, 'codex'), minimaxDb: join(dir, 'none.sqlite'),
     stateDir: join(dir, 'state'), now: () => NOW, paceMs: 0,
   };
-  Object.assign(cfg, { offsetsFile: join(cfg.stateDir, 'usage-offsets.json'), ledgerFile: join(cfg.stateDir, 'usage-ledger.jsonl'), summaryFile: join(cfg.stateDir, 'usage-summary.json'), stallsFile: join(cfg.stateDir, 'stalls.jsonl') });
+  Object.assign(cfg, { offsetsFile: join(cfg.stateDir, 'usage-offsets.json'), ledgerFile: join(cfg.stateDir, 'usage-ledger.jsonl'), summaryFile: join(cfg.stateDir, 'usage-summary.json'), stallsFile: join(cfg.stateDir, 'stalls.jsonl'), evalStateFile: join(cfg.stateDir, 'lfeval-state.json') });
   await fs.mkdir(join(cfg.claudeDir, 'proj'), { recursive: true });
   await fs.mkdir(join(cfg.codexDir, '2026/10/03'), { recursive: true });
   return { dir, cfg };
@@ -244,6 +244,26 @@ test('manager records: jev results and reviewer calls become records, skipped ca
   assert.doesNotMatch(JSON.stringify(L), /SECRET/);
 });
 
+test('AI reviewer generation: prompt name + version always; proposal as output only on opt-in (LFEVAL_SEND_AI_OUTPUT=1)', async () => {
+  const rec = { type: 'triage', id: 'st-p', session: 'vpt-jev', at: '2026-10-03T11:00:02.000Z', case: 'owner_decision', mode: 'simulate', src: 'jev', flags: ['mentions a deploy'],
+    prompt: { name: 'ghosty-ai-reviewer', version: 7 }, ai: { proposed_reply: 'Yes, continue.', reasoning: 'only asks to carry on', confidence: 0.9, owner_needed: false, owner_needed_why: '' }, cost: 0.001, model: 'm', tin: 5, tout: 5 };
+  const off = parseManagerLine(rec);
+  assert.deepEqual(off.prompt, { name: 'ghosty-ai-reviewer', version: 7 });
+  assert.equal(off.output, undefined);
+  assert.equal(off.extra.judgeable, undefined);
+  const on = parseManagerLine(rec, { sendAiOutput: true });
+  assert.deepEqual(on.input, { case: 'owner_decision', source: 'jev', mode: 'simulate', flags: ['mentions a deploy'] });
+  assert.equal(on.output.proposed_reply, 'Yes, continue.');
+  assert.equal(on.extra.judgeable, 'yes');
+  const ev = langfuseEvents([{ ...on, trace: 't1', label: 'vpt-jev' }], new Map([['t1', { first: on.ts, models: new Set(['m']), days: new Set() }]]), 0).find((e) => e.type === 'generation-create').body;
+  assert.equal(ev.promptName, 'ghosty-ai-reviewer');
+  assert.equal(ev.promptVersion, 7);
+  assert.equal(ev.output.reasoning, 'only asks to carry on');
+  const plain = langfuseEvents([{ ...off, trace: 't1', label: 'vpt-jev' }], new Map([['t1', { first: off.ts, models: new Set(['m']), days: new Set() }]]), 0).find((e) => e.type === 'generation-create').body;
+  assert.equal(plain.output, undefined);
+  assert.equal(plain.promptVersion, 7);
+});
+
 test('manager calls reach Langfuse: one generation per call under the session trace, failures ERROR, replays upsert, summary has a manager agent', async () => {
   const lf = await mockLangfuse();
   const { cfg } = await fixture(lf);
@@ -293,4 +313,25 @@ test('buildSummary: perDayModel splits each UTC day by model', () => {
   assert.equal(s.perDayModel['2026-10-03'].a.total, 5);
   assert.equal(s.perDayModel['2026-10-03'].b.total, 7);
   assert.equal(s.perDayModel['2026-10-02'].a.total, 3);
+});
+
+test('tailer eval pass: labels in stalls.jsonl become scores + a dataset item; own state file, tailer offsets untouched', async () => {
+  const lf = await mockLangfuse();
+  const { cfg } = await fixture(lf);
+  await fs.mkdir(cfg.stateDir, { recursive: true });
+  const L = [...mgrLines().trim().split('\n').map((l) => JSON.parse(l)), { type: 'label', id: 'st-1', by: 'owner', label: 'legit', at: '2026-10-03T11:30:00.000Z' }];
+  await fs.writeFile(cfg.stallsFile, L.map((o) => JSON.stringify(o)).join('\n') + '\n');
+  const before = await fs.readFile(cfg.stallsFile, 'utf8');
+  const ing = createIngester(cfg, hooks);
+  await ing.init(false);
+  await ing.tick();
+  const r = await ing.evalPass();
+  assert.equal(r.scores, 4, 'verdict + case on the jev and the ai generation');
+  assert.equal(r.items, 1);
+  const sc = lf.batches.flatMap((b) => b.body?.batch || []).filter((e) => e.type === 'score-create').map((e) => e.body);
+  assert.deepEqual(sc.map((s) => s.observationId).sort(), [genIdOf('manager:ai:st-1'), genIdOf('manager:ai:st-1'), genIdOf('manager:jev:st-1'), genIdOf('manager:jev:st-1')].sort());
+  assert.ok(lf.batches.some((b) => b.url === '/api/public/dataset-items' && b.body.id === 'st-1'));
+  assert.ok((await fs.stat(cfg.evalStateFile)).isFile());
+  assert.equal(await fs.readFile(cfg.stallsFile, 'utf8'), before, 'the log is only read');
+  assert.equal((await ing.evalPass()).skipped, 'nothing new');
 });

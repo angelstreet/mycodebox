@@ -45,6 +45,42 @@ NTFY_TOPIC=ghosty-codebox-<random>      # subscribe to the same topic in the ntf
 PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
 ```
 
+### Langfuse evaluation (TASK-44 phase 12)
+
+The manager's labels feed the local Langfuse's evaluation features (Langfuse 3.x; scores, datasets, prompts work;
+see "Judge" for why its evaluators do not).
+
+- **Scores** (`usage/lfeval.js`, run by the tailer after each pass; own state file `lfeval-state.json`, replay-safe):
+  `stop_verdict` (categorical legit / no_reason), `stop_case_correct` (boolean), `ai_proposal_correct` (boolean, the
+  owner's right / wrong on the AI's proposal), `jev_agreed` (boolean, the owner's reply vs Jev's pick). They sit on the
+  stop's `manager.jev` / `manager.ai-review` generation(s); a stop with neither gets a `manager.stop` span (case, source,
+  agent, session; no text). Ids are deterministic, so a label change upserts, an unlabel deletes the label scores. The
+  pass is skipped unless `stalls.jsonl` gained a label / unlabel / outcome / triage line. `LFEVAL=0` turns it off.
+  CLI: `node usage/lfeval.js [--stalls f] [--state f] [--force]` (one pass; reads the log, never writes it).
+- **Dataset `ghosty-stops`**: one item per labelled stop (item id = stop id). input `{closing_text, case_by_rules, agent,
+  state}`, expected output `{verdict, correct_case?, owner_reply_kind?}`, metadata `{session, stop_id, at}`. The closing
+  text is in it: this Langfuse is local to the box; never export the dataset into the repo or a fixture. Unlabel archives the item.
+- **Experiments**: `node scripts/stops-experiment.js --run-name <name> [--classifier rules|jev|ai]` runs the classifier
+  over the active items and records a dataset run (a trace per item, scores `case_match` / `verdict_match`, run scores
+  `case_accuracy` / `verdict_accuracy`). `rules` is free; `jev` / `ai` call the real endpoints (needs `JEV_URL`, `JEV_API_KEY`).
+  Compare runs in Langfuse: Datasets -> ghosty-stops -> Runs.
+- **Prompt management**: the reviewer's system prompt is the Langfuse text prompt `ghosty-ai-reviewer` (label `production`),
+  fetched with a 10-minute cache (`prompts.js`); the hard-coded `REVIEWER_SYSTEM` is the fallback (Langfuse unset, down, or
+  no such prompt). The triage record and the generation carry the prompt name + version. ghosty needs `LANGFUSE_URL`,
+  `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` in its own environment (the usage unit already has them; add
+  `EnvironmentFile=-/home/jndoye/.config/ghosty/usage.env` to `ghosty-sessions.service`) - until then the fallback is used.
+  Edit the prompt in Langfuse (new version, move the `production` label) to change the reviewer without a deploy.
+- **Judge** (`ai_proposal_judge`, 0..1 + reasoning): `scripts/lf-setup.js` creates the OpenRouter LLM connection, the
+  evaluator and its rule in Langfuse, but observation-level evaluators need Langfuse v4's events tables
+  (`LANGFUSE_MIGRATION_V4_WRITE_MODE`, ClickHouse 25.12); this v3.225 deployment has none, so the rule never fires. The
+  same judge therefore runs in the tailer (`usage/judge.js`): opt-in `LFEVAL_JUDGE=1` + `OPENROUTER_API_KEY` in the usage
+  unit's environment; model `openai/gpt-4.1-mini`, at most `LFEVAL_JUDGE_MAX_PER_DAY` (400) proposals, sampling
+  `LFEVAL_JUDGE_SAMPLING` (1), only proposals of the last 24 h, each once. It sends the case, flags and the reviewer's
+  proposal + reasoning (not the closing text). Cost about $0.0005 per call; the reviewer's own cap is 300 calls/day, so
+  at most about $0.15/day. `LFEVAL_SEND_AI_OUTPUT=1` additionally puts the proposal on the generation (for a future v4 evaluator).
+- **Panel**: manager panel -> "Langfuse" links (scores, dataset, evaluator, prompt) from `LANGFUSE_PUBLIC_URL` (else
+  `LANGFUSE_URL`) and `LANGFUSE_PROJECT` (default `codebox-usage`).
+
 | var | default | meaning |
 |---|---|---|
 | `PORT`        | `7777` | listen port |
@@ -523,7 +559,8 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 ├── leases.js                        # `vpt-lease list --json` reader (cached, injectable)
 ├── session-meta.js                  # priority + pause hold (sessions.json)
 ├── quota.js                         # Codex / Claude / MiniMax quota windows
-├── usage/                           # Langfuse usage tailer + prices
+├── usage/                           # Langfuse usage tailer + prices, eval sync (lfeval), judge, experiment
+├── prompts.js                       # Langfuse prompt fetch (10 min cache, hard-coded fallback)
 ├── usage-view.js                    # /api/usage + per-session status usage (cached summary)
 └── systemd/
     ├── ghosty-sessions.service

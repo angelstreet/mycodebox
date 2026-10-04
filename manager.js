@@ -23,8 +23,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch } from './stall.js';
 import { actorOf } from './api-extras.js';
-import { AI_MODES, AI_NEVER_CASES, createBudget, callReviewer, reviewerUrl } from './triage.js';
-import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
+import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, reviewerUrl } from './triage.js';
+import { createPromptSource } from './prompts.js';
+import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const CONFIG_FILE = join(STATE_DIR, 'manager.json');
@@ -41,6 +42,8 @@ const JEV_DAILY_USD = Number(process.env.JEV_DAILY_USD || 0.25);
 const JEV_DAILY_CALLS = Number(process.env.JEV_DAILY_CALLS || 2000);
 const AI_URL = process.env.AI_URL || reviewerUrl(JEV_URL);          // the reviewer: POST /server/ai/complete on the same server as Jev
 const VPT_TEAM_ID = process.env.VPT_TEAM_ID || '';                    // team of the VPT server's decision log (see /server/health); unset = Jev calls are not logged
+// The reviewer's system prompt comes from Langfuse prompts (`ghosty-ai-reviewer`, label production) when LANGFUSE_* is set; REVIEWER_SYSTEM is the fallback.
+const reviewerPrompt = createPromptSource({ cfg: { langfuseUrl: process.env.LANGFUSE_URL || '', publicKey: process.env.LANGFUSE_PUBLIC_KEY || '', secretKey: process.env.LANGFUSE_SECRET_KEY || '' }, fallback: REVIEWER_SYSTEM });
 const decisions = createDecisionsClient({ jevUrl: JEV_URL, apiKey: JEV_API_KEY, teamId: VPT_TEAM_ID });
 const outcomeQueue = createOutcomeQueue({ file: OUTCOME_QUEUE_FILE, send: (id, outcome) => decisions.postOutcome(id, outcome) });
 const decisionByStop = new Map();   // stop id -> the product's decision_id of its Jev call (outcome write-back)
@@ -103,8 +106,16 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
 export const deployRunnerOn = () => config.deployRunner === true;
 export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct });
 
+// Links into the local Langfuse for the manager panel (scores, dataset, evaluator, prompt). Empty when LANGFUSE_PUBLIC_URL / LANGFUSE_URL is unset.
+export function langfuseLinks(env = process.env) {
+  const base = String(env.LANGFUSE_PUBLIC_URL || env.LANGFUSE_URL || '').replace(/\/+$/, '');
+  if (!base) return null;
+  const p = `${base}/project/${encodeURIComponent(env.LANGFUSE_PROJECT || 'codebox-usage')}`;
+  return { scores: `${p}/scores`, dataset: `${p}/datasets`, evaluator: `${p}/evals`, prompt: `${p}/prompts/ghosty-ai-reviewer`, promptName: 'ghosty-ai-reviewer' };
+}
+
 export function managerConfig() {
-  return { ...config, validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
+  return { ...config, langfuse: langfuseLinks(), validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
     ai: !!(AI_URL && JEV_API_KEY), aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
 }
 
@@ -229,9 +240,12 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
     final.no_status ? 'closing text gives no done / tested / left status' : null, final.deployHint ? 'mentions a deploy' : null].filter(Boolean);
   const facts = { session: name, agent, project, priority: ctx.priority, state, case: final.case, source: final.source, flags,
     jev: jevOut?.choice ? jevOut : null, quota: ctx.quota, ...(deployish ? { leases: ctx.leases, deploys: ctx.deploys } : {}), text: stall.excerpt || final.question || '' };
-  const r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, fetchFn: reviewerFetch });
+  const prompt = await reviewerPrompt.get();
+  const r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, system: prompt.text, fetchFn: reviewerFetch });
   aiBudget.add(r.cost || 0);
-  return finish(r.ai ? { ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model, tin: r.tin, tout: r.tout } : { error: r.error, cost: r.cost || 0, ms: r.ms });
+  // what the eval sync and the Langfuse generation show: the prompt version used and the facts' flags (no closing text)
+  const ctxInfo = { ...(prompt.version != null ? { prompt: { name: prompt.name, version: prompt.version } } : {}), src: final.source, flags };
+  return finish(r.ai ? { ...ctxInfo, ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model, tin: r.tin, tout: r.tout } : { ...ctxInfo, error: r.error, cost: r.cost || 0, ms: r.ms });
 }
 
 export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {
@@ -378,22 +392,8 @@ async function requireKnown(id) {
   if (!known) throw Object.assign(new Error('unknown stall id'), { status: 404 });
 }
 
-// stall id -> its effective label record: the newest label wins, an unlabel after it removes it.
-export function effectiveLabels(recs) {
-  const labels = new Map();
-  for (const r of recs) {
-    if (r.type === 'label' && r.label) labels.set(r.id, r);   // a record with only an aiVerdict does not label the stop
-    else if (r.type === 'unlabel') labels.delete(r.id);
-  }
-  return labels;
-}
-
-// stall id -> 'right' | 'wrong': the owner's verdict on the AI's proposal (newest wins; an unlabel does not touch it).
-export function effectiveAiVerdicts(recs) {
-  const v = new Map();
-  for (const r of recs) if (r.type === 'label' && r.aiVerdict) v.set(r.id, r.aiVerdict);
-  return v;
-}
+// effectiveLabels / effectiveAiVerdicts live in decisions.js (pure; the Langfuse eval sync reads the same log)
+export { effectiveLabels, effectiveAiVerdicts };
 
 // Fire-and-forget: tell the product's decision log what really happened (queued and retried while the endpoint is missing).
 // Nothing is sent for a stop whose Jev call was not logged (no decision id) or when the outcome says nothing.
@@ -492,24 +492,8 @@ async function jev(stall, ctx = {}) {
   if (!JEV_URL || !JEV_API_KEY) return { skipped: 'not configured' };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
-  const facts = [
-    'A coding agent (Claude Code / Codex) running in a terminal has stopped and is waiting. Its closing text:',
-    stall.excerpt,
-  ];
-  if (stall.suggestion) facts.push(`(The agent's own guess at the owner's next prompt: "${stall.suggestion}")`);
   const logged = decisions.configured;   // needs VPT_TEAM_ID: the server writes no log row without a team
-  const body = {
-    usage: await jevUsageNow(), profile: 'jev', log: logged, timeout_s: 20,
-    ...(logged ? { team_id: VPT_TEAM_ID, refs: { source: 'ghosty-manager', session: ctx.session, stall_id: ctx.stallId, case: ctx.case } } : {}),
-    state: facts.join('\n\n'),
-    questions: { choice: { type: 'choice',
-      instructions: 'What should happen next so the work keeps moving without a wrong decision being made for the owner?',
-      criteria: {
-        continue: 'The agent finished a step of work it already planned and only asks, or would only ask, whether to carry on. Saying "yes, continue" cannot make a choice the owner should make.',
-        take_recommended: 'The agent offers options and clearly marks one as its recommendation; taking it is a safe default.',
-        ask_owner: 'The agent needs information, a preference, an approval, or a choice between different directions that only the owner can give; or it is genuinely finished.',
-      } } },
-  };
+  const body = jevRequestBody(stall, { usage: await jevUsageNow(), refs: logged ? { team_id: VPT_TEAM_ID, source: 'ghosty-manager', session: ctx.session, stall_id: ctx.stallId, case: ctx.case } : null });
   const started = Date.now();
   try {
     const post = async () => { const r = await fetch(JEV_URL, {

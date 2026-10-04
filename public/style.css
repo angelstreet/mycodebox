@@ -1124,6 +1124,8 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .card-pane .cell .ask .abtns button, .card-pane .cell .ask .tri button{ min-height:36px; }
 #attention button .ai1{ display:block; font-size:10px; font-weight:400; opacity:.8; max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .aimodes{ display:flex; gap:6px; margin:4px 0; }
+.lflinks{ display:flex; flex-wrap:wrap; gap:6px; margin:4px 0; }
+.lflinks .sbtn.lf{ display:inline-flex; align-items:center; gap:6px; text-decoration:none; }
 .rv-ai{ margin-top:8px; padding:8px 10px; border:1px solid var(--line-2); border-radius:8px; background:rgba(255,255,255,.03); font-size:13px; line-height:1.35; }
 .rv-ail b{ color:var(--ink); }
 .rv-air{ color:var(--ink-3); margin:3px 0 6px; font-size:12px; }
