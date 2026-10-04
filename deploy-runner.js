@@ -22,6 +22,23 @@ const shq = (s) => (SAFE.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
 // What a finished deploy of scope A already deployed: a full deploy contains every part; the others only themselves.
 export const covers = (a, b) => a === 'full' || a === b;
 export const flagsFor = (scope) => SCOPE_FLAGS[scope] || null;
+// full and host deploys never wait for a leased host: update_core.sh drops it (--skip-leased) and reports
+// SKIPPED_HOSTS=a,b, which becomes a catch-up request. A request with `hosts` (the catch-up) deploys only those.
+const skipsLeased = (d) => d.scope === 'full' || d.scope === 'host';
+const HOST_NAME = /^[A-Za-z0-9_.-]+$/;
+export const extraFlagsFor = (d) => [
+  ...(skipsLeased(d) ? ['--skip-leased'] : []),
+  ...(d.scope === 'host' && d.hosts?.length ? ['--hosts', d.hosts.join(',')] : []),
+];
+export const SKIPPED_RE = /^SKIPPED_HOSTS=(\S*)\s*$/;
+export const parseSkipped = (lines) => {
+  const hit = [...lines].reverse().map((l) => l.match(SKIPPED_RE)).find(Boolean);
+  return hit ? hit[1].split(',').map((h) => h.trim()).filter((h) => HOST_NAME.test(h)) : [];
+};
+// Which queued requests does finishing `d` also finish? Same env + ref and a covered scope; a request limited to
+// `hosts` is only covered when d is unrestricted or lists all of them.
+export const mergeable = (d, x) => x.id !== d.id && x.env === d.env && x.state === 'queued' && x.ref === d.ref && covers(d.scope, x.scope)
+  && (!d.hosts?.length || (x.scope === 'host' && !!x.hosts?.length && x.hosts.every((h) => d.hosts.includes(h))));
 export const VERSION_RE = /\bversion\s*[:=]?\s*(v?\d+\.\d+\.\d+[\w.+-]*)/i;
 
 function defaultRegistry() {
@@ -114,12 +131,12 @@ export function createDeployRunner({
     const lines = [];
     const onLine = (l) => { lines.push(l); if (lines.length > 400) lines.shift(); out.write(l + '\n'); };
     // Requests for the same env + ref that this deploy covers are finished with its result.
-    const merged = deploys.filter((x) => x.id !== d.id && x.env === d.env && x.state === 'queued' && x.ref === d.ref && covers(d.scope, x.scope));
-    onLine(`# deploy ${d.id} ${d.env} scope=${d.scope} ref=${d.ref} requested by ${d.agent}${merged.length ? ` (+${merged.length} merged)` : ''}`);
+    let merged = deploys.filter((x) => mergeable(d, x));
+    onLine(`# deploy ${d.id} ${d.env} scope=${d.scope} ref=${d.ref}${d.hosts?.length ? ` hosts=${d.hosts.join(',')}` : ''} requested by ${d.agent}${merged.length ? ` (+${merged.length} merged)` : ''}`);
     alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
     let status = 'failed', rc = null, timedOut = false;
     try {
-      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags].map(shq).join(' ')}`;
+      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
       ({ code: rc, timedOut } = await run(envCfg, { id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs }));
       if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min, killed`);
       else onLine(`# update_core exit ${rc}`);
@@ -132,16 +149,29 @@ export function createDeployRunner({
         } else onLine('# health check: none configured for this env (update_core exit code only)');
       }
     } catch (e) { onLine(`# runner error: ${e.message}`); }
+    const skipped = parseSkipped(lines);
+    if (skipped.length) {
+      onLine(`# skipped (leased): ${skipped.join(',')} — catch-up deploy queued`);
+      // a queued request for a skipped host (or any unrestricted host request) must not be closed by this run
+      merged = merged.filter((m) => m.scope !== 'host' || (m.hosts?.length && !m.hosts.some((h) => skipped.includes(h))));
+    }
     const version = [...lines].reverse().map((l) => l.match(VERSION_RE)?.[1]).find(Boolean) || '';
     await new Promise((r) => out.end(r));
     const tail = lines.slice(-40).join('\n');
-    const fin = await reg(['deploy', 'finish', d.id, '--status', status, ...(version ? ['--version', version] : []), '--tail-stdin'], { stdin: tail });
+    const fin = await reg(['deploy', 'finish', d.id, '--status', status, ...(version ? ['--version', version] : []),
+      ...(skipped.length ? ['--skipped-hosts', skipped.join(',')] : []), '--tail-stdin'], { stdin: tail });
     if (fin.code !== 0) log.error?.(`[deploy] finish ${d.id} failed: ${fin.stderr}`);
     for (const m of merged) await reg(['deploy', 'finish', m.id, '--status', status, '--coalesced-into', d.id, ...(version ? ['--version', version] : []), '--tail-stdin'], { stdin: tail });
+    if (skipped.length) {
+      const q = await reg(['deploy', 'request', d.env, '--scope', 'host', '--ref', d.ref, '--agent', RUNNER_AGENT, '--approved',
+        '--hosts', skipped.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${skipped.join(',')}`]);
+      if (q.code !== 0) log.error?.(`[deploy] catch-up request for ${d.id} failed: ${q.stderr}`);
+      else onLine(`# catch-up request ${q.stdout.trim()} for ${skipped.join(',')}`);
+    }
     running.delete(d.env);
     alert(`deploy:${d.id}:${status}`, {
-      title: `deploy ${d.env} ${d.scope} ${status}${version ? ` (${version})` : ''}`,
-      body: status === 'done' ? `${d.ref} for ${d.agent}; waiters released` : lines.slice(-4).join('\n'),
+      title: `deploy ${d.env} ${d.scope} ${status}${version ? ` (${version})` : ''}${skipped.length ? `, ${skipped.length} host(s) skipped` : ''}`,
+      body: status === 'done' ? `${d.ref} for ${d.agent}; waiters released${skipped.length ? `; skipped (leased): ${skipped.join(',')}` : ''}` : lines.slice(-4).join('\n'),
       priority: status === 'done' ? 'default' : 'high', ntfyTags: status === 'done' ? 'white_check_mark' : 'x', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1',
     }, 0);
     await tick();      // next queued one, without waiting for the poll
@@ -172,7 +202,7 @@ export function createDeployRunner({
             if (running.has(env) || deploys.some((d) => d.env === env && d.state === 'running')) continue;
             const queue = deploys.filter((d) => d.env === env && d.state === 'queued' && flagsFor(d.scope)).sort((a, b) => a.created - b.created);
             for (const d of queue) {
-              const r = await reg(['deploy', 'start', d.id]);
+              const r = await reg(['deploy', 'start', d.id, ...(skipsLeased(d) ? ['--skip-leased'] : [])]);
               if (r.code === 3) continue;                 // resources busy: try a narrower request behind it
               if (r.code !== 0) { log.error?.(`[deploy] start ${d.id}: ${r.stderr}`); continue; }
               running.set(env, d.id);

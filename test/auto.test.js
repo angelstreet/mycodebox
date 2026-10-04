@@ -181,10 +181,12 @@ test('Jev below minConfidence is escalated; above it is sent', async () => {
   await on();
   jevProb = 0.6;
   await stall('j1', pane(AMBIGUOUS));
+  for (let i = 0; i < 50 && !pushes.some((x) => x[0] === 'j1'); i++) await sleep(20);
   assert.equal(m.autoOf('j1'), null);
   assert.match(pushes.filter((x) => x[0] === 'j1').at(-1)[2], /confidence 0\.60 below 0\.8/);
   jevProb = 0.9;
   await stall('j2', pane(AMBIGUOUS));
+  for (let i = 0; i < 50 && !m.autoOf('j2'); i++) await sleep(20);   // Jev is async: wait for it, not a fixed 40 ms
   assert.equal(m.autoOf('j2').case, 'continue');
   await sleep(DELAY + 100);
   assert.equal(sentTo('j2').length, 1);
