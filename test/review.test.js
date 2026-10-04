@@ -81,3 +81,14 @@ test('review deck folds repeats of the same stop into one card', async () => {
   d = await m.reviewDeck(200);
   assert.equal(d.cards.filter((c) => c.session === 'dupsess').length, 0);
 });
+
+test('a re-wrapped pane is the same stop (swipe deck and observe key)', async () => {
+  const { appendFileSync } = await import('node:fs');
+  const m = await import('../manager.js');
+  assert.equal(m.stopKey('the local agent, more pre-canned\n  behavior rule configs), say the word.'),
+    m.stopKey('the lo\ncal   agent, more   pre-canned behavior rule   configs),\n say the word.'));
+  appendFileSync(m.LOG_FILE, JSON.stringify({ type: 'stall', id: 'wrap-1', session: 'wrapsess', case: 'done', at: new Date(Date.now() - 2000).toISOString(), excerpt: 'local agent, say the word.' }) + '\n');
+  appendFileSync(m.LOG_FILE, JSON.stringify({ type: 'stall', id: 'wrap-2', session: 'wrapsess', case: 'done', at: new Date().toISOString(), excerpt: 'lo\ncal   agent,  say the\nword.' }) + '\n');
+  const d = await m.reviewDeck(200);
+  assert.equal(d.cards.filter((c) => c.session === 'wrapsess').length, 1);
+});

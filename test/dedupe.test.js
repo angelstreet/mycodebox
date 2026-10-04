@@ -101,3 +101,16 @@ test('stall-report: labels per case, no_reason examples, --export and --reclassi
   assert.ok(items.find((x) => x.label === 'no_reason' && x.note === 'it just stopped' && /wire it into the reader/.test(x.excerpt)));
   assert.equal(readFileSync(log, 'utf8'), before, 'the log is not modified');
 });
+
+test('a resized window re-wraps the same stop: still one record', async () => {
+  let t = 0;
+  const wide = pane('Done with the prep. If you want more (a smoke test, a Dockerfile for the local agent), say the word.');
+  const narrow = pane('Done with the prep. If you want\nmore (a smoke test, a Dockerfile for the lo\ncal agent), say the\nword.');
+  tick('r9', 'working', ['busy'], t, { realWork: true });
+  for (let i = 0; i < 10; i++) {
+    const p = i % 2 ? narrow : wide;
+    tick('r9', 'done', p, t += 1000); tick('r9', 'done', p, t += 3000);
+  }
+  await sleep(300);
+  assert.equal(of('stall', 'r9').length, 1);
+});

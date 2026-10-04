@@ -51,6 +51,9 @@ let held = { get: () => null, set: () => {} };                      // injected:
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
 
 const today = () => new Date().toISOString().slice(0, 10);
+// Identity of a stop's text regardless of how the pane wraps it: a resized window re-wraps the same words
+// (and the 16-line excerpt then starts elsewhere), so compare the tail with all whitespace removed.
+export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
 export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold } = {}) {
@@ -307,7 +310,7 @@ export async function reviewDeck(limit = 50) {
   const groups = new Map();
   for (const r of recs) {
     if (r.type !== 'stall' || !r.id) continue;
-    const k = `${r.session}\u0000${r.excerpt || r.question || ''}`;
+    const k = `${r.session}\u0000${stopKey(r.excerpt || r.question)}`;
     const g = groups.get(k) || { last: null, labelled: false };
     g.last = r;
     if (labels.has(r.id)) g.labelled = true;
@@ -437,7 +440,7 @@ export function observe(s) {
   if (s.changed || !w.cls || w.clsKey !== key) { w.cls = classifyStall({ plain: s.plain, raw: s.raw, state: s.state }); w.clsKey = key; }
   const stall = w.cls;
   if (w.auto && stall.draft) cancelAuto(s.name, 'draft in the input box');
-  const h = hash(`${stall.case}|${stall.excerpt}`);
+  const h = hash(`${stall.case}|${stopKey(stall.excerpt)}`);
   if (h !== w.hash) { if (w.auto) cancelAuto(s.name, 'pane changed'); w.hash = h; w.since = s.now; w.logged = false; w.stall = stall; }
   // First sight after a restart: don't log stalls that were already sitting there.
   if (!w.seen) { w.logged = true; w.seen = true; return w.stall; }
