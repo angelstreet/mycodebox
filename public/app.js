@@ -555,6 +555,7 @@ function onDeploys(d) {
   renderLeases();
   const waiting = (d?.deploys || []).filter((x) => x.state === 'awaiting-approval').length;
   els.mgrBtn.classList.toggle('badge', waiting > 0);
+  $('#moreBtn')?.classList.toggle('badge', waiting > 0);
   els.mgrBtn.title = waiting ? `AI manager · ${waiting} deploy${waiting > 1 ? 's' : ''} need approval` : 'AI manager: auto-answers, log';
   if (state.depSheet) state.depSheet();
 }
@@ -712,7 +713,7 @@ function renderSummary() {
   ];
   const html = chips
     .filter(([k, n]) => n > 0 || k === 'working')
-    .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}"><i class="dot ${k}"></i>${n}<span class="t">&nbsp;${t}</span></button>`)
+    .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}"><i class="dot ${k}"></i>${n}</button>`)
     .join('');
   if (els.summary.innerHTML !== html) {
     els.summary.innerHTML = html;
@@ -1997,6 +1998,13 @@ function openManager() {
 }
 els.mgrBtn.onclick = openManager;
 document.getElementById('reviewBtn').onclick = startReview;
+// top-bar "more" menu: AI manager, usage, alerts, install/APK, text size
+{
+  const mb = $('#moreBtn'), mp = $('#morePop');
+  mb.onclick = (e) => { e.stopPropagation(); mp.classList.toggle('hidden'); };
+  mp.onclick = (e) => { e.stopPropagation(); if (e.target.closest('.icon-btn')) mp.classList.add('hidden'); };
+  document.addEventListener('click', () => mp.classList.add('hidden'));
+}
 
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
 const LANGFUSE_URL = 'http://<tailscale-ip>:3100';   // tailnet
@@ -2856,6 +2864,8 @@ wireFontUi();
 // to close the topmost thing (sheet, menu, task doc, card view); at the top level, press twice to exit.
 function handleBack() {
   if (sheetEl) { closeSheet(); return true; }
+  const mp = $('#morePop');
+  if (mp && !mp.classList.contains('hidden')) { mp.classList.add('hidden'); return true; }
   const pop = $('#fontPop');
   if (pop && !pop.classList.contains('hidden')) { pop.classList.add('hidden'); return true; }
   if (state.side) { closeSide(); return true; }
