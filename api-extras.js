@@ -2,6 +2,7 @@
 // Kept apart from server.js (which starts listening on import) so they can be unit-tested.
 
 import { isLoopback, TOKEN_HEADER } from './reporter.js';
+import { basename } from 'node:path';
 
 export const ACTOR_MAX = 40;
 export const DEFAULT_ACTOR = 'owner';
@@ -13,6 +14,40 @@ export function actorOf(body) {
   if (v === undefined || v === null) return DEFAULT_ACTOR;
   if (typeof v !== 'string' || !v.trim() || v.trim().length > ACTOR_MAX) throw Object.assign(new Error(`by must be a string of 1..${ACTOR_MAX} characters`), { status: 400 });
   return v.trim();
+}
+
+// ---- Pane process-tree: which agent (if any) is the pane running? ----
+// Pure (no I/O). Server.js feeds processTable() into agentFromTree() via liveAgentOf();
+// the policy layer below treats its `{agent, cmd}` return as "live" and its `null` as "no agent".
+const AGENT_BINS = [
+  [/^claude(?:-code)?$/, 'claude', 'claude'],
+  [/^codex(?:-cli)?$/, 'codex', 'codex'],
+  [/^minimax-code$/, 'minimax', 'minimax-code'],
+  [/^mcode$/, 'minimax', 'mcode'],
+];
+const WRAPPERS = new Set(['node', 'nodejs', 'bun', 'python', 'python3', 'bash', 'sh', 'env']);
+
+export function agentFromArgs(argline) {
+  const toks = argline.split(/\s+/).filter(Boolean);
+  const cand = [toks[0]];
+  if (toks[0] && WRAPPERS.has(basename(toks[0]))) {
+    for (const t of toks.slice(1, 4)) if (!t.startsWith('-')) cand.push(t);
+  }
+  for (const c of cand) {
+    const b = basename(c || '');
+    for (const [re, agent, cmd] of AGENT_BINS) if (re.test(b)) return { agent, cmd };
+  }
+  return null;
+}
+
+// Pure policy: should the server refuse a typed send to this pane from this actor?
+// owner is always allowed (Ghosty is also a terminal, shells included). Any non-owner
+// actor is refused when `live` is null. Return value: null when allowed, otherwise a
+// short reason (logged as the `reason` of the send-refused event in manager.js).
+export function shouldRefuse({ by, live }) {
+  if (by === DEFAULT_ACTOR) return null;
+  if (!live) return 'no claude/codex/minimax process running in the pane';
+  return null;
 }
 
 export const ALERT_PRIORITIES = ['min', 'low', 'default', 'high', 'urgent'];

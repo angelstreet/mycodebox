@@ -167,6 +167,12 @@ the UI means). The Opus manager agent passes `by: "manager-agent"`. It is logged
 'pause'|'resume'|'priority'|'deploy_action', by}`, and `by` on `label` records) and shown on the lines of the manager
 panel log.
 
+**Non-owner sends are gated on a live agent.** Any sender other than `owner` (`POST /api/send/:session`,
+`/api/send-many`, `/api/session-meta/:session`) gets a 409 when the pane has no claude / codex / minimax process —
+the guard looks at the live process tree, never at the pane text, so a `sleep` shell with old MiniMax JSON in its
+scrollback is not mistaken for an agent. The owner uses Ghosty as a terminal too (shells included), so `by:"owner"`
+is always allowed. Refusals are logged as `{type:'send-refused', session, by, reason}`.
+
 **Alert API.** `POST /api/alert {title, body, url?, priority?, tag?}` is the manager agent's channel to the owner.
 Loopback peers only, with the reporter token header (`x-ghosty-reporter-token`); anything else is 403 / 401. It goes
 through the normal `alert()` (same debounce per `tag` or title, notification feed, Web Push, ntfy): the answer is

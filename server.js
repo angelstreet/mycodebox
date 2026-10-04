@@ -65,7 +65,7 @@ import { initManager, logEvent, observe, forget as managerForget, prune as prune
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
-import { actorOf, createAlertApi } from './api-extras.js';
+import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -148,28 +148,7 @@ async function processTable() {
   return { children, args };
 }
 
-const AGENT_BINS = [
-  [/^claude(?:-code)?$/, 'claude', 'claude'],
-  [/^codex(?:-cli)?$/, 'codex', 'codex'],
-  [/^minimax-code$/, 'minimax', 'minimax-code'],
-  [/^mcode$/, 'minimax', 'mcode'],
-];
-const WRAPPERS = new Set(['node', 'nodejs', 'bun', 'python', 'python3', 'bash', 'sh', 'env']);
-
-function agentFromArgs(argline) {
-  const toks = argline.split(/\s+/).filter(Boolean);
-  const cand = [toks[0]];
-  if (toks[0] && WRAPPERS.has(basename(toks[0]))) {
-    for (const t of toks.slice(1, 4)) if (!t.startsWith('-')) cand.push(t);
-  }
-  for (const c of cand) {
-    const b = basename(c || '');
-    for (const [re, agent, cmd] of AGENT_BINS) if (re.test(b)) return { agent, cmd };
-  }
-  return null;
-}
-
-// Breadth-first walk under pane pid; shallowest agent process wins.
+// Breadth-first walk under pane pid; shallowest agent process wins. agentFromArgs lives in api-extras.js.
 function agentFromTree(pid, table) {
   const seen = new Set();
   let level = [pid];
@@ -195,6 +174,31 @@ function agentFromText(text) {
   if (/✻|⏺|Claude Code|bypass permissions on/.test(text)) return { agent: 'claude', cmd: 'claude' };
   if (/\bcodex\b/i.test(text) && /(?:gpt-|\? for shortcuts|To get started)/i.test(text)) return { agent: 'codex', cmd: 'codex' };
   return null;
+}
+
+// Process-tree only: what agent (if any) the pane is actually running right now. Never
+// matches on screen text, so a `sleep` shell with old MiniMax JSON in its scrollback does
+// not get labelled "minimax" — only a live claude / codex / minimax-code (under any of the
+// usual wrappers) counts.
+async function liveAgentOf(session) {
+  const panes = await listPanes();
+  const pane = panes.get(session);
+  if (!pane || !pane.pid) return null;
+  const table = await processTable();
+  return agentFromTree(pane.pid, table);
+}
+
+// Gate a typed send. The owner (default actor) is always allowed — Ghosty is also a
+// terminal, shells included. Any other actor needs a live agent process in the pane;
+// otherwise we 409 and log a `send-refused` event so the refusal is auditable.
+async function assertAgentPane(session, by) {
+  if (by === DEFAULT_ACTOR) return;
+  const live = await liveAgentOf(session);
+  const reason = shouldRefuse({ by, live });
+  if (reason) {
+    logEvent({ type: 'send-refused', session, by, reason });
+    throw httpError(409, `not an agent pane: ${session} runs no claude/codex/minimax process`);
+  }
 }
 
 const tgt = (s) => `=${s}:`;
@@ -939,6 +943,10 @@ async function setSessionMeta(session, body) {
   const changed = sessionMeta.set(session, body || {});
   if (changed.priority) logEvent({ type: 'priority', session, by, priority: changed.priority });
   const released = body?.paused === false && releaseHold(session);   // Resume also clears the manager's quota hold
+  // The sendKey / sendKeys below type into a pane; for any non-owner actor the pane must
+  // be running a live agent (otherwise we'd be sending into a bash / sleep shell). Owner
+  // is exempt — assertAgentPane returns immediately for DEFAULT_ACTOR.
+  if (changed.paused === true || changed.paused === false || released) await assertAgentPane(session, by);
   if (changed.paused === true) {
     cancelAuto(session, 'paused by owner');
     logEvent({ type: 'pause', session, by });
@@ -968,6 +976,7 @@ async function sendMany(sessions, payload) {
   await pool(list.map((session, idx) => ({ session, idx })), 4, async ({ session, idx }) => {
     try {
       if (!(await sessionExists(session))) { results[idx] = { session, ok: false, error: 'no such session' }; return; }
+      await assertAgentPane(session, by);
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys, payload.enter !== false);
@@ -1144,6 +1153,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const by = actorOf(payload);
       if (!(await sessionExists(session))) throw httpError(404, 'no such session');
+      await assertAgentPane(session, by);
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys || '', payload.enter !== false);
@@ -1380,10 +1390,16 @@ async function leaseTick() {
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
   try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
+  // The manager agent's own auto-answers and resumes are never the owner, so gate every
+  // typed send with assertAgentPane first. A bash / sleep shell with old MiniMax JSON in
+  // its scrollback would otherwise be mistaken for an agent (see agentFromText) — this
+  // wrapper only consults the live process tree.
+  const guardSendKey = async (session, key) => { await assertAgentPane(session, 'manager'); return sendKey(session, key); };
+  const guardSendKeys = async (session, keys, enter) => { await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
   await initManager({
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n')),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
-    sendKey, sendKeys, paused: (n) => sessionMeta.isPaused(n),
+    sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
     heldStore: { get: (n) => sessionMeta.held(n), set: (n, h) => sessionMeta.setHeld(n, h) },
     onHold: (n, kind, reason) => alert(`${n}:${kind}`, {
