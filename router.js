@@ -264,7 +264,7 @@ export function pick(point, facts, jevJson, { threshold = 0.7 } = {}) {
   const a = jevJson && jevJson.answers && jevJson.answers.choice;
   const ok = !!(jevJson && jevJson.success !== false && a);
   const choice = ok ? a.choice : null;
-  const confidenceRaw = ok ? Number(a.confidence) : null;
+  const confidenceRaw = ok ? Number(a.probabilities?.[a.choice] ?? a.confidence) : null;
   const confidence = Number.isFinite(confidenceRaw) ? confidenceRaw : null;
   const allowed = f.allowed;
   if (ok && choice != null && allowed.includes(choice) && confidence != null && confidence >= threshold) {

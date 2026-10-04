@@ -385,3 +385,12 @@ test('fixtures: every entry agrees with ruleDefault + floor against the expected
   }
   for (const p of Object.keys(POINTS)) assert.equal(counts[p], 10, `point "${p}" should have 10 fixture states, has ${counts[p] || 0}`);
 });
+test('pick: confidence is the probability of the chosen option when probabilities are present', () => {
+  const reply = { success: true, answers: { choice: { choice: 'answer', confidence: 0.95, probabilities: { answer: 0.6, escalate: 0.4 } } } };
+  const out = pick('stop', { case: 'owner_decision' }, reply, { threshold: 0.7 });
+  assert.equal(out.source, 'rule');
+  assert.equal(out.confidence, 0.6);
+  const hi = pick('stop', { case: 'owner_decision' }, { success: true, answers: { choice: { choice: 'answer', probabilities: { answer: 0.9, escalate: 0.1 } } } });
+  assert.equal(hi.source, 'jev');
+  assert.equal(hi.confidence, 0.9);
+});
