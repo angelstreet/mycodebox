@@ -1773,7 +1773,7 @@ function onQuota(q) {
   if (!q || !q.plans?.length) { el.classList.add('hidden'); return; }
   const parts = q.plans.map((p) => {
     const short = p.plan;
-    if (!p.windows.length) return `<span class="qi na"><b>${short}</b> ?</span>`;
+    if (!p.windows.length) return `<span class="qi na" title="${escapeHtml(p.error || 'no reading yet')}"><b>${short}</b> ${/login|expired/i.test(p.error || '') ? 'login expired' : '?'}</span>`;
     const ws = p.windows.map((w) => {
       if (w.usedPercent == null) return `<span class="qi na">${winShort(w.name)} ${w.unlimited ? '&infin;' : '?'}</span>`;
       return `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`;
@@ -2013,7 +2013,7 @@ const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: n
 const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
 function quotaOfAgent(a) {
   const p = state.quota?.plans?.find((x) => x.plan === a);
-  if (!p || !p.windows?.length) return `<span class="dim">quota ?</span>`;
+  if (!p || !p.windows?.length) return `<span class="dim" title="${escapeHtml(p?.error || '')}">${/login|expired/i.test(p?.error || '') ? 'login expired, open mcode once' : 'quota ?'}</span>`;
   return p.windows.map((w) => w.usedPercent == null
     ? `<span class="qi na">${winShort(w.name)} ${w.unlimited ? '&infin;' : '?'}</span>`
     : `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`).join(' ');
@@ -2155,6 +2155,12 @@ function openSheet(title, build) {
   sheetEl = back;
   const api = { close: closeSheet, body: back.querySelector('.sheet-body'), foot: back.querySelector('.sheet-foot'), title: back.querySelector('.sheet-title') };
   build(api);
+  // house rule: every popup has a visible frame (CSS) and a bordered close button
+  if (api.foot.classList.contains('hidden') && !api.foot.children.length) {
+    api.foot.classList.remove('hidden');
+    api.foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    api.foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) closeSheet(); };
+  }
   requestAnimationFrame(() => back.classList.add('on'));
   return api;
 }

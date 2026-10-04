@@ -1088,8 +1088,11 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 }
 
 /* usage sheet: visible frame, bordered buttons, collapsible groups, filters */
-.sheet.usage{ border:1px solid rgba(255,255,255,.28); }
-.sheet.usage .sheet-foot .sbtn{ border-color:rgba(255,255,255,.28); }
+/* house rule: every popup (sheet, menu, popover) has a visible frame; every sheet footer button is bordered */
+:root{ --frame: rgba(255,255,255,.28); }
+.sheet{ border:1px solid var(--frame); }
+.morepop, .fontpop{ border-color:var(--frame); }
+.sheet-foot .sbtn{ border:1px solid var(--frame); }
 .sbtn.lf{ gap:8px; }
 .sbtn.lf img{ display:block; }
 .ufilters{ display:flex; gap:6px; margin:8px 0 4px; }
