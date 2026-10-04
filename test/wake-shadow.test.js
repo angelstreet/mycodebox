@@ -127,6 +127,51 @@ test('hot floor (P0 blocked / deploy failed / disk 96 %) only allows wake picks;
   assert.deepEqual(quotaPercents({ plans: [{ plan: 'claude', windows: [{ name: '5h', usedPercent: 97 }, { name: 'week', usedPercent: null }] }] }), { 'claude:5h': 97 });
 });
 
+test('wakeFacts: stall_text is included when stall has a question, omitted otherwise', () => {
+  // question wins over excerpt
+  const f1 = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { question: 'What should I do next?', excerpt: 'other words' } });
+  assert.equal(f1.stall_text, 'What should I do next?');
+
+  // no question -> excerpt fallback
+  const f2 = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { excerpt: 'excerpt only' } });
+  assert.equal(f2.stall_text, 'excerpt only');
+
+  // trimmed to the last 600 chars
+  const long = 'x'.repeat(800) + ' final words';
+  const f3 = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { question: long } });
+  assert.equal(f3.stall_text.length, 600);
+  assert.equal(f3.stall_text, long.slice(-600));
+
+  // no stall at all -> no stall_text
+  const f4 = wakeFacts({ cls: classifyKey('web:asks'), event: {} });
+  assert.equal(f4.stall_text, undefined);
+
+  // stall with no question and no excerpt -> no stall_text
+  const f5 = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { case: 'permission' } });
+  assert.equal(f5.stall_text, undefined);
+
+  // non-session events keep stall_text out (deploy/quota/disk/credits)
+  const f6 = wakeFacts({ cls: classifyKey('deploy:ab:failed'), event: {}, stall: { question: 'unrelated' } });
+  assert.equal(f6.stall_text, undefined);
+});
+
+test('wakeFacts: facts.stall carries case and no_status when present, only when at least one is', () => {
+  const both = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { case: 'owner_decision', no_status: true, question: 'Which DB?' } });
+  assert.equal(both.stall.case, 'owner_decision');
+  assert.equal(both.stall.no_status, true);
+
+  const onlyCase = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { case: 'continue', question: 'go?' } });
+  assert.equal(onlyCase.stall.case, 'continue');
+  assert.equal(onlyCase.stall.no_status, undefined);
+
+  const onlyNoStatus = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { no_status: true, question: 'go?' } });
+  assert.equal(onlyNoStatus.stall.case, undefined);
+  assert.equal(onlyNoStatus.stall.no_status, true);
+
+  const none = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { question: 'go?' } });
+  assert.equal(none.stall, undefined);
+});
+
 // ---- outcome ----
 const T0 = Date.parse('2026-10-04T10:00:00.000Z');
 const at = (min) => new Date(T0 + min * 60e3).toISOString();

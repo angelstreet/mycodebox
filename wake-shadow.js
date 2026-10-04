@@ -34,6 +34,18 @@ export function wakeFacts({ cls, event = {}, priority = null, stall = null, agen
   if (cls.kind === 'quota') facts.quota = quota || {};
   if (cls.kind === 'disk' && Number.isFinite(diskPct)) facts.disk_pct = diskPct;
   if (cls.kind === 'credits' && credits) facts.credits = credits;
+  // Session events (asks / waiting / hold / ...): include the stop's closing text so Jev sees WHY a wake
+  // may be needed, not just kind/priority flags. stall.question preferred, falls back to stall.excerpt, both
+  // trimmed to the last 600 chars (the recent stop, not the whole pane history). stall.case and stall.no_status
+  // are surfaced as facts.stall = { case, no_status } when present.
+  if (cls.session && stall) {
+    const text = String(stall.question || stall.excerpt || '').slice(-600);
+    if (text) facts.stall_text = text;
+    const sl = {};
+    if (stall.case != null) sl.case = stall.case;
+    if (stall.no_status) sl.no_status = true;
+    if (Object.keys(sl).length) facts.stall = sl;
+  }
   return facts;
 }
 

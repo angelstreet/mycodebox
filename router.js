@@ -34,7 +34,7 @@ const wake = {
     wake_cheap: 'wake a small/cheap agent to investigate and answer',
     wake_opus: 'wake the strongest (Opus) agent: this is escalated, risky or already broken',
   },
-  instructions: 'Given what is happening right now, who (if anyone) should the manager wake to handle it?',
+  instructions: 'Given what is happening right now, who (if anyone) should the manager wake to handle it? (For session events the stop\'s closing text is in facts.stall_text.)',
   floor(facts) {
     const ev = facts?.event || {};
     const deploy = facts?.deploy || null;

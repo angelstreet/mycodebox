@@ -261,6 +261,8 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
     const verdicts = { agree: 0, miss: 0, extra: 0, differs: 0, risky: 0 };
     const missKeys = [];
     const riskyKeys = [];
+    const extraKeys = [];
+    const differsKeys = [];
     let mmTokens = { input: 0, output: 0, cache_read: 0 };
     const seenBatches = new Set();
     const sonnetRows = [];
@@ -292,6 +294,8 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
       verdicts[verdict] = (verdicts[verdict] || 0) + 1;
       if (verdict === 'miss') missKeys.push(key);
       if (verdict === 'risky') riskyKeys.push(key);
+      if (verdict === 'extra') extraKeys.push(key);
+      if (verdict === 'differs') differsKeys.push(key);
     }
     for (const r of realMgrByDay.get(d) || []) realMgrUsd += Number(r?.cost?.total) || 0;
 
@@ -306,6 +310,8 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
       differs: verdicts.differs,
       missKeys: missKeys.slice(0, 20),
       riskyKeys: riskyKeys.slice(0, 20),
+      extraKeys: extraKeys.slice(0, 20),
+      differsKeys: differsKeys.slice(0, 20),
       sonnetCalls: sonnetRows.length,
       sonnetUsd: Math.round(sonnetRows.reduce((a, r) => a + (Number(r.sonnet_usd) || 0), 0) * 1000) / 1000,
       mmTokens: {
@@ -319,22 +325,27 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
 }
 
 // ---- pretty printer ----
-function printReport(report) {
-  if (!report.length) { console.log('No fake manager events for the day.'); return; }
+export function formatReport(report) {
+  if (!report.length) return 'No fake manager events for the day.\n';
+  const out = [];
   for (const d of report) {
-    console.log(`=== ${d.day} ===`);
-    console.log(`  events: ${d.events}`);
-    console.log(`  proposals: none=${d.proposals.none || 0} answer=${d.proposals.answer || 0} escalate=${d.proposals.escalate || 0} alert=${d.proposals.alert || 0} error=${d.proposals.error || 0}`);
-    console.log(`  agreement: agree=${d.agree || 0} miss=${d.miss || 0} risky=${d.risky || 0}`);
-    if (d.missKeys?.length) console.log(`  miss keys: ${d.missKeys.join(', ')}`);
-    if (d.riskyKeys?.length) console.log(`  risky keys: ${d.riskyKeys.join(', ')}`);
-    console.log(`  sonnet calls: ${d.sonnetCalls}  $: ${d.sonnetUsd ?? 0}`);
-    console.log(`  MiniMax tokens: in=${d.mmTokens.input} out=${d.mmTokens.output} cache_read=${d.mmTokens.cache_read}`);
-    console.log(`  real manager Claude $: ${d.realMgrUsd}`);
-    if (d.audit?.length) console.log('AUDIT FAIL');
-    console.log('');
+    out.push(`=== ${d.day} ===`);
+    out.push(`  events: ${d.events}`);
+    out.push(`  proposals: none=${d.proposals.none || 0} answer=${d.proposals.answer || 0} escalate=${d.proposals.escalate || 0} alert=${d.proposals.alert || 0} error=${d.proposals.error || 0}`);
+    out.push(`  agreement: agree=${d.agree || 0} miss=${d.miss || 0} extra=${d.extra || 0} differs=${d.differs || 0} risky=${d.risky || 0}`);
+    if (d.missKeys?.length) out.push(`  miss keys: ${d.missKeys.join(', ')}`);
+    if (d.extraKeys?.length) out.push(`  extra keys: ${d.extraKeys.join(', ')}`);
+    if (d.differsKeys?.length) out.push(`  differs keys: ${d.differsKeys.join(', ')}`);
+    if (d.riskyKeys?.length) out.push(`  risky keys: ${d.riskyKeys.join(', ')}`);
+    out.push(`  sonnet calls: ${d.sonnetCalls}  $: ${d.sonnetUsd ?? 0}`);
+    out.push(`  MiniMax tokens: in=${d.mmTokens.input} out=${d.mmTokens.output} cache_read=${d.mmTokens.cache_read}`);
+    out.push(`  real manager Claude $: ${d.realMgrUsd}`);
+    if (d.audit?.length) out.push('AUDIT FAIL');
+    out.push('');
   }
+  return out.join('\n');
 }
+function printReport(report) { console.log(formatReport(report)); }
 
 async function main() {
   const args = parseArgs(process.argv);

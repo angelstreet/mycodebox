@@ -613,7 +613,8 @@ function shadowRoute({ id, session, agent, final, stall, escalated }) {
       if (cr?.ok && cr.balance != null && cr.balance <= 0) return skip('no OpenRouter credit');
       const post = async (body) => { const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) }); return { r, j: await r.json() }; };
       const router = await runShadow({ usage: MANAGER_USAGE, teamId: decisions.configured ? VPT_TEAM_ID : '', post,
-        facts: { session, agent, forbidden: final.forbidden, no_status: final.no_status, excerpt: stall.excerpt, stallId: id, ruleCase: final.case, escalated } });
+        facts: { session, agent, forbidden: final.forbidden, no_status: final.no_status, excerpt: stall.excerpt, stallId: id, ruleCase: final.case, escalated },
+        kindOf: jevErrorKind });
       budget.calls += 1; budget.cost += Number(router.cost || 0);
       writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
       st.decision_id = router.decision_id || null; st.done = true;
@@ -855,7 +856,7 @@ export function stallOf(name) {
   const w = watch.get(name);
   if (!w || !w.stall) return null;
   const st = w.stall;
-  return { case: st.case, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
+  return { case: st.case, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
     id: w.pending?.id || null,
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
     forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending?.id), draft: !!(w.cls?.draft), jev: st.jev || null };

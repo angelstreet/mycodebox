@@ -44,14 +44,30 @@ export function parseShadow(j) {
 }
 
 // Fire-and-forget core, never throws. post(body) -> { r, j } as fetch gave it. Returns the record's `router` value:
-// { case, ..., ms, cost, model } | { error } | { skipped }.
-export async function runShadow({ facts, usage, teamId, post, now = () => Date.now() }) {
+// { case, ..., ms, cost, model } | { error, kind } | { skipped }.
+// kindOf(msg): classify an error string (same scheme as manager.js jevErrorKind: 'network' | 'http' | 'timeout' | 'credits' | 'other').
+// sleep(ms): wait between attempts; injected so tests can skip the 2 s delay.
+// One retry after 2 s on a network error ONLY (the VPT server restarting during a deploy). Never on HTTP 4xx/5xx,
+// timeout, credits or anything else. The error kind is stored on the router record alongside the error string.
+export async function runShadow({ facts, usage, teamId, post, now = () => Date.now(), kindOf = (m) => 'other', sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const started = now();
+  const doPost = () => post(shadowBody(facts, { usage, teamId }));
   try {
-    const { r, j } = await post(shadowBody(facts, { usage, teamId }));
+    let r, j;
+    try {
+      ({ r, j } = await doPost());
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (kindOf(msg) !== 'network') return { error: msg.slice(0, 200), kind: kindOf(msg), ms: now() - started };
+      await sleep(2000);
+      ({ r, j } = await doPost());
+    }
     const parsed = parseShadow(j);
     const meta = { ms: j?.ms ?? now() - started, cost: Number(j?.cost || 0), model: j?.model };
-    if (!parsed) return { error: String(j?.error || `http ${r?.status}`).slice(0, 200), ...meta, ...(j?.decision_id ? { decision_id: j.decision_id } : {}) };
+    if (!parsed) {
+      const err = String(j?.error || `http ${r?.status}`).slice(0, 200);
+      return { error: err, kind: kindOf(err), ...meta, ...(j?.decision_id ? { decision_id: j.decision_id } : {}) };
+    }
     return { ...parsed, ...meta };
-  } catch (e) { return { error: String(e?.message || e).slice(0, 200), ms: now() - started }; }
+  } catch (e) { return { error: String(e?.message || e).slice(0, 200), kind: kindOf(String(e?.message || e)), ms: now() - started }; }
 }
