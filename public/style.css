@@ -1474,3 +1474,7 @@ body.side-dockable #menuBtn.hidden{ display:inline-flex !important; }
 /* session list: the focused row wears the same accent frame as the focused card; other cards on screen get a soft marker */
 .session-list li.active{ background:var(--bg-3); color:var(--ink); box-shadow:inset 0 0 0 1px var(--accent), 0 0 12px rgba(232,154,74,.18); }
 .session-list li.shown{ background:rgba(232,154,74,.07); box-shadow:inset 3px 0 0 rgba(232,154,74,.6); }
+/* docked list open: its own ‹ button folds it, so the hamburger is redundant, and the horizontal session tabs duplicate the list.
+   Fold the list and both come back (the hamburger re-opens it). */
+body.side-docked.side-dockable #menuBtn.hidden, body.side-docked #menuBtn{ display:none !important; }
+body.side-docked #tabs{ display:none; }
