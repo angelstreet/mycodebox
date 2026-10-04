@@ -83,13 +83,16 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       questionsView = decisions;
       btnsView = marked.map((b) => (b.text ? { ...b, text: `${lastDecisionN}: ${b.text}` } : b));
     }
-    const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 220);
+    const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 2000);   // the question area scrolls; never cut it mid-line
     const question = questionsView ? '' : baseQ;
     return { item, kind: d.kind, buttons: btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
   }
 
   function metaText(v) {
-    const jl = jevLine(v.jev);
+    const jp = v.jev?.probabilities || {};
+    const jl = (v.jev?.choice && Number.isFinite(jp[v.jev.choice]) && jp[v.jev.choice] > 0)
+      ? `Jev: ${JEV_PLAIN[v.jev.choice] || v.jev.choice} ${Math.round(jp[v.jev.choice] * 100)}%`   // footer stays one short line; the Why section lists all three
+      : jevLine(v.jev);
     const a = v.aiId ? `AI ★ ${Math.round((v.aiConf || 0) * 100)}%` : 'AI: yours to decide';
     return jl ? `${a}  ·  ${jl}` : a;
   }

@@ -200,7 +200,7 @@ export function whyModel(st) {
   const aiOut = ai
     ? {
         present: true,
-        label: ai.proposed_reply ? ai.proposed_reply : 'yours to decide',
+        label: (ai.proposed_reply && !ai.owner_needed) ? ai.proposed_reply : 'yours to decide',
         conf: Number.isFinite(ai.confidence) ? ai.confidence : null,
         reasoning: ai.owner_needed ? (ai.owner_needed_why || 'needs owner') : (ai.reasoning || ''),
       }
@@ -226,7 +226,7 @@ export function jevAgreesOwner(jevChoice, ownerButtonId, aiButtonId) {
   if (!jevChoice) return null;
   if (jevChoice === 'continue' || jevChoice === 'take_recommended') {
     // agree when the owner picked the AI's highlighted button, OR yes (yesno default positive)
-    if (ownerButtonId === 'yes') return true;
+    if (ownerButtonId === 'yes' || ownerButtonId === 'continue') return true;
     if (aiButtonId && ownerButtonId === aiButtonId) return true;
     return false;
   }

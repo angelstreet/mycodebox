@@ -219,3 +219,9 @@ test('whyModel: Jev choice + probabilities, with a friendly plain-English label'
   const t = whyModel({ stall: { jev: { choice: 'take_recommended', probabilities: { continue: 0.1, take_recommended: 0.8, ask_owner: 0.1 } } } });
   assert.equal(t.jev.label, 'take recommended');
 });
+test('whyModel: owner_needed shows "yours to decide"; jevAgreesOwner treats open-question "continue" as a yes', () => {
+  const w = whyModel({ triage: { ai: { proposed_reply: 'Yes, continue.', owner_needed: true, owner_needed_why: 'policy call', confidence: 0.6 } } });
+  assert.equal(w.ai.label, 'yours to decide');
+  assert.equal(w.ai.reasoning, 'policy call');
+  assert.equal(jevAgreesOwner('continue', 'continue', null), true);
+});
