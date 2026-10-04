@@ -75,6 +75,7 @@ button{ font-family:inherit; cursor:pointer; }
 .summary .chip.waiting{ color:var(--waiting); border-color:rgba(255,95,95,0.4); background:rgba(255,95,95,0.08); }
 .summary .chip.working{ color:var(--working); }
 .summary .chip.done{ color:var(--done); border-color:rgba(106,168,255,0.4); background:rgba(106,168,255,0.08); }
+.summary .chip.deploy{ color:var(--deploy); border-color:rgba(160,112,255,0.4); background:rgba(160,112,255,0.08); }
 .summary .chip.on{ border-color:var(--ink-2); }
 
 .modes, .gridsizes{

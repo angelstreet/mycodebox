@@ -9,6 +9,7 @@ import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
 import { jevTabHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
+import { displayStateOf, displayState, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -122,13 +123,9 @@ const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held ||
 const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? 'held: quota' : '');
 const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${escapeHtml(n)}" aria-label="Priority ${prioOf(n)}, tap to change" title="Priority ${prioOf(n)}">${prioOf(n)}</button>`;
 // Visual state: a session blocked on a deploy shows purple ('deploy'); a live needs-you prompt always wins.
-function vstateOf(name) {
-  const s = stateOf(name);
-  return state.status[name]?.deployWait && s !== 'waiting' && s !== 'offline' ? 'deploy' : s;
-}
+// Pure helper lives in /state.js so the top-bar summary and the status filter can reuse it.
+const vstateOf = (name) => displayStateOf(name, state.status);
 const deployWaitTip = (name) => state.status[name]?.deployWait?.text || '';
-const STATE_RANK = { waiting: 0, deploy: 1, done: 2, working: 3, idle: 4, offline: 5 };
-const STATE_LABEL = { working: 'working', waiting: 'needs you', done: 'done', idle: 'idle', offline: 'offline' };
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 
 function agentOf(name) {
@@ -642,7 +639,9 @@ function byUrgency(list) {
 const LS_FILTERS = 'ghosty.filters';
 function projectOf(n) { return state.status[n]?.project || state.status[n]?.repo || ''; }
 function matchesFilter(n) {
-  if (state.filter && stateOf(n) !== state.filter) return false;
+  // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
+  // not its raw working/done/idle state.
+  if (state.filter && displayStateOf(n, state.status) !== state.filter) return false;
   if (state.fProject && projectOf(n) !== (state.fProject === '-' ? '' : state.fProject)) return false;
   if (state.fAgent && agentOf(n) !== state.fAgent) return false;
   return true;
@@ -726,16 +725,20 @@ function onHealth(h) {
 
 // ---------- summary + attention ----------
 function renderSummary() {
-  const counts = { waiting: 0, done: 0, working: 0, idle: 0, offline: 0 };
-  for (const s of state.sessions) counts[stateOf(s.name)]++;
+  // Count sessions by display state so a session waiting on a deploy shows up
+  // under its own violet 'waiting deploy' chip, not under working/done/idle.
+  const counts = { waiting: 0, deploy: 0, done: 0, working: 0, idle: 0, offline: 0 };
+  for (const s of state.sessions) counts[displayStateOf(s.name, state.status)]++;
   const chips = [
     ['waiting', counts.waiting, 'need you'],
+    ['deploy',  counts.deploy,  'waiting deploy'],
     ['done',    counts.done,    'done'],
     ['working', counts.working, 'working'],
     ['idle',    counts.idle,    'idle'],
   ];
   const html = chips
-    .filter(([k, n]) => n > 0 || k === 'working')
+    // working is always shown; deploy only appears once a session actually waits for one
+    .filter(([k, n]) => n > 0 || k === 'working' || k === 'idle')
     .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}"><i class="dot ${k}"></i>${n}</button>`)
     .join('');
   if (els.summary.innerHTML !== html) {
@@ -790,12 +793,14 @@ function renderFilterBar() {
   const count = (pred) => all.filter(pred).length;
   const chip = (group, val, label, n, cls = '') =>
     `<button class="fchip ${cls}${(state[group] || null) === val ? ' on' : ''}" data-g="${group}" data-v="${val ?? ''}">${label}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
-  const states = ['waiting', 'done', 'working', 'idle', 'offline'];
+  // 'waiting deploy' sits next to the other states: it is the violet display state a session shows
+  // while its status has deployWait (and the raw state isn't waiting/offline).
+  const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline'];
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const agents = ['claude', 'codex', 'minimax', 'bash'].filter((a) => all.some((n) => agentOf(n) === a));
   const html =
     `<span class="fl">status</span>` + chip('filter', null, 'all') +
-    states.filter((k) => count((n) => stateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => stateOf(n) === k))).join('') +
+    states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
     `<span class="fsep"></span><span class="fl">project</span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i>no git</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span><span class="fl">agent</span>` + chip('fAgent', null, 'all') +
