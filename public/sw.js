@@ -16,6 +16,7 @@ const SHELL_FILES = [
   '/buttons.js',
   '/deployed.js',
   '/platforms.js',
+  '/platforms-view.js',
   '/state.js',
   '/ask-model.js',
   '/ask-popup.js',

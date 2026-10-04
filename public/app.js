@@ -7,9 +7,9 @@ import { icon, hydrateIcons } from '/icons.js';
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
 import { needsOwner } from '/buttons.js';
-import { deployedView, targetLabel } from '/deployed.js';
+import { platformsBlocks } from '/platforms-view.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
-import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
+import { chipModel, machinesOf, holdingsOf } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import { mountAskPopup } from '/ask-popup.js';
@@ -2039,28 +2039,6 @@ function logLine(r) {
   if (r.type === 'deploy_action') return { cls: 'sent', tag: r.action, sess: 'deploy', case: by, text: r.id };
   return null;
 }
-function depRow(d, d0) {
-  const last = d0?.lastRef?.[d.env];
-  const warn = ['awaiting-approval', 'queued'].includes(d.state) && last && last.ref !== d.ref;
-  const blocking = (d.blocking || []).map((l) => `${escapeHtml(l.resource)} (${escapeHtml(l.agent)}${l.ttlLeftMin != null ? ` ${l.ttlLeftMin}m` : ''})`).join(', ');
-  const btns = d.state === 'awaiting-approval' ? `<button class="sbtn on" data-dep="approve" data-id="${d.id}">Approve</button><button class="sbtn" data-dep="cancel" data-id="${d.id}">Cancel</button>`
-    : d.state === 'queued' ? `<button class="sbtn" data-dep="cancel" data-id="${d.id}">Cancel</button>` : '';
-  const tag = d.state === 'awaiting-approval' ? 'approve?' : d.state;
-  return `<div class="dep ${d.state}"><div class="d1"><span class="dtag ${d.state}">${escapeHtml(tag)}</span><b>${escapeHtml(d.env)}</b><span class="dscope">${escapeHtml(d.scope)}</span><span class="grow"></span>${btns}</div>
-    <div class="d2">${escapeHtml(d.ref)} &middot; ${escapeHtml(d.agent)}${d.purpose ? ` &middot; ${escapeHtml(d.purpose)}` : ''}</div>
-    ${blocking ? `<div class="d2 dwait">waiting on ${blocking}</div>` : ''}
-    ${warn ? `<div class="d2 dwarn">${icon('alert', 12)} replaces ${escapeHtml(last.ref)}${last.version ? ` (${escapeHtml(last.version)})` : ''} last deployed here</div>` : ''}
-    ${d.state === 'running' ? `<pre class="dlog" data-log="${d.id}">…</pre>` : ''}
-    ${d.coalescedInto ? `<div class="d2">merged into ${escapeHtml(d.coalescedInto)}</div>` : ''}${d.reason ? `<div class="d2">${escapeHtml(d.reason)}</div>` : ''}</div>`;
-}
-// "Deployed now" rows of one env (view model from deployedView): per target version, ref, commit, when, who, newer failed attempt.
-function deployedRowsHtml(rows) {
-  return rows.map((r) => `
-    <div class="d2 dnrow"><span class="dscope">${escapeHtml(targetLabel(r.targets))}</span> ${r.deployed
-      ? `<b>${escapeHtml(r.version || '?')}</b> &middot; ${escapeHtml(r.ref || '?')}${r.commit ? ` &middot; ${escapeHtml(r.commit)}` : ''} &middot; ${escapeHtml(r.ago)}${r.by && r.by !== 'unknown' ? ` &middot; ${escapeHtml(r.by)}` : ''}${r.backfill ? ' &middot; <i>read from the target</i>' : ''}`
-      : '<span class="dim">no successful deploy recorded</span>'}
-      ${r.failed ? `<div class="dwarn">${icon('alert', 12)} last attempt failed ${escapeHtml(r.failed.ago)}${r.failed.version ? ` (${escapeHtml(r.failed.version)})` : ''}${r.failed.by ? ` by ${escapeHtml(r.failed.by)}` : ''}</div>` : ''}</div>`).join('');
-}
 // Manager panel keeps only the runner switch; the queue, leases and "deployed now" live on the Platforms page.
 function deploysHtml(d0) {
   if (!d0) return '<div class="dim">loading…</div>';
@@ -2071,38 +2049,46 @@ function deploysHtml(d0) {
     <button class="sbtn pf-link" data-plat-open="1">Platforms &rsaquo;${waiting ? ` <b>${waiting} to approve</b>` : ''}</button>`;
 }
 
-// ---------- Platforms page: leases per env, deploy queue, deployed now ----------
-const platOpen = new Set();          // "Deployed now" sections the owner expanded
+// ---------- Platforms page: one block per platform (status, next deploy, in use, live, history) ----------
+const platOpen = new Set();          // "more queued" / "history" sections the owner expanded
 function platformsData() {
   const l = state.leases;
   const d0 = state.deploys;
   const hostname = l?.hostname || '';
-  return { l, d0, view: l && !l.error ? platformsView({ leases: l.leases || [], deploys: d0?.deploys || [], waiters: l.waiters || [], deployed: d0?.deployed || {}, sessionNames: state.sessions.map((s) => s.name), machines: machinesOf(hostname), nowMs: Date.now() }) : [] };
+  return { l, d0, view: l && !l.error ? platformsBlocks({ leases: l.leases || [], deploys: d0?.deploys || [], deployed: d0?.deployed || {}, sessionNames: state.sessions.map((s) => s.name), machines: machinesOf(hostname), nowMs: Date.now() }) : [] };
+}
+const whoHtml = (w) => (w.gone ? '<span class="pf-gone" title="no live tmux session has this name">&#9888; session gone</span>'
+  : w.session ? `<button class="pf-sess" data-open="${escapeHtml(w.session)}">${escapeHtml(w.text)}</button>` : escapeHtml(w.text));
+function nextRowHtml(n) {
+  const when = n.approve ? 'needs your approval' : n.blocked ? `${n.eta ? `${n.eta}` : 'waits on a lease'}` : 'starts at the next poll';
+  const btns = `${n.approve ? `<button class="sbtn on" data-dep="approve" data-id="${n.id}">Approve</button>` : ''}<button class="sbtn" data-dep="cancel" data-id="${n.id}">Cancel</button>`;
+  return `<div class="pf-next" data-depid="${n.id}"><span class="pf-nm">${escapeHtml(n.scope)} &middot; ${escapeHtml(n.ref)} &middot; ${whoHtml(n.who)}</span><span class="pf-when">${escapeHtml(when)}</span>${btns}</div>`;
+}
+function platformBlockHtml(e) {
+  const key = (k) => `${e.env}|${k}`;
+  const pill = `<span class="pf-pill ${e.status.toLowerCase()}">${e.status === 'FREE' ? '' : e.status === 'BLOCKED' ? icon('lock', 11) : ''}${e.status}</span>`;
+  const [first, ...rest] = e.next;
+  const next = first ? `<div class="pf-sub">NEXT DEPLOY${e.next.length > 1 ? ` (${e.next.length})` : ''}</div>${nextRowHtml(first)}
+    ${rest.length ? `<button class="pf-more" data-pf-toggle="${escapeHtml(key('q'))}"><span class="uch${platOpen.has(key('q')) ? ' on' : ''}"></span>${rest.length} more queued</button>${platOpen.has(key('q')) ? rest.map(nextRowHtml).join('') : ''}` : ''}` : '';
+  const deploying = e.deploying ? `<div class="pf-run" data-depid="${e.deploying.id}"><div>deploying &middot; ${escapeHtml(e.deploying.scope)} &middot; ${escapeHtml(e.deploying.ref)} &middot; ${whoHtml(e.deploying.who)}${e.deploying.startedAgo ? ` &middot; started ${escapeHtml(e.deploying.startedAgo)}` : ''}</div>
+    <pre class="dlog" data-log="${e.deploying.id}">…</pre></div>` : '';
+  const inUse = e.inUse.length ? `<div class="pf-sub">IN USE</div>${e.inUse.map((r) => `
+    <div class="pf-row${r.blocks ? ' blk' : ''}" data-res="${escapeHtml(e.env + '|' + r.resource)}"><span class="pf-r">${escapeHtml(r.label)}</span><span class="pf-w">${whoHtml(r.who)} &middot; ${escapeHtml(r.kindLabel)}</span><span class="pf-l">${escapeHtml(r.left)}</span></div>`).join('')}` : '';
+  const live = `<div class="pf-sub">LIVE</div>${e.live.length ? e.live.map((r) => `
+    <div class="pf-row${r.failed ? ' bad' : ''}"><span class="pf-r">${escapeHtml(r.target)}</span><span class="pf-w">${r.deployed ? escapeHtml(r.version || '?') : 'never deployed'}${r.ago ? ` &middot; ${escapeHtml(r.ago)}` : ''}</span><span class="pf-l">${r.failed ? `${icon('x', 11)} ${escapeHtml(r.reason || 'last deploy failed')}` : icon('check', 11)}</span></div>`).join('') : '<div class="dim pf-none">nothing recorded yet</div>'}`;
+  const hist = e.history.length ? `<button class="pf-more" data-pf-toggle="${escapeHtml(key('h'))}"><span class="uch${platOpen.has(key('h')) ? ' on' : ''}"></span>History (${e.history.length})</button>${platOpen.has(key('h')) ? e.history.map((h) => `
+    <div class="pf-hist${h.ok ? '' : ' bad'}">${escapeHtml(h.ago)} &middot; ${h.ok ? '&#10003;' : h.state === 'failed' ? '&#10007;' : escapeHtml(h.state)} &middot; ${escapeHtml(h.scope)} &middot; ${escapeHtml(h.ref)} &middot; ${whoHtml(h.who)}</div>`).join('') : ''}` : '';
+  return `<section class="pf-env" data-env="${escapeHtml(e.env)}">
+    <div class="pf-h"><span class="pf-name">${escapeHtml(e.env)}</span>${pill}</div>${deploying}${next}${inUse}${live}${hist}</section>`;
 }
 function platformsHtml() {
   const { l, d0, view } = platformsData();
   if (!l) return '<div class="sheet-empty">loading…</div>';
   const err = [l.error ? `registry unreachable &middot; ${escapeHtml(l.error)}` : '', d0 && d0.ok === false ? `deploy queue unreachable &middot; ${escapeHtml(d0.error || '')}` : ''].filter(Boolean);
-  const head = `${err.map((e) => `<div class="mnote dwarn">${e}</div>`).join('')}<div class="mnote">Runs deploys <b>${d0?.enabled ? 'ON' : 'OFF'}</b> &middot; change it in the AI manager</div>`;
+  const head = err.map((e) => `<div class="mnote dwarn">${e}</div>`).join('');
   if (!view.length) return `${head}<div class="sheet-empty">no leases, no deploys: every platform is free</div>`;
-  return head + view.map((e) => {
-    const recent = (d0?.deploys || []).filter((x) => x.env === e.env && !['awaiting-approval', 'queued', 'running'].includes(x.state)).sort((a, b) => (b.finished || 0) - (a.finished || 0)).slice(0, 3);
-    return `<section class="pf-env" data-env="${escapeHtml(e.env)}">
-      <div class="pf-h">${escapeHtml(e.env)}</div>
-      ${e.resources.length ? `<table class="pf-t"><thead><tr><th>resource</th><th>held by</th><th>left</th><th>purpose</th></tr></thead><tbody>${e.resources.map((r) => `
-        <tr data-res="${escapeHtml(e.env + '|' + r.resource)}" class="${r.blocksDeploy ? 'blk' : ''}"><td class="pf-r">${escapeHtml(r.resource)}${r.blocksDeploy ? '<br><span class="pf-b">blocks deploy</span>' : ''}</td>
-        <td>${r.session ? `<button class="pf-sess" data-open="${escapeHtml(r.session)}">${escapeHtml(displayName(r.session))} &#9656;</button>` : `<span class="pf-unk" title="no live session has exactly this name">unknown: ${escapeHtml(r.unknown)}</span>`}</td>
-        <td class="pf-l">${r.ttlLeftMin != null ? escapeHtml(ttlLeft(r.ttlLeftMin)) : ''}</td><td class="pf-p">${escapeHtml(r.purpose)}</td></tr>`).join('')}</tbody></table>` : '<div class="dim pf-none">no leases: free</div>'}
-      <div class="pf-sub">Deploy queue</div>
-      ${e.queue.map((x) => `<div data-depid="${x.id}">${depRow(x, d0)}</div>`).join('') || '<div class="dim pf-none">no deploy queued</div>'}
-      ${e.waiters.length ? `<div class="d2 dim">waiting for it: ${e.waiters.map((w) => escapeHtml(w.agent)).join(', ')}</div>` : ''}
-      ${recent.map((x) => `<div class="d2 dim">${escapeHtml(x.state)} &middot; ${escapeHtml(x.scope)} &middot; ${escapeHtml(x.ref)}${x.version ? ` &middot; ${escapeHtml(x.version)}` : ''} &middot; ${escapeHtml(x.agent)}</div>`).join('')}
-      <button class="pf-sum" data-pf-toggle="${escapeHtml(e.env)}"><span class="uch${platOpen.has(e.env) ? ' on' : ''}"></span><span>Deployed now &middot; ${escapeHtml(e.deployedSummary)}</span></button>
-      ${platOpen.has(e.env) ? `<div class="dep dnow">${deployedRowsHtml(e.deployedRows) || '<div class="dim">nothing recorded yet</div>'}</div>` : ''}
-    </section>`;
-  }).join('');
+  return head + view.map(platformBlockHtml).join('');
 }
-const ttlLeft = (m) => (m < 1 ? '<1m' : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`);
 function openPlatforms(focus) {
   openSheet('Platforms', ({ body, close }) => {
     body.closest('.sheet').classList.add('platforms');
