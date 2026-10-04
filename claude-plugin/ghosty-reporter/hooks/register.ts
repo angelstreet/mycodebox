@@ -1,5 +1,5 @@
 // ghosty-reporter: a pure observer. Every hook below calls next(e) and returns its result untouched;
-// reporting happens after that, is bounded by a short timeout, and swallows every error. If ghosty is
+// reporting is fire-and-forget after that (never awaited by the hook, except session.end), bounded by a short timeout, and swallows every error. If ghosty is
 // down the session behaves exactly as without this plugin (after one failed try, nothing is sent for
 // 30 s). Nothing is printed to the transcript.
 import type { Register } from 'claude-code'
@@ -78,7 +78,7 @@ export const register: Register = (on, options) => {
   state.url = String(options.url || 'http://127.0.0.1:7777/api/reporter/event')
   on('session.start', async ($, e, next) => {
     const out = await next(e)
-    await report($, 'session.start', { surface: e.surface, interactive: e.isInteractive })
+    void report($, 'session.start', { surface: e.surface, interactive: e.isInteractive })
     return out
   })
 
@@ -90,7 +90,7 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     const out = await next(e)
-    await report($, 'prompt', { text: cap(e.text), midTurn: e.turnId !== undefined, synthetic: isSynthetic(e.text) })
+    void report($, 'prompt', { text: cap(e.text), midTurn: e.turnId !== undefined, synthetic: isSynthetic(e.text) })
     return out
   })
 
@@ -98,15 +98,18 @@ export const register: Register = (on, options) => {
   // with its agentId and is not the session's turn.
   on('turn.complete', async ($, e, next) => {
     const out = await next(e)
-    await report($, 'turn.end', { text: cap(e.answer), reason: e.reason, durationMs: e.durationMs, usage: e.usage }, e.agentId)
-    if (!e.agentId) await snapshot($)
+    // one background chain, so a failed report trips the quiet period before the snapshot tries
+    void (async () => {
+      await report($, 'turn.end', { text: cap(e.answer), reason: e.reason, durationMs: e.durationMs, usage: e.usage }, e.agentId)
+      if (!e.agentId) await snapshot($)
+    })()
     return out
   })
 
   // The Stop hook carries what turn.complete does not: whether background work is still in flight.
   on('classic.Stop', async ($, e, next) => {
     const out = await next(e)
-    await report($, 'stop', {
+    void report($, 'stop', {
       text: cap(e.last_assistant_message ?? ''),
       backgroundWork: (e.background_tasks ?? []).length,
       background: taskRows(e.background_tasks),
@@ -117,36 +120,36 @@ export const register: Register = (on, options) => {
 
   on('classic.PermissionRequest', async ($, e, next) => {
     const out = await next(e)
-    await report($, 'waiting', { kind: 'permission', message: cap(`Permission requested: ${e.tool_name}`, 500), tool: e.tool_name }, e.agent_id)
+    void report($, 'waiting', { kind: 'permission', message: cap(`Permission requested: ${e.tool_name}`, 500), tool: e.tool_name }, e.agent_id)
     return out
   })
 
   on('classic.Notification', async ($, e, next) => {
     const out = await next(e)
     if (!NOT_WAITING.has(e.notification_type)) {
-      await report($, 'waiting', { kind: e.notification_type, message: cap(e.message, 1000) }, e.agent_id)
+      void report($, 'waiting', { kind: e.notification_type, message: cap(e.message, 1000) }, e.agent_id)
     }
     return out
   })
 
   on('agent.spawn', async ($, e, next) => {
     const out = await next(e)
-    await snapshot($)
+    void snapshot($)
     return out
   })
   on('classic.SubagentStart', async ($, e, next) => {
     const out = await next(e)
-    await snapshot($)
+    void snapshot($)
     return out
   })
   on('classic.SubagentStop', async ($, e, next) => {
     const out = await next(e)
-    await snapshot($)
+    void snapshot($)
     return out
   })
   on('classic.TeammateIdle', async ($, e, next) => {
     const out = await next(e)
-    await snapshot($)
+    void snapshot($)
     return out
   })
 }
