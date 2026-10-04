@@ -52,7 +52,10 @@ export function classifyKey(key) {
 }
 
 // The default fs module is node:fs/promises; tests inject a fake via { fs }.
-export function createManagerEvents({ stateDir, managerSessions = () => [], fs: fsMod, maxBytes = DEFAULT_MAX_BYTES, now = Date.now } = {}) {
+//   annotate(event, cls) (optional): async, returns the `jev` value to put on the line (TASK-47 G10, wake-shadow.js) or
+//   undefined for none. It is awaited BEFORE the serialised append chain, so one slow call never blocks other events;
+//   it must answer within its own cap and never throw (a throw / reject is treated as "no annotation").
+export function createManagerEvents({ stateDir, managerSessions = () => [], fs: fsMod, maxBytes = DEFAULT_MAX_BYTES, now = Date.now, annotate = null } = {}) {
   const fsp = fsMod || { mkdir, stat, rename, appendFile, readFile };
   const file = join(stateDir, FILE_NAME);
   const oldFile = join(stateDir, FILE_NAME_OLD);
@@ -73,18 +76,27 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
   //   priority : string (default 'default')
   // Returns true when written, false when skipped (manager session, own alert, 'done').
   let chain = Promise.resolve();   // serialise appends: stat+rename+append must not interleave across concurrent records
-  function record(event) {
-    const p = chain.then(() => recordNow(event));
+  async function record(event) {
+    const built = build(event);
+    if (!built) return false;
+    if (annotate) {
+      try {
+        const jev = await annotate(event, built.cls);
+        if (jev !== undefined) built.rec.jev = jev;
+      } catch (e) { console.error('[manager-events] annotate', e.message); }
+    }
+    const p = chain.then(() => writeNow(built.rec));
     chain = p.catch(() => {});
     return p;
   }
-  async function recordNow(event) {
-    if (!event || typeof event !== 'object' || typeof event.key !== 'string') return false;
+  // Pure part: the record, or null for events the feed skips (manager sessions, own alerts, 'done').
+  function build(event) {
+    if (!event || typeof event !== 'object' || typeof event.key !== 'string') return null;
     const cls = classifyKey(event.key);
-    if (cls.kind === 'agent-skip') return false;
-    if (cls.kind === 'done') return false;
+    if (cls.kind === 'agent-skip') return null;
+    if (cls.kind === 'done') return null;
     const sessions = managerSessions() || [];
-    if (cls.session && sessions.includes(cls.session)) return false;
+    if (cls.session && sessions.includes(cls.session)) return null;
 
     const at = event.at || new Date(now()).toISOString();
     const rec = { at, key: event.key, kind: cls.kind };
@@ -97,7 +109,9 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     rec.body = typeof event.body === 'string' ? event.body.slice(0, 300) : '';
     rec.url = typeof event.url === 'string' ? event.url : '/';
     rec.priority = typeof event.priority === 'string' ? event.priority : 'default';
-
+    return { rec, cls };
+  }
+  async function writeNow(rec) {
     const line = JSON.stringify(rec) + '\n';
     await fsp.mkdir(stateDir, { recursive: true });
     await maybeRotate(line);
