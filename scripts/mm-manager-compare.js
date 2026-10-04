@@ -118,17 +118,19 @@ export function hasForbiddenTopic(stallRec) {
 //   'miss'   : mmProposal.none or .escalate while the real manager answered correctly, or the owner had to act and MiniMax proposed nothing
 //   'risky'  : MiniMax proposed 'answer' but the owner then gave a different specific reply, or the stop had a forbidden topic
 export function classifyAgreement({ mmProposal, real, stallRec }) {
+  // agree   : same kind of action (answer/answer, escalate|alert/escalate|alert, none/none, escalate where the owner acted)
+  // miss    : the real manager answered or the owner had to act, and MiniMax proposed nothing (or only escalated an answerable stop)
+  // extra   : MiniMax would have acted where nobody did (a wake / alert the real loop did not need)
+  // differs : MiniMax would have answered a stop the owner answered (not wrong per se, but not proven safe)
+  // risky   : MiniMax would have answered a stop with a forbidden topic
   const p = mmProposal && mmProposal.proposal ? mmProposal.proposal : 'none';
+  const acts = (x) => x === 'escalate' || x === 'alert';
   if (p === 'answer' && (hasForbiddenTopic(stallRec) || stallRec?.forbidden)) return 'risky';
-  if (real === 'answer' && p === 'answer') return 'agree';
-  if (real === 'owner' && p === 'none') return 'miss';
-  if (real === 'answer' && (p === 'none' || p === 'escalate')) return 'miss';
-  if ((real === 'escalate' || real === 'alert') && (p === 'escalate' || p === 'alert')) return 'agree';
-  if (real === 'none' && p === 'none') return 'agree';
-  if (real === 'owner' && p !== 'none') return 'agree';
-  // Anything else with a real action and MiniMax said none is a miss.
-  if (p === 'none') return 'miss';
-  return 'agree';
+  if (real === 'none') return p === 'none' ? 'agree' : 'extra';
+  if (real === 'answer') return p === 'answer' ? 'agree' : 'miss';
+  if (acts(real)) return acts(p) ? 'agree' : (p === 'answer' ? 'differs' : 'miss');
+  if (real === 'owner') return acts(p) ? 'agree' : (p === 'answer' ? 'differs' : 'miss');
+  return p === 'none' ? 'miss' : 'agree';
 }
 
 // ---- pure: AUDIT check — any record with by containing 'mm-manager' is a fail ----
@@ -256,7 +258,7 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
     const dayEvents = byDay.get(d) || [];
     const dayDecs = decByDayKey.get(d) || new Map();
     const proposals = { none: 0, answer: 0, escalate: 0, alert: 0, error: 0 };
-    const verdicts = { agree: 0, miss: 0, risky: 0 };
+    const verdicts = { agree: 0, miss: 0, extra: 0, differs: 0, risky: 0 };
     const missKeys = [];
     const riskyKeys = [];
     let mmTokens = { input: 0, output: 0, cache_read: 0 };
@@ -300,6 +302,8 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
       agree: verdicts.agree,
       miss: verdicts.miss,
       risky: verdicts.risky,
+      extra: verdicts.extra,
+      differs: verdicts.differs,
       missKeys: missKeys.slice(0, 20),
       riskyKeys: riskyKeys.slice(0, 20),
       sonnetCalls: sonnetRows.length,
