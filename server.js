@@ -41,7 +41,9 @@ import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
 import { readFile, stat, readdir, realpath } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
+import { createLeaseStore } from './leases.js';
+import { machinesOf, holdingsOf, deployWaitOf } from './public/platforms.js';
 import { createHash } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -505,20 +507,17 @@ async function getMeta(session, cwd) {
 // Lease link
 // ---------------------------------------------------------------------------
 
-const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-const GENERIC_BRANCH = new Set(['main', 'master', 'dev', 'develop', 'head', 'trunk']);
-function leaseFor(session, branch) {
-  const leases = leaseCache.value?.ok ? leaseCache.value.leases : null;
-  if (!leases || !leases.length) return null;
-  const keys = [norm(session)];
-  if (branch && !GENERIC_BRANCH.has(branch.toLowerCase())) keys.push(norm(branch));
-  const hits = leases.filter((l) => {
-    const a = norm(l.agent);
-    return a && keys.some((k) => k.length >= 3 && a.includes(k));
-  });
-  if (!hits.length) return null;
-  const l = hits[0];
-  return { resource: l.resource, env: l.env, ttlLeftMin: l.ttlLeftMin, count: hits.length };
+const MACHINES = machinesOf(hostname());
+const leaseStore = createLeaseStore();
+// Resources this session holds ([{env, resource, ttlLeftMin, purpose, blocksDeploy}]), exact match on `<machine>:<session>`.
+function leaseFor(session, sessionNames) {
+  const v = leaseStore.peek();
+  if (!v?.ok) return [];
+  return holdingsOf(session, v.leases, deployRunner.snapshot().deploys, sessionNames, MACHINES).map(({ id, agent, ...r }) => r);
+}
+function deployWaitFor(session, sessionNames, stall) {
+  const v = leaseStore.peek();
+  return deployWaitOf(session, { deploys: deployRunner.snapshot().deploys, waiters: v?.ok ? v.waiters : [], stall, sessionNames, machines: MACHINES });
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +604,7 @@ async function pool(items, limit, fn) {
 async function pollOnce() {
   const [sessions, panes, table] = await Promise.all([listSessions(), listPanes(), processTable()]);
   const now = Date.now();
+  const sessionNames = sessions.map((x) => x.name);
   const status = {};
   const changedSessions = [];
   await pool(sessions, CONCURRENCY, async (s) => {
@@ -725,7 +725,8 @@ async function pollOnce() {
       cwd: meta.cwd, repo: meta.repo, branch: meta.branch, dirty: meta.dirty,
       project: meta.project ?? null, github: !!meta.github, worktree: meta.worktree ?? null,
       contextLeft: t.contextLeft, model: t.model,
-      lease: leaseFor(s.name, meta.branch),
+      lease: leaseFor(s.name, sessionNames),
+      deployWait: deployWaitFor(s.name, sessionNames, stallOf(s.name)),
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,
     };
@@ -755,43 +756,8 @@ function poll() {
 // Leases (shared registry on proxmox)
 // ---------------------------------------------------------------------------
 
-let leaseCache = { at: 0, value: null };
-function parseTtl(s) {
-  let min = 0;
-  const h = s.match(/(\d+)h/), m = s.match(/(\d+)m/);
-  if (h) min += Number(h[1]) * 60;
-  if (m) min += Number(m[1]);
-  if (!h && !m && /^\d+$/.test(s)) min = Number(s);
-  return min;
-}
-function parseLeases(out) {
-  const leases = [];
-  for (const line of out.split('\n')) {
-    const m = line.match(/^([0-9a-f]{6,})\s+(\S+)\s+(.*)$/i);
-    if (!m) continue;
-    const [env, ...rest] = m[2].split('/');
-    const kv = (k) => (m[3].match(new RegExp(`${k}=(\\S+)`)) || [])[1] || '';
-    const purpose = (m[3].match(/purpose=(.*)$/) || [])[1] || '';
-    leases.push({
-      id: m[1], env, resource: rest.join('/') || '*',
-      agent: kv('agent'), purpose: purpose.trim(),
-      ttlLeftMin: parseTtl(kv('expires_in')),
-    });
-  }
-  return leases;
-}
-async function getLeases() {
-  if (leaseCache.value && Date.now() - leaseCache.at < 15000) return leaseCache.value;
-  let value;
-  try {
-    const { stdout } = await exec('ssh', ['-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', 'proxmox', '~/bin/vpt-lease list'], { timeout: 8000 });
-    value = { ok: true, leases: parseLeases(stdout) };
-  } catch (err) {
-    value = { ok: false, error: String(err.stderr || err.message).trim().slice(0, 200) };
-  }
-  leaseCache = { at: Date.now(), value };
-  return value;
-}
+const getLeases = (force) => leaseStore.get(force);
+const leasesPayload = (v) => (v.ok ? { type: 'leases', leases: v.leases, waiters: v.waiters, hostname: hostname() } : { type: 'leases', error: v.error });
 
 // Per-session WebSocket fan-out
 const wsBySession = new Map(); // session -> Set<ws>
@@ -1130,7 +1096,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && p === '/api/leases') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(await getLeases()));
+    { const v = await getLeases(); res.end(JSON.stringify(v.ok ? { ok: true, leases: v.leases, waiters: v.waiters, hostname: hostname() } : v)); }
     return;
   }
   if (req.method === 'GET' && p.startsWith('/api/snapshot/')) {
@@ -1306,7 +1272,7 @@ server.on('upgrade', (req, socket, head) => {
   if (p === '/ws/status') {
     wss.handleUpgrade(req, socket, head, (ws) => {
       statusSubs.add(ws);
-      if (leaseCache.value?.ok) ws.send(JSON.stringify({ type: 'leases', leases: leaseCache.value.leases }));
+      if (leaseStore.peek()?.ok) ws.send(JSON.stringify(leasesPayload(leaseStore.peek())));
       if (latest) ws.send(JSON.stringify({ type: 'status', status: latest.status }));
       if (health) ws.send(JSON.stringify({ type: 'health', health }));
       ws.send(JSON.stringify({ type: 'deploys', deploys: deployRunner.snapshot() }));
@@ -1365,9 +1331,8 @@ async function tick() {
 }
 
 async function leaseTick() {
-  leaseCache.at = 0; // force refresh
-  const v = await getLeases();
-  if (v.ok) broadcastStatus({ type: 'leases', leases: v.leases });
+  const v = await getLeases(true);
+  if (v.ok) broadcastStatus(leasesPayload(v));
 }
 
 // ---------------------------------------------------------------------------
@@ -1379,7 +1344,7 @@ server.listen(PORT, HOST, async () => {
   try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
   await initManager({
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n')),
-    context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseCache.value), deploys: deploysLine(deployRunner.snapshot()) }),
+    context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey, sendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
     heldStore: { get: (n) => sessionMeta.held(n), set: (n, h) => sessionMeta.setHeld(n, h) },
