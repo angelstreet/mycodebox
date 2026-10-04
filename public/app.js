@@ -2959,12 +2959,14 @@ function openNewSession() {
       <div class="seg" id="nsAgent">${NEW_AGENTS.map((a) => `<button data-a="${a}" class="${a === agent ? 'on' : ''} ${a}">${a}</button>`).join('')}</div>
       <label class="flab">name</label>
       <input class="sheet-in" id="nsName" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="session name">
-      <label class="flab">working dir <span class="dim" id="nsHint"></span></label>
-      <input class="sheet-in" id="nsCwd" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="search or type a path…">
-      <div class="dirs" id="nsDirs"><div class="sheet-empty">loading…</div></div>`;
+      <label class="flab">project <span class="dim" id="nsHint">git repos &amp; worktrees</span></label>
+      <div class="ucombo nsproj"><button type="button" class="ucb" id="nsProj" aria-label="Choose a project"><span class="ucl">choose a project…</span></button>
+        <div class="ucpanel hidden" id="nsPanel"><input class="ucs" id="nsSearch" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="search projects or type a path…"><div class="uclist" id="nsDirs"><div class="sheet-empty">loading…</div></div></div></div>
+      <input type="hidden" id="nsCwd">`;
     foot.classList.remove('hidden');
     foot.innerHTML = `<button class="sbtn" data-a="cancel">cancel</button><span class="grow"></span><button class="sbtn primary" id="nsGo" data-a="go">create</button>`;
     const nameIn = body.querySelector('#nsName'), cwdIn = body.querySelector('#nsCwd'), list = body.querySelector('#nsDirs');
+    const panel = body.querySelector('#nsPanel'), search = body.querySelector('#nsSearch'), projBtn = body.querySelector('#nsProj');
     const taken = (n) => state.sessions.some((s) => s.name === n);
     const suggest = () => {
       if (nameTouched) return;
@@ -2974,24 +2976,30 @@ function openNewSession() {
       while (taken(n)) n = `${b}-${i++}`;
       nameIn.value = n;
     };
+    const projects = () => (dirs || []).filter((d) => d.git !== false);   // repos / worktrees only (a .git inside)
     const drawDirs = () => {
-      if (!dirs) { list.innerHTML = `<div class="sheet-empty">${dirs === null ? 'dir list unavailable — type a path' : 'loading…'}</div>`; return; }
-      const q = cwdIn.value.trim().toLowerCase();
+      if (!dirs) { list.innerHTML = `<div class="sheet-empty">${dirs === null ? 'project list unavailable \u2014 type a path' : 'loading\u2026'}</div>`; return; }
+      const q = search.value.trim().toLowerCase();
       const rec = recentDirs();
       const rank = (d) => { const i = rec.indexOf(d.path); return i < 0 ? 99 : i; };
-      const items = dirs.filter((d) => !q || d.path.toLowerCase().includes(q) || (d.name || '').toLowerCase().includes(q))
-        .sort((a, b) => rank(a) - rank(b) || (a.name || '').localeCompare(b.name || '')).slice(0, 60);
-      list.innerHTML = items.map((d) => `<button class="drow" data-p="${escapeHtml(d.path)}"><span class="dn">${rank(d) < 99 ? '<i class="rec">●</i> ' : ''}<b>${escapeHtml(d.name || baseName(d.path))}</b>${d.branch ? `<em>${escapeHtml(d.branch)}</em>` : ''}</span><small>${escapeHtml(d.path)}</small></button>`).join('')
-        || '<div class="sheet-empty">no match — it will use the typed path</div>';
+      const items = projects().filter((d) => !q || d.path.toLowerCase().includes(q) || (d.name || '').toLowerCase().includes(q))
+        .sort((x, y) => rank(x) - rank(y) || (x.name || '').localeCompare(y.name || '')).slice(0, 80);
+      const typed = /^\//.test(q) && !items.some((d) => d.path.toLowerCase() === q) ? `<button type="button" class="uci" data-p="${escapeHtml(search.value.trim())}"><b>use path</b> <span class="dim">${escapeHtml(search.value.trim())}</span></button>` : '';
+      list.innerHTML = typed + (items.map((d) => `<button type="button" class="uci${d.path === cwdIn.value ? ' on' : ''}" data-p="${escapeHtml(d.path)}">${rank(d) < 99 ? '<i class="rec">\u25CF</i> ' : ''}<b>${escapeHtml(d.name || baseName(d.path))}</b>${d.branch ? ` <em>${escapeHtml(d.branch)}</em>` : ''}<small>${escapeHtml(d.path)}</small></button>`).join('')
+        || (typed ? '' : '<div class="sheet-empty">no project matches</div>'));
     };
-    list.onclick = (e) => {
-      const b = e.target.closest('.drow');
-      if (!b) return;
-      cwdIn.value = b.dataset.p;
+    const pick = (p) => {
+      cwdIn.value = p;
+      const d = projects().find((x) => x.path === p);
+      projBtn.querySelector('.ucl').textContent = d ? `${d.name || baseName(p)}${d.branch ? ` \u00b7 ${d.branch}` : ''}` : p;
+      projBtn.classList.add('sel');
+      panel.classList.add('hidden');
       suggest();
-      drawDirs();
     };
-    cwdIn.oninput = () => { suggest(); drawDirs(); };
+    projBtn.onclick = (e) => { e.stopPropagation(); const open = panel.classList.contains('hidden'); panel.classList.toggle('hidden', !open); if (open) { search.value = ''; drawDirs(); search.focus(); } };
+    panel.onclick = (e) => { e.stopPropagation(); const b = e.target.closest('.uci'); if (b) pick(b.dataset.p); };
+    search.oninput = drawDirs;
+    body.addEventListener('click', (e) => { if (!e.target.closest('.nsproj')) panel.classList.add('hidden'); });
     nameIn.oninput = () => { nameTouched = true; };
     // Suggestion only: preselect the agent with the most headroom for this priority until the owner picks one.
     const showAgent = () => { for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('on', x.dataset.a === agent); };
@@ -3025,7 +3033,7 @@ function openNewSession() {
       if (a !== 'go') return;
       const name = safeName(nameIn.value), cwd = cwdIn.value.trim();
       if (!name) { toast('name required'); return; }
-      if (!cwd) { toast('pick a working dir'); return; }
+      if (!cwd) { toast('pick a project'); return; }
       const go = foot.querySelector('#nsGo');
       go.disabled = true; go.textContent = 'creating…';
       try {
@@ -3050,7 +3058,7 @@ function openNewSession() {
     };
     suggest();
     applySuggestion();
-    fetchDirs().then((d) => { dirs = d || null; if (d === null) dirs = null; drawDirs(); if (!d) list.innerHTML = '<div class="sheet-empty">dir list unavailable — type a path</div>'; });
+    fetchDirs().then((d) => { dirs = d || null; drawDirs(); if (!d) list.innerHTML = '<div class="sheet-empty">project list unavailable \u2014 type a path</div>'; });
   });
 }
 

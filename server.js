@@ -54,6 +54,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
 import { createPush, createAlerts } from './push.js';
+import { trustFolder } from './trust.js';
 import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
 import { createCredits } from './credits.js';
@@ -904,6 +905,7 @@ async function createSession({ name, agent, cwd, priority }) {
   } catch (err) {
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
+  try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
   const cmd = AGENT_CMDS[agent];
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
@@ -1020,10 +1022,10 @@ async function collectDirs() {
     }
     if (!mtime) return;   // vanished
     const g = await gitInfo(path);
-    list.push({ path, name: basename(path), branch: g.branch, mtime });
+    list.push({ path, name: basename(path), branch: g.branch, mtime, git: existsSync(join(path, '.git')) });
   });
   list.sort((a, b) => b.mtime - a.mtime);
-  const value = list.map(({ path, name, branch }) => ({ path, name, branch }));
+  const value = list.map(({ path, name, branch, git }) => ({ path, name, branch, git }));
   dirsCache = { at: Date.now(), value };
   return value;
 }
