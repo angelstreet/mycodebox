@@ -2110,7 +2110,8 @@ function usageHtml(u, tab, ui) {
       input: rows.reduce((s, r) => s + r.in, 0), output: rows.reduce((s, r) => s + r.out, 0),
       cache_read: rows.reduce((s, r) => s + r.cr, 0), cache_creation: rows.reduce((s, r) => s + r.cw, 0) };
   }
-  const head = `<div class="utot"><b>${usd(total.cost === 0 && total.unpriced > 0 ? null : total.cost)}</b> <span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced` : ''}</span><br>${tokLine(total)}</div>`;
+  const totCost = total.cost === 0 && total.unpriced > 0 ? null : total.cost;
+  const totalHtml = `<div class="utot"><span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced` : ''}</span><br>${tokLine(total)}</div>`;
 
   // agents (with their models nested); derived from the filtered sessions when a project/session filter is on
   const narrowed = !!(fp || q);
@@ -2136,10 +2137,11 @@ function usageHtml(u, tab, ui) {
       ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
   const days = today ? '' : sec('day', 'Per day', '', undefined, `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
-  return head + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa))
+  return sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa))
     + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
     + sec('project', 'Projects', projects.length, undefined, projHtml)
     + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml)
+    + sec('total', 'Total', '', totCost, totalHtml)
     + (filtered ? '' : days);
 }
 function openUsage() {
@@ -2148,7 +2150,7 @@ function openUsage() {
     foot.classList.remove('hidden');
     foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
-    const ui = { f: { agent: '', project: '', q: '' }, open: { quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set() };
+    const ui = { f: { agent: '', project: '', q: '' }, open: { total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set() };
     let tab = 'today', data = null;
     body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
       <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><div class="ucombo"><button type="button" class="ucb" data-combo aria-label="Filter by session"><span class="ucl">all sessions</span></button><div class="ucpanel hidden"><input class="ucs" type="search" placeholder="search session…" aria-label="Search sessions"><div class="uclist"></div></div></div></div>
