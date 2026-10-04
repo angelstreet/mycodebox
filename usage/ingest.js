@@ -160,7 +160,7 @@ const median = (xs) => { const s = [...xs].sort((a, b) => a - b); const m = s.le
 
 export function buildSummary(records, now, days = 14) {
   const since = now - days * DAY_MS, today = dayOf(now);
-  const by = { session: new Map(), project: new Map(), agent: new Map(), model: new Map(), day: new Map() };
+  const by = { session: new Map(), project: new Map(), agent: new Map(), model: new Map(), day: new Map(), dayModel: new Map() };
   const tdy = { total: zero(), agent: new Map(), project: new Map(), model: new Map() };   // today (UTC day) only
   const total = zero();
   const get = (m, k, init) => { let v = m.get(k); if (!v) { v = init(); m.set(k, v); } return v; };
@@ -171,6 +171,7 @@ export function buildSummary(records, now, days = 14) {
     add(get(by.agent, r.agent, zero), r);
     add(get(by.model, r.model, zero), r);
     add(get(by.day, dayOf(r.ts), zero), r);
+    add(get(get(by.dayModel, dayOf(r.ts), () => new Map()), r.model, zero), r);
     const s = get(by.session, r.trace, () => ({ ...zero(), id: r.trace, session: r.label, agent: r.agent, project: r.project || 'unknown', first: r.ts, last: r.ts, models: new Set(), days: new Map(), slots: new Set(), today: { ...zero(), slots: new Set() } }));
     add(s, r);
     s.first = Math.min(s.first, r.ts); s.last = Math.max(s.last, r.ts); s.models.add(r.model);
@@ -210,6 +211,8 @@ export function buildSummary(records, now, days = 14) {
     generatedAt: new Date(now).toISOString(), windowDays: days, total: round(total),
     perAgent: obj(by.agent), perProject: obj(by.project), perModel: obj(by.model),
     perDay: Object.fromEntries([...by.day].sort().map(([k, v]) => [k, round(v)])),
+    // per day, per model: { total tokens, cost (null-ish 0 when unpriced), unpriced } for the usage view's token chart
+    perDayModel: Object.fromEntries([...by.dayModel].sort().map(([d, m]) => [d, Object.fromEntries([...m].map(([k, v]) => [k, { total: v.total, cost: Math.round(v.cost * 1e6) / 1e6, unpriced: v.unpriced }]))])),
     // today = the UTC day's totals, per agent / project / model (the usage view's "Today" tab)
     today: { day: today, total: round(tdy.total), perAgent: obj(tdy.agent), perProject: obj(tdy.project), perModel: obj(tdy.model) },
     // per session: 14-day totals + activeHours (5-minute slots with a record), `today` (null when idle today; rate = cost
