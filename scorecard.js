@@ -134,7 +134,7 @@ export function resolveConfig(cfg) {
 //   config       : manager config snapshot (managerSessions, scoreWeights, costBudget)
 //   from, to     : ms epoch window; records with ts in [from,to) are counted (to is exclusive)
 // Returns the scorecard object.
-export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], config = {}, from, to, deployList = null } = {}) {
+export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, from, to, deployList = null } = {}) {
   const { scoreWeights, costBudget, managerSessions } = resolveConfig({ config });
   const cost = {
     session: emptyBucket(),
@@ -391,6 +391,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
     },
     budget,
     router: routerSection({ stallRecs, from, to }),
+    wakeShadow: wakeShadowSection({ eventRecs, stallRecs, from, to }),
   };
 }
 
@@ -462,8 +463,55 @@ export function routerSection({ stallRecs = [], from, to } = {}) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Wake shadow (TASK-47 G10): Jev's opinion on each manager event (`jev` on the manager-events.jsonl line) vs what
+// really happened 15 min later (`wake_outcome` records in stalls.jsonl). Shadow only. Jev "wakes" = pick wake_cheap |
+// wake_opus; the rule default is compared on the same events (those that carry a `jev` block, so a rule default).
+//   agreement  = share of labelled annotated events where "wake" == "needed"
+//   misses     = said no wake, but it was needed; falseAlarms = said wake, but it was not needed (both counted by kind)
+// ---------------------------------------------------------------------------
+const wakes = (pick) => pick === 'wake_cheap' || pick === 'wake_opus';
+const rate = (a, n) => (n ? Math.round((a / n) * 1000) / 1000 : null);
+function judgeBlock(rows, say) {   // rows: [{ kind, needed }] ; say(row) -> bool (the thing being judged says "wake")
+  const o = { n: rows.length, wake: 0, noWake: 0, agree: 0, agreement: null, misses: { count: 0, byKind: {} }, falseAlarms: { count: 0, byKind: {} } };
+  for (const r of rows) {
+    const w = say(r);
+    if (w) o.wake++; else o.noWake++;
+    if (w === r.needed) o.agree++;
+    else {
+      const b = w ? o.falseAlarms : o.misses;
+      b.count++; b.byKind[r.kind] = (b.byKind[r.kind] || 0) + 1;
+    }
+  }
+  o.agreement = rate(o.agree, o.n);
+  return o;
+}
+export function wakeShadowSection({ eventRecs = [], stallRecs = [], from, to } = {}) {
+  const labels = new Map();   // event_key -> 'needed' | 'not_needed' (newest wins)
+  for (const r of stallRecs || []) if (r && r.type === 'wake_outcome' && r.event_key) labels.set(r.event_key, r.label);
+  const out = { events: 0, annotated: 0, skipped: 0, errors: 0, unannotated: 0, jevSays: { wake: 0, noWake: 0 }, observed: { needed: 0, notNeeded: 0, pending: 0 }, jev: null, rule: null };
+  const rows = [];
+  for (const e of eventRecs || []) {
+    if (!e || !e.at) continue;
+    const t = Date.parse(e.at) || 0;
+    if ((from != null && t < from) || (to != null && t >= to)) continue;
+    out.events++;
+    const j = e.jev;
+    if (!j) out.unannotated++;
+    else if (j.skipped) out.skipped++;
+    else if (j.error) out.errors++;
+    else if (j.pick) { out.annotated++; if (wakes(j.pick)) out.jevSays.wake++; else out.jevSays.noWake++; }
+    const label = labels.get(`${e.at}|${e.key}`);
+    if (label === 'needed') out.observed.needed++; else if (label === 'not_needed') out.observed.notNeeded++; else out.observed.pending++;
+    if (label && j && j.ruleDefault) rows.push({ kind: e.kind, needed: label === 'needed', jev: j.pick || null, rule: j.ruleDefault });
+  }
+  out.jev = judgeBlock(rows.filter((r) => r.jev), (r) => wakes(r.jev));
+  out.rule = judgeBlock(rows.filter((r) => r.jev), (r) => wakes(r.rule));   // same events as Jev, for comparison
+  return out;
+}
+
 // Build one scorecard per UTC day in the window [now-days*DAY_MS, now], oldest first.
-export function scorecardDays({ ledgerRows = [], stallRecs = [], runs = [], config = {}, days = 7, now = Date.now(), deployList = null } = {}) {
+export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, days = 7, now = Date.now(), deployList = null } = {}) {
   const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const to = Math.floor((now - i * DAY_MS) / DAY_MS) * DAY_MS + DAY_MS * (i === 0 ? 1 : 1);   // end of that UTC day
@@ -471,7 +519,7 @@ export function scorecardDays({ ledgerRows = [], stallRecs = [], runs = [], conf
     const day = Math.floor((now - i * DAY_MS) / DAY_MS);
     const from = day * DAY_MS;
     const end = from + DAY_MS;
-    out.push(buildScorecard({ ledgerRows, stallRecs, runs, config, from, to: end, deployList }));
+    out.push(buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to: end, deployList }));
   }
   return out;
 }
@@ -529,27 +577,33 @@ export function foldRuns(lines) {
 // Build the scorecard for one UTC day boundary [from, to). All I/O.
 export async function loadScorecard({ from, to, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
-  const [ledgerRows, stallRecs, runsLines] = await Promise.all([
+  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld] = await Promise.all([
     readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
   ]);
+  const eventRecs = [...eventsOld, ...eventsNow];
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);
-  return buildScorecard({ ledgerRows, stallRecs, runs, config, from, to, deployList });
+  return buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to, deployList });
 }
 
 // days=1..30. Returns { today, days: [oldest..today] } for the UI.
 export async function loadScorecardDays({ days = 7, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
-  const [ledgerRows, stallRecs, runsLines] = await Promise.all([
+  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld] = await Promise.all([
     readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
   ]);
+  const eventRecs = [...eventsOld, ...eventsNow];
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);
-  const all = scorecardDays({ ledgerRows, stallRecs, runs, config, days, now: Date.now(), deployList });
+  const all = scorecardDays({ ledgerRows, stallRecs, eventRecs, runs, config, days, now: Date.now(), deployList });
   return { today: all[all.length - 1], days: all };
 }
 
