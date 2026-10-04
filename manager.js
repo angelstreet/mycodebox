@@ -20,18 +20,21 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
-import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra } from './stall.js';
+import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch } from './stall.js';
+import { AI_MODES, AI_NEVER_CASES, createBudget, callReviewer, reviewerUrl } from './triage.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const CONFIG_FILE = join(STATE_DIR, 'manager.json');
 export const LOG_FILE = join(STATE_DIR, 'stalls.jsonl');
 const BUDGET_FILE = join(STATE_DIR, 'jev-budget.json');
+const AI_BUDGET_FILE = join(STATE_DIR, 'ai-budget.json');
 
 const SETTLE_MS = Number(process.env.STALL_SETTLE_MS || 5000);       // pane unchanged this long = a stall
 const JEV_URL = process.env.JEV_URL || '';                            // VPT server POST /server/ai/decide
 const JEV_API_KEY = process.env.JEV_API_KEY || '';
 const JEV_DAILY_USD = Number(process.env.JEV_DAILY_USD || 0.25);
 const JEV_DAILY_CALLS = Number(process.env.JEV_DAILY_CALLS || 2000);
+const AI_URL = process.env.AI_URL || reviewerUrl(JEV_URL);          // the reviewer: POST /server/ai/complete on the same server as Jev
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
 export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait'];
 export const LABELS = ['no_reason', 'legit', 'wrong_case'];
@@ -39,8 +42,14 @@ export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, ...POLICY_DEFAULTS };
+let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
+  aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: ['owner_decision', 'continue', 'stopped_short', 'menu_recommended'],
+  ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
+const aiBudget = createBudget(AI_BUDGET_FILE);
+const triages = new Map();   // stop id -> triage result (one reviewer call per stop)
+let triageContext = () => ({});   // injected by server.js: (session) -> { priority, quota, leases, deploys }
+let reviewerFetch = (...a) => fetch(...a);
 const watch = new Map();   // session -> { since, hash, stall, pending: {id, at, auto}, last, auto }
 const sentLog = new Map(); // session -> [ms epoch of each auto answer] (hourly cap)
 let notify = () => {};
@@ -56,11 +65,15 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold } = {}) {
+export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { budget = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); } catch {}
+  await aiBudget.load();
   config.autoCases = (config.autoCases || []).filter((c) => AUTO_CASES.includes(c));
+  config.aiAutoCases = (config.aiAutoCases || []).filter((c) => CASES.includes(c) && !AI_NEVER_CASES.includes(c));
+  if (!AI_MODES.includes(config.aiTriage)) config.aiTriage = 'simulate';
+  if (context) triageContext = context;
   if (onOwnerNeeded) notify = onOwnerNeeded;
   if (sendKey) send.key = sendKey;
   if (sendKeys) send.keys = sendKeys;
@@ -68,14 +81,15 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
   if (policy) policyOf = policy;
   if (heldStore) held = heldStore;
   if (onHold) notifyHold = onHold;
-  console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, log ${LOG_FILE}`);
+  console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
 
 export const deployRunnerOn = () => config.deployRunner === true;
 export const policyConfig = () => ({ policyEnabled: config.policyEnabled, p1MaxPct: config.p1MaxPct, p2MaxPct: config.p2MaxPct });
 
 export function managerConfig() {
-  return { ...config, validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS } };
+  return { ...config, validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
+    ai: !!(AI_URL && JEV_API_KEY), aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
 }
 
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
@@ -85,7 +99,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner } = b;
+  const { enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -95,6 +109,14 @@ export async function setManagerConfig(b = {}) {
   if (minConfidence !== undefined) config.minConfidence = num(minConfidence, 0, 1, 'minConfidence');
   if (delayMs !== undefined) config.delayMs = Math.round(num(delayMs, 0, 600000, 'delayMs'));
   if (maxPerSessionPerHour !== undefined) config.maxPerSessionPerHour = Math.round(num(maxPerSessionPerHour, 0, 100, 'maxPerSessionPerHour'));
+  if (aiTriage !== undefined) { if (!AI_MODES.includes(aiTriage)) throw bad(`aiTriage must be one of: ${AI_MODES.join(', ')}`); config.aiTriage = aiTriage; }
+  if (aiMinConfidence !== undefined) config.aiMinConfidence = num(aiMinConfidence, 0, 1, 'aiMinConfidence');
+  if (aiDailyUsd !== undefined) config.aiDailyUsd = num(aiDailyUsd, 0, 100, 'aiDailyUsd');
+  if (aiDailyCalls !== undefined) config.aiDailyCalls = Math.round(num(aiDailyCalls, 0, 10000, 'aiDailyCalls'));
+  if (aiAutoCases !== undefined) {
+    if (!Array.isArray(aiAutoCases) || aiAutoCases.some((c) => !CASES.includes(c) || AI_NEVER_CASES.includes(c))) throw bad(`aiAutoCases must be a list of: ${CASES.filter((c) => !AI_NEVER_CASES.includes(c)).join(', ')}`);
+    config.aiAutoCases = [...new Set(aiAutoCases)];
+  }
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
   if (typeof deployRunner === 'boolean') config.deployRunner = deployRunner;
   if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');
@@ -150,12 +172,49 @@ function autoBlock(name, final, confidence) {
   return null;
 }
 
+// The AI's proposal as an automatic answer: its own switch (aiTriage 'auto') on top of autoSend, its own case list and threshold.
+function aiBlock(name, kase, confidence) {
+  if (isPaused(name)) return 'session paused by owner';
+  if (config.aiTriage !== 'auto') return 'AI auto-answer is off';
+  if (!config.autoSend) return 'auto-answer is off';
+  if (!config.aiAutoCases.includes(kase)) return `${kase} is not an AI auto-answer case`;
+  if (confidence < config.aiMinConfidence) return `AI confidence ${confidence.toFixed(2)} below ${config.aiMinConfidence}`;
+  if (hourCount(name) >= config.maxPerSessionPerHour) return `hourly cap reached (${config.maxPerSessionPerHour})`;
+  return null;
+}
+
 // A stall that is not auto-answered goes to the owner. A waiting session was already pushed by
 // ghosty's own 'waiting' alert, so only a finished turn that asks something is pushed here.
-function escalate(name, state, final, id, reason) {
+function escalate(name, state, final, id, reason, aiLine = null) {
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
-  if (state === 'done' && final.case !== 'done') notify(name, final, reason);
+  if (state === 'done' && final.case !== 'done') notify(name, aiLine ? { ...final, aiLine } : final, reason);
+}
+
+// ---- AI reviewer (phase 9) ----
+// Stops that go to the owner: everything except background work and a plain finished turn without a question.
+export const toOwnerCase = (final) => final.case !== 'background_wait' && (final.case !== 'done' || /\?/.test(final.question || ''));
+
+const QUOTA_NAMES = { claude: 'Claude Max', codex: 'Codex', minimax: 'MiniMax' };
+const oneLine = (rec) => (rec?.ai ? `${rec.ai.owner_needed ? 'needs you' : 'proposes'}${rec.ai.proposed_reply ? ` "${rec.ai.proposed_reply}"` : ''}` : null);
+
+// One reviewer call per stop (cached by stop id). Returns the triage record, or null when AI triage is off.
+export async function triageStop({ name, id, final, jevOut, state, agent, project, stall }) {
+  if (config.aiTriage === 'off') return null;
+  if (triages.has(id)) return triages.get(id);
+  const rec = { type: 'triage', id, session: name, at: new Date().toISOString(), case: final.case, mode: config.aiTriage };
+  const finish = async (extra, logIt = true) => { Object.assign(rec, extra); triages.set(id, rec); if (triages.size > 300) triages.delete(triages.keys().next().value); if (logIt) await log(rec); return rec; };
+  if (!AI_URL || !JEV_API_KEY) return finish({ skipped: 'not configured' }, false);
+  if (aiBudget.over(config.aiDailyUsd, config.aiDailyCalls)) return finish({ skipped: 'AI daily budget reached' });
+  const ctx = (() => { try { return triageContext(name, final) || {}; } catch { return {}; } })();
+  const deployish = final.case === 'waiting_deploy' || !!final.deployHint || /deploy/i.test(final.forbidden || '');   // lease + deploy-queue state only matters here
+  const flags = [final.forbidden ? `forbidden topic: "${final.forbidden}"` : null, stall.draft ? 'the owner has an unsent draft in the input box' : null,
+    final.no_status ? 'closing text gives no done / tested / left status' : null, final.deployHint ? 'mentions a deploy' : null].filter(Boolean);
+  const facts = { session: name, agent, project, priority: ctx.priority, state, case: final.case, source: final.source, flags,
+    jev: jevOut?.choice ? jevOut : null, quota: ctx.quota, ...(deployish ? { leases: ctx.leases, deploys: ctx.deploys } : {}), text: stall.excerpt || final.question || '' };
+  const r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, fetchFn: reviewerFetch });
+  aiBudget.add(r.cost || 0);
+  return finish(r.ai ? { ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model } : { error: r.error, cost: r.cost || 0, ms: r.ms });
 }
 
 export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {
@@ -210,7 +269,7 @@ export function reevaluateHolds() {
     endHold(name, 'manager', `quota recovered: ${pol.reason}`, true);
     const stopped = w.last && (w.last.state === 'waiting' || w.last.state === 'done');
     if (!p || !stopped || w.hash !== p.hash || !sessionOn(name)) continue;
-    if (autoBlock(name, { case: p.case }, p.confidence)) continue;
+    if (p.source === 'ai' ? aiBlock(name, p.case, p.confidence) : autoBlock(name, { case: p.case }, p.confidence)) continue;
     schedule(name, w, p);
   }
 }
@@ -227,13 +286,18 @@ async function fire(name, auto) {
   const w = watch.get(name);
   if (!w || w.auto !== auto) return;
   const last = w.last;
-  const ws = w.stall && w.cls ? wouldSend({ ...w.stall, draft: w.cls.draft, forbidden: w.stall.forbidden || w.cls.forbidden }) : { send: null, why: 'owner' };
+  const ai = auto.source === 'ai';   // the AI reviewer's proposal, auto mode: same gates, plus its own switch and a re-check of the reply itself
+  const forb = (w.stall?.forbidden || w.cls?.forbidden) || (ai ? forbiddenMatch(auto.answer?.text || '') : null);
+  const ws = ai ? (forb ? { send: null, why: `forbidden: ${forb}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'ai' })
+    : w.stall && w.cls ? wouldSend({ ...w.stall, draft: w.cls.draft, forbidden: w.stall.forbidden || w.cls.forbidden }) : { send: null, why: 'owner' };
   let reason = null, esc = false;
   if (isPaused(name)) reason = 'session paused by owner';
   else if (!config.autoSend) reason = 'auto-answer turned off';
   else if (!sessionOn(name)) reason = 'manager disabled for this session';
-  else if (!config.autoCases.includes(auto.case)) reason = `${auto.case} no longer an auto-answer case`;
-  else if (auto.confidence < config.minConfidence) reason = `confidence ${auto.confidence.toFixed(2)} below ${config.minConfidence}`;
+  else if (ai && config.aiTriage !== 'auto') reason = 'AI auto-answer turned off';
+  else if (ai && !config.aiAutoCases.includes(auto.case)) reason = `${auto.case} no longer an AI auto-answer case`;
+  else if (!ai && !config.autoCases.includes(auto.case)) reason = `${auto.case} no longer an auto-answer case`;
+  else if (auto.confidence < (ai ? config.aiMinConfidence : config.minConfidence)) reason = `confidence ${auto.confidence.toFixed(2)} below ${ai ? config.aiMinConfidence : config.minConfidence}`;
   else if (!last || (last.state !== 'waiting' && last.state !== 'done')) reason = 'session moved on';
   else if (w.hash !== auto.hash) reason = 'pane changed';
   else if (last.lastSendAt && w.pending && last.lastSendAt > w.pending.at) reason = 'owner sent something';
@@ -263,13 +327,16 @@ async function fire(name, auto) {
 
 // Owner label on a logged stall ("this stop bothered me"). Appended; the newest label of an id wins.
 // correctCase (the manager chose the wrong case) may ride on any label; with label wrong_case it is the label itself.
-export async function labelStall({ id, label, note, correctCase } = {}) {
+export const AI_VERDICTS = ['right', 'wrong'];
+export async function labelStall({ id, label, note, correctCase, aiVerdict } = {}) {
   if (typeof id !== 'string' || !id) throw bad('id required');
-  if (!LABELS.includes(label)) throw bad(`label must be one of: ${LABELS.join(', ')}`);
+  if (aiVerdict != null && !AI_VERDICTS.includes(aiVerdict)) throw bad(`aiVerdict must be one of: ${AI_VERDICTS.join(', ')}`);
+  // aiVerdict may ride on a normal label, or stand alone (no label): then the stop stays unlabelled for the swipe review.
+  if (!(aiVerdict && label == null) && !LABELS.includes(label)) throw bad(`label must be one of: ${LABELS.join(', ')}`);
   if (note != null && (typeof note !== 'string' || note.length > 500)) throw bad('note must be a string of at most 500 characters');
   if (correctCase != null && !CASES.includes(correctCase)) throw bad(`correctCase must be one of: ${CASES.join(', ')}`);
   await requireKnown(id);
-  const rec = { type: 'label', id, label, note: note || null, correctCase: correctCase || null, at: new Date().toISOString() };
+  const rec = { type: 'label', id, ...(label != null ? { label, note: note || null, correctCase: correctCase || null } : {}), ...(aiVerdict ? { aiVerdict } : {}), at: new Date().toISOString() };
   await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
   return rec;
 }
@@ -293,10 +360,32 @@ async function requireKnown(id) {
 export function effectiveLabels(recs) {
   const labels = new Map();
   for (const r of recs) {
-    if (r.type === 'label') labels.set(r.id, r);
+    if (r.type === 'label' && r.label) labels.set(r.id, r);   // a record with only an aiVerdict does not label the stop
     else if (r.type === 'unlabel') labels.delete(r.id);
   }
   return labels;
+}
+
+// stall id -> 'right' | 'wrong': the owner's verdict on the AI's proposal (newest wins; an unlabel does not touch it).
+export function effectiveAiVerdicts(recs) {
+  const v = new Map();
+  for (const r of recs) if (r.type === 'label' && r.aiVerdict) v.set(r.id, r.aiVerdict);
+  return v;
+}
+
+const readRecs = async () => { try { return (await readFile(LOG_FILE, 'utf8')).split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }); } catch { return []; } };
+
+// For the manager panel and the report: how the AI reviewer is doing.
+export async function aiSummary() {
+  const recs = await readRecs();
+  const tri = new Map(recs.filter((r) => r.type === 'triage' && r.ai).map((r) => [r.id, r]));
+  const verdicts = effectiveAiVerdicts(recs);
+  let right = 0, wrong = 0;
+  for (const [id, v] of verdicts) if (tri.has(id)) { if (v === 'right') right++; else wrong++; }
+  const since = new Date().setHours(0, 0, 0, 0);
+  const today = recs.filter((r) => r.type === 'triage' && Date.parse(r.at) >= since);
+  return { proposals: tri.size, right, wrong, unrated: tri.size - right - wrong, agreement: right + wrong ? right / (right + wrong) : null,
+    today: { calls: today.filter((r) => r.ai || r.error).length, skipped: today.filter((r) => r.skipped).length, cost: today.reduce((a, r) => a + Number(r.cost || 0), 0) } };
 }
 
 // The swipe page's deck: unlabelled stops, newest first, with what the owner replied (outcome) and the counts.
@@ -305,6 +394,8 @@ export async function reviewDeck(limit = 50) {
   try { recs = (await readFile(LOG_FILE, 'utf8')).split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }); } catch {}
   const labels = effectiveLabels(recs);
   const outcomes = new Map(recs.filter((r) => r.type === 'outcome').map((r) => [r.id, r]));
+  const triaged = new Map(recs.filter((r) => r.type === 'triage' && r.ai).map((r) => [r.id, r.ai]));
+  const verdicts = effectiveAiVerdicts(recs);
   // One card per distinct stop: identical (session, closing text) records are the same stop logged again
   // (e.g. the pre-2b repaint bug). The newest stands for the group; a label on any member labels it.
   const groups = new Map();
@@ -327,6 +418,7 @@ export async function reviewDeck(limit = 50) {
       case: s.case, source: s.source || null, why: s.why || null, wouldSend: s.wouldSend || null, deployHint: s.deployHint || null,
       no_status: !!s.no_status, jev: s.jev?.choice ? { choice: s.jev.choice, confidence: s.jev.confidence ?? null } : null,
       excerpt: s.excerpt || s.question || '',
+      ai: triaged.get(s.id) || null, aiVerdict: verdicts.get(s.id) || null,
       outcome: o ? { reply: o.reply || null, kind: o.kind || null, via: o.via || null, afterSec: o.afterSec ?? null } : null,
     };
   });
@@ -487,17 +579,38 @@ export function observe(s) {
       no_status: !!final.no_status, ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
     });
-    if (!ws.send) {
-      if (final.case !== 'done' && final.case !== 'background_wait') escalate(s.name, s.state, final, id, humanWhy(final, ws));
+    const block = ws.send ? autoBlock(s.name, final, confidence) : null;
+    if (ws.send && !block) {   // the existing auto-answer handles this one
+      const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence };
+      const pol = policyOf(s.name, s.agent);
+      if (pol.action === 'hold') { applyHold(s.name, w, pending, pol); return; }
+      if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false);
+      schedule(s.name, w, pending);
       return;
     }
-    const block = autoBlock(s.name, final, confidence);
-    if (block) { if (final.case !== 'done') escalate(s.name, s.state, final, id, block); return; }
-    const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence };
-    const pol = policyOf(s.name, s.agent);
-    if (pol.action === 'hold') { applyHold(s.name, w, pending, pol); return; }
-    if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false);
-    schedule(s.name, w, pending);
+    const why = ws.send ? block : humanWhy(final, ws);
+    // To the owner. With AI triage on, the reviewer reads the stop first (rules and Jev already did) so the push carries its proposal.
+    let tri = null;
+    if (config.aiTriage !== 'off' && toOwnerCase(final)) {
+      w.triage = { id, hash: h, state: 'pending' };
+      tri = await triageStop({ name: s.name, id, final, jevOut, state: s.state, agent: s.agent, project: s.project, stall }).catch((e) => { console.error('[manager] triage', e.message); return null; });
+      if (w.hash !== h) return;   // the pane moved on while the reviewer was thinking
+      w.triage = tri ? { id, hash: h, state: tri.ai ? 'done' : tri.skipped ? 'skipped' : 'error', ai: tri.ai || null, skipped: tri.skipped || null, error: tri.error || null, cost: tri.cost ?? null, ms: tri.ms ?? null, mode: tri.mode, case: final.case,
+        jev: jevOut?.choice ? `${jevOut.choice} ${Math.round(Number(jevOut.probabilities?.[jevOut.choice] ?? jevOut.confidence ?? 0) * 100)} %` : null } : null;
+      // auto mode: an owner-free, confident, non-forbidden proposal goes through the same countdown / cap / fire-time gates.
+      const a = tri?.ai;
+      if (config.aiTriage === 'auto' && a && !a.owner_needed && a.proposed_reply && !a.forbidden && !final.forbidden && !stall.draft
+          && !forbiddenMatch(a.proposed_reply) && !AI_NEVER_CASES.includes(final.case) && !aiBlock(s.name, final.case, a.confidence)) {
+        const pending = { id, hash: h, answer: { text: a.proposed_reply }, case: final.case, source: 'ai', confidence: a.confidence };
+        const pol = policyOf(s.name, s.agent);
+        if (pol.action === 'hold') { applyHold(s.name, w, pending, pol); return; }
+        if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false);
+        schedule(s.name, w, pending);
+        return;
+      }
+    }
+    if (final.case !== 'done' && final.case !== 'background_wait') escalate(s.name, s.state, final, id, why, oneLine(tri));
+    return;
   })().catch((e) => console.error('[manager]', e.message));
   return w.stall;
 }
@@ -507,7 +620,32 @@ export function prune(live) { for (const k of [...watch.keys()]) if (!live.has(k
 
 export function stallOf(name) {
   const w = watch.get(name);
-  return w && w.stall ? { case: w.stall.case, source: w.stall.source, would: w.stall.would || null, question: w.stall.question } : null;
+  if (!w || !w.stall) return null;
+  const st = w.stall;
+  return { case: st.case, source: st.source, would: st.would || null, question: st.question, id: w.pending?.id || null,
+    options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
+    forbidden: st.forbidden || w.cls?.forbidden || null, draft: !!(w.cls?.draft) };
+}
+
+// The AI reviewer's view for the UI: { id, state: pending|done|skipped|error, ai?, skipped?, error?, ... } for the current stop, or null.
+export function triageOf(name) {
+  const w = watch.get(name);
+  if (!w || !w.triage || w.triage.hash !== w.hash || dismissed.has(w.triage.id)) return null;
+  const { hash, ...t } = w.triage;
+  return t;
+}
+
+const dismissed = new Set();
+const TRIAGE_ACTIONS = ['sent', 'edited', 'dismissed'];
+// The owner acted on the AI's proposal from the card (sent it, edited it, dismissed it). Logged for the measure; dismiss hides it.
+export async function triageAction({ id, action, session } = {}) {
+  if (typeof id !== 'string' || !id) throw bad('id required');
+  if (!TRIAGE_ACTIONS.includes(action)) throw bad(`action must be one of: ${TRIAGE_ACTIONS.join(', ')}`);
+  await requireKnown(id);
+  if (action === 'dismissed') { dismissed.add(id); if (dismissed.size > 300) dismissed.delete(dismissed.values().next().value); }
+  const rec = { type: 'triage_action', id, session: session || null, action, at: new Date().toISOString() };
+  await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
+  return rec;
 }
 
 // The pending automatic answer for the UI countdown: { sendAt, answer, case, id } or null.

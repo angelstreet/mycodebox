@@ -120,6 +120,24 @@ appends `{type:'label', ...}` to `stalls.jsonl`. `npm run stall-report` prints l
 excerpts are real text) for future fixtures; `--reclassify` re-runs the current classifier over the logged
 excerpts and prints how cases change (the log is not modified).
 
+**Answer buttons + AI reviewer (TASK-44 phase 9).** The row under a card header that asks for you shows buttons derived from
+the question (`public/buttons.js`): a live numbered menu (permission prompt, AskUserQuestion) gets one button per option with
+its label that sends its key (esc small); a yes/no question gets **Yes** / **No** (typed as text); an either/or or open question
+gets the AI's proposed reply as the primary button, Claude's own dim suggestion if any, and "✎ reply…" (focuses the dock on that
+session). The raw keys stay behind "keys ▾". A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs
+a second tap ("tap again: sensitive topic"). For every stop that goes to you (not plain `done`, not `background_wait`, not what
+auto-answer handles) the **AI reviewer** reads it after the rules and Jev: one `POST <JEV_URL host>/server/ai/complete` (usage
+`text.plan`, same `X-API-Key`) returns `{proposed_reply, reasoning, confidence, owner_needed, owner_needed_why}`; one call per
+stop, 25 s timeout, daily budget `aiDailyUsd` (1.00) and `aiDailyCalls` (300) in `ai-budget.json`. It is logged as a follow-up
+`{type:'triage', id, ai, cost, ms}` record and shown on the card ("Jev: … · AI: “…” — reasoning (confidence)" with Send AI reply /
+Edit / Dismiss), in the NEEDS YOU banner and in the push body. `manager.json` `aiTriage`: `off` | `simulate` (default: compute,
+show, log, never type) | `auto` (owner-only switch: an AI proposal with `owner_needed:false`, confidence ≥ `aiMinConfidence`
+(0.85), no forbidden topic in the question or the reply, no draft, case in `aiAutoCases`, goes through the normal countdown /
+hourly cap / fire-time checks, and needs `autoSend` too). `AI_URL` overrides the derived reviewer URL. In the swipe review the
+card shows the AI proposal; ✓ right / ✗ wrong posts `{type:'label', id, aiVerdict}` (does not label the stop itself);
+`npm run stall-report` prints the AI agreement; the manager panel shows the switch, today's calls / cost and the agreement.
+The server returns token counts, not a cost, so the logged cost is an estimate (`AI_USD_PER_MTOK_IN/OUT`, default 3 / 15).
+
 **Swipe review (the main way to label).** `/?review=1`, the topbar button (cards icon) or "Review stops (N)" in the
 manager panel opens a full-screen deck of unlabelled stops, newest first, one card at a time: session (tap = open its
 card) · agent · age, the case the manager chose, what it would have answered, Jev's pick, `no_status`, and the full closing

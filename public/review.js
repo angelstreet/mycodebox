@@ -79,6 +79,9 @@ export function openReview({ onSession, toast = () => {}, onClose = () => {} } =
         <div class="rv-l2">${chips}</div>
         <div class="rv-l3">manager chose <b>${esc(c.case)}</b>; would answer <b>${esc(wouldText(c))}</b>${c.why && !c.wouldSend ? ` <i>(${esc(c.why)})</i>` : ''}</div>
       </div>
+      ${c.ai ? `<div class="rv-ai"><div class="rv-ail">${c.jev ? `<b>Jev</b> ${esc(c.jev.choice)}${c.jev.confidence != null ? ' ' + Math.round(c.jev.confidence * 100) + '%' : ''} &middot; ` : ''}<b>AI</b> ${c.ai.proposed_reply ? `&ldquo;${esc(c.ai.proposed_reply)}&rdquo;` : 'needs you' + (c.ai.owner_needed_why ? ' &mdash; ' + esc(c.ai.owner_needed_why) : '')}</div>
+        <div class="rv-air">${esc(c.ai.reasoning || '')} <i>(confidence ${Number(c.ai.confidence).toFixed(2)})</i></div>
+        <div class="rv-aiv"><span>AI was</span><button class="${c.aiVerdict === 'right' ? 'on right' : ''}" data-a="aiRight" aria-label="AI proposal was right">&#10003; right</button><button class="${c.aiVerdict === 'wrong' ? 'on wrong' : ''}" data-a="aiWrong" aria-label="AI proposal was wrong">&#10005; wrong</button></div></div>` : ''}
       <div class="rv-text">${esc(c.excerpt)}</div>
       ${c.outcome ? `<div class="rv-outcome">you replied (${esc(c.outcome.kind || '?')}${c.outcome.via ? ', ' + esc(c.outcome.via) : ''}): <b>${esc(c.outcome.reply || '–')}</b></div>` : ''}
       ${note ? `<div class="rv-notechip">&#9998; ${esc(note.correctCase ? note.correctCase + ' ' : '')}${esc(note.note || '')}</div>` : ''}
@@ -215,6 +218,17 @@ export function openReview({ onSession, toast = () => {}, onClose = () => {} } =
     };
   }
 
+  // ---------- the AI's proposal: right / wrong (measured apart from the stop's label) ----------
+  async function rateAi(v) {
+    const c = S.deck[0];
+    if (!c?.ai) return;
+    const was = c.aiVerdict;
+    c.aiVerdict = was === v ? null : v;
+    render();
+    try { if (c.aiVerdict) await post('/api/manager/label', { id: c.id, aiVerdict: c.aiVerdict }); }
+    catch (e) { c.aiVerdict = was; toast('rating failed: ' + e.message); render(); }
+  }
+
   // ---------- chrome ----------
   function close() { document.removeEventListener('keydown', onKey, true); root.remove(); onClose(); }
   function onKey(e) {
@@ -232,6 +246,7 @@ export function openReview({ onSession, toast = () => {}, onClose = () => {} } =
     if (a === 'close') close();
     else if (a === 'undo') undo();
     else if (a === 'open') { close(); onSession?.(b.dataset.s); }
+    else if (a === 'aiRight' || a === 'aiWrong') rateAi(a === 'aiRight' ? 'right' : 'wrong');
     else decide(a);
   });
   load(true);

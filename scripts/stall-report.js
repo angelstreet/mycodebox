@@ -68,7 +68,7 @@ if (process.argv.includes('--list')) {
 
 // ---- owner labels ("this stop bothered me") ----
 const labels = new Map();   // stall id -> newest label record; an unlabel after it withdraws it
-for (const r of recs) { if (r.type === 'label') labels.set(r.id, r); else if (r.type === 'unlabel') labels.delete(r.id); }
+for (const r of recs) { if (r.type === 'label' && r.label) labels.set(r.id, r); else if (r.type === 'unlabel') labels.delete(r.id); }
 const byId = new Map(recs.filter((r) => r.type === 'stall').map((r) => [r.id, r]));
 const labelled = [...labels.values()].map((l) => ({ l, s: byId.get(l.id) })).filter((x) => x.s);
 if (labelled.length) {
@@ -89,6 +89,29 @@ if (labelled.length) {
     console.log(`  ${s.at} ${s.session} [chosen: ${s.case}]${l.note ? ` note: ${l.note}` : ''}\n    ${first(String(s.excerpt || '').split('\n').slice(-3).join('\n') || s.question).slice(0, 160)}`);
   }
 } else console.log('\nno owner labels yet');
+
+// ---- AI reviewer (phase 9): proposals the owner rated right / wrong ----
+{
+  const tri = new Map(recs.filter((r) => r.type === 'triage' && r.ai).map((r) => [r.id, r]));
+  const verdict = new Map();
+  for (const r of recs) if (r.type === 'label' && r.aiVerdict) verdict.set(r.id, r.aiVerdict);
+  const calls = recs.filter((r) => r.type === 'triage');
+  if (calls.length) {
+    let right = 0, wrong = 0;
+    const per = new Map();
+    for (const [id, v] of verdict) {
+      const t = tri.get(id); if (!t) continue;
+      if (v === 'right') right++; else wrong++;
+      const c = byId.get(id)?.case || t.case || '?';
+      const row = per.get(c) || { right: 0, wrong: 0 }; row[v]++; per.set(c, row);
+    }
+    const cost = calls.reduce((a, r) => a + Number(r.cost || 0), 0);
+    const owner = [...tri.values()].filter((t) => t.ai.owner_needed).length;
+    console.log(`\nAI reviewer: ${tri.size} proposals (${owner} said owner needed), ${calls.filter((r) => r.skipped).length} skipped, ${calls.filter((r) => r.error).length} errors, cost $${cost.toFixed(4)}`);
+    console.log(right + wrong ? `AI agreement: ${right} right / ${wrong} wrong = ${Math.round(100 * right / (right + wrong))} % of ${right + wrong} rated (${tri.size - right - wrong} unrated)` : 'AI agreement: no ratings yet');
+    for (const [c, r] of per) console.log(`  ${c.padEnd(18)} right ${r.right}  wrong ${r.wrong}`);
+  }
+}
 
 const exportTo = arg('--export', null);
 if (exportTo) {

@@ -1110,3 +1110,29 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .u1.tog{ cursor:pointer; }
 .umodels{ margin:4px 0 2px 14px; border-left:1px solid var(--line-2); padding-left:8px; }
 .urow.sub{ border-bottom:0; padding:4px 2px; }
+
+/* ------------ Answer buttons + AI proposal (TASK-44 phase 9) ------------ */
+.cell .ask .abtns{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; flex:1 1 100%; }
+.cell .ask .abtns button{ max-width:100%; text-align:left; overflow-wrap:anywhere; }
+.cell .ask .abtns button.sm{ font-size:10px; padding:2px 7px; opacity:.75; background:transparent; }
+.cell .ask .abtns button.rep{ border-style:dashed; }
+.cell .ask .abtns .rawkeys{ display:flex; gap:6px; flex-wrap:wrap; flex:1 1 100%; }
+.cell .ask button.arm{ background:#d6a32b; color:#1c1500; border-color:transparent; font-weight:700; }
+.cell .ask .tri{ flex:1 1 100%; border-top:1px dashed rgba(255,179,179,.35); padding-top:6px; color:var(--ink-2); font-size:12px; line-height:1.35; }
+.cell .ask .tri.hidden{ display:none; }
+.cell .ask .tri .tl{ color:var(--ink); }
+.cell .ask .tri .tl.dim{ color:var(--ink-3); }
+.cell .ask .tri .tr{ margin:2px 0 6px; color:var(--ink-3); }
+.cell .ask .tri .sim{ color:var(--ink-3); font-size:11px; }
+.cell .ask .tri .tb{ display:flex; gap:6px; flex-wrap:wrap; }
+.card-pane .cell .ask .abtns button, .card-pane .cell .ask .tri button{ min-height:36px; }
+#attention button .ai1{ display:block; font-size:10px; font-weight:400; opacity:.8; max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.aimodes{ display:flex; gap:6px; margin:4px 0; }
+.rv-ai{ margin-top:8px; padding:8px 10px; border:1px solid var(--line-2); border-radius:8px; background:rgba(255,255,255,.03); font-size:13px; line-height:1.35; }
+.rv-ail b{ color:var(--ink); }
+.rv-air{ color:var(--ink-3); margin:3px 0 6px; font-size:12px; }
+.rv-aiv{ display:flex; gap:6px; align-items:center; font-size:11px; color:var(--ink-3); }
+.rv-aiv button{ background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:6px; padding:3px 9px; font-size:11px; min-height:28px; }
+.rv-aiv button.on.right{ background:var(--working); color:#04170b; border-color:transparent; }
+.rv-aiv button.on.wrong{ background:#c44; color:#fff; border-color:transparent; }
+.aimodes .sbtn.on{ background:var(--accent); color:#1a1206; border-color:transparent; font-weight:700; }

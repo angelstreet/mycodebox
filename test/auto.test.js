@@ -26,6 +26,7 @@ await m.initManager({
   sendKeys: async (s, t, enter) => { texts.push([s, t, enter]); },
 });
 
+await m.setManagerConfig({ aiTriage: 'off' });   // the AI reviewer has its own tests (triage.test.js)
 const RULE = '─'.repeat(40);
 const pane = (body, prompt = '❯ ') => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, prompt, RULE, '  ⏵⏵ bypass permissions on'];
 const tick = (name, state, plain, now, extra = {}) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, realWork: state === 'working', project: 'p', now, ...extra });

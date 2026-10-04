@@ -5,6 +5,7 @@
 
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
+import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -737,13 +738,16 @@ function renderSummary() {
 }
 
 function renderAttention() {
-  const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting').sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
+  // waiting sessions, plus finished ones whose closing question the AI reviewer sent to the owner
+  const aiAsk = (n) => { const st = state.status[n]; return st && st.state === 'done' && needsOwner(st) && st.triage && st.triage.state !== 'pending'; };
+  const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting' || aiAsk(s.name)).sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
   els.attention.classList.toggle('hidden', waiting.length === 0);
-  const key = waiting.map((s) => s.name + prioOf(s.name)).join('|');
+  const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
+  const key = waiting.map((s) => s.name + prioOf(s.name) + line(s.name)).join('|');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
-    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}</button>`).join('');
+    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}${line(s.name) ? `<span class="ai1">${escapeHtml(line(s.name))}</span>` : ''}</button>`).join('');
   for (const b of els.attention.querySelectorAll('button')) {
     b.onclick = () => openCard(b.dataset.session);
   }
@@ -1095,10 +1099,8 @@ function buildCell(s) {
     </div>
     <div class="ask hidden">
       <span class="q"></span>
-      <button class="yes" data-key="1">1 · yes</button>
-      <button data-key="2">2</button>
-      <button data-key="3">3</button>
-      <button data-key="Escape">esc</button>
+      <div class="abtns"></div>
+      <div class="tri hidden"></div>
     </div>
     <div class="apill hidden"></div>
     <div class="reader"></div>
@@ -1119,9 +1121,7 @@ function buildCell(s) {
     b.onclick = (e) => { e.stopPropagation(); moveSession(s.name, b.dataset.dir); };
   }
   wireDrag(cell, s.name);
-  for (const b of cell.querySelectorAll('.ask button')) {
-    b.onclick = (e) => { e.stopPropagation(); focusSession(s.name); sendKey(s.name, b.dataset.key); };
-  }
+  cell.querySelector('.ask').onclick = (e) => { e.stopPropagation(); onAskClick(cell, s.name, e); };
   syncCell(cell);
   return cell;
 }
@@ -1191,6 +1191,100 @@ function wireTap(el, onSingle, onDouble) {
   }, true);
 }
 
+// ---------- answer buttons + AI proposal (TASK-44 phase 9) ----------
+// The row under a card header shows buttons derived from the question (public/buttons.js), the AI reviewer's
+// proposal with its reasoning, and the raw keys behind a toggle. A reply on a forbidden topic needs a second tap.
+const askVisible = (n, st) => st && (st.state === 'waiting' || (st.state === 'done' && needsOwner(st)));
+function triHtml(t, kind) {
+  if (!t) return '';
+  if (t.state === 'pending') return '<div class="tl dim">AI reviewer reading the stop…</div>';
+  if (t.state === 'skipped') return `<div class="tl dim">AI skipped: ${escapeHtml(t.skipped)}</div>`;
+  if (t.state === 'error') return `<div class="tl dim">AI reviewer failed: ${escapeHtml(String(t.error || '?').slice(0, 70))}</div>`;
+  const a = t.ai;
+  const sim = t.mode === 'simulate' ? ' <i class="sim">simulation: nothing is sent for you</i>' : '';
+  const reply = a.proposed_reply ? `AI: \u201c${escapeHtml(a.proposed_reply)}\u201d` : `AI: needs you${a.owner_needed_why ? ` \u2014 ${escapeHtml(a.owner_needed_why)}` : ''}`;
+  return `<div class="tl">${t.jev ? `<b>Jev</b> ${escapeHtml(t.jev)} \u00b7 ` : `<b>rules</b> ${escapeHtml(t.case || '')} \u00b7 `}${reply}${sim}</div>
+    <div class="tr">${escapeHtml(a.reasoning || '')} <i>(confidence ${Number(a.confidence).toFixed(2)})</i></div>
+    <div class="tb">${a.proposed_reply && (kind === 'menu' || kind === 'yesno') ? '<button class="yes" data-tri="send">Send AI reply</button>' : ''}${a.proposed_reply ? '<button data-tri="edit">Edit</button>' : ''}<button data-tri="dismiss">Dismiss</button></div>`;
+}
+function syncAsk(cell, n) {
+  const st = state.status[n];
+  const ask = cell.querySelector('.ask');
+  const show = askVisible(n, st);
+  ask.classList.toggle('hidden', !show);
+  if (!show) { ask._d = null; ask.dataset.k = ''; return; }
+  const t = st.triage || null;
+  const d = deriveButtons({ state: st.state, stall: st.stall, triage: st.triage });
+  const q = (st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question).slice(0, 220) : '') || 'waiting for your answer';
+  const keysOpen = ask.dataset.keys === '1';
+  const k = JSON.stringify([q, d, t, keysOpen]);
+  if (ask.dataset.k === k) return;
+  ask.dataset.k = k; ask._d = d; ask._t = st.triage || null; ask._id = st.stall?.id || st.triage?.id || null;
+  ask.querySelector('.q').textContent = q;
+  const btn = (b, i) => `<button class="${b.primary ? 'yes' : ''}${b.reply ? ' rep' : ''}" data-i="${i}">${escapeHtml(b.label)}</button>`;
+  ask.querySelector('.abtns').innerHTML = d.buttons.map(btn).join('')
+    + (d.esc ? '<button class="sm" data-esc="1">esc</button>' : '')
+    + `<button class="sm kt" data-keys="1">keys ${keysOpen ? '\u25b4' : '\u25be'}</button>`
+    + (keysOpen ? `<span class="rawkeys">${d.keys.map((b, i) => `<button class="${b.primary ? 'yes' : ''}" data-raw="${i}">${escapeHtml(b.label)}</button>`).join('')}</span>` : '');
+  const tri = ask.querySelector('.tri');
+  const html = triHtml(t, d.kind);
+  tri.classList.toggle('hidden', !html);
+  tri.innerHTML = html;
+}
+async function askSend(n, id, b, via) {
+  focusSession(n);
+  try {
+    if (b.key != null) await postSend(n, { key: b.key });
+    else await postSend(n, { keys: b.text });
+    if (navigator.vibrate) navigator.vibrate(10);
+    toast(`sent \u2192 ${displayName(n)}`, 900);
+    if (id && via) fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, action: via, session: n }) }).catch(() => {});
+  } catch (err) { toast(`send failed: ${err.message}`); }
+}
+function prefillDock(n, text) {
+  focusSession(n);
+  els.sendInput.value = text || '';
+  autoGrow();
+  els.sendInput.focus();
+}
+function onAskClick(cell, n, e) {
+  const ask = cell.querySelector('.ask');
+  const t = e.target.closest('button');
+  if (!t) return;
+  const id = ask._id;
+  if (t.dataset.keys) { ask.dataset.keys = ask.dataset.keys === '1' ? '0' : '1'; ask.dataset.k = ''; syncAsk(cell, n); return; }
+  if (t.dataset.esc) { focusSession(n); sendKey(n, 'Escape'); return; }
+  if (t.dataset.raw != null) { const b = ask._d?.keys[Number(t.dataset.raw)]; if (b) { focusSession(n); sendKey(n, b.key); } return; }
+  if (t.dataset.tri) {
+    const ai = ask._t?.ai;
+    if (t.dataset.tri === 'dismiss') {
+      fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: ask._t?.id || id, action: 'dismissed', session: n }) }).catch(() => {});
+      if (state.status[n]) state.status[n].triage = null;
+      syncAll(); return;
+    }
+    if (!ai?.proposed_reply) return;
+    if (t.dataset.tri === 'edit') {
+      prefillDock(n, ai.proposed_reply);
+      fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: ask._t?.id || id, action: 'edited', session: n }) }).catch(() => {});
+      return;
+    }
+    confirmThen(t, !!(ai.forbidden || state.status[n]?.stall?.forbidden), () => askSend(n, ask._t?.id || id, { text: ai.proposed_reply }, 'sent'));
+    return;
+  }
+  const b = ask._d?.buttons[Number(t.dataset.i)];
+  if (!b) return;
+  if (b.reply) { prefillDock(n, ''); return; }
+  confirmThen(t, b.confirm, () => askSend(n, id, b, b.ai ? 'sent' : null));
+}
+// A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs a second tap within 4 s.
+function confirmThen(btn, needs, go) {
+  if (!needs) { go(); return; }
+  if (btn.dataset.armed === '1') { clearTimeout(btn._arm); btn.dataset.armed = ''; btn.classList.remove('arm'); go(); return; }
+  btn.dataset.armed = '1'; btn.classList.add('arm'); btn._label = btn.textContent;
+  btn.textContent = 'tap again: sensitive topic';
+  btn._arm = setTimeout(() => { btn.dataset.armed = ''; btn.classList.remove('arm'); btn.textContent = btn._label; }, 4000);
+}
+
 function syncCell(cell) {
   const n = cell.dataset.session;
   const s = stateOf(n);
@@ -1205,9 +1299,7 @@ function syncCell(cell) {
   const stw = cell.querySelector('.stw');
   if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
   else stw.querySelector('.st').textContent = badgeText(n);
-  const ask = cell.querySelector('.ask');
-  ask.classList.toggle('hidden', s !== 'waiting');
-  if (s === 'waiting') ask.querySelector('.q').textContent = state.status[n]?.waitReason || 'waiting for your answer';
+  syncAsk(cell, n);
   syncAutoPill(cell.querySelector('.apill'), n);
   const pj = cell.querySelector('.proj'), ph = projHtml(n);
   if (pj.dataset.h !== ph) { pj.dataset.h = ph; pj.innerHTML = ph; }
@@ -1878,6 +1970,7 @@ function logLine(r) {
   if (r.type === 'answer_cancelled') return { cls: 'canc', tag: 'cancelled', sess, case: r.case || '', text: r.reason || '' };
   if (r.type === 'hold') return { cls: 'canc', tag: 'held', sess, case: 'quota', text: r.reason || '' };
   if (r.type === 'resume' && r.by === 'manager') return { cls: 'sent', tag: 'resumed', sess, case: 'quota', text: r.reason || '' };
+  if (r.type === 'triage') return { cls: 'would', tag: 'AI', sess, case: r.case || '', text: r.ai ? `${r.ai.owner_needed ? 'needs you' : '\u201c' + r.ai.proposed_reply + '\u201d'} (${Number(r.ai.confidence).toFixed(2)}) ${r.ai.reasoning || ''}` : (r.skipped || r.error || '') };
   if (r.type === 'escalated') return { cls: 'esc', tag: 'escalated', sess, case: r.case || '', text: r.reason || '' };
   return null;
 }
@@ -1924,7 +2017,7 @@ function openManager() {
       const heldNow = state.sessions.map((s) => s.name).filter((n) => state.status[n]?.held);
       const t = cfg.today || {};
       const labels = new Map();   // stall id -> newest owner label
-      for (const r of log.entries || []) { if (r.type === 'label') labels.set(r.id, r); else if (r.type === 'unlabel') labels.delete(r.id); }
+      for (const r of log.entries || []) { if (r.type === 'label' && r.label) labels.set(r.id, r); else if (r.type === 'unlabel') labels.delete(r.id); }
       const entries = (log.entries || []).filter((r) => logLine(r) && !(mgrUnlabelled && (r.type !== 'stall' || labels.has(r.id)))).slice(-30).reverse();
       const caseOpts = (cfg.cases || []).map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       const stopRow = (r, l) => {
@@ -1941,6 +2034,11 @@ function openManager() {
         <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend"><i></i><span>Auto-answer <b>${cfg.autoSend ? 'ON' : 'OFF'}</b></span></button>
         <div class="mcases">${(cfg.validCases || []).map((c) => `<label class="mchk"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span>${escapeHtml(CASE_LABEL[c] || c)}</span></label>`).join('')}</div>
         <div class="mnote">sends after ${Math.round(cfg.delayMs / 1000)}s (cancel from the pill) · Jev answers need ≥ ${cfg.minConfidence} · max ${cfg.maxPerSessionPerHour}/h per session · never deploy / push / delete / secrets / money</div>
+        <div class="side-sub">AI reviewer</div>
+        <div class="aimodes">${(cfg.aiModes || []).map((m) => `<button class="sbtn${cfg.aiTriage === m ? ' on' : ''}" data-aimode="${m}">${m}</button>`).join('')}</div>
+        <div class="mnote">${cfg.aiTriage === 'simulate' ? 'simulation: proposes a reply and shows it with its reasoning; nothing is typed for you' : cfg.aiTriage === 'auto' ? `auto: owner-free proposals \u2265 ${cfg.aiMinConfidence} go through the same countdown and caps (needs Auto-answer ON); never deploy / push / delete / secrets / money / customer` : 'off: no AI calls'}${cfg.ai ? '' : ' \u00b7 <b>no reviewer server configured</b>'}</div>
+        <div class="mcounts"><span class="dim">today</span><span class="sent"><b>${cfg.aiBudget ? cfg.aiBudget.calls : 0}</b>/${cfg.aiBudget ? cfg.aiBudget.dailyCalls : 0} calls</span><span class="esc"><b>$${cfg.aiBudget ? Number(cfg.aiBudget.cost).toFixed(3) : '0'}</b>/$${cfg.aiBudget ? Number(cfg.aiBudget.dailyUsd).toFixed(2) : '0'}</span></div>
+        <div class="mnote">${cfg.aiStats ? `AI agreement: ${cfg.aiStats.agreement == null ? 'no ratings yet' : `<b>${Math.round(cfg.aiStats.agreement * 100)} %</b> (${cfg.aiStats.right} right / ${cfg.aiStats.wrong} wrong)`} \u00b7 ${cfg.aiStats.proposals} proposals, ${cfg.aiStats.unrated} unrated \u2014 rate them in the swipe review` : ''}</div>
         <div class="side-sub">Quota policy</div>
         <button class="mswitch${cfg.policyEnabled ? ' on' : ''}" data-set="policyEnabled"><i></i><span>Policy <b>${cfg.policyEnabled ? 'ON' : 'OFF'}</b></span></button>
         <div class="mnote">P0 always continues · P1 while the 5h window is under ${cfg.p1MaxPct}% · P2 is held at its next stop when 5h ≥ ${cfg.p2MaxPct}% or the week would run out before reset · a hold never interrupts a working session</div>
@@ -1983,6 +2081,8 @@ function openManager() {
         fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
         return;
       }
+      const am = e.target.closest('[data-aimode]');
+      if (am) { try { await mgrPost({ aiTriage: am.dataset.aimode }); } catch { toast('save failed'); } draw(); return; }
       const sw = e.target.closest('[data-set]');
       if (sw) { try { await mgrPost({ [sw.dataset.set]: !sw.classList.contains('on') }); } catch { toast('save failed'); } draw(); }
     };

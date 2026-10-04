@@ -123,7 +123,7 @@ export function forbiddenMatch(text) {
   return m ? m[0] : null;
 }
 
-function menuOptions(lines) {
+export function menuOptions(lines) {
   const opts = [];
   for (const l of lines) {
     const m = l.match(OPTION_RE);
@@ -157,6 +157,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     else if (rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2)) { out.case = 'menu_recommended'; out.answer = { key: String(rec.n) }; }
     else out.case = 'owner_decision';
     out.forbiddenText = block.join('\n');
+    if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text), forbidden: forbiddenMatch(o.text) }));
     return finish(out);
   }
 

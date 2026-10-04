@@ -17,6 +17,7 @@
 //                                 global settings, {session, sessionEnabled} per session
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
+//   POST /api/manager/triage    → {id, action: sent|edited|dismissed} what the owner did with the AI reviewer's proposal (dismissed hides it)
 //   POST /api/manager/unlabel   → {id} withdraw the newest label of a stall (swipe page undo)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
@@ -52,8 +53,9 @@ import { createQuota } from './quota.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, reviewDeck, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, reviewDeck, triageOf, triageAction, aiSummary, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
 import { createDeployRunner } from './deploy-runner.js';
+import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 
 const exec = promisify(execFile);
@@ -710,6 +712,7 @@ async function pollOnce() {
     status[s.name] = {
       state, agent, agentCmd, waitReason,
       stall: stallOf(s.name),
+      triage: triageOf(s.name),
       auto: autoOf(s.name),
       lastActivitySec: s.lastActivitySec,
       lastSendAt: sentAt,
@@ -1190,7 +1193,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager') {
-    return json(res, 200, { ...managerConfig(), today: await todayCounts() });
+    return json(res, 200, { ...managerConfig(), today: await todayCounts(), aiStats: await aiSummary() });
   }
   if (p.startsWith('/api/push/')) {
     try {
@@ -1252,6 +1255,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && p === '/api/manager/label') {
     try { return json(res, 200, { ok: true, label: await labelStall(await readJsonBody(req)) }); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/manager/triage') {   // {id, action: sent|edited|dismissed, session?}: what the owner did with the AI's proposal
+    try { return json(res, 200, { ok: true, action: await triageAction(await readJsonBody(req)) }); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/manager/unlabel') {
@@ -1371,7 +1378,8 @@ server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
   try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
   await initManager({
-    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
+    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n')),
+    context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseCache.value), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey, sendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
     heldStore: { get: (n) => sessionMeta.held(n), set: (n, h) => sessionMeta.setHeld(n, h) },
