@@ -231,6 +231,7 @@ export function createDeployRunner({
         for (const d of deploys) {
           if (d.state !== 'running' || d.runner !== RUNNER_AGENT) continue;
           if (running.get(d.env) === d.id) continue;
+          if (!envs[d.env]) continue;                 // not an env this runner owns (another runner's log is not here)
           try { await finishOrphan(d); } catch (e) { log.error?.('[deploy] orphan', e.message); }
         }
         if (isEnabled()) {
