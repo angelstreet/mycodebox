@@ -306,8 +306,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
 
   // ---- score ----
   // Quality is now the share of popup choices where the owner agreed with the AI's pick
-  // (ai != null, agreeAi === true). Falls back to jevAgreement (classic outcome-based) when no
-  // popup choices have been recorded yet, then to nothing (null).
+  // (ai != null, agreeAi === true), once >= MIN_CHOICES of them exist; null before that (weights renormalised).
   const ownerAgreementAi = agreeAiTotal ? agreeAiCount / agreeAiTotal : null;
   const jevAgreement = jevAgreeTotal ? jevAgreedCount / jevAgreeTotal : null;
   const agreement = ownerAgreementAi;        // legacy field = the popup quality signal
@@ -327,8 +326,10 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
     const r = Math.max(...ratios);
     efficiency = Math.max(0, Math.min(1, (3 - r) / 2));
   }
-  // quality falls back to jevAgreement when agreement is null; null when both are null
-  const qualityRaw = agreement != null ? agreement : jevAgreement;
+  // quality = owner-vs-AI agreement only, and only from MIN_CHOICES popup answers on: a handful of samples (or Jev's
+  // outcome agreement, reported in the jev block) must not stand in for the owner's judgement.
+  const MIN_CHOICES = 10;
+  const qualityRaw = agreement != null && agreeAiTotal >= MIN_CHOICES ? agreement : null;
   const hasQuality = qualityRaw != null;
   // components used to score, with weights renormalised when one is null
   const components = { quality: hasQuality ? qualityRaw : null, coverage, efficiency };

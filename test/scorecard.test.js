@@ -217,11 +217,11 @@ test('jev.consulted: ambiguous = owner_decision|continue|menu; jevOverridden whe
 // 4. score with a null component (renormalised) + efficiency at 1x/2x/3x
 // ---------------------------------------------------------------------------
 
-test('score: quality null -> falls back to jevAgreement (still defined)', () => {
-  // no labels => agreement null. Add a Jev stall with an outcome -> jevAgreement = 1.
+test('score: no owner choices -> quality null even when Jev agreed (no fallback)', () => {
   const recs = [stall({ id: 'a', source: 'jev', jev: { choice: 'ask_owner' } }), outcome({ id: 'a', kind: 'owner_specific' })];
   const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
-  assert.equal(sc.components.quality, 1);
+  assert.equal(sc.jev.agreement, 1);
+  assert.equal(sc.components.quality, null);
 });
 
 test('score: with quality and efficiency null, coverage null -> score 0 (no components)', () => {
@@ -233,10 +233,8 @@ test('score: one component null drops it and renormalises (only quality survives
   // quality is driven by popup choice records (phase 11), not labels. A single choice that
   // agrees with the AI gives agreeAi=1, coverage=1; no priced USD -> efficiency=null.
   // expected: only quality (0.4) survives -> score = (0.4*1)/0.4 * 100 = 100
-  const recs = [
-    stall({ id: 'a' }), outcome({ id: 'a' }),
-    { type: 'choice', id: 'a', at: t(now - 100), session: 's', kind: 'choice', owner: 'yes', ai: 'yes', agreeAi: true, jev: null },
-  ];
+  const recs = [stall({ id: 'a' }), outcome({ id: 'a' })];
+  for (let i = 0; i < 10; i++) recs.push({ type: 'choice', id: `c${i}`, at: t(now - 100 - i), session: 's', kind: 'yesno', owner: 'yes', ai: 'yes', agreeAi: true, jev: null });
   const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
   assert.equal(sc.components.quality, 1);
   assert.equal(sc.components.coverage, 1);
@@ -409,11 +407,11 @@ test('choice records: agreeAi drives quality, ownerChoices/agreeAi/agreeJev coun
   // 4 jev votes after dedupe (s1 true, s2 latest true, s3 true) = 3 of 3
   assert.equal(sc.perf.agreeJevN, 3);
   assert.equal(sc.perf.agreeJev, 1.0);
-  // quality comes from agreeAi (owner-vs-AI rate), not the legacy label agreement
-  assert.equal(sc.components.quality, 1.0);
+  // fewer than 10 owner choices with an AI pick: quality stays null
+  assert.equal(sc.components.quality, null);
 });
 
-test('choice records: no agreeAi votes -> quality falls back to jevAgreement', () => {
+test('choice records: no agreeAi votes -> quality null, Jev agreement only in the jev block', () => {
   const recs = [
     { type: 'stall', id: 's1', at: t(now - 1000), session: 'a', case: 'continue', source: 'jev', jev: { choice: 'continue', confidence: 0.9 } },
     { type: 'outcome', id: 's1', at: t(now - 500), session: 'a', kind: 'continue', afterSec: 5, via: 'reporter' },
@@ -422,7 +420,7 @@ test('choice records: no agreeAi votes -> quality falls back to jevAgreement', (
   assert.equal(sc.perf.ownerChoices, 0);
   assert.equal(sc.perf.agreeAi, null);
   assert.equal(sc.jev.agreement, 1.0);    // Jev said continue, outcome was continue -> agree
-  assert.equal(sc.components.quality, 1.0);   // fallback to jevAgreement
+  assert.equal(sc.components.quality, null);  // no fallback to jevAgreement
 });
 
 // ---------------------------------------------------------------------------
