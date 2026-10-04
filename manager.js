@@ -856,7 +856,7 @@ export function stallOf(name) {
   const w = watch.get(name);
   if (!w || !w.stall) return null;
   const st = w.stall;
-  return { case: st.case, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
+  return { case: st.case, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
     id: w.pending?.id || null,
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
     forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending?.id), draft: !!(w.cls?.draft), jev: st.jev || null };
