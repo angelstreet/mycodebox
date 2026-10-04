@@ -213,7 +213,7 @@ test('tab html: error shown prominently, not-available text, product rows', () =
   assert.match(html, /AI reviewer: no calls/);
   const withRemote = v.jevTabHtml(d.tabData({ recs, remote: { ok: true, ...d.normalizeSummary({ usages: [{ usage_key: 'text.decision.sherlock', calls: 5, failed: 0, cost: 0, per_day: {} }] }) }, now: NOW }), '2026-10-04');
   assert.match(withRemote, /text\.decision\.sherlock/);
-  assert.doesNotMatch(withRemote, /not available until/);
+  assert.doesNotMatch(withRemote.split('Product uses')[1], /not available until/);
   assert.match(v.jevTabHtml(null), /loading/);
 });
 

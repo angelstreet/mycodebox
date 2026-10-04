@@ -7,7 +7,7 @@ import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
 import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
-import { jevTabHtml, filtersHtml, decisionsHtml } from '/jev-view.js';
+import { jevTabHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
@@ -538,6 +538,8 @@ function connectStatus() {
         onHealth(msg.health);
       } else if (msg.type === 'quota') {
         onQuota(msg.quota);
+      } else if (msg.type === 'credits') {
+        state.credits = msg.credits; onQuota(state.quota);
       }
     } catch {}
   };
@@ -1872,7 +1874,8 @@ const winShort = (n) => (n === 'week' ? 'wk' : n === 'month' ? 'mo' : n);
 function onQuota(q) {
   state.quota = q;
   const el = els.quota;
-  if (!q || !q.plans?.length) { el.classList.add('hidden'); return; }
+  const chip = creditChip(state.credits);
+  if (!q || !q.plans?.length) { if (chip) { el.className = 'quota ok'; el.innerHTML = chip; } else el.classList.add('hidden'); return; }
   const parts = q.plans.map((p) => {
     const short = p.plan;
     if (!p.windows.length) return `<span class="qi na" title="${escapeHtml(p.error || 'no reading yet')}"><b>${short}</b> ${/login|expired/i.test(p.error || '') ? 'login expired' : '?'}</span>`;
@@ -1882,7 +1885,8 @@ function onQuota(q) {
     });
     return `<b>${short}</b> ${ws.join(' ')}`;
   });
-  const worst = ['crit', 'warn'].find((l) => q.plans.some((p) => p.windows.some((w) => qLevel(w.usedPercent) === l))) || 'ok';
+  if (chip) parts.push(chip);
+  const worst = ['crit', 'warn'].find((l) => q.plans.some((p) => p.windows.some((w) => qLevel(w.usedPercent) === l)) || (state.credits?.balance != null && (l === 'crit' ? state.credits.balance <= 0 : state.credits.balance <= 2))) || 'ok';
   el.className = `quota ${worst}`;
   el.innerHTML = parts.join('<i class="sep">&middot;</i>');
 }
@@ -2195,10 +2199,11 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
 const LANGFUSE_URL = 'http://<tailscale-ip>:3100';   // tailnet
-const SUBSCRIPTION = { claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
+const SUBSCRIPTION = { manager: 'pay per call (Jev, AI reviewer)', claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
 const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: no list price for this model">&mdash;</span>' : escapeHtml(fmtUsd(c)) + unit);
 const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
 function quotaOfAgent(a) {
+  if (a === 'manager') return '<span class="dim">no quota</span>';
   const p = state.quota?.plans?.find((x) => x.plan === a);
   if (!p || !p.windows?.length) return `<span class="dim" title="${escapeHtml(p?.error || '')}">${/login|expired/i.test(p?.error || '') ? 'login expired, open mcode once' : 'quota ?'}</span>`;
   return p.windows.map((w) => w.usedPercent == null
@@ -2279,7 +2284,7 @@ function usageHtml(u, tab, ui) {
   let agents = narrowed ? groupRows(rows, 'agent') : topEntries(src.perAgent).filter((a) => !fa || a.name === fa);
   const modelsOf = (a) => (narrowed
     ? a.models.map((m) => ({ name: m, nocost: true }))
-    : topEntries(src.perModel).filter((m) => modelAgent(m.name) === a.name));
+    : topEntries(src.perModel).filter((m) => (m.agent || modelAgent(m.name)) === a.name));
   const agentHtml = agents.map((a) => {
     const on = ui.openAgents.has(a.name), ms = modelsOf(a);
     return `<div class="urow ag"><div class="u1 tog" data-agent="${escapeHtml(a.name)}">${chev(on)}<i class="adot ${escapeHtml(a.name)}"></i><b>${escapeHtml(a.name)}</b><span class="dim">${ms.length} model${ms.length === 1 ? '' : 's'}</span><span class="grow"></span>${usd(a.cost)}</div>

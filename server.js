@@ -19,6 +19,7 @@
 //   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
 //   POST /api/manager/triage    → {id, action: sent|edited|dismissed} what the owner did with the AI reviewer's proposal (dismissed hides it)
 //   POST /api/manager/unlabel   → {id} withdraw the newest label of a stall (swipe page undo)
+//   GET  /api/credits           → OpenRouter credit from the VPT server's /server/ai/credits (cached 10 min; ok:false when the server is older)
 //   GET  /api/jev-ai            → the "Jev & AI" usage tab: manager Jev + AI reviewer per day (local logs), the product's Jev uses (server summary, when it has it)
 //   GET  /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset= → Jev decisions, newest first (the server's log, else the manager's own; /?decisions=1)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
@@ -55,6 +56,7 @@ import { sampleHealth } from './health.js';
 import { createPush, createAlerts } from './push.js';
 import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
+import { createCredits } from './credits.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
@@ -546,6 +548,7 @@ const deployRunner = createDeployRunner({
   pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 45 * 60 * 1000),
   onChange: (d) => broadcastStatus({ type: 'deploys', deploys: d }),
 });
+const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
@@ -1256,7 +1259,8 @@ const server = http.createServer(async (req, res) => {
     try { return json(res, 200, { ok: true, unlabel: await unlabelStall(await readJsonBody(req)) }); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
-  if (req.method === 'GET' && p === '/api/jev-ai') return json(res, 200, await jevAiTab());
+  if (req.method === 'GET' && p === '/api/jev-ai') return json(res, 200, { ...await jevAiTab(), credits: await credits.get() });
+  if (req.method === 'GET' && p === '/api/credits') return json(res, 200, await credits.get());
   if (req.method === 'GET' && p === '/api/decisions') {
     const q = url.searchParams;
     return json(res, 200, await decisionsView({ usage: q.get('usage') || '', ok: q.get('ok') || '', hasOutcome: q.get('has_outcome') || '', minConf: q.get('min_conf') || '',
@@ -1307,6 +1311,7 @@ server.on('upgrade', (req, socket, head) => {
       if (latest) ws.send(JSON.stringify({ type: 'status', status: latest.status }));
       if (health) ws.send(JSON.stringify({ type: 'health', health }));
       ws.send(JSON.stringify({ type: 'deploys', deploys: deployRunner.snapshot() }));
+      if (credits.peek()) ws.send(JSON.stringify({ type: 'credits', credits: credits.peek() }));
       if (quota.get().at) ws.send(JSON.stringify({ type: 'quota', quota: quota.get() }));
       ws.on('close', () => statusSubs.delete(ws));
       ws.on('message', () => {}); // no-op
@@ -1399,6 +1404,7 @@ server.listen(PORT, HOST, async () => {
   const quotaTick = () => quota.poll().then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
   deployRunner.start();
+  credits.start();
   setInterval(quotaTick, 60000);
 });
 

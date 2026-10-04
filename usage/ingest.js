@@ -33,6 +33,7 @@ export function defaults(env = process.env) {
     offsetsFile: join(stateDir, 'usage-offsets.json'),
     ledgerFile: join(stateDir, 'usage-ledger.jsonl'),
     summaryFile: join(stateDir, 'usage-summary.json'),
+    stallsFile: join(stateDir, 'stalls.jsonl'),   // the AI manager's log: its Jev and AI-reviewer calls become generations of agent "manager"
     pricesFile: env.USAGE_PRICES || join(HERE, 'prices.json'),
     backfillDays: Number(env.BACKFILL_DAYS || 14),
     pollMs: Number(env.USAGE_POLL_MS || 15000),
@@ -93,6 +94,30 @@ export function parseClaudeLine(o, { subagent = false } = {}) {
   if (!o.sessionId || !Number.isFinite(ts)) return null;
   return { id: `claude:${m.id}`, agent: 'claude', session: o.sessionId, cwd: o.cwd || null, ts, model: m.model, usage, subagent };
 }
+
+// One line of the manager's stalls.jsonl -> record | null. Jev results sit on {type:'stall'} records (jev.choice or
+// jev.error; a skipped call never reached the server), reviewer calls are {type:'triage'} records (ai or error).
+// No prompt or answer text is kept: ids, model, tokens, cost, the error message of a failure.
+export function parseManagerLine(o) {
+  if (!o || !o.id || !o.session) return null;
+  const ts = Date.parse(o.at);
+  if (!Number.isFinite(ts)) return null;
+  const base = { agent: 'manager', session: o.session, cwd: null, project: o.project || null, ts, subagent: false, label: o.session };
+  if (o.type === 'stall' && o.jev && (o.jev.choice || o.jev.error)) {
+    const j = o.jev;
+    return { ...base, id: `manager:jev:${o.id}`, name: 'manager.jev', model: j.model || 'typesafe/jev-1.13', usage: zeroUsage(), ms: j.ms ?? null,
+      cost: costFrom(j.cost, j.error), costEstimated: false, error: j.error || null, extra: { case: o.case, decision: j.choice || null, decisionId: j.decision_id || null } };
+  }
+  if (o.type === 'triage' && (o.ai || o.error)) {
+    return { ...base, id: `manager:ai:${o.id}`, name: 'manager.ai-review', model: o.model || 'unknown', ms: o.ms ?? null,
+      usage: { input: n(o.tin), output: n(o.tout), cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 },
+      cost: costFrom(o.cost, o.error), costEstimated: !!o.costEstimated, error: o.error || null, extra: { case: o.case, mode: o.mode || null } };
+  }
+  return null;
+}
+const zeroUsage = () => ({ input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 });
+// a failed call costs 0 (priced); a call that succeeded but reported no cost stays unpriced (null)
+const costFrom = (c, error) => (Number.isFinite(Number(c)) && c !== null ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: Number(c) } : error ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0 } : null);
 
 // Codex rollout file: stateful (session_meta + turn_context precede the usage lines). Feed lines in order.
 export function codexReader() {
@@ -163,6 +188,7 @@ export function buildSummary(records, now, days = 14) {
   const by = { session: new Map(), project: new Map(), agent: new Map(), model: new Map(), day: new Map() };
   const tdy = { total: zero(), agent: new Map(), project: new Map(), model: new Map() };   // today (UTC day) only
   const total = zero();
+  const modelAgent = new Map();
   const get = (m, k, init) => { let v = m.get(k); if (!v) { v = init(); m.set(k, v); } return v; };
   for (const r of records) {
     if (r.ts < since) continue;
@@ -170,6 +196,7 @@ export function buildSummary(records, now, days = 14) {
     add(get(by.project, r.project || 'unknown', zero), r);
     add(get(by.agent, r.agent, zero), r);
     add(get(by.model, r.model, zero), r);
+    modelAgent.set(r.model, r.agent);
     add(get(by.day, dayOf(r.ts), zero), r);
     const s = get(by.session, r.trace, () => ({ ...zero(), id: r.trace, session: r.label, agent: r.agent, project: r.project || 'unknown', first: r.ts, last: r.ts, models: new Set(), days: new Map(), slots: new Set(), today: { ...zero(), slots: new Set() } }));
     add(s, r);
@@ -208,7 +235,7 @@ export function buildSummary(records, now, days = 14) {
   const obj = (m) => Object.fromEntries([...m].map(([k, v]) => [k, round(v)]).sort((a, b) => b[1].cost - a[1].cost));
   return {
     generatedAt: new Date(now).toISOString(), windowDays: days, total: round(total),
-    perAgent: obj(by.agent), perProject: obj(by.project), perModel: obj(by.model),
+    perAgent: obj(by.agent), perProject: obj(by.project), perModel: Object.fromEntries(Object.entries(obj(by.model)).map(([k, v]) => [k, { ...v, agent: modelAgent.get(k) }])),
     perDay: Object.fromEntries([...by.day].sort().map(([k, v]) => [k, round(v)])),
     // today = the UTC day's totals, per agent / project / model (the usage view's "Today" tab)
     today: { day: today, total: round(tdy.total), perAgent: obj(tdy.agent), perProject: obj(tdy.project), perModel: obj(tdy.model) },
@@ -250,10 +277,12 @@ export function langfuseEvents(records, traces, sentAt = Date.now()) {
     const u = r.usage;
     const usageDetails = { input: u.input, output: u.output, cache_read: u.cache_read, cache_creation: u.cache_write_5m + u.cache_write_1h };
     events.push({ id: randomUUID(), type: 'generation-create', timestamp: stamp, body: {
-      id: genIdOf(r.id), traceId: r.trace, name: r.subagent ? `${r.agent}-subagent-turn` : `${r.agent}-turn`,
+      id: genIdOf(r.id), traceId: r.trace, name: r.name || (r.subagent ? `${r.agent}-subagent-turn` : `${r.agent}-turn`),
+      ...(r.error ? { level: 'ERROR', statusMessage: String(r.error).slice(0, 500) } : {}),
       startTime: new Date(r.ts).toISOString(), endTime: new Date(r.ts).toISOString(), model: r.model, usageDetails,
       ...(r.cost ? { costDetails: { input: r.cost.input, output: r.cost.output, cache_read: r.cost.cache_read, cache_creation: r.cost.cache_creation, total: r.cost.total } } : {}),
-      metadata: { agent: r.agent, project: r.project || null, session: r.label, model: r.model, day: dayOf(r.ts), source: r.id.split(':')[0], subagent: !!r.subagent, priced: !!r.cost },
+      metadata: { agent: r.agent, project: r.project || null, session: r.label, model: r.model, day: dayOf(r.ts), source: r.id.split(':')[0], subagent: !!r.subagent, priced: !!r.cost,
+        ...(r.agent === 'manager' ? { ms: r.ms ?? null, costEstimated: !!r.costEstimated, ...r.extra } : {}) },
     } });
   }
   return events;
@@ -387,6 +416,23 @@ export function createIngester(cfg, hooks = {}) {
       nextFiles[f.path] = end;
     }
 
+    // The AI manager's own calls (Jev, AI reviewer): its stalls.jsonl, read incrementally like the transcripts above
+    try {
+      const st = await fs.stat(cfg.stallsFile);
+      let off = nextFiles[cfg.stallsFile] ?? 0;
+      if (st.size < off) off = 0;
+      if (st.size > off) {
+        const buf = await readFrom(cfg.stallsFile, off, st.size);
+        let end = off;
+        for (const l of completeLines(buf, off)) {
+          end = l.end;
+          if (!l.text.includes('"jev"') && !l.text.includes('"triage"')) continue;
+          try { push(parseManagerLine(JSON.parse(l.text))); } catch {}
+        }
+        nextFiles[cfg.stallsFile] = end;
+      }
+    } catch (e) { if (e.code !== 'ENOENT') console.error('[usage] manager log:', e.message); }
+
     // MiniMax: sqlite table local_runtime_token_usage (no model column, session -> workspace_dir)
     let minimaxLastId = state.minimaxLastId;
     try {
@@ -420,6 +466,7 @@ export function createIngester(cfg, hooks = {}) {
   async function enrich(fresh, nextState) {
     const projects = nextState.cwdProject, tried = new Set();
     for (const r of fresh) {
+      if (r.agent === 'manager') { r.trace = traceIdOf('manager', r.session); continue; }   // cost, project and label are set by the parser
       if (r.cwd && projects[r.cwd] == null && !tried.has(r.cwd)) { tried.add(r.cwd); projects[r.cwd] = await projectOf(r.cwd); }
       r.project = (r.cwd && projects[r.cwd]) || (r.cwd ? basename(r.cwd) : null);
       r.trace = traceIdOf(r.agent, r.session);
@@ -430,6 +477,7 @@ export function createIngester(cfg, hooks = {}) {
     for (const r of fresh) if (!newest.get(r.trace) || r.ts > newest.get(r.trace).ts) newest.set(r.trace, r);
     let panes = null;
     for (const [trace, r] of newest) {
+      if (r.agent === 'manager') { nextState.traceLabel[trace] = { label: r.session, tmux: true }; continue; }
       if (nextState.traceLabel[trace] && nextState.traceLabel[trace].tmux) continue;
       if (cfg.now() - r.ts < LIVE_MS && r.cwd) {
         panes = panes || await panesOf();

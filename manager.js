@@ -231,7 +231,7 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
     jev: jevOut?.choice ? jevOut : null, quota: ctx.quota, ...(deployish ? { leases: ctx.leases, deploys: ctx.deploys } : {}), text: stall.excerpt || final.question || '' };
   const r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, fetchFn: reviewerFetch });
   aiBudget.add(r.cost || 0);
-  return finish(r.ai ? { ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model } : { error: r.error, cost: r.cost || 0, ms: r.ms });
+  return finish(r.ai ? { ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model, tin: r.tin, tout: r.tout } : { error: r.error, cost: r.cost || 0, ms: r.ms });
 }
 
 export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {

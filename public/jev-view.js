@@ -7,6 +7,27 @@ export const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `
 export const pct = (c) => (c == null ? '' : `${Math.round(c * 100)} %`);
 const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
 
+// ---- OpenRouter credit ----
+const usd = (x) => (x == null ? '?' : `${x < 0 ? '-' : ''}$${Math.abs(x).toFixed(2)}`);
+export function creditHtml(c) {
+  if (!c || !c.ok) return `<section class="jsec"><div class="u1"><b>OpenRouter credit</b></div><div class="jbanner dim">not available until the server is updated${c?.error ? `<br><span class="dim">${esc(c.error)}</span>` : ''}</div></section>`;
+  const rows = c.endpoints.filter((e) => e.has_key).map((e) => {
+    const k = e.key, empty = e.balance != null && e.balance <= 0;
+    return `<div class="urow"><div class="u1"><b>${esc(e.endpoint)}</b><span class="grow"></span><span class="jbal${empty ? ' bad' : e.balance != null && e.balance <= 2 ? ' low' : ''}">${usd(e.balance)}</span></div>
+      <div class="u2">bought ${usd(e.total_credits)} &middot; used ${usd(e.total_usage)}</div>
+      ${k ? `<div class="u2">key: ${k.limit == null ? 'no monthly limit' : `limit ${usd(k.limit)}, ${usd(k.limit_remaining)} left`} &middot; today ${usd(k.usage_daily)} &middot; this month ${usd(k.usage_monthly)}</div>` : ''}
+      ${e.errors.map((m) => `<div class="u2 uo">${esc(m)}</div>`).join('')}</div>`;
+  }).join('');
+  const bad = c.balance != null && c.balance <= 0;
+  return `<section class="jsec"><div class="u1"><b>OpenRouter credit</b><span class="grow"></span><span class="dim">${c.stale ? 'stale &middot; ' : ''}${c.at ? esc(when(c.at)) : ''}</span></div>
+    ${bad ? '<div class="jbanner bad" role="alert"><b>Credit is used up</b><br>Jev and AI calls fail until credit is added.</div>' : ''}${rows || '<div class="jbanner dim">no endpoint with a key</div>'}</section>`;
+}
+// the short line for the quota row; '' without a reading
+export function creditChip(c) {
+  if (!c || !c.ok || c.balance == null) return '';
+  return `<span class="qi ${c.balance <= 0 ? 'crit' : c.balance <= 2 ? 'warn' : 'ok'}" title="OpenRouter credit">openrouter ${usd(c.balance)}</span>`;
+}
+
 // ---- the tab ----
 function banner(h, what) {
   if (h.state === 'failing') return `<div class="jbanner bad" role="alert"><b>${esc(what)} is failing</b><br>${esc(h.error)}<br><span class="dim">${h.streak} call${h.streak === 1 ? '' : 's'} in a row, last ${esc(when(h.at))}</span></div>`;
@@ -36,7 +57,7 @@ export function jevTabHtml(d, today = new Date().toISOString().slice(0, 10)) {
       <div class="jbars" aria-label="calls per day, 14 days">${u.days.map((x) => `<i title="${esc(x.day)}: ${x.calls}" style="height:${Math.round((x.calls / max(u)) * 100)}%"></i>`).join('')}</div></div>`).join('')
       + (d.product.truncated ? '<div class="u2 dim">older rows not counted (the summary is capped)</div>' : '');
   }
-  return `<div class="utot dim">UTC days &middot; manager logs as <span class="jkey">${esc(d.usageKey)}</span>${d.logged ? '' : ' (not logged: VPT_TEAM_ID is not set)'}${d.queued ? ` &middot; ${d.queued} outcome${d.queued === 1 ? '' : 's'} waiting for the server` : ''}</div>`
+  return creditHtml(d.credits) + `<div class="utot dim">UTC days &middot; manager logs as <span class="jkey">${esc(d.usageKey)}</span>${d.logged ? '' : ' (not logged: VPT_TEAM_ID is not set)'}${d.queued ? ` &middot; ${d.queued} outcome${d.queued === 1 ? '' : 's'} waiting for the server` : ''}</div>`
     + stream('Manager Jev', 'classifying ambiguous stops, from ghosty\'s own log', d.manager, today)
     + stream('AI reviewer', 'proposals for stops that go to the owner, from ghosty\'s own log', d.reviewer, today)
     + `<section class="jsec"><div class="u1"><b>Product uses of Jev</b></div><div class="u2">Sherlock, Test Prompt, &hellip; from the server's decision log</div>${product}</section>`;

@@ -112,7 +112,7 @@ export async function callReviewer({ url, apiKey, facts, fetchFn = fetch, timeou
     if (j.direct) return { error: 'reviewer endpoint is host-reach only', ms, cost: 0 };
     if (!j.success) return { error: String(j.error || `http ${r.status}`).slice(0, 200), ms, cost };
     const p = parseReviewerAnswer(j.content);
-    return { ...p, cost, costEstimated: estimated, ms, model: j.model || null, tokens: j.usage?.total_tokens ?? null };
+    return { ...p, cost, costEstimated: estimated, ms, model: j.model || null, tokens: j.usage?.total_tokens ?? null, tin: j.usage?.prompt_tokens ?? null, tout: j.usage?.completion_tokens ?? null };
   } catch (e) {
     return { error: e.message, ms: Date.now() - started, cost: 0 };
   }

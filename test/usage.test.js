@@ -4,7 +4,7 @@ import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createIngester, defaults, priceFor, costOf, buildSummary, genIdOf, traceIdOf } from '../usage/ingest.js';
+import { parseManagerLine, createIngester, defaults, priceFor, costOf, buildSummary, genIdOf, traceIdOf } from '../usage/ingest.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const prices = JSON.parse(await fs.readFile(new URL('../usage/prices.json', import.meta.url), 'utf8'));
@@ -39,7 +39,7 @@ async function fixture(lf) {
     claudeDir: join(dir, 'claude'), codexDir: join(dir, 'codex'), minimaxDb: join(dir, 'none.sqlite'),
     stateDir: join(dir, 'state'), now: () => NOW, paceMs: 0,
   };
-  Object.assign(cfg, { offsetsFile: join(cfg.stateDir, 'usage-offsets.json'), ledgerFile: join(cfg.stateDir, 'usage-ledger.jsonl'), summaryFile: join(cfg.stateDir, 'usage-summary.json') });
+  Object.assign(cfg, { offsetsFile: join(cfg.stateDir, 'usage-offsets.json'), ledgerFile: join(cfg.stateDir, 'usage-ledger.jsonl'), summaryFile: join(cfg.stateDir, 'usage-summary.json'), stallsFile: join(cfg.stateDir, 'stalls.jsonl') });
   await fs.mkdir(join(cfg.claudeDir, 'proj'), { recursive: true });
   await fs.mkdir(join(cfg.codexDir, '2026/10/03'), { recursive: true });
   return { dir, cfg };
@@ -222,4 +222,65 @@ test('streamed message: output_tokens grows across lines with the same message.i
   const ing2 = createIngester(cfg, hooks);
   await ing2.init(false);
   assert.equal((await ing2.summary()).total.output, 500);
+});
+
+const mgrLines = () => [
+  { type: 'stall', id: 'st-1', session: 'vpt-jev', project: 'virtualpytest', at: '2026-10-03T11:00:00.000Z', case: 'done', excerpt: 'SECRET closing text', jev: { choice: 'continue', confidence: 0.9, cost: 0.00002, ms: 640, model: 'typesafe/jev-1.13', decision_id: 'd1' } },
+  { type: 'stall', id: 'st-2', session: 'vpt-jev', at: '2026-10-03T11:05:00.000Z', case: 'done', jev: { error: 'OpenRouter 402: insufficient credits', ms: 400 } },
+  { type: 'stall', id: 'st-3', session: 'vpt-jev', at: '2026-10-03T11:06:00.000Z', jev: { skipped: 'daily budget reached' } },
+  { type: 'stall', id: 'st-4', session: 'vpt-jev', at: '2026-10-03T11:07:00.000Z', jev: null },
+  { type: 'triage', id: 'st-1', session: 'vpt-jev', at: '2026-10-03T11:00:02.000Z', case: 'owner_decision', mode: 'simulate', ai: { proposed_reply: 'SECRET reply' }, cost: 0.0045, costEstimated: true, ms: 2100, model: 'anthropic/claude-sonnet', tin: 1000, tout: 100 },
+  { type: 'triage', id: 'st-2', session: 'vpt-jev', at: '2026-10-03T11:05:03.000Z', error: 'reviewer 402', cost: 0, ms: 300 },
+  { type: 'triage', id: 'st-3', session: 'vpt-jev', at: '2026-10-03T11:06:03.000Z', skipped: 'not configured' },
+].map((o) => JSON.stringify(o) + '\n').join('');
+
+test('manager records: jev results and reviewer calls become records, skipped calls and texts do not', () => {
+  const L = mgrLines().trim().split('\n').map((l) => parseManagerLine(JSON.parse(l)));
+  assert.deepEqual(L.map((r) => r && r.id), ['manager:jev:st-1', 'manager:jev:st-2', null, null, 'manager:ai:st-1', 'manager:ai:st-2', null]);
+  assert.equal(L[0].cost.total, 0.00002);
+  assert.equal(L[1].cost.total, 0, 'a failed call costs nothing and is not "unpriced"');
+  assert.equal(L[4].costEstimated, true);
+  assert.deepEqual([L[4].usage.input, L[4].usage.output], [1000, 100]);
+  assert.doesNotMatch(JSON.stringify(L), /SECRET/);
+});
+
+test('manager calls reach Langfuse: one generation per call under the session trace, failures ERROR, replays upsert, summary has a manager agent', async () => {
+  const lf = await mockLangfuse();
+  const { cfg } = await fixture(lf);
+  await fs.mkdir(cfg.stateDir, { recursive: true });
+  await fs.writeFile(cfg.stallsFile, mgrLines());
+  const ing = createIngester(cfg, hooks);
+  await ing.init(false);
+  assert.equal(await ing.tick(), 4);
+  const g = gens(lf.batches);
+  const by = Object.fromEntries(g.map((x) => [x.name + ':' + (x.level || 'ok') + ':' + x.metadata.case, x]));
+  assert.equal(g.length, 4);
+  const jev = by['manager.jev:ok:done'];
+  assert.equal(jev.model, 'typesafe/jev-1.13');
+  assert.equal(jev.costDetails.total, 0.00002);
+  assert.equal(jev.id, genIdOf('manager:jev:st-1'));
+  assert.equal(jev.traceId, traceIdOf('manager', 'vpt-jev'));
+  const err = g.find((x) => x.name === 'manager.jev' && x.level === 'ERROR');
+  assert.equal(err.statusMessage, 'OpenRouter 402: insufficient credits');
+  const rev = by['manager.ai-review:ok:owner_decision'];
+  assert.deepEqual([rev.usageDetails.input, rev.usageDetails.output, rev.metadata.costEstimated, rev.model], [1000, 100, true, 'anthropic/claude-sonnet']);
+  assert.equal(g.filter((x) => x.name === 'manager.ai-review' && x.level === 'ERROR').length, 1);
+  const traces = lf.batches.flatMap((b) => b.body.batch).filter((e) => e.type === 'trace-create').map((e) => e.body);
+  assert.equal(traces.length, 1);
+  assert.ok(traces[0].tags.includes('agent:manager') && traces[0].tags.includes('session:vpt-jev'));
+  const s = await ing.summary();
+  assert.equal(s.perAgent.manager.turns, 4);
+  assert.equal(s.perAgent.manager.unpriced, 0);
+  assert.equal(s.perAgent.manager.cost, 0.00452);
+  assert.equal(s.perModel['typesafe/jev-1.13'].agent, 'manager');
+  // incremental: only new lines are read; a rewind (--backfill style replay) re-sends the same ids
+  lf.batches.length = 0;
+  assert.equal(await ing.tick(), 0);
+  await fs.appendFile(cfg.stallsFile, JSON.stringify({ type: 'stall', id: 'st-9', session: 'vpt-x', at: '2026-10-03T11:30:00.000Z', jev: { choice: 'ask_owner', cost: 0.00002 } }) + '\n');
+  assert.equal(await ing.tick(), 1);
+  const ing2 = createIngester(cfg, hooks);
+  await ing2.init(true);
+  lf.batches.length = 0;
+  assert.equal(await ing2.tick(), 5);
+  assert.equal(gens(lf.batches).find((x) => x.name === 'manager.jev' && !x.level && x.metadata.decision === 'continue').id, jev.id, 'deterministic ids');
 });
