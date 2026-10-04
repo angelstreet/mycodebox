@@ -1,11 +1,82 @@
 # Ghosty Sessions
 
-Mobile-first tmux dashboard for the Claude / Codex sessions running on `codebox`.
+Mobile-first control room for the Claude Code / Codex / MiniMax coding agents running in tmux on `codebox`.
 Streams every `tmux capture-pane` to your phone over Tailscale (1 Hz tick),
-lets you send keystrokes back, and shows status pills (idle / busy / needs you).
+lets you send keystrokes back, and shows status pills (idle / busy / needs you). On top of that it logs and
+classifies every stop, tracks token usage and plan quota, coordinates deploys and device leases, and is the
+hands of an AI manager that keeps the sessions moving.
 
 > Read-mostly, send-keys-when-needed. The terminal stays alive on your laptop;
 > Ghosty is a peer, not a replacement.
+
+## Why Ghosty exists
+
+### The setup
+
+One person runs a dozen or more AI coding agents at the same time, each in its own tmux session on one coding VM
+(`codebox`), each on its own task in its own git worktree: Claude Code, Codex and MiniMax side by side. Most of
+those tasks build and test one shared product: a platform of servers, test hosts and real devices
+(set-top boxes, phones, emulators). The agents deploy to that platform and run tests on its devices.
+
+That works far better than one agent at a time, and it creates problems a single terminal never had.
+
+### The constraints
+
+| Constraint | What goes wrong without a tool |
+|---|---|
+| **Attention.** One owner, 15 panes, often away from the desk | Agents stop for small reasons: "continue?", a menu with an obvious choice, "waiting for the deploy", "should I deploy?", or a plain "next I'll do X" and then nothing. Nobody sees it, and work sits still for hours. |
+| **Tokens and money.** Three flat subscriptions: Claude Max (200 €/month), ChatGPT Plus for Codex (20 €/month), MiniMax Token Plan (40 €/month), each with a 5-hour and a weekly window | No single view of how much each session burns. One runaway session can eat the week's Claude window and block the urgent work. The same job can cost ten times more on one agent or model than on another. |
+| **Visibility.** Who did what, what is deployed, where each task stands | Answers live in 15 scrollbacks. "Was my fix deployed? Which version? Who restarted the server?" has no answer. |
+| **Shared platform.** One test platform, exclusive devices | A deploy restarts services under another agent's test run. Two agents drive the same set-top box. An agent waits for a deploy nobody runs, or deploys over someone else's run. |
+| **Phone only.** The owner is often away | Decisions must be one tap from the phone, with no extra app. |
+| **Safety.** Agents act fast | Nothing may answer a question about a deploy, a merge to main, a delete, credentials, money or a customer on the owner's behalf. Every automatic action must be visible, logged and switchable off. |
+
+### How Ghosty answers them
+
+| Constraint | Ghosty |
+|---|---|
+| Attention | Live cards for every session with a state (working / waiting / done / idle). Every stop is logged and classified (`stall.js`: continue, recommended menu option, permission, owner decision, done, error, stopped short, waiting for a deploy, owner action). A swipe page lets the owner label stops good or bad, which measures the classifier. Safe stops can be answered automatically after a cancellable countdown; everything else goes to the owner with Jev's call and an AI reviewer's proposed reply. |
+| Tokens and money | Usage tailers read every agent's transcripts into a ledger and a local Langfuse: tokens and API-equivalent cost per session, project, agent, model and day, with outliers flagged. Live plan quota: Claude from its status line, Codex from `codex app-server`, MiniMax from its plan endpoint. Priority P0 / P1 / P2 per session, and a policy that holds low-priority sessions before a plan runs out. |
+| Visibility | One dashboard: sessions, usage, quota, OpenRouter credit, Jev's decisions, deploys, leases, codebox health. A reporter plugin inside each Claude session reports exact events (turn end, prompt, permission, subagents) instead of guessing from the screen. Every send is recorded with who sent it (`by`). |
+| Shared platform | Deploy queue in the shared lease registry (`vpt-lease`): agents request a deploy and wait; ghosty's runner deploys when no lease blocks it and records every deploy in a ledger (what, which version, when, by whom). Leases show on the session cards and on a Platforms page, and a session waiting for a deploy gets its own badge. |
+| Phone only | Installable PWA / Android TWA over Tailscale; Web Push for "needs you" alerts. |
+| Safety | A forbidden-topic filter that always wins; automatic answers off until measured; per-session and global switches; non-owner senders can only type into a pane that really runs an agent; the owner's Pause sends Esc and holds. |
+
+### The manager: one to run them all
+
+Ghosty is the eyes and hands. The **manager** is the judgement on top, in layers, each cheaper than the next
+one up and each passing only what it cannot settle:
+
+```
+ owner (phone)            decisions only: merges, product calls, anything risky
+   ▲  escalations, batched, one tap each
+ manager agent            one AI session following MANAGER.md: priorities vs quota, deploys,
+   ▲                      delegation, escalation, daily report. Writes no code.
+ Jev + AI reviewer        a cheap model's call on ambiguous stops + a proposed reply with reasoning
+   ▲
+ rules (stall.js)         instant classification, forbidden topics
+   ▲
+ ghosty                   watch every pane, log every stop, act (send, hold, deploy), record who did what
+```
+
+What the manager does:
+- **Keeps sessions moving**: answers the safe stops, nudges a session that stopped short, escalates the rest with the
+  question, a proposed answer and why it did not answer itself.
+- **Spends tokens where they matter**: P0 first, P2 held when a plan is under pressure; coding work goes
+  **MiniMax-first with a Sonnet review gate** (MiniMax builds in a worktree, Sonnet accepts, fixes or rejects,
+  the manager ships), so Claude quota is kept for judgement. Its **own** usage is tracked and budgeted like any
+  session's.
+- **Runs the deploys**: under a standing approval, deploys whenever no lease blocks it; agents queue and wait.
+- **Reports**: a daily summary of what shipped, what is blocked, stops and answers, quota, cost, deploys.
+
+Its limits are fixed: it acts only through actions the owner could take from this dashboard, every action is
+logged with `by`, every capability has a switch, and it never answers anything touching deploys, merges, deletes,
+credentials, money or customers.
+
+Goals, each with a measurable "done when", and the full operating manual live with the task that builds this:
+TASK-44 (`docs/tasks/TASK-44-ai-manager.md` and `TASK-44-MANAGER.md` in the platform repo). Today the watching,
+logging, usage, quota, deploy queue and reporter are live. Automatic answering is built but off until the
+owner's labels show it agrees often enough. The manager agent session is the next step.
 
 ## Access
 
