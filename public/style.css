@@ -1129,3 +1129,16 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .qp .qv.warn{ color:var(--accent); } .qp .qv.crit{ color:var(--waiting); }
 .qverdict{ margin-left:52px; }
 .qverdict .vr{ color:var(--waiting); }
+
+/* session filter: dropdown with a search field on top of the list */
+.ucombo{ position:relative; flex:1 1 0; min-width:0; }
+.ucb{ width:100%; height:34px; display:flex; align-items:center; justify-content:space-between; gap:6px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; }
+.ucb::after{ content:''; width:6px; height:6px; border-right:2px solid var(--ink-3); border-bottom:2px solid var(--ink-3); transform:rotate(45deg); margin:-3px 2px 0 0; flex-shrink:0; }
+.ucb.sel{ border-color:var(--accent); color:var(--accent); }
+.ucl{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ucpanel{ position:absolute; right:0; top:calc(100% + 4px); z-index:5; width:min(280px, 90vw); background:var(--bg-2); border:1px solid var(--frame); border-radius:10px; padding:6px; box-shadow:0 10px 28px rgba(0,0,0,.6); }
+.ucpanel.hidden{ display:none; }
+.ucs{ width:100%; height:32px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; margin-bottom:6px; }
+.uclist{ max-height:240px; overflow-y:auto; display:flex; flex-direction:column; }
+.uci{ text-align:left; background:transparent; border:0; color:var(--ink); padding:7px 8px; border-radius:6px; font:inherit; font-size:12px; }
+.uci:hover, .uci.on{ background:var(--bg-3); } .uci.on{ color:var(--accent); }

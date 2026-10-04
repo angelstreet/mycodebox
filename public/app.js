@@ -2098,7 +2098,7 @@ function usageHtml(u, tab, ui) {
   const { agent: fa, project: fp, q } = ui.f;
   const filtered = !!(fa || fp || q);
   const allRows = sessionRows(u, tab);
-  const rows = allRows.filter((r) => (!fa || r.agent === fa) && (!fp || r.project === fp) && (!q || r.session.toLowerCase().includes(q.toLowerCase())));
+  const rows = allRows.filter((r) => (!fa || r.agent === fa) && (!fp || r.project === fp) && (!q || r.session === q));
   const live = (name) => !!state.status[name];
   const chev = (on) => `<i class="uch${on ? ' on' : ''}"></i>`;
   const sec = (key, title, count, cost, inner) => `<div class="usec-wrap"><button class="usec" data-sec="${key}">${chev(ui.open[key])}<span>${title}</span><span class="dim">${count}</span><span class="grow"></span>${cost === undefined ? '' : usd(cost)}</button>${ui.open[key] ? `<div class="usec-body">${inner}</div>` : ''}</div>`;
@@ -2152,7 +2152,7 @@ function openUsage() {
     const ui = { f: { agent: '', project: '', q: '' }, open: { quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set() };
     let tab = 'today', data = null;
     body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
-      <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><input data-f="q" type="search" placeholder="session…" aria-label="Filter by session name"></div>
+      <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><div class="ucombo"><button type="button" class="ucb" data-combo aria-label="Filter by session"><span class="ucl">all sessions</span></button><div class="ucpanel hidden"><input class="ucs" type="search" placeholder="search session…" aria-label="Search sessions"><div class="uclist"></div></div></div></div>
       <div class="ucontent"><div class="sheet-empty">loading…</div></div>`;
     const content = body.querySelector('.ucontent');
     const fillOptions = () => {
@@ -2165,12 +2165,33 @@ function openUsage() {
       };
       set(body.querySelector('[data-f="agent"]'), rows.map((r) => r.agent));
       set(body.querySelector('[data-f="project"]'), rows.map((r) => r.project));
+      combo.names = [...new Set(rows.map((r) => r.session))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+      drawCombo();
     };
+    const combo = { names: [], term: '' };
+    const drawCombo = () => {
+      const cur = ui.f.q, term = combo.term.toLowerCase();
+      body.querySelector('.ucl').textContent = cur || 'all sessions';
+      body.querySelector('.ucb').classList.toggle('sel', !!cur);
+      const items = [''].concat(combo.names).filter((n) => !n || !term || n.toLowerCase().includes(term));
+      body.querySelector('.uclist').innerHTML = items.map((n) => `<button type="button" class="uci${n === cur ? ' on' : ''}" data-session-pick="${escapeHtml(n)}">${n ? escapeHtml(n) : 'all sessions'}</button>`).join('') || '<div class="dim">no match</div>';
+    };
+    const closeCombo = () => body.querySelector('.ucpanel').classList.add('hidden');
     const draw = () => {
       for (const b of body.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
       content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
     body.onclick = (e) => {
+      const cb = e.target.closest('[data-combo]');
+      if (cb) {
+        const p = body.querySelector('.ucpanel'), open = p.classList.contains('hidden');
+        p.classList.toggle('hidden', !open);
+        if (open) { combo.term = ''; body.querySelector('.ucs').value = ''; drawCombo(); body.querySelector('.ucs').focus(); }
+        return;
+      }
+      const pick = e.target.closest('[data-session-pick]');
+      if (pick) { ui.f.q = pick.dataset.sessionPick; closeCombo(); drawCombo(); draw(); return; }
+      if (!e.target.closest('.ucpanel')) closeCombo();
       const t = e.target.closest('[data-tab]');
       if (t) { tab = t.dataset.tab; if (data) fillOptions(); draw(); return; }
       const s = e.target.closest('[data-sec]');
@@ -2180,7 +2201,10 @@ function openUsage() {
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); }
     };
-    body.oninput = (e) => { const f = e.target.dataset.f; if (!f) return; ui.f[f] = e.target.value.trim(); draw(); };
+    body.oninput = (e) => {
+      if (e.target.classList.contains('ucs')) { combo.term = e.target.value.trim(); drawCombo(); return; }
+      const f = e.target.dataset.f; if (!f) return; ui.f[f] = e.target.value.trim(); draw();
+    };
     draw();
     fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; fillOptions(); draw(); })
       .catch(() => { content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
