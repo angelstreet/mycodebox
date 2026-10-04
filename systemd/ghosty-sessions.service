@@ -12,6 +12,8 @@ WorkingDirectory=/home/jndoye/ghosty-sessions
 ExecStart=/usr/bin/env node /home/jndoye/ghosty-sessions/server.js
 Restart=on-failure
 RestartSec=3
+# A running deploy is a detached child (deploy-runner.js); a stop must not kill it, the restarted ghosty re-adopts it.
+KillMode=process
 Environment=PORT=7777
 Environment=HOST=0.0.0.0
 Environment=TICK_MS=1000
