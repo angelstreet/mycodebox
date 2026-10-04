@@ -1555,3 +1555,21 @@ body.side-docked .side-head .ttl{ letter-spacing:.12em; }
   .card-pane .cell .h .name{ white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; }
   .card-pane .cell .h .proj{ order:9; flex:1 1 100%; min-width:0; max-width:100%; justify-content:center; }
 }
+
+/* alerts feed: top-bar bell with unread count + panel */
+#alertsBtn{ position:relative; }
+#alertsBtn .acount{ position:absolute; top:1px; right:0; min-width:15px; height:15px; padding:0 3px; border-radius:8px; background:#d6a32b; color:#111; font-size:10px; font-weight:700; line-height:15px; text-align:center; }
+.alist{ display:flex; flex-direction:column; }
+.alist .al{ padding:8px 0 8px 8px; border-bottom:1px solid var(--line); border-left:3px solid transparent; }
+.alist .al.unread{ border-left-color:#d6a32b; }
+.alist .al.high, .alist .al.urgent{ border-left-color:#d64545; }
+.alist .al .at{ display:flex; gap:8px; justify-content:space-between; align-items:baseline; }
+.alist .al .at b{ font-size:13px; overflow-wrap:anywhere; }
+.alist .al .at time{ color:var(--ink-3); font-size:11px; flex-shrink:0; }
+.alist .al .ab{ white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; color:var(--ink-2); margin-top:3px; }
+.alist .al a{ font-size:12px; color:var(--accent); }
+.alist .al .tg{ color:var(--ink-3); font-size:10px; }
+.mlog .ml.act{ grid-template-columns:36px 1fr; }
+.mlog .ml.act .x{ grid-column:2; }
+.mchip{ display:inline-block; margin-left:8px; padding:1px 7px; border-radius:9px; border:1px solid var(--line); font-size:11px; font-weight:400; color:var(--ink-2); }
+.mchip.warn{ color:#d6a32b; border-color:#d6a32b; } .mchip.over{ color:#d64545; border-color:#d64545; }

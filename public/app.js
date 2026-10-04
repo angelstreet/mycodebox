@@ -3361,6 +3361,54 @@ function alertTransitions() {
   }).catch(() => {});
 }
 
+// ---------- Alerts feed: the push feed rendered in the page (bell + unread count + panel) ----------
+const alertsUi = { items: [] };
+const ALERT_READ_KEY = 'ghosty.alerts.lastRead';
+const alertsLastRead = () => { try { return Number(localStorage.getItem(ALERT_READ_KEY)) || 0; } catch { return 0; } };
+const alertsMarkRead = () => { try { const m = Math.max(0, ...alertsUi.items.map((i) => i.id)); localStorage.setItem(ALERT_READ_KEY, String(m)); } catch {} paintAlerts(); };
+function paintAlerts() {
+  const n = alertsUi.items.filter((i) => i.id > alertsLastRead()).length;
+  const c = $('#alertsCount');
+  c.textContent = n > 99 ? '99+' : String(n);
+  c.classList.toggle('hidden', !n);
+  $('#alertsBtn').title = n ? `${n} unread alert${n > 1 ? 's' : ''}` : 'Alerts: what the manager and ghosty told you';
+}
+async function pollAlerts() {
+  try {
+    const r = await fetch('/api/push/feed?since=0');
+    if (!r.ok) return;
+    alertsUi.items = (await r.json()).items || [];
+    paintAlerts();
+    alertsUi.redraw?.();
+  } catch {}
+}
+function alertsHtml() {
+  const last = alertsLastRead();
+  const items = alertsUi.items.slice().reverse();
+  const safeUrl = (u) => (/^(https?:\/\/|\/)/.test(u || '') ? u : '');
+  return items.map((i) => {
+    const u = i.url && i.url !== '/' ? safeUrl(i.url) : '';
+    const d = new Date(i.at);
+    return `<div class="al ${escapeHtml(i.priority || 'default')}${i.id > last ? ' unread' : ''}"><div class="at"><b>${escapeHtml(i.title || '')}</b><time>${isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toTimeString().slice(0, 5)}</time></div>${i.body ? `<div class="ab">${escapeHtml(i.body)}</div>` : ''}${u ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">open</a> ` : ''}${i.tag ? `<span class="tg">${escapeHtml(i.tag)}</span>` : ''}</div>`;
+  }).join('') || '<div class="sheet-empty">no alerts yet</div>';
+}
+function openAlerts() {
+  openSheet('Alerts', ({ body, foot }) => {
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<button class="sbtn" data-a="read">mark all read</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => {
+      if (e.target.closest('[data-a="close"]')) closeSheet();
+      if (e.target.closest('[data-a="read"]')) { alertsMarkRead(); draw(); }
+    };
+    const draw = () => { body.innerHTML = `<div class="alist">${alertsHtml()}</div>`; };
+    alertsUi.redraw = () => { if (body.isConnected) draw(); else alertsUi.redraw = null; };
+    draw();
+  });
+}
+$('#alertsBtn').onclick = openAlerts;
+pollAlerts();
+setInterval(pollAlerts, 30000);
+
 // ---------- Web Push (bell) ----------
 // The bell is "on" when this browser holds a real push subscription (works with the app closed).
 // Without push support (plain HTTP, old browser) it falls back to in-page notifications.
