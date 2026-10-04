@@ -2018,49 +2018,117 @@ function quotaOfAgent(a) {
     ? `<span class="qi na">${winShort(w.name)} ${w.unlimited ? '&infin;' : '?'}</span>`
     : `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`).join(' ');
 }
-function usageHtml(u, tab) {
+// agent of a model name (perModel is global, but every model belongs to exactly one agent)
+const modelAgent = (m) => (/^claude/i.test(m) ? 'claude' : /^gpt|codex|^o\d/i.test(m) ? 'codex' : /minimax|^m\d/i.test(m) ? 'minimax' : 'other');
+const tokIO = (e) => `${fmtTok(e.total ?? e.tokens)} tok &middot; in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)}`;
+const sumCost = (list) => (list.length && list.every((r) => r.cost == null) ? null : list.reduce((s, r) => s + (r.cost || 0), 0));
+function groupRows(rows, key) {
+  const m = new Map();
+  for (const r of rows) {
+    const g = m.get(r[key]) || { name: r[key], list: [] };
+    g.list.push(r); m.set(r[key], g);
+  }
+  return [...m.values()].map((g) => ({
+    name: g.name, cost: sumCost(g.list), total: g.list.reduce((s, r) => s + r.tokens, 0),
+    input: g.list.reduce((s, r) => s + r.in, 0), output: g.list.reduce((s, r) => s + r.out, 0),
+    cache_read: g.list.reduce((s, r) => s + r.cr, 0), cache_creation: g.list.reduce((s, r) => s + r.cw, 0),
+    models: [...new Set(g.list.flatMap((r) => r.models))],
+  })).sort((x, y) => ((y.cost ?? -1) - (x.cost ?? -1)) || (y.total - x.total));
+}
+// ui = { f: {agent, project, q}, open: {agent, project, session, day}, openAgents: Set }
+function usageHtml(u, tab, ui) {
   const today = tab === 'today';
   if (today && !summaryFresh(u, Date.now())) return '<div class="sheet-empty">no usage today yet (summary is from an earlier day)</div>';
   if (today && !u.today) return '<div class="sheet-empty">today needs the updated ghosty-usage tailer (restart the unit)</div>';
   const src = today ? u.today : u;
-  const total = today ? u.today.total : u.total;
-  const agents = topEntries(src.perAgent), projects = topEntries(src.perProject, 10), models = topEntries(src.perModel);
-  const rows = sessionRows(u, tab).slice(0, 15);
-  const sec = (t, inner) => `<div class="side-sub nocollapse">${t}</div>${inner}`;
+  const { agent: fa, project: fp, q } = ui.f;
+  const filtered = !!(fa || fp || q);
+  const allRows = sessionRows(u, tab);
+  const rows = allRows.filter((r) => (!fa || r.agent === fa) && (!fp || r.project === fp) && (!q || r.session.toLowerCase().includes(q.toLowerCase())));
   const live = (name) => !!state.status[name];
-  const head = `<div class="utot"><b>${usd(total.cost === 0 && total.unpriced > 0 ? null : total.cost)}</b> <span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`} &middot; ${total.turns ?? 0} turns${total.unpriced ? ` &middot; ${total.unpriced} unpriced turns not counted` : ''}</span><br>${tokLine(total)}</div>`;
-  const agentHtml = agents.map((a) => `<div class="urow"><div class="u1"><i class="adot ${escapeHtml(a.name)}"></i><b>${escapeHtml(a.name)}</b><span class="grow"></span>${usd(a.cost)}</div>
+  const chev = (on) => `<i class="uch${on ? ' on' : ''}"></i>`;
+  const sec = (key, title, count, cost, inner) => `<div class="usec-wrap"><button class="usec" data-sec="${key}">${chev(ui.open[key])}<span>${title}</span><span class="dim">${count}</span><span class="grow"></span>${cost === undefined ? '' : usd(cost)}</button>${ui.open[key] ? `<div class="usec-body">${inner}</div>` : ''}</div>`;
+
+  // totals: the summary's own, or the sum of the filtered sessions
+  let total = today ? u.today.total : u.total;
+  if (filtered) {
+    total = { cost: sumCost(rows) ?? 0, unpriced: rows.every((r) => r.cost == null) && rows.length ? 1 : 0, turns: rows.reduce((s, r) => s + r.turns, 0),
+      input: rows.reduce((s, r) => s + r.in, 0), output: rows.reduce((s, r) => s + r.out, 0),
+      cache_read: rows.reduce((s, r) => s + r.cr, 0), cache_creation: rows.reduce((s, r) => s + r.cw, 0) };
+  }
+  const head = `<div class="utot"><b>${usd(total.cost === 0 && total.unpriced > 0 ? null : total.cost)}</b> <span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced turns not counted` : ''}</span><br>${tokLine(total)}</div>`;
+
+  // agents (with their models nested); derived from the filtered sessions when a project/session filter is on
+  const narrowed = !!(fp || q);
+  let agents = narrowed ? groupRows(rows, 'agent') : topEntries(src.perAgent).filter((a) => !fa || a.name === fa);
+  const modelsOf = (a) => (narrowed
+    ? a.models.map((m) => ({ name: m, nocost: true }))
+    : topEntries(src.perModel).filter((m) => modelAgent(m.name) === a.name));
+  const agentHtml = agents.map((a) => {
+    const on = ui.openAgents.has(a.name), ms = modelsOf(a);
+    return `<div class="urow ag"><div class="u1 tog" data-agent="${escapeHtml(a.name)}">${chev(on)}<i class="adot ${escapeHtml(a.name)}"></i><b>${escapeHtml(a.name)}</b><span class="dim">${ms.length} model${ms.length === 1 ? '' : 's'}</span><span class="grow"></span>${usd(a.cost)}</div>
       <div class="u2">${escapeHtml(SUBSCRIPTION[a.name] || 'subscription ?')} &middot; ${quotaOfAgent(a.name)}</div>
-      <div class="u2">${tokLine(a)}</div></div>`).join('') || '<div class="dim">none</div>';
-  const projHtml = projects.map((p) => `<div class="urow"><div class="u1"><b>${escapeHtml(p.name)}</b><span class="grow"></span>${usd(p.cost)}</div><div class="u2">${fmtTok(p.total)} tok</div></div>`).join('') || '<div class="dim">none</div>';
-  const sessHtml = rows.map((r) => `<div class="urow${live(r.session) ? ' go' : ''}${r.outlier ? ' out' : ''}" ${live(r.session) ? `data-open="${escapeHtml(r.session)}"` : ''}>
+      <div class="u2">${tokLine(a)}</div>
+      ${on ? `<div class="umodels">${ms.map((m) => `<div class="urow sub"><div class="u1"><b>${escapeHtml(m.name)}</b><span class="grow"></span>${m.nocost ? '' : usd(m.cost)}</div>${m.nocost ? '' : `<div class="u2">${tokIO(m)}</div>`}</div>`).join('') || '<div class="dim">none</div>'}</div>` : ''}</div>`;
+  }).join('') || '<div class="dim">none</div>';
+
+  const projects = (fa || q ? groupRows(rows, 'project') : topEntries(src.perProject, 10)).filter((p) => !fp || p.name === fp);
+  const projHtml = projects.map((p) => `<div class="urow"><div class="u1"><b>${escapeHtml(p.name)}</b><span class="grow"></span>${usd(p.cost)}</div><div class="u2">${tokIO(p)}</div></div>`).join('') || '<div class="dim">none</div>';
+
+  const shown = rows.slice(0, 40);
+  const sessHtml = shown.map((r) => `<div class="urow${live(r.session) ? ' go' : ''}${r.outlier ? ' out' : ''}" ${live(r.session) ? `data-open="${escapeHtml(r.session)}"` : ''}>
       <div class="u1">${r.outlier ? '<span class="uw" title="outlier">&#9888;</span>' : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span>${usd(r.cost)}</div>
-      <div class="u2">${escapeHtml(r.project)} &middot; ${escapeHtml(r.agent)} &middot; ${escapeHtml(r.models.join(', ') || '?')} &middot; ${fmtTok(r.tokens)} tok &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
-      ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">none</div>';
-  const days = today ? '' : sec('Per day', `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
-  const modelHtml = models.map((m) => `<div class="urow"><div class="u1"><b>${escapeHtml(m.name)}</b><span class="grow"></span>${usd(m.cost)}</div><div class="u2">${fmtTok(m.total)} tok</div></div>`).join('') || '<div class="dim">none</div>';
-  return head + sec('Per agent', agentHtml) + sec('Per project (top 10)', projHtml) + sec('Per session (top 15, outliers first)', sessHtml) + days + sec('Per model', modelHtml);
+      <div class="u2">${escapeHtml(r.project)} &middot; ${escapeHtml(r.agent)} &middot; ${escapeHtml(r.models.join(', ') || '?')}</div>
+      <div class="u2">${tokIO({ tokens: r.tokens, in: r.in, out: r.out })} &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
+      ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
+
+  const days = today ? '' : sec('day', 'Per day', '', undefined, `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
+  return head + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
+    + sec('project', 'Projects', projects.length, undefined, projHtml)
+    + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml)
+    + (filtered ? '' : days);
 }
 function openUsage() {
   openSheet('Usage · API-equivalent', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('usage');
     foot.classList.remove('hidden');
-    foot.innerHTML = `<a class="sbtn" href="${LANGFUSE_URL}" target="_blank" rel="noopener">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
+    foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    const ui = { f: { agent: '', project: '', q: '' }, open: { agent: true, project: true, session: true, day: true }, openAgents: new Set() };
     let tab = 'today', data = null;
+    body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
+      <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><input data-f="q" type="search" placeholder="session…" aria-label="Filter by session name"></div>
+      <div class="ucontent"><div class="sheet-empty">loading…</div></div>`;
+    const content = body.querySelector('.ucontent');
+    const fillOptions = () => {
+      const rows = sessionRows(data, tab);
+      const set = (sel, vals) => {
+        const cur = ui.f[sel.dataset.f];
+        const list = [...new Set(vals)].sort();
+        if (cur && !list.includes(cur)) list.push(cur);
+        sel.innerHTML = `<option value="">all ${sel.dataset.f === 'agent' ? 'agents' : 'projects'}</option>` + list.map((v) => `<option value="${escapeHtml(v)}"${v === cur ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+      };
+      set(body.querySelector('[data-f="agent"]'), rows.map((r) => r.agent));
+      set(body.querySelector('[data-f="project"]'), rows.map((r) => r.project));
+    };
     const draw = () => {
-      const note = '<div class="mnote">API-equivalent cost at list prices, not money spent: Claude Max 200 EUR, Codex/ChatGPT Plus 20 EUR and MiniMax 40 EUR are flat subscriptions. MiniMax is unpriced (&mdash;, tokens only).</div>';
-      body.innerHTML = `<div class="utabs"><button class="sbtn${tab === 'today' ? ' on' : ''}" data-tab="today">Today</button><button class="sbtn${tab === '14d' ? ' on' : ''}" data-tab="14d">14 days</button></div>${note}`
-        + (data ? usageHtml(data, tab) : '<div class="sheet-empty">loading…</div>');
+      for (const b of body.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
+      content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
     body.onclick = (e) => {
       const t = e.target.closest('[data-tab]');
-      if (t) { tab = t.dataset.tab; draw(); return; }
+      if (t) { tab = t.dataset.tab; if (data) fillOptions(); draw(); return; }
+      const s = e.target.closest('[data-sec]');
+      if (s) { ui.open[s.dataset.sec] = !ui.open[s.dataset.sec]; draw(); return; }
+      const g = e.target.closest('[data-agent]');
+      if (g) { const n = g.dataset.agent; if (!ui.openAgents.delete(n)) ui.openAgents.add(n); draw(); return; }
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); }
     };
+    body.oninput = (e) => { const f = e.target.dataset.f; if (!f) return; ui.f[f] = e.target.value.trim(); draw(); };
     draw();
-    fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; draw(); })
-      .catch(() => { body.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
+    fetch('/api/usage').then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((j) => { data = j; fillOptions(); draw(); })
+      .catch(() => { content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
   });
 }
 els.usageBtn.onclick = openUsage;

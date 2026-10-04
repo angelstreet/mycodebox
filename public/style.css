@@ -1086,3 +1086,21 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
   .cell .h .mt .ctx, .cell .h .mt .sep{ display:none; }
   .cell:hover .h .mt .ctx, .cell:hover .h .mt .sep{ display:inline; }
 }
+
+/* usage sheet: visible frame, bordered buttons, collapsible groups, filters */
+.sheet.usage{ border:1px solid rgba(255,255,255,.28); }
+.sheet.usage .sheet-foot .sbtn{ border-color:rgba(255,255,255,.28); }
+.sbtn.lf{ gap:8px; }
+.sbtn.lf img{ display:block; }
+.ufilters{ display:flex; gap:6px; margin:8px 0 4px; }
+.ufilters select, .ufilters input{ flex:1 1 0; min-width:0; height:34px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; }
+.usec-wrap{ margin-top:6px; }
+.usec{ display:flex; align-items:center; gap:8px; width:100%; padding:8px 4px; background:transparent; border:0; border-bottom:1px solid var(--line); color:var(--ink-2); font:inherit; font-size:11px; letter-spacing:.08em; text-transform:uppercase; text-align:left; }
+.usec .grow, .u1 .grow{ flex:1; }
+.usec .dim{ text-transform:none; letter-spacing:0; }
+.usec-body{ padding-top:2px; }
+.uch{ width:7px; height:7px; border-right:2px solid var(--ink-3); border-bottom:2px solid var(--ink-3); transform:rotate(-45deg); transition:transform .12s; flex-shrink:0; margin:0 3px 0 1px; }
+.uch.on{ transform:rotate(45deg); }
+.u1.tog{ cursor:pointer; }
+.umodels{ margin:4px 0 2px 14px; border-left:1px solid var(--line-2); padding-left:8px; }
+.urow.sub{ border-bottom:0; padding:4px 2px; }
