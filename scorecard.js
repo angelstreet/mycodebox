@@ -390,7 +390,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
   }
   const budget = {
     claudeWeeklyPct: planBudget.claudeWeeklyPct,
-    planWeek: { start: new Date(planWeek.start).toISOString(), end: new Date(planWeek.end).toISOString(), elapsed: weeklyUsedPct != null ? Math.round((planWeek.end - planWeek.start > 0 ? Math.max(0, Math.min(1, (now - planWeek.start) / (planWeek.end - planWeek.start))) : 0)) : null },
+    planWeek: { start: new Date(planWeek.start).toISOString(), end: new Date(planWeek.end).toISOString(), elapsed: weeklyUsedPct != null ? Math.round((planWeek.end - planWeek.start > 0 ? Math.max(0, Math.min(1, (now - planWeek.start) / (planWeek.end - planWeek.start))) : 0) * 1000) / 1000 : null },
     weights: scoreWeights,
   };
 

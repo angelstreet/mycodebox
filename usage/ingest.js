@@ -544,7 +544,7 @@ export function createIngester(cfg, hooks = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Manager scorecard -> Langfuse scores (manager.score, manager.cost_usd, jev.*).
+// Manager scorecard -> Langfuse scores (manager.score, manager.claude_weekly_pct, jev.*).
 // Runs in the tailer's main loop, once per cfg.pollMs * 4 (or on a hard cadence when --once).
 // Same trace id each UTC day -> Langfuse upserts (a refresh overwrites yesterday's values too).
 // ---------------------------------------------------------------------------
