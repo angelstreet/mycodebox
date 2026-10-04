@@ -1486,3 +1486,15 @@ body.side-dockable #menuBtn.hidden{ display:inline-flex !important; }
 .session-list li.shown{ background:rgba(232,154,74,.07); box-shadow:inset 3px 0 0 rgba(232,154,74,.6); }
 /* forbidden-topic option (deploy, restart, delete…): needs a second tap; a small mark, not a border that looks selected */
 #askPopup .ap-b.cf::after { content: '⚠ 2 taps'; margin-left: auto; padding-left: 8px; font-size: 11px; color: var(--warn, #d9a441); opacity: .85; white-space: nowrap; }
+/* docked list open: its own ‹ button folds it, so the hamburger is redundant, and the horizontal session tabs duplicate the list.
+   Fold the list and both come back (the hamburger re-opens it). */
+body.side-docked.side-dockable #menuBtn.hidden, body.side-docked #menuBtn{ display:none !important; }
+body.side-docked #tabs{ display:none; }
+
+/* quota readout: centred in the top bar on desktop, hidden on phones */
+.quota.inbar{ width:auto; flex:0 1 auto; min-width:0; margin:0 auto; border:0; padding:0 8px; background:none !important; overflow:hidden; text-overflow:ellipsis; }
+.health.inbar{ margin-right:0; }
+.health.inbar:has(+ .quota.hidden){ margin-right:auto; }
+@media (max-width: 720px){ .quota{ display:none !important; } }
+/* not enough width for the centred quota readout: drop it rather than show half of it (it is in Usage too) */
+@media (max-width: 1320px){ .quota.inbar{ display:none; } .health.inbar{ margin-right:auto; } }

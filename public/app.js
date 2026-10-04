@@ -735,8 +735,13 @@ async function fetchLeases() {
 {
   const mq = window.matchMedia('(min-width: 721px)');
   const place = () => {
-    if (mq.matches) els.health.classList.add('inbar'), $('#appTitle').after(els.health), $('#topbar').after(els.quota);
-    else els.health.classList.remove('inbar'), $('#topbar').after(els.health), els.health.after(els.quota);
+    if (mq.matches) {   // desktop: vitals left next to the title, quota centred, both inside the top bar
+      els.health.classList.add('inbar'); els.quota.classList.add('inbar');
+      $('#appTitle').after(els.health); els.health.after(els.quota);
+    } else {            // phones: vitals strip under the bar; the quota strip is hidden (see Usage)
+      els.health.classList.remove('inbar'); els.quota.classList.remove('inbar');
+      $('#topbar').after(els.health); els.health.after(els.quota);
+    }
   };
   mq.addEventListener('change', place);
   place();
@@ -765,7 +770,7 @@ function onHealth(h) {
   for (const d of h.disks) parts.push(item(d.level, d.path === '/' ? 'disk' : `disk ${d.path}`, pct(d.pct), `${gb(d.free)} free`,
     `${d.path}: ${gb(d.used)} used, ${gb(d.free)} free of ${gb(d.total)}`));
   const worst = ['crit', 'warn'].find((l) => [h.cpu, h.load, h.mem, ...h.disks].some((x) => x?.level === l)) || 'ok';
-  el.className = `health ${worst}`;
+  el.className = `health ${worst}${el.classList.contains('inbar') ? ' inbar' : ''}`;   // keep the in-bar marker (it drives the layout)
   el.innerHTML = parts.join('');
 }
 
@@ -1929,7 +1934,7 @@ function onQuota(q) {
   state.quota = q;
   const el = els.quota;
   const chip = creditChip(state.credits);
-  if (!q || !q.plans?.length) { if (chip) { el.className = 'quota ok'; el.innerHTML = chip; } else el.classList.add('hidden'); return; }
+  if (!q || !q.plans?.length) { if (chip) { el.className = `quota ok${el.classList.contains('inbar') ? ' inbar' : ''}`; el.innerHTML = chip; } else el.classList.add('hidden'); return; }
   const parts = q.plans.map((p) => {
     const short = p.plan;
     if (!p.windows.length) return `<span class="qi na" title="${escapeHtml(p.error || 'no reading yet')}"><b>${short}</b> ${/login|expired/i.test(p.error || '') ? 'login expired' : '?'}</span>`;
@@ -1941,7 +1946,7 @@ function onQuota(q) {
   });
   if (chip) parts.push(chip);
   const worst = ['crit', 'warn'].find((l) => q.plans.some((p) => p.windows.some((w) => qLevel(w.usedPercent) === l)) || (state.credits?.balance != null && (l === 'crit' ? state.credits.balance <= 0 : state.credits.balance <= 2))) || 'ok';
-  el.className = `quota ${worst}`;
+  el.className = `quota ${worst}${el.classList.contains('inbar') ? ' inbar' : ''}`;
   el.innerHTML = parts.join('<i class="sep">&middot;</i>');
 }
 const resetText = (w) => {
