@@ -128,7 +128,7 @@ test('cost: when manager.json sets managerSessions=["ops"], only "ops" counts', 
 
 test('perf: stops, resolved, resolvedFast, auto, escalated', () => {
   // 4 stalls: id1..id4. id1 resolved in 60s (fast) by an auto send; id2 resolved in 600s (slow); id3 escalated; id4 never resolved.
-  const r1 = stall({ id: 'id1', at: t(now - 5000) }); const o1 = outcome({ id: 'id1', at: t(now - 4940), afterSec: 60 });
+  const r1 = stall({ id: 'id1', at: t(now - 5000) }); const o1 = outcome({ id: 'id1', at: t(now - 4940), afterSec: 60, via: 'manager' });   // via 'manager' = manager.js auto-send
   const r2 = stall({ id: 'id2', at: t(now - 20000) }); const o2 = outcome({ id: 'id2', at: t(now - 19400), afterSec: 600 });
   const r3 = stall({ id: 'id3', at: t(now - 800) }); const e3 = escalated({ at: now - 700 });
   const r4 = stall({ id: 'id4', at: t(now - 600) });

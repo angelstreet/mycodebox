@@ -985,6 +985,12 @@ button.prio{ cursor:pointer; }
 .u1 .grow{ flex:1; }
 .u2{ font-size:11px; color:var(--ink-3); margin-top:1px; word-break:break-word; }
 .u2.uo, .uw{ color:var(--waiting); }
+.mscore{ display:flex; align-items:center; gap:12px; padding:8px 4px; border-bottom:1px solid var(--line); }
+.mscore-num{ display:flex; align-items:baseline; gap:4px; } .mscore-num b{ font-size:28px; color:var(--accent); font-variant-numeric:tabular-nums; }
+.mscore-comp{ display:flex; flex-direction:column; gap:1px; font-size:11px; flex:1; min-width:0; }
+.mscore-comp div{ display:flex; gap:6px; justify-content:space-between; } .mscore-comp .dim{ color:var(--ink-3); }
+.mscore-bars{ display:flex; align-items:flex-end; gap:3px; height:24px; }
+.msbar{ width:6px; background:var(--bg-3); border-radius:2px; } .msbar.last{ background:var(--accent); }
 .ubars{ display:flex; flex-direction:column; gap:3px; }
 .ubar{ display:flex; align-items:center; gap:8px; font-size:11px; font-variant-numeric:tabular-nums; }
 .ubar .ud{ width:38px; color:var(--ink-3); }

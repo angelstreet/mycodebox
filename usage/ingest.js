@@ -16,7 +16,7 @@ import { traceIdOf, genIdOf, postBatch as postBatchRaw } from './lf-common.js';
 import { createEvalSync } from './lfeval.js';
 import { createJudge } from './judge.js';
 import { parseManagerLine } from './manager-parse.js';
-import { cachedScorecard, langfuseScoreEvents, scorecardTraceId, foldRuns } from '../scorecard.js';
+import { buildScorecard, langfuseScoreEvents, scorecardTraceId, foldRuns } from '../scorecard.js';
 
 const exec = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -539,14 +539,9 @@ export function createScorecardPoster(cfg, { ing, log = console.log } = {}) {
     const now = cfg.now ? cfg.now() : Date.now();
     if (!force && now - lastAt < SCORECARD_MS) return { skipped: 'throttled' };
     try {
-      // Reuse the ingester's in-memory ledger when available; otherwise read it once. Two sources are fine because
-      // the row id is the dedupe key.
-      const ledger = ing && ing.ledger ? [...ing.ledger.values()] : null;
-      let ledgerRows = ledger;
-      if (!ledgerRows) {
-        const text = await fs.readFile(cfg.ledgerFile, 'utf8').catch(() => '');
-        ledgerRows = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-      }
+      // Read the file, not ing.ledger: judge rows are appended straight to the file and are not in the ingester's map.
+      const text = await fs.readFile(cfg.ledgerFile, 'utf8').catch(() => '');
+      const ledgerRows = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       let stallRecs = [], runsLines = [];
       try { stallRecs = (await fs.readFile(cfg.stallsFile, 'utf8')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
       try { runsLines = (await fs.readFile(join(cfg.stateDir, 'manager-runs.jsonl'), 'utf8')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}

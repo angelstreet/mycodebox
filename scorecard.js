@@ -63,19 +63,9 @@ function labelRight(r, ctx) {
   return null;
 }
 
-// Was the manager the one that moved the session on for a given outcome? Sends by != 'owner' within 10 s before
-// the outcome, OR outcome.via indicating auto (via is set to the source the owner's reply was found at:
-// 'ghosty' = ghosty sent something via send, 'reporter' = the reporter prompt was logged, 'pane' / 'unknown'
-// = no ghosty action). We treat `via === 'ghosty'` AND any send.by != 'owner' within 10 s before as auto.
-function wasAuto(outcomeAt, bySends, ms = 10000) {
-  if (!outcomeAt || !bySends?.length) return false;
-  const t = Date.parse(outcomeAt);
-  for (const s of bySends) {
-    const ts = Date.parse(s.at);
-    if (Number.isFinite(ts) && Math.abs(t - ts) <= ms && s.by !== 'owner' && s.by !== 'manager-agent') return true;   // manager-agent is the Opus session itself, not auto-answer
-  }
-  return false;
-}
+// Was the outcome produced by the manager's own auto-send? manager.js writes outcome.via = 'manager' exactly when the
+// pending stall had an auto-send (p.auto); otherwise via is 'reporter' | 'ghosty' | 'terminal' | 'unknown' (the owner moved it).
+const wasAuto = (o) => o.via === 'manager';
 
 // Jev's pick mapped to the owner's reply kind.
 //   jev 'continue'        -> outcome.kind === 'continue'
@@ -112,8 +102,7 @@ function addBucket(b, r) {
   b.tokens.cache_read += u.cache_read || 0;
   b.tokens.cache_write += u.cache_write_5m || 0;        // we fold 5m + 1h into cache_write for the scorecard
   if (r.usage?.cache_write_1h) b.tokens.cache_write += r.usage.cache_write_1h;
-  if (r.cost && Number.isFinite(r.cost.total)) b.usd = (b.usd || 0) + r.cost.total;
-  else if (r.cost == null) b.usd = null;               // stays null when the first priced row is missing
+  if (r.cost && Number.isFinite(r.cost.total)) b.usd = (b.usd || 0) + r.cost.total;   // unpriced rows add tokens only; usd stays null until a priced row appears
   b.calls++;
 }
 const emptyBucket = () => ({ tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, usd: null, calls: 0 });
@@ -251,7 +240,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
       const sec = Number.isFinite(o.afterSec) ? o.afterSec : null;
       if (sec != null) ttrs.push(sec);
       if (sec != null && sec <= 300) resolvedFast++;
-      if (wasAuto(o.at, sends)) autoCount++;
+      if (wasAuto(o)) autoCount++;
       if (sourceIsJev && s.jev?.choice) {
         const a = jevAgrees(s.jev.choice, o.kind);
         if (a != null) { jevAgreeTotal++; if (a) jevAgreedCount++; }
@@ -420,9 +409,9 @@ export function foldRuns(lines) {
 export async function loadScorecard({ from, to, env = process.env, fsLib = fs, log = console.log } = {}) {
   const dir = stateDir(env);
   const [ledgerRows, stallRecs, runsLines, judgeLines] = await Promise.all([
-    readJsonl(join(dir, 'usage-ledger.jsonl')).catch(() => []),
-    readJsonl(join(dir, 'stalls.jsonl')).catch(() => []),
-    readJsonl(join(dir, 'manager-runs.jsonl')).catch(() => []),
+    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'lfeval-judge.json')).catch(() => []),
   ]);
   const runs = foldRuns(runsLines);
@@ -437,9 +426,9 @@ export async function loadScorecard({ from, to, env = process.env, fsLib = fs, l
 export async function loadScorecardDays({ days = 7, env = process.env, fsLib = fs } = {}) {
   const dir = stateDir(env);
   const [ledgerRows, stallRecs, runsLines] = await Promise.all([
-    readJsonl(join(dir, 'usage-ledger.jsonl')).catch(() => []),
-    readJsonl(join(dir, 'stalls.jsonl')).catch(() => []),
-    readJsonl(join(dir, 'manager-runs.jsonl')).catch(() => []),
+    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
   ]);
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);

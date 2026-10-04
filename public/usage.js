@@ -134,7 +134,7 @@ export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull } = {
   const c = score.components || {};
   const bucket = (b) => b ? `<span class="ut">in ${tok(b.tokens?.input)} &middot; out ${tok(b.tokens?.output)} &middot; cr ${tok(b.tokens?.cache_read)} &middot; cw ${tok(b.tokens?.cache_write)}</span>` : '<span class="dim">—</span>';
   const bucketUsd = (b) => b ? `${usd(b.usd)}${b.usd != null ? '' : ''} · ${b.calls} calls` : '';
-  const sessionLine = `${usd(score.cost.session.usd)} session${score.cost.subagents.calls ? ` · ${usd(score.cost.subagents.usd)} subagents` : ''}`;
+  const sessionLine = usd(score.cost.session.usd);
   const workersLine = `${tok((score.cost.workers.tokens.input || 0) + (score.cost.workers.tokens.output || 0) + (score.cost.workers.tokens.cache_read || 0) + (score.cost.workers.tokens.cache_write || 0))} worker tokens · ${score.cost.workers.calls} calls`;
   const jevLine = `${usd(score.cost.jev.usd)} Jev · ${usd(score.cost.reviewer.usd)} reviewer${Number.isFinite(score.cost.judge.calls) ? ` · ${usd(score.cost.judge.usd)} judge` : ''}`;
   const jev = score.jev || {};
