@@ -2132,8 +2132,7 @@ function usageHtml(u, tab, ui) {
   const shown = rows.slice(0, 40);
   const sessHtml = shown.map((r) => `<div class="urow${live(r.session) ? ' go' : ''}${r.outlier ? ' out' : ''}" ${live(r.session) ? `data-open="${escapeHtml(r.session)}"` : ''}>
       <div class="u1">${r.outlier ? '<span class="uw" title="outlier">&#9888;</span>' : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span>${usd(r.cost)}</div>
-      <div class="u2">${escapeHtml(r.project)} &middot; ${escapeHtml(r.agent)} &middot; ${escapeHtml(r.models.join(', ') || '?')}</div>
-      <div class="u2">${tokIO({ tokens: r.tokens, in: r.in, out: r.out })} &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
+      <div class="u2">${escapeHtml(r.project)} &middot; ${tokIO({ tokens: r.tokens, in: r.in, out: r.out })} &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
       ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
   const days = today ? '' : sec('day', 'Per day', '', undefined, `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
