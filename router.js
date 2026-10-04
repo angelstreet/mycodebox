@@ -73,7 +73,7 @@ const builder = {
     const touches = asArray(facts?.work?.touches);
     const sensitive = hasAny(touches, ['infra', 'deploy', 'secrets', 'migrations']);
     const publicSecurity = !!facts?.work?.repo_public && touches.includes('security');
-    let allowed = ['ignore', 'minimax', 'codex', 'sonnet', 'opus'].filter((id) => id !== 'ignore');
+    let allowed = ['minimax', 'codex', 'sonnet', 'opus'];
     if (sensitive) {
       allowed = allowed.filter((id) => id !== 'minimax' && id !== 'codex');
       reasons.push(`touches ${touches.filter((t) => ['infra', 'deploy', 'secrets', 'migrations'].includes(t)).join('/')}: cheapest builders off the table`);
