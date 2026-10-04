@@ -9,7 +9,7 @@ import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
 import { jevTabHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
-import { displayStateOf, displayState, STATE_RANK, STATE_LABEL } from '/state.js';
+import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -737,8 +737,7 @@ function renderSummary() {
     ['idle',    counts.idle,    'idle'],
   ];
   const html = chips
-    // working is always shown; deploy only appears once a session actually waits for one
-    .filter(([k, n]) => n > 0 || k === 'working' || k === 'idle')
+    .filter(([k, n]) => n > 0 || k === 'working')
     .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}"><i class="dot ${k}"></i>${n}</button>`)
     .join('');
   if (els.summary.innerHTML !== html) {
