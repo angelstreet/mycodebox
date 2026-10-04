@@ -1111,3 +1111,9 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .u1.tog{ cursor:pointer; }
 .umodels{ margin:4px 0 2px 14px; border-left:1px solid var(--line-2); padding-left:8px; }
 .urow.sub{ border-bottom:0; padding:4px 2px; }
+/* the activity / ctx text beside the name must truncate, never spill over the header */
+.cell .h .nm{ overflow:hidden; }
+@media (hover:hover) and (pointer:fine){
+  .cell .h .mt{ flex:0 1 auto; min-width:0; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cell .h .mt .act{ display:inline; overflow:hidden; text-overflow:ellipsis; }
+}
