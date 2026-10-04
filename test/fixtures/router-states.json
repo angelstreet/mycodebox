@@ -1,0 +1,306 @@
+[
+  {
+    "point": "wake",
+    "label": "quiet evening: no escalation, no criticals",
+    "facts": { "event": { "kind": "stall" }, "disk_pct": 42, "quota": { "claude": 30, "codex": 25 } },
+    "expect": "rules_handle"
+  },
+  {
+    "point": "wake",
+    "label": "P0 blocked at 3am",
+    "facts": { "event": { "kind": "stall", "p0_blocked": true }, "disk_pct": 30, "quota": { "claude": 40 } },
+    "expect": "wake_opus"
+  },
+  {
+    "point": "wake",
+    "label": "deploy failed on the staging host",
+    "facts": { "event": { "kind": "deploy" }, "deploy": { "state": "failed", "host": "ci-runner-7" }, "disk_pct": 50, "quota": { "claude": 35 } },
+    "expect": "wake_opus"
+  },
+  {
+    "point": "wake",
+    "label": "disk at 97 percent",
+    "facts": { "event": { "kind": "stall" }, "disk_pct": 97, "quota": { "claude": 40 } },
+    "expect": "wake_cheap"
+  },
+  {
+    "point": "wake",
+    "label": "codex plan quota at 96 percent",
+    "facts": { "event": { "kind": "stall" }, "disk_pct": 40, "quota": { "codex": 96 } },
+    "expect": "wake_cheap"
+  },
+  {
+    "point": "wake",
+    "label": "escalated owner decision, no criticals",
+    "facts": { "event": { "kind": "stall", "escalated": true }, "disk_pct": 50, "quota": { "claude": 30 } },
+    "expect": "wake_opus"
+  },
+  {
+    "point": "wake",
+    "label": "forbidden topic + p0 blocked",
+    "facts": { "event": { "kind": "stall", "p0_blocked": true, "forbidden_topic": true }, "disk_pct": 30, "quota": { "claude": 30 } },
+    "expect": "wake_opus"
+  },
+  {
+    "point": "wake",
+    "label": "forbidden topic, nothing critical",
+    "facts": { "event": { "kind": "stall", "forbidden_topic": true }, "disk_pct": 50, "quota": { "claude": 30 } },
+    "expect": "wake_cheap"
+  },
+  {
+    "point": "wake",
+    "label": "p0 blocked + escalated + high quota",
+    "facts": { "event": { "kind": "stall", "p0_blocked": true, "escalated": true }, "disk_pct": 60, "quota": { "claude": 98 } },
+    "expect": "wake_opus"
+  },
+  {
+    "point": "wake",
+    "label": "ignore: stalled but nothing flagged",
+    "facts": { "event": { "kind": "stall" }, "disk_pct": 20, "quota": { "claude": 10, "codex": 10 } },
+    "expect": "rules_handle"
+  },
+
+  {
+    "point": "builder",
+    "label": "tiny app fix, tests, private repo",
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "has_tests": true } },
+    "expect": "minimax"
+  },
+  {
+    "point": "builder",
+    "label": "touches infra: only sonnet+opus",
+    "facts": { "work": { "touches": ["app", "infra"], "repo_public": false, "size": "medium" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "builder",
+    "label": "touches secrets: only sonnet+opus",
+    "facts": { "work": { "touches": ["secrets"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "builder",
+    "label": "migration on a private repo: only sonnet+opus",
+    "facts": { "work": { "touches": ["migrations"], "repo_public": false, "size": "medium" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "builder",
+    "label": "public repo security: only sonnet+opus",
+    "facts": { "work": { "touches": ["security"], "repo_public": true, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "builder",
+    "label": "P0 product decision: forced opus",
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "p0_product_decision": true } },
+    "expect": "opus"
+  },
+  {
+    "point": "builder",
+    "label": "P0 product decision + touches deploy: still forced opus",
+    "facts": { "work": { "touches": ["deploy", "infra"], "repo_public": false, "size": "large", "p0_product_decision": true } },
+    "expect": "opus"
+  },
+  {
+    "point": "builder",
+    "label": "codex-friendly focused refactor",
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "shape": "refactor" } },
+    "expect": "minimax"
+  },
+  {
+    "point": "builder",
+    "label": "touches deploy: only sonnet+opus, default sonnet",
+    "facts": { "work": { "touches": ["deploy"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "builder",
+    "label": "empty touches: small app change",
+    "facts": { "work": { "touches": [], "repo_public": false, "size": "small" } },
+    "expect": "minimax"
+  },
+
+  {
+    "point": "reviewer",
+    "label": "tiny private fix: sonnet default",
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "public repo: must have a real reviewer",
+    "facts": { "work": { "touches": ["app"], "repo_public": true, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "private repo + auth touch: must have a real reviewer",
+    "facts": { "work": { "touches": ["auth"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "private repo, no auth, trivial: none allowed but sonnet is the rule default",
+    "facts": { "work": { "touches": ["docs"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "public repo + infra touch: sonnet still the rule default",
+    "facts": { "work": { "touches": ["infra"], "repo_public": true, "size": "medium" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "private repo + security touch (not auth): sonnet default",
+    "facts": { "work": { "touches": ["security"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "public repo + auth: sonnet default",
+    "facts": { "work": { "touches": ["auth", "app"], "repo_public": true, "size": "medium" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "private repo, no touches at all: sonnet default",
+    "facts": { "work": { "touches": [], "repo_public": false } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "private repo + tests-only: sonnet default",
+    "facts": { "work": { "touches": ["tests"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+  {
+    "point": "reviewer",
+    "label": "private repo + migrations: sonnet default",
+    "facts": { "work": { "touches": ["migrations"], "repo_public": false, "size": "small" } },
+    "expect": "sonnet"
+  },
+
+  {
+    "point": "retry",
+    "label": "first rejection: step up one is the rule default",
+    "facts": { "reject": { "round": 1, "reason": "tests failed" } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "second rejection: retry_same_with_notes off the table",
+    "facts": { "reject": { "round": 2, "reason": "tests failed again" } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "fifth rejection: only owner / step_up_one left",
+    "facts": { "reject": { "round": 5, "reason": "still failing" } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "second rejection on a deploy: same shape, same rule default",
+    "facts": { "reject": { "round": 2, "reason": "deploy rolled back" } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "round 0 (initial pick, not a rejection): all three allowed",
+    "facts": { "reject": { "round": 0 } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "round 1 with missing reject: rule default still applies",
+    "facts": {},
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "round 3 retry: still no retry_same_with_notes",
+    "facts": { "reject": { "round": 3, "reason": "lint" } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "round 2 with extra context: still step_up_one",
+    "facts": { "reject": { "round": 2, "reason": "typecheck", "last_builder": "minimax" } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "round 2 with forbidden topic: still step_up_one",
+    "facts": { "reject": { "round": 2, "reason": "touched secrets", "forbidden_topic": true } },
+    "expect": "step_up_one"
+  },
+  {
+    "point": "retry",
+    "label": "round 1 with notes: retry_same_with_notes still allowed by floor",
+    "facts": { "reject": { "round": 1, "reason": "minor" } },
+    "expect": "step_up_one"
+  },
+
+  {
+    "point": "model",
+    "label": "default: keep current model",
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small" } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "P0 product decision: still keep (model is suggestion only)",
+    "facts": { "work": { "touches": ["app"], "p0_product_decision": true } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "touches infra: still keep",
+    "facts": { "work": { "touches": ["infra", "deploy"] } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "public repo security: still keep",
+    "facts": { "work": { "touches": ["security"], "repo_public": true } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "quota critical: still keep (suggestion only)",
+    "facts": { "quota": { "claude": 96 } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "forbidden topic: still keep",
+    "facts": { "event": { "forbidden_topic": true } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "escalated: still keep",
+    "facts": { "event": { "escalated": true } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "empty facts: still keep",
+    "facts": {},
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "large change in a public repo: still keep",
+    "facts": { "work": { "touches": ["app", "auth"], "repo_public": true, "size": "large" } },
+    "expect": "keep"
+  },
+  {
+    "point": "model",
+    "label": "second rejection: still keep",
+    "facts": { "reject": { "round": 2 } },
+    "expect": "keep"
+  }
+]

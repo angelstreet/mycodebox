@@ -258,6 +258,18 @@ appends `{type:'label', ...}` to `stalls.jsonl`. `npm run stall-report` prints l
 excerpts are real text) for future fixtures; `--reclassify` re-runs the current classifier over the logged
 excerpts and prints how cases change (the log is not modified).
 
+**Router (TASK-47, shadow).** `router.js` lets Jev (in `POST /server/ai/decide`) pick, inside hard
+floors, who handles manager work — wake (`wake_cheap`/`wake_opus` only when something is p0-blocked,
+a deploy has failed, the disk is critical or any plan quota is at >= 95%), builder (`minimax`/`codex`
+off the table when the work touches infra/deploy/secrets/migrations or a public repo's security; P0
+product decisions are forced to `opus`), reviewer (must be a real reviewer when the repo is public
+or the work touches `auth`), retry (no more same-builder retries after round 2) and a `model` hint
+that is suggestion only. The pure module, its `test/router.test.js` and `test/fixtures/router-states.json`
+(50 hand-made states, 10 per point) live in the repo; `scripts/router-dryrun.js --dry` prints the
+request bodies without calling the server, and without `--dry` it POSTs each fixture to the VPT
+server and prints one line per state plus a per-point agreement roll-up. **Nothing live calls it yet**
+— the wiring to the manager is a later step.
+
 **Answer buttons + AI reviewer (TASK-44 phase 9).** The row under a card header that asks for you shows buttons derived from
 the question (`public/buttons.js`): a live numbered menu (permission prompt, AskUserQuestion) gets one button per option with
 its label that sends its key (esc small); a yes/no question gets **Yes** / **No** (typed as text); an either/or or open question
