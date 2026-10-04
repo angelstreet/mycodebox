@@ -1120,8 +1120,9 @@ function beginInlineRename(nameEl, name) {
   let done = false;
   const finish = (v) => {
     if (done) return; done = true;
-    if (v === null) { nameEl.textContent = displayName(name); return; }
-    applyRename(name, v);
+    nameEl.textContent = v || name;       // drop the input first, or re-renders skip this name as still editing
+    if (v !== null) applyRename(name, v);
+    nameEl.textContent = displayName(name);
   };
   inp.onkeydown = (e) => {
     e.stopPropagation();
