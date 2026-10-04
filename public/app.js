@@ -1033,7 +1033,10 @@ function buildSideRow(s) {
   li.querySelector('.meta').onclick = (e) => {
     e.stopPropagation();
     closeSide();
-    openCard(s.name);
+    if (docked() && state.mode === 'grid') {     // list stays on the left: just select / bring the card on screen
+      focusSession(s.name);
+      els.gridPane.querySelector(`[data-session="${cssEscape(s.name)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } else openCard(s.name);
   };
   li.querySelector('.edit:not(.kill)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
@@ -1779,7 +1782,22 @@ function setGridSize(n) {
 }
 
 // ---------- sidebar ----------
+// Wide screens with a mouse: the session list is docked on the left (collapse / expand), not a drawer.
+const dockMQ = window.matchMedia('(min-width: 1000px) and (hover: hover)');
+state.sideDock = lsGet('ghosty.sideDock', '1') !== '0';
+const docked = () => document.body.classList.contains('side-docked');
+function applyDock() {
+  const on = dockMQ.matches && state.sideDock;
+  document.body.classList.toggle('side-docked', on);
+  document.body.classList.toggle('side-dockable', dockMQ.matches);
+  if (on) { state.side = false; els.side.classList.add('on'); document.querySelector('.side-back')?.classList.remove('on'); fetchLeases(); }
+  else if (!state.side) els.side.classList.remove('on');
+  setTimeout(() => { for (const n of state.terms.keys()) relayoutTerm(n); }, 220);
+}
+function setDock(on) { state.sideDock = on; lsSet('ghosty.sideDock', on ? '1' : '0'); applyDock(); }
+dockMQ.addEventListener('change', applyDock);
 function openSide() {
+  if (dockMQ.matches) { setDock(!state.sideDock); return; }     // desktop: the hamburger folds / unfolds the docked list
   if (state.side) return;
   state.side = true;
   els.side.classList.add('on');
@@ -3325,6 +3343,9 @@ function cssEscape(s) { return (window.CSS?.escape) ? CSS.escape(s) : String(s).
 
 // ---------- wire up ----------
 els.menuBtn.onclick   = openSide;
+$('#sideCollapseBtn').onclick = () => setDock(false);
+$('#sideFullBtn').onclick = () => { setDock(false); setMode('list'); };
+applyDock();
 els.backBtn.onclick   = () => setMode(state.prevMode || (isPhone() ? 'list' : 'grid'));
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();

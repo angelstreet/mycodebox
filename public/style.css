@@ -1423,3 +1423,16 @@ body[data-mode="card"] #health{ display:none; }
 /* board row: the pencil hugs the name; it takes over the name's job of pushing status + pause right */
 .row-item .l1 .name{ flex:0 1 auto; }
 .row-item .l1 .rn{ margin-right:auto; }
+
+/* wide screens with a mouse: docked, collapsible session list (hamburger / chevron); "full list" = the board view */
+.dock-only{ display:none; }
+@media (min-width: 1000px) and (hover: hover){
+  :root{ --sidew: 290px; }
+  body.side-dockable .dock-only{ display:inline-flex; }
+  body.side-docked #side{ transform:none; top:calc(var(--top-h) + env(safe-area-inset-top)); width:var(--sidew); max-width:none; padding-top:0; z-index:8; box-shadow:none; }
+  body.side-docked > :is(#quota, #filterBar, #attention, #deployBanner, #tabs, #main, #dock){ margin-left:var(--sidew); }
+  body.side-docked .side-back, body.side-docked #edgeSwipe{ display:none !important; }
+  body.side-docked #menuBtn{ color:var(--accent); }
+}
+/* the hamburger also folds the docked list while a single card is open (it is hidden there on phones) */
+body.side-dockable #menuBtn.hidden{ display:inline-flex !important; }
