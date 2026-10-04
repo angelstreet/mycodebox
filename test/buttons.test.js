@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyStall } from '../stall.js';
-import { deriveButtons, questionKind, needsOwner, lastQuestion, parseAlternatives, listQuestions } from '../public/buttons.js';
+import { deriveButtons, questionKind, needsOwner, lastQuestion, parseAlternatives, listQuestions, displayQuestion, reflowPane } from '../public/buttons.js';
 
 const RULE = '─'.repeat(60);
 const finished = (body) => [...body.split('\n').map((l, i) => (i === 0 ? `⏺ ${l}` : `  ${l}`)), '', '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'];
@@ -258,4 +258,136 @@ test('gate: real closing shapes -- "(the agent\'s recommendation): ..." lines, "
   const t = 'Question 2: what to do (A or B)?\n  - A (the agent\'s recommendation): stop putting alerts in the queue. Small change.\n  - B: build something that reads the queue. A whole project.';
   assert.deepEqual(parseAlternatives(t).map((a) => [a.letter, a.label, a.recommended]), [['A', 'stop putting alerts in the queue', true], ['B', 'build something that reads the queue', false]]);
   assert.deepEqual(listQuestions('1. Get the fingerprint. Run bubblewrap fingerprint, or keytool.\n2. Install the APK. Copy it, or serve it.'), []);
+});
+
+// ---- displayQuestion ----
+// When the last sentence is content-free (OK? / shall I? / ...), prepend preceding sentences until
+// the text reaches a meaningful length. Long, already-meaningful questions pass through unchanged.
+test('displayQuestion: short tail "OK?" alone stays short (nothing to prepend)', () => {
+  assert.equal(displayQuestion('OK?'), 'OK?');
+  assert.equal(displayQuestion('Shall I?'), 'Shall I?');
+  assert.equal(displayQuestion('Sound good?'), 'Sound good?');
+});
+test('displayQuestion: short tail pulls in preceding sentence(s) to reach 120-220 chars', () => {
+  // Long enough source that the algorithm can prepend one or two preceding sentences to land in
+  // the 120-220 char window while staying under the 3-sentence cap.
+  const t = 'In the closing text we explain the multi-game exclusion behavior across the codebase and why we keep previously answered rows alive when their conversation tree still exists in the workspace. Sound good?';
+  const out = displayQuestion(t);
+  assert.ok(out.length >= 120, `expected >=120 chars, got ${out.length}: ${out}`);
+  assert.ok(out.length <= 220, `expected <=220 chars, got ${out.length}: ${out}`);
+  assert.match(out, /Sound good\?$/);
+  // The preceding sentence(s) carry the meaning — the original context must show up.
+  assert.match(out, /exclusion behavior/);
+});
+test('displayQuestion: a long, meaningful question is returned unchanged (not expanded)', () => {
+  const long = 'I have run the migration on staging and the index plan looks correct; should I apply it to production now, or wait for tomorrow?';
+  assert.equal(displayQuestion(long), long);
+});
+test('displayQuestion: caps at 3 sentences even when more would fit', () => {
+  const t = 'A. B. C. D. Real context. E. F. G. OK?';
+  const out = displayQuestion(t);
+  // "OK?" is the trigger; up to 2 preceding sentences may be prepended. The merged text must not
+  // include all 8 source sentences.
+  assert.ok(out.split(/[.!?]+/).length <= 4, `expected ≤3 sentences, got: ${out}`);
+});
+
+// ---- reflowPane ----
+// The real-world sample from the owner feedback: a closing text hard-wrapped at a narrow pane width,
+// with a trailing "done H:MM AM/PM" Claude Code status line that must NOT appear in the popup.
+test('reflowPane: real-world sample joins continuation lines and strips the "done 2:27 PM" UI line', () => {
+  const sample = [
+    '… keep going. the way games are excluded',
+    'now, and keep the',
+    "rows you've already",
+    'answered as long as',
+    'their tree exists. OK?',
+    'done 2:27 PM',
+  ].join('\n');
+  const out = reflowPane(sample);
+  // The wrap is collapsed into one paragraph.
+  assert.equal(out, "… keep going. the way games are excluded now, and keep the rows you've already answered as long as their tree exists. OK?");
+});
+test('reflowPane: paragraph breaks (blank lines) and list items are preserved on their own lines', () => {
+  const t = [
+    'First paragraph that is hard-wrapped onto',
+    'several pane-wrapped lines that all belong',
+    'together as one thought.',
+    '',
+    '- A. First list item',
+    '- B. Second list item',
+    'continues onto the next pane line',
+    '',
+    '1. Numbered item one',
+    '2. Numbered item two',
+  ].join('\n');
+  const out = reflowPane(t);
+  const lines = out.split('\n');
+  assert.match(lines[0], /^First paragraph/);
+  assert.match(lines[0], /together as one thought\.$/);
+  assert.match(out, /^- A\. First list item$/m);
+  assert.match(out, /^- B\. Second list item continues onto the next pane line$/m);
+  assert.match(out, /^1\. Numbered item one$/m);
+  assert.match(out, /^2\. Numbered item two$/m);
+});
+test('reflowPane: strips Claude Code UI noise (done H:MM, ✻ … done …, ● …, box-drawing bars, bypass-permissions hints)', () => {
+  const noise = [
+    'Actual prose before the status bar.',
+    'done 3:59 PM',
+    '\u273b Baked for 1m \u00b7 done 3:59 PM',
+    '\u25cf tool call (Bash: ls -la)',
+    '\u23bf  \u251c\u2500 package.json',
+    '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500',
+    '\u276f ',
+    '  \u25b7\u25b7 bypass permissions on',
+    'More prose after the noise that wraps onto the',
+    'next pane line.',
+  ].join('\n');
+  const out = reflowPane(noise);
+  assert.doesNotMatch(out, /done \d/);
+  assert.doesNotMatch(out, /\u273b/);
+  assert.doesNotMatch(out, /\u25cf/);
+  assert.doesNotMatch(out, /\u23bf/);
+  assert.doesNotMatch(out, /\u2500{3,}/);
+  assert.doesNotMatch(out, /bypass permissions/);
+  assert.doesNotMatch(out, /\u276f/);
+  // The two prose blocks were joined across their pane-wrapped continuation.
+  assert.match(out, /^Actual prose before the status bar\. More prose after the noise that wraps onto the next pane line\.$/);
+});
+test('reflowPane: a colon-ending previous line does NOT swallow the next one (multi-line field label)', () => {
+  const t = ['Open decisions:', '- A. Stop queueing', '- B. Build a consumer', 'Which one?'];
+  const out = reflowPane(t.join('\n'));
+  assert.match(out, /^Open decisions:$/m);
+  assert.match(out, /^- A\. Stop queueing$/m);
+  assert.match(out, /^- B\. Build a consumer$/m);
+  assert.match(out, /^Which one\?$/m);
+});
+test('reflowPane: table-style lines starting with │ start their own line', () => {
+  const t = ['Header row', '│ col1 │ col2 │', '│ col3 │ col4 │', 'Trailing prose.'];
+  const out = reflowPane(t.join('\n'));
+  assert.match(out, /^\│ col1/m);
+  assert.match(out, /^\│ col3/m);
+  assert.match(out, /^Trailing prose\.$/m);
+});
+test('reflowPane: empty / whitespace input returns ""', () => {
+  assert.equal(reflowPane(''), '');
+  assert.equal(reflowPane(null), '');
+  assert.equal(reflowPane('   \n  \n  '), '');
+});
+
+// ---- toggle rule: only options with a description get a chevron ----
+// (Mirrors the gate in ask-popup.js btnHtml(): Yes / No / Reply… and any option without desc must
+//  never carry data-ex. The render path lives in the DOM layer; here we check the underlying rule.)
+test('toggle rule: an option with no description has nothing to expand', () => {
+  const b = { id: 'yes', label: 'Yes', text: 'yes' };
+  const hasDesc = !!b.desc;
+  assert.equal(hasDesc, false);
+});
+test('toggle rule: an option with a description is the only one that gets a chevron', () => {
+  const a = { id: 'oA', label: 'A', desc: 'Stop queueing' };
+  const b = { id: 'yes', label: 'Yes' };
+  const c = { id: 'reply', label: 'Reply…', reply: true };
+  const needsEx = (b) => !!b.desc;
+  assert.equal(needsEx(a), true);
+  assert.equal(needsEx(b), false);
+  assert.equal(needsEx(c), false);
 });

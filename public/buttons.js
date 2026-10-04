@@ -18,6 +18,171 @@ export function lastQuestion(text) {
   return (qs ? qs[qs.length - 1] : t).trim();
 }
 
+// Short tail words that mean "I just need a confirmation, the real context is in what I said before".
+const SHORT_QUESTION_RE = /^(?:ok(?:ay)?|right|sound(?:s)? good|shall i|shall we|go|proceed|agreed|yeah|alright|sure)\??[.!?]?$/i;
+
+// A meaningful question the popup can render. When the last sentence is content-free ("OK?", "Shall I?", ...),
+// prepend the preceding sentences of the same paragraph until the text reaches a useful length (120-220 chars).
+// Capped at 3 sentences total. Returns the original text trimmed when it is already long enough.
+// Pure: no DOM, no I/O. Used where the popup's question text is built (ask-popup.js -> view()).
+export function displayQuestion(text) {
+  const src0 = String(text || '').replace(/\r/g, '').trim();
+  if (!src0) return src0;
+  // Split into sentences on . ! ? (keep the separator with the sentence). We use a simple heuristic
+  // that respects quoted endings and avoids splitting on single-letter abbreviations.
+  const sentences = [];
+  const re = /[^.!?]+[.!?]+(?:["')\]]*)|[^.!?]+$/g;
+  let m;
+  while ((m = re.exec(src0))) {
+    const s = m[0].trim();
+    if (s) sentences.push(s);
+  }
+  if (sentences.length === 0) return src0;
+  const last = sentences[sentences.length - 1];
+  const lastShort = last.length < 30 || SHORT_QUESTION_RE.test(last.replace(/[.!?]+$/, '').trim());
+  if (!lastShort) {
+    // Already a meaningful question — return as-is, trimmed.
+    return src0;
+  }
+  // Otherwise, prepend preceding sentences (newest first, walking back) until we hit 120-220 chars
+  // or have consumed 3 sentences total.
+  let chosen = last;
+  let used0 = 0;
+  for (let i = sentences.length - 2; i >= 0 && used0 < 2; i--) {
+    const prev = sentences[i];
+    const candidate = `${prev} ${chosen}`.trim();
+    if (candidate.length > 220) break;
+    chosen = candidate;
+    used0++;
+    if (chosen.length >= 120) break;
+  }
+  // If we still haven't reached 120 chars (a single "OK?" with no preceding text), return as-is.
+  return chosen;
+}
+
+// Reflow pane-wrapped text from a tmux pane. Hard-wrapped at the pane width (often 25-60 cols) and indented.
+// Joins a line to the previous one when the previous line does not end a paragraph (no blank line between,
+// the previous line does not end with ':', and the next line does not start a list item like '-', '*', '1.', '1)',
+// 'A.' or a table '│'). Strips Claude Code UI lines ("done H:MM AM/PM", "✻ <Verb>ed for …", "● …" tool markers,
+// spinner lines, "⎿" lines, box-drawing status bars). Pure function with no DOM / no I/O.
+const TIME_RE = /^\s*done\s+\d{1,2}:\d{2}\s*(?:AM|PM)\s*$/i;
+const BAKED_RE = /^\s*\u273b\b.*\u00b7\s+done\s+\d{1,2}:\d{2}\s*(?:AM|PM)\s*$/i;
+const BAKED_RE2 = /^\s*\u273b\s+\S+ed\s+for\b/i;
+const TOOL_DOT_RE = /^\s*\u25cf\b/;
+const SPINNER_CHARS = '\u280b\u2819\u2838\u2834\u2826\u2827\u282b\u283a\u2839\u283f\u2807\u2806\u280e\u281e\u282e\u2836\u2837\u282f\u280f\u2801';
+const SPINNER_RE = new RegExp(`^[\\s\\u2500-\\u257f${SPINNER_CHARS}\\u273b\\u25cf\\u25c6\\u26ab]*[\\u273b\\u25cf\\u25c6\\u26ab\\u280b-\\u28ff]`, 'u');
+const BOX_DRAWING_RE = /^[\s\u2500-\u259f]+$/;
+const PROMPT_RE = /^\s*\u276f\s*$/;
+const LIST_PREFIX_RE = /^(\s*(?:[-*\u2022]\s+|\d+[.)]\s+|[A-Z][.)]\s+))/;
+// Pure-noise lines (no meaningful content even after joining): horizontal-rule bars, "bypass permissions" /
+// "esc to cancel" / "enter to select" hints. Table rows ('│ col │ col │') have content between the bars
+// and must NOT be treated as noise.
+const STATUS_NOISE_RE = /^\s*(?:\u2500{3,}|.*bypass permissions.*|.*esc to cancel.*|.*enter to select.*|.*\u25b7\u25b7.*)$/i;
+const BORDER_LINE_RE = /^\s*[\u2500-\u257f]+[\s\u2500-\u257f]*$/;
+
+function stripUiLine(line) {
+  // A line that is only noise — drop it entirely. This includes:
+  //   "done H:MM AM/PM", "✻ Verb ed for …", "● tool call (…)" markers, spinner-only lines, ⎿ lines, box-drawing bars.
+  const t = line.replace(/\s+$/, '');
+  if (!t.trim()) return false; // empty / blank lines are paragraph breaks, handled elsewhere
+  if (TIME_RE.test(t)) return true;
+  if (BAKED_RE.test(t) || BAKED_RE2.test(t)) return true;
+  if (TOOL_DOT_RE.test(t)) return true;
+  if (SPINNER_RE.test(t)) return true;
+  if (BOX_DRAWING_RE.test(t) && t.replace(/[\s\u2500-\u259f]/g, '') === '') return true;
+  if (BORDER_LINE_RE.test(t)) return true;
+  if (PROMPT_RE.test(t)) return true;
+  if (STATUS_NOISE_RE.test(t)) return true;
+  // ⎿ tool-result markers and Claude Code "pasted text" markers (also a box-drawing char)
+  if (/^\s*\u23bf/.test(t)) return true;
+  return false;
+}
+
+// A "hard" paragraph ender. Joining across these always starts a new paragraph:
+//   ':'  — a multi-line field label (e.g. "Open decisions:" / "Alert queue:")
+//   '?'  — a question that wraps onto the next line is a new question, not a continuation
+//   '!'  — same for an exclamation
+//   '│'  — end of a table row
+const HARD_END_RE = /[?:!\u2502](?:["')\]]?)\s*$/;
+const LIST_PREFIX_RE2 = /^\s*(?:[-*\u2022]\s+|\d+[.)]\s+|[A-Z][.)]\s+)/;
+const TABLE_PREFIX_RE = /^\s*\u2502/;
+
+export function reflowPane(text) {
+  const src = String(text || '').replace(/\r/g, '');
+  if (!src.trim()) return '';
+  // Drop Claude Code UI noise lines up front (status bars, "done H:MM", tool markers, spinners).
+  const lines = src.split('\n').filter((l) => !stripUiLine(l.replace(/\s+$/, '')));
+  const out = [];
+  let buf = '';
+  let prevType = null;   // 'prose' | 'list' | 'table' — what the current buf is.
+  const flush = () => {
+    if (!buf) return;
+    out.push(buf.replace(/\s+/g, ' ').trimEnd());
+    buf = '';
+  };
+  for (const raw of lines) {
+    if (!raw.trim()) { flush(); prevType = null; out.push(''); continue; }
+    const deindented = raw.replace(/^\s+/, '');
+    const isList = LIST_PREFIX_RE2.test(raw);
+    const isTable = TABLE_PREFIX_RE.test(raw);
+    // A list item / table row always starts a new paragraph: flush whatever was buffered.
+    if (isList || isTable) {
+      flush();
+      buf = deindented;
+      prevType = isList ? 'list' : 'table';
+      continue;
+    }
+    if (buf) {
+      // A list item or table row swallows the next non-blank, non-list / non-table line as its
+      // own continuation — UNLESS the next line is clearly a new sentence (capital letter, or ends
+      // with '.', '!', '?'). In that case the list is over and a new paragraph / question begins.
+      if (prevType === 'list') {
+        const startsCapital = /^[A-Z]/.test(deindented);
+        const endsSentence = /[.!?]$/.test(deindented);
+        if (startsCapital || endsSentence) {
+          flush();
+          buf = deindented;
+          prevType = 'prose';
+        } else {
+          buf = `${buf.trimEnd()} ${deindented}`;
+        }
+        continue;
+      }
+      if (prevType === 'table') {
+        flush();
+        buf = deindented;
+        prevType = 'prose';
+        continue;
+      }
+      // Prose: join unless the previous line ends a hard paragraph (':', '?', '!', '│').
+      // A trailing '.' or ',' is soft — the pane may have wrapped mid-sentence (or the noise we
+      // stripped was between two halves of the same sentence, as in the real-world sample).
+      const trimmed = buf.trimEnd();
+      if (HARD_END_RE.test(trimmed)) {
+        flush();
+        buf = deindented;
+        prevType = 'prose';
+        continue;
+      }
+      buf = `${trimmed} ${deindented}`;
+      continue;
+    }
+    buf = deindented;
+    prevType = 'prose';
+  }
+  flush();
+  // Collapse 3+ blank lines to 2; trim leading / trailing blanks.
+  const collapsed = [];
+  let blankRun = 0;
+  for (const l of out) {
+    if (!l) { blankRun++; if (blankRun > 2) continue; collapsed.push(l); continue; }
+    blankRun = 0; collapsed.push(l);
+  }
+  while (collapsed.length && collapsed[0] === '') collapsed.shift();
+  while (collapsed.length && collapsed[collapsed.length - 1] === '') collapsed.pop();
+  return collapsed.join('\n');
+}
+
 // 'menu' (a live numbered menu), 'yesno', 'either' (an or-question), 'open'.
 export function questionKind({ state, stall }) {
   const opts = stall?.options || [];

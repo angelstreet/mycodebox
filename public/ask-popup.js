@@ -4,7 +4,7 @@
 // confirm-on-forbidden second tap); each owner answer is logged through onAnswer() as an owner-vs-AI-vs-Jev record.
 // The queue logic is pure and lives in ask-model.js.
 
-import { deriveButtons, lastQuestion, listQuestions } from './buttons.js';
+import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane } from './buttons.js';
 import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText } from './ask-model.js';
 
 const MIN_KEY = 'ghosty.askPopup.minimized';
@@ -92,9 +92,12 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       questionsView = decisions;
       btnsView = marked.map((b) => (b.text ? { ...b, text: `${lastDecisionN}: ${b.text}` } : b));
     }
-    const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 2000);   // the question area scrolls; never cut it mid-line
+    const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? displayQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 2000);   // the question area scrolls; never cut it mid-line
     const question = questionsView ? '' : baseQ;
-    return { item, kind: d.kind, buttons: btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details: detailsText(st.stall), question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
+    // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
+    // and indented) before display so it fills the popup width instead of a narrow column.
+    const details = reflowPane(detailsText(st.stall));
+    return { item, kind: d.kind, buttons: btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
   }
 
   function metaText(v) {
@@ -139,14 +142,23 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
 
   function btnHtml(b, label, n) {
     const rec = b.rec ? '<span class="ap-rec">agent recommends</span>' : '';
-    const cls = ['ap-b', b.hl ? 'hl' : '', b.confirm ? 'cf' : '', b.muted ? 'muted' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op'].filter(Boolean).join(' ');
+    const hasDesc = !!b.desc;
+    const cls = ['ap-b', b.hl ? 'hl' : '', b.confirm ? 'cf' : '', b.muted ? 'muted' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op', hasDesc ? 'has-ex' : ''].filter(Boolean).join(' ');
     const star = b.hl ? '<i class="star">★</i>' : '';
+    // The chevron is rendered INSIDE the option's own button area (small, right-aligned, stopPropagation
+    // so a tap on the chevron doesn't fire the option's send). Only options with a description get it;
+    // Yes / No / Reply… without a description keep their full width.
+    let chev = '';
+    if (hasDesc) {
+      const open = exOpen.has(`${curKey}|${b.id}`);
+      chev = `<span class="ap-ex" data-ex="${esc(b.id)}" role="button" tabindex="-1" aria-expanded="${open}" aria-label="What does this do?" title="What does this do?">${open ? '▾' : '▸'}</span>`;
+    }
     const inner = n
-      ? `<button class="${cls}" data-btn="${esc(b.id)}"><span class="n">${n}</span><span class="t">${esc(label)}${rec}</span>${star}</button>`
-      : `<button class="${cls}" data-btn="${esc(b.id)}"><span class="t">${esc(label)}${rec}</span>${star}</button>`;
-    if (!b.desc) return inner;
+      ? `<button class="${cls}" data-btn="${esc(b.id)}"><span class="n">${n}</span><span class="t">${esc(label)}${rec}</span>${star}${chev}</button>`
+      : `<button class="${cls}" data-btn="${esc(b.id)}"><span class="t">${esc(label)}${rec}</span>${star}${chev}</button>`;
+    if (!hasDesc) return inner;
     const open = exOpen.has(`${curKey}|${b.id}`);
-    return `<div class="ap-opt ${b.id === 'yes' || b.id === 'no' ? 'yn' : ''}"><div class="ap-optrow">${inner}<button type="button" class="ap-ex" data-ex="${esc(b.id)}" aria-expanded="${open}" aria-label="What does this do?" title="What does this do?">${open ? '▾' : '▸'}</button></div>${open ? `<div class="ap-desc">${esc(b.desc)}</div>` : ''}</div>`;
+    return `<div class="ap-opt ${b.id === 'yes' || b.id === 'no' ? 'yn' : ''}">${inner}${open ? `<div class="ap-desc">${esc(b.desc)}</div>` : ''}</div>`;
   }
 
   function render(force) {
@@ -228,6 +240,15 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const btnById = (id) => ctx?.buttons.find((b) => b.id === id);
 
   body.addEventListener('click', (e) => {
+    // The description chevron lives inside the option button (data-ex is on a <span>, not a <button>);
+    // check it first so a tap on the chevron doesn't fall through to the option's data-btn picker.
+    const exT = e.target.closest('[data-ex]');
+    if (exT) {
+      e.stopPropagation();
+      const k = `${curKey}|${exT.dataset.ex}`;
+      if (exOpen.has(k)) exOpen.delete(k); else exOpen.add(k);
+      return render(true);
+    }
     const t = e.target.closest('button'); if (!t) return;
     if (t.dataset.act === 'card') { const i = cur(); if (i) openCard(i.name); return; }
     if (t.dataset.act === 'prev') return move(-1);
@@ -235,7 +256,6 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.act === 'min') return setMin(true);
     if (t.dataset.act === 'why') return setWhy(!whyOpen);
     if (t.dataset.act === 'details') return setDet(!detOpen);
-    if (t.dataset.ex) { const k = `${curKey}|${t.dataset.ex}`; if (exOpen.has(k)) exOpen.delete(k); else exOpen.add(k); return render(true); }
     if (t.dataset.btn) pick(btnById(t.dataset.btn));
   });
   pill.addEventListener('click', () => setMin(false));
