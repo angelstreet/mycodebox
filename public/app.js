@@ -2307,21 +2307,20 @@ document.addEventListener('click', (e) => {
   if (w) { e.stopPropagation(); openPlatforms({ deploy: w.dataset.wd }); return; }
   if (e.target.closest('[data-plat-open]')) openPlatforms();
 }, true);
-// manager session spend today (scorecard days=1): "manager $1.23 / $10"; hidden when the data is missing
-const mgrCost = { usd: null, budget: null };
-const mgrCostText = () => (mgrCost.usd == null || !mgrCost.budget ? '' : `manager $${Number(mgrCost.usd).toFixed(2)} / $${Number(mgrCost.budget).toFixed(0)}`);
+// manager's share of the Claude weekly plan (scorecard days=1): "Claude week 4.2 % / 10 %"; hidden when quota is unknown
+const mgrCost = { weeklyPct: null, budgetPct: null };
+const mgrCostText = () => (mgrCost.weeklyPct == null || !mgrCost.budgetPct ? '' : `Claude week ${Number(mgrCost.weeklyPct).toFixed(1)} % / ${Number(mgrCost.budgetPct).toFixed(0)} %`);
 const mgrCostChip = () => {
   const t = mgrCostText();
-  const r = t ? mgrCost.usd / mgrCost.budget : 0;
-  return t ? `<span class="mchip${r >= 1 ? ' over' : r >= 0.8 ? ' warn' : ''}" title="manager session spend today (API-equivalent)">${escapeHtml(t)}</span>` : '';
+  const r = t ? mgrCost.weeklyPct / mgrCost.budgetPct : 0;
+  return t ? `<span class="mchip${r >= 1 ? ' over' : r >= 0.8 ? ' warn' : ''}" title="manager's share of the Claude Max weekly plan">${escapeHtml(t)}</span>` : '';
 };
 async function loadMgrCost() {
   try {
     const sc = await (await fetch('/api/manager/scorecard?days=1')).json();
-    const b = sc?.today?.budget?.session;
-    mgrCost.usd = typeof b?.usd === 'number' ? b.usd : null;
-    mgrCost.budget = typeof b?.budget === 'number' ? b.budget : null;
-  } catch { mgrCost.usd = null; }
+    mgrCost.weeklyPct = typeof sc?.today?.claude_weekly_pct === 'number' ? sc.today.claude_weekly_pct : null;
+    mgrCost.budgetPct = typeof sc?.today?.budget?.claudeWeeklyPct === 'number' ? sc.today.budget.claudeWeeklyPct : null;
+  } catch { mgrCost.weeklyPct = null; }
   syncSide();
 }
 loadMgrCost();

@@ -1,5 +1,5 @@
-// Manager scorecard (TASK-44): performance and total cost of the AI manager, with the Jev integration
-// (consulted / errored / agreed / overridden / cost per decision). Pure functions over arrays of records +
+// Manager scorecard (TASK-44): performance of the AI manager and its share of the Claude weekly plan, with
+// the Jev integration (consulted / errored / agreed / overridden). Pure functions over arrays of records +
 // a small loader that tails the ledger and reads stalls.jsonl + manager-runs.jsonl incrementally.
 //
 //   GET /api/manager/scorecard?days=7  -> { today: <scorecard>, days: [<scorecard per UTC day>] }
@@ -10,10 +10,17 @@
 //   1. cost.session   ledger rows for which label in config.managerSessions (default ["manager"])
 //                     and agent in ('claude','codex'); subagents are reported separately as cost.subagents
 //   2. cost.workers   minimax rows whose cwd is in any active manager-runs.jsonl window
-//                     (kind:minimax, startedAt <= ts <= endedAt|now)
-//   3. cost.jev       manager rows with name 'manager.jev'
-//   4. cost.reviewer  manager rows with name 'manager.ai-review'
-//   5. cost.judge     manager rows with name 'manager.judge' (written by usage/judge.js; see _judgeRows)
+//                     (kind:minimax, startedAt <= ts <= endedAt|now) — tokens only, MiniMax has no price
+//   3. cost.jev       manager rows with name 'manager.jev' — OpenRouter, tokens + calls only (no USD)
+//   4. cost.reviewer  manager rows with name 'manager.ai-review' — tokens + calls only (no USD)
+//   5. cost.judge     manager rows with name 'manager.judge' — tokens + calls only (no USD)
+//
+// claude_weekly_pct / claude_today_pct: the manager's share of the Claude Max weekly plan. The API-equivalent
+// cost per ledger row is the internal weight (it reflects how the plan limits weigh models, output and cache)
+// and is never displayed. Manager weight = sum of cost.total for Claude rows whose label is in managerSessions
+// (incl. subagents) in the plan-week (the 7 days ending at the Claude seven_day resets_at, or the last 7 days
+// if unknown). All Claude weight = sum of cost.total for every Claude row in the plan-week. Today uses the
+// same denominator against rows in [from, to).
 //
 // Performance: counts of stall/outcome/escalated/send records from <state dir>/stalls.jsonl, with the
 // "right" verdict for a stop being no_reason|legit (not wrong_case), case-correct (no correctCase), and
@@ -48,7 +55,7 @@ const JEV_MEANING = {
 };
 const SCORE_DEFAULTS = {
   scoreWeights: { quality: 0.4, coverage: 0.3, efficiency: 0.3 },
-  costBudget: { sessionUsd: 10, aiUsd: 1 },
+  planBudget: { claudeWeeklyPct: 10 },
   managerSessions: ['manager'],
 };
 
@@ -105,8 +112,18 @@ function pctStats(xs) {
   return { median, p90: s[idx], n: s.length };
 }
 
-// Adds one ledger row's tokens + cost to a bucket.
-//   { tokens:{input,output,cache_read,cache_write}, usd|null, calls }
+// 7-day plan window ending at the Claude seven_day resets_at; if unknown (status-line hook not installed),
+// fall back to the rolling last 7 days from `now` so the share + efficiency still report something.
+function planWeekOf(claudeRateLimits, now) {
+  if (claudeRateLimits && Number.isFinite(claudeRateLimits.resets_at) && claudeRateLimits.resets_at > 0) {
+    const end = claudeRateLimits.resets_at * 1000;
+    return { start: end - 7 * DAY_MS, end };
+  }
+  return { start: now - 7 * DAY_MS, end: now };
+}
+
+// Adds one ledger row's tokens to a bucket.
+//   { tokens:{input,output,cache_read,cache_write}, calls }
 function addBucket(b, r) {
   if (!r) return;
   const u = r.usage || {};
@@ -115,30 +132,31 @@ function addBucket(b, r) {
   b.tokens.cache_read += u.cache_read || 0;
   b.tokens.cache_write += u.cache_write_5m || 0;        // we fold 5m + 1h into cache_write for the scorecard
   if (r.usage?.cache_write_1h) b.tokens.cache_write += r.usage.cache_write_1h;
-  if (r.cost && Number.isFinite(r.cost.total)) b.usd = (b.usd || 0) + r.cost.total;   // unpriced rows add tokens only; usd stays null until a priced row appears
   b.calls++;
 }
-const emptyBucket = () => ({ tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, usd: null, calls: 0 });
+const emptyBucket = () => ({ tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0 });
 
 // Reads cfg.config with defaults. cfg.config may be a managerConfig() snapshot or a slice of one.
 export function resolveConfig(cfg) {
   const scoreWeights = { ...SCORE_DEFAULTS.scoreWeights, ...(cfg?.config?.scoreWeights || {}) };
-  const costBudget = { ...SCORE_DEFAULTS.costBudget, ...(cfg?.config?.costBudget || {}) };
+  const planBudget = { ...SCORE_DEFAULTS.planBudget, ...(cfg?.config?.planBudget || {}) };
   const managerSessions = Array.isArray(cfg?.config?.managerSessions) && cfg.config.managerSessions.length
     ? cfg.config.managerSessions : SCORE_DEFAULTS.managerSessions;
-  return { scoreWeights, costBudget, managerSessions };
+  return { scoreWeights, planBudget, managerSessions };
 }
 
-// main builder. cfg = { ledgerRows, stallRecs, runs, config, from, to, deployList? }
-//   deployList   : the deploy runner's registry rows ({state:'done'|'failed', finished}); perf.deploys = {run, failed} finished in the window, null without any
-//   ledgerRows   : array of usage-ledger records (the same shape as usage-summary.json: {agent, name, subagent, ts, model, usage, cost|null, cwd, ...})
-//   stallRecs    : array of stalls.jsonl records (mixed types: stall/outcome/send/escalated/label/...)
-//   runs         : array of manager-runs.jsonl records (already folded; start + end merged)
-//   config       : manager config snapshot (managerSessions, scoreWeights, costBudget)
-//   from, to     : ms epoch window; records with ts in [from,to) are counted (to is exclusive)
+// main builder. cfg = { ledgerRows, stallRecs, runs, config, from, to, deployList?, claudeRateLimits?, now? }
+//   deployList       : the deploy runner's registry rows ({state:'done'|'failed', finished}); perf.deploys = {run, failed} finished in the window, null without any
+//   ledgerRows       : array of usage-ledger records (the same shape as usage-summary.json: {agent, name, subagent, ts, model, usage, cost|null, cwd, ...})
+//   stallRecs        : array of stalls.jsonl records (mixed types: stall/outcome/send/escalated/label/...)
+//   runs             : array of manager-runs.jsonl records (already folded; start + end merged)
+//   config           : manager config snapshot (managerSessions, scoreWeights, planBudget)
+//   from, to         : ms epoch window; records with ts in [from,to) are counted (to is exclusive)
+//   claudeRateLimits : { used_percentage, resets_at } from claude-rate-limits.json seven_day window, or null
+//   now              : ms epoch used for the plan-week and pro-rated efficiency; defaults to Date.now()
 // Returns the scorecard object.
-export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, from, to, deployList = null } = {}) {
-  const { scoreWeights, costBudget, managerSessions } = resolveConfig({ config });
+export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, from, to, deployList = null, claudeRateLimits = null, now = Date.now() } = {}) {
+  const { scoreWeights, planBudget, managerSessions } = resolveConfig({ config });
   const cost = {
     session: emptyBucket(),
     subagents: emptyBucket(),
@@ -190,15 +208,10 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
       else if (r.name === 'manager.judge') addBucket(cost.judge, r);
     }
   }
-  // total = sum of priced buckets (MiniMax workers' cost stays null since MiniMax has no price)
-  const sumBucket = (b) => ({
-    tokens: { ...b.tokens },
-    usd: b.usd == null ? null : Math.round(b.usd * 1000) / 1000,
-    calls: b.calls,
-  });
-  const pricedBuckets = [cost.session, cost.subagents, cost.jev, cost.reviewer, cost.judge].filter((b) => b.usd != null);
-  const totalUsd = pricedBuckets.length ? pricedBuckets.reduce((a, b) => a + b.usd, 0) : null;
-  cost.total = { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, usd: totalUsd == null ? null : Math.round(totalUsd * 1000) / 1000, calls: 0 };
+  // total = sum of every bucket (no USD anywhere: Claude/Codex buckets weight the weekly share internally,
+  // MiniMax workers have no price, Jev/reviewer/judge are OpenRouter real-money and tokens-only).
+  const sumBucket = (b) => ({ tokens: { ...b.tokens }, calls: b.calls });
+  cost.total = { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0 };
   for (const k of ['session', 'subagents', 'jev', 'reviewer', 'judge', 'workers']) {
     cost.total.tokens.input += cost[k].tokens.input;
     cost.total.tokens.output += cost[k].tokens.output;
@@ -206,7 +219,6 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
     cost.total.tokens.cache_write += cost[k].tokens.cache_write;
     cost.total.calls += cost[k].calls;
   }
-  // round USD to 3dp so the values don't drift
   for (const k of Object.keys(cost)) cost[k] = sumBucket(cost[k]);
 
   // judge mean: the score carried by the manager.judge ledger rows of the window (unparsable / failed rows carry none)
@@ -311,33 +323,56 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
   }
   const sortedMs = jevMsSamples.slice().sort((a, b) => a - b);
   const jevP50ms = sortedMs.length ? sortedMs[Math.floor((sortedMs.length - 1) / 2)] : null;
-  // cost per jev decision
-  const jevCostPerDecision = jevRows.length ? (cost.jev.usd != null ? cost.jev.usd / jevRows.length : null) : null;
 
   // tokensPerResolvedStop = worker tokens / resolved
   const tokensPerResolvedStop = resolved ? Math.round(cost.workers.tokens.input + cost.workers.tokens.output + cost.workers.tokens.cache_read + cost.workers.tokens.cache_write) / resolved : null;
 
+  // ---- Claude weekly plan share ----
+  // Internal weight per ledger row = cost.total (how the Claude plan limits weigh models, output and cache); never
+  // displayed. Plan-week = 7 days ending at the Claude seven_day resets_at (or last 7 days if unknown). Manager
+  // rows = Claude rows with label in managerSessions (subagents included); total = every Claude row in the week.
+  const planWeek = planWeekOf(claudeRateLimits, now);
+  const dailyStart = from != null ? from : Math.floor(now / DAY_MS) * DAY_MS;
+  const dailyEnd = to != null ? to : Math.floor(now / DAY_MS) * DAY_MS + DAY_MS;
+  let managerWeekWeight = 0, totalWeekWeight = 0, managerTodayWeight = 0;
+  for (const r of ledger) {
+    if (r.agent !== 'claude') continue;
+    if (typeof r.ts !== 'number') continue;
+    const w = r.cost && Number.isFinite(r.cost.total) ? r.cost.total : 0;
+    const isManager = managerSessions.includes(r.label || r.session);
+    if (r.ts >= planWeek.start && r.ts < planWeek.end) {
+      totalWeekWeight += w;
+      if (isManager) managerWeekWeight += w;
+    }
+    if (r.ts >= dailyStart && r.ts < dailyEnd && isManager) managerTodayWeight += w;
+  }
+  const weeklyUsedPct = claudeRateLimits && Number.isFinite(claudeRateLimits.used_percentage) ? claudeRateLimits.used_percentage : null;
+  const hasQuota = weeklyUsedPct != null;
+  const claude_weekly_pct = hasQuota
+    ? (totalWeekWeight > 0 ? (managerWeekWeight / totalWeekWeight) * weeklyUsedPct : 0)
+    : null;
+  const claude_today_pct = hasQuota
+    ? (totalWeekWeight > 0 ? (managerTodayWeight / totalWeekWeight) * weeklyUsedPct : 0)
+    : null;
+
   // ---- score ----
-  // Quality is now the share of popup choices where the owner agreed with the AI's pick
-  // (ai != null, agreeAi === true), once >= MIN_CHOICES of them exist; null before that (weights renormalised).
+  // Quality is the share of popup choices where the owner agreed with the AI's pick (ai != null, agreeAi === true),
+  // once >= MIN_CHOICES of them exist; null before that (weights renormalised).
   const ownerAgreementAi = agreeAiTotal ? agreeAiCount / agreeAiTotal : null;
   const jevAgreement = jevAgreeTotal ? jevAgreedCount / jevAgreeTotal : null;
   const agreement = ownerAgreementAi;        // legacy field = the popup quality signal
   const legacyLabelAgreement = labCount ? rightCount / labCount : null;   // kept for any caller that still wants it
-  // sessionUsd = session + subagents (the manager's *own* sessions, including subagents)
-  const sessionUsd = (cost.session.usd != null || cost.subagents.usd != null) ? Math.round(((cost.session.usd || 0) + (cost.subagents.usd || 0)) * 1000) / 1000 : null;
-  const aiUsd = (cost.jev.usd != null || cost.reviewer.usd != null || cost.judge.usd != null)
-    ? Math.round(((cost.jev.usd || 0) + (cost.reviewer.usd || 0) + (cost.judge.usd || 0)) * 1000) / 1000 : null;
   const coverage = stops ? resolvedFast / stops : null;
-  // efficiency is 1 on an active day with no priced spend (0 is within budget), null on an empty day — otherwise use the worse of the two ratios.
+  // Efficiency = 1 when the manager's weekly % is at or under the budget pro-rated to the elapsed fraction of the
+  // plan-week, linearly to 0 at 3x; null when no Claude quota data (the status line hook isn't installed or is stale).
   let efficiency;
-  if (sessionUsd == null && aiUsd == null) efficiency = (stops || cost.total.calls) ? 1 : null;     // no priced spend on an active day = within budget; an empty day has nothing to score
+  if (!hasQuota) efficiency = null;
   else {
-    const ratios = [];
-    if (sessionUsd != null) ratios.push(sessionUsd / Math.max(1e-9, costBudget.sessionUsd));
-    if (aiUsd != null) ratios.push(aiUsd / Math.max(1e-9, costBudget.aiUsd));
-    const r = Math.max(...ratios);
-    efficiency = Math.max(0, Math.min(1, (3 - r) / 2));
+    const weekMs = planWeek.end - planWeek.start;
+    const elapsed = weekMs > 0 ? Math.max(0, Math.min(1, (now - planWeek.start) / weekMs)) : 0;
+    const prorated = elapsed * planBudget.claudeWeeklyPct;
+    if (prorated <= 0) efficiency = claude_weekly_pct <= 0 ? 1 : 0;
+    else efficiency = Math.max(0, Math.min(1, (3 - claude_weekly_pct / prorated) / 2));
   }
   // quality = owner-vs-AI agreement only, and only from MIN_CHOICES popup answers on: a handful of samples (or Jev's
   // outcome agreement, reported in the jev block) must not stand in for the owner's judgement.
@@ -354,8 +389,8 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
     score = Math.max(0, Math.min(1, score / totalW)) * 100;
   }
   const budget = {
-    session: { usd: sessionUsd, budget: costBudget.sessionUsd },
-    ai: { usd: aiUsd, budget: costBudget.aiUsd },
+    claudeWeeklyPct: planBudget.claudeWeeklyPct,
+    planWeek: { start: new Date(planWeek.start).toISOString(), end: new Date(planWeek.end).toISOString(), elapsed: weeklyUsedPct != null ? Math.round((planWeek.end - planWeek.start > 0 ? Math.max(0, Math.min(1, (now - planWeek.start) / (planWeek.end - planWeek.start))) : 0) * 1000) / 1000 : null },
     weights: scoreWeights,
   };
 
@@ -365,6 +400,8 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
     score: score == null ? null : Math.round(score * 10) / 10,
     components: { quality: hasQuality ? Math.round(qualityRaw * 1000) / 1000 : null, coverage: coverage != null ? Math.round(coverage * 1000) / 1000 : null, efficiency: efficiency != null ? Math.round(efficiency * 1000) / 1000 : null },
     cost,
+    claude_weekly_pct: claude_weekly_pct != null ? Math.round(claude_weekly_pct * 1000) / 1000 : null,
+    claude_today_pct: claude_today_pct != null ? Math.round(claude_today_pct * 1000) / 1000 : null,
     perf: {
       stops, resolved, resolvedFast, auto: autoCount, escalated: escalatedCount,
       medianTtrSec: ttr.median != null ? Math.round(ttr.median) : null,
@@ -392,7 +429,6 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
       agreement: jevAgreement != null ? Math.round(jevAgreement * 1000) / 1000 : null,
       agreementN: jevAgreeTotal,
       overridden: jevOverridden,
-      costPerDecision: jevCostPerDecision != null ? Math.round(jevCostPerDecision * 10000) / 10000 : null,
     },
     budget,
     router: routerSection({ stallRecs, from, to }),
@@ -516,7 +552,7 @@ export function wakeShadowSection({ eventRecs = [], stallRecs = [], from, to } =
 }
 
 // Build one scorecard per UTC day in the window [now-days*DAY_MS, now], oldest first.
-export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, days = 7, now = Date.now(), deployList = null } = {}) {
+export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, days = 7, now = Date.now(), deployList = null, claudeRateLimits = null } = {}) {
   const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const to = Math.floor((now - i * DAY_MS) / DAY_MS) * DAY_MS + DAY_MS * (i === 0 ? 1 : 1);   // end of that UTC day
@@ -524,7 +560,7 @@ export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [],
     const day = Math.floor((now - i * DAY_MS) / DAY_MS);
     const from = day * DAY_MS;
     const end = from + DAY_MS;
-    out.push(buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to: end, deployList }));
+    out.push(buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to: end, deployList, claudeRateLimits, now }));
   }
   return out;
 }
@@ -550,6 +586,18 @@ async function readJsonl(path, opts = {}) {
 // Resolves the state dir the way other modules do (manager.js, usage/ingest.js).
 export function stateDir(env = process.env) {
   return env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
+}
+
+// Reads claude-rate-limits.json (written by scripts/claude-statusline-ratelimits.sh) and returns the seven_day
+// window fields the scorecard needs for the weekly share. null when the file is missing or has no window.
+async function readClaudeRateLimits(dir, fsLib = fs) {
+  try {
+    const j = JSON.parse(await fsLib.readFile(join(dir, 'claude-rate-limits.json'), 'utf8'));
+    const rl = j.rate_limits || j;
+    const w = rl.seven_day;
+    if (!w || !Number.isFinite(w.used_percentage)) return null;
+    return { used_percentage: w.used_percentage, resets_at: Number.isFinite(w.resets_at) ? w.resets_at : null };
+  } catch { return null; }
 }
 
 // Folds manager-runs.jsonl: each line is either a `start` ({id, kind, worktree, task, startedAt, by}) or an `end`
@@ -582,33 +630,35 @@ export function foldRuns(lines) {
 // Build the scorecard for one UTC day boundary [from, to). All I/O.
 export async function loadScorecard({ from, to, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
-  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld] = await Promise.all([
+  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits] = await Promise.all([
     readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
+    readClaudeRateLimits(dir, fsLib),
   ]);
   const eventRecs = [...eventsOld, ...eventsNow];
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);
-  return buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to, deployList });
+  return buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to, deployList, claudeRateLimits });
 }
 
 // days=1..30. Returns { today, days: [oldest..today] } for the UI.
 export async function loadScorecardDays({ days = 7, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
-  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld] = await Promise.all([
+  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits] = await Promise.all([
     readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
+    readClaudeRateLimits(dir, fsLib),
   ]);
   const eventRecs = [...eventsOld, ...eventsNow];
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);
-  const all = scorecardDays({ ledgerRows, stallRecs, eventRecs, runs, config, days, now: Date.now(), deployList });
+  const all = scorecardDays({ ledgerRows, stallRecs, eventRecs, runs, config, days, now: Date.now(), deployList, claudeRateLimits });
   return { today: all[all.length - 1], days: all };
 }
 
@@ -649,7 +699,8 @@ export function langfuseScoreEvents(scorecard, { traceId = 'manager-scorecard', 
   score('manager.quality', scorecard.components.quality);
   score('manager.coverage', scorecard.components.coverage);
   score('manager.efficiency', scorecard.components.efficiency);
-  score('manager.cost_usd', scorecard.cost.total.usd);
+  score('manager.claude_weekly_pct', scorecard.claude_weekly_pct);
+  score('manager.claude_today_pct', scorecard.claude_today_pct);
   score('manager.tokens', scorecard.cost.total.tokens.input + scorecard.cost.total.tokens.output + scorecard.cost.total.tokens.cache_read + scorecard.cost.total.tokens.cache_write);
   score('manager.workers_tokens', scorecard.cost.workers.tokens.input + scorecard.cost.workers.tokens.output + scorecard.cost.workers.tokens.cache_read + scorecard.cost.workers.tokens.cache_write);
   const j = scorecard.jev || {};
