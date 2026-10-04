@@ -1799,9 +1799,11 @@ function onQuota(q) {
 const resetText = (w) => {
   if (w.expired) return 'window has reset';
   if (!w.resetsAt) return 'reset time unknown';
-  const left = Math.max(0, w.resetsAt * 1000 - Date.now()), h = Math.floor(left / 3600e3), m = Math.floor((left % 3600e3) / 60e3);
-  const when = new Date(w.resetsAt * 1000);
-  return `resets in ${h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${h}h ${m}m`} (${when.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })})`;
+  const mins = Math.max(0, Math.floor((w.resetsAt * 1000 - Date.now()) / 60e3));
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const left = d ? `${d}d ${h}h ${m}min` : h ? `${h}h ${m}min` : `${m}min`;
+  const when = new Date(w.resetsAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+  return `reset ${when} - ${left} left`;
 };
 function openQuota() {
   const q = state.quota;
