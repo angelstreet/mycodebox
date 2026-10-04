@@ -149,8 +149,8 @@ see "Judge" for why its evaluators do not).
   same as the AI reviewer in `triage.js` — no OpenRouter key is needed in the ghosty env); at most `LFEVAL_JUDGE_MAX_PER_DAY`
   (400) proposals, sampling `LFEVAL_JUDGE_SAMPLING` (1), only proposals of the last 24 h, each once. It sends the case, flags
   and the reviewer's proposal + reasoning (not the closing text). Cost is estimated from the token counts the server returns
-  (`AI_USD_PER_MTOK_IN/OUT`, default 3 / 15), same as the reviewer; about $0.0005 per call, the reviewer's own cap is 300
-  calls/day, so at most about $0.15/day. `LFEVAL_SEND_AI_OUTPUT=1` additionally puts the proposal on the generation (for a
+  (`AI_USD_PER_MTOK_IN/OUT`, default 3 / 15), same as the reviewer, via `triage.js` `costOf` (no fixed per-call number); the judge's own cap is 400
+  calls/day, and failed calls count against it. `LFEVAL_SEND_AI_OUTPUT=1` additionally puts the proposal on the generation (for a
   future v4 evaluator).
 - **Panel**: manager panel -> "Langfuse" links (scores, dataset, evaluator, prompt) from `LANGFUSE_PUBLIC_URL` (else
   `LANGFUSE_URL`) and `LANGFUSE_PROJECT` (default `codebox-usage`).
