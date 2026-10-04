@@ -1171,7 +1171,7 @@ function buildCell(s) {
   }
   cell.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(cell.querySelector('.name'), s.name); };
   wireTap(cell, () => focusSession(s.name), (e) => {
-    if (e.target.closest('.nm .name')) { beginInlineRename(cell.querySelector('.name'), s.name); return; }
+    if (e.target.closest('.nm')) { beginInlineRename(cell.querySelector('.name'), s.name); return; }
     if (state.mode !== 'card') openCard(s.name);
   });
   cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
