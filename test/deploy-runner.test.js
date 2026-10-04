@@ -26,6 +26,7 @@ function fakeRegistry({ leases = [], deploys = [] } = {}) {
       if (args.includes('--version')) d.version = args[args.indexOf('--version') + 1];
       return { code: 0, stdout: d.state, stderr: '' };
     }
+    if (sub === 'last') return st.deployed ? { code: 0, stdout: JSON.stringify({ now: 1, envs: st.deployed }), stderr: '' } : { code: 2, stdout: '', stderr: 'invalid choice' };
     if (sub === 'approve') { d.state = 'queued'; return { code: 0, stdout: 'approved', stderr: '' }; }
     return { code: 1, stdout: '', stderr: 'unknown' };
   };
@@ -59,7 +60,7 @@ test('runs the oldest approved request: command, flags, runner agent, version, l
   const { runner, alerts, ran, stateDir } = make(reg);
   await runner.tick();
   await until(() => reg.deploys.find((d) => d.id === '2').state === 'done');
-  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy bash update_core.sh feat/y --server');
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=2 bash update_core.sh feat/y --server');
   assert.deepEqual(ran[0].flags, ['--server']);
   const d = reg.deploys.find((x) => x.id === '2');
   assert.equal(d.version, '1.2.3');
@@ -74,7 +75,7 @@ test('full scope uses no flag; other env uses its own host', async () => {
   const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' })] });
   const { runner, ran } = make(reg);
   await runner.tick(); await until(() => ran.length === 1);
-  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy bash update_core.sh main');
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=1 bash update_core.sh main');
 });
 
 test('skips a busy request and starts a free one behind it', async () => {
@@ -192,4 +193,29 @@ test('unsafe ref is shell-quoted in the remote command', async () => {
   const { runner, ran } = make(reg);
   await runner.tick(); await until(() => ran.length === 1);
   assert.ok(ran[0].remoteCmd.includes(`'x'\\''; rm -rf ~; '\\'''`));
+});
+
+test('snapshot carries the deployed-now ledger; an old registry without it keeps the last value', async () => {
+  const reg = fakeRegistry();
+  reg.deployed = { 'node1-vpt': { server: { version: 'main-9', ref: 'main', commit: 'abc', at: 5, agent: 'a:1' } } };
+  const { runner } = make(reg, { enabled: false });
+  await runner.tick();
+  assert.equal(runner.snapshot().deployed['node1-vpt'].server.version, 'main-9');
+  assert.ok(reg.calls.includes('deploy last --json'));
+  delete reg.deployed;                                      // registry without `deploy last`: poll still ok
+  await runner.tick();
+  assert.equal(runner.snapshot().ok, true);
+  assert.equal(runner.snapshot().deployed['node1-vpt'].server.version, 'main-9');
+});
+
+test('onChange fires when only the deployed map changes', async () => {
+  const reg = fakeRegistry();
+  const changes = [];
+  const runner = createDeployRunner({ stateDir: mkdtempSync(join(tmpdir(), 'ghosty-dep-')), registry: reg.fn, isEnabled: () => false, alert() {}, log: { error() {} }, onChange: (s) => changes.push(s), run: async () => ({ code: 0 }) });
+  await runner.tick();
+  const n = changes.length;
+  await runner.tick(); assert.equal(changes.length, n);      // nothing changed
+  reg.deployed = { e: { frontend: { version: 'v1', at: 1 } } };
+  await runner.tick(); assert.equal(changes.length, n + 1);
+  assert.equal(changes.at(-1).deployed.e.frontend.version, 'v1');
 });

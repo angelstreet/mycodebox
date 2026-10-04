@@ -5,6 +5,7 @@
 
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
+import { deployedView, targetLabel } from '/deployed.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -1895,6 +1896,16 @@ function depRow(d, d0) {
     ${d.state === 'running' ? `<pre class="dlog" data-log="${d.id}">…</pre>` : ''}
     ${d.coalescedInto ? `<div class="d2">merged into ${escapeHtml(d.coalescedInto)}</div>` : ''}${d.reason ? `<div class="d2">${escapeHtml(d.reason)}</div>` : ''}</div>`;
 }
+// "Deployed now": per env/target what the registry's ledger says is live (version, ref, commit, when, who, newer failed attempt).
+function deployedHtml(d0) {
+  const view = deployedView(d0?.deployed, Date.now());
+  if (!view.length) return '<div class="mnote">deployed now: nothing recorded yet</div>';
+  return `<div class="mnote">deployed now</div>${view.map((e) => `<div class="dep dnow"><div class="d1"><b>${escapeHtml(e.env)}</b></div>${e.rows.map((r) => `
+    <div class="d2 dnrow"><span class="dscope">${escapeHtml(targetLabel(r.targets))}</span> ${r.deployed
+      ? `<b>${escapeHtml(r.version || '?')}</b> &middot; ${escapeHtml(r.ref || '?')}${r.commit ? ` &middot; ${escapeHtml(r.commit)}` : ''} &middot; ${escapeHtml(r.ago)}${r.by && r.by !== 'unknown' ? ` &middot; ${escapeHtml(r.by)}` : ''}${r.backfill ? ' &middot; <i>read from the target</i>' : ''}`
+      : '<span class="dim">no successful deploy recorded</span>'}
+      ${r.failed ? `<div class="dwarn">&#9888; last attempt failed ${escapeHtml(r.failed.ago)}${r.failed.version ? ` (${escapeHtml(r.failed.version)})` : ''}${r.failed.by ? ` by ${escapeHtml(r.failed.by)}` : ''}</div>` : ''}</div>`).join('')}</div>`).join('')}`;
+}
 function deploysHtml(d0) {
   if (!d0) return '<div class="dim">loading…</div>';
   const all = d0.deploys || [];
@@ -1904,6 +1915,7 @@ function deploysHtml(d0) {
     ${d0.enabled ? '' : '<div class="mnote">runner is off: requests only queue. Agents then follow the manual flow when you tell them to.</div>'}
     ${d0.ok === false ? `<div class="mnote dwarn">registry unreachable &middot; ${escapeHtml(d0.error || '')}</div>` : ''}
     ${act.map((x) => depRow(x, d0)).join('') || '<div class="dim">no deploy queued</div>'}
+    ${deployedHtml(d0)}
     ${recent.length ? `<div class="mnote">recent</div>${recent.map((x) => `<div class="dep ${x.state}"><div class="d1"><span class="dtag ${x.state}">${x.state}</span><b>${escapeHtml(x.env)}</b><span class="dscope">${escapeHtml(x.scope)}</span><span class="grow"></span><span class="dim">${x.version ? escapeHtml(x.version) : ''}</span></div><div class="d2">${escapeHtml(x.ref)} &middot; ${escapeHtml(x.agent)}${x.coalescedInto ? ' &middot; merged' : ''}</div></div>`).join('')}` : ''}`;
 }
 function openManager() {
