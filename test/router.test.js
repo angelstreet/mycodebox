@@ -133,6 +133,85 @@ test('model: appears in SUGGEST_ONLY', () => {
   assert.ok(SUGGEST_ONLY.has('model'));
 });
 
+// ---- stop ----
+// facts shape: { session, agent, case, priority, forbidden_topic, closing_text (<= 1500 chars), proposed_reply }
+test('stop: floor keeps both options and does not force on a plain owner_decision', () => {
+  const f = floor('stop', { session: 's1', agent: 'claude', case: 'owner_decision' });
+  assert.deepEqual(f.allowed, ['answer', 'escalate']);
+  assert.equal(f.forced, null);
+});
+test('stop: forbidden_topic forces escalate regardless of case', () => {
+  for (const c of ['continue', 'done', 'owner_decision', 'stopped_short', 'menu_recommended', 'permission']) {
+    const f = floor('stop', { case: c, forbidden_topic: true });
+    assert.equal(f.forced, 'escalate', `forbidden_topic + case=${c}`);
+    assert.ok(f.allowed.includes('escalate'));
+  }
+});
+test('stop: case=permission forces escalate', () => {
+  const f = floor('stop', { case: 'permission' });
+  assert.equal(f.forced, 'escalate');
+  assert.match(f.reasons.join(' '), /permission/);
+});
+test('stop: case=owner_action forces escalate', () => {
+  const f = floor('stop', { case: 'owner_action' });
+  assert.equal(f.forced, 'escalate');
+  assert.match(f.reasons.join(' '), /owner_action/);
+});
+test('stop: case=waiting_deploy forces escalate', () => {
+  const f = floor('stop', { case: 'waiting_deploy' });
+  assert.equal(f.forced, 'escalate');
+  assert.match(f.reasons.join(' '), /waiting_deploy/);
+});
+test('stop: case=continue does NOT force; ruleDefault is answer', () => {
+  const f = floor('stop', { case: 'continue' });
+  assert.equal(f.forced, null);
+  assert.equal(ruleDefault('stop', { case: 'continue' }), 'answer');
+});
+test('stop: ruleDefault is escalate for anything that is not continue (conservative)', () => {
+  for (const c of ['done', 'owner_decision', 'menu_recommended', 'stopped_short', 'error', 'background_wait', 'unknown', undefined]) {
+    const facts = c ? { case: c } : {};
+    assert.equal(ruleDefault('stop', facts), 'escalate', `case=${c}`);
+  }
+});
+test('stop: forbidden_topic forces escalate even when case=continue (ruleDefault is just a fallback, the floor wins)', () => {
+  const f = floor('stop', { case: 'continue', forbidden_topic: true });
+  assert.equal(f.forced, 'escalate');
+  // ruleDefault is intentionally a pure function of `case` (per spec): forbidden_topic only moves the floor.
+  assert.equal(ruleDefault('stop', { case: 'continue', forbidden_topic: true }), 'answer');
+  // But the end-to-end pick collapses to the forced escalate.
+  const out = pick('stop', { case: 'continue', forbidden_topic: true },
+    { success: true, answers: { choice: { choice: 'answer', confidence: 0.99 } } });
+  assert.equal(out.choice, 'escalate');
+  assert.equal(out.source, 'forced');
+});
+test('stop: pick collapses to forced escalate when forbidden_topic', () => {
+  const out = pick('stop', { case: 'continue', forbidden_topic: true },
+    { success: true, answers: { choice: { choice: 'answer', confidence: 0.99 } } });
+  assert.equal(out.choice, 'escalate');
+  assert.equal(out.source, 'forced');
+  assert.equal(out.confidence, 1);
+});
+test('stop: pick takes Jev answer when confidence >= threshold and choice is allowed', () => {
+  const out = pick('stop', { case: 'owner_decision' },
+    { success: true, answers: { choice: { choice: 'answer', confidence: 0.95 } } });
+  assert.equal(out.choice, 'answer');
+  assert.equal(out.source, 'jev');
+});
+test('stop: pick falls back to rule default (escalate) when Jev says nothing useful', () => {
+  const out = pick('stop', { case: 'owner_decision' }, null);
+  assert.equal(out.choice, 'escalate');
+  assert.equal(out.source, 'rule');
+});
+test('stop: buildRequest uses text.decision.manager and stops choices inside allowed', () => {
+  const body = buildRequest('stop', { case: 'owner_decision' }, { teamId: 't' });
+  assert.equal(body.usage, 'text.decision.manager');
+  assert.deepEqual(Object.keys(body.questions.choice.criteria).sort(), ['answer', 'escalate']);
+});
+test('stop: buildRequest returns null when the floor forces escalate (permission case)', () => {
+  const body = buildRequest('stop', { case: 'permission' }, { teamId: 't' });
+  assert.equal(body, null);
+});
+
 // ---- POINTS shape ----
 test('POINTS: each entry has usage, options, instructions, ruleDefault, floor', () => {
   for (const [name, def] of Object.entries(POINTS)) {
@@ -280,14 +359,14 @@ test('decide: threshold is honored end-to-end', async () => {
   assert.equal(out.choice, 'minimax');
 });
 
-// ---- fixtures smoke test (all 50) ----
+// ---- fixtures smoke test (10 per point across all points) ----
 test('fixtures: every entry agrees with ruleDefault + floor against the expected option', async () => {
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
   const url = await import('node:url');
   const file = url.fileURLToPath(new URL('./fixtures/router-states.json', import.meta.url));
   const states = JSON.parse(await fs.readFile(file, 'utf8'));
-  assert.equal(states.length, 50, 'expected 50 fixture states (10 per point)');
+  assert.equal(states.length, Object.keys(POINTS).length * 10, `expected ${Object.keys(POINTS).length * 10} fixture states (10 per point)`);
   const counts = {};
   for (const s of states) {
     counts[s.point] = (counts[s.point] || 0) + 1;
@@ -305,4 +384,13 @@ test('fixtures: every entry agrees with ruleDefault + floor against the expected
     }
   }
   for (const p of Object.keys(POINTS)) assert.equal(counts[p], 10, `point "${p}" should have 10 fixture states, has ${counts[p] || 0}`);
+});
+test('pick: confidence is the probability of the chosen option when probabilities are present', () => {
+  const reply = { success: true, answers: { choice: { choice: 'answer', confidence: 0.95, probabilities: { answer: 0.6, escalate: 0.4 } } } };
+  const out = pick('stop', { case: 'owner_decision' }, reply, { threshold: 0.7 });
+  assert.equal(out.source, 'rule');
+  assert.equal(out.confidence, 0.6);
+  const hi = pick('stop', { case: 'owner_decision' }, { success: true, answers: { choice: { choice: 'answer', probabilities: { answer: 0.9, escalate: 0.1 } } } });
+  assert.equal(hi.source, 'jev');
+  assert.equal(hi.confidence, 0.9);
 });
