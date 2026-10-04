@@ -282,6 +282,16 @@ section per day (annotated / skipped / errors, Jev wake vs not, needed vs not, a
 by kind, the same for the rule default). Switch: `manager.json` `wakeShadow` (default `true`), or
 `POST /api/manager {"wakeShadow": false}`.
 
+**Per-wake log.** The manager's Claude Code transcript is the only complete record of its wakes, so `manager-wakes.js`
+splits it into wakes (a wake starts at an owner prompt, a task-notification (Monitor event / expiry, background task,
+subagent done), a scheduled sweep or a cross-session message, and ends before the next) with trigger, tool counts,
+alerts / sends / workers / file writes, the first line of its final text, tokens and usd (same price table as the usage
+ledger). `node scripts/manager-wakes.js [--day YYYY-MM-DD] [--json]` prints the table and a daily summary (wakes and usd per
+trigger, top 5 most expensive, share of wakes that did nothing) and rewrites `<state dir>/manager-wakes.jsonl` for that
+day. The transcript is found through the usage ledger: Claude session ids whose rows carry a label from `managerSessions`
+-> `~/.claude/projects/<project dir>/<id>.jsonl`. `GET /api/manager/wakes?day=` (UTC day, cached 60 s) feeds the "Wakes
+today" block of the AI manager panel.
+
 **Owner labels.** In the manager panel every stop has 👎 (stopped for no reason) / 👍 (legit) buttons,
 a "wrong case" picker and an optional note; "unlabelled stops only" filters the list and a row's session
 name opens its card. `POST /api/manager/label {id, label: no_reason|legit|wrong_case, note?, correctCase?}`
