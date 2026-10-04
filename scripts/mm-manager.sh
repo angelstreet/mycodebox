@@ -247,6 +247,9 @@ state-changing API (no POST/PUT/DELETE, no send, no alert, no wake).
 
 $(get_runbook_table)
 
+(The table above is the REAL manager's operating guide. Wherever it says send, alert, escalate, wake or POST,
+you only PROPOSE that action in your JSON line; you never perform it. Only GET requests are allowed to you.)
+
 # Events (one JSON object per line)
 
 $events_json
@@ -288,6 +291,12 @@ swallow the question otherwise.)
 
 Take Sonnet's answer. Include its total_cost_usd as \`sonnet_usd\` in your JSON line.
 
+You DO have a working shell: run these commands for real, never assume a command is unavailable without trying
+it. If one really fails, quote its exact error in \`why\` and propose escalate. Never invent a Jev or Sonnet result.
+When Jev prints confidence 0 or source "rule", that means Jev was unsure: calling Sonnet is then required
+(unless the event is forced by a hard floor). In the Sonnet question, include the event, the facts and the
+decision-table row, and ask for one of: answer (with the reply) | escalate (with the message) | none.
+
 NEVER run any other command that changes anything. Print ONLY the JSON lines, one per event.
 EOF
 }
@@ -308,14 +317,15 @@ record_batch() {
       let mcode={};
       try { mcode=JSON.parse(buf||"{}"); } catch {}
       const result = mcode.result || mcode;
-      const text = String(result.text || result.output || result.content || "");
+      // real `mcode exec --output-format json` shape: {type:"exec.result", output:"<final text>", usage:{inputTokens,outputTokens,cacheReadTokens}, status}
+      const text = String(mcode.output || result.text || result.output || result.content || "");
       const usage = (mcode.usage && typeof mcode.usage==="object")
         ? mcode.usage
         : ((result.usage && typeof result.usage==="object") ? result.usage : {});
       const tokens = {
-        input: usage.input || 0,
-        output: usage.output || 0,
-        cache_read: usage.cache_read || 0,
+        input: usage.inputTokens ?? usage.input ?? 0,
+        output: usage.outputTokens ?? usage.output ?? 0,
+        cache_read: usage.cacheReadTokens ?? usage.cache_read ?? 0,
       };
       const lines = text.split(/\r?\n/);
       const byKey = new Map();
@@ -345,8 +355,9 @@ record_batch() {
           mm_ms: Number(process.env.MM_MS) || 0,
           mm_tokens: tokens,
         };
-        if (d.reply) rec.reply = String(d.reply).slice(0,500);
-        if (d.message) rec.message = String(d.message).slice(0,500);
+        // reply only for an answer, message only for escalate/alert (the model sometimes fills the other with filler)
+        if (rec.proposal === "answer" && d.reply) rec.reply = String(d.reply).slice(0,500);
+        if ((rec.proposal === "escalate" || rec.proposal === "alert") && d.message) rec.message = String(d.message).slice(0,500);
         if (d.jev_ask) rec.jev_ask = d.jev_ask;
         if (d.sonnet_usd != null) rec.sonnet_usd = Number(d.sonnet_usd) || 0;
         out.push(rec);

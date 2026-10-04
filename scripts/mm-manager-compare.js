@@ -260,6 +260,7 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
     const missKeys = [];
     const riskyKeys = [];
     let mmTokens = { input: 0, output: 0, cache_read: 0 };
+    const seenBatches = new Set();
     const sonnetRows = [];
     let realMgrUsd = 0;
     for (const e of dayEvents) {
@@ -271,7 +272,9 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
       }
       const proposal = (dec && dec.proposal) ? dec.proposal : 'none';
       proposals[proposal] = (proposals[proposal] || 0) + 1;
-      if (dec?.mm_tokens) {
+      // the usage is per BATCH and copied onto every event record of that batch: count each batch once
+      if (dec?.mm_tokens && !(dec.batch_id && seenBatches.has(dec.batch_id))) {
+        if (dec.batch_id) seenBatches.add(dec.batch_id);
         mmTokens.input += Number(dec.mm_tokens.input) || 0;
         mmTokens.output += Number(dec.mm_tokens.output) || 0;
         mmTokens.cache_read += Number(dec.mm_tokens.cache_read) || 0;

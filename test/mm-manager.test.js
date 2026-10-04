@@ -204,7 +204,7 @@ test('agent-alert naming the session counts as a real alert; one naming another 
 test('mm-manager.sh --once with a fake mcode records proposals, mm_ms and tokens (no network)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'mmmgr-fake-'));
   const fake = join(dir, 'fakemcode');
-  writeFileSync(fake, '#!/bin/bash\ncat >/dev/null\necho \'{"result":{"text":"{\\"key\\":\\"s1:asks\\",\\"at\\":\\"2026-10-04T12:00:00Z\\",\\"proposal\\":\\"answer\\",\\"reply\\":\\"Yes\\",\\"why\\":\\"ok\\",\\"sonnet\\":false}"},"usage":{"input":5,"output":6,"cache_read":7}}\'\n', { mode: 0o755 });
+  writeFileSync(fake, '#!/bin/bash\ncat >/dev/null\necho \'{"type":"exec.result","output":"{\\"key\\":\\"s1:asks\\",\\"at\\":\\"2026-10-04T12:00:00Z\\",\\"proposal\\":\\"answer\\",\\"reply\\":\\"Yes\\",\\"why\\":\\"ok\\",\\"sonnet\\":false}","usage":{"inputTokens":5,"outputTokens":6,"cacheReadTokens":7}}\'\n', { mode: 0o755 });
   const evFile = join(dir, 'events.jsonl');
   writeFileSync(evFile, JSON.stringify({ at: '2026-10-04T12:00:00Z', key: 's1:asks', kind: 'asks', session: 's1' }) + '\n');
   execFileSync('bash', [join(process.cwd(), 'scripts', 'mm-manager.sh'), '--once', evFile], {
@@ -216,4 +216,14 @@ test('mm-manager.sh --once with a fake mcode records proposals, mm_ms and tokens
   assert.equal(rec.reply, 'Yes');
   assert.equal(typeof rec.mm_ms, 'number');
   assert.deepEqual(rec.mm_tokens, { input: 5, output: 6, cache_read: 7 });
+});
+test('buildReport: batch token usage copied on each event of a batch is counted once', () => {
+  const e1 = ev(0), e2 = { ...ev(1000), key: 's1:done', kind: 'done' };
+  const tok = { input: 10, output: 5, cache_read: 1 };
+  const decisions = [
+    { key: e1.key, at: e1.at, proposal: 'none', batch_id: 'b1', mm_tokens: tok },
+    { key: e2.key, at: e2.at, proposal: 'none', batch_id: 'b1', mm_tokens: tok },
+  ];
+  const [d] = buildReport({ decisions, events: [e1, e2], stallRecs: [], ledger: [], managerCfg: {} });
+  assert.deepEqual(d.mmTokens, tok);
 });
