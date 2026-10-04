@@ -109,8 +109,10 @@ export function markAnswered(prev, name, now = Date.now()) {
 //            "2" / "option 2" / "Release APK" — match by number first, then by case-insensitive
 //            trimmed text against the option label.
 //   either / open : the AI's proposal lives on its own button (id 'ai'), or 'sug' for Claude's own
-//            dim suggestion when the AI proposal is missing. Match by case-insensitive trimmed
-//            text against the proposal / suggestion.
+//            dim suggestion when the AI proposal is missing. For an either question with parsed
+//            lettered/phrase alternatives, the proposal may start with a letter ("A" / "B") or
+//            name one of the phrases — match that alts-button too (it's flagged `ai: true` by
+//            buttons.js so the popup can highlight it).
 const YES_RE = /^\s*(?:yes|y|continue|go|ok(?:ay)?|sure|do it)\b/i;
 const NO_RE  = /^\s*(?:no|n|stop|don't|dont|cancel|skip|abort)\b/i;
 const normText = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -142,6 +144,14 @@ export function mapAiToButton(buttonList, kind, proposedReply) {
       return labelN && labelN === aiN;
     });
     return matchByLabel ? matchByLabel.id : null;
+  }
+  // either with parsed alts: id 'oA'/'oB'/... marked ai:true, OR match the letter/phrase.
+  const aiFlag = buttonList.find((b) => b.ai);
+  if (aiFlag) return aiFlag.id;
+  const letterMatch = ai.match(/^\s*([A-D])\b/);
+  if (letterMatch) {
+    const cand = buttonList.find((b) => b.id === `o${letterMatch[1]}`);
+    if (cand) return cand.id;
   }
   // either / open: the AI's proposal is a button called 'ai' (set by buttons.js), text-on-it.
   // If we don't see one (no triage) we look at 'sug'.

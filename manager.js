@@ -714,7 +714,8 @@ export function stallOf(name) {
   const w = watch.get(name);
   if (!w || !w.stall) return null;
   const st = w.stall;
-  return { case: st.case, source: st.source, would: st.would || null, question: st.question, id: w.pending?.id || null,
+  return { case: st.case, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null,
+    id: w.pending?.id || null,
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
     forbidden: st.forbidden || w.cls?.forbidden || null, draft: !!(w.cls?.draft), jev: st.jev || null };
 }

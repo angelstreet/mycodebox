@@ -1371,7 +1371,14 @@ body[data-mode="card"] #health{ display:none; }
 #askPopup .ap-b.rep { flex: 1 1 0; color: var(--ink-2); border-style: dashed; }
 #askPopup .ap-b.op { flex: 1 1 100%; justify-content: flex-start; text-align: left; }
 #askPopup .ap-b.op .t { flex: 1; overflow-wrap: anywhere; }
+#askPopup .ap-b.muted { color: var(--ink-3); border-style: dashed; opacity: 0.9; }
+#askPopup .ap-b.muted .n { color: var(--ink-3); }
 #askPopup .ap-btns.menu .ap-b.rep, #askPopup .ap-btns.either .ap-b.rep, #askPopup .ap-btns.open .ap-b.rep { flex: 1 1 100%; }
+#askPopup .ap-qs { display: flex; flex-direction: column; gap: 4px; max-height: 7.2em; overflow: auto; }
+#askPopup .ap-q-row { display: flex; gap: 6px; font-size: 12px; color: var(--ink); line-height: 1.35; }
+#askPopup .ap-q-n { flex: 0 0 auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+#askPopup .ap-q-t { flex: 1 1 auto; overflow-wrap: anywhere; }
+#askPopup .ap-qs-note { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
 #askPopup .ap-b .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 #askPopup .ap-b.hl { background: var(--working); color: #04170b; border-color: transparent; font-weight: 700; }
 #askPopup .ap-b.hl .n { color: #04170b; }

@@ -40,6 +40,92 @@ export function needsOwner(st) {
 const trunc = (t, n = 30) => { t = String(t || '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const sameReply = (a, b) => String(a || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === String(b || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
+// True when the body says the option is what the agent recommends ("(recommended)", "my recommendation").
+const RECOMMENDED_RE = /\b(?:recommended|my recommendation)\b/i;
+
+// Extract the alternatives of an either-question. Returns an array (max 4) of either
+//   { letter, label, recommended }  — "A (...)", "- A. ...", "A) ...", "(A) ..."
+//   { phrase }                      — plain "X or Y?"
+// [] when the text doesn't carry a structured choice (fewer than 2 alts).
+export function parseAlternatives(text) {
+  if (!text) return [];
+  const t = String(text);
+  const lines = t.split('\n');
+
+  // 1) Lettered option lines: "- A. ...", "A. ...", "A) ...", "(A) ...".
+  const alts = [];
+  const seen = new Set();
+  for (const l of lines) {
+    const m = l.match(/^\s*(?:[-*]\s+)?\(?([A-D])\)?[.)\s:]\s+(.+)/);
+    if (!m) continue;
+    const letter = m[1];
+    if (seen.has(letter)) continue;
+    seen.add(letter);
+    const body = m[2].trim().replace(/[.,;:\s]+$/, '');
+    alts.push({ letter, label: body, recommended: RECOMMENDED_RE.test(body) });
+    if (alts.length >= 4) break;
+  }
+  if (alts.length >= 2) return alts;
+
+  // 2) Inline "A (...) or B (...)" in any line.
+  const inline = t.match(/\b([A-D])\s*\(([^)]+)\)\s*or\s*\b([A-D])\s*\(([^)]+)\)/);
+  if (inline) {
+    return [
+      { letter: inline[1], label: inline[2].trim(), recommended: RECOMMENDED_RE.test(inline[2]) },
+      { letter: inline[3], label: inline[4].trim(), recommended: RECOMMENDED_RE.test(inline[4]) },
+    ];
+  }
+
+  // 3) Plain "X or Y?" — the words on each side of the "or" in the last question.
+  // Only matches when both sides are single words and the right-hand side is the very last word
+  // before the closing "?". This keeps "Do you want Redis or Postgres for the cache?" as
+  // an unstructured either (the existing AI-button + suggestion path), while "Shall I use X or Y?"
+  // becomes two phrase buttons.
+  const q = lastQuestion(t);
+  const orMatch = q.match(/\b(\S+?)\s+or\s+(\S+?)\s*\??\s*$/i);
+  if (orMatch) {
+    return [{ phrase: orMatch[1].trim() }, { phrase: orMatch[2].trim() }];
+  }
+  return [];
+}
+
+// A short text matches the AI's proposal when the proposal starts with the option's letter
+// (or letter + space/dot/parens) or when the normalised proposal contains the option's phrase.
+function aiMatchesAlt(aiText, alt) {
+  if (!aiText) return false;
+  const ai = String(aiText);
+  if (alt.letter) {
+    const re = new RegExp(`^\\s*${alt.letter}(?:[.)\\]\\s:\\-]|$)`, 'i');
+    if (re.test(ai)) return true;
+  }
+  if (alt.phrase) {
+    const ph = alt.phrase.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const aiN = ai.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (ph && (aiN === ph || aiN.includes(ph))) return true;
+  }
+  return false;
+}
+
+// Pull the numbered decision questions out of a closing text.
+//   "1. ... Do it?"   "2. Alert queue: A (...) or B (...)?"   ...
+// Max 3, each ≤ 160 chars, in source order. Returns [] when there are < 2 such lines.
+export function listQuestions(text) {
+  if (!text) return [];
+  const out = [];
+  const lines = String(text).split('\n');
+  for (const l of lines) {
+    const m = l.match(/^\s*(\d+)[.)]\s+(.+)/);
+    if (!m) continue;
+    const body = m[2].trim();
+    if (!body) continue;
+    if (!/\?|Do it|do it\?|\bor\b/i.test(body)) continue;
+    const t = body.length > 160 ? `${body.slice(0, 159)}…` : body;
+    out.push(t);
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
 export function deriveButtons({ state, stall, triage }) {
   const kind = questionKind({ state, stall });
   const topicForbidden = !!stall?.forbidden;
@@ -55,10 +141,40 @@ export function deriveButtons({ state, stall, triage }) {
     buttons.push({ id: 'yes', label: 'Yes', text: 'yes', primary: true, confirm: topicForbidden });
     buttons.push({ id: 'no', label: 'No', text: 'no' });
   } else {
-    // either/or or open: the AI's proposal first, then Claude's own dim suggestion
-    if (ai) buttons.push({ id: 'ai', label: trunc(ai.proposed_reply, 44), text: ai.proposed_reply, primary: !triage.ai.owner_needed, ai: true, confirm: topicForbidden || !!ai.forbidden });
-    if (stall?.suggestion && !(ai && sameReply(ai.proposed_reply, stall.suggestion))) {
-      buttons.push({ id: 'sug', label: trunc(stall.suggestion, 44), text: stall.suggestion, confirm: topicForbidden || !!stall.suggestionForbidden });
+    // either/or: structured alts get a button per alts; the AI pick is the matching one.
+    // open: no structured choice; Claude's dim suggestion is the only thing worth offering.
+    if (kind === 'either') {
+      const alts = parseAlternatives(stall?.excerpt || stall?.question || '');
+      if (alts.length >= 2) {
+        const pickIdx = ai ? alts.findIndex((a) => aiMatchesAlt(ai.proposed_reply, a)) : -1;
+        alts.forEach((a, i) => {
+          if (a.letter) {
+            const id = `o${a.letter}`;
+            const label = `${a.letter} · ${trunc(a.label)}`;
+            buttons.push({ id, label, text: a.letter, primary: a.recommended ? true : undefined, ai: i === pickIdx ? true : undefined, confirm: topicForbidden });
+          } else {
+            const id = `o${String.fromCharCode(65 + i)}`;
+            const label = trunc(a.phrase, 44);
+            buttons.push({ id, label, text: a.phrase, ai: i === pickIdx ? true : undefined, confirm: topicForbidden });
+          }
+        });
+        // Either with alts: Claude's dim suggestion is NOT an answer (the owner is being asked
+        // to pick). Hide it here; if it's the only thing on screen (no alts at all) it surfaces
+        // as the muted "Claude suggests:" button in the open path below.
+      } else {
+        // either without parsed alts: today's behaviour — AI proposal + Claude's suggestion.
+        if (ai) buttons.push({ id: 'ai', label: trunc(ai.proposed_reply, 44), text: ai.proposed_reply, primary: !triage.ai.owner_needed, ai: true, confirm: topicForbidden || !!ai.forbidden });
+        if (stall?.suggestion && !(ai && sameReply(ai.proposed_reply, stall.suggestion))) {
+          buttons.push({ id: 'sug', label: trunc(stall.suggestion, 44), text: stall.suggestion, muted: true, confirm: topicForbidden || !!stall.suggestionForbidden });
+        }
+      }
+    } else {
+      // open: no structured choice. The AI's proposal is its own button; Claude's dim suggestion
+      // is shown labelled and muted, never primary, never highlighted, never the AI pick.
+      if (ai) buttons.push({ id: 'ai', label: trunc(ai.proposed_reply, 44), text: ai.proposed_reply, primary: !triage.ai.owner_needed, ai: true, confirm: topicForbidden || !!ai.forbidden });
+      if (stall?.suggestion && !(ai && sameReply(ai.proposed_reply, stall.suggestion))) {
+        buttons.push({ id: 'sug', label: `Claude suggests: ${trunc(stall.suggestion, 36)}`, text: stall.suggestion, muted: true, confirm: topicForbidden || !!stall.suggestionForbidden });
+      }
     }
   }
   buttons.push({ id: 'reply', label: '✎ reply…', reply: true });

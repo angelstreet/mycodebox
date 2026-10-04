@@ -4,7 +4,7 @@
 // confirm-on-forbidden second tap); each owner answer is logged through onAnswer() as an owner-vs-AI-vs-Jev record.
 // The queue logic is pure and lives in ask-model.js.
 
-import { deriveButtons, lastQuestion } from './buttons.js';
+import { deriveButtons, lastQuestion, listQuestions } from './buttons.js';
 import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine } from './ask-model.js';
 
 const MIN_KEY = 'ghosty.askPopup.minimized';
@@ -60,8 +60,22 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (!btns.some((b) => b.reply)) btns.push({ id: 'reply', label: '\u270e reply\u2026', reply: true });   // a live menu has no Reply button of its own
     const marked = btns.map((b) => ({ ...b, hl: !!aiId && b.id === aiId && shouldHighlight(b, st.triage) }));
     if (!marked.some((b) => b.hl)) aiId = null;
-    const question = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 220);
-    return { item, kind: d.kind, buttons: marked, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, question, prio: st.priority || item.priority || 'P2' };
+    // Several decisions in one stop: when the closing text has ≥ 2 numbered decision lines, render
+    // each of them in the question area (max 3) and prefix the sent button text with the last
+    // question's number so Claude knows which one the owner answered.
+    const closingText = st.stall?.excerpt || st.stall?.question || '';
+    const decisions = listQuestions(closingText);
+    let btnsView = marked;
+    let questionsView = null;
+    let lastDecisionN = null;
+    if (decisions.length >= 2) {
+      lastDecisionN = decisions.length;
+      questionsView = decisions;
+      btnsView = marked.map((b) => (b.text ? { ...b, text: `${lastDecisionN}: ${b.text}` } : b));
+    }
+    const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 220);
+    const question = questionsView ? '' : baseQ;
+    return { item, kind: d.kind, buttons: btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2' };
   }
 
   function metaText(v) {
@@ -71,7 +85,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   }
 
   function btnHtml(b, label, n) {
-    const cls = ['ap-b', b.hl ? 'hl' : '', b.confirm ? 'cf' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op'].filter(Boolean).join(' ');
+    const cls = ['ap-b', b.hl ? 'hl' : '', b.confirm ? 'cf' : '', b.muted ? 'muted' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op'].filter(Boolean).join(' ');
     const star = b.hl ? '<i class="star">★</i>' : '';
     return n
       ? `<button class="${cls}" data-btn="${esc(b.id)}"><span class="n">${n}</span><span class="t">${esc(label)}</span>${star}</button>`
@@ -99,7 +113,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     pill.classList.toggle('hidden', !minimised);
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
-    const sig = JSON.stringify([item.key, idx, q.items.length, v.question, v.prio, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm]), metaText(v)]);
+    const sig = JSON.stringify([item.key, idx, q.items.length, v.question, v.questions, v.prio, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted]), metaText(v)]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);
@@ -107,6 +121,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       let btns;
       if (v.kind === 'yesno') btns = opts.map((b) => btnHtml(b, b.label)).join('') + (reply ? btnHtml(reply, 'Reply…') : '');
       else btns = opts.map((b, i) => btnHtml(b, v.kind === 'menu' ? stripNum(b.label) : b.label, i + 1)).join('') + (reply ? btnHtml(reply, 'Reply…') : '');
+      const qBlock = v.questions
+        ? `<div class="ap-qs">${v.questions.map((qq, i) => `<div class="ap-q-row"><span class="ap-q-n">${i + 1}.</span><span class="ap-q-t">${esc(qq)}</span></div>`).join('')}<div class="ap-qs-note">${v.questions.length} decisions — Reply… to answer all</div></div>`
+        : `<div class="ap-q">${esc(v.question)}</div>`;
       body.innerHTML = `<div class="ap-head">
           <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(item.name)}</button>
           <span class="ap-prio ${esc(v.prio)}">${esc(v.prio)}</span>
@@ -115,7 +132,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
           <button class="ap-nav" data-act="next" aria-label="Next">›</button>
           <button class="ap-x" data-act="min" aria-label="Minimise">✕</button>
         </div>
-        <div class="ap-q">${esc(v.question)}</div>
+        ${qBlock}
         <div class="ap-btns ${esc(v.kind)}">${btns}</div>
         <div class="ap-meta">${esc(metaText(v))}</div>`;
     }
