@@ -2110,7 +2110,7 @@ function usageHtml(u, tab, ui) {
       input: rows.reduce((s, r) => s + r.in, 0), output: rows.reduce((s, r) => s + r.out, 0),
       cache_read: rows.reduce((s, r) => s + r.cr, 0), cache_creation: rows.reduce((s, r) => s + r.cw, 0) };
   }
-  const head = `<div class="utot"><b>${usd(total.cost === 0 && total.unpriced > 0 ? null : total.cost)}</b> <span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced turns not counted` : ''}</span><br>${tokLine(total)}</div>`;
+  const head = `<div class="utot"><b>${usd(total.cost === 0 && total.unpriced > 0 ? null : total.cost)}</b> <span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced` : ''}</span><br>${tokLine(total)}</div>`;
 
   // agents (with their models nested); derived from the filtered sessions when a project/session filter is on
   const narrowed = !!(fp || q);
