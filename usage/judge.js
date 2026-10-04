@@ -59,14 +59,14 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
       if (random() >= (cfg.judgeSampling ?? 1)) { st.done[r.id] = 'sampled-out'; continue; }
       st.calls++;
       try {
-        const body = { usage: REVIEWER_USAGE, prompt: buildJudgePrompt(r), system: judgeSystem, max_tokens: JUDGE_MAX_TOKENS, timeout_s: JUDGE_TIMEOUT_S };
+        const body = { usage: REVIEWER_USAGE, prompt: buildJudgePrompt(r), system: judgeSystem, max_tokens: JUDGE_MAX_TOKENS, temperature: 0, timeout_s: JUDGE_TIMEOUT_S };
         const res = await callComplete({ url, apiKey: cfg.jevApiKey, body, fetchFn, timeoutMs: JUDGE_TIMEOUT_S * 1000 });
         if (res.error) { log('[lfeval] judge call failed:', res.error); st.calls--; continue; }   // retried next pass
         const p = parseJudge(res.content);
         if (!p) { st.done[r.id] = 'unparsable'; continue; }
         events.push({ id: hash(`ev:judge:${r.id}`).slice(0, 36), type: 'score-create', timestamp: new Date(now).toISOString(), body: {
           id: hash(`score:ai_proposal_judge:${r.id}`).slice(0, 32), traceId: traceIdOf('manager', r.session), observationId: genIdOf(`manager:ai:${r.id}`),
-          name: 'ai_proposal_judge', dataType: 'NUMERIC', value: p.score, comment: p.reasoning, metadata: { stop_id: r.id, judge_model: JUDGE_MODEL, cost: res.cost ?? null } } });
+          name: 'ai_proposal_judge', dataType: 'NUMERIC', value: p.score, comment: p.reasoning, metadata: { stop_id: r.id, judge_model: res.model || JUDGE_MODEL, cost: res.cost ?? null } } });
         st.done[r.id] = 'judged'; judged++;
       } catch (e) { log('[lfeval] judge call failed:', e.message); st.calls--; }   // retried next pass
     }
