@@ -1410,6 +1410,7 @@ server.listen(PORT, HOST, async () => {
   const guardSendKey = async (session, key) => { await assertAgentPane(session, 'manager'); return sendKey(session, key); };
   const guardSendKeys = async (session, keys, enter) => { await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
   await initManager({
+    credits: () => credits.peek(),
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n')),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),

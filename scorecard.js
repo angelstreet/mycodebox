@@ -32,6 +32,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { effectiveLabels, outcomeFromReplyKind } from './decisions.js';
+import { OWNER_THRESHOLD } from './router-shadow.js';
 
 const DAY_MS = 86400000;
 const AMBIGUOUS_CASES = new Set(['owner_decision', 'continue', 'menu_recommended']);
@@ -389,7 +390,76 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
       costPerDecision: jevCostPerDecision != null ? Math.round(jevCostPerDecision * 10000) / 10000 : null,
     },
     budget,
+    router: routerSection({ stallRecs, from, to }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Router shadow (TASK-47 G2): Jev's 3 answers per stop vs what the rules did. Shadow only; nothing here is acted on.
+// ---------------------------------------------------------------------------
+const NEEDS_OWNER_CASES = new Set(['owner_decision', 'owner_action', 'permission', 'error', 'waiting_deploy']);
+const MOVES_ON_CASES = new Set(['continue', 'stopped_short', 'menu_recommended', 'done', 'background_wait']);
+// Did the case fit what is known about the stop? true / false / null (nothing known). An owner label beats the owner's
+// next reply: wrong_case + correctCase is exact; legit = a case that needs the owner; no_reason = one that moves on.
+// An outcome: "continue" -> continue / stopped_short; "take_recommended" -> menu_recommended; the owner typing something
+// of their own -> anything except the three that move on by themselves.
+function caseFits(kase, lab, o) {
+  if (lab) {
+    if (lab.label === 'wrong_case') return lab.correctCase ? kase === lab.correctCase : null;
+    if (lab.label === 'legit') return NEEDS_OWNER_CASES.has(kase);
+    if (lab.label === 'no_reason') return MOVES_ON_CASES.has(kase);
+  }
+  if (o && !wasAuto(o)) {
+    if (o.kind === 'continue') return kase === 'continue' || kase === 'stopped_short';
+    if (o.kind === 'take_recommended') return kase === 'menu_recommended';
+    if (o.kind === 'owner_specific') return !['continue', 'stopped_short', 'menu_recommended'].includes(kase);
+  }
+  return null;
+}
+// The owner really was needed: a legit label, else the owner typing something of their own. null = unknown.
+function ownerWasNeeded(lab, o) {
+  if (lab?.label === 'legit') return true;
+  if (lab?.label === 'no_reason') return false;
+  if (o && !wasAuto(o) && o.kind === 'owner_specific') return true;
+  if (o && !wasAuto(o) && (o.kind === 'continue' || o.kind === 'take_recommended')) return false;
+  return null;
+}
+export function routerSection({ stallRecs = [], from, to } = {}) {
+  const inWin = (at) => { const t = Date.parse(at) || 0; return (from == null || t >= from) && (to == null || t < to); };
+  const routers = new Map(), outcomes = new Map(), escIds = new Set();
+  const stalls = new Map();
+  for (const r of stallRecs || []) {
+    if (!r || !r.id) continue;
+    if (r.type === 'router') routers.set(r.id, r);
+    else if (r.type === 'outcome') outcomes.set(r.id, r);
+    else if (r.type === 'escalated') escIds.add(r.id);
+    else if (r.type === 'stall') stalls.set(r.id, r);
+  }
+  const labels = effectiveLabels(stallRecs);
+  const out = { decisions: 0, errors: 0, skipped: 0, graded: { n: 0, ruleCaseRight: 0, jevCaseRight: 0 }, owner: { flagged: 0, flaggedNotEscalated: 0, confirmed: 0, known: 0 }, wake: { jevOpus: 0, ruleOpus: 0 } };
+  for (const [id, r] of routers) {
+    if (!inWin(r.at)) continue;
+    const j = r.router || {};
+    if (j.skipped) { out.skipped++; continue; }
+    if (j.error || !j.case) { out.errors++; continue; }
+    out.decisions++;
+    const escalated = escIds.has(id) || r.escalated === true;
+    const lab = labels.get(id), o = outcomes.get(id);
+    const ruleCase = r.rule_case ?? stalls.get(id)?.case;
+    const rf = caseFits(ruleCase, lab, o), jf = caseFits(j.case, lab, o);
+    if (rf != null && jf != null) { out.graded.n++; if (rf) out.graded.ruleCaseRight++; if (jf) out.graded.jevCaseRight++; }
+    if (j.owner != null && j.owner >= OWNER_THRESHOLD) {
+      out.owner.flagged++;
+      if (!escalated) {
+        out.owner.flaggedNotEscalated++;
+        const need = ownerWasNeeded(lab, o);
+        if (need != null) { out.owner.known++; if (need) out.owner.confirmed++; }
+      }
+    }
+    if (j.wake === 'wake_opus') out.wake.jevOpus++;
+    if (escalated) out.wake.ruleOpus++;
+  }
+  return out;
 }
 
 // Build one scorecard per UTC day in the window [now-days*DAY_MS, now], oldest first.
