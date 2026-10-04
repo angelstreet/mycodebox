@@ -23,18 +23,33 @@ journalctl -u ghosty-sessions -n 50 --no-pager      # recent logs
 Service runs as `jndoye` with `WorkingDirectory=/home/jndoye/ghosty-sessions`,
 binds `0.0.0.0:7777` (HTTP) and `0.0.0.0:7443` (HTTPS, self-signed).
 
-**Usage / cost (TASK-44 phase 3)** — local Langfuse in `~/langfuse-codebox/` (UI `:3100`, loopback + tailnet) and
-unit `ghosty-usage` (`usage/ingest.js`); details in README "Usage (Langfuse)". Creds: `~/langfuse-codebox/.env`,
-`~/.config/ghosty/usage.env`. Summary for the UI: `~/.local/state/ghosty/usage-summary.json`.
-**Usage view** (branch `task44-usage-ui`): topbar bar-chart icon -> sheet Today / 14 days, API-equivalent costs (never money
-spent; MiniMax unpriced = `—`), cost chip on cards/rows, `GET /api/usage`, `usage` in the status payload; see README
-"Usage view (UI)". Deploy: the tailer must be restarted (`ghosty-usage`) so the summary gets the `today` block, plus a
-ghosty-sessions restart; until then the Today tab says so and 14-day data still works.
+## AI manager (TASK-44) — the map
 
-**Swipe review (TASK-44 phase 2b, branch `task44-swipe-review`)** — `/?review=1` / topbar cards icon / panel link: Tinder-style
-good (right) / bad (left) / skip (up) labelling of unlabelled stops, Undo via `{type:'unlabel'}` records. API
-`GET /api/manager/review`, `POST /api/manager/unlabel`; code `public/review.js`; tests `test/review.test.js`; SW cache v17.
-Not merged or deployed; deploying needs a `ghosty-sessions` restart. See README "Swipe review".
+Full spec, permissions, status and the codebox system map: **TASK-44 in virtualpytest,
+`docs/tasks/TASK-44-ai-manager.md`** (branch `task44-ai-manager` until merged). In one paragraph: ghosty watches every
+agent session, logs every stop once with a reason, asks Jev (and an AI reviewer) what a safe reply would be, shows it
+to the owner, and — only for what the owner switched on — answers, holds or deploys. Today: answering **off**, policy
+on (inert), AI triage **simulate**, deploy runner **off**.
+
+| Piece | Files | Notes |
+|---|---|---|
+| Stop log + reasons | `stall.js`, `manager.js` | one record per stop (repaints and re-wrapped panes fold, `stopKey`); cases continue / menu_recommended / permission / owner_decision / done / error / stopped_short / waiting_deploy / owner_action / background_wait, `no_status` flag; Jev for ambiguous ones |
+| Answering (off) | `manager.js` (schedule/fire), `public/buttons.js` | countdown pill + cancel, hourly cap, re-checked at fire time; forbidden topics / drafts never |
+| AI triage (simulate) | `triage.js` | `POST /server/ai/complete` usage `text.plan`; proposal + reasoning + confidence + owner_needed; budget `ai-budget.json` |
+| Labels / swipe review | `public/review.js`, `/api/manager/review`, `/label`, `/unlabel` | left = no reason, right = legit; ✓/✗ the AI; `npm run stall-report` |
+| Priority / pause / holds | `session-meta.js`, `public/policy.js` | P0/P1/P2 (default P2); owner Pause = Esc + hold; manager holds never send Esc |
+| Quota | `quota.js` | Claude via `scripts/claude-statusline-ratelimits.sh` (status line), Codex via `codex app-server`, MiniMax via `coding_plan/remains` with mcode's login |
+| Usage | `usage/ingest.js` (unit `ghosty-usage`), `usage-view.js` | local Langfuse `~/langfuse-codebox/` (`:3100`); API-equivalent costs |
+| Session reporter | `claude-plugin/ghosty-reporter/`, `reporter.js` | see below |
+| Deploys | `deploy-runner.js`, `public/deployed.js` | queue + ledger live in the `vpt-lease` registry on proxmox (deploy skill) |
+| Alerts | `push.js` | Web Push (APK push parked), ntfy optional |
+| Health | `health.js` | `/api/vm` |
+
+State: `~/.local/state/ghosty/` (`manager.json` = switches, `stalls.jsonl`, `sessions.json`, budgets, `vapid.json`,
+`push-subs.json`, `reporter.token`, `deploy-envs.json`, `usage-summary.json`, `claude-rate-limits.json`).
+Working on it: one worktree per change, test on a spare port with a **fresh** `GHOSTY_STATE_DIR` (an old one may
+have `autoSend` on), merge into main (merge, never rebase — other sessions commit here too), restart only after the
+merge succeeded. Never `git add -A` (a TLS key nearly leaked once; `.certs-bak/` is ignored).
 
 ## Access URLs
 
@@ -96,23 +111,6 @@ disk critical (≥ 95 %, repeated every 6 h). `NTFY_DONE=1` adds turn-finished p
 **Health strip** (TASK-44 phase 1) — under the top bar: CPU %, load 1-min / cores, RAM used, disk used + free.
 Amber ≥ 85 %, red ≥ 95 % (load: amber at 1x cores, red at 2x). `health.js` samples /proc + statfs every 5 s,
 pushed as `{type:'health'}` on `/ws/status`, also `GET /api/vm`. Tests: `npm test`.
-
-**AI Manager** — plan is TASK-44 in virtualpytest (`docs/tasks/TASK-44-ai-manager.md`); dev worktree
-`~/ghosty-sessions-task44`, branch `task44-ai-manager`.
-
-**TASK-44 phase 5** (branch `task44-priority`) — per-session priority P0/P1/P2 and owner pause/resume
-(`session-meta.js`, `/api/session-meta/:s`, state in `sessions.json`), quota row (`quota.js`, `/api/quota`).
-Claude Max quota is `?` until `scripts/claude-statusline-ratelimits.sh` is set as the Claude Code
-`statusLine` command (owner edits `~/.claude/settings.json`; see README "Priority, pause and quota").
-MiniMax has no stored plan limit: tokens only. Deploy = merge + restart `ghosty-sessions`; SW cache is v10.
-
-**TASK-44 phase 6** (branch `task44-policy`) — quota policy by priority (`public/policy.js`, pure; wired in
-`manager.js` + `server.js`). A P1/P2 session that would be auto-answered but whose agent's plan is under
-pressure gets a manager hold (`held` in `sessions.json`, apart from the owner's `paused`), logged
-`{type:'hold'|'resume', by:'manager'}` and pushed; released on every 60 s quota poll when the policy allows.
-The new-session dialog has a priority picker (default P2, saved) and preselects the suggested agent
-(suggestion only). Config keys `policyEnabled`, `p1MaxPct`, `p2MaxPct` in
-`manager.json`. Deploy = merge + restart `ghosty-sessions`; SW cache is v11.
 
 **Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,
 exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only.
