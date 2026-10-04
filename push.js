@@ -133,7 +133,9 @@ export function createPush({ stateDir, fetchImpl = fetch, log = console } = {}) 
 
 // --- alert(): one call -> Web Push + (optional) ntfy, with per-key debounce -----
 
-export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh', publicUrl = '', fetchImpl = fetch, now = Date.now, defaultDebounceMs = 60000, log = console } = {}) {
+// Optional onFired(event) is called once per actually-fired alert (debounced calls do not call it).
+// `event` = { at, key, title, body (≤300 chars), url, priority }. No other behaviour changes.
+export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh', publicUrl = '', fetchImpl = fetch, now = Date.now, defaultDebounceMs = 60000, log = console, onFired = null } = {}) {
   const last = new Map();
   const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
 
@@ -151,6 +153,10 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
         fetchImpl(`${ntfyUrl}/${encodeURIComponent(ntfyTopic)}`, { method: 'POST', headers, body: text, signal: AbortSignal.timeout(8000) })
           .catch((e) => log.error('[ntfy]', e.message));
       } catch (e) { log.error('[ntfy]', e.message); }
+    }
+    if (onFired) {
+      try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority }); }
+      catch (e) { log.error(`[alerts] onFired: ${e.message}`); }
     }
     return true;
   }

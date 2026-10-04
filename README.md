@@ -257,6 +257,14 @@ through the normal `alert()` (same debounce per `tag` or title, notification fee
 `{ok:true, sent:true}` or `{ok:true, sent:false, debounced:true}`. `title` 1..120, `body` 1..1000, `url` starts with
 `/` or `http(s)://`, `priority` one of `min|low|default|high|urgent`. At most 10 calls per hour (429 beyond).
 
+**Manager event feed.** Every alert that actually fires (not debounced) is appended as one JSON line to
+`~/.local/state/ghosty/manager-events.jsonl` for the AI manager agent to follow, so it wakes only when something
+happens. Follow it with: `tail -n0 -F ~/.local/state/ghosty/manager-events.jsonl`. Skipped: events whose session
+is in `manager.json` `managerSessions` (default `["manager"]`), the agent's own `/api/alert` calls
+(`manager-agent:<tag>` keys), and `done` (a finished turn). The file rotates to `manager-events.jsonl.1` when
+the next append would push it past 5 MB. A freshly-started agent catches up via
+`GET /api/manager/events?since=<ISO>&limit=50` (newest last).
+
 **Owner labels.** In the manager panel every stop has 👎 (stopped for no reason) / 👍 (legit) buttons,
 a "wrong case" picker and an optional note; "unlabelled stops only" filters the list and a row's session
 name opens its card. `POST /api/manager/label {id, label: no_reason|legit|wrong_case, note?, correctCase?}`

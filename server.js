@@ -29,6 +29,7 @@
 //   GET  /api/manager/scorecard?days=7 → { today, days:[...] } performance + cost + Jev integration for the window
 //                                       (cached 60 s; manager sessions, subagents, workers, Jev, reviewer, judge; see scorecard.js)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
+//   GET  /api/manager/events?since=<ISO>&limit=50 → tail of manager-events.jsonl (newest last): the events the AI manager should react to (skips the manager's own stops, /api/alert, 'done'). The manager agent follows the file directly with `tail -n0 -F` so it wakes only when something happens
 //   GET  /api/deploys           → deploy queue + recent (registry on proxmox), {enabled, running, lastRef, deployed (ledger: per env/target version, ref, commit, at, agent, lastAttempt)}; pushed on /ws/status as {type:'deploys'}
 //   POST /api/deploys/:id/approve | /cancel → owner action on a queued request
 //   GET  /api/deploys/:id/log?tail=200      → the runner's log of that deploy (text)
@@ -73,6 +74,7 @@ import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
+import { createManagerEvents } from './manager-events.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -549,7 +551,18 @@ const NTFY_DONE = process.env.NTFY_DONE === '1';   // also alert when a turn fin
 const NTFY_DEBOUNCE_MS = 60000;
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const push = createPush({ stateDir: STATE_DIR });
-const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
+// manager.json key `managerSessions` (default ['manager']) — same source the scorecard reads.
+const MANAGER_SESSIONS_DEFAULT = ['manager'];
+const managerConfigFile = join(STATE_DIR, 'manager.json');
+const loadManagerSessions = () => {
+  try {
+    const j = JSON.parse(readFileSync(managerConfigFile, 'utf8'));
+    if (Array.isArray(j?.managerSessions) && j.managerSessions.length) return j.managerSessions;
+  } catch {}
+  return MANAGER_SESSIONS_DEFAULT;
+};
+const managerEvents = createManagerEvents({ stateDir: STATE_DIR, managerSessions: loadManagerSessions });
+const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS, onFired: (e) => managerEvents.record(e).catch((err) => console.error('[manager-events]', err.message)) });
 
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
@@ -1303,6 +1316,12 @@ const server = http.createServer(async (req, res) => {
     let lines = [];
     try { lines = (await readFile(LOG_FILE, 'utf8')).trim().split('\n').filter(Boolean); } catch {}
     return json(res, 200, { entries: lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) });
+  }
+  if (req.method === 'GET' && p === '/api/manager/events') {   // tail of manager-events.jsonl (newest last); a freshly-started manager agent catches up
+    const q = url.searchParams;
+    const since = q.get('since') || '';
+    const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
+    return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
   if (req.method === 'GET' && p === '/api/manager/scorecard') {
     // 60 s in-process cache: the file is ~35k lines and the UI re-renders on every status tick.
