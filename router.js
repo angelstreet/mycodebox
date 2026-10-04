@@ -62,9 +62,9 @@ const wake = {
 const builder = {
   usage: 'text.decision.route',
   options: {
-    minimax: 'small, well-specified change in an app repo with tests; no infrastructure, secrets or deploys; a reviewer will check it',
+    minimax: 'small, well-specified change (few files, a few hundred lines at most) in an app repo with tests; no infrastructure, secrets or deploys; a reviewer will check it',
     codex: 'small/medium change where Codex is a better fit (e.g. focused refactor, simple tests, well-scoped fix)',
-    sonnet: 'medium change needing stronger judgement: cross-file edits, non-trivial logic, or touching auth/security on a private repo',
+    sonnet: 'big or complex: many files, UI wiring, stateful logic or an unclear spec; also anything touching auth/security on a private repo',
     opus: 'large or risky change: touches infra/deploy/secrets/migrations, or is a P0 product decision',
   },
   instructions: 'Which builder should do this work, given what it touches and where it lands?',
@@ -86,8 +86,15 @@ const builder = {
     if (forced) reasons.push('P0 product decision: Opus');
     return { allowed, forced, reasons };
   },
+  // minimax only for a small, specific change: files_est <= 3 AND lines_est <= 200 (both must be given) AND not
+  // ui_wiring AND not stateful AND spec_clear !== false. Optional booleans on facts.work: ui_wiring (touches
+  // UI wiring), stateful (stateful logic), spec_clear (the spec is clear; only an explicit false counts against).
+  // Anything else is sonnet. The infra floor above still removes minimax/codex first.
   ruleDefault(facts, allowed) {
-    if (allowed.includes('minimax')) return 'minimax';
+    const w = facts?.work || {};
+    const small = Number.isFinite(w.files_est) && w.files_est <= 3 && Number.isFinite(w.lines_est) && w.lines_est <= 200
+      && !w.ui_wiring && !w.stateful && w.spec_clear !== false;
+    if (small && allowed.includes('minimax')) return 'minimax';
     return 'sonnet';
   },
 };

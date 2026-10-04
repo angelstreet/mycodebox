@@ -72,9 +72,18 @@ test('builder: floor forces opus when p0_product_decision', () => {
   assert.equal(f.forced, 'opus');
   assert.ok(f.allowed.includes('opus'));
 });
-test('builder: ruleDefault is minimax when allowed, else sonnet', () => {
-  assert.equal(ruleDefault('builder', { work: { touches: ['app'], repo_public: false } }), 'minimax');
-  assert.equal(ruleDefault('builder', { work: { touches: ['secrets'], repo_public: false } }), 'sonnet');
+const SMALL = { files_est: 3, lines_est: 200 };
+test('builder: ruleDefault is minimax only for a small specific change, else sonnet', () => {
+  assert.equal(ruleDefault('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } }), 'minimax');
+  assert.equal(ruleDefault('builder', { work: { touches: ['app'], repo_public: false, ...SMALL, spec_clear: true } }), 'minimax');
+  assert.equal(ruleDefault('builder', { work: { touches: ['secrets'], repo_public: false, ...SMALL } }), 'sonnet', 'infra floor wins');
+  const no = (extra) => ruleDefault('builder', { work: { touches: ['app'], repo_public: false, ...SMALL, ...extra } });
+  assert.equal(no({ files_est: 4 }), 'sonnet');
+  assert.equal(no({ lines_est: 201 }), 'sonnet');
+  assert.equal(no({ ui_wiring: true }), 'sonnet');
+  assert.equal(no({ stateful: true }), 'sonnet');
+  assert.equal(no({ spec_clear: false }), 'sonnet');
+  assert.equal(ruleDefault('builder', { work: { touches: ['app'], repo_public: false } }), 'sonnet', 'no size estimate -> not known to be small');
 });
 
 // ---- reviewer ----
@@ -141,7 +150,7 @@ test('POINTS: each entry has usage, options, instructions, ruleDefault, floor', 
 
 // ---- buildRequest ----
 test('buildRequest: shape, log, profile, timeout, team_id, refs.source, refs.point, state, questions.choice.criteria are allowed-only', () => {
-  const facts = { work: { touches: ['app'], repo_public: false } };
+  const facts = { work: { touches: ['app'], repo_public: false, ...SMALL } };
   const body = buildRequest('builder', facts, { teamId: 'team-x', refs: { session: 's1' } });
   assert.equal(body.usage, 'text.decision.route');
   assert.equal(body.profile, 'jev');
@@ -188,18 +197,18 @@ test('pick: uses the Jev reply when success, choice is allowed, and confidence >
   assert.equal(out.source, 'jev');
 });
 test('pick: falls back to rule default when jevJson is null', () => {
-  const out = pick('builder', { work: { touches: ['app'], repo_public: false } }, null);
+  const out = pick('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } }, null);
   assert.equal(out.choice, 'minimax');
   assert.equal(out.source, 'rule');
 });
 test('pick: falls back to rule default when success=false', () => {
-  const out = pick('builder', { work: { touches: ['app'], repo_public: false } },
+  const out = pick('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } },
     { success: false, answers: { choice: { choice: 'sonnet', confidence: 0.99 } } });
   assert.equal(out.source, 'rule');
   assert.equal(out.choice, 'minimax');
 });
 test('pick: falls back to rule default when confidence < threshold', () => {
-  const out = pick('builder', { work: { touches: ['app'], repo_public: false } },
+  const out = pick('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } },
     { success: true, answers: { choice: { choice: 'sonnet', confidence: 0.5 } } }, { threshold: 0.7 });
   assert.equal(out.source, 'rule');
   assert.equal(out.choice, 'minimax');
@@ -219,7 +228,7 @@ test('pick: choice and ruleDefault are always exposed on the result', () => {
 
 // ---- decide ----
 test('decide: never throws when post rejects; returns the rule default', async () => {
-  const out = await decide('builder', { work: { touches: ['app'], repo_public: false } }, {
+  const out = await decide('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } }, {
     post: async () => { throw new Error('boom'); },
     teamId: 't',
   });
@@ -227,7 +236,7 @@ test('decide: never throws when post rejects; returns the rule default', async (
   assert.equal(out.source, 'rule');
 });
 test('decide: never throws when post returns null; returns the rule default', async () => {
-  const out = await decide('builder', { work: { touches: ['app'], repo_public: false } }, {
+  const out = await decide('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } }, {
     post: async () => null,
     teamId: 't',
   });
@@ -236,7 +245,7 @@ test('decide: never throws when post returns null; returns the rule default', as
 });
 test('decide: uses the Jev reply when post returns a good one', async () => {
   const seen = [];
-  const out = await decide('builder', { work: { touches: ['app'], repo_public: false } }, {
+  const out = await decide('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } }, {
     post: async (body) => { seen.push(body); return { success: true, decision_id: 'd-1', answers: { choice: { choice: 'sonnet', confidence: 0.95 } } }; },
     teamId: 'team-z',
     refs: { session: 's1' },
@@ -258,12 +267,12 @@ test('decide: returns source=forced (no post call) when the floor forces a pick'
   assert.equal(called, 0);
 });
 test('decide: when post is missing, returns the rule default (no throw)', async () => {
-  const out = await decide('builder', { work: { touches: ['app'], repo_public: false } }, { teamId: 't' });
+  const out = await decide('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } }, { teamId: 't' });
   assert.equal(out.source, 'rule');
   assert.equal(out.choice, 'minimax');
 });
 test('decide: threshold is honored end-to-end', async () => {
-  const out = await decide('builder', { work: { touches: ['app'], repo_public: false } }, {
+  const out = await decide('builder', { work: { touches: ['app'], repo_public: false, ...SMALL } }, {
     post: async () => ({ success: true, answers: { choice: { choice: 'sonnet', confidence: 0.5 } } }),
     threshold: 0.9,
   });

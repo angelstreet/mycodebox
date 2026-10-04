@@ -20,8 +20,8 @@
 // the AI reviewer's "right" verdict when the owner marks aiVerdict:right.
 //
 // Jev integration: a stop was Jev-consulted when stall.source === 'jev' OR stall.jev?.choice is set.
-// Agreement: Jev said `continue`/`take_recommended`/`ask_owner` and the owner's outcome matched (a `continue`
-// outcome, the recommended option, or `ask_owner`-style = `owner_specific`/`unknown`).
+// Agreement: Jev said `continue`/`take_recommended`/`ask_owner` and the owner's outcome matched
+// (outcomeFromReplyKind of the outcome kind; `unknown` outcomes and manager-typed outcomes are left out).
 //
 // Owner choice (popup, phase 11): {type:'choice', id, owner:<button|reply>, ai:<button|null>, agreeAi,
 // jev, agreeJev}. The popup records every owner tap so we measure owner-vs-AI agreement BEFORE
@@ -31,7 +31,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { effectiveLabels } from './decisions.js';
+import { effectiveLabels, outcomeFromReplyKind } from './decisions.js';
 
 const DAY_MS = 86400000;
 const AMBIGUOUS_CASES = new Set(['owner_decision', 'continue', 'menu_recommended']);
@@ -80,18 +80,14 @@ function dedupeLedgerById(rows) {
 // pending stall had an auto-send (p.auto); otherwise via is 'reporter' | 'ghosty' | 'terminal' | 'unknown' (the owner moved it).
 const wasAuto = (o) => o.via === 'manager';
 
-// Jev's pick mapped to the owner's reply kind.
-//   jev 'continue'        -> outcome.kind === 'continue'
-//   jev 'take_recommended' -> outcome.kind === 'take_recommended'
-//   jev 'ask_owner'       -> outcome.kind === 'owner_specific' | 'unknown' (owner picked something else / nothing)
-// Owner_specific covers "owner wrote something else" — Jev said ask_owner and the owner did answer; that is
-// the expected outcome of an ask_owner pick.
-function jevAgrees(jevChoice, outcomeKind) {
-  if (!jevChoice || !outcomeKind) return null;
-  if (jevChoice === 'continue') return outcomeKind === 'continue';
-  if (jevChoice === 'take_recommended') return outcomeKind === 'take_recommended';
-  if (jevChoice === 'ask_owner') return outcomeKind === 'owner_specific' || outcomeKind === 'unknown';
-  return null;
+// Jev's pick vs what the owner really did. The outcome kind goes through outcomeFromReplyKind (continue |
+// take_recommended | ask_owner | null); `unknown` maps to null and is left out of the comparison, and so are outcomes the
+// manager typed itself (outcome.via === 'manager': Jev's continue would agree with itself).
+function jevAgrees(jevChoice, outcome) {
+  if (!jevChoice || !outcome || wasAuto(outcome)) return null;
+  const truth = outcomeFromReplyKind(outcome.kind);
+  if (!truth) return null;
+  return truth === jevChoice;
 }
 
 // Time-to-resolution stats from a list of numeric seconds (outcome.afterSec). null when empty.
@@ -126,20 +122,19 @@ export function resolveConfig(cfg) {
   const costBudget = { ...SCORE_DEFAULTS.costBudget, ...(cfg?.config?.costBudget || {}) };
   const managerSessions = Array.isArray(cfg?.config?.managerSessions) && cfg.config.managerSessions.length
     ? cfg.config.managerSessions : SCORE_DEFAULTS.managerSessions;
-  const judgeMean = (cfg?.judgeScores && Number.isFinite(cfg.judgeScores.mean)) ? cfg.judgeScores.mean : null;
-  const deploys = cfg?.deploys && (Number.isFinite(cfg.deploys.run) || Number.isFinite(cfg.deploys.failed)) ? cfg.deploys : null;
-  return { scoreWeights, costBudget, managerSessions, judgeMean, deploys };
+  return { scoreWeights, costBudget, managerSessions };
 }
 
-// main builder. cfg = { ledgerRows, stallRecs, runs, config, from, to, judgeScores?, deploys? }
+// main builder. cfg = { ledgerRows, stallRecs, runs, config, from, to, deployList? }
+//   deployList   : the deploy runner's registry rows ({state:'done'|'failed', finished}); perf.deploys = {run, failed} finished in the window, null without any
 //   ledgerRows   : array of usage-ledger records (the same shape as usage-summary.json: {agent, name, subagent, ts, model, usage, cost|null, cwd, ...})
 //   stallRecs    : array of stalls.jsonl records (mixed types: stall/outcome/send/escalated/label/...)
 //   runs         : array of manager-runs.jsonl records (already folded; start + end merged)
 //   config       : manager config snapshot (managerSessions, scoreWeights, costBudget)
 //   from, to     : ms epoch window; records with ts in [from,to) are counted (to is exclusive)
 // Returns the scorecard object.
-export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], config = {}, from, to } = {}) {
-  const { scoreWeights, costBudget, managerSessions, judgeMean, deploys } = resolveConfig({ config });
+export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], config = {}, from, to, deployList = null } = {}) {
+  const { scoreWeights, costBudget, managerSessions } = resolveConfig({ config });
   const cost = {
     session: emptyBucket(),
     subagents: emptyBucket(),
@@ -166,7 +161,6 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
     for (const [key, list] of runByWorktree) {
       if (cwd === key || cwd.startsWith(key + '/')) {
         for (const r of list) {
-          if (r.kind && r.kind !== 'minimax' && r.kind !== 'other') continue;
           const e = r.endedAt == null ? Number.MAX_SAFE_INTEGER : r.endedAt;
           if (ts >= r.startedAt && ts <= e) return true;
         }
@@ -210,6 +204,19 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
   }
   // round USD to 3dp so the values don't drift
   for (const k of Object.keys(cost)) cost[k] = sumBucket(cost[k]);
+
+  // judge mean: the score carried by the manager.judge ledger rows of the window (unparsable / failed rows carry none)
+  const judgeScoreList = ledger.filter((r) => r.agent === 'manager' && r.name === 'manager.judge' && typeof r.ts === 'number' && (from == null || r.ts >= from) && (to == null || r.ts < to)
+    && Number.isFinite(r.extra?.score)).map((r) => r.extra.score);
+  const judgeMean = judgeScoreList.length ? judgeScoreList.reduce((a, b) => a + b, 0) / judgeScoreList.length : null;
+  // deploys the runner finished in the window (registry times may be seconds or ms)
+  let deploys = null;
+  if (Array.isArray(deployList)) {
+    const fin = deployList.filter((d) => d && (d.state === 'done' || d.state === 'failed') && d.finished > 0)
+      .map((d) => ({ state: d.state, at: d.finished < 1e12 ? d.finished * 1000 : d.finished }))
+      .filter((d) => (from == null || d.at >= from) && (to == null || d.at < to));
+    if (fin.length) deploys = { run: fin.length, failed: fin.filter((d) => d.state === 'failed').length };
+  }
 
   // ---- performance ----
   // index records by id (latest wins; same convention as the rest of the manager code).
@@ -274,7 +281,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
       if (sec != null && sec <= 300) resolvedFast++;
       if (wasAuto(o)) autoCount++;
       if (sourceIsJev && s.jev?.choice) {
-        const a = jevAgrees(s.jev.choice, o.kind);
+        const a = jevAgrees(s.jev.choice, o);
         if (a != null) { jevAgreeTotal++; if (a) jevAgreedCount++; }
       }
     }
@@ -316,9 +323,9 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
   const aiUsd = (cost.jev.usd != null || cost.reviewer.usd != null || cost.judge.usd != null)
     ? Math.round(((cost.jev.usd || 0) + (cost.reviewer.usd || 0) + (cost.judge.usd || 0)) * 1000) / 1000 : null;
   const coverage = stops ? resolvedFast / stops : null;
-  // efficiency is null when we have no priced data for either bucket — otherwise use the worse of the two ratios.
+  // efficiency is 1 on an active day with no priced spend (0 is within budget), null on an empty day — otherwise use the worse of the two ratios.
   let efficiency;
-  if (sessionUsd == null && aiUsd == null) efficiency = null;
+  if (sessionUsd == null && aiUsd == null) efficiency = (stops || cost.total.calls) ? 1 : null;     // no priced spend on an active day = within budget; an empty day has nothing to score
   else {
     const ratios = [];
     if (sessionUsd != null) ratios.push(sessionUsd / Math.max(1e-9, costBudget.sessionUsd));
@@ -335,7 +342,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
   const components = { quality: hasQuality ? qualityRaw : null, coverage, efficiency };
   const used = Object.entries(components).filter(([, v]) => v != null);
   const totalW = used.reduce((a, [,], _i, arr) => a + scoreWeights[arr[_i][0]], 0);
-  let score = 0;
+  let score = null;
   if (totalW > 0) {
     for (const [k, v] of used) score += scoreWeights[k] * v;
     score = Math.max(0, Math.min(1, score / totalW)) * 100;
@@ -349,7 +356,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
   return {
     from: from != null ? new Date(from).toISOString() : null,
     to: to != null ? new Date(to).toISOString() : null,
-    score: Math.round(score * 10) / 10,
+    score: score == null ? null : Math.round(score * 10) / 10,
     components: { quality: hasQuality ? Math.round(qualityRaw * 1000) / 1000 : null, coverage: coverage != null ? Math.round(coverage * 1000) / 1000 : null, efficiency: efficiency != null ? Math.round(efficiency * 1000) / 1000 : null },
     cost,
     perf: {
@@ -386,7 +393,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
 }
 
 // Build one scorecard per UTC day in the window [now-days*DAY_MS, now], oldest first.
-export function scorecardDays({ ledgerRows = [], stallRecs = [], runs = [], config = {}, days = 7, now = Date.now(), judgeScoresByDay = null, deploysByDay = null } = {}) {
+export function scorecardDays({ ledgerRows = [], stallRecs = [], runs = [], config = {}, days = 7, now = Date.now(), deployList = null } = {}) {
   const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const to = Math.floor((now - i * DAY_MS) / DAY_MS) * DAY_MS + DAY_MS * (i === 0 ? 1 : 1);   // end of that UTC day
@@ -394,10 +401,7 @@ export function scorecardDays({ ledgerRows = [], stallRecs = [], runs = [], conf
     const day = Math.floor((now - i * DAY_MS) / DAY_MS);
     const from = day * DAY_MS;
     const end = from + DAY_MS;
-    const dayKey = new Date(from).toISOString().slice(0, 10);
-    const judgeScores = judgeScoresByDay?.[dayKey] || null;
-    const deploys = deploysByDay?.[dayKey] || null;
-    out.push(buildScorecard({ ledgerRows, stallRecs, runs, config, from, to: end, judgeScores, deploys }));
+    out.push(buildScorecard({ ledgerRows, stallRecs, runs, config, from, to: end, deployList }));
   }
   return out;
 }
@@ -453,24 +457,7 @@ export function foldRuns(lines) {
 }
 
 // Build the scorecard for one UTC day boundary [from, to). All I/O.
-export async function loadScorecard({ from, to, env = process.env, fsLib = fs, log = console.log } = {}) {
-  const dir = stateDir(env);
-  const [ledgerRows, stallRecs, runsLines, judgeLines] = await Promise.all([
-    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
-    readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
-    readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
-    readJsonl(join(dir, 'lfeval-judge.json')).catch(() => []),
-  ]);
-  const runs = foldRuns(runsLines);
-  // judge scores: lfeval-judge.json is the judge's own state file (day, calls, done: {stopId: state});
-  // the scorecard only reads the cached `mean` if the writer saved one. Not invented otherwise.
-  const judgeScores = judgeLines.find?.((r) => r && r.mean) || null;
-  const config = await readConfig(env, fsLib);
-  return buildScorecard({ ledgerRows, stallRecs, runs, config, from, to, judgeScores, deploys: null });
-}
-
-// days=1..30. Returns { today, days: [oldest..today] } for the UI.
-export async function loadScorecardDays({ days = 7, env = process.env, fsLib = fs } = {}) {
+export async function loadScorecard({ from, to, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
   const [ledgerRows, stallRecs, runsLines] = await Promise.all([
     readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
@@ -479,7 +466,20 @@ export async function loadScorecardDays({ days = 7, env = process.env, fsLib = f
   ]);
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);
-  const all = scorecardDays({ ledgerRows, stallRecs, runs, config, days, now: Date.now() });
+  return buildScorecard({ ledgerRows, stallRecs, runs, config, from, to, deployList });
+}
+
+// days=1..30. Returns { today, days: [oldest..today] } for the UI.
+export async function loadScorecardDays({ days = 7, env = process.env, fsLib = fs, deployList = null } = {}) {
+  const dir = stateDir(env);
+  const [ledgerRows, stallRecs, runsLines] = await Promise.all([
+    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
+  ]);
+  const runs = foldRuns(runsLines);
+  const config = await readConfig(env, fsLib);
+  const all = scorecardDays({ ledgerRows, stallRecs, runs, config, days, now: Date.now(), deployList });
   return { today: all[all.length - 1], days: all };
 }
 
@@ -492,11 +492,11 @@ async function readConfig(env, fsLib) {
 
 // Cache wrapper: < 60 s we serve from the in-memory map.
 const cache = new Map();      // key -> { at, value }
-export async function cachedScorecard({ days = 7, ttlMs = 60000, env = process.env } = {}) {
+export async function cachedScorecard({ days = 7, ttlMs = 60000, env = process.env, deployList = null } = {}) {
   const key = `${days}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ttlMs) return hit.value;
-  const value = await loadScorecardDays({ days, env });
+  const value = await loadScorecardDays({ days, env, deployList: typeof deployList === 'function' ? deployList() : deployList });
   cache.set(key, { at: Date.now(), value });
   return value;
 }

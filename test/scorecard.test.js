@@ -175,25 +175,27 @@ test('perf: agreement null when no labels and no choices (falls back to jevAgree
 // 3. Jev agreement mapping (take_recommended/continue vs owner; ask_owner vs owner_specific/unknown)
 // ---------------------------------------------------------------------------
 
-test('jev.agreement: jev continue matches outcome continue; ask_owner matches owner_specific and unknown', () => {
+test('jev.agreement: jev continue matches outcome continue; ask_owner matches owner_specific; unknown and manager-typed outcomes are excluded', () => {
   const cases = [
     { id: 'c', jev: 'continue', kind: 'continue', expect: true },
     { id: 'c2', jev: 'continue', kind: 'take_recommended', expect: false },
     { id: 'r', jev: 'take_recommended', kind: 'take_recommended', expect: true },
     { id: 'r2', jev: 'take_recommended', kind: 'continue', expect: false },
     { id: 'a', jev: 'ask_owner', kind: 'owner_specific', expect: true },
-    { id: 'a2', jev: 'ask_owner', kind: 'unknown', expect: true },
+    { id: 'a2', jev: 'ask_owner', kind: 'unknown', expect: null },    // unknown is left out
+    { id: 'm', jev: 'continue', kind: 'continue', via: 'manager', expect: null },   // manager-typed: would agree with itself
     { id: 'a3', jev: 'ask_owner', kind: 'continue', expect: false },     // owner said continue despite Jev asking -> disagreement
   ];
   const recs = [];
   for (const c of cases) {
     recs.push(stall({ id: c.id, source: 'jev', jev: { choice: c.jev } }));
-    recs.push(outcome({ id: c.id, kind: c.kind }));
+    recs.push(outcome({ id: c.id, kind: c.kind, via: c.via || 'ghosty' }));
   }
   const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
-  const trueCount = cases.filter((c) => c.expect).length;
-  assert.ok(Math.abs(sc.jev.agreement - trueCount / cases.length) < 0.001, `agreement ~ ${trueCount}/${cases.length}, got ${sc.jev.agreement}`);
-  assert.equal(sc.jev.agreementN, cases.length);
+  const counted = cases.filter((c) => c.expect !== null);
+  const trueCount = counted.filter((c) => c.expect).length;
+  assert.ok(Math.abs(sc.jev.agreement - trueCount / counted.length) < 0.001, `agreement ~ ${trueCount}/${counted.length}, got ${sc.jev.agreement}`);
+  assert.equal(sc.jev.agreementN, counted.length);
 });
 
 test('jev.consulted: ambiguous = owner_decision|continue|menu; jevOverridden when the pick is blocked by the forbidden filter', () => {
@@ -224,30 +226,35 @@ test('score: no owner choices -> quality null even when Jev agreed (no fallback)
   assert.equal(sc.components.quality, null);
 });
 
-test('score: with quality and efficiency null, coverage null -> score 0 (no components)', () => {
+test('score: an empty day has no components -> score null (not 0)', () => {
   const sc = buildScorecard({ ledgerRows: [], stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
-  assert.equal(sc.score, 0);
+  assert.equal(sc.score, null);
 });
 
-test('score: one component null drops it and renormalises (only quality survives)', () => {
+test('efficiency: an active day with no priced spend is 1 (within budget)', () => {
+  const sc = buildScorecard({ ledgerRows: [], stallRecs: [stall({ id: 'a' })], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
+  assert.equal(sc.components.efficiency, 1);
+});
+
+test('score: quality, coverage and efficiency all 1 -> 100', () => {
   // quality is driven by popup choice records (phase 11), not labels. A single choice that
   // agrees with the AI gives agreeAi=1, coverage=1; no priced USD -> efficiency=null.
-  // expected: only quality (0.4) survives -> score = (0.4*1)/0.4 * 100 = 100
+  // efficiency is 1 on an active day with no priced spend; quality 1, coverage 1 -> score 100
   const recs = [stall({ id: 'a' }), outcome({ id: 'a' })];
   for (let i = 0; i < 10; i++) recs.push({ type: 'choice', id: `c${i}`, at: t(now - 100 - i), session: 's', kind: 'yesno', owner: 'yes', ai: 'yes', agreeAi: true, jev: null });
   const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
   assert.equal(sc.components.quality, 1);
   assert.equal(sc.components.coverage, 1);
-  assert.equal(sc.components.efficiency, null);
+  assert.equal(sc.components.efficiency, 1);
   assert.equal(sc.score, 100);
 });
 
-test('score: all components null -> score 0 (no components)', () => {
+test('score: all components null -> score null (no components)', () => {
   const sc = buildScorecard({ ledgerRows: [], stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
   assert.equal(sc.components.quality, null);
   assert.equal(sc.components.coverage, null);
   assert.equal(sc.components.efficiency, null);
-  assert.equal(sc.score, 0);
+  assert.equal(sc.score, null);
 });
 
 test('efficiency: 1x budget -> 1.0; 2x budget -> 0.5; 3x budget -> 0.0 (linearly)', () => {
@@ -448,4 +455,23 @@ test('ledger rows without an id pass through unchanged', () => {
   const sc = buildScorecard({ ledgerRows: rows, stallRecs: [], runs: [], from: dayStart, to: dayStart + DAY_MS });
   assert.equal(sc.cost.jev.tokens.input, 120);
   assert.equal(sc.cost.jev.calls, 2);
+});
+
+test('judgeMean comes from the manager.judge ledger rows (extra.score); failed rows carry none', () => {
+  const j = (id, score) => ({ ...managerRow({ id, name: 'manager.judge' }), extra: { score } });
+  const sc = buildScorecard({ ledgerRows: [j('a', 0.5), j('b', 1), j('c', null)], stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
+  assert.equal(sc.perf.judgeMean, 0.75);
+});
+
+test('deploys: run/failed from the runner rows finished in the window; null without any', () => {
+  const dl = [{ state: 'done', finished: now - 1000 }, { state: 'failed', finished: Math.floor((now - 500) / 1000) }, { state: 'done', finished: now - 3 * DAY_MS }, { state: 'queued' }];
+  const sc = buildScorecard({ ledgerRows: [], stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1, deployList: dl });
+  assert.deepEqual(sc.perf.deploys, { run: 2, failed: 1 });
+  assert.equal(buildScorecard({ ledgerRows: [], stallRecs: [], runs: emptyRuns, config: {}, from: dayStart, to: now + 1, deployList: [] }).perf.deploys, null);
+});
+
+test('workers window includes runs of kind gate', () => {
+  const runs = [{ id: 'g', kind: 'gate', worktree: '/home/me/gate', startedAt: now - 5000, endedAt: null }];
+  const sc = buildScorecard({ ledgerRows: [minimaxRow({ id: 'w', cwd: '/home/me/gate' })], stallRecs: [], runs: foldRuns(runs), config: {}, from: dayStart, to: now + 1 });
+  assert.equal(sc.cost.workers.calls, 1);
 });

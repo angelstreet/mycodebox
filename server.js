@@ -1298,7 +1298,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && p === '/api/manager/scorecard') {
     // 60 s in-process cache: the file is ~35k lines and the UI re-renders on every status tick.
     const days = Math.max(1, Math.min(30, Number(url.searchParams.get('days')) || 7));
-    return json(res, 200, await cachedScorecard({ days, ttlMs: 60000 }));
+    return json(res, 200, await cachedScorecard({ days, ttlMs: 60000, deployList: () => deployRunner.snapshot().deploys }));
   }
   if (req.method === 'GET' && p === '/api/vm') {
     return json(res, 200, health || await sampleHealth(HEALTH_DISKS));

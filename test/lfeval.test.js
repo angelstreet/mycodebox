@@ -182,7 +182,7 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   const { createJudge, parseJudge, judgeMessages } = await import('../usage/judge.js');
   const lf = await mock();
   const f = await setup([triage('a', 30, { src: 'rule', flags: ['mentions a deploy'] }), triage('b', 20), triage('old', 60 * 30)], lf);
-  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1 };
+  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1, ledgerFile: join(tmpdir(), `judge-ledger-${Date.now()}.jsonl`) };
   const asked = [];
   let fail = false;
   const fetchFn = async (url, init) => {
@@ -203,10 +203,18 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   const sc = events(lf.calls, 'score-create')[0].body;
   assert.deepEqual([sc.name, sc.value, sc.comment, sc.observationId], ['ai_proposal_judge', 0.9, 'safe', genIdOf('manager:ai:a')]);
   assert.equal((await judge()).judged, 0, 'a judged stop is not judged again; the cap is reached');
-  // a failing endpoint does not burn the cap or mark the stop done
+  // a failing endpoint counts against the cap, writes an error row, and is retried at most once an hour
   cfg.judgeMaxPerDay = 5; fail = true;
+  const t0 = Date.now(); cfg.now = () => t0;
+  const ledgerOf = async () => (await fs.readFile(cfg.ledgerFile, 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
   assert.equal((await judge()).judged, 0);
+  const failRow = (await ledgerOf()).filter((r) => r.error);
+  assert.equal(failRow.length, 1);
+  assert.equal(failRow[0].usage.input, 0);
+  assert.equal(JSON.parse(await fs.readFile(cfg.judgeStateFile, 'utf8')).calls, 2, 'the failed call counted against the cap');
   fail = false;
+  assert.equal((await judge()).judged, 0, 'within the hour the failed stop is not retried');
+  cfg.now = () => t0 + 3600e3 + 1000;
   assert.equal((await judge()).judged, 1);
   assert.equal(parseJudge('```json\n{"reasoning":"x","score":2}\n```'), null);
   assert.equal(parseJudge('{"reasoning":"x","score":0.25}').score, 0.25);
