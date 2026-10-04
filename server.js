@@ -28,6 +28,7 @@
 //   POST /api/deploys/:id/approve | /cancel → owner action on a queued request
 //   GET  /api/deploys/:id/log?tail=200      → the runner's log of that deploy (text)
 //   (the runner itself only starts deploys when manager.json has deployRunner:true, see deploy-runner.js)
+//   POST /api/alert             → {title, body, url?, priority?, tag?} the manager agent's alert; loopback + reporter token, max 10/h
 //   POST /api/reporter/event    → ghosty-reporter plugin events; loopback peers + x-ghosty-reporter-token (state dir reporter.token) only
 //   GET  /api/reporter/:session → latest reported turn / prompt / waiting / agents of a session
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
@@ -43,7 +44,9 @@ import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
 import { readFile, stat, readdir, realpath } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
+import { createLeaseStore } from './leases.js';
+import { machinesOf, holdingsOf, deployWaitOf } from './public/platforms.js';
 import { createHash } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,6 +62,7 @@ import { initManager, logEvent, observe, forget as managerForget, prune as prune
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
+import { actorOf, createAlertApi } from './api-extras.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -507,20 +511,17 @@ async function getMeta(session, cwd) {
 // Lease link
 // ---------------------------------------------------------------------------
 
-const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-const GENERIC_BRANCH = new Set(['main', 'master', 'dev', 'develop', 'head', 'trunk']);
-function leaseFor(session, branch) {
-  const leases = leaseCache.value?.ok ? leaseCache.value.leases : null;
-  if (!leases || !leases.length) return null;
-  const keys = [norm(session)];
-  if (branch && !GENERIC_BRANCH.has(branch.toLowerCase())) keys.push(norm(branch));
-  const hits = leases.filter((l) => {
-    const a = norm(l.agent);
-    return a && keys.some((k) => k.length >= 3 && a.includes(k));
-  });
-  if (!hits.length) return null;
-  const l = hits[0];
-  return { resource: l.resource, env: l.env, ttlLeftMin: l.ttlLeftMin, count: hits.length };
+const MACHINES = machinesOf(hostname());
+const leaseStore = createLeaseStore();
+// Resources this session holds ([{env, resource, ttlLeftMin, purpose, blocksDeploy}]), exact match on `<machine>:<session>`.
+function leaseFor(session, sessionNames) {
+  const v = leaseStore.peek();
+  if (!v?.ok) return [];
+  return holdingsOf(session, v.leases, deployRunner.snapshot().deploys, sessionNames, MACHINES).map(({ id, agent, ...r }) => r);
+}
+function deployWaitFor(session, sessionNames, stall) {
+  const v = leaseStore.peek();
+  return deployWaitOf(session, { deploys: deployRunner.snapshot().deploys, waiters: v?.ok ? v.waiters : [], stall, sessionNames, machines: MACHINES });
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +538,7 @@ const push = createPush({ stateDir: STATE_DIR });
 const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
 
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
+const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
 const deployRunner = createDeployRunner({
@@ -607,6 +609,7 @@ async function pool(items, limit, fn) {
 async function pollOnce() {
   const [sessions, panes, table] = await Promise.all([listSessions(), listPanes(), processTable()]);
   const now = Date.now();
+  const sessionNames = sessions.map((x) => x.name);
   const status = {};
   const changedSessions = [];
   await pool(sessions, CONCURRENCY, async (s) => {
@@ -727,7 +730,8 @@ async function pollOnce() {
       cwd: meta.cwd, repo: meta.repo, branch: meta.branch, dirty: meta.dirty,
       project: meta.project ?? null, github: !!meta.github, worktree: meta.worktree ?? null,
       contextLeft: t.contextLeft, model: t.model,
-      lease: leaseFor(s.name, meta.branch),
+      lease: leaseFor(s.name, sessionNames),
+      deployWait: deployWaitFor(s.name, sessionNames, stallOf(s.name)),
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,
     };
@@ -757,43 +761,8 @@ function poll() {
 // Leases (shared registry on proxmox)
 // ---------------------------------------------------------------------------
 
-let leaseCache = { at: 0, value: null };
-function parseTtl(s) {
-  let min = 0;
-  const h = s.match(/(\d+)h/), m = s.match(/(\d+)m/);
-  if (h) min += Number(h[1]) * 60;
-  if (m) min += Number(m[1]);
-  if (!h && !m && /^\d+$/.test(s)) min = Number(s);
-  return min;
-}
-function parseLeases(out) {
-  const leases = [];
-  for (const line of out.split('\n')) {
-    const m = line.match(/^([0-9a-f]{6,})\s+(\S+)\s+(.*)$/i);
-    if (!m) continue;
-    const [env, ...rest] = m[2].split('/');
-    const kv = (k) => (m[3].match(new RegExp(`${k}=(\\S+)`)) || [])[1] || '';
-    const purpose = (m[3].match(/purpose=(.*)$/) || [])[1] || '';
-    leases.push({
-      id: m[1], env, resource: rest.join('/') || '*',
-      agent: kv('agent'), purpose: purpose.trim(),
-      ttlLeftMin: parseTtl(kv('expires_in')),
-    });
-  }
-  return leases;
-}
-async function getLeases() {
-  if (leaseCache.value && Date.now() - leaseCache.at < 15000) return leaseCache.value;
-  let value;
-  try {
-    const { stdout } = await exec('ssh', ['-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', 'proxmox', '~/bin/vpt-lease list'], { timeout: 8000 });
-    value = { ok: true, leases: parseLeases(stdout) };
-  } catch (err) {
-    value = { ok: false, error: String(err.stderr || err.message).trim().slice(0, 200) };
-  }
-  leaseCache = { at: Date.now(), value };
-  return value;
-}
+const getLeases = (force) => leaseStore.get(force);
+const leasesPayload = (v) => (v.ok ? { type: 'leases', leases: v.leases, waiters: v.waiters, hostname: hostname() } : { type: 'leases', error: v.error });
 
 // Per-session WebSocket fan-out
 const wsBySession = new Map(); // session -> Set<ws>
@@ -959,17 +928,19 @@ async function killSession(name, confirm) {
 // paused:true  -> hold first (so the manager stops at once), then Escape once.
 // paused:false -> release, then "continue" + Enter.
 async function setSessionMeta(session, body) {
+  const by = actorOf(body);
   if (!(await sessionExists(session))) throw httpError(404, 'no such session');
   sessionMeta.sync([session]);
   const changed = sessionMeta.set(session, body || {});
+  if (changed.priority) logEvent({ type: 'priority', session, by, priority: changed.priority });
   const released = body?.paused === false && releaseHold(session);   // Resume also clears the manager's quota hold
   if (changed.paused === true) {
     cancelAuto(session, 'paused by owner');
-    logEvent({ type: 'pause', session, by: 'owner' });
+    logEvent({ type: 'pause', session, by });
     try { await sendKey(session, 'Escape'); }
     catch (e) { sessionMeta.set(session, { paused: false }); throw e; }
   } else if (changed.paused === false) {
-    logEvent({ type: 'resume', session, by: 'owner' });
+    logEvent({ type: 'resume', session, by });
     await sendKeys(session, 'continue', true);
   } else if (released) {
     await sendKeys(session, 'continue', true);
@@ -978,7 +949,13 @@ async function setSessionMeta(session, body) {
   return { ok: true, session, priority: sessionMeta.priority(session), paused: sessionMeta.isPaused(session), held: heldOf(session), changed };
 }
 
+// Who typed: every send is logged with its actor (the owner's UI sends no `by`, the manager agent sends 'manager-agent').
+function logSend(session, by, payload) {
+  logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
+}
+
 async function sendMany(sessions, payload) {
+  const by = actorOf(payload);
   if (!Array.isArray(sessions) || !sessions.length || sessions.length > 50) throw httpError(400, 'sessions must be a non-empty array (max 50)');
   if (payload.key === undefined && typeof payload.keys !== 'string') throw httpError(400, 'keys (string) or key required');
   const list = [...new Set(sessions.map(String))];
@@ -989,6 +966,7 @@ async function sendMany(sessions, payload) {
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys, payload.enter !== false);
+      logSend(session, by, payload);
       results[idx] = { session, ...out };
     } catch (err) {
       results[idx] = { session, ok: false, error: err.stderr ? String(err.stderr).trim().slice(0, 120) : err.message };
@@ -1079,6 +1057,12 @@ const server = http.createServer(async (req, res) => {
     try { return json(res, 200, reporter.ingest(await readJsonBody(req))); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
+  if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
+    try {
+      const r = await alertApi.handle({ remoteAddress: req.socket.remoteAddress, headers: req.headers, readBody: () => readJsonBody(req) });
+      return json(res, r.status, r.body);
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
   if (req.method === 'GET' && p.startsWith('/api/reporter/')) {
     const d = reporter.detail(decodeURIComponent(p.slice('/api/reporter/'.length)));
     return d ? json(res, 200, d) : json(res, 404, { ok: false, error: 'no reports for that session' });
@@ -1132,7 +1116,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && p === '/api/leases') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(await getLeases()));
+    { const v = await getLeases(); res.end(JSON.stringify(v.ok ? { ok: true, leases: v.leases, waiters: v.waiters, hostname: hostname() } : v)); }
     return;
   }
   if (req.method === 'GET' && p.startsWith('/api/snapshot/')) {
@@ -1153,10 +1137,12 @@ const server = http.createServer(async (req, res) => {
       return json(res, err.status || 400, { ok: false, error: err.status ? err.message : 'bad json' });
     }
     try {
+      const by = actorOf(payload);
       if (!(await sessionExists(session))) throw httpError(404, 'no such session');
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys || '', payload.enter !== false);
+      logSend(session, by, payload);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(out));
     } catch (err) {
@@ -1240,7 +1226,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (dm[2] !== 'log' && req.method === 'POST') {
+      let by;
+      try { by = actorOf(await readJsonBody(req)); } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
       const r = await deployRunner.act(dm[1], dm[2]);
+      if (r.ok) logEvent({ type: 'deploy_action', id: dm[1], action: dm[2], by });
       return json(res, r.ok ? 200 : r.status, r.ok ? { ok: true } : { ok: false, error: r.error });
     }
   }
@@ -1314,7 +1303,7 @@ server.on('upgrade', (req, socket, head) => {
   if (p === '/ws/status') {
     wss.handleUpgrade(req, socket, head, (ws) => {
       statusSubs.add(ws);
-      if (leaseCache.value?.ok) ws.send(JSON.stringify({ type: 'leases', leases: leaseCache.value.leases }));
+      if (leaseStore.peek()?.ok) ws.send(JSON.stringify(leasesPayload(leaseStore.peek())));
       if (latest) ws.send(JSON.stringify({ type: 'status', status: latest.status }));
       if (health) ws.send(JSON.stringify({ type: 'health', health }));
       ws.send(JSON.stringify({ type: 'deploys', deploys: deployRunner.snapshot() }));
@@ -1373,9 +1362,8 @@ async function tick() {
 }
 
 async function leaseTick() {
-  leaseCache.at = 0; // force refresh
-  const v = await getLeases();
-  if (v.ok) broadcastStatus({ type: 'leases', leases: v.leases });
+  const v = await getLeases(true);
+  if (v.ok) broadcastStatus(leasesPayload(v));
 }
 
 // ---------------------------------------------------------------------------
@@ -1387,7 +1375,7 @@ server.listen(PORT, HOST, async () => {
   try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
   await initManager({
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n')),
-    context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseCache.value), deploys: deploysLine(deployRunner.snapshot()) }),
+    context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey, sendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
     heldStore: { get: (n) => sessionMeta.held(n), set: (n, h) => sessionMeta.setHeld(n, h) },

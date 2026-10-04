@@ -80,7 +80,7 @@ Claude exits you land in a shell at the repo root, not kicked out of the session
 
 **States** — working (pulsing green + current step), needs you (red, prompt + 1/2/3/esc), done
 (blue, agent finished its turn), idle (grey), offline. Agent badge (claude/codex/minimax/bash via
-process tree), repo/branch*, context left, model, linked lease.
+process tree), repo/branch*, context left, model, held leases (exact `codebox:<session>` match; see README "Platforms page"), purple "waiting deploy".
 
 **Phone (≤720px)** — board is home (sorted needs you > done > working > idle); tap row = card,
 long-press = set send target. Card: swipe header/reader left/right = next/prev session, "Aa / >_"
@@ -93,7 +93,7 @@ Reorder: drag a card by its header (desktop), or ◀ ▲ ▼ ▶ on the selected
 history, quick keys, sent ✓ / delivered ✓✓, multi-target send.
 
 **Sidebar** — grouped by state, rename, kill (type name to confirm), "+" new session (agent + dir
-from `/api/dirs` + name), collapsible leases.
+from `/api/dirs` + name), Platforms page in the ⋮ menu (leases, deploy queue, deployed now; replaces the sidebar leases list).
 
 **Font & fit** — one global terminal font (A− / A+ / Aa popover, Ctrl+= / − / 0); detached sessions
 are resized (`tmux resize-window`, then `window-size` unset so a later attach still resizes) to fill
@@ -147,7 +147,9 @@ server.js                       # Node 20+, ws, no framework
 public/app.js                   # controller, three view renderers, swipe, SW reg
 public/index.html               # shell
 public/style.css                # ghosty dark
-public/sw.js                    # PWA service worker, cache v5, notification click
+public/sw.js                    # PWA service worker (shell cache version is in the file), notification click
+public/platforms.js             # lease ownership + chip + waiting-for-deploy + Platforms view model (pure, shared with server)
+leases.js                       # vpt-lease list --json reader
 public/manifest.webmanifest     # installable as "codebox"
 public/certs/  (git-ignored)    # self-signed PEMs
 public/vendor/                  # xterm.js v5.3.0 + addon-fit
@@ -187,3 +189,14 @@ Or from the Mac:
 ```bash
 ~/bin/codebox-ghosty
 ```
+
+## Manager fixes (TASK-44 readiness review)
+
+- `aiAutoCases` defaults to `[]` (owner picks); a test pins that no default turns `owner_decision` on.
+- Repeat stops: `last-stops.json` (state dir) holds the last logged stop per session, so restarts and repaints do not
+  log it again; `w.moved` (real work / send / reporter prompt) lets the same words through. The last 5 keys are compared,
+  so an A, B, A flip does not log A again.
+- Outcome: reporter prompt must be newer than the stall; pane prompt must sit below the stall's closing text, else `unknown`.
+- `POST /api/alert` (loopback + reporter token, 10/h) and the `by` actor field live in `api-extras.js` (server.js starts
+  listening on import, so tests cover the handlers directly; `test/manager-fixes.test.js`).
+- SW cache bumped to v25 (manager panel log shows `by`).

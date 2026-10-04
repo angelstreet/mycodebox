@@ -113,6 +113,27 @@ ghosty already computes, passed to `observe` as `realWork`) or ghosty sent it so
 logged after that, and a stall identical to the last logged one is not logged again unless one of those
 happened in between.
 
+The last 5 logged stops (hashes of their whitespace-free closing text) are kept per session in `<state dir>/last-stops.json`,
+so a service restart or a repaint does not log it again either; real work, a send or a reporter prompt in between
+resets that list, so the same words then count as a new stop. An `outcome` only uses a reply that came after the stop: the reporter's prompt must
+be newer than the stall, and from the pane only a `❯ prompt` line below the stall's closing text counts (an older prompt
+above it, or a closing text no longer on screen, gives kind `unknown`).
+
+**Safe defaults.** `autoSend` off, `autoCases: []`, `aiTriage: 'simulate'`, `aiAutoCases: []`: the owner picks
+every case that may be auto-answered (`POST /api/manager`). `owner_decision` is never in a default list.
+
+**Who acted (`by`).** `POST /api/send/:session`, `/api/send-many`, `/api/manager/label`, `/api/session-meta/:session`
+and `/api/deploys/:id/approve|cancel` take an optional `by` (string, 1..40 characters; default `owner`, which is what
+the UI means). The Opus manager agent passes `by: "manager-agent"`. It is logged in `stalls.jsonl` (`{type:'send'|
+'pause'|'resume'|'priority'|'deploy_action', by}`, and `by` on `label` records) and shown on the lines of the manager
+panel log.
+
+**Alert API.** `POST /api/alert {title, body, url?, priority?, tag?}` is the manager agent's channel to the owner.
+Loopback peers only, with the reporter token header (`x-ghosty-reporter-token`); anything else is 403 / 401. It goes
+through the normal `alert()` (same debounce per `tag` or title, notification feed, Web Push, ntfy): the answer is
+`{ok:true, sent:true}` or `{ok:true, sent:false, debounced:true}`. `title` 1..120, `body` 1..1000, `url` starts with
+`/` or `http(s)://`, `priority` one of `min|low|default|high|urgent`. At most 10 calls per hour (429 beyond).
+
 **Owner labels.** In the manager panel every stop has 👎 (stopped for no reason) / 👍 (legit) buttons,
 a "wrong case" picker and an optional note; "unlabelled stops only" filters the list and a row's session
 name opens its card. `POST /api/manager/label {id, label: no_reason|legit|wrong_case, note?, correctCase?}`
@@ -248,6 +269,7 @@ New sessions pick it up; running ones keep going without it. One session only: `
 
 ghosty creates `reporter.token` (0600) in its state dir at startup if missing. `POST /api/reporter/event` accepts
 loopback peers only, with the token in the `x-ghosty-reporter-token` header; anything else is 403 / 401.
+`POST /api/alert` uses the same check and token (see "Alert API" under the manager).
 
 The session is identified by its tmux session name (`tmux display-message -p -t $TMUX_PANE '#S'`, once, at the first
 event) plus the Claude session id and cwd; a session outside tmux is ignored.
@@ -277,10 +299,10 @@ Develop / test the plugin: `claude plugin validate claude-plugin/ghosty-reporter
 ## Deploy queue (TASK-44 phase 7)
 
 Agents do not run `update_core.sh`; they queue a request in the shared lease registry (`vpt-lease deploy request ...`)
-and wait (`vpt-lease deploy wait <id>`). `deploy-runner.js` polls the queue every 30 s, shows it in the manager sheet
-(approve / cancel, what each request waits on, live log of the running one, a warning when the ref differs from the
-last one deployed) and a "deploy pending" pill in the Leases section. A request without `--approved` waits for one tap
-in the sheet and pushes an alert.
+and wait (`vpt-lease deploy wait <id> --agent A`). `deploy-runner.js` polls the queue every 30 s and shows it on the
+**Platforms page** (approve / cancel, what each request waits on, live log of the running one, a warning when the ref
+differs from the last one deployed). A request without `--approved` waits for one tap there and pushes an alert.
+The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
 
 - **Off by default.** The runner only starts deploys when `manager.json` has `"deployRunner": true` (switch in the
   manager sheet or `POST /api/manager {"deployRunner":true}`). Off = it only reads the queue.
@@ -294,6 +316,26 @@ in the sheet and pushes an alert.
 - Registry: `ssh proxmox '~/bin/vpt-lease ...'`; `DEPLOY_REGISTRY='["python3","/path/vpt-lease"]'` runs it locally (tests, live checks).
   `DEPLOY_POLL_MS`, `DEPLOY_TIMEOUT_MS` override the timings.
 - API: `GET /api/deploys`, `POST /api/deploys/:id/approve|cancel`, `GET /api/deploys/:id/log?tail=200`; `{type:'deploys'}` on `/ws/status`.
+
+## Platforms page, lease ownership, waiting for a deploy (TASK-44)
+
+Open it from the ⋮ menu -> Platforms, from a lease chip / purple badge, or `/?platforms=1` (`/?deploys=1`, the push link, opens it too).
+Per env: a table `resource · held by · left · purpose`, the **Deploy queue**, and a one-line **Deployed now** summary
+(tap to expand per target, from the registry's ledger).
+
+- **Exact ownership.** A lease belongs to a session iff its agent is `<machine>:<tmux session name>`, case-insensitive;
+  `<machine>` is `codebox` or this host's name. Agents get it with `AGENT="codebox:$(tmux display-message -p '#S')"` (deploy skill).
+  There is no fuzzy guess: any other agent id shows as `unknown: <agent>`. Code: `public/platforms.js` (pure, shared with the server),
+  `leases.js` (reads `vpt-lease list --json`, 15 s cache, injectable `run`).
+- **Status payload.** `status[session].lease` = `[{env, resource, ttlLeftMin, purpose, blocksDeploy}]` (`blocksDeploy`: an
+  awaiting-approval or queued deploy of that env whose scope touches the resource). `/api/leases` and the `leases` WS message also carry `waiters` and `hostname`.
+- **Lease chip.** Only a session holding a lease gets `🔒 pi1/stb4 · 1h40` (`+N` for more) in the card header and board row; amber
+  `· blocks deploy` while a pending deploy waits on it. Tap -> Platforms scrolled to that resource.
+- **Purple "waiting deploy"** (`status[session].deployWait`, state badge, card border, row, tab, NEEDS-YOU order right after red): the session
+  (1) is the requester of an awaiting-approval / queued / running deploy, (2) is a registered waiter (`vpt-lease deploy wait --agent`; the
+  registry keeps `waiters.json`, heartbeat on every poll, dropped after 10 min without one), or (3) its latest stop was classified
+  `waiting_deploy` (cleared when it works again). A live needs-you prompt always wins visually. The tooltip says which one applies;
+  tap -> Platforms at that deploy.
 
 ## Priority, pause and quota
 
@@ -467,14 +509,18 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 │   ├── app.js                       # controller
 │   ├── prio.js                      # priority helpers shared with the server
 │   ├── policy.js                    # quota policy + agent suggestion (pure, shared)
+│   ├── platforms.js                 # lease ownership, lease chip, waiting-for-deploy, Platforms view model (pure, shared)
+│   ├── deployed.js                  # "deployed now" view model
 │   ├── usage.js                     # usage view helpers: formatting, summary -> session rows (pure, shared)
 │   ├── style.css                    # ghosty dark
 │   ├── manifest.webmanifest
 │   ├── sw.js                        # service worker
 │   ├── icon.svg / icon-{192,512}.png
 │   └── vendor/                      # xterm.js + xterm-addon-fit (offline)
+├── api-extras.js                    # `by` (actor) validation + POST /api/alert handler (rate limit)
 ├── reporter.js                      # intake of the ghosty-reporter plugin events (token, latest facts per session)
 ├── claude-plugin/ghosty-reporter/   # the Claude Code plugin (hooks/register.ts, tests)
+├── leases.js                        # `vpt-lease list --json` reader (cached, injectable)
 ├── session-meta.js                  # priority + pause hold (sessions.json)
 ├── quota.js                         # Codex / Claude / MiniMax quota windows
 ├── usage/                           # Langfuse usage tailer + prices

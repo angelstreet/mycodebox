@@ -8,6 +8,7 @@ import { suggestAgent } from '/policy.js';
 import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
 import { jevTabHtml, filtersHtml, decisionsHtml } from '/jev-view.js';
+import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -32,8 +33,6 @@ const els = {
   side:        $('#side'),
   sessionList: $('#sessionList'),
   sessionCount:$('#sessionCount'),
-  leaseList:   $('#leaseList'),
-  leaseCount:  $('#leaseCount'),
   refreshBtn:  $('#refreshBtn'),
   menuBtn:     $('#menuBtn'),
   backBtn:     $('#backBtn'),
@@ -122,7 +121,13 @@ const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held ||
 // Pill text for the owner's pause or the manager's hold, '' when neither.
 const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? 'held: quota' : '');
 const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${escapeHtml(n)}" aria-label="Priority ${prioOf(n)}, tap to change" title="Priority ${prioOf(n)}">${prioOf(n)}</button>`;
-const STATE_RANK = { waiting: 0, done: 1, working: 2, idle: 3, offline: 4 };
+// Visual state: a session blocked on a deploy shows purple ('deploy'); a live needs-you prompt always wins.
+function vstateOf(name) {
+  const s = stateOf(name);
+  return state.status[name]?.deployWait && s !== 'waiting' && s !== 'offline' ? 'deploy' : s;
+}
+const deployWaitTip = (name) => state.status[name]?.deployWait?.text || '';
+const STATE_RANK = { waiting: 0, deploy: 1, done: 2, working: 3, idle: 4, offline: 5 };
 const STATE_LABEL = { working: 'working', waiting: 'needs you', done: 'done', idle: 'idle', offline: 'offline' };
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 
@@ -164,6 +169,7 @@ function badgeText(name) { return stateText(name).replace(/^working ?/, ''); }
 function stateText(name) {
   const st = state.status[name] || {};
   const s = stateOf(name);
+  if (vstateOf(name) === 'deploy') return '\u23f3 waiting deploy';
   const now = Date.now();
   const drift = (now - state.statusAt) / 1000;
   if (s === 'working') {
@@ -179,8 +185,9 @@ function stateText(name) {
 }
 
 function stateBadgeHtml(name) {
-  const s = stateOf(name);
-  return `<span class="state ${s}"><i class="dot ${s}"></i><span class="st">${escapeHtml(badgeText(name))}</span></span>`;
+  const s = vstateOf(name);
+  const tip = s === 'deploy' ? ` data-wd="${escapeHtml(state.status[name].deployWait.id || '')}" title="${escapeHtml(deployWaitTip(name))}"` : '';
+  return `<span class="state ${s}"${tip}><i class="dot ${s}"></i><span class="st">${escapeHtml(badgeText(name))}</span></span>`;
 }
 function agentBadgeHtml(name) {
   const a = agentOf(name);
@@ -524,7 +531,7 @@ function connectStatus() {
         }
         onStatus();
       } else if (msg.type === 'leases') {
-        onLeases(msg.leases);
+        onLeases(msg);
       } else if (msg.type === 'deploys') {
         onDeploys(msg.deploys);
       } else if (msg.type === 'health') {
@@ -566,7 +573,7 @@ function onStatus() {
 const DEP_PENDING = ['queued', 'running'];
 function onDeploys(d) {
   state.deploys = d;
-  renderLeases();
+  if (state.platSheet) state.platSheet();
   const waiting = (d?.deploys || []).filter((x) => x.state === 'awaiting-approval').length;
   els.mgrBtn.classList.toggle('badge', waiting > 0);
   $('#moreBtn')?.classList.toggle('badge', waiting > 0);
@@ -574,9 +581,9 @@ function onDeploys(d) {
   if (state.depSheet) state.depSheet();
 }
 
-function onLeases(leases) {
-  state.leases = leases;
-  renderLeases();
+function onLeases(msg) {
+  state.leases = msg;       // {leases, waiters, hostname} or {error}
+  if (state.platSheet) state.platSheet();
 }
 
 function onPane(session, pane) {
@@ -625,7 +632,7 @@ function moveSession(name, dir) {
 function byUrgency(list) {
   return [...list].sort((a, b) =>
     byPriority(prioOf(a.name), prioOf(b.name)) ||
-    (STATE_RANK[stateOf(a.name)] - STATE_RANK[stateOf(b.name)]) ||
+    (STATE_RANK[vstateOf(a.name)] - STATE_RANK[vstateOf(b.name)]) ||
     displayName(a.name).localeCompare(displayName(b.name)));
 }
 // Filters: status (state.filter, also set by the top-bar count chips),
@@ -669,7 +676,7 @@ async function fetchLeases() {
     const r = await fetch('/api/leases');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
-    onLeases(data.ok ? (data.leases || []) : { error: data.error || 'unavailable' });
+    onLeases(data.ok ? data : { error: data.error || 'unavailable' });
   } catch (err) {
     onLeases({ error: err.message });
   }
@@ -928,7 +935,7 @@ function renderTabStrip() {
 function syncTabs() {
   for (const tab of els.tabs.children) {
     const n = tab.dataset.session;
-    const s = stateOf(n);
+    const s = vstateOf(n);
     tab.className = `tab ${s}${n === state.active ? ' active' : ''}`;
     tab.querySelector('.dot').className = `dot ${s}`;
   }
@@ -999,7 +1006,7 @@ function syncSide() {
     const n = li.dataset.session;
     if (!n || li.classList.contains('editing')) continue;
     li.classList.toggle('active', n === state.active);
-    li.querySelector('.dot').className = `dot ${stateOf(n)}`;
+    li.querySelector('.dot').className = `dot ${vstateOf(n)}`;
     const ag = agentBadgeHtml(n);
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
@@ -1019,26 +1026,6 @@ function tickSide() {
     const st = li.querySelector('.sst');
     if (st && li.dataset.session && !li.classList.contains('editing')) st.textContent = stateText(li.dataset.session);
   }
-}
-
-function renderLeases() {
-  const l = state.leases;
-  const pend = (state.deploys?.deploys || []).filter((x) => ['awaiting-approval', ...DEP_PENDING].includes(x.state));
-  els.leaseCount.innerHTML = pend.length ? `<button class="deploy-pill${pend.some((x) => x.state === 'awaiting-approval') ? ' ask' : ''}" id="depPill">deploy ${pend.some((x) => x.state === 'running') ? 'running' : pend.some((x) => x.state === 'queued') ? 'pending' : 'to approve'}</button>` : '';
-  const pill = els.leaseCount.querySelector('#depPill');
-  if (pill) pill.onclick = (e) => { e.stopPropagation(); openManager(); };
-  if (!l) return;
-  if (l.error) {
-    els.leaseList.innerHTML = `<li class="dim">registry unreachable · ${escapeHtml(l.error)}</li>`;
-    return;
-  }
-  const mine = (x) => /codebox/i.test(x.agent || '');
-  const cnt = l.length ? `${l.length}${l.some(mine) ? ' · ' + l.filter(mine).length + ' here' : ''}` : '';
-  if (cnt) els.leaseCount.append(` ${cnt}`);
-  els.leaseList.innerHTML = l.length
-    ? l.map((x) => `<li class="${mine(x) ? 'mine' : ''}"><b>${escapeHtml(x.resource || '*')}</b> @ ${escapeHtml(x.env || '')}<br>
-        ${escapeHtml(x.agent || '?')} <span class="ttl">· ${x.ttlLeftMin != null ? `${x.ttlLeftMin}m left` : ''}${x.purpose ? ` · ${escapeHtml(x.purpose)}` : ''}</span></li>`).join('')
-    : '<li class="dim">no active leases — platforms free</li>';
 }
 
 function beginRename(li, name) {
@@ -1289,7 +1276,7 @@ function confirmThen(btn, needs, go) {
 
 function syncCell(cell) {
   const n = cell.dataset.session;
-  const s = stateOf(n);
+  const s = vstateOf(n);
   const inCard = cell.parentElement === els.cardPane;
   const docOn = inCard && cell.classList.contains('doc-on');
   cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
@@ -1299,7 +1286,8 @@ function syncCell(cell) {
   if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
   syncPrioPause(cell, n);
   const stw = cell.querySelector('.stw');
-  if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
+  const sk = s + '|' + deployWaitTip(n);
+  if (stw.dataset.s !== sk) { stw.dataset.s = sk; stw.innerHTML = stateBadgeHtml(n); }
   else stw.querySelector('.st').textContent = badgeText(n);
   syncAsk(cell, n);
   syncAutoPill(cell.querySelector('.apill'), n);
@@ -1329,9 +1317,17 @@ function ctxHtml(st) {
   const cls = v < 15 ? ' crit' : v < 30 ? ' warn' : '';
   return `<span class="ctx${cls}">ctx ${Math.round(v)}%</span>`;
 }
+// 🔒 chip: only for a session that holds a lease; amber while a pending deploy waits on it. Tap -> Platforms at that resource.
+function leaseChipHtml(st, cls) {
+  const c = chipModel(st.lease);
+  if (!c) return '';
+  return `<button class="${cls} lease${c.blocks ? ' blocks' : ''}" data-plat="${escapeHtml(c.env + '|' + c.resource)}" title="Open Platforms">${escapeHtml(c.text)}</button>`;
+}
 function headMetaHtml(n) {
   const st = state.status[n] || {};
   const parts = [];
+  const lc = leaseChipHtml(st, 'lease-chip');
+  if (lc) parts.push(lc);
   const c = ctxHtml(st);
   if (c) parts.push(c);
   if (stateOf(n) === 'working' && st.activity) parts.push(`<span class="act">${escapeHtml(st.activity)}</span>`);
@@ -1354,7 +1350,8 @@ function rowChipsHtml(n) {
   if (loc) chips.push(`<span class="chip-m">${escapeHtml(loc)}</span>`);
   const c = ctxHtml(st);
   if (c) chips.push(c.replace('class="ctx', 'class="chip-m ctx'));
-  if (st.lease?.resource) chips.push(`<span class="chip-m lease">&#128274; ${escapeHtml(st.lease.resource)}${st.lease.ttlLeftMin != null ? ` ${st.lease.ttlLeftMin}m` : ''}</span>`);
+  const lc = leaseChipHtml(st, 'chip-m');
+  if (lc) chips.push(lc);
   return chips.join('');
 }
 
@@ -1637,14 +1634,15 @@ function syncList() {
   } else if (!order && !els.listPane.querySelector('.empty')) { renderList(); return; }
   for (const row of els.listPane.querySelectorAll('.row-item')) {
     const n = row.dataset.session;
-    const s = stateOf(n);
+    const s = vstateOf(n);
     row.className = `row-item ${s}${n === state.active ? ' focus' : ''}`;
     const ag = agentBadgeHtml(n);
     const agEl = row.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
     syncPrioPause(row, n);
     const stw = row.querySelector('.stw');
-    if (stw.dataset.s !== s) { stw.dataset.s = s; stw.innerHTML = stateBadgeHtml(n); }
+    const sk = s + '|' + deployWaitTip(n);
+    if (stw.dataset.s !== sk) { stw.dataset.s = sk; stw.innerHTML = stateBadgeHtml(n); }
     else stw.querySelector('.st').textContent = badgeText(n);
     syncAutoPill(row.querySelector('.apill'), n);
     const last = row.querySelector('.last'), lt = rowLast(n);
@@ -1759,7 +1757,6 @@ function closeSide() {
 const LS_PROMPTS = 'ghosty.prompts';
 const LS_HIST    = 'ghosty.sendHistory';
 const LS_RECENT  = 'ghosty.recentDirs';
-const LS_LEASES  = 'ghosty.leasesOpen';
 const DEFAULT_PROMPTS = ['continue', 'yes, go ahead', 'commit and push', 'run the tests and fix failures', 'summarize status in 3 lines', '/clear'];
 const HIST_MAX = 30;
 const COARSE = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
@@ -1976,6 +1973,12 @@ function logLine(r) {
   if (r.type === 'resume' && r.by === 'manager') return { cls: 'sent', tag: 'resumed', sess, case: 'quota', text: r.reason || '' };
   if (r.type === 'triage') return { cls: 'would', tag: 'AI', sess, case: r.case || '', text: r.ai ? `${r.ai.owner_needed ? 'needs you' : '\u201c' + r.ai.proposed_reply + '\u201d'} (${Number(r.ai.confidence).toFixed(2)}) ${r.ai.reasoning || ''}` : (r.skipped || r.error || '') };
   if (r.type === 'escalated') return { cls: 'esc', tag: 'escalated', sess, case: r.case || '', text: r.reason || '' };
+  // Who acted (by): 'owner' for the UI, 'manager-agent' for the Opus manager; shown on every action line.
+  const by = r.by || 'owner';
+  if (r.type === 'send') return { cls: 'sent', tag: 'typed', sess, case: by, text: r.text != null ? r.text : `key ${r.key}` };
+  if (r.type === 'pause' || (r.type === 'resume' && r.by !== 'manager')) return { cls: 'canc', tag: r.type, sess, case: by, text: '' };
+  if (r.type === 'priority') return { cls: 'sent', tag: 'priority', sess, case: by, text: r.priority };
+  if (r.type === 'deploy_action') return { cls: 'sent', tag: r.action, sess: 'deploy', case: by, text: r.id };
   return null;
 }
 function depRow(d, d0) {
@@ -1992,28 +1995,98 @@ function depRow(d, d0) {
     ${d.state === 'running' ? `<pre class="dlog" data-log="${d.id}">…</pre>` : ''}
     ${d.coalescedInto ? `<div class="d2">merged into ${escapeHtml(d.coalescedInto)}</div>` : ''}${d.reason ? `<div class="d2">${escapeHtml(d.reason)}</div>` : ''}</div>`;
 }
-// "Deployed now": per env/target what the registry's ledger says is live (version, ref, commit, when, who, newer failed attempt).
-function deployedHtml(d0) {
-  const view = deployedView(d0?.deployed, Date.now());
-  if (!view.length) return '<div class="mnote">deployed now: nothing recorded yet</div>';
-  return `<div class="mnote">deployed now</div>${view.map((e) => `<div class="dep dnow"><div class="d1"><b>${escapeHtml(e.env)}</b></div>${e.rows.map((r) => `
+// "Deployed now" rows of one env (view model from deployedView): per target version, ref, commit, when, who, newer failed attempt.
+function deployedRowsHtml(rows) {
+  return rows.map((r) => `
     <div class="d2 dnrow"><span class="dscope">${escapeHtml(targetLabel(r.targets))}</span> ${r.deployed
       ? `<b>${escapeHtml(r.version || '?')}</b> &middot; ${escapeHtml(r.ref || '?')}${r.commit ? ` &middot; ${escapeHtml(r.commit)}` : ''} &middot; ${escapeHtml(r.ago)}${r.by && r.by !== 'unknown' ? ` &middot; ${escapeHtml(r.by)}` : ''}${r.backfill ? ' &middot; <i>read from the target</i>' : ''}`
       : '<span class="dim">no successful deploy recorded</span>'}
-      ${r.failed ? `<div class="dwarn">&#9888; last attempt failed ${escapeHtml(r.failed.ago)}${r.failed.version ? ` (${escapeHtml(r.failed.version)})` : ''}${r.failed.by ? ` by ${escapeHtml(r.failed.by)}` : ''}</div>` : ''}</div>`).join('')}</div>`).join('')}`;
+      ${r.failed ? `<div class="dwarn">&#9888; last attempt failed ${escapeHtml(r.failed.ago)}${r.failed.version ? ` (${escapeHtml(r.failed.version)})` : ''}${r.failed.by ? ` by ${escapeHtml(r.failed.by)}` : ''}</div>` : ''}</div>`).join('');
 }
+// Manager panel keeps only the runner switch; the queue, leases and "deployed now" live on the Platforms page.
 function deploysHtml(d0) {
   if (!d0) return '<div class="dim">loading…</div>';
-  const all = d0.deploys || [];
-  const act = all.filter((x) => ['awaiting-approval', ...DEP_PENDING].includes(x.state)).sort((a, b) => a.created - b.created);
-  const recent = all.filter((x) => !['awaiting-approval', ...DEP_PENDING].includes(x.state)).sort((a, b) => (b.finished || 0) - (a.finished || 0)).slice(0, 6);
+  const waiting = (d0.deploys || []).filter((x) => x.state === 'awaiting-approval').length;
   return `<button class="mswitch${d0.enabled ? ' on' : ''}" data-set="deployRunner"><i></i><span>Runs deploys <b>${d0.enabled ? 'ON' : 'OFF'}</b></span></button>
     ${d0.enabled ? '' : '<div class="mnote">runner is off: requests only queue. Agents then follow the manual flow when you tell them to.</div>'}
     ${d0.ok === false ? `<div class="mnote dwarn">registry unreachable &middot; ${escapeHtml(d0.error || '')}</div>` : ''}
-    ${act.map((x) => depRow(x, d0)).join('') || '<div class="dim">no deploy queued</div>'}
-    ${deployedHtml(d0)}
-    ${recent.length ? `<div class="mnote">recent</div>${recent.map((x) => `<div class="dep ${x.state}"><div class="d1"><span class="dtag ${x.state}">${x.state}</span><b>${escapeHtml(x.env)}</b><span class="dscope">${escapeHtml(x.scope)}</span><span class="grow"></span><span class="dim">${x.version ? escapeHtml(x.version) : ''}</span></div><div class="d2">${escapeHtml(x.ref)} &middot; ${escapeHtml(x.agent)}${x.coalescedInto ? ' &middot; merged' : ''}</div></div>`).join('')}` : ''}`;
+    <button class="sbtn pf-link" data-plat-open="1">Platforms &rsaquo;${waiting ? ` <b>${waiting} to approve</b>` : ''}</button>`;
 }
+
+// ---------- Platforms page: leases per env, deploy queue, deployed now ----------
+const platOpen = new Set();          // "Deployed now" sections the owner expanded
+function platformsData() {
+  const l = state.leases;
+  const d0 = state.deploys;
+  const hostname = l?.hostname || '';
+  return { l, d0, view: l && !l.error ? platformsView({ leases: l.leases || [], deploys: d0?.deploys || [], waiters: l.waiters || [], deployed: d0?.deployed || {}, sessionNames: state.sessions.map((s) => s.name), machines: machinesOf(hostname), nowMs: Date.now() }) : [] };
+}
+function platformsHtml() {
+  const { l, d0, view } = platformsData();
+  if (!l) return '<div class="sheet-empty">loading…</div>';
+  const err = [l.error ? `registry unreachable &middot; ${escapeHtml(l.error)}` : '', d0 && d0.ok === false ? `deploy queue unreachable &middot; ${escapeHtml(d0.error || '')}` : ''].filter(Boolean);
+  const head = `${err.map((e) => `<div class="mnote dwarn">${e}</div>`).join('')}<div class="mnote">Runs deploys <b>${d0?.enabled ? 'ON' : 'OFF'}</b> &middot; change it in the AI manager</div>`;
+  if (!view.length) return `${head}<div class="sheet-empty">no leases, no deploys: every platform is free</div>`;
+  return head + view.map((e) => {
+    const recent = (d0?.deploys || []).filter((x) => x.env === e.env && !['awaiting-approval', 'queued', 'running'].includes(x.state)).sort((a, b) => (b.finished || 0) - (a.finished || 0)).slice(0, 3);
+    return `<section class="pf-env" data-env="${escapeHtml(e.env)}">
+      <div class="pf-h">${escapeHtml(e.env)}</div>
+      ${e.resources.length ? `<table class="pf-t"><thead><tr><th>resource</th><th>held by</th><th>left</th><th>purpose</th></tr></thead><tbody>${e.resources.map((r) => `
+        <tr data-res="${escapeHtml(e.env + '|' + r.resource)}" class="${r.blocksDeploy ? 'blk' : ''}"><td class="pf-r">${escapeHtml(r.resource)}${r.blocksDeploy ? '<br><span class="pf-b">blocks deploy</span>' : ''}</td>
+        <td>${r.session ? `<button class="pf-sess" data-open="${escapeHtml(r.session)}">${escapeHtml(displayName(r.session))} &#9656;</button>` : `<span class="pf-unk" title="no live session has exactly this name">unknown: ${escapeHtml(r.unknown)}</span>`}</td>
+        <td class="pf-l">${r.ttlLeftMin != null ? escapeHtml(ttlLeft(r.ttlLeftMin)) : ''}</td><td class="pf-p">${escapeHtml(r.purpose)}</td></tr>`).join('')}</tbody></table>` : '<div class="dim pf-none">no leases: free</div>'}
+      <div class="pf-sub">Deploy queue</div>
+      ${e.queue.map((x) => `<div data-depid="${x.id}">${depRow(x, d0)}</div>`).join('') || '<div class="dim pf-none">no deploy queued</div>'}
+      ${e.waiters.length ? `<div class="d2 dim">waiting for it: ${e.waiters.map((w) => escapeHtml(w.agent)).join(', ')}</div>` : ''}
+      ${recent.map((x) => `<div class="d2 dim">${escapeHtml(x.state)} &middot; ${escapeHtml(x.scope)} &middot; ${escapeHtml(x.ref)}${x.version ? ` &middot; ${escapeHtml(x.version)}` : ''} &middot; ${escapeHtml(x.agent)}</div>`).join('')}
+      <button class="pf-sum" data-pf-toggle="${escapeHtml(e.env)}"><span class="uch${platOpen.has(e.env) ? ' on' : ''}"></span><span>Deployed now &middot; ${escapeHtml(e.deployedSummary)}</span></button>
+      ${platOpen.has(e.env) ? `<div class="dep dnow">${deployedRowsHtml(e.deployedRows) || '<div class="dim">nothing recorded yet</div>'}</div>` : ''}
+    </section>`;
+  }).join('');
+}
+const ttlLeft = (m) => (m < 1 ? '<1m' : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`);
+function openPlatforms(focus) {
+  openSheet('Platforms', ({ body, close }) => {
+    body.closest('.sheet').classList.add('platforms');
+    let last = '', pending = focus || null;
+    const pollLogs = () => body.querySelectorAll('[data-log]').forEach(async (el) => {
+      try { el.textContent = (await (await fetch(`/api/deploys/${el.dataset.log}/log?tail=12`)).text()) || '…'; el.scrollTop = el.scrollHeight; } catch {}
+    });
+    const draw = () => {
+      const h = platformsHtml();
+      if (h !== last) { last = h; body.innerHTML = h; pollLogs(); }
+      if (pending) {
+        const el = pending.deploy ? body.querySelector(`[data-depid="${CSS.escape(pending.deploy)}"]`) : body.querySelector(`[data-res="${CSS.escape(pending.res || '')}"]`);
+        if (el) { pending = null; el.scrollIntoView({ block: 'center' }); el.classList.add('pf-hit'); setTimeout(() => el.classList.remove('pf-hit'), 2500); }
+        else if (state.leases && state.deploys) pending = null;
+      }
+    };
+    state.platSheet = draw;
+    draw();
+    fetchLeases();
+    const timer = setInterval(() => { if (!body.isConnected) { clearInterval(timer); if (state.platSheet === draw) state.platSheet = null; } else pollLogs(); }, 3000);
+    body.onclick = async (e) => {
+      const o = e.target.closest('[data-open]');
+      if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); return; }
+      const t = e.target.closest('[data-pf-toggle]');
+      if (t) { const k = t.dataset.pfToggle; platOpen.has(k) ? platOpen.delete(k) : platOpen.add(k); draw(); return; }
+      const db = e.target.closest('[data-dep]');
+      if (db) {
+        db.disabled = true;
+        try { const r = await fetch(`/api/deploys/${db.dataset.id}/${db.dataset.dep}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); if (!r.ok) toast((await r.json()).error || 'failed'); } catch { toast('failed'); }
+        fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
+      }
+    };
+  });
+}
+// chips and purple badges open Platforms at their resource / deploy; the manager panel and the ⋮ menu link to it
+document.addEventListener('click', (e) => {
+  const c = e.target.closest('[data-plat]');
+  if (c) { e.stopPropagation(); openPlatforms({ res: c.dataset.plat }); return; }
+  const w = e.target.closest('.state[data-wd]');
+  if (w) { e.stopPropagation(); openPlatforms({ deploy: w.dataset.wd }); return; }
+  if (e.target.closest('[data-plat-open]')) openPlatforms();
+}, true);
 function openManager() {
   openSheet('AI manager', async ({ body, foot, close }) => {
     body.innerHTML = '<div class="sheet-empty">loading…</div>';
@@ -2041,7 +2114,7 @@ function openManager() {
         return `<div class="ml stop ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s${live ? ' go' : ''}" ${live ? `data-open="${escapeHtml(r.session)}"` : ''}>${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span>
           <span class="x"><b>${escapeHtml(l.case)}</b>${r.no_status ? ' <i class="ns">no status</i>' : ''} &middot; ${escapeHtml(l.text)}</span>
           <span class="q">${escapeHtml(firstLine(r.excerpt || r.question))}</span>
-          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
+          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.by && lab.by !== 'owner' ? ` <span class="dim">by ${escapeHtml(lab.by)}</span>` : ''}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
             : `<button class="sbtn lb" data-label="no_reason" data-id="${escapeHtml(r.id)}" title="stopped for no reason" aria-label="stopped for no reason">👎</button><button class="sbtn lb" data-label="legit" data-id="${escapeHtml(r.id)}" title="legit stop" aria-label="legit stop">👍</button><select class="lb" data-wrong="${escapeHtml(r.id)}" aria-label="wrong case"><option value="">wrong case…</option>${caseOpts}</select><input class="lbn" data-note="${escapeHtml(r.id)}" placeholder="note" maxlength="500">`}</span></div>`;
       };
       body.innerHTML = `
@@ -2066,15 +2139,8 @@ function openManager() {
         <div class="side-sub">Sessions</div>
         <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
     };
-    const redrawDeploys = () => {
-      const box = body.querySelector('#depBox');
-      if (box) { box.innerHTML = deploysHtml(state.deploys); pollLogs(); }
-    };
-    const pollLogs = () => body.querySelectorAll('[data-log]').forEach(async (el) => {
-      try { el.textContent = (await (await fetch(`/api/deploys/${el.dataset.log}/log?tail=12`)).text()) || '…'; el.scrollTop = el.scrollHeight; } catch {}
-    });
-    state.depSheet = redrawDeploys;
-    const logTimer = setInterval(() => { if (!body.isConnected) { clearInterval(logTimer); state.depSheet = null; } else pollLogs(); }, 3000);
+    state.depSheet = () => { const box = body.querySelector('#depBox'); if (box) box.innerHTML = deploysHtml(state.deploys); };
+    const logTimer = setInterval(() => { if (!body.isConnected) { clearInterval(logTimer); state.depSheet = null; } }, 3000);
     body.onclick = async (e) => {
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); return; }
@@ -2088,13 +2154,6 @@ function openManager() {
           if (!r.ok) throw new Error(r.status);
         } catch { toast('label failed'); }
         draw(); return;
-      }
-      const db = e.target.closest('[data-dep]');
-      if (db) {
-        db.disabled = true;
-        try { const r = await fetch(`/api/deploys/${db.dataset.id}/${db.dataset.dep}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); if (!r.ok) toast((await r.json()).error || 'failed'); } catch { toast('failed'); }
-        fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
-        return;
       }
       const am = e.target.closest('[data-aimode]');
       if (am) { try { await mgrPost({ aiTriage: am.dataset.aimode }); } catch { toast('save failed'); } draw(); return; }
@@ -2119,10 +2178,11 @@ function openManager() {
       } catch { toast('save failed'); }
       draw();
     };
-    draw().then(pollLogs);
+    draw();
   });
 }
 els.mgrBtn.onclick = openManager;
+$('#platBtn').onclick = () => openPlatforms();
 document.getElementById('reviewBtn').onclick = startReview;
 document.getElementById('decisionsBtn').onclick = openDecisions;
 // top-bar "more" menu: AI manager, usage, alerts, install/APK, text size
@@ -2398,11 +2458,11 @@ function openSheet(title, build) {
 }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sheetEl) closeSheet(); });
 
-const RANK2 = { waiting: 0, done: 1, working: 2, idle: 3, offline: 4 };
+const RANK2 = STATE_RANK;
 function sortedByNeed() {
   return [...state.sessions].sort((a, b) =>
     byPriority(prioOf(a.name), prioOf(b.name)) ||
-    ((RANK2[stateOf(a.name)] ?? 5) - (RANK2[stateOf(b.name)] ?? 5)) ||
+    ((RANK2[vstateOf(a.name)] ?? 6) - (RANK2[vstateOf(b.name)] ?? 6)) ||
     displayName(a.name).localeCompare(displayName(b.name)));
 }
 function agentDotHtml(n) { return `<i class="adot ${agentOf(n)}"></i>`; }
@@ -2727,7 +2787,7 @@ function openPicker() {
         const rb = repoBranch(n);
         return `<button class="prow-s${on ? ' on' : ''}" data-n="${escapeHtml(n)}">${agentDotHtml(n)}
           <span class="pn"><b>${escapeHtml(displayName(n))}</b>${rb ? `<small>${escapeHtml(rb)}</small>` : ''}</span>
-          <span class="state ${stateOf(n)}"><i class="dot ${stateOf(n)}"></i>${escapeHtml(stateText(n).split(' ')[0])}</span>
+          <span class="state ${vstateOf(n)}"><i class="dot ${vstateOf(n)}"></i>${escapeHtml(stateText(n).split(' ')[0])}</span>
           ${dock.multi ? `<span class="chk">${on ? '✓' : ''}</span>` : ''}</button>`;
       }).join('') || '<div class="sheet-empty">no sessions</div>';
     };
@@ -2917,11 +2977,6 @@ function confirmKill(name) {
 (function wireSide() {
   const nb = $('#newSessBtn');
   if (nb) nb.onclick = openNewSession;
-  const sec = $('.side-sec'), sub = sec && sec.querySelector('.side-sub');
-  if (sub) {
-    sec.classList.toggle('collapsed', lsGet(LS_LEASES, '1') === '0');
-    sub.onclick = () => { sec.classList.toggle('collapsed'); lsSet(LS_LEASES, sec.classList.contains('collapsed') ? '0' : '1'); };
-  }
   setInterval(tickSide, 1000);
 })();
 loadDock();
@@ -2932,7 +2987,6 @@ function renderAll() {
   if (state.mode === 'card') renderCard();
   if (state.mode === 'grid') renderGrid();
   if (state.mode === 'list') renderList();
-  renderLeases();
   syncAll();
 }
 
@@ -3269,11 +3323,13 @@ if ('serviceWorker' in navigator) {
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
+  const openPlat = ['platforms', 'deploys'].some((k) => new URLSearchParams(location.search).get(k));
   const view = new URLSearchParams(location.search).get('view');
   if (['card', 'grid', 'list'].includes(view)) state.mode = view;
   setMode(state.mode);
   hideInstallIfInstalled();
   await fetchInitial();
+  if (openPlat) openPlatforms();
   connectStatus();
   wireSwipe();
   wireCardSwipe();

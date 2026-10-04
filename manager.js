@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch } from './stall.js';
+import { actorOf } from './api-extras.js';
 import { AI_MODES, AI_NEVER_CASES, createBudget, callReviewer, reviewerUrl } from './triage.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
@@ -29,6 +30,7 @@ const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'sta
 const CONFIG_FILE = join(STATE_DIR, 'manager.json');
 export const LOG_FILE = join(STATE_DIR, 'stalls.jsonl');
 const BUDGET_FILE = join(STATE_DIR, 'jev-budget.json');
+const LAST_STOPS_FILE = join(STATE_DIR, 'last-stops.json');   // session -> keys of the last 5 stops logged (survives a restart)
 const AI_BUDGET_FILE = join(STATE_DIR, 'ai-budget.json');
 const OUTCOME_QUEUE_FILE = join(STATE_DIR, 'decision-outcomes.json');
 
@@ -50,9 +52,13 @@ setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
 let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
-  jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: ['owner_decision', 'continue', 'stopped_short', 'menu_recommended'],
+  jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
+const RECENT_STOPS = 5;
+let lastStops = {};
+let lastStopsWrite = Promise.resolve();
+const saveLastStops = () => { lastStopsWrite = lastStopsWrite.then(() => writeFile(LAST_STOPS_FILE, JSON.stringify(lastStops))).catch(() => {}); };
 const aiBudget = createBudget(AI_BUDGET_FILE);
 const triages = new Map();   // stop id -> triage result (one reviewer call per stop)
 let triageContext = () => ({});   // injected by server.js: (session) -> { priority, quota, leases, deploys }
@@ -76,6 +82,7 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { budget = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); } catch {}
+  try { lastStops = JSON.parse(await readFile(LAST_STOPS_FILE, 'utf8')) || {}; } catch { lastStops = {}; }
   await aiBudget.load();
   config.autoCases = (config.autoCases || []).filter((c) => AUTO_CASES.includes(c));
   config.aiAutoCases = (config.aiAutoCases || []).filter((c) => CASES.includes(c) && !AI_NEVER_CASES.includes(c));
@@ -338,7 +345,8 @@ async function fire(name, auto) {
 // Owner label on a logged stall ("this stop bothered me"). Appended; the newest label of an id wins.
 // correctCase (the manager chose the wrong case) may ride on any label; with label wrong_case it is the label itself.
 export const AI_VERDICTS = ['right', 'wrong'];
-export async function labelStall({ id, label, note, correctCase, aiVerdict } = {}) {
+export async function labelStall({ id, label, note, correctCase, aiVerdict, by } = {}) {
+  const actor = actorOf({ by });
   if (typeof id !== 'string' || !id) throw bad('id required');
   if (aiVerdict != null && !AI_VERDICTS.includes(aiVerdict)) throw bad(`aiVerdict must be one of: ${AI_VERDICTS.join(', ')}`);
   // aiVerdict may ride on a normal label, or stand alone (no label): then the stop stays unlabelled for the swipe review.
@@ -346,7 +354,7 @@ export async function labelStall({ id, label, note, correctCase, aiVerdict } = {
   if (note != null && (typeof note !== 'string' || note.length > 500)) throw bad('note must be a string of at most 500 characters');
   if (correctCase != null && !CASES.includes(correctCase)) throw bad(`correctCase must be one of: ${CASES.join(', ')}`);
   await requireKnown(id);
-  const rec = { type: 'label', id, ...(label != null ? { label, note: note || null, correctCase: correctCase || null } : {}), ...(aiVerdict ? { aiVerdict } : {}), at: new Date().toISOString() };
+  const rec = { type: 'label', id, by: actor, ...(label != null ? { label, note: note || null, correctCase: correctCase || null } : {}), ...(aiVerdict ? { aiVerdict } : {}), at: new Date().toISOString() };
   await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
   if (label != null) {
     const stall = (await readRecs()).find((r) => r.type === 'stall' && r.id === id);
@@ -522,10 +530,26 @@ async function jev(stall, ctx = {}) {
   }
 }
 
-// What the owner typed to move the session on: a ghosty send, else the newest prompt line in the body.
-function ownerReply(plain, sentText) {
+// Index of the pane line where the stop's closing text ends (the text is compared without whitespace, so
+// a re-wrapped pane still matches), or -1 when it is not on screen.
+function closingLine(plain, key) {
+  const tail = String(key || '').slice(-80);
+  if (tail.length < 8) return -1;
+  let acc = '';
+  const ends = plain.map((l) => (acc += String(l).replace(/\s+/g, ''), acc.length));
+  const at = acc.lastIndexOf(tail);
+  if (at < 0) return -1;
+  const end = at + tail.length;
+  return ends.findIndex((e) => e >= end);
+}
+
+// What the owner typed to move the session on: a ghosty send, else the newest prompt line in the body that
+// sits BELOW the stall's closing text. A prompt above it is an older reply and never this stop's outcome.
+function ownerReply(plain, sentText, closingKey) {
   if (sentText) return { via: 'ghosty', text: sentText };
-  for (let i = plain.length - 1, rules = 0; i >= 0 && i >= plain.length - 400; i--) {
+  const floor = closingLine(plain, closingKey);
+  if (floor < 0) return { via: 'unknown', text: null };
+  for (let i = plain.length - 1, rules = 0; i > floor && i >= plain.length - 400; i--) {
     const l = plain[i];
     if (/^\s*[─━]{4,}/.test(l)) { rules++; continue; }
     if (rules < 2) continue;   // skip the input box at the bottom
@@ -564,7 +588,7 @@ export function observe(s) {
       const p = w.pending;
       const sent = sentSince ? s.lastSendText : null;
       const said = !sent && rep ? rep.promptSince(p.at) : null;   // the prompt text the reporter saw the owner submit
-      const reply = said ? { via: 'reporter', text: said.text } : ownerReply(s.plain, sent);
+      const reply = said ? { via: 'reporter', text: said.text } : ownerReply(s.plain, sent, p.key);
       log({ type: 'outcome', id: p.id, session: s.name, at: new Date(s.now).toISOString(), afterSec: Math.round((s.now - p.at) / 1000),
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
       writeBack(p.id, outcomeFromReplyKind(reply.text ? outcomeKind(reply.text) : 'unknown'), 'owner-reply', p.auto ? null : decisionByStop.get(p.id));
@@ -601,11 +625,18 @@ export function observe(s) {
   if (w.logged || s.now - w.since < SETTLE_MS || !sessionOn(s.name)) return w.stall;
   w.logged = true;
   // The very same stop as the last one logged, with no real work or send in between: not a new stop.
-  if (h === w.lastLoggedHash && !w.moved) return w.stall;
-  w.lastLoggedHash = h; w.moved = false;
+  // The last RECENT_STOPS logged stops are remembered per session on disk, so a restart, a repaint or an
+  // A, B, A flip does not log a stop again; real work, a send or a reporter prompt since resets the list.
+  const stopId = hash(stopKey(stall.excerpt));
+  const recent = w.recent ?? (w.recent = Array.isArray(lastStops[s.name]) ? [...lastStops[s.name]] : []);
+  if (w.moved) recent.length = 0;
+  if (recent.includes(stopId)) return w.stall;
+  recent.push(stopId); if (recent.length > RECENT_STOPS) recent.shift();
+  w.moved = false;
+  lastStops[s.name] = [...recent]; saveLastStops();
 
   const id = randomUUID();
-  w.pending = { id, at: s.now };
+  w.pending = { id, at: s.now, key: stopKey(stall.excerpt) };
   (async () => {
     let final = stall, jevOut = null;
     if (stall.source === 'ambiguous') {
