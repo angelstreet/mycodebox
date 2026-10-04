@@ -2255,42 +2255,97 @@ function quotaPaceHtml(q, onlyAgent) {
     return `<div class="urow">${head}${rows}</div>`;
   }).join('');
 }
-// Tokens (or cost) by model: 7 stacked daily bars; tap a day (or use the Today tab) for one bar with its split.
-const CHART_PAL = ['#c678dd', '#f5b942', '#ef8a52', '#5aa9e6'], CHART_OTHER = '#8a8d96';
-function chartHtml(u, tab, ui) {
+// ---- usage views: Over time (stacked bars) and Trending (sparklines) ----
+const PAL = ['#c678dd', '#f5b942', '#ef8a52', '#5aa9e6', '#6ed1c0'], OTHER_C = '#8a8d96', OTHERS = '\u0000others';
+const PROVIDER = { claude: 'Anthropic', codex: 'OpenAI', minimax: 'MiniMax', other: '' };
+const lastDays = (n) => Array.from({ length: n }, (_, i) => new Date(Date.now() - (n - 1 - i) * 86400000).toISOString().slice(0, 10));
+// day -> key -> { total, cost } for the chosen split (model comes from the tailer's perDayModel; project / agent from the sessions)
+function dimData(u, dim) {
+  if (dim === 'model') return u.perDayModel || null;
+  const out = {};
+  for (const s of u.perSession || []) {
+    const key = dim === 'project' ? s.project : s.agent;
+    for (const [d, v] of Object.entries(s.days || {})) {
+      const e = ((out[d] ||= {})[key] ||= { total: 0, cost: 0 });
+      e.total += v.total || 0; e.cost += v.cost || 0;
+    }
+  }
+  return out;
+}
+const niceMax = (v) => { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); const m = v / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p; };
+const chip = (attr, val, cur, label) => `<button class="mchip${val === cur ? ' on' : ''}" data-${attr}="${val}">${label}</button>`;
+function overTimeHtml(u, tab, ui) {
+  const dm = dimData(u, ui.dim);
+  if (!dm) return '<div class="sheet-empty">model split needs the updated ghosty-usage tailer (restart the unit)</div>';
+  const metric = ui.metric, val = (e) => (metric === 'cost' ? (e.cost || 0) : (e.total || 0));
+  const fmtV = (v) => (metric === 'cost' ? fmtUsd(v) : fmtTok(v));
+  const today = tab === 'today';
+  const days = today ? lastDays(1) : lastDays(ui.range);
+  const totals = new Map();
+  for (const d of days) for (const [k, e] of Object.entries(dm[d] || {})) totals.set(k, (totals.get(k) || 0) + val(e));
+  const ranked = [...totals].filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]).map(([k]) => k);
+  const top = ranked.slice(0, 5);
+  const colorOf = (k) => (k === OTHERS ? OTHER_C : PAL[top.indexOf(k)] || OTHER_C);
+  const nameOf = (k) => (k === OTHERS ? 'others' : k);
+  const segsOf = (d) => {
+    const g = new Map();
+    for (const [k, e] of Object.entries(dm[d] || {})) { const kk = top.includes(k) ? k : OTHERS; g.set(kk, (g.get(kk) || 0) + val(e)); }
+    return [...top, OTHERS].filter((k) => g.get(k) > 0).map((k) => ({ k, v: g.get(k) }));
+  };
+  const dayTotal = (d) => segsOf(d).reduce((s, x) => s + x.v, 0);
+  const seg = (s, h) => `<i class="cseg" style="${h != null ? `height:${h}%` : `flex:${s.v}`};background:${colorOf(s.k)}" title="${escapeHtml(nameOf(s.k))} ${fmtV(s.v)}"></i>`;
+  const sel = today ? days[0] : (days.includes(ui.selDay) ? ui.selDay : days[days.length - 1]);
+  let chart;
+  if (today) {
+    chart = `<div class="cone">${segsOf(sel).map((s) => seg(s)).join('') || '<span class="dim">no usage today</span>'}</div>`;
+  } else {
+    const max = niceMax(Math.max(...days.map(dayTotal), 0));
+    const lines = [1, 0.5, 0].map((f) => `<div class="oline" style="bottom:calc(18px + (100% - 18px) * ${f})"><span>${f ? fmtV(max * f) : '0'}</span></div>`).join('');
+    chart = `<div class="oplot">${lines}<div class="obars">${days.map((d) => {
+      const t = dayTotal(d);
+      return `<button class="ocol${d === sel ? ' sel' : ''}" data-cday="${d}"><span class="owrap"><span class="ostack" style="height:${t ? Math.max(1, (t / max) * 100) : 0}%">${segsOf(d).slice().reverse().map((s) => seg(s, (s.v / t) * 100)).join('')}</span></span><span class="ox">${days.length > 8 ? d.slice(8) : d.slice(5)}</span></button>`;
+    }).join('')}</div></div>`;
+  }
+  const ss = segsOf(sel), st = ss.reduce((s, x) => s + x.v, 0);
+  const panel = `<div class="opanel"><div class="ophead"><b>${new Date(sel + 'T12:00:00Z').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}</b><span class="grow"></span><b>${fmtV(st)}</b></div>${
+    ss.map((s) => `<div class="cleg"><i style="background:${colorOf(s.k)}"></i><span>${escapeHtml(nameOf(s.k))}</span><span class="grow"></span><span class="dim">${st ? Math.round((s.v / st) * 100) : 0}%</span><b>${fmtV(s.v)}</b></div>`).join('') || '<div class="dim">no usage that day</div>'}</div>`;
+  const ctrl = `<div class="octrl"><span class="dim">split</span>${['model', 'project', 'agent'].map((x) => chip('dim', x, ui.dim, x)).join('')}</div>
+    <div class="octrl"><span class="dim">show</span>${chip('metric', 'total', metric, 'tokens')}${chip('metric', 'cost', metric, 'cost')}${today ? '' : `<span class="grow"></span>${chip('range', '7', String(ui.range), '7d')}${chip('range', '14', String(ui.range), '14d')}`}</div>`;
+  const legend = `<div class="clegend">${[...top, ...(ranked.length > top.length ? [OTHERS] : [])].map((k) => `<span class="lg"><i style="background:${colorOf(k)}"></i>${escapeHtml(nameOf(k))}</span>`).join('')}</div>`;
+  return `<div class="ot">${ctrl}<div class="ohead"><b>${fmtV([...totals.values()].reduce((s, v) => s + v, 0))}</b><span class="dim">${today ? 'today (UTC)' : `last ${days.length} days`}</span></div>${chart}${legend}${panel}</div>`;
+}
+function sparkSvg(vals, color) {
+  const w = 84, h = 26, max = Math.max(...vals, 0) || 1;
+  const pts = vals.map((v, i) => `${(i / Math.max(1, vals.length - 1)) * w},${h - 2 - (v / max) * (h - 4)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><polyline fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points="${pts}"/></svg>`;
+}
+function trendHtml(u, tab, ui) {
   const dm = u.perDayModel;
   if (!dm) return '<div class="sheet-empty">needs the updated ghosty-usage tailer (restart the unit)</div>';
-  const metric = ui.metric, val = (e) => (metric === 'cost' ? (e.cost || 0) : (e.total || 0)), fmtV = (v) => (metric === 'cost' ? fmtUsd(v) : fmtTok(v));
-  const today = tab === 'today';
-  const day = today ? u.today.day : ui.chartDay;
-  const last7 = Array.from({ length: 7 }, (_, i) => new Date(Date.now() - (6 - i) * 86400000).toISOString().slice(0, 10));
-  const days = day ? [day] : last7;
-  const totals = new Map();
-  for (const d of days) for (const [m, e] of Object.entries(dm[d] || {})) totals.set(m, (totals.get(m) || 0) + val(e));
-  const ranked = [...totals].filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]).map(([m]) => m);
-  const top = ranked.slice(0, 4);
-  const colorOf = (m) => (top.includes(m) ? CHART_PAL[top.indexOf(m)] : CHART_OTHER);
-  const sumDay = (d) => Object.values(dm[d] || {}).reduce((s, e) => s + val(e), 0);
-  const grand = days.reduce((s, d) => s + sumDay(d), 0);
-  const segs = (d) => {
-    const g = new Map();
-    for (const [m, e] of Object.entries(dm[d] || {})) { const k = top.includes(m) ? m : '\u0000others'; g.set(k, (g.get(k) || 0) + val(e)); }
-    return [...top, '\u0000others'].filter((k) => g.get(k) > 0).map((k) => ({ k, v: g.get(k) }));
-  };
-  const seg = (s, h) => `<i class="cseg" style="${h ? `height:${h}%` : `flex:${s.v}`};background:${s.k === '\u0000others' ? CHART_OTHER : colorOf(s.k)}" title="${escapeHtml(s.k === '\u0000others' ? 'others' : s.k)} ${fmtV(s.v)}"></i>`;
-  let bars;
-  if (day) {
-    bars = `<div class="cone">${segs(day).map((s) => seg(s)).join('') || '<span class="dim">no usage that day</span>'}</div>`;
-  } else {
-    const max = Math.max(...days.map(sumDay), 0);
-    bars = `<div class="cbars">${days.map((d) => `<button class="ccol" data-cday="${d}" title="${d} · ${fmtV(sumDay(d))}"><span class="cstack" style="height:${max ? Math.max(1, Math.round((sumDay(d) / max) * 100)) : 0}%">${segs(d).slice().reverse().map((s) => seg(s, sumDay(d) ? (s.v / sumDay(d)) * 100 : 0)).join('')}</span><span class="cd">${d.slice(8)}</span></button>`).join('')}</div>`;
-  }
-  const rest = ranked.slice(4).reduce((s, m) => s + (totals.get(m) || 0), 0);
-  const legend = top.map((m) => [m, totals.get(m), colorOf(m)]).concat(rest > 0 ? [['others', rest, CHART_OTHER]] : [])
-    .map(([m, v, c]) => `<div class="cleg"><i style="background:${c}"></i><span>${escapeHtml(m)}</span><span class="grow"></span><span class="dim">${grand ? Math.round((v / grand) * 100) : 0}%</span><b>${fmtV(v)}</b></div>`).join('');
-  const sw = `<div class="cmetric"><button class="${metric === 'total' ? 'on' : ''}" data-metric="total">tokens</button><button class="${metric === 'cost' ? 'on' : ''}" data-metric="cost">cost</button></div>`;
-  const back = !today && day ? `<button class="cback" data-cback>&larr; 7 days</button><span class="dim">${day}</span>` : (!today ? '<span class="dim">last 7 days &middot; tap a day</span>' : '<span class="dim">today (UTC)</span>');
-  return `<div class="chart"><div class="chead"><b>${fmtV(grand)}</b>${back}<span class="grow"></span>${sw}</div>${bars}<div class="clegs">${legend || ''}</div></div>`;
+  const metric = ui.metric, val = (e) => (metric === 'cost' ? (e.cost || 0) : (e.total || 0));
+  const fmtV = (v) => (metric === 'cost' ? fmtUsd(v) : fmtTok(v));
+  const days = lastDays(14), models = new Set();
+  for (const d of days) for (const m of Object.keys(dm[d] || {})) models.add(m);
+  const rows = [...models].map((m) => {
+    const series = days.map((d) => val((dm[d] || {})[m] || {}));
+    const sum = (arr) => arr.reduce((s, v) => s + v, 0), cur = sum(series.slice(7)), prev = sum(series.slice(0, 7));
+    const agent = modelAgent(m);
+    return { m, agent, series, total: sum(series), cur, prev, delta: prev > 0 ? ((cur - prev) / prev) * 100 : null };
+  }).filter((r) => r.total > 0).sort((x, y) => y.total - x.total);
+  const ctrl = `<div class="octrl"><span class="dim">show</span>${chip('metric', 'total', metric, 'tokens')}${chip('metric', 'cost', metric, 'cost')}<span class="grow"></span><span class="dim">last 7d vs the 7d before</span></div>`;
+  return `<div class="ot">${ctrl}${rows.map((r) => `<div class="trow"><i class="adot ${escapeHtml(r.agent)}"></i><div class="tn"><b>${escapeHtml(r.m)}</b><div class="u2">${escapeHtml(PROVIDER[r.agent] || '')}</div></div>${sparkSvg(r.series, r.delta != null && r.delta < 0 ? '#8a8d96' : '#6ed1c0')}<div class="tv"><b>${fmtV(r.total)}</b><div class="u2 ${r.delta == null ? '' : r.delta >= 0 ? 'up' : 'dn'}">${r.delta == null ? (r.cur > 0 ? 'new' : '') : `${r.delta >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(r.delta))}%`}</div></div></div>`).join('') || '<div class="dim">no usage</div>'}</div>`;
+}
+// headline for Overview: cost, change vs the previous period, and what that is worth against the flat subscriptions
+const SUB_EUR_MONTH = 260, EUR_USD = 1.08;   // Claude Max 200 + ChatGPT Plus 20 + MiniMax 40
+function valueHtml(u, tab) {
+  const today = tab === 'today', cost = (d) => (u.perDay?.[d]?.cost) || 0;
+  const days = lastDays(14), sum = (ds) => ds.reduce((s, d) => s + cost(d), 0);
+  const cur = today ? cost(days[13]) : sum(days.slice(7)), prev = today ? cost(days[12]) : sum(days.slice(0, 7));
+  const diff = cur - prev;
+  const delta = `<span class="${diff >= 0 ? 'up' : 'dn'}">${diff >= 0 ? '▲' : '▼'} ${escapeHtml(fmtUsd(Math.abs(diff)))}</span> <span class="dim">vs ${today ? 'yesterday' : 'the previous 7 days'}</span>`;
+  const sub = SUB_EUR_MONTH * EUR_USD, share = cur / (today ? sub : (sub * 7) / 30);
+  const worth = today ? `≈ ${Math.round(share * 100)}% of one month of subscriptions (&euro;${SUB_EUR_MONTH})` : `≈ ${share.toFixed(1)}&times; what the subscriptions cost for 7 days`;
+  return `<div class="uval"><div class="u1"><b class="big">${usd(cur)}</b><span class="dim">${today ? 'today' : 'last 7 days'} (API-equivalent)</span></div><div class="u2">${delta}</div><div class="u2">${worth}</div></div>`;
 }
 // ui = { f: {agent, project, q}, open: {agent, project, session, day}, openAgents: Set }
 function usageHtml(u, tab, ui) {
@@ -2340,13 +2395,16 @@ function usageHtml(u, tab, ui) {
       ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
   const days = today ? '' : sec('day', 'Per day', '', undefined, `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
-  return sec('chart', 'Tokens by model', '', undefined, chartHtml(u, tab, ui))
+  if (ui.view === 'time') return overTimeHtml(u, tab, ui);
+  if (ui.view === 'trend') return trendHtml(u, tab, ui);
+  if (ui.view === 'sessions') {
+    return sec('project', 'Projects', projects.length, undefined, projHtml)
+      + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml);
+  }
+  return valueHtml(u, tab)
     + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa))
     + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
-    + sec('project', 'Projects', projects.length, undefined, projHtml)
-    + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml)
-    + sec('total', 'Total', '', totCost, totalHtml)
-    + (filtered ? '' : days);
+    + sec('total', 'Total', '', totCost, totalHtml);
 }
 function openUsage() {
   openSheet('Usage · API-equivalent', ({ body, foot, close }) => {
@@ -2354,9 +2412,10 @@ function openUsage() {
     foot.classList.remove('hidden');
     foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
-    const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', chartDay: null };
+    const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', dim: 'model', range: 7, selDay: null, view: lsGet('ghosty.usageView', 'overview') };
     let tab = 'today', data = null;
     body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button><button class="sbtn" data-tab="jev">Jev &amp; AI</button></div>
+      <div class="uviews"><button data-view="overview">Overview</button><button data-view="time">Over time</button><button data-view="trend">Trending</button><button data-view="sessions">Sessions</button></div>
       <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><div class="ucombo"><button type="button" class="ucb" data-combo aria-label="Filter by session"><span class="ucl">all sessions</span></button><div class="ucpanel hidden"><input class="ucs" type="search" placeholder="search session…" aria-label="Search sessions"><div class="uclist"></div></div></div></div>
       <div class="ucontent"><div class="sheet-empty">loading…</div></div>`;
     const content = body.querySelector('.ucontent');
@@ -2385,7 +2444,9 @@ function openUsage() {
     let jevData = null, jevErr = null;
     const draw = () => {
       for (const b of body.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
-      body.querySelector('.ufilters').classList.toggle('hidden', tab === 'jev');
+      body.querySelector('.uviews').classList.toggle('hidden', tab === 'jev');
+      for (const b of body.querySelectorAll('[data-view]')) b.classList.toggle('on', b.dataset.view === ui.view);
+      body.querySelector('.ufilters').classList.toggle('hidden', tab === 'jev' || !['overview', 'sessions'].includes(ui.view));
       if (tab === 'jev') { content.innerHTML = jevErr ? `<div class="sheet-empty">${escapeHtml(jevErr)}</div>` : jevTabHtml(jevData); return; }
       content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
@@ -2403,11 +2464,16 @@ function openUsage() {
       if (!e.target.closest('.ucpanel')) closeCombo();
       const t = e.target.closest('[data-tab]');
       if (t) { tab = t.dataset.tab; if (tab === 'jev') loadJev(); else if (data) fillOptions(); draw(); return; }
+      const vw = e.target.closest('[data-view]');
+      if (vw) { ui.view = vw.dataset.view; lsSet('ghosty.usageView', ui.view); draw(); return; }
       const cd = e.target.closest('[data-cday]');
-      if (cd) { ui.chartDay = cd.dataset.cday; draw(); return; }
-      if (e.target.closest('[data-cback]')) { ui.chartDay = null; draw(); return; }
+      if (cd) { ui.selDay = cd.dataset.cday; draw(); return; }
       const mt = e.target.closest('[data-metric]');
       if (mt) { ui.metric = mt.dataset.metric; draw(); return; }
+      const dmn = e.target.closest('[data-dim]');
+      if (dmn) { ui.dim = dmn.dataset.dim; draw(); return; }
+      const rg = e.target.closest('[data-range]');
+      if (rg) { ui.range = Number(rg.dataset.range); draw(); return; }
       const s = e.target.closest('[data-sec]');
       if (s) { ui.open[s.dataset.sec] = !ui.open[s.dataset.sec]; draw(); return; }
       const g = e.target.closest('[data-agent]');
