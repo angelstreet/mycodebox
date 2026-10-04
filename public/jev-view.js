@@ -28,6 +28,39 @@ export function creditChip(c) {
   return `<span class="qi ${c.balance <= 0 ? 'crit' : c.balance <= 2 ? 'warn' : 'ok'}" title="OpenRouter credit">openrouter ${usd(c.balance)}</span>`;
 }
 
+// ---- Jev inside the usage Overview (replaces the old third tab) ----
+// One "agent" row next to claude / codex / minimax: calls and failures for the period, real spend ($, the only paid thing),
+// expandable into its uses. Credit is a bar in the quota section.
+const period = (s, tab, today) => (tab === 'today'
+  ? (s.days.find((x) => x.day === today) || { calls: 0, failed: 0, cost: 0 })
+  : s.total);
+export function jevRowHtml(d, tab, open, chev, today = new Date().toISOString().slice(0, 10)) {
+  if (!d) return '';
+  const streams = [['Manager Jev', 'classifies ambiguous stops', d.manager], ['AI reviewer', 'proposes replies for stops that go to you', d.reviewer]];
+  const per = streams.map(([title, sub, s]) => ({ title, sub, s, p: period(s, tab, today) }));
+  const calls = per.reduce((n, x) => n + x.p.calls, 0), failed = per.reduce((n, x) => n + x.p.failed, 0), spend = per.reduce((n, x) => n + (x.p.cost || 0), 0);
+  const failing = per.some((x) => x.s.health.state === 'failing');
+  const chip = failed ? `<span class="jfchip ${failing || failed / Math.max(1, calls) > 0.25 ? 'crit' : 'warn'}">${failed} failed</span>` : '';
+  const sub = failing ? 'failing right now' : calls ? `${calls} call${calls === 1 ? '' : 's'}` : 'no calls';
+  const body = open ? `<div class="umodels">${per.map((x) => `<div class="urow sub"><div class="u1"><b>${esc(x.title)}</b><span class="grow"></span><b class="tk">${cost(x.p.cost)}</b></div>
+      <div class="u2">${esc(x.sub)} &middot; ${x.p.calls} calls &middot; <span class="${x.p.failed ? 'jf' : ''}">${x.p.failed} failed</span></div>
+      ${x.s.health.state === 'failing' ? banner(x.s.health, x.title) : ''}${tab === 'today' ? '' : dayRows(x.s.days, today)}</div>`).join('')}
+      ${d.product?.available && d.product.usages?.length ? d.product.usages.map((u) => `<div class="urow sub"><div class="u1"><b>${esc(u.usage_key)}</b><span class="grow"></span><b class="tk">${cost(u.cost)}</b></div><div class="u2">${u.calls} calls &middot; <span class="${u.failed ? 'jf' : ''}">${u.failed} failed</span> &middot; last ${esc(when(u.last_at))}</div></div>`).join('') : `<div class="u2 dim">product uses (Sherlock, Test Prompt, ...): ${esc(d.product?.reason || 'not available')}</div>`}</div>` : '';
+  return `<div class="urow ag jev"><div class="u1 tog" data-agent="jev">${chev(open)}<i class="adot jev"></i><b>Jev</b><span class="dim">${sub}</span>${chip}<span class="grow"></span><b class="tk jcost" title="real spend (OpenRouter), the only paid usage">${cost(spend)}</b></div>
+    <div class="u2">${open ? '' : 'Manager Jev &middot; AI reviewer &middot; product uses'}</div>${body}</div>`;
+}
+export function creditRowHtml(c) {
+  const head = (right, cls = '') => `<div class="u1"><i class="adot jev"></i><b>OpenRouter credit</b><span class="grow"></span><b class="tk ${cls}">${right}</b></div>`;
+  if (!c || !c.ok) return `<div class="urow">${head('?')}<div class="u2 dim">no reading${c?.error ? ` (${esc(String(c.error).slice(0, 80))})` : ''}</div></div>`;
+  const ep = (c.endpoints || []).find((e) => e.has_key && e.total_credits) || (c.endpoints || []).find((e) => e.has_key);
+  const bal = c.balance != null ? c.balance : ep?.balance;
+  const tot = ep?.total_credits, used = ep?.total_usage;
+  const lvl = bal != null && bal <= 0 ? 'crit' : bal != null && bal <= 2 ? 'warn' : 'ok';
+  const pctUsed = tot ? Math.min(100, Math.round(((used ?? 0) / tot) * 100)) : null;
+  return `<div class="urow">${head(`${usd(bal)} left`, lvl)}${pctUsed == null ? '' : `<div class="qp"><span class="qn">used</span><span class="qb ${lvl}"><i style="width:${pctUsed}%"></i></span><span class="qv ${lvl}">${pctUsed}%</span></div>`}
+    <div class="u2">${bal != null && bal <= 0 ? '<b class="jf">credit is used up: Jev and AI calls fail until credit is added</b>' : `${tot != null ? `bought ${usd(tot)} &middot; ` : ''}${used != null ? `used ${usd(used)}` : ''}`}${c.stale ? ' &middot; stale' : ''}</div></div>`;
+}
+
 // ---- the tab ----
 function banner(h, what) {
   if (h.state === 'failing') return `<div class="jbanner bad" role="alert"><b>${esc(what)} is failing</b><br>${esc(h.error)}<br><span class="dim">${h.streak} call${h.streak === 1 ? '' : 's'} in a row, last ${esc(when(h.at))}</span></div>`;

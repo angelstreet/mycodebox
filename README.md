@@ -598,3 +598,8 @@ It appears in the sidebar within ~1 s.
 ## License
 
 Private. Joakim, your call whether to OSS.
+## Icons
+
+All UI icons come from one set in `public/icons.js` (24x24 grid, 2px round strokes, `currentColor`). Do not paste emoji, unicode
+glyphs (⏸ ⚡ ⚠ ▲ …) or one-off `<svg>` markup: add the icon to `ICONS`, then use `${icon('name', size)}` in JS strings or
+`<i data-icon="name" data-size="18"></i>` in `index.html`. The catalogue is listed at the top of `icons.js`.

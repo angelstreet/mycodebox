@@ -1218,7 +1218,7 @@ tr.pf-hit{ outline-offset:-2px; }
 .pf-link{ align-self:flex-start; }
 .cell .h .mt{ min-width:0; }
 .cell .h .mt .lease-chip{ line-height:1.2; font-size:10px; padding:0 6px; max-width:100%; overflow:hidden; text-overflow:ellipsis; vertical-align:top; }
-@media (max-width: 720px){ .row-item .state.deploy .st{ display:inline; } .row-item .state.deploy{ padding:2px 8px 2px 6px; gap:6px; } }
+
 .jbal{ font-weight:700; font-size:18px; font-variant-numeric:tabular-nums; } .jbal.bad{ color:var(--waiting); } .jbal.low{ color:var(--accent); }
 
 /* tokens-by-model chart (usage sheet) */
@@ -1291,3 +1291,18 @@ tr.pf-hit{ outline-offset:-2px; }
 /* usage sheet keeps one height on every tab (no jump when switching Today / 14 days / Jev) */
 .sheet.usage{ height:min(86dvh, 780px); }
 .tk{ font-variant-numeric:tabular-nums; font-weight:600; }
+
+/* icons: one set (icons.js); svgs inherit the text colour */
+svg.ico{ display:inline-block; vertical-align:-0.18em; flex-shrink:0; }
+.icon-btn i[data-icon], .icon-btn i, .newbtn i{ display:inline-flex; font-style:normal; }
+.pz{ display:inline-flex; align-items:center; justify-content:center; }
+.mv button, .jump button, .open{ display:inline-flex; align-items:center; justify-content:center; }
+.state.deploy .st{ display:none; }
+.state.deploy{ padding:3px 6px; }
+.state .sticon, .chip .sticon{ color:var(--deploy); }
+
+/* Jev row inside Overview */
+.adot.jev{ background:#9ab1ff; }
+.urow.jev .jcost{ color:var(--accent); }
+.jfchip{ font-size:10.5px; padding:1px 7px; border-radius:999px; border:1px solid; font-weight:600; }
+.jfchip.warn{ color:var(--accent); border-color:var(--accent); } .jfchip.crit{ color:var(--waiting); border-color:var(--waiting); background:rgba(255,95,95,.1); }
