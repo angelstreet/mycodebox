@@ -4,13 +4,13 @@
 // to judge it and writes the Langfuse score `ai_proposal_judge` (0..1, the reasoning as the comment) on the manager.ai-review generation.
 // Opt-in: LFEVAL_JUDGE=1 and JEV_URL + JEV_API_KEY. Capped per day; only proposals of the last 24 h; each stop judged once.
 //
-// Also appends one row to usage-ledger.jsonl per judged call (agent 'manager', name 'manager.judge'), exactly the
-// shape usage/manager-parse.js writes for the AI reviewer (cost.total on success, 0 on error, usage tokens, ms,
-// error, model). A failed call writes a row too (tokens 0, error set). The scorecard counts those rows under cost.judge.
+// Every call yields one usage row (agent 'manager', name 'manager.judge', with the manager trace id), the shape
+// usage/manager-parse.js gives the AI reviewer (cost.total on success, 0 on error, usage tokens, ms, error, model);
+// a failed call yields a row too (tokens 0, error set). The rows go to commit(rows) (the ingester's commitRows:
+// generation in Langfuse + ledger append), never straight into the ledger file. The scorecard counts them under cost.judge.
 // Every call, failed or not, counts against the daily cap; a record whose call failed is retried at most once an hour
 // (st.failed[stopId] = ms of the last failure, kept in the same state file).
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 import { hash, genIdOf, traceIdOf, postBatch } from './lf-common.js';
 import { callComplete, reviewerUrl, REVIEWER_USAGE } from '../triage.js';
 import { JUDGE_PROMPT, JUDGE_MODEL } from '../scripts/lf-setup.js';
@@ -50,13 +50,13 @@ function ledgerRow(r, res, p) {
   const usage = { input: Number(u.prompt_tokens) || 0, output: Number(u.completion_tokens) || 0, cache_read: Number(u.cache_read_input_tokens) || 0, cache_write_5m: 0, cache_write_1h: 0 };
   const cost = res.error ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0 }
     : Number.isFinite(Number(res.cost)) && Number(res.cost) >= 0 ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: Number(res.cost) } : null;
-  return { id: `manager:judge:${r.id}`, agent: 'manager', session: r.session, cwd: null, label: r.session, ts: now, model: res.model || JUDGE_MODEL, usage,
+  return { id: `manager:judge:${r.id}`, agent: 'manager', session: r.session, cwd: null, label: r.session, ts: now, trace: traceIdOf('manager', r.session), model: res.model || JUDGE_MODEL, usage,
     name: 'manager.judge', subagent: false,
     cost, costEstimated: !!res.costEstimated, ms: res.ms ?? null, error: res.error ? res.error : (p ? null : 'unparsable'), extra: { stop_id: r.id, score: p ? p.score : null } };
 }
 
-// cfg: { stallsFile, judgeStateFile, jevUrl, jevApiKey, judgeMaxPerDay?, judgeSampling?, ledgerFile?, stateDir?, now() } ; returns { judged, skipped }
-export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = console.log } = {}) {
+// cfg: { stallsFile, judgeStateFile, jevUrl, jevApiKey, judgeMaxPerDay?, judgeSampling?, now() } ; opts.commit(rows) takes the usage rows ; returns { judged, skipped, rows }
+export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = console.log, commit = null } = {}) {
   return async function judgePass() {
     if (!cfg.jevUrl || !cfg.jevApiKey) return { skipped: 'no JEV_URL / JEV_API_KEY' };
     const url = reviewerUrl(cfg.jevUrl);
@@ -77,7 +77,6 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
     const events = [];
     const ledgerRows = [];
     let judged = 0;
-    const ledgerFile = cfg.ledgerFile || (cfg.stateDir ? join(cfg.stateDir, 'usage-ledger.jsonl') : null);
     for (const r of recs) {
       if (st.calls >= (cfg.judgeMaxPerDay ?? 400)) break;
       if (random() >= (cfg.judgeSampling ?? 1)) { st.done[r.id] = 'sampled-out'; continue; }
@@ -88,12 +87,12 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
         if (res.error) {
           log('[lfeval] judge call failed:', res.error);
           st.failed[r.id] = now;          // counted against the cap; retried after RETRY_AFTER_MS
-          if (ledgerFile) ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, ms: res.ms, model: res.model, error: res.error, costEstimated: false }, null));
+          ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, ms: res.ms, model: res.model, error: res.error, costEstimated: false }, null));
           continue;
         }
         const p = parseJudge(res.content);
         // one usage-ledger row per call (success, unparsable or failed): the scorecard counts these under cost.judge
-        if (ledgerFile) ledgerRows.push(ledgerRow(r, res, p));
+        ledgerRows.push(ledgerRow(r, res, p));
         delete st.failed[r.id];
         if (!p) { st.done[r.id] = 'unparsable'; continue; }
         events.push({ id: hash(`ev:judge:${r.id}`).slice(0, 36), type: 'score-create', timestamp: new Date(now).toISOString(), body: {
@@ -103,16 +102,16 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
       } catch (e) {
         log('[lfeval] judge call failed:', e.message);
         st.failed[r.id] = now;
-        if (ledgerFile) ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, error: e.message }, null));
+        ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, error: e.message }, null));
       }
     }
     if (events.length) await postBatch(cfg, events, { fetchFn });
-    if (ledgerRows.length && ledgerFile) {
-      try { await fs.appendFile(ledgerFile, ledgerRows.map((r) => JSON.stringify(r)).join('\n') + '\n'); }
-      catch (e) { log('[lfeval] judge ledger append failed:', e.message); }
+    if (ledgerRows.length && commit) {
+      try { await commit(ledgerRows); }
+      catch (e) { log('[lfeval] judge usage rows not recorded:', e.message); }
     }
     for (const k of Object.keys(st.done)) if (Object.keys(st.done).length > 2000) delete st.done[k];
     await fs.writeFile(cfg.judgeStateFile, JSON.stringify(st));
-    return { judged, skipped: recs.length - judged };
+    return { judged, skipped: recs.length - judged, rows: ledgerRows };
   };
 }

@@ -182,7 +182,7 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   const { createJudge, parseJudge, judgeMessages } = await import('../usage/judge.js');
   const lf = await mock();
   const f = await setup([triage('a', 30, { src: 'rule', flags: ['mentions a deploy'] }), triage('b', 20), triage('old', 60 * 30)], lf);
-  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1, ledgerFile: join(tmpdir(), `judge-ledger-${Date.now()}.jsonl`) };
+  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1 };
   const asked = [];
   let fail = false;
   const fetchFn = async (url, init) => {
@@ -193,7 +193,8 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
     return new Response(JSON.stringify({ success: true, content: '{"reasoning":"safe","score":0.9}', usage: { prompt_tokens: 1000, completion_tokens: 100, total_tokens: 1100 }, model: 'mock-judge' }), { status: 200 });
   };
   const judge = createJudge(cfg, { fetchFn, log: () => {} });
-  assert.deepEqual(await judge(), { judged: 1, skipped: 1 }, 'cap of 1 per day; the 30-hour-old proposal is out of range');
+  const first = await judge();
+  assert.deepEqual([first.judged, first.skipped, first.rows.length], [1, 1, 1], 'cap of 1 per day; the 30-hour-old proposal is out of range');
   assert.equal(asked.length, 1);
   assert.equal(asked[0].url, 'http://127.0.0.1:5555/server/ai/complete');
   assert.equal(asked[0].headers['x-api-key'], 'vpt-key');
@@ -206,10 +207,11 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   // a failing endpoint counts against the cap, writes an error row, and is retried at most once an hour
   cfg.judgeMaxPerDay = 5; fail = true;
   const t0 = Date.now(); cfg.now = () => t0;
-  const ledgerOf = async () => (await fs.readFile(cfg.ledgerFile, 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  assert.equal((await judge()).judged, 0);
-  const failRow = (await ledgerOf()).filter((r) => r.error);
+  const failed = await judge();
+  assert.equal(failed.judged, 0);
+  const failRow = failed.rows.filter((r) => r.error);
   assert.equal(failRow.length, 1);
+  assert.equal(failRow[0].trace, traceIdOf('manager', 'sess-b'));
   assert.equal(failRow[0].usage.input, 0);
   assert.equal(JSON.parse(await fs.readFile(cfg.judgeStateFile, 'utf8')).calls, 2, 'the failed call counted against the cap');
   fail = false;

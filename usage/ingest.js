@@ -338,7 +338,7 @@ export function createIngester(cfg, hooks = {}) {
     const since = cfg.now() - cfg.backfillDays * DAY_MS;
     let text = ''; try { text = await fs.readFile(cfg.ledgerFile, 'utf8'); } catch {}
     // later lines for the same id are updates (a message's output_tokens grows while it streams): last one wins
-    if (!forceBackfill) for (const l of text.split('\n')) { try { const r = JSON.parse(l); if (r.ts >= since) remember(r); } catch {} }
+    if (!forceBackfill) for (const l of text.split('\n')) { try { const r = JSON.parse(l); if (r.ts >= since) remember(r.agent === 'manager' && !r.trace ? { ...r, trace: traceIdOf('manager', r.session) } : r); } catch {} }
     await fs.writeFile(cfg.ledgerFile, [...byId.values()].map((r) => JSON.stringify(r) + '\n').join(''));
   }
 
@@ -473,30 +473,48 @@ export function createIngester(cfg, hooks = {}) {
     for (const r of [...fresh, ...byId.values()]) { const l = nextState.traceLabel[r.trace]; if (l) r.label = l.label; }
   }
 
+  // Folds fresh (enriched) records into the traces, posts them to Langfuse as generations and appends them to the ledger.
+  async function send(fresh) {
+    if (!fresh.length) return;
+    // traces.get() needs the new records folded in for tags; do it on a copy so a failed send leaves state untouched
+    const tmpTraces = new Map([...traces].map(([k, v]) => [k, { first: v.first, models: new Set(v.models), days: new Set(v.days) }]));
+    for (const r of fresh) {
+      let t = tmpTraces.get(r.trace);
+      if (!t) tmpTraces.set(r.trace, t = { first: r.ts, models: new Set(), days: new Set() });
+      t.first = Math.min(t.first, r.ts); t.models.add(r.model); t.days.add(dayOf(r.ts));
+    }
+    const events = langfuseEvents(fresh, tmpTraces, cfg.now());
+    if (!cfg.publicKey || !cfg.secretKey) throw new Error('LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set');
+    for (let i = 0; i < events.length; i += cfg.batchSize) {
+      if (i && cfg.paceMs) await new Promise((r) => setTimeout(r, cfg.paceMs));
+      await postBatch(cfg, events.slice(i, i + cfg.batchSize));
+    }
+    await fs.appendFile(cfg.ledgerFile, fresh.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    for (const r of fresh) remember(r);
+    console.log(`[usage] sent ${fresh.length} generations`);
+  }
+
+  // Records another component produced (the in-ghosty judge's manager.judge calls): same path as the manager's own
+  // lines in collect(): enrich (trace id + label), generation to Langfuse, ledger append, remembered in byId.
+  async function commitRows(rows) {
+    if (!rows.length) return 0;
+    if (!state) await init(false);
+    const nextState = { ...state, traceLabel: { ...state.traceLabel } };
+    const fresh = rows.filter((r) => r && r.id && !byId.has(r.id)).sort((a, b) => a.ts - b.ts);
+    await enrich(fresh, nextState);
+    await send(fresh);
+    state = nextState;
+    await atomicWrite(cfg.offsetsFile, JSON.stringify(state));
+    return fresh.length;
+  }
+
   async function tick() {
     if (!state) await init(false);
     const { fresh, nextFiles, minimaxLastId } = await collect();
     const nextState = { ...state, files: nextFiles, minimaxLastId, cwdProject: { ...state.cwdProject }, traceLabel: { ...state.traceLabel } };
     fresh.sort((a, b) => a.ts - b.ts);
     await enrich(fresh, nextState);
-    if (fresh.length) {
-      // traces.get() needs the new records folded in for tags; do it on a copy so a failed send leaves state untouched
-      const tmpTraces = new Map([...traces].map(([k, v]) => [k, { first: v.first, models: new Set(v.models), days: new Set(v.days) }]));
-      for (const r of fresh) {
-        let t = tmpTraces.get(r.trace);
-        if (!t) tmpTraces.set(r.trace, t = { first: r.ts, models: new Set(), days: new Set() });
-        t.first = Math.min(t.first, r.ts); t.models.add(r.model); t.days.add(dayOf(r.ts));
-      }
-      const events = langfuseEvents(fresh, tmpTraces, cfg.now());
-      if (!cfg.publicKey || !cfg.secretKey) throw new Error('LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set');
-      for (let i = 0; i < events.length; i += cfg.batchSize) {
-        if (i && cfg.paceMs) await new Promise((r) => setTimeout(r, cfg.paceMs));
-        await postBatch(cfg, events.slice(i, i + cfg.batchSize));
-      }
-      await fs.appendFile(cfg.ledgerFile, fresh.map((r) => JSON.stringify(r)).join('\n') + '\n');
-      for (const r of fresh) remember(r);
-      console.log(`[usage] sent ${fresh.length} generations`);
-    }
+    await send(fresh);
     state = nextState;
     await atomicWrite(cfg.offsetsFile, JSON.stringify(state));
     return fresh.length;
@@ -509,7 +527,7 @@ export function createIngester(cfg, hooks = {}) {
     try {
       evalSync = evalSync || createEvalSync(cfg, { traceKnown: (t) => traces.has(t) });
       const r = await evalSync.sync();
-      if (cfg.jevUrl && cfg.jevApiKey) { judge = judge || createJudge(cfg); const j = await judge(); if (j.judged) console.log(`[usage] judged ${j.judged} AI proposals`); }
+      if (cfg.jevUrl && cfg.jevApiKey) { judge = judge || createJudge(cfg, { commit: commitRows }); const j = await judge(); if (j.judged) console.log(`[usage] judged ${j.judged} AI proposals`); }
       if (r && !r.skipped && (r.scores || r.spans || r.items || r.deleted)) console.log(`[usage] eval sync ${JSON.stringify(r)}`);
       return r;
     } catch (e) { console.error('[usage] eval sync:', e.message); return null; }
@@ -522,7 +540,7 @@ export function createIngester(cfg, hooks = {}) {
     return s;
   }
 
-  return { init, tick, summary, evalPass, ledger: byId };
+  return { init, tick, summary, evalPass, commitRows, ledger: byId };
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +557,7 @@ export function createScorecardPoster(cfg, { ing, log = console.log } = {}) {
     const now = cfg.now ? cfg.now() : Date.now();
     if (!force && now - lastAt < SCORECARD_MS) return { skipped: 'throttled' };
     try {
-      // Read the file, not ing.ledger: judge rows are appended straight to the file and are not in the ingester's map.
+      // Read the file, not ing.ledger: the file is the full record (the ingester's map only covers its window).
       const text = await fs.readFile(cfg.ledgerFile, 'utf8').catch(() => '');
       const ledgerRows = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       let stallRecs = [], runsLines = [];

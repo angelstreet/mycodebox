@@ -335,3 +335,59 @@ test('tailer eval pass: labels in stalls.jsonl become scores + a dataset item; o
   assert.equal(await fs.readFile(cfg.stallsFile, 'utf8'), before, 'the log is only read');
   assert.equal((await ing.evalPass()).skipped, 'nothing new');
 });
+
+// ---------------------------------------------------------------------------
+// in-ghosty judge rows travel the reviewer's path: generation in Langfuse + ledger row with a trace
+// ---------------------------------------------------------------------------
+test('judge rows: one generation + one ledger row with the manager trace per call (ok and failed); init never makes an id-less trace', async () => {
+  const { createJudge } = await import('../usage/judge.js');
+  const lf = await mockLangfuse();
+  const { cfg } = await fixture(lf);
+  await fs.mkdir(cfg.stateDir, { recursive: true });
+  const at = (m) => new Date(NOW - m * 60000).toISOString();
+  const tri = (id, m) => ({ type: 'triage', id, session: `sess-${id}`, at: at(m), case: 'owner_decision', mode: 'simulate', model: 'm', ai: { proposed_reply: 'Yes.', reasoning: 'r', confidence: 0.9, owner_needed: false, owner_needed_why: '' } });
+  await fs.writeFile(cfg.stallsFile, [tri('ok', 30), tri('bad', 20)].map((x) => JSON.stringify(x)).join('\n') + '\n');
+  const ing = createIngester(cfg, hooks);
+  await ing.init(false);
+  const jcfg = { ...cfg, judgeStateFile: join(cfg.stateDir, 'lfeval-judge.json'), jevUrl: 'http://127.0.0.1:1/server/ai/decide', jevApiKey: 'k' };
+  const fetchFn = async (url, init) => {
+    if (fetchFn.n++ === 1) throw new Error('boom');
+    return new Response(JSON.stringify({ success: true, content: '{"reasoning":"fine","score":0.7}', usage: { prompt_tokens: 100, completion_tokens: 10 }, model: 'judge-m', cost: 0.002 }), { status: 200 });
+  };
+  fetchFn.n = 0;
+  const r = await createJudge(jcfg, { fetchFn, commit: ing.commitRows, log: () => {}, random: () => 0 })();
+  assert.equal(r.rows.length, 2);
+  const g = gens(lf.batches).filter((x) => x.name === 'manager.judge');
+  assert.equal(g.length, 2, 'one generation per call');
+  const ok = g.find((x) => x.id === genIdOf('manager:judge:ok')), bad = g.find((x) => x.id === genIdOf('manager:judge:bad'));
+  assert.equal(ok.traceId, traceIdOf('manager', 'sess-ok'));
+  assert.equal(ok.model, 'judge-m');
+  assert.deepEqual([ok.usageDetails.input, ok.usageDetails.output, ok.costDetails.total, ok.level], [100, 10, 0.002, undefined]);
+  assert.equal(bad.level, 'ERROR');
+  assert.match(bad.statusMessage, /boom/);
+  assert.equal(bad.usageDetails.input, 0);
+  const rows = (await fs.readFile(cfg.ledgerFile, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.name === 'manager.judge');
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((x) => /^[0-9a-f]{32}$/.test(x.trace)));
+  assert.equal(rows.find((x) => x.id === 'manager:judge:bad').error.includes('boom'), true);
+  assert.equal(rows.find((x) => x.id === 'manager:judge:ok').extra.score, 0.7);
+  // committing the same rows again sends nothing new
+  const before = lf.batches.length;
+  await ing.commitRows(r.rows);
+  assert.equal(lf.batches.length, before);
+
+  // restart with an old-shape judge row (no trace) on disk: init gives it a trace, no trace without an id
+  const old = { id: 'manager:judge:legacy', agent: 'manager', session: 'sess-legacy', cwd: null, label: 'sess-legacy', ts: NOW - 1000, model: 'judge-m', name: 'manager.judge', subagent: false,
+    usage: { input: 1, output: 1, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 }, cost: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0.001 }, error: null, extra: { stop_id: 'legacy', score: 0.5 } };
+  await fs.appendFile(cfg.ledgerFile, JSON.stringify(old) + '\n');
+  const ing2 = createIngester(cfg, hooks);
+  await ing2.init(false);
+  assert.equal(ing2.ledger.get('manager:judge:legacy').trace, traceIdOf('manager', 'sess-legacy'));
+  const s = await ing2.summary();
+  assert.ok(!s.perSession.some((x) => !x.session && !x.trace), 'summary builds');
+  const fileRows = (await fs.readFile(cfg.ledgerFile, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.ok(fileRows.every((x) => x.trace), 'every ledger row carries a trace after init');
+  const sent = lf.batches.length;
+  await ing2.tick();
+  assert.ok(!lf.batches.slice(sent).flatMap((b) => b.body.batch || []).some((e) => e.type === 'trace-create' && !e.body.id));
+});
