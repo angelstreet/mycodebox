@@ -244,15 +244,21 @@ async function sendKey(session, key) {
 }
 
 async function sendKeys(session, keys, enter = true) {
-  // Split on \n so a multi-line paste works.
-  const lines = String(keys || '').split('\n');
+  // Multi-line text goes in as ONE bracketed paste, then a separate Enter after a pause: per-line Enter would submit
+  // line 1 alone, and an Enter sent right after a fast burst is swallowed by Claude Code's paste detection.
+  const text = String(keys || '');
+  const lines = text.split('\n');
   if (lines.length > 200) throw httpError(400, 'too many lines (max 200)');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.length) {
-      await exec(TMUX, ['send-keys', '-t', tgt(session), '-l', '--', line]);
-    }
-    if (enter || i < lines.length - 1) await exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
+  if (lines.length > 1) {
+    const buf = `ghosty-send-${process.pid}-${Date.now()}`;
+    await exec(TMUX, ['set-buffer', '-b', buf, '--', text]);
+    await exec(TMUX, ['paste-buffer', '-p', '-d', '-b', buf, '-t', tgt(session)]);
+  } else if (text.length) {
+    await exec(TMUX, ['send-keys', '-t', tgt(session), '-l', '--', text]);
+  }
+  if (enter) {
+    await new Promise((r) => setTimeout(r, text.length > 200 || lines.length > 1 ? 400 : 80));
+    await exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
   }
   lastSendAt.set(session, Date.now());
   lastSendText.set(session, String(keys || ''));
