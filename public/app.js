@@ -2079,11 +2079,8 @@ function quotaPaceHtml(q, onlyAgent) {
     const rows = p.windows.map((w) => {
       if (w.usedPercent == null) return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb na"></span><span class="qt dim">${w.unlimited ? 'unlimited' : 'unknown'}</span></div>`;
       const pc = paceOf(w), used = Math.min(100, w.usedPercent);
-      const lvl = pc?.runsOut ? 'crit' : (pc?.proj != null && pc.proj >= 85) || w.usedPercent >= 80 ? 'warn' : 'ok';
-      const verdict = !pc ? resetText(w)
-        : pc.runsOut ? `<b class="vr">runs out in ${fmtMin(pc.toFull)}</b>, ${fmtMin(pc.left - pc.toFull)} before it resets`
-        : pc.proj == null ? `${resetText(w)} &middot; too early to project`
-        : `on track &middot; ~${Math.round(pc.proj)}% at reset &middot; ${resetText(w)}`;
+      const lvl = qLevel(w.usedPercent) === 'na' ? 'ok' : qLevel(w.usedPercent);   // from what is used, not a forecast
+      const verdict = resetText(w);
       return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb ${lvl}"><i style="width:${used}%"></i>${pc ? `<u style="left:${Math.round(pc.frac * 100)}%" title="time elapsed in this window"></u>` : ''}</span><span class="qv ${lvl}">${Math.round(w.usedPercent)}%</span></div><div class="u2 qverdict">${verdict}</div>`;
     }).join('');
     return `<div class="urow">${head}${rows}</div>`;
