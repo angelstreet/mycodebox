@@ -3,6 +3,7 @@
 // State-first UI: every session shows agent, state (working / needs you /
 // idle / offline) and elapsed time. Custom names live in localStorage.
 
+import { icon, hydrateIcons } from '/icons.js';
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
 import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
@@ -15,6 +16,7 @@ import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
 
+hydrateIcons();
 const els = {
   topbar:      $('#topbar'),
   appTitle:    $('#appTitle'),
@@ -162,11 +164,11 @@ function fmtShort(sec) {
 //   waiting  → how long it has been waiting on you
 //   idle     → time since last output
 // card / board badge: the pulsing dot already says "working", so show only the elapsed time
-function badgeText(name) { return stateText(name).replace(/^working ?/, ''); }
+function badgeText(name) { return vstateOf(name) === 'deploy' ? '' : stateText(name).replace(/^working ?/, ''); }
 function stateText(name) {
   const st = state.status[name] || {};
   const s = stateOf(name);
-  if (vstateOf(name) === 'deploy') return '\u23f3 waiting deploy';
+  if (vstateOf(name) === 'deploy') return 'deploy';
   const now = Date.now();
   const drift = (now - state.statusAt) / 1000;
   if (s === 'working') {
@@ -184,7 +186,7 @@ function stateText(name) {
 function stateBadgeHtml(name) {
   const s = vstateOf(name);
   const tip = s === 'deploy' ? ` data-wd="${escapeHtml(state.status[name].deployWait.id || '')}" title="${escapeHtml(deployWaitTip(name))}"` : '';
-  return `<span class="state ${s}"${tip}><i class="dot ${s}"></i><span class="st">${escapeHtml(badgeText(name))}</span></span>`;
+  return `<span class="state ${s}"${tip}>${s === 'deploy' ? icon('timer', 14, 'sticon') : `<i class="dot ${s}"></i>`}<span class="st">${escapeHtml(badgeText(name))}</span></span>`;
 }
 function agentBadgeHtml(name) {
   const a = agentOf(name);
@@ -200,7 +202,7 @@ function reporterMarkHtml(name) {
   const subs = (r.agentList || []).map((x) => `${x.type || 'agent'} (${x.status})${x.description ? ': ' + x.description : ''}`);
   const tip = ['reporter live', r.agents && r.agents.count ? `${r.agents.count} subagent${r.agents.count === 1 ? '' : 's'}: ${Object.entries(r.agents.by).map(([k, v]) => `${v} ${k}`).join(', ')}` : 'no subagents', r.backgroundWork ? `${r.backgroundWork} background task${r.backgroundWork === 1 ? '' : 's'} running` : '', ...subs].filter(Boolean).join('\n');
   const n = r.agents && r.agents.count ? `<sup>${r.agents.count}</sup>` : '';
-  return `<span class="rp" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip.split('\n')[0])}">&#9889;${n}</span>`;
+  return `<span class="rp" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip.split('\n')[0])}">${icon('zap', 12)}${n}</span>`;
 }
 
 // Strip ANSI control sequences.
@@ -738,7 +740,7 @@ function renderSummary() {
   ];
   const html = chips
     .filter(([k, n]) => n > 0 || k === 'working')
-    .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}"><i class="dot ${k}"></i>${n}</button>`)
+    .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}">${k === 'deploy' ? icon('timer', 13, 'sticon') : `<i class="dot ${k}"></i>`}${n}</button>`)
     .join('');
   if (els.summary.innerHTML !== html) {
     els.summary.innerHTML = html;
@@ -989,12 +991,8 @@ function buildSideRow(s) {
       <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="uc hidden"></span><span class="pp hidden">paused</span></div>
       <div class="sub rb"></div>
     </div>
-    <button class="edit" aria-label="Rename">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-    </button>
-    <button class="edit kill" aria-label="Kill session">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
-    </button>`;
+    <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
+    <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button>`;
   li.querySelector('.meta').onclick = (e) => {
     e.stopPropagation();
     closeSide();
@@ -1081,16 +1079,14 @@ function buildCell(s) {
       <span class="pos"></span>
       <span class="tgt">&rarr; send target</span>
       <span class="mv" title="Move card">
-        <button data-dir="left" aria-label="Move left">&#9664;</button><button data-dir="up" aria-label="Move up">&#9650;</button><button data-dir="down" aria-label="Move down">&#9660;</button><button data-dir="right" aria-label="Move right">&#9654;</button>
+        <button data-dir="left" aria-label="Move left">${icon('chevron-left', 13)}</button><button data-dir="up" aria-label="Move up">${icon('chevron-up', 13)}</button><button data-dir="down" aria-label="Move down">${icon('chevron-down', 13)}</button><button data-dir="right" aria-label="Move right">${icon('chevron-right', 13)}</button>
       </span>
       <span class="stw"></span>
       <span class="pp hidden">paused</span>
-      <button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button>
+      <button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button>
       <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
-      <button class="open" aria-label="Open full screen" title="Open">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-      </button>
+      <button class="open" aria-label="Open full screen" title="Open">${icon('expand', 14)}</button>
     </div>
     <div class="ask hidden">
       <span class="q"></span>
@@ -1102,8 +1098,8 @@ function buildCell(s) {
     <div class="b"></div>
     <div class="docview"></div>
     <div class="jump">
-      <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">&#10514;</button>
-      <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">&#10515;</button>
+      <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">${icon('arrow-up-to-line', 15)}</button>
+      <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">${icon('arrow-down-to-line', 15)}</button>
     </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
   cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
@@ -1122,7 +1118,7 @@ function buildCell(s) {
 }
 
 // Desktop drag-to-reorder: grab a card by its header, drop it on another
-// card to take that card's place. (Touch uses the ◀ ▲ ▼ ▶ buttons.)
+// card to take that card's place. (Touch uses the move arrow buttons.)
 function wireDrag(cell, name) {
   const h = cell.querySelector('.h');
   h.draggable = true;
@@ -1345,8 +1341,8 @@ function projHtml(n) {
   const project = st.project || st.repo;
   if (!project) return '';
   const gh = st.github ? '<svg class="gh" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>' : '';
-  const br = st.branch ? `<span class="br">\u2387 ${escapeHtml(st.branch)}${st.dirty ? '<b class="dirty">*</b>' : ''}</span>` : '';
-  const wt = st.worktree ? `<span class="wt" title="git worktree">\u2442 ${escapeHtml(st.worktree)}</span>` : '';
+  const br = st.branch ? `<span class="br">${icon('git-branch', 11)} ${escapeHtml(st.branch)}${st.dirty ? '<b class="dirty">*</b>' : ''}</span>` : '';
+  const wt = st.worktree ? `<span class="wt" title="git worktree">${icon('git-fork', 11)} ${escapeHtml(st.worktree)}</span>` : '';
   return `${gh}<b class="pj">${escapeHtml(project)}</b>${br}${wt}`;
 }
 function rowChipsHtml(n) {
@@ -1592,7 +1588,7 @@ function renderList() {
     row.className = 'row-item';
     row.dataset.session = s.name;
     row.innerHTML = `
-      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="uc hidden"></span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">&#9208;</button></div>
+      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><span class="uc hidden"></span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button></div>
       <div class="last"></div>
       <div class="apill hidden"></div>
       <div class="meta"></div>`;
@@ -1807,9 +1803,10 @@ function syncPrioPause(el, n) {
   syncPill(el.querySelector('.pp'), n);
   syncUsageChip(el.querySelector('.uc'), n);
   const pz = el.querySelector('.pz');
-  const glyph = paused ? '▶' : '⏸';
-  if (pz.textContent !== glyph) {
-    pz.textContent = glyph;
+  const glyph = paused ? 'play' : 'pause';
+  if (pz.dataset.ic !== glyph) {
+    pz.dataset.ic = glyph;
+    pz.innerHTML = icon(glyph, 14);
     pz.title = paused ? 'Resume (sends "continue")' : 'Pause (Esc, then hold)';
     pz.setAttribute('aria-label', paused ? 'Resume session' : 'Pause session');
   }
@@ -1994,7 +1991,7 @@ function depRow(d, d0) {
   return `<div class="dep ${d.state}"><div class="d1"><span class="dtag ${d.state}">${escapeHtml(tag)}</span><b>${escapeHtml(d.env)}</b><span class="dscope">${escapeHtml(d.scope)}</span><span class="grow"></span>${btns}</div>
     <div class="d2">${escapeHtml(d.ref)} &middot; ${escapeHtml(d.agent)}${d.purpose ? ` &middot; ${escapeHtml(d.purpose)}` : ''}</div>
     ${blocking ? `<div class="d2 dwait">waiting on ${blocking}</div>` : ''}
-    ${warn ? `<div class="d2 dwarn">&#9888; replaces ${escapeHtml(last.ref)}${last.version ? ` (${escapeHtml(last.version)})` : ''} last deployed here</div>` : ''}
+    ${warn ? `<div class="d2 dwarn">${icon('alert', 12)} replaces ${escapeHtml(last.ref)}${last.version ? ` (${escapeHtml(last.version)})` : ''} last deployed here</div>` : ''}
     ${d.state === 'running' ? `<pre class="dlog" data-log="${d.id}">…</pre>` : ''}
     ${d.coalescedInto ? `<div class="d2">merged into ${escapeHtml(d.coalescedInto)}</div>` : ''}${d.reason ? `<div class="d2">${escapeHtml(d.reason)}</div>` : ''}</div>`;
 }
@@ -2004,7 +2001,7 @@ function deployedRowsHtml(rows) {
     <div class="d2 dnrow"><span class="dscope">${escapeHtml(targetLabel(r.targets))}</span> ${r.deployed
       ? `<b>${escapeHtml(r.version || '?')}</b> &middot; ${escapeHtml(r.ref || '?')}${r.commit ? ` &middot; ${escapeHtml(r.commit)}` : ''} &middot; ${escapeHtml(r.ago)}${r.by && r.by !== 'unknown' ? ` &middot; ${escapeHtml(r.by)}` : ''}${r.backfill ? ' &middot; <i>read from the target</i>' : ''}`
       : '<span class="dim">no successful deploy recorded</span>'}
-      ${r.failed ? `<div class="dwarn">&#9888; last attempt failed ${escapeHtml(r.failed.ago)}${r.failed.version ? ` (${escapeHtml(r.failed.version)})` : ''}${r.failed.by ? ` by ${escapeHtml(r.failed.by)}` : ''}</div>` : ''}</div>`).join('');
+      ${r.failed ? `<div class="dwarn">${icon('alert', 12)} last attempt failed ${escapeHtml(r.failed.ago)}${r.failed.version ? ` (${escapeHtml(r.failed.version)})` : ''}${r.failed.by ? ` by ${escapeHtml(r.failed.by)}` : ''}</div>` : ''}</div>`).join('');
 }
 // Manager panel keeps only the runner switch; the queue, leases and "deployed now" live on the Platforms page.
 function deploysHtml(d0) {
@@ -2117,8 +2114,8 @@ function openManager() {
         return `<div class="ml stop ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s${live ? ' go' : ''}" ${live ? `data-open="${escapeHtml(r.session)}"` : ''}>${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span>
           <span class="x"><b>${escapeHtml(l.case)}</b>${r.no_status ? ' <i class="ns">no status</i>' : ''} &middot; ${escapeHtml(l.text)}</span>
           <span class="q">${escapeHtml(firstLine(r.excerpt || r.question))}</span>
-          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.by && lab.by !== 'owner' ? ` <span class="dim">by ${escapeHtml(lab.by)}</span>` : ''}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
-            : `<button class="sbtn lb" data-label="no_reason" data-id="${escapeHtml(r.id)}" title="stopped for no reason" aria-label="stopped for no reason">👎</button><button class="sbtn lb" data-label="legit" data-id="${escapeHtml(r.id)}" title="legit stop" aria-label="legit stop">👍</button><select class="lb" data-wrong="${escapeHtml(r.id)}" aria-label="wrong case"><option value="">wrong case…</option>${caseOpts}</select><input class="lbn" data-note="${escapeHtml(r.id)}" placeholder="note" maxlength="500">`}</span></div>`;
+          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? `${icon('thumbs-down', 14)} no reason` : lab.label === 'legit' ? `${icon('thumbs-up', 14)} legit` : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.by && lab.by !== 'owner' ? ` <span class="dim">by ${escapeHtml(lab.by)}</span>` : ''}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
+            : `<button class="sbtn lb" data-label="no_reason" data-id="${escapeHtml(r.id)}" title="stopped for no reason" aria-label="stopped for no reason">${icon('thumbs-down', 16)}</button><button class="sbtn lb" data-label="legit" data-id="${escapeHtml(r.id)}" title="legit stop" aria-label="legit stop">${icon('thumbs-up', 16)}</button><select class="lb" data-wrong="${escapeHtml(r.id)}" aria-label="wrong case"><option value="">wrong case…</option>${caseOpts}</select><input class="lbn" data-note="${escapeHtml(r.id)}" placeholder="note" maxlength="500">`}</span></div>`;
       };
       body.innerHTML = `
         <div class="side-sub nocollapse">Deploys</div><div id="depBox">${deploysHtml(state.deploys)}</div>
@@ -2389,7 +2386,7 @@ function usageHtml(u, tab, ui) {
 
   const shown = rows.slice(0, 40);
   const sessHtml = shown.map((r) => `<div class="urow${live(r.session) ? ' go' : ''}${r.outlier ? ' out' : ''}" ${live(r.session) ? `data-open="${escapeHtml(r.session)}"` : ''}>
-      <div class="u1">${r.outlier ? '<span class="uw" title="outlier">&#9888;</span>' : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span><b class="tk">${fmtTok(r.tokens)}</b></div>
+      <div class="u1">${r.outlier ? `<span class="uw" title="outlier">${icon('alert', 12)}</span>` : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span><b class="tk">${fmtTok(r.tokens)}</b></div>
       <div class="u2">${escapeHtml(r.project)} &middot; ${ioLine({ in: r.in, out: r.out })}</div>
       ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(String(r.outlier).split(':')[0])}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
