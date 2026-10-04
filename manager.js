@@ -518,11 +518,20 @@ export async function jevUsageNow() {
   return (await decisions.available()) ? MANAGER_USAGE : FALLBACK_USAGE;
 }
 
+// What kind of failure an error text is, for the scorecard and for the credits cool-down.
+export const jevErrorKind = (msg) => /\b402\b|insufficient credits/i.test(msg) ? 'credits' : /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network/i.test(msg) ? 'network' : /timeout|aborted/i.test(msg) ? 'timeout' : /^http \d/i.test(msg) ? 'http' : 'other';
+// OpenRouter credit is used up: every call fails with 402 until the owner tops up, so stop calling for a while
+// (the rules decide meanwhile) instead of logging one error per stop. Probed again after the cool-down.
+const CREDITS_COOLDOWN_MS = 5 * 60e3;
+let creditsDownUntil = 0;
+export const resetJevCooldown = () => { creditsDownUntil = 0; };   // tests, and an owner top-up
+
 // ctx = { session, stallId, case }: what the product's log shows as "what this decision was about".
 async function jev(stall, ctx = {}) {
   if (!JEV_URL || !JEV_API_KEY) return { skipped: 'not configured' };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
+  if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
   const logged = decisions.configured;   // needs VPT_TEAM_ID: the server writes no log row without a team
   const body = jevRequestBody(stall, { usage: await jevUsageNow(), refs: logged ? { team_id: VPT_TEAM_ID, source: 'ghosty-manager', session: ctx.session, stall_id: ctx.stallId, case: ctx.case } : null });
   const started = Date.now();
@@ -531,17 +540,28 @@ async function jev(stall, ctx = {}) {
       method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY },
       body: JSON.stringify(body), signal: AbortSignal.timeout(25000),
     }); return { r, j: await r.json() }; };
-    let { r, j } = await post();
+    let r, j;
+    // The server restarting (deploy) refuses the connection for a moment: one more try, not an error.
+    try { ({ r, j } = await post()); } catch (e) {
+      if (jevErrorKind(e.message) !== 'network') throw e;
+      await new Promise((res) => setTimeout(res, 2000));
+      ({ r, j } = await post());
+    }
     // An older server that does not know the manager usage: once more under the generic one.
     if (!j.success && body.usage !== FALLBACK_USAGE && /unknown usage/i.test(String(j.error || ''))) { body.usage = FALLBACK_USAGE; ({ r, j } = await post()); }
     budget.calls += 1;
     budget.cost += Number(j.cost || 0);
     writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
     const a = j.answers?.choice;
-    if (!j.success || !a) return { error: String(j.error || `http ${r.status}`).slice(0, 200), ms: Date.now() - started, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
+    if (!j.success || !a) {
+      const error = String(j.error || `http ${r.status}`).slice(0, 200);
+      const kind = jevErrorKind(error);
+      if (kind === 'credits') creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS;
+      return { error, kind, ms: Date.now() - started, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
+    }
     return { choice: a.choice, confidence: a.confidence, probabilities: a.probabilities, cost: j.cost, ms: j.ms ?? Date.now() - started, model: j.model, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
   } catch (e) {
-    return { error: e.message, ms: Date.now() - started };
+    return { error: e.message, kind: jevErrorKind(e.message), ms: Date.now() - started };
   }
 }
 

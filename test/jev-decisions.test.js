@@ -113,7 +113,16 @@ test('a failing Jev (402) is on the stall record and shows in the tab data; noth
   jevFail = true;
   const st = await stop('j3');
   assert.match(st.jev.error, /402/);
+  assert.equal(st.jev.kind, 'credits');
   assert.equal(st.jev.decision_id, undefined);
+  // credit is out: the next stop does not call the server again, and it is a skip, not an error
+  const before = seen.decide.length;
+  await stop('j3b');
+  assert.equal(seen.decide.length, before, 'cool-down: no call while credit is used up');
+  const skipped = records().find((r) => r.type === 'stall' && r.session === 'j3b').jev;
+  assert.match(skipped.skipped, /credit/);
+  assert.equal(skipped.error, undefined);
+  m.resetJevCooldown();
   const tab = await m.jevAiTab();
   assert.equal(tab.manager.health.state, 'failing');
   assert.match(tab.manager.health.error, /402/);
@@ -303,6 +312,13 @@ test('an older server that does not know text.decision.manager gets the generic 
   assert.equal(st.jev.choice, 'continue');
   srv.removeAllListeners('request'); srv.on('request', orig);
   await m.setManagerConfig({ jevUsage: 'auto' });
+});
+
+test('error kinds: credits, network, timeout, http', () => {
+  assert.equal(m.jevErrorKind("openrouter decisions call failed: {\"code\":402,\"message\":\"Insufficient credits\"}"), 'credits');
+  assert.equal(m.jevErrorKind('fetch failed'), 'network');
+  assert.equal(m.jevErrorKind('The operation was aborted due to timeout'), 'timeout');
+  assert.equal(m.jevErrorKind('http 502'), 'http');
 });
 
 test.after(() => { srv.closeAllConnections(); srv.close(); });
