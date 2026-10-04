@@ -139,8 +139,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   const close = closingLines(plain, 16);
   const tail = close.slice(-8);
   const excerpt = close.join('\n');
+  const closing = closingLines(plain, 90).join('\n').slice(-6000);   // the long closing text: the popup's multi-question form needs every numbered question, not the 16-line tail
   const { draft, suggestion } = inputBox(fromReport ? raw || [] : raw || plain);   // the draft is always read off the pane
-  const out = { case: null, source: 'rule', answer: null, question: null, forbidden: null, draft, suggestion, excerpt };
+  const out = { case: null, source: 'rule', answer: null, question: null, forbidden: null, draft, suggestion, excerpt, closing };
 
   if (tail.slice(-3).some((l) => ERROR_RE.test(l))) {
     out.case = 'error';

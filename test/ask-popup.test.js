@@ -129,14 +129,13 @@ test('mapAiToButton menu: matches by number prefix first, then by label text', (
   assert.equal(mapAiToButton(buttons, 'menu', 'Both'), 'o3');
   assert.equal(mapAiToButton(buttons, 'menu', 'something else'), null);
 });
-test('mapAiToButton either/open: matches against the AI/suggestion button text', () => {
+test('mapAiToButton either/open: matches the AI button text; Claude\'s suggestion is never a button', () => {
   const buttons = [
     { id: 'ai', text: 'Yes, continue with the API change' },
-    { id: 'sug', text: 'Update the API then rerun tests' },
     { id: 'reply' },
   ];
   assert.equal(mapAiToButton(buttons, 'either', 'Yes, continue with the API change'), 'ai');
-  assert.equal(mapAiToButton(buttons, 'either', 'Update the API then rerun tests'), 'sug');
+  assert.equal(mapAiToButton(buttons, 'either', 'Update the API then rerun tests'), null);
   assert.equal(mapAiToButton(buttons, 'either', 'some other reply'), null);
 });
 

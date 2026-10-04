@@ -5,7 +5,7 @@
 // The queue logic is pure and lives in ask-model.js.
 
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane } from './buttons.js';
-import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText } from './ask-model.js';
+import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText, multiFormModel, multiSendText, multiComplete } from './ask-model.js';
 
 const MIN_KEY = 'ghosty.askPopup.minimized';
 const WHY_KEY = 'ghosty.askPopup.whyOpen';
@@ -26,6 +26,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   let minimised = false;
   let whyOpen = false;                          // expandable AI/Jev "Why" section, collapsed by default
   let detOpen = false;                          // "Details" (tail of the closing text), collapsed by default, remembered like Why
+  const picks = new Map();                      // item.key -> { questionN: optionN } (the multi-question form, owner's taps)
+  const fqOpen = new Set();                     // `${item.key}|${questionN}`: question whose full option texts are expanded
   const exOpen = new Set();                     // option descriptions expanded: `${item.key}|${button id}`
   let renderedKey = '';                         // content signature: re-render only when it changes (keeps a armed confirm alive)
   let ctx = null;                               // the showing item's derived view: { item, kind, buttons, aiId, aiConf, jev }
@@ -82,8 +84,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     // Several decisions in one stop: when the closing text has ≥ 2 numbered decision lines, render
     // each of them in the question area (max 3) and prefix the sent button text with the last
     // question's number so Claude knows which one the owner answered.
-    const closingText = st.stall?.excerpt || st.stall?.question || '';
-    const decisions = listQuestions(closingText);
+    const closingText = st.stall?.closing || st.stall?.excerpt || st.stall?.question || '';
+    const form = multiFormModel(st.stall, st.triage);   // >= 2 numbered questions with parsed options: one chip row per question
+    const decisions = form ? [] : listQuestions(closingText);
     let btnsView = marked;
     let questionsView = null;
     let lastDecisionN = null;
@@ -92,12 +95,15 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       questionsView = decisions;
       btnsView = marked.map((b) => (b.text ? { ...b, text: `${lastDecisionN}: ${b.text}` } : b));
     }
-    const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? displayQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 2000);   // the question area scrolls; never cut it mid-line
-    const question = questionsView ? '' : baseQ;
+    // stall.question can be only "OK?" (the server keeps the last sentence): when it is short, take its context from the closing text.
+    let dq = st.stall?.question ? displayQuestion(reflowPane(st.stall.question)) : '';
+    if (dq.length < 60 && closingText) { const alt = displayQuestion(reflowPane(closingText)); if (alt.length > dq.length) dq = alt; }
+    const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || dq || 'waiting for your answer').slice(0, 2000);   // the question area scrolls; never cut it mid-line
+    const question = form || questionsView ? '' : baseQ;
     // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
     // and indented) before display so it fills the popup width instead of a narrow column.
-    const details = reflowPane(detailsText(st.stall));
-    return { item, kind: d.kind, buttons: btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
+    const details = reflowPane(detailsText(st.stall, 1800));
+    return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
   }
 
   function metaText(v) {
@@ -138,6 +144,32 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       jevRow = `<div class="ap-why-row"><span class="ap-why-name">Jev</span><span class="ap-why-missing">not asked</span></div>`;
     }
     return `<div class="ap-why">${aiRow}${aiReason}${jevRow}</div>`;
+  }
+
+  // The multi-question form: per question a short label, a row of compact option chips (1 / 2 / 3 + short text, full
+  // text as title and in the expandable list), the agent's recommended chip tagged "rec", the AI's pick starred.
+  function formHtml(v) {
+    const pk = picks.get(v.item.key) || {};
+    const rows = v.form.questions.map((fq) => {
+      const open = fqOpen.has(`${v.item.key}|${fq.n}`);
+      const chips = fq.options.map((o) => {
+        const sel = pk[fq.n] === o.n;
+        const aiShow = o.ai && pk[fq.n] == null;   // the AI's green fill steps aside once the owner picked
+        const cls = ['ap-b', 'ap-chip', sel || aiShow ? 'hl' : ''].filter(Boolean).join(' ');
+        return `<button type="button" class="${cls}" data-q="${esc(fq.n)}" data-o="${esc(o.n)}" aria-pressed="${sel}" title="${esc(o.text)}"><span class="ap-ch"><span class="n">${esc(o.n)}</span>${o.recommended ? '<span class="ap-rec" title="agent recommends">rec</span>' : ''}${o.ai ? '<i class="star" title="AI pick">\u2605</i>' : ''}</span><span class="t">${esc(o.short)}</span></button>`;
+      }).join('');
+      const full = open ? `<div class="ap-fq-full">${fq.options.map((o) => `<div><b>${esc(o.n)}</b> ${esc(o.text)}${o.recommended ? ' <span class="ap-rec">agent recommends</span>' : ''}</div>`).join('')}</div>` : '';
+      return `<div class="ap-fq"><button type="button" class="ap-fq-l" data-fq="${esc(fq.n)}" aria-expanded="${open}"><span class="ap-q-n">${esc(fq.n)}.</span><span class="ap-q-t">${esc(fq.label)}</span><span class="ap-toggle">${open ? '\u25be' : '\u25b8'}</span></button><div class="ap-chips">${chips}</div>${full}</div>`;
+    }).join('');
+    return `<div class="ap-form"><div class="ap-qs-note">${v.form.questions.length} questions \u2014 tap one answer for each (rec = agent recommends)</div>${rows}</div>`;
+  }
+  // "Send answers" sits in the button row under the scrolling form, so it is always visible.
+  function sendBtnHtml(v) {
+    const pk = picks.get(v.item.key) || {};
+    const got = Object.keys(pk).filter((n) => v.form.questions.some((q) => q.n === n)).length;
+    const total = v.form.questions.length;
+    const label = got === total ? 'Send answers' : got ? `Send ${got} of ${total} answers` : `Send answers (0 of ${total})`;
+    return `<button type="button" class="ap-b yn" data-act="msend"${got ? '' : ' disabled'}>${esc(label)}</button>`;
   }
 
   function btnHtml(b, label, n) {
@@ -182,15 +214,16 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     pill.classList.toggle('hidden', !minimised);
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
-    const sig = JSON.stringify([item.key, idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, [...exOpen].join(','), v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
+    const sig = JSON.stringify([item.key, idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);
       const reply = v.buttons.find((b) => b.reply);
       let btns;
-      if (v.kind === 'yesno') btns = opts.map((b) => btnHtml(b, b.label)).join('') + (reply ? btnHtml(reply, 'Reply…') : '');
-      else btns = opts.map((b, i) => btnHtml(b, v.kind === 'menu' ? stripNum(b.label) : b.label, i + 1)).join('') + (reply ? btnHtml(reply, 'Reply…') : '');
-      const qBlock = v.questions
+      if (v.form) btns = sendBtnHtml(v) + (reply ? btnHtml(reply, 'Other / Reply\u2026') : '');
+      else if (v.kind === 'yesno') btns = opts.map((b) => btnHtml(b, b.label)).join('') + (reply ? btnHtml(reply, 'Other / Reply\u2026') : '');
+      else btns = opts.map((b, i) => btnHtml(b, v.kind === 'menu' ? stripNum(b.label) : b.label, i + 1)).join('') + (reply ? btnHtml(reply, 'Other / Reply\u2026') : '');
+      const qBlock = v.form ? formHtml(v) : v.questions
         ? `<div class="ap-qs">${v.questions.map((qq, i) => `<div class="ap-q-row"><span class="ap-q-n">${i + 1}.</span><span class="ap-q-t">${esc(qq)}</span></div>`).join('')}<div class="ap-qs-note">${v.questions.length} decisions — Reply… to answer all</div></div>`
         : `<div class="ap-q">${esc(v.question)}</div>`;
       const detBlock = v.details
@@ -207,6 +240,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         ${qBlock}
         ${detBlock}
         <div class="ap-btns ${esc(v.kind)}">${btns}</div>
+        ${v.suggestion ? `<div class="ap-sug"><span class="ap-sug-t">Claude suggests: ${esc(truncText(v.suggestion.text, 90))}</span><button type="button" class="ap-use" data-act="sug" title="Send Claude's suggestion">use</button></div>` : ''}
         <button type="button" class="ap-meta" data-act="why" aria-expanded="${whyOpen ? 'true' : 'false'}" title="Why these buttons?">${esc(metaText(v))} <span class="ap-toggle">${whyOpen ? '▾' : '▸'}</span></button>
         ${whyOpen ? whyHtml(v) : ''}`;
     }
@@ -234,10 +268,28 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       q = markAnswered(q, v.item.name);
       render();
     };
-    const node = body.querySelector(`[data-btn="${CSS.escape(b.id)}"]`);
+    const node = body.querySelector(b.id === 'sug' ? '[data-act="sug"]' : `[data-btn="${CSS.escape(b.id)}"]`);
     confirmThen(node, !!b.confirm, go);
   }
   const btnById = (id) => ctx?.buttons.find((b) => b.id === id);
+  // Send the form's picks as one line "1: 1, 2: 1, ...". An incomplete form (or a forbidden topic) needs the second tap.
+  function sendForm(node) {
+    const v = ctx; if (!v?.form) return;
+    const pk = picks.get(v.item.key) || {};
+    const text = multiSendText(pk, v.form);
+    if (!text) return;
+    const go = () => {
+      onAnswer({ name: v.item.name, id: v.item.id, kind: 'multi', button: 'multi', text, multi: { ...pk }, multiAi: Object.keys(v.form.aiPicks).length ? v.form.aiPicks : null, aiButtonId: null, aiConfidence: null, jev: v.jev });
+      ownSend.set(v.item.name, Date.now());
+      askSend(v.item.name, v.item.id, { text }, Object.keys(v.form.aiPicks).length && JSON.stringify(v.form.aiPicks) === JSON.stringify(pk) ? 'sent' : null);
+      picks.delete(v.item.key);
+      q = markAnswered(q, v.item.name);
+      render();
+    };
+    const partial = !multiComplete(pk, v.form);
+    confirmThen(node, partial || !!st0(v)?.stall?.forbidden, go, partial ? `tap again: send ${Object.keys(pk).length} of ${v.form.questions.length}` : null);
+  }
+  const st0 = (v) => state.status[v.item.name];
 
   body.addEventListener('click', (e) => {
     // The description chevron lives inside the option button (data-ex is on a <span>, not a <button>);
@@ -250,6 +302,15 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       return render(true);
     }
     const t = e.target.closest('button'); if (!t) return;
+    if (t.dataset.q) {   // a chip: one pick per question (tap again to clear)
+      const k = curKey; const pk = { ...(picks.get(k) || {}) };
+      if (pk[t.dataset.q] === t.dataset.o) delete pk[t.dataset.q]; else pk[t.dataset.q] = t.dataset.o;
+      picks.set(k, pk);
+      return render(true);
+    }
+    if (t.dataset.fq) { const k = `${curKey}|${t.dataset.fq}`; if (fqOpen.has(k)) fqOpen.delete(k); else fqOpen.add(k); return render(true); }
+    if (t.dataset.act === 'msend') return sendForm(t);
+    if (t.dataset.act === 'sug') { const sg = ctx?.suggestion; if (sg) pick({ id: 'sug', text: sg.text, confirm: sg.confirm }); return; }
     if (t.dataset.act === 'card') { const i = cur(); if (i) openCard(i.name); return; }
     if (t.dataset.act === 'prev') return move(-1);
     if (t.dataset.act === 'next') return move(+1);

@@ -34,7 +34,7 @@ export function displayQuestion(text) {
   const re = /[^.!?]+[.!?]+(?:["')\]]*)|[^.!?]+$/g;
   let m;
   while ((m = re.exec(src0))) {
-    const s = m[0].trim();
+    const s = m[0].replace(/\s+/g, ' ').trim();
     if (s) sentences.push(s);
   }
   if (sentences.length === 0) return src0;
@@ -68,7 +68,7 @@ export function displayQuestion(text) {
 const TIME_RE = /^\s*done\s+\d{1,2}:\d{2}\s*(?:AM|PM)\s*$/i;
 const BAKED_RE = /^\s*\u273b\b.*\u00b7\s+done\s+\d{1,2}:\d{2}\s*(?:AM|PM)\s*$/i;
 const BAKED_RE2 = /^\s*\u273b\s+\S+ed\s+for\b/i;
-const TOOL_DOT_RE = /^\s*\u25cf\b/;
+const TOOL_DOT_RE = /^\s*\u25cf\b/;   // (stall.js closingLines already strips the agent's own leading bullet, so a surviving '●' line is a tool marker)
 const SPINNER_CHARS = '\u280b\u2819\u2838\u2834\u2826\u2827\u282b\u283a\u2839\u283f\u2807\u2806\u280e\u281e\u282e\u2836\u2837\u282f\u280f\u2801';
 const SPINNER_RE = new RegExp(`^[\\s\\u2500-\\u257f${SPINNER_CHARS}\\u273b\\u25cf\\u25c6\\u26ab]*[\\u273b\\u25cf\\u25c6\\u26ab\\u280b-\\u28ff]`, 'u');
 const BOX_DRAWING_RE = /^[\s\u2500-\u259f]+$/;
@@ -114,6 +114,8 @@ export function reflowPane(text) {
   const lines = src.split('\n').filter((l) => !stripUiLine(l.replace(/\s+$/, '')));
   const out = [];
   let buf = '';
+  let listIndent = 0;
+  let listNumbered = false;
   let prevType = null;   // 'prose' | 'list' | 'table' — what the current buf is.
   const flush = () => {
     if (!buf) return;
@@ -130,6 +132,8 @@ export function reflowPane(text) {
       flush();
       buf = deindented;
       prevType = isList ? 'list' : 'table';
+      listIndent = raw.length - raw.trimStart().length;
+      listNumbered = /^\s*\d+[.)]\s/.test(raw);   // a numbered item wraps on any word (even a capital); only its '.', '?' ends it
       continue;
     }
     if (buf) {
@@ -137,9 +141,10 @@ export function reflowPane(text) {
       // own continuation — UNLESS the next line is clearly a new sentence (capital letter, or ends
       // with '.', '!', '?'). In that case the list is over and a new paragraph / question begins.
       if (prevType === 'list') {
-        const startsCapital = /^[A-Z]/.test(deindented);
-        const endsSentence = /[.!?]$/.test(deindented);
-        if (startsCapital || endsSentence) {
+        // A wrapped list item continues on a more-indented line. A flush-left line (same indent as the marker) is a new
+        // paragraph when the item ended a sentence ('.', '?', '!', ':') or the line starts with a capital; else it is the wrap.
+        const ind = raw.length - raw.trimStart().length;
+        if (ind <= listIndent && (/[.?!:]["')\]]?$/.test(buf.trimEnd()) || (!listNumbered && /^[A-Z]/.test(deindented)))) {
           flush();
           buf = deindented;
           prevType = 'prose';
@@ -183,12 +188,81 @@ export function reflowPane(text) {
   return collapsed.join('\n');
 }
 
+// ---------- inline numbered options: "Where from: (1) each server *(recommended)*, (2) central, or (3) both?" ----------
+// The agent's pick is flagged "*(recommended)*", "(recommended)" or "my recommendation"; the flag never makes an option selected.
+const REC_TAG_RE = /\s*\*?\(\s*(?:my |the agent's )?recommend(?:ed|ation)\s*\)\*?|\s*,?\s*\bmy recommendation\b/gi;
+const MULTI_REC_RE = /\brecommend(?:ed|ation)\b/i;
+const cleanOpt = (t) => String(t).replace(REC_TAG_RE, '').replace(/\*+/g, '').replace(/\s+/g, ' ').trim()
+  .replace(/[\s,;]+(?:or|and)?\s*$/i, '').replace(/[\s,;]+$/, '').replace(/\?+$/, '').trim();
+export const clip = (t, n) => { t = String(t || '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t; };
+
+// "(1) a, (2) b or (3) c" -> { label: text before "(1)", options: [{ n, text, recommended }] }; null when < 2 options.
+// The numbers must run 1, 2, 3 ... in order, so "(2)" in prose or "(see 1)" is not an option.
+export function parseInlineOptions(text) {
+  const t = String(text || '').replace(/\*\*/g, '');
+  const marks = [];
+  const re = /\((\d{1,2})\)/g;
+  let m;
+  while ((m = re.exec(t))) if (Number(m[1]) === marks.length + 1) marks.push({ n: marks.length + 1, start: m.index, end: m.index + m[0].length });
+  if (marks.length < 2) return null;
+  const options = marks.map((k, i) => {
+    const seg = t.slice(k.end, i + 1 < marks.length ? marks[i + 1].start : t.length);
+    return { n: k.n, text: cleanOpt(seg), recommended: MULTI_REC_RE.test(seg) };
+  }).filter((o) => o.text);
+  if (options.length < 2) return null;
+  const label = t.slice(0, marks[0].start).replace(/^\s*\d+[.)]\s+/, '').replace(/[\s:\u2014\u2013-]+$/, '').replace(/\s+/g, ' ').trim();
+  return { label, options };
+}
+
+// The multi-question form: >= 2 numbered questions ("1. Where ...: (1) a, (2) b?") that each carry parsed options.
+// -> [{ n, label, options: [{ n, text, recommended }] }] in source order, or null. Works on pane-wrapped text (reflowed first).
+export function parseQuestionForm(text) {
+  if (!text) return null;
+  const qs = [];
+  const seen = new Set();
+  for (const line of reflowPane(text).split('\n')) {
+    const m = line.match(/^\s*(\d+)[.)]\s+(.+)/);
+    if (!m || seen.has(m[1])) continue;
+    const parsed = parseInlineOptions(m[2]);
+    if (!parsed) continue;
+    seen.add(m[1]);
+    qs.push({ n: m[1], label: parsed.label || `Question ${m[1]}`, options: parsed.options });
+    if (qs.length >= 12) break;
+  }
+  return qs.length >= 2 ? qs : null;
+}
+
+// picks {"1":"1","2":"3"} -> "1: 1, 2: 3" (question order); unpicked questions are left out.
+export function formatMultiAnswer(picks, questions) {
+  const order = questions ? questions.map((q) => String(q.n)) : Object.keys(picks || {}).sort((a, b) => Number(a) - Number(b));
+  return order.filter((n) => picks && picks[n] != null && picks[n] !== '').map((n) => `${n}: ${picks[n]}`).join(', ');
+}
+
+// "1: 1, 2: 3" / "1=1 2=3" / "1) 1" -> { "1":"1", "2":"3" } (the AI reviewer's per-question picks as a reply string); {} when none.
+export function parseMultiReply(text) {
+  const out = {};
+  const re = /(?:^|[\s,;])(\d{1,2})\s*[:=)\-]\s*(?:option\s+)?(\d{1,2})(?=$|[\s,;.])/gi;
+  let m;
+  while ((m = re.exec(String(text || '')))) if (!(m[1] in out)) out[m[1]] = m[2];
+  return out;
+}
+
+// Claude Code's dim input-box suggestion is a GUESS at what the owner types next, never an answer. When it only
+// repeats a parsed answer set ("1 1 1 1 1 1 1, go ahead", "yes", "2") the popup ignores it.
+export function suggestionIsAnswer(suggestion, questions, buttons = []) {
+  const sg = String(suggestion || '').trim();
+  if (!sg) return true;
+  if (/^[\d\s,:;=.)-]+(?:,?\s*(?:go ahead|ok(?:ay)?|please))?\s*[.!]?$/i.test(sg)) return true;   // digits only: an answer set
+  if (questions && parseMultiReply(sg) && Object.keys(parseMultiReply(sg)).length >= 2) return true;
+  return buttons.some((b) => b.text && sameReply(b.text, sg)) || buttons.some((b) => b.label && sameReply(String(b.label).replace(/^\s*[A-Z0-9]\s\u00b7\s/, ''), sg));
+}
+
 // 'menu' (a live numbered menu), 'yesno', 'either' (an or-question), 'open'.
 export function questionKind({ state, stall }) {
   const opts = stall?.options || [];
   if (state === 'waiting' && opts.length >= 2) return 'menu';
   const q = lastQuestion(stall?.question);
-  if (/\bor\b/i.test(q) || /^which\b|\bwhich (?:one|option|approach)\b/i.test(q)) return 'either';
+  if (/\bor\b/i.test(q) || parseInlineOptions(q) || /^which\b|\bwhich (?:one|option|approach)\b/i.test(q)) return 'either';
   if (YESNO_START.test(q) && /\?$/.test(q)) return 'yesno';
   return 'open';
 }
@@ -216,6 +290,10 @@ export function parseAlternatives(text) {
   if (!text) return [];
   const t = String(text);
   const lines = t.split('\n');
+
+  // 0) Inline numbered options "(1) a, (2) b or (3) c" in the last question: options 1..N, "recommended" tagged.
+  const inl = parseInlineOptions(lastQuestion(t));
+  if (inl) return inl.options.slice(0, 4).map((o) => ({ letter: String(o.n), label: clip(o.text, 60), recommended: o.recommended, ...(o.text.length > 60 ? { desc: clip(o.text, 200) } : {}) }));
 
   // 1) Lettered option lines: "- A. ...", "A. ...", "A) ...", "(A) ...".
   const alts = [];
@@ -322,6 +400,14 @@ function withDescriptions(buttons, triage) {
   }
 }
 
+// Claude's dim input-box suggestion is shown as a muted "Claude suggests: ..." line with its own "use" link, never as an
+// option. Dropped when it repeats an answer the buttons already offer (or the AI's proposal) or is just an answer set.
+function suggestionOf(stall, buttons, ai, topicForbidden) {
+  const sg = String(stall?.suggestion || '').trim();
+  if (!sg || (ai && sameReply(ai.proposed_reply, sg)) || suggestionIsAnswer(sg, null, buttons)) return null;
+  return { text: sg, confirm: topicForbidden || !!stall?.suggestionForbidden };
+}
+
 export function deriveButtons({ state, stall, triage }) {
   const kind = questionKind({ state, stall });
   const topicForbidden = !!stall?.forbidden;
@@ -332,14 +418,13 @@ export function deriveButtons({ state, stall, triage }) {
       buttons.push({ id: `o${o.n}`, label: `${o.n} · ${trunc(o.text)}`, key: String(o.n), primary: !!o.recommended, ...(o.recommended ? { rec: true } : {}), confirm: topicForbidden || !!o.forbidden });
     }
     withDescriptions(buttons, triage);
-    return { kind, buttons, esc: true, keys: RAW_KEYS };
+    return { kind, buttons, esc: true, keys: RAW_KEYS, suggestion: null };
   }
   if (kind === 'yesno') {
     buttons.push({ id: 'yes', label: 'Yes', text: 'yes', primary: true, confirm: topicForbidden });
     buttons.push({ id: 'no', label: 'No', text: 'no' });
   } else {
     // either/or: structured alts get a button per alts; the AI pick is the matching one.
-    // open: no structured choice; Claude's dim suggestion is the only thing worth offering.
     if (kind === 'either') {
       const alts = parseAlternatives(stall?.excerpt || stall?.question || '');
       if (alts.length >= 2) {
@@ -355,35 +440,25 @@ export function deriveButtons({ state, stall, triage }) {
             buttons.push({ id, label, text: a.phrase, ai: i === pickIdx ? true : undefined, confirm: topicForbidden });
           }
         });
-        // Either with alts: Claude's dim suggestion is NOT an answer (the owner is being asked
-        // to pick). Hide it here; if it's the only thing on screen (no alts at all) it surfaces
-        // as the muted "Claude suggests:" button in the open path below.
       } else {
-        // either without parsed alts: today's behaviour — AI proposal + Claude's suggestion.
+        // either without parsed alts: the AI's proposal (when any), then the two generic answers, so there are always >= 3 with Other.
         if (ai) buttons.push({ id: 'ai', label: trunc(ai.proposed_reply, 44), text: ai.proposed_reply, primary: !triage.ai.owner_needed, ai: true, confirm: topicForbidden || !!ai.forbidden });
-        if (stall?.suggestion && !(ai && sameReply(ai.proposed_reply, stall.suggestion))) {
-          buttons.push({ id: 'sug', label: trunc(stall.suggestion, 44), text: stall.suggestion, muted: true, confirm: topicForbidden || !!stall.suggestionForbidden });
-        }
+        else buttons.push({ id: 'continue', label: 'Yes, continue', text: 'yes', primary: true, confirm: topicForbidden });
+        buttons.push({ id: 'wait', label: 'No \u2014 wait for me', text: "No, wait \u2014 I'll answer this myself.", confirm: topicForbidden });
       }
     } else {
-      // open: no structured choice. The popup always offers at least 2 options before Reply.
-      // With an AI proposal: that proposal is option 1 (highlighted), then "No — wait for me" as
-      // option 2 (sends "No, wait — I'll answer this myself."); without one: "Yes, continue" and
-      // "No — wait for me". Claude's dim suggestion, when distinct, comes after these as a 3rd
-      // muted option, numbered like a menu row.
+      // open: no structured choice. With an AI proposal: that proposal is option 1 (highlighted), then "No \u2014 wait for me"
+      // as option 2; without one: "Yes, continue" and "No \u2014 wait for me". Then Other / Reply\u2026.
       if (ai) {
         buttons.push({ id: 'ai', label: trunc(ai.proposed_reply, 44), text: ai.proposed_reply, primary: !triage.ai.owner_needed, ai: true, confirm: topicForbidden || !!ai.forbidden });
-        buttons.push({ id: 'wait', label: 'No — wait for me', text: "No, wait — I'll answer this myself.", confirm: topicForbidden });
+        buttons.push({ id: 'wait', label: 'No \u2014 wait for me', text: "No, wait \u2014 I'll answer this myself.", confirm: topicForbidden });
       } else {
         buttons.push({ id: 'continue', label: 'Yes, continue', text: 'yes', primary: true, confirm: topicForbidden });
-        buttons.push({ id: 'wait', label: 'No — wait for me', text: "No, wait — I'll answer this myself.", confirm: topicForbidden });
-      }
-      if (stall?.suggestion && !(ai && sameReply(ai.proposed_reply, stall.suggestion))) {
-        buttons.push({ id: 'sug', label: `Claude suggests: ${trunc(stall.suggestion, 36)}`, text: stall.suggestion, muted: true, confirm: topicForbidden || !!stall.suggestionForbidden });
+        buttons.push({ id: 'wait', label: 'No \u2014 wait for me', text: "No, wait \u2014 I'll answer this myself.", confirm: topicForbidden });
       }
     }
   }
   withDescriptions(buttons, triage);
   buttons.push({ id: 'reply', label: '✎ reply…', reply: true });
-  return { kind, buttons, esc: state === 'waiting', keys: RAW_KEYS };
+  return { kind, buttons, esc: state === 'waiting', keys: RAW_KEYS, suggestion: suggestionOf(stall, buttons, ai, topicForbidden) };
 }

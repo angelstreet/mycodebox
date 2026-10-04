@@ -45,15 +45,15 @@ test('yes/no on a forbidden topic: Yes needs a confirm, No does not', () => {
   assert.equal(d.buttons[1].confirm, undefined);
 });
 
-test('either/or question: the AI proposal is the primary button, then Claude\'s suggestion, then reply', () => {
+test('either/or question: the AI proposal is the primary button, then wait, then reply; Claude\'s suggestion is a separate line, never a button', () => {
   const triage = { state: 'done', ai: { proposed_reply: 'Use Postgres, it is already in the stack.', reasoning: 'x', confidence: 0.8, owner_needed: false } };
   const d = derive('done', finished('Cache design is ready.\nDo you want Redis or Postgres for the cache?'), triage, { suggestion: 'use postgres and run the migration tests' });
   assert.equal(d.kind, 'either');
-  assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'sug', 'reply']);
+  assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'wait', 'reply']);
   assert.equal(d.buttons[0].primary, true);
   assert.equal(d.buttons[0].ai, true);
   assert.equal(d.buttons[0].text, 'Use Postgres, it is already in the stack.');
-  assert.equal(d.buttons[1].text, 'use postgres and run the migration tests');
+  assert.equal(d.suggestion.text, 'use postgres and run the migration tests');
 });
 
 test('either/or about a deploy (the real-world example): AI reply and suggestion both need two taps', () => {
@@ -64,12 +64,12 @@ test('either/or about a deploy (the real-world example): AI reply and suggestion
   assert.equal(d.buttons.at(-1).reply, true);
 });
 
-test('open question without a proposal: always 2 options before Reply (Yes, continue + No — wait for me) + Claude\'s suggestion', () => {
+test('open question without a proposal: always 2 options before Reply (Yes, continue + No — wait for me); the suggestion is not a button', () => {
   const triage = { state: 'done', ai: { proposed_reply: '', reasoning: 'x', confidence: 0.3, owner_needed: true, owner_needed_why: 'product choice' } };
   const d = derive('done', finished('The export is done.\nWhat should the file name look like?'), triage, { suggestion: 'name it by date' });
   assert.equal(d.kind, 'open');
-  // Always 2 options before Reply...; Claude's dim suggestion comes after them as a 3rd muted option.
-  assert.deepEqual(d.buttons.map((b) => b.id), ['continue', 'wait', 'sug', 'reply']);
+  assert.deepEqual(d.buttons.map((b) => b.id), ['continue', 'wait', 'reply']);
+  assert.equal(d.suggestion.text, 'name it by date');
   const cont = d.buttons.find((b) => b.id === 'continue');
   const wait = d.buttons.find((b) => b.id === 'wait');
   assert.equal(cont.label, 'Yes, continue');
@@ -85,7 +85,8 @@ test('a suggestion identical to the AI proposal is shown once', () => {
   const d = deriveButtons({ state: 'done', stall: { case: 'owner_decision', question: 'Which part next?', suggestion: 'yes continue' }, triage });
   // "Which ...?" is an `either` question (matches /^which\b/), and the identical suggestion is deduped.
   assert.equal(d.kind, 'either');
-  assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'reply']);
+  assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'wait', 'reply']);
+  assert.equal(d.suggestion, null);
 });
 
 test('questionKind / lastQuestion / needsOwner', () => {
@@ -172,22 +173,14 @@ test('lettered option lines "- A. ... - B. ... Which?": A/B buttons, A primary w
   assert.equal(b.text, 'B');
 });
 
-// Open question with Claude's dim suggestion: the suggestion button is labelled
-// "Claude suggests: ...", is muted, never primary, never highlighted, and never counted as the AI pick.
-test('open question with suggestion: "Claude suggests:" button, muted, non-primary', () => {
+// Open question with Claude's dim suggestion: it is a separate "Claude suggests" line (d.suggestion), never a button.
+test('open question with suggestion: d.suggestion carries it, no sug button, forbidden flag kept', () => {
   const triage = { state: 'done', ai: { proposed_reply: '', reasoning: 'x', confidence: 0.3, owner_needed: true, owner_needed_why: 'product choice' } };
   const d = derive('done', finished('The export is done.\nWhat should the file name look like?'), triage, { suggestion: 'name it by date' });
   assert.equal(d.kind, 'open');
-  const sug = d.buttons.find((b) => b.id === 'sug');
-  assert.ok(sug, 'suggestion button is present for an unstructured open question');
-  assert.match(sug.label, /^Claude suggests: /);
-  assert.match(sug.label, /name it by date/);
-  assert.equal(sug.primary, undefined, 'Claude\'s suggestion is never primary');
-  assert.equal(sug.muted, true, 'Claude\'s suggestion renders muted in the popup');
-  assert.equal(sug.text, 'name it by date');
-  // "Yes, continue" + "No — wait for me" come before the suggestion, then Reply.
-  assert.deepEqual(d.buttons.map((b) => b.id), ['continue', 'wait', 'sug', 'reply']);
-  assert.equal(d.buttons.at(-1).reply, true);
+  assert.ok(!d.buttons.some((b) => b.id === 'sug'));
+  assert.deepEqual(d.suggestion, { text: 'name it by date', confirm: false });
+  assert.deepEqual(d.buttons.map((b) => b.id), ['continue', 'wait', 'reply']);
 });
 
 // Open question WITH an AI proposal: the proposal is option 1 (highlighted), "No — wait for me"
@@ -196,7 +189,8 @@ test('open question with AI proposal: AI button + "No — wait for me" + Claude 
   const triage = { state: 'done', ai: { proposed_reply: 'Name it by date.', reasoning: 'a clean default', confidence: 0.9, owner_needed: false } };
   const d = derive('done', finished('The export is done.\nWhat should the file name look like?'), triage, { suggestion: 'name it by date' });
   assert.equal(d.kind, 'open');
-  // Suggestion matches AI proposal -> deduped; no 'sug' button.
+  // Suggestion matches AI proposal -> no suggestion line either.
+  assert.equal(d.suggestion, null);
   assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'wait', 'reply']);
   const ai = d.buttons.find((b) => b.id === 'ai');
   const wait = d.buttons.find((b) => b.id === 'wait');
@@ -208,11 +202,12 @@ test('open question with AI proposal: AI button + "No — wait for me" + Claude 
 });
 
 // Open question with AI proposal AND a distinct suggestion: 3 options (AI + wait + sug) + Reply.
-test('open question with AI proposal + distinct Claude suggestion: 3 options + Reply', () => {
+test('open question with AI proposal + distinct Claude suggestion: AI + wait + Reply, the suggestion on its own line', () => {
   const triage = { state: 'done', ai: { proposed_reply: 'Use Postgres.', reasoning: 'x', confidence: 0.8, owner_needed: false } };
   const d = derive('done', finished('Cache design is ready.\nWhat should the file name look like?'), triage, { suggestion: 'name it by date' });
   assert.equal(d.kind, 'open');
-  assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'wait', 'sug', 'reply']);
+  assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'wait', 'reply']);
+  assert.equal(d.suggestion.text, 'name it by date');
 });
 
 // parseAlternatives coverage of the three accepted shapes.

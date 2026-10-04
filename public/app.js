@@ -1483,19 +1483,19 @@ async function askSend(n, id, b, via) {
 }
 // A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs a second tap within 4 s.
 // Wraps the DOM-side arming; the popup uses it through the api injected at mount.
-function confirmThen(btn, needs, go) {
+function confirmThen(btn, needs, go, msg) {
   if (!needs) { go(); return; }
   if (!btn) { go(); return; }
   if (btn.dataset.armed === '1') { clearTimeout(btn._arm); btn.dataset.armed = ''; btn.classList.remove('arm'); go(); return; }
   btn.dataset.armed = '1'; btn.classList.add('arm'); btn._label = btn.innerHTML;
-  btn.textContent = 'tap again: sensitive topic';
+  btn.textContent = msg || 'tap again: sensitive topic';
   btn._arm = setTimeout(() => { btn.dataset.armed = ''; btn.classList.remove('arm'); btn.innerHTML = btn._label; }, 4000);
 }
 
 // Popup wiring. The popup asks the page for these (state, openCard, askSend, prefillDock).
 let popupApi = null;
-function ownerChoicePost({ name, id, kind, button, text, aiButtonId, aiConfidence, jev }) {
-  const body = { id, session: name, kind, owner: button, ai: aiButtonId || null };
+function ownerChoicePost({ name, id, kind, button, text, aiButtonId, aiConfidence, jev, multi, multiAi }) {
+  const body = { id, session: name, kind, owner: multi || button, ai: multi ? (multiAi || null) : (aiButtonId || null) };   // kind 'multi': owner/ai = { "<question n>": "<option n>" }
   if (button === 'reply' && text) body.ownerText = String(text).slice(0, 200);
   if (Number.isFinite(aiConfidence)) body.aiConfidence = aiConfidence;
   if (jev?.choice) body.jev = jev.choice;

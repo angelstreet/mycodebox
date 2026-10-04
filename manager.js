@@ -403,11 +403,23 @@ export async function unlabelStall({ id } = {}) {
 // agreeAi: owner===ai (null when no AI pick was highlighted). agreeJev (public/ask-model.js jevAgreesOwner):
 // continue/take_recommended agree when the owner picked Yes or the highlighted option; ask_owner agrees when
 // the owner picked anything other than the AI highlight, or replied; null when Jev made no call.
+// kind 'multi' (the popup's multi-question form): owner = { "1": "2", ... } (one pick per question number), ai = the AI
+// reviewer's per-question picks in the same shape or null. agreeAi stays "all AI-covered questions agree" (null without AI
+// picks); the scorecard uses the per-question counts aiQs / agreeQs (one vote per AI-covered question) plus agreeAiQ.
+const pickMap = (o) => {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(o).slice(0, 30)) if (v != null && v !== '') out[String(k).slice(0, 8)] = String(v).slice(0, 40);
+  return Object.keys(out).length ? out : null;
+};
 export async function logOwnerChoice({ id, session, kind, owner, ownerText, ai, aiConfidence, jev, jevProbabilities } = {}) {
   if (typeof id !== 'string' || !id) throw bad('id required');
   if (typeof session !== 'string' || !session) throw bad('session required');
-  if (typeof owner !== 'string' || !owner) throw bad('owner required');
-  const aiId = typeof ai === 'string' && ai ? ai : null;
+  const multi = kind === 'multi';
+  const ownerPicks = multi ? pickMap(owner) : null;
+  if (multi ? !ownerPicks : (typeof owner !== 'string' || !owner)) throw bad('owner required');
+  const aiPicks = multi ? pickMap(ai) : null;
+  const aiId = multi ? null : (typeof ai === 'string' && ai ? ai : null);
   const jevChoice = typeof jev === 'string' && jev ? jev : null;
   const rec = {
     type: 'choice',
@@ -415,12 +427,19 @@ export async function logOwnerChoice({ id, session, kind, owner, ownerText, ai, 
     id,
     session,
     kind: typeof kind === 'string' && kind ? kind.slice(0, 20) : null,
-    owner: owner.slice(0, 80),
-    ai: aiId,
+    owner: multi ? ownerPicks : owner.slice(0, 80),
+    ai: multi ? aiPicks : aiId,
     jev: jevChoice,
-    agreeAi: aiId == null ? null : owner === aiId,
-    agreeJev: jevAgreesOwner(jevChoice, owner, aiId),
+    agreeAi: multi ? null : aiId == null ? null : owner === aiId,
+    agreeJev: multi ? null : jevAgreesOwner(jevChoice, owner, aiId),
   };
+  if (multi && aiPicks) {
+    const covered = Object.keys(aiPicks).filter((k) => ownerPicks[k] != null);
+    rec.agreeAiQ = Object.fromEntries(covered.map((k) => [k, ownerPicks[k] === aiPicks[k]]));
+    rec.aiQs = covered.length;
+    rec.agreeQs = covered.filter((k) => rec.agreeAiQ[k]).length;
+    rec.agreeAi = covered.length ? rec.agreeQs === covered.length : null;
+  }
   if (owner === 'reply' && ownerText) rec.ownerText = String(ownerText).slice(0, 200);
   if (Number.isFinite(aiConfidence)) rec.aiConfidence = aiConfidence;
   if (jevProbabilities && typeof jevProbabilities === 'object') rec.jevProbabilities = jevProbabilities;
@@ -836,7 +855,7 @@ export function stallOf(name) {
   const w = watch.get(name);
   if (!w || !w.stall) return null;
   const st = w.stall;
-  return { case: st.case, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null,
+  return { case: st.case, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
     id: w.pending?.id || null,
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
     forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending?.id), draft: !!(w.cls?.draft), jev: st.jev || null };

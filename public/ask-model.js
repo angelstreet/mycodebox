@@ -13,7 +13,7 @@
 //     path) and then POSTs /api/manager/choice for the agreement record.
 
 // ---------- queue ----------
-import { needsOwner } from './buttons.js';
+import { needsOwner, parseQuestionForm, parseMultiReply, formatMultiAnswer, clip } from './buttons.js';
 
 // Same predicate renderAttention() (NEEDS YOU strip) uses: a waiting session, or a finished one whose
 // closing question the AI reviewer sent to the owner (triage done / skipped / error, not pending).
@@ -108,8 +108,7 @@ export function markAnswered(prev, name, now = Date.now()) {
 //   menu   : the option whose number or label matches the proposal. The proposal may be
 //            "2" / "option 2" / "Release APK" — match by number first, then by case-insensitive
 //            trimmed text against the option label.
-//   either / open : the AI's proposal lives on its own button (id 'ai'), or 'sug' for Claude's own
-//            dim suggestion when the AI proposal is missing. For an either question with parsed
+//   either / open : the AI's proposal lives on its own button (id 'ai'). Claude's own dim suggestion is never a button. For an either question with parsed
 //            lettered/phrase alternatives, the proposal may start with a letter ("A" / "B") or
 //            name one of the phrases — match that alts-button too (it's flagged `ai: true` by
 //            buttons.js so the popup can highlight it).
@@ -154,12 +153,8 @@ export function mapAiToButton(buttonList, kind, proposedReply) {
     if (cand) return cand.id;
   }
   // either / open: the AI's proposal is a button called 'ai' (set by buttons.js), text-on-it.
-  // If we don't see one (no triage) we look at 'sug'.
-  const aiN2 = normText(ai);
   const aiBtn = buttonList.find((b) => b.id === 'ai');
-  if (aiBtn && aiBtn.text && normText(aiBtn.text) === aiN2) return 'ai';
-  const sug = buttonList.find((b) => b.id === 'sug');
-  if (sug && sug.text && normText(sug.text) === aiN2) return 'sug';
+  if (aiBtn && aiBtn.text && normText(aiBtn.text) === normText(ai)) return 'ai';
   return null;
 }
 // Whether the proposed highlight should be shown: the button exists, has no `confirm` (i.e. it is
@@ -239,8 +234,35 @@ export function jevAgreesOwner(jevChoice, ownerButtonId, aiButtonId) {
 // ---------- Details (last ~300 characters of the stop's closing text) ----------
 // Prefers stall.excerpt, else stall.question. Returns '' when there is none. Starts with '…' when cut.
 export const DETAILS_CHARS = 300;
-export function detailsText(stall) {
-  const t = String(stall?.excerpt || stall?.question || '').replace(/\r/g, '').trim();
+export function detailsText(stall, max = DETAILS_CHARS) {
+  const t = String(stall?.closing || stall?.excerpt || stall?.question || '').replace(/\r/g, '').trim();
   if (!t) return '';
-  return t.length > DETAILS_CHARS ? `…${t.slice(-DETAILS_CHARS).trimStart()}` : t;
+  return t.length > max ? `…${t.slice(-max).trimStart()}` : t;
 }
+
+// ---------- multi-question form ----------
+// The closing text carries >= 2 numbered questions that each have parsed "(1) a, (2) b" options (stall.closing is the
+// long closing text, stall.excerpt the 16-line tail). The AI reviewer's per-question picks are optional:
+// triage.ai.picks = { "1": "2", ... } or, when absent, proposed_reply written as "1: 2, 2: 1". No picks -> nothing highlighted.
+// -> { questions: [{ n, label, options: [{ n, text, short, recommended, ai }], aiPick }], aiPicks } | null
+export function multiFormModel(stall, triage) {
+  const qs = parseQuestionForm(stall?.closing || stall?.excerpt || stall?.question || '');
+  if (!qs) return null;
+  const ai = triage?.ai || null;
+  let picks = {};
+  if (ai && !ai.owner_needed && !ai.forbidden) {
+    if (ai.picks && typeof ai.picks === 'object' && !Array.isArray(ai.picks)) for (const [k, v] of Object.entries(ai.picks)) picks[String(k)] = String(v);
+    else picks = parseMultiReply(ai.proposed_reply);
+  }
+  const questions = qs.map((q) => {
+    const pick = q.options.some((o) => String(o.n) === picks[q.n]) ? picks[q.n] : null;
+    return { n: q.n, label: clip(q.label, 80), options: q.options.map((o) => ({ n: String(o.n), text: o.text, short: clip(o.text, 24), recommended: o.recommended, ai: pick === String(o.n) })), aiPick: pick };
+  });
+  const aiPicks = {};
+  for (const q of questions) if (q.aiPick) aiPicks[q.n] = q.aiPick;
+  return { questions, aiPicks };
+}
+
+// The send string: "1: 1, 2: 1, 3: 1" (question order; unpicked questions are left out).
+export const multiSendText = (picks, form) => formatMultiAnswer(picks, form.questions);
+export const multiComplete = (picks, form) => form.questions.every((q) => picks[q.n] != null);

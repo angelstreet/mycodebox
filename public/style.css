@@ -1368,19 +1368,17 @@ body[data-mode="card"] #health{ display:none; }
   display: inline-flex; align-items: center; justify-content: center; gap: 8px; box-sizing: border-box;
 }
 #askPopup .ap-b.yn { flex: 1 1 0; font-weight: 700; }
-#askPopup .ap-b.rep { flex: 1 1 0; color: var(--ink-2); border-style: dashed; }
+#askPopup .ap-b.rep { flex: 1 1 0; color: var(--ink-2); }
 #askPopup .ap-b.op { flex: 1 1 100%; justify-content: flex-start; text-align: left; }
 #askPopup .ap-b.op .t { flex: 1; overflow-wrap: anywhere; }
-#askPopup .ap-b.muted { color: var(--ink-3); border-style: dashed; opacity: 0.9; }
-#askPopup .ap-b.muted .n { color: var(--ink-3); }
-#askPopup .ap-btns.menu .ap-b.rep, #askPopup .ap-btns.either .ap-b.rep, #askPopup .ap-btns.open .ap-b.rep { flex: 1 1 100%; }
+#askPopup .ap-btns.menu .ap-b.rep, #askPopup .ap-btns.either .ap-b.rep, #askPopup .ap-btns.open .ap-b.rep, #askPopup .ap-btns.multi .ap-b.rep { flex: 1 1 0; }
 #askPopup .ap-qs { display: flex; flex-direction: column; gap: 4px; max-height: 14em; overflow-y: auto; }
 #askPopup .ap-q-row { display: flex; gap: 6px; font-size: 12px; color: var(--ink); line-height: 1.35; }
 #askPopup .ap-q-n { flex: 0 0 auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 #askPopup .ap-q-t { flex: 1 1 auto; overflow-wrap: anywhere; }
 #askPopup .ap-qs-note { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
 #askPopup .ap-b .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
-#askPopup .ap-b.hl { background: var(--working); color: #04170b; border-color: transparent; font-weight: 700; }
+#askPopup .ap-b.hl { background: var(--working); color: #04170b; border-color: var(--working); font-weight: 700; }   /* same 1px solid border as every button; highlighted = green fill only */
 #askPopup .ap-b.hl .n { color: #04170b; }
 #askPopup .ap-b .star { font-style: normal; font-size: 12px; }
 #askPopup .ap-rec { display: inline-block; margin-left: 8px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 10px; font-weight: 500; color: var(--ink-3); white-space: nowrap; vertical-align: middle; }
@@ -1404,8 +1402,8 @@ body[data-mode="card"] #health{ display:none; }
 #askPopup .ap-desc { font-size: 12px; line-height: 1.4; color: var(--ink-2); padding: 0 4px 2px 8px; overflow-wrap: anywhere; }
 #askPopup .ap-det { align-self: flex-start; background: none; border: 0; padding: 2px 0; min-height: 28px; font-size: 11px; color: var(--ink-3); cursor: pointer; }
 #askPopup .ap-det:hover { color: var(--ink-2); }
-#askPopup .ap-det-t { margin: 0; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 6px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12em; overflow-y: auto; width: 100%; box-sizing: border-box; }
-#askPopup .ap-b.arm { background: var(--accent); color: #1a0d00; border-color: transparent; font-weight: 700; }
+#askPopup .ap-det-t { margin: 0; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 6px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; width: 100%; box-sizing: border-box; }
+#askPopup .ap-b.arm { background: var(--accent); color: #1a0d00; border-color: var(--accent); font-weight: 700; }
 #askPopup .ap-b:active { transform: translateY(1px); }
 #askPopup .ap-meta {
   background: transparent; border: 0; padding: 0; margin: 0;
@@ -1532,3 +1530,19 @@ body.side-docked #tabs{ display:none; }
 body.side-docked .side-head{ gap:2px; padding:8px 8px 8px 14px; }
 body.side-docked .side-head .icon-btn{ width:28px; height:30px; }
 body.side-docked .side-head .ttl{ letter-spacing:.12em; }
+
+/* multi-question form + Claude's suggestion line (popup) */
+#askPopup .ap-form { display: flex; flex-direction: column; gap: 8px; max-height: 42vh; overflow-y: auto; }
+#askPopup .ap-fq { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+#askPopup .ap-fq-l { display: flex; align-items: baseline; gap: 6px; background: none; border: 0; padding: 0; min-height: 24px; text-align: left; font-size: 12px; color: var(--ink); cursor: pointer; line-height: 1.35; }
+#askPopup .ap-fq-l .ap-q-t { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+#askPopup .ap-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+#askPopup .ap-b.ap-chip { flex: 1 1 0; min-width: 84px; min-height: 40px; padding: 4px 8px; gap: 1px; font-size: 12px; flex-direction: column; align-items: flex-start; justify-content: flex-start; text-align: left; }
+#askPopup .ap-b.ap-chip .ap-ch { display: flex; align-items: center; gap: 5px; }
+#askPopup .ap-b.ap-chip .t { overflow-wrap: anywhere; text-align: left; min-width: 0; line-height: 1.25; }
+#askPopup .ap-chips .ap-rec { margin-left: 0; padding: 0 5px; font-size: 9.5px; }
+#askPopup .ap-fq-full { font-size: 11.5px; color: var(--ink-2); line-height: 1.4; padding: 0 2px 2px 18px; overflow-wrap: anywhere; }
+#askPopup .ap-b[disabled] { opacity: .45; cursor: default; }
+#askPopup .ap-sug { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-3); }
+#askPopup .ap-sug-t { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+#askPopup .ap-use { flex: 0 0 auto; background: none; border: 0; padding: 2px 6px; min-height: 24px; font-size: 11px; color: var(--ink-2); text-decoration: underline; cursor: pointer; }

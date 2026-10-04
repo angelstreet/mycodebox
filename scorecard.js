@@ -26,6 +26,9 @@
 // Owner choice (popup, phase 11): {type:'choice', id, owner:<button|reply>, ai:<button|null>, agreeAi,
 // jev, agreeJev}. The popup records every owner tap so we measure owner-vs-AI agreement BEFORE
 // auto-answering is switched on; quality is now driven by these choice records (not by label verdicts).
+// Multi-question form (kind 'multi'): owner/ai are { "<question n>": "<option n>" }; the record carries agreeAiQ (per question),
+// aiQs (questions the AI picked) and agreeQs (of those, how many the owner matched). The scorecard counts one AI vote per
+// covered question (agreeAiTotal += aiQs, agreeAiCount += agreeQs), so a 6-question form weighs 6, not 1; no AI picks = no votes.
 
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
@@ -256,7 +259,9 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
     if (from != null && (Date.parse(c.at) || 0) < from) continue;
     if (to != null && (Date.parse(c.at) || 0) >= to) continue;
     ownerChoices++;
-    if (c.ai != null) { agreeAiTotal++; if (c.agreeAi === true) agreeAiCount++; }
+    if (c.kind === 'multi') {   // multi-question form: one vote per AI-covered question (aiQs / agreeQs), not one per stop
+      if (c.aiQs > 0) { agreeAiTotal += c.aiQs; agreeAiCount += c.agreeQs || 0; }
+    } else if (c.ai != null) { agreeAiTotal++; if (c.agreeAi === true) agreeAiCount++; }
     if (typeof c.agreeJev === 'boolean') { popupJevAgreeTotal++; if (c.agreeJev) popupJevAgreeCount++; }
   }
 
