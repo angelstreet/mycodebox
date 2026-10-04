@@ -1,0 +1,16 @@
+// Service worker reload guard.
+// The phone app keeps running old JS after a deploy: a controllerchange event means a new SW is
+// now in control of the page. We want to reload ONCE so the owner sees the new shell. But not
+// while the owner is typing in the send dock or has a popup Reply open: surface a "tap to reload"
+// toast and reload only when the owner taps it.
+// Pure: no DOM, no I/O. Tested in test/sw-update.test.js.
+
+// inputText: the current value of the send dock input. Any non-whitespace text -> the owner is typing.
+// inputFocused: true when the send dock input is the active element.
+// popupReplyOpen: true when the popup is showing (the popup has its own answer / Reply flow).
+export function reloadGuard({ inputText = '', inputFocused = false, popupReplyOpen = false } = {}) {
+  const typing = String(inputText || '').trim().length > 0 || !!inputFocused;
+  if (typing) return { shouldReload: false, showToast: true };
+  if (popupReplyOpen) return { shouldReload: false, showToast: true };
+  return { shouldReload: true, showToast: false };
+}

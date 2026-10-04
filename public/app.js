@@ -14,6 +14,7 @@ import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
+import { reloadGuard } from '/sw-update.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -3648,11 +3649,63 @@ async function promptInstall() {
 
 // ---------- service worker ----------
 if ('serviceWorker' in navigator) {
+  // The phone app kept running old JS after a deploy: the SW did skipWaiting + clients.claim, but
+  // the page never reloaded, so the owner still saw the pre-deploy UI hours later. Poll for updates
+  // every 5 min and on every visibilitychange, and reload ONCE on controllerchange — unless the
+  // owner is typing or has a popup Reply open, in which case show a toast and reload on tap.
+  let swReloading = false;             // guard against reload loops (controllerchange can fire more than once)
+  let swReloadToast = null;              // the persistent "New version — tap to reload" toast element
+  const hadControllerAtLoad = !!navigator.serviceWorker.controller;   // skip the first controllerchange (the SW we just registered)
+
+  const showReloadToast = () => {
+    if (swReloadToast) return;
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'toast-reload';
+    el.style.cssText = 'position:fixed;bottom:96px;left:50%;transform:translateX(-50%);z-index:9999;background:#222;color:#fff;border:none;border-radius:8px;padding:8px 14px;font:13px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);opacity:.95';
+    el.textContent = 'New version — tap to reload';
+    el.setAttribute('aria-label', 'New version available, tap to reload');
+    el.onclick = () => { el.remove(); swReloadToast = null; swReloading = true; window.location.reload(); };
+    document.body.appendChild(el);
+    swReloadToast = el;
+  };
+
+  const tryReload = () => {
+    if (swReloading) return;
+    const inputEl = els.sendInput;
+    const inputText = inputEl ? inputEl.value : '';
+    const inputFocused = !!inputEl && document.activeElement === inputEl;
+    const popupEl = document.getElementById('askPopup');
+    // "Popup Reply open" = the popup is visible (not hidden/minimised). The popup uses the
+    // 'hidden' class when minimised; offsetParent is null when display:none.
+    const popupReplyOpen = !!popupEl && !popupEl.classList.contains('hidden') && popupEl.offsetParent !== null;
+    const g = reloadGuard({ inputText, inputFocused, popupReplyOpen });
+    if (g.shouldReload) { swReloading = true; window.location.reload(); }
+    else if (g.showToast) showReloadToast();
+  };
+
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { scope: '/' })
-      .then((reg) => console.log('[sw] registered scope=', reg.scope))
+      .then((reg) => {
+        console.log('[sw] registered scope=', reg.scope);
+        // Poll for updates every 5 minutes (battery-friendly; the Android webview keeps the page
+        // alive in the background, so setInterval is enough).
+        try { setInterval(() => reg.update().catch(() => {}), 5 * 60 * 1000); } catch {}
+        // Also check when the owner returns to the app — the most common deploy moment.
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      })
       .catch((err) => console.warn('[sw] failed:', err.message));
   });
+
+  // A new SW has taken control of the page. Reload once so the owner sees the new shell (unless
+  // the owner is typing or has a Reply open).
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadControllerAtLoad) return;          // first SW (just registered): the page already has its code
+    tryReload();
+  });
+
   // notification tap → focus that session
   navigator.serviceWorker.addEventListener('message', (ev) => {
     if (ev.data?.type === 'focus' && ev.data.session) openCard(ev.data.session);

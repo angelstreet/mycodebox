@@ -327,23 +327,68 @@ export function parseAlternatives(text) {
     ];
   }
 
-  // 3) Plain "X or Y?" — the words on each side of the "or" in the last question.
-  // Only matches when both sides are single words and the right-hand side is the very last word
-  // before the closing "?". This keeps "Do you want Redis or Postgres for the cache?" as
-  // an unstructured either (the existing AI-button + suggestion path), while "Shall I use X or Y?"
-  // becomes two phrase buttons.
+  // 3) Plain "X or Y?" — two shapes:
+  //    a) single-word operands right before the closing "?" (existing behaviour), and
+  //    b) multi-word verb phrases when there is a recognised lead-in at the start of the question
+  //       ("Want me to X, or Y?", "Should I X or Y?", "Shall I X, or Y?", "Do you want me to X,
+  //       or Y?", "Would you like me to X, or Y?") or a comma right before "or" ("Run tests, or
+  //       not?"). The lead-in is stripped from X and both sides are capitalised; Y keeps its own
+  //       verb. Plain "do you want X"/"would you like X" without "me to" is NOT a lead-in —
+  // "Do you want X, or will you Y?" stays as the existing AI-button + wait path (two full clauses).
   const q = lastQuestion(t);
+  const LEAD_INS = /^(?:do you want me to|would you like me to|want me to|should i|shall i)\b/i;
+  // Bare "do you want" / "would you like" without "me to" is NOT a lead-in — those are full-clause
+  // questions ("Do you want to deploy once the run ends, or will you run it yourself?") and stay
+  // on the existing AI-button + wait path. Use a negative lookahead so "Do you want me to X,
+  // or Y?" / "Would you like me to X, or Y?" still match LEAD_INS and split.
+  const INTERROG = /^(?:do you want|would you like)(?!\s+me\s+to)\b/i;
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+
+  // a) Single-word operands.
   const orMatch = q.match(/\b(\S+?)\s+or\s+(\S+?)\s*\??\s*$/i);
   if (orMatch) {
-    const clean = (x) => x.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
-    const a = clean(orMatch[1]); const b = clean(orMatch[2]);
-    if (a && b) return [{ phrase: a }, { phrase: b }];
+    const aRaw = orMatch[1]; const bRaw = orMatch[2];
+    const a = aRaw.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+    const b = bRaw.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+    if (a && b) {
+      // If either side ends with a comma, the simple regex captured only the last token before
+      // "or": defer to the multi-word path below so the full verb phrase is kept
+      // ("Run tests, or not?" -> "Run tests", not "tests").
+      if (!/,\s*$/.test(aRaw) && !/,\s*$/.test(bRaw)) {
+        if (LEAD_INS.test(q)) return [{ phrase: cap(a) }, { phrase: cap(b) }];
+        return [{ phrase: a }, { phrase: b }];
+      }
+    }
+  }
+
+  // b) Multi-word verb phrases. Only act when there is a lead-in or a comma right before "or"
+  // AND the question doesn't start with the bare "do you want" / "would you like" interrogator
+  // (those are full-clause questions, not verb-phrase slots).
+  const verbMatch = q.match(/^(.+?)\s+or\s+(.+?)\s*\??\s*$/i);
+  if (verbMatch) {
+    const xRaw = verbMatch[1];
+    const yRaw = verbMatch[2];
+    const leadMatch = xRaw.match(LEAD_INS);
+    const hasComma = /,\s*$/.test(xRaw);
+    if ((leadMatch || hasComma) && !INTERROG.test(xRaw)) {
+      let x = xRaw.trim();
+      if (leadMatch) x = x.slice(leadMatch[0].length).trim();
+      x = x.replace(/^to\s+/, '').trim().replace(/[,;:.!?]+$/, '').trim();
+      const y = yRaw.trim().replace(/[,;:.!?]+$/, '').trim();
+      const xCap = cap(x);
+      const yCap = cap(y);
+      if (xCap && yCap) return [{ phrase: xCap }, { phrase: yCap }];
+    }
   }
   return [];
 }
 
 // A short text matches the AI's proposal when the proposal starts with the option's letter
-// (or letter + space/dot/parens) or when the normalised proposal contains the option's phrase.
+// (or letter + space/dot/parens), when the normalised proposal contains the option's phrase, or
+// when >= 2 significant words (>= 3 chars, not stop words) from the option appear in the proposal —
+// this last path catches the common reworded-verb-phrase case ("Leave it for now" -> "Leave the
+// worktree as is for now, thanks."), where the AI keeps the meaning but not the wording.
+const MATCH_STOP = new Set('the a an and or but if is are was were be been being have has had do does did will would should shall may might must can could to for of in on at by with as it i you me we they he she this that these those there here when where why how all any both each few many more most other some such no not only own same so than too very just'.split(/\s+/));
 function aiMatchesAlt(aiText, alt) {
   if (!aiText) return false;
   const ai = String(aiText);
@@ -355,6 +400,13 @@ function aiMatchesAlt(aiText, alt) {
     const ph = alt.phrase.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const aiN = ai.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
     if (ph && (aiN === ph || aiN.includes(ph))) return true;
+    const phWords = ph.split(/\s+/).filter((w) => w.length >= 3 && !MATCH_STOP.has(w));
+    if (phWords.length >= 2) {
+      const aiWords = new Set(aiN.split(/\s+/).filter((w) => w.length >= 3 && !MATCH_STOP.has(w)));
+      let shared = 0;
+      for (const w of phWords) if (aiWords.has(w)) shared++;
+      if (shared >= 2) return true;
+    }
   }
   return false;
 }

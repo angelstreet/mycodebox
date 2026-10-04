@@ -229,6 +229,107 @@ test('parseAlternatives: lettered lines, inline "A (..) or B (..)", plain "X or 
   assert.deepEqual(parseAlternatives(null), []);
 });
 
+// ---- either/or with lead-ins and comma-separated verb phrases ----
+// Real case (session mcode_qualiai): "Want me to clean up the worktree, or leave it for now?" got NO
+// option buttons before — only the AI's proposal + Reply. The popup needs both options.
+test('either "Want me to X, or Y?": strips "Want me to", capitalises both, Y keeps its verb', () => {
+  const d = derive('done', finished('Want me to clean up the worktree, or leave it for now?'));
+  assert.equal(d.kind, 'either');
+  const ids = d.buttons.map((b) => b.id);
+  assert.ok(ids.includes('oA') && ids.includes('oB'), `expected oA and oB, got ${ids.join(',')}`);
+  assert.ok(ids.includes('reply'), 'Other / Reply still present (3-choice minimum)');
+  const a = d.buttons.find((b) => b.id === 'oA');
+  const b = d.buttons.find((b) => b.id === 'oB');
+  assert.equal(a.text, 'Clean up the worktree');
+  assert.equal(b.text, 'Leave it for now');
+  assert.match(a.label, /^Clean up the worktree/);
+  assert.match(b.label, /^Leave it for now/);
+});
+
+test('either "Should I X or Y?": strips "Should I" and capitalises both', () => {
+  const d = derive('done', finished('Should I push or wait?'));
+  assert.equal(d.kind, 'either');
+  const a = d.buttons.find((b) => b.id === 'oA');
+  const b = d.buttons.find((b) => b.id === 'oB');
+  assert.equal(a.text, 'Push');
+  assert.equal(b.text, 'Wait');
+  assert.match(a.label, /^Push/);
+  assert.match(b.label, /^Wait/);
+});
+
+test('either "Shall I X, or Y?": strips "Shall I" and capitalises both', () => {
+  const d = derive('done', finished('Shall I deploy, or wait?'));
+  assert.equal(d.kind, 'either');
+  const a = d.buttons.find((b) => b.id === 'oA');
+  const b = d.buttons.find((b) => b.id === 'oB');
+  assert.equal(a.text, 'Deploy');
+  assert.equal(b.text, 'Wait');
+});
+
+test('either "X, or Y?" (no lead-in, comma before "or"): "Run tests, or not?" keeps the full verb phrase', () => {
+  const d = derive('done', finished('Run tests, or not?'));
+  assert.equal(d.kind, 'either');
+  const a = d.buttons.find((b) => b.id === 'oA');
+  const b = d.buttons.find((b) => b.id === 'oB');
+  assert.equal(a.text, 'Run tests');
+  assert.equal(b.text, 'Not');
+});
+
+test('either "Do you want me to X, or Y?": strips "do you want me to", capitalises both', () => {
+  assert.deepEqual(parseAlternatives('Do you want me to clean up the worktree, or leave it for now?'), [
+    { phrase: 'Clean up the worktree' },
+    { phrase: 'Leave it for now' },
+  ]);
+});
+
+test('either "Would you like me to X, or Y?": strips "would you like me to", capitalises both', () => {
+  assert.deepEqual(parseAlternatives('Would you like me to deploy now, or wait until tomorrow?'), [
+    { phrase: 'Deploy now' },
+    { phrase: 'Wait until tomorrow' },
+  ]);
+});
+
+// must NOT split: plain "Do you want X, or Y?" (full clauses) stays as the existing AI + wait path.
+test('either "Do you want X, or will you Y?" (full clauses) is NOT split into oA/oB', () => {
+  const triage = { state: 'done', ai: { proposed_reply: 'I will run it myself.', reasoning: 'x', confidence: 0.6, owner_needed: false } };
+  const d = derive('done', finished('The run is going.\nDo you want to deploy once the run ends, or will you run it yourself?'), triage, { forbidden: true });
+  // "Do you want" without "me to" is not a recognised lead-in: stays as ai + wait + reply.
+  const ids = d.buttons.map((b) => b.id);
+  assert.deepEqual(ids, ['ai', 'wait', 'reply']);
+  assert.ok(d.buttons.filter((x) => x.text).every((x) => x.confirm), 'forbidden topic: confirm on every reply');
+});
+
+// must NOT split: trailing words on Y still block the simple case ("Do you want A or B for X?").
+test('either "Do you want A or B for X?" (trailing words on Y) stays as AI + wait + reply', () => {
+  const triage = { state: 'done', ai: { proposed_reply: 'Use Redis.', reasoning: 'x', confidence: 0.7, owner_needed: false } };
+  const d = derive('done', finished('Do you want Redis or Postgres for the cache?'), triage);
+  assert.equal(d.kind, 'either');
+  assert.deepEqual(d.buttons.map((b) => b.id), ['ai', 'wait', 'reply']);
+});
+
+// AI reworded verb phrase: "Leave it for now" matches "Leave the worktree as is for now, thanks."
+// via shared key words (leave, now) rather than exact substring.
+test('either "Want me to X, or Y?" + reworded AI proposal: option 2 highlighted via shared key words', () => {
+  const triage = { state: 'done', ai: { proposed_reply: 'Leave the worktree as is for now, thanks.', reasoning: 'owner asked not to clean', confidence: 0.8, owner_needed: false } };
+  const d = derive('done', finished('Want me to clean up the worktree, or leave it for now?'), triage);
+  assert.equal(d.kind, 'either');
+  const a = d.buttons.find((b) => b.id === 'oA');
+  const b = d.buttons.find((b) => b.id === 'oB');
+  assert.equal(b.ai, true, 'option 2 (Leave it for now) is highlighted via ai:true (shared key words: leave, now)');
+  assert.equal(a.ai, undefined, 'option 1 (Clean up the worktree) is not the AI pick');
+});
+
+// Same setup, AI pick matches option 1 instead.
+test('either "Want me to X, or Y?" + AI picking X: option 1 highlighted', () => {
+  const triage = { state: 'done', ai: { proposed_reply: 'Clean up the worktree, please.', reasoning: 'x', confidence: 0.7, owner_needed: false } };
+  const d = derive('done', finished('Want me to clean up the worktree, or leave it for now?'), triage);
+  assert.equal(d.kind, 'either');
+  const a = d.buttons.find((b) => b.id === 'oA');
+  const b = d.buttons.find((b) => b.id === 'oB');
+  assert.equal(a.ai, true, 'option 1 highlighted via shared key words (clean, worktree)');
+  assert.equal(b.ai, undefined);
+});
+
 // listQuestions pulls out the numbered decisions, max 3, each ≤ 160 chars, in source order.
 test('listQuestions: numbered decision lines, max 3, ≤ 160 chars, in order', () => {
   const text = [
