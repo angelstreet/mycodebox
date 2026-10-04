@@ -40,7 +40,8 @@ export function defaults(env = process.env) {
     evalStateFile: join(stateDir, 'lfeval-state.json'),   // scores + dataset the eval sync already sent (its own file: the tailer's offsets are never touched)
     evalEnabled: env.LFEVAL !== '0',
     judgeStateFile: join(stateDir, 'lfeval-judge.json'),
-    openrouterKey: env.LFEVAL_JUDGE === '1' ? env.OPENROUTER_API_KEY || '' : '',   // the in-ghosty AI-proposal judge is opt-in
+    jevUrl: env.JEV_URL || '',   // the in-ghosty AI-proposal judge is opt-in (LFEVAL_JUDGE=1) and uses the same VPT server as the AI reviewer
+    jevApiKey: env.LFEVAL_JUDGE === '1' ? env.JEV_API_KEY || '' : '',
     judgeMaxPerDay: Number(env.LFEVAL_JUDGE_MAX_PER_DAY || 400),
     judgeSampling: Number(env.LFEVAL_JUDGE_SAMPLING || 1),
     stallsFile: join(stateDir, 'stalls.jsonl'),   // the AI manager's log: its Jev and AI-reviewer calls become generations of agent "manager"
@@ -507,7 +508,7 @@ export function createIngester(cfg, hooks = {}) {
     try {
       evalSync = evalSync || createEvalSync(cfg, { traceKnown: (t) => traces.has(t) });
       const r = await evalSync.sync();
-      if (cfg.openrouterKey) { judge = judge || createJudge(cfg); const j = await judge(); if (j.judged) console.log(`[usage] judged ${j.judged} AI proposals`); }
+      if (cfg.jevUrl && cfg.jevApiKey) { judge = judge || createJudge(cfg); const j = await judge(); if (j.judged) console.log(`[usage] judged ${j.judged} AI proposals`); }
       if (r && !r.skipped && (r.scores || r.spans || r.items || r.deleted)) console.log(`[usage] eval sync ${JSON.stringify(r)}`);
       return r;
     } catch (e) { console.error('[usage] eval sync:', e.message); return null; }

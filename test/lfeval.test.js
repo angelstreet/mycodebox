@@ -182,20 +182,23 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   const { createJudge, parseJudge, judgeMessages } = await import('../usage/judge.js');
   const lf = await mock();
   const f = await setup([triage('a', 30, { src: 'rule', flags: ['mentions a deploy'] }), triage('b', 20), triage('old', 60 * 30)], lf);
-  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), openrouterKey: 'or-key', judgeMaxPerDay: 1 };
+  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1 };
   const asked = [];
   let fail = false;
   const fetchFn = async (url, init) => {
     if (url.startsWith(lf.url)) return fetch(url, init);
     if (fail) throw new Error('down');
-    asked.push({ url, auth: init.headers.authorization, body: JSON.parse(init.body) });
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"reasoning":"safe","score":0.9}' } }] }), { status: 200 });
+    const headers = Object.fromEntries(Object.entries(init.headers).map(([k, v]) => [String(k).toLowerCase(), v]));
+    asked.push({ url, headers, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ success: true, content: '{"reasoning":"safe","score":0.9}', usage: { prompt_tokens: 1000, completion_tokens: 100, total_tokens: 1100 }, model: 'mock-judge' }), { status: 200 });
   };
   const judge = createJudge(cfg, { fetchFn, log: () => {} });
   assert.deepEqual(await judge(), { judged: 1, skipped: 1 }, 'cap of 1 per day; the 30-hour-old proposal is out of range');
   assert.equal(asked.length, 1);
-  assert.equal(asked[0].url, 'https://openrouter.ai/api/v1/chat/completions');
-  assert.match(asked[0].body.messages[1].content, /mentions a deploy/);
+  assert.equal(asked[0].url, 'http://127.0.0.1:5555/server/ai/complete');
+  assert.equal(asked[0].headers['x-api-key'], 'vpt-key');
+  assert.equal(asked[0].body.usage, 'text.plan');
+  assert.match(asked[0].body.prompt, /mentions a deploy/);
   assert.ok(!JSON.stringify(asked[0].body).includes('synthetic closing text'));
   const sc = events(lf.calls, 'score-create')[0].body;
   assert.deepEqual([sc.name, sc.value, sc.comment, sc.observationId], ['ai_proposal_judge', 0.9, 'safe', genIdOf('manager:ai:a')]);
@@ -208,5 +211,42 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   assert.equal(parseJudge('```json\n{"reasoning":"x","score":2}\n```'), null);
   assert.equal(parseJudge('{"reasoning":"x","score":0.25}').score, 0.25);
   assert.equal(judgeMessages(triage('z', 1)).length, 2);
-  assert.equal(await createJudge({ ...cfg, openrouterKey: '' })().then((r) => r.skipped), 'no OPENROUTER_API_KEY');
+  assert.equal(await createJudge({ ...cfg, jevApiKey: '' })().then((r) => r.skipped), 'no JEV_URL / JEV_API_KEY');
+});
+
+test('judge: request goes to /server/ai/complete with X-API-Key and usage text.plan', async () => {
+  const { createJudge } = await import('../usage/judge.js');
+  const lf = await mock();
+  const f = await setup([triage('a', 30, { src: 'rule', flags: ['mentions a deploy'] })], lf);
+  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}-${Math.random()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key' };
+  const asked = [];
+  const fetchFn = async (url, init) => {
+    if (url.startsWith(lf.url)) return fetch(url, init);
+    const headers = Object.fromEntries(Object.entries(init.headers).map(([k, v]) => [String(k).toLowerCase(), v]));
+    asked.push({ url, headers, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ success: true, content: '{"reasoning":"r","score":0.7}', usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }, model: 'mock-judge' }), { status: 200 });
+  };
+  await createJudge(cfg, { fetchFn, log: () => {} })();
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].url, 'http://127.0.0.1:5555/server/ai/complete', 'derived from JEV_URL origin');
+  assert.equal(asked[0].headers['x-api-key'], 'vpt-key');
+  assert.equal(asked[0].headers['content-type'], 'application/json');
+  assert.equal(asked[0].body.usage, 'text.plan');
+  assert.match(asked[0].body.system, /JSON object/);
+  assert.ok(asked[0].body.max_tokens > 0 && asked[0].body.timeout_s > 0);
+});
+
+test('judge: skipped when JEV_URL or JEV_API_KEY is missing', async () => {
+  const { createJudge } = await import('../usage/judge.js');
+  const lf = await mock();
+  const f = await setup([triage('a', 30)], lf);
+  const asked = [];
+  const fetchFn = async (url, init) => { if (url.startsWith(lf.url)) return fetch(url, init); asked.push(url); return { json: () => ({}) }; };
+  // no JEV_URL
+  let r = await createJudge({ ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}-${Math.random()}.json`), jevApiKey: 'vpt-key' }, { fetchFn, log: () => {} })();
+  assert.equal(r.skipped, 'no JEV_URL / JEV_API_KEY');
+  // no JEV_API_KEY
+  r = await createJudge({ ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}-${Math.random()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide' }, { fetchFn, log: () => {} })();
+  assert.equal(r.skipped, 'no JEV_URL / JEV_API_KEY');
+  assert.equal(asked.length, 0, 'no network call when the judge is skipped');
 });

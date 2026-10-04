@@ -207,8 +207,9 @@ Or from the Mac:
   `usage/manager-parse.js` (stalls.jsonl -> generations), `usage/experiment.js` + `scripts/stops-experiment.js`,
   `usage/judge.js`, `prompts.js`, `scripts/lf-setup.js` (idempotent: prompt, dataset, LLM connection, evaluator + rule).
 - Owner steps not done headlessly (they need a service restart): (1) restart `ghosty-usage` so the tailer runs the eval
-  sync; add `LFEVAL_JUDGE=1` and `OPENROUTER_API_KEY` to `~/.config/ghosty/usage.env` for the judge; (2) add that env file to
-  `ghosty-sessions.service` so the manager reads the Langfuse prompt (until then: the hard-coded fallback).
+  sync; add `LFEVAL_JUDGE=1` to `~/.config/ghosty/usage.env` for the judge (it uses the same `JEV_URL` + `JEV_API_KEY` as the
+  AI reviewer, so no extra key is needed); (2) add that env file to `ghosty-sessions.service` so the manager reads the
+  Langfuse prompt (until then: the hard-coded fallback).
 - The real log had no owner labels yet at build time: only `jev_agreed` scores were backfilled. A demo dataset
   `ghosty-stops-livecheck` (synthetic labels on real stops) and its run `rules-livecheck` can be deleted in the Langfuse UI.
 - Langfuse 3.x: `unstable/evaluation-rules` accept observation rules but never fire (no events tables, write mode legacy).

@@ -73,11 +73,14 @@ see "Judge" for why its evaluators do not).
 - **Judge** (`ai_proposal_judge`, 0..1 + reasoning): `scripts/lf-setup.js` creates the OpenRouter LLM connection, the
   evaluator and its rule in Langfuse, but observation-level evaluators need Langfuse v4's events tables
   (`LANGFUSE_MIGRATION_V4_WRITE_MODE`, ClickHouse 25.12); this v3.225 deployment has none, so the rule never fires. The
-  same judge therefore runs in the tailer (`usage/judge.js`): opt-in `LFEVAL_JUDGE=1` + `OPENROUTER_API_KEY` in the usage
-  unit's environment; model `openai/gpt-4.1-mini`, at most `LFEVAL_JUDGE_MAX_PER_DAY` (400) proposals, sampling
-  `LFEVAL_JUDGE_SAMPLING` (1), only proposals of the last 24 h, each once. It sends the case, flags and the reviewer's
-  proposal + reasoning (not the closing text). Cost about $0.0005 per call; the reviewer's own cap is 300 calls/day, so
-  at most about $0.15/day. `LFEVAL_SEND_AI_OUTPUT=1` additionally puts the proposal on the generation (for a future v4 evaluator).
+  same judge therefore runs in the tailer (`usage/judge.js`): opt-in `LFEVAL_JUDGE=1` + `JEV_URL` + `JEV_API_KEY` in the usage
+  unit's environment (the judge goes through the VPT server's `POST <JEV_URL origin>/server/ai/complete` with `X-API-Key`,
+  same as the AI reviewer in `triage.js` — no OpenRouter key is needed in the ghosty env); at most `LFEVAL_JUDGE_MAX_PER_DAY`
+  (400) proposals, sampling `LFEVAL_JUDGE_SAMPLING` (1), only proposals of the last 24 h, each once. It sends the case, flags
+  and the reviewer's proposal + reasoning (not the closing text). Cost is estimated from the token counts the server returns
+  (`AI_USD_PER_MTOK_IN/OUT`, default 3 / 15), same as the reviewer; about $0.0005 per call, the reviewer's own cap is 300
+  calls/day, so at most about $0.15/day. `LFEVAL_SEND_AI_OUTPUT=1` additionally puts the proposal on the generation (for a
+  future v4 evaluator).
 - **Panel**: manager panel -> "Langfuse" links (scores, dataset, evaluator, prompt) from `LANGFUSE_PUBLIC_URL` (else
   `LANGFUSE_URL`) and `LANGFUSE_PROJECT` (default `codebox-usage`).
 

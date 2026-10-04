@@ -1,18 +1,28 @@
 // AI-proposal judge written by ghosty itself (TASK-44 phase 12). The Langfuse evaluator `ai_proposal_judge` (scripts/lf-setup.js)
 // is the intended path, but observation-level evaluators need Langfuse v4's events tables; this v3 deployment cannot run them.
-// So this does the same job: for each new AI-reviewer proposal it asks a cheap model (OpenRouter) the same question and writes the
-// Langfuse score `ai_proposal_judge` (0..1, the reasoning as the comment) on the manager.ai-review generation.
-// Opt-in: LFEVAL_JUDGE=1 and OPENROUTER_API_KEY. Capped per day; only proposals of the last 24 h; each stop judged once.
+// So this does the same job: for each new AI-reviewer proposal it asks the VPT server (same /server/ai/complete the AI reviewer uses)
+// to judge it and writes the Langfuse score `ai_proposal_judge` (0..1, the reasoning as the comment) on the manager.ai-review generation.
+// Opt-in: LFEVAL_JUDGE=1 and JEV_URL + JEV_API_KEY. Capped per day; only proposals of the last 24 h; each stop judged once.
 import { promises as fs } from 'node:fs';
 import { hash, genIdOf, traceIdOf, postBatch } from './lf-common.js';
+import { callComplete, reviewerUrl, REVIEWER_USAGE } from '../triage.js';
 import { JUDGE_PROMPT, JUDGE_MODEL } from '../scripts/lf-setup.js';
 
-export function judgeMessages(rec) {
+const JUDGE_MAX_TOKENS = 300;
+const JUDGE_TIMEOUT_S = 30;
+
+const judgeSystem = 'Answer with ONE JSON object and nothing else: {"reasoning": string, "score": number between 0 and 1}';
+
+function buildJudgePrompt(rec) {
   const context = JSON.stringify({ case: rec.case, source: rec.src || null, mode: rec.mode || null, flags: Array.isArray(rec.flags) ? rec.flags : [] });
   const a = rec.ai || {};
   const proposal = JSON.stringify({ proposed_reply: a.proposed_reply, reasoning: a.reasoning, owner_needed: a.owner_needed, owner_needed_why: a.owner_needed_why, confidence: a.confidence });
-  const prompt = JUDGE_PROMPT.replace('{{context}}', context).replace('{{proposal}}', proposal);
-  return [{ role: 'system', content: 'Answer with ONE JSON object and nothing else: {"reasoning": string, "score": number between 0 and 1}' }, { role: 'user', content: prompt }];
+  return JUDGE_PROMPT.replace('{{context}}', context).replace('{{proposal}}', proposal);
+}
+
+// Public: kept for the test suite (used to assert the system + user prompt sent to the model).
+export function judgeMessages(rec) {
+  return [{ role: 'system', content: judgeSystem }, { role: 'user', content: buildJudgePrompt(rec) }];
 }
 
 export function parseJudge(text) {
@@ -25,10 +35,12 @@ export function parseJudge(text) {
   } catch { return null; }
 }
 
-// cfg: { stallsFile, judgeStateFile, openrouterKey, judgeModel?, judgeMaxPerDay?, judgeSampling?, now() } ; returns { judged, skipped }
+// cfg: { stallsFile, judgeStateFile, jevUrl, jevApiKey, judgeMaxPerDay?, judgeSampling?, now() } ; returns { judged, skipped }
 export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = console.log } = {}) {
   return async function judgePass() {
-    if (!cfg.openrouterKey) return { skipped: 'no OPENROUTER_API_KEY' };
+    if (!cfg.jevUrl || !cfg.jevApiKey) return { skipped: 'no JEV_URL / JEV_API_KEY' };
+    const url = reviewerUrl(cfg.jevUrl);
+    if (!url) return { skipped: 'invalid JEV_URL' };
     const now = cfg.now ? cfg.now() : Date.now();
     const day = new Date(now).toISOString().slice(0, 10);
     let st = { day, calls: 0, done: {} };
@@ -47,14 +59,14 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
       if (random() >= (cfg.judgeSampling ?? 1)) { st.done[r.id] = 'sampled-out'; continue; }
       st.calls++;
       try {
-        const res = await fetchFn('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.openrouterKey}` },
-          body: JSON.stringify({ model: cfg.judgeModel || JUDGE_MODEL, messages: judgeMessages(r), max_tokens: 300, temperature: 0, response_format: { type: 'json_object' } }), signal: AbortSignal.timeout(30000) });
-        const j = await res.json();
-        const p = parseJudge(j?.choices?.[0]?.message?.content);
+        const body = { usage: REVIEWER_USAGE, prompt: buildJudgePrompt(r), system: judgeSystem, max_tokens: JUDGE_MAX_TOKENS, timeout_s: JUDGE_TIMEOUT_S };
+        const res = await callComplete({ url, apiKey: cfg.jevApiKey, body, fetchFn, timeoutMs: JUDGE_TIMEOUT_S * 1000 });
+        if (res.error) { log('[lfeval] judge call failed:', res.error); st.calls--; continue; }   // retried next pass
+        const p = parseJudge(res.content);
         if (!p) { st.done[r.id] = 'unparsable'; continue; }
         events.push({ id: hash(`ev:judge:${r.id}`).slice(0, 36), type: 'score-create', timestamp: new Date(now).toISOString(), body: {
           id: hash(`score:ai_proposal_judge:${r.id}`).slice(0, 32), traceId: traceIdOf('manager', r.session), observationId: genIdOf(`manager:ai:${r.id}`),
-          name: 'ai_proposal_judge', dataType: 'NUMERIC', value: p.score, comment: p.reasoning, metadata: { stop_id: r.id, judge_model: cfg.judgeModel || JUDGE_MODEL, cost: Number(j?.usage?.cost ?? 0) || null } } });
+          name: 'ai_proposal_judge', dataType: 'NUMERIC', value: p.score, comment: p.reasoning, metadata: { stop_id: r.id, judge_model: JUDGE_MODEL, cost: res.cost ?? null } } });
         st.done[r.id] = 'judged'; judged++;
       } catch (e) { log('[lfeval] judge call failed:', e.message); st.calls--; }   // retried next pass
     }

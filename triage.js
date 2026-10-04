@@ -98,24 +98,33 @@ export function createBudget(file, today = () => new Date().toISOString().slice(
   };
 }
 
-// One reviewer call. Never throws. Returns { ai, cost, ms, model } | { error, ms } .
-export async function callReviewer({ url, apiKey, facts, system, fetchFn = fetch, timeoutMs = 25000 }) {
+// Shared POST /server/ai/complete call. Never throws. Returns { content, cost, costEstimated, usage, model, ms } | { error, ms } .
+// Shared between the AI reviewer (callReviewer below) and the AI-proposal judge (usage/judge.js), so both stay on the same
+// VPT server endpoint with the same X-API-Key header and the same cost estimate.
+export async function callComplete({ url, apiKey, body, fetchFn = fetch, timeoutMs = 25000 }) {
   const started = Date.now();
   try {
     const r = await fetchFn(url, {
       method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': apiKey },
-      body: JSON.stringify(reviewerRequest(facts, system ? { system } : {})), signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
     });
     const j = await r.json();
     const { cost, estimated } = costOf(j);
     const ms = Date.now() - started;
-    if (j.direct) return { error: 'reviewer endpoint is host-reach only', ms, cost: 0 };
+    if (j.direct) return { error: 'endpoint is host-reach only', ms, cost: 0 };
     if (!j.success) return { error: String(j.error || `http ${r.status}`).slice(0, 200), ms, cost };
-    const p = parseReviewerAnswer(j.content);
-    return { ...p, cost, costEstimated: estimated, ms, model: j.model || null, tokens: j.usage?.total_tokens ?? null, tin: j.usage?.prompt_tokens ?? null, tout: j.usage?.completion_tokens ?? null };
+    return { content: j.content, usage: j.usage || null, cost, costEstimated: estimated, ms, model: j.model || null };
   } catch (e) {
     return { error: e.message, ms: Date.now() - started, cost: 0 };
   }
+}
+
+// One reviewer call. Never throws. Returns { ai, cost, ms, model } | { error, ms } .
+export async function callReviewer({ url, apiKey, facts, system, fetchFn = fetch, timeoutMs = 25000 }) {
+  const r = await callComplete({ url, apiKey, body: reviewerRequest(facts, system ? { system } : {}), fetchFn, timeoutMs });
+  if (r.error) return r;
+  const p = parseReviewerAnswer(r.content);
+  return { ...p, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model, tokens: r.usage?.total_tokens ?? null, tin: r.usage?.prompt_tokens ?? null, tout: r.usage?.completion_tokens ?? null };
 }
 
 // ---- context lines for the reviewer (pure; server.js passes the cached quota / leases / deploy queue) ----
