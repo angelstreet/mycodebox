@@ -6,7 +6,9 @@
 //
 // Also appends one row to usage-ledger.jsonl per judged call (agent 'manager', name 'manager.judge'), exactly the
 // shape usage/manager-parse.js writes for the AI reviewer (cost.total on success, 0 on error, usage tokens, ms,
-// error, model). The scorecard counts those rows under cost.judge.
+// error, model). A failed call writes a row too (tokens 0, error set). The scorecard counts those rows under cost.judge.
+// Every call, failed or not, counts against the daily cap; a record whose call failed is retried at most once an hour
+// (st.failed[stopId] = ms of the last failure, kept in the same state file).
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { hash, genIdOf, traceIdOf, postBatch } from './lf-common.js';
@@ -15,6 +17,7 @@ import { JUDGE_PROMPT, JUDGE_MODEL } from '../scripts/lf-setup.js';
 
 const JUDGE_MAX_TOKENS = 300;
 const JUDGE_TIMEOUT_S = 30;
+const RETRY_AFTER_MS = 3600e3;
 
 const judgeSystem = 'Answer with ONE JSON object and nothing else: {"reasoning": string, "score": number between 0 and 1}';
 
@@ -40,6 +43,18 @@ export function parseJudge(text) {
   } catch { return null; }
 }
 
+// One ledger row per judge call. res.error (failed call) -> tokens 0, cost 0, error set.
+function ledgerRow(r, res, p) {
+  const now = res.at || Date.now();
+  const u = res.usage || {};
+  const usage = { input: Number(u.prompt_tokens) || 0, output: Number(u.completion_tokens) || 0, cache_read: Number(u.cache_read_input_tokens) || 0, cache_write_5m: 0, cache_write_1h: 0 };
+  const cost = res.error ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0 }
+    : Number.isFinite(Number(res.cost)) && Number(res.cost) >= 0 ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: Number(res.cost) } : null;
+  return { id: `manager:judge:${r.id}`, agent: 'manager', session: r.session, cwd: null, label: r.session, ts: now, model: res.model || JUDGE_MODEL, usage,
+    name: 'manager.judge', subagent: false,
+    cost, costEstimated: !!res.costEstimated, ms: res.ms ?? null, error: res.error ? res.error : (p ? null : 'unparsable'), extra: { stop_id: r.id, score: p ? p.score : null } };
+}
+
 // cfg: { stallsFile, judgeStateFile, jevUrl, jevApiKey, judgeMaxPerDay?, judgeSampling?, ledgerFile?, stateDir?, now() } ; returns { judged, skipped }
 export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = console.log } = {}) {
   return async function judgePass() {
@@ -48,14 +63,16 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
     if (!url) return { skipped: 'invalid JEV_URL' };
     const now = cfg.now ? cfg.now() : Date.now();
     const day = new Date(now).toISOString().slice(0, 10);
-    let st = { day, calls: 0, done: {} };
+    let st = { day, calls: 0, done: {}, failed: {} };
     try { st = { ...st, ...JSON.parse(await fs.readFile(cfg.judgeStateFile, 'utf8')) }; } catch {}
     if (st.day !== day) { st.day = day; st.calls = 0; }
+    if (!st.failed || typeof st.failed !== 'object') st.failed = {};
+    for (const k of Object.keys(st.failed)) if (now - st.failed[k] >= RETRY_AFTER_MS * 24) delete st.failed[k];
     const since = now - 24 * 3600e3;
     const recs = [];
     for (const l of (await fs.readFile(cfg.stallsFile, 'utf8').catch(() => '')).split('\n')) {
       if (!l.includes('"type":"triage"') || !l.includes('"ai"')) continue;
-      try { const r = JSON.parse(l); if (r.type === 'triage' && r.ai && Date.parse(r.at) >= since && !st.done[r.id]) recs.push(r); } catch {}
+      try { const r = JSON.parse(l); if (r.type === 'triage' && r.ai && Date.parse(r.at) >= since && !st.done[r.id] && !(now - (st.failed[r.id] || -Infinity) < RETRY_AFTER_MS)) recs.push(r); } catch {}
     }
     const events = [];
     const ledgerRows = [];
@@ -68,25 +85,26 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
       try {
         const body = { usage: REVIEWER_USAGE, prompt: buildJudgePrompt(r), system: judgeSystem, max_tokens: JUDGE_MAX_TOKENS, temperature: 0, timeout_s: JUDGE_TIMEOUT_S };
         const res = await callComplete({ url, apiKey: cfg.jevApiKey, body, fetchFn, timeoutMs: JUDGE_TIMEOUT_S * 1000 });
-        if (res.error) { log('[lfeval] judge call failed:', res.error); st.calls--; continue; }   // retried next pass
-        const p = parseJudge(res.content);
-        // one usage-ledger row per call (success or unparsable): the scorecard counts these under cost.judge
-        if (ledgerFile) {
-          const u = res.usage || {};
-          const usage = { input: Number(u.prompt_tokens) || 0, output: Number(u.completion_tokens) || 0, cache_read: Number(u.cache_read_input_tokens) || 0, cache_write_5m: 0, cache_write_1h: 0 };
-          const cost = Number.isFinite(Number(res.cost)) && Number(res.cost) >= 0
-            ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: Number(res.cost) }
-            : (res.error ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0 } : null);
-          ledgerRows.push({ id: `manager:judge:${r.id}`, agent: 'manager', session: r.session, cwd: null, label: r.session, ts: now, model: res.model || JUDGE_MODEL, usage,
-            name: 'manager.judge', subagent: false,
-            cost, costEstimated: !!res.costEstimated, ms: res.ms ?? null, error: p ? null : (res.error || 'unparsable'), extra: { stop_id: r.id, score: p ? p.score : null } });
+        if (res.error) {
+          log('[lfeval] judge call failed:', res.error);
+          st.failed[r.id] = now;          // counted against the cap; retried after RETRY_AFTER_MS
+          if (ledgerFile) ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, ms: res.ms, model: res.model, error: res.error, costEstimated: false }, null));
+          continue;
         }
+        const p = parseJudge(res.content);
+        // one usage-ledger row per call (success, unparsable or failed): the scorecard counts these under cost.judge
+        if (ledgerFile) ledgerRows.push(ledgerRow(r, res, p));
+        delete st.failed[r.id];
         if (!p) { st.done[r.id] = 'unparsable'; continue; }
         events.push({ id: hash(`ev:judge:${r.id}`).slice(0, 36), type: 'score-create', timestamp: new Date(now).toISOString(), body: {
           id: hash(`score:ai_proposal_judge:${r.id}`).slice(0, 32), traceId: traceIdOf('manager', r.session), observationId: genIdOf(`manager:ai:${r.id}`),
           name: 'ai_proposal_judge', dataType: 'NUMERIC', value: p.score, comment: p.reasoning, metadata: { stop_id: r.id, judge_model: res.model || JUDGE_MODEL, cost: res.cost ?? null } } });
         st.done[r.id] = 'judged'; judged++;
-      } catch (e) { log('[lfeval] judge call failed:', e.message); st.calls--; }   // retried next pass
+      } catch (e) {
+        log('[lfeval] judge call failed:', e.message);
+        st.failed[r.id] = now;
+        if (ledgerFile) ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, error: e.message }, null));
+      }
     }
     if (events.length) await postBatch(cfg, events, { fetchFn });
     if (ledgerRows.length && ledgerFile) {
