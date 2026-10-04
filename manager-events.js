@@ -17,7 +17,7 @@
 // new line never lands in a file that is about to be moved.
 
 import { join } from 'node:path';
-import { mkdir, stat, rename, appendFile, readFile } from 'node:fs/promises';
+import { mkdir, stat, rename, appendFile, readFile, open } from 'node:fs/promises';
 
 export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 export const FILE_NAME = 'manager-events.jsonl';
@@ -159,4 +159,28 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
   }
 
   return { record, tail, file };
+}
+
+// The manager agent's own action log (<stateDir>/manager-actions.jsonl, one JSON line per wake/event/decision; the agent
+// writes it, ghosty only reads). Newest last; entries strictly after `since` (ISO); bad lines skipped; missing file = [].
+// Only the last maxBytes of the file are read, so a huge log never loads whole.
+export const ACTIONS_FILE = 'manager-actions.jsonl';
+export async function readActions({ stateDir, since = null, limit = 100, maxBytes = 1024 * 1024 } = {}) {
+  const n = Math.max(1, Math.min(1000, Number(limit) || 100));
+  let text = '';
+  try {
+    const fh = await open(join(stateDir, ACTIONS_FILE), 'r');
+    try {
+      const { size } = await fh.stat();
+      const len = Math.min(size, maxBytes);
+      const buf = Buffer.alloc(len);
+      await fh.read(buf, 0, len, size - len);
+      text = buf.toString('utf8');
+      if (size > len) text = text.slice(text.indexOf('\n') + 1);   // drop the partial first line
+    } finally { await fh.close(); }
+  } catch { return []; }
+  let rows = text.split('\n').filter(Boolean).map((l) => { try { const r = JSON.parse(l); return r && typeof r === 'object' ? r : null; } catch { return null; } }).filter(Boolean);
+  const t = since ? Date.parse(since) : NaN;
+  if (Number.isFinite(t)) rows = rows.filter((r) => Date.parse(r.at) > t);
+  return rows.slice(-n);
 }
