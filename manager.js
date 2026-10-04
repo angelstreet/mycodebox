@@ -302,7 +302,18 @@ export async function reviewDeck(limit = 50) {
   try { recs = (await readFile(LOG_FILE, 'utf8')).split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }); } catch {}
   const labels = effectiveLabels(recs);
   const outcomes = new Map(recs.filter((r) => r.type === 'outcome').map((r) => [r.id, r]));
-  const open = recs.filter((r) => r.type === 'stall' && r.id && !labels.has(r.id));
+  // One card per distinct stop: identical (session, closing text) records are the same stop logged again
+  // (e.g. the pre-2b repaint bug). The newest stands for the group; a label on any member labels it.
+  const groups = new Map();
+  for (const r of recs) {
+    if (r.type !== 'stall' || !r.id) continue;
+    const k = `${r.session}\u0000${r.excerpt || r.question || ''}`;
+    const g = groups.get(k) || { last: null, labelled: false };
+    g.last = r;
+    if (labels.has(r.id)) g.labelled = true;
+    groups.set(k, g);
+  }
+  const open = [...groups.values()].filter((g) => !g.labelled).map((g) => g.last).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const since = new Date().setHours(0, 0, 0, 0);
   const stopIds = new Set(recs.filter((r) => r.type === 'stall').map((r) => r.id));
   const labelledToday = [...labels.values()].filter((l) => stopIds.has(l.id) && Date.parse(l.at) >= since).length;

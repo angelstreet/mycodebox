@@ -67,3 +67,17 @@ test('stall-report honours unlabel (counts and --export)', () => {
   assert.deepEqual(items.map((x) => x.id).sort(), ['c2', 'c3']);
   assert.match(r.stdout, /continue\s+1\s+1\s+1/, 'continue: 1 no_reason, 1 legit, 1 wrong_case');
 });
+
+test('review deck folds repeats of the same stop into one card', async () => {
+  const { appendFileSync } = await import('node:fs');
+  const m = await import('../manager.js');
+  const ex = 'Repeated closing text of one stop.';
+  for (let i = 0; i < 5; i++) appendFileSync(m.LOG_FILE, JSON.stringify({ type: 'stall', id: `dup-${i}`, session: 'dupsess', case: 'done', at: new Date(Date.now() - (5 - i) * 1000).toISOString(), excerpt: ex }) + '\n');
+  let d = await m.reviewDeck(200);
+  const dups = d.cards.filter((c) => c.session === 'dupsess');
+  assert.equal(dups.length, 1);
+  assert.equal(dups[0].id, 'dup-4');
+  await m.labelStall({ id: 'dup-2', label: 'legit' });
+  d = await m.reviewDeck(200);
+  assert.equal(d.cards.filter((c) => c.session === 'dupsess').length, 0);
+});
