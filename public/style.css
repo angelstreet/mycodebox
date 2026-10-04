@@ -1078,3 +1078,11 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .morepop .mrow-font .ml{ font-size:13px; }
 .morepop .fontbox{ background:var(--bg-3); }
 .topbar{ position:relative; }
+
+/* desktop: name and its meta share one row (name stays vertically centred); ctx % appears on hover */
+@media (hover:hover) and (pointer:fine){
+  .cell .h .nm{ flex-direction:row; align-items:center; gap:8px; }
+  .cell .h .mt{ height:auto; flex-shrink:0; }
+  .cell .h .mt .ctx, .cell .h .mt .sep{ display:none; }
+  .cell:hover .h .mt .ctx, .cell:hover .h .mt .sep{ display:inline; }
+}
