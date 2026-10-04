@@ -3037,7 +3037,8 @@ function openNewSession() {
         state.pendingNew = { name: real, at: Date.now() };
         await fetchInitial();
         openCard(real);
-        toast(`started ${real}`);
+        toast(`started ${real} \u2014 type your prompt below`);
+        setTimeout(() => els.sendInput.focus(), 250);
       } catch (err) {
         toast(`create failed: ${err.message}`);
       } finally {
@@ -3089,6 +3090,7 @@ function confirmKill(name) {
 (function wireSide() {
   const nb = $('#newSessBtn');
   if (nb) nb.onclick = openNewSession;
+  $('#topNewBtn').onclick = openNewSession;
   setInterval(tickSide, 1000);
 })();
 loadDock();
