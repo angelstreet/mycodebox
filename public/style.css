@@ -1546,3 +1546,12 @@ body.side-docked .side-head .ttl{ letter-spacing:.12em; }
 #askPopup .ap-sug { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-3); }
 #askPopup .ap-sug-t { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 #askPopup .ap-use { flex: 0 0 auto; background: none; border: 0; padding: 2px 6px; min-height: 24px; font-size: 11px; color: var(--ink-2); text-decoration: underline; cursor: pointer; }
+
+/* phone, single card: provider only (no model), no counter, no pause; the full title gets the room;
+   MD / terminal toggle stay on the title row, the project pill gets its own line */
+@media (max-width: 720px){
+  .card-pane .cell .h .agent-model, .card-pane .cell .h .pos, .card-pane .cell .h .pz{ display:none; }
+  .card-pane .cell .h .nm{ flex:1 1 0; min-width:0; }
+  .card-pane .cell .h .name{ white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; }
+  .card-pane .cell .h .proj{ order:9; flex:1 1 100%; min-width:0; max-width:100%; justify-content:center; }
+}
