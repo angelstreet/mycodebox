@@ -38,6 +38,14 @@ function envFromFile(file) {
   return out;
 }
 
+// Pushes the current REVIEWER_SYSTEM as a NEW version when the live production version differs (--update-prompt).
+export async function updatePrompt(cfg, { fetchFn = fetch } = {}) {
+  const cur = await lfRequest(cfg, 'GET', `/api/public/v2/prompts/${PROMPT_NAME}?label=${PROMPT_LABEL}`, undefined, { fetchFn, okStatuses: [404] });
+  if (cur && cur.version && cur.prompt === REVIEWER_SYSTEM) return `prompt ${PROMPT_NAME}: v${cur.version} already matches triage.js`;
+  const j = await lfRequest(cfg, 'POST', '/api/public/v2/prompts', { name: PROMPT_NAME, type: 'text', prompt: REVIEWER_SYSTEM, labels: [PROMPT_LABEL], commitMessage: 'reviewer describes each option (options[] in the JSON)' }, { fetchFn });
+  return `prompt ${PROMPT_NAME}: created v${j.version} (label ${PROMPT_LABEL})`;
+}
+
 export async function seedPrompt(cfg, { fetchFn = fetch } = {}) {
   const opt = { fetchFn, okStatuses: [404] };
   const cur = await lfRequest(cfg, 'GET', `/api/public/v2/prompts/${PROMPT_NAME}?label=${PROMPT_LABEL}`, undefined, opt);
@@ -87,7 +95,8 @@ async function main() {
   const only = arg('--only');
   const env = { ...envFromFile(arg('--env-file', '')), ...process.env };
   const lines = [];
-  if (!only || only === 'prompt') lines.push(await seedPrompt(cfg));
+  if (process.argv.includes('--update-prompt')) lines.push(await updatePrompt(cfg));
+  else if (!only || only === 'prompt') lines.push(await seedPrompt(cfg));
   if (!only || only === 'dataset') lines.push(await ensureDataset(cfg));
   if (!only || only === 'judge') lines.push(...await ensureJudge(cfg, { apiKey: env.OPENROUTER_API_KEY, sampling: Number(arg('--sampling', 0.5)), dryRun: process.argv.includes('--dry-run') }));
   console.log(lines.join('\n'));

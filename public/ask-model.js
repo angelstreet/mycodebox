@@ -236,3 +236,11 @@ export function jevAgreesOwner(jevChoice, ownerButtonId, aiButtonId) {
   }
   return null;
 }
+// ---------- Details (last ~300 characters of the stop's closing text) ----------
+// Prefers stall.excerpt, else stall.question. Returns '' when there is none. Starts with '…' when cut.
+export const DETAILS_CHARS = 300;
+export function detailsText(stall) {
+  const t = String(stall?.excerpt || stall?.question || '').replace(/\r/g, '').trim();
+  if (!t) return '';
+  return t.length > DETAILS_CHARS ? `…${t.slice(-DETAILS_CHARS).trimStart()}` : t;
+}

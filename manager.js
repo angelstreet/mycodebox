@@ -27,6 +27,7 @@ import { actorOf } from './api-extras.js';
 import { jevAgreesOwner } from './public/ask-model.js';
 import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, reviewerUrl } from './triage.js';
 import { createPromptSource } from './prompts.js';
+import { reviewerOptions } from './public/buttons.js';
 import { runShadow } from './router-shadow.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
@@ -245,7 +246,7 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
   const flags = [final.forbidden ? `forbidden topic: "${final.forbidden}"` : null, stall.draft ? 'the owner has an unsent draft in the input box' : null,
     final.no_status ? 'closing text gives no done / tested / left status' : null, final.deployHint ? 'mentions a deploy' : null].filter(Boolean);
   const facts = { session: name, agent, project, priority: ctx.priority, state, case: final.case, source: final.source, flags,
-    jev: jevOut?.choice ? jevOut : null, quota: ctx.quota, ...(deployish ? { leases: ctx.leases, deploys: ctx.deploys } : {}), text: stall.excerpt || final.question || '' };
+    jev: jevOut?.choice ? jevOut : null, quota: ctx.quota, ...(deployish ? { leases: ctx.leases, deploys: ctx.deploys } : {}), options: (() => { try { return reviewerOptions({ state, stall: { question: final.question || stall.question, excerpt: stall.excerpt, options: stall.options || final.options || null } }); } catch { return []; } })(), text: stall.excerpt || final.question || '' };
   const prompt = await reviewerPrompt.get();
   const r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, system: prompt.text, fetchFn: reviewerFetch });
   aiBudget.add(r.cost || 0);

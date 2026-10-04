@@ -1383,7 +1383,17 @@ body[data-mode="card"] #health{ display:none; }
 #askPopup .ap-b.hl { background: var(--working); color: #04170b; border-color: transparent; font-weight: 700; }
 #askPopup .ap-b.hl .n { color: #04170b; }
 #askPopup .ap-b .star { font-style: normal; font-size: 12px; }
-#askPopup .ap-b.cf { border-color: var(--accent); }
+#askPopup .ap-rec { display: inline-block; margin-left: 8px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 10px; font-weight: 500; color: var(--ink-3); white-space: nowrap; vertical-align: middle; }
+#askPopup .ap-b.hl .ap-rec { color: #04170b; border-color: rgba(4,23,11,0.45); }
+#askPopup .ap-opt { flex: 1 1 100%; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+#askPopup .ap-opt.yn { flex: 1 1 0; }
+#askPopup .ap-optrow { display: flex; gap: 4px; align-items: stretch; }
+#askPopup .ap-optrow .ap-b { flex: 1 1 auto; min-width: 0; }
+#askPopup .ap-ex { background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 8px; min-width: 40px; min-height: 40px; cursor: pointer; color: var(--ink-2); font-size: 14px; padding: 0; }
+#askPopup .ap-desc { font-size: 12px; line-height: 1.4; color: var(--ink-2); padding: 0 4px 2px 8px; overflow-wrap: anywhere; }
+#askPopup .ap-det { align-self: flex-start; background: none; border: 0; padding: 2px 0; min-height: 28px; font-size: 11px; color: var(--ink-3); cursor: pointer; }
+#askPopup .ap-det:hover { color: var(--ink-2); }
+#askPopup .ap-det-t { margin: 0; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 6px; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow-y: auto; }
 #askPopup .ap-b.arm { background: var(--accent); color: #1a0d00; border-color: transparent; font-weight: 700; }
 #askPopup .ap-b:active { transform: translateY(1px); }
 #askPopup .ap-meta {

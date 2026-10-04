@@ -66,8 +66,11 @@ export function parseAlternatives(text) {
     const afterLetter = l.replace(/^\s*(?:[-*\u2022]\s+)?\(?[A-D]\s*/, '');
     const paren = /^\([^()]*\)\s*[:\u2014\u2013-]\s*(.+)$/.exec(afterLetter);
     if (paren) body = paren[1].trim();
-    body = body.replace(/\s*\([^()]*recommend[^()]*\)/ig, '').replace(/^[:\u2014\u2013-]\s*/, '').split(/(?<=[a-z0-9)])\.\s/i)[0].trim().replace(/[.,;:\s]+$/, '');
-    alts.push({ letter, label: body, recommended: RECOMMENDED_RE.test(l) });
+    const full = body.replace(/\s*\([^()]*recommend[^()]*\)/ig, '').replace(/^[:\u2014\u2013-]\s*/, '').trim();
+    body = full.split(/(?<=[a-z0-9)])\.\s/i)[0].trim().replace(/[.,;:\s]+$/, '');
+    // what follows the label sentence is the agent's own description of the option (kept, <= 200 chars)
+    const rest = full.slice(full.indexOf(body) + body.length).replace(/^[.,;:\s]+/, '').replace(/\s+/g, ' ').trim();
+    alts.push({ letter, label: body, recommended: RECOMMENDED_RE.test(l), ...(rest ? { desc: trunc(rest, 200) } : {}) });
     if (alts.length >= 4) break;
   }
   if (alts.length >= 2) return alts;
@@ -133,6 +136,27 @@ export function listQuestions(text) {
   return out;
 }
 
+// The id the AI reviewer and the buttons share for an option: 'yes' / 'no', 'A'.. for lettered, '1'.. for a menu.
+const optionId = (b) => (b.id === 'yes' || b.id === 'no' ? b.id : /^o[A-Za-z0-9]$/.test(b.id) ? b.id.slice(1) : null);
+
+// The option list handed to the AI reviewer so its option ids match the buttons: [{ id, label }] ([] for an open question).
+export function reviewerOptions({ state, stall }) {
+  const d = deriveButtons({ state, stall, triage: null });
+  return d.buttons.map((b) => ({ b, id: optionId(b) })).filter((x) => x.id != null)
+    .map(({ b, id }) => ({ id, label: String(b.label).replace(/^\s*[A-Z0-9]\s·\s/, '') }));
+}
+
+// Descriptions: the agent's own text first (already on the button), else the AI reviewer's summary for that option id.
+function withDescriptions(buttons, triage) {
+  const sums = new Map((triage?.ai?.options || []).map((o) => [String(o.id), o.summary]));
+  for (const b of buttons) {
+    const oid = optionId(b);
+    if (oid == null) continue;
+    if (!b.desc) { const sm = sums.get(oid); if (sm) b.desc = sm; }
+    if (!b.desc) delete b.desc;
+  }
+}
+
 export function deriveButtons({ state, stall, triage }) {
   const kind = questionKind({ state, stall });
   const topicForbidden = !!stall?.forbidden;
@@ -140,8 +164,9 @@ export function deriveButtons({ state, stall, triage }) {
   const ai = triage?.ai && triage.ai.proposed_reply ? triage.ai : null;
   if (kind === 'menu') {
     for (const o of stall.options) {
-      buttons.push({ id: `o${o.n}`, label: `${o.n} · ${trunc(o.text)}`, key: String(o.n), primary: !!o.recommended, confirm: topicForbidden || !!o.forbidden });
+      buttons.push({ id: `o${o.n}`, label: `${o.n} · ${trunc(o.text)}`, key: String(o.n), primary: !!o.recommended, ...(o.recommended ? { rec: true } : {}), confirm: topicForbidden || !!o.forbidden });
     }
+    withDescriptions(buttons, triage);
     return { kind, buttons, esc: true, keys: RAW_KEYS };
   }
   if (kind === 'yesno') {
@@ -158,7 +183,7 @@ export function deriveButtons({ state, stall, triage }) {
           if (a.letter) {
             const id = `o${a.letter}`;
             const label = `${a.letter} · ${trunc(a.label)}`;
-            buttons.push({ id, label, text: a.letter, primary: a.recommended ? true : undefined, ai: i === pickIdx ? true : undefined, confirm: topicForbidden });
+            buttons.push({ id, label, text: a.letter, primary: a.recommended ? true : undefined, rec: a.recommended ? true : undefined, desc: a.desc, ai: i === pickIdx ? true : undefined, confirm: topicForbidden });
           } else {
             const id = `o${String.fromCharCode(65 + i)}`;
             const label = trunc(a.phrase, 44);
@@ -193,6 +218,7 @@ export function deriveButtons({ state, stall, triage }) {
       }
     }
   }
+  withDescriptions(buttons, triage);
   buttons.push({ id: 'reply', label: '✎ reply…', reply: true });
   return { kind, buttons, esc: state === 'waiting', keys: RAW_KEYS };
 }
