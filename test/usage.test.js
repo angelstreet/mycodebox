@@ -284,3 +284,13 @@ test('manager calls reach Langfuse: one generation per call under the session tr
   assert.equal(await ing2.tick(), 5);
   assert.equal(gens(lf.batches).find((x) => x.name === 'manager.jev' && !x.level && x.metadata.decision === 'continue').id, jev.id, 'deterministic ids');
 });
+
+test('buildSummary: perDayModel splits each UTC day by model', () => {
+  const mk = (ts, model, input) => ({ ts, model, agent: 'claude', label: 'x', trace: 't', project: 'p',
+    usage: { input, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 }, cost: { total: 1 } });
+  const s = buildSummary([mk(NOW - 1000, 'a', 5), mk(NOW - 1000, 'b', 7), mk(NOW - 86400000, 'a', 3)], NOW);
+  assert.deepEqual(Object.keys(s.perDayModel), ['2026-10-02', '2026-10-03']);
+  assert.equal(s.perDayModel['2026-10-03'].a.total, 5);
+  assert.equal(s.perDayModel['2026-10-03'].b.total, 7);
+  assert.equal(s.perDayModel['2026-10-02'].a.total, 3);
+});
