@@ -334,9 +334,16 @@ async function sendFit(session) {
   if (!entry.fitCols || !entry.fitRows) return;
   const cols = Math.max(20, Math.min(400, entry.fitCols)), rows = Math.max(5, Math.min(200, entry.fitRows));
   const key = `${cols}x${rows}`;
-  if (cols === st.cols && rows === st.rows) { entry.reqKey = key; return; }
-  if (entry.reqKey === key) return;
-  entry.reqKey = key;
+  const curC = entry.paneCols || st.cols, curR = entry.paneRows || st.rows;   // the live size from the pane stream beats the 1 s status poll
+  if (cols === curC && rows === curR) { entry.reqKey = key; entry.reclaims = 0; return; }
+  if (entry.reqKey === key) {
+    // we already asked for this size but the pane is not at it: another client (a phone in a small grid, a re-attach)
+    // took the window back. Ask again, but only from a focused page, at most every 3 s, and give up after 4 tries.
+    const taken = Math.abs((curC || 0) - cols) > 1;
+    if (!taken || !document.hasFocus() || Date.now() - (entry.reqAt || 0) < 3000 || (entry.reclaims || 0) >= 4) return;
+    entry.reclaims = (entry.reclaims || 0) + 1;
+  } else entry.reclaims = 0;
+  entry.reqKey = key; entry.reqAt = Date.now();
   try {
     const res = await fetch(`/api/resize/${encodeURIComponent(session)}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cols, rows }),
@@ -353,7 +360,7 @@ async function sendFit(session) {
 function refit(name) {
   const e = state.terms.get(name);
   if (!e) return;
-  e.reqKey = '';
+  e.reqKey = ''; e.reclaims = 0;
   scheduleFit(name);
 }
 function refitVisible() { for (const name of state.terms.keys()) refit(name); }
