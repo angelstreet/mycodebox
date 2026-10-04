@@ -56,11 +56,28 @@ mkdir -p "$STATE_DIR" "$BATCH_DIR" 2>/dev/null || true
 
 # Lock (mkdir is atomic; another instance already holds it -> bail).
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  echo "mm-manager: another instance holds $LOCK_DIR" >&2
-  exit 1
+  old_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    echo "mm-manager: another instance (pid $old_pid) holds $LOCK_DIR" >&2
+    exit 1
+  fi
+  # stale lock (holder died without cleanup, e.g. SIGKILL / reboot): take it over
+  rm -f "$LOCK_DIR/pid" 2>/dev/null || true
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "mm-manager: cannot take $LOCK_DIR" >&2
+    exit 1
+  fi
 fi
+echo "$$" > "$LOCK_DIR/pid"
 stopping=0
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+tail_pid=""
+cleanup() {
+  [ -n "$tail_pid" ] && kill "$tail_pid" 2>/dev/null || true
+  rm -f "$LOCK_DIR/pid" 2>/dev/null || true
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
 trap 'stopping=1' TERM INT
 
 # ---- helpers ----
@@ -77,13 +94,13 @@ parse_json_text() {
 # Trim old batches (keep last 200). Explicit file names only, never `rm -rf` with a computed glob.
 trim_batches() {
   [ -d "$BATCH_DIR" ] || return
-  local files=()
+  # two files per batch (.prompt + .json): keep the newest 400 files = 200 batches
   local i=0
   while IFS= read -r f; do
-    [ -z "$f" ] && continue
+    case "$f" in *.prompt|*.json) ;; *) continue;; esac
     i=$((i + 1))
-    if [ "$i" -gt 200 ]; then
-      rm -- "$f" 2>/dev/null || true
+    if [ "$i" -gt 400 ]; then
+      rm -f -- "$BATCH_DIR/$f" 2>/dev/null || true
     fi
   done < <(ls -1t "$BATCH_DIR" 2>/dev/null)
 }
@@ -187,7 +204,7 @@ gather_facts_json() {
     ' 2>/dev/null) || deploy_arg='null'
   fi
 
-  printf '%s' "$sess_resp" | NODE_PATH="$NODE_BIN" "$NODE_BIN/node" -e '
+  printf '%s' "$sess_resp" | WANTED="$sessions_json" DEPLOYS="$deploy_arg" NODE_PATH="$NODE_BIN" "$NODE_BIN/node" -e '
     let buf="";process.stdin.on("data",c=>buf+=c);process.stdin.on("end",()=>{
       const wanted = JSON.parse(process.env.WANTED || "[]");
       const deploys = process.env.DEPLOYS || "null";
@@ -211,7 +228,7 @@ gather_facts_json() {
       try { dep = JSON.parse(deploys); } catch { dep = null; }
       process.stdout.write(JSON.stringify({ sessions: filtered, deploys: dep }));
     });
-  ' WANTED="$sessions_json" DEPLOYS="$deploy_arg" 2>/dev/null \
+  ' 2>/dev/null \
     || echo '{"sessions":{},"deploys":null}'
 }
 
@@ -234,7 +251,7 @@ $(get_runbook_table)
 
 $events_json
 
-Each event line may carry a \`jev\` field with Jev's wake opinion once TASK-47 wires it.
+Each event line may carry a \`jev\` field: Jev's wake opinion for that event (a hint, not an order).
 
 # Facts (read-only GETs to the local ghosty API)
 
@@ -264,7 +281,10 @@ Take Jev's pick only if confidence >= 0.7. Jev's \`source\` is forced|jev|rule.
 ONLY if Jev's source is "rule" (Jev was unsure) AND the event is NOT forced by a hard floor
 (forbidden topic, case in permission|owner_action|waiting_deploy), call Sonnet:
 
-  claude -p --model sonnet --output-format json --disallowedTools Bash Edit Write NotebookEdit WebFetch WebSearch Task "<question with the facts>"
+  claude -p "<question with the facts>" --model sonnet --output-format json --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task"
+
+(Keep exactly this order and the comma-separated, quoted tool list: --disallowedTools is variadic and would
+swallow the question otherwise.)
 
 Take Sonnet's answer. Include its total_cost_usd as \`sonnet_usd\` in your JSON line.
 
@@ -279,8 +299,9 @@ record_batch() {
   local mcode_json="$1"
   local batch_id="$2"
   local events_json="$3"
+  local mm_ms="${4:-0}"
 
-  printf '%s' "$mcode_json" | NODE_PATH="$NODE_BIN" "$NODE_BIN/node" -e '
+  printf '%s' "$mcode_json" | EVENTS="$events_json" BATCH="$batch_id" MM_MS="$mm_ms" NODE_PATH="$NODE_BIN" "$NODE_BIN/node" -e '
     let buf="";process.stdin.on("data",c=>buf+=c);process.stdin.on("end",()=>{
       const events=JSON.parse(process.env.EVENTS||"[]");
       const batchId=process.env.BATCH;
@@ -321,6 +342,7 @@ record_batch() {
           why: d.why ? String(d.why).slice(0,200) : null,
           sonnet: d.sonnet === true,
           batch_id: batchId,
+          mm_ms: Number(process.env.MM_MS) || 0,
           mm_tokens: tokens,
         };
         if (d.reply) rec.reply = String(d.reply).slice(0,500);
@@ -331,7 +353,7 @@ record_batch() {
       }
       process.stdout.write(out.map(r=>JSON.stringify(r)).join("\n") + "\n");
     });
-  ' EVENTS="$events_json" BATCH="$batch_id" >> "$MM_LOG"
+  ' >> "$MM_LOG"
 }
 
 # Append {key, error} per event when mcode failed or timed out.
@@ -339,17 +361,18 @@ record_errors() {
   local events_json="$1"
   local batch_id="$2"
   local err="$3"
-  printf '%s' "$events_json" | NODE_PATH="$NODE_BIN" "$NODE_BIN/node" -e '
+  local mm_ms="${4:-0}"
+  printf '%s' "$events_json" | E="$err" B="$batch_id" MM_MS="$mm_ms" NODE_PATH="$NODE_BIN" "$NODE_BIN/node" -e '
     let buf="";process.stdin.on("data",c=>buf+=c);process.stdin.on("end",()=>{
       const events=JSON.parse(buf||"[]");
       const out = events.map(e => JSON.stringify({
-        key: e.key, at: e.at, error: process.env.E,
+        key: e.key, at: e.at, error: process.env.E, mm_ms: Number(process.env.MM_MS) || 0,
         batch_id: process.env.B,
         mm_tokens: { input: 0, output: 0, cache_read: 0 },
       }));
       process.stdout.write(out.join("\n") + "\n");
     });
-  ' E="$err" B="$batch_id" >> "$MM_LOG"
+  ' >> "$MM_LOG"
 }
 
 # Validate and collect event lines into a JSON array.
@@ -396,7 +419,8 @@ process_batch() {
   fi
 
   local raw_file="$BATCH_DIR/${batch_id}.json"
-  local mcode_out
+  local mcode_out t0 mm_ms
+  t0=$(date +%s%N)
   mcode_out=$(PATH="$NODE_BIN:$PATH" "$MCODE" exec \
       --cwd "$REPO" \
       --prompt-mode coding \
@@ -405,12 +429,14 @@ process_batch() {
       --output-format json \
       --input - < "$prompt_file" 2>/dev/null) || mcode_out=''
 
+  mm_ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+
   printf '%s' "$mcode_out" > "$raw_file"
 
   if [ -z "$mcode_out" ]; then
-    record_errors "$events_json" "$batch_id" "mcode exec failed or timed out"
+    record_errors "$events_json" "$batch_id" "mcode exec failed or timed out" "$mm_ms"
   else
-    record_batch "$mcode_out" "$batch_id" "$events_json"
+    record_batch "$mcode_out" "$batch_id" "$events_json" "$mm_ms" || record_errors "$events_json" "$batch_id" "could not record mcode output" "$mm_ms"
   fi
 
   trim_batches
@@ -444,21 +470,36 @@ fi
 [ "$stopping" -eq 1 ] && exit 0
 
 exec 3< <(tail -n0 -F "$STATE_DIR/manager-events.jsonl" 2>/dev/null)
+tail_pid=$!
+# (-F follows the name, so the rename to manager-events.jsonl.1 on rotation is survived)
 
-while IFS= read -r -t 86400 line <&3; do
+while [ "$stopping" -eq 0 ]; do
+  line=""
+  IFS= read -r -t 5 line <&3
+  rc=$?
+  if [ "$rc" -gt 128 ]; then continue; fi   # idle timeout slice: re-check `stopping`
+  if [ "$rc" -ne 0 ]; then break; fi        # tail died
   [ -z "$line" ] && continue
   events=("$line")
-  batch_started=1
-  # Collect more lines for BATCH_S seconds after the first.
-  while IFS= read -r -t "$BATCH_S" extra <&3; do
+  # Collect more lines until BATCH_S seconds after the first one (a fixed deadline, not per line).
+  deadline=$(( $(date +%s) + BATCH_S ))
+  while :; do
+    left=$(( deadline - $(date +%s) ))
+    [ "$left" -le 0 ] && break
+    [ "$stopping" -eq 1 ] && break
+    extra=""
+    [ "$left" -gt 5 ] && left=5     # short reads so SIGTERM is noticed (bash defers traps during read)
+    IFS= read -r -t "$left" extra <&3
+    rc=$?
+    if [ "$rc" -gt 128 ]; then continue; fi   # timeout slice: loop re-checks deadline + stopping
+    if [ "$rc" -ne 0 ]; then break; fi
     [ -z "$extra" ] && continue
     events+=("$extra")
   done
   batch_id=$(gen_batch_id)
-  process_batch "$batch_id" "${events[@]}"
+  # A failed batch must never kill the loop.
+  process_batch "$batch_id" "${events[@]}" || echo "mm-manager: batch $batch_id failed" >&2
   events=()
-  batch_started=0
-  if [ "$stopping" -eq 1 ]; then break; fi
 done
 
 exec 3<&-

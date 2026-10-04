@@ -17,6 +17,7 @@ import {
   sumBuckets,
   buildReport,
   dayKey,
+  alertsNaming,
 } from '../scripts/mm-manager-compare.js';
 
 const DAY_MS = 86400000;
@@ -188,3 +189,31 @@ test('mm-manager.sh --once --dry writes a prompt with events + rules; tolerates 
   assert.ok(!existsSync(decLog), 'no decisions file in --dry mode');
 });
 
+
+// ---- gate additions ----
+test('realAction: owner-via-<session> send is the owner, not the real manager', () => {
+  assert.equal(realAction({ at: ev(0).at, eventsForSession: [send('owner-via-task44', 60_000)] }), 'owner');
+});
+test('agent-alert naming the session counts as a real alert; one naming another does not', () => {
+  const a = { type: 'agent-alert', at: new Date(T0 + 60_000).toISOString(), key: 'agent:x', title: 'needs you', body: 'session s1 asks about deploy' };
+  const b = { ...a, body: 'session other asks' };
+  const named = alertsNaming([a, b], ev(0));
+  assert.deepEqual(named, [a]);
+  assert.equal(realAction({ at: ev(0).at, eventsForSession: named }), 'alert');
+});
+test('mm-manager.sh --once with a fake mcode records proposals, mm_ms and tokens (no network)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mmmgr-fake-'));
+  const fake = join(dir, 'fakemcode');
+  writeFileSync(fake, '#!/bin/bash\ncat >/dev/null\necho \'{"result":{"text":"{\\"key\\":\\"s1:asks\\",\\"at\\":\\"2026-10-04T12:00:00Z\\",\\"proposal\\":\\"answer\\",\\"reply\\":\\"Yes\\",\\"why\\":\\"ok\\",\\"sonnet\\":false}"},"usage":{"input":5,"output":6,"cache_read":7}}\'\n', { mode: 0o755 });
+  const evFile = join(dir, 'events.jsonl');
+  writeFileSync(evFile, JSON.stringify({ at: '2026-10-04T12:00:00Z', key: 's1:asks', kind: 'asks', session: 's1' }) + '\n');
+  execFileSync('bash', [join(process.cwd(), 'scripts', 'mm-manager.sh'), '--once', evFile], {
+    env: { ...process.env, GHOSTY_STATE_DIR: dir, GHOSTY_PORT: '1', MCODE: fake },
+    timeout: 30000,
+  });
+  const rec = JSON.parse(readFileSync(join(dir, 'mm-manager-decisions.jsonl'), 'utf8').trim());
+  assert.equal(rec.proposal, 'answer');
+  assert.equal(rec.reply, 'Yes');
+  assert.equal(typeof rec.mm_ms, 'number');
+  assert.deepEqual(rec.mm_tokens, { input: 5, output: 6, cache_read: 7 });
+});

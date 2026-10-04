@@ -72,13 +72,13 @@ export function realAction({ at, eventsForSession, stallBySession }) {
     const rt = Date.parse(r.at);
     if (!Number.isFinite(rt) || rt < t0 || rt > t1) continue;
     if (r.type === 'send') {
-      if (r.by === 'owner' || r.by == null) sawOwnerSend = true;
+      if (r.by == null || String(r.by).startsWith('owner')) sawOwnerSend = true;   // 'owner', 'owner-via-<session>'
       else if (typeof r.by === 'string' && r.by.includes('mm-manager')) { /* shadow never acts; ignore for real */ }
       else sawManagerSend = true;
     } else if (r.type === 'escalated') {
       sawEscalate = true;
-    } else if (r.type === 'alert') {
-      sawAlert = true;
+    } else if (r.type === 'alert' || r.type === 'agent-alert') {
+      sawAlert = true;   // agent-alert: the manager agent's /api/alert call (recorded by ghosty, names the session in its text)
     }
   }
   if (sawManagerSend) return 'answer';
@@ -86,6 +86,17 @@ export function realAction({ at, eventsForSession, stallBySession }) {
   if (sawAlert) return 'alert';
   if (sawOwnerSend) return 'owner';
   return 'none';
+}
+
+// ---- pure: agent-alert records (no `session` field) that name an event's session or key in their text ----
+export function alertsNaming(agentAlerts, ev) {
+  const sess = ev.session || (ev.key && ev.key.includes(':') ? ev.key.slice(0, ev.key.indexOf(':')) : null);
+  const out = [];
+  for (const a of agentAlerts || []) {
+    const text = `${a.key || ''} ${a.title || ''} ${a.body || ''}`;
+    if ((sess && text.includes(sess)) || (ev.key && text.includes(ev.key))) out.push(a);
+  }
+  return out;
 }
 
 // ---- pure: detect a forbidden topic in a stop's question / excerpt ----
@@ -210,6 +221,7 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
       eventsBySession.get(r.session).push(r);
     }
   }
+  const agentAlerts = (stallRecs || []).filter((r) => r && r.type === 'agent-alert');
 
   // ledger entries that count toward the real manager's Claude $
   const dedupe = (rows) => {
@@ -267,7 +279,7 @@ export function buildReport({ decisions, events, stallRecs, ledger, managerCfg, 
       if (dec?.sonnet) sonnetRows.push(dec);
 
       const sess = e.session || (key && key.includes(':') ? key.slice(0, key.indexOf(':')) : null);
-      const sessionEvents = sess ? (eventsBySession.get(sess) || []) : [];
+      const sessionEvents = [...(sess ? (eventsBySession.get(sess) || []) : []), ...alertsNaming(agentAlerts, e)];
       const sessionStalls = sess ? (stallsBySession.get(sess) || []) : [];
       const real = realAction({ at: e.at, eventsForSession: sessionEvents, stallBySession: sessionStalls });
       const stallRec = sessionStalls.find((s) => Date.parse(s.at) && Math.abs(Date.parse(s.at) - Date.parse(e.at)) < REAL_ACTION_WINDOW_MS) || sessionStalls[0] || null;
