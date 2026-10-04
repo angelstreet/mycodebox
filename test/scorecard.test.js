@@ -143,7 +143,10 @@ test('perf: stops, resolved, resolvedFast, auto, escalated', () => {
   assert.equal(sc.perf.p90TtrSec, 600);
 });
 
-test('perf: labels -> agreement (no_reason|legit = right, wrong_case = wrong)', () => {
+test('perf: labels -> legacyLabelAgreement (no_reason|legit = right, wrong_case = wrong)', () => {
+  // Labels no longer drive quality — popup choices do (phase 11). The label verdict is still
+  // exposed as legacyLabelAgreement for callers that want it; agreement (the owner-vs-AI rate
+  // from choices) is null when no popup choices have been recorded.
   const recs = [
     stall({ id: 'a' }), outcome({ id: 'a' }),
     stall({ id: 'b' }), outcome({ id: 'b' }),
@@ -157,13 +160,15 @@ test('perf: labels -> agreement (no_reason|legit = right, wrong_case = wrong)', 
   const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
   assert.equal(sc.perf.labelledCount, 3);
   // 2/3 rounds to 0.667 (3dp). The scorecard rounds to 3dp for the response shape.
-  assert.ok(Math.abs(sc.perf.agreement - 0.667) < 0.001, `agreement ~ 2/3, got ${sc.perf.agreement}`);
+  assert.ok(Math.abs(sc.perf.legacyLabelAgreement - 0.667) < 0.001, `legacyLabelAgreement ~ 2/3, got ${sc.perf.legacyLabelAgreement}`);
+  assert.equal(sc.perf.agreement, null, 'no popup choices -> agreement is null (quality signal is gone)');
+  assert.equal(sc.perf.ownerChoices, 0);
 });
 
-test('perf: agreement null when no labels (falls back to jevAgreement; null when both null)', () => {
+test('perf: agreement null when no labels and no choices (falls back to jevAgreement; null when both null)', () => {
   const sc = buildScorecard({ ledgerRows: [], stallRecs: [stall({ id: 'a' })], runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
   assert.equal(sc.perf.agreement, null);
-  assert.equal(sc.components.quality, null, 'quality is null with no labels and no jev agreement');
+  assert.equal(sc.components.quality, null, 'quality is null with no choices and no jev agreement');
 });
 
 // ---------------------------------------------------------------------------
@@ -225,9 +230,13 @@ test('score: with quality and efficiency null, coverage null -> score 0 (no comp
 });
 
 test('score: one component null drops it and renormalises (only quality survives)', () => {
-  // one stall + outcome + label 'legit' -> agreement=1, coverage=1; no priced USD -> efficiency=null
+  // quality is driven by popup choice records (phase 11), not labels. A single choice that
+  // agrees with the AI gives agreeAi=1, coverage=1; no priced USD -> efficiency=null.
   // expected: only quality (0.4) survives -> score = (0.4*1)/0.4 * 100 = 100
-  const recs = [stall({ id: 'a' }), outcome({ id: 'a' }), label({ id: 'a', label: 'legit' })];
+  const recs = [
+    stall({ id: 'a' }), outcome({ id: 'a' }),
+    { type: 'choice', id: 'a', at: t(now - 100), session: 's', kind: 'choice', owner: 'yes', ai: 'yes', agreeAi: true, jev: null },
+  ];
   const sc = buildScorecard({ ledgerRows: [], stallRecs: recs, runs: emptyRuns, config: {}, from: dayStart, to: now + 1 });
   assert.equal(sc.components.quality, 1);
   assert.equal(sc.components.coverage, 1);
@@ -377,4 +386,68 @@ test('langfuseScoreEvents: deterministic ids, score names from the spec; null va
   // deterministic ids
   const again = langfuseScoreEvents(sc, { traceId: scorecardTraceId(now), traceName: 'manager-scorecard', sentAt: now });
   for (let i = 0; i < evs.length; i++) assert.equal(evs[i].body.id, again[i].body.id);
+});
+// ---------------------------------------------------------------------------
+// 9. popup choice records: quality = owner-vs-AI agreement (phase 11)
+// ---------------------------------------------------------------------------
+
+test('choice records: agreeAi drives quality, ownerChoices/agreeAi/agreeJev counted in perf', () => {
+  // three choices: owner agreed with the AI twice, disagreed once; one jev agreement, one jev disagreement
+  const recs = [
+    { type: 'choice', id: 's1', at: t(now - 1000), session: 'a', kind: 'choice', owner: 'yes', ai: 'yes', agreeAi: true, jev: 'continue', agreeJev: true },
+    { type: 'choice', id: 's2', at: t(now - 800), session: 'b', kind: 'choice', owner: 'no', ai: 'yes', agreeAi: false, jev: 'continue', agreeJev: false },
+    // ai is null (no AI proposal): agreeAi stays null, not counted toward agreeAi
+    { type: 'choice', id: 's3', at: t(now - 600), session: 'c', kind: 'choice', owner: 'reply', ai: null, agreeAi: null, jev: 'ask_owner', agreeJev: true },
+    // duplicate (later write wins)
+    { type: 'choice', id: 's2', at: t(now - 500), session: 'b', kind: 'choice', owner: 'yes', ai: 'yes', agreeAi: true, jev: 'continue', agreeJev: true },
+  ];
+  const sc = buildScorecard({ stallRecs: recs, ledgerRows: [], runs: [], from: dayStart, to: dayStart + DAY_MS });
+  assert.equal(sc.perf.ownerChoices, 3);
+  // 3 had ai != null across the two duplicate ids (latest s2 counts): s1 yes/yes, s2 yes/yes (latest), s3 null -> agreeAiTotal=2
+  assert.equal(sc.perf.agreeAiN, 2);
+  assert.equal(sc.perf.agreeAi, 1.0);    // both agreed
+  // 4 jev votes after dedupe (s1 true, s2 latest true, s3 true) = 3 of 3
+  assert.equal(sc.perf.agreeJevN, 3);
+  assert.equal(sc.perf.agreeJev, 1.0);
+  // quality comes from agreeAi (owner-vs-AI rate), not the legacy label agreement
+  assert.equal(sc.components.quality, 1.0);
+});
+
+test('choice records: no agreeAi votes -> quality falls back to jevAgreement', () => {
+  const recs = [
+    { type: 'stall', id: 's1', at: t(now - 1000), session: 'a', case: 'continue', source: 'jev', jev: { choice: 'continue', confidence: 0.9 } },
+    { type: 'outcome', id: 's1', at: t(now - 500), session: 'a', kind: 'continue', afterSec: 5, via: 'reporter' },
+  ];
+  const sc = buildScorecard({ stallRecs: recs, from: dayStart, to: dayStart + DAY_MS });
+  assert.equal(sc.perf.ownerChoices, 0);
+  assert.equal(sc.perf.agreeAi, null);
+  assert.equal(sc.jev.agreement, 1.0);    // Jev said continue, outcome was continue -> agree
+  assert.equal(sc.components.quality, 1.0);   // fallback to jevAgreement
+});
+
+// ---------------------------------------------------------------------------
+// 10. ledger dedupe by id: a growing-id writer rewrites the same row
+// ---------------------------------------------------------------------------
+
+test('ledger dedupe by id: a row re-written with a growing id is counted once (latest wins)', () => {
+  // a single growing-id call: first write at t=10 (100 tokens / 0.01 usd), rewrite at t=20 (200 / 0.02)
+  const rows = [
+    { id: 1, agent: 'manager', name: 'manager.jev', label: 'manager', subagent: false, ts: now - 10000, usage: { input: 100, output: 0, cache_read: 0, cache_write: 0 }, cost: { total: 0.01 } },
+    { id: 1, agent: 'manager', name: 'manager.jev', label: 'manager', subagent: false, ts: now - 9000,  usage: { input: 200, output: 0, cache_read: 0, cache_write: 0 }, cost: { total: 0.02 } },
+  ];
+  const sc = buildScorecard({ ledgerRows: rows, stallRecs: [], runs: [], from: dayStart, to: dayStart + DAY_MS });
+  // after dedupe: one row, 200 input, 0.02 usd
+  assert.equal(sc.cost.jev.tokens.input, 200);
+  assert.equal(sc.cost.jev.calls, 1);
+  assert.equal(Math.round((sc.cost.jev.usd || 0) * 100) / 100, 0.02);
+});
+
+test('ledger rows without an id pass through unchanged', () => {
+  const rows = [
+    { agent: 'manager', name: 'manager.jev', label: 'manager', ts: now - 5000, usage: { input: 50, output: 0, cache_read: 0, cache_write: 0 }, cost: { total: 0.005 } },
+    { agent: 'manager', name: 'manager.jev', label: 'manager', ts: now - 4000, usage: { input: 70, output: 0, cache_read: 0, cache_write: 0 }, cost: { total: 0.007 } },
+  ];
+  const sc = buildScorecard({ ledgerRows: rows, stallRecs: [], runs: [], from: dayStart, to: dayStart + DAY_MS });
+  assert.equal(sc.cost.jev.tokens.input, 120);
+  assert.equal(sc.cost.jev.calls, 2);
 });

@@ -151,6 +151,14 @@
 
   <div class="edge-swipe" id="edgeSwipe" aria-hidden="true"></div>
 
+  <!-- Answer popup (phase 11): one bottom-right card for the owner; mounted once. -->
+  <div id="askPopup" class="hidden" role="dialog" aria-label="Session awaiting your answer">
+    <div class="ap-body"></div>
+  </div>
+  <button id="askPopupPill" class="hidden" type="button" aria-label="Sessions awaiting owner">
+    <span class="ap-pill-n">0</span> need you
+  </button>
+
   <aside id="side" class="side" aria-hidden="true">
     <div class="side-head">
       <span class="ttl">Sessions</span>

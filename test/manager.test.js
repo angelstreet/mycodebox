@@ -97,3 +97,50 @@ test('a disabled session is not logged; stalls present at startup are not logged
 });
 
 test.after(() => jev.close());
+
+test('logOwnerChoice: records the popup choice and validates required fields', async () => {
+  // log a stall first so requireKnown passes
+  tick('s1', 'working', ['busy'], 0);
+  const p = pane('Shall I continue?');
+  tick('s1', 'done', p, 1000); tick('s1', 'done', p, 3000);
+  await settle();
+  const stalls = records().filter((r) => r.type === 'stall');
+  assert.ok(stalls.length >= 1);
+  const id = stalls[0].id;
+  // missing id -> 400
+  await assert.rejects(() => m.logOwnerChoice({ session: 's1', owner: 'yes' }), /id required/);
+  // missing owner -> 400
+  await assert.rejects(() => m.logOwnerChoice({ id, session: 's1' }), /owner required/);
+  // missing session -> 400
+  await assert.rejects(() => m.logOwnerChoice({ id, owner: 'yes' }), /session required/);
+  // happy path: records the choice
+  const rec = await m.logOwnerChoice({
+    id, session: 's1', kind: 'choice', owner: 'yes', ai: 'yes', aiConfidence: 0.92,
+    jev: 'continue', jevProbabilities: { continue: 0.7, take_recommended: 0.2, ask_owner: 0.1 },
+    agreeJev: true, ownerText: 'Yes, continue with the API change',
+  });
+  assert.equal(rec.type, 'choice');
+  assert.equal(rec.owner, 'yes');
+  assert.equal(rec.ai, 'yes');
+  assert.equal(rec.agreeAi, true);
+  assert.equal(rec.jev, 'continue');
+  assert.equal(rec.agreeJev, true);
+  assert.equal(rec.ownerText.length <= 200, true);
+  // the record was appended to the log
+  const all = records();
+  const found = all.find((r) => r.type === 'choice' && r.id === id && r.session === 's1');
+  assert.ok(found, 'choice record was appended to stalls.jsonl');
+  assert.equal(found.ai, 'yes');
+  assert.equal(found.agreeAi, true);
+});
+
+test('logOwnerChoice: ownerText is capped at 200 characters', async () => {
+  tick('s1', 'working', ['busy'], 0);
+  const p = pane('Shall I continue?');
+  tick('s1', 'done', p, 1000); tick('s1', 'done', p, 3000);
+  await settle();
+  const id = records().find((r) => r.type === 'stall').id;
+  const big = 'x'.repeat(500);
+  const rec = await m.logOwnerChoice({ id, session: 's1', owner: 'reply', ownerText: big, ai: null });
+  assert.ok(rec.ownerText.length <= 200);
+});

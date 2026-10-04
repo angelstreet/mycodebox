@@ -386,6 +386,34 @@ export async function unlabelStall({ id } = {}) {
   return rec;
 }
 
+// Owner answered a stop from the popup (TASK-44 phase 11). {id, session, kind:'choice',
+// owner:<button id|'reply'>, ownerText?, ai:<button id|null>, aiConfidence?, jev?, agreeJev?}.
+// agreeAi: owner===ai (null when ai was null); agreeJev is the same mapping the popup uses
+// (continue/take_recommended agree when the owner picked the highlighted/positive answer;
+// ask_owner agrees when the owner picked anything else, or replied).
+export async function logOwnerChoice({ id, session, owner, ownerText, ai, aiConfidence, jev, jevProbabilities, agreeJev } = {}) {
+  if (typeof id !== 'string' || !id) throw bad('id required');
+  if (typeof session !== 'string' || !session) throw bad('session required');
+  if (typeof owner !== 'string' || !owner) throw bad('owner required');
+  const rec = {
+    type: 'choice',
+    at: new Date().toISOString(),
+    id,
+    session,
+    kind: 'choice',
+    owner,
+    ai: ai || null,
+    agreeAi: ai == null ? null : owner === ai,
+    jev: jev || null,
+  };
+  if (ownerText) rec.ownerText = String(ownerText).slice(0, 200);
+  if (Number.isFinite(aiConfidence)) rec.aiConfidence = aiConfidence;
+  if (jevProbabilities) rec.jevProbabilities = jevProbabilities;
+  if (typeof agreeJev === 'boolean') rec.agreeJev = agreeJev;
+  await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
+  return rec;
+}
+
 async function requireKnown(id) {
   let known = false;
   try { known = (await readFile(LOG_FILE, 'utf8')).includes(`"id":"${id.replace(/[^\w-]/g, '')}"`); } catch {}

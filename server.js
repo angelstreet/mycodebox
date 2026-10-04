@@ -18,6 +18,8 @@
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
 //   POST /api/manager/triage    → {id, action: sent|edited|dismissed} what the owner did with the AI reviewer's proposal (dismissed hides it)
+//   POST /api/manager/choice    → {id, session, kind:'choice', owner:<button|reply>, ownerText?, ai:<button|null>, aiConfidence?, jev?, jevProbabilities?, agreeJev?}
+//                                 the owner answered a stop from the popup (one-tap; records owner vs AI vs Jev agreement in stalls.jsonl for the scorecard)
 //   POST /api/manager/unlabel   → {id} withdraw the newest label of a stall (swipe page undo)
 //   GET  /api/credits           → OpenRouter credit from the VPT server's /server/ai/credits (cached 10 min; ok:false when the server is older)
 //   GET  /api/jev-ai            → the "Jev & AI" usage tab: manager Jev + AI reviewer per day (local logs), the product's Jev uses (server summary, when it has it)
@@ -63,7 +65,7 @@ import { createCredits } from './credits.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -1267,6 +1269,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && p === '/api/manager/triage') {   // {id, action: sent|edited|dismissed, session?}: what the owner did with the AI's proposal
     try { return json(res, 200, { ok: true, action: await triageAction(await readJsonBody(req)) }); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/manager/choice') {   // {id, session, kind:'choice', owner, ai?, jev?, agreeJev?}: owner answered from the popup (one tap)
+    try { return json(res, 200, { ok: true, choice: await logOwnerChoice(await readJsonBody(req)) }); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/manager/unlabel') {

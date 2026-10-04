@@ -22,6 +22,10 @@
 // Jev integration: a stop was Jev-consulted when stall.source === 'jev' OR stall.jev?.choice is set.
 // Agreement: Jev said `continue`/`take_recommended`/`ask_owner` and the owner's outcome matched (a `continue`
 // outcome, the recommended option, or `ask_owner`-style = `owner_specific`/`unknown`).
+//
+// Owner choice (popup, phase 11): {type:'choice', id, owner:<button|reply>, ai:<button|null>, agreeAi,
+// jev, agreeJev}. The popup records every owner tap so we measure owner-vs-AI agreement BEFORE
+// auto-answering is switched on; quality is now driven by these choice records (not by label verdicts).
 
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
@@ -48,19 +52,28 @@ const SCORE_DEFAULTS = {
 // Pure: one day's scorecard
 // ---------------------------------------------------------------------------
 
-// Manager "right" on a stop (label verdict). Definitions, in priority:
-//   - `no_reason` and `legit` both mean "this stop was wanted" - the classifier / Jev was right.
-//     `legit` is a positive accept of a question, `no_reason` rejects a stop-without-reason.
-//   - `wrong_case` with `correctCase` means the classifier picked the wrong case -> not right.
-//   - `wrong_case` without `correctCase` is rare but treated as not right (it is a complaint).
-//   - the AI reviewer's own `aiVerdict:right` rides on any label; here we look at the label itself.
-// When there is no label at all, agreement is null and quality falls back to jevAgreement (or is excluded).
+// labelRight is kept only for legacy use elsewhere; the scorecard quality now comes from the
+// owner's choice records (`agreeAi`), not from label verdicts. The function returns null when
+// no label verdict applies so the scorecard can fall back to jevAgreement or stay null.
 function labelRight(r, ctx) {
   if (!r || !r.label) return null;
   const lab = r.label.label;
   if (lab === 'legit' || lab === 'no_reason') return true;
   if (lab === 'wrong_case') return false;     // either with or without correctCase -> not right
   return null;
+}
+
+// Dedupes ledger rows by id, keeping the latest (a single call can rewrite the same row with a
+// growing id). Returns the array unchanged when no id field exists.
+function dedupeLedgerById(rows) {
+  const byId = new Map();
+  const noId = [];
+  for (const r of rows || []) {
+    if (!r || typeof r.id !== 'number' && typeof r.id !== 'string') { noId.push(r); continue; }
+    const prev = byId.get(r.id);
+    if (!prev || (Number(r.ts) || 0) >= (Number(prev.ts) || 0)) byId.set(r.id, r);
+  }
+  return noId.concat([...byId.values()]);
 }
 
 // Was the outcome produced by the manager's own auto-send? manager.js writes outcome.via = 'manager' exactly when the
@@ -162,8 +175,9 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
     return false;
   };
 
-  // ledger cost buckets
-  for (const r of ledgerRows || []) {
+  // ledger cost buckets (dedupe rows that share an id — a growing-id writer rewrites the same row)
+  const ledger = dedupeLedgerById(ledgerRows);
+  for (const r of ledger) {
     if (typeof r.ts !== 'number' || (from != null && r.ts < from) || (to != null && r.ts >= to)) continue;
     if (r.agent === 'claude' || r.agent === 'codex') {
       if (managerSessions.includes(r.label || r.session)) {
@@ -219,6 +233,24 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
   let jevConsultedStops = 0;
   let jevAgreedCount = 0, jevAgreeTotal = 0;
   let rightCount = 0, labCount = 0;
+  // owner-vs-AI agreement from popup choice records (phase 11): each {type:'choice', id} becomes
+  // one vote. agreeAi=true when owner===ai (ai is null on the popup when there was no AI highlight).
+  const choicesById = new Map();
+  for (const r of stallRecs || []) {
+    if (r && r.type === 'choice' && r.id) {
+      const prev = choicesById.get(r.id);
+      if (!prev || (Date.parse(r.at) || 0) >= (Date.parse(prev.at) || 0)) choicesById.set(r.id, r);
+    }
+  }
+  let ownerChoices = 0, agreeAiCount = 0, agreeAiTotal = 0;
+  let popupJevAgreeCount = 0, popupJevAgreeTotal = 0;
+  for (const [, c] of choicesById) {
+    if (from != null && (Date.parse(c.at) || 0) < from) continue;
+    if (to != null && (Date.parse(c.at) || 0) >= to) continue;
+    ownerChoices++;
+    if (c.ai != null) { agreeAiTotal++; if (c.agreeAi === true) agreeAiCount++; }
+    if (typeof c.agreeJev === 'boolean') { popupJevAgreeTotal++; if (c.agreeJev) popupJevAgreeCount++; }
+  }
 
   for (const [id, s] of byId) {
     if (from != null && (Date.parse(s.at) || 0) < from) continue;
@@ -258,7 +290,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
   const escalatedCount = escalated.filter((e) => from == null || (Date.parse(e.at) || 0) >= from).filter((e) => to == null || (Date.parse(e.at) || 0) < to).length;
 
   // ---- Jev own stats from ledger rows ----
-  const jevRows = (ledgerRows || []).filter((r) => r.agent === 'manager' && r.name === 'manager.jev' && (from == null || r.ts >= from) && (to == null || r.ts < to));
+  const jevRows = ledger.filter((r) => r.agent === 'manager' && r.name === 'manager.jev' && (from == null || r.ts >= from) && (to == null || r.ts < to));
   let jevErrors = 0, jevMsSum = 0, jevMsCount = 0, jevMsSamples = [];
   for (const r of jevRows) {
     if (r.error) jevErrors++;
@@ -273,8 +305,13 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
   const tokensPerResolvedStop = resolved ? Math.round(cost.workers.tokens.input + cost.workers.tokens.output + cost.workers.tokens.cache_read + cost.workers.tokens.cache_write) / resolved : null;
 
   // ---- score ----
-  const agreement = labCount ? rightCount / labCount : null;
+  // Quality is now the share of popup choices where the owner agreed with the AI's pick
+  // (ai != null, agreeAi === true). Falls back to jevAgreement (classic outcome-based) when no
+  // popup choices have been recorded yet, then to nothing (null).
+  const ownerAgreementAi = agreeAiTotal ? agreeAiCount / agreeAiTotal : null;
   const jevAgreement = jevAgreeTotal ? jevAgreedCount / jevAgreeTotal : null;
+  const agreement = ownerAgreementAi;        // legacy field = the popup quality signal
+  const legacyLabelAgreement = labCount ? rightCount / labCount : null;   // kept for any caller that still wants it
   // sessionUsd = session + subagents (the manager's *own* sessions, including subagents)
   const sessionUsd = (cost.session.usd != null || cost.subagents.usd != null) ? Math.round(((cost.session.usd || 0) + (cost.subagents.usd || 0)) * 1000) / 1000 : null;
   const aiUsd = (cost.jev.usd != null || cost.reviewer.usd != null || cost.judge.usd != null)
@@ -318,11 +355,20 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], runs = [], con
       stops, resolved, resolvedFast, auto: autoCount, escalated: escalatedCount,
       medianTtrSec: ttr.median != null ? Math.round(ttr.median) : null,
       p90TtrSec: ttr.p90 != null ? Math.round(ttr.p90) : null,
+      // agreement is the owner-vs-AI rate from the popup choices (phase 11). jevAgreement stays
+      // here too as a fallback (the Jev integration stats).
       agreement: agreement != null ? Math.round(agreement * 1000) / 1000 : null,
+      legacyLabelAgreement: legacyLabelAgreement != null ? Math.round(legacyLabelAgreement * 1000) / 1000 : null,
       judgeMean: judgeMean != null ? Math.round(judgeMean * 1000) / 1000 : null,
       deploys,
       labelledCount: labCount,
       tokensPerResolvedStop: tokensPerResolvedStop != null ? Math.round(tokensPerResolvedStop) : null,
+      // popup-choice fields (owner vs AI vs Jev)
+      ownerChoices,
+      agreeAi: ownerAgreementAi != null ? Math.round(ownerAgreementAi * 1000) / 1000 : null,
+      agreeAiN: agreeAiTotal,
+      agreeJev: popupJevAgreeTotal ? Math.round((popupJevAgreeCount / popupJevAgreeTotal) * 1000) / 1000 : null,
+      agreeJevN: popupJevAgreeTotal,
     },
     jev: {
       consulted: { count: consulted, share: stops ? Math.round((consulted / stops) * 1000) / 1000 : null, ambiguousShare: ambigTotal.count ? Math.round((consultedOfAmbiguous / ambigTotal.count) * 1000) / 1000 : null },

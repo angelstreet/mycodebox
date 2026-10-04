@@ -12,6 +12,8 @@ import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, cred
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
+import { mountAskPopup, showAskPopup } from '/ask-popup.js';
+import { jevAgreesOwner } from '/ask-model.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -568,6 +570,7 @@ function onStatus() {
     syncAll();
   }
   alertTransitions();
+  if (popupApi) popupApi.tick();
 }
 
 // ---------- deploy banner: shown while a deploy is running, queued or waiting for approval ----------
@@ -798,7 +801,7 @@ function renderAttention() {
   els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}${line(s.name) ? `<span class="ai1">${escapeHtml(line(s.name))}</span>` : ''}</button>`).join('');
   for (const b of els.attention.querySelectorAll('button')) {
-    b.onclick = () => openCard(b.dataset.session);
+    b.onclick = () => showAskPopup(b.dataset.session, () => popupApi);
   }
 }
 
@@ -1122,11 +1125,7 @@ function buildCell(s) {
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
       <button class="open" aria-label="Open full screen" title="Open">${icon('expand', 14)}</button>
     </div>
-    <div class="ask hidden">
-      <span class="q"></span>
-      <div class="abtns"></div>
-      <div class="tri hidden"></div>
-    </div>
+    <div class="ask hidden"></div>
     <div class="apill hidden"></div>
     <div class="reader"></div>
     <div class="b"></div>
@@ -1146,7 +1145,7 @@ function buildCell(s) {
     b.onclick = (e) => { e.stopPropagation(); moveSession(s.name, b.dataset.dir); };
   }
   wireDrag(cell, s.name);
-  cell.querySelector('.ask').onclick = (e) => { e.stopPropagation(); onAskClick(cell, s.name, e); };
+  // .ask is populated by syncAsk (one-line "asks you" chip that opens the popup)
   syncCell(cell);
   return cell;
 }
@@ -1216,45 +1215,33 @@ function wireTap(el, onSingle, onDouble) {
   }, true);
 }
 
-// ---------- answer buttons + AI proposal (TASK-44 phase 9) ----------
-// The row under a card header shows buttons derived from the question (public/buttons.js), the AI reviewer's
-// proposal with its reasoning, and the raw keys behind a toggle. A reply on a forbidden topic needs a second tap.
+// ---------- answer popup (TASK-44 phase 11) ----------
+// One bottom-right popup shows the question, the answer buttons (yes/no / numbered menu /
+// either-or / Reply…), the AI reviewer's recommended pick highlighted, and Jev's probabilities.
+// The cards keep only a tiny "asks you" chip; tapping it opens the popup on that session.
+// A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs a second tap.
 const askVisible = (n, st) => st && (st.state === 'waiting' || (st.state === 'done' && needsOwner(st)));
-function triHtml(t, kind) {
-  if (!t) return '';
-  if (t.state === 'pending') return '<div class="tl dim">AI reviewer reading the stop…</div>';
-  if (t.state === 'skipped') return `<div class="tl dim">AI skipped: ${escapeHtml(t.skipped)}</div>`;
-  if (t.state === 'error') return `<div class="tl dim">AI reviewer failed: ${escapeHtml(String(t.error || '?').slice(0, 70))}</div>`;
-  const a = t.ai;
-  const sim = t.mode === 'simulate' ? ' <i class="sim">simulation: nothing is sent for you</i>' : '';
-  const reply = a.proposed_reply ? `AI: \u201c${escapeHtml(a.proposed_reply)}\u201d` : `AI: needs you${a.owner_needed_why ? ` \u2014 ${escapeHtml(a.owner_needed_why)}` : ''}`;
-  return `<div class="tl">${t.jev ? `<b>Jev</b> ${escapeHtml(t.jev)} \u00b7 ` : `<b>rules</b> ${escapeHtml(t.case || '')} \u00b7 `}${reply}${sim}</div>
-    <div class="tr">${escapeHtml(a.reasoning || '')} <i>(confidence ${Number(a.confidence).toFixed(2)})</i></div>
-    <div class="tb">${a.proposed_reply && (kind === 'menu' || kind === 'yesno') ? '<button class="yes" data-tri="send">Send AI reply</button>' : ''}${a.proposed_reply ? '<button data-tri="edit">Edit</button>' : ''}<button data-tri="dismiss">Dismiss</button></div>`;
-}
 function syncAsk(cell, n) {
   const st = state.status[n];
   const ask = cell.querySelector('.ask');
-  const show = askVisible(n, st);
-  ask.classList.toggle('hidden', !show);
-  if (!show) { ask._d = null; ask.dataset.k = ''; return; }
+  const visible = askVisible(n, st);
+  if (!visible) { ask.classList.add('hidden'); ask.innerHTML = ''; ask._d = null; return; }
+  ask.classList.remove('hidden');
   const t = st.triage || null;
-  const d = deriveButtons({ state: st.state, stall: st.stall, triage: st.triage });
-  const q = (st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question).slice(0, 220) : '') || 'waiting for your answer';
-  const keysOpen = ask.dataset.keys === '1';
-  const k = JSON.stringify([q, d, t, keysOpen]);
-  if (ask.dataset.k === k) return;
-  ask.dataset.k = k; ask._d = d; ask._t = st.triage || null; ask._id = st.stall?.id || st.triage?.id || null;
-  ask.querySelector('.q').textContent = q;
-  const btn = (b, i) => `<button class="${b.primary ? 'yes' : ''}${b.reply ? ' rep' : ''}" data-i="${i}">${escapeHtml(b.label)}</button>`;
-  ask.querySelector('.abtns').innerHTML = d.buttons.map(btn).join('')
-    + (d.esc ? '<button class="sm" data-esc="1">esc</button>' : '')
-    + `<button class="sm kt" data-keys="1">keys ${keysOpen ? '\u25b4' : '\u25be'}</button>`
-    + (keysOpen ? `<span class="rawkeys">${d.keys.map((b, i) => `<button class="${b.primary ? 'yes' : ''}" data-raw="${i}">${escapeHtml(b.label)}</button>`).join('')}</span>` : '');
-  const tri = ask.querySelector('.tri');
-  const html = triHtml(t, d.kind);
-  tri.classList.toggle('hidden', !html);
-  tri.innerHTML = html;
+  const aiStarred = !!(t?.ai?.proposed_reply);
+  const key = (st.state === 'waiting' ? 'w' : 'd') + '|' + (st.waitReason || '') + '|' + (st.stall?.id || '') + '|' + (t?.id || '') + '|' + aiStarred;
+  if (ask.dataset.k === key) return;
+  ask.dataset.k = key;
+  ask.innerHTML = `<button class="askchip" data-act="open-popup" aria-label="Open answer popup">
+    asks you${aiStarred ? ' <i class="ai-star">\u2605</i>' : ''}
+  </button>`;
+  ask.querySelector('.askchip').onclick = (e) => { e.stopPropagation(); showAskPopup(n, () => popupApi); };
+}
+function prefillDock(n, text) {
+  focusSession(n);
+  els.sendInput.value = text || '';
+  autoGrow();
+  els.sendInput.focus();
 }
 async function askSend(n, id, b, via) {
   focusSession(n);
@@ -1266,48 +1253,70 @@ async function askSend(n, id, b, via) {
     if (id && via) fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, action: via, session: n }) }).catch(() => {});
   } catch (err) { toast(`send failed: ${err.message}`); }
 }
-function prefillDock(n, text) {
-  focusSession(n);
-  els.sendInput.value = text || '';
-  autoGrow();
-  els.sendInput.focus();
-}
-function onAskClick(cell, n, e) {
-  const ask = cell.querySelector('.ask');
-  const t = e.target.closest('button');
-  if (!t) return;
-  const id = ask._id;
-  if (t.dataset.keys) { ask.dataset.keys = ask.dataset.keys === '1' ? '0' : '1'; ask.dataset.k = ''; syncAsk(cell, n); return; }
-  if (t.dataset.esc) { focusSession(n); sendKey(n, 'Escape'); return; }
-  if (t.dataset.raw != null) { const b = ask._d?.keys[Number(t.dataset.raw)]; if (b) { focusSession(n); sendKey(n, b.key); } return; }
-  if (t.dataset.tri) {
-    const ai = ask._t?.ai;
-    if (t.dataset.tri === 'dismiss') {
-      fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: ask._t?.id || id, action: 'dismissed', session: n }) }).catch(() => {});
-      if (state.status[n]) state.status[n].triage = null;
-      syncAll(); return;
-    }
-    if (!ai?.proposed_reply) return;
-    if (t.dataset.tri === 'edit') {
-      prefillDock(n, ai.proposed_reply);
-      fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: ask._t?.id || id, action: 'edited', session: n }) }).catch(() => {});
-      return;
-    }
-    confirmThen(t, !!(ai.forbidden || state.status[n]?.stall?.forbidden), () => askSend(n, ask._t?.id || id, { text: ai.proposed_reply }, 'sent'));
-    return;
-  }
-  const b = ask._d?.buttons[Number(t.dataset.i)];
-  if (!b) return;
-  if (b.reply) { prefillDock(n, ''); return; }
-  confirmThen(t, b.confirm, () => askSend(n, id, b, b.ai ? 'sent' : null));
-}
 // A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs a second tap within 4 s.
+// Wraps the DOM-side arming; the popup uses it through the api injected at mount.
 function confirmThen(btn, needs, go) {
   if (!needs) { go(); return; }
+  if (!btn) { go(); return; }
   if (btn.dataset.armed === '1') { clearTimeout(btn._arm); btn.dataset.armed = ''; btn.classList.remove('arm'); go(); return; }
   btn.dataset.armed = '1'; btn.classList.add('arm'); btn._label = btn.textContent;
   btn.textContent = 'tap again: sensitive topic';
   btn._arm = setTimeout(() => { btn.dataset.armed = ''; btn.classList.remove('arm'); btn.textContent = btn._label; }, 4000);
+}
+
+// Popup wiring. The popup asks the page for these (state, openCard, askSend, prefillDock).
+let popupApi = null;
+function ownerChoicePost({ name, id, button, text, aiButtonId, aiConfidence, jevChoice, jevProbabilities }) {
+  const body = { id, session: name, kind: 'choice', owner: button };
+  if (text != null) body.ownerText = String(text).slice(0, 200);
+  if (aiButtonId) body.ai = aiButtonId; else body.ai = null;
+  if (Number.isFinite(aiConfidence)) body.aiConfidence = aiConfidence;
+  if (jevChoice) body.jev = jevChoice;
+  if (jevProbabilities) body.jevProbabilities = jevProbabilities;
+  fetch('/api/manager/choice', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+}
+function mountPopup() {
+  popupApi = mountAskPopup({
+    state,
+    openCard,
+    prefillDock,
+    askSend,
+    confirmThen,
+    postSend,
+    toastFn: toast,
+    sendKeyFn: (n, k) => sendKey(n, k),
+    onAnswer: (info) => {
+      // build the ai/jev context for the agreement record
+      const st = state.status[info.name];
+      const triage = st?.triage;
+      const ai = triage?.ai;
+      // We use ask-model's mapper: rebuild a quick button list to identify the AI button id.
+      let aiButtonId = null;
+      try {
+        const d = deriveButtons({ state: st.state, stall: st.stall, triage });
+        const mod = info.module;
+        // mapAiToButton is re-exported from ask-model
+        if (mod && mod.mapAiToButton && ai?.proposed_reply) {
+          aiButtonId = mod.mapAiToButton(d.buttons, d.kind, ai.proposed_reply);
+          if (aiButtonId && (d.buttons.find((b) => b.id === aiButtonId)?.confirm || ai.owner_needed)) aiButtonId = null;
+        }
+      } catch {}
+      const jevChoice = st?.stall?.jev?.choice || null;
+      const jevProbabilities = st?.stall?.jev?.probabilities || null;
+      const agreeJev = jevAgreesOwner(jevChoice, info.button, aiButtonId);
+      ownerChoicePost({
+        name: info.name,
+        id: info.id,
+        button: info.button,
+        text: info.text,
+        aiButtonId,
+        aiConfidence: ai?.confidence,
+        jevChoice,
+        jevProbabilities,
+        agreeJev,
+      });
+    },
+  });
 }
 
 function syncCell(cell) {
@@ -3491,6 +3500,7 @@ if ('serviceWorker' in navigator) {
   if (['card', 'grid', 'list'].includes(view)) state.mode = view;
   setMode(state.mode);
   hideInstallIfInstalled();
+  mountPopup();    // bottom-right popup for sessions that need the owner
   await fetchInitial();
   if (openPlat) openPlatforms();
   connectStatus();

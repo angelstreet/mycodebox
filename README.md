@@ -270,23 +270,47 @@ request bodies without calling the server, and without `--dry` it POSTs each fix
 server and prints one line per state plus a per-point agreement roll-up. **Nothing live calls it yet**
 — the wiring to the manager is a later step.
 
-**Answer buttons + AI reviewer (TASK-44 phase 9).** The row under a card header that asks for you shows buttons derived from
-the question (`public/buttons.js`): a live numbered menu (permission prompt, AskUserQuestion) gets one button per option with
-its label that sends its key (esc small); a yes/no question gets **Yes** / **No** (typed as text); an either/or or open question
-gets the AI's proposed reply as the primary button, Claude's own dim suggestion if any, and "✎ reply…" (focuses the dock on that
-session). The raw keys stay behind "keys ▾". A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs
-a second tap ("tap again: sensitive topic"). For every stop that goes to you (not plain `done`, not `background_wait`, not what
-auto-answer handles) the **AI reviewer** reads it after the rules and Jev: one `POST <JEV_URL host>/server/ai/complete` (usage
-`text.plan`, same `X-API-Key`) returns `{proposed_reply, reasoning, confidence, owner_needed, owner_needed_why}`; one call per
-stop, 25 s timeout, daily budget `aiDailyUsd` (1.00) and `aiDailyCalls` (300) in `ai-budget.json`. It is logged as a follow-up
-`{type:'triage', id, ai, cost, ms}` record and shown on the card ("Jev: … · AI: “…” — reasoning (confidence)" with Send AI reply /
-Edit / Dismiss), in the NEEDS YOU banner and in the push body. `manager.json` `aiTriage`: `off` | `simulate` (default: compute,
-show, log, never type) | `auto` (owner-only switch: an AI proposal with `owner_needed:false`, confidence ≥ `aiMinConfidence`
-(0.85), no forbidden topic in the question or the reply, no draft, case in `aiAutoCases`, goes through the normal countdown /
-hourly cap / fire-time checks, and needs `autoSend` too). `AI_URL` overrides the derived reviewer URL. In the swipe review the
-card shows the AI proposal; ✓ right / ✗ wrong posts `{type:'label', id, aiVerdict}` (does not label the stop itself);
-`npm run stall-report` prints the AI agreement; the manager panel shows the switch, today's calls / cost and the agreement.
-The server returns token counts, not a cost, so the logged cost is an estimate (`AI_USD_PER_MTOK_IN/OUT`, default 3 / 15).
+**Answer popup (TASK-44 phase 11).** One bottom-right popup shows every session that needs you
+(the same set the NEEDS YOU strip does — `waiting` or `done` with a non-pending triage). Each item: the
+question (max 220 chars), the answer buttons from `public/buttons.js` (`yesno` → Yes / No + Reply…,
+`menu` / `either` → one numbered row per option + Reply…, `open` → Reply…), the AI reviewer's pick
+pre-highlighted with a ★ (only when the proposal maps to a button that has no `confirm` and the AI
+didn't mark it `owner_needed`), and the bottom line `AI ★ <confidence %>   Jev: continue <p%> · recommended <p%> · ask you <p%>`
+(omitted when Jev didn't run). Cards keep only a one-line "asks you ★" chip; tapping it (or a name on
+the NEEDS YOU strip) opens the popup on that session; tapping the session name inside the popup opens
+the card. A TUI repaint that flips state to `working` for a few seconds is **not** progress: a session
+stays in the popup queue until the owner answered it, its non-eligible streak hits 8 s, or its stall
+id changed. The popup slides up (transform translateY + opacity, ~200 ms) only on a brand-new stall id;
+content updates in place otherwise. Reply… prefills the existing dock for that session. Sending uses
+the same `/api/send` + confirm-on-forbidden path as the dock. Desktop keys: `1..9` picks an option,
+`y`/`n` for yes/no, `Enter` the highlighted one, `Esc` minimises; the minimised pill bottom-right
+(`N need you`) reopens it (remembered in `sessionStorage`). Code: `public/ask-model.js` (pure queue /
+AI→button / jev line / jev-agreement mapping), `public/ask-popup.js`, CSS in `public/style.css`.
+
+**Owner choice log.** Every owner tap in the popup posts `POST /api/manager/choice {id, session,
+kind:'choice', owner:<button id|'reply'>, ownerText?, ai:<button id|null>, aiConfidence?, jev?,
+jevProbabilities?}` and the server appends `{type:'choice', at, id, session, kind, owner, ai,
+agreeAi:owner===ai (null when ai null), jev, ...agreeJev}` to `stalls.jsonl` (next to
+`/api/manager/triage`; same loopback / auth as its neighbours). Jev-agreement mapping (same on the
+client and the scorecard): `continue`/`take_recommended` agrees when the owner picked the highlighted
+(Yes, or the recommended option); `ask_owner` agrees when the owner picked anything other than the
+AI highlight or tapped Reply. The manager panel shows today's calls/cost; the scorecard's quality is
+the share of `choice` records with `agreeAi===true` among those with `ai!=null`.
+
+**AI reviewer (TASK-44 phase 9).** For every stop that goes to you (not plain `done`, not
+`background_wait`, not what auto-answer handles) the reviewer reads it after the rules and Jev: one
+`POST <JEV_URL host>/server/ai/complete` (usage `text.plan`, same `X-API-Key`) returns
+`{proposed_reply, reasoning, confidence, owner_needed, owner_needed_why}`; one call per stop, 25 s
+timeout, daily budget `aiDailyUsd` (1.00) and `aiDailyCalls` (300) in `ai-budget.json`. It is logged
+as a follow-up `{type:'triage', id, ai, cost, ms}` record and used by the popup (highlight + bottom
+line); the NEEDS YOU strip and the push body show a one-line preview. `manager.json` `aiTriage`:
+`off` | `simulate` (default: compute, show, log, never type) | `auto` (owner-only switch: an AI
+proposal with `owner_needed:false`, confidence ≥ `aiMinConfidence` (0.85), no forbidden topic in the
+question or the reply, no draft, case in `aiAutoCases`, goes through the normal countdown / hourly
+cap / fire-time checks, and needs `autoSend` too). `AI_URL` overrides the derived reviewer URL.
+`npm run stall-report` prints the AI agreement; the manager panel shows the switch, today's calls /
+cost and the agreement. The server returns token counts, not a cost, so the logged cost is an
+estimate (`AI_USD_PER_MTOK_IN/OUT`, default 3 / 15).
 
 **Swipe review (the main way to label).** `/?review=1`, the topbar button (cards icon) or "Review stops (N)" in the
 manager panel opens a full-screen deck of unlabelled stops, newest first, one card at a time: session (tap = open its
@@ -376,17 +400,22 @@ the Jev integration stats, and a 7-day mini bar of the score. Behind it:
   - reviewer = `agent:'manager', name:'manager.ai-review'`
   - judge = `agent:'manager', name:'manager.judge'` — `usage/judge.js` now appends one ledger row per
     judged call (success or unparsable), matching the shape of the AI reviewer rows.
-- **Performance** (`perf.{stops,resolved,resolvedFast,auto,escalated,medianTtrSec,p90TtrSec,agreement}`)
-  reads `stalls.jsonl`: `auto` = send by `!= 'owner'` within 10 s before the outcome OR
-  `outcome.via === 'ghosty'`; `agreement` is the share of labelled stops whose label is `legit` or
-  `no_reason` (manager right), `wrong_case` is not right; falls back to `jevAgreement` when there
-  are no labels.
+- **Performance** (`perf.{stops,resolved,resolvedFast,auto,escalated,medianTtrSec,p90TtrSec,agreement,
+  ownerChoices, agreeAi, agreeAiN, agreeJev, agreeJevN, legacyLabelAgreement}`) reads `stalls.jsonl`:
+  `auto` = send by `!= 'owner'` within 10 s before the outcome OR `outcome.via === 'ghosty'`;
+  `ownerChoices` / `agreeAi` / `agreeJev` are the popup choice records (`{type:'choice', id, owner,
+  ai, agreeAi, jev, agreeJev}`, see "Owner choice log" above): `agreeAi` is the share of choices
+  where the owner picked the AI's highlighted button (over those with `ai != null`); `agreeJev`
+  uses the Jev-agreement mapping the popup uses. `agreement` is the same as `agreeAi` (popup choices
+  are now the quality signal); `legacyLabelAgreement` keeps the share of `no_reason|legit` label
+  verdicts for any caller that still wants it. Ledger rows that share an id are deduped (latest
+  wins) before summing cost — a growing-id writer rewrites the same row.
 - **Jev integration** (`jev.{consulted,errorRate,agreement,p50ms,overridden,costPerDecision}`):
   consulted = `stall.source === 'jev'` or a `stall.jev.choice`; ambiguous = cases
   `owner_decision|continue|menu_recommended`; agreement = Jev said `continue`/`take_recommended` and
   the outcome matched, OR Jev said `ask_owner` and the outcome was `owner_specific`/`unknown`;
   overridden = `stall.forbidden` blocked the Jev pick; `costPerDecision` = jev USD / jev calls.
-- **Score** is the weighted average of `quality` (owner labels, then jev agreement), `coverage`
+- **Score** is the weighted average of `quality` (popup `agreeAi`, then jev agreement), `coverage`
   (`resolvedFast / stops`) and `efficiency` (1 at the budget, 0 at 3x; `null` if both USD buckets
   are unpriced). A null component is excluded and the remaining weights renormalise. Weights and
   budgets live in `manager.json` (`scoreWeights`, `costBudget`).
