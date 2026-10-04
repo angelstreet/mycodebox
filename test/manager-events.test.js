@@ -258,3 +258,28 @@ test('end-to-end: a fired alert (manager sessions + done skipped) lands in manag
   assert.equal(lines.length, 2);
   assert.deepEqual(lines.map((l) => l.session + ':' + l.kind).sort(), ['api:waiting', 'web:asks']);
 });
+// ---------------------------------------------------------------------------
+// dedupe: the same stop re-fired within 6 h is not appended again
+// ---------------------------------------------------------------------------
+
+test('dedupe: same session + kind + text within 6 h is skipped; different text, other session, and after the window are kept', async () => {
+  const dir = tmp();
+  const H = 3600 * 1000, t0 = Date.parse('2026-01-01T00:00:00Z');
+  const me = createManagerEvents({ stateDir: dir });
+  const ev = (key, body, hours) => ({ key, title: 't', body, at: new Date(t0 + hours * H).toISOString() });
+  assert.equal(await me.record(ev('web:asks', 'Should I  deploy\nnow?', 0)), true);
+  assert.equal(await me.record(ev('web:asks', 'Should I deploy now?', 0.2)), false);       // whitespace-insensitive duplicate
+  assert.equal(await me.record(ev('web:asks', 'Pick A or B?', 0.3)), true);                // different stop
+  assert.equal(await me.record(ev('api:asks', 'Should I deploy now?', 0.4)), true);        // other session
+  assert.equal(await me.record(ev('web:waiting', 'Should I deploy now?', 0.5)), true);     // other kind
+  assert.equal(await me.record(ev('web:asks', 'Should I deploy now?', 6.5)), true);        // after the window
+  assert.equal(readLines(me.file).length, 5);
+});
+
+test('dedupe: survives a restart (seeded from the file tail)', async () => {
+  const dir = tmp();
+  const at = '2026-01-01T00:00:00Z';
+  await createManagerEvents({ stateDir: dir }).record({ key: 'web:asks', title: 't', body: 'same', at });
+  const again = createManagerEvents({ stateDir: dir });
+  assert.equal(await again.record({ key: 'web:asks', title: 't', body: 'same', at: '2026-01-01T01:00:00Z' }), false);
+});

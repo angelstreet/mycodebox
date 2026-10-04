@@ -1245,7 +1245,7 @@ function syncSide() {
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
     syncPill(li.querySelector('.pp'), n);
     const rb = li.querySelector('.rb');
-    const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
+    const t = [repoBranch(n), customFor(n) ? n : '', n === 'manager' ? mgrCostText() : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
     rb.classList.toggle('hidden', !t);
   }
@@ -2307,18 +2307,42 @@ document.addEventListener('click', (e) => {
   if (w) { e.stopPropagation(); openPlatforms({ deploy: w.dataset.wd }); return; }
   if (e.target.closest('[data-plat-open]')) openPlatforms();
 }, true);
+// manager session spend today (scorecard days=1): "manager $1.23 / $10"; hidden when the data is missing
+const mgrCost = { usd: null, budget: null };
+const mgrCostText = () => (mgrCost.usd == null || !mgrCost.budget ? '' : `manager $${Number(mgrCost.usd).toFixed(2)} / $${Number(mgrCost.budget).toFixed(0)}`);
+const mgrCostChip = () => {
+  const t = mgrCostText();
+  const r = t ? mgrCost.usd / mgrCost.budget : 0;
+  return t ? `<span class="mchip${r >= 1 ? ' over' : r >= 0.8 ? ' warn' : ''}" title="manager session spend today (API-equivalent)">${escapeHtml(t)}</span>` : '';
+};
+async function loadMgrCost() {
+  try {
+    const sc = await (await fetch('/api/manager/scorecard?days=1')).json();
+    const b = sc?.today?.budget?.session;
+    mgrCost.usd = typeof b?.usd === 'number' ? b.usd : null;
+    mgrCost.budget = typeof b?.budget === 'number' ? b.budget : null;
+  } catch { mgrCost.usd = null; }
+  syncSide();
+}
+loadMgrCost();
+setInterval(loadMgrCost, 60000);
+const actTime = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
+const actRow = (a) => `<div class="ml act"><span class="t">${actTime(a.at)}</span><span class="x"><b>${escapeHtml([a.trigger, a.session].filter(Boolean).join(' / '))}</b> ${a.decision ? `&middot; ${escapeHtml(String(a.decision).slice(0, 120))}` : ''}${a.action ? ` &rarr; ${escapeHtml(String(a.action).slice(0, 120))}` : ''}${a.reason ? `<br><span class="dim">${escapeHtml(String(a.reason).slice(0, 200))}</span>` : ''}</span></div>`;
 function openManager() {
-  openSheet('AI manager', async ({ body, foot, close }) => {
+  openSheet('AI manager', async ({ body, foot, close, title }) => {
+    const setChip = () => { title.innerHTML = `AI manager${mgrCostChip()}`; };
+    setChip(); loadMgrCost().then(setChip);
     body.innerHTML = '<div class="sheet-empty">loading…</div>';
     foot.classList.remove('hidden');
     foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const draw = async () => {
-      let cfg, log;
+      let cfg, log, acts;
       try {
-        [cfg, log] = await Promise.all([
+        [cfg, log, acts] = await Promise.all([
           fetch('/api/manager').then((r) => r.json()),
           fetch('/api/manager/log?limit=800').then((r) => r.json()),
+          fetch('/api/manager/actions?limit=50').then((r) => r.json()).catch(() => ({ actions: [] })),
         ]);
       } catch { body.innerHTML = '<div class="sheet-empty">could not load</div>'; return; }
       const off = new Set(cfg.disabledSessions || []);
@@ -2359,6 +2383,8 @@ function openManager() {
         <div class="side-sub">Last ${entries.length}</div>
         <label class="mchk"><input type="checkbox" data-unlab ${mgrUnlabelled ? 'checked' : ''}><span>unlabelled stops only</span></label>
         <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
+        <div class="side-sub">Manager actions (last ${(acts.actions || []).length})</div>
+        <div class="mlog">${(acts.actions || []).slice().reverse().map(actRow).join('') || '<div class="dim">no manager actions logged yet</div>'}</div>
         <div class="side-sub">Sessions</div>
         <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
     };
@@ -3360,6 +3386,54 @@ function alertTransitions() {
     }
   }).catch(() => {});
 }
+
+// ---------- Alerts feed: the push feed rendered in the page (bell + unread count + panel) ----------
+const alertsUi = { items: [] };
+const ALERT_READ_KEY = 'ghosty.alerts.lastRead';
+const alertsLastRead = () => { try { return Number(localStorage.getItem(ALERT_READ_KEY)) || 0; } catch { return 0; } };
+const alertsMarkRead = () => { try { const m = Math.max(0, ...alertsUi.items.map((i) => i.id)); localStorage.setItem(ALERT_READ_KEY, String(m)); } catch {} paintAlerts(); };
+function paintAlerts() {
+  const n = alertsUi.items.filter((i) => i.id > alertsLastRead()).length;
+  const c = $('#alertsCount');
+  c.textContent = n > 99 ? '99+' : String(n);
+  c.classList.toggle('hidden', !n);
+  $('#alertsBtn').title = n ? `${n} unread alert${n > 1 ? 's' : ''}` : 'Alerts: what the manager and ghosty told you';
+}
+async function pollAlerts() {
+  try {
+    const r = await fetch('/api/push/feed?since=0');
+    if (!r.ok) return;
+    alertsUi.items = (await r.json()).items || [];
+    paintAlerts();
+    alertsUi.redraw?.();
+  } catch {}
+}
+function alertsHtml() {
+  const last = alertsLastRead();
+  const items = alertsUi.items.slice().reverse();
+  const safeUrl = (u) => (/^(https?:\/\/|\/)/.test(u || '') ? u : '');
+  return items.map((i) => {
+    const u = i.url && i.url !== '/' ? safeUrl(i.url) : '';
+    const d = new Date(i.at);
+    return `<div class="al ${escapeHtml(i.priority || 'default')}${i.id > last ? ' unread' : ''}"><div class="at"><b>${escapeHtml(i.title || '')}</b><time>${isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toTimeString().slice(0, 5)}</time></div>${i.body ? `<div class="ab">${escapeHtml(i.body)}</div>` : ''}${u ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">open</a> ` : ''}${i.tag ? `<span class="tg">${escapeHtml(i.tag)}</span>` : ''}</div>`;
+  }).join('') || '<div class="sheet-empty">no alerts yet</div>';
+}
+function openAlerts() {
+  openSheet('Alerts', ({ body, foot }) => {
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<button class="sbtn" data-a="read">mark all read</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => {
+      if (e.target.closest('[data-a="close"]')) closeSheet();
+      if (e.target.closest('[data-a="read"]')) { alertsMarkRead(); draw(); }
+    };
+    const draw = () => { body.innerHTML = `<div class="alist">${alertsHtml()}</div>`; };
+    alertsUi.redraw = () => { if (body.isConnected) draw(); else alertsUi.redraw = null; };
+    draw();
+  });
+}
+$('#alertsBtn').onclick = openAlerts;
+pollAlerts();
+setInterval(pollAlerts, 30000);
 
 // ---------- Web Push (bell) ----------
 // The bell is "on" when this browser holds a real push subscription (works with the app closed).

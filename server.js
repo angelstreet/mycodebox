@@ -26,6 +26,7 @@
 //   GET  /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset= → Jev decisions, newest first (the server's log, else the manager's own; /?decisions=1)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
+//   GET  /api/manager/actions?since=<ISO>&limit=100 → tail of manager-actions.jsonl (newest last), the manager agent's own log of wakes/decisions (read-only)
 //   GET  /api/manager/scorecard?days=7 → { today, days:[...] } performance + cost + Jev integration for the window
 //                                       (cached 60 s; manager sessions, subagents, workers, Jev, reviewer, judge; see scorecard.js)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
@@ -74,7 +75,7 @@ import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
-import { createManagerEvents, classifyKey } from './manager-events.js';
+import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 
 const exec = promisify(execFile);
@@ -1348,6 +1349,10 @@ const server = http.createServer(async (req, res) => {
     const since = q.get('since') || '';
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
+  }
+  if (req.method === 'GET' && p === '/api/manager/actions') {   // the manager agent's own action log (manager-actions.jsonl), newest last, read-only
+    const q = url.searchParams;
+    return json(res, 200, { actions: await readActions({ stateDir: STATE_DIR, since: q.get('since') || null, limit: q.get('limit') }) });
   }
   if (req.method === 'GET' && p === '/api/manager/scorecard') {
     // 60 s in-process cache: the file is ~35k lines and the UI re-renders on every status tick.
