@@ -7,8 +7,8 @@
 // Test-only entry shape: { "argv": ["bash", "-c", "..."] } runs locally instead of ssh (env vars VPT_DEPLOY_REF/SCOPE set).
 // Registry: ssh proxmox '~/bin/vpt-lease ...' by default; DEPLOY_REGISTRY='["python3","/path/vpt-lease"]' runs it locally.
 import { spawn, execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile, appendFile, stat } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
+import { mkdir, readFile, writeFile, appendFile, stat, open } from 'node:fs/promises';
+import { createWriteStream, openSync, closeSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const DEFAULT_ENVS = {
@@ -55,8 +55,80 @@ function defaultRegistry() {
   });
 }
 
+// A deploy must survive a restart of this process, so the deploy child is detached: own session (setsid), output to
+// `<deploys>/<id>.run` through a file descriptor, never a pipe through ghosty. A tiny sh wrapper writes its exit code
+// to `<id>.exit` (atomic mv); we write the wrapper pid to `<id>.pid`. A restarted runner re-adopts from these files:
+// they must not be deleted. systemd must also leave the child alone on stop: the unit needs KillMode=process.
+const WRAP = '"$@"; rc=$?; echo $rc > "$0.tmp" && mv "$0.tmp" "$0"; exit $rc';
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const pidFile = (dir, id) => join(dir, `${id}.pid`);
+const exitFile = (dir, id) => join(dir, `${id}.exit`);
+const readInt = async (f) => { try { const n = parseInt(await readFile(f, 'utf8'), 10); return Number.isFinite(n) ? n : null; } catch { return null; } };
+const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Follows a detached deploy: copies new bytes of `<id>.run` to onLine, until the exit file appears or the pid is gone.
+// Resolves {code, timedOut}. The consumed offset is kept in `<id>.off` so an adopting runner does not repeat lines.
+export function followDetached(dir, id, { onLine, timeoutMs, pollMs = 1000, pid }) {
+  return new Promise((resolve) => {
+    let off = 0, buf = '', timedOut = false, done = false, busy = false, t = null;
+    const started = Date.now();
+    const runFile = join(dir, `${id}.run`), offFile = join(dir, `${id}.off`);
+    const drain = async () => {
+      let fh;
+      try {
+        fh = await open(runFile, 'r');
+        const size = (await fh.stat()).size;
+        if (size > off) {
+          const b = Buffer.alloc(size - off); await fh.read(b, 0, b.length, off);
+          off = size; buf += b.toString('utf8'); let i;
+          while ((i = buf.indexOf('\n')) >= 0) { onLine(buf.slice(0, i)); buf = buf.slice(i + 1); }
+          await writeFile(offFile, String(off)).catch(() => {});
+        }
+      } catch {} finally { await fh?.close().catch(() => {}); }
+    };
+    const check = async () => {
+      if (done || busy) return;
+      busy = true;
+      try {
+        await drain();
+        let code = await readInt(exitFile(dir, id));
+        if (code == null && !alive(pid)) { await nap(300); code = await readInt(exitFile(dir, id)); if (code == null) code = 255; }
+        if (code != null) {
+          await drain(); if (buf) { onLine(buf); buf = ''; }
+          done = true; clearInterval(t);
+          return resolve({ code, timedOut });
+        }
+        if (!timedOut && Date.now() - started > timeoutMs) {
+          timedOut = true;
+          try { process.kill(-pid, 'SIGTERM'); } catch {}
+          setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} }, 5000).unref();
+        }
+      } finally { busy = false; }
+    };
+    readInt(offFile).then((n) => { off = n || 0; t = setInterval(check, pollMs); check(); });
+  });
+}
+
 // Runs the deploy command. Streams every output line to onLine; resolves {code, timedOut}.
-function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind = 'deploy', id = '' }) {
+// kind 'deploy' is detached (survives a restart, see above); the short health check stays a plain piped child.
+function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind = 'deploy', id = '', dir, followPollMs }) {
+  if (kind === 'deploy' && dir) {
+    mkdirSync(dir, { recursive: true });
+    const argv = env.argv || ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', env.ssh, remoteCmd];
+    let fd;
+    try { fd = openSync(join(dir, `${id}.run`), 'a'); } catch (e) { onLine(`spawn error: ${e.message}`); return Promise.resolve({ code: 255, timedOut: false }); }
+    const child = spawn('sh', ['-c', WRAP, exitFile(dir, id), ...argv], {
+      detached: true, stdio: ['ignore', fd, fd],
+      env: env.argv ? { ...process.env, VPT_DEPLOY_REF: ref, VPT_DEPLOY_SCOPE: scope, VPT_DEPLOY_KIND: kind, VPT_DEPLOY_ID: id } : process.env,
+    });
+    closeSync(fd);
+    child.unref();
+    return new Promise((resolve) => {
+      child.on('error', (e) => { onLine(`spawn error: ${e.message}`); resolve({ code: 255, timedOut: false }); });
+      if (!child.pid) return;
+      writeFile(pidFile(dir, id), String(child.pid)).then(() => followDetached(dir, id, { onLine, timeoutMs, pollMs: followPollMs, pid: child.pid })).then(resolve);
+    });
+  }
   return new Promise((resolve) => {
     let child;
     if (env.argv) {
@@ -77,7 +149,7 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind
 export function createDeployRunner({
   stateDir, alert = () => {}, onChange = () => {}, isEnabled = () => false,
   registry = defaultRegistry(), run = defaultRun, timeoutMs = 45 * 60 * 1000, pollMs = 30000,
-  orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, log = console,
+  orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, follow = followDetached, log = console,
 } = {}) {
   const envsFile = join(stateDir, 'deploy-envs.json');
   const logDir = join(stateDir, 'deploys');
@@ -152,21 +224,24 @@ export function createDeployRunner({
     }, 0);
   }
 
-  async function runDeploy(d, deploys) {
+  async function runDeploy(d, deploys, adopt = null) {
     const flags = flagsFor(d.scope);
     const envCfg = envs[d.env];
     await mkdir(logDir, { recursive: true });
     const out = createWriteStream(join(logDir, `${d.id}.log`), { flags: 'a' });
     const lines = [];
+    if (adopt) { try { lines.push(...(await readFile(join(logDir, `${d.id}.log`), 'utf8')).split('\n').filter(Boolean).slice(-400)); } catch {} }
     const onLine = (l) => { lines.push(l); if (lines.length > 400) lines.shift(); out.write(l + '\n'); };
     // Requests for the same env + ref that this deploy covers are finished with its result.
     let merged = deploys.filter((x) => mergeable(d, x));
-    onLine(`# deploy ${d.id} ${d.env} scope=${d.scope} ref=${d.ref}${d.hosts?.length ? ` hosts=${d.hosts.join(',')}` : ''} requested by ${d.agent}${merged.length ? ` (+${merged.length} merged)` : ''}`);
-    alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
+    if (adopt) onLine(`# runner restarted: re-adopted running deploy (wrapper pid ${adopt.pid})`);
+    else onLine(`# deploy ${d.id} ${d.env} scope=${d.scope} ref=${d.ref}${d.hosts?.length ? ` hosts=${d.hosts.join(',')}` : ''} requested by ${d.agent}${merged.length ? ` (+${merged.length} merged)` : ''}`);
+    if (!adopt) alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
     let status = 'failed', rc = null, timedOut = false;
     try {
       const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
-      ({ code: rc, timedOut } = await run(envCfg, { id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs }));
+      if (adopt) ({ code: rc, timedOut } = await follow(logDir, d.id, { onLine, timeoutMs, pollMs: followPollMs, pid: adopt.pid }));
+      else ({ code: rc, timedOut } = await run(envCfg, { dir: logDir, followPollMs, id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs }));
       if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min, killed`);
       else onLine(`# update_core exit ${rc}`);
       status = rc === 0 && !timedOut ? 'done' : 'failed';
@@ -226,6 +301,17 @@ export function createDeployRunner({
           }
         }
         first = false;
+        // Re-adopt: registry says running + runner == us + this process lost it (restart), but the detached wrapper is
+        // still alive or left an exit file: follow it to the end (same finish path). Neither file = the orphan sweep.
+        for (const d of deploys) {
+          if (d.state !== 'running' || d.runner !== RUNNER_AGENT || running.has(d.env) || !envs[d.env]) continue;
+          const pid = await readInt(pidFile(logDir, d.id));
+          const exited = (await readInt(exitFile(logDir, d.id))) != null;
+          if (pid == null || !(exited || alive(pid))) continue;
+          running.set(d.env, d.id);
+          log.info?.(`[deploy] re-adopted ${d.id} (pid ${pid}${exited ? ', already exited' : ''})`);
+          runDeploy(d, deploys, { pid }).catch((e) => { running.delete(d.env); log.error?.('[deploy] adopt', e.message); });
+        }
         // Detect orphans: registry says running + runner == us, but this process no longer tracks it. Skip ones
         // owned by `running`. Gated by `if (deploys)` above so a poll failure does nothing.
         for (const d of deploys) {

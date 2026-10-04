@@ -588,6 +588,12 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
   themselves) are finished with its result (`coalescedInto`).
 - Registry: `ssh proxmox '~/bin/vpt-lease ...'`; `DEPLOY_REGISTRY='["python3","/path/vpt-lease"]'` runs it locally (tests, live checks).
   `DEPLOY_POLL_MS`, `DEPLOY_TIMEOUT_MS` override the timings.
+- **Survives a restart (BUG-0341).** The deploy child is detached (own session, output to `deploys/<id>.run` via a file descriptor) and a
+  tiny `sh` wrapper writes `deploys/<id>.pid` / `<id>.exit`. A restarted ghosty re-adopts every `running` deploy of the runner whose
+  wrapper is alive or left an exit file, and finishes it as usual; with neither file the orphan sweep still applies. So a restart no
+  longer loses a deploy, but the `.pid` / `.exit` / `.run` / `.off` files must not be deleted. The systemd unit must not kill the child on
+  stop: `ghosty-sessions.service` needs `KillMode=process` (one line in `[Service]`, in `systemd/`); `/etc/systemd/system` is a hand copy, so
+  copy it and `systemctl daemon-reload` (no restart needed for the unit text to be read; it applies at the next stop/start).
 - API: `GET /api/deploys`, `POST /api/deploys/:id/approve|cancel`, `GET /api/deploys/:id/log?tail=200`; `{type:'deploys'}` on `/ws/status`.
 
 ## Platforms page, lease ownership, waiting for a deploy (TASK-44)

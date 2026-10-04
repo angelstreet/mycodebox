@@ -374,3 +374,85 @@ test('orphan: poll failure does nothing (no finish, no alert)', async () => {
   assert.equal(alerts.length, 0);
   assert.equal(runner.snapshot().ok, false);
 });
+
+// --- re-adoption of a detached deploy after a runner restart (BUG-0341) ---
+import { spawn } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+const mkAdopt = (reg) => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-adopt-'));
+  const dir = join(stateDir, 'deploys'); mkdirSync(dir, { recursive: true });
+  const alerts = [];
+  const runner = createDeployRunner({ stateDir, registry: reg.fn, isEnabled: () => true, alert: (k) => alerts.push(k), log: { error() {} }, followPollMs: 30,
+    run: async () => { throw new Error('must not start a new run'); } });
+  return { runner, dir, alerts };
+};
+const runningDep = (id, o = {}) => dep(id, { state: 'running', runner: RUNNER_AGENT, ...o });
+// a stand-in for the detached wrapper: sh that logs, sleeps, then writes the exit file like the real wrapper
+const fakeWrapper = (dir, id, secs, rc = 0) => {
+  const c = spawn('sh', ['-c', `echo "VERSION 4.5.6" >> "${dir}/${id}.run"; sleep ${secs}; echo ${rc} > "${dir}/${id}.exit"`], { detached: true, stdio: 'ignore' });
+  c.unref(); writeFileSync(join(dir, `${id}.pid`), String(c.pid)); return c;
+};
+
+test('adopt: a child still alive at startup is re-adopted and finished when it exits', async () => {
+  const reg = fakeRegistry({ deploys: [runningDep('5')] });
+  const { runner, dir, alerts } = mkAdopt(reg);
+  fakeWrapper(dir, '5', 0.4);
+  await runner.tick();
+  assert.equal(runner._running.get('node1-vpt'), '5');
+  assert.equal(reg.deploys[0].state, 'running');
+  await until(() => reg.deploys[0].state === 'done', 5000);
+  assert.equal(reg.deploys[0].version, '4.5.6');
+  assert.ok(alerts.includes('deploy:5:done') && !alerts.includes('deploy:5:start') && !alerts.includes('deploy:5:orphan'));
+  assert.match(readFileSync(join(dir, '5.log'), 'utf8'), /re-adopted/);
+});
+
+test('adopt: a non-zero exit of the adopted child finishes failed', async () => {
+  const reg = fakeRegistry({ deploys: [runningDep('6')] });
+  const { runner, dir } = mkAdopt(reg);
+  fakeWrapper(dir, '6', 0.2, 3);
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'failed', 5000);
+});
+
+test('adopt: exit file present, process gone -> finished immediately from it', async () => {
+  const reg = fakeRegistry({ deploys: [runningDep('7')] });
+  const { runner, dir } = mkAdopt(reg);
+  writeFileSync(join(dir, '7.pid'), '999999'); writeFileSync(join(dir, '7.exit'), '0'); writeFileSync(join(dir, '7.run'), 'SKIPPED_HOSTS=h1\nVERSION 7.7.7\n');
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done', 3000);
+  assert.equal(reg.deploys[0].version, '7.7.7');
+  assert.deepEqual(reg.deploys[0].skippedHosts, ['h1']);
+});
+
+test('adopt: process gone and no exit file is left to the orphan sweep', async () => {
+  const reg = fakeRegistry({ deploys: [runningDep('8')] });
+  const { runner, dir } = mkAdopt(reg);
+  writeFileSync(join(dir, '8.pid'), '999999');
+  await runner.tick();
+  assert.equal(runner._running.size, 0);
+  assert.equal(reg.deploys[0].state, 'running');   // log missing + `started` unset: sweep does nothing yet
+});
+
+test('adopt: a running deploy of another runner is untouched', async () => {
+  const reg = fakeRegistry({ deploys: [runningDep('9', { runner: 'someone:else' })] });
+  const { runner, dir } = mkAdopt(reg);
+  fakeWrapper(dir, '9', 0.2);
+  await runner.tick();
+  assert.equal(runner._running.size, 0);
+  assert.equal(reg.deploys[0].state, 'running');
+});
+
+test('real detached run: output through the file, exit file and pid file written', async () => {
+  const reg = fakeRegistry({ deploys: [dep('11')] });
+  const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-real-'));
+  const { writeFileSync: wf } = await import('node:fs');
+  wf(join(stateDir, 'deploy-envs.json'), JSON.stringify({ 'node1-vpt': { argv: ['sh', '-c', 'echo hello; echo VERSION 9.9.9; exit 0'] } }));
+  const runner = createDeployRunner({ stateDir, registry: reg.fn, isEnabled: () => true, log: { error() {} }, followPollMs: 30 });
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done', 5000);
+  const dir = join(stateDir, 'deploys');
+  assert.equal(readFileSync(join(dir, '11.exit'), 'utf8').trim(), '0');
+  assert.ok(existsSync(join(dir, '11.pid')));
+  assert.match(readFileSync(join(dir, '11.log'), 'utf8'), /hello/);
+  assert.equal(reg.deploys[0].version, '9.9.9');
+});
