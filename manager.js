@@ -32,7 +32,7 @@ const JEV_API_KEY = process.env.JEV_API_KEY || '';
 const JEV_DAILY_USD = Number(process.env.JEV_DAILY_USD || 0.25);
 const JEV_DAILY_CALLS = Number(process.env.JEV_DAILY_CALLS || 2000);
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
-export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action'];
+export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait'];
 export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
@@ -338,20 +338,24 @@ function ownerReply(plain, sentText) {
 }
 
 // Called every tick for every session, after ghosty computed its state.
-//   s = { name, state, agent, plain, raw, changed, project, lastSendAt, lastSendText, now }
+//   s = { name, state, agent, plain, raw, changed, project, lastSendAt, lastSendText, now,
+//         rep? }   rep = the session's reporter (reporter.js) as { turnForStop(since), promptSince(since) }; Claude only
 export function observe(s) {
   if (!AGENTS.has(s.agent)) { watch.delete(s.name); return null; }
   let w = watch.get(s.name);
   if (!w) { w = { since: s.now, hash: null, stall: null, pending: null, seen: false }; watch.set(s.name, w); }
 
   w.agent = s.agent;
+  const rep = s.agent === 'claude' ? s.rep || null : null;   // Codex / MiniMax have no reporter: panes only
   w.last = { state: s.state, lastSendAt: s.lastSendAt || null, now: s.now };
   const stopped = s.state === 'waiting' || s.state === 'done';
   // The session only counts as moved on when real work was seen (the spinner signal ghosty computes) or
   // somebody sent it something since the stall. A TUI that merely repaints flips ghosty's state to
   // 'working' for a few seconds without doing anything: that must not reset the stall.
   const sentSince = !!(w.pending && s.lastSendAt && s.lastSendAt > w.pending.at);
-  const moved = !!s.realWork || sentSince;
+  // A prompt the reporter saw submitted after the stall is movement too (the spinner can be missed on a short turn).
+  const prompted = !!(w.pending && rep && rep.promptSince(w.pending.at));
+  const moved = !!s.realWork || sentSince || prompted;
   if (moved) w.moved = true;
   if (!stopped) {
     const flicker = s.state === 'working' && !moved;
@@ -361,21 +365,34 @@ export function observe(s) {
     if (w.pending && s.state === 'working' && moved) {
       const p = w.pending;
       const sent = sentSince ? s.lastSendText : null;
-      const reply = ownerReply(s.plain, sent);
+      const said = !sent && rep ? rep.promptSince(p.at) : null;   // the prompt text the reporter saw the owner submit
+      const reply = said ? { via: 'reporter', text: said.text } : ownerReply(s.plain, sent);
       log({ type: 'outcome', id: p.id, session: s.name, at: new Date(s.now).toISOString(), afterSec: Math.round((s.now - p.at) / 1000),
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
       w.pending = null;
     }
     if (holdOf(s.name)) endHold(s.name, 'manager', 'session moved on', false);
+    w.stopSince = null;
     w.heldStall = null;
     w.hash = null; w.stall = null; w.since = s.now;
     w.seen = true;
     return null;
   }
 
-  // Classify only when the pane changed (or the state did); a still pane gives the same answer.
-  const key = `${s.state}`;
-  if (s.changed || !w.cls || w.clsKey !== key) { w.cls = classifyStall({ plain: s.plain, raw: s.raw, state: s.state }); w.clsKey = key; }
+  if (!w.stopSince) w.stopSince = s.now;
+  // A finished turn of a Claude session with a fresh report: the reported final answer text is the
+  // closing text (exact, no pane scraping). A waiting prompt is a pane thing (menus, permission dialogs).
+  const turn = s.state === 'done' && rep ? rep.turnForStop(w.stopSince) : null;
+  const useReport = !!(turn && turn.text && turn.reason !== 'aborted');
+  const bgWait = !!(turn && turn.backgroundWork > 0);
+  // Classify only when the pane changed (or the state did, or a report arrived); a still pane gives the same answer.
+  const key = `${s.state}|${useReport ? turn.at : ''}|${bgWait}`;
+  if (s.changed || !w.cls || w.clsKey !== key) {
+    w.cls = classifyStall({ plain: useReport ? turn.text.split('\n') : s.plain, raw: s.raw, state: s.state, fromReport: useReport });
+    w.cls.textSource = useReport ? 'reporter' : 'pane';
+    if (bgWait) Object.assign(w.cls, { case: 'background_wait', answer: null, autoCase: undefined, forbidden: null, no_status: false, source: 'rule', backgroundWork: turn.backgroundWork });
+    w.clsKey = key;
+  }
   const stall = w.cls;
   if (w.auto && stall.draft) cancelAuto(s.name, 'draft in the input box');
   const h = hash(`${stall.case}|${stall.excerpt}`);
@@ -402,13 +419,14 @@ export function observe(s) {
     w.stall = { ...final, would: ws };
     await log({
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
-      at: new Date(s.now).toISOString(), case: final.case, source: final.source, question: final.question,
+      at: new Date(s.now).toISOString(), case: final.case, source: final.source, textSource: stall.textSource || 'pane', question: final.question,
+      ...(final.case === 'background_wait' ? { backgroundWork: final.backgroundWork } : {}),
       forbidden: final.forbidden, draft: final.draft, suggestion: final.suggestion,
       no_status: !!final.no_status, ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
     });
     if (!ws.send) {
-      if (final.case !== 'done') escalate(s.name, s.state, final, id, humanWhy(final, ws));
+      if (final.case !== 'done' && final.case !== 'background_wait') escalate(s.name, s.state, final, id, humanWhy(final, ws));
       return;
     }
     const block = autoBlock(s.name, final, confidence);

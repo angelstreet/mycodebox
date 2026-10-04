@@ -1,0 +1,15 @@
+{
+  "name": "ghosty-reporter",
+  "version": "0.1.0",
+  "author": { "name": "ghosty-sessions" },
+  "description": "Pure observer: reports structured Claude Code session events (turn end, prompt, waiting, subagents) to the ghosty dashboard on this machine. Never changes, delays or denies anything.",
+  "userConfig": {
+    "url": {
+      "type": "string",
+      "title": "Reporter URL",
+      "description": "Where ghosty accepts events. GHOSTY_REPORTER_URL in the environment overrides it.",
+      "default": "http://127.0.0.1:7777/api/reporter/event",
+      "required": false
+    }
+  }
+}

@@ -187,6 +187,56 @@ curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
 curl -s -XPOST localhost:7777/api/manager/cancel/task05 -H 'content-type: application/json' -d '{}'
 ```
 
+## Session reporter (TASK-44 phase 8)
+
+`claude-plugin/ghosty-reporter/` is a Claude Code plugin (function hooks, Claude Code >= 2.1.288) that every
+Claude session on the box loads. It is a **pure observer**: every hook awaits `next(e)` and returns its result
+untouched, reports after that with an 800 ms bound, swallows every error and prints nothing. If ghosty is
+down the session behaves as without the plugin (one failed try, then 30 s of silence).
+
+**Install for all sessions** (owner action, one line in `~/.claude/settings.json`; the plugin is not part of the
+settings otherwise):
+
+```json
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/home/jndoye/ghosty-sessions/claude-plugin/ghosty-reporter" } }
+```
+
+New sessions pick it up; running ones keep going without it. One session only: `claude --plugin-dir <folder>`.
+
+| plugin env / option | default | meaning |
+|---|---|---|
+| `GHOSTY_REPORTER_URL` (or plugin option `url`) | `http://127.0.0.1:7777/api/reporter/event` | where events go |
+| `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | where `reporter.token` is read from |
+| `GHOSTY_REPORTER_TOKEN_FILE` | `<state dir>/reporter.token` | token file override |
+
+ghosty creates `reporter.token` (0600) in its state dir at startup if missing. `POST /api/reporter/event` accepts
+loopback peers only, with the token in the `x-ghosty-reporter-token` header; anything else is 403 / 401.
+
+The session is identified by its tmux session name (`tmux display-message -p -t $TMUX_PANE '#S'`, once, at the first
+event) plus the Claude session id and cwd; a session outside tmux is ignored.
+
+| event (plugin hook) | payload | what ghosty does |
+|---|---|---|
+| `session.start` / `session.end` (`session.start`, `session.end`) | reason | session is `live` / not |
+| `prompt` (`prompt.submit`) | the submitted text (exact, 8 KB cap), `synthetic` for engine-raised prompts such as a finished background task | the owner's reply in the stall `outcome` (`via: "reporter"`); a prompt after a stall also counts as the session moving on |
+| `turn.end` (`turn.complete`) | the final answer (exact), reason, usage; subagent turns carry `agentId` and are ignored as the session's turn | closing text of the stall classifier |
+| `stop` (`classic.Stop`) | `last_assistant_message`, `backgroundWork` = background tasks in flight | `background_wait` when > 0 |
+| `waiting` (`classic.PermissionRequest`, `classic.Notification` except idle / auth) | message | marks the session `waiting` even when the pane regex missed it, while the pane stays still |
+| `agents` (`agent.spawn`, `classic.SubagentStart/Stop`, `classic.TeammateIdle`, after `turn.complete`) | `$.agent.list()`: id, type, status, description, sent only when it changed | subagent count + statuses in the ⚡ tooltip |
+
+What the manager does with it (Claude sessions only; Codex / MiniMax unchanged): a stop whose turn has a fresh report
+(no newer prompt, ended within 20 s of the stop being seen) is classified from the **reported answer text** instead
+of the pane excerpt (`textSource: "reporter"`, else `"pane"`, in `stalls.jsonl`; `source` stays the rule / Jev
+decision source). A reported turn with background work in flight is logged as `case: "background_wait"` and is never
+escalated or answered. The pane is still read for the owner's unsent draft and for waiting menus / permission dialogs.
+
+The status payload carries a small `reporter` object per live Claude session (`seenAt`, `turnAt`, `backgroundWork`,
+`waiting`, `agents {count, by}`, `agentList`); the cards show a ⚡ (with the subagent count) whose tooltip lists them.
+`GET /api/reporter/:session` returns everything held for one session (latest turn, prompt, waiting, agents).
+
+Develop / test the plugin: `claude plugin validate claude-plugin/ghosty-reporter` and
+`claude plugin test claude-plugin/ghosty-reporter` (tests in `ghosty-reporter.test.ts`); ghosty side: `npm test`.
+
 ## Deploy queue (TASK-44 phase 7)
 
 Agents do not run `update_core.sh`; they queue a request in the shared lease registry (`vpt-lease deploy request ...`)
@@ -358,6 +408,8 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 │   ├── sw.js                        # service worker
 │   ├── icon.svg / icon-{192,512}.png
 │   └── vendor/                      # xterm.js + xterm-addon-fit (offline)
+├── reporter.js                      # intake of the ghosty-reporter plugin events (token, latest facts per session)
+├── claude-plugin/ghosty-reporter/   # the Claude Code plugin (hooks/register.ts, tests)
 ├── session-meta.js                  # priority + pause hold (sessions.json)
 ├── quota.js                         # Codex / Claude / MiniMax quota windows
 ├── usage/                           # Langfuse usage tailer + prices

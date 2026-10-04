@@ -124,6 +124,18 @@ exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only
 | 6 | No HTTPS via `tailscale serve` (free plan) | self-signed on :7443 works after manual accept |
 | 7 | SW cache v6 | bump again if stale JS ever shows |
 
+## Session reporter (TASK-44 phase 8)
+
+`claude-plugin/ghosty-reporter/` reports structured Claude events to `POST /api/reporter/event` (loopback + token
+from `<state dir>/reporter.token`); `reporter.js` keeps the latest per tmux session; `manager.js` prefers the
+reported final answer over the pane excerpt, logs `background_wait`, and takes the owner's reply from the reported
+prompt. Install = one `CLAUDE_CODE_PLUGIN_DIRS` line in `~/.claude/settings.json` (README, "Session reporter").
+Things to know: `Stop` is the only hook that says whether background work is in flight, and it does not fire for
+every turn end (an interrupted or declined-question turn has only `turn.complete`), so a missing count means 0;
+a finished background task wakes the session with a synthetic `<task-notification>` prompt (marked, ignored as an
+owner reply); the Notification hook for a permission dialog can arrive ~10 s after the dialog is drawn. The spinner
+detector (`WORK_RE`) misses short turns on Claude 2.1.289, so a reported prompt also counts as the session moving on.
+
 ## Files of interest
 
 ```

@@ -135,11 +135,11 @@ function menuOptions(lines) {
 // plain = ANSI-stripped pane lines; raw = the same lines with ANSI (for the input box);
 // state = ghosty state ('waiting' | 'done' | 'idle' | ...).
 // Returns { case, source: 'rule'|'ambiguous', answer, question, forbidden, draft, suggestion, excerpt }.
-export function classifyStall({ plain, raw = null, state }) {
+export function classifyStall({ plain, raw = null, state, fromReport = false }) {
   const close = closingLines(plain, 16);
   const tail = close.slice(-8);
   const excerpt = close.join('\n');
-  const { draft, suggestion } = inputBox(raw || plain);
+  const { draft, suggestion } = inputBox(fromReport ? raw || [] : raw || plain);   // the draft is always read off the pane
   const out = { case: null, source: 'rule', answer: null, question: null, forbidden: null, draft, suggestion, excerpt };
 
   if (tail.slice(-3).some((l) => ERROR_RE.test(l))) {
@@ -238,7 +238,7 @@ export function applyJev(stall, choice) {
 
 // The final gate: what would actually be typed. Forbidden topics, drafts and owner cases never are.
 export function wouldSend(stall) {
-  if (!stall.answer) return { send: null, why: { done: 'finished', waiting_deploy: 'deploy waiting', owner_action: 'owner action' }[stall.case] || 'owner' };
+  if (!stall.answer) return { send: null, why: { done: 'finished', waiting_deploy: 'deploy waiting', owner_action: 'owner action', background_wait: 'background work still running' }[stall.case] || 'owner' };
   if (stall.forbidden) return { send: null, why: `forbidden: ${stall.forbidden}` };
   if (stall.draft) return { send: null, why: 'owner has a draft in the input box' };
   return { send: stall.answer, why: stall.autoCase || stall.case };

@@ -23,6 +23,8 @@
 //   POST /api/deploys/:id/approve | /cancel → owner action on a queued request
 //   GET  /api/deploys/:id/log?tail=200      → the runner's log of that deploy (text)
 //   (the runner itself only starts deploys when manager.json has deployRunner:true, see deploy-runner.js)
+//   POST /api/reporter/event    → ghosty-reporter plugin events; loopback peers + x-ghosty-reporter-token (state dir reporter.token) only
+//   GET  /api/reporter/:session → latest reported turn / prompt / waiting / agents of a session
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
 //   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
@@ -50,6 +52,7 @@ import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
 import { createDeployRunner } from './deploy-runner.js';
+import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -527,6 +530,7 @@ const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'sta
 const push = createPush({ stateDir: STATE_DIR });
 const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
 
+const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
 const deployRunner = createDeployRunner({
@@ -638,9 +642,13 @@ async function pollOnce() {
 
     let state = 'idle';
     let waitReason = null;
+    let reportedWait = null;
     let spinning = false;   // the live spinner / WORK_RE signal this tick: real work, not just a repaint
     if (offline) state = 'offline';
     else if (agent !== 'bash' && (waitReason = findWaitReason(tail)) !== null) state = 'waiting';
+    // Claude with a live reporter: a permission request / notification it reported still stands (the pane
+    // has been still since) even when the pane regex above missed it.
+    else if (agent === 'claude' && (reportedWait = reporter.waitingNow(s.name, t.changeAt))) { state = 'waiting'; waitReason = reportedWait.message || 'needs input'; }
     else {
       spinning = agent !== 'bash' && WORK_RE.test(tail.filter((l) => !/⏵⏵|bypass permissions|accept edits/.test(l)).join('\n'));
       if (spinning) t.realWork = true;
@@ -692,7 +700,8 @@ async function pollOnce() {
 
     if (!offline) {
       observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state, realWork: spinning,
-        project: meta.project ?? null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now });
+        project: meta.project ?? null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now,
+        rep: agent === 'claude' && reporter.liveOf(s.name) ? { turnForStop: (since) => reporter.turnForStop(s.name, since), promptSince: (since) => reporter.promptSince(s.name, since) } : null });
       t.prevObserved = state;
     }
 
@@ -721,8 +730,9 @@ async function pollOnce() {
   for (const k of [...metaCache.keys()]) if (!status[k]) metaCache.delete(k);
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set(Object.keys(status)));
+  reporter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
-  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); }
+  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
   return { sessions, status, changedSessions };
 }
 
@@ -1055,6 +1065,18 @@ const server = http.createServer(async (req, res) => {
     return json(res, 415, { ok: false, error: 'content-type must be application/json' });
   }
 
+  // --- reporter intake: loopback peers only, shared token (reporter.token, 0600) ---
+  if (req.method === 'POST' && p === '/api/reporter/event') {
+    if (!isLoopback(req.socket.remoteAddress)) return json(res, 403, { ok: false, error: 'loopback only' });
+    if (!reporter.tokenOk(req.headers[TOKEN_HEADER])) return json(res, 401, { ok: false, error: 'bad token' });
+    try { return json(res, 200, reporter.ingest(await readJsonBody(req))); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p.startsWith('/api/reporter/')) {
+    const d = reporter.detail(decodeURIComponent(p.slice('/api/reporter/'.length)));
+    return d ? json(res, 200, d) : json(res, 404, { ok: false, error: 'no reports for that session' });
+  }
+
   // --- API ---
   if (req.method === 'GET' && p === '/api/sessions') {
     const r = (latest && Date.now() - latest.at < 1500) ? latest : await poll();
@@ -1338,6 +1360,7 @@ async function leaseTick() {
 
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
+  try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
   await initManager({
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case].filter(Boolean).join('\n')),
     sendKey, sendKeys, paused: (n) => sessionMeta.isPaused(n),

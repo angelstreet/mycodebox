@@ -182,7 +182,18 @@ function stateBadgeHtml(name) {
 function agentBadgeHtml(name) {
   const a = agentOf(name);
   const m = (state.status[name] || {}).model;
-  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>${m ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}`;
+  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>${m ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
+}
+
+// ⚡ = the ghosty-reporter plugin is live in this Claude session (exact answers / prompts, subagents). The
+// tooltip lists the subagents: count and statuses.
+function reporterMarkHtml(name) {
+  const r = (state.status[name] || {}).reporter;
+  if (!r) return '';
+  const subs = (r.agentList || []).map((x) => `${x.type || 'agent'} (${x.status})${x.description ? ': ' + x.description : ''}`);
+  const tip = ['reporter live', r.agents && r.agents.count ? `${r.agents.count} subagent${r.agents.count === 1 ? '' : 's'}: ${Object.entries(r.agents.by).map(([k, v]) => `${v} ${k}`).join(', ')}` : 'no subagents', r.backgroundWork ? `${r.backgroundWork} background task${r.backgroundWork === 1 ? '' : 's'} running` : '', ...subs].filter(Boolean).join('\n');
+  const n = r.agents && r.agents.count ? `<sup>${r.agents.count}</sup>` : '';
+  return `<span class="rp" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip.split('\n')[0])}">&#9889;${n}</span>`;
 }
 
 // Strip ANSI control sequences.
