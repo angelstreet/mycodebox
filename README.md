@@ -265,6 +265,23 @@ is in `manager.json` `managerSessions` (default `["manager"]`), the agent's own 
 the next append would push it past 5 MB. A freshly-started agent catches up via
 `GET /api/manager/events?since=<ISO>&limit=50` (newest last).
 
+**Wake shadow (`jev` on each event line).** Each line also carries Jev's opinion on whether that event needed
+waking the manager agent: `jev: { pick, confidence, source, ruleDefault, decision_id, ms }`, where `pick` is
+`ignore | rules_handle | wake_cheap | wake_opus` (the last two mean "wake"), `source` is `jev` (or `forced` when a
+hard floor decided, no call made) and `ruleDefault` is what the rules alone would have picked. No call is made when
+there is nothing to ask: `jev: { skipped: <why> }` (Jev not configured, daily budget, no OpenRouter credit, 402
+cool-down) or `jev: { error: <kind> }` (`timeout` after the 3 s cap, `network`, `http`, ...). The call happens before the
+line is appended and never delays an event by more than ~3 s or blocks other events. It is SHADOW: the rules still
+decide what is recorded and what is sent. Fifteen minutes later ghosty labels each event from its own records
+(`wake_outcome` in `stalls.jsonl`, once per event, restart-safe): `needed` if the manager agent acted on it (a send
+by anyone but the owner, an auto answer, a `/api/alert` naming the session) or the owner did (send, outcome, popup
+choice, deploy action), else `not_needed`; deploy / quota / disk / credits events count only an agent alert about them
+(plus the owner's deploy action), because ghosty records no other owner action there. The label is posted to the
+Jev decision as `{label, by: 'observed-15min', event_key}`, and `GET /api/manager/scorecard` gets a `wakeShadow`
+section per day (annotated / skipped / errors, Jev wake vs not, needed vs not, agreement, misses and false alarms
+by kind, the same for the rule default). Switch: `manager.json` `wakeShadow` (default `true`), or
+`POST /api/manager {"wakeShadow": false}`.
+
 **Owner labels.** In the manager panel every stop has 👎 (stopped for no reason) / 👍 (legit) buttons,
 a "wrong case" picker and an optional note; "unlabelled stops only" filters the list and a row's session
 name opens its card. `POST /api/manager/label {id, label: no_reason|legit|wrong_case, note?, correctCase?}`

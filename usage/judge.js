@@ -44,8 +44,8 @@ export function parseJudge(text) {
 }
 
 // One ledger row per judge call. res.error (failed call) -> tokens 0, cost 0, error set.
-function ledgerRow(r, res, p) {
-  const now = res.at || Date.now();
+function ledgerRow(r, res, p, at) {
+  const now = at ?? res.at ?? Date.now();   // the pass's clock (cfg.now), so injected time and the row agree
   const u = res.usage || {};
   const usage = { input: Number(u.prompt_tokens) || 0, output: Number(u.completion_tokens) || 0, cache_read: Number(u.cache_read_input_tokens) || 0, cache_write_5m: 0, cache_write_1h: 0 };
   const cost = res.error ? { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0 }
@@ -87,12 +87,12 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
         if (res.error) {
           log('[lfeval] judge call failed:', res.error);
           st.failed[r.id] = now;          // counted against the cap; retried after RETRY_AFTER_MS
-          ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, ms: res.ms, model: res.model, error: res.error, costEstimated: false }, null));
+          ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, ms: res.ms, model: res.model, error: res.error, costEstimated: false }, null, now));
           continue;
         }
         const p = parseJudge(res.content);
         // one usage-ledger row per call (success, unparsable or failed): the scorecard counts these under cost.judge
-        ledgerRows.push(ledgerRow(r, res, p));
+        ledgerRows.push(ledgerRow(r, res, p, now));
         delete st.failed[r.id];
         if (!p) { st.done[r.id] = 'unparsable'; continue; }
         events.push({ id: hash(`ev:judge:${r.id}`).slice(0, 36), type: 'score-create', timestamp: new Date(now).toISOString(), body: {
@@ -102,7 +102,7 @@ export function createJudge(cfg, { fetchFn = fetch, random = Math.random, log = 
       } catch (e) {
         log('[lfeval] judge call failed:', e.message);
         st.failed[r.id] = now;
-        ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, error: e.message }, null));
+        ledgerRows.push(ledgerRow(r, { usage: {}, cost: 0, error: e.message }, null, now));
       }
     }
     if (events.length) await postBatch(cfg, events, { fetchFn });
