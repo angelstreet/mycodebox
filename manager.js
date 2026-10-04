@@ -23,6 +23,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch } from './stall.js';
 import { actorOf } from './api-extras.js';
+import { jevAgreesOwner } from './public/ask-model.js';
 import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, reviewerUrl } from './triage.js';
 import { createPromptSource } from './prompts.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
@@ -386,30 +387,32 @@ export async function unlabelStall({ id } = {}) {
   return rec;
 }
 
-// Owner answered a stop from the popup (TASK-44 phase 11). {id, session, kind:'choice',
-// owner:<button id|'reply'>, ownerText?, ai:<button id|null>, aiConfidence?, jev?, agreeJev?}.
-// agreeAi: owner===ai (null when ai was null); agreeJev is the same mapping the popup uses
-// (continue/take_recommended agree when the owner picked the highlighted/positive answer;
-// ask_owner agrees when the owner picked anything else, or replied).
-export async function logOwnerChoice({ id, session, owner, ownerText, ai, aiConfidence, jev, jevProbabilities, agreeJev } = {}) {
+// Owner answered a stop from the popup (TASK-44 phase 11). {id, session, kind:<yesno|menu|either|open>,
+// owner:<button id|'reply'>, ownerText?, ai:<button id|null>, aiConfidence?, jev?:<choice>, jevProbabilities?}.
+// agreeAi: owner===ai (null when no AI pick was highlighted). agreeJev (public/ask-model.js jevAgreesOwner):
+// continue/take_recommended agree when the owner picked Yes or the highlighted option; ask_owner agrees when
+// the owner picked anything other than the AI highlight, or replied; null when Jev made no call.
+export async function logOwnerChoice({ id, session, kind, owner, ownerText, ai, aiConfidence, jev, jevProbabilities } = {}) {
   if (typeof id !== 'string' || !id) throw bad('id required');
   if (typeof session !== 'string' || !session) throw bad('session required');
   if (typeof owner !== 'string' || !owner) throw bad('owner required');
+  const aiId = typeof ai === 'string' && ai ? ai : null;
+  const jevChoice = typeof jev === 'string' && jev ? jev : null;
   const rec = {
     type: 'choice',
     at: new Date().toISOString(),
     id,
     session,
-    kind: 'choice',
-    owner,
-    ai: ai || null,
-    agreeAi: ai == null ? null : owner === ai,
-    jev: jev || null,
+    kind: typeof kind === 'string' && kind ? kind.slice(0, 20) : null,
+    owner: owner.slice(0, 80),
+    ai: aiId,
+    jev: jevChoice,
+    agreeAi: aiId == null ? null : owner === aiId,
+    agreeJev: jevAgreesOwner(jevChoice, owner, aiId),
   };
-  if (ownerText) rec.ownerText = String(ownerText).slice(0, 200);
+  if (owner === 'reply' && ownerText) rec.ownerText = String(ownerText).slice(0, 200);
   if (Number.isFinite(aiConfidence)) rec.aiConfidence = aiConfidence;
-  if (jevProbabilities) rec.jevProbabilities = jevProbabilities;
-  if (typeof agreeJev === 'boolean') rec.agreeJev = agreeJev;
+  if (jevProbabilities && typeof jevProbabilities === 'object') rec.jevProbabilities = jevProbabilities;
   await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
   return rec;
 }
@@ -659,7 +662,7 @@ export function observe(s) {
     if (w.hash !== h) return;   // the pane moved on while Jev was thinking: that stall is gone
     const ws = wouldSend(final);
     const confidence = final.source === 'jev' ? Number(jevOut?.probabilities?.[jevOut.choice] ?? jevOut?.confidence ?? 0) : 1;
-    w.stall = { ...final, would: ws };
+    w.stall = { ...final, would: ws, jev: jevOut?.choice ? { choice: jevOut.choice, probabilities: jevOut.probabilities || null } : null };
     await log({
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
       at: new Date(s.now).toISOString(), case: final.case, source: final.source, textSource: stall.textSource || 'pane', question: final.question,
@@ -713,7 +716,7 @@ export function stallOf(name) {
   const st = w.stall;
   return { case: st.case, source: st.source, would: st.would || null, question: st.question, id: w.pending?.id || null,
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
-    forbidden: st.forbidden || w.cls?.forbidden || null, draft: !!(w.cls?.draft) };
+    forbidden: st.forbidden || w.cls?.forbidden || null, draft: !!(w.cls?.draft), jev: st.jev || null };
 }
 
 // The AI reviewer's view for the UI: { id, state: pending|done|skipped|error, ai?, skipped?, error?, ... } for the current stop, or null.

@@ -288,9 +288,9 @@ the same `/api/send` + confirm-on-forbidden path as the dock. Desktop keys: `1..
 AI→button / jev line / jev-agreement mapping), `public/ask-popup.js`, CSS in `public/style.css`.
 
 **Owner choice log.** Every owner tap in the popup posts `POST /api/manager/choice {id, session,
-kind:'choice', owner:<button id|'reply'>, ownerText?, ai:<button id|null>, aiConfidence?, jev?,
-jevProbabilities?}` and the server appends `{type:'choice', at, id, session, kind, owner, ai,
-agreeAi:owner===ai (null when ai null), jev, ...agreeJev}` to `stalls.jsonl` (next to
+kind:<yesno|menu|either|open>, owner:<button id|'reply'>, ownerText? (Reply only, 200 chars), ai:<button id|null>,
+aiConfidence?, jev?:<choice>, jevProbabilities?}` and the server appends `{type:'choice', at, id, session, kind, owner, ai,
+agreeAi:owner===ai (null when ai null), jev, agreeJev (computed by the server)}` to `stalls.jsonl` (next to
 `/api/manager/triage`; same loopback / auth as its neighbours). Jev-agreement mapping (same on the
 client and the scorecard): `continue`/`take_recommended` agrees when the owner picked the highlighted
 (Yes, or the recommended option); `ask_owner` agrees when the owner picked anything other than the
@@ -308,8 +308,8 @@ line); the NEEDS YOU strip and the push body show a one-line preview. `manager.j
 proposal with `owner_needed:false`, confidence ≥ `aiMinConfidence` (0.85), no forbidden topic in the
 question or the reply, no draft, case in `aiAutoCases`, goes through the normal countdown / hourly
 cap / fire-time checks, and needs `autoSend` too). `AI_URL` overrides the derived reviewer URL.
-`npm run stall-report` prints the AI agreement; the manager panel shows the switch, today's calls /
-cost and the agreement. The server returns token counts, not a cost, so the logged cost is an
+In the swipe review the card shows the AI proposal; ✓ right / ✗ wrong posts `{type:'label', id, aiVerdict}` (does not label the
+stop itself); `npm run stall-report` prints the AI agreement; the manager panel shows the switch, today's calls / cost and the agreement. The server returns token counts, not a cost, so the logged cost is an
 estimate (`AI_USD_PER_MTOK_IN/OUT`, default 3 / 15).
 
 **Swipe review (the main way to label).** `/?review=1`, the topbar button (cards icon) or "Review stops (N)" in the

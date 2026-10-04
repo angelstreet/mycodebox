@@ -1332,121 +1332,72 @@ body[data-mode="card"] #health{ display:none; }
 .health.inbar{ margin-left:14px; }
 
 /* ------------ Answer popup (phase 11) ------------
-   One bottom-right card for every session that needs the owner. The card keeps only a tiny
-   "asks you" chip; everything that used to live on it (yes/no/menu buttons, the AI proposal,
-   Jev) lives here, with the AI's pick highlighted. */
+   One bottom-right card for every session that needs the owner (full-width bottom sheet on a phone).
+   Cards keep only a tiny "asks you" chip; the buttons, the AI pick (highlighted) and Jev live here. */
 #askPopup {
-  position: fixed;
-  right: 14px;
-  bottom: 14px;
-  width: min(380px, calc(100vw - 28px));
-  background: var(--bg-2);
-  color: var(--ink);
-  border: 1px solid var(--line-2);
-  border-radius: 10px;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.55);
-  z-index: 50;
-  font-size: 12px;
-  display: flex;
-  flex-direction: column;
+  position: fixed; right: 14px; bottom: 14px; z-index: 50;
+  width: min(400px, calc(100vw - 28px)); box-sizing: border-box;
+  background: var(--bg-2); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.55); font-size: 12px;
 }
 #askPopup.hidden { display: none; }
-#askPopup .ap-body { padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 8px; }
-#askPopup .ap-head {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 11px; color: var(--ink-2);
-}
+#askPopup .ap-body { padding: 10px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+#askPopup button { font: inherit; color: inherit; }
+#askPopup .ap-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-2); }
 #askPopup .ap-name {
-  font-weight: 700; color: var(--ink); flex: 1;
-  cursor: pointer; text-decoration: none;
+  background: none; border: 0; padding: 0; margin: 0; flex: 0 1 auto; min-width: 0;
+  font-weight: 700; font-size: 12px; color: var(--ink); cursor: pointer; text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-#askPopup .ap-prio {
-  font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px;
-  background: var(--bg-3); color: var(--ink-2); border: 1px solid var(--line-2);
-}
+#askPopup .ap-name:hover { text-decoration: underline; }
+#askPopup .ap-prio { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--ink-2); }
 #askPopup .ap-prio.P0 { color: var(--waiting); border-color: var(--waiting); }
 #askPopup .ap-prio.P1 { color: var(--accent); border-color: var(--accent); }
-#askPopup .ap-cnt { color: var(--ink-3); font-variant-numeric: tabular-nums; }
-#askPopup .ap-x {
-  background: transparent; border: 0; color: var(--ink-3); cursor: pointer;
-  padding: 2px 6px; font-size: 14px; line-height: 1;
+#askPopup .ap-cnt { margin-left: auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+#askPopup .ap-nav, #askPopup .ap-x {
+  background: transparent; border: 0; color: var(--ink-2); cursor: pointer;
+  min-width: 28px; min-height: 28px; font-size: 16px; line-height: 1; padding: 0;
 }
-#askPopup .ap-x:hover { color: var(--ink); }
-#askPopup .ap-q {
-  font-size: 12.5px; color: var(--ink); line-height: 1.4;
-  max-height: 4.4em; overflow: hidden; text-overflow: ellipsis;
+#askPopup .ap-nav:hover, #askPopup .ap-x:hover { color: var(--ink); }
+#askPopup .ap-q { font-size: 13px; color: var(--ink); line-height: 1.4; max-height: 6.2em; overflow: auto; overflow-wrap: anywhere; }
+#askPopup .ap-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+#askPopup .ap-b {
+  background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 7px 12px; min-height: 40px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; box-sizing: border-box;
 }
-#askPopup .ap-btns {
-  display: flex; flex-wrap: wrap; gap: 6px;
-}
-#askPopup .ap-btns button {
-  background: var(--bg-3); color: var(--ink);
-  border: 1px solid var(--line-2); border-radius: 8px;
-  padding: 7px 11px; font-size: 12px; cursor: pointer;
-  min-height: 36px;
-  display: inline-flex; align-items: center; gap: 4px;
-}
-#askPopup .ap-btns button.yn { font-weight: 700; }
-#askPopup .ap-btns button.op { flex: 1 1 100%; justify-content: flex-start; }
-#askPopup .ap-btns button.highlight {
-  background: var(--working); color: #04170b; border-color: transparent; font-weight: 700;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2);
-}
-#askPopup .ap-btns button.confirm {
-  border-color: var(--accent); color: var(--accent);
-}
-#askPopup .ap-btns button.highlight.confirm {
-  background: rgba(232,154,74,0.15); color: var(--accent); border-color: var(--accent);
-}
-#askPopup .ap-btns button:active { transform: translateY(1px); }
-#askPopup .ap-btns button.armed { animation: apArm 0.4s ease; }
-@keyframes apArm { 0% { background: var(--accent); color: #1a0d00; } 100% { } }
-#askPopup .ap-btns .star { font-size: 11px; opacity: 0.85; }
-#askPopup .ap-meta {
-  font-size: 11px; color: var(--ink-3); white-space: pre-wrap;
-  border-top: 1px dashed var(--line); padding-top: 6px;
-}
-#askPopup .ap-reply button {
-  background: transparent; color: var(--ink-2);
-  border: 0; padding: 0; font-size: 11px; cursor: pointer;
-  text-decoration: underline dotted;
-}
-#askPopup .ap-reply button:hover { color: var(--ink); }
-#askPopup .ap-close { display: none; }
+#askPopup .ap-b.yn { flex: 1 1 0; font-weight: 700; }
+#askPopup .ap-b.rep { flex: 1 1 0; color: var(--ink-2); border-style: dashed; }
+#askPopup .ap-b.op { flex: 1 1 100%; justify-content: flex-start; text-align: left; }
+#askPopup .ap-b.op .t { flex: 1; overflow-wrap: anywhere; }
+#askPopup .ap-btns.menu .ap-b.rep, #askPopup .ap-btns.either .ap-b.rep, #askPopup .ap-btns.open .ap-b.rep { flex: 1 1 100%; }
+#askPopup .ap-b .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+#askPopup .ap-b.hl { background: var(--working); color: #04170b; border-color: transparent; font-weight: 700; }
+#askPopup .ap-b.hl .n { color: #04170b; }
+#askPopup .ap-b .star { font-style: normal; font-size: 12px; }
+#askPopup .ap-b.cf { border-color: var(--accent); }
+#askPopup .ap-b.arm { background: var(--accent); color: #1a0d00; border-color: transparent; font-weight: 700; }
+#askPopup .ap-b:active { transform: translateY(1px); }
+#askPopup .ap-meta { font-size: 11px; color: var(--ink-3); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Slide-up animation when a brand-new stall id appears. Content updates in place otherwise. */
-#askPopup.ap-anim {
-  animation: apSlideIn 200ms ease-out;
-}
-@keyframes apSlideIn {
-  from { transform: translateY(20px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-@media (prefers-reduced-motion: reduce) {
-  #askPopup.ap-anim { animation: none; }
-}
+/* Slide-up only when a stop id never shown before appears; content updates in place otherwise. */
+#askPopup.ap-anim { animation: apSlideIn 200ms ease-out; }
+@keyframes apSlideIn { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #askPopup.ap-anim { animation: none; } }
 
-/* Minimised pill bottom-right: "N need you". Tapping it reopens the popup. */
+/* Minimised: a pill "N need you" bottom-right; tapping it reopens the popup. */
 #askPopupPill {
-  position: fixed; right: 14px; bottom: 14px;
-  background: var(--waiting); color: #1a0606;
-  border: 0; border-radius: 999px; padding: 8px 14px;
-  font-size: 12px; font-weight: 700; cursor: pointer;
+  position: fixed; right: 14px; bottom: 14px; z-index: 49;
+  background: var(--waiting); color: #1a0606; border: 0; border-radius: 999px;
+  padding: 9px 15px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
   box-shadow: 0 4px 14px rgba(0,0,0,0.5);
-  z-index: 49;
 }
 #askPopupPill.hidden { display: none; }
-#askPopupPill:hover { filter: brightness(1.08); }
 
-/* On a narrow viewport the popup becomes a full-width bottom sheet. */
 @media (max-width: 600px) {
-  #askPopup {
-    right: 0; bottom: 0;
-    width: 100vw; max-width: none;
-    border-radius: 12px 12px 0 0;
-  }
-  #askPopupPill { right: 8px; bottom: 8px; }
+  #askPopup { right: 0; bottom: 0; width: 100%; border-radius: 12px 12px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+  #askPopupPill { right: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); }
 }
 
 /* "asks you" chip on each card: a one-line button that opens the popup on that session. */

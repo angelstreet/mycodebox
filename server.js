@@ -18,7 +18,7 @@
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
 //   POST /api/manager/triage    → {id, action: sent|edited|dismissed} what the owner did with the AI reviewer's proposal (dismissed hides it)
-//   POST /api/manager/choice    → {id, session, kind:'choice', owner:<button|reply>, ownerText?, ai:<button|null>, aiConfidence?, jev?, jevProbabilities?, agreeJev?}
+//   POST /api/manager/choice    → {id, session, kind:<yesno|menu|either|open>, owner:<button|reply>, ownerText?, ai:<button|null>, aiConfidence?, jev?:<choice>, jevProbabilities?}
 //                                 the owner answered a stop from the popup (one-tap; records owner vs AI vs Jev agreement in stalls.jsonl for the scorecard)
 //   POST /api/manager/unlabel   → {id} withdraw the newest label of a stall (swipe page undo)
 //   GET  /api/credits           → OpenRouter credit from the VPT server's /server/ai/credits (cached 10 min; ok:false when the server is older)

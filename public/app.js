@@ -6,14 +6,14 @@
 import { icon, hydrateIcons } from '/icons.js';
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
-import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
+import { needsOwner } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
-import { mountAskPopup, showAskPopup } from '/ask-popup.js';
-import { jevAgreesOwner } from '/ask-model.js';
+import { mountAskPopup } from '/ask-popup.js';
+import { isOwnersTurn } from '/ask-model.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -801,7 +801,7 @@ function renderAttention() {
   els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}${line(s.name) ? `<span class="ai1">${escapeHtml(line(s.name))}</span>` : ''}</button>`).join('');
   for (const b of els.attention.querySelectorAll('button')) {
-    b.onclick = () => showAskPopup(b.dataset.session, () => popupApi);
+    b.onclick = () => popupApi ? popupApi.showFor(b.dataset.session) : openCard(b.dataset.session);
   }
 }
 
@@ -1220,7 +1220,7 @@ function wireTap(el, onSingle, onDouble) {
 // either-or / Reply…), the AI reviewer's recommended pick highlighted, and Jev's probabilities.
 // The cards keep only a tiny "asks you" chip; tapping it opens the popup on that session.
 // A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs a second tap.
-const askVisible = (n, st) => st && (st.state === 'waiting' || (st.state === 'done' && needsOwner(st)));
+const askVisible = (n, st) => isOwnersTurn(st);   // same predicate as the popup queue and the NEEDS YOU strip
 function syncAsk(cell, n) {
   const st = state.status[n];
   const ask = cell.querySelector('.ask');
@@ -1235,7 +1235,7 @@ function syncAsk(cell, n) {
   ask.innerHTML = `<button class="askchip" data-act="open-popup" aria-label="Open answer popup">
     asks you${aiStarred ? ' <i class="ai-star">\u2605</i>' : ''}
   </button>`;
-  ask.querySelector('.askchip').onclick = (e) => { e.stopPropagation(); showAskPopup(n, () => popupApi); };
+  ask.querySelector('.askchip').onclick = (e) => { e.stopPropagation(); if (popupApi) popupApi.showFor(n); };
 }
 function prefillDock(n, text) {
   focusSession(n);
@@ -1259,64 +1259,23 @@ function confirmThen(btn, needs, go) {
   if (!needs) { go(); return; }
   if (!btn) { go(); return; }
   if (btn.dataset.armed === '1') { clearTimeout(btn._arm); btn.dataset.armed = ''; btn.classList.remove('arm'); go(); return; }
-  btn.dataset.armed = '1'; btn.classList.add('arm'); btn._label = btn.textContent;
+  btn.dataset.armed = '1'; btn.classList.add('arm'); btn._label = btn.innerHTML;
   btn.textContent = 'tap again: sensitive topic';
-  btn._arm = setTimeout(() => { btn.dataset.armed = ''; btn.classList.remove('arm'); btn.textContent = btn._label; }, 4000);
+  btn._arm = setTimeout(() => { btn.dataset.armed = ''; btn.classList.remove('arm'); btn.innerHTML = btn._label; }, 4000);
 }
 
 // Popup wiring. The popup asks the page for these (state, openCard, askSend, prefillDock).
 let popupApi = null;
-function ownerChoicePost({ name, id, button, text, aiButtonId, aiConfidence, jevChoice, jevProbabilities }) {
-  const body = { id, session: name, kind: 'choice', owner: button };
-  if (text != null) body.ownerText = String(text).slice(0, 200);
-  if (aiButtonId) body.ai = aiButtonId; else body.ai = null;
+function ownerChoicePost({ name, id, kind, button, text, aiButtonId, aiConfidence, jev }) {
+  const body = { id, session: name, kind, owner: button, ai: aiButtonId || null };
+  if (button === 'reply' && text) body.ownerText = String(text).slice(0, 200);
   if (Number.isFinite(aiConfidence)) body.aiConfidence = aiConfidence;
-  if (jevChoice) body.jev = jevChoice;
-  if (jevProbabilities) body.jevProbabilities = jevProbabilities;
+  if (jev?.choice) body.jev = jev.choice;
+  if (jev?.probabilities) body.jevProbabilities = jev.probabilities;
   fetch('/api/manager/choice', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
 }
 function mountPopup() {
-  popupApi = mountAskPopup({
-    state,
-    openCard,
-    prefillDock,
-    askSend,
-    confirmThen,
-    postSend,
-    toastFn: toast,
-    sendKeyFn: (n, k) => sendKey(n, k),
-    onAnswer: (info) => {
-      // build the ai/jev context for the agreement record
-      const st = state.status[info.name];
-      const triage = st?.triage;
-      const ai = triage?.ai;
-      // We use ask-model's mapper: rebuild a quick button list to identify the AI button id.
-      let aiButtonId = null;
-      try {
-        const d = deriveButtons({ state: st.state, stall: st.stall, triage });
-        const mod = info.module;
-        // mapAiToButton is re-exported from ask-model
-        if (mod && mod.mapAiToButton && ai?.proposed_reply) {
-          aiButtonId = mod.mapAiToButton(d.buttons, d.kind, ai.proposed_reply);
-          if (aiButtonId && (d.buttons.find((b) => b.id === aiButtonId)?.confirm || ai.owner_needed)) aiButtonId = null;
-        }
-      } catch {}
-      const jevChoice = st?.stall?.jev?.choice || null;
-      const jevProbabilities = st?.stall?.jev?.probabilities || null;
-      const agreeJev = jevAgreesOwner(jevChoice, info.button, aiButtonId);
-      ownerChoicePost({
-        name: info.name,
-        id: info.id,
-        button: info.button,
-        text: info.text,
-        aiButtonId,
-        aiConfidence: ai?.confidence,
-        jevChoice,
-        jevProbabilities,
-        agreeJev,
-      });
-    },
-  });
+  popupApi = mountAskPopup({ state, openCard, prefillDock, askSend, confirmThen, onAnswer: ownerChoicePost });
 }
 
 function syncCell(cell) {
@@ -2644,6 +2603,7 @@ async function postSend(name, body) {
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   state.sentAt[name] = Date.now();
+  if (popupApi) popupApi.sent(name, body.keys);   // a send to a session answers its stop
 }
 
 // Returns the list of session names that failed.

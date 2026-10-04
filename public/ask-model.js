@@ -13,87 +13,93 @@
 //     path) and then POSTs /api/manager/choice for the agreement record.
 
 // ---------- queue ----------
-// Visible condition: a session that needs the owner's attention right now. Same set the NEEDS YOU
-// strip shows in public/app.js renderAttention().
+import { needsOwner } from './buttons.js';
+
+// Same predicate renderAttention() (NEEDS YOU strip) uses: a waiting session, or a finished one whose
+// closing question the AI reviewer sent to the owner (triage done / skipped / error, not pending).
 export function isOwnersTurn(st) {
   if (!st) return false;
   if (st.state === 'waiting') return true;
-  if (st.state === 'done' && /\?/.test(st.question || st.stall?.question || '')) return true;
-  return false;
+  return st.state === 'done' && needsOwner(st) && !!st.triage && st.triage.state !== 'pending';
 }
 
-// The id that ties together status flickers (a TUI repaint can flip state to 'working' and back
-// without the stall moving on). One popup item per id; the same id re-shows in place.
+// The id that ties status flickers together. stall.id (the manager's stop id) wins, then triage.id.
+// A waiting session the manager has not classified yet has neither: a weak id ('~' prefix) made of the
+// session + its wait reason stands in, and is adopted silently when the real id arrives (no re-animation).
 export function stallId(st) {
   return st?.stall?.id || st?.triage?.id || null;
 }
+const weakId = (name, st) => `~${name}|${String(st?.waitReason || st?.stall?.question || '').slice(0, 80)}`;
 
-// Build the queue from the current set of statuses, in the priority order the NEEDS YOU strip uses
-// (P0 first, then the rest). Each entry: { name, id, key, lastEligibleAt }. `key` is the dedupe key
-// the popup uses to decide "still the same item".
-export function buildQueue(statuses, prios, sessions, now = Date.now()) {
+const prioRank = (p) => ({ P0: 0, P1: 1, P2: 2 }[p] ?? 2);
+const byPrio = (a, b) => prioRank(a.priority) - prioRank(b.priority) || a.name.localeCompare(b.name);
+
+// The live queue: every session that needs the owner now, P0 first (the strip's order).
+export function buildQueue(statuses, prios, sessions) {
   const out = [];
   for (const s of sessions) {
     const st = statuses[s.name];
     if (!isOwnersTurn(st)) continue;
-    const id = stallId(st);
-    if (!id) continue;
-    const priority = st?.priority || prios[s.name] || 'P2';
-    out.push({ name: s.name, id, key: `${s.name}\x1f${id}`, lastEligibleAt: now, priority });
+    const real = stallId(st);
+    const id = real || weakId(s.name, st);
+    out.push({ name: s.name, id, weak: !real, key: `${s.name}\x1f${id}`, priority: st?.priority || prios?.[s.name] || 'P2' });
   }
-  out.sort((a, b) => prioRank(a.priority) - prioRank(b.priority) || a.name.localeCompare(b.name));
-  return out;
+  return out.sort(byPrio);
 }
-const prioRank = (p) => ({ P0: 0, P1: 1, P2: 2 }[p] ?? 2);
 
-// Reconcile the live queue against the popup's known items. Three rules:
-//   1. a fresh stall id not seen before appears -> slide-up animation runs (animate: true)
-//   2. an item stays in the queue while (a) the owner hasn't answered it AND (b) it has not been
-//      continuously something other than waiting/done-needs-owner for >= 8s AND (c) its stall id
-//      hasn't changed
-//   3. an item is removed when the owner answers it, OR its non-eligible streak reaches 8s, OR
-//      its stall id changed (then the new id is the next item, with a fresh animation)
-//
-// `now` is ms; the popup calls this on every status tick with the live statuses.
-// Returns { items, changed, animate } — items is the new ordered list (name+key), changed is true
-// when the order or contents shifted (the popup re-renders), animate is true when at least one new
-// id appeared (the popup runs the slide-up).
+export const KEEP_MS = 8000;
+
+// Reconcile the popup's items against the live statuses. An item stays until (a) the owner answered it
+// (a send to that session, from the popup or anywhere), (b) its session has been something other than
+// waiting / done-needs-owner continuously for >= KEEP_MS, or (c) its stall id changed (that is a new item).
+// prev = { items, answered: Map<key, ts> }. Returns { items, answered, changed, added } where `added` are
+// items whose key was not in prev (the popup animates only for ids it has never shown).
 export function reconcileQueue(prev, statuses, sessions, now = Date.now()) {
-  const live = buildQueue(statuses, Object.fromEntries(sessions.map((s) => [s.name, statuses[s.name]?.priority || 'P2'])), sessions, now);
+  const live = buildQueue(statuses, {}, sessions);
+  const answered = new Map(prev.answered || []);
+  for (const [k, t] of answered) if (now - t > 10 * 60 * 1000) answered.delete(k);
   const liveByKey = new Map(live.map((it) => [it.key, it]));
-  const prevByKey = new Map((prev.items || []).map((it) => [it.key, it]));
-
+  const liveByName = new Map(live.map((it) => [it.name, it]));
   const next = [];
-  let changed = false;
-  let animate = false;
-  const keep = new Set();
+  const kept = new Set();
   for (const it of prev.items || []) {
     const cur = liveByKey.get(it.key);
-    if (cur) {
-      // still eligible, same id — keep it in its current position; clear any "non-eligible since" timer
-      next.push({ ...it, lastEligibleAt: cur.lastEligibleAt, priority: it.priority });
-      keep.add(it.key);
-    } else if (it.nonEligibleSince) {
-      // we saw it go non-eligible already (a working flicker): keep it for up to 8 s
-      const elapsed = now - it.nonEligibleSince;
-      if (elapsed < 8000) {
-        next.push({ ...it });
-        keep.add(it.key);
-      } else {
-        changed = true;
-      }
+    const byName = liveByName.get(it.name);
+    if (cur && !answered.has(cur.key)) {
+      next.push({ ...it, priority: cur.priority, nonEligibleSince: null }); kept.add(cur.key);
+    } else if (cur) {
+      // answered: stays gone while the same stop is still on screen
+    } else if (it.weak && byName && !byName.weak && !answered.has(byName.key)) {
+      next.push({ ...it, id: byName.id, key: byName.key, weak: false, priority: byName.priority, nonEligibleSince: null }); kept.add(byName.key);   // weak id upgraded in place
+    } else if (byName) {
+      // eligible again but under another stall id: c) it is a new item, this one is gone
     } else {
-      // first tick we miss it: drop immediately (the stall id changed -> new item)
-      changed = true;
+      const st = statuses[it.name];
+      const sid = stallId(st);
+      if (!st || (sid && sid !== it.id && !it.weak)) continue;   // session gone, or a different stop took over
+      const since = it.nonEligibleSince ?? now;
+      if (now - since < KEEP_MS) next.push({ ...it, nonEligibleSince: since });
     }
   }
-  // append brand-new ids at the tail, then re-sort by priority (P0 first), then name
+  const added = [];
   for (const it of live) {
-    if (!keep.has(it.key)) { next.push({ ...it, nonEligibleSince: null }); changed = true; animate = true; }
+    if (kept.has(it.key) || answered.has(it.key)) continue;
+    const item = { ...it, nonEligibleSince: null };
+    next.push(item); added.push(item);
   }
-  next.sort((a, b) => prioRank(a.priority) - prioRank(b.priority) || a.name.localeCompare(b.name));
-  // re-detect "same stall id, different session" as a fresh item: the byKey map catches renames
-  return { items: next, changed, animate };
+  next.sort(byPrio);
+  const sig = (l) => l.map((x) => x.key).join('|');
+  return { items: next, answered, changed: sig(next) !== sig(prev.items || []), added };
+}
+
+// The owner answered this item (or sent to its session): it leaves the queue until its stop id changes.
+export function markAnswered(prev, name, now = Date.now()) {
+  const answered = new Map(prev.answered || []);
+  const items = [];
+  for (const it of prev.items || []) {
+    if (it.name === name) answered.set(it.key, now); else items.push(it);
+  }
+  return { items, answered };
 }
 
 // ---------- AI -> button mapping ----------
@@ -150,7 +156,7 @@ export function mapAiToButton(buttonList, kind, proposedReply) {
 // not on a forbidden topic) and the AI didn't say the owner must answer.
 export function shouldHighlight(button, triage) {
   if (!button || button.confirm) return false;
-  if (triage?.ai?.owner_needed) return false;
+  if (triage?.ai?.owner_needed || triage?.ai?.forbidden) return false;
   return true;
 }
 
@@ -182,9 +188,7 @@ export function jevAgreesOwner(jevChoice, ownerButtonId, aiButtonId) {
   }
   if (jevChoice === 'ask_owner') {
     // agree when the owner did NOT just rubber-stamp the AI: they picked something else OR replied.
-    if (ownerButtonId === 'reply') return true;
-    if (aiButtonId && ownerButtonId !== aiButtonId) return true;
-    return false;
+    return ownerButtonId === 'reply' || ownerButtonId !== aiButtonId;
   }
   return null;
 }

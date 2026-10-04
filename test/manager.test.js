@@ -115,17 +115,18 @@ test('logOwnerChoice: records the popup choice and validates required fields', a
   await assert.rejects(() => m.logOwnerChoice({ id, owner: 'yes' }), /session required/);
   // happy path: records the choice
   const rec = await m.logOwnerChoice({
-    id, session: 's1', kind: 'choice', owner: 'yes', ai: 'yes', aiConfidence: 0.92,
+    id, session: 's1', kind: 'yesno', owner: 'yes', ai: 'yes', aiConfidence: 0.92,
     jev: 'continue', jevProbabilities: { continue: 0.7, take_recommended: 0.2, ask_owner: 0.1 },
-    agreeJev: true, ownerText: 'Yes, continue with the API change',
+    ownerText: 'Yes, continue with the API change',
   });
+  assert.equal(rec.kind, 'yesno');
+  assert.equal(rec.ownerText, undefined, 'ownerText is kept only for a Reply');
   assert.equal(rec.type, 'choice');
   assert.equal(rec.owner, 'yes');
   assert.equal(rec.ai, 'yes');
   assert.equal(rec.agreeAi, true);
   assert.equal(rec.jev, 'continue');
-  assert.equal(rec.agreeJev, true);
-  assert.equal(rec.ownerText.length <= 200, true);
+  assert.equal(rec.agreeJev, true);   // jev said continue, owner picked Yes
   // the record was appended to the log
   const all = records();
   const found = all.find((r) => r.type === 'choice' && r.id === id && r.session === 's1');
@@ -143,4 +144,13 @@ test('logOwnerChoice: ownerText is capped at 200 characters', async () => {
   const big = 'x'.repeat(500);
   const rec = await m.logOwnerChoice({ id, session: 's1', owner: 'reply', ownerText: big, ai: null });
   assert.ok(rec.ownerText.length <= 200);
+});
+
+test('logOwnerChoice: agreeAi null without an AI pick; agreeJev for ask_owner = not the AI highlight', async () => {
+  const a = await m.logOwnerChoice({ id: 'x1', session: 's1', kind: 'menu', owner: 'o1', ai: null, jev: 'ask_owner' });
+  assert.equal(a.agreeAi, null); assert.equal(a.ai, null); assert.equal(a.agreeJev, true);
+  const b = await m.logOwnerChoice({ id: 'x2', session: 's1', kind: 'menu', owner: 'o2', ai: 'o2', jev: 'ask_owner' });
+  assert.equal(b.agreeAi, true); assert.equal(b.agreeJev, false);
+  const c = await m.logOwnerChoice({ id: 'x3', session: 's1', kind: 'yesno', owner: 'no', ai: 'yes', jev: null });
+  assert.equal(c.agreeAi, false); assert.equal(c.agreeJev, null);
 });
