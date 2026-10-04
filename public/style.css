@@ -1287,3 +1287,7 @@ tr.pf-hit{ outline-offset:-2px; }
 .nsproj .uci .rec{ color:var(--accent); font-style:normal; font-size:9px; }
 /* cost lives in Usage: the per-row chip only stays as a warning when the session is a cost outlier */
 .uc:not(.out){ display:none !important; }
+
+/* usage sheet keeps one height on every tab (no jump when switching Today / 14 days / Jev) */
+.sheet.usage{ height:min(86dvh, 780px); }
+.tk{ font-variant-numeric:tabular-nums; font-weight:600; }

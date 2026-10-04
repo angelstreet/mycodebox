@@ -2214,7 +2214,9 @@ function quotaOfAgent(a) {
 }
 // agent of a model name (perModel is global, but every model belongs to exactly one agent)
 const modelAgent = (m) => (/^claude/i.test(m) ? 'claude' : /^gpt|codex|^o\d/i.test(m) ? 'codex' : /minimax|^m\d/i.test(m) ? 'minimax' : 'other');
+const ioLine = (e) => `in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)}`;
 const tokIO = (e) => `${fmtTok(e.total ?? e.tokens)} tok &middot; in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)}`;
+const byTok = (x, y) => ((y.total ?? y.tokens ?? 0) - (x.total ?? x.tokens ?? 0));
 const sumCost = (list) => (list.length && list.every((r) => r.cost == null) ? null : list.reduce((s, r) => s + (r.cost || 0), 0));
 function groupRows(rows, key) {
   const m = new Map();
@@ -2245,7 +2247,7 @@ function quotaPaceHtml(q, onlyAgent) {
   const plans = (q?.plans || []).filter((p) => !onlyAgent || p.plan === onlyAgent);
   if (!plans.length) return '<div class="dim">no quota reading yet</div>';
   return plans.map((p) => {
-    const head = `<div class="u1"><i class="adot ${escapeHtml(p.plan)}"></i><b>${escapeHtml(p.label || p.plan)}</b><span class="grow"></span><span class="dim">${escapeHtml(p.price || '')}</span></div>`;
+    const head = `<div class="u1"><i class="adot ${escapeHtml(p.plan)}"></i><b>${escapeHtml(p.label || p.plan)}</b></div>`;
     if (!p.windows?.length) return `<div class="urow">${head}<div class="u2 uo">${escapeHtml(/login|expired/i.test(p.error || '') ? 'login expired, open mcode once to refresh' : (p.error || 'no reading yet'))}</div></div>`;
     const rows = p.windows.map((w) => {
       if (w.usedPercent == null) return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb na"></span><span class="qt dim">${w.unlimited ? 'unlimited' : 'unknown'}</span></div>`;
@@ -2279,8 +2281,7 @@ const chip = (attr, val, cur, label) => `<button class="mchip${val === cur ? ' o
 function overTimeHtml(u, tab, ui) {
   const dm = dimData(u, ui.dim);
   if (!dm) return '<div class="sheet-empty">model split needs the updated ghosty-usage tailer (restart the unit)</div>';
-  const metric = ui.metric, val = (e) => (metric === 'cost' ? (e.cost || 0) : (e.total || 0));
-  const fmtV = (v) => (metric === 'cost' ? fmtUsd(v) : fmtTok(v));
+  const val = (e) => e.total || 0, fmtV = fmtTok;   // tokens only: cost lives in Jev (real money) and the subscriptions
   const today = tab === 'today';
   const days = today ? lastDays(1) : lastDays(ui.range);
   const totals = new Map();
@@ -2311,8 +2312,7 @@ function overTimeHtml(u, tab, ui) {
   const ss = segsOf(sel), st = ss.reduce((s, x) => s + x.v, 0);
   const panel = `<div class="opanel"><div class="ophead"><b>${new Date(sel + 'T12:00:00Z').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}</b><span class="grow"></span><b>${fmtV(st)}</b></div>${
     ss.map((s) => `<div class="cleg"><i style="background:${colorOf(s.k)}"></i><span>${escapeHtml(nameOf(s.k))}</span><span class="grow"></span><span class="dim">${st ? Math.round((s.v / st) * 100) : 0}%</span><b>${fmtV(s.v)}</b></div>`).join('') || '<div class="dim">no usage that day</div>'}</div>`;
-  const ctrl = `<div class="octrl"><span class="dim">split</span>${['model', 'project', 'agent'].map((x) => chip('dim', x, ui.dim, x)).join('')}</div>
-    <div class="octrl"><span class="dim">show</span>${chip('metric', 'total', metric, 'tokens')}${chip('metric', 'cost', metric, 'cost')}${today ? '' : `<span class="grow"></span>${chip('range', '7', String(ui.range), '7d')}${chip('range', '14', String(ui.range), '14d')}`}</div>`;
+  const ctrl = `<div class="octrl">${['model', 'project', 'agent'].map((x) => chip('dim', x, ui.dim, x)).join('')}${today ? '' : `<span class="grow"></span>${chip('range', '7', String(ui.range), '7d')}${chip('range', '14', String(ui.range), '14d')}`}</div>`;
   const legend = `<div class="clegend">${[...top, ...(ranked.length > top.length ? [OTHERS] : [])].map((k) => `<span class="lg"><i style="background:${colorOf(k)}"></i>${escapeHtml(nameOf(k))}</span>`).join('')}</div>`;
   return `<div class="ot">${ctrl}<div class="ohead"><b>${fmtV([...totals.values()].reduce((s, v) => s + v, 0))}</b><span class="dim">${today ? 'today (UTC)' : `last ${days.length} days`}</span></div>${chart}${legend}${panel}</div>`;
 }
@@ -2337,16 +2337,13 @@ function trendHtml(u, tab, ui) {
   return `<div class="ot">${ctrl}${rows.map((r) => `<div class="trow"><i class="adot ${escapeHtml(r.agent)}"></i><div class="tn"><b>${escapeHtml(r.m)}</b><div class="u2">${escapeHtml(PROVIDER[r.agent] || '')}</div></div>${sparkSvg(r.series, r.delta != null && r.delta < 0 ? '#8a8d96' : '#6ed1c0')}<div class="tv"><b>${fmtV(r.total)}</b><div class="u2 ${r.delta == null ? '' : r.delta >= 0 ? 'up' : 'dn'}">${r.delta == null ? (r.cur > 0 ? 'new' : '') : `${r.delta >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(r.delta))}%`}</div></div></div>`).join('') || '<div class="dim">no usage</div>'}</div>`;
 }
 // headline for Overview: cost, change vs the previous period, and what that is worth against the flat subscriptions
-const SUB_EUR_MONTH = 260, EUR_USD = 1.08;   // Claude Max 200 + ChatGPT Plus 20 + MiniMax 40
 function valueHtml(u, tab) {
-  const today = tab === 'today', cost = (d) => (u.perDay?.[d]?.cost) || 0;
-  const days = lastDays(14), sum = (ds) => ds.reduce((s, d) => s + cost(d), 0);
-  const cur = today ? cost(days[13]) : sum(days.slice(7)), prev = today ? cost(days[12]) : sum(days.slice(0, 7));
+  const today = tab === 'today', tk = (d) => (u.perDay?.[d]?.total) || 0;
+  const days = lastDays(14), sum = (ds) => ds.reduce((s, d) => s + tk(d), 0);
+  const cur = today ? tk(days[13]) : sum(days.slice(7)), prev = today ? tk(days[12]) : sum(days.slice(0, 7));
   const diff = cur - prev;
-  const delta = `<span class="${diff >= 0 ? 'up' : 'dn'}">${diff >= 0 ? '▲' : '▼'} ${escapeHtml(fmtUsd(Math.abs(diff)))}</span> <span class="dim">vs ${today ? 'yesterday' : 'the previous 7 days'}</span>`;
-  const sub = SUB_EUR_MONTH * EUR_USD, share = cur / (today ? sub : (sub * 7) / 30);
-  const worth = today ? `≈ ${Math.round(share * 100)}% of one month of subscriptions (&euro;${SUB_EUR_MONTH})` : `≈ ${share.toFixed(1)}&times; what the subscriptions cost for 7 days`;
-  return `<div class="uval"><div class="u1"><b class="big">${usd(cur)}</b><span class="dim">${today ? 'today' : 'last 7 days'} (API-equivalent)</span></div><div class="u2">${delta}</div><div class="u2">${worth}</div></div>`;
+  const delta = prev || cur ? `<span class="${diff >= 0 ? 'up' : 'dn'}">${diff >= 0 ? '\u25B2' : '\u25BC'} ${escapeHtml(fmtTok(Math.abs(diff)))}</span> <span class="dim">vs ${today ? 'yesterday' : 'the previous 7 days'}</span>` : '';
+  return `<div class="uval"><div class="u1"><b class="big">${fmtTok(cur)}</b><span class="dim">tokens ${today ? 'today' : 'in the last 7 days'}</span></div><div class="u2">${delta}</div></div>`;
 }
 // ui = { f: {agent, project, q}, open: {agent, project, session, day}, openAgents: Set }
 function usageHtml(u, tab, ui) {
@@ -2356,46 +2353,46 @@ function usageHtml(u, tab, ui) {
   const src = today ? u.today : u;
   const { agent: fa, project: fp, q } = ui.f;
   const filtered = !!(fa || fp || q);
-  const allRows = sessionRows(u, tab);
+  const allRows = sessionRows(u, tab).sort((x, y) => (!!y.outlier - !!x.outlier) || (y.tokens - x.tokens));
   const rows = allRows.filter((r) => (!fa || r.agent === fa) && (!fp || r.project === fp) && (!q || r.session === q));
   const live = (name) => !!state.status[name];
   const chev = (on) => `<i class="uch${on ? ' on' : ''}"></i>`;
-  const sec = (key, title, count, cost, inner) => `<div class="usec-wrap"><button class="usec" data-sec="${key}">${chev(ui.open[key])}<span>${title}</span><span class="dim">${count}</span><span class="grow"></span>${cost === undefined ? '' : usd(cost)}</button>${ui.open[key] ? `<div class="usec-body">${inner}</div>` : ''}</div>`;
+  const sec = (key, title, count, right, inner) => `<div class="usec-wrap"><button class="usec" data-sec="${key}">${chev(ui.open[key])}<span>${title}</span><span class="dim">${count}</span><span class="grow"></span>${right === undefined ? '' : right}</button>${ui.open[key] ? `<div class="usec-body">${inner}</div>` : ''}</div>`;
 
   // totals: the summary's own, or the sum of the filtered sessions
   let total = today ? u.today.total : u.total;
   if (filtered) {
     total = { cost: sumCost(rows) ?? 0, unpriced: rows.every((r) => r.cost == null) && rows.length ? 1 : 0, turns: rows.reduce((s, r) => s + r.turns, 0),
       input: rows.reduce((s, r) => s + r.in, 0), output: rows.reduce((s, r) => s + r.out, 0),
+      total: rows.reduce((s, r) => s + r.tokens, 0),
       cache_read: rows.reduce((s, r) => s + r.cr, 0), cache_creation: rows.reduce((s, r) => s + r.cw, 0) };
   }
   const totCost = total.cost === 0 && total.unpriced > 0 ? null : total.cost;
-  const totalHtml = `<div class="utot"><span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns${!filtered && total.unpriced ? ` &middot; ${total.unpriced} unpriced` : ''}</span><br>${tokLine(total)}</div>`;
+  const totalHtml = `<div class="utot"><span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns</span><br>${tokLine(total)}</div>`;
 
   // agents (with their models nested); derived from the filtered sessions when a project/session filter is on
   const narrowed = !!(fp || q);
-  let agents = narrowed ? groupRows(rows, 'agent') : topEntries(src.perAgent).filter((a) => !fa || a.name === fa);
+  let agents = (narrowed ? groupRows(rows, 'agent') : topEntries(src.perAgent).filter((a) => !fa || a.name === fa)).sort(byTok);
   const modelsOf = (a) => (narrowed
     ? a.models.map((m) => ({ name: m, nocost: true }))
-    : topEntries(src.perModel).filter((m) => (m.agent || modelAgent(m.name)) === a.name));
+    : topEntries(src.perModel).filter((m) => (m.agent || modelAgent(m.name)) === a.name).sort(byTok));
   const agentHtml = agents.map((a) => {
     const on = ui.openAgents.has(a.name), ms = modelsOf(a);
-    return `<div class="urow ag"><div class="u1 tog" data-agent="${escapeHtml(a.name)}">${chev(on)}<i class="adot ${escapeHtml(a.name)}"></i><b>${escapeHtml(a.name)}</b><span class="dim">${ms.length} model${ms.length === 1 ? '' : 's'}</span><span class="grow"></span>${usd(a.cost)}</div>
-      <div class="u2">${escapeHtml(SUBSCRIPTION[a.name] || 'subscription ?')} &middot; ${quotaOfAgent(a.name)}</div>
+    return `<div class="urow ag"><div class="u1 tog" data-agent="${escapeHtml(a.name)}">${chev(on)}<i class="adot ${escapeHtml(a.name)}"></i><b>${escapeHtml(a.name)}</b><span class="dim">${ms.length} model${ms.length === 1 ? '' : 's'}</span><span class="grow"></span><b class="tk">${fmtTok(a.total)}</b></div>
+      <div class="u2">${escapeHtml((SUBSCRIPTION[a.name] || 'subscription ?').replace(/\s*\d+\s*EUR\/month/i, ''))} &middot; ${quotaOfAgent(a.name)}</div>
       <div class="u2">${tokLine(a)}</div>
-      ${on ? `<div class="umodels">${ms.map((m) => `<div class="urow sub"><div class="u1"><b>${escapeHtml(m.name)}</b><span class="grow"></span>${m.nocost ? '' : usd(m.cost)}</div>${m.nocost ? '' : `<div class="u2">${tokIO(m)}</div>`}</div>`).join('') || '<div class="dim">none</div>'}</div>` : ''}</div>`;
+      ${on ? `<div class="umodels">${ms.map((m) => `<div class="urow sub"><div class="u1"><b>${escapeHtml(m.name)}</b><span class="grow"></span>${m.nocost ? '' : `<b class="tk">${fmtTok(m.total)}</b>`}</div>${m.nocost ? '' : `<div class="u2">${ioLine(m)}</div>`}</div>`).join('') || '<div class="dim">none</div>'}</div>` : ''}</div>`;
   }).join('') || '<div class="dim">none</div>';
 
-  const projects = (fa || q ? groupRows(rows, 'project') : topEntries(src.perProject, 10)).filter((p) => !fp || p.name === fp);
-  const projHtml = projects.map((p) => `<div class="urow"><div class="u1"><b>${escapeHtml(p.name)}</b><span class="grow"></span>${usd(p.cost)}</div><div class="u2">${tokIO(p)}</div></div>`).join('') || '<div class="dim">none</div>';
+  const projects = (fa || q ? groupRows(rows, 'project') : topEntries(src.perProject)).filter((p) => !fp || p.name === fp).sort(byTok).slice(0, 12);
+  const projHtml = projects.map((p) => `<div class="urow"><div class="u1"><b>${escapeHtml(p.name)}</b><span class="grow"></span><b class="tk">${fmtTok(p.total)}</b></div><div class="u2">${ioLine(p)}</div></div>`).join('') || '<div class="dim">none</div>';
 
   const shown = rows.slice(0, 40);
   const sessHtml = shown.map((r) => `<div class="urow${live(r.session) ? ' go' : ''}${r.outlier ? ' out' : ''}" ${live(r.session) ? `data-open="${escapeHtml(r.session)}"` : ''}>
-      <div class="u1">${r.outlier ? '<span class="uw" title="outlier">&#9888;</span>' : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span>${usd(r.cost)}</div>
-      <div class="u2">${escapeHtml(r.project)} &middot; ${tokIO({ tokens: r.tokens, in: r.in, out: r.out })} &middot; ${r.rate != null ? `${escapeHtml(fmtUsd(r.rate))}/h` : '&mdash;/h'}</div>
-      ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(r.outlier)}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
+      <div class="u1">${r.outlier ? '<span class="uw" title="outlier">&#9888;</span>' : ''}<i class="adot ${escapeHtml(r.agent)}"></i><b>${escapeHtml(r.session)}</b><span class="grow"></span><b class="tk">${fmtTok(r.tokens)}</b></div>
+      <div class="u2">${escapeHtml(r.project)} &middot; ${ioLine({ in: r.in, out: r.out })}</div>
+      ${r.outlier ? `<div class="u2 uo">outlier: ${escapeHtml(String(r.outlier).split(':')[0])}</div>` : ''}</div>`).join('') || '<div class="dim">no session matches</div>';
 
-  const days = today ? '' : sec('day', 'Per day', '', undefined, `<div class="ubars">${dayBars(u, u.windowDays).map((d) => `<div class="ubar"><span class="ud">${d.day.slice(5)}</span><span class="uw2"><i style="width:${Math.round(d.frac * 100)}%"></i></span><span class="uv">${d.cost == null ? `${fmtTok(d.total)} tok` : usd(d.cost)}</span></div>`).join('')}</div>`);
   if (ui.view === 'time') return overTimeHtml(u, tab, ui);
   if (ui.view === 'trend') return trendHtml(u, tab, ui);
   if (ui.view === 'sessions') {
@@ -2405,7 +2402,7 @@ function usageHtml(u, tab, ui) {
   return valueHtml(u, tab)
     + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa))
     + sec('agent', 'Agents &amp; models', agents.length, undefined, agentHtml)
-    + sec('total', 'Total', '', totCost, totalHtml);
+    + sec('total', 'Total', '', `<b class="tk">${fmtTok(total.total)}</b>`, totalHtml);
 }
 function openUsage() {
   openSheet('Usage · API-equivalent', ({ body, foot, close }) => {
