@@ -2326,8 +2326,7 @@ function sparkSvg(vals, color) {
 function trendHtml(u, tab, ui) {
   const dm = u.perDayModel;
   if (!dm) return '<div class="sheet-empty">needs the updated ghosty-usage tailer (restart the unit)</div>';
-  const metric = ui.metric, val = (e) => (metric === 'cost' ? (e.cost || 0) : (e.total || 0));
-  const fmtV = (v) => (metric === 'cost' ? fmtUsd(v) : fmtTok(v));
+  const val = (e) => e.total || 0, fmtV = fmtTok;   // trending is by tokens only, never price (unpriced models count too)
   const days = lastDays(14), models = new Set();
   for (const d of days) for (const m of Object.keys(dm[d] || {})) models.add(m);
   const rows = [...models].map((m) => {
@@ -2336,7 +2335,7 @@ function trendHtml(u, tab, ui) {
     const agent = modelAgent(m);
     return { m, agent, series, total: sum(series), cur, prev, delta: prev > 0 ? ((cur - prev) / prev) * 100 : null };
   }).filter((r) => r.total > 0).sort((x, y) => y.total - x.total);
-  const ctrl = `<div class="octrl"><span class="dim">show</span>${chip('metric', 'total', metric, 'tokens')}${chip('metric', 'cost', metric, 'cost')}<span class="grow"></span><span class="dim">last 7d vs the 7d before</span></div>`;
+  const ctrl = '<div class="octrl"><span class="dim">tokens &middot; last 7 days vs the 7 before</span></div>';
   return `<div class="ot">${ctrl}${rows.map((r) => `<div class="trow"><i class="adot ${escapeHtml(r.agent)}"></i><div class="tn"><b>${escapeHtml(r.m)}</b><div class="u2">${escapeHtml(PROVIDER[r.agent] || '')}</div></div>${sparkSvg(r.series, r.delta != null && r.delta < 0 ? '#8a8d96' : '#6ed1c0')}<div class="tv"><b>${fmtV(r.total)}</b><div class="u2 ${r.delta == null ? '' : r.delta >= 0 ? 'up' : 'dn'}">${r.delta == null ? (r.cur > 0 ? 'new' : '') : `${r.delta >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(r.delta))}%`}</div></div></div>`).join('') || '<div class="dim">no usage</div>'}</div>`;
 }
 // headline for Overview: cost, change vs the previous period, and what that is worth against the flat subscriptions
