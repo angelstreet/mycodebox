@@ -939,14 +939,13 @@ async function killSession(name, confirm) {
 async function setSessionMeta(session, body) {
   const by = actorOf(body);
   if (!(await sessionExists(session))) throw httpError(404, 'no such session');
+  // Pause / resume type into the pane: refuse BEFORE touching any state (paused flag, hold) so a
+  // refused non-owner call leaves nothing half-applied. Owner is exempt inside assertAgentPane.
+  if (typeof body?.paused === 'boolean') await assertAgentPane(session, by);
   sessionMeta.sync([session]);
   const changed = sessionMeta.set(session, body || {});
   if (changed.priority) logEvent({ type: 'priority', session, by, priority: changed.priority });
   const released = body?.paused === false && releaseHold(session);   // Resume also clears the manager's quota hold
-  // The sendKey / sendKeys below type into a pane; for any non-owner actor the pane must
-  // be running a live agent (otherwise we'd be sending into a bash / sleep shell). Owner
-  // is exempt — assertAgentPane returns immediately for DEFAULT_ACTOR.
-  if (changed.paused === true || changed.paused === false || released) await assertAgentPane(session, by);
   if (changed.paused === true) {
     cancelAuto(session, 'paused by owner');
     logEvent({ type: 'pause', session, by });
