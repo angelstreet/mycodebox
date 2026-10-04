@@ -18,6 +18,7 @@ import {
   buildReport,
   dayKey,
   alertsNaming,
+  formatReport,
 } from '../scripts/mm-manager-compare.js';
 
 const DAY_MS = 86400000;
@@ -226,4 +227,47 @@ test('buildReport: batch token usage copied on each event of a batch is counted 
   ];
   const [d] = buildReport({ decisions, events: [e1, e2], stallRecs: [], ledger: [], managerCfg: {} });
   assert.deepEqual(d.mmTokens, tok);
+});
+
+// ---- pretty printer (text output) ----
+test('formatReport: prints all five verdicts and lists extra / differs / miss / risky keys', () => {
+  // agree: real=answer, mm=answer
+  // extra: real=none, mm=answer
+  // differs: real=owner, mm=answer
+  // miss: real=answer, mm=none
+  // risky: real=none, mm=answer with a forbidden topic in the stall
+  const T = new Date('2026-10-04T12:00:00Z').getTime();
+  const at = (s) => new Date(T + s).toISOString();
+  const evs = [
+      { at: at(0), key: 's-ok:asks', session: 's-ok', kind: 'asks' },
+      { at: at(60_000), key: 's-extra:asks', session: 's-extra', kind: 'asks' },
+      { at: at(120_000), key: 's-diff:asks', session: 's-diff', kind: 'asks' },
+      { at: at(180_000), key: 's-miss:asks', session: 's-miss', kind: 'asks' },
+      { at: at(240_000), key: 's-risky:asks', session: 's-risky', kind: 'asks' },
+    ];
+  const decisions = [
+    { key: 's-ok:asks', at: at(0), proposal: 'answer', reply: 'Yes, continue.' },
+    { key: 's-extra:asks', at: at(60_000), proposal: 'answer', reply: 'hi' },                         // real none -> extra
+    { key: 's-diff:asks', at: at(120_000), proposal: 'answer', reply: 'take postgres' },              // real owner -> differs
+    { key: 's-miss:asks', at: at(180_000), proposal: 'none' },                                         // real answer -> owns
+    { key: 's-risky:asks', at: at(240_000), proposal: 'answer', reply: 'deploying' },                 // forbidden topic in stall -> risky
+  ];
+  const stallRecs = [
+    { type: 'send', at: at(70_000), session: 's-ok', by: 'manager-agent' },   // real answer for s-ok
+    { type: 'send', at: at(130_000), session: 's-diff', by: 'owner' },         // real owner for s-diff (owner answered differently)
+    { type: 'send', at: at(190_000), session: 's-miss', by: 'manager-agent' },  // real answer for s-miss
+    { type: 'stall', at: at(240_000), session: 's-risky', excerpt: 'please deploy now' },
+  ];
+  const report = buildReport({ decisions, events: evs, stallRecs, ledger: [], managerCfg: {} });
+  const day = report[0];
+  assert.equal(day.agree, 1); assert.equal(day.extra, 1); assert.equal(day.differs, 1); assert.equal(day.miss, 1); assert.equal(day.risky, 1);
+
+  const text = formatReport(report);
+  // All five verdicts on the same line
+  assert.match(text, /agreement: agree=1 miss=1 extra=1 differs=1 risky=1/);
+  // Keys listed for each (miss / extra / differs / risky)
+  assert.match(text, /miss keys: s-miss:asks/);
+  assert.match(text, /extra keys: s-extra:asks/);
+  assert.match(text, /differs keys: s-diff:asks/);
+  assert.match(text, /risky keys: s-risky:asks/);
 });
