@@ -21,6 +21,7 @@ import { mkdir, stat, rename, appendFile, readFile } from 'node:fs/promises';
 
 export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 export const FILE_NAME = 'manager-events.jsonl';
+export const DEDUPE_MS = 6 * 3600 * 1000;   // the same stop re-fired inside this window is not appended again
 export const FILE_NAME_OLD = 'manager-events.jsonl.1';
 
 // Pure: classify an alert key. Exported for tests.
@@ -111,7 +112,24 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     rec.priority = typeof event.priority === 'string' ? event.priority : 'default';
     return { rec, cls };
   }
+  // Re-fired stops (a re-wrap, a restart) repeat the same session + kind + text minutes apart: skip them for 6 h.
+  // The map is seeded from the file's tail on first use so a service restart does not forget it.
+  const seen = new Map();   // dedupe signature -> ms of the newest appended line
+  let seeded = false;
+  const sigOf = (r) => [r.session || r.key, r.kind, String(r.body || r.title || '').replace(/\s+/g, '').slice(0, 160)].join('\u0000');
+  async function seedSeen() {
+    seeded = true;
+    try {
+      const lines = (await fsp.readFile(file, 'utf8')).split('\n').filter(Boolean).slice(-500);
+      for (const l of lines) { try { const r = JSON.parse(l); const t = Date.parse(r.at); if (Number.isFinite(t)) seen.set(sigOf(r), t); } catch {} }
+    } catch { /* no file yet */ }
+  }
   async function writeNow(rec) {
+    if (!seeded) await seedSeen();
+    const sig = sigOf(rec), t = Date.parse(rec.at);
+    const prev = seen.get(sig);
+    if (prev !== undefined && Number.isFinite(t) && t - prev >= 0 && t - prev < DEDUPE_MS) return false;
+    if (Number.isFinite(t)) seen.set(sig, t);
     const line = JSON.stringify(rec) + '\n';
     await fsp.mkdir(stateDir, { recursive: true });
     await maybeRotate(line);
