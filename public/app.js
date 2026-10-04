@@ -1245,7 +1245,7 @@ function syncSide() {
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
     syncPill(li.querySelector('.pp'), n);
     const rb = li.querySelector('.rb');
-    const t = [repoBranch(n), customFor(n) ? n : ''].filter(Boolean).join(' · ');
+    const t = [repoBranch(n), customFor(n) ? n : '', n === 'manager' ? mgrCostText() : ''].filter(Boolean).join(' · ');
     if (rb.textContent !== t) rb.textContent = t;
     rb.classList.toggle('hidden', !t);
   }
@@ -2307,18 +2307,42 @@ document.addEventListener('click', (e) => {
   if (w) { e.stopPropagation(); openPlatforms({ deploy: w.dataset.wd }); return; }
   if (e.target.closest('[data-plat-open]')) openPlatforms();
 }, true);
+// manager session spend today (scorecard days=1): "manager $1.23 / $10"; hidden when the data is missing
+const mgrCost = { usd: null, budget: null };
+const mgrCostText = () => (mgrCost.usd == null || !mgrCost.budget ? '' : `manager $${Number(mgrCost.usd).toFixed(2)} / $${Number(mgrCost.budget).toFixed(0)}`);
+const mgrCostChip = () => {
+  const t = mgrCostText();
+  const r = t ? mgrCost.usd / mgrCost.budget : 0;
+  return t ? `<span class="mchip${r >= 1 ? ' over' : r >= 0.8 ? ' warn' : ''}" title="manager session spend today (API-equivalent)">${escapeHtml(t)}</span>` : '';
+};
+async function loadMgrCost() {
+  try {
+    const sc = await (await fetch('/api/manager/scorecard?days=1')).json();
+    const b = sc?.today?.budget?.session;
+    mgrCost.usd = typeof b?.usd === 'number' ? b.usd : null;
+    mgrCost.budget = typeof b?.budget === 'number' ? b.budget : null;
+  } catch { mgrCost.usd = null; }
+  syncSide();
+}
+loadMgrCost();
+setInterval(loadMgrCost, 60000);
+const actTime = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
+const actRow = (a) => `<div class="ml act"><span class="t">${actTime(a.at)}</span><span class="x"><b>${escapeHtml([a.trigger, a.session].filter(Boolean).join(' / '))}</b> ${a.decision ? `&middot; ${escapeHtml(String(a.decision).slice(0, 120))}` : ''}${a.action ? ` &rarr; ${escapeHtml(String(a.action).slice(0, 120))}` : ''}${a.reason ? `<br><span class="dim">${escapeHtml(String(a.reason).slice(0, 200))}</span>` : ''}</span></div>`;
 function openManager() {
-  openSheet('AI manager', async ({ body, foot, close }) => {
+  openSheet('AI manager', async ({ body, foot, close, title }) => {
+    const setChip = () => { title.innerHTML = `AI manager${mgrCostChip()}`; };
+    setChip(); loadMgrCost().then(setChip);
     body.innerHTML = '<div class="sheet-empty">loading…</div>';
     foot.classList.remove('hidden');
     foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const draw = async () => {
-      let cfg, log;
+      let cfg, log, acts;
       try {
-        [cfg, log] = await Promise.all([
+        [cfg, log, acts] = await Promise.all([
           fetch('/api/manager').then((r) => r.json()),
           fetch('/api/manager/log?limit=800').then((r) => r.json()),
+          fetch('/api/manager/actions?limit=50').then((r) => r.json()).catch(() => ({ actions: [] })),
         ]);
       } catch { body.innerHTML = '<div class="sheet-empty">could not load</div>'; return; }
       const off = new Set(cfg.disabledSessions || []);
@@ -2359,6 +2383,8 @@ function openManager() {
         <div class="side-sub">Last ${entries.length}</div>
         <label class="mchk"><input type="checkbox" data-unlab ${mgrUnlabelled ? 'checked' : ''}><span>unlabelled stops only</span></label>
         <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
+        <div class="side-sub">Manager actions (last ${(acts.actions || []).length})</div>
+        <div class="mlog">${(acts.actions || []).slice().reverse().map(actRow).join('') || '<div class="dim">no manager actions logged yet</div>'}</div>
         <div class="side-sub">Sessions</div>
         <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
     };
