@@ -5,11 +5,14 @@
 // The queue logic is pure and lives in ask-model.js.
 
 import { deriveButtons, lastQuestion, listQuestions } from './buttons.js';
-import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine } from './ask-model.js';
+import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel } from './ask-model.js';
 
 const MIN_KEY = 'ghosty.askPopup.minimized';
+const WHY_KEY = 'ghosty.askPopup.whyOpen';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const stripNum = (label) => String(label).replace(/^\s*\d+\s*[.\-)\]:|·•]?\s*/, '');
+const JEV_PLAIN = { continue: 'continue', take_recommended: 'take recommended', ask_owner: 'ask you' };
+const truncText = (s, n) => { s = String(s); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
 
 export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmThen, onAnswer }) {
   const el = document.getElementById('askPopup');
@@ -20,12 +23,14 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   let q = { items: [], answered: new Map() };   // the queue (ask-model.js)
   let curKey = null;                            // which item is showing
   let minimised = false;
+  let whyOpen = false;                          // expandable AI/Jev "Why" section, collapsed by default
   let renderedKey = '';                         // content signature: re-render only when it changes (keeps a armed confirm alive)
   let ctx = null;                               // the showing item's derived view: { item, kind, buttons, aiId, aiConf, jev }
   const known = new Set();                      // stop ids already shown: only a new one slides in
   const replying = new Map();                   // name -> ctx of a Reply... tap, logged when the dock send happens
   const ownSend = new Map();                    // name -> ts of a send the popup made itself
   try { minimised = sessionStorage.getItem(MIN_KEY) === '1'; } catch {}
+  try { whyOpen = sessionStorage.getItem(WHY_KEY) === '1'; } catch {}
 
   // Keep the popup above the send dock: --ask-bottom = the dock's real top edge measured from the viewport bottom.
   const dockEl = document.getElementById('dock');
@@ -40,6 +45,11 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const setMin = (on) => {
     minimised = !!on;
     try { sessionStorage.setItem(MIN_KEY, on ? '1' : '0'); } catch {}
+    render(true);
+  };
+  const setWhy = (on) => {
+    whyOpen = !!on;
+    try { sessionStorage.setItem(WHY_KEY, on ? '1' : '0'); } catch {}
     render(true);
   };
   const cur = () => q.items.find((i) => i.key === curKey) || q.items[0] || null;
@@ -75,13 +85,44 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     }
     const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || (st.stall?.question ? lastQuestion(st.stall.question) : '') || 'waiting for your answer').slice(0, 220);
     const question = questionsView ? '' : baseQ;
-    return { item, kind: d.kind, buttons: btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2' };
+    return { item, kind: d.kind, buttons: btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
   }
 
   function metaText(v) {
     const jl = jevLine(v.jev);
     const a = v.aiId ? `AI ★ ${Math.round((v.aiConf || 0) * 100)}%` : 'AI: yours to decide';
-    return jl ? `${a}   ${jl}` : a;
+    return jl ? `${a}  ·  ${jl}` : a;
+  }
+
+  function whyHtml(v) {
+    const w = v.why || { ai: { present: false }, jev: { present: false } };
+    const ai = w.ai;
+    const jev = w.jev;
+    let aiRow;
+    if (ai.present) {
+      const conf = ai.conf != null ? `${Math.round(ai.conf * 100)}%` : '–';
+      aiRow = `<div class="ap-why-row"><span class="ap-why-name">AI</span><span class="ap-why-pick">${esc(ai.label)}</span><span class="ap-why-conf">${esc(conf)}</span></div>`;
+    } else {
+      aiRow = `<div class="ap-why-row"><span class="ap-why-name">AI</span><span class="ap-why-missing">not run yet</span></div>`;
+    }
+    const aiReason = (ai.present && ai.reasoning)
+      ? `<div class="ap-why-reason">${esc(truncText(ai.reasoning, 240))}</div>`
+      : '';
+    let jevRow;
+    if (jev.present) {
+      const probs = jev.probs || {};
+      const main = jev.label || jev.choice || 'unknown';
+      const mainKey = jev.choice;
+      const mainPct = (mainKey && Number.isFinite(probs[mainKey])) ? `${Math.round(probs[mainKey] * 100)}%` : '–';
+      const others = ['continue', 'take_recommended', 'ask_owner']
+        .filter((k) => k !== mainKey && Number.isFinite(probs[k]) && probs[k] > 0)
+        .map((k) => `${esc(JEV_PLAIN[k] || k)} ${Math.round(probs[k] * 100)}%`)
+        .join('  ·  ');
+      jevRow = `<div class="ap-why-row"><span class="ap-why-name">Jev</span><span class="ap-why-pick">${esc(main)}</span><span class="ap-why-conf">${esc(mainPct)}</span>${others ? `<span class="ap-why-probs">${others}</span>` : ''}</div>`;
+    } else {
+      jevRow = `<div class="ap-why-row"><span class="ap-why-name">Jev</span><span class="ap-why-missing">not asked</span></div>`;
+    }
+    return `<div class="ap-why">${aiRow}${aiReason}${jevRow}</div>`;
   }
 
   function btnHtml(b, label, n) {
@@ -113,7 +154,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     pill.classList.toggle('hidden', !minimised);
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
-    const sig = JSON.stringify([item.key, idx, q.items.length, v.question, v.questions, v.prio, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted]), metaText(v)]);
+    const sig = JSON.stringify([item.key, idx, q.items.length, v.question, v.questions, v.prio, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);
@@ -134,7 +175,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         </div>
         ${qBlock}
         <div class="ap-btns ${esc(v.kind)}">${btns}</div>
-        <div class="ap-meta">${esc(metaText(v))}</div>`;
+        <button type="button" class="ap-meta" data-act="why" aria-expanded="${whyOpen ? 'true' : 'false'}" title="Why these buttons?">${esc(metaText(v))} <span class="ap-toggle">${whyOpen ? '▾' : '▸'}</span></button>
+        ${whyOpen ? whyHtml(v) : ''}`;
     }
     // slide in only for a stop id never shown before (and only when the popup is visible)
     const fresh = r.added.filter((it) => !known.has(it.id));
@@ -170,6 +212,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.act === 'prev') return move(-1);
     if (t.dataset.act === 'next') return move(+1);
     if (t.dataset.act === 'min') return setMin(true);
+    if (t.dataset.act === 'why') return setWhy(!whyOpen);
     if (t.dataset.btn) pick(btnById(t.dataset.btn));
   });
   pill.addEventListener('click', () => setMin(false));

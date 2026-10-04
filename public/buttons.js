@@ -176,9 +176,18 @@ export function deriveButtons({ state, stall, triage }) {
         }
       }
     } else {
-      // open: no structured choice. The AI's proposal is its own button; Claude's dim suggestion
-      // is shown labelled and muted, never primary, never highlighted, never the AI pick.
-      if (ai) buttons.push({ id: 'ai', label: trunc(ai.proposed_reply, 44), text: ai.proposed_reply, primary: !triage.ai.owner_needed, ai: true, confirm: topicForbidden || !!ai.forbidden });
+      // open: no structured choice. The popup always offers at least 2 options before Reply.
+      // With an AI proposal: that proposal is option 1 (highlighted), then "No — wait for me" as
+      // option 2 (sends "No, wait — I'll answer this myself."); without one: "Yes, continue" and
+      // "No — wait for me". Claude's dim suggestion, when distinct, comes after these as a 3rd
+      // muted option, numbered like a menu row.
+      if (ai) {
+        buttons.push({ id: 'ai', label: trunc(ai.proposed_reply, 44), text: ai.proposed_reply, primary: !triage.ai.owner_needed, ai: true, confirm: topicForbidden || !!ai.forbidden });
+        buttons.push({ id: 'wait', label: 'No — wait for me', text: "No, wait — I'll answer this myself.", confirm: topicForbidden });
+      } else {
+        buttons.push({ id: 'continue', label: 'Yes, continue', text: 'yes', primary: true, confirm: topicForbidden });
+        buttons.push({ id: 'wait', label: 'No — wait for me', text: "No, wait — I'll answer this myself.", confirm: topicForbidden });
+      }
       if (stall?.suggestion && !(ai && sameReply(ai.proposed_reply, stall.suggestion))) {
         buttons.push({ id: 'sug', label: `Claude suggests: ${trunc(stall.suggestion, 36)}`, text: stall.suggestion, muted: true, confirm: topicForbidden || !!stall.suggestionForbidden });
       }

@@ -13,6 +13,7 @@ import {
   shouldHighlight,
   jevLine,
   jevAgreesOwner,
+  whyModel,
 } from '../public/ask-model.js';
 
 // ---- isOwnersTurn / stallId ----
@@ -178,4 +179,43 @@ test('jevAgreesOwner: continue/take_recommended agree when owner picked the high
   // unknown / null choices -> null
   assert.equal(jevAgreesOwner(null, 'yes', 'yes'), null);
   assert.equal(jevAgreesOwner('mystery', 'yes', 'yes'), null);
+});
+
+// ---- whyModel: the expandable AI + Jev opinion ----
+// All parts missing -> "not run yet" / "not asked".
+test('whyModel: AI "not run yet", Jev "not asked" when nothing is present', () => {
+  const w = whyModel({});
+  assert.equal(w.ai.present, false);
+  assert.equal(w.ai.label, '');
+  assert.equal(w.ai.conf, null);
+  assert.equal(w.ai.reasoning, '');
+  assert.equal(w.jev.present, false);
+  assert.equal(w.jev.choice, null);
+  assert.equal(w.jev.label, '');
+  assert.deepEqual(w.jev.probs, { continue: 0, take_recommended: 0, ask_owner: 0 });
+});
+test('whyModel: AI present with proposal + confidence + reasoning', () => {
+  const w = whyModel({ triage: { ai: { proposed_reply: 'Use Postgres.', reasoning: 'already in the stack', confidence: 0.8, owner_needed: false } } });
+  assert.equal(w.ai.present, true);
+  assert.equal(w.ai.label, 'Use Postgres.');
+  assert.equal(w.ai.conf, 0.8);
+  assert.equal(w.ai.reasoning, 'already in the stack');
+});
+test('whyModel: AI "yours to decide" when proposed_reply is empty but AI did run', () => {
+  const w = whyModel({ triage: { ai: { proposed_reply: '', reasoning: 'x', confidence: 0.3, owner_needed: true, owner_needed_why: 'product choice' } } });
+  assert.equal(w.ai.present, true);
+  assert.equal(w.ai.label, 'yours to decide');
+  assert.equal(w.ai.conf, 0.3);
+  assert.equal(w.ai.reasoning, 'product choice', 'owner_needed_why wins when owner_needed');
+});
+test('whyModel: Jev choice + probabilities, with a friendly plain-English label', () => {
+  const w = whyModel({ stall: { jev: { choice: 'ask_owner', probabilities: { continue: 0.1, take_recommended: 0.1, ask_owner: 0.8 } } } });
+  assert.equal(w.jev.present, true);
+  assert.equal(w.jev.choice, 'ask_owner');
+  assert.equal(w.jev.label, 'ask you');
+  assert.deepEqual(w.jev.probs, { continue: 0.1, take_recommended: 0.1, ask_owner: 0.8 });
+  const c = whyModel({ stall: { jev: { choice: 'continue', probabilities: { continue: 0.7, take_recommended: 0.2, ask_owner: 0.1 } } } });
+  assert.equal(c.jev.label, 'continue');
+  const t = whyModel({ stall: { jev: { choice: 'take_recommended', probabilities: { continue: 0.1, take_recommended: 0.8, ask_owner: 0.1 } } } });
+  assert.equal(t.jev.label, 'take recommended');
 });

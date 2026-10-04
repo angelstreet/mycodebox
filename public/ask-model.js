@@ -186,6 +186,40 @@ export function jevLine(jev) {
   return parts.length ? `Jev: ${parts.join(' \u00b7 ')}` : '';
 }
 
+// ---------- Why (expandable AI + Jev opinion) ----------
+// Plain English for the Jev choice keys, used in the expanded Why section.
+const JEV_PLAIN = { continue: 'continue', take_recommended: 'take recommended', ask_owner: 'ask you' };
+
+// Returns { ai: { present, label, conf, reasoning }, jev: { present, choice, label, probs } }
+// for the expandable "Why" section. `present: false` means the model wasn't run yet / Jev was
+// not asked — the section still renders (showing "not run yet" / "not asked") so the owner
+// sees both machine opinions before deciding.
+export function whyModel(st) {
+  const ai = st?.triage?.ai || null;
+  const jev = st?.stall?.jev || null;
+  const aiOut = ai
+    ? {
+        present: true,
+        label: ai.proposed_reply ? ai.proposed_reply : 'yours to decide',
+        conf: Number.isFinite(ai.confidence) ? ai.confidence : null,
+        reasoning: ai.owner_needed ? (ai.owner_needed_why || 'needs owner') : (ai.reasoning || ''),
+      }
+    : { present: false, label: '', conf: null, reasoning: '' };
+  const jevOut = jev
+    ? {
+        present: true,
+        choice: jev.choice || null,
+        label: jev.choice ? (JEV_PLAIN[jev.choice] || jev.choice) : '',
+        probs: {
+          continue: Number.isFinite(jev.probabilities?.continue) ? jev.probabilities.continue : 0,
+          take_recommended: Number.isFinite(jev.probabilities?.take_recommended) ? jev.probabilities.take_recommended : 0,
+          ask_owner: Number.isFinite(jev.probabilities?.ask_owner) ? jev.probabilities.ask_owner : 0,
+        },
+      }
+    : { present: false, choice: null, label: '', probs: { continue: 0, take_recommended: 0, ask_owner: 0 } };
+  return { ai: aiOut, jev: jevOut };
+}
+
 // Was Jev's call `continue` or `take_recommended`? Owner agrees when they picked the highlighted
 // (positive) answer — Yes for a yes/no, the AI's button for a menu/either.
 export function jevAgreesOwner(jevChoice, ownerButtonId, aiButtonId) {
