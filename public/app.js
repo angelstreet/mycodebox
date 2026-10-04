@@ -1843,6 +1843,15 @@ async function mgrPost(body) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
+async function startReview() {
+  closeSheet();
+  const { openReview } = await import('/review.js');
+  openReview({
+    toast,
+    onSession: (n) => { if (state.status[n]) { focusSession(n); openCard(n); } else toast('session is not running'); },
+    onClose: () => { if (new URLSearchParams(location.search).get('review')) history.replaceState(null, '', '/'); },
+  });
+}
 const CASE_LABEL = { continue: 'continue? → "Yes, continue."', menu_recommended: 'recommended option', stopped_short: 'stopped short → "Yes, continue."', ask_status: 'no status → "what is done / tested / left?"' };
 const firstLine = (t) => (String(t || '').split('\n').map((x) => x.trim()).filter(Boolean).slice(-1)[0] || '').slice(0, 140);
 let mgrUnlabelled = false;   // panel filter: only stops the owner has not labelled yet
@@ -1903,7 +1912,7 @@ function openManager() {
       const heldNow = state.sessions.map((s) => s.name).filter((n) => state.status[n]?.held);
       const t = cfg.today || {};
       const labels = new Map();   // stall id -> newest owner label
-      for (const r of log.entries || []) if (r.type === 'label') labels.set(r.id, r);
+      for (const r of log.entries || []) { if (r.type === 'label') labels.set(r.id, r); else if (r.type === 'unlabel') labels.delete(r.id); }
       const entries = (log.entries || []).filter((r) => logLine(r) && !(mgrUnlabelled && (r.type !== 'stall' || labels.has(r.id)))).slice(-30).reverse();
       const caseOpts = (cfg.cases || []).map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       const stopRow = (r, l) => {
@@ -1912,7 +1921,7 @@ function openManager() {
         return `<div class="ml stop ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s${live ? ' go' : ''}" ${live ? `data-open="${escapeHtml(r.session)}"` : ''}>${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span>
           <span class="x"><b>${escapeHtml(l.case)}</b>${r.no_status ? ' <i class="ns">no status</i>' : ''} &middot; ${escapeHtml(l.text)}</span>
           <span class="q">${escapeHtml(firstLine(r.excerpt || r.question))}</span>
-          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
+          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
             : `<button class="sbtn lb" data-label="no_reason" data-id="${escapeHtml(r.id)}" title="stopped for no reason" aria-label="stopped for no reason">👎</button><button class="sbtn lb" data-label="legit" data-id="${escapeHtml(r.id)}" title="legit stop" aria-label="legit stop">👍</button><select class="lb" data-wrong="${escapeHtml(r.id)}" aria-label="wrong case"><option value="">wrong case…</option>${caseOpts}</select><input class="lbn" data-note="${escapeHtml(r.id)}" placeholder="note" maxlength="500">`}</span></div>`;
       };
       body.innerHTML = `
@@ -1925,6 +1934,7 @@ function openManager() {
         <div class="mnote">P0 always continues · P1 while the 5h window is under ${cfg.p1MaxPct}% · P2 is held at its next stop when 5h ≥ ${cfg.p2MaxPct}% or the week would run out before reset · a hold never interrupts a working session</div>
         <div class="mheld">${heldNow.map((n) => `<div class="mh"><b>${escapeHtml(displayName(n))}</b> ${escapeHtml(prioOf(n))} <span class="dim">${escapeHtml(state.status[n].held.reason)}</span></div>`).join('') || '<div class="dim">no session held</div>'}</div>
         <div class="mcounts"><span class="sent"><b>${t.answered ?? 0}</b> answered</span><span class="canc"><b>${t.cancelled ?? 0}</b> cancelled</span><span class="esc"><b>${t.escalated ?? 0}</b> escalated</span><span class="dim">today</span></div>
+        <button class="mswitch on rvlink" data-review="1"><i></i><span>Review stops (${log.entries ? (log.entries || []).filter((r) => r.type === 'stall' && !labels.has(r.id)).length : 0}) &rarr; swipe</span></button>
         <div class="side-sub">Last ${entries.length}</div>
         <label class="mchk"><input type="checkbox" data-unlab ${mgrUnlabelled ? 'checked' : ''}><span>unlabelled stops only</span></label>
         <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
@@ -1943,6 +1953,7 @@ function openManager() {
     body.onclick = async (e) => {
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); return; }
+      if (e.target.closest('[data-review]')) { startReview(); return; }
       const lb = e.target.closest('[data-label]');
       if (lb) {
         const id = lb.dataset.id;
@@ -1985,6 +1996,7 @@ function openManager() {
   });
 }
 els.mgrBtn.onclick = openManager;
+document.getElementById('reviewBtn').onclick = startReview;
 
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
 const LANGFUSE_URL = 'http://<tailscale-ip>:3100';   // tailnet
@@ -2939,6 +2951,7 @@ if ('serviceWorker' in navigator) {
   const rd = lsGet(LS_READER, null);
   state.reader = rd == null ? isPhone() : rd === '1';
   if (wanted) { state.active = wanted; state.mode = 'card'; }
+  if (new URLSearchParams(location.search).get('review')) startReview();
   const view = new URLSearchParams(location.search).get('view');
   if (['card', 'grid', 'list'].includes(view)) state.mode = view;
   setMode(state.mode);

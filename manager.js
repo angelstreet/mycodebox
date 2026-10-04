@@ -9,7 +9,8 @@
 //   stalls.jsonl   {type:'stall'} per stall, {type:'answer'} / {type:'answer_cancelled'} / {type:'escalated'},
 //                  {type:'hold'|'resume', by:'manager'|'owner'} for quota holds (phase 6),
 //                  one {type:'outcome'} line when the session moves on after REAL work (a spinner, or a send),
-//                  and {type:'label'} owner labels on a stall ("this stop bothered me", POST /api/manager/label)
+//                  and {type:'label'} owner labels on a stall ("this stop bothered me", POST /api/manager/label),
+//                  {type:'unlabel', id} withdraws the newest label of a stall (swipe page undo; the stop is unlabelled again)
 //   jev-budget.json { day, calls, cost }
 //
 // It never starts, kills or renames sessions.
@@ -258,17 +259,64 @@ async function fire(name, auto) {
 }
 
 // Owner label on a logged stall ("this stop bothered me"). Appended; the newest label of an id wins.
+// correctCase (the manager chose the wrong case) may ride on any label; with label wrong_case it is the label itself.
 export async function labelStall({ id, label, note, correctCase } = {}) {
   if (typeof id !== 'string' || !id) throw bad('id required');
   if (!LABELS.includes(label)) throw bad(`label must be one of: ${LABELS.join(', ')}`);
   if (note != null && (typeof note !== 'string' || note.length > 500)) throw bad('note must be a string of at most 500 characters');
   if (correctCase != null && !CASES.includes(correctCase)) throw bad(`correctCase must be one of: ${CASES.join(', ')}`);
+  await requireKnown(id);
+  const rec = { type: 'label', id, label, note: note || null, correctCase: correctCase || null, at: new Date().toISOString() };
+  await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
+  return rec;
+}
+
+// Withdraw the newest label of a stall (Undo on the swipe page). The stop counts as unlabelled again.
+export async function unlabelStall({ id } = {}) {
+  if (typeof id !== 'string' || !id) throw bad('id required');
+  await requireKnown(id);
+  const rec = { type: 'unlabel', id, at: new Date().toISOString() };
+  await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
+  return rec;
+}
+
+async function requireKnown(id) {
   let known = false;
   try { known = (await readFile(LOG_FILE, 'utf8')).includes(`"id":"${id.replace(/[^\w-]/g, '')}"`); } catch {}
   if (!known) throw Object.assign(new Error('unknown stall id'), { status: 404 });
-  const rec = { type: 'label', id, label, note: note || null, correctCase: label === 'wrong_case' ? correctCase || null : null, at: new Date().toISOString() };
-  await appendFile(LOG_FILE, JSON.stringify(rec) + '\n');
-  return rec;
+}
+
+// stall id -> its effective label record: the newest label wins, an unlabel after it removes it.
+export function effectiveLabels(recs) {
+  const labels = new Map();
+  for (const r of recs) {
+    if (r.type === 'label') labels.set(r.id, r);
+    else if (r.type === 'unlabel') labels.delete(r.id);
+  }
+  return labels;
+}
+
+// The swipe page's deck: unlabelled stops, newest first, with what the owner replied (outcome) and the counts.
+export async function reviewDeck(limit = 50) {
+  let recs = [];
+  try { recs = (await readFile(LOG_FILE, 'utf8')).split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }); } catch {}
+  const labels = effectiveLabels(recs);
+  const outcomes = new Map(recs.filter((r) => r.type === 'outcome').map((r) => [r.id, r]));
+  const open = recs.filter((r) => r.type === 'stall' && r.id && !labels.has(r.id));
+  const since = new Date().setHours(0, 0, 0, 0);
+  const stopIds = new Set(recs.filter((r) => r.type === 'stall').map((r) => r.id));
+  const labelledToday = [...labels.values()].filter((l) => stopIds.has(l.id) && Date.parse(l.at) >= since).length;
+  const cards = open.slice().reverse().slice(0, Math.max(1, Math.min(200, Number(limit) || 50))).map((s) => {
+    const o = outcomes.get(s.id);
+    return {
+      id: s.id, at: s.at, session: s.session, project: s.project || null, agent: s.agent || null, state: s.state || null,
+      case: s.case, source: s.source || null, why: s.why || null, wouldSend: s.wouldSend || null, deployHint: s.deployHint || null,
+      no_status: !!s.no_status, jev: s.jev?.choice ? { choice: s.jev.choice, confidence: s.jev.confidence ?? null } : null,
+      excerpt: s.excerpt || s.question || '',
+      outcome: o ? { reply: o.reply || null, kind: o.kind || null, via: o.via || null, afterSec: o.afterSec ?? null } : null,
+    };
+  });
+  return { cards, unlabelled: open.length, labelledToday, cases: CASES };
 }
 
 // Counts since local midnight, for the UI panel.
