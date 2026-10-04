@@ -7,7 +7,7 @@
 // Test-only entry shape: { "argv": ["bash", "-c", "..."] } runs locally instead of ssh (env vars VPT_DEPLOY_REF/SCOPE set).
 // Registry: ssh proxmox '~/bin/vpt-lease ...' by default; DEPLOY_REGISTRY='["python3","/path/vpt-lease"]' runs it locally.
 import { spawn, execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, appendFile, stat } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 
@@ -16,6 +16,7 @@ export const DEFAULT_ENVS = {
   'node3-qualiai': { ssh: 'proxmox3', cmd: 'bash update_core.sh' },
 };
 export const RUNNER_AGENT = 'manager:deploy';
+export const DEFAULT_ORPHAN_IDLE_MS = 10 * 60 * 1000;
 const SCOPE_FLAGS = { frontend: ['--frontend'], host: ['--host'], server: ['--server'], full: [] };   // update_core.sh: none = everything
 const SAFE = /^[A-Za-z0-9_.\/:@=+-]+$/;
 const shq = (s) => (SAFE.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
@@ -75,7 +76,8 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind
 
 export function createDeployRunner({
   stateDir, alert = () => {}, onChange = () => {}, isEnabled = () => false,
-  registry = defaultRegistry(), run = defaultRun, timeoutMs = 45 * 60 * 1000, pollMs = 30000, log = console,
+  registry = defaultRegistry(), run = defaultRun, timeoutMs = 45 * 60 * 1000, pollMs = 30000,
+  orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, log = console,
 } = {}) {
   const envsFile = join(stateDir, 'deploy-envs.json');
   const logDir = join(stateDir, 'deploys');
@@ -83,6 +85,7 @@ export function createDeployRunner({
   let snap = { ok: false, error: 'not polled yet', deploys: [], lastRef: {}, deployed: {}, at: 0 };
   const running = new Map();          // env -> deploy id this process is running
   const seenAwaiting = new Set();
+  const handledOrphans = new Set();   // ids already finished as orphaned (alert once per id)
   let first = true, ticking = false, timer = null, lastJson = '';
 
   async function loadEnvs() {
@@ -121,6 +124,32 @@ export function createDeployRunner({
 
   async function logTail(id, n = 200) {
     try { return (await readFile(join(logDir, `${id}.log`), 'utf8')).split('\n').slice(-n - 1).join('\n').trimEnd(); } catch { return ''; }
+  }
+
+  // If the runner process restarts mid-deploy, the in-memory `running` map is lost but the registry entry stays
+  // "running" until its 90 min expiry, blocking the env queue. Finish it as failed once the log has been idle for
+  // `orphanIdleMs` (or since `started` when the log is missing). Once per id: `handledOrphans` prevents retries.
+  async function finishOrphan(d) {
+    if (handledOrphans.has(d.id)) return;
+    const logFile = join(logDir, `${d.id}.log`);
+    let idleSince;
+    try { idleSince = (await stat(logFile)).mtimeMs; }
+    catch { if (d.started != null) idleSince = Number(d.started); else return; }
+    if (!Number.isFinite(idleSince)) return;
+    if (idleSince < 1e12) idleSince *= 1000;                 // registry `started` is unix seconds
+    if (Date.now() - idleSince < orphanIdleMs) return;
+    handledOrphans.add(d.id);
+    const tail = await logTail(d.id, 40);
+    const note = '# orphaned: runner restarted mid-deploy, finished by the runner';
+    const stdin = `${note}\n${tail}`;
+    try { await mkdir(logDir, { recursive: true }); await appendFile(logFile, note + '\n'); } catch (e) { log.error?.('[deploy] orphan log append', e.message); }
+    const fin = await reg(['deploy', 'finish', d.id, '--status', 'failed', '--tail-stdin'], { stdin });
+    if (fin.code !== 0) log.error?.(`[deploy] finish orphan ${d.id} failed: ${fin.stderr}`);
+    alert(`deploy:${d.id}:orphan`, {
+      title: `deploy ${d.env} ${d.scope} orphaned`,
+      body: `runner restarted mid-deploy; finished as failed`,
+      priority: 'high', ntfyTags: 'warning', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1',
+    }, 0);
   }
 
   async function runDeploy(d, deploys) {
@@ -197,6 +226,14 @@ export function createDeployRunner({
           }
         }
         first = false;
+        // Detect orphans: registry says running + runner == us, but this process no longer tracks it. Skip ones
+        // owned by `running`. Gated by `if (deploys)` above so a poll failure does nothing.
+        for (const d of deploys) {
+          if (d.state !== 'running' || d.runner !== RUNNER_AGENT) continue;
+          if (running.get(d.env) === d.id) continue;
+          if (!envs[d.env]) continue;                 // not an env this runner owns (another runner's log is not here)
+          try { await finishOrphan(d); } catch (e) { log.error?.('[deploy] orphan', e.message); }
+        }
         if (isEnabled()) {
           for (const env of Object.keys(envs)) {
             if (running.has(env) || deploys.some((d) => d.env === env && d.state === 'running')) continue;

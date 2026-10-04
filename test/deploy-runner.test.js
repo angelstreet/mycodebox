@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable } from '../deploy-runner.js';
+import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS } from '../deploy-runner.js';
 
 // In-memory registry that mimics `vpt-lease deploy ...` (start = atomic check against leases + one running per env).
 function fakeRegistry({ leases = [], deploys = [] } = {}) {
@@ -300,4 +300,77 @@ test('a hosts-limited run only merges requests for hosts it deploys', () => {
   assert.equal(mergeable(d, x({ hosts: ['a', 'c'] })), false);
   assert.equal(mergeable(d, x({})), false);
   assert.equal(mergeable({ ...d, hosts: undefined }, x({})), true);
+});
+
+test('orphan: finished once after idle > limit; not finished on a second tick', async () => {
+  const orphan = {
+    id: 'orphan1', env: 'node1-vpt', scope: 'frontend', ref: 'main', agent: 'mgr:1',
+    state: 'running', runner: RUNNER_AGENT,
+    started: Math.floor((Date.now() - (DEFAULT_ORPHAN_IDLE_MS + 60 * 1000)) / 1000), created: 1,
+  };
+  const reg = fakeRegistry({ deploys: [orphan] });
+  const { runner, alerts, stateDir } = make(reg);
+  await runner.tick();
+  assert.equal(reg.deploys[0].state, 'failed');
+  assert.equal(reg.calls.filter((c) => c === 'deploy finish orphan1 --status failed --tail-stdin').length, 1);
+  assert.equal(reg.deploys[0].tail.split('\n')[0], '# orphaned: runner restarted mid-deploy, finished by the runner');
+  assert.match(readFileSync(join(stateDir, 'deploys', 'orphan1.log'), 'utf8'), /# orphaned: runner restarted mid-deploy/);
+  const orphans = alerts.filter(([k]) => k === 'deploy:orphan1:orphan');
+  assert.equal(orphans.length, 1);
+  assert.equal(orphans[0][1].toLowerCase().includes('orphaned'), true);
+  // tick again: no extra finish, no extra alert
+  const before = reg.calls.length;
+  await runner.tick();
+  assert.equal(reg.calls.filter((c) => c === 'deploy finish orphan1 --status failed --tail-stdin').length, 1);
+  assert.equal(alerts.filter(([k]) => k === 'deploy:orphan1:orphan').length, 1);
+  assert.ok(reg.calls.slice(before).every((c) => !c.startsWith('deploy finish orphan1')));
+});
+
+test('orphan: a log written recently is left alone (still running)', async () => {
+  const orphan = {
+    id: 'orphan1', env: 'node1-vpt', scope: 'frontend', ref: 'main', agent: 'mgr:1',
+    state: 'running', runner: RUNNER_AGENT,
+    started: Math.floor((Date.now() - (DEFAULT_ORPHAN_IDLE_MS + 60 * 1000)) / 1000), created: 1,
+  };
+  const reg = fakeRegistry({ deploys: [orphan] });
+  const { runner, stateDir } = make(reg);
+  // recent log overrules the old `started`
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  mkdirSync(join(stateDir, 'deploys'), { recursive: true });
+  writeFileSync(join(stateDir, 'deploys', 'orphan1.log'), 'fresh log line\n');
+  await runner.tick();
+  assert.equal(reg.deploys[0].state, 'running');
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy finish orphan1')));
+});
+
+test('orphan: a deploy tracked in this process\'s running map is left alone', async () => {
+  const orphan = {
+    id: 'orphan1', env: 'node1-vpt', scope: 'frontend', ref: 'main', agent: 'mgr:1',
+    state: 'running', runner: RUNNER_AGENT,
+    started: Math.floor((Date.now() - (DEFAULT_ORPHAN_IDLE_MS + 60 * 1000)) / 1000), created: 1,
+  };
+  const reg = fakeRegistry({ deploys: [orphan] });
+  const { runner } = make(reg);
+  runner._running.set('node1-vpt', 'orphan1');                       // this process still owns it
+  await runner.tick();
+  assert.equal(reg.deploys[0].state, 'running');
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy finish orphan1')));
+});
+
+test('orphan: poll failure does nothing (no finish, no alert)', async () => {
+  const calls = [];
+  const reg = { fn: async (args, { stdin } = {}) => {
+    calls.push(args.join(' '));
+    if (args[0] === 'deploy' && args[1] === 'list') return { code: 255, stdout: '', stderr: 'ssh: down' };
+    if (args[0] === 'deploy' && args[1] === 'finish') return { code: 0, stdout: 'failed', stderr: '' };
+    return { code: 0, stdout: '{}', stderr: '' };
+  } };
+  const alerts = [];
+  const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-dep-'));
+  const runner = createDeployRunner({ stateDir, registry: reg.fn, isEnabled: () => false, alert: (k, p) => alerts.push([k, p.title]), log: { error() {} }, run: async () => ({ code: 0 }) });
+  await runner.tick();
+  assert.equal(calls.some((c) => c === 'deploy list --json'), true);
+  assert.ok(!calls.some((c) => c.startsWith('deploy finish')));
+  assert.equal(alerts.length, 0);
+  assert.equal(runner.snapshot().ok, false);
 });
