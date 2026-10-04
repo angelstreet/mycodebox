@@ -63,7 +63,7 @@
   {
     "point": "builder",
     "label": "tiny app fix, tests, private repo",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "has_tests": true } },
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "files_est": 2, "lines_est": 80, "has_tests": true } },
     "expect": "minimax"
   },
   {
@@ -104,9 +104,9 @@
   },
   {
     "point": "builder",
-    "label": "codex-friendly focused refactor",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "shape": "refactor" } },
-    "expect": "minimax"
+    "label": "small app change but UI wiring: sonnet",
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "files_est": 2, "lines_est": 80, "ui_wiring": true } },
+    "expect": "sonnet"
   },
   {
     "point": "builder",
@@ -116,9 +116,9 @@
   },
   {
     "point": "builder",
-    "label": "empty touches: small app change",
-    "facts": { "work": { "touches": [], "repo_public": false, "size": "small" } },
-    "expect": "minimax"
+    "label": "app change across many files: sonnet",
+    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "medium", "files_est": 9, "lines_est": 150 } },
+    "expect": "sonnet"
   },
 
   {
