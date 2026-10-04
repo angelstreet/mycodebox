@@ -112,6 +112,27 @@ ghosty already computes, passed to `observe` as `realWork`) or ghosty sent it so
 logged after that, and a stall identical to the last logged one is not logged again unless one of those
 happened in between.
 
+The last logged stop (a hash of its whitespace-free closing text) is kept per session in `<state dir>/last-stops.json`,
+so a service restart or a repaint does not log it again either; real work, a send or a reporter prompt in between
+makes the same words a new stop. An `outcome` only uses a reply that came after the stop: the reporter's prompt must
+be newer than the stall, and from the pane only a `❯ prompt` line below the stall's closing text counts (an older prompt
+above it, or a closing text no longer on screen, gives kind `unknown`).
+
+**Safe defaults.** `autoSend` off, `autoCases: []`, `aiTriage: 'simulate'`, `aiAutoCases: []`: the owner picks
+every case that may be auto-answered (`POST /api/manager`). `owner_decision` is never in a default list.
+
+**Who acted (`by`).** `POST /api/send/:session`, `/api/send-many`, `/api/manager/label`, `/api/session-meta/:session`
+and `/api/deploys/:id/approve|cancel` take an optional `by` (string, 1..40 characters; default `owner`, which is what
+the UI means). The Opus manager agent passes `by: "manager-agent"`. It is logged in `stalls.jsonl` (`{type:'send'|
+'pause'|'resume'|'priority'|'deploy_action', by}`, and `by` on `label` records) and shown on the lines of the manager
+panel log.
+
+**Alert API.** `POST /api/alert {title, body, url?, priority?, tag?}` is the manager agent's channel to the owner.
+Loopback peers only, with the reporter token header (`x-ghosty-reporter-token`); anything else is 403 / 401. It goes
+through the normal `alert()` (same debounce per `tag` or title, notification feed, Web Push, ntfy): the answer is
+`{ok:true, sent:true}` or `{ok:true, sent:false, debounced:true}`. `title` 1..120, `body` 1..1000, `url` starts with
+`/` or `http(s)://`, `priority` one of `min|low|default|high|urgent`. At most 10 calls per hour (429 beyond).
+
 **Owner labels.** In the manager panel every stop has 👎 (stopped for no reason) / 👍 (legit) buttons,
 a "wrong case" picker and an optional note; "unlabelled stops only" filters the list and a row's session
 name opens its card. `POST /api/manager/label {id, label: no_reason|legit|wrong_case, note?, correctCase?}`
@@ -247,6 +268,7 @@ New sessions pick it up; running ones keep going without it. One session only: `
 
 ghosty creates `reporter.token` (0600) in its state dir at startup if missing. `POST /api/reporter/event` accepts
 loopback peers only, with the token in the `x-ghosty-reporter-token` header; anything else is 403 / 401.
+`POST /api/alert` uses the same check and token (see "Alert API" under the manager).
 
 The session is identified by its tmux session name (`tmux display-message -p -t $TMUX_PANE '#S'`, once, at the first
 event) plus the Claude session id and cwd; a session outside tmux is ignored.
@@ -466,6 +488,7 @@ Tune `classify()` in `server.js` if you want stricter or looser behaviour.
 │   ├── sw.js                        # service worker
 │   ├── icon.svg / icon-{192,512}.png
 │   └── vendor/                      # xterm.js + xterm-addon-fit (offline)
+├── api-extras.js                    # `by` (actor) validation + POST /api/alert handler (rate limit)
 ├── reporter.js                      # intake of the ghosty-reporter plugin events (token, latest facts per session)
 ├── claude-plugin/ghosty-reporter/   # the Claude Code plugin (hooks/register.ts, tests)
 ├── leases.js                        # `vpt-lease list --json` reader (cached, injectable)

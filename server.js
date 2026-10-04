@@ -26,6 +26,7 @@
 //   POST /api/deploys/:id/approve | /cancel → owner action on a queued request
 //   GET  /api/deploys/:id/log?tail=200      → the runner's log of that deploy (text)
 //   (the runner itself only starts deploys when manager.json has deployRunner:true, see deploy-runner.js)
+//   POST /api/alert             → {title, body, url?, priority?, tag?} the manager agent's alert; loopback + reporter token, max 10/h
 //   POST /api/reporter/event    → ghosty-reporter plugin events; loopback peers + x-ghosty-reporter-token (state dir reporter.token) only
 //   GET  /api/reporter/:session → latest reported turn / prompt / waiting / agents of a session
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
@@ -59,6 +60,7 @@ import { initManager, logEvent, observe, forget as managerForget, prune as prune
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
+import { actorOf, createAlertApi } from './api-extras.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -534,6 +536,7 @@ const push = createPush({ stateDir: STATE_DIR });
 const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS });
 
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
+const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
 const deployRunner = createDeployRunner({
@@ -923,17 +926,19 @@ async function killSession(name, confirm) {
 // paused:true  -> hold first (so the manager stops at once), then Escape once.
 // paused:false -> release, then "continue" + Enter.
 async function setSessionMeta(session, body) {
+  const by = actorOf(body);
   if (!(await sessionExists(session))) throw httpError(404, 'no such session');
   sessionMeta.sync([session]);
   const changed = sessionMeta.set(session, body || {});
+  if (changed.priority) logEvent({ type: 'priority', session, by, priority: changed.priority });
   const released = body?.paused === false && releaseHold(session);   // Resume also clears the manager's quota hold
   if (changed.paused === true) {
     cancelAuto(session, 'paused by owner');
-    logEvent({ type: 'pause', session, by: 'owner' });
+    logEvent({ type: 'pause', session, by });
     try { await sendKey(session, 'Escape'); }
     catch (e) { sessionMeta.set(session, { paused: false }); throw e; }
   } else if (changed.paused === false) {
-    logEvent({ type: 'resume', session, by: 'owner' });
+    logEvent({ type: 'resume', session, by });
     await sendKeys(session, 'continue', true);
   } else if (released) {
     await sendKeys(session, 'continue', true);
@@ -942,7 +947,13 @@ async function setSessionMeta(session, body) {
   return { ok: true, session, priority: sessionMeta.priority(session), paused: sessionMeta.isPaused(session), held: heldOf(session), changed };
 }
 
+// Who typed: every send is logged with its actor (the owner's UI sends no `by`, the manager agent sends 'manager-agent').
+function logSend(session, by, payload) {
+  logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
+}
+
 async function sendMany(sessions, payload) {
+  const by = actorOf(payload);
   if (!Array.isArray(sessions) || !sessions.length || sessions.length > 50) throw httpError(400, 'sessions must be a non-empty array (max 50)');
   if (payload.key === undefined && typeof payload.keys !== 'string') throw httpError(400, 'keys (string) or key required');
   const list = [...new Set(sessions.map(String))];
@@ -953,6 +964,7 @@ async function sendMany(sessions, payload) {
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys, payload.enter !== false);
+      logSend(session, by, payload);
       results[idx] = { session, ...out };
     } catch (err) {
       results[idx] = { session, ok: false, error: err.stderr ? String(err.stderr).trim().slice(0, 120) : err.message };
@@ -1043,6 +1055,12 @@ const server = http.createServer(async (req, res) => {
     try { return json(res, 200, reporter.ingest(await readJsonBody(req))); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
+  if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
+    try {
+      const r = await alertApi.handle({ remoteAddress: req.socket.remoteAddress, headers: req.headers, readBody: () => readJsonBody(req) });
+      return json(res, r.status, r.body);
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
   if (req.method === 'GET' && p.startsWith('/api/reporter/')) {
     const d = reporter.detail(decodeURIComponent(p.slice('/api/reporter/'.length)));
     return d ? json(res, 200, d) : json(res, 404, { ok: false, error: 'no reports for that session' });
@@ -1117,10 +1135,12 @@ const server = http.createServer(async (req, res) => {
       return json(res, err.status || 400, { ok: false, error: err.status ? err.message : 'bad json' });
     }
     try {
+      const by = actorOf(payload);
       if (!(await sessionExists(session))) throw httpError(404, 'no such session');
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys || '', payload.enter !== false);
+      logSend(session, by, payload);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(out));
     } catch (err) {
@@ -1204,7 +1224,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (dm[2] !== 'log' && req.method === 'POST') {
+      let by;
+      try { by = actorOf(await readJsonBody(req)); } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
       const r = await deployRunner.act(dm[1], dm[2]);
+      if (r.ok) logEvent({ type: 'deploy_action', id: dm[1], action: dm[2], by });
       return json(res, r.ok ? 200 : r.status, r.ok ? { ok: true } : { ok: false, error: r.error });
     }
   }

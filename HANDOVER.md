@@ -188,3 +188,14 @@ Or from the Mac:
 ```bash
 ~/bin/codebox-ghosty
 ```
+
+## Manager fixes (TASK-44 readiness review)
+
+- `aiAutoCases` defaults to `[]` (owner picks); a test pins that no default turns `owner_decision` on.
+- Repeat stops: `last-stops.json` (state dir) holds the last logged stop per session, so restarts and repaints do not
+  log it again; `w.moved` (real work / send / reporter prompt) lets the same words through. Only the LAST key is compared,
+  so an A, B, A pattern still logs A twice.
+- Outcome: reporter prompt must be newer than the stall; pane prompt must sit below the stall's closing text, else `unknown`.
+- `POST /api/alert` (loopback + reporter token, 10/h) and the `by` actor field live in `api-extras.js` (server.js starts
+  listening on import, so tests cover the handlers directly; `test/manager-fixes.test.js`).
+- SW cache bumped to v25 (manager panel log shows `by`).

@@ -1972,6 +1972,12 @@ function logLine(r) {
   if (r.type === 'resume' && r.by === 'manager') return { cls: 'sent', tag: 'resumed', sess, case: 'quota', text: r.reason || '' };
   if (r.type === 'triage') return { cls: 'would', tag: 'AI', sess, case: r.case || '', text: r.ai ? `${r.ai.owner_needed ? 'needs you' : '\u201c' + r.ai.proposed_reply + '\u201d'} (${Number(r.ai.confidence).toFixed(2)}) ${r.ai.reasoning || ''}` : (r.skipped || r.error || '') };
   if (r.type === 'escalated') return { cls: 'esc', tag: 'escalated', sess, case: r.case || '', text: r.reason || '' };
+  // Who acted (by): 'owner' for the UI, 'manager-agent' for the Opus manager; shown on every action line.
+  const by = r.by || 'owner';
+  if (r.type === 'send') return { cls: 'sent', tag: 'typed', sess, case: by, text: r.text != null ? r.text : `key ${r.key}` };
+  if (r.type === 'pause' || (r.type === 'resume' && r.by !== 'manager')) return { cls: 'canc', tag: r.type, sess, case: by, text: '' };
+  if (r.type === 'priority') return { cls: 'sent', tag: 'priority', sess, case: by, text: r.priority };
+  if (r.type === 'deploy_action') return { cls: 'sent', tag: r.action, sess: 'deploy', case: by, text: r.id };
   return null;
 }
 function depRow(d, d0) {
@@ -2107,7 +2113,7 @@ function openManager() {
         return `<div class="ml stop ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s${live ? ' go' : ''}" ${live ? `data-open="${escapeHtml(r.session)}"` : ''}>${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span>
           <span class="x"><b>${escapeHtml(l.case)}</b>${r.no_status ? ' <i class="ns">no status</i>' : ''} &middot; ${escapeHtml(l.text)}</span>
           <span class="q">${escapeHtml(firstLine(r.excerpt || r.question))}</span>
-          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
+          <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? '👎 no reason' : lab.label === 'legit' ? '👍 legit' : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.by && lab.by !== 'owner' ? ` <span class="dim">by ${escapeHtml(lab.by)}</span>` : ''}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
             : `<button class="sbtn lb" data-label="no_reason" data-id="${escapeHtml(r.id)}" title="stopped for no reason" aria-label="stopped for no reason">👎</button><button class="sbtn lb" data-label="legit" data-id="${escapeHtml(r.id)}" title="legit stop" aria-label="legit stop">👍</button><select class="lb" data-wrong="${escapeHtml(r.id)}" aria-label="wrong case"><option value="">wrong case…</option>${caseOpts}</select><input class="lbn" data-note="${escapeHtml(r.id)}" placeholder="note" maxlength="500">`}</span></div>`;
       };
       body.innerHTML = `
