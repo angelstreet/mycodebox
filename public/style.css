@@ -1171,3 +1171,9 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 
 /* review page on wide screens: a centred card column instead of a full-width slab */
 .rv-stage{ width:calc(100% - 24px); max-width:760px; margin:4px auto; }
+/* phones: card / board rows show a status dot only (colour says it) and no cost chip (see Usage) */
+@media (max-width: 720px){
+  .cell .state .st, .row-item .state .st{ display:none; }
+  .cell .state, .row-item .state{ padding:2px 6px; gap:0; }
+  .row-item .uc{ display:none !important; }
+}
