@@ -15,6 +15,7 @@ const SHELL_FILES = [
   '/buttons.js',
   '/deployed.js',
   '/platforms.js',
+  '/state.js',
   '/manifest.webmanifest',
   '/icon.svg',
   '/icon-192.png',

@@ -9,6 +9,7 @@ import { deriveButtons, needsOwner, lastQuestion } from '/buttons.js';
 import { deployedView, targetLabel } from '/deployed.js';
 import { jevTabHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, platformsView, machinesOf, holdingsOf } from '/platforms.js';
+import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh } from '/usage.js';
 
 const $  = (q) => document.querySelector(q);
@@ -122,13 +123,9 @@ const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held ||
 const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? 'held: quota' : '');
 const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${escapeHtml(n)}" aria-label="Priority ${prioOf(n)}, tap to change" title="Priority ${prioOf(n)}">${prioOf(n)}</button>`;
 // Visual state: a session blocked on a deploy shows purple ('deploy'); a live needs-you prompt always wins.
-function vstateOf(name) {
-  const s = stateOf(name);
-  return state.status[name]?.deployWait && s !== 'waiting' && s !== 'offline' ? 'deploy' : s;
-}
+// Pure helper lives in /state.js so the top-bar summary and the status filter can reuse it.
+const vstateOf = (name) => displayStateOf(name, state.status);
 const deployWaitTip = (name) => state.status[name]?.deployWait?.text || '';
-const STATE_RANK = { waiting: 0, deploy: 1, done: 2, working: 3, idle: 4, offline: 5 };
-const STATE_LABEL = { working: 'working', waiting: 'needs you', done: 'done', idle: 'idle', offline: 'offline' };
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 
 function agentOf(name) {
@@ -642,7 +639,9 @@ function byUrgency(list) {
 const LS_FILTERS = 'ghosty.filters';
 function projectOf(n) { return state.status[n]?.project || state.status[n]?.repo || ''; }
 function matchesFilter(n) {
-  if (state.filter && stateOf(n) !== state.filter) return false;
+  // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
+  // not its raw working/done/idle state.
+  if (state.filter && displayStateOf(n, state.status) !== state.filter) return false;
   if (state.fProject && projectOf(n) !== (state.fProject === '-' ? '' : state.fProject)) return false;
   if (state.fAgent && agentOf(n) !== state.fAgent) return false;
   return true;
@@ -726,10 +725,13 @@ function onHealth(h) {
 
 // ---------- summary + attention ----------
 function renderSummary() {
-  const counts = { waiting: 0, done: 0, working: 0, idle: 0, offline: 0 };
-  for (const s of state.sessions) counts[stateOf(s.name)]++;
+  // Count sessions by display state so a session waiting on a deploy shows up
+  // under its own violet 'waiting deploy' chip, not under working/done/idle.
+  const counts = { waiting: 0, deploy: 0, done: 0, working: 0, idle: 0, offline: 0 };
+  for (const s of state.sessions) counts[displayStateOf(s.name, state.status)]++;
   const chips = [
     ['waiting', counts.waiting, 'need you'],
+    ['deploy',  counts.deploy,  'waiting deploy'],
     ['done',    counts.done,    'done'],
     ['working', counts.working, 'working'],
     ['idle',    counts.idle,    'idle'],
@@ -790,12 +792,14 @@ function renderFilterBar() {
   const count = (pred) => all.filter(pred).length;
   const chip = (group, val, label, n, cls = '') =>
     `<button class="fchip ${cls}${(state[group] || null) === val ? ' on' : ''}" data-g="${group}" data-v="${val ?? ''}">${label}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
-  const states = ['waiting', 'done', 'working', 'idle', 'offline'];
+  // 'waiting deploy' sits next to the other states: it is the violet display state a session shows
+  // while its status has deployWait (and the raw state isn't waiting/offline).
+  const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline'];
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const agents = ['claude', 'codex', 'minimax', 'bash'].filter((a) => all.some((n) => agentOf(n) === a));
   const html =
     `<span class="fl">status</span>` + chip('filter', null, 'all') +
-    states.filter((k) => count((n) => stateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => stateOf(n) === k))).join('') +
+    states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
     `<span class="fsep"></span><span class="fl">project</span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i>no git</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span><span class="fl">agent</span>` + chip('fAgent', null, 'all') +
@@ -1846,7 +1850,7 @@ document.addEventListener('click', async (e) => {
   }
   if (!pb && !zb) return;
   e.stopPropagation(); e.preventDefault();
-  if (pb) { pickPriority(pb.dataset.prio); return; }
+  if (pb) { e.stopPropagation(); e.preventDefault(); cyclePriority(pb.dataset.prio); return; }
   const n = zb.dataset.pause;
   zb.disabled = true;
   try {
@@ -1857,15 +1861,10 @@ document.addEventListener('click', async (e) => {
   } catch (err) { toast(`failed: ${err.message}`, 2500); }
   zb.disabled = false;
 }, true);
-function pickPriority(n) {
-  openSheet(`Priority - ${displayName(n)}`, ({ body, close }) => {
-    body.innerHTML = `<div class="prio-pick">${PRIORITIES.map((p) => `<button class="sbtn prio-opt ${p}${prioOf(n) === p ? ' cur' : ''}" data-p="${p}">${p}<span>${{ P0: 'urgent', P1: 'important', P2: 'normal' }[p]}</span></button>`).join('')}</div>`;
-    body.onclick = async (e) => {
-      const b = e.target.closest('[data-p]');
-      if (!b) return;
-      try { await metaPost(n, { priority: b.dataset.p }); close(); renderAll(); } catch (err) { toast(`failed: ${err.message}`, 2500); }
-    };
-  });
+// tap the P0 / P1 / P2 badge: cycle P0 -> P1 -> P2 -> P0 (no popup)
+async function cyclePriority(n) {
+  const cur = prioOf(n), next = PRIORITIES[(PRIORITIES.indexOf(cur) + 1) % PRIORITIES.length];
+  try { await metaPost(n, { priority: next }); renderAll(); } catch (err) { toast(`failed: ${err.message}`, 2500); }
 }
 
 // Quota row: "codex 5h 2% · wk 32% · claude ? · minimax 5h 2% wk ∞". Amber >= 80 %, red >= 95 %.
@@ -2325,8 +2324,7 @@ function sparkSvg(vals, color) {
 function trendHtml(u, tab, ui) {
   const dm = u.perDayModel;
   if (!dm) return '<div class="sheet-empty">needs the updated ghosty-usage tailer (restart the unit)</div>';
-  const metric = ui.metric, val = (e) => (metric === 'cost' ? (e.cost || 0) : (e.total || 0));
-  const fmtV = (v) => (metric === 'cost' ? fmtUsd(v) : fmtTok(v));
+  const val = (e) => e.total || 0, fmtV = fmtTok;   // trending is by tokens only, never price (unpriced models count too)
   const days = lastDays(14), models = new Set();
   for (const d of days) for (const m of Object.keys(dm[d] || {})) models.add(m);
   const rows = [...models].map((m) => {
@@ -2335,7 +2333,7 @@ function trendHtml(u, tab, ui) {
     const agent = modelAgent(m);
     return { m, agent, series, total: sum(series), cur, prev, delta: prev > 0 ? ((cur - prev) / prev) * 100 : null };
   }).filter((r) => r.total > 0).sort((x, y) => y.total - x.total);
-  const ctrl = `<div class="octrl"><span class="dim">show</span>${chip('metric', 'total', metric, 'tokens')}${chip('metric', 'cost', metric, 'cost')}<span class="grow"></span><span class="dim">last 7d vs the 7d before</span></div>`;
+  const ctrl = '<div class="octrl"><span class="dim">tokens &middot; last 7 days vs the 7 before</span></div>';
   return `<div class="ot">${ctrl}${rows.map((r) => `<div class="trow"><i class="adot ${escapeHtml(r.agent)}"></i><div class="tn"><b>${escapeHtml(r.m)}</b><div class="u2">${escapeHtml(PROVIDER[r.agent] || '')}</div></div>${sparkSvg(r.series, r.delta != null && r.delta < 0 ? '#8a8d96' : '#6ed1c0')}<div class="tv"><b>${fmtV(r.total)}</b><div class="u2 ${r.delta == null ? '' : r.delta >= 0 ? 'up' : 'dn'}">${r.delta == null ? (r.cur > 0 ? 'new' : '') : `${r.delta >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(r.delta))}%`}</div></div></div>`).join('') || '<div class="dim">no usage</div>'}</div>`;
 }
 // headline for Overview: cost, change vs the previous period, and what that is worth against the flat subscriptions
@@ -3042,7 +3040,8 @@ function openNewSession() {
         state.pendingNew = { name: real, at: Date.now() };
         await fetchInitial();
         openCard(real);
-        toast(`started ${real}`);
+        toast(`started ${real} \u2014 type your prompt below`);
+        setTimeout(() => els.sendInput.focus(), 250);
       } catch (err) {
         toast(`create failed: ${err.message}`);
       } finally {
@@ -3094,6 +3093,7 @@ function confirmKill(name) {
 (function wireSide() {
   const nb = $('#newSessBtn');
   if (nb) nb.onclick = openNewSession;
+  $('#topNewBtn').onclick = openNewSession;
   setInterval(tickSide, 1000);
 })();
 loadDock();
