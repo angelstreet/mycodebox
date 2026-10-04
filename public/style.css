@@ -1285,3 +1285,5 @@ tr.pf-hit{ outline-offset:-2px; }
 .nsproj .uci small{ flex-basis:100%; color:var(--ink-3); font-size:10.5px; }
 .nsproj .uci em{ color:var(--accent); font-style:normal; font-size:11px; }
 .nsproj .uci .rec{ color:var(--accent); font-style:normal; font-size:9px; }
+/* cost lives in Usage: the per-row chip only stays as a warning when the session is a cost outlier */
+.uc:not(.out){ display:none !important; }
