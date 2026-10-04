@@ -1413,3 +1413,6 @@ body[data-mode="card"] #health{ display:none; }
 .rn:hover{ opacity:1; color:var(--ink); background:var(--bg-3); }
 @media (hover:hover){ .rn{ opacity:0; } .cell .h:hover .rn, .row-item:hover .rn, .rn:focus-visible{ opacity:.7; } }
 .name .name-input{ font:inherit; color:inherit; background:var(--bg-3); border:1px solid var(--accent); border-radius:4px; padding:1px 5px; width:min(240px, 100%); outline:none; }
+/* board row: the pencil hugs the name; it takes over the name's job of pushing status + pause right */
+.row-item .l1 .name{ flex:0 1 auto; }
+.row-item .l1 .rn{ margin-right:auto; }
