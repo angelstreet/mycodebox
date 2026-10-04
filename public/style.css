@@ -1312,3 +1312,17 @@ svg.ico{ display:inline-block; vertical-align:-0.18em; flex-shrink:0; }
 .urow.jev .jcost{ color:var(--accent); }
 .jfchip{ font-size:10.5px; padding:1px 7px; border-radius:999px; border:1px solid; font-weight:600; }
 .jfchip.warn{ color:var(--accent); border-color:var(--accent); } .jfchip.crit{ color:var(--waiting); border-color:var(--waiting); background:rgba(255,95,95,.1); }
+
+/* deploy banner: a deploy is running / queued / waiting for approval */
+.deployban{ display:flex; gap:6px; align-items:center; padding:6px 10px; overflow-x:auto; scrollbar-width:none; border-top:1px solid; border-bottom:1px solid; }
+.deployban.run{ background:rgba(160,112,255,.12); border-color:rgba(160,112,255,.45); }
+.deployban.wait{ background:rgba(232,154,74,.10); border-color:rgba(232,154,74,.4); }
+.deployban .lbl{ flex-shrink:0; font-size:11px; font-weight:700; letter-spacing:.08em; color:var(--deploy); margin-right:4px; }
+.deployban.wait .lbl{ color:var(--accent); }
+.dchip{ display:inline-flex; align-items:center; gap:6px; flex-shrink:0; background:var(--bg-2); color:var(--ink); border:1px solid rgba(160,112,255,.5); border-radius:999px; padding:4px 11px; font:inherit; font-size:12px; white-space:nowrap; }
+.dchip.queued, .dchip.ask{ border-color:rgba(232,154,74,.55); } .dchip.ask{ color:var(--accent); }
+.dchip i{ font-style:normal; color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.dchip .ico{ color:var(--deploy); } .dchip.queued .ico, .dchip.ask .ico{ color:var(--accent); }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+svg.spin{ animation:spin 1.3s linear infinite; }
+@media (prefers-reduced-motion: reduce){ svg.spin{ animation:none; } }

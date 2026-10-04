@@ -1,7 +1,7 @@
 // Ghosty Sessions — service worker
 // Cache the shell so the PWA launches offline (and reloads fast over Tailscale).
 
-const SHELL_CACHE = 'ghosty-shell-v31';
+const SHELL_CACHE = 'ghosty-shell-v32';
 const SHELL_FILES = [
   '/',
   '/index.html',
@@ -12,6 +12,7 @@ const SHELL_FILES = [
   '/usage.js',
   '/review.js',
   '/jev-view.js',
+  '/icons.js',
   '/buttons.js',
   '/deployed.js',
   '/platforms.js',
@@ -45,10 +46,11 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) {
     return; // passthrough
   }
-  // Network-first for HTML/JS/CSS so updates roll out.
+  // Network-first for the app's own HTML / JS / CSS / SVG (every module, not just app.js) so updates roll out;
+  // the cache is only the offline fallback. Cache-first stays for /vendor/ and the PNG icons.
   if (e.request.method !== 'GET') return;
   if (e.request.headers.get('accept')?.includes('text/html') ||
-      url.pathname === '/app.js' || url.pathname === '/style.css') {
+      (!url.pathname.startsWith('/vendor/') && /\.(js|css|svg|webmanifest)$/.test(url.pathname))) {
     e.respondWith(
       fetch(e.request).then((resp) => {
         const copy = resp.clone();

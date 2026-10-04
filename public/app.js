@@ -570,10 +570,44 @@ function onStatus() {
   alertTransitions();
 }
 
+// ---------- deploy banner: shown while a deploy is running, queued or waiting for approval ----------
+state.depSeen = new Map();   // deploy id -> ms when this page first saw it running (the registry has no start time)
+function noteDeploys(d) {
+  const live = new Set();
+  for (const x of d?.deploys || []) {
+    if (x.state === 'running') { live.add(x.id); if (!state.depSeen.has(x.id)) state.depSeen.set(x.id, x.started ? x.started * 1000 : Date.now()); }
+  }
+  for (const id of [...state.depSeen.keys()]) if (!live.has(id)) state.depSeen.delete(id);
+  renderDeployBanner();
+}
+function renderDeployBanner() {
+  const el = $('#deployBanner');
+  if (!el) return;
+  const list = state.deploys?.deploys || [];
+  const rank = { running: 0, 'awaiting-approval': 1, queued: 2 };
+  const act = list.filter((x) => x.state in rank).sort((p, q) => rank[p.state] - rank[q.state] || p.created - q.created);
+  el.classList.toggle('hidden', !act.length);
+  if (!act.length) { el.innerHTML = ''; el.dataset.key = ''; return; }
+  const key = act.map((x) => x.id + x.state).join('|');
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  const running = act.some((x) => x.state === 'running');
+  el.className = `deployban${running ? ' run' : ' wait'}`;
+  el.innerHTML = `<span class="lbl">${running ? 'DEPLOYING' : act.some((x) => x.state === 'awaiting-approval') ? 'DEPLOY NEEDS APPROVAL' : 'DEPLOY QUEUED'}</span>` + act.map((x) => {
+    const since = state.depSeen.get(x.id);
+    const what = `<b>${escapeHtml(x.env)}</b> ${escapeHtml(x.scope)} &middot; ${escapeHtml(x.ref)}`;
+    const tail = x.state === 'running' ? `${since ? `<i data-since="${since}">${fmtDur((Date.now() - since) / 1000)}</i>` : ''}`
+      : x.state === 'awaiting-approval' ? '<i>approve?</i>' : '<i>queued</i>';
+    return `<button class="dchip ${x.state === 'awaiting-approval' ? 'ask' : x.state}" data-dep-open="${escapeHtml(x.id)}" title="${escapeHtml(`${x.agent || ''}${x.purpose ? ' \u2014 ' + x.purpose : ''}`)}">${x.state === 'running' ? icon('refresh', 13, 'spin') : icon('timer', 13)}${what}${tail ? ` ${tail}` : ''}</button>`;
+  }).join('');
+  for (const b of el.querySelectorAll('[data-dep-open]')) b.onclick = () => openPlatforms({ deploy: b.dataset.depOpen });
+}
+
 // ---------- deploy queue (TASK-44 phase 7) ----------
 const DEP_PENDING = ['queued', 'running'];
 function onDeploys(d) {
   state.deploys = d;
+  noteDeploys(d);
   if (state.platSheet) state.platSheet();
   const waiting = (d?.deploys || []).filter((x) => x.state === 'awaiting-approval').length;
   els.mgrBtn.classList.toggle('badge', waiting > 0);
@@ -1670,6 +1704,7 @@ function syncAll() {
 
 // Elapsed timers tick locally between server updates.
 function tickClock() {
+  for (const el of document.querySelectorAll('#deployBanner [data-since]')) el.textContent = fmtDur((Date.now() - Number(el.dataset.since)) / 1000);
   for (const el of document.querySelectorAll('.apill [data-at]')) el.textContent = autoLeft(Number(el.dataset.at));
   for (const el of document.querySelectorAll('.stw[data-s] .st')) {
     const host = el.closest('[data-session]');
