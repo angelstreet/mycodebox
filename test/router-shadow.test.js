@@ -5,6 +5,7 @@ import http from 'node:http';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runShadow } from '../router-shadow.js';
 
 const TEAM = 'team-shadow';
 const seen = { shadow: [], manager: [], outcome: [] };
@@ -152,6 +153,44 @@ test('a hanging Jev never blocks the stop flow', async () => {
   assert.equal(pushes.length - pBefore, 1, 'pushed while the shadow call is still open');
   assert.ok(!records().some((r) => r.type === 'router' && r.id === st.id), 'no router record yet');
   mode = 'ok';
+});
+
+test('shadow retry: first post rejects with a network error, second succeeds -> parsed answers, no error', async () => {
+  const seen = [];
+  const post = async (body) => {
+    seen.push(body);
+    if (seen.length === 1) throw new Error('fetch failed ECONNRESET');
+    return { r: { status: 200 },
+      j: { success: true, cost: 0.0001, ms: 50, model: 'jev', decision_id: 'sh-retry',
+        answers: {
+          case: { type: 'choice', choice: 'done', confidence: 0.9, probabilities: { done: 0.9 } },
+          owner: { type: 'noul', noul: 0.1 },
+          wake: { type: 'choice', choice: 'ignore', confidence: 0.9, probabilities: { ignore: 0.9 } },
+        } } };
+  };
+  const kindOf = (m) => /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network/i.test(m) ? 'network'
+    : /^http \d/i.test(m) ? 'http'
+    : /timeout|aborted/i.test(m) ? 'timeout'
+    : /\b402\b|insufficient credits/i.test(m) ? 'credits' : 'other';
+  const sleep = () => Promise.resolve();   // skip the 2 s wait in tests
+  const router = await runShadow({ facts: { session: 's', agent: 'claude', excerpt: 'foo' }, post, kindOf, sleep });
+  assert.equal(seen.length, 2, 'retried exactly once on the network error');
+  assert.equal(router.error, undefined, 'no error on the parsed record');
+  assert.equal(router.kind, undefined, 'no kind on a successful record');
+  assert.equal(router.case, 'done'); assert.equal(router.wake, 'ignore'); assert.equal(router.decision_id, 'sh-retry');
+});
+
+test('shadow retry: a non-network failure (http 5xx) is NOT retried, and carries kind=http', async () => {
+  const seen = [];
+  const post = async (body) => {
+    seen.push(body);
+    return { r: { status: 500 }, j: { success: false, error: 'http 500' } };
+  };
+  const kindOf = (m) => /^http \d/i.test(m) ? 'http' : /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network/i.test(m) ? 'network' : 'other';
+  const router = await runShadow({ facts: { session: 's', agent: 'claude', excerpt: 'foo' }, post, kindOf });
+  assert.equal(seen.length, 1, 'no retry on an http error');
+  assert.match(router.error, /http 500/);
+  assert.equal(router.kind, 'http');
 });
 
 test('no OpenRouter credit: the shadow is skipped (logged), the flow is untouched', async () => {
