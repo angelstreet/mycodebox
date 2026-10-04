@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDeployRunner, flagsFor, covers } from '../deploy-runner.js';
+import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable } from '../deploy-runner.js';
 
 // In-memory registry that mimics `vpt-lease deploy ...` (start = atomic check against leases + one running per env).
 function fakeRegistry({ leases = [], deploys = [] } = {}) {
@@ -14,6 +14,11 @@ function fakeRegistry({ leases = [], deploys = [] } = {}) {
     const [, sub, id] = args;
     const d = st.deploys.find((x) => x.id === id);
     if (sub === 'list') return { code: 0, stdout: JSON.stringify({ deploys: st.deploys, leases: st.leases }), stderr: '' };
+    if (sub === 'request') {
+      const g = (f) => args[args.indexOf(f) + 1];
+      const n = { id: `c${st.deploys.length + 1}`, env: args[2], scope: g('--scope'), ref: g('--ref'), agent: g('--agent'), purpose: g('--purpose'), state: 'queued', created: 99, hosts: args.includes('--hosts') ? g('--hosts').split(',') : undefined };
+      st.deploys.push(n); return { code: 0, stdout: n.id, stderr: '' };
+    }
     if (sub === 'start') {
       if (!d || d.state !== 'queued') return { code: 1, stdout: '', stderr: 'not queued' };
       if (st.deploys.some((x) => x.env === d.env && x.state === 'running')) return { code: 3, stdout: '', stderr: 'running' };
@@ -23,6 +28,7 @@ function fakeRegistry({ leases = [], deploys = [] } = {}) {
     if (sub === 'finish') {
       d.state = args[args.indexOf('--status') + 1]; d.finished = Date.now(); d.tail = stdin;
       if (args.includes('--coalesced-into')) d.coalescedInto = args[args.indexOf('--coalesced-into') + 1];
+      if (args.includes('--skipped-hosts')) d.skippedHosts = args[args.indexOf('--skipped-hosts') + 1].split(',');
       if (args.includes('--version')) d.version = args[args.indexOf('--version') + 1];
       return { code: 0, stdout: d.state, stderr: '' };
     }
@@ -75,7 +81,8 @@ test('full scope uses no flag; other env uses its own host', async () => {
   const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' })] });
   const { runner, ran } = make(reg);
   await runner.tick(); await until(() => ran.length === 1);
-  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=1 bash update_core.sh main');
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=1 bash update_core.sh main --skip-leased');
+  assert.ok(reg.calls.includes('deploy start 1 --skip-leased'));
 });
 
 test('skips a busy request and starts a free one behind it', async () => {
@@ -227,4 +234,70 @@ test('onChange fires when only the deployed map changes', async () => {
   reg.deployed = { e: { frontend: { version: 'v1', at: 1 } } };
   await runner.tick(); assert.equal(changes.length, n + 1);
   assert.equal(changes.at(-1).deployed.e.frontend.version, 'v1');
+});
+
+test('full and host deploys always pass --skip-leased; frontend and server do not', async () => {
+  assert.deepEqual(extraFlagsFor({ scope: 'full' }), ['--skip-leased']);
+  assert.deepEqual(extraFlagsFor({ scope: 'host' }), ['--skip-leased']);
+  assert.deepEqual(extraFlagsFor({ scope: 'host', hosts: ['a', 'b'] }), ['--skip-leased', '--hosts', 'a,b']);
+  assert.deepEqual(extraFlagsFor({ scope: 'frontend' }), []);
+  assert.deepEqual(extraFlagsFor({ scope: 'server' }), []);
+});
+
+test('parseSkipped reads the last SKIPPED_HOSTS line and ignores junk names', () => {
+  assert.deepEqual(parseSkipped(['x', 'SKIPPED_HOSTS=a,b']), ['a', 'b']);
+  assert.deepEqual(parseSkipped(['SKIPPED_HOSTS=a', 'SKIPPED_HOSTS=c']), ['c']);
+  assert.deepEqual(parseSkipped(['SKIPPED (leased by x): a']), []);
+  assert.deepEqual(parseSkipped(['SKIPPED_HOSTS=a;rm,b']), ['b']);
+});
+
+test('SKIPPED_HOSTS: recorded on the deploy and a catch-up host request is queued', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' })] });
+  const { runner, ran, alerts } = make(reg, { run: async (env, o) => { o.onLine('deploying'); if (o.id === '1') { o.onLine('SKIPPED (leased by mac:m): labox-dongle'); o.onLine('SKIPPED_HOSTS=labox-dongle'); } return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '1').state === 'done');
+  assert.deepEqual(reg.deploys.find((d) => d.id === '1').skippedHosts, ['labox-dongle']);
+  const cu = reg.deploys.find((d) => d.agent === 'manager:deploy');
+  assert.ok(cu);
+  assert.deepEqual([cu.scope, cu.ref, cu.hosts], ['host', 'main', ['labox-dongle']]);
+  assert.match(cu.purpose, /^catch-up: hosts skipped by 1 \(leased\): labox-dongle$/);
+  assert.ok(reg.calls.some((c) => /deploy request node1-vpt --scope host --ref main --agent manager:deploy --approved --hosts labox-dongle/.test(c)));
+  assert.ok(alerts.some(([k, t]) => k === 'deploy:1:done' && /1 host\(s\) skipped/.test(t)));
+});
+
+test('the catch-up runs with --hosts, only when its hosts are free', async () => {
+  const reg = fakeRegistry({ deploys: [dep('5', { scope: 'host', ref: 'main', agent: 'manager:deploy', hosts: ['labox-dongle'] })] });
+  const { runner, ran } = make(reg);
+  await runner.tick(); await until(() => ran.length === 1);
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=5 bash update_core.sh main --host --skip-leased --hosts labox-dongle');
+  assert.ok(reg.calls.includes('deploy start 5 --skip-leased'));
+});
+
+test('no SKIPPED_HOSTS line: no catch-up request, no skippedHosts', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'host' })] });
+  const { runner } = make(reg);
+  await runner.tick(); await until(() => reg.deploys[0].state === 'done');
+  assert.equal(reg.deploys.length, 1);
+  assert.equal(reg.deploys[0].skippedHosts, undefined);
+});
+
+test('a run that skipped hosts does not close a queued host request for them; one for other hosts is merged', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full' }), dep('2', { scope: 'host', hosts: ['labox-dongle'] }), dep('3', { scope: 'host', hosts: ['vpt-pi1'] }), dep('4', { scope: 'host' })] });
+  const { runner } = make(reg, { run: async (env, o) => { if (o.id === '1') o.onLine('SKIPPED_HOSTS=labox-dongle'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '1').state === 'done');
+  const st = (i) => reg.deploys.find((d) => d.id === i).state;
+  assert.equal(st('3'), 'done');                 // coalesced into the full run
+  assert.equal(st('2') === 'queued' || st('2') === 'running' || st('2') === 'done', true);
+  assert.notEqual(reg.deploys.find((d) => d.id === '2').coalescedInto, '1');
+  assert.notEqual(reg.deploys.find((d) => d.id === '4').coalescedInto, '1');
+});
+
+test('a hosts-limited run only merges requests for hosts it deploys', () => {
+  const d = { id: '1', env: 'e', scope: 'host', ref: 'm', hosts: ['a', 'b'], state: 'running' };
+  const x = (o) => ({ id: '2', env: 'e', scope: 'host', ref: 'm', state: 'queued', ...o });
+  assert.equal(mergeable(d, x({ hosts: ['a'] })), true);
+  assert.equal(mergeable(d, x({ hosts: ['a', 'c'] })), false);
+  assert.equal(mergeable(d, x({})), false);
+  assert.equal(mergeable({ ...d, hosts: undefined }, x({})), true);
 });
