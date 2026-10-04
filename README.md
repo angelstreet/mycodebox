@@ -120,6 +120,24 @@ appends `{type:'label', ...}` to `stalls.jsonl`. `npm run stall-report` prints l
 excerpts are real text) for future fixtures; `--reclassify` re-runs the current classifier over the logged
 excerpts and prints how cases change (the log is not modified).
 
+**Swipe review (the main way to label).** `/?review=1`, the topbar button (cards icon) or "Review stops (N)" in the
+manager panel opens a full-screen deck of unlabelled stops, newest first, one card at a time: session (tap = open its
+card) · agent · age, the case the manager chose, what it would have answered, Jev's pick, `no_status`, and the full closing
+text (the end is scrolled into view), plus your own reply if one was logged. **Swipe right = good** (a legit stop, label
+`legit`), **left = bad** (stopped for no reason, `no_reason`), **up = skip** (no label, back of the deck). The card follows the
+finger, tilts, shows a BAD / GOOD stamp past the threshold and snaps back under it. Buttons (✕ ↷ ✓) and the keys ← ↑ → do the
+same; **Undo** (button, Backspace, `u`, Ctrl+Z) withdraws the last swipe. **Long-press** a card for a note and "manager got the
+case wrong" (the correct case); they ride on the next swipe, which still decides good/bad. The panel's 👎/👍 remain but are
+dimmed.
+
+- `GET /api/manager/review?limit=50` -> `{cards, unlabelled, labelledToday, cases}`: unlabelled `stall` records (no effective
+  label), newest first, each with id, at, session, project, agent, state, case, source, why, wouldSend, deployHint, no_status,
+  jev {choice, confidence}, excerpt and `outcome` {reply, kind, via, afterSec} when the owner's reply was logged.
+- `POST /api/manager/unlabel {id}` appends `{type:'unlabel', id}`. Readers (`effectiveLabels` in `manager.js`, the panel,
+  `stall-report`) treat it as: the newest `label` of an id wins, an `unlabel` after it removes it. A `label` record may carry
+  `correctCase` next to `no_reason`/`legit`; the report counts it under `wrong_case` as well.
+- Code: `public/review.js` (loaded on demand), styles `.rv-*` in `style.css`.
+
 **Sending is off by default.** Turn it on (`autoSend`) and only the cases in `autoCases` are typed
 (`continue` and `stopped_short` -> "Yes, continue."; `ask_status` -> the status question; `menu_recommended` -> the option's number in a live menu, or "Yes,
 go with your recommendation." after a finished turn). A forbidden topic (deploy, push/merge to

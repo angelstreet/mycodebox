@@ -17,6 +17,8 @@
 //                                 global settings, {session, sessionEnabled} per session
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
 //   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
+//   POST /api/manager/unlabel   → {id} withdraw the newest label of a stall (swipe page undo)
+//   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
 //   GET  /api/deploys           → deploy queue + recent (registry on proxmox), {enabled, running, lastRef}; pushed on /ws/status as {type:'deploys'}
@@ -50,7 +52,7 @@ import { createQuota } from './quota.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, reviewDeck, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, LOG_FILE } from './manager.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 
@@ -1251,6 +1253,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/api/manager/label') {
     try { return json(res, 200, { ok: true, label: await labelStall(await readJsonBody(req)) }); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/manager/unlabel') {
+    try { return json(res, 200, { ok: true, unlabel: await unlabelStall(await readJsonBody(req)) }); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/manager/review') {
+    return json(res, 200, await reviewDeck(url.searchParams.get('limit') || 50));
   }
   if (req.method === 'GET' && p === '/api/manager/log') {
     const limit = Math.min(2000, Number(url.searchParams.get('limit')) || 200);

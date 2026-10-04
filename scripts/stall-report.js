@@ -67,8 +67,8 @@ if (process.argv.includes('--list')) {
 }
 
 // ---- owner labels ("this stop bothered me") ----
-const labels = new Map();   // stall id -> newest label record
-for (const r of recs) if (r.type === 'label') labels.set(r.id, r);
+const labels = new Map();   // stall id -> newest label record; an unlabel after it withdraws it
+for (const r of recs) { if (r.type === 'label') labels.set(r.id, r); else if (r.type === 'unlabel') labels.delete(r.id); }
 const byId = new Map(recs.filter((r) => r.type === 'stall').map((r) => [r.id, r]));
 const labelled = [...labels.values()].map((l) => ({ l, s: byId.get(l.id) })).filter((x) => x.s);
 if (labelled.length) {
@@ -76,6 +76,7 @@ if (labelled.length) {
   for (const { l, s } of labelled) {
     const row = per.get(s.case) || { no_reason: 0, legit: 0, wrong_case: 0 };
     row[l.label]++;
+    if (l.correctCase && l.label !== 'wrong_case') row.wrong_case++;   // the swipe page: good/bad AND the manager chose the wrong case
     per.set(s.case, row);
   }
   console.log('\nowner labels per case          no_reason  legit  wrong_case');

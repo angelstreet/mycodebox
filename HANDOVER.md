@@ -31,6 +31,11 @@ spent; MiniMax unpriced = `—`), cost chip on cards/rows, `GET /api/usage`, `us
 "Usage view (UI)". Deploy: the tailer must be restarted (`ghosty-usage`) so the summary gets the `today` block, plus a
 ghosty-sessions restart; until then the Today tab says so and 14-day data still works.
 
+**Swipe review (TASK-44 phase 2b, branch `task44-swipe-review`)** — `/?review=1` / topbar cards icon / panel link: Tinder-style
+good (right) / bad (left) / skip (up) labelling of unlabelled stops, Undo via `{type:'unlabel'}` records. API
+`GET /api/manager/review`, `POST /api/manager/unlabel`; code `public/review.js`; tests `test/review.test.js`; SW cache v17.
+Not merged or deployed; deploying needs a `ghosty-sessions` restart. See README "Swipe review".
+
 ## Access URLs
 
 | URL | Use |
