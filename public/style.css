@@ -1498,3 +1498,26 @@ body.side-docked #tabs{ display:none; }
 @media (max-width: 720px){ .quota{ display:none !important; } }
 /* not enough width for the centred quota readout: drop it rather than show half of it (it is in Usage too) */
 @media (max-width: 1320px){ .quota.inbar{ display:none; } .health.inbar{ margin-right:auto; } }
+
+/* session list: pin, groups, drag and drop */
+.session-list li.grp{ display:flex; align-items:center; gap:7px; padding:9px 8px 5px; margin:6px 0 2px; cursor:pointer; color:var(--ink-3); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; border-bottom:1px solid var(--line); }
+.session-list li.grp:hover{ color:var(--ink-2); }
+.session-list li.grp .gc{ letter-spacing:0; color:var(--ink-3); }
+.session-list li.grp .grow{ flex:1; }
+.session-list li.grp .gx{ background:transparent; border:0; color:var(--ink-3); padding:2px; display:inline-flex; opacity:0; }
+.session-list li.grp:hover .gx{ opacity:1; }
+.session-list li .edit.pin{ opacity:0; } .session-list li:hover .edit.pin{ opacity:1; }
+.session-list li.pinned .edit.pin{ opacity:1; color:var(--accent); }
+.session-list li[draggable="true"]{ cursor:grab; }
+.session-list li.dragging{ opacity:.4; }
+.session-list li.drop-before{ box-shadow:0 -2px 0 var(--accent); }
+.session-list li.drop-after{ box-shadow:0 2px 0 var(--accent); }
+.session-list li.grp.drop-into{ background:rgba(232,154,74,.14); color:var(--accent); }
+/* roomier docked list: row buttons only on hover (a pinned row keeps its pin showing), tighter header */
+@media (hover: hover){
+  .session-list li:not(:hover):not(.editing) .edit:not(.pin){ display:none; }
+  .session-list li:not(:hover):not(.pinned) .edit.pin{ display:none; }
+}
+body.side-docked .side-head{ gap:2px; padding:8px 8px 8px 14px; }
+body.side-docked .side-head .icon-btn{ width:28px; height:30px; }
+body.side-docked .side-head .ttl{ letter-spacing:.12em; }

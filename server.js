@@ -40,6 +40,7 @@
 //   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
+//   GET|PUT /api/layout         → the session list's order / pins / groups ({order,pins,groups,groupNames,collapsed}); PUT merges the keys it carries
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
 //   GET  /*                     → static files in ./public
 
@@ -59,6 +60,7 @@ import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
 import { createPush, createAlerts } from './push.js';
 import { trustFolder } from './trust.js';
+import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
 import { createCredits } from './credits.js';
@@ -552,6 +554,7 @@ const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntf
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
+const layoutStore = createLayoutStore({ file: join(STATE_DIR, 'layout.json') });   // order / pins / groups of the session list
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
 const deployRunner = createDeployRunner({
   stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn,
@@ -1188,6 +1191,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'DELETE' && p.startsWith('/api/sessions/')) {
     try { return json(res, 200, await killSession(decodeURIComponent(p.slice('/api/sessions/'.length)), url.searchParams.get('confirm'))); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  if (p === '/api/layout' && (req.method === 'GET' || req.method === 'PUT')) {
+    try {
+      if (req.method === 'GET') return json(res, 200, await layoutStore.get());
+      return json(res, 200, await layoutStore.set(await readJsonBody(req)));
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/dirs') {
     try { return json(res, 200, await collectDirs()); }

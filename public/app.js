@@ -96,8 +96,46 @@ function saveRenames() { lsSet(LS_RENAMES, JSON.stringify(state.rename)); }
 function customFor(name) { return state.rename[name] || ''; }
 function displayName(name) { return customFor(name) || name; }
 
+// Order / pins / groups of the session list live in a config file on the server (GET|PUT /api/layout); localStorage is only a cache.
+const normLayout = (x) => ({
+  order: Array.isArray(x?.order) ? x.order.filter((n) => typeof n === 'string') : [],
+  pins: Array.isArray(x?.pins) ? x.pins.filter((n) => typeof n === 'string') : [],
+  groups: x?.groups && typeof x.groups === 'object' && !Array.isArray(x.groups) ? { ...x.groups } : {},
+  groupNames: Array.isArray(x?.groupNames) ? [...new Set(x.groupNames)] : [],
+  collapsed: Array.isArray(x?.collapsed) ? x.collapsed : [],
+});
+state.layout = normLayout(null);
+let layoutTimer = 0, layoutDirty = false;
+function saveLayout() {
+  state.layout.groupNames = [...new Set([...state.layout.groupNames, ...Object.values(state.layout.groups)])];
+  state.order = state.layout.order;
+  lsSet('ghosty.layout', JSON.stringify(state.layout));
+  layoutDirty = true;
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(() => {
+    fetch('/api/layout', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(state.layout) })
+      .then((r) => { if (r.ok) layoutDirty = false; }).catch(() => {});
+  }, 400);
+}
+async function loadLayout() {
+  if (layoutDirty) return;
+  try {
+    const r = await fetch('/api/layout');
+    if (!r.ok) return;
+    const j = normLayout(await r.json());
+    const empty = !j.order.length && !j.pins.length && !Object.keys(j.groups).length && !j.groupNames.length;
+    if (empty && (state.layout.order.length || state.layout.pins.length || Object.keys(state.layout.groups).length)) { saveLayout(); return; }   // first run: seed the file from this browser
+    if (JSON.stringify(j) === JSON.stringify(state.layout)) return;
+    state.layout = j; state.order = j.order;
+    lsSet('ghosty.layout', JSON.stringify(j));
+    sortSessions(); renderAll();
+  } catch { /* offline: keep the cache */ }
+}
 function loadOrder() {
   try { state.order = JSON.parse(lsGet(LS_ORDER, '[]')) || []; } catch { state.order = []; }
+  try { state.layout = normLayout(JSON.parse(lsGet('ghosty.layout', 'null'))); } catch { state.layout = normLayout(null); }
+  if (!state.layout.order.length && state.order.length) state.layout.order = [...state.order];
+  state.order = state.layout.order;
 }
 function loadPrefs() {
   loadOrder();
@@ -131,6 +169,8 @@ const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${esc
 const vstateOf = (name) => displayStateOf(name, state.status);
 const deployWaitTip = (name) => state.status[name]?.deployWait?.text || '';
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
+// filter bar: open by default on desktop, hidden by default on phones; the first tap on the funnel makes it your choice
+state.filterOpen = (() => { const v = lsGet('ghosty.filterOpen', ''); return v === '' ? !window.matchMedia('(max-width: 720px)').matches : v === '1'; })();
 
 function agentOf(name) {
   const st = state.status[name] || {};
@@ -642,9 +682,10 @@ function onPane(session, pane) {
 // Grid order: the user's saved order first (drag / arrows), then the rest
 // alphabetically. Cards never reorder on their own.
 function sortSessions() {
-  const idx = new Map((state.order || []).map((n, i) => [n, i]));
+  const idx = new Map((state.layout.order || []).map((n, i) => [n, i]));
+  const pins = new Set(state.layout.pins);
   const rank = (n) => idx.has(n) ? idx.get(n) : Infinity;
-  state.sessions.sort((a, b) => (rank(a.name) - rank(b.name)) ||
+  state.sessions.sort((a, b) => ((pins.has(b.name) ? 1 : 0) - (pins.has(a.name) ? 1 : 0)) || (rank(a.name) - rank(b.name)) ||
     displayName(a.name).localeCompare(displayName(b.name)));
 }
 
@@ -657,8 +698,8 @@ function moveSessionTo(name, to) {
   if (to === from) return;
   names.splice(from, 1);
   names.splice(to, 0, name);
-  state.order = names;
-  lsSet(LS_ORDER, JSON.stringify(names));
+  state.layout.order = names;
+  saveLayout();
   sortSessions();
   renderTabStrip();
   if (state.mode === 'grid') renderGrid();
@@ -1017,22 +1058,143 @@ function renderSide() {
   layoutSide();
   syncSide();
 }
+// Sections of the list: Pinned, then each named group, then the rest. Headers show only when a pin or group exists.
+const secOfName = (n) => (state.layout.pins.includes(n) ? 'pin' : state.layout.groups[n] ? `g:${state.layout.groups[n]}` : 'other');
 function layoutSide() {
   const list = els.sessionList;
+  const L = state.layout;
   const rows = new Map([...list.children].filter((li) => li.dataset.session).map((li) => [li.dataset.session, li]));
+  const hdrs = state.sideHdr || (state.sideHdr = {});
+  const names = state.sessions.map((s) => s.name);            // already pinned-first, then the saved order, then alphabetical
+  const groupNames = [...new Set([...(L.groupNames || []), ...Object.values(L.groups)])].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+  const sections = [];
+  if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned', icon: 'pin' });
+  for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: g });
+  const withHeaders = sections.length > 0;
+  if (withHeaders) sections.push({ key: 'other', title: 'Other' });
+  const plan = [];
+  for (const sec of (withHeaders ? sections : [{ key: 'other' }])) {
+    const members = names.filter((n) => secOfName(n) === sec.key && matchesFilter(n));
+    const total = names.filter((n) => secOfName(n) === sec.key).length;
+    if (withHeaders && !(sec.key === 'other' && !total)) plan.push({ hdr: sec, count: total });
+    const closed = L.collapsed.includes(sec.key);
+    for (const n of members) plan.push({ name: n, sec: sec.key, closed });
+  }
+  const want = new Set(plan.filter((p) => p.hdr).map((p) => p.hdr.key));
+  for (const [k, el] of Object.entries(hdrs)) if (!want.has(k)) { el.remove(); delete hdrs[k]; }
   let cursor = list.firstChild;
   const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
-  // flat, alphabetical by shown name: the state badge says the rest, so rows never jump around
-  for (const h of [...list.querySelectorAll('li.grp')]) { if (h === cursor) cursor = cursor.nextSibling; h.remove(); }
-  const shown = (s) => displayName(s.name).toLowerCase();
-  const sorted = [...state.sessions].sort((x, y) => shown(x).localeCompare(shown(y), undefined, { numeric: true }));
-  for (const m of sorted) { const row = rows.get(m.name); if (row) place(row); }
-  for (const [n, row] of rows) row.hidden = !matchesFilter(n);
+  for (const p of plan) {
+    if (p.hdr) {
+      let h = hdrs[p.hdr.key];
+      if (!h) {
+        h = hdrs[p.hdr.key] = document.createElement('li');
+        h.className = 'grp'; h.dataset.sec = p.hdr.key;
+        h.innerHTML = `<i class="uch"></i>${p.hdr.icon ? icon(p.hdr.icon, 12) : ''}<span class="gt"></span><span class="gc"></span><span class="grow"></span>${p.hdr.group ? `<button class="gx" aria-label="Remove group" title="Remove group (sessions go back to Other)">${icon('x', 12)}</button>` : ''}`;
+      }
+      h.querySelector('.gt').textContent = p.hdr.title;
+      h.querySelector('.gc').textContent = String(p.count);
+      h.querySelector('.uch').classList.toggle('on', !L.collapsed.includes(p.hdr.key));
+      place(h);
+    } else {
+      const row = rows.get(p.name);
+      if (!row) continue;
+      row.dataset.sec = p.sec; row.hidden = p.closed;
+      place(row);
+    }
+  }
+  const planned = new Set(plan.filter((p) => p.name).map((p) => p.name));
+  for (const [n, row] of rows) if (!planned.has(n)) row.hidden = true;     // filtered out
+}
+// drag a row onto a row (before / after it) or onto a header (end of that section); the section's pin / group follows
+function moveInSidebar(name, target, before) {
+  const L = state.layout;
+  const sec = target.dataset.sec;
+  L.pins = L.pins.filter((n) => n !== name); delete L.groups[name];
+  if (sec === 'pin') L.pins.push(name); else if (sec?.startsWith('g:')) L.groups[name] = sec.slice(2);
+  const names = state.sessions.map((s) => s.name).filter((n) => n !== name);
+  let at;
+  if (target.classList.contains('grp')) {
+    const members = names.filter((n) => secOfName(n) === sec);
+    at = members.length ? names.indexOf(members[members.length - 1]) + 1 : names.length;
+  } else {
+    const t = target.dataset.session;
+    if (t === name) return;
+    const ti = names.indexOf(t);
+    at = before ? ti : ti + 1;
+  }
+  names.splice(at, 0, name);
+  L.order = names;
+  saveLayout(); sortSessions(); renderTabStrip();
+  if (state.mode === 'grid') renderGrid();
+  syncAll();
+}
+function wireSideDnd() {
+  const list = els.sessionList;
+  let drag = null;
+  const clear = () => { for (const e of list.querySelectorAll('.drop-before,.drop-after,.drop-into,.dragging')) e.classList.remove('drop-before', 'drop-after', 'drop-into', 'dragging'); };
+  list.addEventListener('dragstart', (e) => {
+    const li = e.target.closest('li[data-session]');
+    if (!li || li.classList.contains('editing')) { e.preventDefault(); return; }
+    drag = li.dataset.session;
+    e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/x-ghosty-side', drag);
+    li.classList.add('dragging');
+  });
+  list.addEventListener('dragend', () => { drag = null; clear(); });
+  list.addEventListener('dragover', (e) => {
+    if (!drag) return;
+    const li = e.target.closest('li[data-session], li.grp');
+    if (!li) return;
+    e.preventDefault();
+    clear();
+    if (li.classList.contains('grp')) li.classList.add('drop-into');
+    else { const r = li.getBoundingClientRect(); li.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after'); }
+  });
+  list.addEventListener('drop', (e) => {
+    if (!drag) return;
+    const li = e.target.closest('li[data-session], li.grp');
+    if (!li) return;
+    e.preventDefault();
+    const r = li.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2, name = drag;
+    drag = null; clear();
+    moveInSidebar(name, li, before);
+  });
+  // headers: tap = fold / unfold, x = remove the group
+  list.addEventListener('click', (e) => {
+    const h = e.target.closest('li.grp');
+    if (!h) return;
+    const key = h.dataset.sec, L = state.layout;
+    if (e.target.closest('.gx')) {
+      const g = key.slice(2);
+      for (const [n, v] of Object.entries(L.groups)) if (v === g) delete L.groups[n];
+      L.groupNames = L.groupNames.filter((x) => x !== g); L.collapsed = L.collapsed.filter((k) => k !== key);
+    } else L.collapsed = L.collapsed.includes(key) ? L.collapsed.filter((k) => k !== key) : [...L.collapsed, key];
+    saveLayout(); layoutSide();
+  });
+}
+function openNewGroup() {
+  openSheet('New group', ({ body, foot, close }) => {
+    body.innerHTML = '<label class="flab">group name</label><input class="sheet-in" id="grpName" maxlength="40" autocomplete="off" placeholder="e.g. qualiai">';
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<button class="sbtn" data-a="cancel">cancel</button><span class="grow"></span><button class="sbtn primary" data-a="go">create</button>';
+    const inp = body.querySelector('#grpName');
+    const go = () => {
+      const g = inp.value.trim();
+      if (!g) return;
+      if (!state.layout.groupNames.includes(g)) state.layout.groupNames.push(g);
+      saveLayout(); layoutSide(); close();
+      toast(`group "${g}": drag sessions onto it`);
+    };
+    foot.onclick = (e) => { const x = e.target.closest('button')?.dataset.a; if (x === 'cancel') close(); else if (x === 'go') go(); };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+    setTimeout(() => inp.focus(), 80);
+  });
 }
 function buildSideRow(s) {
   const custom = customFor(s.name);
   const li = document.createElement('li');
   li.dataset.session = s.name;
+  li.draggable = true;
   li.innerHTML = `
     <i class="dot"></i>
     <div class="meta">
@@ -1040,6 +1202,7 @@ function buildSideRow(s) {
       <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="pp hidden">paused</span></div>
       <div class="sub rb"></div>
     </div>
+    <button class="edit pin" aria-label="Pin" title="Pin to the top">${icon('pin', 15)}</button>
     <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
     <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button>`;
   li.querySelector('.meta').onclick = (e) => {
@@ -1050,7 +1213,13 @@ function buildSideRow(s) {
       els.gridPane.querySelector(`[data-session="${cssEscape(s.name)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     } else openCard(s.name);
   };
-  li.querySelector('.edit:not(.kill)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
+  li.querySelector('.pin').onclick = (e) => {
+    e.stopPropagation();
+    const L = state.layout;
+    L.pins = L.pins.includes(s.name) ? L.pins.filter((n) => n !== s.name) : [...L.pins, s.name];
+    saveLayout(); sortSessions(); renderTabStrip(); if (state.mode === 'grid') renderGrid(); syncAll();
+  };
+  li.querySelector('.edit:not(.kill):not(.pin)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
   return li;
 }
@@ -1064,6 +1233,7 @@ function syncSide() {
     const n = li.dataset.session;
     if (!n || li.classList.contains('editing')) continue;
     li.classList.toggle('active', n === state.active);
+    li.classList.toggle('pinned', state.layout.pins.includes(n));
     li.classList.toggle('shown', n !== state.active && shownNames.has(n));
     li.querySelector('.dot').className = `dot ${vstateOf(n)}`;
     const ag = agentBadgeHtml(n);
@@ -3351,12 +3521,16 @@ function cssEscape(s) { return (window.CSS?.escape) ? CSS.escape(s) : String(s).
 // ---------- wire up ----------
 els.menuBtn.onclick   = openSide;
 $('#sideCollapseBtn').onclick = () => setDock(false);
+$('#sideGroupBtn').onclick = openNewGroup;
+wireSideDnd();
+loadLayout();
+window.addEventListener('focus', loadLayout);
 $('#sideFullBtn').onclick = () => { setDock(false); setMode('list'); };
 applyDock();
 els.backBtn.onclick   = () => setMode(state.prevMode || (isPhone() ? 'list' : 'grid'));
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();
-els.filterBtn.onclick = () => { state.filterOpen = !state.filterOpen; renderFilterBar(); };
+els.filterBtn.onclick = () => { state.filterOpen = !state.filterOpen; lsSet('ghosty.filterOpen', state.filterOpen ? '1' : '0'); renderFilterBar(); };
 els.notifyBtn.onclick = () => toggleNotify();
 for (const b of $$('.mode-btn')) b.onclick = () => setMode(b.dataset.mode);
 // tapping a size always shows the grid at that size
