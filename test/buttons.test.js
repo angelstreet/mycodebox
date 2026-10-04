@@ -181,11 +181,11 @@ test('open question with suggestion: "Claude suggests:" button, muted, non-prima
 // parseAlternatives coverage of the three accepted shapes.
 test('parseAlternatives: lettered lines, inline "A (..) or B (..)", plain "X or Y?"', () => {
   assert.deepEqual(parseAlternatives('- A. Foo (recommended)\n- B. Bar'), [
-    { letter: 'A', label: 'Foo (recommended)', recommended: true },
+    { letter: 'A', label: 'Foo', recommended: true },
     { letter: 'B', label: 'Bar', recommended: false },
   ]);
   assert.deepEqual(parseAlternatives('Alert queue: A (stop queueing, my recommendation) or B (build a consumer)?'), [
-    { letter: 'A', label: 'stop queueing, my recommendation', recommended: true },
+    { letter: 'A', label: 'stop queueing', recommended: true },
     { letter: 'B', label: 'build a consumer', recommended: false },
   ]);
   assert.deepEqual(parseAlternatives('Shall I use X or Y?'), [
@@ -215,4 +215,10 @@ test('listQuestions: numbered decision lines, max 3, ≤ 160 chars, in order', (
   assert.ok(long[0].length <= 160 && long[0].endsWith('…'), 'long questions are truncated');
   assert.deepEqual(listQuestions('No numbered decisions here, just prose.'), []);
   assert.deepEqual(listQuestions(''), []);
+});
+
+test('gate: real closing shapes -- "(the agent\'s recommendation): ..." lines, "(A or B)?", numbered steps are not decisions', () => {
+  const t = 'Question 2: what to do (A or B)?\n  - A (the agent\'s recommendation): stop putting alerts in the queue. Small change.\n  - B: build something that reads the queue. A whole project.';
+  assert.deepEqual(parseAlternatives(t).map((a) => [a.letter, a.label, a.recommended]), [['A', 'stop putting alerts in the queue', true], ['B', 'build something that reads the queue', false]]);
+  assert.deepEqual(listQuestions('1. Get the fingerprint. Run bubblewrap fingerprint, or keytool.\n2. Install the APK. Copy it, or serve it.'), []);
 });

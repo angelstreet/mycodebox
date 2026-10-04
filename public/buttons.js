@@ -41,7 +41,7 @@ const trunc = (t, n = 30) => { t = String(t || '').replace(/\s+/g, ' ').trim(); 
 const sameReply = (a, b) => String(a || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === String(b || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 // True when the body says the option is what the agent recommends ("(recommended)", "my recommendation").
-const RECOMMENDED_RE = /\b(?:recommended|my recommendation)\b/i;
+const RECOMMENDED_RE = /\brecommend(?:ed|ation)\b/i;
 
 // Extract the alternatives of an either-question. Returns an array (max 4) of either
 //   { letter, label, recommended }  — "A (...)", "- A. ...", "A) ...", "(A) ..."
@@ -56,13 +56,18 @@ export function parseAlternatives(text) {
   const alts = [];
   const seen = new Set();
   for (const l of lines) {
-    const m = l.match(/^\s*(?:[-*]\s+)?\(?([A-D])\)?[.)\s:]\s+(.+)/);
+    const m = l.match(/^\s*(?:[-*\u2022]\s+)?\(?([A-D])(?:[.):\u2014\u2013-]|\s*\()\s*(.+)/);
     if (!m) continue;
     const letter = m[1];
     if (seen.has(letter)) continue;
     seen.add(letter);
-    const body = m[2].trim().replace(/[.,;:\s]+$/, '');
-    alts.push({ letter, label: body, recommended: RECOMMENDED_RE.test(body) });
+    let body = m[2].trim();
+    // "A (the agent's recommendation): do x" -> label "do x"; the parenthetical still counts for 'recommended'.
+    const afterLetter = l.replace(/^\s*(?:[-*\u2022]\s+)?\(?[A-D]\s*/, '');
+    const paren = /^\([^()]*\)\s*[:\u2014\u2013-]\s*(.+)$/.exec(afterLetter);
+    if (paren) body = paren[1].trim();
+    body = body.replace(/\s*\([^()]*recommend[^()]*\)/ig, '').replace(/^[:\u2014\u2013-]\s*/, '').split(/(?<=[a-z0-9)])\.\s/i)[0].trim().replace(/[.,;:\s]+$/, '');
+    alts.push({ letter, label: body, recommended: RECOMMENDED_RE.test(l) });
     if (alts.length >= 4) break;
   }
   if (alts.length >= 2) return alts;
@@ -71,8 +76,8 @@ export function parseAlternatives(text) {
   const inline = t.match(/\b([A-D])\s*\(([^)]+)\)\s*or\s*\b([A-D])\s*\(([^)]+)\)/);
   if (inline) {
     return [
-      { letter: inline[1], label: inline[2].trim(), recommended: RECOMMENDED_RE.test(inline[2]) },
-      { letter: inline[3], label: inline[4].trim(), recommended: RECOMMENDED_RE.test(inline[4]) },
+      { letter: inline[1], label: inline[2].replace(/,?\s*(?:my |the agent's )?recommend(?:ed|ation)\s*/ig, '').trim(), recommended: RECOMMENDED_RE.test(inline[2]) },
+      { letter: inline[3], label: inline[4].replace(/,?\s*(?:my |the agent's )?recommend(?:ed|ation)\s*/ig, '').trim(), recommended: RECOMMENDED_RE.test(inline[4]) },
     ];
   }
 
@@ -84,7 +89,9 @@ export function parseAlternatives(text) {
   const q = lastQuestion(t);
   const orMatch = q.match(/\b(\S+?)\s+or\s+(\S+?)\s*\??\s*$/i);
   if (orMatch) {
-    return [{ phrase: orMatch[1].trim() }, { phrase: orMatch[2].trim() }];
+    const clean = (x) => x.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+    const a = clean(orMatch[1]); const b = clean(orMatch[2]);
+    if (a && b) return [{ phrase: a }, { phrase: b }];
   }
   return [];
 }
@@ -118,7 +125,7 @@ export function listQuestions(text) {
     if (!m) continue;
     const body = m[2].trim();
     if (!body) continue;
-    if (!/\?|Do it|do it\?|\bor\b/i.test(body)) continue;
+    if (!/\?|\bdo it\b/i.test(body)) continue;
     const t = body.length > 160 ? `${body.slice(0, 159)}…` : body;
     out.push(t);
     if (out.length >= 3) break;
