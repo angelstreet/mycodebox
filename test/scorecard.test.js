@@ -346,13 +346,14 @@ test('judge.js: appends manager.judge ledger rows for each call (success + unpar
   const mkRes = (jsonBody) => ({ ok: true, status: 200, json: async () => jsonBody, text: async () => JSON.stringify(jsonBody) });
   const fetchFn1 = async () => mkRes({ success: true, content: '{"score":0.8,"reasoning":"ok"}', model: 'judge', cost: 0.01, usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });
   const { createJudge } = await import('../usage/judge.js');
-  const j1 = createJudge({ stallsFile, judgeStateFile, ledgerFile, jevUrl: 'http://x/server/ai/decide', jevApiKey: 'k', now: () => now }, { fetchFn: fetchFn1, random: () => 0, log: () => {} });
+  const commitTo = (f) => async (rows) => appendFileSync(f, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const j1 = createJudge({ stallsFile, judgeStateFile, jevUrl: 'http://x/server/ai/decide', jevApiKey: 'k', now: () => now }, { commit: commitTo(ledgerFile), fetchFn: fetchFn1, random: () => 0, log: () => {} });
   const pass1 = await j1();
   // Add a second triage record with unparsable content
   appendFileSync(stallsFile, JSON.stringify({ ...triage, id: 'stop-j-2', at: t(now - 400) }) + '\n');
   let n = 0;
   const fetchFn2 = async () => { n++; return mkRes({ success: true, content: n === 1 ? '{"score":0.9,"reasoning":"good"}' : 'not json', model: 'judge', cost: 0.015, usage: { prompt_tokens: 110, completion_tokens: 22, total_tokens: 132 } }); };
-  const j2 = createJudge({ stallsFile, judgeStateFile, ledgerFile, jevUrl: 'http://x/server/ai/decide', jevApiKey: 'k', now: () => now }, { fetchFn: fetchFn2, random: () => 0, log: () => {} });
+  const j2 = createJudge({ stallsFile, judgeStateFile, jevUrl: 'http://x/server/ai/decide', jevApiKey: 'k', now: () => now }, { commit: commitTo(ledgerFile), fetchFn: fetchFn2, random: () => 0, log: () => {} });
   const pass2 = await j2();
   assert.equal(pass1.judged, 1);
   assert.equal(pass2.judged, 1);
