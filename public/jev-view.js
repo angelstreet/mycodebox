@@ -38,14 +38,19 @@ export function jevRowHtml(d, tab, open, chev, today = new Date().toISOString().
   if (!d) return '';
   const streams = [['Manager Jev', 'classifies ambiguous stops', d.manager], ['AI reviewer', 'proposes replies for stops that go to you', d.reviewer]];
   const per = streams.map(([title, sub, s]) => ({ title, sub, s, p: period(s, tab, today) }));
-  const calls = per.reduce((n, x) => n + x.p.calls, 0), failed = per.reduce((n, x) => n + x.p.failed, 0), spend = per.reduce((n, x) => n + (x.p.cost || 0), 0);
+  // product uses (Sherlock, Test Prompt, ...) from the server's log; the manager's own key is already counted above
+  const prod = (d.product?.available ? d.product.usages || [] : []).filter((u) => u.usage_key !== d.usageKey).map((u) => ({
+    u, p: tab === 'today' ? { calls: (u.days || []).find((x) => x.day === today)?.calls || 0, failed: null, cost: null } : { calls: u.calls, failed: u.failed, cost: u.cost },
+  })).filter((x) => x.p.calls > 0);
+  const all = [...per.map((x) => x.p), ...prod.map((x) => x.p)];
+  const calls = all.reduce((n, p) => n + p.calls, 0), failed = all.reduce((n, p) => n + (p.failed || 0), 0), spend = all.reduce((n, p) => n + (p.cost || 0), 0);
   const failing = per.some((x) => x.s.health.state === 'failing');
   const chip = failed ? `<span class="jfchip ${failing || failed / Math.max(1, calls) > 0.25 ? 'crit' : 'warn'}">${failed} failed</span>` : '';
   const sub = failing ? 'failing right now' : calls ? `${calls} call${calls === 1 ? '' : 's'}` : 'no calls';
   const body = open ? `<div class="umodels">${per.map((x) => `<div class="urow sub"><div class="u1"><b>${esc(x.title)}</b><span class="grow"></span><b class="tk">${cost(x.p.cost)}</b></div>
       <div class="u2">${esc(x.sub)} &middot; ${x.p.calls} calls &middot; <span class="${x.p.failed ? 'jf' : ''}">${x.p.failed} failed</span></div>
       ${x.s.health.state === 'failing' ? banner(x.s.health, x.title) : ''}${tab === 'today' ? '' : dayRows(x.s.days, today)}</div>`).join('')}
-      ${d.product?.available && d.product.usages?.length ? d.product.usages.map((u) => `<div class="urow sub"><div class="u1"><b>${esc(u.usage_key)}</b><span class="grow"></span><b class="tk">${cost(u.cost)}</b></div><div class="u2">${u.calls} calls &middot; <span class="${u.failed ? 'jf' : ''}">${u.failed} failed</span> &middot; last ${esc(when(u.last_at))}</div></div>`).join('') : `<div class="u2 dim">product uses (Sherlock, Test Prompt, ...): ${esc(d.product?.reason || 'not available')}</div>`}</div>` : '';
+      ${d.product?.available ? prod.map((x) => `<div class="urow sub"><div class="u1"><b>${esc(x.u.usage_key)}</b><span class="grow"></span><b class="tk">${x.p.cost == null ? '' : cost(x.p.cost)}</b></div><div class="u2">${x.p.calls} calls${x.p.failed == null ? '' : ` &middot; <span class="${x.p.failed ? 'jf' : ''}">${x.p.failed} failed</span>`} &middot; last ${esc(when(x.u.last_at))}</div></div>`).join('') : `<div class="u2 dim">product uses (Sherlock, Test Prompt, ...): ${esc(d.product?.reason || 'not available')}</div>`}</div>` : '';
   return `<div class="urow ag jev"><div class="u1 tog" data-agent="jev">${chev(open)}<i class="adot jev"></i><b>Jev</b><span class="dim">${sub}</span>${chip}<span class="grow"></span><b class="tk jcost" title="real spend (OpenRouter), the only paid usage">${cost(spend)}</b></div>
     <div class="u2">${open ? '' : 'Manager Jev &middot; AI reviewer &middot; product uses'}</div>${body}</div>`;
 }
