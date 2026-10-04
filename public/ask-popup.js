@@ -27,6 +27,16 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const ownSend = new Map();                    // name -> ts of a send the popup made itself
   try { minimised = sessionStorage.getItem(MIN_KEY) === '1'; } catch {}
 
+  // Keep the popup above the send dock: --ask-bottom = the dock's real top edge measured from the viewport bottom.
+  const dockEl = document.getElementById('dock');
+  const syncDock = () => {
+    const top = dockEl ? dockEl.getBoundingClientRect().top : window.innerHeight;
+    document.documentElement.style.setProperty('--ask-bottom', `${Math.max(0, Math.round(window.innerHeight - top))}px`);
+  };
+  syncDock();
+  window.addEventListener('resize', syncDock);
+  if (dockEl && typeof ResizeObserver !== 'undefined') new ResizeObserver(syncDock).observe(dockEl);
+
   const setMin = (on) => {
     minimised = !!on;
     try { sessionStorage.setItem(MIN_KEY, on ? '1' : '0'); } catch {}

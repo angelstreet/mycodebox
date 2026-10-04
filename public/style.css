@@ -1335,7 +1335,7 @@ body[data-mode="card"] #health{ display:none; }
    One bottom-right card for every session that needs the owner (full-width bottom sheet on a phone).
    Cards keep only a tiny "asks you" chip; the buttons, the AI pick (highlighted) and Jev live here. */
 #askPopup {
-  position: fixed; right: 14px; bottom: 14px; z-index: 50;
+  position: fixed; right: 14px; bottom: calc(var(--ask-bottom, 0px) + 14px); z-index: 50;
   width: min(400px, calc(100vw - 28px)); box-sizing: border-box;
   background: var(--bg-2); color: var(--ink);
   border: 1px solid var(--line-2); border-radius: 10px;
@@ -1388,7 +1388,7 @@ body[data-mode="card"] #health{ display:none; }
 
 /* Minimised: a pill "N need you" bottom-right; tapping it reopens the popup. */
 #askPopupPill {
-  position: fixed; right: 14px; bottom: 14px; z-index: 49;
+  position: fixed; right: 14px; bottom: calc(var(--ask-bottom, 0px) + 14px); z-index: 49;
   background: var(--waiting); color: #1a0606; border: 0; border-radius: 999px;
   padding: 9px 15px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
   box-shadow: 0 4px 14px rgba(0,0,0,0.5);
@@ -1396,8 +1396,9 @@ body[data-mode="card"] #health{ display:none; }
 #askPopupPill.hidden { display: none; }
 
 @media (max-width: 600px) {
-  #askPopup { right: 0; bottom: 0; width: 100%; border-radius: 12px 12px 0 0; padding-bottom: env(safe-area-inset-bottom); }
-  #askPopupPill { right: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); }
+  #askPopup { right: 0; bottom: var(--ask-bottom, 0px); width: 100%; border-radius: 12px 12px 0 0; max-height: calc(100vh - var(--ask-bottom, 0px) - 56px); display: flex; flex-direction: column; }
+  #askPopup .ap-body { overflow-y: auto; min-height: 0; }
+  #askPopupPill { right: 10px; bottom: calc(var(--ask-bottom, 0px) + 10px); }
 }
 
 /* "asks you" chip on each card: a one-line button that opens the popup on that session. */
