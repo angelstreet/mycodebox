@@ -481,6 +481,26 @@ curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
 curl -s -XPOST localhost:7777/api/manager/cancel/task05 -H 'content-type: application/json' -d '{}'
 ```
 
+**MiniMax shadow manager (experiment, TASK-47 G11).** A parallel loop (`scripts/mm-manager.sh`)
+that follows the same `manager-events.jsonl` and proposes what the manager should do for each event —
+running it through MiniMax, calling `scripts/jev-ask.js` when in doubt, and Sonnet only when Jev was
+unsure (`source:"rule"`). **Shadow only: it never acts.** No POST, no send, no alert, no wake — read-only
+GETs to `127.0.0.1:${GHOSTY_PORT:-7777}` and a single `mcode exec` per batch. Each batch appends one
+record per event to `${GHOSTY_STATE_DIR:-~/.local/state/ghosty}/mm-manager-decisions.jsonl` (the
+proposal plus `mm_ms`, `mm_tokens`, `sonnet_usd`, `batch_id`); the prompt and raw mcode output are
+kept under `<state>/mm-manager/<batch_id>.{prompt,json}` (last 200 batches). Start it inside tmux so
+the loop survives — and only after reading the runbook:
+
+```bash
+tmux new -d -s mm-manager 'scripts/mm-manager.sh'           # do NOT start it
+node scripts/mm-manager-compare.js [--day YYYY-MM-DD] [--json]   # grade the day vs. the real (Sonnet) manager
+```
+
+Compare output per day: events, proposals by kind, agreement / misses / risky verdicts, Sonnet calls
+and their `$`, MiniMax tokens, and the real manager's Claude `$` from the ledger. Any stall record
+with `by` containing `mm-manager` is printed as `AUDIT FAIL` (the shadow never acts, so any such
+record is a bug).
+
 ## Session reporter (TASK-44 phase 8)
 
 `claude-plugin/ghosty-reporter/` is a Claude Code plugin (function hooks, Claude Code >= 2.1.288) that every
