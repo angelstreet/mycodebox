@@ -232,6 +232,13 @@ above it, or a closing text no longer on screen, gives kind `unknown`).
 **Safe defaults.** `autoSend` off, `autoCases: []`, `aiTriage: 'simulate'`, `aiAutoCases: []`: the owner picks
 every case that may be auto-answered (`POST /api/manager`). `owner_decision` is never in a default list.
 
+**Router shadow (`routerShadow`, default on).** For every new distinct stop, after the rules classified it, ghosty fires one
+`POST /server/ai/decide` (usage `text.decision.manager`, profile `jev`, `refs.source: "ghosty-router"`) with three questions: the stop's
+case, whether only the owner can answer, and who to wake. The answers go to `stalls.jsonl` as `{type:"router", id, rule_case, escalated,
+router:{case, caseConf, owner, wake, wakeConf, decision_id}}` and the stop's outcome is posted to the decision once it is known. It is
+shadow only: it never changes a reply, push, hold or wake, uses the same daily Jev budget and skips when the OpenRouter credit is 0. The
+scorecard's `router` section per day compares it with the rules. Off: `POST /api/manager {"routerShadow":false}`.
+
 **Who acted (`by`).** `POST /api/send/:session`, `/api/send-many`, `/api/manager/label`, `/api/session-meta/:session`
 and `/api/deploys/:id/approve|cancel` take an optional `by` (string, 1..40 characters; default `owner`, which is what
 the UI means). The Opus manager agent passes `by: "manager-agent"`. It is logged in `stalls.jsonl` (`{type:'send'|

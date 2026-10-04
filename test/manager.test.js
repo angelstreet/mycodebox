@@ -23,7 +23,7 @@ Object.assign(process.env, {
 const m = await import('../manager.js');
 const pushes = [];
 await m.initManager({ onOwnerNeeded: (s, st) => pushes.push([s, st.case]) });
-await m.setManagerConfig({ aiTriage: 'off' });   // these tests are about the rules + Jev; the AI reviewer has its own tests (triage.test.js)
+await m.setManagerConfig({ aiTriage: 'off', routerShadow: false });   // these tests are about the rules + Jev; the AI reviewer has its own tests (triage.test.js)   // the router shadow has its own tests (router-shadow.test.js)
 
 const RULE = '─'.repeat(40);
 const pane = (body, prompt = '❯ ') => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, prompt, RULE, '  ⏵⏵ bypass permissions on'];

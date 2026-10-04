@@ -12,6 +12,7 @@
 //                  and {type:'label'} owner labels on a stall ("this stop bothered me", POST /api/manager/label),
 //                  {type:'unlabel', id} withdraws the newest label of a stall (swipe page undo; the stop is unlabelled again)
 //   jev-budget.json { day, calls, cost }
+//   router records {type:'router', id, rule_case, escalated, router:{case,caseConf,owner,wake,wakeConf,decision_id}} (TASK-47 shadow: Jev's 3 answers per stop; changes nothing)
 //   decision-outcomes.json  outcomes not yet accepted by the server's decision log (retried every 5 min, dropped after 7 days)
 //
 // It never starts, kills or renames sessions.
@@ -26,6 +27,7 @@ import { actorOf } from './api-extras.js';
 import { jevAgreesOwner } from './public/ask-model.js';
 import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, reviewerUrl } from './triage.js';
 import { createPromptSource } from './prompts.js';
+import { runShadow } from './router-shadow.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -55,7 +57,7 @@ export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: false, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
+let config = { enabled: true, autoSend: false, routerShadow: true, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
   jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
@@ -65,6 +67,7 @@ let lastStopsWrite = Promise.resolve();
 const saveLastStops = () => { lastStopsWrite = lastStopsWrite.then(() => writeFile(LAST_STOPS_FILE, JSON.stringify(lastStops))).catch(() => {}); };
 const aiBudget = createBudget(AI_BUDGET_FILE);
 const triages = new Map();   // stop id -> triage result (one reviewer call per stop)
+let creditsPeek = () => null;   // injected by server.js: the cached OpenRouter credit ({ ok, balance }) or null
 let triageContext = () => ({});   // injected by server.js: (session) -> { priority, quota, leases, deploys }
 let reviewerFetch = (...a) => fetch(...a);
 const watch = new Map();   // session -> { since, hash, stall, pending: {id, at, auto}, last, auto }
@@ -82,7 +85,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context } = {}) {
+export async function initManager({ credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { budget = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); } catch {}
@@ -94,6 +97,7 @@ export async function initManager({ onOwnerNeeded, sendKey, sendKeys, paused, po
   if (!/^(auto|text\.decision(\.[a-z0-9_]+)*)$/.test(String(config.jevUsage))) config.jevUsage = 'auto';
   if (decisions.configured) { outcomeQueue.flush().catch(() => {}); setInterval(() => outcomeQueue.flush().catch(() => {}), 5 * 60e3).unref(); }
   if (context) triageContext = context;
+  if (credits) creditsPeek = credits;
   if (onOwnerNeeded) notify = onOwnerNeeded;
   if (sendKey) send.key = sendKey;
   if (sendKeys) send.keys = sendKeys;
@@ -127,7 +131,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases } = b;
+  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -148,6 +152,7 @@ export async function setManagerConfig(b = {}) {
   }
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
   if (typeof deployRunner === 'boolean') config.deployRunner = deployRunner;
+  if (typeof routerShadow === 'boolean') config.routerShadow = routerShadow;
   if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');
   if (p2MaxPct !== undefined) config.p2MaxPct = num(p2MaxPct, 1, 100, 'p2MaxPct');
   if (session && typeof sessionEnabled === 'boolean') {
@@ -545,6 +550,46 @@ async function jev(stall, ctx = {}) {
   }
 }
 
+// ---- router shadow (TASK-47 G2) ----
+// One Jev call per new distinct stop (3 questions), after the rules classified it. SHADOW ONLY: the answers are logged
+// ({type:'router'}) and graded later; nothing here is awaited by, or feeds into, the reply / escalation / push / hold flow.
+const routerStops = new Map();   // stop id -> { decision_id, done, outcome, posted }
+function shadowRoute({ id, session, agent, final, stall, escalated }) {
+  try {
+    if (config.routerShadow === false || routerStops.has(id) || !JEV_URL || !JEV_API_KEY) return;
+    const st = { decision_id: null, done: false, outcome: null, posted: false };
+    routerStops.set(id, st); if (routerStops.size > 500) routerStops.delete(routerStops.keys().next().value);
+    (async () => {
+      const rec = { type: 'router', id, session, rule_case: final.case, escalated };
+      const skip = (why) => { st.done = true; return logLater({ ...rec, router: { skipped: why } }); };
+      if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
+      if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return skip('daily budget reached');
+      const cr = (() => { try { return creditsPeek(); } catch { return null; } })();
+      if (cr?.ok && cr.balance != null && cr.balance <= 0) return skip('no OpenRouter credit');
+      const post = async (body) => { const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) }); return { r, j: await r.json() }; };
+      const router = await runShadow({ usage: MANAGER_USAGE, teamId: decisions.configured ? VPT_TEAM_ID : '', post,
+        facts: { session, agent, forbidden: final.forbidden, no_status: final.no_status, excerpt: stall.excerpt, stallId: id, ruleCase: final.case, escalated } });
+      budget.calls += 1; budget.cost += Number(router.cost || 0);
+      writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
+      st.decision_id = router.decision_id || null; st.done = true;
+      await logLater({ ...rec, router });
+      flushRouterOutcome(id);
+    })().catch((e) => { console.error('[manager] router shadow', e.message); });
+  } catch (e) { console.error('[manager] router shadow', e.message); }
+}
+// The stop's outcome, once known: posted to the shadow decision once (after the call answered, whichever comes first).
+function routerOutcome(id, kind) {
+  const st = routerStops.get(id);
+  if (!st || !kind || kind === 'unknown') return;
+  st.outcome = kind; flushRouterOutcome(id);
+}
+function flushRouterOutcome(id) {
+  const st = routerStops.get(id);
+  if (!st || !st.done || !st.decision_id || !st.outcome || st.posted || !decisions.configured) return;
+  st.posted = true;
+  outcomeQueue.add(st.decision_id, outcomeBody(st.outcome, 'owner-reply', id)).catch((e) => console.error('[manager] router outcome', e.message));
+}
+
 // Index of the pane line where the stop's closing text ends (the text is compared without whitespace, so
 // a re-wrapped pane still matches), or -1 when it is not on screen.
 function closingLine(plain, key) {
@@ -607,6 +652,7 @@ export function observe(s) {
       log({ type: 'outcome', id: p.id, session: s.name, at: new Date(s.now).toISOString(), afterSec: Math.round((s.now - p.at) / 1000),
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
       writeBack(p.id, outcomeFromReplyKind(reply.text ? outcomeKind(reply.text) : 'unknown'), 'owner-reply', p.auto ? null : decisionByStop.get(p.id));
+      if (!p.auto) routerOutcome(p.id, reply.text ? outcomeKind(reply.text) : 'unknown');
       w.pending = null;
     }
     if (holdOf(s.name)) endHold(s.name, 'manager', 'session moved on', false);
@@ -672,6 +718,7 @@ export function observe(s) {
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
     });
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;
+    shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' });   // shadow: fire and forget, never awaited
     if (ws.send && !block) {   // the existing auto-answer handles this one
       const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence };
       const pol = policyOf(s.name, s.agent);

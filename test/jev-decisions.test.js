@@ -39,7 +39,7 @@ const m = await import('../manager.js');
 const d = await import('../decisions.js');
 const v = await import('../public/jev-view.js');
 await m.initManager({});
-await m.setManagerConfig({ aiTriage: 'off' });
+await m.setManagerConfig({ aiTriage: 'off', routerShadow: false });   // the router shadow has its own tests (router-shadow.test.js)
 
 const RULE = '─'.repeat(40);
 const pane = (body, prompt = '❯ ') => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, prompt, RULE, '  ⏵⏵ bypass permissions on'];
