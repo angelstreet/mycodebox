@@ -249,6 +249,13 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   // The agent's own words: lines after the last tool-output line (its "5 passed" is not a status report).
   const toolEnd = close.reduce((k, l, i) => (/^\s*[⎿└]/.test(l) ? i : k), -1);
   const msg = close.slice(toolEnd + 1).length ? close.slice(toolEnd + 1) : close;
+  // A question line right before a numbered option list ("Should I split it?" 1. ... 2. ...): the last paragraph is
+  // then only the final option, so look at the line above the first option. A status list with no question above stays done.
+  if (!asks && opts.length >= 2) {
+    const first = msg.findIndex((l) => OPTION_RE.test(l));
+    const lead = first > 0 ? msg.slice(Math.max(0, first - 2), first).filter((l) => !OPTION_RE.test(l)).map((l) => l.trim()) : [];
+    if (lead.length && /\?["')\]]*\s*:?\s*$/.test(lead[lead.length - 1])) { asks = true; out.question = tailSentences(lead[lead.length - 1], 300); }
+  }
   const tailText = msg.slice(-6).join(' ').replace(/\s+/g, ' ');
   const lastText = last.replace(/\s+/g, ' ');
   const shortText = lastParagraph(close, { stripTools: false }).replace(/\s+/g, ' ');   // stopped_short keeps the tool output: a still-running background task blocks it
@@ -283,6 +290,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   } else out.case = 'done';
   // no_status: a closing text that never says what is done / tested / left / next / blocked. A question,
   // a deploy wait and an owner action each state their own next step, so they are not flagged.
+  if (asks && opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text), forbidden: forbiddenMatch(o.text) }));
   if (fyi) out.fyi = fyi;
   out.no_status = !asks && !fyi && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
   if (out.no_status && out.case === 'done') { out.answer = { text: ASK_STATUS_TEXT }; out.autoCase = 'ask_status'; }

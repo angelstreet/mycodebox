@@ -102,3 +102,26 @@ test('real asks still escalate: a real deploy wait', () => {
     assert.equal(wouldSend(s).send, null);
   }
 });
+
+test('a finished turn ending on a question + numbered options is a question, options parsed', () => {
+  const s = classify('Should I split the file?\n1. Yes, split it now\n2. No, leave it as one file');
+  assert.equal(s.case, 'owner_decision');
+  assert.equal(s.question, 'Should I split the file?');
+  assert.equal(wouldSend(s).send, null);
+  assert.deepEqual(s.options.map((o) => o.n), [1, 2]);
+});
+
+test('"Do you want me to" + options, one marked Recommended -> menu_recommended', () => {
+  const s = classify('Do you want me to go ahead?\n1. Ship it now (Recommended)\n2. Wait for review');
+  assert.equal(s.case, 'menu_recommended');
+});
+
+test('a plain numbered status list with no question stays done', () => {
+  const s = classify('All three parts are finished:\n1. The badge shows the holder\n2. The tooltip lists every holder\n3. Tests pass: 12 passed');
+  assert.equal(s.case, 'done');
+});
+
+test('options before the question still ask', () => {
+  const s = classify('1. Keep the table\n2. Replace it\nWhich do you want?');
+  assert.equal(s.case, 'owner_decision');
+});
