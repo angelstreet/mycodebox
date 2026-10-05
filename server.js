@@ -1018,7 +1018,7 @@ async function killSession(name, confirm) {
 // ---------------------------------------------------------------------------
 const claudeIndex = createClaudeIndex({ dir: process.env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions') });
 const parking = createParking({
-  file: join(STATE_DIR, 'parked.json'),
+  file: join(STATE_DIR, 'parked-sessions.json'),
   tmux: {
     exists: sessionExists,
     kill: async (name) => { await killSession(name, name); },
