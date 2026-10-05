@@ -27,6 +27,7 @@ import { dirname, join } from 'node:path';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { decide, POINTS } from '../router.js';
 import { serverBase } from '../decisions.js';
+import { isDisabledReply } from '../jev-switch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -159,6 +160,7 @@ async function main() {
 
   const origin = serverBase(JEV_URL);
   // post(): returns the JSON or null on any error. Never throws.
+  let jevDisabled = false;   // the server's JEV_ENABLED=false: print the rule default, flagged
   const post = origin && JEV_API_KEY
     ? async (body) => {
         try {
@@ -169,6 +171,7 @@ async function main() {
             signal: AbortSignal.timeout(20000),
           });
           const j = await r.json().catch(() => null);
+          if (isDisabledReply(j)) jevDisabled = true;
           return (j && j.success !== false) ? j : null;
         } catch { return null; }
       }
@@ -189,6 +192,7 @@ async function main() {
     ruleDefault: out.ruleDefault,
     allowed: out.allowed,
     decision_id: out.decision_id || null,
+    ...(jevDisabled && out.source !== 'forced' ? { jev: 'disabled' } : {}),
   };
 
   // Exactly ONE JSON line on stdout.
@@ -205,6 +209,7 @@ async function main() {
       source: out.source,
       ruleDefault: out.ruleDefault,
       decision_id: out.decision_id || null,
+      ...(jevDisabled && out.source !== 'forced' ? { skipped: 'jev_disabled' } : {}),
       ...(args.flags.task ? { task: String(args.flags.task).slice(0, 500) } : {}),
     }) + '\n');
   } catch { /* logging is best-effort; never block the answer */ }

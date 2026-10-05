@@ -29,6 +29,7 @@ import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, 
 import { createPromptSource } from './prompts.js';
 import { reviewerOptions } from './public/buttons.js';
 import { runShadow } from './router-shadow.js';
+import { createJevSwitch, isDisabledReply, DISABLED } from './jev-switch.js';
 import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
 import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
@@ -553,12 +554,14 @@ export const jevErrorKind = (msg) => /\b402\b|insufficient credits/i.test(msg) ?
 // OpenRouter credit is used up: every call fails with 402 until the owner tops up, so stop calling for a while
 // (the rules decide meanwhile) instead of logging one error per stop. Probed again after the cool-down.
 const CREDITS_COOLDOWN_MS = 5 * 60e3;
+const jevSwitch = createJevSwitch();   // the server's JEV_ENABLED=false: one probe per 5 min, never an error
 let creditsDownUntil = 0;
 export const resetJevCooldown = () => { creditsDownUntil = 0; };   // tests, and an owner top-up
 
 // ctx = { session, stallId, case }: what the product's log shows as "what this decision was about".
 async function jev(stall, ctx = {}) {
   if (!JEV_URL || !JEV_API_KEY) return { skipped: 'not configured' };
+  if (jevSwitch.off()) return { skipped: DISABLED };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
   if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
@@ -579,6 +582,7 @@ async function jev(stall, ctx = {}) {
     }
     // An older server that does not know the manager usage: once more under the generic one.
     if (!j.success && body.usage !== FALLBACK_USAGE && /unknown usage/i.test(String(j.error || ''))) { body.usage = FALLBACK_USAGE; ({ r, j } = await post()); }
+    if (jevSwitch.seen(j)) return { skipped: DISABLED };   // Jev off on the server: not an error, not counted
     budget.calls += 1;
     budget.cost += Number(j.cost || 0);
     writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
@@ -607,6 +611,7 @@ function shadowRoute({ id, session, agent, final, stall, escalated }) {
     (async () => {
       const rec = { type: 'router', id, session, rule_case: final.case, escalated };
       const skip = (why) => { st.done = true; return logLater({ ...rec, router: { skipped: why } }); };
+      if (jevSwitch.off()) return skip(DISABLED);
       if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
       if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return skip('daily budget reached');
       const cr = (() => { try { return creditsPeek(); } catch { return null; } })();
@@ -615,6 +620,7 @@ function shadowRoute({ id, session, agent, final, stall, escalated }) {
       const router = await runShadow({ usage: MANAGER_USAGE, teamId: decisions.configured ? VPT_TEAM_ID : '', post,
         facts: { session, agent, forbidden: final.forbidden, no_status: final.no_status, excerpt: stall.excerpt, stallId: id, ruleCase: final.case, escalated },
         kindOf: jevErrorKind });
+      if (router.skipped === DISABLED) { jevSwitch.markOff(); st.done = true; return logLater({ ...rec, router }); }
       budget.calls += 1; budget.cost += Number(router.cost || 0);
       writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
       st.decision_id = router.decision_id || null; st.done = true;
@@ -647,6 +653,7 @@ const wakeAnnotator = createWakeAnnotator({
   kindOf: jevErrorKind,
   guard: () => {
     if (!JEV_URL || !JEV_API_KEY) return 'not configured';
+    if (jevSwitch.off()) return DISABLED;
     if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
     if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return 'daily budget reached';
     const cr = (() => { try { return creditsPeek(); } catch { return null; } })();
@@ -658,6 +665,7 @@ const wakeAnnotator = createWakeAnnotator({
   call: async (body) => {
     const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(CAP_MS) });
     const j = await r.json();
+    if (jevSwitch.seen(j)) return j;   // Jev off on the server: not counted against the budget
     if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
     budget.calls += 1; budget.cost += Number(j?.cost || 0);
     writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});

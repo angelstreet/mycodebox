@@ -2,6 +2,7 @@
 // who to wake), logged in the product's decision log next to what the rules did. SHADOW ONLY: nothing here may
 // change a reply, an escalation, a push, a hold or a wake. The question texts are the ones the benchmark used
 // (283 recorded stops: case 40 % rules vs 60 % Jev, owner-needed 18 vs 64 of 78, Opus wakes 72 vs 5).
+import { isDisabledReply, DISABLED } from './jev-switch.js';
 export const SHADOW_SOURCE = 'ghosty-router';
 export const OWNER_THRESHOLD = 0.7;   // noul >= this = "only the owner can answer" (the benchmark's cut)
 
@@ -62,6 +63,7 @@ export async function runShadow({ facts, usage, teamId, post, now = () => Date.n
       await sleep(2000);
       ({ r, j } = await doPost());
     }
+    if (isDisabledReply(j)) return { skipped: DISABLED };   // the server's JEV_ENABLED=false: not an error
     const parsed = parseShadow(j);
     const meta = { ms: j?.ms ?? now() - started, cost: Number(j?.cost || 0), model: j?.model };
     if (!parsed) {

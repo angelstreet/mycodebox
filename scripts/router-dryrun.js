@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { decide, POINTS, buildRequest } from '../router.js';
+import { isDisabledReply } from '../jev-switch.js';
 import { serverBase } from '../decisions.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -58,9 +59,11 @@ if (!Array.isArray(states) || !states.length) { console.error('fixtures empty or
 
 // One post() for the whole run: --dry returns the body; otherwise POSTs to /server/ai/decide.
 const origin = serverBase(JEV_URL);
+let jevDisabled = false;
 const post = args.dry
   ? async (body) => { body.__dry = true; return body; }
   : async (body) => {
+      if (jevDisabled) return null;   // one probe: the server said Jev is off
       try {
         const r = await fetch(`${origin}/server/ai/decide`, {
           method: 'POST',
@@ -69,6 +72,7 @@ const post = args.dry
           signal: AbortSignal.timeout(20000),
         });
         const j = await r.json().catch(() => null);
+        if (isDisabledReply(j)) jevDisabled = true;
         return (j && j.success !== false) ? j : null;
       } catch { return null; }
     };
@@ -120,4 +124,4 @@ for (const [p, s] of Object.entries(stats)) {
   const jev = `${s.jev.agree}/${s.jev.total}`;
   const rule = `${s.rule.agree}/${s.rule.total}`;
   console.log(pad(p, 10), pad(jev, 16), pad(rule, 16), pad(String(s.forced), 8), pad(String(s.called), 8));
-}
+}if (jevDisabled) console.log('\nJev: disabled on the server (JEV_ENABLED=false); every choice above is the rule default.');
