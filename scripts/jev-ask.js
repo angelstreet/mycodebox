@@ -72,7 +72,7 @@ const EXAMPLES = {
   reviewer: { work: { touches: ['app'], repo_public: false, size: 'small' } },
   retry: { reject: { round: 1, reason: 'tests failed' } },
   model: { work: { touches: ['app'], repo_public: false, size: 'small' } },
-  stop: { session: 's1', agent: 'claude', case: 'owner_decision', priority: 'P1', forbidden_topic: false, closing_text: 'Done with step 1. Continue with step 2?', proposed_reply: 'Yes, continue with step 2.' },
+  stop: { session: 's1', agent: 'claude', case: 'menu_recommended', priority: 'P1', forbidden_topic: false, closing_text: 'I recommend option B (smaller scope, can be reverted).', proposed_reply: 'Pick B.', recommended: true, reversible: true, delegated: true },
 };
 function help() {
   const examples = Object.keys(POINTS).map((p) => {

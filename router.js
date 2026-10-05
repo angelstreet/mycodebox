@@ -152,35 +152,83 @@ const retry = {
 
 // ---- stop ----
 // Should the manager answer a stopped coding session itself, or escalate it to the owner?
-// facts shape: { session, agent, case, priority, forbidden_topic, closing_text (<= 1500 chars), proposed_reply }
-//   - session:        session id/name (string)
-//   - agent:          'claude' | 'codex' | 'minimax' (string)
-//   - case:           the stop's rule case (continue | stopped_short | menu_recommended | done | permission |
-//                     owner_decision | waiting_deploy | owner_action | error | background_wait | unknown)
-//   - priority:       'P0' | 'P1' | 'P2' (string; informational)
-//   - forbidden_topic: true when the closing text / proposed reply hits the manager's forbidden list
-//   - closing_text:   the agent's own closing text (<= 1500 chars) so Jev sees the stop
-//   - proposed_reply: the AI reviewer's candidate reply for this stop (string, optional)
-// floor: forbidden_topic OR case in {permission, owner_action, waiting_deploy} -> forced 'escalate'.
-// ruleDefault: 'escalate' (conservative), except case 'continue' -> 'answer'.
+// The owner delegated (2026-10-04, "delegation (a)") a class of stops to the manager:
+// design/scope choices where the session RECOMMENDS an option and the choice is REVERSIBLE,
+// plus cleanup of a session's OWN worktree/scratch files. Owner-only floors (must escalate):
+// money / cost beyond plan, credentials/secrets, customers, deleting shared data, database
+// migrations, merges to main, restarts / deploys.
+// facts shape:
+//   - session, agent, case, priority, forbidden_topic, closing_text, proposed_reply
+//     (as in the previous spec; documented for clarity)
+//   - recommended (bool, optional): the session marked one option as recommended / its own
+//     proposal (e.g. menu_recommended with a highlight, or a session that says "I recommend Y").
+//   - reversible (bool, optional): the choice is reversible (the manager can undo or back out
+//     without cost beyond plan or external side effects).
+//   - own_cleanup (bool, optional): the action is removing the session's OWN worktree /
+//     scratch / temp files (not shared data, not someone else's files).
+//   - touches (string[], optional): floor topics the stop touches. Any one of
+//     'money', 'credentials', 'customers', 'shared_data_delete', 'migration', 'merge_main',
+//     'deploy_restart' -> forced 'escalate'.
+//   - delegated (bool, optional): the manager already judged this stop to be inside the
+//     owner's delegation (e.g. a menu with a recommended option it can pick). When true,
+//     the rule default leans 'answer' unless a floor applies.
+// floor: forbidden_topic OR case in {permission, owner_action, waiting_deploy} OR any
+//   touches entry -> forced 'escalate' (with the reason naming it).
+// ruleDefault: 'answer' when (delegated === true) OR (recommended === true AND
+//   reversible === true) OR own_cleanup === true — and no floor applies; else today's
+//   default ('answer' for case continue, else 'escalate').
+const STOP_FLOOR_TOPICS = ['money', 'credentials', 'customers', 'shared_data_delete', 'migration', 'merge_main', 'deploy_restart'];
 const stop = {
   usage: 'text.decision.manager',
   options: {
-    answer: 'a safe reply exists that cannot make a choice the owner should make: continue a planned step, take a clearly recommended option, or give a fact the manager knows; the proposed reply (if any) is safe',
-    escalate: 'only the owner can rightly answer: a preference, an approval, credentials, a product decision, a physical action, a deploy go-ahead, or anything risky or unclear',
+    // The criteria text below must stay short and readable without context; they are the only
+    // thing Jev (and a human reading the test diff) sees. The two options state the owner's
+    // delegation in plain words so Jev knows what is safe to take and what is not.
+    answer: 'manager can answer: a design or scope choice with a recommended, reversible option; cleanup of the session\'s own files (its worktree, scratch or temp); continuing planned work; or a fact the manager knows. If the facts say delegated, or recommended and reversible, lean to answer',
+    escalate: 'only the owner can answer: money or cost beyond plan, credentials or secrets, customers, deleting shared data, database migrations, merges to main, restarts or deploys; also a choice between directions with no recommendation, a product or taste question (what the product should show or do) with no recommendation, an irreversible choice, or anything forbidden / unclear',
   },
-  instructions: 'Should the manager answer this stopped session itself, or escalate it to the owner?',
+  instructions: 'Should the manager answer this stopped session itself (inside the owner\'s delegation), or escalate it to the owner?',
   floor(facts) {
     const reasons = [];
     const c = facts?.case;
     let forced = null;
     if (facts?.forbidden_topic) { forced = 'escalate'; reasons.push('forbidden topic: the manager must not answer'); }
     else if (['permission', 'owner_action', 'waiting_deploy'].includes(c)) { forced = 'escalate'; reasons.push(`case "${c}": only the owner can answer`); }
+    else {
+      const touches = Array.isArray(facts?.touches) ? facts.touches.filter((t) => STOP_FLOOR_TOPICS.includes(t)) : [];
+      if (touches.length) { forced = 'escalate'; reasons.push(`touches owner-only topic: ${touches.join(', ')}`); }
+    }
     return { allowed: ['answer', 'escalate'], forced, reasons };
   },
   ruleDefault(facts) {
+    if (facts?.own_cleanup === true) return 'answer';
+    if (facts?.delegated === true) return 'answer';
+    if (facts?.recommended === true && facts?.reversible === true) return 'answer';
     return facts?.case === 'continue' ? 'answer' : 'escalate';
   },
+};
+
+// ---- STOP_V1 ----
+// Frozen copy of the previous stop point (before the 2026-10-04 delegation update). Used by
+// scripts/router-replay-stop.js --old to compare the new stop point against the same cases
+// against today's floors / ruleDefault. DO NOT EDIT — kept verbatim for replay parity.
+const stop_v1_floor = (facts) => {
+  const reasons = [];
+  const c = facts?.case;
+  let forced = null;
+  if (facts?.forbidden_topic) { forced = 'escalate'; reasons.push('forbidden topic: the manager must not answer'); }
+  else if (['permission', 'owner_action', 'waiting_deploy'].includes(c)) { forced = 'escalate'; reasons.push(`case "${c}": only the owner can answer`); }
+  return { allowed: ['answer', 'escalate'], forced, reasons };
+};
+const stop_v1_ruleDefault = (facts) => (facts?.case === 'continue' ? 'answer' : 'escalate');
+const STOP_V1 = {
+  options: {
+    answer: 'a safe reply exists that cannot make a choice the owner should make: continue a planned step, take a clearly recommended option, or give a fact the manager knows; the proposed reply (if any) is safe',
+    escalate: 'only the owner can rightly answer: a preference, an approval, credentials, a product decision, a physical action, a deploy go-ahead, or anything risky or unclear',
+  },
+  instructions: 'Should the manager answer this stopped session itself, or escalate it to the owner?',
+  floor: stop_v1_floor,
+  ruleDefault: stop_v1_ruleDefault,
 };
 
 // ---- model (suggestion only) ----
@@ -200,6 +248,7 @@ const model = {
 
 export const POINTS = { wake, builder, reviewer, retry, stop, model };
 export const SUGGEST_ONLY = new Set(['model']);
+export { STOP_FLOOR_TOPICS, STOP_V1 };
 
 // ---- floor + ruleDefault for a point ----
 // ruleDefault is clamped to the allowed list: if the rule's pick is not allowed, the first allowed
