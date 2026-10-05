@@ -854,7 +854,7 @@ function renderAttention() {
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
-    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}">${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}${line(s.name) ? `<span class="ai1">${escapeHtml(line(s.name))}</span>` : ''}</button>`).join('');
+    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}</button>`).join('');
   for (const b of els.attention.querySelectorAll('button')) {
     b.onclick = () => popupApi ? popupApi.showFor(b.dataset.session) : openCard(b.dataset.session);
   }
