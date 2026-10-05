@@ -29,6 +29,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadShare, summarizeShare } from './decision-share.js';
+import { loadLeaseStats } from '../lease-stats.js';
 
 // Pure: the G8 section of the daily report (autonomy >= 80 %, regret <= 5 %) from summarizeShare() results.
 export function g8Lines(today, week) {
@@ -113,6 +114,9 @@ export async function run({ home = homedir(), now = Date.now(), argv = process.a
 
   try { R.push(...g8Lines(summarizeShare(loadShare({ stateDir, days: 1, now })), summarizeShare(loadShare({ stateDir, days: 7, now })))); }
   catch (e) { R.push('## Decision share (G8)', '', `could not be computed: ${e.message}`, ''); }
+
+  try { R.push(...loadLeaseStats({ stateDir, now })); }
+  catch (e) { R.push('## Leases (TASK-58 C1)', '', `could not be computed: ${e.message}`, ''); }
 
   const state = loadState(statePath);
   const seen = new Set();

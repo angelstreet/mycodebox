@@ -156,7 +156,16 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
     return s ? { session: name, live: liveOf(s), sessionId: s.sessionId, cwd: s.cwd, reporterSeenAt: s.reporterSeenAt, lastTurn: s.lastTurn, waiting: s.waiting, lastPrompt: s.lastPrompt, agents: s.agents } : null;
   }
 
+  // Activity for lease binding: the last finished turn (turn.complete) and whether a newer prompt means a turn is running.
+  // { turnAt, promptAt, working } or null when the reporter never reported this session (then nobody may act on idleness).
+  function activityOf(name) {
+    const s = sessions.get(name);
+    if (!s || (!s.lastTurn && !s.lastPrompt)) return null;
+    const turnAt = s.lastTurn?.at ?? 0, promptAt = s.lastPrompt?.at ?? 0;
+    return { turnAt, promptAt, working: promptAt > turnAt };
+  }
+
   const prune = (liveNames) => { for (const k of [...sessions.keys()]) if (!liveNames.has(k)) sessions.delete(k); };
 
-  return { init, tokenOk, ingest, summary, detail, turnForStop, waitingNow, promptSince, prune, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
+  return { init, tokenOk, ingest, summary, detail, turnForStop, waitingNow, promptSince, activityOf, prune, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
 }

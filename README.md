@@ -908,3 +908,12 @@ Private. Joakim, your call whether to OSS.
 All UI icons come from one set in `public/icons.js` (24x24 grid, 2px round strokes, `currentColor`). Do not paste emoji, unicode
 glyphs (⏸ ⚡ ⚠ ▲ …) or one-off `<svg>` markup: add the icon to `ICONS`, then use `${icon('name', size)}` in JS strings or
 `<i data-icon="name" data-size="18"></i>` in `index.html`. The catalogue is listed at the top of `icons.js`.
+
+## Lease binding (TASK-58 C1)
+
+`lease-watch.js` polls `vpt-lease` on proxmox every 30 s: it writes `lease:released|expired|narrowed` to manager-events.jsonl (never pushed),
+releases a lease whose `codebox:<session>` holder is gone (seen in tmux before, missing on two polls in a row), and narrows a `kind=server`
+lease to `host` when the holder had no finished turn for 30 min (never releases an idle holder). Everything automatic is logged with
+`by:"TASK58-C1"` in `lease-actions.jsonl`. `manager.json` `leaseBind`: `"dry"` (log only) or `"off"`; default live. `GET /api/leases/watch` shows
+each holder (live / ended / remote / unknown / system) and the planned action. The reporter plugin releases a session's leases on SessionEnd
+(not on /clear or resume). Daily report: `lease-stats.js` (deploy request -> start p95, minutes held back by a lease, unknown holders).

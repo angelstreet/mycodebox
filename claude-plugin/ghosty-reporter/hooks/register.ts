@@ -3,11 +3,12 @@
 // down the session behaves exactly as without this plugin (after one failed try, nothing is sent for
 // 30 s). Nothing is printed to the transcript.
 import type { Register } from 'claude-code'
-import { agentRows, cap, isSynthetic, NOT_WAITING, payload, shouldRequireStatus, STATUS_REASON, taskRows } from './report.ts'
+import { agentRows, cap, isSynthetic, leaseReleaseArgv, NOT_WAITING, payload, shouldRequireStatus, STATUS_REASON, taskRows } from './report.ts'
 import type { Identity } from './report.ts'
 
 const SEND_MS = 800        // longest a hook waits for ghosty
 const SEND_END_MS = 300    // session.end shares a short wall-clock bound
+const LEASE_MS = 2500      // longest session.end waits for the lease release (ssh to proxmox)
 const DOWN_MS = 30_000     // after a failed send, stay quiet this long
 
 type State = { ident: Identity | null; tmuxTried: number; downUntil: number; lastAgents: string; url: string }
@@ -64,6 +65,17 @@ async function report($: any, event: string, data: Record<string, unknown> = {},
   } catch { /* silent */ }
 }
 
+// Fail open: no tmux, no ssh, no proxmox, a slow answer: the lease then simply stays (ghosty releases it later when the session is gone).
+async function releaseLeases($: any, reason: unknown): Promise<void> {
+  try {
+    const argv = leaseReleaseArgv((await identity($)).session, reason)
+    if (!argv) return
+    const ran = $.process.run(argv, { timeoutMs: LEASE_MS }).then(() => true, () => false)
+    const timeout = $.clock.sleep(LEASE_MS).then(() => null, () => null)
+    await Promise.race([ran, timeout])
+  } catch { /* silent */ }
+}
+
 async function snapshot($: any): Promise<void> {
   try {
     const rows = agentRows(await $.agent.list())
@@ -84,7 +96,8 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     const out = await next(e)
-    await report($, 'session.end', { reason: e.reason }, undefined, SEND_END_MS)
+    // both bounded and in parallel; each swallows its own errors, so exiting is never delayed by more than LEASE_MS
+    await Promise.all([report($, 'session.end', { reason: e.reason }, undefined, SEND_END_MS), releaseLeases($, e.reason)])
     return out
   })
 
