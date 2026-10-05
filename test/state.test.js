@@ -69,6 +69,12 @@ test('isRoutineAlert: deploy started/done with a ghosty-deploy- tag is routine',
   assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy staging backend started' }), true);
 });
 
+test('isRoutineAlert: a plain done with a version suffix is routine, with skipped hosts it counts', () => {
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt server done (v1.2.3)' }), true);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt host done (v1.2.3), 1 host(s) skipped' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt host done, 1 host(s) skipped' }), false);
+});
+
 test('isRoutineAlert: deploy failed / skipped / orphaned / approval still count', () => {
   assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend failed' }), false);
   assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend done, 2 host(s) skipped' }), false);

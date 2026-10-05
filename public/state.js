@@ -29,5 +29,6 @@ export function isRoutineAlert(item) {
   const tag = typeof item.tag === 'string' ? item.tag : '';
   const title = typeof item.title === 'string' ? item.title : '';
   if (!tag.startsWith('ghosty-deploy-')) return false;
-  return title.endsWith(' started') || title.endsWith(' done');
+  // Real titles: "deploy <env> <scope> started" or "... done", optionally "done (<version>)"; a ", N host(s) skipped" suffix makes it count.
+  return /\b(started|done( \([^)]*\))?)$/.test(title);
 }
