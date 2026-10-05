@@ -913,8 +913,8 @@ async function readJsonBody(req) {
 const HOME = homedir();
 const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 const AGENT_CMDS = {
-  claude:  process.env.AGENT_CMD_CLAUDE  ?? 'claude',
-  codex:   process.env.AGENT_CMD_CODEX   ?? 'codex',
+  claude:  process.env.AGENT_CMD_CLAUDE  ?? 'claude --dangerously-skip-permissions',
+  codex:   process.env.AGENT_CMD_CODEX   ?? 'codex --dangerously-bypass-approvals-and-sandbox',
   minimax: process.env.AGENT_CMD_MINIMAX ?? 'minimax-code',
   bash:    process.env.AGENT_CMD_BASH    ?? '',
 };
