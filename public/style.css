@@ -1573,3 +1573,18 @@ body.side-docked .side-head .ttl{ letter-spacing:.12em; }
 .mlog .ml.act .x{ grid-column:2; }
 .mchip{ display:inline-block; margin-left:8px; padding:1px 7px; border-radius:9px; border:1px solid var(--line); font-size:11px; font-weight:400; color:var(--ink-2); }
 .mchip.warn{ color:#d6a32b; border-color:#d6a32b; } .mchip.over{ color:#d64545; border-color:#d64545; }
+
+/* workspace filter + resources toggle (desktop top bar); folded resources = workspace dropdown in their place */
+.res-toggle{ width:24px; height:28px; margin-left:2px; }
+.wsel{ height:30px; max-width:240px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; margin-left:10px; margin-right:auto; }
+.wsel.on{ border-color:var(--accent); color:var(--accent); }
+body:not(.res-hidden) .wsel{ display:none; }
+body.res-hidden .health.inbar, body.res-hidden .quota.inbar{ display:none !important; }
+body[data-mode="card"] .res-toggle, body[data-mode="card"] .wsel{ display:none; }
+@media (max-width: 720px){ .res-toggle, .wsel{ display:none !important; } }
+#sideByProjectBtn.on{ color:var(--accent); }
+/* New session: taller, so name / project / folder are all in view; the project list opens inline */
+.sheet.newsess{ height:min(94dvh, 900px); max-height:94dvh; }
+.newsess .nsproj .ucpanel{ position:static; margin-top:6px; box-shadow:none; }
+.newsess .nsproj .uclist{ max-height:min(40dvh, 380px); }
+.title:has(+ .res-toggle){ flex:0 0 auto; }

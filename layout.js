@@ -1,6 +1,7 @@
 // Where the owner put things: the order of the sessions, which are pinned, and the named groups. One small JSON file
 // (<state dir>/layout.json) so a refresh or another device shows the same list.
-//   { order: [session…], pins: [session…], groups: { session: groupName }, groupNames: [groupName…], collapsed: [sectionKey…] }
+//   { order: [session…], pins: [session…], groups: { session: groupName }, groupNames: [groupName…], collapsed: [sectionKey…], groupBy: ''|'project' }
+// groupBy 'project' = the list also sections itself by repo (manual groups still win).
 // Section keys: "pin" or "g:<groupName>". Unknown sessions are kept (a session may be down for a while).
 import { promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
@@ -16,7 +17,7 @@ export function normalizeLayout(x) {
     for (const [k, v] of Object.entries(x.groups).slice(0, MAX_NAMES)) { const g = str(v), n = str(k); if (n && g) groups[n] = g; }
   }
   const groupNames = uniq([...list(x?.groupNames), ...Object.values(groups)]);
-  return { order: list(x?.order), pins: list(x?.pins), groups, groupNames, collapsed: list(x?.collapsed) };
+  return { order: list(x?.order), pins: list(x?.pins), groups, groupNames, collapsed: list(x?.collapsed), groupBy: x?.groupBy === 'project' ? 'project' : '' };
 }
 
 export function createLayoutStore({ file }) {
@@ -37,6 +38,7 @@ export function createLayoutStore({ file }) {
       await fs.mkdir(dirname(file), { recursive: true });
       const tmp = `${file}.${process.pid}.tmp`;
       await fs.writeFile(tmp, snap);
+      try { await fs.copyFile(file, `${file}.bak`); } catch { /* first write */ }   // one step back, in case a bad PUT wipes it
       await fs.rename(tmp, file);
     }).catch(() => {});
     await writing;

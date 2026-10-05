@@ -25,6 +25,10 @@
       <i data-icon="chevron-left" data-size="20"></i>
     </button>
     <div class="title" id="appTitle">codebox</div>
+    <button class="icon-btn res-toggle" id="resToggle" aria-label="Show or hide codebox resources" title="Hide the codebox resources (CPU, RAM, quota) and show the workspace filter">
+      <i data-icon="chevron-left" data-size="16"></i>
+    </button>
+    <select class="wsel" id="wsSelect" aria-label="Workspace (repo)" title="Workspace: show one repo only"></select>
     <!-- fleet summary: counts per state, tap to filter -->
     <div class="summary" id="summary"></div>
     <div class="viewctl">
@@ -171,6 +175,9 @@
       </button>
       <button class="icon-btn dock-only" id="sideCollapseBtn" aria-label="Collapse list" title="Collapse the list">
         <i data-icon="chevron-left" data-size="18"></i>
+      </button>
+      <button class="icon-btn" id="sideByProjectBtn" aria-label="Group by project" title="Group the list by project (repo)">
+        <i data-icon="layers" data-size="17"></i>
       </button>
       <button class="icon-btn" id="sideGroupBtn" aria-label="New group" title="New group (drag sessions into it)">
         <i data-icon="folder-plus" data-size="17"></i>

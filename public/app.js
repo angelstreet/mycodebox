@@ -104,6 +104,7 @@ const normLayout = (x) => ({
   groups: x?.groups && typeof x.groups === 'object' && !Array.isArray(x.groups) ? { ...x.groups } : {},
   groupNames: Array.isArray(x?.groupNames) ? [...new Set(x.groupNames)] : [],
   collapsed: Array.isArray(x?.collapsed) ? x.collapsed : [],
+  groupBy: x?.groupBy === 'project' ? 'project' : '',
 });
 state.layout = normLayout(null);
 let layoutTimer = 0, layoutDirty = false;
@@ -129,7 +130,7 @@ async function loadLayout() {
     if (JSON.stringify(j) === JSON.stringify(state.layout)) return;
     state.layout = j; state.order = j.order;
     lsSet('ghosty.layout', JSON.stringify(j));
-    sortSessions(); renderAll();
+    sortSessions(); renderAll(); syncByProjectBtn?.();
   } catch { /* offline: keep the cache */ }
 }
 function loadOrder() {
@@ -779,7 +780,7 @@ async function fetchLeases() {
   const place = () => {
     if (mq.matches) {   // desktop: vitals left next to the title, quota centred, both inside the top bar
       els.health.classList.add('inbar'); els.quota.classList.add('inbar');
-      $('#appTitle').after(els.health); els.health.after(els.quota);
+      $('#appTitle').after($('#resToggle')); $('#resToggle').after(els.health); els.health.after(els.quota); els.quota.after($('#wsSelect'));
     } else {            // phones: vitals strip under the bar; the quota strip is hidden (see Usage)
       els.health.classList.remove('inbar'); els.quota.classList.remove('inbar');
       $('#topbar').after(els.health); els.health.after(els.quota);
@@ -875,7 +876,26 @@ function loadFilters() {
 
 // Filter bar: one horizontal row of chip groups. Rebuilt only when its
 // content (counts / options / selection) changes.
+// Workspace = repo. The dropdown (top bar, shown while the codebox resources are folded) drives the same project filter as the
+// filter bar; it lists only repos that have a session right now.
+state.resHidden = lsGet('ghosty.resHidden', '0') === '1';
+function applyRes() {
+  document.body.classList.toggle('res-hidden', state.resHidden);
+  const t = $('#resToggle');
+  if (t) { t.innerHTML = icon(state.resHidden ? 'chevron-right' : 'chevron-left', 16); t.title = state.resHidden ? 'Show the codebox resources (CPU, RAM, quota)' : 'Hide the codebox resources (CPU, RAM, quota) and show the workspace filter'; }
+}
+function syncWorkspace() {
+  const sel = $('#wsSelect');
+  if (!sel) return;
+  const all = state.sessions.map((s) => s.name);
+  const projs = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
+  const html = `<option value="">All workspaces \u00b7 ${all.length}</option>` + projs.map((p) => `<option value="${escapeHtml(p || '-')}">${escapeHtml(p || 'no git')} \u00b7 ${all.filter((n) => projectOf(n) === p).length}</option>`).join('');
+  if (sel.dataset.h !== html) { sel.dataset.h = html; sel.innerHTML = html; }
+  sel.value = state.fProject || '';
+  sel.classList.toggle('on', !!state.fProject);
+}
 function renderFilterBar() {
+  syncWorkspace();
   const bar = els.filterBar;
   const show = state.filterOpen || anyFilter();
   bar.classList.toggle('hidden', !show);
@@ -1060,17 +1080,19 @@ function renderSide() {
   syncSide();
 }
 // Sections of the list: Pinned, then each named group, then the rest. Headers show only when a pin or group exists.
-const secOfName = (n) => (state.layout.pins.includes(n) ? 'pin' : state.layout.groups[n] ? `g:${state.layout.groups[n]}` : 'other');
+const autoGroupOf = (n) => (state.layout.groupBy === 'project' ? (projectOf(n) || 'no git') : '');
+const secOfName = (n) => (state.layout.pins.includes(n) ? 'pin' : (state.layout.groups[n] || autoGroupOf(n)) ? `g:${state.layout.groups[n] || autoGroupOf(n)}` : 'other');
 function layoutSide() {
   const list = els.sessionList;
   const L = state.layout;
   const rows = new Map([...list.children].filter((li) => li.dataset.session).map((li) => [li.dataset.session, li]));
   const hdrs = state.sideHdr || (state.sideHdr = {});
   const names = state.sessions.map((s) => s.name);            // already pinned-first, then the saved order, then alphabetical
-  const groupNames = [...new Set([...(L.groupNames || []), ...Object.values(L.groups)])].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+  const manual = new Set([...(L.groupNames || []), ...Object.values(L.groups)]);
+  const groupNames = [...new Set([...manual, ...(L.groupBy === 'project' ? names.map(autoGroupOf) : [])])].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
   const sections = [];
   if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned', icon: 'pin' });
-  for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: g });
+  for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
   const withHeaders = sections.length > 0;
   if (withHeaders) sections.push({ key: 'other', title: 'Other' });
   const plan = [];
@@ -3205,9 +3227,10 @@ const NEW_AGENTS = ['claude', 'codex', 'minimax', 'bash'];
 function openNewSession() {
   let agent = lsGet('ghosty.newAgent', 'claude');
   if (!NEW_AGENTS.includes(agent)) agent = 'claude';
-  let dirs = null, nameTouched = false, agentTouched = false;
+  let dirs, nameTouched = false, agentTouched = false;   // dirs: undefined = loading, null = unavailable
   let priority = DEFAULT_PRIORITY, mcfg = null;
   openSheet('New session', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('newsess');
     body.innerHTML = `
       <div class="seg" id="nsPrio">${PRIORITIES.map((p) => `<button data-p="${p}" class="${p === priority ? 'on' : ''}">${p}</button>`).join('')}</div>
       <div class="mnote" id="nsSug"></div>
@@ -3607,6 +3630,12 @@ function cssEscape(s) { return (window.CSS?.escape) ? CSS.escape(s) : String(s).
 els.menuBtn.onclick   = openSide;
 $('#sideCollapseBtn').onclick = () => setDock(false);
 $('#sideGroupBtn').onclick = openNewGroup;
+$('#sideByProjectBtn').onclick = () => { state.layout.groupBy = state.layout.groupBy === 'project' ? '' : 'project'; saveLayout(); layoutSide(); syncByProjectBtn(); };
+function syncByProjectBtn() { $('#sideByProjectBtn')?.classList.toggle('on', state.layout.groupBy === 'project'); }
+syncByProjectBtn();
+$('#resToggle').onclick = () => { state.resHidden = !state.resHidden; lsSet('ghosty.resHidden', state.resHidden ? '1' : '0'); applyRes(); };
+$('#wsSelect').onchange = (e) => setFilters({ fProject: e.target.value || null });
+applyRes();
 wireSideDnd();
 loadLayout();
 window.addEventListener('focus', loadLayout);

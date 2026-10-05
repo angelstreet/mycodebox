@@ -12,7 +12,9 @@ test('normalizeLayout drops junk, dedupes and derives group names', () => {
   assert.deepEqual(n.groups, { a: 'G' });
   assert.deepEqual(n.groupNames, ['G']);
   assert.deepEqual(n.collapsed, ['pin']);
-  assert.deepEqual(normalizeLayout(null), { order: [], pins: [], groups: {}, groupNames: [], collapsed: [] });
+  assert.deepEqual(normalizeLayout(null), { order: [], pins: [], groups: {}, groupNames: [], collapsed: [], groupBy: '' });
+  assert.equal(normalizeLayout({ groupBy: 'project' }).groupBy, 'project');
+  assert.equal(normalizeLayout({ groupBy: 'x' }).groupBy, '');
 });
 
 test('store persists to disk, merges partial PUTs, survives a restart', async () => {
@@ -28,4 +30,14 @@ test('store persists to disk, merges partial PUTs, survives a restart', async ()
   assert.deepEqual(l.pins, ['a']);
   assert.deepEqual(l.groups, { b: 'Work' });
   assert.deepEqual(l.groupNames, ['Work']);
+});
+
+test('store keeps the previous version as layout.json.bak', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'layout-'));
+  const file = join(dir, 'layout.json');
+  const s = createLayoutStore({ file });
+  await s.set({ order: ['a', 'b'] });
+  await s.set({ order: [] });                       // a wipe
+  const bak = JSON.parse(await fs.readFile(`${file}.bak`, 'utf8'));
+  assert.deepEqual(bak.order, ['a', 'b']);
 });
