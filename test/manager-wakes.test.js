@@ -109,3 +109,19 @@ test('finds the transcript through the ledger label, writes the day file idempot
   t = 30000; assert.equal((await view('2026-01-01')).summary.count, 6);   // cached
   t = 61000; assert.equal((await view('2026-01-01')).summary.count, 0);
 });
+
+test('writeWakesFile with a day keeps other days; startWakesLogger refreshes today', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { writeWakesFile, startWakesLogger } = await import('../manager-wakes.js');
+  const dir = mkdtempSync(join(tmpdir(), 'ghosty-wk-'));
+  await writeWakesFile(dir, [{ start: '2026-10-04T10:00:00Z', n: 1 }]);
+  await writeWakesFile(dir, [{ start: '2026-10-05T10:00:00Z', n: 2 }], '2026-10-05');
+  await writeWakesFile(dir, [{ start: '2026-10-05T11:00:00Z', n: 3 }], '2026-10-05');
+  const rows = readFileSync(join(dir, 'manager-wakes.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).n);
+  assert.deepEqual(rows, [1, 3]);
+  const lg = startWakesLogger({ stateDir: dir, claudeDir: join(dir, 'none'), intervalMs: 1e9, now: () => Date.parse('2026-10-06T12:00:00Z') });
+  await lg.run(); lg.stop();
+  assert.deepEqual(readFileSync(join(dir, 'manager-wakes.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).n), [1, 3]);
+});

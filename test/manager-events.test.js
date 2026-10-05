@@ -89,14 +89,14 @@ test('record: writes one JSON line with the expected shape per key family', asyn
   const me = createManagerEvents({ stateDir: dir, managerSessions: () => [] });
   const at = '2026-01-02T03:04:05.000Z';
   await me.record({ at, key: 'web:asks', title: 't1', url: '/?s=web', priority: 'high', body: 'b1' });
-  await me.record({ at, key: 'deploy:abc123:done', title: 't2', priority: 'default' });
+  await me.record({ at, key: 'deploy:abc123:failed', title: 't2', priority: 'default' });
   await me.record({ at, key: 'quota:codex:5h', title: 't3', priority: 'high' });
   await me.record({ at, key: 'disk:/', title: 't4', priority: 'urgent' });
   await me.record({ at, key: 'openrouter:credits', title: 't5' });
   const lines = readLines(me.file);
   assert.equal(lines.length, 5);
   assert.deepEqual(lines[0], { at, key: 'web:asks', kind: 'asks', session: 'web', title: 't1', body: 'b1', url: '/?s=web', priority: 'high' });
-  assert.deepEqual(lines[1], { at, key: 'deploy:abc123:done', kind: 'deploy', deployId: 'abc123', state: 'done', title: 't2', body: '', url: '/', priority: 'default' });
+  assert.deepEqual(lines[1], { at, key: 'deploy:abc123:failed', kind: 'deploy', deployId: 'abc123', state: 'failed', title: 't2', body: '', url: '/', priority: 'default' });
   assert.deepEqual(lines[2], { at, key: 'quota:codex:5h', kind: 'quota', quotaKey: 'codex:5h', title: 't3', body: '', url: '/', priority: 'high' });
   assert.deepEqual(lines[3], { at, key: 'disk:/', kind: 'disk', diskPath: '/', title: 't4', body: '', url: '/', priority: 'urgent' });
   assert.deepEqual(lines[4], { at, key: 'openrouter:credits', kind: 'credits', creditsKey: 'credits', title: 't5', body: '', url: '/', priority: 'default' });
@@ -282,4 +282,17 @@ test('dedupe: survives a restart (seeded from the file tail)', async () => {
   await createManagerEvents({ stateDir: dir }).record({ key: 'web:asks', title: 't', body: 'same', at });
   const again = createManagerEvents({ stateDir: dir });
   assert.equal(await again.record({ key: 'web:asks', title: 't', body: 'same', at: '2026-01-01T01:00:00Z' }), false);
+});
+
+test('record: routine deploy start/done are not written; kept when a lease blocked them, and failed/orphan always', async () => {
+  const dir = tmp();
+  const me = createManagerEvents({ stateDir: dir, managerSessions: () => [] });
+  assert.equal(await me.record({ key: 'deploy:a:start', title: 't' }), false);
+  assert.equal(await me.record({ key: 'deploy:a:done', title: 't', blockedBy: [] }), false);
+  assert.equal(await me.record({ key: 'deploy:b:start', title: 't', blockedBy: ['lease'] }), true);
+  assert.equal(await me.record({ key: 'deploy:c:failed', title: 't' }), true);
+  assert.equal(await me.record({ key: 'deploy:d:orphan', title: 't' }), true);
+  const lines = readLines(me.file);
+  assert.deepEqual(lines.map((l) => l.key), ['deploy:b:start', 'deploy:c:failed', 'deploy:d:orphan']);
+  assert.deepEqual(lines[0].blockedBy, ['lease']);
 });
