@@ -30,6 +30,7 @@
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
+//   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
 //   GET  /api/manager/actions?since=<ISO>&limit=100 → { actions, regrets } tail of manager-actions.jsonl (newest last) + the `at|session` keys the owner marked wrong
 //   POST /api/manager/regret → {at, session, decision?, undo?} one-tap "wrong" on a manager action; appends to manager-regret.jsonl (regret.js)
 //   GET  /api/manager/scorecard?days=7 → { today, days:[...] } performance + cost + Jev integration for the window
@@ -59,7 +60,8 @@ import { spawn, execFile } from 'node:child_process';
 import { readFile, writeFile, stat, readdir, realpath } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
-import { createLeaseStore } from './leases.js';
+import { createLeaseStore, sshRun as leaseRun } from './leases.js';
+import { createLeaseWatch } from './lease-watch.js';
 import { machinesOf, holdingsOf, deployWaitOf } from './public/platforms.js';
 import { createHash } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -620,6 +622,15 @@ const deployRunner = createDeployRunner({
   stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn,
   pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 45 * 60 * 1000),
   onChange: (d) => broadcastStatus({ type: 'deploys', deploys: d }),
+});
+// Lease <-> session binding (lease-watch.js): lease:* manager events, release of ended holders, narrow of idle server leases.
+// manager.json key `leaseBind`: "live" (default) | "dry" (log what it would do) | "off".
+const leaseWatch = createLeaseWatch({
+  stateDir: STATE_DIR, run: leaseRun, machines: MACHINES,
+  listSessionNames: async () => (await listSessions()).map((x) => x.name),
+  activityOf: (name) => reporter.activityOf(name),
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseBind; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
@@ -1489,6 +1500,7 @@ const server = http.createServer(async (req, res) => {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
+  if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
   if (req.method === 'GET' && p === '/api/manager/actions') {   // the manager agent's own action log (manager-actions.jsonl), newest last, read-only
     const q = url.searchParams;
     return json(res, 200, { actions: await readActions({ stateDir: STATE_DIR, since: q.get('since') || null, limit: q.get('limit') }), regrets: effectiveRegrets(await readRegrets({ stateDir: STATE_DIR })).map((r) => regretKey(r.at, r.session)) });
@@ -1649,6 +1661,7 @@ server.listen(PORT, HOST, async () => {
   const quotaTick = () => quota.poll().then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
   deployRunner.start();
+  leaseWatch.start();
   credits.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:
   // ONE alert (digest tier) + the jev:down event (the alert feeds the manager feed), and a jev:up event when it closes.

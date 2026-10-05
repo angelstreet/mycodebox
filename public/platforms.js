@@ -1,6 +1,6 @@
 // Platforms view model (TASK-44): who holds which lease, deploy-wait signals, chip text. Pure: used by server.js and the page.
-// Ownership is EXACT: a lease belongs to a session iff its agent is `<machine>:<tmux session name>` (case-insensitive),
-// where <machine> is `codebox` or this machine's hostname. No fuzzy matching: agents must use
+// A lease belongs to a session iff its agent is `<machine>:<tmux session name>` (case- and punctuation-insensitive, or a unique
+// long prefix), where <machine> is `codebox` or this machine's hostname. Agents should use
 // AGENT="codebox:$(tmux display-message -p '#S')" (see the deploy skill).
 
 const PENDING = ['awaiting-approval', 'queued'];            // a deploy waiting for the platform; `running` already owns it
@@ -13,15 +13,33 @@ export const machinesOf = (hostname) => {
   return m;
 };
 
-// session name for an agent id, or null
-export function agentSession(agent, sessionNames, machines) {
+// Tolerant name form: case, dashes, underscores and dots do not matter (TASK-28-videos == TASK28-videos).
+export const normName = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const PREFIX_MIN = 8;   // a shorter normalised name must be at least this long to match as a prefix (TASK28-videos <-> TASK-28-videos-sw)
+
+// The part after `<machine>:` when the machine is one of ours, else null.
+export function agentLocalName(agent, machines) {
   const a = String(agent || '');
   const i = a.indexOf(':');
   if (i <= 0 || !machines.has(a.slice(0, i).toLowerCase())) return null;
-  const want = a.slice(i + 1).toLowerCase();
-  if (!want) return null;
-  const exact = sessionNames.find((n) => n === a.slice(i + 1));
-  return exact ?? sessionNames.find((n) => n.toLowerCase() === want) ?? null;
+  return a.slice(i + 1) || null;
+}
+
+// session name for an agent id, or null. Exact (case-insensitive) first, then the same name ignoring punctuation,
+// then a unique prefix match either way (the shorter side >= 8 characters, so `qualiai` does not match `qualiai-pipeline`).
+export function agentSession(agent, sessionNames, machines) {
+  const rest = agentLocalName(agent, machines);
+  if (!rest) return null;
+  const want = rest.toLowerCase();
+  const exact = sessionNames.find((n) => n === rest) ?? sessionNames.find((n) => n.toLowerCase() === want);
+  if (exact) return exact;
+  const w = normName(rest);
+  if (!w) return null;
+  const same = sessionNames.filter((n) => normName(n) === w);
+  if (same.length === 1) return same[0];
+  if (same.length > 1) return null;
+  const pre = sessionNames.filter((n) => { const x = normName(n); return x && Math.min(x.length, w.length) >= PREFIX_MIN && (x.startsWith(w) || w.startsWith(x)); });
+  return pre.length === 1 ? pre[0] : null;
 }
 
 // Does a deploy of this scope disturb a lease on res? Same table as vpt-lease scope_touches.

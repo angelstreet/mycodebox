@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { cap, hasStatusLine, shouldRequireStatus, TEXT_CAP } from './hooks/report.ts'
+import { cap, hasStatusLine, leaseReleaseArgv, shouldRequireStatus, TEXT_CAP } from './hooks/report.ts'
 
 const ENV = {
   TMUX: '/tmp/tmux-1000/default,1,0',
@@ -201,4 +201,15 @@ test('every status value is recognised, anywhere in the last 3 lines; prose is n
   expect(hasStatusLine('The status: done is fine')).toBe(false)
   expect(hasStatusLine('STATUS: maybe')).toBe(false)
   expect(hasStatusLine('STATUS: done\na\nb\nc')).toBe(false)
+})
+
+test('leaseReleaseArgv: only for a tmux session that really ended, with a safe name', () => {
+  const a = leaseReleaseArgv('TASK58-orchestration', 'prompt_input_exit')!
+  expect(a[0]).toBe('ssh')
+  expect(a[a.length - 1]).toBe('~/bin/vpt-lease release --agent codebox:TASK58-orchestration --by session-end --reason session-ended')
+  expect(leaseReleaseArgv('s', undefined)).not.toBeNull()
+  expect(leaseReleaseArgv(null, 'logout')).toBeNull()
+  expect(leaseReleaseArgv('s', 'clear')).toBeNull()
+  expect(leaseReleaseArgv('s', 'resume')).toBeNull()
+  expect(leaseReleaseArgv("a b; rm -rf /", 'logout')).toBeNull()
 })

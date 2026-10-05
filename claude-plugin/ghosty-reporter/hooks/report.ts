@@ -80,3 +80,16 @@ export function shouldRequireStatus(e: { stop_hook_active?: boolean; last_assist
   if (typeof text !== 'string' || !text.trim()) return false
   return !hasStatusLine(text)
 }
+
+// ---- lease release on session end (TASK-58 C1) ----
+// A session that ends releases the vpt-lease leases it holds as `codebox:<tmux session>`. /clear and a resume end the
+// conversation but not the work, so those keep the lease. Returns the ssh argv, or null when nothing should run.
+const KEEP_ON_END = new Set(['clear', 'resume'])
+const SAFE_SESSION = /^[A-Za-z0-9_.-]+$/
+
+export function leaseReleaseArgv(session: string | null, reason: unknown): string[] | null {
+  if (!session || !SAFE_SESSION.test(session)) return null    // not in tmux, or a name the remote shell could misread
+  if (typeof reason === 'string' && KEEP_ON_END.has(reason)) return null
+  return ['ssh', '-o', 'ConnectTimeout=2', '-o', 'BatchMode=yes', 'proxmox',
+    `~/bin/vpt-lease release --agent codebox:${session} --by session-end --reason session-ended`]
+}
