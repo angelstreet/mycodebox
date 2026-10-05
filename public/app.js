@@ -851,7 +851,7 @@ function renderAttention() {
   const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting' || aiAsk(s.name)).sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
   els.attention.classList.toggle('hidden', waiting.length === 0);
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
-  const key = waiting.map((s) => s.name + prioOf(s.name) + line(s.name)).join('|');
+  const key = waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +

@@ -214,7 +214,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     pill.classList.toggle('hidden', !minimised);
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
-    const sig = JSON.stringify([item.key, idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
+    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);
@@ -230,7 +230,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         ? `<button type="button" class="ap-det" data-act="details" aria-expanded="${detOpen}">Details <span class="ap-toggle">${detOpen ? '▾' : '▸'}</span></button>${detOpen ? `<pre class="ap-det-t">${esc(v.details)}</pre>` : ''}`
         : '';
       body.innerHTML = `<div class="ap-head">
-          <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(item.name)}</button>
+          <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(state.rename?.[item.name] || item.name)}</button>
           <span class="ap-prio ${esc(v.prio)}">${esc(v.prio)}</span>
           <span class="ap-cnt">${idx + 1}/${q.items.length}</span>
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
