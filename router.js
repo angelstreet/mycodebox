@@ -13,6 +13,7 @@
 // when the floor already forced a pick (no need to call). pick(point, facts, jevJson, ...) collapses
 // the server's reply with the rule default. decide(point, facts, { post, ... }) wraps both, never
 // throws, and threads post() (injected, returns null on error).
+import { isDisabledReply } from './jev-switch.js';
 
 // ---- shared helpers ----
 
@@ -343,6 +344,8 @@ export async function decide(point, facts, { post, teamId, refs, threshold } = {
     reply = null;
   }
   const out = pick(point, facts, reply, { threshold });
+  // An API failure is not "unsure": source 'error' (+ the error text) keeps it apart from a rule default, the pick is still the rule default.
+  if (reply && reply.success === false && !isDisabledReply(reply)) { out.source = 'error'; out.error = String(reply.error || 'error').slice(0, 200); }
   const decisionId = reply && reply.decision_id ? reply.decision_id : null;
   return decisionId ? { ...out, decision_id: decisionId } : out;
 }

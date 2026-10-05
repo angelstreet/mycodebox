@@ -25,9 +25,9 @@ test('alerts: seed silently, once at <= $2, again at <= $0, re-arm above $2', ()
   const a = createCreditAlerts((k, m) => sent.push(m.title));
   a.check(50);            // seed
   a.check(30); assert.equal(sent.length, 0);
-  a.check(1.9); assert.equal(sent.length, 1); assert.match(sent[0], /low \(\$1\.90\)/);
+  a.check(1.9); assert.equal(sent.length, 1); assert.match(sent[0], /nearly reached/);
   a.check(1.5); assert.equal(sent.length, 1, 'no repeat while low');
-  a.check(-0.21); assert.equal(sent.length, 2); assert.match(sent[1], /used up \(-\$0\.21\)/);
+  a.check(-0.21); assert.equal(sent.length, 2); assert.match(sent[1], /OpenRouter limit reached/);
   a.check(-1); assert.equal(sent.length, 2);
   a.check(10);            // topped up: re-armed
   a.check(2); assert.equal(sent.length, 3);
@@ -57,7 +57,7 @@ test('views: red balance, key limits, not-available text, quota chip, tab shows 
   const c = normalizeCredits(body(-0.21));
   const h = creditHtml(c);
   assert.match(h, /jbal bad">-\$0\.21/);
-  assert.match(h, /Credit is used up/);
+  assert.match(h, /Jev will stop/);
   assert.match(h, /limit \$50\.00, \$12\.50 left/);
   assert.match(h, /today \$0\.30/); assert.match(h, /this month \$37\.50/);
   assert.doesNotMatch(creditHtml(normalizeCredits(body(40))), /used up/);

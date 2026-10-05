@@ -28,6 +28,7 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { decide, POINTS } from '../router.js';
 import { serverBase } from '../decisions.js';
 import { isDisabledReply } from '../jev-switch.js';
+import { createJevBreaker } from '../jev-breaker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -94,7 +95,7 @@ env (process.env or <repoRoot>/.env):
 
 stdout is exactly one JSON line:
   { point, pick, confidence, source, ruleDefault, allowed, decision_id }
-  source = "forced" | "jev" | "rule"
+  source = "forced" | "jev" | "rule" | "error"   (error = the Jev call failed, e.g. HTTP 403; "error" has the text; the pick is the rule default)
 
 exit codes:
   0  printed a pick (also on rule fallback, also on forced floor)
@@ -159,10 +160,13 @@ async function main() {
   const VPT_TEAM_ID = process.env.VPT_TEAM_ID || dot.VPT_TEAM_ID || '';
 
   const origin = serverBase(JEV_URL);
+  const breaker = createJevBreaker({ file: join(STATE_DIR, 'jev-budget.json') });   // shared with the server: 3 errors in a row = rules only, a probe every 10 min
+  let breakerOpen = false;
   // post(): returns the JSON or null on any error. Never throws.
   let jevDisabled = false;   // the server's JEV_ENABLED=false: print the rule default, flagged
   const post = origin && JEV_API_KEY
     ? async (body) => {
+        if (!breaker.allow()) { breakerOpen = true; return null; }
         try {
           const r = await fetch(`${origin}/server/ai/decide`, {
             method: 'POST',
@@ -171,9 +175,12 @@ async function main() {
             signal: AbortSignal.timeout(20000),
           });
           const j = await r.json().catch(() => null);
-          if (isDisabledReply(j)) jevDisabled = true;
-          return (j && j.success !== false) ? j : null;
-        } catch { return null; }
+          if (isDisabledReply(j)) { jevDisabled = true; return null; }
+          if (j && j.success !== false) { breaker.success(); return j; }
+          const error = String(j?.error || `http ${r.status}`).slice(0, 200);
+          breaker.failure(error);
+          return { success: false, error };
+        } catch (e) { breaker.failure(e.message); return { success: false, error: e.message }; }
       }
     : null;
 
@@ -192,7 +199,9 @@ async function main() {
     ruleDefault: out.ruleDefault,
     allowed: out.allowed,
     decision_id: out.decision_id || null,
+    ...(out.source === 'error' ? { error: out.error } : {}),
     ...(jevDisabled && out.source !== 'forced' ? { jev: 'disabled' } : {}),
+    ...(breakerOpen && out.source !== 'forced' ? { jev: 'down' } : {}),
   };
 
   // Exactly ONE JSON line on stdout.

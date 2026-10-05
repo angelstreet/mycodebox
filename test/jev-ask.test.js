@@ -164,7 +164,8 @@ test('jev-ask: when the server is unreachable, falls back to ruleDefault', async
   assert.equal(code, 0, `stderr: ${stderr}`);
   const rec = JSON.parse(stdout.trim());
   assert.equal(rec.pick, 'escalate');
-  assert.equal(rec.source, 'rule');
+  assert.equal(rec.source, 'error');
+  assert.ok(rec.error, 'error text present');
   assert.equal(rec.decision_id, null);
   // still logged locally
   const log = (await readFile(join(stateDir, 'manager-asks.jsonl'), 'utf8')).trim().split('\n');

@@ -29,6 +29,7 @@ import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, 
 import { createPromptSource } from './prompts.js';
 import { reviewerOptions } from './public/buttons.js';
 import { runShadow } from './router-shadow.js';
+import { createJevBreaker } from './jev-breaker.js';
 import { createJevSwitch, isDisabledReply, DISABLED } from './jev-switch.js';
 import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
 import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
@@ -65,6 +66,8 @@ let config = { enabled: true, autoSend: false, routerShadow: true, wakeShadow: t
   jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
+export const jevBreaker = createJevBreaker({ file: BUDGET_FILE });   // 3 errors in a row: rules only, one probe per 10 min (jev-breaker.js)
+const saveBudget = () => { try { jevBreaker.saveCounters(budget); } catch {} };
 const RECENT_STOPS = 5;
 let lastStops = {};
 let lastStopsWrite = Promise.resolve();
@@ -92,7 +95,7 @@ const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
-  try { budget = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); } catch {}
+  try { const b = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); budget = { day: b.day || '', calls: b.calls || 0, cost: b.cost || 0 }; } catch {}
   try { lastStops = JSON.parse(await readFile(LAST_STOPS_FILE, 'utf8')) || {}; } catch { lastStops = {}; }
   await aiBudget.load();
   config.autoCases = (config.autoCases || []).filter((c) => AUTO_CASES.includes(c));
@@ -125,7 +128,7 @@ export function langfuseLinks(env = process.env) {
 }
 
 export function managerConfig() {
-  return { ...config, langfuse: langfuseLinks(), validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
+  return { ...config, langfuse: langfuseLinks(), validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...jevBreaker.state(), ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
     ai: !!(AI_URL && JEV_API_KEY), aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
 }
 
@@ -570,6 +573,7 @@ async function jev(stall, ctx = {}) {
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
   if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
+  if (!jevBreaker.allow()) return { skipped: 'Jev down (3 errors in a row), rules decide' };
   const logged = decisions.configured;   // needs VPT_TEAM_ID: the server writes no log row without a team
   const body = jevRequestBody(stall, { usage: await jevUsageNow(), refs: logged ? { team_id: VPT_TEAM_ID, source: 'ghosty-manager', session: ctx.session, stall_id: ctx.stallId, case: ctx.case } : null });
   const started = Date.now();
@@ -590,16 +594,19 @@ async function jev(stall, ctx = {}) {
     if (jevSwitch.seen(j)) return { skipped: DISABLED };   // Jev off on the server: not an error, not counted
     budget.calls += 1;
     budget.cost += Number(j.cost || 0);
-    writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
+    saveBudget();
     const a = j.answers?.choice;
     if (!j.success || !a) {
       const error = String(j.error || `http ${r.status}`).slice(0, 200);
       const kind = jevErrorKind(error);
       if (kind === 'credits') creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS;
+      if (!j.success) jevBreaker.failure(error); else jevBreaker.success();
       return { error, kind, ms: Date.now() - started, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
     }
+    jevBreaker.success();
     return { choice: a.choice, confidence: a.confidence, probabilities: a.probabilities, cost: j.cost, ms: j.ms ?? Date.now() - started, model: j.model, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
   } catch (e) {
+    jevBreaker.failure(e.message);
     return { error: e.message, kind: jevErrorKind(e.message), ms: Date.now() - started };
   }
 }
@@ -621,13 +628,15 @@ function shadowRoute({ id, session, agent, final, stall, escalated }) {
       if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return skip('daily budget reached');
       const cr = (() => { try { return creditsPeek(); } catch { return null; } })();
       if (cr?.ok && cr.balance != null && cr.balance <= 0) return skip('no OpenRouter credit');
+      if (!jevBreaker.allow()) return skip('Jev down (3 errors in a row)');
       const post = async (body) => { const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) }); return { r, j: await r.json() }; };
       const router = await runShadow({ usage: MANAGER_USAGE, teamId: decisions.configured ? VPT_TEAM_ID : '', post,
         facts: { session, agent, forbidden: final.forbidden, no_status: final.no_status, excerpt: stall.excerpt, stallId: id, ruleCase: final.case, escalated },
         kindOf: jevErrorKind });
       if (router.skipped === DISABLED) { jevSwitch.markOff(); st.done = true; return logLater({ ...rec, router }); }
+      if (router.error && !/^http 2\d\d$/.test(router.error)) jevBreaker.failure(router.error); else jevBreaker.success();   // an answer the shadow could not parse (http 200) is not an outage
       budget.calls += 1; budget.cost += Number(router.cost || 0);
-      writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
+      saveBudget();
       st.decision_id = router.decision_id || null; st.done = true;
       await logLater({ ...rec, router });
       flushRouterOutcome(id);
@@ -664,17 +673,22 @@ const wakeAnnotator = createWakeAnnotator({
     const cr = (() => { try { return creditsPeek(); } catch { return null; } })();
     if (cr?.ok && cr.balance != null && cr.balance <= 0) return 'no OpenRouter credit';
     if (Date.now() < creditsDownUntil) return 'OpenRouter credit used up (402), retrying later';
+    if (!jevBreaker.allow()) return 'Jev down (3 errors in a row)';
     return null;
   },
   onError: (kind) => { if (kind === 'credits') creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS; },
   call: async (body) => {
-    const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(CAP_MS) });
-    const j = await r.json();
+    let r, j;
+    try {
+      r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(CAP_MS) });
+      j = await r.json();
+    } catch (e) { jevBreaker.failure(e.message); throw e; }
     if (jevSwitch.seen(j)) return j;   // Jev off on the server: not counted against the budget
     if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
     budget.calls += 1; budget.cost += Number(j?.cost || 0);
-    writeFile(BUDGET_FILE, JSON.stringify(budget)).catch(() => {});
+    saveBudget();
     if (j && j.success === false && !j.error) j.error = `http ${r.status}`;
+    if (j && j.success === false) jevBreaker.failure(j.error); else if (j) jevBreaker.success();
     return j;
   },
 });
