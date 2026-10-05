@@ -1,0 +1,10 @@
+[Unit]
+Description=Ghosty: token-free codebox health watchdog (disk, load, RAM, runaways; wakes the AI manager only if a problem remains)
+
+[Service]
+Type=oneshot
+User=jndoye
+Environment=HOME=/home/jndoye
+ExecStart=/usr/local/bin/node /home/jndoye/ghosty-sessions/scripts/health-watch.js
+TimeoutStartSec=10min
+Nice=10

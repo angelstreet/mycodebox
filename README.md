@@ -292,6 +292,33 @@ day. The transcript is found through the usage ledger: Claude session ids whose 
 -> `~/.claude/projects/<project dir>/<id>.jsonl`. `GET /api/manager/wakes?day=` (UTC day, cached 60 s) feeds the "Wakes
 today" block of the AI manager panel.
 
+**Health watchdog (zero tokens unless a problem remains).** `scripts/health-watch.js` (no deps, no AI calls) runs every
+5 minutes from `systemd/ghosty-health-watch.timer` (`.service`: oneshot, `User=jndoye`; install with `sudo cp` to
+`/etc/systemd/system`, `daemon-reload`, `enable --now ghosty-health-watch.timer`). It checks disk % of `/`, load vs
+cores (sustained: the last samples in `~/.local/state/ghosty/health-watch-state.json`), RAM available %, runaway
+processes (yours, older than `runawayHours`, and RSS over `runawayRssMB` or CPU over `runawayCpu` % across two
+samples 5 s apart; claude, tmux and the ghosty server are never runaways) and stuck patterns (a bare `node --test`,
+too many defunct processes). Healthy = exit 0, only the state file is touched. When a check trips it writes a markdown
+report to `~/.local/state/ghosty/health-reports/<ISO>.md` (kept 7 days): top 15 processes by CPU and RSS with their
+owning tmux / Claude session, disk use of `/tmp`, `~/.cache`, `~/.claude`, `~/.npm`, the journal, docker (if usable),
+and every `~/vpt-*` / `~/ghosty-*` dir with its worktree / clean / merged / live-session status. Thresholds live in
+`~/.local/state/ghosty/health-watch.json` (created with defaults: `diskPct` 85, `loadPerCore` 1.0 for `loadMinutes` 10,
+`ramAvailPct` 10, `runawayHours` 2, `runawayRssMB` 1024, `runawayCpu` 80, `fixLevel`).
+
+Fix levels (`fixLevel`, only acted on when the disk check trips): `report` = no fixes; `cleanup` (default) = delete
+`/tmp/claude-1000/<project>/<session-id>/` scratch dirs whose session is not live and older than 2 days, `journalctl
+--user --vacuum-time=7d` (skipped without rights), `npm cache clean --force` when `~/.npm` > 1 GB; `cleanup+orphans`
+(OFF by default) also SIGTERMs runaway / bare `node --test` processes that belong to no live tmux or Claude session;
+`cleanup+worktrees` (OFF by default) also runs `git worktree remove` (never forced) on worktrees that are clean, merged
+into `main` and have no live session. Never touched: anything under a live session, any other worktree, anything
+outside `/tmp/claude-1000` for the scratch cleanup. Every deletion and its size goes in the report.
+
+The AI manager is woken only if a problem REMAINS after the fixes (disk still over the limit) or needs a decision (a
+runaway inside a live session, sustained load, low RAM, a stuck `node --test`): one line `kind: "health"`, key
+`health:<issue>` appended to `manager-events.jsonl` (no `jev` field: the watchdog writes it directly, not through
+ghosty). The same issue key is written at most once per `debounceHours` (6) unless it worsened (disk +3 points, a new
+runaway). `--force` investigates even when healthy; `--dry-run` deletes nothing and writes no event.
+
 **Owner labels.** In the manager panel every stop has 👎 (stopped for no reason) / 👍 (legit) buttons,
 a "wrong case" picker and an optional note; "unlabelled stops only" filters the list and a row's session
 name opens its card. `POST /api/manager/label {id, label: no_reason|legit|wrong_case, note?, correctCase?}`
