@@ -1,4 +1,4 @@
-// Session cap + parking (TASK-58 C8). A parked Claude session = its conversation id and folder recorded in parked.json, Claude exited
+// Session cap + parking (TASK-58 C8). A parked Claude session = its conversation id and folder recorded in parked-sessions.json, Claude exited
 // cleanly and the tmux session removed (RAM freed); the worktree is untouched. Resume recreates the tmux session in the same folder
 // and runs `claude --resume <id>`.
 //

@@ -792,7 +792,7 @@ function renderParking() {
 async function parkSession(name) {
   toast(`parking ${name}…`, 4000);
   try {
-    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/park`, { method: 'POST' });
+    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/park`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     const j = await r.json();
     toast(r.ok ? `${name} parked` : (j.error || `park failed: HTTP ${r.status}`), r.ok ? 1800 : 6000);
   } catch (err) { toast(`park failed: ${err.message}`); }
@@ -801,7 +801,7 @@ async function parkSession(name) {
 async function resumeParked(name, btn) {
   if (btn) btn.disabled = true;
   try {
-    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/resume`, { method: 'POST' });
+    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/resume`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     const j = await r.json();
     toast(r.ok ? `${name} resumed` : (j.error || `resume failed: HTTP ${r.status}`), r.ok ? 1800 : 6000);
   } catch (err) { toast(`resume failed: ${err.message}`); }
