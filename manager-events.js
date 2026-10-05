@@ -9,6 +9,7 @@
 //   quota:<plan>:<window>                        → kind = 'quota'
 //   disk:<path>                                  → kind = 'disk'
 //   jev:down|up                                  → kind = 'jev' (Jev circuit breaker), state
+//   lease:released|expired|narrowed              → kind = 'lease', state (written by lease-watch.js straight to the feed, no push)
 //   openrouter:credits                           → kind = 'credits'
 //   manager-agent:<tag|title>                    → skipped (the agent's own POST /api/alert)
 //   anything else                                → kind = 'other'
@@ -49,6 +50,7 @@ export function classifyKey(key) {
   if (head === 'quota') return { kind: 'quota', quotaKey: key.slice(colon + 1) };
   if (head === 'disk') return { kind: 'disk', diskPath: key.slice(colon + 1) };
   if (head === 'jev') return { kind: 'jev', state: key.slice(colon + 1) };   // jev:down / jev:up (circuit breaker)
+  if (head === 'lease') return { kind: 'lease', state: key.slice(colon + 1) };   // lease:released / expired / narrowed (never pushed)
   if (head === 'openrouter') return { kind: 'credits', creditsKey: key.slice(colon + 1) };
   // <session>:<kind> — the suffix may itself contain colons (we don't strip beyond the first).
   return { kind: key.slice(colon + 1), session: head };
@@ -107,7 +109,7 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     const rec = { at, key: event.key, kind: cls.kind };
     if (cls.session) rec.session = cls.session;
     if (cls.kind === 'deploy') { rec.deployId = cls.deployId; if (cls.state) rec.state = cls.state; if (Array.isArray(event.blockedBy) && event.blockedBy.length) rec.blockedBy = event.blockedBy; }
-    if (cls.kind === 'jev') rec.state = cls.state;
+    if (cls.kind === 'jev' || cls.kind === 'lease') rec.state = cls.state;
     if (cls.kind === 'quota') rec.quotaKey = cls.quotaKey;
     if (cls.kind === 'disk') rec.diskPath = cls.diskPath;
     if (cls.kind === 'credits') rec.creditsKey = cls.creditsKey;
