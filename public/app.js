@@ -10,7 +10,7 @@ import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { chipModel, machinesOf, holdingsOf } from '/platforms.js';
-import { displayStateOf, STATE_RANK, STATE_LABEL } from '/state.js';
+import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
@@ -3430,7 +3430,9 @@ const ALERT_READ_KEY = 'ghosty.alerts.lastRead';
 const alertsLastRead = () => { try { return Number(localStorage.getItem(ALERT_READ_KEY)) || 0; } catch { return 0; } };
 const alertsMarkRead = () => { try { const m = Math.max(0, ...alertsUi.items.map((i) => i.id)); localStorage.setItem(ALERT_READ_KEY, String(m)); } catch {} paintAlerts(); };
 function paintAlerts() {
-  const n = alertsUi.items.filter((i) => i.id > alertsLastRead()).length;
+  const last = alertsLastRead();
+  // Routine deploy notices (started/done) stay in the panel but don't inflate the badge.
+  const n = alertsUi.items.filter((i) => i.id > last && !isRoutineAlert(i)).length;
   const c = $('#alertsCount');
   c.textContent = n > 99 ? '99+' : String(n);
   c.classList.toggle('hidden', !n);
@@ -3452,7 +3454,9 @@ function alertsHtml() {
   return items.map((i) => {
     const u = i.url && i.url !== '/' ? safeUrl(i.url) : '';
     const d = new Date(i.at);
-    return `<div class="al ${escapeHtml(i.priority || 'default')}${i.id > last ? ' unread' : ''}"><div class="at"><b>${escapeHtml(i.title || '')}</b><time>${isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toTimeString().slice(0, 5)}</time></div>${i.body ? `<div class="ab">${escapeHtml(i.body)}</div>` : ''}${u ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">open</a> ` : ''}${i.tag ? `<span class="tg">${escapeHtml(i.tag)}</span>` : ''}</div>`;
+    const routine = isRoutineAlert(i);
+    const classes = `al ${escapeHtml(i.priority || 'default')}${i.id > last && !routine ? ' unread' : ''}${routine ? ' routine' : ''}`;
+    return `<div class="${classes}"><div class="at"><b>${escapeHtml(i.title || '')}</b><time>${isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toTimeString().slice(0, 5)}</time></div>${i.body ? `<div class="ab">${escapeHtml(i.body)}</div>` : ''}${u ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">open</a> ` : ''}${i.tag ? `<span class="tg">${escapeHtml(i.tag)}</span>` : ''}</div>`;
   }).join('') || '<div class="sheet-empty">no alerts yet</div>';
 }
 function openAlerts() {

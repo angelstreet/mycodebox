@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { displayState, displayStateOf, STATE_RANK, STATE_LABEL } from '../public/state.js';
+import { displayState, displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '../public/state.js';
 
 test('displayState: no status -> offline', () => {
   assert.equal(displayState(undefined), 'offline');
@@ -60,4 +60,46 @@ test('STATE_LABEL: every state the UI shows, including a "waiting deploy" for th
   assert.equal(STATE_LABEL.done, 'done');
   assert.equal(STATE_LABEL.idle, 'idle');
   assert.equal(STATE_LABEL.offline, 'offline');
+});
+
+test('isRoutineAlert: deploy started/done with a ghosty-deploy- tag is routine', () => {
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend started' }), true);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend done' }), true);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy prod api done' }), true);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy staging backend started' }), true);
+});
+
+test('isRoutineAlert: deploy failed / skipped / orphaned / approval still count', () => {
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend failed' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend done, 2 host(s) skipped' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend orphaned' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy needs approval: prod api' }), false);
+});
+
+test('isRoutineAlert: non-deploy alerts always count (any tag, any title)', () => {
+  assert.equal(isRoutineAlert({ tag: 'ghosty-ask', title: 'codebox asks you to pick a model' }), false);
+  assert.equal(isRoutineAlert({ tag: undefined, title: 'codebox needs you' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-quota', title: 'codebox quota at 92%' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-credits', title: 'OpenRouter credit is low ($2.10)' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-disk', title: 'disk almost full on /var' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-held', title: 'session held: waiting for owner' }), false);
+});
+
+test('isRoutineAlert: ghosty-deploy-* tag with a non-routine title still counts', () => {
+  // belt-and-braces: an unrelated deploy-classified alert must not be silenced by the prefix alone
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy node1-vpt frontend running' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-d42', title: 'deploy approval expired' }), false);
+});
+
+test('isRoutineAlert: missing / wrong-typed tag or title is safe (returns false)', () => {
+  assert.equal(isRoutineAlert(undefined), false);
+  assert.equal(isRoutineAlert(null), false);
+  assert.equal(isRoutineAlert({}), false);
+  assert.equal(isRoutineAlert({ tag: null, title: 'deploy x y started' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-x', title: undefined }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-x', title: '' }), false);
+  assert.equal(isRoutineAlert({ tag: 'ghosty-deploy-x', title: 123 }), false);
+  // tag without the deploy prefix -> never routine even if the title looks routine
+  assert.equal(isRoutineAlert({ tag: 'deploy-x', title: 'deploy x y started' }), false);
+  assert.equal(isRoutineAlert({ tag: '', title: 'deploy x y started' }), false);
 });

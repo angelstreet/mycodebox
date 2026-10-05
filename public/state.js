@@ -19,3 +19,15 @@ export function displayState(status) {
 export function displayStateOf(name, statusMap) {
   return displayState(statusMap && statusMap[name]);
 }
+
+// Push-feed predicate for the bell's unread badge. Routine items stay visible in the panel but don't
+// inflate the count: a deploy that simply started or finished is noise; failed/skipped/orphaned deploys,
+// approval requests, and non-deploy items (asks, credits, quota, disk, ...) still count. Pure helper used
+// from app.js (badge + muted style) and unit-tested in test/state.test.js.
+export function isRoutineAlert(item) {
+  if (!item || typeof item !== 'object') return false;
+  const tag = typeof item.tag === 'string' ? item.tag : '';
+  const title = typeof item.title === 'string' ? item.title : '';
+  if (!tag.startsWith('ghosty-deploy-')) return false;
+  return title.endsWith(' started') || title.endsWith(' done');
+}
