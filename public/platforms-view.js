@@ -80,10 +80,31 @@ export function liveRows(ledger, nowMs) {
   });
 }
 
-export function platformsBlocks({ leases = [], deploys = [], deployed = {}, sessionNames = [], machines = new Set(), nowMs = Date.now() }) {
+// VPT take-control locks (GET /api/vpt-locks) next to the leases, for the one env that server belongs to.
+const shortName = (s) => String(s || '').toLowerCase().replace(/^(vpt-|host-)/, '');
+// The locks that belong to a lease resource ("vpt-pi1/stb4" = host/device, "vpt-pi1" = a whole host, "*" = every device).
+export function locksForResource(resource, locks) {
+  if (resource === '*') return locks;
+  const [h, d] = String(resource).split('/');
+  return locks.filter((l) => shortName(l.host) === shortName(h) && (d == null || d === '' || shortName(l.device) === shortName(d)));
+}
+export function lockText(l) {
+  const age = l.ageMin == null ? '' : l.ageMin < 1 ? ', <1m' : l.ageMin < 60 ? `, ${l.ageMin}m` : `, ${Math.floor(l.ageMin / 60)}h${String(l.ageMin % 60).padStart(2, '0')}`;
+  const who = [l.owner, l.reason].filter(Boolean).join(' · ');
+  return `${l.ownerType}${who ? ` · ${who}` : ''}${age}`;
+}
+// "VPT lock: free" / "VPT lock: manual_control · jo, 4m" / "VPT lock: unknown" (the server could not be asked)
+export function vptLockLabel(vpt, resource) {
+  if (!vpt || !vpt.ok) return 'VPT lock: unknown';
+  const m = locksForResource(resource, vpt.locks || []);
+  return m.length ? `VPT lock: ${m.map(lockText).join('; ')}` : 'VPT lock: free';
+}
+
+export function platformsBlocks({ leases = [], deploys = [], deployed = {}, sessionNames = [], machines = new Set(), nowMs = Date.now(), vptLocks = null }) {
   const nowSec = nowMs / 1000;
   const active = (d) => PENDING.includes(d.state) || d.state === 'running';
   const envs = new Set([...leases.map((l) => l.env), ...deploys.filter(active).map((d) => d.env), ...Object.keys(deployed || {})]);
+  if (vptLocks?.ok && vptLocks.locks?.length && vptLocks.env) envs.add(vptLocks.env);   // a held lock shows even when no lease or deploy names the env
   const who = (a) => whoName(a, sessionNames, machines);
   return [...envs].map((env) => {
     const ds = deploys.filter((d) => d.env === env);
@@ -99,12 +120,18 @@ export function platformsBlocks({ leases = [], deploys = [], deployed = {}, sess
     const inUse = leases.filter((l) => l.env === env).map((l) => ({
       id: l.id, resource: l.resource, label: resourceLabel(l), who: who(l.agent), kind: leaseKind(l.kind), kindLabel: kindLabel(l.kind),
       left: leftText(l.ttlLeftMin), min: l.ttlLeftMin ?? 1e9, blocks: blockIds.has(l.id),
+      vptLock: vptLocks && vptLocks.env === env ? vptLockLabel(vptLocks, l.resource) : '',
     })).sort((a, b) => (b.blocks - a.blocks) || (a.min - b.min) || a.resource.localeCompare(b.resource));
     const history = ds.filter((d) => !active(d)).sort((a, b) => (b.finished || 0) - (a.finished || 0)).slice(0, 8).map((d) => ({
       id: d.id, ago: d.finished ? agoText(d.finished, nowSec) : '', ok: d.state === 'done', state: d.state, scope: scopeText(d), ref: d.ref, who: who(d.agent),
     }));
+    // The take-control locks no lease row accounts for (a person took control, or a script runs, without a vpt-lease).
+    const mine = !!vptLocks && vptLocks.env === env;
+    const covered = new Set(inUse.flatMap((r) => locksForResource(r.resource, vptLocks?.ok ? vptLocks.locks || [] : [])));
+    const vptOther = mine && vptLocks.ok ? (vptLocks.locks || []).filter((x) => !covered.has(x)).map((x) => ({ resource: `${x.host}${x.device ? ` · ${x.device}` : ''}`, text: lockText(x) })) : [];
+    const vptUnknown = mine && !vptLocks.ok;
     return {
-      env, status, inUse, next, history, live: liveRows(deployed[env], nowMs),
+      env, status, inUse, vptOther, vptUnknown, next, history, live: liveRows(deployed[env], nowMs),
       deploying: running ? { id: running.id, scope: scopeText(running), ref: running.ref, who: who(running.agent), startedAgo: running.started ? agoText(running.started, nowSec) : '' } : null,
     };
   }).sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.env.localeCompare(b.env));

@@ -33,6 +33,7 @@
 //                                       (cached 60 s; manager sessions, subagents, workers, Jev, reviewer, judge; see scorecard.js)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
 //   GET  /api/manager/events?since=<ISO>&limit=50 → tail of manager-events.jsonl (newest last): the events the AI manager should react to (skips the manager's own stops, /api/alert, 'done'). The manager agent follows the file directly with `tail -n0 -F` so it wakes only when something happens
+//   GET  /api/vpt-locks         → VPT take-control locks per device (read-only, vpt-locks.js), cached 15 s; {ok:false, error} = "VPT lock: unknown"
 //   GET  /api/deploys           → deploy queue + recent (registry on proxmox), {enabled, running, lastRef, deployed (ledger: per env/target version, ref, commit, at, agent, lastAttempt)}; pushed on /ws/status as {type:'deploys'}
 //   POST /api/deploys/:id/approve | /cancel → owner action on a queued request
 //   GET  /api/deploys/:id/log?tail=200      → the runner's log of that deploy (text)
@@ -78,6 +79,7 @@ import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
+import { createVptLockStore } from './vpt-locks.js';
 import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret.js';
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
@@ -541,6 +543,9 @@ async function getMeta(session, cwd) {
 
 const MACHINES = machinesOf(hostname());
 const leaseStore = createLeaseStore();
+// VPT take-control locks (read-only) for the Platforms page; they belong to the env whose server JEV_URL points at.
+const vptLockStore = createVptLockStore({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '' });
+const VPT_LOCKS_ENV = process.env.VPT_LOCKS_ENV || 'node1-vpt';
 // Resources this session holds ([{env, resource, ttlLeftMin, purpose, blocksDeploy}]), exact match on `<machine>:<session>`.
 function leaseFor(session, sessionNames) {
   const v = leaseStore.peek();
@@ -1208,6 +1213,11 @@ const server = http.createServer(async (req, res) => {
       }
     }
     return json(res, 200, { session, reply, replyHash: reply ? shortHash(reply) : null });
+  }
+  if (req.method === 'GET' && p === '/api/vpt-locks') {   // {ok, env, locks:[{host, device, ownerType, owner, reason, ageMin}]} or {ok:false, env, error}; never an error status
+    let v;
+    try { v = await vptLockStore.get(); } catch (e) { v = { ok: false, error: String(e.message || e).slice(0, 120) }; }
+    return json(res, 200, { ...v, env: VPT_LOCKS_ENV });
   }
   if (req.method === 'GET' && p === '/api/leases') {
     res.writeHead(200, { 'content-type': 'application/json' });

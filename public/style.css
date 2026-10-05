@@ -1598,3 +1598,5 @@ body[data-mode="card"] .res-toggle, body[data-mode="card"] .wsel{ display:none; 
 @media (max-width:700px){ .row-item .l1 .lb{ display:none; } }
 /* resources hidden: nothing pushes the controls, so do it here (same right edge as when expanded) */
 body.res-hidden .topbar .viewctl{ margin-left:auto; }
+
+.platforms .pf-vl{ flex-basis:100%; font-size:11px; color:var(--ink-3); } .platforms .pf-vl.unk{ color:var(--ink-3); font-style:italic; }
