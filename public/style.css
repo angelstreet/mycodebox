@@ -836,6 +836,8 @@ body{ display:flex; flex-direction:column; }
 .mlog .ml{ display:grid; grid-template-columns:36px 108px 62px 1fr; gap:6px; padding:3px 0; border-bottom:1px solid var(--line); align-items:baseline; }
 .mlog .ml .t{ color:var(--ink-3); } .mlog .ml .s{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mlog .ml .c{ display:none; }
+.mlog .ml .regret{ min-height:28px; margin-top:2px; padding:1px 8px; font-size:11px; }
+.mlog .ml .regret.on{ color:var(--waiting); border-color:currentColor; }
 .mlog .ml .x{ grid-column:2 / -1; color:var(--ink-3); overflow-wrap:anywhere; }
 /* stop rows: closing line + owner label controls */
 .mlog .ml.stop .q{ grid-column:2 / -1; color:var(--ink-2); overflow-wrap:anywhere; font-style:italic; }

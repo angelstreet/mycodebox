@@ -2349,7 +2349,9 @@ async function loadMgrCost() {
 loadMgrCost();
 setInterval(loadMgrCost, 60000);
 const actTime = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
-const actRow = (a) => `<div class="ml act"><span class="t">${actTime(a.at)}</span><span class="x"><b>${escapeHtml([a.trigger, a.session].filter(Boolean).join(' / '))}</b> ${a.decision ? `&middot; ${escapeHtml(String(a.decision).slice(0, 120))}` : ''}${a.action ? ` &rarr; ${escapeHtml(String(a.action).slice(0, 120))}` : ''}${a.reason ? `<br><span class="dim">${escapeHtml(String(a.reason).slice(0, 200))}</span>` : ''}</span></div>`;
+const actKey = (a) => `${a.at}|${a.session}`;
+// `wrong` = Set of actKey()s the owner already marked wrong (G8 regret ground truth). One tap marks, a second tap withdraws.
+const actRow = (a, wrong = new Set()) => `<div class="ml act"><span class="t">${actTime(a.at)}</span><span class="x"><b>${escapeHtml([a.trigger, a.session].filter(Boolean).join(' / '))}</b> ${a.decision ? `&middot; ${escapeHtml(String(a.decision).slice(0, 120))}` : ''}${a.action ? ` &rarr; ${escapeHtml(String(a.action).slice(0, 120))}` : ''}${a.reason ? `<br><span class="dim">${escapeHtml(String(a.reason).slice(0, 200))}</span>` : ''}${a.at && a.session ? `<br><button class="sbtn regret${wrong.has(actKey(a)) ? ' on' : ''}" data-regret="1" data-at="${escapeHtml(a.at)}" data-session="${escapeHtml(a.session)}" data-decision="${escapeHtml(String(a.decision || '').slice(0, 120))}" data-undo="${wrong.has(actKey(a)) ? '1' : ''}" title="the manager got this wrong (counts as regret in the G8 measure)">${wrong.has(actKey(a)) ? 'marked wrong &middot; undo' : 'wrong'}</button>` : ''}</span></div>`;
 const wakeRow = (w) => `<div class="ml act"><span class="t">${actTime(w.start)}</span><span class="x"><b>${escapeHtml(w.trigger)}</b> ${escapeHtml(String(w.triggerSummary || '').slice(0, 120))} <span class="dim">${w.usd == null ? '' : '$' + Number(w.usd).toFixed(3)}${w.nothing ? ' &middot; nothing' : ''}</span></span></div>`;
 const wakesHtml = (wk) => {
   if (!wk || !wk.summary) return '<div class="dim">wakes unavailable</div>';
@@ -2413,7 +2415,7 @@ function openManager() {
         <label class="mchk"><input type="checkbox" data-unlab ${mgrUnlabelled ? 'checked' : ''}><span>unlabelled stops only</span></label>
         <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
         <div class="side-sub">Manager actions (last ${(acts.actions || []).length})</div>
-        <div class="mlog">${(acts.actions || []).slice().reverse().map(actRow).join('') || '<div class="dim">no manager actions logged yet</div>'}</div>
+        <div class="mlog">${(() => { const wrong = new Set(acts.regrets || []); return (acts.actions || []).slice().reverse().map((a) => actRow(a, wrong)).join(''); })() || '<div class="dim">no manager actions logged yet</div>'}</div>
         <div class="side-sub">Wakes today</div>
         ${wakesHtml(wk)}
         <div class="side-sub">Sessions</div>
@@ -2425,6 +2427,14 @@ function openManager() {
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); return; }
       if (e.target.closest('[data-review]')) { startReview(); return; }
+      const rg = e.target.closest('[data-regret]');
+      if (rg) {
+        try {
+          const r = await fetch('/api/manager/regret', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ at: rg.dataset.at, session: rg.dataset.session, decision: rg.dataset.decision, undo: rg.dataset.undo === '1' }) });
+          if (!r.ok) throw new Error(r.status);
+        } catch { toast('could not save'); }
+        draw(); return;
+      }
       const lb = e.target.closest('[data-label]');
       if (lb) {
         const id = lb.dataset.id;
