@@ -23,6 +23,39 @@
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
 
+// Claude Code shows an optional feedback survey at the bottom of the pane ("How is Claude
+// doing this session? (optional)" + a line of 0/1/2/3 rating options that may wrap to 1-2
+// extra rows in narrow panes). The session is still working while it renders, so the survey
+// alone must never produce a question, menu or options, and never make a stall.
+const SURVEY_HEADER = /how is claude doing this session\?\s*\(optional\)/i;
+// Survey rating token: "N:" (N = 0..3), optionally followed by a rating word (Bad, Fine,
+// Good, Dismiss) or a wrapped fragment (Dis, miss, goo miss, good miss). The word part is
+// optional so glued forms like "3:    0: Dis" still match (the "3:" is left dangling for
+// the next row).
+const SURVEY_TOKEN = '[0-3]:(?:\\s*(?:Bad|Fine|Good|Dismiss|Dis\\b|miss\\b|goo\\s*miss|good\\s*miss))?';
+const SURVEY_OPTION = new RegExp(`^\\s*(?:${SURVEY_TOKEN}\\s*){1,5}$`, 'i');
+// A wrapped fragment of a survey option line: just one or more survey words, no "N:"
+// (e.g. "Good  miss" or "Dis" or "miss" — the tail of a survey line that wrapped to a new row).
+const SURVEY_FRAGMENT = /^\s*(?:(?:Bad|Fine|Good|Dismiss|Dis\b|miss\b|goo\s*miss|good\s*miss)\s+)*(?:Bad|Fine|Good|Dismiss|Dis\b|miss\b|goo\s*miss|good\s*miss)\s*$/i;
+
+function stripSurvey(lines) {
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (!SURVEY_HEADER.test(stripAnsi(lines[i]))) { out.push(lines[i]); i++; continue; }
+    // Drop the header and the next 1-3 lines that look like survey rating options or
+    // their wrapped fragments. Text above the header is classified exactly as before.
+    i++;
+    let dropped = 0;
+    while (i < lines.length && dropped < 3) {
+      const t = stripAnsi(lines[i]).trim();
+      if (SURVEY_OPTION.test(t) || SURVEY_FRAGMENT.test(t)) { i++; dropped++; continue; }
+      break;
+    }
+  }
+  return out;
+}
+
 const RULE_LINE = /^\s*[─━]{4,}/;
 const PROMPT_GLYPH = /^\s*[❯›>]\s?/;
 // A narrow pane wraps a line's last char or two onto its own row ("e", "…", "─"): not content.
@@ -136,6 +169,8 @@ export function menuOptions(lines) {
 // state = ghosty state ('waiting' | 'done' | 'idle' | ...).
 // Returns { case, source: 'rule'|'ambiguous', answer, question, forbidden, draft, suggestion, excerpt }.
 export function classifyStall({ plain, raw = null, state, fromReport = false }) {
+  plain = stripSurvey(plain);
+  raw = raw ? stripSurvey(raw) : null;
   const close = closingLines(plain, 16);
   const tail = close.slice(-8);
   const excerpt = close.join('\n');

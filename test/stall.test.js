@@ -142,3 +142,66 @@ test('outcomeKind maps the owner reply to the same vocabulary', () => {
   assert.equal(outcomeKind('2'), 'take_recommended');
   assert.equal(outcomeKind('check the network theory first'), 'owner_specific');
 });
+
+test('Claude Code feedback survey (spinner + Tip + survey) is not a stall', () => {
+  // The pane while the session is still working: spinner + Tip + the optional feedback
+  // survey. The survey alone must not produce a question, menu, or owner_decision.
+  const plain = [
+    '✻ Synthesizing… (11s)',
+    '⎿  Tip: Run /install-slack-app to use Claude in Slack',
+    'How is Claude doing this session? (optional)',
+    '1: Bad    2: Fine   3: Good   0: Dismiss',
+    RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents', '                                   /rc',
+  ];
+  const s = classify(plain);
+  assert.notEqual(s.case, 'owner_decision', `survey-only pane should not be owner_decision; got ${s.case}`);
+  assert.notEqual(s.case, 'menu_recommended', `survey-only pane should not be a menu; got ${s.case}`);
+  assert.notEqual(s.case, 'permission', `survey-only pane should not be a permission prompt; got ${s.case}`);
+  assert.ok(!/how is claude doing/i.test(s.question || ''), `question should not be the survey header: ${s.question}`);
+  assert.ok(!/\b(?:Bad|Fine|Good|Dismiss)\b/.test(s.question || ''), `question should not mention survey options: ${s.question}`);
+  const optTexts = (s.options || []).map((o) => o.text);
+  for (const word of ['Bad', 'Fine', 'Good', 'Dismiss']) {
+    assert.ok(!optTexts.some((t) => t.includes(word)), `survey options should not include ${word}: ${JSON.stringify(optTexts)}`);
+  }
+});
+
+test('Claude Code feedback survey: wrapped narrow-pane form is not a stall', () => {
+  // Same pane in a narrow terminal: the rating line wraps so "3:    0: Dis" lands on one
+  // row and "Good  miss" on the one below.
+  const plain = [
+    '✻ Synthesizing… (11s)',
+    '⎿  Tip: Run /install-slack-app to use Claude in Slack',
+    'How is Claude doing this session? (optional)',
+    '1: Bad2: Fine3:    0: Dis',
+    'Good  miss',
+    RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents', '                                   /rc',
+  ];
+  const s = classify(plain);
+  assert.notEqual(s.case, 'owner_decision', `wrapped survey pane should not be owner_decision; got ${s.case}`);
+  assert.notEqual(s.case, 'menu_recommended', `wrapped survey pane should not be a menu; got ${s.case}`);
+  assert.ok(!/how is claude doing/i.test(s.question || ''), `question should not be the survey header: ${s.question}`);
+  assert.ok(!/\b(?:Bad|Fine|Good|Dismiss)\b/.test(s.question || ''), `question should not mention survey options: ${s.question}`);
+  const optTexts = (s.options || []).map((o) => o.text);
+  for (const word of ['Bad', 'Fine', 'Good', 'Dismiss']) {
+    assert.ok(!optTexts.some((t) => t.includes(word)), `survey options should not include ${word}: ${JSON.stringify(optTexts)}`);
+  }
+});
+
+test('Claude Code feedback survey: real (Recommended) menu above the survey is still menu_recommended', () => {
+  // A real numbered menu with "(Recommended)" sits in the body; the survey is appended at
+  // the bottom. The menu must still be classified exactly as before, and the survey's
+  // Bad/Fine/Good/Dismiss words must not leak into the surfaced question / options.
+  const plain = claude('Two ways forward:\n1. Cache the tree per host (Recommended)\n2. Rebuild it on every run\nWhich one?');
+  const ruleIdx = plain.indexOf(RULE);
+  plain.splice(ruleIdx, 0, '', 'How is Claude doing this session? (optional)', '1: Bad    2: Fine   3: Good   0: Dismiss');
+  const s = classify(plain);
+  assert.equal(s.case, 'menu_recommended', `menu above survey should still be menu_recommended; got ${s.case}`);
+  assert.deepEqual(wouldSend(s).send, { text: 'Yes, go with your recommendation.' });
+  // The detected menu options must not include any survey rating word; the survey text
+  // must not leak into the surfaced question, excerpt, or closing text either.
+  const haystack = [s.question, s.excerpt, s.closing].filter(Boolean).join('\n');
+  assert.ok(!/how is claude doing/i.test(haystack), `survey header must not appear in output: ${haystack.slice(0, 160)}`);
+  for (const word of ['Bad', 'Fine', 'Good', 'Dismiss']) {
+    assert.ok(!new RegExp(`\\b${word}\\b`).test(haystack), `survey word ${word} must not leak into output`);
+  }
+});
