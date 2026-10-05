@@ -31,9 +31,9 @@ export const DEFAULT_CONFIG = {
   scratchMaxAgeDays: 2,   // /tmp/claude-1000 session scratch older than this (and session dead) is deletable
   npmCacheMB: 1024,       // npm cache is cleaned only above this size
   debounceHours: 6,       // same issue key is written to the manager feed at most once per this
-  fixLevel: 'cleanup',    // report | cleanup | cleanup+orphans | cleanup+worktrees
+  fixLevel: 'cleanup',    // report | cleanup | cleanup+orphans | cleanup+worktrees | cleanup+all (orphans and worktrees are separate opt-ins)
 };
-export const FIX_LEVELS = ['report', 'cleanup', 'cleanup+orphans', 'cleanup+worktrees'];
+export const FIX_LEVELS = ['report', 'cleanup', 'cleanup+orphans', 'cleanup+worktrees', 'cleanup+all'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // How much worse an issue must get (severity units) to bypass the debounce.
 const WORSEN_STEP = { disk: 3, ram: 5 };
@@ -316,7 +316,7 @@ function runFixes(ctx) {
 function runOptionalFixes(ctx, issues) {
   const { cfg, dryRun, wts, log } = ctx;
   const verb = dryRun ? 'WOULD' : 'did';
-  if (cfg.fixLevel === 'cleanup+orphans' || cfg.fixLevel === 'cleanup+worktrees') {
+  if (cfg.fixLevel === 'cleanup+orphans' || cfg.fixLevel === 'cleanup+all') {   // killing orphans is its own opt-in
     for (const i of issues) {
       if ((i.type === 'runaway' || i.type === 'stuck') && i.orphan && i.pid) {
         if (!dryRun) { try { process.kill(i.pid, 'SIGTERM'); } catch {} }
@@ -325,7 +325,7 @@ function runOptionalFixes(ctx, issues) {
       }
     }
   }
-  if (cfg.fixLevel === 'cleanup+worktrees') {
+  if (cfg.fixLevel === 'cleanup+worktrees' || cfg.fixLevel === 'cleanup+all') {
     for (const w of wts.filter((x) => x.kind === 'removable')) {
       if (!dryRun) {
         const o = sh('git', ['-C', w.dir, 'worktree', 'remove', w.dir], 120000);

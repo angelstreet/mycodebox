@@ -321,8 +321,9 @@ Fix levels (`fixLevel`, only acted on when the disk check trips): `report` = no 
 `/tmp/claude-1000/<project>/<session-id>/` scratch dirs whose session is not live and older than 2 days, `journalctl
 --user --vacuum-time=7d` (skipped without rights), `npm cache clean --force` when `~/.npm` > 1 GB; `cleanup+orphans`
 (OFF by default) also SIGTERMs runaway / bare `node --test` processes that belong to no live tmux or Claude session;
-`cleanup+worktrees` (OFF by default) also runs `git worktree remove` (never forced) on worktrees that are clean, merged
-into `main` and have no live session. Never touched: anything under a live session, any other worktree, anything
+`cleanup+worktrees` also runs `git worktree remove` (never forced) on worktrees that are clean, merged
+into `main` and have no live session (no orphan kills); `cleanup+all` = both. On codebox since 2026-10-05: `cleanup+worktrees`
+(owner: "if a worktree has no session, delete"). Never touched: anything under a live session, any other worktree, anything
 outside `/tmp/claude-1000` for the scratch cleanup. Every deletion and its size goes in the report.
 
 The AI manager is woken only if a problem REMAINS after the fixes (disk still over the limit) or needs a decision (a
