@@ -116,3 +116,10 @@ test('park refuses with reasons and does not touch tmux', async () => {
   assert.deepEqual(h.log, []);
   assert.ok(!existsSync(h.file));
 });
+
+test('session-cap-check: no finding under the cap, one finding listing idle-longest over it', async () => {
+  const { summarize } = await import('../scripts/session-cap-check.js');
+  assert.deepEqual(summarize({ live: 9, cap: 10, over: 0, candidates: [], parked: [{}], ramSavedMb: 300 }).findings, []);
+  const f = summarize({ live: 12, cap: 10, over: 2, candidates: [{ name: 'a', idleMin: 3000, rssMb: 300 }], parked: [] }).findings;
+  assert.equal(f.length, 1); assert.match(f[0].body, /a \(2d\)/);
+});
