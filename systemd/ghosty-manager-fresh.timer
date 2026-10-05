@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly fresh restart of the AI manager agent (03:30 Europe/Zurich)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Europe/Zurich
+Persistent=false
+
+[Install]
+WantedBy=timers.target

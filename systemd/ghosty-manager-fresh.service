@@ -1,0 +1,10 @@
+[Unit]
+Description=Ghosty: restart the AI manager agent in a fresh Claude session (short context = cheap wakes)
+After=ghosty-sessions.service
+
+[Service]
+Type=oneshot
+User=jndoye
+Environment=HOME=/home/jndoye
+ExecStart=/home/jndoye/ghosty-sessions/scripts/manager-fresh.sh
+TimeoutStartSec=75min
