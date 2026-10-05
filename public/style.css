@@ -1593,3 +1593,5 @@ body[data-mode="card"] .res-toggle, body[data-mode="card"] .wsel{ display:none; 
 .row-item .l1 .lb{ flex:0 1 auto; min-width:0; overflow:hidden; display:inline-flex; }
 .row-item .l1 .lb .lease{ max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 @media (max-width:700px){ .row-item .l1 .lb{ display:none; } }
+/* resources hidden: nothing pushes the controls, so do it here (same right edge as when expanded) */
+body.res-hidden .topbar .viewctl{ margin-left:auto; }
