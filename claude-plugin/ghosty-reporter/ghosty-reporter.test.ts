@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { cap, TEXT_CAP } from './hooks/report.ts'
+import { cap, hasStatusLine, shouldRequireStatus, TEXT_CAP } from './hooks/report.ts'
 
 const ENV = {
   TMUX: '/tmp/tmux-1000/default,1,0',
@@ -14,12 +14,12 @@ const settle = () => new Promise<void>((r) => setTimeout(r, 30))
 type Sent = { url: string; headers: Record<string, string>; body: any }
 
 // The world beneath the plugin: env, clock, tmux, token file, ghosty. Returns what ghosty received.
-function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean } = {}) {
+function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; tmux?: string } = {}) {
   const sent: Sent[] & { attempts?: number } = []
   sent.attempts = 0
   mock.env(on, { ...ENV, ...(opts.env ?? {}) })
   mock.clock(on, { now: 1_000_000 })
-  on('process.run', async (_$: any, e: any) => ({ value: { exitCode: 0, stdout: e.argv?.[0] === 'tmux' ? 'my-session\n' : '', stderr: '' } }))
+  on('process.run', async (_$: any, e: any) => ({ value: { exitCode: 0, stdout: e.argv?.[0] === 'tmux' ? `${opts.tmux ?? 'my-session'}\n` : '', stderr: '' } }))
   on('fs.read', async () => { if (opts.noToken) throw new Error('ENOENT'); return { value: 'tok-123\n' } })
   // the engine's own bottoms: what each event answers when nobody above changes it
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
@@ -144,4 +144,61 @@ test('no token file: nothing sent, nothing breaks', async ($, on) => {
   await settle()
   expect(r.text).toBe('ok')
   expect(sent.length).toBe(0)
+})
+
+const stop = (extra: Record<string, unknown> = {}) => ({ stop_hook_active: false, last_assistant_message: 'All merged and tested.', background_tasks: [], ...extra }) as any
+
+test('Stop without a STATUS line is blocked once, with the format in the reason, and is not reported as a stop', async ($, on) => {
+  const sent = world(on)
+  const r: any = await $.classic.Stop(stop())
+  await settle()
+  expect(r.block).toContain('STATUS: done')
+  expect(r.block).toContain('needs-owner')
+  expect(sent.some(s => s.body.event === 'stop')).toBe(false)
+})
+
+test('Stop with a STATUS line passes and is reported', async ($, on) => {
+  const sent = world(on)
+  const r: any = await $.classic.Stop(stop({ last_assistant_message: 'Merged.\n\nSTATUS: done' }))
+  await settle()
+  expect(r.block).toBeUndefined()
+  expect(sent.some(s => s.body.event === 'stop')).toBe(true)
+})
+
+test('Stop never loops: stop_hook_active passes', async ($, on) => {
+  world(on)
+  const r: any = await $.classic.Stop(stop({ stop_hook_active: true }))
+  expect(r.block).toBeUndefined()
+})
+
+test('Stop is never blocked in the manager session, outside tmux, or with background work in flight', async ($, on) => {
+  const sent = world(on)
+  expect(shouldRequireStatus(stop(), 'manager')).toBe(false)
+  expect(shouldRequireStatus(stop(), null)).toBe(false)
+  expect(shouldRequireStatus(stop({ agent_id: 'a1' }), 'my-session')).toBe(false)
+  expect(shouldRequireStatus(stop({ background_tasks: [{ id: 'b' }] }), 'my-session')).toBe(false)
+  expect(shouldRequireStatus(stop({ last_assistant_message: '' }), 'my-session')).toBe(false)
+  expect(shouldRequireStatus(stop({ last_assistant_message: undefined }), 'my-session')).toBe(false)
+  expect(shouldRequireStatus(stop(), 'my-session')).toBe(true)
+  void sent
+})
+
+test('Stop outside tmux (headless) is not blocked', async ($, on) => {
+  world(on, { env: { TMUX: '', TMUX_PANE: '' } })
+  const r: any = await $.classic.Stop(stop())
+  expect(r.block).toBeUndefined()
+})
+
+test('Stop in the manager tmux session is not blocked', async ($, on) => {
+  world(on, { tmux: 'manager' })
+  const r: any = await $.classic.Stop(stop())
+  expect(r.block).toBeUndefined()
+})
+
+test('every status value is recognised, anywhere in the last 3 lines; prose is not', () => {
+  for (const l of ['STATUS: done', 'STATUS: needs-owner: ship it? [1 yes, 2 no]', 'STATUS: blocked: lease held', 'STATUS: handoff: lease -> task58-b by 14:30', 'STATUS: waiting: deploy d-12', '**STATUS: done**'])
+    expect(hasStatusLine(`work\n${l}\n`)).toBe(true)
+  expect(hasStatusLine('The status: done is fine')).toBe(false)
+  expect(hasStatusLine('STATUS: maybe')).toBe(false)
+  expect(hasStatusLine('STATUS: done\na\nb\nc')).toBe(false)
 })

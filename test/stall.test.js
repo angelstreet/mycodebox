@@ -211,3 +211,51 @@ test('Claude Code feedback survey: quoted header text and "N:" menu lines are no
   const s = classify(plain);
   assert.ok(/1: Yes/.test(s.excerpt) && /How is Claude doing/.test(s.excerpt) && /0: Skip/.test(s.excerpt), `nothing may be stripped: ${s.excerpt}`);
 });
+
+// ---- STATUS line (last line of a Claude turn) decides first; regexes stay for turns without it ----
+test('STATUS: done is not an ask, even when the text above contains a question mark', () => {
+  const s = classify(claude('Merged. Why did the old path fail? Because of the cache.\n\nSTATUS: done'));
+  assert.equal(s.case, 'done');
+  assert.equal(s.status, 'done');
+  assert.equal(s.no_status, false);
+  assert.equal(wouldSend(s).send, null);
+});
+
+test('STATUS: needs-owner is the owner question, never auto-answered', () => {
+  const s = classify(claude('Two ways to do it.\nSTATUS: needs-owner: Ship the migration now or after the deploy? [1 now, 2 after]'));
+  assert.equal(s.case, 'owner_decision');
+  assert.equal(s.status, 'needs-owner');
+  assert.match(s.question, /^Ship the migration now or after the deploy/);
+  assert.equal(wouldSend(s).send, null);
+});
+
+test('STATUS: blocked needs the owner', () => {
+  const s = classify(claude('Cannot proceed.\nSTATUS: blocked: lease held by task42'));
+  assert.equal(s.case, 'owner_decision');
+  assert.equal(s.blocked, 'lease held by task42');
+  assert.equal(wouldSend(s).send, null);
+});
+
+test('STATUS: handoff is not an ask', () => {
+  const s = classify(claude('Passing the box on.\nSTATUS: handoff: lease -> task58-b by 14:30'));
+  assert.equal(s.case, 'done');
+  assert.equal(s.handoff, 'lease -> task58-b by 14:30');
+  assert.equal(s.no_status, false);
+});
+
+test('STATUS: waiting: deploy is the deploy case with the id', () => {
+  const s = classify(claude('Queued.\nSTATUS: waiting: deploy d-42'));
+  assert.equal(s.case, 'waiting_deploy');
+  assert.equal(s.deployHint.id, 'd-42');
+});
+
+test('STATUS line is read from report text lines too (fromReport)', () => {
+  const s = classifyStall({ plain: ['Did a thing?', 'STATUS: done'], state: 'done', fromReport: true });
+  assert.equal(s.case, 'done');
+});
+
+test('no STATUS line: the regex fallback is unchanged (Codex / MiniMax panes)', () => {
+  const s = classify(claude('Phase 1 works: all 5 tests pass and the strip renders.\nShall I continue with phase 2?'));
+  assert.equal(s.case, 'continue');
+  assert.equal(s.status, undefined);
+});
