@@ -9,7 +9,10 @@ const GENERIC = ['frontend', 'server', 'hosts'];
 const rank = (t) => (GENERIC.includes(t) ? GENERIC.indexOf(t) : GENERIC.length);
 const STATUS_ORDER = { BLOCKED: 0, DEPLOYING: 1, FREE: 2 };
 
-export const kindLabel = (kind) => (kind === 'maintenance' ? 'maintenance' : 'test run');
+// vpt-lease kinds: `server` (old `run`) = a server restart breaks the holder; `host` (old `maintenance`) = only a restart
+// of its host/device services does. Old names still arrive from an old registry: treat them as the new ones.
+export const leaseKind = (kind) => (kind === 'host' || kind === 'maintenance' ? 'host' : 'server');
+export const kindLabel = (kind) => (leaseKind(kind) === 'host' ? 'host-bound' : 'server-bound');
 
 // Plain name for an agent id. `codebox:TASK-28-tp-worker` -> "task28", `claude-mac:labox-dongle-disk` -> "mac",
 // `manager:deploy` -> "manager". A holder on this codebox / this host whose tmux session no longer exists -> gone.
@@ -44,11 +47,11 @@ export function leftText(min) {
 
 // What the runner really waits on. The registry lists every lease that overlaps the scope (`blocking`), but the runner
 // starts full / host requests with --skip-leased (deploy-runner.js skipsLeased, vpt-lease blockers(skip_leased=True)):
-// a full deploy is blocked only by env-wide leases and by `run` leases (it restarts the server), a host deploy
+// a full deploy is blocked only by env-wide leases and by `server` leases (it restarts the server), a host deploy
 // without a host list only by env-wide leases. Everything else is dropped by update_core and caught up later.
 export function effectiveBlockers(d) {
   const b = d.blocking || [];
-  if (d.scope === 'full') return b.filter((l) => l.resource === '*' || (l.kind || 'run') === 'run');
+  if (d.scope === 'full') return b.filter((l) => l.resource === '*' || leaseKind(l.kind) === 'server');
   if (d.scope === 'host' && !(d.hosts && d.hosts.length)) return b.filter((l) => l.resource === '*');
   return b;
 }
@@ -94,7 +97,7 @@ export function platformsBlocks({ leases = [], deploys = [], deployed = {}, sess
         blocked: bl.length > 0, eta: mins == null ? '' : etaText(mins), etaMin: mins };
     });
     const inUse = leases.filter((l) => l.env === env).map((l) => ({
-      id: l.id, resource: l.resource, label: resourceLabel(l), who: who(l.agent), kind: l.kind || 'run', kindLabel: kindLabel(l.kind),
+      id: l.id, resource: l.resource, label: resourceLabel(l), who: who(l.agent), kind: leaseKind(l.kind), kindLabel: kindLabel(l.kind),
       left: leftText(l.ttlLeftMin), min: l.ttlLeftMin ?? 1e9, blocks: blockIds.has(l.id),
     })).sort((a, b) => (b.blocks - a.blocks) || (a.min - b.min) || a.resource.localeCompare(b.resource));
     const history = ds.filter((d) => !active(d)).sort((a, b) => (b.finished || 0) - (a.finished || 0)).slice(0, 8).map((d) => ({

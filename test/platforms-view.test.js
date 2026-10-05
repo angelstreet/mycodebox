@@ -8,7 +8,7 @@ const NAMES = ['TASK-28-tp-worker', 'task47-jev-routing', 'free-name'];
 const NOW = 1_800_000_000_000;
 const sec = NOW / 1000;
 const E = 'node1-vpt';
-const lease = (o = {}) => ({ id: 'l1', env: E, resource: 'vpt-pi1/device1', agent: 'codebox:TASK-28-tp-worker', kind: 'run', ttlLeftMin: 55, ...o });
+const lease = (o = {}) => ({ id: 'l1', env: E, resource: 'vpt-pi1/device1', agent: 'codebox:TASK-28-tp-worker', kind: 'server', ttlLeftMin: 55, ...o });
 const dep = (o = {}) => ({ id: 'd1', env: E, scope: 'full', ref: 'main', agent: 'codebox:task47-jev-routing', state: 'queued', created: 1, blocking: [], ...o });
 
 test('whoName: plain session names', () => {
@@ -25,13 +25,14 @@ test('whoName: a codebox holder without a live tmux session is "gone", never unk
   assert.equal(whoName('codebox:', NAMES, M).gone, true);
 });
 test('kind label, time and resource text', () => {
-  assert.equal(kindLabel('run'), 'test run'); assert.equal(kindLabel(undefined), 'test run'); assert.equal(kindLabel('maintenance'), 'maintenance');
+  assert.equal(kindLabel('server'), 'server-bound'); assert.equal(kindLabel(undefined), 'server-bound'); assert.equal(kindLabel('host'), 'host-bound');
+  assert.equal(kindLabel('run'), 'server-bound'); assert.equal(kindLabel('maintenance'), 'host-bound');   // old registry names
   assert.equal(etaText(55), '~55 min'); assert.equal(etaText(100), '~1h40'); assert.equal(etaText(0), '<1 min'); assert.equal(etaText(null), '');
   assert.equal(leftText(20), '20 min left'); assert.equal(leftText(65), '1h05 left');
   assert.equal(resourceLabel(lease()), 'vpt-pi1 · device1'); assert.equal(resourceLabel(lease({ resource: '*' })), `${E} (all)`);
 });
-test('effectiveBlockers mirrors vpt-lease blockers(skip_leased): full = run leases + env-wide, host = env-wide only', () => {
-  const run = lease({ id: 'a' }), maint = lease({ id: 'b', kind: 'maintenance' }), wide = lease({ id: 'c', resource: '*', kind: 'maintenance' }), fe = lease({ id: 'd', resource: 'frontend', kind: 'maintenance' });
+test('effectiveBlockers mirrors vpt-lease blockers(skip_leased): full = server leases + env-wide, host = env-wide only', () => {
+  const run = lease({ id: 'a' }), maint = lease({ id: 'b', kind: 'host' }), wide = lease({ id: 'c', resource: '*', kind: 'host' }), fe = lease({ id: 'd', resource: 'frontend', kind: 'host' });
   const blocking = [run, maint, wide, fe];
   assert.deepEqual(effectiveBlockers(dep({ scope: 'full', blocking })).map((l) => l.id), ['a', 'c']);
   assert.deepEqual(effectiveBlockers(dep({ scope: 'host', blocking })).map((l) => l.id), ['c']);
@@ -44,7 +45,7 @@ test('envStatus: running > blocked > free; a queued deploy with nothing in the w
   assert.equal(envStatus([]), 'FREE');
   assert.equal(envStatus([dep()]), 'FREE');
   assert.equal(envStatus([dep({ blocking: [lease()] })]), 'BLOCKED');
-  assert.equal(envStatus([dep({ blocking: [lease({ kind: 'maintenance' })] })]), 'FREE');   // full skips a maintenance lease
+  assert.equal(envStatus([dep({ blocking: [lease({ kind: 'host' })] })]), 'FREE');   // full skips a host lease
   assert.equal(envStatus([dep({ state: 'running' }), dep({ id: 'd2', blocking: [lease()] })]), 'DEPLOYING');
   assert.equal(envStatus([dep({ state: 'done', blocking: [lease()] })]), 'FREE');
 });
@@ -67,14 +68,14 @@ test('liveRows: every target, generic first, failed ones red with reason, stale 
 });
 test('platformsBlocks: blocked env with next deploy, red blocking lease, normal maintenance lease', () => {
   const run = lease({ id: 'a', ttlLeftMin: 55 });
-  const maint = lease({ id: 'b', resource: 'labox-dongle', agent: 'claude-mac:labox-dongle-disk', kind: 'maintenance', ttlLeftMin: 20 });
+  const maint = lease({ id: 'b', resource: 'labox-dongle', agent: 'claude-mac:labox-dongle-disk', kind: 'host', ttlLeftMin: 20 });
   const gone = lease({ id: 'c', resource: 'vpt-pi3/x', agent: 'codebox:task99-dead', ttlLeftMin: 5 });
   const d = dep({ blocking: [run, maint, gone], created: 5 });
   const [b] = platformsBlocks({ leases: [maint, run, gone], deploys: [d], deployed: { [E]: { server: { at: sec - 60, version: 'v' } } }, sessionNames: NAMES, machines: M, nowMs: NOW });
   assert.equal(b.status, 'BLOCKED');
   assert.deepEqual(b.inUse.map((r) => [r.id, r.blocks]), [['c', true], ['a', true], ['b', false]]);   // blockers first, then by time left
   assert.equal(b.inUse.find((r) => r.id === 'a').who.text, 'task28');
-  assert.equal(b.inUse.find((r) => r.id === 'a').kindLabel, 'test run');
+  assert.equal(b.inUse.find((r) => r.id === 'a').kindLabel, 'server-bound');
   assert.equal(b.inUse.find((r) => r.id === 'b').who.text, 'mac');
   assert.equal(b.inUse.find((r) => r.id === 'c').who.gone, true);
   assert.equal(b.next.length, 1);
