@@ -3210,12 +3210,16 @@ function autoGrow() {
 }
 
 // ----- new session -----
+// Project list: shown instantly from the last copy (memory, then localStorage), refreshed in the background.
+const cachedDirs = () => { if (state.dirsCache) return state.dirsCache; try { const d = JSON.parse(lsGet('ghosty.dirs', 'null')); if (Array.isArray(d) && d.length) return (state.dirsCache = d); } catch { /* none */ } return undefined; };
 async function fetchDirs() {
   try {
     const r = await fetch('/api/dirs');
     if (!r.ok) return null;
     const j = await r.json();
-    return Array.isArray(j) ? j : (j.dirs || null);
+    const d = Array.isArray(j) ? j : (j.dirs || null);
+    if (d && d.length) { state.dirsCache = d; lsSet('ghosty.dirs', JSON.stringify(d)); }
+    return d;
   } catch { return null; }
 }
 function recentDirs() { try { return JSON.parse(lsGet(LS_RECENT, '[]')) || []; } catch { return []; } }
@@ -3336,7 +3340,8 @@ function openNewSession() {
     };
     suggest();
     applySuggestion();
-    fetchDirs().then((d) => { dirs = d || null; drawDirs(); if (!d) list.innerHTML = '<div class="sheet-empty">project list unavailable \u2014 type a path</div>'; });
+    dirs = cachedDirs();                        // instant when this browser has seen the list before
+    fetchDirs().then((d) => { if (d) dirs = d; else if (!dirs) dirs = null; drawDirs(); if (!dirs) list.innerHTML = '<div class="sheet-empty">project list unavailable \u2014 type a path</div>'; });
   });
 }
 

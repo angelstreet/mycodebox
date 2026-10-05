@@ -51,7 +51,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
-import { readFile, stat, readdir, realpath } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, realpath } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore } from './leases.js';
@@ -1040,7 +1040,12 @@ async function sendMany(sessions, payload) {
 }
 
 // Candidate working dirs: repos + their worktrees under $HOME (depth <= 3), plus live pane cwds.
+// Project list: cached in memory, persisted to <state dir>/dirs.json (instant after a restart), refreshed in the background.
+// A request never waits for the scan once there is any copy: it gets the cached list and, when it is older than a minute, a
+// single background refresh starts.
 let dirsCache = { at: 0, value: null };
+let dirsInflight = null;
+const DIRS_FILE = join(STATE_DIR, 'dirs.json');
 const SKIP_DIRS = new Set(['node_modules', 'snap', 'venv', '.venv', '__pycache__', 'dist', 'build', 'target']);
 async function walkRepos(dir, depth, out) {
   let ents;
@@ -1053,8 +1058,7 @@ async function walkRepos(dir, depth, out) {
   }
 }
 
-async function collectDirs() {
-  if (dirsCache.value && Date.now() - dirsCache.at < 60000) return dirsCache.value;
+async function scanDirs() {
   const repos = [];
   // depth counted from $HOME: ~/a (1), ~/a/b (2), ~/a/b/c (3)
   let top = [];
@@ -1085,8 +1089,27 @@ async function collectDirs() {
   });
   list.sort((a, b) => b.mtime - a.mtime);
   const value = list.map(({ path, name, branch, git }) => ({ path, name, branch, git }));
-  dirsCache = { at: Date.now(), value };
   return value;
+}
+function refreshDirs() {
+  if (!dirsInflight) {
+    dirsInflight = scanDirs().then(async (value) => {
+      dirsCache = { at: Date.now(), value };
+      try { await writeFile(DIRS_FILE, JSON.stringify(value)); } catch { /* cache only */ }
+      return value;
+    }).finally(() => { dirsInflight = null; });
+  }
+  return dirsInflight;
+}
+async function collectDirs() {
+  if (!dirsCache.value) {
+    try { dirsCache = { at: (await stat(DIRS_FILE)).mtimeMs, value: JSON.parse(await readFile(DIRS_FILE, 'utf8')) }; } catch { /* no copy yet */ }
+  }
+  if (dirsCache.value) {
+    if (Date.now() - dirsCache.at > 60000) refreshDirs().catch(() => {});
+    return dirsCache.value;
+  }
+  return refreshDirs();
 }
 
 function json(res, code, obj) {
