@@ -12,6 +12,9 @@
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/sessions          → {name, agent, cwd, priority?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
+//   POST /api/sessions/:name/park   → record the Claude conversation, /exit, kill the tmux session (refuses when not idle / lease held / job running)
+//   POST /api/sessions/:name/resume → recreate the tmux session in the same folder and run `claude --resume <id>`
+//   GET  /api/parking               → { cap, live, over, candidates[], parked[], ramSavedMb }
 //   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
 //   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
 //                                 global settings, {session, sessionEnabled} per session
@@ -79,6 +82,7 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
+import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createVptLockStore } from './vpt-locks.js';
@@ -153,18 +157,20 @@ async function listPanes() {
 async function processTable() {
   const children = new Map();
   const args = new Map();
+  const rss = new Map();   // pid -> resident KB
   try {
-    const { stdout } = await exec('ps', ['-eo', 'pid=,ppid=,args='], { maxBuffer: 16 * 1024 * 1024 });
+    const { stdout } = await exec('ps', ['-eo', 'pid=,ppid=,rss=,args='], { maxBuffer: 16 * 1024 * 1024 });
     for (const line of stdout.split('\n')) {
-      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
       if (!m) continue;
       const pid = Number(m[1]), ppid = Number(m[2]);
-      args.set(pid, m[3]);
+      args.set(pid, m[4]);
+      rss.set(pid, Number(m[3]));
       if (!children.has(ppid)) children.set(ppid, []);
       children.get(ppid).push(pid);
     }
   } catch {}
-  return { children, args };
+  return { children, args, rss };
 }
 
 // Breadth-first walk under pane pid; shallowest agent process wins. agentFromArgs lives in api-extras.js.
@@ -826,6 +832,16 @@ async function pollOnce() {
   pruneManager(new Set(Object.keys(status)));
   reporter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
+  const claudeIdx = await claudeIndex.get();
+  for (const [k, v] of Object.entries(status)) {
+    if (v.agent !== 'claude') continue;
+    const c = claudeOfPane(panes.get(k)?.pid || 0, table, claudeIdx);
+    const la = lastActivityOf({ info: c?.info, reporterAt: reporter.lastActivity(k) });
+    v.lastActivity = la ? la.at : null;
+    v.lastActivitySource = la ? la.source : null;
+    v.claudeSessionId = c ? c.info.sessionId : null;
+    v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
+  }
   for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
   return { sessions, status, changedSessions };
 }
@@ -1006,6 +1022,74 @@ async function killSession(name, confirm) {
   sessionMeta.reset(name);
   latest = null;
   return { ok: true, name };
+}
+
+// ---------------------------------------------------------------------------
+// Session cap + parking (parking.js): park = record the Claude conversation, /exit, kill tmux; resume = new tmux + claude --resume.
+// ---------------------------------------------------------------------------
+const claudeIndex = createClaudeIndex({ dir: process.env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions') });
+const parking = createParking({
+  file: join(STATE_DIR, 'parked-sessions.json'),
+  tmux: {
+    exists: sessionExists,
+    kill: async (name) => { await killSession(name, name); },
+    sendText: (name, text) => exec(TMUX, ['send-keys', '-t', `=${name}:`, '-l', '--', text]),
+    sendEnter: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']),
+    create: (name, cwd) => exec(TMUX, ['new-session', '-d', '-s', name, '-c', cwd, '-x', '120', '-y', '40']),
+  },
+});
+const pidAlive = async (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+async function parkFacts(name) {
+  if (!(await sessionExists(name))) throw httpError(404, 'no such session');
+  const panes = await listPanes();
+  const table = await processTable();
+  const idx = await claudeIndex.get(true);
+  const claude = claudeOfPane(panes.get(name)?.pid || 0, table, idx);
+  const sess = (await listSessions()).find((x) => x.name === name);
+  const st = (latest && latest.status[name]) || null;
+  const lz = await getLeases(true);
+  let leases = null;
+  if (lz?.ok) leases = leasesOfSession(lz.leases, [name, claude?.info?.name || '']);
+  let rssMb = null;
+  if (claude) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(claude.pid)])).stdout.trim()) / 1024); } catch {} }
+  const rw = reporter.detail(name);
+  return {
+    claude, state: st?.state || null, attached: !!sess?.attached, reporterWaiting: !!(rw && reporter.waitingNow(name, 0)),
+    backgroundWork: rw?.lastTurn?.backgroundWork || 0, busy: claude ? busyChildren(claude.pid, table) : [], leases, rssMb, priority: sessionMeta.priority(name),
+  };
+}
+
+async function parkSession(name) {
+  if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid session name');
+  const rec = await parking.park(name, await parkFacts(name), { claudeAlive: pidAlive });
+  latest = null;
+  return { ok: true, parked: rec };
+}
+
+async function resumeSession(name) {
+  const rec = await parking.get(name);
+  if (!rec) throw httpError(404, 'not parked');
+  const out = await parking.resume(name, {
+    base: AGENT_CMDS.claude,
+    start: async (n, r, cmd) => {
+      try { await trustFolder('claude', r.cwd); } catch { /* best effort */ }
+      await exec(TMUX, ['send-keys', '-t', `=${n}:`, '-l', '--', cmd]);
+      await exec(TMUX, ['send-keys', '-t', `=${n}:`, 'Enter']);
+      sessionMeta.reset(n);
+      sessionMeta.sync([n]);
+      if (r.priority) sessionMeta.set(n, { priority: r.priority });
+    },
+  });
+  latest = null;
+  return { ok: true, resumed: out };
+}
+
+async function parkingView() {
+  const r = (latest && Date.now() - latest.at < 5000) ? latest : await poll();
+  const rows = Object.entries(r.status).map(([name, v]) => ({ name, agent: v.agent, state: v.state, lastActivity: v.lastActivity ?? null, rssMb: v.rssMb ?? null }));
+  const parked = await parking.list();
+  return { ...capView({ sessions: rows, cap: SESSION_CAP }), parked, ramSavedMb: parked.reduce((a, p) => a + (p.rssMb || 0), 0) };
 }
 
 // Owner settings of one session: { priority } and / or { paused }.
@@ -1282,6 +1366,17 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/api/sessions') {
     try { return json(res, 200, await createSession(await readJsonBody(req))); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/parking') {
+    try { return json(res, 200, await parkingView()); } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  {
+    const m = req.method === 'POST' && /^\/api\/sessions\/([^/]+)\/(park|resume)$/.exec(p);
+    if (m) {
+      const name = decodeURIComponent(m[1]);
+      try { return json(res, 200, m[2] === 'park' ? await parkSession(name) : await resumeSession(name)); }
+      catch (err) { return json(res, err.status || 500, { ok: false, error: err.message, reasons: err.reasons }); }
+    }
   }
   if (req.method === 'DELETE' && p.startsWith('/api/sessions/')) {
     try { return json(res, 200, await killSession(decodeURIComponent(p.slice('/api/sessions/'.length)), url.searchParams.get('confirm'))); }

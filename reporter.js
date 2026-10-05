@@ -165,7 +165,10 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
     return { turnAt, promptAt, working: promptAt > turnAt };
   }
 
+  // Newest event time of a session that was a turn end or a prompt (ms), or 0.
+  const lastActivity = (name) => { const s = sessions.get(name); return s ? Math.max(s.lastTurn?.at || 0, s.lastTurn?.stopAt || 0, s.lastPrompt?.at || 0) : 0; };
+
   const prune = (liveNames) => { for (const k of [...sessions.keys()]) if (!liveNames.has(k)) sessions.delete(k); };
 
-  return { init, tokenOk, ingest, summary, detail, turnForStop, waitingNow, promptSince, activityOf, prune, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
+  return { init, tokenOk, ingest, summary, detail, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
 }
