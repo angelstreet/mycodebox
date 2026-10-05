@@ -1606,8 +1606,6 @@ function rowChipsHtml(n) {
   if (loc) chips.push(`<span class="chip-m">${escapeHtml(loc)}</span>`);
   const c = ctxHtml(st);
   if (c) chips.push(c.replace('class="ctx', 'class="chip-m ctx'));
-  const lc = leaseChipHtml(st, 'chip-m');
-  if (lc) chips.push(lc);
   return chips.join('');
 }
 
@@ -1845,7 +1843,7 @@ function renderList() {
     row.className = 'row-item';
     row.dataset.session = s.name;
     row.innerHTML = `
-      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><button class="rn" aria-label="Rename session" title="Rename">${icon('pencil', 12)}</button><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button></div>
+      <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><button class="rn" aria-label="Rename session" title="Rename">${icon('pencil', 12)}</button><span class="lb"></span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button></div>
       <div class="last"></div>
       <div class="apill hidden"></div>
       <div class="meta"></div>`;
@@ -1904,6 +1902,8 @@ function syncList() {
     const sk = s + '|' + deployWaitTip(n);
     if (stw.dataset.s !== sk) { stw.dataset.s = sk; stw.innerHTML = stateBadgeHtml(n); }
     else stw.querySelector('.st').textContent = badgeText(n);
+    const lb = row.querySelector('.lb'), lh = leaseChipHtml(state.status[n] || {}, 'chip-m');
+    if (lb.dataset.h !== lh) { lb.dataset.h = lh; lb.innerHTML = lh; }
     syncAutoPill(row.querySelector('.apill'), n);
     const last = row.querySelector('.last'), lt = rowLast(n);
     if (last.textContent !== lt) last.textContent = lt;
