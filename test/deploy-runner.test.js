@@ -456,3 +456,34 @@ test('real detached run: output through the file, exit file and pid file written
   assert.match(readFileSync(join(dir, '11.log'), 'utf8'), /hello/);
   assert.equal(reg.deploys[0].version, '9.9.9');
 });
+
+test('lease freed: one alert per blocking lease once it disappears, not before, not twice', async () => {
+  const reg = fakeRegistry({
+    deploys: [dep('21', { scope: 'full' })],
+    leases: [{ id: 'aa11', env: 'node1-vpt', resource: '*', agent: 'codebox:t1', kind: 'server' }],
+  });
+  const { runner, alerts } = make(reg);
+  await runner.tick();
+  await runner.tick();
+  assert.equal(reg.deploys[0].state, 'queued');
+  assert.ok(!alerts.some(([k]) => k.includes('lease-freed')));
+  reg.leases.length = 0;                       // released or expired
+  await runner.tick();
+  const freed = alerts.filter(([k]) => k.startsWith('deploy:21:lease-freed:'));
+  assert.equal(freed.length, 1);
+  assert.equal(freed[0][1], 'lease freed: node1-vpt/* (codebox:t1) — deploy 21 can start');
+  await runner.tick();                          // it started; no second alert
+  assert.equal(alerts.filter(([k]) => k.includes('lease-freed')).length, 1);
+});
+
+test('lease freed: a host-kind lease that a full deploy skips is never tracked', async () => {
+  const reg = fakeRegistry({
+    deploys: [dep('22', { scope: 'full' })],
+    leases: [{ id: 'bb22', env: 'node1-vpt', resource: 'vpt-pi3/device2', agent: 'a:2', kind: 'host' }],
+  });
+  const { runner, alerts } = make(reg);
+  await runner.tick();                          // fake registry says busy (code 3), real one would skip the host
+  reg.leases.length = 0;
+  await runner.tick();
+  assert.ok(!alerts.some(([k]) => k.includes('lease-freed')));
+});

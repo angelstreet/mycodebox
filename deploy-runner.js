@@ -157,6 +157,8 @@ export function createDeployRunner({
   let snap = { ok: false, error: 'not polled yet', deploys: [], lastRef: {}, deployed: {}, at: 0 };
   const running = new Map();          // env -> deploy id this process is running
   const seenAwaiting = new Set();
+  let liveLeases = null;                // leases of the last good poll (`deploy list --json` carries them)
+  const blockedBy = new Map();          // deploy id -> Map(lease id -> {env, resources[], agent}) that blocked its start
   const handledOrphans = new Set();   // ids already finished as orphaned (alert once per id)
   let first = true, ticking = false, timer = null, lastJson = '';
 
@@ -180,6 +182,7 @@ export function createDeployRunner({
     if (r.code !== 0) { snap = { ...snap, ok: false, error: (r.stderr || `exit ${r.code}`).trim().slice(0, 200), at: Date.now() }; return null; }
     let j; try { j = JSON.parse(r.stdout); } catch { snap = { ...snap, ok: false, error: 'bad registry output', at: Date.now() }; return null; }
     const deploys = j.deploys || [];
+    liveLeases = Array.isArray(j.leases) ? j.leases : null;
     snap = { ok: true, error: '', deploys, lastRef: lastRefs(deploys), deployed: await pollDeployed(), at: Date.now() };
     return deploys;
   }
@@ -192,6 +195,36 @@ export function createDeployRunner({
       if (r.code !== 0) return snap.deployed || {};
       return JSON.parse(r.stdout).envs || {};
     } catch { return snap.deployed || {}; }
+  }
+
+  // Which leases keep `d` from starting (same rule as vpt-lease: with --skip-leased only env-wide leases, plus server
+  // leases for a full deploy, block; otherwise every lease that overlaps the scope). Our own and update_core's never count.
+  function blockersOf(d) {
+    const out = new Map();
+    for (const l of liveLeases || []) {
+      if (l.env !== d.env || l.agent === RUNNER_AGENT || String(l.agent || '').startsWith('update_core:')) continue;
+      const res = l.resource || '*';
+      const blocks = skipsLeased(d) ? (res === '*' || (d.scope === 'full' && (l.kind || 'server') === 'server')) : (res === '*' || d.scope === 'server' || (d.scope === 'frontend' ? res === 'frontend' : res !== 'frontend'));
+      if (!blocks) continue;
+      const e = out.get(l.id) || { env: l.env, resources: [], agent: l.agent || '?' };
+      e.resources.push(res); out.set(l.id, e);
+    }
+    return out;
+  }
+
+  // One manager event + push per blocking lease that disappears (released or expired) while the deploy still waits.
+  function checkFreed(deploys) {
+    if (!liveLeases) return;
+    const present = new Set(liveLeases.map((l) => l.id));
+    for (const [id, m] of [...blockedBy]) {
+      if (!deploys.some((d) => d.id === id && d.state === 'queued')) { blockedBy.delete(id); continue; }
+      for (const [lid, e] of [...m]) {
+        if (present.has(lid)) continue;
+        m.delete(lid);
+        alert(`deploy:${id}:lease-freed:${lid}`, { title: `lease freed: ${e.env}/${e.resources.join(',')} (${e.agent}) — deploy ${id} can start`, body: `lease ${lid} is gone; ${m.size ? `${m.size} other lease(s) still block it` : 'the runner starts it on its next poll'}`, priority: 'default', ntfyTags: 'unlock', tag: `ghosty-deploy-${id}`, url: '/?deploys=1' }, 0);
+      }
+      if (!m.size) blockedBy.delete(id);
+    }
   }
 
   async function logTail(id, n = 200) {
@@ -320,13 +353,18 @@ export function createDeployRunner({
           if (!envs[d.env]) continue;                 // not an env this runner owns (another runner's log is not here)
           try { await finishOrphan(d); } catch (e) { log.error?.('[deploy] orphan', e.message); }
         }
+        checkFreed(deploys);
         if (isEnabled()) {
           for (const env of Object.keys(envs)) {
             if (running.has(env) || deploys.some((d) => d.env === env && d.state === 'running')) continue;
             const queue = deploys.filter((d) => d.env === env && d.state === 'queued' && flagsFor(d.scope)).sort((a, b) => a.created - b.created);
             for (const d of queue) {
               const r = await reg(['deploy', 'start', d.id, ...(skipsLeased(d) ? ['--skip-leased'] : [])]);
-              if (r.code === 3) continue;                 // resources busy: try a narrower request behind it
+              if (r.code === 3) {
+                const b = blockersOf(d);
+                if (b.size) { const m = blockedBy.get(d.id) || new Map(); for (const [k, v] of b) if (!m.has(k)) m.set(k, v); blockedBy.set(d.id, m); }
+                continue;
+              }                 // resources busy: try a narrower request behind it
               if (r.code !== 0) { log.error?.(`[deploy] start ${d.id}: ${r.stderr}`); continue; }
               running.set(env, d.id);
               runDeploy(d, deploys).catch((e) => { running.delete(env); log.error?.('[deploy] run', e.message); });
