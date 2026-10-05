@@ -136,11 +136,13 @@ test('quota alert: fires once at 80 %, stays quiet while high, re-arms under 70 
   qa.check(plans(80));   assert.equal(calls.length, 1);
   assert.match(calls[0][1], /Codex 5h quota at 80%/);
   assert.equal(calls[0][2], 0);              // no debounce swallowing the edge
-  qa.check(plans(95)); qa.check(plans(85)); assert.equal(calls.length, 1);
+  qa.check(plans(95)); assert.equal(calls.length, 2);   // TASK-58 C7: the 95 % crossing is a second (interrupt-tier) alert
+  assert.equal(calls[1][0], 'quota:codex:5h:crit');
+  qa.check(plans(97)); qa.check(plans(85)); assert.equal(calls.length, 2);
   qa.check(plans(75));                       // between 70 and 80: still disarmed
-  qa.check(plans(82));   assert.equal(calls.length, 1);
+  qa.check(plans(82));   assert.equal(calls.length, 2);
   qa.check(plans(69));                       // back under 70: re-armed
-  qa.check(plans(81));   assert.equal(calls.length, 2);
+  qa.check(plans(81));   assert.equal(calls.length, 3);
 });
 
 test('quota alert: a window already high at start is not announced; null percent is ignored', () => {
