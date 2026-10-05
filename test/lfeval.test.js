@@ -182,7 +182,7 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   const { createJudge, parseJudge, judgeMessages } = await import('../usage/judge.js');
   const lf = await mock();
   const f = await setup([triage('a', 30, { src: 'rule', flags: ['mentions a deploy'] }), triage('b', 20), triage('old', 60 * 30)], lf);
-  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1 };
+  const cfg = { ...f.cfg, judgeStateFile: join(tmpdir(), `judge-${Date.now()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1, now: () => NOW };
   const asked = [];
   let fail = false;
   const fetchFn = async (url, init) => {
@@ -206,7 +206,7 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   assert.equal((await judge()).judged, 0, 'a judged stop is not judged again; the cap is reached');
   // a failing endpoint counts against the cap, writes an error row, and is retried at most once an hour
   cfg.judgeMaxPerDay = 5; fail = true;
-  const t0 = Date.now(); cfg.now = () => t0;
+  const t0 = NOW; cfg.now = () => t0;   // cfg.now is NOW from setup() for every pass; never mix in the wall clock (a different UTC day resets the cap)
   const failed = await judge();
   assert.equal(failed.judged, 0);
   const failRow = failed.rows.filter((r) => r.error);
@@ -223,6 +223,43 @@ test('judge: scores a new AI proposal on its generation, once, capped per day, f
   assert.equal(judgeMessages(triage('z', 1)).length, 2);
   assert.equal(await createJudge({ ...cfg, jevApiKey: '' })().then((r) => r.skipped), 'no JEV_URL / JEV_API_KEY');
 });
+
+// The cap is per UTC day: drive the judge on an injected clock at the edges of the day (never the wall clock).
+for (const [name, start] of [['crosses UTC midnight', '2026-10-04T23:59:30Z'], ['at 02:40 UTC', '2026-10-05T02:40:00Z'], ['at 12:00:30 UTC', '2026-10-04T12:00:30Z']]) {
+  test(`judge: per-day cap and failure accounting ${name}`, async () => {
+    const { createJudge } = await import('../usage/judge.js');
+    const lf = await mock();
+    let clock = Date.parse(start);
+    const ago = (m) => new Date(clock - m * 60000).toISOString();
+    const f = await setup([triage('a', 0, { at: ago(30) }), triage('b', 0, { at: ago(20) })], lf);
+    const cfg = { ...f.cfg, now: () => clock, judgeStateFile: join(tmpdir(), `judge-${Date.now()}-${Math.random()}.json`), jevUrl: 'http://127.0.0.1:5555/server/ai/decide', jevApiKey: 'vpt-key', judgeMaxPerDay: 1 };
+    let fail = false;
+    const fetchFn = async (url, init) => {
+      if (url.startsWith(lf.url)) return fetch(url, init);
+      if (fail) throw new Error('down');
+      return new Response(JSON.stringify({ success: true, content: '{"reasoning":"ok","score":0.8}', usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }, model: 'mock-judge' }), { status: 200 });
+    };
+    const judge = createJudge(cfg, { fetchFn, log: () => {} });
+    const state = async () => JSON.parse(await fs.readFile(cfg.judgeStateFile, 'utf8'));
+    assert.equal((await judge()).judged, 1);
+    assert.equal((await judge()).judged, 0, 'cap of 1 reached the same day');
+    assert.equal((await state()).day, new Date(clock).toISOString().slice(0, 10));
+    // 60 s later (past midnight in the first case): the cap resets only if the UTC day changed
+    const day0 = new Date(clock).toISOString().slice(0, 10);
+    clock += 60e3;
+    const rolled = new Date(clock).toISOString().slice(0, 10) !== day0;
+    assert.equal((await judge()).judged, rolled ? 1 : 0, rolled ? 'new UTC day: the cap is fresh' : 'same UTC day: still capped');
+    // a failed call counts against the cap and is retried only after an hour
+    cfg.judgeMaxPerDay = (await state()).calls + 1; fail = true;
+    clock += 60e3;
+    await f.append([triage('c', 0, { at: ago(1) })]);
+    const failed = await judge();
+    assert.equal(failed.rows.filter((r) => r.error).length, 1);
+    assert.equal((await state()).calls, cfg.judgeMaxPerDay, 'the failed call counted against the cap');
+    fail = false;
+    assert.equal((await judge()).judged, 0, 'capped, and within the hour');
+  });
+}
 
 test('judge: request goes to /server/ai/complete with X-API-Key and usage text.plan', async () => {
   const { createJudge } = await import('../usage/judge.js');
