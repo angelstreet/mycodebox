@@ -41,12 +41,15 @@ const readManagerSessions = () => {
 };
 
 // manager-actions.session may be "all", "-", or "s1,s2,s3" — match the target session.
+// "all"/"-" are fleet-wide lines (sweeps), not an answer to one stop: never match them.
 const actionMatchesSession = (actionSession, target) => {
-  if (!actionSession || actionSession === '-' || actionSession === 'all') return true;
+  if (!actionSession || actionSession === '-' || actionSession === 'all') return false;
   if (actionSession === target) return true;
   return actionSession.split(',').map((s) => s.trim()).includes(target);
 };
 
+// Real `by` values in stalls.jsonl: 'owner', 'owner-via-task44' (owner words relayed) vs 'manager-agent'.
+const isOwnerBy = (by) => /^owner/.test(String(by || ''));
 const REGRET_PREFIX = /^\s*(no|stop|wait|don't|undo|revert)\b/i;
 const REGRET_MS = 30 * 60 * 1000;
 const WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -95,6 +98,8 @@ export function computeShare(records, actions, opts = {}) {
   // Index answer / send / choice / pause records within the window for fast lookup.
   const answers = records.filter((r) => r && r.type === 'answer' && r.id);
   const sends = records.filter((r) => r && r.type === 'send' && r.session);
+  // outcome.via === 'manager' = ghosty auto-sent the answer (manager.js); terminal/reporter/ghosty = the owner typed it.
+  const outcomes = new Map(records.filter((r) => r && r.type === 'outcome' && r.id).map((r) => [r.id, r]));
   const choices = records.filter((r) => r && r.type === 'choice');
   const pauses = records.filter((r) => r && r.type === 'pause' && r.by === 'owner');
 
@@ -107,13 +112,17 @@ export function computeShare(records, actions, opts = {}) {
     let outcome = 'owner-handled';
     let via = null;
 
-    // 1. autonomous via answer record with the same id (within the window)
+    // 1. autonomous via answer record with the same id (within the window), or an outcome the manager auto-sent
     const matchedAnswer = answers.find((a) => g.ids.has(a.id) && Date.parse(a.at) >= firstAtMs && Date.parse(a.at) <= windowEndMs);
     if (matchedAnswer) { outcome = 'autonomous'; via = `answer (${matchedAnswer.source || 'unknown'})`; }
+    else {
+      const o = [...g.ids].map((id) => outcomes.get(id)).find((x) => x && x.via === 'manager');
+      if (o) { outcome = 'autonomous'; via = 'outcome (manager)'; }
+    }
 
     // 2. autonomous via manager-agent send to that session in the window
     if (outcome === 'owner-handled') {
-      const send = sends.find((s) => s.session === g.session && s.by && s.by !== 'owner' && Date.parse(s.at) >= firstAtMs && Date.parse(s.at) <= windowEndMs);
+      const send = sends.find((s) => s.session === g.session && s.by && !isOwnerBy(s.by) && Date.parse(s.at) >= firstAtMs && Date.parse(s.at) <= windowEndMs);
       if (send) { outcome = 'autonomous'; via = `send (${send.by})`; }
     }
 
@@ -143,7 +152,7 @@ export function computeShare(records, actions, opts = {}) {
       const pause = pauses.find((p) => p.session === g.session && Date.parse(p.at) >= firstAtMs && Date.parse(p.at) <= regretEndMs);
       if (pause) regret = { via: 'pause', at: pause.at };
       else {
-        const rs = sends.find((s) => s.session === g.session && s.by === 'owner' && Date.parse(s.at) >= firstAtMs && Date.parse(s.at) <= regretEndMs && REGRET_PREFIX.test(String(s.text || '')));
+        const rs = sends.find((s) => s.session === g.session && isOwnerBy(s.by) && Date.parse(s.at) >= firstAtMs && Date.parse(s.at) <= regretEndMs && REGRET_PREFIX.test(String(s.text || '')));
         if (rs) regret = { via: 'send', at: rs.at, text: rs.text };
       }
     }
@@ -183,9 +192,9 @@ export function dailyRollup(share) {
 
 const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
 
-const printTable = (rollup) => {
+const printTable = (rollup, days) => {
   const lines = [];
-  lines.push(`decisions since ${new Date(Date.now() - rollup.total.decisions * 0).toISOString().slice(0, 10)} (last ${rollup.days[0] ? Math.ceil((Date.now() - new Date(rollup.days[0].day + 'T00:00:00Z').getTime()) / 86400000) : 0} UTC days)`);
+  lines.push(`decisions per UTC day (last ${days} days)`);
   lines.push('');
   const widths = [10, 9, 10, 15, 13, 9, 7, 8];
   const header = ['day', 'decisions', 'autonomous', 'owner-confirmed', 'owner-handled', 'autonomy%', 'regret', 'regret%'];
@@ -237,7 +246,7 @@ function main() {
   if (asJson) {
     process.stdout.write(JSON.stringify(toJson(share, rollup, list), null, 2) + '\n');
   } else {
-    process.stdout.write(printTable(rollup));
+    process.stdout.write(printTable(rollup, days));
     if (list) process.stdout.write('\n' + printList(share));
   }
 }

@@ -97,13 +97,45 @@ test('autonomous via manager-actions answer for that session in the window', () 
   assert.match(d.via, /^manager-actions/);
 });
 
-test('manager-actions session "all" applies to every session in the window', () => {
+test('manager-actions session "all"/"-" is fleet-wide and never counts as an answer to one stop', () => {
   const records = [
     stall({ session: 'feat', id: 'a', at: t('10:00', 1), case: 'owner_decision', excerpt: 'pick one of the three options' }),
   ];
   const actions = [{ at: t('10:05', 1), session: 'all', decision: 'answer: option 2', action: 'replied' }];
   const share = computeShare(records, actions, { days: 7, managerSessions: [] });
-  assert.equal(share.decisions[0].outcome, 'autonomous');
+  assert.equal(share.decisions[0].outcome, 'owner-handled');
+});
+
+test('owner-relayed sends (by owner-via-*) are owner words: not autonomous, and they can be a regret', () => {
+  const rec = (by2) => [
+    stall({ session: 'feat', id: 'a', at: t('10:00', 1), case: 'owner_decision', excerpt: 'relay case question' }),
+    { type: 'send', session: 'feat', by: 'owner-via-task44', text: 'yes do it', at: t('10:03', 1) },
+    ...by2,
+  ];
+  assert.equal(computeShare(rec([]), [], { days: 7 }).decisions[0].outcome, 'owner-handled');
+  const r = computeShare(rec([
+    { type: 'answer', id: 'a', session: 'feat', at: t('10:01', 1), source: 'ai' },
+    { type: 'send', session: 'feat', by: 'owner-via-task44', text: 'undo that', at: t('10:10', 1) },
+  ]), [], { days: 7 });
+  assert.equal(r.decisions[0].regret?.via, 'send');
+});
+
+test('outcome via manager (auto-sent) is autonomous; via terminal is owner-handled', () => {
+  const recs = [
+    stall({ session: 'feat', id: 'a', at: t('10:00', 1), case: 'continue', excerpt: 'auto one' }),
+    { type: 'outcome', id: 'a', session: 'feat', at: t('10:02', 1), via: 'manager', kind: 'continue' },
+    stall({ session: 'feat2', id: 'b', at: t('10:00', 1), case: 'continue', excerpt: 'typed one' }),
+    { type: 'outcome', id: 'b', session: 'feat2', at: t('10:02', 1), via: 'terminal', kind: 'owner_specific', reply: 'x' },
+  ];
+  const d = computeShare(recs, [], { days: 7 }).decisions;
+  assert.deepEqual(d.map((x) => x.outcome), ['autonomous', 'owner-handled']);
+});
+
+test('stopKey is identical to manager.js stopKey', async () => {
+  const m = await import('../manager.js');
+  const { stopKey } = await import('../scripts/decision-share.js');
+  const x = '  a b\n c '.repeat(200);
+  assert.equal(stopKey(x), m.stopKey(x));
 });
 
 test('owner-confirmed AI proposal: choice with agreeAi true, matched by id', () => {
