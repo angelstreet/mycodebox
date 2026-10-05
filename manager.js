@@ -822,7 +822,7 @@ export function observe(s) {
       at: new Date(s.now).toISOString(), case: final.case, source: final.source, textSource: stall.textSource || 'pane', question: final.question,
       ...(final.case === 'background_wait' ? { backgroundWork: final.backgroundWork } : {}),
       forbidden: final.forbidden, draft: final.draft, suggestion: final.suggestion,
-      no_status: !!final.no_status, ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
+      no_status: !!final.no_status, ...(final.status ? { status: final.status } : {}), ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
     });
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;

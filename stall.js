@@ -206,6 +206,18 @@ export function menuOptions(lines) {
   return opts;
 }
 
+// The agent's own last-line verdict (AGENTS.md "End every turn with a STATUS line"):
+//   STATUS: done | needs-owner: <question> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
+// Looked for in the last 3 closing lines only. Returns { kind, text } or null (Codex/MiniMax panes, turns without the line).
+const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(done|needs-owner|blocked|handoff|waiting)\b[*_`]*\s*:?\s*(.*)$/i;
+export function statusLine(lines) {
+  for (const l of lines.slice(-3).reverse()) {
+    const m = STATUS_LINE_RE.exec(l);
+    if (m) return { kind: m[1].toLowerCase(), text: m[2].replace(/[*_`]+\s*$/, '').trim() };
+  }
+  return null;
+}
+
 // plain = ANSI-stripped pane lines; raw = the same lines with ANSI (for the input box);
 // state = ghosty state ('waiting' | 'done' | 'idle' | ...).
 // Returns { case, source: 'rule'|'ambiguous', answer, question, forbidden, draft, suggestion, excerpt }.
@@ -240,6 +252,21 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
 
   // A finished turn: what did the agent end on?
   const last = lastParagraph(close);
+  // The STATUS line, when the agent wrote one, decides first; the regexes below stay for turns without it.
+  const st = statusLine(close);
+  if (st) {
+    out.status = st.kind;
+    out.question = st.text || last.slice(0, 300);
+    out.source = 'rule';
+    out.no_status = false;
+    out.forbiddenText = close.slice(-6).join('\n');
+    if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
+    else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; }
+    else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; }
+    else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
+    else out.case = 'done';
+    return finish(out);
+  }
   out.question = tailSentences(last, 300);
   // A question anywhere in the closing paragraph ("Can I run it? After that I'd ...").
   let asks = /\?(?:["')\]]|\s|$)/.test(last.replace(/https?:\S+/g, ''));

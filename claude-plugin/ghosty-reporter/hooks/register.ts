@@ -3,7 +3,7 @@
 // down the session behaves exactly as without this plugin (after one failed try, nothing is sent for
 // 30 s). Nothing is printed to the transcript.
 import type { Register } from 'claude-code'
-import { agentRows, cap, isSynthetic, NOT_WAITING, payload, taskRows } from './report.ts'
+import { agentRows, cap, isSynthetic, NOT_WAITING, payload, shouldRequireStatus, STATUS_REASON, taskRows } from './report.ts'
 import type { Identity } from './report.ts'
 
 const SEND_MS = 800        // longest a hook waits for ghosty
@@ -109,6 +109,11 @@ export const register: Register = (on, options) => {
   // The Stop hook carries what turn.complete does not: whether background work is still in flight.
   on('classic.Stop', async ($, e, next) => {
     const out = await next(e)
+    // One re-prompt for a missing STATUS line. Anything going wrong here lets the stop through unchanged.
+    try {
+      const id = await identity($)
+      if (shouldRequireStatus(e as any, id.session)) return { ...out, block: STATUS_REASON }
+    } catch { /* fail open */ }
     void report($, 'stop', {
       text: cap(e.last_assistant_message ?? ''),
       backgroundWork: (e.background_tasks ?? []).length,

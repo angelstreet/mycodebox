@@ -58,3 +58,25 @@ export const NOT_WAITING = new Set(['idle_prompt', 'auth_success'])
 // Prompts the engine raises itself (a finished background task waking the session, a system reminder) are
 // not something the owner typed: they are reported, marked, and ghosty never reads them as the owner's reply.
 export const isSynthetic = (text: string): boolean => /^\s*<(?:task-notification|system-reminder|local-command|command-name|command-message)\b/.test(text)
+
+// The last-line verdict a session ends its turn with: "STATUS: done | needs-owner: ... | blocked: ... | handoff: ... | waiting: ...".
+// Same shape ghosty's stall.js reads. Looked for in the last 3 non-empty lines.
+export const STATUS_RE = /^\s*[*_`]*STATUS:[*_`]*\s*(?:done|needs-owner|blocked|handoff|waiting)\b/i
+export const hasStatusLine = (text: unknown): boolean =>
+  typeof text === 'string' && text.split('\n').filter(l => l.trim()).slice(-3).some(l => STATUS_RE.test(l))
+
+export const STATUS_REASON =
+  'End the turn with a final line in this format (one of): `STATUS: done` | `STATUS: needs-owner: <one-line question> [options]` | ' +
+  '`STATUS: blocked: <what>` | `STATUS: handoff: <resource> -> <session> by <HH:MM>` | `STATUS: waiting: deploy <id>`. ' +
+  'Reply with the same closing text plus that line; do not redo any work.'
+
+// Block the stop once for a missing STATUS line. Fail open: only in a tmux session (not headless), never in the
+// manager session, never on the second pass (stop_hook_active), never with background work in flight.
+export function shouldRequireStatus(e: { stop_hook_active?: boolean; last_assistant_message?: string; background_tasks?: unknown[]; agent_id?: string }, session: string | null): boolean {
+  if (e.stop_hook_active || e.agent_id) return false
+  if (!session || /^manager(?:$|[-_])/.test(session)) return false
+  if ((e.background_tasks ?? []).length > 0) return false
+  const text = e.last_assistant_message
+  if (typeof text !== 'string' || !text.trim()) return false
+  return !hasStatusLine(text)
+}
