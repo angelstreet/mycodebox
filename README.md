@@ -305,6 +305,18 @@ and every `~/vpt-*` / `~/ghosty-*` dir with its worktree / clean / merged / live
 `~/.local/state/ghosty/health-watch.json` (created with defaults: `diskPct` 85, `loadPerCore` 1.0 for `loadMinutes` 10,
 `ramAvailPct` 10, `runawayHours` 2, `runawayRssMB` 1024, `runawayCpu` 80, `fixLevel`).
 
+**Daily checks (zero tokens unless something is wrong).** `scripts/daily-checks.js` (no deps, no AI calls) runs once a day at
+07:00 Europe/Zurich from `systemd/ghosty-daily-checks.timer` (install like the health watchdog; `Persistent=true` catches a
+missed run). It is a generic runner: the checks are defined in the private, untracked
+`~/.local/state/ghosty/daily-checks.json` (`debounceHours` 20, `keepDays` 14, `checks[]` of `{id, title, command[], timeoutSec}`).
+A check command prints one JSON line `{summary, report, findings:[{key, title, body, priority}]}` and exits 0; no findings =
+healthy. A check that crashes, times out or prints garbage becomes the finding `daily:check-broken:<id>`. The runner writes
+the full report to `~/.local/state/ghosty/daily-reports/<date>.md` (kept `keepDays`) and appends ONE line per finding to
+`manager-events.jsonl` (kind `daily`, key `daily:<key>`, title <= 80, body <= 300 ending in the report path), debounced per
+key via `daily-checks-state.json` (same text inside the window is not repeated; a key that clears is forgotten). Flags:
+`--dry-run` (report only, no event, no state), `--only <id>`. Keep repository names, term lists and customer names in the
+private config and check scripts, never in this repo.
+
 Fix levels (`fixLevel`, only acted on when the disk check trips): `report` = no fixes; `cleanup` (default) = delete
 `/tmp/claude-1000/<project>/<session-id>/` scratch dirs whose session is not live and older than 2 days, `journalctl
 --user --vacuum-time=7d` (skipped without rights), `npm cache clean --force` when `~/.npm` > 1 GB; `cleanup+orphans`

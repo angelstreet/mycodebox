@@ -1,0 +1,10 @@
+[Unit]
+Description=Ghosty: token-free daily checks (CI/CD results, leak gate; wakes the AI manager only on findings)
+
+[Service]
+Type=oneshot
+User=jndoye
+Environment=HOME=/home/jndoye
+ExecStart=/usr/local/bin/node /home/jndoye/ghosty-sessions/scripts/daily-checks.js
+TimeoutStartSec=45min
+Nice=10
