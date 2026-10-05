@@ -13,7 +13,12 @@ case "$(state)" in "done ok"|"idle ok") ;; *) echo "manager never idle, not rest
 git -C "$HOME/vpt-manager" fetch -q origin && git -C "$HOME/vpt-manager" checkout -q --detach origin/task44-ai-manager || true
 pane=$(tmux display -p -t "=$S:" '#{pane_pid}')
 curl -s -X POST "$BASE/api/send/$S" "${H[@]}" -d '{"keys":"/exit","enter":true}' >/dev/null
-for i in $(seq 1 30); do pgrep -P "$pane" -f claude >/dev/null || break; sleep 1; done
+for i in $(seq 1 30); do
+  pgrep -P "$pane" -f claude >/dev/null || break
+  # /exit with background work (its waits, a scheduled sweep) asks first: option 1 "Exit and stop tasks" is preselected
+  tmux capture-pane -p -t "=$S:" | grep -q "Exit and stop tasks" && tmux send-keys -t "=$S:" Enter
+  sleep 1
+done
 pgrep -P "$pane" -f claude >/dev/null && { echo "claude did not exit"; exit 1; }
 tmux send-keys -t "=$S:" -l "$CMD"; sleep 0.3; tmux send-keys -t "=$S:" Enter
 for i in $(seq 1 30); do sleep 2; tmux capture-pane -p -t "=$S:" | grep -q "remote-control is active" && break; done
