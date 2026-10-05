@@ -640,7 +640,8 @@ function renderDeployBanner() {
   const act = list.filter((x) => x.state in rank).sort((p, q) => rank[p.state] - rank[q.state] || p.created - q.created);
   el.classList.toggle('hidden', !act.length);
   if (!act.length) { el.innerHTML = ''; el.dataset.key = ''; return; }
-  const key = act.map((x) => x.id + x.state).join('|');
+  const blockers = [...new Set(act.filter((x) => x.state !== 'running').flatMap((x) => (x.blocking || []).map((b) => String(b.agent || b.purpose || b.id).replace(/^[^:]*:/, ''))))];
+  const key = act.map((x) => x.id + x.state).join('|') + '#' + blockers.join(',');
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   const running = act.some((x) => x.state === 'running');
@@ -651,7 +652,7 @@ function renderDeployBanner() {
     const tail = x.state === 'running' ? `${since ? `<i data-since="${since}">${fmtDur((Date.now() - since) / 1000)}</i>` : ''}`
       : x.state === 'awaiting-approval' ? '<i>approve?</i>' : '<i>queued</i>';
     return `<button class="dchip ${x.state === 'awaiting-approval' ? 'ask' : x.state}" data-dep-open="${escapeHtml(x.id)}" title="${escapeHtml(`${x.agent || ''}${x.purpose ? ' \u2014 ' + x.purpose : ''}`)}">${x.state === 'running' ? icon('refresh', 13, 'spin') : icon('timer', 13)}${what}${tail ? ` ${tail}` : ''}</button>`;
-  }).join('');
+  }).join('') + (blockers.length ? `<span class="dblk" title="${escapeHtml(blockers.join(', '))}">${icon('lock', 12)}blocked by: <b>${escapeHtml(blockers.join(', '))}</b></span>` : '');
   for (const b of el.querySelectorAll('[data-dep-open]')) b.onclick = () => openPlatforms({ deploy: b.dataset.depOpen });
 }
 

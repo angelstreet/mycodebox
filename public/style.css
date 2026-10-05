@@ -1588,3 +1588,5 @@ body[data-mode="card"] .res-toggle, body[data-mode="card"] .wsel{ display:none; 
 .newsess .nsproj .ucpanel{ position:static; margin-top:6px; box-shadow:none; }
 .newsess .nsproj .uclist{ max-height:min(40dvh, 380px); }
 .title:has(+ .res-toggle){ flex:0 0 auto; }
+.deployban .dblk{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); white-space:nowrap; padding-left:10px; }
+.deployban .dblk b{ color:var(--accent); font-weight:600; }
