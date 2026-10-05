@@ -205,3 +205,9 @@ test('Claude Code feedback survey: real (Recommended) menu above the survey is s
     assert.ok(!new RegExp(`\\b${word}\\b`).test(haystack), `survey word ${word} must not leak into output`);
   }
 });
+
+test('Claude Code feedback survey: quoted header text and "N:" menu lines are not stripped', () => {
+  const plain = claude('Should the detector ignore "How is Claude doing this session? (optional)" in a quote?\n1: Yes (Recommended)\n2: No\n0: Skip');
+  const s = classify(plain);
+  assert.ok(/1: Yes/.test(s.excerpt) && /How is Claude doing/.test(s.excerpt) && /0: Skip/.test(s.excerpt), `nothing may be stripped: ${s.excerpt}`);
+});

@@ -27,7 +27,7 @@ export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
 // doing this session? (optional)" + a line of 0/1/2/3 rating options that may wrap to 1-2
 // extra rows in narrow panes). The session is still working while it renders, so the survey
 // alone must never produce a question, menu or options, and never make a stall.
-const SURVEY_HEADER = /how is claude doing this session\?\s*\(optional\)/i;
+const SURVEY_HEADER = /^\W*how is claude doing this session\?\s*\(optional\)/i;
 // Survey rating token: "N:" (N = 0..3), optionally followed by a rating word (Bad, Fine,
 // Good, Dismiss) or a wrapped fragment (Dis, miss, goo miss, good miss). The word part is
 // optional so glued forms like "3:    0: Dis" still match (the "3:" is left dangling for
