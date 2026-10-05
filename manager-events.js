@@ -96,13 +96,15 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     const cls = classifyKey(event.key);
     if (cls.kind === 'agent-skip') return null;
     if (cls.kind === 'done') return null;
+    // routine deploy start/done (69 % of the feed) are not events: kept only when a lease blocked the deploy; failed/orphan/approve/lease-freed pass.
+    if (cls.kind === 'deploy' && (cls.state === 'start' || cls.state === 'done') && !(Array.isArray(event.blockedBy) && event.blockedBy.length)) return null;
     const sessions = managerSessions() || [];
     if (cls.session && sessions.includes(cls.session)) return null;
 
     const at = event.at || new Date(now()).toISOString();
     const rec = { at, key: event.key, kind: cls.kind };
     if (cls.session) rec.session = cls.session;
-    if (cls.kind === 'deploy') { rec.deployId = cls.deployId; if (cls.state) rec.state = cls.state; }
+    if (cls.kind === 'deploy') { rec.deployId = cls.deployId; if (cls.state) rec.state = cls.state; if (Array.isArray(event.blockedBy) && event.blockedBy.length) rec.blockedBy = event.blockedBy; }
     if (cls.kind === 'quota') rec.quotaKey = cls.quotaKey;
     if (cls.kind === 'disk') rec.diskPath = cls.diskPath;
     if (cls.kind === 'credits') rec.creditsKey = cls.creditsKey;

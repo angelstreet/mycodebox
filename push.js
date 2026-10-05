@@ -139,7 +139,7 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
   const last = new Map();
   const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
 
-  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '' }, debounceMs = defaultDebounceMs) {
+  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '', blockedBy = null }, debounceMs = defaultDebounceMs) {
     const t = now();
     if (t - (last.get(key) || 0) < debounceMs) return false;
     last.set(key, t);
@@ -155,7 +155,7 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
       } catch (e) { log.error('[ntfy]', e.message); }
     }
     if (onFired) {
-      try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority }); }
+      try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority, ...(blockedBy ? { blockedBy } : {}) }); }
       catch (e) { log.error(`[alerts] onFired: ${e.message}`); }
     }
     return true;

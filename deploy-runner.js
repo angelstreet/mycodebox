@@ -158,6 +158,7 @@ export function createDeployRunner({
   const running = new Map();          // env -> deploy id this process is running
   const seenAwaiting = new Set();
   let liveLeases = null;                // leases of the last good poll (`deploy list --json` carries them)
+  const everBlocked = new Set();        // deploy ids that were ever held back by a lease: their start/done are worth a manager event
   const blockedBy = new Map();          // deploy id -> Map(lease id -> {env, resources[], agent}) that blocked its start
   const handledOrphans = new Set();   // ids already finished as orphaned (alert once per id)
   let first = true, ticking = false, timer = null, lastJson = '';
@@ -269,7 +270,7 @@ export function createDeployRunner({
     let merged = deploys.filter((x) => mergeable(d, x));
     if (adopt) onLine(`# runner restarted: re-adopted running deploy (wrapper pid ${adopt.pid})`);
     else onLine(`# deploy ${d.id} ${d.env} scope=${d.scope} ref=${d.ref}${d.hosts?.length ? ` hosts=${d.hosts.join(',')}` : ''} requested by ${d.agent}${merged.length ? ` (+${merged.length} merged)` : ''}`);
-    if (!adopt) alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
+    if (!adopt) alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1', blockedBy: everBlocked.has(d.id) ? ['lease'] : null }, 0);
     let status = 'failed', rc = null, timedOut = false;
     try {
       const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
@@ -309,8 +310,9 @@ export function createDeployRunner({
     alert(`deploy:${d.id}:${status}`, {
       title: `deploy ${d.env} ${d.scope} ${status}${version ? ` (${version})` : ''}${skipped.length ? `, ${skipped.length} host(s) skipped` : ''}`,
       body: status === 'done' ? `${d.ref} for ${d.agent}; waiters released${skipped.length ? `; skipped (leased): ${skipped.join(',')}` : ''}` : lines.slice(-4).join('\n'),
-      priority: status === 'done' ? 'default' : 'high', ntfyTags: status === 'done' ? 'white_check_mark' : 'x', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1',
+      priority: status === 'done' ? 'default' : 'high', ntfyTags: status === 'done' ? 'white_check_mark' : 'x', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1', blockedBy: everBlocked.has(d.id) ? ['lease'] : null,
     }, 0);
+    everBlocked.delete(d.id);
     await tick();      // next queued one, without waiting for the poll
   }
 
@@ -362,7 +364,7 @@ export function createDeployRunner({
               const r = await reg(['deploy', 'start', d.id, ...(skipsLeased(d) ? ['--skip-leased'] : [])]);
               if (r.code === 3) {
                 const b = blockersOf(d);
-                if (b.size) { const m = blockedBy.get(d.id) || new Map(); for (const [k, v] of b) if (!m.has(k)) m.set(k, v); blockedBy.set(d.id, m); }
+                if (b.size) { everBlocked.add(d.id); const m = blockedBy.get(d.id) || new Map(); for (const [k, v] of b) if (!m.has(k)) m.set(k, v); blockedBy.set(d.id, m); }
                 continue;
               }                 // resources busy: try a narrower request behind it
               if (r.code !== 0) { log.error?.(`[deploy] start ${d.id}: ${r.stderr}`); continue; }

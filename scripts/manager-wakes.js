@@ -17,7 +17,7 @@ const label = arg('--label', null);
 const stateDir = stateDirDefault();
 const { wakes, transcripts } = await computeWakes({ stateDir, claudeDir: claudeDirDefault(), day, labels: label ? [label] : null });
 const summary = summarizeWakes(wakes);
-const file = await writeWakesFile(stateDir, wakes);
+const file = await writeWakesFile(stateDir, wakes, day);
 
 if (process.argv.includes('--json')) console.log(JSON.stringify({ day, transcripts, summary, wakes }, null, 2));
 else {

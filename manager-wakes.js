@@ -242,12 +242,35 @@ export async function computeWakes({ stateDir = stateDirDefault(), claudeDir = c
 }
 
 // Rewrite <stateDir>/manager-wakes.jsonl with the given day's wakes (idempotent: same input, same file).
-export async function writeWakesFile(stateDir, wakes) {
+// With `day`, only that day's rows are replaced and every other day's rows stay (so a periodic logger can refresh "today"
+// without losing history). Without it the file is replaced whole.
+export async function writeWakesFile(stateDir, wakes, day = null) {
   await mkdir(stateDir, { recursive: true });
   const f = join(stateDir, WAKES_FILE), tmp = `${f}.tmp`;
-  await writeFile(tmp, wakes.map((w) => JSON.stringify(w)).join('\n') + (wakes.length ? '\n' : ''));
+  let keep = [];
+  if (day) {
+    try { keep = (await readFile(f, 'utf8')).split('\n').filter(Boolean).filter((l) => { try { return dayOf(JSON.parse(l).start) !== day; } catch { return false; } }); } catch { /* no file yet */ }
+  }
+  const rows = keep.concat(wakes.map((w) => JSON.stringify(w)));
+  await writeFile(tmp, rows.join('\n') + (rows.length ? '\n' : ''));
   await rename(tmp, f);
   return f;
+}
+
+// Why manager-wakes.jsonl went silent on 2026-10-04: only scripts/manager-wakes.js ever wrote it, and nothing ran that script
+// (the HTTP view computed wakes but never persisted them). The server now calls this on a timer: refresh today's rows.
+export function startWakesLogger({ stateDir, claudeDir, intervalMs = 10 * 60 * 1000, now = Date.now, log = console } = {}) {
+  const run = async () => {
+    const day = new Date(now()).toISOString().slice(0, 10);
+    try {
+      const { wakes } = await computeWakes({ stateDir, claudeDir, day });
+      await writeWakesFile(stateDir, wakes, day);
+    } catch (e) { log.error?.('[manager-wakes] log', e.message); }
+  };
+  run();
+  const t = setInterval(run, intervalMs);
+  t.unref?.();
+  return { run, stop: () => clearInterval(t) };
 }
 
 // Cached on-demand view for the HTTP route: { day, summary, wakes, transcripts }.
