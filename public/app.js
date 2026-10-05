@@ -762,6 +762,14 @@ async function fetchInitial() {
   fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
 }
 
+// VPT take-control locks (read-only; the server caches 15 s). A failure is { ok: false } = "VPT lock: unknown", never an error on the page.
+async function fetchVptLocks() {
+  try {
+    const r = await fetch('/api/vpt-locks');
+    state.vptLocks = r.ok ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+  } catch (err) { state.vptLocks = { ok: false, error: err.message }; }
+  if (state.platSheet) state.platSheet();
+}
 async function fetchLeases() {
   try {
     const r = await fetch('/api/leases');
@@ -2254,7 +2262,7 @@ function platformsData() {
   const l = state.leases;
   const d0 = state.deploys;
   const hostname = l?.hostname || '';
-  return { l, d0, view: l && !l.error ? platformsBlocks({ leases: l.leases || [], deploys: d0?.deploys || [], deployed: d0?.deployed || {}, sessionNames: state.sessions.map((s) => s.name), machines: machinesOf(hostname), nowMs: Date.now() }) : [] };
+  return { l, d0, view: l && !l.error ? platformsBlocks({ leases: l.leases || [], deploys: d0?.deploys || [], deployed: d0?.deployed || {}, sessionNames: state.sessions.map((s) => s.name), machines: machinesOf(hostname), nowMs: Date.now(), vptLocks: state.vptLocks }) : [] };
 }
 const whoHtml = (w) => (w.gone ? '<span class="pf-gone" title="no live tmux session has this name">&#9888; session gone</span>'
   : w.session ? `<button class="pf-sess" data-open="${escapeHtml(w.session)}">${escapeHtml(w.text)}</button>` : escapeHtml(w.text));
@@ -2272,13 +2280,14 @@ function platformBlockHtml(e) {
   const deploying = e.deploying ? `<div class="pf-run" data-depid="${e.deploying.id}"><div>deploying &middot; ${escapeHtml(e.deploying.scope)} &middot; ${escapeHtml(e.deploying.ref)} &middot; ${whoHtml(e.deploying.who)}${e.deploying.startedAgo ? ` &middot; started ${escapeHtml(e.deploying.startedAgo)}` : ''}</div>
     <pre class="dlog" data-log="${e.deploying.id}">…</pre></div>` : '';
   const inUse = e.inUse.length ? `<div class="pf-sub">IN USE</div>${e.inUse.map((r) => `
-    <div class="pf-row${r.blocks ? ' blk' : ''}" data-res="${escapeHtml(e.env + '|' + r.resource)}"><span class="pf-r">${escapeHtml(r.label)}</span><span class="pf-w">${whoHtml(r.who)} &middot; ${escapeHtml(r.kindLabel)}</span><span class="pf-l">${escapeHtml(r.left)}</span></div>`).join('')}` : '';
+    <div class="pf-row${r.blocks ? ' blk' : ''}" data-res="${escapeHtml(e.env + '|' + r.resource)}"><span class="pf-r">${escapeHtml(r.label)}</span><span class="pf-w">${whoHtml(r.who)} &middot; ${escapeHtml(r.kindLabel)}</span><span class="pf-l">${escapeHtml(r.left)}</span>${r.vptLock ? `<span class="pf-vl${r.vptLock.endsWith('unknown') ? ' unk' : ''}">${escapeHtml(r.vptLock)}</span>` : ''}</div>`).join('')}` : '';
+  const vptOther = e.vptOther?.length || e.vptUnknown ? `<div class="pf-sub">VPT TAKE-CONTROL LOCKS</div>${e.vptUnknown ? '<div class="pf-row"><span class="pf-r">VPT lock: unknown</span></div>' : ''}${(e.vptOther || []).map((x) => `<div class="pf-row"><span class="pf-r">${escapeHtml(x.resource)}</span><span class="pf-w">${escapeHtml(x.text)}</span></div>`).join('')}` : '';
   const live = `<div class="pf-sub">LIVE</div>${e.live.length ? e.live.map((r) => `
     <div class="pf-row${r.failed ? ' bad' : ''}"><span class="pf-r">${escapeHtml(r.target)}</span><span class="pf-w">${r.deployed ? escapeHtml(r.version || '?') : 'never deployed'}${r.ago ? ` &middot; ${escapeHtml(r.ago)}` : ''}</span><span class="pf-l">${r.failed ? `${icon('x', 11)} ${escapeHtml(r.reason || 'last deploy failed')}` : icon('check', 11)}</span></div>`).join('') : '<div class="dim pf-none">nothing recorded yet</div>'}`;
   const hist = e.history.length ? `<button class="pf-more" data-pf-toggle="${escapeHtml(key('h'))}"><span class="uch${platOpen.has(key('h')) ? ' on' : ''}"></span>History (${e.history.length})</button>${platOpen.has(key('h')) ? e.history.map((h) => `
     <div class="pf-hist${h.ok ? '' : ' bad'}">${escapeHtml(h.ago)} &middot; ${h.ok ? '&#10003;' : h.state === 'failed' ? '&#10007;' : escapeHtml(h.state)} &middot; ${escapeHtml(h.scope)} &middot; ${escapeHtml(h.ref)} &middot; ${whoHtml(h.who)}</div>`).join('') : ''}` : '';
   return `<section class="pf-env" data-env="${escapeHtml(e.env)}">
-    <div class="pf-h"><span class="pf-name">${escapeHtml(e.env)}</span>${pill}</div>${deploying}${next}${inUse}${live}${hist}</section>`;
+    <div class="pf-h"><span class="pf-name">${escapeHtml(e.env)}</span>${pill}</div>${deploying}${next}${inUse}${vptOther}${live}${hist}</section>`;
 }
 function platformsHtml() {
   const { l, d0, view } = platformsData();
@@ -2307,7 +2316,9 @@ function openPlatforms(focus) {
     state.platSheet = draw;
     draw();
     fetchLeases();
-    const timer = setInterval(() => { if (!body.isConnected) { clearInterval(timer); if (state.platSheet === draw) state.platSheet = null; } else pollLogs(); }, 3000);
+    fetchVptLocks();
+    let lockTick = 0;
+    const timer = setInterval(() => { if (!body.isConnected) { clearInterval(timer); if (state.platSheet === draw) state.platSheet = null; } else { pollLogs(); if (++lockTick % 5 === 0) fetchVptLocks(); } }, 3000);
     body.onclick = async (e) => {
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); return; }
