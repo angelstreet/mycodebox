@@ -27,7 +27,8 @@
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
-//   GET  /api/manager/actions?since=<ISO>&limit=100 → tail of manager-actions.jsonl (newest last), the manager agent's own log of wakes/decisions (read-only)
+//   GET  /api/manager/actions?since=<ISO>&limit=100 → { actions, regrets } tail of manager-actions.jsonl (newest last) + the `at|session` keys the owner marked wrong
+//   POST /api/manager/regret → {at, session, decision?, undo?} one-tap "wrong" on a manager action; appends to manager-regret.jsonl (regret.js)
 //   GET  /api/manager/scorecard?days=7 → { today, days:[...] } performance + cost + Jev integration for the window
 //                                       (cached 60 s; manager sessions, subagents, workers, Jev, reviewer, judge; see scorecard.js)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
@@ -77,6 +78,7 @@ import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
+import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret.js';
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 
@@ -1384,7 +1386,13 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && p === '/api/manager/actions') {   // the manager agent's own action log (manager-actions.jsonl), newest last, read-only
     const q = url.searchParams;
-    return json(res, 200, { actions: await readActions({ stateDir: STATE_DIR, since: q.get('since') || null, limit: q.get('limit') }) });
+    return json(res, 200, { actions: await readActions({ stateDir: STATE_DIR, since: q.get('since') || null, limit: q.get('limit') }), regrets: effectiveRegrets(await readRegrets({ stateDir: STATE_DIR })).map((r) => regretKey(r.at, r.session)) });
+  }
+  if (req.method === 'POST' && p === '/api/manager/regret') {   // {at, session, decision?, undo?}: the owner's one-tap "wrong" on a manager action (G8 ground truth)
+    try {
+      const b = await readJsonBody(req);
+      return json(res, 200, { ok: true, label: await appendRegret({ stateDir: STATE_DIR, at: b?.at, session: b?.session, decision: b?.decision, undo: b?.undo === true }) });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager/wakes') {   // per-wake log built from the manager's Claude transcript (60 s cache)
     try { return json(res, 200, await wakesView(url.searchParams.get('day') || '')); } catch (e) { return json(res, 500, { error: String(e.message || e) }); }

@@ -43,6 +43,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { effectiveLabels, outcomeFromReplyKind } from './decisions.js';
 import { OWNER_THRESHOLD } from './router-shadow.js';
+import { computeShare, summarizeShare } from './scripts/decision-share.js';
 
 const DAY_MS = 86400000;
 const AMBIGUOUS_CASES = new Set(['owner_decision', 'continue', 'menu_recommended']);
@@ -155,7 +156,7 @@ export function resolveConfig(cfg) {
 //   claudeRateLimits : { used_percentage, resets_at } from claude-rate-limits.json seven_day window, or null
 //   now              : ms epoch used for the plan-week and pro-rated efficiency; defaults to Date.now()
 // Returns the scorecard object.
-export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, from, to, deployList = null, claudeRateLimits = null, now = Date.now() } = {}) {
+export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, from, to, deployList = null, claudeRateLimits = null, now = Date.now(), actionRecs = [], regretRecs = [] } = {}) {
   const { scoreWeights, planBudget, managerSessions } = resolveConfig({ config });
   const cost = {
     session: emptyBucket(),
@@ -431,9 +432,17 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
       overridden: jevOverridden,
     },
     budget,
+    // G8 (autonomy >= 80 %, regret <= 5 %): same numbers as scripts/decision-share.js, for this window. regretPct = owner
+    // "wrong" taps only; guessPct = the old pause / "no, stop" heuristic, a separate number. Null without a window.
+    g8: from != null && to != null ? g8Section({ stallRecs, actionRecs, regretRecs, from, to, managerSessions }) : null,
     router: routerSection({ stallRecs, from, to }),
     wakeShadow: wakeShadowSection({ eventRecs, stallRecs, from, to }),
   };
+}
+
+export function g8Section({ stallRecs, actionRecs = [], regretRecs = [], from, to, managerSessions = [] }) {
+  const days = Math.max(1, Math.round((to - from) / DAY_MS));
+  return summarizeShare(computeShare(stallRecs, actionRecs, { days, now: to, until: to, managerSessions, regretLabels: regretRecs }));
 }
 
 // ---------------------------------------------------------------------------
@@ -552,7 +561,7 @@ export function wakeShadowSection({ eventRecs = [], stallRecs = [], from, to } =
 }
 
 // Build one scorecard per UTC day in the window [now-days*DAY_MS, now], oldest first.
-export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, days = 7, now = Date.now(), deployList = null, claudeRateLimits = null } = {}) {
+export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [], runs = [], config = {}, days = 7, now = Date.now(), deployList = null, claudeRateLimits = null, actionRecs = [], regretRecs = [] } = {}) {
   const out = [];
   for (let i = days - 1; i >= 0; i--) {
     const to = Math.floor((now - i * DAY_MS) / DAY_MS) * DAY_MS + DAY_MS * (i === 0 ? 1 : 1);   // end of that UTC day
@@ -560,7 +569,7 @@ export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [],
     const day = Math.floor((now - i * DAY_MS) / DAY_MS);
     const from = day * DAY_MS;
     const end = from + DAY_MS;
-    out.push(buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to: end, deployList, claudeRateLimits, now }));
+    out.push(buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to: end, deployList, claudeRateLimits, now, actionRecs, regretRecs }));
   }
   return out;
 }
@@ -630,35 +639,39 @@ export function foldRuns(lines) {
 // Build the scorecard for one UTC day boundary [from, to). All I/O.
 export async function loadScorecard({ from, to, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
-  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits] = await Promise.all([
+  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits, actionRecs, regretRecs] = await Promise.all([
     readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
     readClaudeRateLimits(dir, fsLib),
+    readJsonl(join(dir, 'manager-actions.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-regret.jsonl'), { silent: true }).catch(() => []),
   ]);
   const eventRecs = [...eventsOld, ...eventsNow];
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);
-  return buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to, deployList, claudeRateLimits });
+  return buildScorecard({ ledgerRows, stallRecs, eventRecs, runs, config, from, to, deployList, claudeRateLimits, actionRecs, regretRecs });
 }
 
 // days=1..30. Returns { today, days: [oldest..today] } for the UI.
 export async function loadScorecardDays({ days = 7, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
-  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits] = await Promise.all([
+  const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits, actionRecs, regretRecs] = await Promise.all([
     readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
     readClaudeRateLimits(dir, fsLib),
+    readJsonl(join(dir, 'manager-actions.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'manager-regret.jsonl'), { silent: true }).catch(() => []),
   ]);
   const eventRecs = [...eventsOld, ...eventsNow];
   const runs = foldRuns(runsLines);
   const config = await readConfig(env, fsLib);
-  const all = scorecardDays({ ledgerRows, stallRecs, eventRecs, runs, config, days, now: Date.now(), deployList, claudeRateLimits });
+  const all = scorecardDays({ ledgerRows, stallRecs, eventRecs, runs, config, days, now: Date.now(), deployList, claudeRateLimits, actionRecs, regretRecs });
   return { today: all[all.length - 1], days: all };
 }
 

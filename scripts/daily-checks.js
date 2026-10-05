@@ -28,6 +28,15 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { loadShare, summarizeShare } from './decision-share.js';
+
+// Pure: the G8 section of the daily report (autonomy >= 80 %, regret <= 5 %) from summarizeShare() results.
+export function g8Lines(today, week) {
+  const f = (n) => (n == null ? 'n/a' : `${n} %`);
+  const row = (label, g) => `- ${label}: autonomy ${f(g.autonomyPct)} (${g.autonomous} of ${g.decisions} stops), regret ${f(g.regretPct)} (${g.regretLabelled} owner "wrong" taps), regret guess ${f(g.guessPct)} (pause / "no, stop" heuristic, ${g.regretGuess})`;
+  return ['## Decision share (G8: autonomy >= 80 %, regret <= 5 %)', '', row('today (24 h)', today), row('last 7 days', week), '',
+    week.regretLabelled === 0 ? 'No regret labels yet: regret reads 0 until the owner taps "wrong" on a manager action in the manager panel.' : '', ''];
+}
 
 export const DEFAULT_CONFIG = { debounceHours: 20, keepDays: 14, checks: [] };
 
@@ -101,6 +110,9 @@ export async function run({ home = homedir(), now = Date.now(), argv = process.a
     if (r.findings.length) R.push('Findings:', ...r.findings.map((f) => `- \`${f.key}\` [${f.priority}] ${f.title}: ${f.body}`), '');
     if (r.report) R.push(r.report.trim(), '');
   }
+
+  try { R.push(...g8Lines(summarizeShare(loadShare({ stateDir, days: 1, now })), summarizeShare(loadShare({ stateDir, days: 7, now })))); }
+  catch (e) { R.push('## Decision share (G8)', '', `could not be computed: ${e.message}`, ''); }
 
   const state = loadState(statePath);
   const seen = new Set();

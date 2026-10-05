@@ -117,7 +117,7 @@ test('owner-relayed sends (by owner-via-*) are owner words: not autonomous, and 
     { type: 'answer', id: 'a', session: 'feat', at: t('10:01', 1), source: 'ai' },
     { type: 'send', session: 'feat', by: 'owner-via-task44', text: 'undo that', at: t('10:10', 1) },
   ]), [], { days: 7 });
-  assert.equal(r.decisions[0].regret?.via, 'send');
+  assert.equal(r.decisions[0].regretHeuristic?.via, 'send');
 });
 
 test('outcome via manager (auto-sent) is autonomous; via terminal is owner-handled', () => {
@@ -147,7 +147,7 @@ test('owner-confirmed AI proposal: choice with agreeAi true, matched by id', () 
   const d = share.decisions[0];
   assert.equal(d.outcome, 'owner-confirmed');
   assert.equal(d.via, 'choice');
-  assert.equal(d.regret, null);   // owner-confirmed is not autonomous, so no regret test applies
+  assert.equal(d.regretHeuristic, null);   // owner-confirmed is not autonomous, so no regret test applies
 });
 
 test('owner-confirmed AI proposal: choice matched by session-in-window when ids differ', () => {
@@ -174,7 +174,7 @@ test('owner-handled: stall with no autonomous path and no choice', () => {
   ];
   const share = computeShare(records, [], { days: 7, managerSessions: [] });
   assert.equal(share.decisions[0].outcome, 'owner-handled');
-  assert.equal(share.decisions[0].regret, null);
+  assert.equal(share.decisions[0].regretHeuristic, null);
 });
 
 test('regret: autonomous decision followed by owner pause within 30 min', () => {
@@ -186,8 +186,9 @@ test('regret: autonomous decision followed by owner pause within 30 min', () => 
   const share = computeShare(records, [], { days: 7, managerSessions: [] });
   const d = share.decisions[0];
   assert.equal(d.outcome, 'autonomous');
-  assert.ok(d.regret, 'should be flagged as a regret');
-  assert.equal(d.regret.via, 'pause');
+  assert.ok(d.regretHeuristic, 'should be flagged as a regret guess');
+  assert.equal(d.regretHeuristic.via, 'pause');
+  assert.equal(d.regret, null, 'no owner label: the measured regret stays empty');
 });
 
 test('regret: autonomous decision followed by owner send starting with stop/no/wait/don\'t/undo/revert within 30 min', () => {
@@ -211,10 +212,10 @@ test('regret: autonomous decision followed by owner send starting with stop/no/w
     const d = share.decisions[0];
     assert.equal(d.outcome, 'autonomous', `expected autonomous for "${c.text}"`);
     if (c.want) {
-      assert.ok(d.regret, `expected regret for "${c.text}"`);
-      assert.equal(d.regret.via, 'send');
+      assert.ok(d.regretHeuristic, `expected regret for "${c.text}"`);
+      assert.equal(d.regretHeuristic.via, 'send');
     } else {
-      assert.equal(d.regret, null, `expected no regret for "${c.text}"`);
+      assert.equal(d.regretHeuristic, null, `expected no regret for "${c.text}"`);
     }
   }
 });
@@ -227,7 +228,7 @@ test('regret: owner push-back outside the 30 min window does not count', () => {
   ];
   const share = computeShare(records, [], { days: 7, managerSessions: [] });
   assert.equal(share.decisions[0].outcome, 'autonomous');
-  assert.equal(share.decisions[0].regret, null);
+  assert.equal(share.decisions[0].regretHeuristic, null);
 });
 
 test('day bucketing: decisions group by UTC day', () => {
@@ -291,7 +292,7 @@ test('end-to-end: mixed fixture yields the expected rollup', () => {
   assert.equal(roll.total.autonomous, 2);     // g1 + g2
   assert.equal(roll.total.owner_confirmed, 1); // g3
   assert.equal(roll.total.owner_handled, 1);   // g4
-  assert.equal(roll.total.regret, 1);          // only g1 had a pause within 30 min
+  assert.equal(roll.total.regret_heuristic, 1);          // only g1 had a pause within 30 min
 });
 
 // CLI smoke test: write synthetic stalls into a temp state dir, invoke the script, parse its JSON output.

@@ -131,6 +131,22 @@ export function dayBars(summary, days = 14, now = Date.now()) {
 // (tokens only — the MiniMax week is unlimited). The "Claude plan" line is the manager's share of the Claude Max
 // weekly quota, with today's slice and the budget from manager.json.
 // helpers: { fmtTok, fmtUsd, costOrNull }  (passed in to avoid duplicating here; fmtUsd unused — kept for callers)
+// G8 row: autonomy and regret over the days shown (counts summed, not percentages averaged). Pure, exported for tests.
+// Targets: autonomy >= 80 %, regret <= 5 %. `regret` = owner "wrong" taps; `guess` = the old pause / "no, stop" heuristic.
+export function g8Summary(days) {
+  const t = { decisions: 0, autonomous: 0, regretLabelled: 0, regretGuess: 0 };
+  let seen = false;
+  for (const d of Array.isArray(days) ? days : []) {
+    const g = d && d.g8;
+    if (!g) continue;
+    seen = true;
+    for (const k of Object.keys(t)) t[k] += Number(g[k]) || 0;
+  }
+  if (!seen) return null;
+  const p = (a, b) => (b ? Math.round((1000 * a) / b) / 10 : null);
+  return { ...t, autonomyPct: p(t.autonomous, t.decisions), regretPct: p(t.regretLabelled, t.autonomous), guessPct: p(t.regretGuess, t.autonomous) };
+}
+
 export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull } = {}) {
   if (!score) return '';
   const tok = fmtTok || ((n) => `${Math.round(n || 0)}`);
@@ -167,6 +183,8 @@ export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull } = {
     <div class="urow"><div class="u1"><b>Total today</b><span class="grow"></span><b class="tk">${totalTok(score.cost.total)}</b></div>${bucket(score.cost.total)}</div>
     <div class="urow"><div class="u2" style="white-space:normal;color:var(--fg,inherit)"><b>${planLine}</b></div></div>
     <div class="urow jev"><div class="u1"><b>Jev</b><span class="grow"></span><b class="tk">${pct(consulted.share)} consulted</b></div><div class="u2">consulted ${consulted.count || 0} of ${perf.stops || 0} stops${consulted.ambiguousShare != null ? ` · ${pct(consulted.ambiguousShare)} of ambiguous` : ''} · errors ${pct(jev.errorRate)} · agreement ${pct(jev.agreement)} · p50 ${jev.p50ms != null ? jev.p50ms + 'ms' : '—'}${Number.isFinite(jev.overridden) && jev.overridden ? ` · ${jev.overridden} overridden by forbidden` : ''}</div></div>
+    ${(() => { const g = g8Summary(days); if (!g) return ''; const f = (n) => (n == null ? '—' : `${n} %`);
+      return `<div class="urow g8"><div class="u1"><b>Autonomy</b><span class="grow"></span><b class="tk">${f(g.autonomyPct)}</b></div><div class="u2">${g.autonomous} of ${g.decisions} stops handled without you (target &ge; 80 %) &middot; regret ${f(g.regretPct)} (${g.regretLabelled} marked wrong, target &le; 5 %) &middot; guess ${f(g.guessPct)} (pause / &ldquo;no, stop&rdquo; heuristic)</div></div>`; })()}
     <div class="urow"><div class="u1"><b>Performance</b><span class="grow"></span><b class="tk">${perf.stops || 0} stops</b></div><div class="u2">${perf.stops ? `${perf.resolved || 0} resolved (${pct(perf.resolvedFast != null && perf.stops ? perf.resolvedFast / perf.stops : null)} &le;5min) · ${perf.auto || 0} auto · ${perf.escalated || 0} escalated · median ${perf.medianTtrSec != null ? perf.medianTtrSec + 's' : '—'} · p90 ${perf.p90TtrSec != null ? perf.p90TtrSec + 's' : '—'}${perf.judgeMean != null ? ` · judge mean ${(perf.judgeMean).toFixed(2)}` : ''}${perf.agreement != null ? ` · agreement ${pct(perf.agreement)}` : ''}` : 'no stops today'}</div></div>
   </div></div>`;
 }
