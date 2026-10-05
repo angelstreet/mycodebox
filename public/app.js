@@ -221,6 +221,9 @@ function stateText(name) {
     return from ? `working ${fmtDur((now - from) / 1000)}` : 'working';
   }
   const idleFor = (st.lastActivitySec ?? 0) + drift;
+  // Claude: time since its last real turn end / prompt (Claude's own stamp or the reporter), not since a tmux client touched it.
+  const actFor = st.lastActivity ? Math.max(0, (now - st.lastActivity) / 1000) : idleFor;
+  if (s === 'idle' && st.lastActivity) return `idle ${fmtDur(actFor)}`;
   if (s === 'done') return `done ${fmtShort(st.doneAt ? (now - st.doneAt) / 1000 : idleFor)}`;
   if (s === 'waiting') return `needs you ${fmtDur(idleFor)}`;
   if (s === 'idle')    return `idle ${fmtDur(idleFor)}`;
@@ -762,6 +765,49 @@ async function fetchInitial() {
   fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
 }
 
+// ----- session cap + parked sessions -----
+async function fetchParking() {
+  try {
+    const r = await fetch('/api/parking');
+    state.parking = r.ok ? await r.json() : null;
+  } catch { state.parking = null; }
+  renderParking();
+}
+function renderParking() {
+  const box = document.getElementById('parkBox');
+  if (!box) return;
+  const pk = state.parking;
+  if (!pk || (!pk.parked.length && !pk.over)) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const idleText = (m) => (m == null ? '?' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
+  let h = '';
+  if (pk.over) h += `<div class="cap">${pk.live} live Claude sessions, cap ${pk.cap}. Idle longest: ${pk.candidates.map((c) => `${escapeHtml(c.name)} (${idleText(c.idleMin)})`).join(', ')}</div>`;
+  if (pk.parked.length) {
+    h += `<div class="ph">Parked (${pk.parked.length}) · ${pk.ramSavedMb} MB saved</div>`;
+    for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
+  }
+  box.innerHTML = h;
+  box.classList.remove('hidden');
+  box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
+}
+async function parkSession(name) {
+  toast(`parking ${name}…`, 4000);
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/park`, { method: 'POST' });
+    const j = await r.json();
+    toast(r.ok ? `${name} parked` : (j.error || `park failed: HTTP ${r.status}`), r.ok ? 1800 : 6000);
+  } catch (err) { toast(`park failed: ${err.message}`); }
+  fetchParking();
+}
+async function resumeParked(name, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/resume`, { method: 'POST' });
+    const j = await r.json();
+    toast(r.ok ? `${name} resumed` : (j.error || `resume failed: HTTP ${r.status}`), r.ok ? 1800 : 6000);
+  } catch (err) { toast(`resume failed: ${err.message}`); }
+  fetchParking();
+}
+
 // VPT take-control locks (read-only; the server caches 15 s). A failure is { ok: false } = "VPT lock: unknown", never an error on the page.
 async function fetchVptLocks() {
   try {
@@ -1236,6 +1282,7 @@ function buildSideRow(s) {
     </div>
     <button class="edit pin" aria-label="Pin" title="Pin to the top">${icon('pin', 15)}</button>
     <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
+    <button class="edit park" aria-label="Park session" title="Park: save the conversation, free its RAM (Resume brings it back)">${icon('archive', 15)}</button>
     <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button>`;
   li.querySelector('.meta').onclick = (e) => {
     e.stopPropagation();
@@ -1251,7 +1298,8 @@ function buildSideRow(s) {
     L.pins = L.pins.includes(s.name) ? L.pins.filter((n) => n !== s.name) : [...L.pins, s.name];
     saveLayout(); sortSessions(); renderTabStrip(); if (state.mode === 'grid') renderGrid(); syncAll();
   };
-  li.querySelector('.edit:not(.kill):not(.pin)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
+  li.querySelector('.park').onclick = (e) => { e.stopPropagation(); parkSession(s.name); };
+  li.querySelector('.edit:not(.kill):not(.pin):not(.park)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
   return li;
 }
@@ -1272,6 +1320,7 @@ function syncSide() {
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
     li.querySelector('.sst').textContent = stateText(n);
+    li.querySelector('.park').hidden = (state.status[n] || {}).agent !== 'claude';
     const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
     syncPill(li.querySelector('.pp'), n);
@@ -3883,4 +3932,5 @@ if ('serviceWorker' in navigator) {
   wireCardSwipe();
   setInterval(tickClock, 1000);
   setInterval(fetchLeases, 60000);
+  fetchParking(); setInterval(fetchParking, 20000);
 })();
