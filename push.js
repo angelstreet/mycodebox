@@ -131,19 +131,79 @@ export function createPush({ stateDir, fetchImpl = fetch, log = console } = {}) 
   return { publicKey: keys.publicKey, keys, subscribe, unsubscribe, notify, record, feedSince, count: () => subs.length, subs: () => subs.slice() };
 }
 
-// --- alert(): one call -> Web Push + (optional) ntfy, with per-key debounce -----
+// --- two-tier escalation (TASK-58 C7, MANAGER.md section 6) -----------------------
+// interrupt tier: pushed at once (still debounced per key). digest tier: collected, ONE push per
+// digestMs while the owner is awake, nothing in quiet hours (held for the first digest after they end).
 
-// Optional onFired(event) is called once per actually-fired alert (debounced calls do not call it).
-// `event` = { at, key, title, body (≤300 chars), url, priority }. No other behaviour changes.
-export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh', publicUrl = '', fetchImpl = fetch, now = Date.now, defaultDebounceMs = 60000, log = console, onFired = null } = {}) {
+export const TIER_DEFAULTS = { digestMinutes: 30, awakeFrom: '07:00', awakeTo: '23:00', timezone: 'Europe/Zurich', interruptPct: 95 };
+
+// Pure. cfg = TIER_DEFAULTS merged with manager.json keys pushDigestMinutes/pushAwakeFrom/pushAwakeTo/pushTimezone/pushInterruptPct.
+export function tierConfig(j = {}) {
+  const c = { ...TIER_DEFAULTS };
+  if (Number(j.pushDigestMinutes) > 0) c.digestMinutes = Number(j.pushDigestMinutes);
+  if (/^\d{1,2}:\d{2}$/.test(j.pushAwakeFrom || '')) c.awakeFrom = j.pushAwakeFrom;
+  if (/^\d{1,2}:\d{2}$/.test(j.pushAwakeTo || '')) c.awakeTo = j.pushAwakeTo;
+  if (typeof j.pushTimezone === 'string' && j.pushTimezone) c.timezone = j.pushTimezone;
+  if (Number(j.pushInterruptPct) > 0) c.interruptPct = Number(j.pushInterruptPct);
+  return c;
+}
+
+const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+
+// Pure. Minutes since midnight in cfg.timezone at epoch ms `t`.
+export function localMinutes(t, timezone) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t));
+  const g = (type) => Number(parts.find((p) => p.type === type).value);
+  return g('hour') * 60 + g('minute');
+}
+
+// Pure. True while the owner is asleep: outside [awakeFrom, awakeTo).
+export function isQuietHours(t, cfg = TIER_DEFAULTS) {
+  const m = localMinutes(t, cfg.timezone);
+  const from = toMin(cfg.awakeFrom), to = toMin(cfg.awakeTo);
+  return from <= to ? !(m >= from && m < to) : !(m >= from || m < to);
+}
+
+const P0_RE = /\bP0\b|\bblocked\b|credential|secret|api[ _-]?key|password|customer/i;
+
+// Pure. 'interrupt' | 'digest' for an alert. An explicit opts.tier wins; otherwise by key:
+// disk:* and deploy failed/approve are interrupts, a stop that names P0 / blocked / credentials / customer is,
+// urgent priority is, everything else (done, holds, plain asks, quota < interruptPct, credits) is digest.
+export function defaultTier(key, opts = {}, cfg = TIER_DEFAULTS) {
+  if (opts.tier === 'interrupt' || opts.tier === 'digest') return opts.tier;
+  if (opts.priority === 'urgent') return 'interrupt';
+  const head = String(key).split(':')[0];
+  if (head === 'disk') return 'interrupt';
+  if (head === 'deploy') return /^(failed|orphan|approve)/.test(String(key).split(':')[2] || '') ? 'interrupt' : 'digest';
+  if (head === 'quota') return Number(opts.pct) >= cfg.interruptPct ? 'interrupt' : 'digest';
+  if (/^(asks|waiting)$/.test(String(key).slice(head.length + 1))) return P0_RE.test(`${opts.title || ''}\n${opts.body || ''}`) ? 'interrupt' : 'digest';
+  return 'digest';
+}
+
+// Pure. One digest line: `session · case · question · proposed answer`.
+export function digestLine(item) {
+  const first = (s) => String(s || '').split('\n')[0].trim();
+  const session = item.session || String(item.key).split(':')[0];
+  const kase = item.case || String(item.key).slice(session.length + 1) || 'event';
+  const question = first(item.question || item.body || item.title).slice(0, 140);
+  const answer = first(item.answer).slice(0, 80) || '-';
+  return [session, kase, question, answer].join(' \u00b7 ');
+}
+
+// Optional onFired(event) is called once per actually-fired alert (debounced calls do not call it), for both tiers, when the
+// alert happens (a digest item is "fired" when queued). `event` = { at, key, title, body (<=300 chars), url, priority }.
+// tiering = { config: () => tierConfig, managerSessions: () => [names], file?: path } turns the two tiers on; without it every alert is an interrupt.
+export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh', publicUrl = '', fetchImpl = fetch, now = Date.now, defaultDebounceMs = 60000, log = console, onFired = null, tiering = null } = {}) {
   const last = new Map();
   const ascii = (s) => String(s).replace(/[^\x20-\x7e]/g, '').slice(0, 200);
+  let pending = [];                 // digest items, newest key wins
+  let lastDigestAt = 0;
+  const digestFile = tiering?.file || null;
+  if (digestFile) { try { const j = JSON.parse(readFileSync(digestFile, 'utf8')); pending = j.pending || []; lastDigestAt = j.lastDigestAt || 0; } catch {} }
+  const saveDigest = () => { if (digestFile) { try { writeFileSync(digestFile, JSON.stringify({ pending, lastDigestAt })); } catch (e) { log.error('[digest] save', e.message); } } };
+  const cfg = () => (tiering?.config ? tiering.config() : TIER_DEFAULTS);
 
-  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '' }, debounceMs = defaultDebounceMs) {
-    const t = now();
-    if (t - (last.get(key) || 0) < debounceMs) return false;
-    last.set(key, t);
-    const text = String(body || title).slice(0, 500);
+  function deliver({ title, text, url, tag, priority, ntfyTags }) {
     if (push) push.notify({ title, body: text, url, tag, priority }).catch((e) => log.error('[push]', e.message));
     if (ntfyTopic) {
       const headers = { Title: ascii(title), Priority: priority };
@@ -154,11 +214,41 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
           .catch((e) => log.error('[ntfy]', e.message));
       } catch (e) { log.error('[ntfy]', e.message); }
     }
+  }
+
+  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '', tier, pct, meta } = {}, debounceMs = defaultDebounceMs) {
+    if (tiering) {
+      const head = String(key).split(':')[0];
+      if ((tiering.managerSessions?.() || []).includes(head)) return false;   // the manager's own session never pushes the owner
+    }
+    const t = now();
+    if (t - (last.get(key) || 0) < debounceMs) return false;
+    last.set(key, t);
+    const text = String(body || title).slice(0, 500);
+    const which = tiering ? defaultTier(key, { tier, priority, title, body, pct }, cfg()) : 'interrupt';
+    if (which === 'interrupt') deliver({ title, text, url, tag, priority, ntfyTags });
+    else {
+      pending = pending.filter((p) => p.key !== key);
+      pending.push({ key, at: t, title, body: text, url, ...(meta || {}) });
+      saveDigest();
+    }
     if (onFired) {
       try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority }); }
       catch (e) { log.error(`[alerts] onFired: ${e.message}`); }
     }
     return true;
   }
-  return { alert, resetDebounce: (key) => last.delete(key) };
+
+  // Called on a timer. Sends ONE push with every pending item when awake and digestMs has passed since the last one.
+  function digestTick() {
+    if (!tiering || !pending.length) return false;
+    const t = now(), c = cfg();
+    if (isQuietHours(t, c) || t - lastDigestAt < c.digestMinutes * 60000) return false;
+    const items = pending;
+    pending = []; lastDigestAt = t; saveDigest();
+    const n = items.length;
+    deliver({ title: `${n} item${n === 1 ? '' : 's'} for you`, text: items.map(digestLine).join('\n'), url: '/', tag: 'ghosty-digest', priority: 'default', ntfyTags: 'inbox_tray' });
+    return true;
+  }
+  return { alert, resetDebounce: (key) => last.delete(key), digestTick, pendingDigest: () => pending.slice() };
 }

@@ -61,7 +61,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
-import { createPush, createAlerts } from './push.js';
+import { createPush, createAlerts, tierConfig } from './push.js';
 import { trustFolder } from './trust.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
@@ -588,7 +588,11 @@ const wakeAnnotateEvent = (event, cls) => {
 };
 const wakesView = createWakesView({ stateDir: STATE_DIR });
 const managerEvents = createManagerEvents({ stateDir: STATE_DIR, managerSessions: loadManagerSessions, annotate: wakeAnnotateEvent });
-const { alert, resetDebounce } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS, onFired: (e) => {
+// Two-tier push (MANAGER.md section 6): interrupts at once, the rest as one digest per pushDigestMinutes while awake.
+// Knobs in manager.json: pushDigestMinutes (30), pushAwakeFrom ("07:00"), pushAwakeTo ("23:00"), pushTimezone ("Europe/Zurich"), pushInterruptPct (95).
+const pushTierConfig = () => { try { return tierConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return tierConfig({}); } };
+const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS,
+  tiering: { config: pushTierConfig, managerSessions: loadManagerSessions, file: join(STATE_DIR, 'push-digest.json') }, onFired: (e) => {
     // The manager agent's own alerts are not fed back to it, but they are what the wake outcome looks for.
     if (classifyKey(e.key).kind === 'agent-skip') logEvent({ type: 'agent-alert', key: e.key, title: String(e.title || '').slice(0, 120), body: String(e.body || '').slice(0, 300) });
     managerEvents.record(e).catch((err) => console.error('[manager-events]', err.message));
@@ -608,7 +612,7 @@ const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: proce
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
-function notifySession(session, kind, body) {
+function notifySession(session, kind, body, meta) {
   if ((kind === 'waiting' || kind === 'asks') && loadManagerSessions().includes(session)) return;   // the manager's own session never pushes the owner
   const waiting = kind === 'waiting' || kind === 'asks';
   alert(`${session}:${kind}`, {
@@ -618,6 +622,7 @@ function notifySession(session, kind, body) {
     body: body || kind,
     url: `/?s=${encodeURIComponent(session)}`,
     tag: `ghosty-${session}`,
+    meta: { session, case: meta?.case || kind, question: meta?.question, answer: meta?.answer },
   });
 }
 
@@ -1505,7 +1510,7 @@ server.listen(PORT, HOST, async () => {
   await initManager({
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
-    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n')),
+    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine }),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
@@ -1522,6 +1527,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(tick, TICK_MS);
   leaseTick();
   setInterval(leaseTick, 15000);
+  setInterval(digestTick, 60000);   // digest tier: one push per 30 min while the owner is awake
   healthTick();
   setInterval(healthTick, HEALTH_MS);
   const usageTick = () => usage.get().catch(() => {});   // one small file read per 30 s keeps the status field cheap

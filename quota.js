@@ -19,6 +19,7 @@ const CODEX_TIMEOUT_MS = 20e3;
 const HTTP_TIMEOUT_MS = 10e3;
 
 export const WARN_PCT = 80;     // alert when a window crosses this
+export const CRIT_PCT = 95;     // second alert (an interrupt-tier push) when a window crosses this
 export const REARM_PCT = 70;    // and again only after it dropped below this
 
 export function defaults(env = process.env) {
@@ -210,9 +211,17 @@ export function createQuotaAlerts(alert) {
           if (seeded) alert(`quota:${key}`, {
             title: `${p.label} ${w.name} quota at ${Math.round(w.usedPercent)}%`,
             body: w.resetsAt ? `resets ${new Date(w.resetsAt * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'reset time unknown',
-            priority: 'high', ntfyTags: 'warning', url: '/', tag: `ghosty-quota-${key}`,
+            priority: 'high', ntfyTags: 'warning', url: '/', tag: `ghosty-quota-${key}`, pct: w.usedPercent,
           }, 0);
-        } else if (above && w.usedPercent < REARM_PCT) armed.set(key, false);
+        }
+        const crit = armed.get(`${key}!`) === true;
+        if (!crit && w.usedPercent >= CRIT_PCT) {
+          armed.set(`${key}!`, true);
+          if (seeded && above) alert(`quota:${key}:crit`, {   // 80 % already announced; the first-crossing alert above covers a jump straight past 95
+            title: `${p.label} ${w.name} quota at ${Math.round(w.usedPercent)}%`, body: 'plan almost used up', priority: 'high', ntfyTags: 'rotating_light', url: '/', tag: `ghosty-quota-${key}-crit`, pct: w.usedPercent,
+          }, 0);
+        } else if (crit && w.usedPercent < REARM_PCT) armed.set(`${key}!`, false);
+        if (above && w.usedPercent < REARM_PCT) armed.set(key, false);
       }
       seeded = true;
     },
