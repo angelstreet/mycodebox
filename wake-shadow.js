@@ -7,6 +7,7 @@
 //        { skipped: <why>, ruleDefault }                                no call: budget, credits, cool-down, not configured
 //        { error: <kind>, ruleDefault, ms }                             the call failed or took longer than the 3 s cap
 import { decide, floor, ruleDefault } from './router.js';
+import { isDisabledReply, DISABLED } from './jev-switch.js';
 
 export const CAP_MS = 3000;                 // the event line never waits for Jev longer than this
 export const OUTCOME_WINDOW_MS = 15 * 60e3;  // how long we watch for the manager / owner to act
@@ -89,6 +90,7 @@ export function createWakeAnnotator({ enabled = () => true, guard = () => null, 
     const out = await Promise.race([decide('wake', facts, { post, teamId, refs, threshold: 0 }), timeout]);
     clearTimeout(timer);
     const ms = now() - started;
+    if (isDisabledReply(reply)) return { skipped: DISABLED, ruleDefault: out.ruleDefault ?? rd, ms };   // Jev off on the server: no error, no cool-down
     if (out.timeout) { onError('timeout'); return { error: 'timeout', ruleDefault: rd, ms }; }
     if (out.source === 'forced') return { pick: out.choice, confidence: 1, source: 'forced', ruleDefault: out.ruleDefault, ms };
     if (out.source === 'jev') return { pick: out.choice, confidence: out.confidence, source: 'jev', ruleDefault: out.ruleDefault, ...(out.decision_id ? { decision_id: out.decision_id } : {}), ms: Number.isFinite(reply?.ms) ? reply.ms : ms };
