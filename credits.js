@@ -32,8 +32,8 @@ export function createCreditAlerts(alert) {
       const now = balance <= 0 ? 2 : balance <= LOW_USD ? 1 : 0;
       if (level !== null && now > level) {
         alert('openrouter:credits', {
-          title: now === 2 ? `OpenRouter credit is used up (${fmtUsd(balance)})` : `OpenRouter credit is low (${fmtUsd(balance)})`,
-          body: now === 2 ? 'Jev and AI calls fail with 402 until credit is added.' : 'Add credit before Jev and AI calls start failing.',
+          title: now === 2 ? 'Jev has stopped: OpenRouter limit reached' : 'Jev will stop soon: OpenRouter limit nearly reached',
+          body: now === 2 ? 'Jev will stop: its calls fail (402) and the rules decide until the OpenRouter limit is raised.' : 'Jev will stop when the OpenRouter limit is reached; then the rules decide.',
           priority: 'high', ntfyTags: 'warning', url: '/', tag: `ghosty-credits-${now}`,
         }, 0);
       }

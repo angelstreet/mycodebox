@@ -71,7 +71,7 @@ import { createCredits } from './credits.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -1545,6 +1545,13 @@ server.listen(PORT, HOST, async () => {
   quotaTick();
   deployRunner.start();
   credits.start();
+  // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:
+  // ONE alert (digest tier) + the jev:down event (the alert feeds the manager feed), and a jev:up event when it closes.
+  const jevBreakerTick = () => jevBreaker.announce(({ kind, state }) => {
+    if (kind === 'down') alert('jev:down', { title: 'Jev is down: the rules decide', body: `3 errors in a row (last: ${state.lastError || '?'}). Jev is not called except one probe every 10 min.`, priority: 'default', tier: 'digest', ntfyTags: 'warning', tag: 'ghosty-jev-down', url: '/' }, 0);
+    else managerEvents.record({ key: 'jev:up', title: 'Jev is back', body: 'a Jev call succeeded again', priority: 'default' }).catch(() => {});
+  });
+  setInterval(jevBreakerTick, 15000).unref?.();
   startWakesLogger({ stateDir: STATE_DIR });   // keeps manager-wakes.jsonl current (it silently stopped 2026-10-04)
   setInterval(() => wakeOutcomeTick().catch((e) => console.error('[wake-outcome]', e.message)), 60000).unref?.();
   setInterval(quotaTick, 60000);

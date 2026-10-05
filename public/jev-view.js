@@ -20,7 +20,7 @@ export function creditHtml(c) {
   }).join('');
   const bad = c.balance != null && c.balance <= 0;
   return `<section class="jsec"><div class="u1"><b>OpenRouter credit</b><span class="grow"></span><span class="dim">${c.stale ? 'stale &middot; ' : ''}${c.at ? esc(when(c.at)) : ''}</span></div>
-    ${bad ? '<div class="jbanner bad" role="alert"><b>Credit is used up</b><br>Jev and AI calls fail until credit is added.</div>' : ''}${rows || '<div class="jbanner dim">no endpoint with a key</div>'}</section>`;
+    ${bad ? '<div class="jbanner bad" role="alert"><b>Jev will stop</b><br>The OpenRouter limit is reached: Jev and AI calls fail and the rules decide.</div>' : ''}${rows || '<div class="jbanner dim">no endpoint with a key</div>'}</section>`;
 }
 // the short line for the quota row; '' without a reading
 export function creditChip(c) {
@@ -63,7 +63,7 @@ export function creditRowHtml(c) {
   const lvl = bal != null && bal <= 0 ? 'crit' : bal != null && bal <= 2 ? 'warn' : 'ok';
   const pctUsed = tot ? Math.min(100, Math.round(((used ?? 0) / tot) * 100)) : null;
   return `<div class="urow">${head(`${usd(bal)} left`, lvl)}${pctUsed == null ? '' : `<div class="qp"><span class="qn">used</span><span class="qb ${lvl}"><i style="width:${pctUsed}%"></i></span><span class="qv ${lvl}">${pctUsed}%</span></div>`}
-    <div class="u2">${bal != null && bal <= 0 ? '<b class="jf">credit is used up: Jev and AI calls fail until credit is added</b>' : `${tot != null ? `bought ${usd(tot)} &middot; ` : ''}${used != null ? `used ${usd(used)}` : ''}`}${c.stale ? ' &middot; stale' : ''}</div></div>`;
+    <div class="u2">${bal != null && bal <= 0 ? '<b class="jf">Jev will stop: OpenRouter limit reached, calls fail</b>' : `${tot != null ? `bought ${usd(tot)} &middot; ` : ''}${used != null ? `used ${usd(used)}` : ''}`}${c.stale ? ' &middot; stale' : ''}</div></div>`;
 }
 
 // ---- the tab ----
