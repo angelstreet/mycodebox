@@ -184,8 +184,8 @@ const stop = {
     // The criteria text below must stay short and readable without context; they are the only
     // thing Jev (and a human reading the test diff) sees. The two options state the owner's
     // delegation in plain words so Jev knows what is safe to take and what is not.
-    answer: 'manager can answer: a design or scope choice with a recommended, reversible option; cleanup of the session\'s own files (its worktree, scratch or temp); continuing planned work; or a fact the manager knows',
-    escalate: 'only the owner can answer: money or cost beyond plan, credentials or secrets, customers, deleting shared data, database migrations, merges to main, restarts or deploys; also a choice between directions with no recommendation, or anything forbidden / unclear',
+    answer: 'manager can answer: a design or scope choice with a recommended, reversible option; cleanup of the session\'s own files (its worktree, scratch or temp); continuing planned work; or a fact the manager knows. If the facts say delegated, or recommended and reversible, lean to answer',
+    escalate: 'only the owner can answer: money or cost beyond plan, credentials or secrets, customers, deleting shared data, database migrations, merges to main, restarts or deploys; also a choice between directions with no recommendation, a product or taste question (what the product should show or do) with no recommendation, an irreversible choice, or anything forbidden / unclear',
   },
   instructions: 'Should the manager answer this stopped session itself (inside the owner\'s delegation), or escalate it to the owner?',
   floor(facts) {

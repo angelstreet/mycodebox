@@ -17,7 +17,8 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFile, mkdir, appendFile } from 'node:fs/promises';
-import { stop, STOP_V1 } from '../router.js';
+import { POINTS, STOP_V1 } from '../router.js';
+const stop = POINTS.stop;
 import { serverBase } from '../decisions.js';
 import { isDisabledReply } from '../jev-switch.js';
 
