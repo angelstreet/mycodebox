@@ -89,7 +89,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { budget = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); } catch {}
@@ -101,6 +101,7 @@ export async function initManager({ credits, onOwnerNeeded, sendKey, sendKeys, p
   if (!/^(auto|text\.decision(\.[a-z0-9_]+)*)$/.test(String(config.jevUsage))) config.jevUsage = 'auto';
   if (decisions.configured) { outcomeQueue.flush().catch(() => {}); setInterval(() => outcomeQueue.flush().catch(() => {}), 5 * 60e3).unref(); }
   if (context) triageContext = context;
+  if (managerSessions) managerSessionsOf = managerSessions;
   if (credits) creditsPeek = credits;
   if (onOwnerNeeded) notify = onOwnerNeeded;
   if (sendKey) send.key = sendKey;
@@ -224,8 +225,12 @@ function aiBlock(name, kase, confidence) {
 
 // A stall that is not auto-answered goes to the owner. A waiting session was already pushed by
 // ghosty's own 'waiting' alert, so only a finished turn that asks something is pushed here.
+// manager.json managerSessions (default ["manager"]): the manager agent's own session is never escalated or pushed (TASK-44-MANAGER.md section 0).
+let managerSessionsOf = () => ['manager'];
+export const isManagerSession = (name) => { try { return (managerSessionsOf() || []).includes(name); } catch { return false; } };
 const escalatedStops = new Set();   // stop ids the rules escalated to the owner (the wake shadow's `escalated` fact)
 function escalate(name, state, final, id, reason, aiLine = null) {
+  if (isManagerSession(name)) return;   // never an owner stop, never pushed
   escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
@@ -821,7 +826,7 @@ export function observe(s) {
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
     });
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;
-    shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' });   // shadow: fire and forget, never awaited
+    shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' });   // shadow: fire and forget, never awaited
     if (ws.send && !block) {   // the existing auto-answer handles this one
       const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence };
       const pol = policyOf(s.name, s.agent);

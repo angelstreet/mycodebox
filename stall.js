@@ -118,8 +118,45 @@ export function closingLines(plain, n = 16) {
   return out;
 }
 
+// Claude Code tool-call lines ("Bash(...)", "Read(...)", "mcp__x__y(...)") and their "⎿" output lines are
+// chrome, never the agent's words: they must not leak into the question or the excerpt tail.
+const TOOL_CALL_RE = /^\s*(?:[⏺●•]\s+)?(?:Bash|Read|Edit|Write|MultiEdit|Update|Grep|Glob|Search|List|Task|Agent|WebFetch|WebSearch|TodoWrite|NotebookEdit|Skill|Monitor|mcp__[\w-]+)\(/;
+const TOOL_OUT_RE = /^\s*⎿/;
+// Index of the first line of the agent's own closing words: after the last tool-call / ⎿ line, skipping the
+// deeper-indented continuation rows of a tool output ("… +22 lines", wrapped result text).
+function agentTextStart(lines) {
+  let k = -1;
+  for (let i = 0; i < lines.length; i++) if (TOOL_CALL_RE.test(lines[i]) || TOOL_OUT_RE.test(lines[i])) k = i;
+  if (k < 0) return 0;
+  let i = k + 1;
+  if (TOOL_OUT_RE.test(lines[k])) while (i < lines.length && /^\s{4,}\S/.test(lines[i])) i++;
+  return i < lines.length ? i : lines.length;
+}
+
+// At most `max` chars, ending on the last text: whole sentences from the end, never starting mid-word.
+export function tailSentences(text, max = 300) {
+  const t = String(text).trim();
+  if (t.length <= max) return t;
+  const parts = t.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g) || [t];
+  let out = '';
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const cand = (parts[i].trim() + (out ? ' ' + out : '')).trim();
+    if (cand.length > max) break;
+    out = cand;
+  }
+  if (out) return out;
+  const cut = t.slice(-max);
+  const sp = cut.indexOf(' ');
+  return '… ' + (sp >= 0 ? cut.slice(sp + 1) : cut);
+}
+
 // Joins wrapped lines into paragraphs; the last paragraph is what the agent ended on.
-function lastParagraph(lines) {
+function paragraphs(lines) {
+  const text = lines.map((l) => l.trim()).join('\n');
+  return text.split(/\n(?=\s*(?:\d+[.)]\s|[-*]\s))|\n{2,}/).map((p) => p.replace(/\n/g, ' ').trim()).filter(Boolean);
+}
+function lastParagraph(lines, { stripTools = true } = {}) {
+  if (stripTools) lines = lines.slice(agentTextStart(lines));
   const text = lines.map((l) => l.trim()).join('\n');
   const paras = text.split(/\n(?=\s*(?:\d+[.)]\s|[-*]\s))|\n{2,}/).map((p) => p.replace(/\n/g, ' ').trim()).filter(Boolean);
   return paras.length ? paras[paras.length - 1] : '';
@@ -138,7 +175,11 @@ const DECISION_Q = /^which\b|\bwhich (?:one|option|approach|do you|would you|sho
 const SHORT_RE = /\b(?:I'?ll|I will|I'?m going to|I am going to)\s+(?:now\s+|next\s+|then\s+|also\s+)?(?!wait\b|stop\b|leave\b|hold\b|pause\b|not\b|need\b)[a-z]+|\bnext(?: improvement| up)?\s*:|\bnext,? I'?ll\b|\bonce\b[^.\n]{0,60},? I'?ll\b/i;
 const SHORT_BLOCK_RE = /\bblocked\b|\bcannot\b|\bcan'?t\b|\bwaiting\b|\bI'?ll wait\b|\bwill wait\b|\bI'?m stopping\b|\bstopping here\b|\bI'?ll stop\b|\bI'?ll leave\b|\bpausing\b|\bneed(?:s)? (?:your|you|a |an )|\buntil you\b|\bonce you\b|\blet me know\b|\bif you(?:'d)? (?:want|like|prefer)\b|\bbefore (?:deploy|pushing|merging)|\bsay the word\b|\bas soon as you\b|\b(?:send|tell|give|paste) me\b|\bI'?ll (?:report|resume|let you know|review)\b|\b(?:still )?running\b|\bin the background\b|\b(?:finishes|completes|goes through)\b|\bwhen it\b/i;
 // waiting_deploy: waiting on leases, live runs, a deploy, or the owner's go-ahead for one.
-const WAIT_DEPLOY_RE = /\bwaiting (?:on|for)\b[^.\n]{0,80}(?:go-ahead|approval|approve|leases?|deploy|restart|live runs?)|\bgo-ahead (?:to|for)\b[^.\n]{0,60}(?:deploy|restart|update_core)|\bwait(?:ing)? (?:for|on) your (?:answer|ok|go-ahead|approval)\b[^.\n]{0,40}(?:deploy|restart)|\bupdate_core(?:\.sh)?\b[^.\n]{0,40}(?:go-ahead|approv|waiting)|\bblocked by\b[^.\n]{0,40}(?:live )?(?:runs?|leases?)|\b(?:once|when|after)\b[^.\n]{0,40}\bleases? (?:clear|release|free|expire)|\bnot deployed yet\b|\bneeds a (?:server |host |frontend )?restart\b/i;
+const WAIT_DEPLOY_RE = /\b(?:may|can|shall|should) I (?:queue|deploy|restart)\b[^.\n]{0,60}\?|\bwaiting (?:on|for)\b[^.\n]{0,80}(?:go-ahead|approval|approve|leases?|deploy|restart|live runs?)|\bgo-ahead (?:to|for)\b[^.\n]{0,60}(?:deploy|restart|update_core)|\bwait(?:ing)? (?:for|on) your (?:answer|ok|go-ahead|approval)\b[^.\n]{0,40}(?:deploy|restart)|\bupdate_core(?:\.sh)?\b[^.\n]{0,40}(?:go-ahead|approv|waiting)|\bblocked by\b[^.\n]{0,40}(?:live )?(?:runs?|leases?)|\b(?:once|when|after)\b[^.\n]{0,40}\bleases? (?:clear|release|free|expire)|\bnot deployed yet\b|\bneeds a (?:server |host |frontend )?restart\b/i;
+// Sentences that mention a restart / deploy only to say none was needed (or that it already happened).
+const NEGATED_RE = /\bno (?:server |host |frontend |service )?(?:restart|deploy(?:ment)?)\b|\bwithout (?:a |any )?(?:restart|deploy)|\b(?:restart|deploy(?:ment)?)\b[^.\n]{0,30}\b(?:was|were|is|are)(?: not|n'?t)? (?:needed|required|necessary)|\b(?:did(?: not|n'?t)|do(?: not|n'?t)|does(?: not|n'?t)) (?:need|require) (?:a |any )?(?:restart|deploy)|\bnot (?:need|require)[sd]? (?:a |any )?(?:restart|deploy)|\b(?:already|was|were|got|been|has been|have been) (?:deployed|restarted)\b/i;
+// "Reload the page to pick it up": an FYI at the end of a finished report, not something the agent is waiting on.
+const FYI_RELOAD_RE = /^(?:reload|refresh|hard[- ]refresh)\b[^.\n?]*\b(?:to (?:pick|see|get|load|apply|use|view|have|make)|so (?:you|it|that) (?:can |will |'ll )?(?:see|get|pick)|for (?:it|the change|this) to (?:take|show|apply))/i;
 const OWNER_ACTION_RE = /(?:^|[,;:.]\s+(?:so\s+)?|\bplease\s+|\byou (?:need to|can|should|have to|must|could)\s+|\b(?:can|could|would) you\s+)(reload|refresh|hard[- ]refresh|plug(?: in)?|unplug|replug|power[- ]cycle|press|tap|click|reconnect|check (?:the |your )?(?:phone|tv|screen|device|box|remote)|(?:turn|switch) (?:on|off)|open (?:the|your) (?:app|page|phone|tv))\b([^.\n?]*)/im;
 const STATUS_RE = /\b(?:done|finished|complete[d]?|tested|verified|passed|passing|green|failing|failed|left|remaining|to do|todo|next|blocked|pending|not (?:yet )?(?:tested|deployed|done|run)|untested|still needs?|status)\b|\b\d+\s+(?:passed|failed|tests?)\b/i;
 const NEXT_STEP = /\bnext(?::| is| step| phase| I'?d| I will| I'll)|\bI'?ll (?:now|next|then)\b|\bthen I(?:'ll| will)\b|\bstill to do\b|\bremaining\b/i;
@@ -199,9 +240,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
 
   // A finished turn: what did the agent end on?
   const last = lastParagraph(close);
-  out.question = last.slice(-300);
+  out.question = tailSentences(last, 300);
   // A question anywhere in the closing paragraph ("Can I run it? After that I'd ...").
-  const asks = /\?(?:["')\]]|\s|$)/.test(last.replace(/https?:\S+/g, ''));
+  let asks = /\?(?:["')\]]|\s|$)/.test(last.replace(/https?:\S+/g, ''));
   const opts = menuOptions(close);
   const rec = opts.find((o) => RECOMMENDED_RE.test(o.text)) || (/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' ')) && { n: Number(/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' '))[1]) });
   out.forbiddenText = close.slice(-6).join('\n');
@@ -210,11 +251,22 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   const msg = close.slice(toolEnd + 1).length ? close.slice(toolEnd + 1) : close;
   const tailText = msg.slice(-6).join(' ').replace(/\s+/g, ' ');
   const lastText = last.replace(/\s+/g, ' ');
-  const wait = WAIT_DEPLOY_RE.exec(tailText);
-  const act = opts.length < 2 && !wait ? OWNER_ACTION_RE.exec(lastText) || OWNER_ACTION_RE.exec(tailText) : null;
+  const shortText = lastParagraph(close, { stripTools: false }).replace(/\s+/g, ' ');   // stopped_short keeps the tool output: a still-running background task blocks it
+  const paras = paragraphs(msg);
+  const lastPara = paras[paras.length - 1] || '';
+  // A wait is the agent's own closing state: the last paragraphs, but a list item only counts when it is the very last
+  // one (a feature description inside an earlier bullet is not the agent waiting), minus sentences that say no
+  // restart / deploy was needed.
+  const isItem = (p) => /^\s*(?:[-*]|\d+[.)])\s/.test(p);
+  const waitText = paras.slice(-4).filter((p) => !isItem(p) || p === lastPara).join(' ')
+    .split(/(?<=[.!?])\s+/).filter((x) => !NEGATED_RE.test(x)).join(' ').replace(/\s+/g, ' ').slice(-600);
+  const wait = WAIT_DEPLOY_RE.exec(waitText);
+  let act = opts.length < 2 && !wait ? OWNER_ACTION_RE.exec(lastText) || OWNER_ACTION_RE.exec(tailText) : null;
+  let fyi = null;
+  if (act && FYI_RELOAD_RE.test(`${act[1]}${act[2] || ''}`)) { fyi = actionOf(act, tailText); act = null; asks = /\?["')\]]*\s*$/.test(lastText); }   // an FYI report asks only when it really ends on a question (a code line's "a ? b : c" is not one)
   if (wait) {
     out.case = 'waiting_deploy';
-    out.deployHint = deployHint(tailText);
+    out.deployHint = deployHint(waitText);
   } else if (act) {
     out.case = 'owner_action';
     out.action = actionOf(act, tailText);
@@ -223,7 +275,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     else if (opts.length >= 2 || DECISION_Q.test(last)) out.case = 'owner_decision';
     else if (CONTINUE_Q.test(last)) { out.case = 'continue'; out.answer = { text: 'Yes, continue.' }; }
     else { out.case = 'owner_decision'; out.source = 'ambiguous'; }
-  } else if (SHORT_RE.test(lastText) && !SHORT_BLOCK_RE.test(lastText)) {
+  } else if (SHORT_RE.test(shortText) && !SHORT_BLOCK_RE.test(shortText)) {
     out.case = 'stopped_short'; out.answer = { text: 'Yes, continue.' };
   } else if (NEXT_STEP.test(close.slice(-4).join(' '))) {
     // Stopped while announcing a next step: maybe it should just carry on.
@@ -231,7 +283,8 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   } else out.case = 'done';
   // no_status: a closing text that never says what is done / tested / left / next / blocked. A question,
   // a deploy wait and an owner action each state their own next step, so they are not flagged.
-  out.no_status = !asks && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
+  if (fyi) out.fyi = fyi;
+  out.no_status = !asks && !fyi && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
   if (out.no_status && out.case === 'done') { out.answer = { text: ASK_STATUS_TEXT }; out.autoCase = 'ask_status'; }
   return finish(out);
 }

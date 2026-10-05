@@ -609,6 +609,7 @@ const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quo
 
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
 function notifySession(session, kind, body) {
+  if ((kind === 'waiting' || kind === 'asks') && loadManagerSessions().includes(session)) return;   // the manager's own session never pushes the owner
   const waiting = kind === 'waiting' || kind === 'asks';
   alert(`${session}:${kind}`, {
     title: kind === 'asks' ? `${session} asks you` : waiting ? `${session} needs you` : `${session} is done`,
@@ -1502,6 +1503,7 @@ server.listen(PORT, HOST, async () => {
   const guardSendKey = async (session, key) => { await assertAgentPane(session, 'manager'); return sendKey(session, key); };
   const guardSendKeys = async (session, keys, enter) => { await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
   await initManager({
+    managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
     onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n')),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
