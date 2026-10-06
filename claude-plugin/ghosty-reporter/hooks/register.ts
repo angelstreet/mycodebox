@@ -136,6 +136,23 @@ export const register: Register = (on, options) => {
     return out
   })
 
+  // Cross-session messages (TASK-58 C4 logging only): peer.send from a SendMessage tool call, peer.recv from an
+  // inbound delivery whose origin is another session or teammate. A subagent's chatter is not session traffic — skip.
+  on('session.send', async ($, e, next) => {
+    const out = await next(e)
+    if (e.agentId) return out
+    void report($, 'peer.send', { to: String(e.to ?? '').slice(0, 200), text: cap(e.text) })
+    return out
+  })
+
+  on('session.receive', async ($, e, next) => {
+    const out = await next(e)
+    if (e.agentId) return out
+    if (e.origin?.kind !== 'peer' && e.origin?.kind !== 'peer-send-message') return out
+    void report($, 'peer.recv', { text: cap(e.text), kind: e.origin.kind })
+    return out
+  })
+
   on('classic.PermissionRequest', async ($, e, next) => {
     const out = await next(e)
     void report($, 'waiting', { kind: 'permission', message: cap(`Permission requested: ${e.tool_name}`, 500), tool: e.tool_name }, e.agent_id)

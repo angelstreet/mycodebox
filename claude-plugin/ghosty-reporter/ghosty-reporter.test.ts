@@ -14,7 +14,7 @@ const settle = () => new Promise<void>((r) => setTimeout(r, 30))
 type Sent = { url: string; headers: Record<string, string>; body: any }
 
 // The world beneath the plugin: env, clock, tmux, token file, ghosty. Returns what ghosty received.
-function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; tmux?: string } = {}) {
+function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; tmux?: string; receiveOk?: (e: any) => any } = {}) {
   const sent: Sent[] & { attempts?: number } = []
   sent.attempts = 0
   mock.env(on, { ...ENV, ...(opts.env ?? {}) })
@@ -26,6 +26,8 @@ function world(on: any, opts: { down?: boolean; env?: Record<string, string>; no
   on('prompt.submit', async (_$: any, e: any) => ({ text: e.text }))
   on('session.start', async () => ({}))
   on('session.end', async (_$: any, e: any) => ({ sessionId: e.sessionId }))
+  on('session.send', async () => ({ isDelivered: true }))
+  on('session.receive', async (_$: any, e: any) => (opts.receiveOk ? opts.receiveOk(e) : { text: e.text }))
   on('agent.spawn', async () => ({ model: 'm' }))
   for (const c of ['Stop', 'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop', 'TeammateIdle']) on(`classic.${c}`, async () => ({}))
   on('http.fetch', async (_$: any, e: any) => {
@@ -212,4 +214,67 @@ test('leaseReleaseArgv: only for a tmux session that really ended, with a safe n
   expect(leaseReleaseArgv('s', 'clear')).toBeNull()
   expect(leaseReleaseArgv('s', 'resume')).toBeNull()
   expect(leaseReleaseArgv("a b; rm -rf /", 'logout')).toBeNull()
+})
+
+test('session.send reports peer.send with capped text and passes through', async ($, on) => {
+  const sent = world(on)
+  const r = await $.session.send({ to: 'task58-b', text: 'please continue with phase 2', origin: { kind: 'model' } } as any)
+  await settle()
+  expect(r).toEqual({ isDelivered: true })
+  const ev = sent.find(s => s.body.event === 'peer.send')!
+  expect(ev.body.to).toBe('task58-b')
+  expect(ev.body.text).toBe('please continue with phase 2')
+  expect(ev.body.session).toBe('my-session')
+  expect(ev.body.agentId).toBeUndefined()
+})
+
+test('session.send with agentId is not reported (subagent chatter)', async ($, on) => {
+  const sent = world(on)
+  const r = await $.session.send({ to: 'lead', text: 'subagent ping', origin: { kind: 'model' }, agentId: 'ag-9' } as any)
+  await settle()
+  expect(r).toEqual({ isDelivered: true })
+  expect(sent.some(s => s.body.event === 'peer.send')).toBe(false)
+})
+
+test('session.receive with origin kind peer reports peer.recv and passes through', async ($, on) => {
+  const sent = world(on)
+  const r: any = await $.session.receive({ origin: { kind: 'peer', plugin: 'claude-code' }, text: 'a note from a teammate' } as any)
+  await settle()
+  expect(r.text).toBe('a note from a teammate')
+  const ev = sent.find(s => s.body.event === 'peer.recv')!
+  expect(ev.body.text).toBe('a note from a teammate')
+  expect(ev.body.kind).toBe('peer')
+  expect(ev.body.session).toBe('my-session')
+  expect(ev.body.agentId).toBeUndefined()
+})
+
+test('session.receive with origin kind peer-send-message reports peer.recv', async ($, on) => {
+  const sent = world(on)
+  await $.session.receive({ origin: { kind: 'peer-send-message' }, text: 'delivered from SendMessage' } as any)
+  await settle()
+  const ev = sent.find(s => s.body.event === 'peer.recv')!
+  expect(ev.body.kind).toBe('peer-send-message')
+})
+
+test('session.receive with origin kind bridge is not reported as peer', async ($, on) => {
+  const sent = world(on)
+  const r: any = await $.session.receive({ origin: { kind: 'bridge' }, text: 'a Remote Control prompt' } as any)
+  await settle()
+  expect(r.text).toBe('a Remote Control prompt')
+  expect(sent.some(s => s.body.event === 'peer.recv')).toBe(false)
+})
+
+test('session.receive with agentId is not reported (subagent chatter)', async ($, on) => {
+  const sent = world(on)
+  await $.session.receive({ origin: { kind: 'peer' }, text: 'inbound to subagent', agentId: 'ag-9' } as any)
+  await settle()
+  expect(sent.some(s => s.body.event === 'peer.recv')).toBe(false)
+})
+
+test('peer.send text is capped to 8 KB', async ($, on) => {
+  const sent = world(on)
+  await $.session.send({ to: 'task58-b', text: 'é'.repeat(20000), origin: { kind: 'model' } } as any)
+  await settle()
+  const ev = sent.find(s => s.body.event === 'peer.send')!
+  expect(new TextEncoder().encode(ev.body.text).length <= TEXT_CAP).toBe(true)
 })
