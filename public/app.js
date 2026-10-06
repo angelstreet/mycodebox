@@ -1023,6 +1023,7 @@ function renderFilterBar() {
   const bar = els.filterBar;
   const show = state.filterOpen || anyFilter();
   bar.classList.toggle('hidden', !show);
+  document.body.classList.toggle('filterbar-on', show);   // the top-bar count chips are the same filters: shown only while the filter bar is hidden
   els.filterBtn.classList.toggle('on', anyFilter());
   if (!show) return;
   const all = state.sessions.map((s) => s.name);
