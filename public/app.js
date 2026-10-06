@@ -810,7 +810,8 @@ function renderParking() {
   if (!box) return;
   const pk = state.parking || { parked: [], over: 0, manual: [], live: 0, cap: 0, candidates: [], ramSavedMb: 0 };
   const hid = state.layout.hidden.filter((n) => state.sessions.some((s) => s.name === n));
-  if (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length) && !hid.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  syncHiddenMenu();
+  if (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length)) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const idleText = (m) => (m == null ? '?' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
   // Two separate folds: Parked (the session cap + what ghosty closed to free RAM, with Resume) and Notes (sessions parked by hand).
   let h = '';
@@ -836,24 +837,36 @@ function renderParking() {
       h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman${on ? ' on' : ''}" aria-label="Show note">${icon('note', 14)}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
     }
   }
-  if (hid.length) {
-    const ho = state.hiddenClosed !== true;
-    h += `<button class="ph pfold" data-pfold="hiddenClosed" aria-expanded="${ho}"><span class="uch${ho ? ' on' : ''}"></span>Hidden (${hid.length})</button>`;
-    if (ho) for (const n of hid) h += `<div class="prow"><span class="pn" title="${escapeHtml(n)}">${escapeHtml(displayName(n))}</span><button class="sbtn" data-unhide="${escapeHtml(n)}">Show</button></div>`;
-  }
   box.innerHTML = h;
   box.classList.remove('hidden');
-  box.querySelectorAll('[data-unhide]').forEach((b) => { b.onclick = () => setHidden(b.dataset.unhide, false); });
   box.querySelectorAll('[data-pfold]').forEach((b) => { b.onclick = () => { state[b.dataset.pfold] = state[b.dataset.pfold] !== true; renderParking(); }; });
   box.querySelectorAll('[data-note]').forEach((r) => { r.onclick = () => { state.noteOpen = state.noteOpen === r.dataset.note ? '' : r.dataset.note; renderParking(); }; });
   box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
+}
+// "Hidden sessions" lives in the ⋮ menu (nothing about them shows in the sidebar); the entry appears only when something is hidden
+function syncHiddenMenu() {
+  const hid = state.layout.hidden.filter((n) => state.sessions.some((s) => s.name === n));
+  const b = $('#hiddenBtn');
+  if (!b) return;
+  b.classList.toggle('hidden', !hid.length);
+  b.querySelector('.ml').textContent = `Hidden sessions (${hid.length})`;
+}
+function openHiddenSheet() {
+  openSheet('Hidden sessions', ({ body, close }) => {
+    const draw = () => {
+      const hid = state.layout.hidden.filter((n) => state.sessions.some((s) => s.name === n));
+      body.innerHTML = hid.map((n) => `<div class="prow-s"><span class="pn"><b>${escapeHtml(displayName(n))}</b><small>${escapeHtml(n)}</small></span><button class="sbtn" data-unhide="${escapeHtml(n)}">Show</button></div>`).join('') || '<div class="sheet-empty">nothing hidden</div>';
+    };
+    draw();
+    body.onclick = (e) => { const b = e.target.closest('[data-unhide]'); if (b) { setHidden(b.dataset.unhide, false); draw(); } };
+  });
 }
 function setHidden(name, on) {
   const L = state.layout;
   L.hidden = on ? [...new Set([...L.hidden, name])] : L.hidden.filter((n) => n !== name);
   saveLayout();
-  toast(on ? `${displayName(name)} hidden (Hidden, bottom of the sidebar, brings it back)` : `${displayName(name)} is back`, 2600);
-  renderAll(); renderParking();
+  toast(on ? `${displayName(name)} hidden (⋮ menu, Hidden sessions, brings it back)` : `${displayName(name)} is back`, 2600);
+  renderAll(); renderParking(); syncHiddenMenu();
 }
 async function parkSession(name) {
   toast(`parking ${name}…`, 4000);
@@ -1034,7 +1047,7 @@ function renderFilterBar() {
   // while its status has deployWait (and the raw state isn't waiting/offline).
   const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline'];
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
-  const agents = ['claude', 'codex', 'minimax', 'bash'].filter((a) => all.some((n) => agentOf(n) === a));
+  const agents = ['claude', 'codex', 'minimax'].filter((a) => all.some((n) => agentOf(n) === a));
   const html =
     `` + chip('filter', null, 'all') +
     states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
@@ -2689,6 +2702,7 @@ function openManager() {
 }
 els.mgrBtn.onclick = openManager;
 $('#platBtn').onclick = () => openPlatforms();
+$('#hiddenBtn').onclick = openHiddenSheet;
 document.getElementById('reviewBtn').onclick = startReview;
 document.getElementById('decisionsBtn').onclick = openDecisions;
 // top-bar "more" menu: AI manager, usage, alerts, install/APK, text size

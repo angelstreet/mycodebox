@@ -1611,7 +1611,7 @@ body.side-docked .side-head .ttl{ letter-spacing:.12em; }
 
 /* workspace filter + resources toggle (desktop top bar); folded resources = workspace dropdown in their place */
 .res-toggle{ width:24px; height:28px; margin-left:2px; }
-.wsel{ height:30px; max-width:240px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; margin-left:10px; margin-right:auto; }
+.wsel{ height:30px; max-width:170px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; margin-left:10px; margin-right:auto; }
 .wsel.on{ border-color:var(--accent); color:var(--accent); }
 body:not(.res-hidden) .wsel{ display:none; }
 body.res-hidden .health.inbar, body.res-hidden .quota.inbar{ display:none !important; }
@@ -1912,3 +1912,6 @@ body.filterbar-on .topbar .summary{ display:none; }
 /* web: the hamburger stays top-left in every state and folds / unfolds the docked list, so the list's own collapse button is gone (no button swapping places) */
 body.side-dockable #menuBtn{ display:inline-flex !important; }
 #sideCollapseBtn{ display:none !important; }
+
+/* web: the filter bar keeps its row when hidden, so showing / hiding it never moves the page */
+@media (min-width: 721px){ .filterbar.hidden{ display:flex !important; visibility:hidden; } }
