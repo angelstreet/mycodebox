@@ -40,8 +40,29 @@ def summary(line):
     e = e.get('l', e)  # the filter wraps each event as {k, l}
     jev = e.get('jev') or {}
     j = f" [jev {jev.get('pick')} {jev.get('confidence')}]" if jev.get('pick') else ''
-    body = ' '.join(str(e.get('body') or '').split())[:160]
+    raw = ' '.join(str(e.get('body') or '').split())
+    body = raw[:160] + ('…' if len(raw) > 160 else '')
     return f"[{e.get('kind')}] {e.get('title')} — {body}{j}"
+
+
+def self_session(line):
+    # Drop events for the woken session itself (mm-manager); otherwise its own
+    # stops keep re-waking it. Match on session / key prefix / title prefix —
+    # the feed records use all three shapes.
+    try:
+        e = json.loads(line)
+    except ValueError:
+        return False
+    e = e.get('l', e)
+    if e.get('session') == SESSION:
+        return True
+    key = e.get('key')
+    if isinstance(key, str) and key.startswith(SESSION + ':'):
+        return True
+    title = e.get('title')
+    if isinstance(title, str) and title.startswith(SESSION + ' '):
+        return True
+    return False
 
 
 def ready():
@@ -54,6 +75,7 @@ def ready():
 def deliver(items):
     msg = f"EVENTS ({len(items)}) — handle per your brief: " + ' | '.join(f"{i + 1}) {s}" for i, s in enumerate(items))
     msg = msg[:1800]
+    msg += f" (summary — read status[{SESSION}].stall / GET /api/reply/{SESSION} for the full text)"
     while True:
         try:
             r = ready()
@@ -82,8 +104,9 @@ def main():
         if os.path.getsize(EVENTS) < f.tell():  # rotated / truncated
             f.close(); f = open(EVENTS)
         if pending and time.time() - first >= BATCH_S:
-            items = [summary(l) for l in filtered(pending)]
+            kept = [l for l in pending if not self_session(l)]
             pending, first = [], None
+            items = [summary(l) for l in filtered(kept)]
             if items:
                 deliver(items)
         time.sleep(1)
@@ -91,3 +114,24 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
+
+
+# --- tiny self-test ----------------------------------------------------------
+# python3 -c 'import importlib.util, json
+# spec = importlib.util.spec_from_file_location("mmw", "scripts/mm-manager-wake.py")
+# mm = importlib.util.module_from_spec(spec); spec.loader.exec_module(mm)
+# mm.SESSION = "mm-manager"
+# self_line  = json.dumps({"k":"mm-manager|done|x","l":{"key":"mm-manager:done","session":"mm-manager","title":"mm-manager is done","kind":"done","body":"x"*200}})
+# other_line = json.dumps({"k":"other|asks|x",      "l":{"key":"other:asks",     "session":"other",      "title":"other asks you","kind":"asks","body":"y"*200}})
+# assert mm.self_session(self_line)  is True
+# assert mm.self_session(other_line) is False
+# assert mm.summary(other_line).endswith("\u2026")
+# sent = []
+# mm.api = lambda path, body=None: sent.append(body) or {}
+# mm.ready = lambda: True
+# mm.deliver([mm.summary(self_line), mm.summary(other_line)])
+# msg = sent[0]["keys"]
+# suffix = " (summary \u2014 read status[mm-manager].stall / GET /api/reply/mm-manager for the full text)"
+# assert msg.endswith(suffix) and msg.count(suffix) == 1
+# print("OK")'
+# ---------------------------------------------------------------------------
