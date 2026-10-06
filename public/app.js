@@ -1894,6 +1894,7 @@ function rowLast(n) {
   const s = stateOf(n);
   if (s === 'waiting' && st.waitReason) return st.waitReason;
   if (s === 'working' && st.activity) return st.activity;
+  if ((s === 'done' || s === 'waiting') && st.lastTurn?.line) return st.lastTurn.line;   // STATUS: verdict · elapsed · tokens · the agent's info
   return st.lastMessage || lastLine(state.paneText.get(n) || '') || ' ';
 }
 function renderList() {

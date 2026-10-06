@@ -66,8 +66,10 @@ export const hasStatusLine = (text: unknown): boolean =>
   typeof text === 'string' && text.split('\n').filter(l => l.trim()).slice(-3).some(l => STATUS_RE.test(l))
 
 export const STATUS_REASON =
-  'End the turn with a final line in this format (one of): `STATUS: done` | `STATUS: needs-owner: <one-line question> [options]` | ' +
-  '`STATUS: blocked: <what>` | `STATUS: handoff: <resource> -> <session> by <HH:MM>` | `STATUS: waiting: deploy <id>`. ' +
+  'End the turn with a final line in this format (one of): `STATUS: done — <useful info: commits/branch, what is tested, what is left>` | ' +
+  '`STATUS: needs-owner: <one-line question> [options]` | `STATUS: blocked: <what>` | `STATUS: handoff: <resource> -> <session> by <HH:MM>` | ' +
+  '`STATUS: waiting: deploy <id>`. Example: `STATUS: done — branch x pushed (abc123), tsc+lint pass, browser not checked, left: 23 tables`. ' +
+  'Ghosty measures and adds the tokens and elapsed time itself: do not write them. ' +
   'Reply with the same closing text plus that line; do not redo any work.'
 
 // Block the stop once for a missing STATUS line. Fail open: only in a tmux session (not headless), never in the

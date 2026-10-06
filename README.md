@@ -584,6 +584,23 @@ and their `$`, MiniMax tokens, and the real manager's Claude `$` from the ledger
 with `by` containing `mm-manager` is printed as `AUDIT FAIL` (the shadow never acts, so any such
 record is a bug).
 
+## STATUS meter (what a turn took)
+
+Agents end a turn with `STATUS: <verdict> — <useful info>` (e.g. `STATUS: done — branch x pushed (abc123), tsc+lint pass, left: 23 tables`).
+Agents cannot measure their own tokens or time, so ghosty does and shows one line:
+`STATUS: done · 4m 01s · 1.3M tok · <info, max 200 chars>`. A part that cannot be known is left out, never guessed.
+
+- Claude (reporter plugin): elapsed = prompt received -> `turn.complete`; tokens = the summed `turn.complete` usage (input, output,
+  cache read, cache write; subagent turns of the same turn included).
+- Codex / MiniMax (no hooks): elapsed = last owner/manager send -> the poll that saw the stop; tokens = `usage-ledger.jsonl` rows with
+  that session's label dated in that window. The tailer writes the ledger a few seconds after a call, so a stop seen at once may
+  undercount; the status payload re-reads it for 2 min. A stop that predates ghosty has no elapsed / tokens.
+- Where: `GET /api/sessions` status entry `lastTurn` `{at, elapsedMs, tokens{in,out,cacheRead,cacheWrite,total}, status, info, line, source}`;
+  the board row and the ask popup details; the first line of the `asks` / `done` push body and of the manager event `body`
+  (the event also carries the object as `turn`). Code: `turn-meter.js`, `reporter.js` (`meterOf`), `stall.js` (`statusLine` strips the
+  `— – - : ·` separator after the verdict).
+- The Stop hook's re-prompt quotes the new form and tells the agent that ghosty adds tokens and time.
+
 ## Session reporter (TASK-44 phase 8)
 
 `claude-plugin/ghosty-reporter/` is a Claude Code plugin (function hooks, Claude Code >= 2.1.288) that every

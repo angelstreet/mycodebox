@@ -216,7 +216,7 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
     }
   }
 
-  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '', tier, pct, meta, blockedBy = null } = {}, debounceMs = defaultDebounceMs) {
+  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '', tier, pct, meta, blockedBy = null, turn = null } = {}, debounceMs = defaultDebounceMs) {
     if (tiering) {
       const head = String(key).split(':')[0];
       if ((tiering.managerSessions?.() || []).includes(head)) return false;   // the manager's own session never pushes the owner
@@ -233,7 +233,7 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
       saveDigest();
     }
     if (onFired) {
-      try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority, ...(blockedBy ? { blockedBy } : {}) }); }
+      try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority, ...(blockedBy ? { blockedBy } : {}), ...(turn ? { turn } : {}) }); }
       catch (e) { log.error(`[alerts] onFired: ${e.message}`); }
     }
     return true;

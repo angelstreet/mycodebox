@@ -156,6 +156,8 @@ test('Stop without a STATUS line is blocked once, with the format in the reason,
   await settle()
   expect(r.block).toContain('STATUS: done')
   expect(r.block).toContain('needs-owner')
+  expect(r.block).toContain('STATUS: done — <useful info')   // the new form: info after the verdict
+  expect(r.block).toMatch(/adds the tokens and elapsed time itself/)   // ghosty measures them, the agent must not
   expect(sent.some(s => s.body.event === 'stop')).toBe(false)
 })
 
@@ -198,7 +200,7 @@ test('Stop in the manager tmux session is not blocked', async ($, on) => {
 })
 
 test('every status value is recognised, anywhere in the last 3 lines; prose is not', () => {
-  for (const l of ['STATUS: done', 'STATUS: needs-owner: ship it? [1 yes, 2 no]', 'STATUS: blocked: lease held', 'STATUS: handoff: lease -> task58-b by 14:30', 'STATUS: waiting: deploy d-12', '**STATUS: done**'])
+  for (const l of ['STATUS: done', 'STATUS: needs-owner: ship it? [1 yes, 2 no]', 'STATUS: blocked: lease held', 'STATUS: handoff: lease -> task58-b by 14:30', 'STATUS: waiting: deploy d-12', '**STATUS: done**', 'STATUS: done — branch x pushed (abc123), tsc pass, left: 3'])
     expect(hasStatusLine(`work\n${l}\n`)).toBe(true)
   expect(hasStatusLine('The status: done is fine')).toBe(false)
   expect(hasStatusLine('STATUS: maybe')).toBe(false)
