@@ -1606,7 +1606,8 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 /* session cap + parked sessions */
 .parkbox{ border-top:1px solid var(--line); padding:8px 10px; font-size:12px; color:var(--ink-2); max-height:40%; overflow-y:auto; }
 .parkbox .ph{ font-weight:700; color:var(--ink); margin-bottom:4px; }
-.parkbox .cap{ color:var(--waiting); margin-bottom:6px; }
+.parkbox .cap{ display:flex; align-items:center; gap:6px; width:100%; background:none; border:0; padding:2px 0; margin-bottom:4px; font:inherit; font-size:12px; color:var(--accent); text-align:left; cursor:pointer; }
+.parkbox .capl{ font-size:11px; color:var(--ink-2); margin:0 0 6px 16px; }
 .parkbox .prow{ display:flex; align-items:center; gap:8px; padding:3px 0; }
 .parkbox .prow .pn{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); }
 .parkbox .prow .pm{ color:var(--ink-3); white-space:nowrap; }
