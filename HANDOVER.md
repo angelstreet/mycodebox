@@ -1,216 +1,32 @@
-# Ghosty Sessions — handover
+# Developer handover
 
-Where this lives: **`~/ghosty-sessions/` on `codebox` (VM 190, Tailscale `<tailscale-ip>`)**.
-Git remote: `git@github.com:angelstreet/mycodebox` (public).
+Start with [AGENTS.md](AGENTS.md), the [documentation index](docs/README.md), and the [agent contract](docs/CONTRACT.md). The [repository map](docs/MAP.md) locates implementation and tests; [INSTALL](docs/INSTALL.md) is the sole installation/update runbook.
 
-This file is the **first** thing to read when resuming work. Everything else
-(architecture, runbook, certs, status pill heuristic) is in `docs/REFERENCE.md` and
-`certs/README.md`.
+This is a portable development handover, not a record of a particular machine's live settings. Deployment identifiers, credentials and captured session output belong outside this public repository.
 
-## 30-second bring-up
+## Resume work
 
-```bash
-ssh codebox
-sudo systemctl status ghosty-sessions --no-pager    # should be active
-curl -sS http://127.0.0.1:7777/api/health           # {"ok":true,...}
-curl -ksS https://127.0.0.1:7443/api/health         # same, over TLS
+1. Read the user's task and `git status --short`; preserve other work. Use a separate worktree when appropriate.
+2. Read the relevant source, tests and reference section. Task numbers in comments refer to external project history, not required local documents.
+3. Test modules with fresh temporary state. Importing `server.js` starts the application; do not use it as a passive inspection tool.
+4. Follow the contract for tests, staged-diff inspection and delivery. A handover does not authorize a merge, push or live restart.
 
-# if it's down:
-sudo systemctl restart ghosty-sessions
-journalctl -u ghosty-sessions -n 50 --no-pager      # recent logs
-```
+## Implementation notes
 
-Service runs as `jndoye` with `WorkingDirectory=/home/jndoye/ghosty-sessions`,
-binds `0.0.0.0:7777` (HTTP) and `0.0.0.0:7443` (HTTPS, self-signed).
+- `stall.js` classifies stops; `manager.js` records outcomes, deduplicates repeated stops and guards scheduled sends. Repaints are not progress. Preserve forbidden-topic, draft, pause and cancellation checks.
+- `reporter.js` supplies structured Claude turn facts, with pane heuristics as fallback. Its token and loopback checks also protect the local alert API. Plugin tests are separate from `npm test`; see [reporter reference](docs/REFERENCE.md#session-reporter-task-44-phase-8).
+- `turn-meter.js` derives elapsed time and usage. Unknown values stay unknown; agents should not invent token/time counts.
+- `deploy-runner.js` can recover detached children using persisted process/exit files. Preserve `KillMode=process` and those files. Still use the guarded restart procedure outside deploys.
+- `usage/` includes ingestion, evaluation and experiments; external Langfuse/Jev behavior depends on the configured server versions. See [evaluation](docs/REFERENCE.md#langfuse-evaluation-task-44-phase-12).
+- Check the current cache version in `public/sw.js` when changing the UI; historical version numbers are not useful configuration instructions.
 
-## AI manager (TASK-44) — the map
+## Known limitations to check before operations
 
-Full spec, permissions, status and the codebox system map: **TASK-44 in virtualpytest,
-`docs/tasks/TASK-44-ai-manager.md`** (branch `task44-ai-manager` until merged). In one paragraph: ghosty watches every
-agent session, logs every stop once with a reason, asks Jev (and an AI reviewer) what a safe reply would be, shows it
-to the owner, and — only for what the owner switched on — answers, holds or deploys. Today: answering **off**, policy
-on (inert), AI triage **simulate**, deploy runner **off**.
+- The source listener defaults to all interfaces. INSTALL explicitly configures loopback + private Serve.
+- Default Claude/Codex UI launch commands bypass permissions; INSTALL overrides them. Parking/resume and scripts have their own launch paths to review.
+- The safe-restart script treats an unreachable API as no active deploy. Verify API reachability and deployment state before invoking it.
+- Status derived from terminal text is heuristic and can misclassify quoted prompts or unfamiliar CLI versions.
+- Some platform adapters retain deployment-specific defaults. A generic install does not guarantee those integrations work; lease binding can act when its registry is reachable.
+- UI feature availability depends on browser support, trusted HTTPS and permission state. Self-signed-warning acceptance is not a reliable PWA installation procedure.
 
-| Piece | Files | Notes |
-|---|---|---|
-| Stop log + reasons | `stall.js`, `manager.js` | one record per stop (repaints and re-wrapped panes fold, `stopKey`); cases continue / menu_recommended / permission / owner_decision / done / error / stopped_short / waiting_deploy / owner_action / background_wait, `no_status` flag; Jev for ambiguous ones |
-| Answering (off) | `manager.js` (schedule/fire), `public/buttons.js` | countdown pill + cancel, hourly cap, re-checked at fire time; forbidden topics / drafts never |
-| AI triage (simulate) | `triage.js` | `POST /server/ai/complete` usage `text.plan`; proposal + reasoning + confidence + owner_needed; budget `ai-budget.json` |
-| Labels / swipe review | `public/review.js`, `/api/manager/review`, `/label`, `/unlabel` | left = no reason, right = legit; ✓/✗ the AI; `npm run stall-report` |
-| Priority / pause / holds | `session-meta.js`, `public/policy.js` | P0/P1/P2 (default P2); owner Pause = Esc + hold; manager holds never send Esc |
-| Quota | `quota.js` | Claude via `scripts/claude-statusline-ratelimits.sh` (status line), Codex via `codex app-server`, MiniMax via `coding_plan/remains` with mcode's login |
-| Jev decision log | `decisions.js`, `public/jev-view.js`, `manager.js` (`jev`, `writeBack`) | manager's Jev calls logged in the product (`VPT_TEAM_ID`), outcome write-back with a retry queue, usage tab "Jev & AI", decisions page `/?decisions=1`; docs/REFERENCE.md "Jev in the product's decision log" |
-| Usage | `usage/ingest.js` (unit `ghosty-usage`), `usage-view.js` | local Langfuse `~/langfuse-codebox/` (`:3100`); API-equivalent costs |
-| Session reporter | `claude-plugin/ghosty-reporter/`, `reporter.js` | see below |
-| Deploys | `deploy-runner.js`, `public/deployed.js` | queue + ledger live in the `vpt-lease` registry on proxmox (deploy skill) |
-| Alerts | `push.js` | Web Push (APK push parked), ntfy optional |
-| Health | `health.js` | `/api/vm` |
-
-State: `~/.local/state/ghosty/` (`manager.json` = switches, `stalls.jsonl`, `sessions.json`, budgets, `vapid.json`,
-`push-subs.json`, `reporter.token`, `deploy-envs.json`, `usage-summary.json`, `claude-rate-limits.json`).
-Working on it: one worktree per change, test on a spare port with a **fresh** `GHOSTY_STATE_DIR` (an old one may
-have `autoSend` on), merge into main (merge, never rebase — other sessions commit here too), restart only after the
-merge succeeded. Never `git add -A` (a TLS key nearly leaked once; `.certs-bak/` is ignored).
-
-## Access URLs
-
-| URL | Use |
-|---|---|
-| `http://<tailscale-ip>:7777/` | daily driver on the tailnet — works, no install ceremony |
-| `https://<tailscale-ip>:7443/` | for installing the PWA (Android Chrome refuses SW on plain HTTP); accept the cert once |
-| `https://<tailnet-host>:7443/` | if you ever want the ts.net name instead of the IP |
-
-## Resume the dev session
-
-There is a persistent tmux session `ghosty` on codebox that drops you straight
-into this repo:
-
-```bash
-# from the Mac:
-~/bin/codebox-ghosty
-
-# from any box with the key:
-ssh codebox 'tmux new-session -A -s ghosty -c ~/ghosty-sessions'
-```
-
-The session starts with `claude --dangerously-skip-permissions; bash -l` so when
-Claude exits you land in a shell at the repo root, not kicked out of the session.
-
-## What's done (v2 — cockpit)
-
-**States** — working (pulsing green + current step), needs you (red, prompt + 1/2/3/esc), done
-(blue, agent finished its turn), idle (grey), offline. Agent badge (claude/codex/minimax/bash via
-process tree), repo/branch*, context left, model, held leases (exact `codebox:<session>` match; see docs/REFERENCE.md "Platforms page"), purple "waiting deploy".
-
-**Phone (≤720px)** — board is home (sorted needs you > done > working > idle); tap row = card,
-long-press = set send target. Card: swipe header/reader left/right = next/prev session, "Aa / >_"
-toggles reader (last reply as readable text) vs raw terminal. Tabs + grid hidden.
-
-**Grid** — sizes 2 / 4 / 8 / 16 always visible at the far right of the top bar (tap = grid at that size, phones too); tap = send target ("→ send target" pill), double-tap = open card.
-Reorder: drag a card by its header (desktop), or ◀ ▲ ▼ ▶ on the selected card (touch); order saved per device.
-
-**Dock** — fixed-width target chip (tap = picker), quick-prompt chips (long-press edit, + adds),
-history, quick keys, sent ✓ / delivered ✓✓, multi-target send.
-
-**Sidebar** — grouped by state, rename, kill (type name to confirm), "+" new session (agent + dir
-from `/api/dirs` + name), Platforms page in the ⋮ menu (leases, deploy queue, deployed now; replaces the sidebar leases list).
-
-**Font & fit** — one global terminal font (A− / A+ / Aa popover, Ctrl+= / − / 0); detached sessions
-are resized (`tmux resize-window`, then `window-size` unset so a later attach still resizes) to fill
-their card — `POST /api/resize/:s`, 409 when a client is attached (then h-scroll), `GHOSTY_RESIZE_ALLOW`
-regex limits which sessions may be resized. Toggle "Fit sessions to cards" in the Aa popover.
-
-**Filters** — funnel button: status / project (GitHub repo from `origin`) / agent; applies to grid,
-board, tabs, sidebar. Card headers show project · ⎇ branch(*) · ⑂ worktree in the middle.
-
-**Dock** — chevron bottom-left collapses quick prompts + keys (remembered).
-
-**Alerts** — bell = Web Push subscription (see docs/REFERENCE.md "Web Push"; state in the state dir: vapid.json, push-subs.json, push-feed.json). Optional extra phone push via ntfy: the secret `NTFY_TOPIC` + `PUBLIC_URL` are in
-the gitignored `~/ghosty-sessions/.env` (loaded by the unit's `EnvironmentFile=`); pushes on "needs you" and on
-disk critical (≥ 95 %, repeated every 6 h). `NTFY_DONE=1` adds turn-finished pushes.
-
-**Health strip** (TASK-44 phase 1) — under the top bar: CPU %, load 1-min / cores, RAM used, disk used + free.
-Amber ≥ 85 %, red ≥ 95 % (load: amber at 1x cores, red at 2x). `health.js` samples /proc + statfs every 5 s,
-pushed as `{type:'health'}` on `/ws/status`, also `GET /api/vm`. Tests: `npm test`.
-
-**Security** — cross-origin POST/WS rejected (Origin ≠ Host), JSON-only POSTs, 64KB body cap,
-exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only.
-
-## Known issues / not done
-
-| # | Issue | Notes |
-|---|---|---|
-| 1 | Codex prompt/done/activity patterns untested (no live Codex pane) | calibrate `WAIT_RE` / done markers on a real codex session |
-| 2 | "waiting" can false-positive on prompt-like text in the last ~15 lines | e.g. a quoted "Do you want to proceed?" |
-| 3 | `ntfy` not configured yet | add `Environment=NTFY_TOPIC=<secret-topic>` + `PUBLIC_URL` to the systemd unit |
-| 4 | Board reorders when states change | by design (urgency sort); rows are moved in place, not rebuilt |
-| 5 | Phone top bar is full at 360px — count chips get squeezed (they scroll) | hides less once installed (no install button) |
-| 6 | No HTTPS via `tailscale serve` (free plan) | self-signed on :7443 works after manual accept |
-| 7 | SW cache v6 | bump again if stale JS ever shows |
-
-## Session reporter (TASK-44 phase 8)
-
-`claude-plugin/ghosty-reporter/` reports structured Claude events to `POST /api/reporter/event` (loopback + token
-from `<state dir>/reporter.token`); `reporter.js` keeps the latest per tmux session; `manager.js` prefers the
-reported final answer over the pane excerpt, logs `background_wait`, and takes the owner's reply from the reported
-prompt. Install = one `CLAUDE_CODE_PLUGIN_DIRS` line in `~/.claude/settings.json` (docs/REFERENCE.md, "Session reporter").
-Things to know: `Stop` is the only hook that says whether background work is in flight, and it does not fire for
-every turn end (an interrupted or declined-question turn has only `turn.complete`), so a missing count means 0;
-a finished background task wakes the session with a synthetic `<task-notification>` prompt (marked, ignored as an
-owner reply); the Notification hook for a permission dialog can arrive ~10 s after the dialog is drawn. The spinner
-detector (`WORK_RE`) misses short turns on Claude 2.1.289, so a reported prompt also counts as the session moving on.
-
-## Files of interest
-
-```
-server.js                       # Node 20+, ws, no framework
-public/app.js                   # controller, three view renderers, swipe, SW reg
-public/index.html               # shell
-public/style.css                # ghosty dark
-public/sw.js                    # PWA service worker (shell cache version is in the file), notification click
-public/platforms.js             # lease ownership + chip + waiting-for-deploy + Platforms view model (pure, shared with server)
-leases.js                       # vpt-lease list --json reader
-public/manifest.webmanifest     # installable as "codebox"
-public/certs/  (git-ignored)    # self-signed PEMs
-public/vendor/                  # xterm.js v5.3.0 + addon-fit
-systemd/ghosty-sessions.service # PrivateTmp=false so the tmux socket is visible
-```
-
-## Commit conventions
-
-- One feature per commit, message starts with `feat:` / `fix:` / `docs:` / `refactor:`
-- Push directly to `main` (no PR flow yet — single-author)
-- Always: `git diff --cached` before commit, then `git add` + `git commit` + `git push` in one Bash call to keep other agents from stepping in mid-flight
-
-## Repo links
-
-- GitHub: <https://github.com/angelstreet/mycodebox>
-- Tailscale IP: `<tailscale-ip>`
-- Tailnet: `<tailnet>.ts.net`
-
-## How to test the PWA install flow on a fresh phone
-
-1. Join the `angelstreet` Tailscale tailnet on the phone (if not already).
-2. Visit `https://<tailscale-ip>:7443/` in Chrome.
-3. Tap **Advanced → Proceed to <tailscale-ip> (unsafe)**. Accept once.
-4. The page loads → orange ↓ install icon in the topbar → tap → "Add to Home Screen" → done.
-5. Launch from home screen — opens full-screen, no address bar, install button auto-hides.
-
-## When you're done for the day
-
-The session is named `ghosty` so you can re-attach from any box with the key:
-
-```bash
-ssh codebox 'tmux attach -t ghosty'
-```
-
-Or from the Mac:
-
-```bash
-~/bin/codebox-ghosty
-```
-
-## Manager fixes (TASK-44 readiness review)
-
-- `aiAutoCases` defaults to `[]` (owner picks); a test pins that no default turns `owner_decision` on.
-- Repeat stops: `last-stops.json` (state dir) holds the last logged stop per session, so restarts and repaints do not
-  log it again; `w.moved` (real work / send / reporter prompt) lets the same words through. The last 5 keys are compared,
-  so an A, B, A flip does not log A again.
-- Outcome: reporter prompt must be newer than the stall; pane prompt must sit below the stall's closing text, else `unknown`.
-- `POST /api/alert` (loopback + reporter token, 10/h) and the `by` actor field live in `api-extras.js` (server.js starts
-  listening on import, so tests cover the handlers directly; `test/manager-fixes.test.js`).
-- SW cache bumped to v25 (manager panel log shows `by`).
-
-## Langfuse evaluation (TASK-44 phase 12)
-
-- Details in docs/REFERENCE.md "Langfuse evaluation". Code: `usage/lf-common.js` (ids + HTTP), `usage/lfeval.js` (scores + dataset sync),
-  `usage/manager-parse.js` (stalls.jsonl -> generations), `usage/experiment.js` + `scripts/stops-experiment.js`,
-  `usage/judge.js`, `prompts.js`, `scripts/lf-setup.js` (idempotent: prompt, dataset, LLM connection, evaluator + rule).
-- Owner steps not done headlessly (they need a service restart): (1) restart `ghosty-usage` so the tailer runs the eval
-  sync; add `LFEVAL_JUDGE=1` to `~/.config/ghosty/usage.env` for the judge (it uses the same `JEV_URL` + `JEV_API_KEY` as the
-  AI reviewer, so no extra key is needed); (2) add that env file to `ghosty-sessions.service` so the manager reads the
-  Langfuse prompt (until then: the hard-coded fallback).
-- The real log had no owner labels yet at build time: only `jev_agreed` scores were backfilled. A demo dataset
-  `ghosty-stops-livecheck` (synthetic labels on real stops) and its run `rules-livecheck` can be deleted in the Langfuse UI.
-- Langfuse 3.x: `unstable/evaluation-rules` accept observation rules but never fire (no events tables, write mode legacy).
-- SW cache v29.
+Do not translate these documentation fixes into claims that runtime defaults were changed or that an existing installation is secured. Inspect and validate the actual deployment separately when asked.

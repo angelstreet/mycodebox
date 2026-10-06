@@ -128,7 +128,7 @@ export function langfuseLinks(env = process.env) {
 }
 
 export function managerConfig() {
-  return { ...config, langfuse: langfuseLinks(), validCases: AUTO_CASES, cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...jevBreaker.state(), ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
+  return { ...config, langfuse: langfuseLinks(), validCases: AUTO_CASES, validAiCases: CASES.filter((c) => !AI_NEVER_CASES.includes(c)), cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...jevBreaker.state(), ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
     ai: !!(AI_URL && JEV_API_KEY), aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
 }
 

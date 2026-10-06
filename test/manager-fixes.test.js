@@ -34,6 +34,8 @@ test('defaults: aiAutoCases is empty (the owner picks), like autoCases; owner_de
   assert.ok(!c.aiAutoCases.includes('owner_decision'));
   assert.equal(c.autoSend, false);
   assert.equal(c.aiTriage, 'simulate');
+  assert.ok(c.validAiCases.includes('continue'));
+  for (const c0 of ['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait']) assert.ok(!c.validAiCases.includes(c0));
 });
 
 // ---- 2. repeat logging across restarts ----

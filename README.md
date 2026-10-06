@@ -23,8 +23,9 @@ Every agent session is a card that says what it is doing: working, waiting for y
 last answer, type a reply, or send a quick key like yes or continue. It installs on your phone like an app and can
 notify you when an agent needs you, even when the app is closed.
 
-It runs on your own machine and is reached only through [Tailscale](https://tailscale.com), so nothing is sent to a
-third party and nothing is exposed to the internet.
+It runs on your own machine and is intended for private access through [Tailscale](https://tailscale.com).
+Configure the listener and tailnet policy using the install guide. Optional notifications, AI review and evaluation
+can send data to configured providers; agent CLIs also use their own services.
 
 ---
 
@@ -75,20 +76,23 @@ More, such as deploy coordination, usage reports and the session reporter plugin
 
 ## Quick start
 
-You need a Linux machine with [Node.js](https://nodejs.org) 20+, tmux and Tailscale, and your agents running in tmux.
+You need Linux, Node.js 20+, Git, tmux and Tailscale. Run the dashboard as the Unix user who owns your tmux sessions.
 
 ```bash
-git clone https://github.com/angelstreet/mycodebox.git
-cd mycodebox
-npm install --omit=dev
-node server.js
+git clone https://github.com/angelstreet/mycodebox.git ~/ghosty-sessions
+cd ~/ghosty-sessions
+npm ci --omit=dev
+HOST=127.0.0.1 AGENT_CMD_CLAUDE=claude AGENT_CMD_CODEX=codex node server.js
 ```
 
-Then open `http://<your-tailscale-ip>:7777` on a phone that is on the same Tailscale network. Every tmux session shows
-up as a card.
+This starts a local dashboard at `http://127.0.0.1:7777`. For phone access, follow the
+[install guide](docs/INSTALL.md): connect both devices to Tailscale, restrict the tailnet policy, and configure private
+HTTPS with Tailscale Serve. The guide also covers direct Tailscale access, systemd, verification and optional features.
 
-To run it as a service, add HTTPS so you can install it as an app, and set up notifications or voice input, follow the
-[install guide](docs/INSTALL.md). It is written so you can hand it to an AI agent and ask it to do the install.
+These explicit settings matter: the source otherwise listens on all interfaces, and its Claude/Codex UI launch
+commands bypass CLI permission checks. Node does not automatically read `.env`.
+
+Once connected, follow [Usage](docs/USAGE.md) to select a session, read its answer and send a reply.
 
 ---
 
@@ -102,10 +106,14 @@ on your machine and are never part of the repository.
 
 ## Documentation
 
-- [Install guide (for you or an AI agent)](docs/INSTALL.md)
-- [Technical reference](docs/REFERENCE.md): every setting, API route, and feature in detail
-- [AGENTS.md](AGENTS.md): rules for AI agents working in this repo
-- [Hand-over notes](HANDOVER.md)
+Start at the [documentation index](docs/README.md).
+
+- [Installation and configuration](docs/INSTALL.md): Tailscale, HTTPS, service, updates and verification
+- [Usage](docs/USAGE.md): first session, replies, phone features and troubleshooting
+- [Repository map](docs/MAP.md): components, data flow, state and tests
+- [Agent rules](AGENTS.md) and [agent contract](docs/CONTRACT.md): safety, workflow and completion checks
+- [Technical reference](docs/REFERENCE.md): settings, feature APIs and implementation details
+- [Handover](HANDOVER.md): development context and known limitations
 
 ## Community & support
 

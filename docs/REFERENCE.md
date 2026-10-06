@@ -1,10 +1,12 @@
 # mycodebox: technical reference
 
-The full feature and configuration reference. For what mycodebox is and a quick start, see the [README](../README.md); to install it with an AI agent, see [INSTALL.md](INSTALL.md).
+Feature and configuration details for the current implementation. [Documentation index](README.md) · [Repository map](MAP.md) · [Agent contract](CONTRACT.md). For what mycodebox is and a quick start, see the [README](../README.md); to install it with an AI agent, see [INSTALL.md](INSTALL.md).
 
-Mobile-first control room for the Claude Code / Codex / MiniMax coding agents running in tmux on `codebox`.
+Quick links: [configuration](#configuration) · [manager](#ai-manager) · [reporter](#session-reporter-task-44-phase-8) · [deploys](#deploy-queue-task-44-phase-7) · [quota](#priority-pause-and-quota) · [usage](#usage-langfuse) · [security](#security)
+
+Mobile-first control room for the Claude Code / Codex / MiniMax coding agents running in tmux on one Linux host.
 Streams every `tmux capture-pane` to your phone over Tailscale (1 Hz tick),
-lets you send keystrokes back, and shows status pills (idle / busy / needs you). On top of that it logs and
+lets you send keystrokes back, and shows status pills (idle / working / needs you / done). On top of that it logs and
 classifies every stop, tracks token usage and plan quota, coordinates deploys and device leases, and is the
 hands of an AI manager that keeps the sessions moving.
 
@@ -15,8 +17,8 @@ hands of an AI manager that keeps the sessions moving.
 
 ### The setup
 
-One person runs a dozen or more AI coding agents at the same time, each in its own tmux session on one coding VM
-(`codebox`), each on its own task in its own git worktree: Claude Code, Codex and MiniMax side by side. Most of
+One person runs a dozen or more AI coding agents at the same time on one coding VM,
+each in its own tmux session and git worktree: Claude Code, Codex and MiniMax side by side. Most of
 those tasks build and test one shared product: a platform of servers, test hosts and real devices
 (set-top boxes, phones, emulators). The agents deploy to that platform and run tests on its devices.
 
@@ -27,7 +29,7 @@ That works far better than one agent at a time, and it creates problems a single
 | Constraint | What goes wrong without a tool |
 |---|---|
 | **Attention.** One owner, 15 panes, often away from the desk | Agents stop for small reasons: "continue?", a menu with an obvious choice, "waiting for the deploy", "should I deploy?", or a plain "next I'll do X" and then nothing. Nobody sees it, and work sits still for hours. |
-| **Tokens and money.** Three flat subscriptions: Claude Max (200 €/month), ChatGPT Plus for Codex (20 €/month), MiniMax Token Plan (40 €/month), each with a 5-hour and a weekly window | No single view of how much each session burns. One runaway session can eat the week's Claude window and block the urgent work. The same job can cost ten times more on one agent or model than on another. |
+| **Tokens and money.** Multiple agent subscriptions with different usage windows and limits | No single view of how much each session burns. One runaway session can eat the week's Claude window and block the urgent work. The same job can cost ten times more on one agent or model than on another. |
 | **Visibility.** Who did what, what is deployed, where each task stands | Answers live in 15 scrollbacks. "Was my fix deployed? Which version? Who restarted the server?" has no answer. |
 | **Shared platform.** One test platform, exclusive devices | A deploy restarts services under another agent's test run. Two agents drive the same set-top box. An agent waits for a deploy nobody runs, or deploys over someone else's run. |
 | **Phone only.** The owner is often away | Decisions must be one tap from the phone, with no extra app. |
@@ -39,7 +41,7 @@ That works far better than one agent at a time, and it creates problems a single
 |---|---|
 | Attention | Live cards for every session with a state (working / waiting / done / idle). Every stop is logged and classified (`stall.js`: continue, recommended menu option, permission, owner decision, done, error, stopped short, waiting for a deploy, owner action). A swipe page lets the owner label stops good or bad, which measures the classifier. Safe stops can be answered automatically after a cancellable countdown; everything else goes to the owner with Jev's call and an AI reviewer's proposed reply. |
 | Tokens and money | Usage tailers read every agent's transcripts into a ledger and a local Langfuse: tokens and API-equivalent cost per session, project, agent, model and day, with outliers flagged. Live plan quota: Claude from its status line, Codex from `codex app-server`, MiniMax from its plan endpoint. Priority P0 / P1 / P2 per session, and a policy that holds low-priority sessions before a plan runs out. |
-| Visibility | One dashboard: sessions, usage, quota, OpenRouter credit, Jev's decisions, deploys, leases, codebox health. A reporter plugin inside each Claude session reports exact events (turn end, prompt, permission, subagents) instead of guessing from the screen. Every send is recorded with who sent it (`by`). |
+| Visibility | One dashboard: sessions, usage, quota, OpenRouter credit, Jev's decisions, deploys, leases, host health. A reporter plugin inside each Claude session reports exact events (turn end, prompt, permission, subagents) instead of guessing from the screen. Every send is recorded with who sent it (`by`). |
 | Shared platform | Deploy queue in the shared lease registry (`vpt-lease`): agents request a deploy and wait; ghosty's runner deploys when no lease blocks it and records every deploy in a ledger (what, which version, when, by whom). Leases show on the session cards and on a Platforms page, and a session waiting for a deploy gets its own badge. |
 | Phone only | Installable PWA / Android TWA over Tailscale; Web Push for "needs you" alerts. |
 | Safety | A forbidden-topic filter that always wins; automatic answers off until measured; per-session and global switches; non-owner senders can only type into a pane that really runs an agent; the owner's Pause sends Esc and holds. |
@@ -75,53 +77,67 @@ Its limits are fixed: it acts only through actions the owner could take from thi
 logged with `by`, every capability has a switch, and it never answers anything touching deploys, merges, deletes,
 credentials, money or customers.
 
-Goals, each with a measurable "done when", and the full operating manual live with the task that builds this:
-TASK-44 (`docs/tasks/TASK-44-ai-manager.md` and `TASK-44-MANAGER.md` in the platform repo). Today the watching,
-logging, usage, quota, deploy queue and reporter are live. Automatic answering is built but off until the
-owner's labels show it agrees often enough. The manager agent session is the next step.
+Historical goals and a platform-specific operating manual were tracked externally in:
+TASK-44 (`docs/tasks/TASK-44-ai-manager.md` and `TASK-44-MANAGER.md` in the platform repo). Those documents are not included here and are not prerequisites for a core install.
+Use source defaults and the current installation's saved settings to determine which features are active.
 
 ## Access
 
-- Phone must be on the same Tailscale tailnet as `codebox`.
-- **Plain HTTP**: `http://<codebox-tailnet-ip>:7777/` — works, but Chrome won't
-  show the "Install" PWA option. Use Chrome menu → "Add to Home Screen".
-- **HTTPS (recommended for PWA install)**: `https://<codebox-tailnet-ip>:7443/`
-  — accepts a self-signed cert once, after which Chrome treats it as installable
-  and the orange ↓ button in the topbar fires the system install prompt.
+Follow [INSTALL](INSTALL.md) for Tailscale setup, access policy, HTTPS and service operation.
+The recommended mode is private Tailscale Serve forwarding to `HOST=127.0.0.1` on port 7777.
+Direct access binds to a literal Tailscale IP and optionally serves native TLS on 7443.
+The source default `0.0.0.0` listens on every IPv4 interface; no host firewall protection is implied by this repository.
+PWA, push and microphone features need trusted HTTPS; clicking through a self-signed warning is not a reliable substitute.
 
-The server listens on `0.0.0.0:7777` and `0.0.0.0:7443`. It is reached via
-the machine's Tailscale IP (see `tailscale ip -4`). The Proxmox firewall on
-`vmbr0` does not expose these ports to LAN guests — only tailnet peers can reach them.
+## Run the service
 
-## Run on codebox
-
-```bash
-cd ~/ghosty-sessions
-npm install --omit=dev
-sudo ln -sf $PWD/systemd/ghosty-sessions.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ghosty-sessions
-sudo systemctl status ghosty-sessions --no-pager
-journalctl -u ghosty-sessions -f
-```
-
-If you don't want systemd, just `npm start` in a tmux session — the same `server.js`.
+Use [INSTALL](INSTALL.md#persistent-service-configuration), including the explicit launch-command overrides.
+The checked-in systemd units have deployment-specific paths and settings. Copy and adapt them; do not symlink them unedited.
+See [updates](INSTALL.md#update-and-uninstall) before restarting.
 
 ## Configuration
 
-Env vars (defaults shown). The unit sets the non-secret ones and loads the gitignored
-`~/ghosty-sessions/.env` for the rest:
+Environment variables (source defaults below). Node does not automatically load `.env`; the adapted systemd unit
+loads its configured `EnvironmentFile`. Use absolute paths and protect private files with mode 0600. Environment
+files can override unit `Environment=` values. Saved manager settings in the state directory persist across restarts.
+For safe initial values, follow [INSTALL](INSTALL.md).
 
-```bash
+```ini
 # ~/ghosty-sessions/.env  (chmod 600, never committed)
-NTFY_TOPIC=ghosty-codebox-<random>      # subscribe to the same topic in the ntfy phone app
-PUBLIC_URL=http://<tailscale-ip>:7777     # notification tap opens /?s=<session>
+NTFY_TOPIC=<long-random-private-topic>      # subscribe to the same topic in the ntfy phone app
+PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<session>
 ```
+
+| var | default | meaning |
+|---|---|---|
+| `PORT`        | `7777` | listen port |
+| `HOST`        | `0.0.0.0` | listen address; explicitly use `127.0.0.1` behind private Serve, or a literal Tailscale IP; not an interface name |
+| `TICK_MS`     | `1000`  | pane capture cadence |
+| `PANE_LINES`  | `1000`  | scrollback lines captured for a session with an open card (a WebSocket viewer); the unit sets 2000 |
+| `PANE_LINES_BG` | `300` | scrollback lines for every other session (state, reply and manager only need the tail) |
+| `NTFY_TOPIC`  | unset   | enable optional ntfy push (Web Push is always on): a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
+| `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
+| `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
+| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
+| `HEALTH_MS`   | `5000`  | host health sample cadence (CPU, load, RAM, disk) |
+| `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
+| `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
+| `JEV_URL` / `JEV_API_KEY` | unset | AI manager: the VPT server's `POST /server/ai/decide` and its `API_KEY` (Jev for ambiguous stalls). Unset = rules only |
+| `VPT_TEAM_ID` | unset | team of the VPT server's decision log (`<team-uuid>`, shown by the server's `/server/health`). With it the manager's Jev calls are written to the product's decision log (`log:true`, `team_id`, `refs`), outcomes are written back, and the Jev & AI tab / decisions page can read the server. Unset = Jev calls are not logged, those pages use ghosty's own log |
+| `JEV_DAILY_USD` / `JEV_DAILY_CALLS` | `0.25` / `2000` | Jev budget per UTC day; over it, ambiguous stalls stay with the owner |
+| `STALL_SETTLE_MS` | `5000` | a stopped pane must stay unchanged this long before it counts as a stall |
+| `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
+| `GHOSTY_FORBIDDEN_EXTRA` | unset | extra regex of never-auto-answer words (customer names etc. — keep them out of the public repo) |
+| `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
+| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | source UI launch defaults; override with normal installed commands in INSTALL. Other launch paths must be reviewed separately |
+| `TLS_KEY` / `TLS_CERT` | `certs/key.pem` / `certs/cert.pem` under checkout | native TLS starts only when both exist; same HOST as HTTP |
+| `TLS_PORT` | `7443` (`443` if PORT=443) | native HTTPS port; HTTP remains enabled |
+| `TMUX_BIN` | `tmux` | tmux executable |
 
 ### Langfuse evaluation (TASK-44 phase 12)
 
-The manager's labels feed the local Langfuse's evaluation features (Langfuse 3.x; scores, datasets, prompts work;
-see "Judge" for why its evaluators do not).
+The manager can send labels to a configured Langfuse instance. The integration notes below include historical
+Langfuse 3.x observations; validate compatibility against your installed version before enabling evaluation.
 
 - **Scores** (`usage/lfeval.js`, run by the tailer after each pass; own state file `lfeval-state.json`, replay-safe):
   `stop_verdict` (categorical legit / no_reason), `stop_case_correct` (boolean), `ai_proposal_correct` (boolean, the
@@ -132,7 +148,7 @@ see "Judge" for why its evaluators do not).
   CLI: `node usage/lfeval.js [--stalls f] [--state f] [--force]` (one pass; reads the log, never writes it).
 - **Dataset `ghosty-stops`**: one item per labelled stop (item id = stop id). input `{closing_text, case_by_rules, agent,
   state}`, expected output `{verdict, correct_case?, owner_reply_kind?}`, metadata `{session, stop_id, at}`. The closing
-  text is in it: this Langfuse is local to the box; never export the dataset into the repo or a fixture. Unlabel archives the item.
+  text is in it: ensure the configured Langfuse endpoint is approved to receive session text; never export the dataset into the repo or a fixture. Unlabel archives the item.
 - **Experiments**: `node scripts/stops-experiment.js --run-name <name> [--classifier rules|jev|ai]` runs the classifier
   over the active items and records a dataset run (a trace per item, scores `case_match` / `verdict_match`, run scores
   `case_accuracy` / `verdict_accuracy`). `rules` is free; `jev` / `ai` call the real endpoints (needs `JEV_URL`, `JEV_API_KEY`).
@@ -141,12 +157,11 @@ see "Judge" for why its evaluators do not).
   fetched with a 10-minute cache (`prompts.js`); the hard-coded `REVIEWER_SYSTEM` is the fallback (Langfuse unset, down, or
   no such prompt). The triage record and the generation carry the prompt name + version. ghosty needs `LANGFUSE_URL`,
   `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` in its own environment (the usage unit already has them; add
-  `EnvironmentFile=-/home/jndoye/.config/ghosty/usage.env` to `ghosty-sessions.service`) - until then the fallback is used.
+  `EnvironmentFile=-/home/<user>/.config/ghosty/usage.env` to `ghosty-sessions.service`) - until then the fallback is used.
   Edit the prompt in Langfuse (new version, move the `production` label) to change the reviewer without a deploy.
 - **Judge** (`ai_proposal_judge`, 0..1 + reasoning): `scripts/lf-setup.js` creates the OpenRouter LLM connection, the
-  evaluator and its rule in Langfuse, but observation-level evaluators need Langfuse v4's events tables
-  (`LANGFUSE_MIGRATION_V4_WRITE_MODE`, ClickHouse 25.12); this v3.225 deployment has none, so the rule never fires. The
-  same judge therefore runs in the tailer (`usage/judge.js`): opt-in `LFEVAL_JUDGE=1` + `JEV_URL` + `JEV_API_KEY` in the usage
+  evaluator and its rule in Langfuse, but the historical v3.225 deployment did not run those observation-level rules.
+  Do not assume this limitation applies to every current version. The alternative judge runs in the tailer (`usage/judge.js`): opt-in `LFEVAL_JUDGE=1` + `JEV_URL` + `JEV_API_KEY` in the usage
   unit's environment (the judge goes through the VPT server's `POST <JEV_URL origin>/server/ai/complete` with `X-API-Key`,
   same as the AI reviewer in `triage.js` — no OpenRouter key is needed in the ghosty env); at most `LFEVAL_JUDGE_MAX_PER_DAY`
   (400) proposals, sampling `LFEVAL_JUDGE_SAMPLING` (1), only proposals of the last 24 h, each once. It sends the case, flags
@@ -157,28 +172,6 @@ see "Judge" for why its evaluators do not).
 - **Panel**: manager panel -> "Langfuse" links (scores, dataset, evaluator, prompt) from `LANGFUSE_PUBLIC_URL` (else
   `LANGFUSE_URL`) and `LANGFUSE_PROJECT` (default `codebox-usage`).
 
-| var | default | meaning |
-|---|---|---|
-| `PORT`        | `7777` | listen port |
-| `HOST`        | `0.0.0.0` | listen addr (`tailscale0` is the safest) |
-| `TICK_MS`     | `1000`  | pane capture cadence |
-| `PANE_LINES`  | `1000`  | scrollback lines captured for a session with an open card (a WebSocket viewer); the unit sets 2000 |
-| `PANE_LINES_BG` | `300` | scrollback lines for every other session (state, reply and manager only need the tail) |
-| `NTFY_TOPIC`  | unset   | enable optional ntfy push (Web Push is always on): a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
-| `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
-| `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
-| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
-| `HEALTH_MS`   | `5000`  | codebox health sample cadence (CPU, load, RAM, disk) |
-| `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
-| `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
-| `JEV_URL` / `JEV_API_KEY` | unset | AI manager: the VPT server's `POST /server/ai/decide` and its `API_KEY` (Jev for ambiguous stalls). Unset = rules only |
-| `VPT_TEAM_ID` | unset | team of the VPT server's decision log (`<team-uuid>`, shown by the server's `/server/health`). With it the manager's Jev calls are written to the product's decision log (`log:true`, `team_id`, `refs`), outcomes are written back, and the Jev & AI tab / decisions page can read the server. Unset = Jev calls are not logged, those pages use ghosty's own log |
-| `JEV_DAILY_USD` / `JEV_DAILY_CALLS` | `0.25` / `2000` | Jev budget per UTC day; over it, ambiguous stalls stay with the owner |
-| `STALL_SETTLE_MS` | `5000` | a stopped pane must stay unchanged this long before it counts as a stall |
-| `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
-| `GHOSTY_FORBIDDEN_EXTRA` | unset | extra regex of never-auto-answer words (customer names etc. — keep them out of the public repo) |
-| `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
-| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude` / `codex` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | command typed into a session created via `POST /api/sessions` |
 
 ## Web Push (phone notifications, no extra app)
 
@@ -295,7 +288,7 @@ day. The transcript is found through the usage ledger: Claude session ids whose 
 today" block of the AI manager panel.
 
 **Health watchdog (zero tokens unless a problem remains).** `scripts/health-watch.js` (no deps, no AI calls) runs every
-5 minutes from `systemd/ghosty-health-watch.timer` (`.service`: oneshot, `User=jndoye`; install with `sudo cp` to
+5 minutes from `systemd/ghosty-health-watch.timer` (`.service`: oneshot, `User=<service-user>`; install with `sudo cp` to
 `/etc/systemd/system`, `daemon-reload`, `enable --now ghosty-health-watch.timer`). It checks disk % of `/`, load vs
 cores (sustained: the last samples in `~/.local/state/ghosty/health-watch-state.json`), RAM available %, runaway
 processes (yours, older than `runawayHours`, and RSS over `runawayRssMB` or CPU over `runawayCpu` % across two
@@ -324,8 +317,8 @@ Fix levels (`fixLevel`, only acted on when the disk check trips): `report` = no 
 --user --vacuum-time=7d` (skipped without rights), `npm cache clean --force` when `~/.npm` > 1 GB; `cleanup+orphans`
 (OFF by default) also SIGTERMs runaway / bare `node --test` processes that belong to no live tmux or Claude session;
 `cleanup+worktrees` also runs `git worktree remove` (never forced) on worktrees that are clean, merged
-into `main` and have no live session (no orphan kills); `cleanup+all` = both. On codebox since 2026-10-05: `cleanup+worktrees`
-(owner: "if a worktree has no session, delete"). Never touched: anything under a live session, any other worktree, anything
+into `main` and have no live session (no orphan kills); `cleanup+all` = both. These are destructive optional modes;
+configure only within the owner's authorization. Historical deployment choices are not default permissions. Never touched: anything under a live session, any other worktree, anything
 outside `/tmp/claude-1000` for the scratch cleanup. Every deletion and its size goes in the report.
 
 The AI manager is woken only if a problem REMAINS after the fixes (disk still over the limit) or needs a decision (a
@@ -467,9 +460,11 @@ a waiting session is covered by the existing "needs you" push.
 | `scoreWeights` | `{quality:0.4, coverage:0.3, efficiency:0.3}` | how the three components combine into the scorecard number; a component that is null drops out and the others renormalise |
 | `planBudget` | `{claudeWeeklyPct:10}` | scorecard `efficiency` is 1 when the manager's Claude weekly share is at or under this budget pro-rated to the elapsed fraction of the plan-week, falling linearly to 0 at 3x that; `null` when no Claude quota data |
 
-The robot icon in the top bar opens the manager panel: global auto-answer switch, per-case
-checkboxes, per-session on/off, today's answered / cancelled / escalated counts and the last 30
-log entries.
+The robot icon in the top bar opens the manager panel. Its first view shows whether automatic replies,
+AI replies and deploys can actually run, plus stops awaiting review and today's outcomes. Expand the
+sections to choose routine reply types, AI reply types, deploy behavior, quota policy or sessions; activity
+and Langfuse details are further down. Selecting AI **Auto** alone does not send replies: the reviewer
+must be configured, automatic replies must be on, and at least one AI reply type must be enabled.
 
 **Policy by priority and quota** (`public/policy.js`, pure and unit-tested). At a stall the manager
 would auto-answer (all safety gates above already passed), the policy decides `allow` or `hold`:
@@ -614,7 +609,7 @@ down the session behaves as without the plugin (one failed try, then 30 s of sil
 settings otherwise):
 
 ```json
-{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/home/jndoye/ghosty-sessions/claude-plugin/ghosty-reporter" } }
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/home/<user>/ghosty-sessions/claude-plugin/ghosty-reporter" } }
 ```
 
 New sessions pick it up; running ones keep going without it. One session only: `claude --plugin-dir <folder>`.
@@ -671,7 +666,7 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
   `$GHOSTY_STATE_DIR/deploys/<id>.log`. Without `health`, only update_core's exit code decides done / failed.
 - One running deploy per env. Queued requests with the same env + ref that the running scope covers (`full` covers all; other scopes only
   themselves) are finished with its result (`coalescedInto`).
-- Registry: `ssh proxmox '~/bin/vpt-lease ...'`; `DEPLOY_REGISTRY='["python3","/path/vpt-lease"]'` runs it locally (tests, live checks).
+- Registry: the default SSH adapter is deployment-specific (see `deploy-runner.js`). Override `DEPLOY_REGISTRY` with a JSON command array for your registry; for example, `DEPLOY_REGISTRY='["python3","/path/vpt-lease"]'` for a local registry. This setting does not configure every other lease adapter.
   `DEPLOY_POLL_MS`, `DEPLOY_TIMEOUT_MS` override the timings.
 - **Survives a restart (BUG-0341).** The deploy child is detached (own session, output to `deploys/<id>.run` via a file descriptor) and a
   tiny `sh` wrapper writes `deploys/<id>.pid` / `<id>.exit`. A restarted ghosty re-adopts every `running` deploy of the runner whose
@@ -687,18 +682,18 @@ Open it from the ⋮ menu -> Platforms, from a lease chip / purple badge, or `/?
 One block per platform/env, BLOCKED first, then DEPLOYING, then FREE: a status pill, **NEXT DEPLOY** in one line
 (scope, ref, who, when it can start = the end of the lease it waits on, Cancel; several queued fold under "N more"),
 **IN USE** (every lease, red when it blocks the next deploy), **LIVE** (every target in the ledger, red when its last
-attempt failed) and a collapsed **History**. Agent ids show as plain names (`codebox:TASK-28-x` -> task28,
-`claude-mac:...` -> mac, `manager:deploy` -> manager; "session gone" when a codebox holder has no live tmux session).
+attempt failed) and a collapsed **History**. Agent ids are shortened for display; "session gone" means a recognized local holder has no live tmux session.
+See `public/platforms.js` for legacy alias handling.
 What blocks follows the runner: full deploys wait on `run` and env-wide leases, host deploys on env-wide ones
 (`effectiveBlockers` in `public/platforms-view.js`, same rule as `vpt-lease` with `--skip-leased`).
 
-- **Exact ownership.** A lease belongs to a session iff its agent is `<machine>:<tmux session name>`, case-insensitive;
-  `<machine>` is `codebox` or this host's name. Agents get it with `AGENT="codebox:$(tmux display-message -p '#S')"` (deploy skill).
-  There is no fuzzy guess: a codebox holder without that exact session shows as "session gone". Code: `public/platforms.js` (pure, shared with the server),
+- **Exact ownership.** A lease belongs to a session iff its agent is `<machine>:<tmux session name>`, case-insensitive.
+  Use the actual host name; the implementation also recognizes a legacy alias. Generate holder IDs locally, never hard-code a private host name in documentation.
+  There is no fuzzy guess: a recognized local holder without that exact session shows as "session gone". Code: `public/platforms.js` (pure, shared with the server),
   `leases.js` (reads `vpt-lease list --json`, 15 s cache, injectable `run`).
 - **Status payload.** `status[session].lease` = `[{env, resource, ttlLeftMin, purpose, blocksDeploy}]` (`blocksDeploy`: an
   awaiting-approval or queued deploy of that env whose scope touches the resource). `/api/leases` and the `leases` WS message also carry `waiters` and `hostname`.
-- **Lease chip.** Only a session holding a lease gets `🔒 pi1/stb4 · 1h40` (`+N` for more) in the card header and board row; amber
+- **Lease chip.** Only a session holding a lease gets `<platform>/<device> · 1h40` (`+N` for more) in the card header and board row; amber
   `· blocks deploy` while a pending deploy waits on it. Tap -> Platforms scrolled to that resource.
 - **Purple "waiting deploy"** (`status[session].deployWait`, state badge, card border, row, tab, NEEDS-YOU order right after red): the session
   (1) is the requester of an awaiting-approval / queued / running deploy, (2) is a registered waiter (`vpt-lease deploy wait --agent`; the
@@ -729,8 +724,8 @@ reading after a restart only seeds, it does not alert).
 
 | plan | source | notes |
 |---|---|---|
-| Codex (Plus, 20 EUR/month) | live account read: `codex app-server` over stdio JSON-RPC (`initialize`, `initialized`, `account/rateLimits/read`), killed after the answer, 20 s timeout, no model call | 5h = `primary` (300 min), week = `secondary` (10080 min); a window whose reset time has passed reads 0 % (`expired`) |
-| Claude Max (200 EUR/month) | `$GHOSTY_STATE_DIR/claude-rate-limits.json` written by `scripts/claude-statusline-ratelimits.sh` | no limit file exists on disk; Claude Code passes `rate_limits` (`five_hour`, `seven_day`: `used_percentage`, `resets_at`, Pro/Max logins, after the first reply) to its status-line command. Shows `?` until the script is installed as the status line |
+| Codex | live account read: `codex app-server` over stdio JSON-RPC (`initialize`, `initialized`, `account/rateLimits/read`), killed after the answer, 20 s timeout, no model call | 5h = `primary` (300 min), week = `secondary` (10080 min); a window whose reset time has passed reads 0 % (`expired`) |
+| Claude | `$GHOSTY_STATE_DIR/claude-rate-limits.json` written by `scripts/claude-statusline-ratelimits.sh` | no limit file exists on disk; Claude Code passes `rate_limits` (`five_hour`, `seven_day`: `used_percentage`, `resets_at`, Pro/Max logins, after the first reply) to its status-line command. Shows `?` until the script is installed as the status line |
 | MiniMax (Token Plan) | the calls mcode's `/usage` makes: `GET platform.minimax.io/v1/api/openplatform/coding_plan/remains` with mcode's stored login as bearer token (read per request, in memory, never logged or kept) (plan name/expiry are not read: that needs mcode's signed client calls, deliberately not replicated) | 5h used % = 100 - remaining %; week is `unlimited:true` (no %, never triggers the weekly-projection hold) or a %. The login is never refreshed: when mcode's access token has expired the plan shows the last value as stale with `mcode login expired — open mcode once` |
 
 A failed read keeps the last good value with `stale:true` and an `error` (the quota sheet shows it); a stale plan
@@ -745,17 +740,11 @@ Claude status line: in `~/.claude/settings.json` set
 
 ## Usage (Langfuse)
 
-A local Langfuse (v3) on the host plus a tailer, `usage/ingest.js`, give token usage and cost per
-session, project, agent, model and day. The tailer sends usage numbers and ids only, never prompt or
-reply text.
+The tailer, `usage/ingest.js`, produces token usage and API-equivalent cost per session, project, agent, model and day.
+Usage records contain numbers and identifiers; evaluation/dataset features can additionally send closing text as described above.
 
-- **Langfuse**: Docker compose in `~/langfuse-codebox/` (outside any repo; web, worker, Postgres,
-  ClickHouse, Redis, MinIO, named volumes, `restart: unless-stopped`). Only the web UI is published,
-  on `127.0.0.1:3100` and the tailnet IP `:3100` (open `http://<tailnet-ip>:3100`). Login, project
-  `codebox-usage` and its API keys come from the headless-init variables in
-  `~/langfuse-codebox/.env` (chmod 600). Telemetry and signup are off.
-- **Tailer**: unit `systemd/ghosty-usage.service` (`sudo ln -sf $PWD/systemd/ghosty-usage.service /etc/systemd/system/`,
-  `daemon-reload`, `enable --now`). It reads the API keys from `~/.config/ghosty/usage.env`
+- **Langfuse**: optional separately deployed service, outside this repository. Configure `LANGFUSE_URL`, project keys and access controls for your installation. Do not assume any deployment's Docker configuration, signup or telemetry settings. Keep its private configuration outside the checkout.
+- **Tailer**: copy and adapt `systemd/ghosty-usage.service` using the same path/user review as the main unit in INSTALL before enabling it. It reads the API keys from `~/.config/ghosty/usage.env`
   (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, optional `LANGFUSE_URL`), chmod 600.
 - **Sources**: Claude Code transcripts (`~/.claude/projects/**/*.jsonl`, including `subagents/`), Codex
   rollouts (`~/.codex/sessions/**/*.jsonl`, one generation per `token_usage_record`), and MiniMax
@@ -843,9 +832,9 @@ in / out / cache r / cache w (`12.3M`). A session row opens that session's card;
 ## Architecture
 
 ```
-┌────────────┐  capture-pane  ┌─────────────────┐  WebSocket :7777  ┌────────┐
+┌────────────┐  capture-pane  ┌─────────────────┐  WebSocket / TLS  ┌────────┐
 │  tmux      │ ─────────────▶ │ ghosty-server   │ ─────────────────▶ │ phone  │
-│  (11 sess) │  tmux send-keys│ (Node 20+, ws)  │  JSON snapshot    │ (PWA)  │
+│  (sessions) │  tmux send-keys│ (Node 20+, ws)  │  JSON snapshot    │ (PWA)  │
 └────────────┘ ◀───────────── └─────────────────┘                   └────────┘
                               also: /api/sessions, /api/send/:s
 ```
@@ -859,65 +848,32 @@ in / out / cache r / cache w (`12.3M`). A session row opens that session's card;
 
 | state | meaning |
 |---|---|
-| `wait` | pane contains a permission prompt (`[Y/n]`, `(y/N)`, `Allow?`, etc.) |
-| `busy` | activity in last 5 s **and** pane contains a generation glyph (`⠿`, `Thinking`, …) |
-| `busy` | activity in last 2 s (anything typing) |
-| `idle` | otherwise |
-| `offline` | session is not in `tmux list-sessions` |
+| `waiting` | detected question or permission prompt needing input |
+| `working` | detected agent activity |
+| `done` | detected finished turn; becomes idle after the configured interval |
+| `idle` | no current work/prompt detected |
+| `offline` | session unavailable |
+| `deploy` (display only) | deployment wait overlays raw state except waiting/offline |
 
-Tune `classify()` in `server.js` if you want stricter or looser behaviour.
+Parsing and activity detection live in `server.js`; `public/state.js` defines display labels and precedence.
+These are heuristics, supplemented by reporter facts, not proof that a task succeeded. Preserve tests when changing them.
 
 ## Files
 
-```
-.
-├── server.js                        # HTTP + WS + tmux
-├── package.json
-├── public/
-│   ├── index.html                   # PWA shell
-│   ├── app.js                       # controller
-│   ├── prio.js                      # priority helpers shared with the server
-│   ├── policy.js                    # quota policy + agent suggestion (pure, shared)
-│   ├── platforms.js                 # lease ownership, lease chip, waiting-for-deploy, Platforms view model (pure, shared)
-│   ├── deployed.js                  # "deployed now" view model
-│   ├── usage.js                     # usage view helpers: formatting, summary -> session rows (pure, shared)
-│   ├── style.css                    # ghosty dark
-│   ├── manifest.webmanifest
-│   ├── sw.js                        # service worker
-│   ├── icon.svg / icon-{192,512}.png
-│   └── vendor/                      # xterm.js + xterm-addon-fit (offline)
-├── api-extras.js                    # `by` (actor) validation + POST /api/alert handler (rate limit)
-├── reporter.js                      # intake of the ghosty-reporter plugin events (token, latest facts per session)
-├── claude-plugin/ghosty-reporter/   # the Claude Code plugin (hooks/register.ts, tests)
-├── leases.js                        # `vpt-lease list --json` reader (cached, injectable)
-├── session-meta.js                  # priority + pause hold (sessions.json)
-├── quota.js                         # Codex / Claude / MiniMax quota windows
-├── usage/                           # Langfuse usage tailer + prices, eval sync (lfeval), judge, experiment
-├── prompts.js                       # Langfuse prompt fetch (10 min cache, hard-coded fallback)
-├── usage-view.js                    # /api/usage + per-session status usage (cached summary)
-└── systemd/
-    ├── ghosty-sessions.service
-    └── ghosty-usage.service
-```
+See the maintained [repository map](MAP.md) for components, tests and persistent data. The route inventory is at the top of `server.js`; handlers and tests are the authority for request/response details.
 
 ## Adding xterm sessions automatically
 
-Every tmux session on `codebox` shows up in Ghosty. To start a new Claude session:
-
-```bash
-ssh codebox
-tmux new-session -d -s my-new-task -c ~/virtualpytest \
-  '$HOME/.local/bin/claude --dangerously-skip-permissions; bash -l'
-```
-
-It appears in the sidebar within ~1 s.
+Every tmux session visible to the server's Unix user/socket appears in the dashboard. See [Usage](USAGE.md#first-session)
+for creating a session without bypassing agent permissions. UI launch commands are configured above.
 
 ## Security
 
-- Tailscale ACL is the only gate.
-- No auth prompt in the UI by design — anyone on your tailnet is "you".
-- `tmux send-keys` runs as `jndoye`, scoped to the session name in the URL.
-  Validate inputs server-side if you ever expose this beyond your tailnet.
+- No user authentication: every client allowed to reach the endpoint can read and control sessions as the service user.
+- Bind explicitly and restrict tailnet grants/ACLs. Never publish the service with Funnel or a public tunnel/proxy.
+- Keep Origin checks, exact tmux targets, body/input validation and reporter tokens intact; none replaces the network gate.
+- Optional providers can receive data: ntfy receives alert content; AI review can receive session text; Langfuse evaluation can store closing text. Configure and assess these separately.
+- See [agent contract](CONTRACT.md) for invariants and [INSTALL](INSTALL.md) for operational checks.
 
 ## License
 
@@ -930,8 +886,8 @@ glyphs (⏸ ⚡ ⚠ ▲ …) or one-off `<svg>` markup: add the icon to `ICONS`,
 
 ## Lease binding (TASK-58 C1)
 
-`lease-watch.js` polls `vpt-lease` on proxmox every 30 s: it writes `lease:released|expired|narrowed` to manager-events.jsonl (never pushed),
-releases a lease whose `codebox:<session>` holder is gone (seen in tmux before, missing on two polls in a row), and narrows a `kind=server`
+`lease-watch.js` polls the configured external `vpt-lease` registry every 30 s: it writes `lease:released|expired|narrowed` to manager-events.jsonl (never pushed),
+releases a lease whose recognized `<machine>:<session>` holder is gone (seen in tmux before, missing on two polls in a row), and narrows a `kind=server`
 lease to `host` when the holder had no finished turn for 30 min (never releases an idle holder). Everything automatic is logged with
 `by:"TASK58-C1"` in `lease-actions.jsonl`. `manager.json` `leaseBind`: `"dry"` (log only) or `"off"`; default live. `GET /api/leases/watch` shows
 each holder (live / ended / remote / unknown / system) and the planned action. The reporter plugin releases a session's leases on SessionEnd

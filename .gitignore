@@ -8,3 +8,4 @@ certs/cert.pem
 public/codebox.apk
 .certs-bak/
 .manager-s4.md
+__pycache__/

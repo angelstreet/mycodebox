@@ -2553,7 +2553,7 @@ function openManager() {
       const unreviewed = (log.entries || []).filter((r) => r.type === 'stall' && !labels.has(r.id)).length;
       const aiReady = cfg.aiTriage === 'auto' && cfg.autoSend && cfg.ai && (cfg.aiAutoCases || []).length > 0;
       const reviewerState = cfg.aiTriage === 'off' ? 'Off' : aiReady ? 'Can send' : cfg.aiTriage === 'auto' ? 'Suggestions only' : 'Suggestions';
-      const aiChoices = cfg.validAiCases || [];
+      const aiChoices = cfg.validAiCases || (cfg.cases || []).filter((c) => !['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait'].includes(c));
       const section = (key, heading, detail, content) => `<details class="mgr-section" data-manager-section="${key}" ${sectionsOpen.has(key) ? 'open' : ''}><summary><span>${heading}<small>${detail}</small></span></summary><div class="mgr-section-body">${content}</div></details>`;
       const scroll = body.scrollTop;
       body.innerHTML = `

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manager — page concept</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0d1017; --surface:#161b25; --surface2:#1c2330; --line:#354052; --text:#f0f3f8; --muted:#b7c1cf; --quiet:#8c9aad; --orange:#f4a354; --orange-bg:#3a281d; --green:#64d59b; --red:#fa8888; --blue:#8ebcff; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    button { font:inherit; cursor:pointer; }
+    button:focus-visible, a:focus-visible { outline:3px solid var(--orange); outline-offset:3px; }
+    .shell { display:grid; grid-template-columns:240px minmax(0,1fr); min-height:100vh; }
+    .rail { position:sticky; top:0; align-self:start; height:100vh; border-right:1px solid var(--line); padding:28px 16px; background:#111620; display:flex; flex-direction:column; gap:28px; }
+    .brand { padding:0 12px; color:var(--text); font-size:18px; font-weight:750; letter-spacing:.02em; }
+    .brand span { color:var(--orange); }
+    .nav { display:grid; gap:6px; }
+    .nav button { width:100%; min-height:46px; padding:9px 14px; text-align:left; color:var(--muted); background:none; border:1px solid transparent; border-radius:10px; }
+    .nav button[aria-current="page"] { color:var(--text); background:var(--surface2); border-color:var(--line); font-weight:700; }
+    .nav .count { float:right; min-width:27px; padding:1px 6px; border-radius:8px; color:var(--orange); background:var(--orange-bg); text-align:center; font-size:13px; font-weight:700; }
+    .rail-foot { margin-top:auto; padding:0 12px; color:var(--quiet); font-size:13px; }
+    .main { min-width:0; padding:32px clamp(18px,3vw,48px) 64px; max-width:1560px; width:100%; margin:0 auto; }
+    .top { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:30px; }
+    .eyebrow { color:var(--orange); font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.12em; }
+    h1 { font-size:clamp(30px,3.3vw,42px); line-height:1.12; margin:6px 0 8px; letter-spacing:-.03em; }
+    .subtitle { color:var(--muted); margin:0; max-width:650px; }
+    .preview { display:inline-flex; gap:9px; align-items:center; margin-top:6px; padding:9px 12px; border:1px solid #8b673d; border-radius:9px; background:#30261e; color:#ffcf95; font-size:13px; font-weight:700; }
+    .preview::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--orange); }
+    [hidden] { display:none !important; }
+    .section-head { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin:26px 0 13px; }
+    h2 { font-size:21px; line-height:1.3; margin:0; letter-spacing:-.01em; }
+    h3 { font-size:17px; line-height:1.3; margin:0; }
+    .section-head a, .text-link { color:var(--orange); font-weight:700; text-decoration:none; }
+    .section-head a:hover, .text-link:hover { text-decoration:underline; }
+    .kpis { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+    .kpi, .panel, .request { border:1px solid var(--line); border-radius:14px; background:var(--surface); }
+    .kpi { padding:18px; min-width:0; }
+    .kpi .label { color:var(--muted); font-size:14px; font-weight:650; }
+    .kpi .value { display:block; margin:8px 0 4px; font-size:23px; line-height:1.25; font-weight:780; letter-spacing:-.025em; }
+    .kpi .value.good { color:var(--green); } .kpi .value.warn { color:var(--orange); }
+    .kpi .detail { color:var(--muted); font-size:14px; }
+    .two-col { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(285px,.8fr); gap:18px; align-items:start; }
+    .stack { display:grid; gap:12px; }
+    .request { padding:20px; border-left:4px solid var(--orange); }
+    .request.critical { border-left-color:var(--red); }
+    .request-top { display:flex; flex-wrap:wrap; align-items:center; gap:7px 10px; margin-bottom:8px; }
+    .pill { padding:3px 8px; border-radius:7px; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+    .pill.orange { background:var(--orange-bg); color:#ffbc78; } .pill.red { background:#412528; color:#ffabab; } .pill.green { background:#1a3a2d; color:#8ce5b4; }
+    .meta { color:var(--quiet); font-size:13px; }
+    .request p { margin:8px 0 13px; color:var(--muted); }
+    .quote { padding:11px 13px; border-radius:9px; border:1px solid var(--line); background:#111720; color:var(--text); overflow-wrap:anywhere; }
+    .proposed { margin-top:11px; color:var(--muted); font-size:14px; }
+    .proposed strong { color:var(--text); }
+    .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+    .btn { min-height:42px; padding:8px 14px; border:1px solid #536174; border-radius:9px; background:var(--surface2); color:var(--text); font-weight:700; }
+    .btn:hover { border-color:var(--orange); }
+    .btn.primary { background:var(--orange); border-color:var(--orange); color:#26180b; }
+    .btn.ghost { color:var(--orange); border-color:#855c35; background:transparent; }
+    .panel { padding:20px; }
+    .panel p { margin:7px 0 0; color:var(--muted); font-size:14px; }
+    .stat { display:flex; justify-content:space-between; gap:12px; padding:11px 0; border-bottom:1px solid var(--line); }
+    .stat:last-child { border-bottom:0; padding-bottom:0; }
+    .stat span { color:var(--muted); } .stat strong { font-size:17px; text-align:right; }
+    .metric { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:17px 0 7px; }
+    .metric div { padding:13px; background:var(--surface2); border-radius:10px; }
+    .metric b { display:block; font-size:24px; line-height:1.2; }
+    .metric span { color:var(--muted); font-size:13px; }
+    .timeline { display:grid; gap:0; padding:4px 0; }
+    .event { display:grid; grid-template-columns:55px minmax(0,1fr); gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+    .event:last-child { border:0; }
+    .event time { color:var(--quiet); font-size:13px; padding-top:2px; }
+    .event strong { display:block; font-size:14px; }
+    .event span { display:block; color:var(--muted); font-size:14px; }
+    .note { color:var(--muted); font-size:14px; }
+    .setting { display:flex; justify-content:space-between; gap:20px; padding:17px 0; border-bottom:1px solid var(--line); }
+    .setting:last-child { border:0; }
+    .setting strong { display:block; font-size:16px; }
+    .setting p { margin:3px 0 0; color:var(--muted); max-width:680px; font-size:14px; }
+    .state { flex-shrink:0; align-self:center; padding:5px 10px; border-radius:8px; font-size:14px; font-weight:800; color:var(--green); background:#1a3a2d; }
+    .state.dim { color:var(--muted); background:var(--surface2); }
+    .toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); padding:10px 14px; color:var(--text); background:#303b4e; border:1px solid #6a7d99; border-radius:10px; box-shadow:0 12px 30px #0008; z-index:10; font-size:14px; }
+    @media (max-width:1000px) { .shell { grid-template-columns:190px minmax(0,1fr); } .two-col { grid-template-columns:1fr; } }
+    @media (max-width:760px) { .shell { display:block; } .rail { position:sticky; z-index:5; width:100%; height:auto; padding:10px 14px; gap:8px; border-right:0; border-bottom:1px solid var(--line); } .brand { font-size:16px; padding:0 3px; } .rail-foot { display:none; } .nav { display:flex; overflow-x:auto; gap:3px; scrollbar-width:none; } .nav button { width:auto; min-height:40px; white-space:nowrap; padding:7px 10px; font-size:14px; } .nav .count { margin-left:5px; } .main { padding:22px 15px 56px; } .top { margin-bottom:23px; } .kpis { grid-template-columns:1fr; gap:7px; } .kpi { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:1px 8px; align-items:baseline; padding:9px 13px; } .kpi .value { grid-column:2; grid-row:1; margin:0; font-size:17px; text-align:right; } .kpi .detail { grid-column:1 / -1; font-size:13px; } .request, .panel { padding:16px; } .setting { flex-direction:column; gap:9px; } .state { align-self:flex-start; } }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail" aria-label="Manager navigation">
+    <div class="brand"><span>●</span> mycodebox <span style="color:var(--muted);font-weight:500">/ Manager</span></div>
+    <nav class="nav" aria-label="Views">
+      <button type="button" data-view="overview" aria-current="page">Overview</button>
+      <button type="button" data-view="inbox">Needs review <span class="count">3</span></button>
+      <button type="button" data-view="activity">Activity</button>
+      <button type="button" data-view="controls">Controls</button>
+    </nav>
+    <div class="rail-foot">Concept preview<br>Sample data only</div>
+  </aside>
+  <main class="main">
+    <header class="top"><div><div class="eyebrow">Manager workspace</div><h1 id="pageTitle">Overview</h1><p class="subtitle" id="pageSubtitle">What needs your decision, what can run automatically, and what happened today.</p></div><div class="preview">Design preview · sample data</div></header>
+
+    <section data-page="overview">
+      <div class="kpis" aria-label="Automation status">
+        <div class="kpi"><span class="label">Automatic replies</span><strong class="value good">On · 1 rule</strong><span class="detail">Routine “continue?” requests only</span></div>
+        <div class="kpi"><span class="label">AI reviewer</span><strong class="value warn">Suggestions only</strong><span class="detail">It proposes; you decide. 12 unrated suggestions.</span></div>
+        <div class="kpi"><span class="label">Deploy runner</span><strong class="value good">On · 2 waiting</strong><span class="detail">Approval stays with you</span></div>
+      </div>
+      <div class="section-head"><h2>Needs your attention</h2><a href="#inbox" data-go="inbox">View all 3 →</a></div>
+      <div class="two-col">
+        <div class="stack">
+          <article class="request critical"><div class="request-top"><span class="pill red">Approval needed</span><strong>Deploy request</strong><span class="meta">· 5 min ago</span></div><h3>Release check is waiting for approval</h3><p>A deploy was requested for the test platform. No automatic reply can approve it.</p><div class="quote">Scope: frontend · Reference: &lt;reviewed-ref&gt;</div><div class="actions"><button class="btn primary" data-demo="This opens the platform request in the proposed design.">Review deploy →</button><button class="btn ghost" data-go="activity">See related activity</button></div></article>
+          <article class="request"><div class="request-top"><span class="pill orange">Decision needed</span><strong>session-17</strong><span class="meta">· 11 min ago</span></div><h3>Agent needs a choice</h3><p>The task is paused at a question. Read the full session before replying.</p><div class="quote">“The test failed twice. Should I investigate the fixture or try the previous build?”</div><div class="proposed"><strong>AI suggestion:</strong> Investigate the fixture first. <span class="note">This has not been sent.</span></div><div class="actions"><button class="btn primary" data-demo="This opens the full session in the proposed design.">Open session →</button><button class="btn" data-go="inbox">Review suggestion</button></div></article>
+        </div>
+        <div class="stack"><section class="panel"><h2>Today at a glance</h2><div class="metric"><div><b>5</b><span>Answered safely</span></div><div><b>3</b><span>Escalated to you</span></div></div><div class="stat"><span>Cancelled before send</span><strong>2</strong></div><div class="stat"><span>Sessions held by quota</span><strong>1</strong></div><div class="stat"><span>Stops awaiting review</span><strong>12</strong></div></section><section class="panel"><h2>AI review usage</h2><div class="stat"><span>Calls today</span><strong>58 / 300</strong></div><div class="stat"><span>Spend today</span><strong>$0.263 / $1.00</strong></div><p>Agreement will appear once suggestions receive enough ratings.</p><p><a class="text-link" href="#inbox" data-go="inbox">Rate suggestions →</a></p></section></div>
+      </div>
+      <div class="section-head"><h2>Recent actions</h2><a href="#activity" data-go="activity">Full activity →</a></div>
+      <section class="panel timeline" aria-label="Recent actions"><div class="event"><time>14:42</time><div><strong>Asked session-12 to continue</strong><span>Routine rule · countdown completed · sent by manager</span></div></div><div class="event"><time>14:37</time><div><strong>Escalated deploy request</strong><span>Approval is required from you; no reply was sent.</span></div></div><div class="event"><time>14:29</time><div><strong>Held session-08</strong><span>Low priority; quota threshold reached at its next stop.</span></div></div></section>
+    </section>
+
+    <section data-page="inbox" hidden><div class="section-head"><h2>Needs review</h2><span class="note">3 sample items · newest first</span></div><div class="stack"><article class="request critical"><div class="request-top"><span class="pill red">Approval needed</span><strong>Deploy request</strong><span class="meta">· 5 min ago</span></div><h3>Release check is waiting for approval</h3><p>Confirm the scope and target in the full platform view. The manager will not approve this on your behalf.</p><div class="quote">Frontend · &lt;reviewed-ref&gt; · waiting for owner</div><div class="actions"><button class="btn primary" data-demo="This would open the platform request.">Review deploy →</button></div></article><article class="request"><div class="request-top"><span class="pill orange">Decision needed</span><strong>session-17</strong><span class="meta">· 11 min ago</span></div><h3>Choose the next investigation</h3><div class="quote">“Should I investigate the fixture or try the previous build?”</div><div class="proposed"><strong>AI suggests:</strong> Investigate the fixture first. <span class="note">Not sent.</span></div><div class="actions"><button class="btn primary" data-demo="This would open the full session.">Open session →</button><button class="btn" data-demo="This would open the suggestion rating.">Rate suggestion</button></div></article><article class="request"><div class="request-top"><span class="pill orange">Review stop</span><strong>session-08</strong><span class="meta">· 18 min ago</span></div><h3>Paused by quota policy</h3><p>The agent reached its next stop while the plan was near the limit. It remains held until you resume or capacity recovers.</p><div class="actions"><button class="btn" data-demo="This would open the session and quota details.">Inspect hold →</button></div></article></div></section>
+
+    <section data-page="activity" hidden><div class="section-head"><h2>Activity</h2><span class="note">Actions and decisions, with actor and outcome</span></div><section class="panel timeline"><div class="event"><time>14:42</time><div><strong>Manager sent “Yes, continue.”</strong><span>session-12 · routine rule · countdown completed · no owner draft</span></div></div><div class="event"><time>14:37</time><div><strong>Deploy request sent to owner</strong><span>release-check · approval required · no automatic reply</span></div></div><div class="event"><time>14:31</time><div><strong>Owner cancelled a pending reply</strong><span>session-04 · cancelled with 18 seconds remaining</span></div></div><div class="event"><time>14:29</time><div><strong>Quota policy held a session</strong><span>session-08 · P2 · held at the next stop</span></div></div></section><p class="note">In the implemented page, each row should link to its session and the matching audit record.</p></section>
+
+    <section data-page="controls" hidden><div class="section-head"><h2>Controls</h2><span class="note">Configuration, separate from today's decisions</span></div><div class="stack"><section class="panel"><h3>Automatic replies</h3><div class="setting"><div><strong>Routine replies</strong><p>Allowed for an agent asking to continue. A countdown gives you time to cancel. Other routine categories are off.</p></div><span class="state">On · 1 rule</span></div><div class="setting"><div><strong>AI reviewer</strong><p>Suggestion mode: it proposes replies and gives reasons. No AI proposal is sent automatically.</p></div><span class="state dim">Suggest</span></div><div class="setting"><div><strong>Safety gate</strong><p>Deploys, deletes, credentials, money and customer decisions always require a person.</p></div><span class="state">Always on</span></div></section><section class="panel"><h3>Other automation</h3><div class="setting"><div><strong>Deploy runner</strong><p>Approved requests can run when the platform is available. Approval remains a separate owner action.</p></div><span class="state">On</span></div><div class="setting"><div><strong>Quota policy</strong><p>Low priority sessions may be held at their next stop as a plan approaches its limit.</p></div><span class="state">On</span></div></section><p class="note">These states are illustrative. This mockup cannot change the real manager configuration.</p></div></section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+<script>
+  const titles = {overview:['Overview','What needs your decision, what can run automatically, and what happened today.'],inbox:['Needs review','Questions and approvals waiting for your decision.'],activity:['Activity','A readable record of what the manager did and why.'],controls:['Controls','Settings and limits live away from the daily work queue.']};
+  function show(view) {
+    if (!titles[view]) return;
+    document.querySelectorAll('[data-page]').forEach(el => el.hidden = el.dataset.page !== view);
+    document.querySelectorAll('[data-view]').forEach(el => { if (el.dataset.view === view) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current'); });
+    document.getElementById('pageTitle').textContent = titles[view][0];
+    document.getElementById('pageSubtitle').textContent = titles[view][1];
+    history.replaceState(null,'','#'+view);
+    window.scrollTo({top:0,behavior:'instant'});
+  }
+  let toastTimer;
+  document.addEventListener('click', e => {
+    const go=e.target.closest('[data-view],[data-go]'); if(go){e.preventDefault();show(go.dataset.view||go.dataset.go);return;}
+    const demo=e.target.closest('[data-demo]'); if(!demo)return;
+    const toast=document.getElementById('toast'); toast.textContent=demo.dataset.demo+' Sample data only.'; toast.hidden=false;
+    clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.hidden=true,4200);
+  });
+  show(location.hash.slice(1)||'overview');
+</script>
+</body></html>

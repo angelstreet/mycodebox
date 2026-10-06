@@ -1,120 +1,170 @@
-# Install and set up mycodebox (for AI agents)
+# Install and configure mycodebox
 
-This page is written for a coding agent that has been asked to install mycodebox on a Linux machine for its owner.
-Follow it top to bottom. Do the **core** steps, then only the **optional** features the owner asks for.
-Everything that needs a secret is created on the machine and stays there; nothing below asks you to commit one.
+[Documentation index](README.md) · [Usage](USAGE.md) · [Reference](REFERENCE.md)
 
-mycodebox (repo `ghosty-sessions`) is a mobile-first dashboard for the Claude Code / Codex / MiniMax agents that run in
-tmux sessions on one machine. A small Node server captures every tmux pane once a second, serves a PWA over
-Tailscale, and lets the owner send keystrokes back. See `docs/REFERENCE.md` for the full feature reference.
+For a human or an installing agent. Read [AGENTS.md](../AGENTS.md) first. Do the core steps, then only the optional features requested by the owner. Keep private values on the machine.
 
-## What you need first
+## Prerequisites
 
-| Need | Check | Notes |
+| Requirement | Check | Notes |
 |---|---|---|
-| Linux with systemd | `uname -s`, `systemctl --version` | systemd is optional: `npm start` in a tmux session works too |
-| Node.js 20 or newer | `node -v` | the only runtime dependency is `ws` |
-| tmux | `tmux -V` | the agents must run in tmux sessions; mycodebox lists `tmux list-sessions` |
-| Tailscale on the machine and on the owner's phone | `tailscale status` | the tailnet is the only access control (see Security) |
-| At least one agent CLI | `claude --version`, `codex --version` | only needed to create sessions from the UI |
+| Linux | `uname -s` | systemd is optional for foreground operation |
+| Node.js 20+ and npm | `node -v`, `npm -v` | ES modules, no build step; one runtime npm dependency (`ws`) |
+| Git and tmux | `git --version`, `tmux -V` | Run the server as the Unix user owning the tmux sessions |
+| Tailscale on server and client | `tailscale status` | Private network access is the only user-access gate |
+| curl and Python 3 | `curl --version`, `python3 --version` | Verification and safe-restart script |
+| Agent CLI, if desired | Check the CLI you use | Existing shell sessions also work; UI launches need configured commands |
 
-Ask the owner for nothing secret. Ask only for: the machine's Tailscale name, and which optional features they want.
+Use the installed machine's paths and service user; do not copy a previous deployment's identity. Have the owner perform any interactive sign-in locally. Do not ask for passwords, tokens or private keys in chat.
 
-## Core install (about 5 minutes)
+## Tailscale setup and access policy
+
+1. Install Tailscale using its [official platform instructions](https://tailscale.com/download), on both the Linux server and the phone/laptop.
+2. On the server, run `sudo tailscale up` if it is not already joined. Complete sign-in locally and connect the client to the same tailnet. Inspect existing settings before changing an already configured node.
+3. Check `tailscale status` and `tailscale ip -4` locally. Do not paste their private output into repository files or public issues.
+4. Restrict inbound access to the owner or explicitly trusted operators through the tailnet policy. Existing allow-all rules can make a new restrictive grant ineffective: review the complete policy, not just the new rule. See [Tailscale grants](https://tailscale.com/docs/features/access-control/grants) and [examples](https://tailscale.com/docs/reference/examples/grants).
+5. Choose one network mode below. Do not open router/firewall ports to the internet or enable Tailscale Funnel.
+
+The recommended mode allows trusted clients to reach HTTPS on TCP 443 through Serve; Node listens only on `127.0.0.1:7777`. Direct mode instead needs policy access to TCP 7777 and, if configured, 7443 on the node. Other tailnet users must not receive access merely because they share the network.
+
+## Core install
+
+For a new checkout:
 
 ```bash
-git clone https://github.com/angelstreet/mycodebox.git ~/ghosty-sessions   # the folder name is yours to choose; the unit file and docs assume this one
+git clone https://github.com/angelstreet/mycodebox.git ~/ghosty-sessions
 cd ~/ghosty-sessions
-npm install --omit=dev
-npm test          # all tests should pass before you start the service
+npm ci --omit=dev
+GHOSTY_STATE_DIR="$(mktemp -d)" npm test
 ```
 
-Run it once in the foreground to check:
+Run once in the foreground, with explicit network and agent-command settings:
 
 ```bash
-PORT=7777 node server.js     # then, from another shell:
-curl -s http://127.0.0.1:7777/api/sessions | head -c 300
+HOST=127.0.0.1 PORT=7777 AGENT_CMD_CLAUDE=claude AGENT_CMD_CODEX=codex node server.js
 ```
 
-You should get JSON (an empty list is fine). Stop it with Ctrl-C.
+From another shell:
 
-### Run it as a service
+```bash
+curl --fail --silent --show-error http://127.0.0.1:7777/api/health
+```
 
-`systemd/ghosty-sessions.service` is the unit the author uses, with the author's user name and paths. Copy it and
-edit `User=`, `WorkingDirectory=`, `ExecStart=` and the `TLS_*` / `EnvironmentFile=` paths to match this machine. Do not
-symlink it unedited.
+Expect JSON with `ok: true`. An empty session list is fine if no tmux sessions exist. Stop the foreground process with Ctrl-C before starting the service.
+
+**Why explicit settings:** the current source defaults to `HOST=0.0.0.0`; Claude and Codex UI launch commands include permission/sandbox bypass flags. The commands above override those defaults for new UI sessions. They do not change existing agents or every other launch path, such as parking/resume. Review those paths before using them. The server does not automatically load `.env`.
+
+### Persistent service configuration
+
+`systemd/ghosty-sessions.service` is an example from a particular deployment, not a portable installer. Copy it and edit the installed copy before enabling it:
 
 ```bash
 sudo cp systemd/ghosty-sessions.service /etc/systemd/system/ghosty-sessions.service
-sudo nano /etc/systemd/system/ghosty-sessions.service   # fix user and paths
+sudo nano /etc/systemd/system/ghosty-sessions.service
+```
+
+Set `User=` to the tmux owner, `WorkingDirectory=` to the checkout, and `ExecStart=` to an absolute Node executable and the absolute `server.js` path. A shell's Node version manager may not be available to systemd.
+Change all `TLS_*`, `Documentation=` and `EnvironmentFile=` paths. Remove the optional usage environment file unless that integration is configured.
+Set these service environment entries explicitly:
+
+```ini
+Environment=HOST=127.0.0.1
+Environment=PORT=7777
+Environment=AGENT_CMD_CLAUDE=claude
+Environment=AGENT_CMD_CODEX=codex
+```
+
+Set absolute CLI paths if needed. For MiniMax, override `AGENT_CMD_MINIMAX` with your installed command; the source default has a machine-specific Node path.
+Keep `PrivateTmp=false` so the tmux socket remains visible, and `KillMode=process` for detached deploy-child recovery. Do not apply generic systemd hardening that hides the owner's home or tmux socket without testing it.
+
+Optional secrets/settings belong in a private environment file (mode 0600) referenced by `EnvironmentFile=`. The example unit uses `<checkout>/.env`, which Git ignores. Use `KEY=value` entries, no shell commands; systemd does not expand `~` or shell substitutions there. Use absolute paths for `GHOSTY_STATE_DIR`, certificate paths and similar settings. An environment file can override `Environment=` values, so ensure it does not restore an unsafe HOST or launch command.
+
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now ghosty-sessions
 systemctl status ghosty-sessions --no-pager
 ```
 
-If the service is already running (an update, not a first install), restart it with `scripts/safe-restart.sh`, which
-refuses while a deploy is running. A plain `systemctl restart` can kill a deploy mid-build.
+This is a first-install start. For an existing service, use the update procedure below.
 
-### HTTPS, so the phone can install the app
+### Recommended: private HTTPS with Tailscale Serve
 
-Plain HTTP on `:7777` works for browsing. The PWA install, Web Push and the microphone need HTTPS (`:7443`).
-Put `key.pem` and `cert.pem` in `certs/` (both git-ignored). A self-signed cert is fine on a tailnet; steps are in
-`certs/README.md`. Use the machine's real Tailscale IP and name in the cert, never anything copied from the docs.
+Enable MagicDNS and HTTPS certificates for the tailnet as described in [Tailscale's HTTPS guide](https://tailscale.com/docs/how-to/set-up-https-certificates). Certificate issuance publishes the certificate's DNS name in public certificate-transparency logs; choose a non-sensitive node name.
 
-### Open it from the phone
-
-`http://<tailscale-ip>:7777/` or `https://<tailscale-ip>:7443/`. The phone must be on the same tailnet. On Android
-Chrome use the menu, then Install app. Then check that a tmux session shows up as a card within a second or two:
+Inspect existing Serve configuration before adding a root endpoint so you do not replace another service:
 
 ```bash
-tmux new-session -d -s hello -c ~ 'bash -l'
+tailscale serve status
+sudo tailscale serve --bg http://127.0.0.1:7777
+tailscale serve status
 ```
+
+Open the HTTPS URL printed by Serve on the connected client, normally `https://<machine>.<tailnet>.ts.net/`. Serve provides private HTTPS and manages its certificate; no PEM files are needed in the checkout. This is **Serve**, not public **Funnel**. See the [Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+
+Set `PUBLIC_URL` to that exact HTTPS origin in the service environment, then use the guarded restart procedure. Check that the page, live cards and sends work: the proxy must preserve Host and support WebSocket upgrades because the app checks browser Origin against Host. Local reporter calls still use `http://127.0.0.1:7777` and their token.
+
+### Alternative: direct Tailscale access
+
+For a simple HTTP dashboard without Serve, bind to the node's actual Tailscale IPv4 address:
+
+```bash
+GHOSTY_TAILSCALE_IP="$(tailscale ip -4)"
+test -n "$GHOSTY_TAILSCALE_IP" || exit 1
+HOST="$GHOSTY_TAILSCALE_IP" AGENT_CMD_CLAUDE=claude AGENT_CMD_CODEX=codex node server.js
+```
+
+Open `http://<tailscale-ip>:7777/`. Set the literal address in the service configuration for persistent operation; `HOST` takes an address, not the interface name `tailscale0`. Do not start this command alongside a running dashboard.
+For trusted native HTTPS on 7443, follow [certificates](../certs/README.md) and use the certificate's full DNS name.
+
+A listener bound only to the Tailscale IP cannot also receive loopback requests. Reporter/alert APIs require loopback and will not work by pointing them at the tailnet IP; use the recommended Serve mode for those integrations. Local checks and `GHOSTY_URL` for safe-restart must target the configured listener. Do not switch to `0.0.0.0` just to make a local helper connect.
 
 ## Optional features
 
-Each one is off until you set it up. None is required for the dashboard to work.
+Optional does not mean every background reader defaults off. The server starts polling some integrations at startup; configure only what the owner needs, and review the reference for side effects.
 
-| Feature | What it gives | How to set it up | Secret involved |
-|---|---|---|---|
-| **Web Push** | "needs you" alerts on the phone with the app closed | Nothing to install. Open the app over HTTPS and tap the bell. | The server creates a VAPID key in the state dir (`vapid.json`, 0600) |
-| **ntfy push** | the same alerts through the ntfy app | Add `NTFY_TOPIC=<long random string>` to the gitignored `.env`, subscribe to it in the ntfy app | the topic name |
-| **Session reporter** | exact turn / prompt / permission events from Claude sessions instead of screen guessing | Add `{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "<repo>/claude-plugin/ghosty-reporter" } }` to `~/.claude/settings.json`. Needs Claude Code 2.1.288 or newer. New sessions load it; running ones do not. | `reporter.token` is created by the server, loopback only |
-| **Voice input** (mic button) | speech to text on the machine, sent like typed text | `pip install faster-whisper` for the python3 that runs the server. `WHISPER_MODEL` picks the model (default `base`, CPU). The first use downloads the model. | none |
-| **Image attach** (paperclip, paste, drop) | uploads an image to `~/.ghosty/uploads/` and adds `@<path>` to the message | works out of the box | none |
-| **AI manager** | classifies every stop, can answer safe ones after a cancellable countdown | in the manager panel; auto-answer is off by default. Read the AI manager section of `docs/REFERENCE.md` before turning anything on. | `JEV_API_KEY` only if the owner has such a server |
-| **Usage and quota** | token cost per session, plan windows | `usage/ingest.js`, `systemd/ghosty-usage.service`; Langfuse is optional | Langfuse keys, in a separate env file outside the repo |
-| **Deploy queue, leases, Platforms page** | coordination of deploys and exclusive devices | specific to the author's platform (`vpt-lease` reached by `ssh proxmox`). Skip unless the owner has the same setup; without it those panels just show no data. | ssh access |
+| Feature | Setup / prerequisite | Data or credential |
+|---|---|---|
+| Web Push | Trusted HTTPS, browser permission, bell button | Generated VAPID key and subscriptions in state dir |
+| ntfy | Private `NTFY_TOPIC`, optional `NTFY_URL`, `PUBLIC_URL` | Topic is secret; default provider is external |
+| Claude reporter | Merge the plugin setting from [REFERENCE](REFERENCE.md#session-reporter-task-44-phase-8) into existing Claude settings; compatible Claude version; new sessions | Loopback URL plus `reporter.token`; do not overwrite other settings |
+| Voice | Install `faster-whisper` into the Python environment used by `transcribe.js`; see reference/source for `WHISPER_MODEL` | First use downloads a model; choose a virtual environment instead of changing system Python |
+| Image attach | Available in dashboard | Stored separately in `~/.ghosty/uploads/` |
+| AI manager | Review [manager settings](REFERENCE.md#ai-manager); automatic sends default off | Optional Jev/reviewer endpoint credentials; requests can include session text |
+| Usage and evaluation | `usage/ingest.js`, optional adapted `systemd/ghosty-usage.service`; see [usage](REFERENCE.md#usage-langfuse) | CLI transcripts, local ledger; optional Langfuse keys/data |
+| Deploys and leases | External platform registry/SSH adapters and state configuration | Deployment-specific; skip on a generic install. Deploy runner defaults off, but lease binding defaults live when the registry is reachable; review [lease binding](REFERENCE.md#lease-binding-task-58-c1) first |
 
-State (config, logs, keys) lives in `$GHOSTY_STATE_DIR`, default `~/.local/state/ghosty`. Back it up, never commit it.
-
-## Security rules for you, the installing agent
-
-- There is **no login screen**. Anyone who can reach the port can send keystrokes to every agent session on the machine.
-  Keep it on the tailnet. Do not open the ports on a public interface, do not publish them with a tunnel or reverse
-  proxy, and do not bind to a public address. Prefer `HOST=<tailscale-ip>` over `0.0.0.0` where you can.
-- Never write a secret into a tracked file, a commit message, an issue or a pull request. Secrets go in `.env`
-  (`chmod 600`, git-ignored), in the state dir, or in the environment of the service.
-- Never commit `certs/*.pem`, `.env`, anything from the state dir, or a screenshot that shows a session's output.
-- Before you push, run `git status` and read the diff for tokens, IP addresses, host names and e-mail addresses.
-- The manager must never answer, on the owner's behalf, a question about a deploy, a merge to main, a delete,
-  credentials, money or a customer. The forbidden-topic filter always wins; do not weaken it.
+State defaults to `~/.local/state/ghosty` or the absolute `GHOSTY_STATE_DIR`. Back it up privately. Existing state can carry previously enabled manager actions; do not treat an upgrade as a fresh set of safe defaults.
 
 ## Verify
 
+For the recommended loopback + Serve setup:
+
 ```bash
-curl -s http://127.0.0.1:7777/api/sessions | python3 -m json.tool | head
-curl -s http://127.0.0.1:7777/api/vm            # CPU / RAM / disk of this machine
-journalctl -u ghosty-sessions -n 30 --no-pager  # no stack traces
-npm test
+curl --fail --silent --show-error http://127.0.0.1:7777/api/health
+curl --fail --silent --show-error http://127.0.0.1:7777/api/vm
+tailscale serve status
+ss -ltn
+journalctl -u ghosty-sessions -n 30 --no-pager
 ```
 
-Report back to the owner: the URL to open, which optional features are on, and anything you skipped and why.
+Verify Node binds only to the intended address. On the owner's phone, confirm HTTPS has no warning, a tmux session appears, updates arrive, and a harmless reply reaches an explicitly selected test session. Verify an unauthorized client cannot access the endpoint. Check notifications/microphone only if requested. Keep session output and diagnostic logs private.
+Report the private URL to the owner, enabled features, test results and anything skipped. See [usage and troubleshooting](USAGE.md).
 
 ## Update and uninstall
 
+Check `git status --short`, preserve local changes, review the update, and securely back up state before changing versions. Record the previous commit so rollback is possible without discarding local work.
+
 ```bash
-cd ~/ghosty-sessions && git pull && npm install --omit=dev && npm test && scripts/safe-restart.sh
+cd ~/ghosty-sessions
+git pull --ff-only
+npm ci --omit=dev
+GHOSTY_STATE_DIR="$(mktemp -d)" npm test
+export GHOSTY_URL=http://127.0.0.1:7777
+curl --fail --silent --show-error "$GHOSTY_URL/api/deploys"
+# Only after a successful response and confirming no deploy is running:
+scripts/safe-restart.sh
 ```
 
-Uninstall: `sudo systemctl disable --now ghosty-sessions`, remove the unit file, and delete the repo. The state dir
-is separate; delete it only if the owner agrees.
+Adapt `GHOSTY_URL` for direct mode. **The script currently treats an unreachable API as no running deploy**, so a failed check is not permission to restart; inspect the deployment state and resolve reachability first. Never restart during a deploy. Deploy children can survive a restart, but that is recovery behavior, not a reason to bypass the guard. Repeat health and phone checks after an update. If it fails, restore the reviewed previous code/dependencies and compatible backup through the same guarded procedure; do not blindly reset a shared checkout.
+
+Uninstall only when requested: confirm no deploy is running, disable/stop the dashboard service and any optional units you installed, remove its copied unit and reload systemd. Remove only this app's Serve endpoint (inspect shared Serve configuration first). Remove its checkout if desired. State, uploads, private env files, certificates and agent settings need separate retention/removal decisions; never delete the owner's agent home directories or tmux sessions as cleanup.

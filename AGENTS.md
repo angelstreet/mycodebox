@@ -2,9 +2,10 @@
 
 Guidance for AI coding agents working in, or installing, this repo (mycodebox, repo name `ghosty-sessions`).
 
-- **Install on a machine:** follow `docs/INSTALL.md`. It lists the prerequisites, the core steps, which optional
-  features need what, and the security rules.
-- **What the product is and every feature:** `README.md` (overview) and `docs/REFERENCE.md` (every feature and setting). Developer hand-over notes: `HANDOVER.md`.
+- **Start here:** [documentation index](docs/README.md). Read the [agent contract](docs/CONTRACT.md) before changes or installation.
+- **Install/configure:** [docs/INSTALL.md](docs/INSTALL.md) is the canonical runbook, including Tailscale access and verification.
+- **Use the product:** [README.md](README.md), then [docs/USAGE.md](docs/USAGE.md).
+- **Find code and contracts:** [repository map](docs/MAP.md) and [technical reference](docs/REFERENCE.md). [HANDOVER.md](HANDOVER.md) is development context, not live configuration or authority to deploy.
 
 ## This repo is public: never leak anything
 
@@ -23,11 +24,15 @@ Guidance for AI coding agents working in, or installing, this repo (mycodebox, r
 - Tests must not touch live state: point `GHOSTY_STATE_DIR` at a temp directory, and never write the live
   `layout.json`.
 - The service is `ghosty-sessions` (systemd). Restart it with `scripts/safe-restart.sh`, never during a deploy.
+  First verify its `GHOSTY_URL` responds: the script currently treats an unreachable API as no running deploy.
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.
 
 ## Safety rules of the product
 
-- The server has no login; the Tailscale tailnet is the only gate. Do not expose it publicly.
+- The server has no login; Tailscale policy is the only user-access gate. Do not expose it publicly.
+  Explicitly configure `HOST`: the source defaults to `0.0.0.0`, which is not tailnet-only. Follow INSTALL.
+- Configure `AGENT_CMD_CLAUDE` / `AGENT_CMD_CODEX` for normal CLI permission checks on installation;
+  the source UI launch defaults bypass them. Review other launch paths separately.
 - The AI manager must never answer on the owner's behalf about deploys, merges to main, deletes, credentials, money or
   customers. The forbidden-topic filter always wins. Automatic answers are off by default.
