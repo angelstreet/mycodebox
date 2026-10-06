@@ -790,17 +790,20 @@ function renderParking() {
       for (const c of pk.candidates) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">idle ${idleText(c.idleMin)}</span></div>`;
     }
     if (pk.parked.length) {
-      h += `<div class="ph">Parked</div>`;
-      for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
+      const po = state.parkedClosed !== true;
+      h += `<button class="ph pfold" data-pfold="parkedClosed" aria-expanded="${po}"><span class="uch${po ? ' on' : ''}"></span>Parked (${pk.parked.length})</button>`;
+      if (po) for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
     }
     if (pk.manual && pk.manual.length) {
-      h += `<div class="ph">Manual notes</div>`;
-      for (const m of pk.manual) h += `<div class="prow"><span class="pn" title="${escapeHtml(m.how)}">${escapeHtml(m.session)}</span><span class="pman">manual</span></div>`;
+      const mo = state.manualClosed !== true;
+      h += `<button class="ph pfold" data-pfold="manualClosed" aria-expanded="${mo}"><span class="uch${mo ? ' on' : ''}"></span>Manual notes (${pk.manual.length})</button>`;
+      if (mo) for (const m of pk.manual) h += `<div class="prow"><span class="pn" title="${escapeHtml(m.how)}">${escapeHtml(m.session)}</span><span class="pman">manual</span></div>`;
     }
   }
   box.innerHTML = h;
   box.classList.remove('hidden');
   box.querySelector('[data-ptop]')?.addEventListener('click', () => { state.parkOpen = !state.parkOpen; renderParking(); });
+  box.querySelectorAll('[data-pfold]').forEach((b) => { b.onclick = () => { state[b.dataset.pfold] = state[b.dataset.pfold] !== true; renderParking(); }; });
   box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
 }
 async function parkSession(name) {

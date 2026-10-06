@@ -1622,3 +1622,4 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 .parkbox .ptop.over .psum{ color:var(--accent); }
 .parkbox .pnote{ font-size:11px; color:var(--accent); margin:6px 0 2px; }
 .parkbox .ph{ margin-top:8px; }
+.parkbox .pfold{ display:flex; align-items:center; gap:8px; width:100%; background:none; border:0; padding:2px 0; font:inherit; font-size:12px; font-weight:700; color:var(--ink); text-align:left; cursor:pointer; }
