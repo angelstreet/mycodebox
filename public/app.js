@@ -1170,19 +1170,24 @@ function layoutSide() {
   const sections = [];
   if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned', icon: 'pin' });
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
+  let fl = list.querySelector('li.sidefilt');
+  if (anyFilter()) {
+    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear filter</button>'; fl.querySelector('button').onclick = () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); }; list.insertBefore(fl, list.firstChild); }
+    fl.querySelector('.ft').textContent = `Filter on: ${names.filter(matchesFilter).length} of ${names.length} shown`;
+  } else if (fl) fl.remove();
   const withHeaders = sections.length > 0;
   if (withHeaders) sections.push({ key: 'other', title: 'Other' });
   const plan = [];
   for (const sec of (withHeaders ? sections : [{ key: 'other' }])) {
     const members = names.filter((n) => secOfName(n) === sec.key && matchesFilter(n));
     const total = names.filter((n) => secOfName(n) === sec.key).length;
-    if (withHeaders && !(sec.key === 'other' && !total)) plan.push({ hdr: sec, count: total });
+    if (withHeaders && !(sec.key === 'other' && !total)) plan.push({ hdr: sec, count: members.length === total ? String(total) : `${members.length}/${total}` });
     const closed = L.collapsed.includes(sec.key);
     for (const n of members) plan.push({ name: n, sec: sec.key, closed });
   }
   const want = new Set(plan.filter((p) => p.hdr).map((p) => p.hdr.key));
   for (const [k, el] of Object.entries(hdrs)) if (!want.has(k)) { el.remove(); delete hdrs[k]; }
-  let cursor = list.firstChild;
+  let cursor = list.querySelector('li.sidefilt')?.nextSibling || list.firstChild;
   const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
   for (const p of plan) {
     if (p.hdr) {
@@ -1194,6 +1199,7 @@ function layoutSide() {
       }
       h.querySelector('.gt').textContent = p.hdr.title;
       h.querySelector('.gc').textContent = String(p.count);
+      h.title = String(p.count).includes('/') ? 'a filter is hiding some sessions' : '';
       h.querySelector('.uch').classList.toggle('on', !L.collapsed.includes(p.hdr.key));
       place(h);
     } else {
