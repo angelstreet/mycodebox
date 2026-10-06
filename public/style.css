@@ -1572,6 +1572,25 @@ body.side-docked .side-head .ttl{ letter-spacing:.12em; }
   .card-pane .cell .h .proj{ order:9; flex:1 1 100%; min-width:0; max-width:100%; justify-content:center; }
 }
 
+/* ------------ Session detail card: full header, no clipping ------------ */
+/* Fix: the single-card view's chip/title row used nowrap + ellipsis on every
+   label, so on a long MiniMax session (project + branch + worktree + agent
+   model + activity text + handoff chip) each label was truncated. Use the
+   free horizontal space on desktop, full width on phones, let the row wrap
+   to a second line when a label does not fit, and never ellipsis a label.
+   The card-pane is already position:absolute inside .main{overflow:hidden},
+   so the header is pinned and only the terminal/reader scrolls. */
+.card-pane .cell .h{ flex-wrap:wrap; row-gap:6px; align-items:center; }
+.card-pane .cell .h .nm{ flex:1 1 100%; min-width:0; max-width:100%; overflow:visible; }
+.card-pane .cell .h .name{ white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; min-width:0; }
+.card-pane .cell .h .mt{ max-width:none; min-width:0; height:auto; overflow:visible; text-overflow:clip; white-space:normal; overflow-wrap:anywhere; flex:0 1 auto; }
+.card-pane .cell .h .mt .act{ display:inline; overflow:visible; text-overflow:clip; white-space:normal; overflow-wrap:anywhere; }
+.card-pane .cell .h .mt .lease-chip{ max-width:none; overflow:visible; text-overflow:clip; white-space:normal; }
+.card-pane .cell .h .proj{ flex:1 1 100%; min-width:0; max-width:100%; white-space:normal; overflow:visible; justify-content:flex-start; }
+.card-pane .cell .h .proj .pj,
+.card-pane .cell .h .proj .br,
+.card-pane .cell .h .proj .wt{ overflow:visible; text-overflow:clip; white-space:normal; min-width:0; flex-shrink:0; }
+
 /* alerts feed: top-bar bell with unread count + panel */
 #alertsBtn{ position:relative; }
 #alertsBtn .acount{ position:absolute; top:1px; right:0; min-width:15px; height:15px; padding:0 3px; border-radius:8px; background:#d6a32b; color:#111; font-size:10px; font-weight:700; line-height:15px; text-align:center; }
