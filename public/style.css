@@ -1725,3 +1725,5 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 /* phones: no priority badge on grid / single cards (the board rows and the side list keep it) */
 @media (max-width: 720px){ .grid-pane .cell .h .pr, .card-pane .cell .h .pr{ display:none; } }
 .cell .h .tgt{ cursor:pointer; }
+/* the "→ send target" arrow is gone: the focused card's highlighted border is enough */
+.cell .h .tgt, .grid-pane .cell.focus .h .tgt{ display:none !important; }
