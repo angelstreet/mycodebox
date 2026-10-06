@@ -5,6 +5,7 @@
   <p>See which one needs you, answer in one tap, keep an eye on cost. Self-hosted, over your own private network.</p>
   <p>
     <a href="#quick-start"><b>Quick start</b></a> •
+    <a href="#screenshots"><b>Screenshots</b></a> •
     <a href="#features"><b>Features</b></a> •
     <a href="docs/INSTALL.md"><b>Install (with an AI agent)</b></a> •
     <a href="docs/REFERENCE.md"><b>Reference</b></a>
@@ -26,6 +27,18 @@ notify you when an agent needs you, even when the app is closed.
 It runs on your own machine and is intended for private access through [Tailscale](https://tailscale.com).
 Configure the listener and tailnet policy using the install guide. Optional notifications, AI review and evaluation
 can send data to configured providers; agent CLIs also use their own services.
+
+---
+
+## Screenshots
+
+Desktop dashboard with sample session data:
+
+![mycodebox desktop dashboard showing session cards, filters, and a reply bar](docs/images/mycodebox-desktop.png)
+
+Mobile dashboard with sample session data:
+
+<img src="docs/images/mycodebox-mobile.png" alt="mycodebox mobile dashboard showing session status and reply controls" width="360">
 
 ---
 
