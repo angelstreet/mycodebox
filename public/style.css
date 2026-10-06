@@ -1691,3 +1691,9 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
   .session-list li.pinned .pinmark{ display:inline-flex; color:var(--accent); flex-shrink:0; }
   .session-list li.pinned .acts .edit.pin{ color:var(--accent); border-color:var(--accent); }
 }
+/* board rows: two lines (title row, then last text with the repo / branch chips on its right) */
+.row-item{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 0; min-height:0; padding:8px 12px; }
+.row-item .l1, .row-item .apill{ grid-column:1 / -1; }
+.row-item .last{ grid-column:1; min-width:0; }
+.row-item .meta{ grid-column:2; margin-left:10px; max-width:45vw; align-self:center; }
+.row-item .meta.hidden{ display:none; }
