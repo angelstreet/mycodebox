@@ -1902,3 +1902,8 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 
 /* nav list: the PAUSED badge sits at the right edge of the row's second line */
 .session-list .sub .pp{ margin-left:auto; }
+
+/* group headers: a lighter band with a clear border and more space above, so the groups read as separate blocks */
+.session-list li.grp{ background:var(--bg-3); border:1px solid var(--line-2); border-radius:8px; color:var(--ink-2); margin-top:12px; margin-bottom:4px; padding:6px 10px; }
+.session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ margin-top:2px; }
+.session-list li.grp:hover{ color:var(--ink); background:var(--bg-3); filter:brightness(1.15); }
