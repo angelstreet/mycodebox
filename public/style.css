@@ -670,8 +670,16 @@ body{ display:flex; flex-direction:column; }
 
 /* ------------ Grid reorder: drag (desktop) + arrow buttons ------------ */
 .cell .h .mv{ display:none; gap:2px; flex-shrink:0; }
-.grid-pane .cell.focus .h .mv{ display:inline-flex; }
-@media (hover: hover){ .grid-pane .cell:hover .h .mv{ display:inline-flex; } }
+/* desktop: drag the header to reorder, no buttons (they changed the header on hover / focus and made it flicker).
+   touch: the arrows float over the focused card's top edge, outside the header, so it never changes. */
+@media (pointer: coarse){
+  .grid-pane .cell .h{ position:relative; }
+  .grid-pane .cell.focus .h .mv{
+    display:inline-flex; position:absolute; right:4px; top:100%; margin-top:4px; z-index:3;
+    background:var(--bg-2); border:1px solid var(--line-2); border-radius:8px; padding:3px;
+    box-shadow:0 4px 12px rgba(0,0,0,.5);
+  }
+}
 .cell .h .mv button{
   width:26px; height:26px; padding:0; border-radius:6px;
   background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line);
