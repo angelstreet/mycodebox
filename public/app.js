@@ -642,8 +642,10 @@ function renderDeployBanner() {
   const list = state.deploys?.deploys || [];
   const rank = { running: 0, 'awaiting-approval': 1, queued: 2 };
   const act = list.filter((x) => x.state in rank).sort((p, q) => rank[p.state] - rank[q.state] || p.created - q.created);
-  el.classList.toggle('hidden', !act.length);
-  if (!act.length) { el.innerHTML = ''; el.dataset.key = ''; return; }
+  if (!act.length) {
+    if (el.dataset.key !== 'idle') { el.dataset.key = 'idle'; el.className = 'deployban idle'; el.innerHTML = '<span class="lbl">DEPLOY</span><span class="dnone">none</span>'; }
+    return;
+  }
   const blockers = [...new Set(act.filter((x) => x.state !== 'running').flatMap((x) => (x.blocking || []).map((b) => String(b.agent || b.purpose || b.id).replace(/^[^:]*:/, ''))))];
   const key = act.map((x) => x.id + x.state).join('|') + '#' + blockers.join(',');
   if (el.dataset.key === key) return;
@@ -925,14 +927,15 @@ function renderAttention() {
   // waiting sessions, plus finished ones whose closing question the AI reviewer sent to the owner
   const aiAsk = (n) => { const st = state.status[n]; return st && st.state === 'done' && needsOwner(st) && st.triage && st.triage.state !== 'pending'; };
   const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting' || aiAsk(s.name)).sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
-  els.attention.classList.toggle('hidden', waiting.length === 0);
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
-  const key = waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|');
+  const key = state.filter + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
-  els.attention.innerHTML = `<span class="lbl">NEEDS YOU</span>` +
+  els.attention.classList.toggle('none', !waiting.length);
+  els.attention.innerHTML = `<button class="lbl${state.filter === 'waiting' ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU <b>${waiting.length}</b></button>` +
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}</button>`).join('');
-  for (const b of els.attention.querySelectorAll('button')) {
+  els.attention.querySelector('[data-needs]').onclick = () => setFilter(state.filter === 'waiting' ? null : 'waiting');
+  for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = () => popupApi ? popupApi.showFor(b.dataset.session) : openCard(b.dataset.session);
   }
 }
