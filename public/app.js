@@ -171,6 +171,8 @@ function stateOf(name) {
 }
 const prioOf = (n) => state.status[n]?.priority || DEFAULT_PRIORITY;
 const pausedOf = (n) => !!state.status[n]?.paused;
+// for the filters a paused session is simply 'paused' (not also working / idle / done), so the status chips split the sessions cleanly
+const filterStateOf = (n) => (pausedOf(n) ? 'paused' : displayStateOf(n, state.status));
 const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held || null);   // the manager's quota hold
 // Pill text for the owner's pause or the manager's hold, '' when neither.
 const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? 'held: quota' : '');
@@ -766,7 +768,7 @@ function matchesFilter(n) {
   // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
   // not its raw working/done/idle state.
   // filters are cumulative: several values in a group match any of them (done + working), the groups combine with AND
-  if (state.filter.length && !state.filter.some((k) => (k === 'paused' ? pausedOf(n) : displayStateOf(n, state.status) === k))) return false;
+  if (state.filter.length && !state.filter.includes(filterStateOf(n))) return false;
   if (state.fProject.length && !state.fProject.some((v) => projectOf(n) === (v === '-' ? '' : v))) return false;
   if (state.fAgent.length && !state.fAgent.some((v) => agentOf(n) === v)) return false;
   return true;
@@ -956,8 +958,8 @@ function onHealth(h) {
 function renderSummary() {
   // Count sessions by display state so a session waiting on a deploy shows up
   // under its own violet 'waiting deploy' chip, not under working/done/idle.
-  const counts = { waiting: 0, deploy: 0, done: 0, working: 0, idle: 0, offline: 0 };
-  for (const s of state.sessions) counts[displayStateOf(s.name, state.status)]++;
+  const counts = { waiting: 0, deploy: 0, done: 0, working: 0, idle: 0, offline: 0, paused: 0 };
+  for (const s of state.sessions) counts[filterStateOf(s.name)]++;
   const chips = [
     ['waiting', counts.waiting, 'need you'],
     ['deploy',  counts.deploy,  'waiting deploy'],
@@ -1073,8 +1075,8 @@ function renderFilterBar() {
   const agents = ['claude', 'codex', 'minimax'].filter((a) => all.some((n) => agentOf(n) === a));
   const html =
     `` + chip('filter', null, 'all') +
-    states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
-    (count(pausedOf) || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count(pausedOf)) : '') +
+    states.filter((k) => count((n) => filterStateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => filterStateOf(n) === k))).join('') +
+    (count((n) => filterStateOf(n) === 'paused') || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count((n) => filterStateOf(n) === 'paused')) : '') +
     `<span class="fsep"></span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span>` + chip('fAgent', null, 'all') +
