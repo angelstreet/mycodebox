@@ -1,5 +1,5 @@
 // Per-turn meter: what a finished turn cost in wall time and tokens, shown next to the agent's own STATUS line.
-//   STATUS: done · 4m 01s · 1.3M tok · branch x pushed (abc123), tsc+lint pass, left: 23 tables
+//   STATUS: done · 4m 01s · 1.3M tok · Status page shows VM summary (abc123), left: 23 tables
 // An agent cannot measure its own tokens or time, so ghosty does. A value that cannot be known is left out, never guessed.
 //
 // Sources:

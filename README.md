@@ -215,7 +215,7 @@ to `stalls.jsonl` with what it would answer, then the owner's real reply as its 
 Any finished-turn stall also carries `no_status`: the closing text (the agent's own words, not tool
 output) never says what is done / tested / left / next / blocked. It is a flag, not a case, and is not set
 for questions, deploy waits or owner actions. A `done` stall with `no_status` has the would-answer
-"Before stopping: what is done, what is tested, what is left?" (auto case `ask_status`, off by default).
+"Before stopping: what is done, what is left?" (auto case `ask_status`, off by default).
 
 **One stop, one record.** A TUI that merely repaints makes ghosty show `working` for a few seconds; that
 is not progress. A session only counts as having moved on when real work was seen (the spinner signal
@@ -586,7 +586,7 @@ record is a bug).
 
 ## STATUS meter (what a turn took)
 
-Agents end a turn with `STATUS: <verdict> — <useful info>` (e.g. `STATUS: done — branch x pushed (abc123), tsc+lint pass, left: 23 tables`).
+Agents end a turn with `STATUS: <verdict> — <useful info>` (e.g. `STATUS: done — Status page shows VM summary (abc123), left: 23 tables`).
 Agents cannot measure their own tokens or time, so ghosty does and shows one line:
 `STATUS: done · 4m 01s · 1.3M tok · <info, max 200 chars>`. A part that cannot be known is left out, never guessed.
 

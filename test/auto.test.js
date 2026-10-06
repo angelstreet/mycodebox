@@ -248,7 +248,7 @@ test('stopped_short and ask_status are valid autoCases, off unless enabled', asy
   assert.equal(m.autoOf('as2').case, 'ask_status');
   await sleep(DELAY + 100);
   assert.deepEqual(texts.filter((x) => x[0] === 'ss2'), [['ss2', 'Yes, continue.', true]]);
-  assert.deepEqual(texts.filter((x) => x[0] === 'as2'), [['as2', 'Before stopping: what is done, what is tested, what is left?', true]]);
+  assert.deepEqual(texts.filter((x) => x[0] === 'as2'), [['as2', 'Before stopping: what is done, what is left?', true]]);
 });
 
 test('waiting_deploy and owner_action are never typed and are escalated with their reasons', async () => {

@@ -329,7 +329,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   return finish(out);
 }
 
-export const ASK_STATUS_TEXT = 'Before stopping: what is done, what is tested, what is left?';
+export const ASK_STATUS_TEXT = 'Before stopping: what is done, what is left?';
 
 // {scope?, ref?} when the closing text names them (--host / --server / --frontend, a branch).
 function deployHint(text) {
