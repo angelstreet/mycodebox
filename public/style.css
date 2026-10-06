@@ -1640,3 +1640,4 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 .parkbox .prow.note:hover .pman, .parkbox .pman.on{ color:var(--accent); }
 .session-list li.sidefilt{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 12px; font-size:12px; color:var(--accent); border-bottom:1px solid var(--line); }
 .session-list li.sidefilt .sbtn{ min-height:0; height:24px; padding:0 8px; font-size:11px; }
+#askPopupPill{ display:flex; align-items:center; gap:6px; }

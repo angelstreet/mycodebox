@@ -4,6 +4,7 @@
 // confirm-on-forbidden second tap); each owner answer is logged through onAnswer() as an owner-vs-AI-vs-Jev record.
 // The queue logic is pure and lives in ask-model.js.
 
+import { icon } from './icons.js';
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane } from './buttons.js';
 import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText, multiFormModel, multiSendText, multiComplete } from './ask-model.js';
 
@@ -235,7 +236,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
           <span class="ap-cnt">${idx + 1}/${q.items.length}</span>
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
           <button class="ap-nav" data-act="next" aria-label="Next">›</button>
-          <button class="ap-x" data-act="min" aria-label="Minimise">✕</button>
+          <button class="ap-x" data-act="min" aria-label="Hide" title="Hide (tap the red pill to bring it back)">${icon('chevron-down', 16)}</button>
         </div>
         ${qBlock}
         ${detBlock}
