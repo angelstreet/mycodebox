@@ -698,7 +698,6 @@ body{ display:flex; flex-direction:column; }
   .grid-pane .cell .h{ gap:5px; padding:5px 6px; position:relative; }
   .grid-pane .cell .h .ag, .grid-pane .cell .h .mt, .grid-pane .cell .h .tgt,
   .grid-pane .cell .h .rd, .grid-pane .cell .h .open, .grid-pane .cell .h .pos{ display:none; }
-  .grid-pane .cell .h .state .st{ display:none; }
   .grid-pane .cell .h .state.waiting{ padding:2px 4px; }
   /* move arrows float over the selected card's top edge instead of squeezing the name */
   .grid-pane .cell.focus .h .mv{
@@ -744,7 +743,8 @@ body{ display:flex; flex-direction:column; }
    so the label sits in the middle and pushes (never covers) the sides. */
 .cell .h .ag{ order:0; } .cell .h .nm{ order:1; flex:1 1 0; } .cell .h .proj{ order:2; }
 .cell .h::after{ content:''; order:3; flex:1 1 0; min-width:0; }
-.cell .h > :not(.ag):not(.nm):not(.proj){ order:4; }
+.cell .h > :not(.ag):not(.nm):not(.proj):not(.pr){ order:4; }
+.cell .h .pr{ order:-1; }   /* priority first, like in the nav list */
 .cell .h .proj{
   flex:0 1 auto; min-width:0; max-width:46%;
   display:inline-flex; align-items:center; gap:6px;
@@ -1179,7 +1179,6 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .rv-stage{ width:calc(100% - 24px); max-width:760px; margin:4px auto; }
 /* phones: card / board rows show a status dot only (colour says it) */
 @media (max-width: 720px){
-  .cell .state .st, .row-item .state .st{ display:none; }
   .cell .state, .row-item .state{ padding:2px 6px; gap:0; }
 }
 
@@ -1730,3 +1729,9 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 .cell .h .tgt{ cursor:pointer; }
 /* the "→ send target" arrow is gone: the focused card's highlighted border is enough */
 .cell .h .tgt, .grid-pane .cell.focus .h .tgt{ display:none !important; }
+
+/* move arrows a card cannot use at its position */
+.cell .h .mv button.na, .cell .h .mv.na{ display:none !important; }
+
+/* nav list: two lines per session (name, then priority / agent / state); the repo-branch line is dropped */
+.session-list .sub.rb{ display:none; }

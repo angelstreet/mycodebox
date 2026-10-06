@@ -212,7 +212,8 @@ function fmtShort(sec) {
 //   waiting  → how long it has been waiting on you
 //   idle     → time since last output
 // card / board badge: the pulsing dot already says "working", so show only the elapsed time
-function badgeText(name) { return vstateOf(name) === 'deploy' ? '' : stateText(name).replace(/^working ?/, ''); }
+// the dot's colour says the state; the badge only carries the time ("7m"), the word is in the tooltip
+function badgeText(name) { return vstateOf(name) === 'deploy' ? '' : stateText(name).replace(/^(working|done|idle|needs you) ?/, ''); }
 function stateText(name) {
   const st = state.status[name] || {};
   const s = stateOf(name);
@@ -237,7 +238,7 @@ function stateText(name) {
 function stateBadgeHtml(name) {
   const s = vstateOf(name);
   const tip = s === 'deploy' ? ` data-wd="${escapeHtml(state.status[name].deployWait.id || '')}" title="${escapeHtml(deployWaitTip(name))}"` : '';
-  return `<span class="state ${s}"${tip}>${s === 'deploy' ? icon('timer', 14, 'sticon') : `<i class="dot ${s}"></i>`}<span class="st">${escapeHtml(badgeText(name))}</span></span>`;
+  return `<span class="state ${s}"${tip || ` title="${s === 'waiting' ? 'needs you' : s}"`}>${s === 'deploy' ? icon('timer', 14, 'sticon') : `<i class="dot ${s}"></i>`}<span class="st">${escapeHtml(badgeText(name))}</span></span>`;
 }
 function agentBadgeHtml(name) {
   const a = agentOf(name);
@@ -1676,6 +1677,13 @@ function syncCell(cell) {
   if (mt.dataset.h !== mh) { mt.dataset.h = mh; mt.innerHTML = mh; }
   const rd = cell.querySelector('.rd');
   rd.textContent = state.reader ? '>_' : 'Aa';
+  if (!inCard && n === state.active) {
+    // move arrows: only the directions this card can still go
+    const i = state.sessions.findIndex((x) => x.name === n), N = state.sessions.length, cols = gridCols();
+    const ok = { left: i % cols > 0, right: i % cols < cols - 1 && i < N - 1, up: i - cols >= 0, down: i + cols <= N - 1 };
+    for (const b of cell.querySelectorAll('.mv button')) b.classList.toggle('na', !ok[b.dataset.dir]);
+    cell.querySelector('.mv').classList.toggle('na', !Object.values(ok).some(Boolean));
+  }
   const pos = cell.querySelector('.pos');
   if (inCard) {
     const order = byUrgency(visibleSessions()), i = order.findIndex((x) => x.name === n);
