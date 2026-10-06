@@ -2553,7 +2553,7 @@ function openManager() {
       const unreviewed = (log.entries || []).filter((r) => r.type === 'stall' && !labels.has(r.id)).length;
       const aiReady = cfg.aiTriage === 'auto' && cfg.autoSend && cfg.ai && (cfg.aiAutoCases || []).length > 0;
       const reviewerState = cfg.aiTriage === 'off' ? 'Off' : aiReady ? 'Can send' : cfg.aiTriage === 'auto' ? 'Suggestions only' : 'Suggestions';
-      const aiChoices = (cfg.cases || []).filter((c) => !['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait'].includes(c));
+      const aiChoices = cfg.validAiCases || [];
       const section = (key, heading, detail, content) => `<details class="mgr-section" data-manager-section="${key}" ${sectionsOpen.has(key) ? 'open' : ''}><summary><span>${heading}<small>${detail}</small></span></summary><div class="mgr-section-body">${content}</div></details>`;
       const scroll = body.scrollTop;
       body.innerHTML = `
@@ -2561,7 +2561,7 @@ function openManager() {
         <div class="mgr-overview" aria-label="Manager status">
           <div class="mgr-status"><span>Automatic replies</span><strong class="${cfg.autoSend && (cfg.autoCases || []).length ? 'active' : ''}">${cfg.autoSend && (cfg.autoCases || []).length ? 'On' : cfg.autoSend ? 'No reply types selected' : 'Off'}</strong><small>${(cfg.autoCases || []).length} reply types allowed</small></div>
           <div class="mgr-status"><span>AI reviewer</span><strong class="${aiReady ? 'active' : ''}">${reviewerState}</strong><small>${cfg.aiTriage === 'auto' && !aiReady ? 'Automatic AI replies need enabled types, reviewer access and automatic replies on' : cfg.aiTriage === 'off' ? 'No AI review calls' : `${cfg.aiStats?.unrated ?? 0} proposals without a rating`}</small></div>
-          <div class="mgr-status"><span>Deploy runner</span><strong class="${state.deploys?.enabled ? 'active' : ''}">${state.deploys?.enabled ? 'On' : 'Off'}</strong><small>${state.deploys?.ok === false ? 'Registry unreachable' : `${(state.deploys?.deploys || []).filter((x) => x.state === 'awaiting-approval').length} awaiting approval`}</small></div>
+          <div class="mgr-status" data-manager-deploy-status><span>Deploy runner</span><strong class="${state.deploys?.enabled ? 'active' : ''}">${state.deploys?.enabled ? 'On' : 'Off'}</strong><small>${state.deploys?.ok === false ? 'Registry unreachable' : `${(state.deploys?.deploys || []).filter((x) => x.state === 'awaiting-approval').length} awaiting approval`}</small></div>
         </div>
         <div class="mgr-action"><div><strong>${unreviewed} stops to review</strong><span>Today: ${t.answered ?? 0} answered · ${t.cancelled ?? 0} cancelled · ${t.escalated ?? 0} escalated${heldNow.length ? ` · ${heldNow.length} held` : ''}</span></div><button class="sbtn" data-review="1">Review stops →</button></div>
         ${section('replies', 'Automatic replies', cfg.autoSend ? `${(cfg.autoCases || []).length} reply types selected` : 'Off', `
@@ -2593,7 +2593,16 @@ function openManager() {
           <p class="mhelp">Owner labels and AI ratings can feed scores and evaluation datasets when configured.</p>`)} `;
       body.scrollTop = scroll;
     };
-    state.depSheet = () => { const box = body.querySelector('#depBox'); if (box) box.innerHTML = deploysHtml(state.deploys); };
+    state.depSheet = () => {
+      const box = body.querySelector('#depBox');
+      if (box) box.innerHTML = deploysHtml(state.deploys);
+      const card = body.querySelector('[data-manager-deploy-status]');
+      if (card) {
+        card.querySelector('strong').textContent = state.deploys?.enabled ? 'On' : 'Off';
+        card.querySelector('strong').classList.toggle('active', !!state.deploys?.enabled);
+        card.querySelector('small').textContent = state.deploys?.ok === false ? 'Registry unreachable' : `${(state.deploys?.deploys || []).filter((x) => x.state === 'awaiting-approval').length} awaiting approval`;
+      }
+    };
     const logTimer = setInterval(() => { if (!body.isConnected) { clearInterval(logTimer); state.depSheet = null; } }, 3000);
     body.addEventListener('toggle', (e) => {
       if (!e.target.matches('[data-manager-section]')) return;

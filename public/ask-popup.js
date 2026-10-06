@@ -25,6 +25,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   let q = { items: [], answered: new Map() };   // the queue (ask-model.js)
   let curKey = null;                            // which item is showing
   let minimised = false;
+  const dismissed = new Set();                  // item keys (session + stop) the owner dismissed: not shown again until the stop changes or the session is opened from the strip
   let whyOpen = false;                          // expandable AI/Jev "Why" section, collapsed by default
   let detOpen = false;                          // "Details" (tail of the closing text), collapsed by default, remembered like Why
   const picks = new Map();                      // item.key -> { questionN: optionN } (the multi-question form, owner's taps)
@@ -196,7 +197,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
 
   function render(force) {
     const r = reconcileQueue(q, state.status || {}, state.sessions || []);
-    q = { items: r.items, answered: r.answered };
+    q = { items: r.items.filter((i) => !dismissed.has(i.key)), answered: r.answered };
+    r.added = r.added.filter((i) => !dismissed.has(i.key));
     if (!q.items.length) {
       curKey = null; ctx = null; renderedKey = '';
       el.classList.add('hidden'); pill.classList.add('hidden'); body.innerHTML = '';
@@ -237,6 +239,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
           <button class="ap-nav" data-act="next" aria-label="Next">›</button>` : ''}
           <button class="ap-x" data-act="min" aria-label="Hide" title="Hide (tap the red pill to bring it back)">${icon('chevron-down', 16)}</button>
+          <button class="ap-x" data-act="dismiss" aria-label="Dismiss" title="Dismiss: I won't answer this one, don't show it again">${icon('x', 16)}</button>
         </div>
         ${qBlock}
         ${detBlock}
@@ -316,6 +319,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.act === 'prev') return move(-1);
     if (t.dataset.act === 'next') return move(+1);
     if (t.dataset.act === 'min') return setMin(true);
+    if (t.dataset.act === 'dismiss') { const i = cur(); if (i) { dismissed.add(i.key); curKey = null; } return render(true); }
     if (t.dataset.act === 'why') return setWhy(!whyOpen);
     if (t.dataset.act === 'details') return setDet(!detOpen);
     if (t.dataset.btn) pick(btnById(t.dataset.btn));
@@ -340,6 +344,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     // jump to a session (strip name / card chip): reopens the popup and drops any "answered" mark on it
     showFor(name) {
       for (const k of [...q.answered.keys()]) if (k.startsWith(`${name}\x1f`)) q.answered.delete(k);
+      for (const k of [...dismissed]) if (k.startsWith(`${name}\x1f`)) dismissed.delete(k);
       minimised = false; try { sessionStorage.setItem(MIN_KEY, '0'); } catch {}
       render(true);
       const it = q.items.find((i) => i.name === name);

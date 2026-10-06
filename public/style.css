@@ -1776,18 +1776,18 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 .manager-sheet .sheet-body{ padding:10px 20px 24px; gap:14px; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; font-size:15px; line-height:1.45; }
 .manager-sheet .sheet-foot{ padding:10px 20px; }
 .manager-sheet .mgr-intro{ color:var(--ink-2); }
-.mgr-overview{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.mgr-overview{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; flex-shrink:0; }
 .mgr-status{ display:flex; flex-direction:column; gap:3px; min-width:0; padding:13px 14px; border:1px solid var(--line-2); border-radius:12px; background:var(--bg-3); }
 .mgr-status span{ color:var(--ink-2); font-size:13px; }
 .mgr-status strong{ color:var(--ink); font-size:18px; line-height:1.3; }
 .mgr-status strong.active{ color:var(--working); }
 .mgr-status small{ color:var(--ink-2); font-size:12px; line-height:1.35; }
-.mgr-action{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; border:1px solid rgba(232,154,74,.45); border-radius:12px; background:rgba(232,154,74,.08); }
+.mgr-action{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; border:1px solid rgba(232,154,74,.45); border-radius:12px; background:rgba(232,154,74,.08); flex-shrink:0; }
 .mgr-action div{ display:flex; flex-direction:column; gap:3px; min-width:0; }
 .mgr-action strong{ font-size:17px; }
 .mgr-action span{ color:var(--ink-2); font-size:13px; }
 .mgr-action .sbtn{ flex-shrink:0; border-color:var(--accent); color:var(--accent); font-weight:700; }
-.mgr-section{ border:1px solid var(--line-2); border-radius:12px; background:var(--bg-3); overflow:hidden; }
+.mgr-section{ border:1px solid var(--line-2); border-radius:12px; background:var(--bg-3); overflow:hidden; flex-shrink:0; }
 .mgr-section > summary{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 16px; cursor:pointer; list-style:none; font-size:16px; font-weight:700; }
 .mgr-section > summary::-webkit-details-marker{ display:none; }
 .mgr-section > summary span{ display:flex; flex-wrap:wrap; align-items:baseline; gap:5px 12px; min-width:0; }
