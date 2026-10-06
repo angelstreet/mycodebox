@@ -25,6 +25,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   let q = { items: [], answered: new Map() };   // the queue (ask-model.js)
   let curKey = null;                            // which item is showing
   let minimised = false;
+  const DISMISS_KEY = 'ghosty.askPopup.dismissed';
   const dismissed = new Set();                  // item keys (session + stop) the owner dismissed: not shown again until the stop changes or the session is opened from the strip
   let whyOpen = false;                          // expandable AI/Jev "Why" section, collapsed by default
   let detOpen = false;                          // "Details" (tail of the closing text), collapsed by default, remembered like Why
@@ -39,6 +40,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   try { minimised = sessionStorage.getItem(MIN_KEY) === '1'; } catch {}
   try { whyOpen = sessionStorage.getItem(WHY_KEY) === '1'; } catch {}
   try { detOpen = sessionStorage.getItem(DET_KEY) === '1'; } catch {}
+  try { for (const k of JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]')) dismissed.add(k); } catch {}   // survives a refresh (per device)
+  const saveDismissed = () => { try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...dismissed].slice(-200))); } catch {} };
 
   // Keep the popup above the send dock: --ask-bottom = the dock's real top edge measured from the viewport bottom.
   const dockEl = document.getElementById('dock');
@@ -319,7 +322,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.act === 'prev') return move(-1);
     if (t.dataset.act === 'next') return move(+1);
     if (t.dataset.act === 'min') return setMin(true);
-    if (t.dataset.act === 'dismiss') { const i = cur(); if (i) { dismissed.add(i.key); curKey = null; } return render(true); }
+    if (t.dataset.act === 'dismiss') { const i = cur(); if (i) { dismissed.add(i.key); saveDismissed(); curKey = null; } return render(true); }
     if (t.dataset.act === 'why') return setWhy(!whyOpen);
     if (t.dataset.act === 'details') return setDet(!detOpen);
     if (t.dataset.btn) pick(btnById(t.dataset.btn));
@@ -345,6 +348,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     showFor(name) {
       for (const k of [...q.answered.keys()]) if (k.startsWith(`${name}\x1f`)) q.answered.delete(k);
       for (const k of [...dismissed]) if (k.startsWith(`${name}\x1f`)) dismissed.delete(k);
+      saveDismissed();
       minimised = false; try { sessionStorage.setItem(MIN_KEY, '0'); } catch {}
       render(true);
       const it = q.items.find((i) => i.name === name);
