@@ -1951,4 +1951,15 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 /* the filter area sits right after the workspace select (left side, so it never moves as filters are added) and shows only while the codebox resources are folded */
 .fgrp{ margin-right:auto; }
 body:not(.res-hidden) .fgrp{ display:none; }
-@media (max-width: 720px){ .fgrp{ display:flex !important; margin-right:0; } }
+@media (max-width: 720px){ .fgrp{ display:none !important; } }
+
+/* phones: the swipe row of quick filter chips under the top bar */
+.qrow{ display:none; }
+@media (max-width: 720px){
+  .qrow{ display:flex; gap:6px; padding:6px 10px; overflow-x:auto; scrollbar-width:none; border-bottom:1px solid var(--line); flex-shrink:0; background:var(--bg); }
+  .qrow::-webkit-scrollbar{ display:none; }
+  .qchip{ display:inline-flex; align-items:center; gap:5px; flex-shrink:0; padding:4px 10px; border-radius:999px; font-size:12px; min-height:30px; background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line); white-space:nowrap; }
+  .qchip .n{ color:var(--ink-3); font-variant-numeric:tabular-nums; }
+  .qchip .agent{ padding:1px 4px; }
+  .qchip.on{ border-color:var(--accent); color:var(--ink); background:rgba(232,154,74,.12); }
+}

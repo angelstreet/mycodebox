@@ -1054,8 +1054,32 @@ function renderActiveFilters() {
     if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
   };
 }
+// phones: one row you swipe sideways under the top bar - status, then agent, then project; tap a chip to toggle it
+function renderQuickRow() {
+  const host = $('#quickRow');
+  if (!host) return;
+  const all = state.sessions.map((s) => s.name);
+  const cnt = (pred) => all.filter(pred).length;
+  const chip = (g, v, inner, n) => `<button class="qchip${(state[g] || []).includes(v) ? ' on' : ''}" data-g="${g}" data-v="${escapeHtml(v)}">${inner}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
+  const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline', 'paused'].filter((k) => cnt((n) => filterStateOf(n) === k));
+  const agents = ['claude', 'codex', 'minimax'].filter((x) => all.some((n) => agentOf(n) === x));
+  const projects = [...new Set(all.map(projectOf))].sort((x, y) => (x === '') - (y === '') || x.localeCompare(y));
+  const html = `<button class="qchip${anyFilter() ? '' : ' on'}" data-g="" data-v="">all</button>` +
+    states.map((k) => chip('filter', k, `<i class="dot ${k}"></i>${escapeHtml(STATE_LABEL[k] || k)}`, cnt((n) => filterStateOf(n) === k))).join('') +
+    agents.map((x) => chip('fAgent', x, `<span class="agent ${x}">${AGENT_LABEL[x]}</span>`, cnt((n) => agentOf(n) === x))).join('') +
+    projects.map((p) => chip('fProject', p || '-', escapeHtml(p || 'no repo'), cnt((n) => projectOf(n) === p))).join('');
+  if (host.dataset.h === html) return;
+  host.dataset.h = html; host.innerHTML = html;
+  for (const b of host.querySelectorAll('.qchip')) b.onclick = () => {
+    const g = b.dataset.g, v = b.dataset.v;
+    if (!g) { state.filter = []; setFilters({ fProject: [], fAgent: [] }); return; }
+    const next = toggleIn(state[g] || [], v);
+    if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
+  };
+}
 function renderFilterBar() {
   syncWorkspace();
+  renderQuickRow();
   const bar = els.filterBar;
   const show = state.filterOpen;
   bar.classList.toggle('hidden', !show);
