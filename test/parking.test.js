@@ -144,7 +144,8 @@ test('readManualNotes parses valid entries (newest first), skips bad rows, toler
 test('session-cap-check: no finding under the cap, one finding listing idle-longest over it', async () => {
   const { summarize } = await import('../scripts/session-cap-check.js');
   assert.deepEqual(summarize({ live: 9, cap: 10, over: 0, candidates: [], parked: [{}], ramSavedMb: 300 }).findings, []);
-  const f = summarize({ live: 12, cap: 10, over: 2, candidates: [{ name: 'a', idleMin: 3000, rssMb: 300 }], parked: [] }).findings;
+  assert.deepEqual(summarize({ live: 12, cap: 10, over: 2, candidates: [{ name: 'a', idleMin: 3000, rssMb: 300 }], parked: [] }, 6000).findings, []);   // RAM to spare: no finding
+  const f = summarize({ live: 12, cap: 10, over: 2, candidates: [{ name: 'a', idleMin: 3000, rssMb: 300 }], parked: [] }, 2000).findings;
   assert.equal(f.length, 1); assert.match(f[0].body, /a \(2d\)/);
 });
 // MiniMax harness: same shape as harness() above, but the pane's agent is minimax-code / mcode; no claude session file.
