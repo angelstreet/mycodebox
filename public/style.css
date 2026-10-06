@@ -1921,3 +1921,8 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 .grid-pane .cell{ border:1px solid rgba(255,255,255,.22); box-shadow:0 4px 16px rgba(0,0,0,.65); }
 .grid-pane .cell .h{ background:#1c1f28; border-bottom:1px solid rgba(255,255,255,.14); }
 .grid-pane .cell.focus{ border-color:var(--accent); }
+
+/* a few pixels of air between rows, more around the highlighted (shown / active) ones so their frames never touch */
+.session-list li[data-session]{ margin-bottom:3px; }
+.session-list li.shown, .session-list li.active{ margin-top:3px; margin-bottom:6px; }
+.session-list li.grp ~ li[data-session].shown, .session-list li.grp ~ li[data-session].active{ margin-left:14px; }
