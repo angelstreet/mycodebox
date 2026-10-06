@@ -950,7 +950,7 @@ function renderAttention() {
   els.attention.dataset.key = key;
   els.attention.classList.toggle('none', !waiting.length);
   els.attention.innerHTML = `<button class="lbl${state.filter === 'waiting' ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU <b>${waiting.length}</b></button>` +
-    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${prioOf(s.name) === DEFAULT_PRIORITY ? '' : `<b class="prio ${prioOf(s.name)}">${prioOf(s.name)}</b>`}${escapeHtml(displayName(s.name))}</button>`).join('');
+    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(state.filter === 'waiting' ? null : 'waiting');
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = () => popupApi ? popupApi.showFor(b.dataset.session) : openCard(b.dataset.session);
