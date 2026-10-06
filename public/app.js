@@ -807,11 +807,10 @@ function renderParking() {
   let h = '';
   if (pk.parked.length || pk.over) {
     const po = state.parkedClosed !== true;
-    h += `<button class="ph pfold${pk.over ? ' over' : ''}" data-pfold="parkedClosed" aria-expanded="${po}"><span class="uch${po ? ' on' : ''}"></span>Parked (${pk.parked.length})</button>`;
+    const bits = [`${pk.live} live / ${pk.cap} max`];
+    if (pk.parked.length) bits.push(`${Math.round(pk.ramSavedMb / 100) / 10} GB saved`);
+    h += `<button class="ph pfold${pk.over ? ' over' : ''}" data-pfold="parkedClosed" aria-expanded="${po}" title="${bits.join(' \u00b7 ')}"><span class="uch${po ? ' on' : ''}"></span>Parked (${pk.parked.length})</button>`;
     if (po) {
-      const bits = [`${pk.live} live / ${pk.cap} max`];
-      if (pk.parked.length) bits.push(`${Math.round(pk.ramSavedMb / 100) / 10} GB saved`);
-      h += `<div class="psum${pk.over ? ' over' : ''}">${bits.join(' \u00b7 ')}</div>`;
       if (pk.over) {
         h += `<div class="pnote">${pk.over} over the limit. Park the idlest to free memory:</div>`;
         for (const c of pk.candidates) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">idle ${idleText(c.idleMin)}</span></div>`;

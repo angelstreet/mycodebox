@@ -1751,3 +1751,14 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 .grid-pane .cell .h{ container-type:inline-size; }
 @container (max-width:600px){ .cell .h .mt{ display:none; } }
 @container (max-width:600px){ .cell .h .ag .agent-model{ display:none; } }
+
+/* indentation: sessions under a group header and rows under Parked / Notes sit to the right of it, with a guide line */
+.session-list li.grp ~ li[data-session]{ margin-left:12px; border-left:1px solid var(--line-2); border-top-left-radius:0; border-bottom-left-radius:0; }
+.parkbox .prow, .parkbox .pnote, .parkbox .pnotebody{ margin-left:9px; padding-left:12px; border-left:1px solid var(--line-2); }
+.parkbox .pnotebody{ border-radius:0 7px 7px 0; }
+
+/* a border above and below every group header (sidebar groups, Parked, Notes) */
+.session-list li.grp{ border-top:1px solid var(--line-2); border-bottom:1px solid var(--line-2); }
+.session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ border-top:0; }
+.parkbox .pfold{ border-top:1px solid var(--line-2); border-bottom:1px solid var(--line-2); padding:5px 0; margin-top:6px; }
+.parkbox .pfold:first-child{ border-top:0; margin-top:0; }
