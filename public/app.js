@@ -1172,8 +1172,8 @@ function layoutSide() {
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
   let fl = list.querySelector('li.sidefilt');
   if (anyFilter()) {
-    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear filter</button>'; fl.querySelector('button').onclick = () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); }; list.insertBefore(fl, list.firstChild); }
-    fl.querySelector('.ft').textContent = `Filter on: ${names.filter(matchesFilter).length} of ${names.length} shown`;
+    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear</button>'; fl.querySelector('button').onclick = () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); }; list.insertBefore(fl, list.firstChild); }
+    fl.querySelector('.ft').textContent = `Filter on: ${names.filter(matchesFilter).length}/${names.length}`;
   } else if (fl) fl.remove();
   const withHeaders = sections.length > 0;
   if (withHeaders) sections.push({ key: 'other', title: 'Other' });
