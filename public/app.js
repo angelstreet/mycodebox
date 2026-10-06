@@ -65,7 +65,9 @@ const state = {
   mode:       'grid',           // card | grid | list
   prevMode:   'grid',           // where the back arrow returns to
   gridSize:   4,                // 2 | 4 | 6 | 8
-  filter:     null,             // null | 'waiting' | 'working'
+  filter:     [],               // status values ('waiting', 'working', 'paused'...); cumulative, empty = all
+  fProject:   [],               // project values, cumulative
+  fAgent:     [],               // agent values, cumulative
   ws:        new Map(),
   statusWs:  null,
   terms:     new Map(),
@@ -759,13 +761,14 @@ function projectOf(n) { const st = state.status[n]; return st?.project || st?.re
 function matchesFilter(n) {
   // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
   // not its raw working/done/idle state.
-  if (state.filter === 'paused') { if (!pausedOf(n)) return false; }
-  else if (state.filter && displayStateOf(n, state.status) !== state.filter) return false;
-  if (state.fProject && projectOf(n) !== (state.fProject === '-' ? '' : state.fProject)) return false;
-  if (state.fAgent && agentOf(n) !== state.fAgent) return false;
+  // filters are cumulative: several values in a group match any of them (done + working), the groups combine with AND
+  if (state.filter.length && !state.filter.some((k) => (k === 'paused' ? pausedOf(n) : displayStateOf(n, state.status) === k))) return false;
+  if (state.fProject.length && !state.fProject.some((v) => projectOf(n) === (v === '-' ? '' : v))) return false;
+  if (state.fAgent.length && !state.fAgent.some((v) => agentOf(n) === v)) return false;
   return true;
 }
-function anyFilter() { return !!(state.filter || state.fProject || state.fAgent); }
+function anyFilter() { return !!(state.filter.length || state.fProject.length || state.fAgent.length); }
+const toggleIn = (arr, v) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);   // click an active value to unselect it
 function visibleSessions() {
   if (!anyFilter()) return state.sessions;
   return state.sessions.filter((s) => matchesFilter(s.name));
@@ -933,12 +936,12 @@ function renderSummary() {
   ];
   const html = chips
     .filter(([k, n]) => n > 0 || k === 'working')
-    .map(([k, n, t]) => `<button class="chip ${k}${state.filter === k ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}">${k === 'deploy' ? icon('timer', 13, 'sticon') : `<i class="dot ${k}"></i>`}${n}</button>`)
+    .map(([k, n, t]) => `<button class="chip ${k}${state.filter.includes(k) ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}">${k === 'deploy' ? icon('timer', 13, 'sticon') : `<i class="dot ${k}"></i>`}${n}</button>`)
     .join('');
   if (els.summary.innerHTML !== html) {
     els.summary.innerHTML = html;
     for (const b of els.summary.querySelectorAll('.chip')) {
-      b.onclick = () => setFilter(state.filter === b.dataset.filter ? null : b.dataset.filter);
+      b.onclick = () => setFilter(toggleIn(state.filter, b.dataset.filter));
     }
   }
   // tab title badge so the PWA / browser tab shows how many need you
@@ -950,30 +953,30 @@ function renderAttention() {
   const aiAsk = (n) => { const st = state.status[n]; return st && st.state === 'done' && needsOwner(st) && st.triage && st.triage.state !== 'pending'; };
   const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting' || aiAsk(s.name)).sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
-  const key = state.filter + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|');
+  const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.classList.toggle('none', !waiting.length);
-  els.attention.innerHTML = `<button class="lbl${state.filter === 'waiting' ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU <b>${waiting.length}</b></button>` +
+  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU <b>${waiting.length}</b></button>` +
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('');
-  els.attention.querySelector('[data-needs]').onclick = () => setFilter(state.filter === 'waiting' ? null : 'waiting');
+  els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = () => popupApi ? popupApi.showFor(b.dataset.session) : openCard(b.dataset.session);
   }
 }
 
 function setFilter(f) {
-  state.filter = f;
+  state.filter = f == null ? [] : [].concat(f);
   renderAll();
 }
 function setFilters(patch) {
   Object.assign(state, patch);
-  lsSet(LS_FILTERS, JSON.stringify({ p: state.fProject || null, a: state.fAgent || null }));
+  lsSet(LS_FILTERS, JSON.stringify({ p: state.fProject, a: state.fAgent }));
   renderAll();
 }
 function loadFilters() {
-  try { const f = JSON.parse(lsGet(LS_FILTERS, '{}')) || {}; state.fProject = f.p || null; state.fAgent = f.a || null; }
-  catch { state.fProject = state.fAgent = null; }
+  try { const f = JSON.parse(lsGet(LS_FILTERS, '{}')) || {}; state.fProject = [].concat(f.p || []); state.fAgent = [].concat(f.a || []); }
+  catch { state.fProject = []; state.fAgent = []; }
 }
 
 // Filter bar: one horizontal row of chip groups. Rebuilt only when its
@@ -993,8 +996,8 @@ function syncWorkspace() {
   const projs = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const html = `<option value="">All workspaces \u00b7 ${all.length}</option>` + projs.map((p) => `<option value="${escapeHtml(p || '-')}">${escapeHtml(p || 'no repo')} \u00b7 ${all.filter((n) => projectOf(n) === p).length}</option>`).join('');
   if (sel.dataset.h !== html) { sel.dataset.h = html; sel.innerHTML = html; }
-  sel.value = state.fProject || '';
-  sel.classList.toggle('on', !!state.fProject);
+  sel.value = state.fProject.length === 1 ? state.fProject[0] : '';
+  sel.classList.toggle('on', state.fProject.length > 0);
 }
 function renderFilterBar() {
   syncWorkspace();
@@ -1006,7 +1009,7 @@ function renderFilterBar() {
   const all = state.sessions.map((s) => s.name);
   const count = (pred) => all.filter(pred).length;
   const chip = (group, val, label, n, cls = '') =>
-    `<button class="fchip ${cls}${(state[group] || null) === val ? ' on' : ''}" data-g="${group}" data-v="${val ?? ''}">${label}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
+    `<button class="fchip ${cls}${(val === null ? !(state[group] || []).length : (state[group] || []).includes(val)) ? ' on' : ''}" data-g="${group}" data-v="${val ?? ''}">${label}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
   // 'waiting deploy' sits next to the other states: it is the violet display state a session shows
   // while its status has deployWait (and the raw state isn't waiting/offline).
   const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline'];
@@ -1015,7 +1018,7 @@ function renderFilterBar() {
   const html =
     `<span class="fl">status</span>` + chip('filter', null, 'all') +
     states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
-    (count(pausedOf) || state.filter === 'paused' ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count(pausedOf)) : '') +
+    (count(pausedOf) || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count(pausedOf)) : '') +
     `<span class="fsep"></span><span class="fl">project</span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span><span class="fl">agent</span>` + chip('fAgent', null, 'all') +
@@ -1027,11 +1030,11 @@ function renderFilterBar() {
   for (const b of bar.querySelectorAll('.fchip')) {
     b.onclick = () => {
       const g = b.dataset.g, v = b.dataset.v || null;
-      const next = state[g] === v ? null : v;
+      const next = v === null ? [] : toggleIn(state[g] || [], v);   // 'all' clears the group; a value toggles
       if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
     };
   }
-  bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); });
+  bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); });
 }
 
 // ---------- task document (.md) ----------
@@ -1198,7 +1201,7 @@ function layoutSide() {
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
   let fl = list.querySelector('li.sidefilt');
   if (anyFilter()) {
-    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear</button>'; fl.querySelector('button').onclick = () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); }; list.insertBefore(fl, list.firstChild); }
+    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear</button>'; fl.querySelector('button').onclick = () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); }; list.insertBefore(fl, list.firstChild); }
     fl.querySelector('.ft').textContent = `Filter on: ${names.filter(matchesFilter).length}/${names.length}`;
   } else if (fl) fl.remove();
   const withHeaders = sections.length > 0;
@@ -1980,7 +1983,7 @@ function renderList() {
       ? `No session matches the filter.<br><button class="clear-f">show all ${state.sessions.length}</button>`
       : 'No tmux sessions yet.<br>Start one from the sidebar, or run <code>tmux new -s name</code>.'}</div>`;
     const cf = els.listPane.querySelector('.clear-f');
-    if (cf) cf.onclick = () => { state.filter = null; setFilters({ fProject: null, fAgent: null }); };
+    if (cf) cf.onclick = () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); };
     return;
   }
   for (const s of rows) {
@@ -3844,7 +3847,7 @@ $('#sideByProjectBtn').onclick = () => { state.layout.groupBy = state.layout.gro
 function syncByProjectBtn() { $('#sideByProjectBtn')?.classList.toggle('on', state.layout.groupBy === 'project'); }
 syncByProjectBtn();
 $('#resToggle').onclick = () => { state.resHidden = !state.resHidden; lsSet('ghosty.resHidden', state.resHidden ? '1' : '0'); applyRes(); };
-$('#wsSelect').onchange = (e) => setFilters({ fProject: e.target.value || null });
+$('#wsSelect').onchange = (e) => setFilters({ fProject: e.target.value ? [e.target.value] : [] });
 applyRes();
 wireSideDnd();
 loadLayout();
