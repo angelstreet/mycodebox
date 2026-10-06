@@ -57,6 +57,7 @@ const els = {
 };
 
 const state = {
+  parkedClosed: true,                  // the Parked fold starts collapsed
   sessions:   [],
   status:     {},
   statusAt:   Date.now(),       // when state.status was received (for local elapsed ticking)
