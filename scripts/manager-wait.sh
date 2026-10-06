@@ -64,6 +64,7 @@ def cursored():
     off = read_cursor()
     if off is None:
         off = size(events); write_cursor(off)      # first run: start at EOF, do not flood the manager
+    last_written = off                              # so write_cursor only touches disk when the value changes
     p = subprocess.Popen(['bash', '-c', os.environ['MANAGER_WAIT_DEFAULT_FILTER']], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          start_new_session=True)
     out = []
@@ -80,8 +81,12 @@ def cursored():
     def feed(data):
         try: p.stdin.write(data); p.stdin.flush()
         except (BrokenPipeError, OSError): pass
+    def advance(n):
+        nonlocal last_written
+        if n != last_written: write_cursor(n); last_written = n
     first_at = None
     alive = True
+    prev_off = off                                   # what `off` was at the last pump; if a tick fed nothing, the filter has had a full poll to react
     while alive:
         if size(events) < off:                        # rotated: finish the old file (.1), then start the new one
             data, noff = read_from(events + '.1', off)
@@ -96,6 +101,9 @@ def cursored():
             if first_at is None: first_at = time.time()
         if first_at is not None and time.time() - first_at >= grace: break
         if p.poll() is not None and not alive: break
+        if first_at is None and off == prev_off:      # quiet tick, nothing new fed: every fed line has been dropped by the filter, move on
+            advance(off)
+        prev_off = off
     # flush: stop feeding, let the filter drain what it already has
     try: p.stdin.close()
     except OSError: pass
@@ -104,7 +112,7 @@ def cursored():
     while b'\n' in buf:
         line, _, buf = buf.partition(b'\n'); out.append(line.decode() + '\n')
     kill(p)
-    if out: write_cursor(off)                          # delivered: the cursor moves; otherwise noise is just re-read
+    if out: advance(off)                             # delivered: cursor moves; quiet ticks may already have
     sys.stdout.write(''.join(out))
 
 if filt and os.path.realpath(filt) != os.path.realpath(os.environ['MANAGER_WAIT_DEFAULT_FILTER']): legacy()

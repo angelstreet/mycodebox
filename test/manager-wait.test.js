@@ -9,6 +9,7 @@ import { spawnSync, spawn } from 'node:child_process';
 
 const SH = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'manager-wait.sh');
 const ev = (i, extra = {}) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), key: `s${i}:asks`, kind: 'asks', session: `s${i}`, title: `t${i}`, body: `question ${i}`, ...extra }) + '\n';
+const noise = (i) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), kind: 'deploy', state: 'start', session: undefined, body: `noise ${i}`, blockedBy: [] }) + '\n';
 const setup = () => {
   const dir = mkdtempSync(join(tmpdir(), 'ghosty-mwait-'));
   mkdirSync(join(dir, 'manager-reports'));
@@ -49,11 +50,31 @@ test('routine deploy noise is filtered but the cursor still moves past it on del
   assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
 });
 
-test('a partial last line is not consumed until complete', () => {
+test('cursor advances past pure noise (no delivery) once the filter has had time to answer', async () => {
+  const s = setup();
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, noise(1) + noise(2) + noise(3));              // every line is filtered out
+  const p = spawn('bash', [SH], { env: s.env, detached: true });        // own group so the kill is clean
+  await new Promise((r) => setTimeout(r, 1500));
+  try { process.kill(-p.pid, 'SIGTERM'); } catch {}                     // kill the whole process group (filter too)
+  await new Promise((r) => p.on('close', r));
+  assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
+});
+
+test('noise then a real event is delivered and the cursor sits at EOF', () => {
+  const s = setup();
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, noise(1) + noise(2) + ev(3));
+  const r = run(s);
+  assert.deepEqual(ids(r.stdout), ['s3']);
+  assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
+});
+
+test('a partial last line is not consumed by the cursor (still incomplete)', () => {
   const s = setup();
   writeFileSync(s.cursor, '0\n');
   const full = ev(5);
-  writeFileSync(s.events, ev(1) + full.slice(0, 20));
+  writeFileSync(s.events, ev(1) + full.slice(0, 20));                    // trailing 20 bytes have no newline
   const r = run(s);
   assert.deepEqual(ids(r.stdout), ['s1']);
   assert.equal(Number(readFileSync(s.cursor, 'utf8')), ev(1).length);

@@ -777,13 +777,17 @@ function renderParking() {
   const box = document.getElementById('parkBox');
   if (!box) return;
   const pk = state.parking;
-  if (!pk || (!pk.parked.length && !pk.over)) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  if (!pk || (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length))) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const idleText = (m) => (m == null ? '?' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
   let h = '';
   if (pk.over) h += `<div class="cap">${pk.live} live Claude sessions, cap ${pk.cap}. Idle longest: ${pk.candidates.map((c) => `${escapeHtml(c.name)} (${idleText(c.idleMin)})`).join(', ')}</div>`;
   if (pk.parked.length) {
     h += `<div class="ph">Parked (${pk.parked.length}) · ${pk.ramSavedMb} MB saved</div>`;
     for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
+  }
+  if (pk.manual && pk.manual.length) {
+    h += `<div class="ph">Manual notes (${pk.manual.length})</div>`;
+    for (const m of pk.manual) h += `<div class="prow"><span class="pn" title="${escapeHtml(m.how)}">${escapeHtml(m.session)}</span><span class="pman">manual</span></div>`;
   }
   box.innerHTML = h;
   box.classList.remove('hidden');

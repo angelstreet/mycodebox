@@ -106,6 +106,31 @@ export function capView({ sessions, cap = SESSION_CAP, now = Date.now() }) {
 
 export const fmtIdle = (min) => (min == null ? 'unknown' : min >= 2880 ? `${Math.round(min / 1440)}d` : min >= 120 ? `${Math.round(min / 60)}h` : `${min}m`);
 
+// Manual park notes (read-only): object keyed by session name. Tolerant of a missing or malformed file
+// — the file is hand-written by other tools and may be absent or contain rows that are not objects.
+export async function readManualNotes(file) {
+  let j;
+  try { j = JSON.parse(await readFile(file, 'utf8')); } catch { return []; }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return [];
+  const out = [];
+  for (const [session, v] of Object.entries(j)) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+    let parkedAt = null;
+    if (typeof v.parkedAt === 'string') {
+      const t = Date.parse(v.parkedAt);
+      if (Number.isFinite(t)) parkedAt = t;
+    }
+    out.push({
+      session,
+      parkedAt,
+      how: typeof v.how === 'string' ? v.how : '',
+      resume: typeof v.resume === 'string' ? v.resume : '',
+    });
+  }
+  out.sort((a, b) => (b.parkedAt ?? 0) - (a.parkedAt ?? 0));
+  return out;
+}
+
 export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now }) {
   // tmux = { exists(name), kill(name), sendText(name, text), sendEnter(name), create(name, cwd) }
   let data = { parked: {} };

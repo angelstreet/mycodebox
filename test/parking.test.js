@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle } from '../parking.js';
+import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes } from '../parking.js';
 
 const table = (rows) => { // rows: [pid, ppid, args]
   const children = new Map(), args = new Map();
@@ -115,6 +115,30 @@ test('park refuses with reasons and does not touch tmux', async () => {
   await assert.rejects(h.p.park('S', { ...h.facts, leases: [{ id: 'L' }] }, { claudeAlive: h.isAlive }), (e) => e.status === 409 && e.reasons.length === 1);
   assert.deepEqual(h.log, []);
   assert.ok(!existsSync(h.file));
+});
+
+test('readManualNotes parses valid entries (newest first), skips bad rows, tolerates missing/corrupt file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ghosty-mn-'));
+  const file = join(dir, 'parked.json');
+  assert.deepEqual(await readManualNotes(file), []);                     // missing file -> []
+  writeFileSync(file, '{not json');                                       // corrupt JSON -> []
+  assert.deepEqual(await readManualNotes(file), []);
+  writeFileSync(file, JSON.stringify({                                     // valid: newest first, non-object row skipped
+    a: { resume: 'tmux new -A -s a', parkedAt: '2026-10-04T12:00:00Z', how: 'reason a' },
+    b: 'not an object',
+    c: { resume: 'tmux new -A -s c', parkedAt: '2026-10-06T08:00:00Z', how: 'reason c' },
+  }));
+  const out = await readManualNotes(file);
+  assert.deepEqual(out.map((m) => m.session), ['c', 'a']);
+  assert.equal(out[0].parkedAt, Date.parse('2026-10-06T08:00:00Z'));
+  assert.equal(out[0].how, 'reason c');
+  assert.equal(out[0].resume, 'tmux new -A -s c');
+  assert.equal(out[1].how, 'reason a');
+  writeFileSync(file, JSON.stringify({ x: { resume: 'r', parkedAt: 'not-a-date', how: 'h' } }));   // invalid ISO -> null
+  const one = await readManualNotes(file);
+  assert.equal(one.length, 1);
+  assert.equal(one[0].session, 'x');
+  assert.equal(one[0].parkedAt, null);
 });
 
 test('session-cap-check: no finding under the cap, one finding listing idle-longest over it', async () => {
