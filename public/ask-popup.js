@@ -246,6 +246,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         </div>
         ${qBlock}
         ${detBlock}
+        ${v.buttons.some((b) => b.confirm) ? '<div class="ap-warn">Sensitive topic (deploy, push, delete, credentials, money or a customer). Nothing is suggested, and every answer needs two taps to confirm.</div>' : ''}
         <div class="ap-btns ${esc(v.kind)}">${btns}</div>
         ${v.suggestion ? `<div class="ap-sug"><span class="ap-sug-t">Claude suggests: ${esc(truncText(v.suggestion.text, 90))}</span><button type="button" class="ap-use" data-act="sug" title="Send Claude's suggestion">use</button></div>` : ''}
         <button type="button" class="ap-meta" data-act="why" aria-expanded="${whyOpen ? 'true' : 'false'}" title="Why these buttons?">${esc(metaText(v))} <span class="ap-toggle">${whyOpen ? '▾' : '▸'}</span></button>
