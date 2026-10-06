@@ -1774,7 +1774,10 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 @container (max-width:600px){ .cell .h .ag .agent-model{ display:none; } }
 
 /* indentation: sessions under a group header and rows under Parked / Notes sit to the right of it, with a guide line */
-.session-list li.grp ~ li[data-session]{ margin-left:12px; border-left:1px solid var(--line-2); border-top-left-radius:0; border-bottom-left-radius:0; }
+.session-list li.grp ~ li[data-session]{ margin-left:12px; position:relative; }
+.session-list li.grp ~ li[data-session]::before{ content:''; position:absolute; left:-7px; top:-2px; bottom:-2px; border-left:1px solid var(--line-2); pointer-events:none; }   /* guide line outside the row, so the focus ring never touches it */
+.session-list li.grp + li[data-session]{ margin-top:4px; }
+.session-list li.active, .session-list li.shown.active{ box-shadow:inset 0 0 0 1px var(--accent); }   /* no outer glow: it spilled over the group header and the guide line */
 .parkbox .prow, .parkbox .pnote, .parkbox .pnotebody{ margin-left:9px; padding-left:12px; border-left:1px solid var(--line-2); }
 .parkbox .pnotebody{ border-radius:0 7px 7px 0; }
 
