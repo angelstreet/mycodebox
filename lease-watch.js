@@ -79,7 +79,7 @@ export function createLeaseWatch({
         : e.event === 'expired' ? `lease expired: ${where} (${e.agent})`
         : `lease narrowed to host: ${where} (${e.agent})`;
       const body = `lease ${e.id}${e.by ? ` by ${e.by}` : ''}${e.reason ? ` (${e.reason})` : ''}; purpose: ${e.purpose || '-'}`;
-      await record({ key: `lease:${e.event}`, title, body, url: '/?platforms=1', priority: 'default', at: new Date((e.ts || 0) * 1000).toISOString(), leaseId: e.id });
+      await record({ key: `lease:${e.event}`, title, body, url: '/?platforms=1', priority: 'default', at: new Date((e.ts || 0) * 1000).toISOString(), leaseId: e.id, agent: e.agent, env: e.env, resources: e.resources || [] });
     }
     st.cursor = j.next;
   }

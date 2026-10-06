@@ -31,6 +31,9 @@
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
+//   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
+//   POST /api/handoffs          → {resource, from, to, due?} create a new hand-off row
+//   POST /api/handoffs/<id>/done → mark a hand-off done (body {by?})
 //   GET  /api/manager/actions?since=<ISO>&limit=100 → { actions, regrets } tail of manager-actions.jsonl (newest last) + the `at|session` keys the owner marked wrong
 //   POST /api/manager/regret → {at, session, decision?, undo?} one-tap "wrong" on a manager action; appends to manager-regret.jsonl (regret.js)
 //   GET  /api/manager/scorecard?days=7 → { today, days:[...] } performance + cost + Jev integration for the window
@@ -85,6 +88,7 @@ import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
+import { createHandoffs } from './handoffs.js';
 import { createVptLockStore } from './vpt-locks.js';
 import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret.js';
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
@@ -625,11 +629,13 @@ const deployRunner = createDeployRunner({
 });
 // Lease <-> session binding (lease-watch.js): lease:* manager events, release of ended holders, narrow of idle server leases.
 // manager.json key `leaseBind`: "live" (default) | "dry" (log what it would do) | "off".
+const handoffs = createHandoffs({ file: join(STATE_DIR, 'handoffs.json'), machines: MACHINES, record: (e) => managerEvents.record(e), log: console });
 const leaseWatch = createLeaseWatch({
   stateDir: STATE_DIR, run: leaseRun, machines: MACHINES,
   listSessionNames: async () => (await listSessions()).map((x) => x.name),
   activityOf: (name) => reporter.activityOf(name),
-  record: (e) => managerEvents.record(e),
+  record: async (e) => { await handoffs.onLeaseEvent(e).catch((err) => console.error('[handoffs] lease event', err.message)); return managerEvents.record(e); },
+  onChange: (snap) => { handoffs.onHolders(snap.holders).catch((err) => console.error('[handoffs] holders', err.message)); },
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseBind; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
@@ -808,6 +814,7 @@ async function pollOnce() {
       stall: stallOf(s.name),
       triage: triageOf(s.name),
       auto: autoOf(s.name),
+      handoffs: handoffs.forSession(s.name),
       lastActivitySec: s.lastActivitySec,
       lastSendAt: sentAt,
       lastSendAck: sentAt && t.ackFor === sentAt ? t.ackAt : null,
@@ -1501,6 +1508,27 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
+  if (req.method === 'GET' && p === '/api/handoffs') {
+    const q = url.searchParams;
+    return json(res, 200, { handoffs: handoffs.list({ state: q.get('state') || undefined, session: q.get('session') || undefined }) });
+  }
+  if (req.method === 'POST' && p === '/api/handoffs') {
+    try {
+      const b = await readJsonBody(req);
+      if (!b || !b.resource || !b.from || !b.to) return json(res, 400, { ok: false, error: 'resource, from and to are required' });
+      const due = typeof b.due === 'number' ? b.due : (typeof b.due === 'string' && /^\d{1,2}:\d{2}$/.test(b.due) ? (() => { const d = new Date(); const [hh, mm] = b.due.split(':'); d.setHours(Number(hh), Number(mm), 0, 0); return d.getTime(); })() : null);
+      const row = await handoffs.create({ resource: String(b.resource), from: String(b.from), to: String(b.to), due });
+      return json(res, 200, { ok: true, handoff: row });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p.startsWith('/api/handoffs/') && p.endsWith('/done')) {
+    const id = p.slice('/api/handoffs/'.length, -'/done'.length);
+    try {
+      const b = await readJsonBody(req).catch(() => ({}));
+      const row = await handoffs.done(id, b?.by);
+      return row ? json(res, 200, { ok: true, handoff: row }) : json(res, 404, { ok: false, error: 'no such handoff' });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
   if (req.method === 'GET' && p === '/api/manager/actions') {   // the manager agent's own action log (manager-actions.jsonl), newest last, read-only
     const q = url.searchParams;
     return json(res, 200, { actions: await readActions({ stateDir: STATE_DIR, since: q.get('since') || null, limit: q.get('limit') }), regrets: effectiveRegrets(await readRegrets({ stateDir: STATE_DIR })).map((r) => regretKey(r.at, r.session)) });
@@ -1645,6 +1673,7 @@ server.listen(PORT, HOST, async () => {
       body: kind === 'hold' ? 'continues when the quota recovers; Resume to override' : reason,
       priority: 'default', ntfyTags: kind === 'hold' ? 'pause_button' : 'arrow_forward', url: `/?s=${encodeURIComponent(n)}`, tag: `ghosty-hold-${n}`,
     }, 0),
+    onHandoff: async (session, text, at) => { await handoffs.fromStop(session, text, at); },
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.
@@ -1661,7 +1690,9 @@ server.listen(PORT, HOST, async () => {
   const quotaTick = () => quota.poll().then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
   deployRunner.start();
+  await handoffs.load();
   leaseWatch.start();
+  setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:
   // ONE alert (digest tier) + the jev:down event (the alert feeds the manager feed), and a jev:up event when it closes.
