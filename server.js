@@ -95,6 +95,7 @@ import { createVptLockStore } from './vpt-locks.js';
 import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret.js';
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
+import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -962,6 +963,21 @@ async function serveStatic(req, res, urlPath) {
 }
 
 const MAX_BODY = 64 * 1024;
+// raw request body (audio upload), capped
+async function readRawBody(req, max) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > max) { if (size - c.length <= max) reject(Object.assign(new Error('body too large'), { status: 413 })); chunks.length = 0; return; }
+      chunks.push(c);
+    });
+    req.on('end', () => { if (size <= max) resolve(Buffer.concat(chunks)); });
+    req.on('error', reject);
+  });
+}
+const transcriber = createTranscriber();
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -1287,7 +1303,8 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
-      && req.method !== 'OPTIONS' && !/application\/json/i.test(req.headers['content-type'] || '')) {
+      && req.method !== 'OPTIONS' && !/application\/json/i.test(req.headers['content-type'] || '')
+      && !(p === '/api/transcribe' && /^audio\//i.test(req.headers['content-type'] || ''))) {   // audio/* is not CORS-safelisted either
     return json(res, 415, { ok: false, error: 'content-type must be application/json' });
   }
 
@@ -1305,6 +1322,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, rest);
     }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/transcribe') {   // dock mic: audio body -> { text }
+    try {
+      const audio = await readRawBody(req, MAX_AUDIO);
+      if (!audio.length) return json(res, 400, { ok: false, error: 'empty recording' });
+      const r = await transcriber.transcribe(audio, { ext: extFor(req.headers['content-type']), lang: url.searchParams.get('lang') || null });
+      return json(res, 200, { ok: true, ...r });
+    } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
     try {

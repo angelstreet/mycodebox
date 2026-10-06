@@ -37,6 +37,7 @@ const els = {
   keys:        $('#keys'),
   sendInput:   $('#sendInput'),
   sendBtn:     $('#sendBtn'),
+  micBtn:      $('#micBtn'),
   side:        $('#side'),
   sessionList: $('#sessionList'),
   sessionCount:$('#sessionCount'),
@@ -3800,6 +3801,59 @@ for (const b of els.keys.querySelectorAll('button')) {
 }
 els.sendBtn.onpointerdown = (e) => e.preventDefault();
 els.sendBtn.onclick   = send;
+
+// ----- voice input: tap the mic to record, tap again -> /api/transcribe (faster-whisper on codebox) -> sent like typed text -----
+const voice = { rec: null, stream: null, chunks: [], busy: false, cap: null };
+const VOICE_MAX_MS = 120e3;
+function voiceUi() {
+  const b = els.micBtn;
+  b.classList.toggle('rec', !!voice.rec);
+  b.classList.toggle('busy', voice.busy);
+  b.title = voice.rec ? 'Recording: tap to stop, transcribe and send' : voice.busy ? 'Transcribing…' : 'Voice: tap to record, tap again to transcribe and send';
+}
+async function voiceStart() {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    toast(!window.isSecureContext ? 'the mic needs the https://<tailnet-host>:7443 address' : 'no microphone support in this browser', 4000);
+    return;
+  }
+  try { voice.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (err) { toast(`microphone blocked: ${err.message}`, 4000); return; }
+  voice.chunks = [];
+  voice.rec = new MediaRecorder(voice.stream);
+  voice.rec.ondataavailable = (e) => { if (e.data && e.data.size) voice.chunks.push(e.data); };
+  voice.rec.onstop = voiceDone;
+  voice.rec.start();
+  voice.cap = setTimeout(() => voice.rec && voice.rec.stop(), VOICE_MAX_MS);
+  if (navigator.vibrate) navigator.vibrate(15);
+  voiceUi();
+}
+async function voiceDone() {
+  clearTimeout(voice.cap);
+  const type = voice.rec?.mimeType || 'audio/webm';
+  voice.stream?.getTracks().forEach((t) => t.stop());
+  voice.rec = null; voice.stream = null;
+  const blob = new Blob(voice.chunks, { type });
+  voice.chunks = [];
+  if (blob.size < 1000) { voiceUi(); toast('too short'); return; }
+  voice.busy = true; voiceUi();
+  try {
+    const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'content-type': type }, body: blob });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const text = (j.text || '').trim();
+    if (!text) { toast("didn't catch that"); return; }
+    const cur = els.sendInput.value.trim();
+    els.sendInput.value = cur ? `${cur} ${text}` : text;
+    autoGrow();
+    send();
+  } catch (err) { toast(`transcription failed: ${err.message}`, 5000); }
+  finally { voice.busy = false; voiceUi(); }
+}
+els.micBtn.onpointerdown = (e) => e.preventDefault();
+els.micBtn.onclick = () => {
+  if (voice.busy) return;
+  if (voice.rec) voice.rec.stop(); else voiceStart();
+};
 els.sendInput.oninput = autoGrow;
 els.sendInput.onkeydown = onDockKey;
 
