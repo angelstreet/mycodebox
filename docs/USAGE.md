@@ -37,6 +37,10 @@ Browser and OS support varies; accepting a certificate warning is not a reliable
 
 ## Optional panels
 
+The More menu also has **Preview new pages**, which opens a separate tab with sample-data designs for AI manager,
+Review stops, Platforms, Jev decisions, Usage & cost, Alerts and Install app. This is a visual preview: its buttons
+do not change settings or sessions. Use the existing menu items for the live panels.
+
 Usage/quota may be unavailable until the relevant CLI or tailer is configured. Costs are estimates at API-equivalent prices, not subscription invoices.
 The AI manager panel shows its effective state at the top and places unrated stops in the review queue. Expand
 Automatic replies to choose routine cases, AI reviewer to choose Suggest or Auto and any AI reply types, and Deploys

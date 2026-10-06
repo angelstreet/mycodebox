@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101116">
+  <title>Page previews · mycodebox</title>
+  <link rel="stylesheet" href="/page-preview.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Preview pages">
+      <div class="brand"><span class="brand-mark">m</span><span>mycodebox<small>Page previews</small></span></div>
+      <p class="nav-label">WORKSPACE</p>
+      <nav id="previewNav"></nav>
+      <div class="sidebar-bottom"><span class="preview-dot"></span> Concept preview <small>Sample data · no settings are changed</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><button class="mobile-menu" id="menuBtn" aria-label="Open page menu">Pages</button><span>Design preview</span><a href="/" class="back-link">Back to dashboard ↗</a></header>
+      <div id="page" class="page" aria-live="polite"></div>
+    </main>
+  </div>
+  <script type="module" src="/page-preview.js"></script>
+</body>
+</html>
