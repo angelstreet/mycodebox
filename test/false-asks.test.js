@@ -125,3 +125,27 @@ test('options before the question still ask', () => {
   const s = classify('1. Keep the table\n2. Replace it\nWhich do you want?');
   assert.equal(s.case, 'owner_decision');
 });
+
+test('2c. "Tap the "New version" toast to load it" at the end of a done report is an FYI, not owner_action', () => {
+  const s = classify([
+    'The filters now survive a refresh. Pushed and the tests pass.',
+    '',
+    'All three are kept in the browser, so each device remembers its own filters.',
+    '',
+    'Tap the "New version" toast to load it.',
+  ].join('\n'));
+  assert.equal(s.case, 'done');
+  assert.equal(wouldSend(s).why, 'finished');
+});
+
+test('2c. "Tap the "New version" toast to load it" at the end of a done report is an FYI, not owner_action', () => {
+  const s = classify([
+    'The filters now survive a refresh. Pushed and the tests pass.',
+    '',
+    'All three are kept in the browser, so each device remembers its own filters.',
+    '',
+    'Tap the "New version" toast to load it.',
+  ].join('\n'));
+  assert.equal(s.case, 'done');
+  assert.equal(wouldSend(s).why, 'finished');
+});

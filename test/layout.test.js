@@ -12,7 +12,7 @@ test('normalizeLayout drops junk, dedupes and derives group names', () => {
   assert.deepEqual(n.groups, { a: 'G' });
   assert.deepEqual(n.groupNames, ['G']);
   assert.deepEqual(n.collapsed, ['pin']);
-  assert.deepEqual(normalizeLayout(null), { order: [], pins: [], groups: {}, groupNames: [], collapsed: [], groupBy: '' });
+  assert.deepEqual(normalizeLayout(null), { order: [], pins: [], groups: {}, groupNames: [], collapsed: [], hidden: [], groupBy: '' });
   assert.equal(normalizeLayout({ groupBy: 'project' }).groupBy, 'project');
   assert.equal(normalizeLayout({ groupBy: 'x' }).groupBy, '');
 });
@@ -40,4 +40,8 @@ test('store keeps the previous version as layout.json.bak', async () => {
   await s.set({ order: [] });                       // a wipe
   const bak = JSON.parse(await fs.readFile(`${file}.bak`, 'utf8'));
   assert.deepEqual(bak.order, ['a', 'b']);
+});
+
+test('hidden sessions are kept as a list of names', () => {
+  assert.deepEqual(normalizeLayout({ hidden: ['a', 'a', ' b ', 3] }).hidden, ['a', 'b']);
 });

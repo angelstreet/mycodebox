@@ -1,6 +1,6 @@
 // Where the owner put things: the order of the sessions, which are pinned, and the named groups. One small JSON file
 // (<state dir>/layout.json) so a refresh or another device shows the same list.
-//   { order: [session…], pins: [session…], groups: { session: groupName }, groupNames: [groupName…], collapsed: [sectionKey…], groupBy: ''|'project' }
+//   { order: [session…], pins: [session…], groups: { session: groupName }, groupNames: [groupName…], collapsed: [sectionKey…], hidden: [session…], groupBy: ''|'project' }
 // groupBy 'project' = the list also sections itself by repo (manual groups still win).
 // Section keys: "pin" or "g:<groupName>". Unknown sessions are kept (a session may be down for a while).
 import { promises as fs } from 'node:fs';
@@ -17,7 +17,7 @@ export function normalizeLayout(x) {
     for (const [k, v] of Object.entries(x.groups).slice(0, MAX_NAMES)) { const g = str(v), n = str(k); if (n && g) groups[n] = g; }
   }
   const groupNames = uniq([...list(x?.groupNames), ...Object.values(groups)]);
-  return { order: list(x?.order), pins: list(x?.pins), groups, groupNames, collapsed: list(x?.collapsed), groupBy: x?.groupBy === 'project' ? 'project' : '' };
+  return { order: list(x?.order), pins: list(x?.pins), groups, groupNames, collapsed: list(x?.collapsed), hidden: list(x?.hidden), groupBy: x?.groupBy === 'project' ? 'project' : '' };
 }
 
 export function createLayoutStore({ file }) {

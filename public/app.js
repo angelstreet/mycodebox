@@ -57,6 +57,7 @@ const els = {
 };
 
 const state = {
+  hiddenClosed: true,                  // the Hidden fold starts collapsed
   parkedClosed: true,                  // the Parked fold starts collapsed
   sessions:   [],
   status:     {},
@@ -110,6 +111,7 @@ const normLayout = (x) => ({
   groups: x?.groups && typeof x.groups === 'object' && !Array.isArray(x.groups) ? { ...x.groups } : {},
   groupNames: Array.isArray(x?.groupNames) ? [...new Set(x.groupNames)] : [],
   collapsed: Array.isArray(x?.collapsed) ? x.collapsed : [],
+  hidden: Array.isArray(x?.hidden) ? [...new Set(x.hidden.filter((n) => typeof n === 'string'))] : [],
   groupBy: x?.groupBy === 'project' ? 'project' : '',
 });
 state.layout = normLayout(null);
@@ -136,7 +138,7 @@ async function loadLayout() {
     if (JSON.stringify(j) === JSON.stringify(state.layout)) return;
     state.layout = j; state.order = j.order;
     lsSet('ghosty.layout', JSON.stringify(j));
-    sortSessions(); renderAll(); syncByProjectBtn?.();
+    sortSessions(); renderAll(); renderParking(); syncByProjectBtn?.();
   } catch { /* offline: keep the cache */ }
 }
 function loadOrder() {
@@ -759,6 +761,7 @@ function byUrgency(list) {
 const LS_FILTERS = 'ghosty.filters';
 function projectOf(n) { const st = state.status[n]; return st?.project || st?.repo || (st ? agentOf(n) : ''); }   // not in a git repo: label it by its agent (claude, codex, bash...)
 function matchesFilter(n) {
+  if (state.layout.hidden.includes(n)) return false;   // hidden by the owner (sidebar eye button); listed under Hidden in the sidebar footer
   // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
   // not its raw working/done/idle state.
   // filters are cumulative: several values in a group match any of them (done + working), the groups combine with AND
@@ -770,7 +773,7 @@ function matchesFilter(n) {
 function anyFilter() { return !!(state.filter.length || state.fProject.length || state.fAgent.length); }
 const toggleIn = (arr, v) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);   // click an active value to unselect it
 function visibleSessions() {
-  if (!anyFilter()) return state.sessions;
+  if (!anyFilter() && !state.layout.hidden.length) return state.sessions;
   return state.sessions.filter((s) => matchesFilter(s.name));
 }
 
@@ -805,8 +808,9 @@ async function fetchParking() {
 function renderParking() {
   const box = document.getElementById('parkBox');
   if (!box) return;
-  const pk = state.parking;
-  if (!pk || (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length))) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const pk = state.parking || { parked: [], over: 0, manual: [], live: 0, cap: 0, candidates: [], ramSavedMb: 0 };
+  const hid = state.layout.hidden.filter((n) => state.sessions.some((s) => s.name === n));
+  if (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length) && !hid.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const idleText = (m) => (m == null ? '?' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
   // Two separate folds: Parked (the session cap + what ghosty closed to free RAM, with Resume) and Notes (sessions parked by hand).
   let h = '';
@@ -832,11 +836,24 @@ function renderParking() {
       h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman${on ? ' on' : ''}" aria-label="Show note">${icon('note', 14)}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
     }
   }
+  if (hid.length) {
+    const ho = state.hiddenClosed !== true;
+    h += `<button class="ph pfold" data-pfold="hiddenClosed" aria-expanded="${ho}"><span class="uch${ho ? ' on' : ''}"></span>Hidden (${hid.length})</button>`;
+    if (ho) for (const n of hid) h += `<div class="prow"><span class="pn" title="${escapeHtml(n)}">${escapeHtml(displayName(n))}</span><button class="sbtn" data-unhide="${escapeHtml(n)}">Show</button></div>`;
+  }
   box.innerHTML = h;
   box.classList.remove('hidden');
+  box.querySelectorAll('[data-unhide]').forEach((b) => { b.onclick = () => setHidden(b.dataset.unhide, false); });
   box.querySelectorAll('[data-pfold]').forEach((b) => { b.onclick = () => { state[b.dataset.pfold] = state[b.dataset.pfold] !== true; renderParking(); }; });
   box.querySelectorAll('[data-note]').forEach((r) => { r.onclick = () => { state.noteOpen = state.noteOpen === r.dataset.note ? '' : r.dataset.note; renderParking(); }; });
   box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
+}
+function setHidden(name, on) {
+  const L = state.layout;
+  L.hidden = on ? [...new Set([...L.hidden, name])] : L.hidden.filter((n) => n !== name);
+  saveLayout();
+  toast(on ? `${displayName(name)} hidden (Hidden, bottom of the sidebar, brings it back)` : `${displayName(name)} is back`, 2600);
+  renderAll(); renderParking();
 }
 async function parkSession(name) {
   toast(`parking ${name}…`, 4000);
@@ -1343,6 +1360,7 @@ function buildSideRow(s) {
     <button class="edit pin" aria-label="Pin" title="Pin to the top">${icon('pin', 15)}</button>
     <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
     <button class="edit park" aria-label="Park session" title="Park: save the conversation, free its RAM (Resume brings it back)">${icon('archive', 15)}</button>
+    <button class="edit hide" aria-label="Hide session" title="Hide from the lists (it keeps running; bring it back from Hidden at the bottom)">${icon('eye-off', 15)}</button>
     <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button></span>`;
   // hover devices: the action bar floats to the right of the list (never covers the rows), level with this row
   li.addEventListener('mouseenter', () => {
@@ -1365,7 +1383,8 @@ function buildSideRow(s) {
     saveLayout(); sortSessions(); renderTabStrip(); if (state.mode === 'grid') renderGrid(); syncAll();
   };
   li.querySelector('.park').onclick = (e) => { e.stopPropagation(); parkSession(s.name); };
-  li.querySelector('.edit:not(.kill):not(.pin):not(.park)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
+  li.querySelector('.hide').onclick = (e) => { e.stopPropagation(); setHidden(s.name, true); };
+  li.querySelector('.edit:not(.kill):not(.pin):not(.park):not(.hide)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
   return li;
 }
