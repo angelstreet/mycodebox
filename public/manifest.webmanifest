@@ -1,6 +1,6 @@
 {
-  "name": "codebox — ghosty sessions",
-  "short_name": "codebox",
+  "name": "mycodebox",
+  "short_name": "mycodebox",
   "description": "Mobile-first tmux dashboard for Claude / Codex sessions. Tabs, grid, send-keys — over Tailscale.",
   "start_url": "/",
   "scope": "/",

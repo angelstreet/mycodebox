@@ -939,7 +939,7 @@ function renderSummary() {
     }
   }
   // tab title badge so the PWA / browser tab shows how many need you
-  document.title = counts.waiting ? `(${counts.waiting}) codebox` : 'codebox';
+  document.title = counts.waiting ? `(${counts.waiting}) mycodebox` : 'mycodebox';
 }
 
 function renderAttention() {
@@ -2070,7 +2070,7 @@ function tickClock() {
 // ---------- focus ----------
 // title: "codebox" on the overview (grid / board), the session name only on a single card
 function syncTitle() {
-  els.appTitle.textContent = state.mode === 'card' && state.active ? displayName(state.active) : 'codebox';
+  els.appTitle.textContent = state.mode === 'card' && state.active ? displayName(state.active) : 'mycodebox';
 }
 function focusSession(name) {
   if (!name) return;
