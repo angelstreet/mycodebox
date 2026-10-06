@@ -7,6 +7,9 @@
 #   scripts/mm-manager.sh                        tail <state>/manager-events.jsonl and process batches
 #   scripts/mm-manager.sh --once <file>          process the lines of <file> once and exit (tests/dry runs)
 #   scripts/mm-manager.sh --dry                  with --once: write the prompt only, no mcode call
+#   scripts/mm-manager.sh --alert                ALERT-ONLY mode (owner Q36, 2026-10-06): escalate/alert proposals are
+#                                                POSTed to /api/alert (the owner's ntfy). Still never sends to a
+#                                                session, deploys or pushes. One alert per event key per 6 h.
 #
 # Env (sane defaults):
 #   GHOSTY_STATE_DIR   ~/.local/state/ghosty
@@ -37,10 +40,12 @@ LOCK_DIR="$STATE_DIR/mm-manager.lock"
 mode="tail"
 once_file=""
 dry=0
+alert=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) once_file="${2:-}"; mode="once"; shift 2;;
     --dry) dry=1; shift;;
+    --alert) alert=1; shift;;
     -h|--help)
       sed -n '2,/^[^#]/p' "$0" | sed '/^$/d' | head -n 40
       exit 0
@@ -407,6 +412,40 @@ build_events_json() {
   printf '[%s]' "$joined"
 }
 
+# ALERT-ONLY mode: post this batch's escalate/alert proposals to the owner via /api/alert (loopback + reporter
+# token, ghosty caps it at 10/h). Never posts anything else. Dedupe per event key for 6 h in mm-alerted.json.
+post_alerts() {
+  local batch_id="$1"
+  [ "$alert" -eq 1 ] || return 0
+  local token_file="$STATE_DIR/reporter.token"
+  [ -r "$token_file" ] || { echo "mm-manager: no $token_file, alerts skipped" >&2; return 0; }
+  B="$batch_id" LOG="$MM_LOG" SEEN="$STATE_DIR/mm-alerted.json" TOKEN_FILE="$token_file" PORT="$GHOSTY_PORT" \
+    "$NODE_BIN/node" -e '
+    const fs=require("fs");
+    const tok=fs.readFileSync(process.env.TOKEN_FILE,"utf8").trim();
+    let seen={}; try{seen=JSON.parse(fs.readFileSync(process.env.SEEN,"utf8"))}catch{}
+    const now=Date.now(), TTL=6*3600e3;
+    for (const k of Object.keys(seen)) if (now-seen[k]>TTL) delete seen[k];
+    const recs=fs.readFileSync(process.env.LOG,"utf8").trim().split("\n").slice(-200)
+      .map(l=>{try{return JSON.parse(l)}catch{return null}})
+      .filter(r=>r&&r.batch_id===process.env.B&&(r.proposal==="escalate"||r.proposal==="alert")&&r.message);
+    (async()=>{
+      for (const r of recs){
+        if (seen[r.key]) continue;
+        const session=String(r.key).split(":")[0];
+        const body={title:(r.proposal==="alert"?"Alert: ":"Needs you: ")+session, body:String(r.message).slice(0,1000),
+          url:"/?s="+encodeURIComponent(session), priority:r.proposal==="alert"?"high":"default", tag:"mm-manager"};
+        try{
+          const res=await fetch("http://127.0.0.1:"+process.env.PORT+"/api/alert",{method:"POST",
+            headers:{"content-type":"application/json","x-ghosty-reporter-token":tok},body:JSON.stringify(body)});
+          if (res.ok) seen[r.key]=now; else console.error("mm-manager: alert",res.status,await res.text());
+        }catch(e){console.error("mm-manager: alert failed",e.message)}
+      }
+      fs.writeFileSync(process.env.SEEN,JSON.stringify(seen));
+    })();
+  '
+}
+
 # Process one batch of event lines.
 process_batch() {
   local batch_id="$1"
@@ -448,6 +487,7 @@ process_batch() {
     record_errors "$events_json" "$batch_id" "mcode exec failed or timed out" "$mm_ms"
   else
     record_batch "$mcode_out" "$batch_id" "$events_json" "$mm_ms" || record_errors "$events_json" "$batch_id" "could not record mcode output" "$mm_ms"
+    post_alerts "$batch_id"
   fi
 
   trim_batches
