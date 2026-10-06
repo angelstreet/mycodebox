@@ -75,7 +75,7 @@ def ready():
 def deliver(items):
     msg = f"EVENTS ({len(items)}) — handle per your brief: " + ' | '.join(f"{i + 1}) {s}" for i, s in enumerate(items))
     msg = msg[:1800]
-    msg += f" (summary — read status[{SESSION}].stall / GET /api/reply/{SESSION} for the full text)"
+    msg += " (summaries — for the full text read status[<session>].stall and GET /api/reply/<session> of the session named in each event)"
     while True:
         try:
             r = ready()
@@ -131,7 +131,7 @@ if __name__ == '__main__':
 # mm.ready = lambda: True
 # mm.deliver([mm.summary(self_line), mm.summary(other_line)])
 # msg = sent[0]["keys"]
-# suffix = " (summary \u2014 read status[mm-manager].stall / GET /api/reply/mm-manager for the full text)"
+# suffix = " (summaries \u2014 for the full text read status[<session>].stall and GET /api/reply/<session> of the session named in each event)"
 # assert msg.endswith(suffix) and msg.count(suffix) == 1
 # print("OK")'
 # ---------------------------------------------------------------------------
