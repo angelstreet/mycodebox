@@ -1344,7 +1344,7 @@ svg.spin{ animation:spin 1.3s linear infinite; }
 @media (prefers-reduced-motion: reduce){ svg.spin{ animation:none; } }
 
 /* codebox vitals belong to the overview: hidden while a single card is open; on desktop they sit right after the title */
-body[data-mode="card"] #health{ display:none; }
+@media (max-width: 720px){ body[data-mode="card"] #health{ display:none; } }   /* phones only: the web header never changes between views */
 .health.inbar{ margin-left:14px; }
 
 /* ------------ Answer popup (phase 11) ------------
@@ -1616,7 +1616,7 @@ body.side-docked .side-head .ttl{ letter-spacing:.12em; }
 .wsel.on{ border-color:var(--accent); color:var(--accent); }
 body:not(.res-hidden) .wsel{ display:none; }
 body.res-hidden .health.inbar, body.res-hidden .quota.inbar{ display:none !important; }
-body[data-mode="card"] .res-toggle, body[data-mode="card"] .wsel{ display:none; }
+@media (max-width: 720px){ body[data-mode="card"] .res-toggle, body[data-mode="card"] .wsel{ display:none; } }
 @media (max-width: 720px){ .res-toggle, .wsel{ display:none !important; } }
 #sideByProjectBtn.on{ color:var(--accent); }
 /* New session: taller, so name / project / folder are all in view; the project list opens inline */
@@ -1728,7 +1728,7 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .row-item .last{ grid-column:1; min-width:0; }
 .row-item .meta{ grid-column:2; margin-left:10px; max-width:45vw; align-self:center; }
 .row-item .meta.hidden{ display:none; }
-body[data-mode="card"] .topbar .summary{ margin-left:auto; }
+@media (max-width: 720px){ body[data-mode="card"] .topbar .summary{ margin-left:auto; } }
 /* quota takes all the free space (its text stays centred), so the status chips and view buttons stay at the right edge */
 .quota.inbar{ flex:1 1 0; margin:0; justify-content:center; text-align:center; }
 /* empty states keep their colours (red / purple / amber) */

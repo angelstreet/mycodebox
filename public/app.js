@@ -2115,7 +2115,7 @@ function tickClock() {
 // ---------- focus ----------
 // title: "codebox" on the overview (grid / board), the session name only on a single card
 function syncTitle() {
-  els.appTitle.textContent = state.mode === 'card' && state.active ? displayName(state.active) : 'mycodebox';
+  els.appTitle.textContent = state.mode === 'card' && state.active && isPhone() ? displayName(state.active) : 'mycodebox';   // the web header keeps its name in every view
 }
 function focusSession(name) {
   if (!name) return;
@@ -2153,8 +2153,9 @@ function setMode(mode) {
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
   // size buttons are always visible; highlighted only while the grid is shown
   for (const b of $$('.size-btn')) b.classList.toggle('on', Number(b.dataset.size) === 1 ? mode === 'card' : mode === 'grid' && Number(b.dataset.size) === state.gridSize);
-  els.backBtn.classList.toggle('hidden', mode !== 'card');
-  els.menuBtn.classList.toggle('hidden', mode === 'card');
+  // phones swap the menu button for Back in a single card; on the web the header never changes
+  els.backBtn.classList.toggle('hidden', !(mode === 'card' && isPhone()));
+  els.menuBtn.classList.toggle('hidden', mode === 'card' && isPhone());
   // Leaving a view: free its cells so xterm instances are reparented, not duplicated.
   if (mode !== 'card') els.cardPane.innerHTML = '';
   if (mode !== 'grid') els.gridPane.innerHTML = '';
