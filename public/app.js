@@ -180,7 +180,7 @@ const vstateOf = (name) => displayStateOf(name, state.status);
 const deployWaitTip = (name) => state.status[name]?.deployWait?.text || '';
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 // filter bar: open by default on desktop, hidden by default on phones; the first tap on the funnel makes it your choice
-state.filterOpen = (() => { const v = lsGet('ghosty.filterOpen', ''); return v === '' ? !window.matchMedia('(max-width: 720px)').matches : v === '1'; })();
+state.filterOpen = false;   // the filter panel is a popover from the Filter button; it starts closed
 
 function agentOf(name) {
   const st = state.status[name] || {};
@@ -1031,13 +1031,30 @@ function syncWorkspace() {
   sel.value = state.fProject.length === 1 ? state.fProject[0] : '';
   sel.classList.toggle('on', state.fProject.length > 0);
 }
+// the filters that are on stay in the top bar as removable chips (the panel itself is a popover)
+function renderActiveFilters() {
+  const host = $('#activeFilters');
+  if (!host) return;
+  const items = [
+    ...state.filter.map((v) => ['filter', v, v === 'waiting' ? 'needs you' : v]),
+    ...state.fProject.map((v) => ['fProject', v, v === '-' ? 'no repo' : v]),
+    ...state.fAgent.map((v) => ['fAgent', v, AGENT_LABEL[v] || v]),
+  ];
+  const html = items.map(([g, v, l]) => `<button class="afc" data-g="${g}" data-v="${escapeHtml(v)}" title="Remove this filter">${escapeHtml(l)} <span aria-hidden="true">\u00d7</span></button>`).join('');
+  if (host.dataset.h === html) return;
+  host.dataset.h = html; host.innerHTML = html;
+  for (const b of host.querySelectorAll('.afc')) b.onclick = () => {
+    const g = b.dataset.g, next = toggleIn(state[g], b.dataset.v);
+    if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
+  };
+}
 function renderFilterBar() {
   syncWorkspace();
   const bar = els.filterBar;
-  const show = state.filterOpen || anyFilter();
+  const show = state.filterOpen;
   bar.classList.toggle('hidden', !show);
-  document.body.classList.toggle('filterbar-on', show);   // the top-bar count chips are the same filters: shown only while the filter bar is hidden
-  els.filterBtn.classList.toggle('on', anyFilter());
+  els.filterBtn.classList.toggle('on', anyFilter() || show);
+  renderActiveFilters();
   if (!show) return;
   const all = state.sessions.map((s) => s.name);
   const count = (pred) => all.filter(pred).length;
@@ -3893,7 +3910,9 @@ applyDock();
 els.backBtn.onclick   = () => setMode(state.prevMode || (isPhone() ? 'list' : 'grid'));
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();
-els.filterBtn.onclick = () => { state.filterOpen = !state.filterOpen; lsSet('ghosty.filterOpen', state.filterOpen ? '1' : '0'); renderFilterBar(); };
+els.filterBtn.onclick = (e) => { e.stopPropagation(); state.filterOpen = !state.filterOpen; renderFilterBar(); };
+document.addEventListener('pointerdown', (e) => { if (state.filterOpen && !e.target.closest('#filterBar, #filterBtn')) { state.filterOpen = false; renderFilterBar(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.filterOpen) { state.filterOpen = false; renderFilterBar(); } });
 els.notifyBtn.onclick = () => toggleNotify();
 for (const b of $$('.mode-btn')) b.onclick = () => setMode(b.dataset.mode);
 // tapping a size always shows the grid at that size

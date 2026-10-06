@@ -1499,7 +1499,7 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   :root{ --sidew: 290px; }
   body.side-dockable .dock-only{ display:inline-flex; }
   body.side-docked #side{ transform:none; top:calc(var(--top-h) + env(safe-area-inset-top)); width:var(--sidew); max-width:none; padding-top:0; z-index:8; box-shadow:none; }
-  body.side-docked > :is(#quota, #filterBar, #alertRow, #tabs, #main, #dock){ margin-left:var(--sidew); }
+  body.side-docked > :is(#quota, #alertRow, #tabs, #main, #dock){ margin-left:var(--sidew); }
   body.side-docked .side-back, body.side-docked #edgeSwipe{ display:none !important; }
   body.side-docked #menuBtn{ color:var(--accent); }
 }
@@ -1907,14 +1907,12 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ margin-top:2px; }
 .session-list li.grp:hover{ color:var(--ink); background:var(--bg-3); filter:brightness(1.15); }
 
-body.filterbar-on .topbar .summary{ display:none; }
 
 /* web: the hamburger stays top-left in every state and folds / unfolds the docked list, so the list's own collapse button is gone (no button swapping places) */
 body.side-dockable #menuBtn{ display:inline-flex !important; }
 #sideCollapseBtn{ display:none !important; }
 
 /* web: the filter bar keeps its row when hidden, so showing / hiding it never moves the page */
-@media (min-width: 721px){ .filterbar.hidden{ display:flex !important; visibility:hidden; } }
 
 /* grid: cards stand out from the page - darker gutter, a clearer frame, a lighter header band */
 .view-grid .grid-pane{ background:#06070a; gap:12px; padding:12px; }
@@ -1924,3 +1922,13 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 
 /* every row has the same room, highlighted or not, so selecting a session never moves anything - only the frame changes */
 .session-list li[data-session]{ margin-top:2px; margin-bottom:4px; }
+
+/* filters: a Filter button opens this panel; what is on stays in the bar as chips (no extra row, nothing moves) */
+.filterbar.filterpop{ position:fixed; top:calc(var(--top-h, 44px) + env(safe-area-inset-top) + 4px); right:12px; z-index:70; width:min(560px, calc(100vw - 24px)); flex-wrap:wrap; row-gap:8px; padding:12px; border:1px solid var(--line-2); border-radius:12px; background:var(--bg-2); box-shadow:0 12px 36px rgba(0,0,0,.6); overflow:visible; }
+.filterbar.filterpop.hidden{ display:none; }
+.filterpop .fsep{ flex-basis:100%; height:0; margin:0; background:none; }
+.afs{ display:flex; gap:5px; align-items:center; flex:0 1 auto; min-width:0; overflow:hidden; }
+.afs:empty{ display:none; }
+.afc{ display:inline-flex; align-items:center; gap:5px; flex-shrink:0; padding:3px 9px; border-radius:999px; font-size:11px; background:rgba(232,154,74,.12); color:var(--accent); border:1px solid rgba(232,154,74,.45); white-space:nowrap; }
+.afc:hover{ background:rgba(232,154,74,.22); }
+@media (max-width: 720px){ .afs{ display:none; } }
