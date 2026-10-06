@@ -1600,7 +1600,7 @@ body[data-mode="card"] .res-toggle, body[data-mode="card"] .wsel{ display:none; 
 .row-item .l1 .lb .lease{ max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 @media (max-width:700px){ .row-item .l1 .lb{ display:none; } }
 /* resources hidden: nothing pushes the controls, so do it here (same right edge as when expanded) */
-body.res-hidden .topbar .viewctl{ margin-left:auto; }
+body.res-hidden .topbar .summary{ margin-left:auto; }
 
 .platforms .pf-vl{ flex-basis:100%; font-size:11px; color:var(--ink-3); } .platforms .pf-vl.unk{ color:var(--ink-3); font-style:italic; }
 
@@ -1698,7 +1698,7 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 .row-item .last{ grid-column:1; min-width:0; }
 .row-item .meta{ grid-column:2; margin-left:10px; max-width:45vw; align-self:center; }
 .row-item .meta.hidden{ display:none; }
-body[data-mode="card"] .topbar .viewctl{ margin-left:auto; }
+body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 /* quota takes all the free space (its text stays centred), so the status chips and view buttons stay at the right edge */
 .quota.inbar{ flex:1 1 0; margin:0; justify-content:center; text-align:center; }
 /* empty states keep their colours (red / purple / amber) */
