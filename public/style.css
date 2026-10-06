@@ -1915,3 +1915,9 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 
 /* web: the filter bar keeps its row when hidden, so showing / hiding it never moves the page */
 @media (min-width: 721px){ .filterbar.hidden{ display:flex !important; visibility:hidden; } }
+
+/* grid: cards stand out from the page - darker gutter, a clearer frame, a lighter header band */
+.view-grid .grid-pane{ background:#06070a; gap:12px; padding:12px; }
+.grid-pane .cell{ border:1px solid rgba(255,255,255,.22); box-shadow:0 4px 16px rgba(0,0,0,.65); }
+.grid-pane .cell .h{ background:#1c1f28; border-bottom:1px solid rgba(255,255,255,.14); }
+.grid-pane .cell.focus{ border-color:var(--accent); }
