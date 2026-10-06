@@ -89,21 +89,10 @@ More, such as deploy coordination, usage reports and the session reporter plugin
 
 ## Quick start
 
-You need Linux, Node.js 20+, Git, tmux and Tailscale. Run the dashboard as the Unix user who owns your tmux sessions.
-
-```bash
-git clone https://github.com/angelstreet/mycodebox.git ~/ghosty-sessions
-cd ~/ghosty-sessions
-npm ci --omit=dev
-HOST=127.0.0.1 AGENT_CMD_CLAUDE=claude AGENT_CMD_CODEX=codex node server.js
-```
-
-This starts a local dashboard at `http://127.0.0.1:7777`. For phone access, follow the
-[install guide](docs/INSTALL.md): connect both devices to Tailscale, restrict the tailnet policy, and configure private
-HTTPS with Tailscale Serve. The guide also covers direct Tailscale access, systemd, verification and optional features.
-
-These explicit settings matter: the source otherwise listens on all interfaces, and its Claude/Codex UI launch
-commands bypass CLI permission checks. Node does not automatically read `.env`.
+You need Linux, Node.js 20+, Git, tmux and Tailscale. Follow the [installation and configuration guide](docs/INSTALL.md)
+as the Unix user who owns your tmux sessions. It covers the first local run, private Tailscale access, service setup,
+verification and optional features. The listener and agent launch commands must be configured explicitly; the source
+defaults are not suitable for a private installation.
 
 Once connected, follow [Usage](docs/USAGE.md) to select a session, read its answer and send a reply.
 
