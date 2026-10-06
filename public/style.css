@@ -1729,12 +1729,15 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 /* phones: no grid view and no filter button in the header (the filter bar below covers it) */
 @media (max-width: 720px){ .viewctl, #filterBtn{ display:none !important; } }
 
-/* grid view: only the focused card scrolls inside; touching any other card scrolls the grid / list instead */
-.grid-pane{ touch-action:pan-y; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
-/* xterm's own touchmove handler calls preventDefault (non-passive), so overflow:hidden alone left a finger on an
-   unfocused card scrolling nothing. Unfocused cards' content takes no pointer events at all: the touch lands on the
-   .cell (not a scroller) and the browser scrolls the grid natively; the tap still reaches the cell's wireTap. */
-.grid-pane .cell:not(.focus) .b, .grid-pane .cell:not(.focus) .reader, .grid-pane .cell:not(.focus) .docview{ pointer-events:none; }
+/* Mobile swipes on inactive cards belong to the board, not nested content scrollers. */
+@media (max-width: 720px){
+  .grid-pane{ touch-action:pan-y; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  /* Unlike hidden, clip does not make the hit-tested card a scroll container. */
+  .grid-pane .cell:not(.focus){ overflow:clip; touch-action:pan-y; }
+  /* Keep xterm's cancelling touch handlers out of the event path; taps still select the cell. */
+  .grid-pane .cell:not(.focus) :is(.b, .reader, .docview),
+  .grid-pane .cell:not(.focus) :is(.b, .reader, .docview) *{ pointer-events:none; }
+}
 
 /* phones: no priority badge on grid / single cards (the board rows and the side list keep it) */
 @media (max-width: 720px){ .grid-pane .cell .h .pr, .card-pane .cell .h .pr{ display:none; } }
@@ -1831,4 +1834,11 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
   .mgr-section .mgr-options{ grid-template-columns:1fr; }
   .mgr-section .mlog .ml{ grid-template-columns:38px minmax(0,1fr) 65px; }
   .mgr-section .mlog .ml .x, .mgr-section .mlog .ml .q, .mgr-section .mlog .ml .lab{ grid-column:2 / -1; }
+}
+
+/* touch: the row's buttons sit at the right edge and take no room when invisible (the hidden pin / park buttons used to reserve ~70px and squeezed the name, badge and time) */
+@media (hover: none){
+  .session-list li{ gap:6px; }
+  .session-list li:not(.pinned) .edit.pin, .session-list li .edit.park{ display:none !important; }
+  .session-list .edit{ width:32px; height:32px; }
 }
