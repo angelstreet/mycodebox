@@ -1630,3 +1630,6 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 #askPopup .ap-b:hover{ border-color:var(--ink-2); }
 #askPopup .ap-b.hl{ border-color:var(--working); }
 #askPopup .ap-det, #askPopup .ap-sug, #askPopup .ap-chips .ap-ch{ border-color:var(--ink-3); }
+/* agent-recommended option: accent border + soft tint (selected / AI pick keeps its green fill) */
+#askPopup .ap-b.isrec:not(.hl){ border-color:var(--accent); background:rgba(232,154,74,.10); box-shadow:inset 0 0 0 1px rgba(232,154,74,.35); }
+#askPopup .ap-b.isrec .ap-rec{ color:var(--accent); border-color:var(--accent); }

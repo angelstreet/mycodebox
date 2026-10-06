@@ -155,7 +155,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       const chips = fq.options.map((o) => {
         const sel = pk[fq.n] === o.n;
         const aiShow = o.ai && pk[fq.n] == null;   // the AI's green fill steps aside once the owner picked
-        const cls = ['ap-b', 'ap-chip', sel || aiShow ? 'hl' : ''].filter(Boolean).join(' ');
+        const cls = ['ap-b', 'ap-chip', sel || aiShow ? 'hl' : '', o.recommended ? 'isrec' : ''].filter(Boolean).join(' ');
         return `<button type="button" class="${cls}" data-q="${esc(fq.n)}" data-o="${esc(o.n)}" aria-pressed="${sel}" title="${esc(o.text)}"><span class="ap-ch"><span class="n">${esc(o.n)}</span>${o.recommended ? '<span class="ap-rec" title="agent recommends">rec</span>' : ''}${o.ai ? '<i class="star" title="AI pick">\u2605</i>' : ''}</span><span class="t">${esc(o.short)}</span></button>`;
       }).join('');
       const full = open ? `<div class="ap-fq-full">${fq.options.map((o) => `<div><b>${esc(o.n)}</b> ${esc(o.text)}${o.recommended ? ' <span class="ap-rec">agent recommends</span>' : ''}</div>`).join('')}</div>` : '';
@@ -175,7 +175,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   function btnHtml(b, label, n) {
     const rec = b.rec ? '<span class="ap-rec">agent recommends</span>' : '';
     const hasDesc = !!b.desc;
-    const cls = ['ap-b', b.hl ? 'hl' : '', b.confirm ? 'cf' : '', b.muted ? 'muted' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op', hasDesc ? 'has-ex' : ''].filter(Boolean).join(' ');
+    const cls = ['ap-b', b.hl ? 'hl' : '', b.rec ? 'isrec' : '', b.confirm ? 'cf' : '', b.muted ? 'muted' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op', hasDesc ? 'has-ex' : ''].filter(Boolean).join(' ');
     const star = b.hl ? '<i class="star">★</i>' : '';
     // The chevron is rendered INSIDE the option's own button area (small, right-aligned, stopPropagation
     // so a tap on the chevron doesn't fire the option's send). Only options with a description get it;
