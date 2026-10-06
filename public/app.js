@@ -966,7 +966,7 @@ function syncWorkspace() {
   if (!sel) return;
   const all = state.sessions.map((s) => s.name);
   const projs = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
-  const html = `<option value="">All workspaces \u00b7 ${all.length}</option>` + projs.map((p) => `<option value="${escapeHtml(p || '-')}">${escapeHtml(p || 'no git')} \u00b7 ${all.filter((n) => projectOf(n) === p).length}</option>`).join('');
+  const html = `<option value="">All workspaces \u00b7 ${all.length}</option>` + projs.map((p) => `<option value="${escapeHtml(p || '-')}">${escapeHtml(p || 'no repo')} \u00b7 ${all.filter((n) => projectOf(n) === p).length}</option>`).join('');
   if (sel.dataset.h !== html) { sel.dataset.h = html; sel.innerHTML = html; }
   sel.value = state.fProject || '';
   sel.classList.toggle('on', !!state.fProject);
@@ -991,7 +991,7 @@ function renderFilterBar() {
     `<span class="fl">status</span>` + chip('filter', null, 'all') +
     states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
     `<span class="fsep"></span><span class="fl">project</span>` + chip('fProject', null, 'all') +
-    projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i>no git</i>', count((n) => projectOf(n) === p))).join('') +
+    projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span><span class="fl">agent</span>` + chip('fAgent', null, 'all') +
     agents.map((a) => chip('fAgent', a, `<span class="agent ${a}">${AGENT_LABEL[a]}</span>`, count((n) => agentOf(n) === a))).join('') +
     (anyFilter() ? `<span class="fsep"></span><button class="fclear">clear ×</button>` : '');
@@ -1157,7 +1157,7 @@ function renderSide() {
   syncSide();
 }
 // Sections of the list: Pinned, then each named group, then the rest. Headers show only when a pin or group exists.
-const autoGroupOf = (n) => (state.layout.groupBy === 'project' ? (projectOf(n) || 'no git') : '');
+const autoGroupOf = (n) => (state.layout.groupBy === 'project' ? (projectOf(n) || 'no repo') : '');
 const secOfName = (n) => (state.layout.pins.includes(n) ? 'pin' : (state.layout.groups[n] || autoGroupOf(n)) ? `g:${state.layout.groups[n] || autoGroupOf(n)}` : 'other');
 function layoutSide() {
   const list = els.sessionList;
