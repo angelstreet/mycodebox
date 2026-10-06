@@ -797,13 +797,18 @@ function renderParking() {
     if (pk.manual && pk.manual.length) {
       const mo = state.manualClosed !== true;
       h += `<button class="ph pfold" data-pfold="manualClosed" aria-expanded="${mo}"><span class="uch${mo ? ' on' : ''}"></span>Manual notes (${pk.manual.length})</button>`;
-      if (mo) for (const m of pk.manual) h += `<div class="prow"><span class="pn" title="${escapeHtml(m.how)}">${escapeHtml(m.session)}</span><span class="pman">manual</span></div>`;
+      if (mo) for (const m of pk.manual) {
+        const note = [m.how, m.resume ? `resume: ${m.resume}` : '', m.parkedAt ? `parked ${new Date(m.parkedAt).toLocaleString()}` : ''].filter(Boolean).join('\n');
+        const on = state.noteOpen === m.session;
+        h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman">${on ? 'hide' : 'note'}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
+      }
     }
   }
   box.innerHTML = h;
   box.classList.remove('hidden');
   box.querySelector('[data-ptop]')?.addEventListener('click', () => { state.parkOpen = !state.parkOpen; renderParking(); });
   box.querySelectorAll('[data-pfold]').forEach((b) => { b.onclick = () => { state[b.dataset.pfold] = state[b.dataset.pfold] !== true; renderParking(); }; });
+  box.querySelectorAll('[data-note]').forEach((r) => { r.onclick = () => { state.noteOpen = state.noteOpen === r.dataset.note ? '' : r.dataset.note; renderParking(); }; });
   box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
 }
 async function parkSession(name) {
