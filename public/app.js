@@ -965,18 +965,20 @@ function renderAttention() {
   }
 }
 
+const saveFilters = () => lsSet(LS_FILTERS, JSON.stringify({ s: state.filter, p: state.fProject, a: state.fAgent }));   // kept in this browser: a refresh keeps the filters
 function setFilter(f) {
   state.filter = f == null ? [] : [].concat(f);
+  saveFilters();
   renderAll();
 }
 function setFilters(patch) {
   Object.assign(state, patch);
-  lsSet(LS_FILTERS, JSON.stringify({ p: state.fProject, a: state.fAgent }));
+  saveFilters();
   renderAll();
 }
 function loadFilters() {
-  try { const f = JSON.parse(lsGet(LS_FILTERS, '{}')) || {}; state.fProject = [].concat(f.p || []); state.fAgent = [].concat(f.a || []); }
-  catch { state.fProject = []; state.fAgent = []; }
+  try { const f = JSON.parse(lsGet(LS_FILTERS, '{}')) || {}; state.fProject = [].concat(f.p || []); state.fAgent = [].concat(f.a || []); state.filter = [].concat(f.s || []); }
+  catch { state.fProject = []; state.fAgent = []; state.filter = []; }
 }
 
 // Filter bar: one horizontal row of chip groups. Rebuilt only when its
