@@ -1,16 +1,48 @@
-// Session cap + parking (TASK-58 C8). A parked Claude session = its conversation id and folder recorded in parked-sessions.json, Claude exited
-// cleanly and the tmux session removed (RAM freed); the worktree is untouched. Resume recreates the tmux session in the same folder
-// and runs `claude --resume <id>`.
+// Session cap + parking (TASK-58 C8). A parked session = its conversation id (Claude) or its cwd (MiniMax) recorded in
+// parked-sessions.json, the agent exited cleanly and the tmux session removed (RAM freed); the worktree is untouched.
+// Resume recreates the tmux session in the same folder and runs `claude --resume <id>` (Claude) or `mcode -c` (MiniMax).
 //
 // Facts come from Claude itself: ~/.claude/sessions/<pid>.json ({sessionId, cwd, name, status: idle|busy|shell, statusUpdatedAt}).
-// The tmux name in that file goes stale when a session is renamed, so a pane is matched to its Claude through the process tree.
+// The tmux name in that file goes stale when a session is renamed, so a pane is matched to its agent through the process tree.
 // Pure helpers are exported for tests; createParking() takes its IO (tmux, ps, files, leases) as injected functions.
+//
+// MiniMax uses `mcode` (AGENT_CMDS.minimax in server.js: `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode`).
+// There's no per-pane session file for MiniMax, so parking records only the cwd / agent / args / priority; resume reuses
+// `mcode -c` to continue the most recent session in that cwd.
 
 import { readdir, readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export const SESSION_CAP = 10;
 const DIR_TTL_MS = 5000;
+
+// MiniMax / mcode: pids under `root` (breadth first, depth <= 8) whose args look like minimax-code / mcode.
+// table = { children: Map<ppid, pid[]>, args: Map<pid, string> } from server.js's processTable().
+export function minimaxPidsUnder(root, table) {
+  const out = [];
+  const seen = new Set();
+  let level = [root];
+  for (let d = 0; level.length && d < 8; d++) {
+    const next = [];
+    for (const p of level) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      const a = table.args.get(p) || '';
+      if (/(?:^|\/)(?:minimax-code|mcode)(?:\s|$)/.test(a)) out.push(p);
+      next.push(...(table.children.get(p) || []));
+    }
+    level = next;
+  }
+  return out;
+}
+
+// The MiniMax of a pane: the first minimax-code / mcode pid in its tree. cwd comes from the pane (no session file like Claude).
+export function minimaxOfPane(panePid, table, cwd) {
+  for (const pid of minimaxPidsUnder(panePid, table)) {
+    return { pid, cwd: cwd || null, args: table.args.get(pid) || '' };
+  }
+  return null;
+}
 
 // Claude's own session files, cached a few seconds: Map<pid, {pid, sessionId, cwd, name, status, statusUpdatedAt, ...}>.
 export function createClaudeIndex({ dir, now = Date.now, ttlMs = DIR_TTL_MS }) {
@@ -94,7 +126,7 @@ export function leasesOfSession(leases, names) {
 }
 
 // Cap view: live Claude sessions and, when over the cap, the idle-longest ones as parking candidates.
-export function capView({ sessions, cap = SESSION_CAP, now = Date.now() }) {
+export function capView({ sessions, cap = SESSION_CAP, now = Date.now }) {
   const live = sessions.filter((s) => s.agent === 'claude' && s.state !== 'offline');
   const over = Math.max(0, live.length - cap);
   const idleLongest = live
@@ -132,7 +164,7 @@ export async function readManualNotes(file) {
 }
 
 export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now }) {
-  // tmux = { exists(name), kill(name), sendText(name, text), sendEnter(name), create(name, cwd) }
+  // tmux = { exists(name), kill(name), sendText(name, text), sendEnter(name), sendCtrlC(name)?, create(name, cwd) }
   let data = { parked: {} };
   let loaded = false;
   async function load() {
@@ -150,12 +182,19 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
   return {
     async list() { await load(); return Object.values(data.parked).sort((a, b) => b.parkedAt - a.parkedAt); },
     async get(name) { await load(); return data.parked[name] || null; },
-    // facts = { claude: {pid, info, args}|null, state, attached, reporterWaiting, backgroundWork, busy[], leases[]|null, rssMb, priority }
-    // Returns the list of reasons the session may not be parked (empty = ok).
+    // facts = { claude: {pid, info, args}|null, minimax: {pid, cwd, args}|null, state, attached, reporterWaiting, backgroundWork, busy[], leases[]|null, rssMb, priority }
+    // Exactly one of facts.claude / facts.minimax is set; either way, the same idle / busy / lease checks apply. Returns the list of reasons
+    // the session may not be parked (empty = ok).
     checks(facts) {
       const r = [];
-      if (!facts.claude) return ['no Claude process with a session file in this pane'];
-      if (facts.claude.info.status !== 'idle') r.push(`Claude status is "${facts.claude.info.status}", not idle`);
+      const agent = facts.claude ? 'claude' : facts.minimax ? 'minimax' : null;
+      if (!agent) return ['no Claude or MiniMax process in this pane'];
+      // Per-agent prerequisite checks (Claude only knows its own idle / sessionId; MiniMax is idle by the board's `state`).
+      if (agent === 'claude') {
+        if (facts.claude.info.status !== 'idle') r.push(`Claude status is "${facts.claude.info.status}", not idle`);
+        if (!facts.claude.info.sessionId) r.push('no resumable session id');
+      }
+      // Shared checks (busy children / lease held / not idle).
       if (facts.state && !['idle', 'done'].includes(facts.state)) r.push(`board state is ${facts.state}`);
       if (facts.attached) r.push('a terminal is attached');
       if (facts.reporterWaiting) r.push('a permission prompt / question is pending');
@@ -163,43 +202,69 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       if (facts.busy?.length) r.push(`running child process: ${facts.busy[0].args.slice(0, 80)}`);
       if (facts.leases == null) r.push('could not read vpt-lease (cannot prove no lease is held)');
       else if (facts.leases.length) r.push(`holds vpt-lease: ${facts.leases.map((l) => l.id).join(', ')}`);
-      if (!facts.claude.info.sessionId) r.push('no resumable session id');
       return r;
     },
-    // Records the session, exits Claude with /exit, kills the tmux session only once the claude process is gone.
+    // Records the session, exits the agent with /exit, kills the tmux session only once the agent process is gone ( Claude: refuses if it
+    // doesn't exit within the wait; MiniMax: falls back to Ctrl-C twice when /exit didn't take effect, then kills the tmux session anyway).
     async park(name, facts, { claudeAlive }) {
       await load();
       const reasons = this.checks(facts);
       if (reasons.length) throw err(409, `not parked: ${reasons.join('; ')}`, reasons);
-      const { info, args } = facts.claude;
-      const rec = { session: name, cwd: info.cwd, sessionId: info.sessionId, claudeName: info.name || name, args: args.slice(0, 400), priority: facts.priority || null, rssMb: facts.rssMb ?? null, lastActivity: info.statusUpdatedAt || null, parkedAt: now() };
-      data.parked[name] = rec;
-      await save();                       // the id is on disk before anything is closed
-      await tmux.sendText(name, '/exit');
-      await sleep(300);
-      await tmux.sendEnter(name);
-      const t0 = now();
-      let gone = false;
-      while (now() - t0 < exitWaitMs) {
-        if (!(await claudeAlive(facts.claude.pid))) { gone = true; break; }
-        await sleep(pollMs);
-      }
-      if (!gone) {
-        delete data.parked[name];
+      let rec;
+      if (facts.claude) {
+        const { info, args } = facts.claude;
+        rec = { session: name, cwd: info.cwd, sessionId: info.sessionId, claudeName: info.name || name, args: args.slice(0, 400), priority: facts.priority || null, rssMb: facts.rssMb ?? null, lastActivity: info.statusUpdatedAt || null, parkedAt: now() };
+        data.parked[name] = rec;
+        await save();                       // the id is on disk before anything is closed
+        await tmux.sendText(name, '/exit');
+        await sleep(300);
+        await tmux.sendEnter(name);
+        const t0 = now();
+        let gone = false;
+        while (now() - t0 < exitWaitMs) {
+          if (!(await claudeAlive(facts.claude.pid))) { gone = true; break; }
+          await sleep(pollMs);
+        }
+        if (!gone) {
+          delete data.parked[name];
+          await save();
+          throw err(500, 'Claude did not exit within the wait; session left running, nothing killed');
+        }
+        await tmux.kill(name);
+      } else {
+        // MiniMax: park = record {agent:'minimax', cwd, args, priority, rssMb, parkedAt}; /exit; wait; Ctrl-C fallback; kill tmux.
+        const m = facts.minimax;
+        rec = { session: name, agent: 'minimax', cwd: m.cwd || null, args: (m.args || '').slice(0, 400), priority: facts.priority || null, rssMb: facts.rssMb ?? null, parkedAt: now() };
+        data.parked[name] = rec;
         await save();
-        throw err(500, 'Claude did not exit within the wait; session left running, nothing killed');
+        await tmux.sendText(name, '/exit');
+        await sleep(300);
+        await tmux.sendEnter(name);
+        const t0 = now();
+        let gone = false;
+        while (now() - t0 < exitWaitMs) {
+          if (!(await claudeAlive(m.pid))) { gone = true; break; }
+          await sleep(pollMs);
+        }
+        if (!gone && typeof tmux.sendCtrlC === 'function') {
+          await tmux.sendCtrlC(name);
+          await tmux.sendCtrlC(name);
+        }
+        await tmux.kill(name);
       }
-      await tmux.kill(name);
       return rec;
     },
-    // Recreates the tmux session in the recorded folder and starts Claude with --resume.
+    // Recreates the tmux session in the recorded folder and starts the agent. Claude: resumeCommand(base, rec.args, rec.claudeName, rec.sessionId).
+    // MiniMax: `${base} -c` (reuses AGENT_CMDS.minimax + ' -c' to continue the latest session in the recorded cwd).
     async resume(name, { base, start }) {
       await load();
       const rec = data.parked[name];
       if (!rec) throw err(404, 'not parked');
       if (await tmux.exists(name)) throw err(409, 'a tmux session with that name already exists');
       await tmux.create(name, rec.cwd);
-      const cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId });
+      let cmd;
+      if (rec.agent === 'minimax') cmd = `${base} -c`;
+      else cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId });
       await start(name, rec, cmd);
       delete data.parked[name];
       await save();
