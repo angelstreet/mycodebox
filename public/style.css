@@ -1626,3 +1626,7 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 /* answer popup: a clearly visible frame, bordered close / nav buttons */
 #askPopup{ border:1.5px solid var(--ink-3); box-shadow:0 0 0 1px rgba(0,0,0,.6), 0 8px 28px rgba(0,0,0,.65); }
 #askPopup .ap-nav, #askPopup .ap-x{ border:1px solid var(--ink-3); border-radius:7px; min-width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; }
+#askPopup .ap-b{ border-color:var(--ink-3); }
+#askPopup .ap-b:hover{ border-color:var(--ink-2); }
+#askPopup .ap-b.hl{ border-color:var(--working); }
+#askPopup .ap-det, #askPopup .ap-sug, #askPopup .ap-chips .ap-ch{ border-color:var(--ink-3); }
