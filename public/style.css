@@ -1698,3 +1698,4 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 .row-item .last{ grid-column:1; min-width:0; }
 .row-item .meta{ grid-column:2; margin-left:10px; max-width:45vw; align-self:center; }
 .row-item .meta.hidden{ display:none; }
+body[data-mode="card"] .topbar .viewctl{ margin-left:auto; }
