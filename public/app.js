@@ -240,10 +240,11 @@ function stateBadgeHtml(name) {
   const tip = s === 'deploy' ? ` data-wd="${escapeHtml(state.status[name].deployWait.id || '')}" title="${escapeHtml(deployWaitTip(name))}"` : '';
   return `<span class="state ${s}"${tip || ` title="${s === 'waiting' ? 'needs you' : s}"`}>${s === 'deploy' ? icon('timer', 14, 'sticon') : `<i class="dot ${s}"></i>`}<span class="st">${escapeHtml(badgeText(name))}</span></span>`;
 }
-function agentBadgeHtml(name) {
+function agentBadgeHtml(name, { model = true } = {}) {
   const a = agentOf(name);
   const m = (state.status[name] || {}).model;
-  return `<span class="agent ${a}">${AGENT_LABEL[a] || a}</span>${m ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
+  // the model is the badge's tooltip; the nav list shows no model text (no room), cards and rows show it when they have space
+  return `<span class="agent ${a}"${m ? ` title="${escapeHtml(m)}"` : ''}>${AGENT_LABEL[a] || a}</span>${m && model ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
 }
 
 // ⚡ = the ghosty-reporter plugin is live in this Claude session (exact answers / prompts, subagents). The
@@ -1375,11 +1376,13 @@ function syncSide() {
     li.classList.toggle('active', n === state.active);
     li.classList.toggle('pinned', state.layout.pins.includes(n));
     li.classList.toggle('shown', n !== state.active && shownNames.has(n));
-    li.querySelector('.dot').className = `dot ${vstateOf(n)}`;
-    const ag = agentBadgeHtml(n);
+    const dotEl = li.querySelector('.dot');
+    dotEl.className = `dot ${vstateOf(n)}`;
+    dotEl.title = vstateOf(n) === 'waiting' ? 'needs you' : vstateOf(n);
+    const ag = agentBadgeHtml(n, { model: false });
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
-    li.querySelector('.sst').textContent = stateText(n);
+    li.querySelector('.sst').textContent = badgeText(n);   // the dot's colour says the state (its tooltip names it); the row shows only the time
     li.querySelector('.park').hidden = (state.status[n] || {}).agent !== 'claude';
     const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
@@ -1398,7 +1401,7 @@ function syncSide() {
 function tickSide() {
   for (const li of els.sessionList.children) {
     const st = li.querySelector('.sst');
-    if (st && li.dataset.session && !li.classList.contains('editing')) st.textContent = stateText(li.dataset.session);
+    if (st && li.dataset.session && !li.classList.contains('editing')) st.textContent = badgeText(li.dataset.session);
   }
 }
 
