@@ -220,6 +220,7 @@ body{ display:flex; flex-direction:column; }
 
 .grid-pane.size-2  { grid-template-columns: repeat(2, minmax(0,1fr)); grid-auto-rows: minmax(0,1fr); }
 .grid-pane.size-4  { grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
+.grid-pane.size-6  { grid-template-columns: repeat(3, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
 .grid-pane.size-8  { grid-template-columns: repeat(4, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
 .grid-pane.size-16 { grid-template-columns: repeat(4, minmax(0,1fr)); grid-template-rows: repeat(4, minmax(0,1fr)); }
 /* phones: 2 → one column, 4 / 8 → two columns filling the screen, 16 → two columns scrolling */
@@ -227,6 +228,7 @@ body{ display:flex; flex-direction:column; }
   .view-grid .grid-pane{ gap:6px; padding:6px; }
   .grid-pane.size-2 { grid-template-columns: minmax(0,1fr); grid-template-rows: repeat(2, minmax(0,1fr)); grid-auto-rows:0; }
   .grid-pane.size-4 { grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); }
+  .grid-pane.size-6 { grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(3, minmax(0,1fr)); }
   .grid-pane.size-8 { grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(4, minmax(0,1fr)); }
   .grid-pane.size-16{ grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: none; grid-auto-rows: 24vh; }
   .size-btn{ min-width:28px; padding:5px 4px; justify-content:center; }
@@ -685,7 +687,6 @@ body{ display:flex; flex-direction:column; }
 @media (max-width: 720px){
   .topbar{ gap:4px; padding:0 4px; }
   /* card view is reached by tapping a session; the board button is enough here */
-  .mode-btn[data-mode="card"]{ display:none; }
   /* count chips give way first: they shrink and scroll, the buttons never move */
   .summary{ flex:1 1 auto; min-width:0; overflow-x:auto; scrollbar-width:none; }
   .summary::-webkit-scrollbar{ display:none; }
@@ -783,8 +784,8 @@ body{ display:flex; flex-direction:column; }
 }
 .cell .jump button:hover{ color:var(--accent); border-color:var(--accent); }
 /* small grid cards: keep it out of the way */
-.grid-pane.size-8 .cell .jump, .grid-pane.size-16 .cell .jump{ right:6px; bottom:6px; gap:4px; }
-.grid-pane.size-8 .cell .jump button, .grid-pane.size-16 .cell .jump button{ width:26px; height:26px; font-size:13px; }
+.grid-pane.size-6 .cell .jump, .grid-pane.size-8 .cell .jump, .grid-pane.size-16 .cell .jump{ right:6px; bottom:6px; gap:4px; }
+.grid-pane.size-6 .cell .jump button, .grid-pane.size-8 .cell .jump button, .grid-pane.size-16 .cell .jump button{ width:26px; height:26px; font-size:13px; }
 
 /* ------------ Selected session tab: solid gold, always wins over state colours ------------ */
 .tabs .tab.active,

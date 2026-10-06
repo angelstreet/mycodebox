@@ -61,7 +61,7 @@ const state = {
   active:     null,
   mode:       'grid',           // card | grid | list
   prevMode:   'grid',           // where the back arrow returns to
-  gridSize:   4,                // 2 | 4 | 6 | 9 | 16 (all)
+  gridSize:   4,                // 2 | 4 | 6 | 8
   filter:     null,             // null | 'waiting' | 'working'
   ws:        new Map(),
   statusWs:  null,
@@ -85,7 +85,7 @@ const LS_GRID    = 'ghosty.gridSize';
 const LS_MODE    = 'ghosty.mode';
 const LS_ORDER   = 'ghosty.order';
 const LS_NOTIFY  = 'ghosty.notify';
-const GRID_SIZES = [2, 4, 8, 16];
+const GRID_SIZES = [2, 4, 6, 8];
 
 function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
@@ -144,7 +144,7 @@ function loadPrefs() {
   loadOrder();
   const g = Number(lsGet(LS_GRID, 4));
   // old saved sizes (6 / 9) map to the nearest current one
-  state.gridSize = GRID_SIZES.includes(g) ? g : (g > 4 ? 8 : 4);
+  state.gridSize = GRID_SIZES.includes(g) ? g : (g > 8 ? 8 : g > 4 ? 6 : 4);
   const m = lsGet(LS_MODE, 'grid');
   state.mode = ['card', 'grid', 'list'].includes(m) ? m : 'grid';
   state.notify = lsGet(LS_NOTIFY, '0') === '1';
@@ -2098,7 +2098,7 @@ function setMode(mode) {
   syncTitle();
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
   // size buttons are always visible; highlighted only while the grid is shown
-  for (const b of $$('.size-btn')) b.classList.toggle('on', mode === 'grid' && Number(b.dataset.size) === state.gridSize);
+  for (const b of $$('.size-btn')) b.classList.toggle('on', Number(b.dataset.size) === 1 ? mode === 'card' : mode === 'grid' && Number(b.dataset.size) === state.gridSize);
   els.backBtn.classList.toggle('hidden', mode !== 'card');
   els.menuBtn.classList.toggle('hidden', mode === 'card');
   // Leaving a view: free its cells so xterm instances are reparented, not duplicated.
@@ -2114,7 +2114,7 @@ function setMode(mode) {
 function setGridSize(n) {
   state.gridSize = n;
   lsSet(LS_GRID, String(n));
-  for (const b of $$('.size-btn')) b.classList.toggle('on', state.mode === 'grid' && Number(b.dataset.size) === n);
+  for (const b of $$('.size-btn')) b.classList.toggle('on', Number(b.dataset.size) === 1 ? state.mode === 'card' : state.mode === 'grid' && Number(b.dataset.size) === n);
   if (state.mode === 'grid') { els.gridPane.innerHTML = ''; renderGrid(); }
 }
 
@@ -3793,7 +3793,7 @@ els.filterBtn.onclick = () => { state.filterOpen = !state.filterOpen; lsSet('gho
 els.notifyBtn.onclick = () => toggleNotify();
 for (const b of $$('.mode-btn')) b.onclick = () => setMode(b.dataset.mode);
 // tapping a size always shows the grid at that size
-for (const b of $$('.size-btn')) b.onclick = () => { setGridSize(Number(b.dataset.size)); if (state.mode !== 'grid') setMode('grid'); };
+for (const b of $$('.size-btn')) b.onclick = () => { const n = Number(b.dataset.size); if (n === 1) return setMode('card'); setGridSize(n); if (state.mode !== 'grid') setMode('grid'); };
 for (const b of els.keys.querySelectorAll('button')) {
   // keep the soft keyboard open when tapping a quick key
   b.onpointerdown = (e) => e.preventDefault();
