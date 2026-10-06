@@ -1714,3 +1714,6 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 .dock .mic{ background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:10px; width:42px; height:42px; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
 .dock .mic.rec{ background:var(--waiting); border-color:var(--waiting); color:#fff; animation:blink 1s infinite; }
 .dock .mic.busy{ opacity:.5; cursor:progress; }
+
+/* phones: no grid view and no filter button in the header (the filter bar below covers it) */
+@media (max-width: 720px){ .viewctl, #filterBtn{ display:none !important; } }
