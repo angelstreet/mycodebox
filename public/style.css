@@ -1610,7 +1610,7 @@ body.side-docked .side-head .ttl{ letter-spacing:.12em; }
 
 /* workspace filter + resources toggle (desktop top bar); folded resources = workspace dropdown in their place */
 .res-toggle{ width:24px; height:28px; margin-left:2px; }
-.wsel{ height:30px; max-width:170px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; margin-left:10px; margin-right:auto; }
+.wsel{ height:30px; max-width:170px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:0 8px; font:inherit; font-size:12px; margin-left:10px; margin-right:6px; }
 .wsel.on{ border-color:var(--accent); color:var(--accent); }
 body:not(.res-hidden) .wsel{ display:none; }
 body.res-hidden .health.inbar, body.res-hidden .quota.inbar{ display:none !important; }
@@ -1947,3 +1947,8 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 }
 
 #askPopup .ap-topic{ font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:rgba(217,164,65,.16); color:var(--warn, #d9a441); border:1px solid rgba(217,164,65,.55); white-space:nowrap; }
+
+/* the filter area sits right after the workspace select (left side, so it never moves as filters are added) and shows only while the codebox resources are folded */
+.fgrp{ margin-right:auto; }
+body:not(.res-hidden) .fgrp{ display:none; }
+@media (max-width: 720px){ .fgrp{ display:flex !important; margin-right:0; } }
