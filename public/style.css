@@ -1748,8 +1748,8 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 /* phones: no grid view and no filter button in the header (the filter bar below covers it) */
 @media (max-width: 720px){ .viewctl, #filterBtn{ display:none !important; } }
 
-/* Mobile swipes on inactive cards belong to the board, not nested content scrollers. */
-@media (max-width: 720px){
+/* Touch phones can have wide CSS viewports (landscape / desktop-site mode). */
+@media (max-width: 720px), (pointer: coarse){
   .grid-pane{ touch-action:pan-y; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
   /* Unlike hidden, clip does not make the hit-tested card a scroll container. */
   .grid-pane .cell:not(.focus){ overflow:clip; touch-action:pan-y; }
@@ -1758,8 +1758,6 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
   .grid-pane .cell:not(.focus) :is(.b, .reader, .docview) *{ pointer-events:none; }
 }
 
-/* phones: no priority badge on grid / single cards (the board rows and the side list keep it) */
-@media (max-width: 720px){ .grid-pane .cell .h .pr, .card-pane .cell .h .pr{ display:none; } }
 .cell .h .tgt{ cursor:pointer; }
 /* the "→ send target" arrow is gone: the focused card's highlighted border is enough */
 .cell .h .tgt, .grid-pane .cell.focus .h .tgt{ display:none !important; }
@@ -1860,4 +1858,11 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
   .session-list li{ gap:6px; }
   .session-list li:not(.pinned) .edit.pin, .session-list li .edit.park{ display:none !important; }
   .session-list .edit{ width:32px; height:32px; }
+}
+
+/* phones: priority and name on the left, everything else (state, time, pause) pushed to the right edge */
+@media (max-width: 720px){
+  .cell .h .pr{ display:inline-flex; order:-1; }
+  .cell .h .nm{ order:0; flex:1 1 auto; max-width:none; min-width:0; }
+  .cell .h > :not(.pr):not(.nm){ margin-left:0; }
 }
