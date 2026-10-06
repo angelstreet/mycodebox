@@ -2366,7 +2366,8 @@ async function startReview() {
     onClose: () => { if (new URLSearchParams(location.search).get('review')) history.replaceState(null, '', '/'); },
   });
 }
-const CASE_LABEL = { continue: 'continue? → "Yes, continue."', menu_recommended: 'recommended option', stopped_short: 'stopped short → "Yes, continue."', ask_status: 'no status → "what is done / tested / left?"' };
+const CASE_LABEL = { continue: 'Agent asks to continue', menu_recommended: 'Agent recommends a menu option', stopped_short: 'Agent stops after stating its next step', ask_status: 'Agent finishes without a status update', owner_decision: 'Owner decision', done: 'Finished turn' };
+const CASE_REPLY = { continue: 'Sends: “Yes, continue.”', menu_recommended: 'Chooses the recommended option', stopped_short: 'Sends: “Yes, continue.”', ask_status: 'Asks what is done, tested and left' };
 const firstLine = (t) => (String(t || '').split('\n').map((x) => x.trim()).filter(Boolean).slice(-1)[0] || '').slice(0, 140);
 let mgrUnlabelled = false;   // panel filter: only stops the owner has not labelled yet
 const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toTimeString().slice(0, 5); };
@@ -2394,10 +2395,10 @@ function logLine(r) {
 function deploysHtml(d0) {
   if (!d0) return '<div class="dim">loading…</div>';
   const waiting = (d0.deploys || []).filter((x) => x.state === 'awaiting-approval').length;
-  return `<button class="mswitch${d0.enabled ? ' on' : ''}" data-set="deployRunner"><i></i><span>Runs deploys <b>${d0.enabled ? 'ON' : 'OFF'}</b></span></button>
-    ${d0.enabled ? '' : '<div class="mnote">runner is off: requests only queue. Agents then follow the manual flow when you tell them to.</div>'}
-    ${d0.ok === false ? `<div class="mnote dwarn">registry unreachable &middot; ${escapeHtml(d0.error || '')}</div>` : ''}
-    <button class="sbtn pf-link" data-plat-open="1">Platforms &rsaquo;${waiting ? ` <b>${waiting} to approve</b>` : ''}</button>`;
+  return `<button class="mswitch${d0.enabled ? ' on' : ''}" data-set="deployRunner" aria-pressed="${!!d0.enabled}"><i aria-hidden="true"></i><span>Run approved deploys</span><b>${d0.enabled ? 'On' : 'Off'}</b></button>
+    <p class="mhelp">${d0.enabled ? 'Approved requests may run when leases allow.' : 'Requests remain queued for your action.'}</p>
+    ${d0.ok === false ? `<p class="mhelp dwarn">Registry unreachable: ${escapeHtml(d0.error || '')}</p>` : ''}
+    <button class="sbtn pf-link" data-plat-open="1">Open platforms${waiting ? ` <b>· ${waiting} need approval</b>` : ''}</button>`;
 }
 
 // ---------- Platforms page: one block per platform (status, next deploy, in use, live, history) ----------
@@ -2517,7 +2518,9 @@ function openManager() {
   openSheet('AI manager', async ({ body, foot, close, title }) => {
     const setChip = () => { title.innerHTML = `AI manager${mgrCostChip()}`; };
     setChip(); loadMgrCost().then(setChip);
+    body.closest('.sheet').classList.add('manager-sheet');
     body.innerHTML = '<div class="sheet-empty">loading…</div>';
+    const sectionsOpen = new Set(['replies']);
     foot.classList.remove('hidden');
     foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
@@ -2547,37 +2550,56 @@ function openManager() {
           <span class="lab">${lab ? `<span class="lbd ${escapeHtml(lab.label)}">${lab.label === 'no_reason' ? `${icon('thumbs-down', 14)} no reason` : lab.label === 'legit' ? `${icon('thumbs-up', 14)} legit` : `wrong case${lab.correctCase ? ' → ' + escapeHtml(lab.correctCase) : ''}`}${lab.by && lab.by !== 'owner' ? ` <span class="dim">by ${escapeHtml(lab.by)}</span>` : ''}${lab.label !== 'wrong_case' && lab.correctCase ? ` <span class="dim">(case → ${escapeHtml(lab.correctCase)})</span>` : ''}</span>${lab.note ? `<span class="dim"> ${escapeHtml(lab.note)}</span>` : ''}`
             : `<button class="sbtn lb" data-label="no_reason" data-id="${escapeHtml(r.id)}" title="stopped for no reason" aria-label="stopped for no reason">${icon('thumbs-down', 16)}</button><button class="sbtn lb" data-label="legit" data-id="${escapeHtml(r.id)}" title="legit stop" aria-label="legit stop">${icon('thumbs-up', 16)}</button><select class="lb" data-wrong="${escapeHtml(r.id)}" aria-label="wrong case"><option value="">wrong case…</option>${caseOpts}</select><input class="lbn" data-note="${escapeHtml(r.id)}" placeholder="note" maxlength="500">`}</span></div>`;
       };
+      const unreviewed = (log.entries || []).filter((r) => r.type === 'stall' && !labels.has(r.id)).length;
+      const aiReady = cfg.aiTriage === 'auto' && cfg.autoSend && cfg.ai && (cfg.aiAutoCases || []).length > 0;
+      const reviewerState = cfg.aiTriage === 'off' ? 'Off' : aiReady ? 'Can send' : cfg.aiTriage === 'auto' ? 'Suggestions only' : 'Suggestions';
+      const aiChoices = (cfg.cases || []).filter((c) => !['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait'].includes(c));
+      const section = (key, heading, detail, content) => `<details class="mgr-section" data-manager-section="${key}" ${sectionsOpen.has(key) ? 'open' : ''}><summary><span>${heading}<small>${detail}</small></span></summary><div class="mgr-section-body">${content}</div></details>`;
+      const scroll = body.scrollTop;
       body.innerHTML = `
-        <div class="side-sub nocollapse">Deploys</div><div id="depBox">${deploysHtml(state.deploys)}</div>
-        <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend"><i></i><span>Auto-answer <b>${cfg.autoSend ? 'ON' : 'OFF'}</b></span></button>
-        <div class="mcases">${(cfg.validCases || []).map((c) => `<label class="mchk"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span>${escapeHtml(CASE_LABEL[c] || c)}</span></label>`).join('')}</div>
-        <div class="mnote">sends after ${Math.round(cfg.delayMs / 1000)}s (cancel from the pill) · Jev answers need ≥ ${cfg.minConfidence} · max ${cfg.maxPerSessionPerHour}/h per session · never deploy / push / delete / secrets / money</div>
-        <div class="side-sub">AI reviewer</div>
-        <div class="aimodes">${(cfg.aiModes || []).map((m) => `<button class="sbtn${cfg.aiTriage === m ? ' on' : ''}" data-aimode="${m}">${m}</button>`).join('')}</div>
-        <div class="mnote">${cfg.aiTriage === 'simulate' ? 'simulation: proposes a reply and shows it with its reasoning; nothing is typed for you' : cfg.aiTriage === 'auto' ? `auto: owner-free proposals \u2265 ${cfg.aiMinConfidence} go through the same countdown and caps (needs Auto-answer ON); never deploy / push / delete / secrets / money / customer` : 'off: no AI calls'}${cfg.ai ? '' : ' \u00b7 <b>no reviewer server configured</b>'}</div>
-        <div class="mcounts"><span class="dim">today</span><span class="sent"><b>${cfg.aiBudget ? cfg.aiBudget.calls : 0}</b>/${cfg.aiBudget ? cfg.aiBudget.dailyCalls : 0} calls</span><span class="esc"><b>$${cfg.aiBudget ? Number(cfg.aiBudget.cost).toFixed(3) : '0'}</b>/$${cfg.aiBudget ? Number(cfg.aiBudget.dailyUsd).toFixed(2) : '0'}</span></div>
-        <div class="mnote">${cfg.aiStats ? `AI agreement: ${cfg.aiStats.agreement == null ? 'no ratings yet' : `<b>${Math.round(cfg.aiStats.agreement * 100)} %</b> (${cfg.aiStats.right} right / ${cfg.aiStats.wrong} wrong)`} \u00b7 ${cfg.aiStats.proposals} proposals, ${cfg.aiStats.unrated} unrated \u2014 rate them in the swipe review` : ''}</div>
-        <div class="side-sub">Langfuse</div>
-        <div class="lflinks">${(() => { const l = cfg.langfuse || { scores: LANGFUSE_URL, dataset: LANGFUSE_URL, evaluator: LANGFUSE_URL, prompt: LANGFUSE_URL }; return [['Scores', l.scores], ['Dataset ghosty-stops', l.dataset], ['Evaluator', l.evaluator], ['Prompt', l.prompt]].map(([t, u]) => `<a class="sbtn lf" href="${escapeHtml(u)}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="14" height="14" alt="">${t}</a>`).join(''); })()}</div>
-        <div class="mnote">your labels and AI ratings become Langfuse scores; labelled stops feed the dataset; the AI reviewer's prompt and its judge live there</div>
-        <div class="side-sub">Quota policy</div>
-        <button class="mswitch${cfg.policyEnabled ? ' on' : ''}" data-set="policyEnabled"><i></i><span>Policy <b>${cfg.policyEnabled ? 'ON' : 'OFF'}</b></span></button>
-        <div class="mnote">P0 always continues · P1 while the 5h window is under ${cfg.p1MaxPct}% · P2 is held at its next stop when 5h ≥ ${cfg.p2MaxPct}% or the week would run out before reset · a hold never interrupts a working session</div>
-        <div class="mheld">${heldNow.map((n) => `<div class="mh"><b>${escapeHtml(displayName(n))}</b> ${escapeHtml(prioOf(n))} <span class="dim">${escapeHtml(state.status[n].held.reason)}</span></div>`).join('') || '<div class="dim">no session held</div>'}</div>
-        <div class="mcounts"><span class="sent"><b>${t.answered ?? 0}</b> answered</span><span class="canc"><b>${t.cancelled ?? 0}</b> cancelled</span><span class="esc"><b>${t.escalated ?? 0}</b> escalated</span><span class="dim">today</span></div>
-        <button class="mswitch on rvlink" data-review="1"><i></i><span>Review stops (${log.entries ? (log.entries || []).filter((r) => r.type === 'stall' && !labels.has(r.id)).length : 0}) &rarr; swipe</span></button>
-        <div class="side-sub">Last ${entries.length}</div>
-        <label class="mchk"><input type="checkbox" data-unlab ${mgrUnlabelled ? 'checked' : ''}><span>unlabelled stops only</span></label>
-        <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">nothing logged yet</div>'}</div>
-        <div class="side-sub">Manager actions (last ${(acts.actions || []).length})</div>
-        <div class="mlog">${(() => { const wrong = new Set(acts.regrets || []); return (acts.actions || []).slice().reverse().map((a) => actRow(a, wrong)).join(''); })() || '<div class="dim">no manager actions logged yet</div>'}</div>
-        <div class="side-sub">Wakes today</div>
-        ${wakesHtml(wk)}
-        <div class="side-sub">Sessions</div>
-        <div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">no agent sessions</div>'}</div>`;
+        <div class="mgr-intro">See what needs you and what the manager is allowed to do.</div>
+        <div class="mgr-overview" aria-label="Manager status">
+          <div class="mgr-status"><span>Automatic replies</span><strong class="${cfg.autoSend && (cfg.autoCases || []).length ? 'active' : ''}">${cfg.autoSend && (cfg.autoCases || []).length ? 'On' : cfg.autoSend ? 'No reply types selected' : 'Off'}</strong><small>${(cfg.autoCases || []).length} reply types allowed</small></div>
+          <div class="mgr-status"><span>AI reviewer</span><strong class="${aiReady ? 'active' : ''}">${reviewerState}</strong><small>${cfg.aiTriage === 'auto' && !aiReady ? 'Automatic AI replies need enabled types, reviewer access and automatic replies on' : cfg.aiTriage === 'off' ? 'No AI review calls' : `${cfg.aiStats?.unrated ?? 0} proposals without a rating`}</small></div>
+          <div class="mgr-status"><span>Deploy runner</span><strong class="${state.deploys?.enabled ? 'active' : ''}">${state.deploys?.enabled ? 'On' : 'Off'}</strong><small>${state.deploys?.ok === false ? 'Registry unreachable' : `${(state.deploys?.deploys || []).filter((x) => x.state === 'awaiting-approval').length} awaiting approval`}</small></div>
+        </div>
+        <div class="mgr-action"><div><strong>${unreviewed} stops to review</strong><span>Today: ${t.answered ?? 0} answered · ${t.cancelled ?? 0} cancelled · ${t.escalated ?? 0} escalated${heldNow.length ? ` · ${heldNow.length} held` : ''}</span></div><button class="sbtn" data-review="1">Review stops →</button></div>
+        ${section('replies', 'Automatic replies', cfg.autoSend ? `${(cfg.autoCases || []).length} reply types selected` : 'Off', `
+          <button class="mswitch${cfg.autoSend ? ' on' : ''}" data-set="autoSend" aria-pressed="${!!cfg.autoSend}"><i aria-hidden="true"></i><span>Allow automatic replies</span><b>${cfg.autoSend ? 'On' : 'Off'}</b></button>
+          <p class="mhelp">Choose which routine stops may get a reply. Other decisions stay with you.</p>
+          <div class="mgr-options">${(cfg.validCases || []).map((c) => `<label class="mgr-option"><input type="checkbox" data-case="${c}" ${(cfg.autoCases || []).includes(c) ? 'checked' : ''}><span><strong>${escapeHtml(CASE_LABEL[c] || c)}</strong><small>${escapeHtml(CASE_REPLY[c] || '')}</small></span></label>`).join('')}</div>
+          <p class="mhelp">Waits ${Math.round(cfg.delayMs / 1000)} seconds before sending; cancel from the session countdown. Jev confidence ≥ ${cfg.minConfidence}; at most ${cfg.maxPerSessionPerHour} replies per hour per session. Deploys, deletes, credentials, money and customer decisions always need you.</p>`)}
+        ${section('reviewer', 'AI reviewer', reviewerState, `
+          <p class="mhelp">Checks stops that need attention and proposes a reply.</p>
+          <div class="aimodes" role="group" aria-label="AI reviewer mode">${(cfg.aiModes || []).map((m) => `<button class="sbtn${cfg.aiTriage === m ? ' on' : ''}" data-aimode="${m}" aria-pressed="${cfg.aiTriage === m}">${{ off: 'Off', simulate: 'Suggest', auto: 'Auto' }[m] || m}</button>`).join('')}</div>
+          <p class="mhelp">${cfg.aiTriage === 'off' ? 'No AI review calls.' : cfg.aiTriage === 'simulate' ? 'Suggestions and reasons appear for you to review. Nothing is sent automatically.' : `Auto can send eligible replies above ${cfg.aiMinConfidence} confidence after the same countdown. It also needs automatic replies on and at least one AI reply type below.`}${cfg.ai ? '' : ' Reviewer server is not configured.'}</p>
+          ${cfg.aiTriage === 'auto' ? `<div class="mgr-options">${aiChoices.map((c) => `<label class="mgr-option"><input type="checkbox" data-ai-case="${c}" ${(cfg.aiAutoCases || []).includes(c) ? 'checked' : ''}><span><strong>${escapeHtml(CASE_LABEL[c] || c)}</strong><small>Allow AI reply for this stop type</small></span></label>`).join('')}</div>` : ''}
+          <div class="mgr-metrics"><span>Today: <b>${cfg.aiBudget?.calls ?? 0}</b> / ${cfg.aiBudget?.dailyCalls ?? 0} calls</span><span><b>$${Number(cfg.aiBudget?.cost || 0).toFixed(3)}</b> / $${Number(cfg.aiBudget?.dailyUsd || 0).toFixed(2)} limit</span></div>
+          <p class="mhelp">${cfg.aiStats ? `Agreement: ${cfg.aiStats.agreement == null ? 'not rated yet' : `${Math.round(cfg.aiStats.agreement * 100)}% (${cfg.aiStats.right} right, ${cfg.aiStats.wrong} wrong)`}. ${cfg.aiStats.unrated} of ${cfg.aiStats.proposals} proposals still need a rating.` : 'No reviewer results yet.'}</p>`)}
+        ${section('deploys', 'Deploys', state.deploys?.enabled ? 'Runner on' : 'Runner off', `<div id="depBox">${deploysHtml(state.deploys)}</div>`)}
+        ${section('quota', 'Quota policy', cfg.policyEnabled ? 'On' : 'Off', `
+          <button class="mswitch${cfg.policyEnabled ? ' on' : ''}" data-set="policyEnabled" aria-pressed="${!!cfg.policyEnabled}"><i aria-hidden="true"></i><span>Hold lower priority sessions near quota limits</span><b>${cfg.policyEnabled ? 'On' : 'Off'}</b></button>
+          <p class="mhelp">P0 continues. P1 runs below ${cfg.p1MaxPct}% of its 5-hour window. P2 can be held at its next stop above ${cfg.p2MaxPct}% or when the weekly window may run out. Active work is not interrupted.</p>
+          <div class="mheld">${heldNow.map((n) => `<div class="mh"><b>${escapeHtml(displayName(n))}</b> ${escapeHtml(prioOf(n))} <span class="dim">${escapeHtml(state.status[n].held.reason)}</span></div>`).join('') || '<div class="dim">No sessions held</div>'}</div>`)}
+        ${section('activity', 'Activity and decisions', `${entries.length} recent events`, `
+          <label class="mchk"><input type="checkbox" data-unlab ${mgrUnlabelled ? 'checked' : ''}><span>Show only stops without a rating</span></label>
+          <div class="mlog">${entries.map((r) => { const l = logLine(r); if (l.stop) return stopRow(r, l); return `<div class="ml ${l.cls}"><span class="t">${hhmm(r.at)}</span><span class="s">${escapeHtml(l.sess)}</span><span class="g ${l.cls}">${l.tag}</span><span class="c">${escapeHtml(l.case)}</span><span class="x">${escapeHtml(l.text)}</span></div>`; }).join('') || '<div class="dim">Nothing logged yet</div>'}</div>
+          <h3>Manager actions (${(acts.actions || []).length})</h3>
+          <div class="mlog">${(() => { const wrong = new Set(acts.regrets || []); return (acts.actions || []).slice().reverse().map((a) => actRow(a, wrong)).join(''); })() || '<div class="dim">No manager actions logged yet</div>'}</div>
+          <h3>Wakes today</h3>${wakesHtml(wk)}`)}
+        ${section('sessions', 'Sessions', `${state.sessions.length} visible`, `<p class="mhelp">Choose which agent sessions the manager may handle.</p><div class="msess">${state.sessions.filter((s) => ['claude', 'codex', 'minimax'].includes(agentOf(s.name))).map((s) => `<label class="mchk"><input type="checkbox" data-sess="${escapeHtml(s.name)}" ${off.has(s.name) ? '' : 'checked'}><span>${escapeHtml(displayName(s.name))}</span></label>`).join('') || '<div class="dim">No agent sessions</div>'}</div>`)}
+        ${section('langfuse', 'Langfuse', 'Evaluation details', `
+          <div class="lflinks">${(() => { const l = cfg.langfuse; return l ? [['Scores', l.scores], ['Dataset', l.dataset], ['Evaluator', l.evaluator], ['Prompt', l.prompt]].map(([name, url]) => `<a class="sbtn lf" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="14" height="14" alt="">${name}</a>`).join('') : '<span class="dim">No Langfuse URL configured</span>'; })()}</div>
+          <p class="mhelp">Owner labels and AI ratings can feed scores and evaluation datasets when configured.</p>`)} `;
+      body.scrollTop = scroll;
     };
     state.depSheet = () => { const box = body.querySelector('#depBox'); if (box) box.innerHTML = deploysHtml(state.deploys); };
     const logTimer = setInterval(() => { if (!body.isConnected) { clearInterval(logTimer); state.depSheet = null; } }, 3000);
+    body.addEventListener('toggle', (e) => {
+      if (!e.target.matches('[data-manager-section]')) return;
+      const key = e.target.dataset.managerSection;
+      e.target.open ? sectionsOpen.add(key) : sectionsOpen.delete(key);
+    }, true);
     body.onclick = async (e) => {
       const o = e.target.closest('[data-open]');
       if (o) { close(); focusSession(o.dataset.open); openCard(o.dataset.open); return; }
@@ -2619,6 +2641,9 @@ function openManager() {
         if (i.dataset.case) {
           const cases = [...body.querySelectorAll('[data-case]')].filter((x) => x.checked).map((x) => x.dataset.case);
           await mgrPost({ autoCases: cases });
+        } else if (i.dataset.aiCase) {
+          const cases = [...body.querySelectorAll('[data-ai-case]')].filter((x) => x.checked).map((x) => x.dataset.aiCase);
+          await mgrPost({ aiAutoCases: cases });
         } else if (i.dataset.sess) await mgrPost({ session: i.dataset.sess, sessionEnabled: i.checked });
       } catch { toast('save failed'); }
       draw();

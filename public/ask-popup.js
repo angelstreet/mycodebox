@@ -231,11 +231,11 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         ? `<button type="button" class="ap-det" data-act="details" aria-expanded="${detOpen}">Details <span class="ap-toggle">${detOpen ? '▾' : '▸'}</span></button>${detOpen ? `<pre class="ap-det-t">${esc(v.details)}</pre>` : ''}`
         : '';
       body.innerHTML = `<div class="ap-head">
-          <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(state.rename?.[item.name] || item.name)}</button>
           <span class="ap-prio ${esc(v.prio)}">${esc(v.prio)}</span>
-          <span class="ap-cnt">${idx + 1}/${q.items.length}</span>
+          <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(state.rename?.[item.name] || item.name)}</button>
+          ${q.items.length > 1 ? `<span class="ap-cnt">${idx + 1}/${q.items.length}</span>
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
-          <button class="ap-nav" data-act="next" aria-label="Next">›</button>
+          <button class="ap-nav" data-act="next" aria-label="Next">›</button>` : ''}
           <button class="ap-x" data-act="min" aria-label="Hide" title="Hide (tap the red pill to bring it back)">${icon('chevron-down', 16)}</button>
         </div>
         ${qBlock}
