@@ -1699,3 +1699,10 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 .row-item .meta{ grid-column:2; margin-left:10px; max-width:45vw; align-self:center; }
 .row-item .meta.hidden{ display:none; }
 body[data-mode="card"] .topbar .viewctl{ margin-left:auto; }
+/* quota takes all the free space (its text stays centred), so the status chips and view buttons stay at the right edge */
+.quota.inbar{ flex:1 1 0; margin:0; justify-content:center; text-align:center; }
+/* empty states keep their colours (red / purple / amber) */
+.attention.none{ background:rgba(255,95,95,0.10); border-color:rgba(255,95,95,0.35); }
+.attention.none .lbl{ color:var(--waiting); border-color:var(--waiting); }
+.leasebar.idle{ background:rgba(232,154,74,.07); border-color:rgba(232,154,74,.4); }
+.leasebar.idle .lbl{ color:var(--accent); }
