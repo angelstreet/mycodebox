@@ -982,7 +982,7 @@ const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
 const AGENT_CMDS = {
   claude:  process.env.AGENT_CMD_CLAUDE  ?? 'claude --dangerously-skip-permissions',
   codex:   process.env.AGENT_CMD_CODEX   ?? 'codex --dangerously-bypass-approvals-and-sandbox',
-  minimax: process.env.AGENT_CMD_MINIMAX ?? 'minimax-code',
+  minimax: process.env.AGENT_CMD_MINIMAX ?? 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode',
   bash:    process.env.AGENT_CMD_BASH    ?? '',
 };
 const RESIZE_ALLOW = process.env.GHOSTY_RESIZE_ALLOW ? new RegExp(process.env.GHOSTY_RESIZE_ALLOW) : null;
