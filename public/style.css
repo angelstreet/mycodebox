@@ -1762,3 +1762,5 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 .session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ border-top:0; }
 .parkbox .pfold{ border-top:1px solid var(--line-2); border-bottom:1px solid var(--line-2); padding:5px 0; margin-top:6px; }
 .parkbox .pfold:first-child{ border-top:0; margin-top:0; }
+
+.dot.paused{ background:var(--accent); }

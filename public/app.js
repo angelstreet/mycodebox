@@ -758,7 +758,8 @@ function projectOf(n) { const st = state.status[n]; return st?.project || st?.re
 function matchesFilter(n) {
   // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
   // not its raw working/done/idle state.
-  if (state.filter && displayStateOf(n, state.status) !== state.filter) return false;
+  if (state.filter === 'paused') { if (!pausedOf(n)) return false; }
+  else if (state.filter && displayStateOf(n, state.status) !== state.filter) return false;
   if (state.fProject && projectOf(n) !== (state.fProject === '-' ? '' : state.fProject)) return false;
   if (state.fAgent && agentOf(n) !== state.fAgent) return false;
   return true;
@@ -1013,6 +1014,7 @@ function renderFilterBar() {
   const html =
     `<span class="fl">status</span>` + chip('filter', null, 'all') +
     states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
+    (count(pausedOf) || state.filter === 'paused' ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count(pausedOf)) : '') +
     `<span class="fsep"></span><span class="fl">project</span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span><span class="fl">agent</span>` + chip('fAgent', null, 'all') +
