@@ -1035,12 +1035,13 @@ function syncWorkspace() {
 function renderActiveFilters() {
   const host = $('#activeFilters');
   if (!host) return;
+  // the same look as in the panel: status = coloured dot + label, agent = its coloured badge, project = plain name
   const items = [
-    ...state.filter.map((v) => ['filter', v, v === 'waiting' ? 'needs you' : v]),
-    ...state.fProject.map((v) => ['fProject', v, v === '-' ? 'no repo' : v]),
-    ...state.fAgent.map((v) => ['fAgent', v, AGENT_LABEL[v] || v]),
+    ...state.filter.map((v) => ['filter', v, `<i class="dot ${escapeHtml(v)}"></i>${escapeHtml(STATE_LABEL[v] || v)}`]),
+    ...state.fProject.map((v) => ['fProject', v, escapeHtml(v === '-' ? 'no repo' : v)]),
+    ...state.fAgent.map((v) => ['fAgent', v, `<span class="agent ${escapeHtml(v)}">${escapeHtml(AGENT_LABEL[v] || v)}</span>`]),
   ];
-  const html = items.map(([g, v, l]) => `<button class="afc" data-g="${g}" data-v="${escapeHtml(v)}" title="Remove this filter">${escapeHtml(l)} <span aria-hidden="true">\u00d7</span></button>`).join('');
+  const html = items.map(([g, v, l]) => `<button class="afc" data-g="${g}" data-v="${escapeHtml(v)}" title="Remove this filter">${l}<span class="x" aria-hidden="true">\u00d7</span></button>`).join('');
   if (host.dataset.h === html) return;
   host.dataset.h = html; host.innerHTML = html;
   for (const b of host.querySelectorAll('.afc')) b.onclick = () => {
