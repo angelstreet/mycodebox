@@ -2000,10 +2000,17 @@ function wireRow(row, name) {
     focusSession(name); openCard(name);
   });
 }
+for (const ev of ['touchstart', 'touchmove', 'scroll']) els.listPane.addEventListener(ev, () => { els.listPane._busyUntil = Date.now() + 1500; }, { passive: true });
 function syncList() {
   // Reorder only when urgency order changed; otherwise update text in place.
   const order = byUrgency(visibleSessions()).map((s) => s.name).join('|');
   const cur = [...els.listPane.querySelectorAll('.row-item')].map((r) => r.dataset.session).join('|');
+  if (order !== cur && Date.now() < (els.listPane._busyUntil || 0)) {
+    // moving or rebuilding rows under a finger cancels the touch scroll on phones: wait until it lifts
+    clearTimeout(els.listPane._retry);
+    els.listPane._retry = setTimeout(syncList, els.listPane._busyUntil - Date.now() + 50);
+    return;
+  }
   if (order !== cur) {
     const want = order ? order.split('|') : [], have = cur ? cur.split('|') : [];
     if (want.length && want.length === have.length && want.every((n) => have.includes(n))) {
