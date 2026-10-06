@@ -780,22 +780,27 @@ function renderParking() {
   const pk = state.parking;
   if (!pk || (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length))) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const idleText = (m) => (m == null ? '?' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
-  let h = '';
-  if (pk.over) {
-    const list = pk.candidates.map((c) => `${escapeHtml(c.name)} (${idleText(c.idleMin)})`).join(', ');
-    h += `<button class="cap${state.capOpen ? ' open' : ''}" data-cap title="${escapeHtml(`Idle longest: ${pk.candidates.map((c) => c.name).join(', ')}`)}"><span class="uch${state.capOpen ? ' on' : ''}"></span>${pk.live} live Claude \u00b7 cap ${pk.cap}</button>${state.capOpen ? `<div class="capl">Idle longest: ${list}</div>` : ''}`;
-  }
-  if (pk.parked.length) {
-    h += `<div class="ph">Parked (${pk.parked.length}) · ${pk.ramSavedMb} MB saved</div>`;
-    for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
-  }
-  if (pk.manual && pk.manual.length) {
-    h += `<div class="ph">Manual notes (${pk.manual.length})</div>`;
-    for (const m of pk.manual) h += `<div class="prow"><span class="pn" title="${escapeHtml(m.how)}">${escapeHtml(m.session)}</span><span class="pman">manual</span></div>`;
+  const open = !!state.parkOpen;
+  const bits = [`${pk.live} live / ${pk.cap} max`];
+  if (pk.parked.length) bits.push(`${pk.parked.length} parked`, `${Math.round(pk.ramSavedMb / 100) / 10} GB saved`);
+  let h = `<button class="ptop${pk.over ? ' over' : ''}" data-ptop aria-expanded="${open}"><span class="uch${open ? ' on' : ''}"></span><b>Parking</b><span class="psum">${bits.join(' \u00b7 ')}</span></button>`;
+  if (open) {
+    if (pk.over) {
+      h += `<div class="pnote">${pk.over} over the limit. Park the idlest to free memory:</div>`;
+      for (const c of pk.candidates) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">idle ${idleText(c.idleMin)}</span></div>`;
+    }
+    if (pk.parked.length) {
+      h += `<div class="ph">Parked</div>`;
+      for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
+    }
+    if (pk.manual && pk.manual.length) {
+      h += `<div class="ph">Manual notes</div>`;
+      for (const m of pk.manual) h += `<div class="prow"><span class="pn" title="${escapeHtml(m.how)}">${escapeHtml(m.session)}</span><span class="pman">manual</span></div>`;
+    }
   }
   box.innerHTML = h;
   box.classList.remove('hidden');
-  box.querySelector('[data-cap]')?.addEventListener('click', () => { state.capOpen = !state.capOpen; renderParking(); });
+  box.querySelector('[data-ptop]')?.addEventListener('click', () => { state.parkOpen = !state.parkOpen; renderParking(); });
   box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
 }
 async function parkSession(name) {
