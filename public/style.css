@@ -1899,3 +1899,6 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
   .card-pane .cell .h::after{ display:none; }
   .card-pane .cell .h .ag, .card-pane .cell .h .proj{ display:none; }
 }
+
+/* nav list: the PAUSED badge sits at the right edge of the row's second line */
+.session-list .sub .pp{ margin-left:auto; }
