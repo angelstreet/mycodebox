@@ -14,7 +14,7 @@
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the Claude conversation, /exit, kill the tmux session (refuses when not idle / lease held / job running)
 //   POST /api/sessions/:name/resume → recreate the tmux session in the same folder and run `claude --resume <id>`
-//   GET  /api/parking               → { cap, live, over, candidates[], parked[], ramSavedMb }
+//   GET  /api/parking               → { cap, live, over, candidates[], parked[], manual[], ramSavedMb } (manual notes read from <STATE_DIR>/parked.json, never counted in ramSavedMb or in parked)
 //   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
 //   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
 //                                 global settings, {session, sessionEnabled} per session
@@ -85,7 +85,7 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
-import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, SESSION_CAP } from './parking.js';
+import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
@@ -1096,7 +1096,7 @@ async function parkingView() {
   const r = (latest && Date.now() - latest.at < 5000) ? latest : await poll();
   const rows = Object.entries(r.status).map(([name, v]) => ({ name, agent: v.agent, state: v.state, lastActivity: v.lastActivity ?? null, rssMb: v.rssMb ?? null }));
   const parked = await parking.list();
-  return { ...capView({ sessions: rows, cap: SESSION_CAP }), parked, ramSavedMb: parked.reduce((a, p) => a + (p.rssMb || 0), 0) };
+  return { ...capView({ sessions: rows, cap: SESSION_CAP }), parked, manual: await readManualNotes(join(STATE_DIR, 'parked.json')), ramSavedMb: parked.reduce((a, p) => a + (p.rssMb || 0), 0) };
 }
 
 // Owner settings of one session: { priority } and / or { paused }.

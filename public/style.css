@@ -1610,4 +1610,5 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 .parkbox .prow{ display:flex; align-items:center; gap:8px; padding:3px 0; }
 .parkbox .prow .pn{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); }
 .parkbox .prow .pm{ color:var(--ink-3); white-space:nowrap; }
+.parkbox .prow .pman{ color:var(--ink-3); font-style:italic; }
 .session-list li .edit.park{ opacity:0; } .session-list li:hover .edit.park{ opacity:1; }
