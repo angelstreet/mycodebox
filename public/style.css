@@ -1884,3 +1884,18 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
   .dock .row > #sendBtn{ order:5; }
   .tchip .tn{ flex:1; }
 }
+
+/* single card view: a one-line header like the board rows (priority, name, agent, repo chip, then state and buttons at the right).
+   No green activity text; long project / branch labels shorten with an ellipsis instead of wrapping. */
+.card-pane .cell .h{ flex-wrap:nowrap; row-gap:0; }
+.card-pane .cell .h .nm{ flex:0 1 auto; min-width:0; max-width:55%; overflow:hidden; }
+.card-pane .cell .h .name{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; overflow-wrap:normal; }
+.card-pane .cell .h .mt{ display:none; }
+.card-pane .cell .h::after{ display:block; }
+.card-pane .cell .h .proj{ order:2; flex:0 1 auto; min-width:0; max-width:46%; white-space:nowrap; overflow:hidden; justify-content:flex-start; }
+.card-pane .cell .h .proj .pj, .card-pane .cell .h .proj .br, .card-pane .cell .h .proj .wt{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:1; min-width:3ch; }
+@media (max-width: 720px){
+  .card-pane .cell .h .nm{ flex:1 1 auto; max-width:none; }
+  .card-pane .cell .h::after{ display:none; }
+  .card-pane .cell .h .ag, .card-pane .cell .h .proj{ display:none; }
+}
