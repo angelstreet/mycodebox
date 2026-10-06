@@ -1658,3 +1658,21 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 @media (max-width:600px){ .alertrow{ grid-template-columns:1fr; } .alertrow .attention{ border-right:0; } .alertrow .deployban.idle{ display:none; } }
 .deployban.idle{ background:rgba(160,112,255,.08); border-color:rgba(160,112,255,.35); }
 .deployban.idle .lbl{ color:var(--deploy); }
+.alertrow{ grid-template-columns:1fr 1fr 1fr; }
+.leasebar{ display:flex; gap:6px; align-items:center; padding:6px 10px; overflow-x:auto; scrollbar-width:none; border-top:1px solid rgba(232,154,74,.4); border-bottom:1px solid rgba(232,154,74,.4); background:rgba(232,154,74,.07); border-left:1px solid var(--line); }
+.leasebar.idle{ background:none; border-color:var(--line); }
+.leasebar .lbl{ flex-shrink:0; font-size:11px; font-weight:700; letter-spacing:.08em; color:var(--accent); margin-right:4px; }
+.leasebar.idle .lbl{ color:var(--ink-3); }
+.leasebar .dnone{ color:var(--ink-3); font-size:11px; }
+.lchip{ display:inline-flex; align-items:center; gap:5px; flex-shrink:0; background:var(--bg-2); color:var(--ink-2); border:1px solid var(--ink-3); border-radius:999px; padding:3px 10px; font:inherit; font-size:11.5px; cursor:pointer; white-space:nowrap; }
+.lchip b{ color:var(--ink); font-weight:600; }
+.lchip i{ font-style:normal; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.lchip.blocks{ border-color:var(--accent); background:rgba(232,154,74,.12); }
+@media (max-width:900px){ .alertrow{ grid-template-columns:1fr 1fr; } .leasebar{ grid-column:1 / -1; border-left:0; } }
+@media (max-width:600px){ .alertrow{ grid-template-columns:1fr; } .leasebar.idle{ display:none; } }
+/* compact sidebar: tighter list padding, section headers and row gaps */
+.session-list{ padding:2px 8px 8px; }
+.session-list li.grp{ padding:5px 8px 3px; margin:2px 0 1px; }
+.session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ margin-top:0; }
+.session-list li{ padding-top:5px; padding-bottom:5px; margin-bottom:1px; }
+.session-list li.sidefilt{ padding:4px 12px; margin-bottom:2px; }

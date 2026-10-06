@@ -9,7 +9,7 @@ import { suggestAgent } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
-import { chipModel, machinesOf, holdingsOf } from '/platforms.js';
+import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import '/tip.js';
@@ -667,6 +667,7 @@ const DEP_PENDING = ['queued', 'running'];
 function onDeploys(d) {
   state.deploys = d;
   noteDeploys(d);
+  renderLeaseBar();
   if (state.platSheet) state.platSheet();
   const waiting = (d?.deploys || []).filter((x) => x.state === 'awaiting-approval').length;
   els.mgrBtn.classList.toggle('badge', waiting > 0);
@@ -675,8 +676,24 @@ function onDeploys(d) {
   if (state.depSheet) state.depSheet();
 }
 
+function renderLeaseBar() {
+  const el = $('#leaseBar');
+  if (!el) return;
+  const ls = state.leases?.leases || [];
+  const deps = state.deploys?.deploys || [];
+  const key = JSON.stringify(ls.map((l) => [l.id, l.ttlLeftMin, blocksDeploy(l, deps)]));
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.className = `leasebar${ls.length ? '' : ' idle'}`;
+  el.innerHTML = `<span class="lbl">LEASES</span>` + (ls.length ? ls.map((l) => {
+    const who = String(l.agent || '').replace(/^[^:]*:/, '');
+    const t = ttlText(l.ttlLeftMin);
+    return `<button class="lchip${blocksDeploy(l, deps) ? ' blocks' : ''}" data-plat="${escapeHtml(l.env + '|' + l.resource)}" title="${escapeHtml(`${l.resource}\n${l.agent || ''}${l.purpose ? '\n' + l.purpose : ''}`)}">${icon('lock', 12)}<b>${escapeHtml(shortResource(l))}</b>${who ? ` ${escapeHtml(who)}` : ''}${t ? ` <i>${t}</i>` : ''}</button>`;
+  }).join('') : '<span class="dnone">none</span>');
+}
 function onLeases(msg) {
   state.leases = msg;       // {leases, waiters, hostname} or {error}
+  renderLeaseBar();
   if (state.platSheet) state.platSheet();
 }
 
