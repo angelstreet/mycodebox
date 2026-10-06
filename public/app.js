@@ -800,7 +800,7 @@ function renderParking() {
       if (mo) for (const m of pk.manual) {
         const note = [m.how, m.resume ? `resume: ${m.resume}` : '', m.parkedAt ? `parked ${new Date(m.parkedAt).toLocaleString()}` : ''].filter(Boolean).join('\n');
         const on = state.noteOpen === m.session;
-        h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman">${on ? 'hide' : 'note'}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
+        h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman${on ? ' on' : ''}" aria-label="Show note">${icon('note', 14)}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
       }
     }
   }
