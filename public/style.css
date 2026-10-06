@@ -1939,3 +1939,5 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 /* the Filter button and the filters that are on share one bordered area */
 .fgrp{ display:flex; align-items:center; gap:4px; flex:0 1 auto; min-width:0; padding:2px 4px; border:1px solid var(--line-2); border-radius:10px; background:var(--bg-2); }
 .fgrp .icon-btn{ flex-shrink:0; }
+.afclear{ flex-shrink:0; padding:3px 9px; border-radius:999px; font-size:11px; background:none; color:var(--accent); border:1px dashed rgba(232,154,74,.55); white-space:nowrap; }
+.afclear:hover{ background:rgba(232,154,74,.15); }

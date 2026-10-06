@@ -1042,8 +1042,10 @@ function renderActiveFilters() {
     ...state.fAgent.map((v) => ['fAgent', v, `<span class="agent ${escapeHtml(v)}">${escapeHtml(AGENT_LABEL[v] || v)}</span>`]),
   ];
   const html = items.map(([g, v, l]) => `<button class="afc" data-g="${g}" data-v="${escapeHtml(v)}" title="Remove this filter">${l}<span class="x" aria-hidden="true">\u00d7</span></button>`).join('');
-  if (host.dataset.h === html) return;
-  host.dataset.h = html; host.innerHTML = html;
+  const full = items.length > 2 ? `${html}<button class="afclear" title="Clear all filters">clear all \u00d7</button>` : html;   // three or more: one click clears them all
+  if (host.dataset.h === full) return;
+  host.dataset.h = full; host.innerHTML = full;
+  host.querySelector('.afclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); });
   for (const b of host.querySelectorAll('.afc')) b.onclick = () => {
     const g = b.dataset.g, next = toggleIn(state[g], b.dataset.v);
     if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
