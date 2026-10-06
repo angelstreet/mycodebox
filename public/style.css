@@ -1721,3 +1721,7 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 /* grid view: only the focused card scrolls inside; touching any other card scrolls the grid / list instead */
 .grid-pane{ touch-action:pan-y; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
 .grid-pane .cell:not(.focus) .reader, .grid-pane .cell:not(.focus) .xterm-viewport{ overflow:hidden !important; touch-action:auto; overscroll-behavior:auto; }
+
+/* phones: no priority badge on grid / single cards (the board rows and the side list keep it) */
+@media (max-width: 720px){ .grid-pane .cell .h .pr, .card-pane .cell .h .pr{ display:none; } }
+.cell .h .tgt{ cursor:pointer; }

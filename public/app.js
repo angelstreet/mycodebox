@@ -1503,7 +1503,15 @@ function buildCell(s) {
     b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
   cell.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(cell.querySelector('.name'), s.name); };
-  wireTap(cell, () => focusSession(s.name), (e) => {
+  // one tap = select the card and put the cursor in the message box; two taps = open it as a full card.
+  // The cursor waits out the double-tap window so the keyboard doesn't open under the second tap.
+  let focusTimer = 0;
+  wireTap(cell, () => {
+    focusSession(s.name);
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(() => { if (!els.sendInput.disabled) els.sendInput.focus({ preventScroll: true }); }, 380);
+  }, (e) => {
+    clearTimeout(focusTimer);
     if (e.target.closest('.nm')) { beginInlineRename(cell.querySelector('.name'), s.name); return; }
     if (state.mode !== 'card') openCard(s.name);
   });
