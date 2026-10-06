@@ -799,33 +799,33 @@ function renderParking() {
   const pk = state.parking;
   if (!pk || (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length))) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const idleText = (m) => (m == null ? '?' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
-  const open = !!state.parkOpen;
-  const bits = [`${pk.live} live / ${pk.cap} max`];
-  if (pk.parked.length) bits.push(`${pk.parked.length} parked`, `${Math.round(pk.ramSavedMb / 100) / 10} GB saved`);
-  let h = `<button class="ptop${pk.over ? ' over' : ''}" data-ptop aria-expanded="${open}"><span class="uch${open ? ' on' : ''}"></span><b>Parking</b><span class="psum">${bits.join(' \u00b7 ')}</span></button>`;
-  if (open) {
-    if (pk.over) {
-      h += `<div class="pnote">${pk.over} over the limit. Park the idlest to free memory:</div>`;
-      for (const c of pk.candidates) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">idle ${idleText(c.idleMin)}</span></div>`;
-    }
-    if (pk.parked.length) {
-      const po = state.parkedClosed !== true;
-      h += `<button class="ph pfold" data-pfold="parkedClosed" aria-expanded="${po}"><span class="uch${po ? ' on' : ''}"></span>Parked (${pk.parked.length})</button>`;
-      if (po) for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
-    }
-    if (pk.manual && pk.manual.length) {
-      const mo = state.manualClosed !== true;
-      h += `<button class="ph pfold" data-pfold="manualClosed" aria-expanded="${mo}"><span class="uch${mo ? ' on' : ''}"></span>Manual notes (${pk.manual.length})</button>`;
-      if (mo) for (const m of pk.manual) {
-        const note = [m.how, m.resume ? `resume: ${m.resume}` : '', m.parkedAt ? `parked ${new Date(m.parkedAt).toLocaleString()}` : ''].filter(Boolean).join('\n');
-        const on = state.noteOpen === m.session;
-        h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman${on ? ' on' : ''}" aria-label="Show note">${icon('note', 14)}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
+  // Two separate folds: Parked (the session cap + what ghosty closed to free RAM, with Resume) and Notes (sessions parked by hand).
+  let h = '';
+  if (pk.parked.length || pk.over) {
+    const po = state.parkedClosed !== true;
+    h += `<button class="ph pfold${pk.over ? ' over' : ''}" data-pfold="parkedClosed" aria-expanded="${po}"><span class="uch${po ? ' on' : ''}"></span>Parked (${pk.parked.length})</button>`;
+    if (po) {
+      const bits = [`${pk.live} live / ${pk.cap} max`];
+      if (pk.parked.length) bits.push(`${Math.round(pk.ramSavedMb / 100) / 10} GB saved`);
+      h += `<div class="psum${pk.over ? ' over' : ''}">${bits.join(' \u00b7 ')}</div>`;
+      if (pk.over) {
+        h += `<div class="pnote">${pk.over} over the limit. Park the idlest to free memory:</div>`;
+        for (const c of pk.candidates) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">idle ${idleText(c.idleMin)}</span></div>`;
       }
+      for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
+    }
+  }
+  if (pk.manual && pk.manual.length) {
+    const mo = state.manualClosed !== true;
+    h += `<button class="ph pfold" data-pfold="manualClosed" aria-expanded="${mo}"><span class="uch${mo ? ' on' : ''}"></span>Notes (${pk.manual.length})</button>`;
+    if (mo) for (const m of pk.manual) {
+      const note = [m.how, m.resume ? `resume: ${m.resume}` : '', m.parkedAt ? `parked ${new Date(m.parkedAt).toLocaleString()}` : ''].filter(Boolean).join('\n');
+      const on = state.noteOpen === m.session;
+      h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman${on ? ' on' : ''}" aria-label="Show note">${icon('note', 14)}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
     }
   }
   box.innerHTML = h;
   box.classList.remove('hidden');
-  box.querySelector('[data-ptop]')?.addEventListener('click', () => { state.parkOpen = !state.parkOpen; renderParking(); });
   box.querySelectorAll('[data-pfold]').forEach((b) => { b.onclick = () => { state[b.dataset.pfold] = state[b.dataset.pfold] !== true; renderParking(); }; });
   box.querySelectorAll('[data-note]').forEach((r) => { r.onclick = () => { state.noteOpen = state.noteOpen === r.dataset.note ? '' : r.dataset.note; renderParking(); }; });
   box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
@@ -1188,7 +1188,7 @@ function layoutSide() {
   const manual = new Set([...(L.groupNames || []), ...Object.values(L.groups)]);
   const groupNames = [...new Set([...manual, ...(L.groupBy === 'project' ? names.map(autoGroupOf) : [])])].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
   const sections = [];
-  if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned', icon: 'pin' });
+  if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned' });
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
   let fl = list.querySelector('li.sidefilt');
   if (anyFilter()) {

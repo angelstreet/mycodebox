@@ -1706,3 +1706,7 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 .attention.none .lbl{ color:var(--waiting); border-color:var(--waiting); }
 .leasebar.idle{ background:rgba(232,154,74,.07); border-color:rgba(232,154,74,.4); }
 .leasebar.idle .lbl{ color:var(--accent); }
+/* parking: Parked and Notes are two separate folds; the live / max line wraps instead of being cut */
+.parkbox .psum{ font-size:11px; color:var(--ink-3); margin:2px 0 4px 22px; white-space:normal; }
+.parkbox .psum.over, .parkbox .pfold.over{ color:var(--accent); }
+.parkbox .ph:first-child{ margin-top:0; }

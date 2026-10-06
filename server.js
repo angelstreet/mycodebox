@@ -710,6 +710,12 @@ async function pool(items, limit, fn) {
   }));
 }
 
+// The pane as far as activity goes: the MiniMax footer rotates a "Tip: …" hint every 30 s, which is not work
+// (it flipped done sessions to working for WORKING_HOLD_MS every 30 s).
+function activityText(pane) {
+  return pane.replace(/ {2,}(?:\x1b\[[0-9;]*m)*Tip: [^\n]*/g, '');
+}
+
 async function pollOnce() {
   const [sessions, panes, table] = await Promise.all([listSessions(), listPanes(), processTable()]);
   const now = Date.now();
@@ -730,16 +736,17 @@ async function pollOnce() {
     const offline = p.dead || failed;
     const prev = lastSnapshots.get(s.name);
     let changed = false;
+    const act = offline ? null : activityText(pane);
     if (!offline) {
       changed = !prev || prev.pane !== pane || prev.cols !== p.cols || prev.rows !== p.rows;
       if (changed) {
-        lastSnapshots.set(s.name, { pane, cols: p.cols, rows: p.rows, depth });
+        lastSnapshots.set(s.name, { pane, act, cols: p.cols, rows: p.rows, depth });
         changedSessions.push(s.name);
       }
     }
     const t = track.get(s.name) || { changeAt: 0, workingSince: null, lastWorkAt: 0, realWork: false, prevState: undefined, doneAt: null, ackFor: null, ackAt: null, reply: null, replyHash: null, contextLeft: null, model: null };
     // A change of capture depth (card opened/closed) is not activity.
-    const paneChanged = !!(changed && prev && prev.pane !== pane && prev.depth === depth);
+    const paneChanged = !!(changed && prev && prev.act !== act && prev.depth === depth);
     if (paneChanged) t.changeAt = now;   // first sight is not activity
     track.set(s.name, t);
     // Delivery ack: first pane change after the most recent send.
