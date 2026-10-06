@@ -1328,10 +1328,17 @@ function buildSideRow(s) {
       <div class="sub"><span class="pr"></span><span class="ag"></span><span class="sst"></span><span class="pp hidden">paused</span></div>
       <div class="sub rb"></div>
     </div>
+<span class="pinmark" aria-hidden="true">${icon('pin', 13)}</span><span class="acts">
     <button class="edit pin" aria-label="Pin" title="Pin to the top">${icon('pin', 15)}</button>
     <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
     <button class="edit park" aria-label="Park session" title="Park: save the conversation, free its RAM (Resume brings it back)">${icon('archive', 15)}</button>
-    <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button>`;
+    <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button></span>`;
+  // hover devices: the action bar floats to the right of the list (never covers the rows), level with this row
+  li.addEventListener('mouseenter', () => {
+    const r = li.getBoundingClientRect(), a = li.querySelector('.acts');
+    a.style.setProperty('--ax', `${r.right + 8}px`);
+    a.style.setProperty('--ay', `${r.top + r.height / 2}px`);
+  });
   li.querySelector('.meta').onclick = (e) => {
     e.stopPropagation();
     closeSide();

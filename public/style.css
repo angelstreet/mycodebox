@@ -1676,3 +1676,18 @@ body.res-hidden .topbar .viewctl{ margin-left:auto; }
 .session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ margin-top:0; }
 .session-list li{ padding-top:5px; padding-bottom:5px; margin-bottom:1px; }
 .session-list li.sidefilt{ padding:4px 12px; margin-bottom:2px; }
+
+/* row actions */
+.session-list .acts{ display:contents; }
+.session-list .pinmark{ display:none; }
+@media (hover: hover){
+  .session-list .acts{ display:none; position:fixed; left:var(--ax, 300px); top:var(--ay, 0); transform:translateY(-50%); z-index:60; gap:4px; padding:2px 4px; background:var(--bg-2); border:1.5px solid var(--ink-3); border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.55); cursor:default; }
+  .session-list li:hover .acts{ display:flex; }
+  .session-list li.editing:hover .acts{ display:none; }
+  .session-list .acts::before{ content:''; position:absolute; left:-12px; top:0; width:12px; height:100%; }   /* bridge so the bar stays hovered while the pointer crosses the gap */
+  .session-list .acts .edit{ display:flex !important; opacity:1 !important; width:28px; height:28px; margin:0; border:1px solid var(--ink-3); border-radius:7px; color:var(--ink-2); }
+  .session-list .acts .edit:hover{ border-color:var(--accent); color:var(--accent); }
+  .session-list .acts .edit.kill:hover{ border-color:var(--waiting); color:var(--waiting); }
+  .session-list li.pinned .pinmark{ display:inline-flex; color:var(--accent); flex-shrink:0; }
+  .session-list li.pinned .acts .edit.pin{ color:var(--accent); border-color:var(--accent); }
+}
