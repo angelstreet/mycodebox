@@ -1765,3 +1765,6 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 .parkbox .pfold:first-child{ border-top:0; margin-top:0; }
 
 .dot.paused{ background:var(--accent); }
+
+/* the PAUSED badge is hidden for now (it showed next to "working" and confused; the play / pause button still tells) */
+.pp, .cell .h .pp, .row-item .pp, .session-list .sub .pp{ display:none !important; }
