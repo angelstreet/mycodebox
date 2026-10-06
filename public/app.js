@@ -1692,15 +1692,19 @@ async function askSend(n, id, b, via) {
     if (id && via) fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, action: via, session: n }) }).catch(() => {});
   } catch (err) { toast(`send failed: ${err.message}`); }
 }
-// A reply on a forbidden topic (deploy, push, delete, secrets, money, customer) needs a second tap within 4 s.
-// Wraps the DOM-side arming; the popup uses it through the api injected at mount.
+// A reply on a sensitive topic (deploy, push, delete, credentials, money, customer) needs a second tap within 4 s:
+// the button turns into "Confirm this deployment? 4s" and counts down. The popup uses it through the api injected at mount.
 function confirmThen(btn, needs, go, msg) {
-  if (!needs) { go(); return; }
-  if (!btn) { go(); return; }
-  if (btn.dataset.armed === '1') { clearTimeout(btn._arm); btn.dataset.armed = ''; btn.classList.remove('arm'); go(); return; }
+  if (!needs || !btn) { go(); return; }
+  const disarm = () => { clearTimeout(btn._arm); clearInterval(btn._tick); btn.dataset.armed = ''; btn.classList.remove('arm'); btn.innerHTML = btn._label; };
+  if (btn.dataset.armed === '1') { disarm(); go(); return; }
   btn.dataset.armed = '1'; btn.classList.add('arm'); btn._label = btn.innerHTML;
-  btn.textContent = msg || 'tap again: sensitive topic';
-  btn._arm = setTimeout(() => { btn.dataset.armed = ''; btn.classList.remove('arm'); btn.innerHTML = btn._label; }, 4000);
+  const text = msg || 'Confirm this action?', total = 4;
+  let left = total;
+  const draw = () => { btn.textContent = `${text} ${left}s`; };
+  draw();
+  btn._tick = setInterval(() => { left -= 1; if (left > 0) draw(); }, 1000);
+  btn._arm = setTimeout(disarm, total * 1000);
 }
 
 // Popup wiring. The popup asks the page for these (state, openCard, askSend, prefillDock).

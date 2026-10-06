@@ -6,7 +6,7 @@
 
 import { icon } from './icons.js';
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane } from './buttons.js';
-import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText, multiFormModel, multiSendText, multiComplete } from './ask-model.js';
+import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText, multiFormModel, multiSendText, multiComplete, topicLabel, confirmText } from './ask-model.js';
 
 const MIN_KEY = 'ghosty.askPopup.minimized';
 const WHY_KEY = 'ghosty.askPopup.whyOpen';
@@ -108,7 +108,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
     // and indented) before display so it fills the popup width instead of a narrow column.
     const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
-    return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
+    return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st), forbidden: (typeof st.stall?.forbidden === 'string' && st.stall.forbidden) || (typeof ai?.forbidden === 'string' && ai.forbidden) || '' };
   }
 
   function metaText(v) {
@@ -237,6 +237,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         : '';
       body.innerHTML = `<div class="ap-head">
           <span class="ap-prio ${esc(v.prio)}">${esc(v.prio)}</span>
+          ${v.buttons.some((b) => b.confirm) ? `<span class="ap-topic" title="Sensitive topic: nothing is suggested and every answer asks you to confirm">${esc(topicLabel(v.forbidden))}</span>` : ''}
           <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(state.rename?.[item.name] || item.name)}</button>
           ${q.items.length > 1 ? `<span class="ap-cnt">${idx + 1}/${q.items.length}</span>
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
@@ -246,7 +247,6 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         </div>
         ${qBlock}
         ${detBlock}
-        ${v.buttons.some((b) => b.confirm) ? '<div class="ap-warn">Sensitive topic (deploy, push, delete, credentials, money or a customer). Nothing is suggested, and every answer needs two taps to confirm.</div>' : ''}
         <div class="ap-btns ${esc(v.kind)}">${btns}</div>
         ${v.suggestion ? `<div class="ap-sug"><span class="ap-sug-t">Claude suggests: ${esc(truncText(v.suggestion.text, 90))}</span><button type="button" class="ap-use" data-act="sug" title="Send Claude's suggestion">use</button></div>` : ''}
         <button type="button" class="ap-meta" data-act="why" aria-expanded="${whyOpen ? 'true' : 'false'}" title="Why these buttons?">${esc(metaText(v))} <span class="ap-toggle">${whyOpen ? '▾' : '▸'}</span></button>
@@ -277,7 +277,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       render();
     };
     const node = body.querySelector(b.id === 'sug' ? '[data-act="sug"]' : `[data-btn="${CSS.escape(b.id)}"]`);
-    confirmThen(node, !!b.confirm, go);
+    confirmThen(node, !!b.confirm, go, confirmText(ctx?.forbidden));
   }
   const btnById = (id) => ctx?.buttons.find((b) => b.id === id);
   // Send the form's picks as one line "1: 1, 2: 1, ...". An incomplete form (or a forbidden topic) needs the second tap.
@@ -295,7 +295,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       render();
     };
     const partial = !multiComplete(pk, v.form);
-    confirmThen(node, partial || !!st0(v)?.stall?.forbidden, go, partial ? `tap again: send ${Object.keys(pk).length} of ${v.form.questions.length}` : null);
+    confirmThen(node, partial || !!st0(v)?.stall?.forbidden, go, partial ? `Confirm sending ${Object.keys(pk).length} of ${v.form.questions.length}?` : confirmText(v.forbidden));
   }
   const st0 = (v) => state.status[v.item.name];
 

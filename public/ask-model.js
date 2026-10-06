@@ -266,3 +266,27 @@ export function multiFormModel(stall, triage) {
 // The send string: "1: 1, 2: 1, 3: 1" (question order; unpicked questions are left out).
 export const multiSendText = (picks, form) => formatMultiAnswer(picks, form.questions);
 export const multiComplete = (picks, form) => form.questions.every((q) => picks[q.n] != null);
+
+// What kind of sensitive topic did the forbidden-word filter hit? Shown as a badge on the popup and in the confirmation.
+export function topicLabel(word) {
+  const w = String(word || '');
+  if (/deploy|update_core|rollout|systemctl|pm2|restart/i.test(w)) return 'Deployment';
+  if (/push|merge/i.test(w)) return 'Push to main';
+  if (/delet|remov|rm -r|drop|prune|truncate|migrat|reset/i.test(w)) return 'Delete / data';
+  if (/credential|password|passphrase|secret|token|bearer|api|ssh|private key|\.env/i.test(w)) return 'Credentials';
+  if (/money|pay|purchase|buy|billing|invoice|credit/i.test(w)) return 'Money';
+  if (/customer/i.test(w)) return 'Customer';
+  return 'Sensitive';
+}
+
+// The wording of the second-tap confirmation, by the kind of sensitive topic the filter hit.
+export function confirmText(word) {
+  const w = String(word || '');
+  if (/deploy|update_core|rollout|systemctl|pm2|restart/i.test(w)) return 'Confirm this deployment?';
+  if (/push|merge/i.test(w)) return 'Confirm this push?';
+  if (/delet|remov|rm -r|drop|prune|truncate|migrat|reset/i.test(w)) return 'Confirm this delete?';
+  if (/credential|password|passphrase|secret|token|bearer|api|ssh|private key|\.env/i.test(w)) return 'Confirm: credentials?';
+  if (/money|pay|purchase|buy|billing|invoice|credit/i.test(w)) return 'Confirm this payment?';
+  if (/customer/i.test(w)) return 'Confirm: customer?';
+  return 'Confirm this action?';
+}
