@@ -87,7 +87,7 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
-import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
@@ -1062,6 +1062,7 @@ const parking = createParking({
     kill: async (name) => { await killSession(name, name); },
     sendText: (name, text) => exec(TMUX, ['send-keys', '-t', `=${name}:`, '-l', '--', text]),
     sendEnter: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']),
+    sendCtrlC: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'C-c']),
     create: (name, cwd) => exec(TMUX, ['new-session', '-d', '-s', name, '-c', cwd, '-x', '120', '-y', '40']),
   },
 });
@@ -1072,18 +1073,25 @@ async function parkFacts(name) {
   const panes = await listPanes();
   const table = await processTable();
   const idx = await claudeIndex.get(true);
-  const claude = claudeOfPane(panes.get(name)?.pid || 0, table, idx);
+  const pane = panes.get(name);
+  const claude = claudeOfPane(pane?.pid || 0, table, idx);
+  // MiniMax (minimax-code / mcode) is the other agent we park; no session file, so cwd comes from the pane.
+  const minimax = claude ? null : minimaxOfPane(pane?.pid || 0, table, pane?.cwd || HOME);
   const sess = (await listSessions()).find((x) => x.name === name);
   const st = (latest && latest.status[name]) || null;
   const lz = await getLeases(true);
   let leases = null;
   if (lz?.ok) leases = leasesOfSession(lz.leases, [name, claude?.info?.name || '']);
   let rssMb = null;
-  if (claude) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(claude.pid)])).stdout.trim()) / 1024); } catch {} }
+  const agentPid = claude?.pid || minimax?.pid;
+  if (agentPid) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(agentPid)])).stdout.trim() / 1024); } catch {} }
   const rw = reporter.detail(name);
   return {
-    claude, state: st?.state || null, attached: !!sess?.attached, reporterWaiting: !!(rw && reporter.waitingNow(name, 0)),
-    backgroundWork: rw?.lastTurn?.backgroundWork || 0, busy: claude ? busyChildren(claude.pid, table) : [], leases, rssMb, priority: sessionMeta.priority(name),
+    claude, minimax,
+    state: st?.state || null, attached: !!sess?.attached, reporterWaiting: !!(rw && reporter.waitingNow(name, 0)),
+    backgroundWork: rw?.lastTurn?.backgroundWork || 0,
+    busy: claude ? busyChildren(claude.pid, table) : (minimax ? busyChildren(minimax.pid, table) : []),
+    leases, rssMb, priority: sessionMeta.priority(name),
   };
 }
 
@@ -1097,10 +1105,14 @@ async function parkSession(name) {
 async function resumeSession(name) {
   const rec = await parking.get(name);
   if (!rec) throw httpError(404, 'not parked');
+  // Claude entries have no `agent` field (legacy); MiniMax entries store agent: 'minimax'. Dispatch on that.
+  const isMinimax = rec.agent === 'minimax';
+  const base = isMinimax ? AGENT_CMDS.minimax : AGENT_CMDS.claude;
+  const trustAgent = isMinimax ? 'minimax' : 'claude';
   const out = await parking.resume(name, {
-    base: AGENT_CMDS.claude,
+    base,
     start: async (n, r, cmd) => {
-      try { await trustFolder('claude', r.cwd); } catch { /* best effort */ }
+      try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, '-l', '--', cmd]);
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, 'Enter']);
       sessionMeta.reset(n);
@@ -1108,7 +1120,7 @@ async function resumeSession(name) {
       if (r.priority) sessionMeta.set(n, { priority: r.priority });
     },
   });
-  latest = null;
+   latest = null;
   return { ok: true, resumed: out };
 }
 

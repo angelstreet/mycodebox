@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createClaudeIndex, claudeOfPane, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes } from '../parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes } from '../parking.js';
 
 const table = (rows) => { // rows: [pid, ppid, args]
   const children = new Map(), args = new Map();
@@ -146,4 +146,95 @@ test('session-cap-check: no finding under the cap, one finding listing idle-long
   assert.deepEqual(summarize({ live: 9, cap: 10, over: 0, candidates: [], parked: [{}], ramSavedMb: 300 }).findings, []);
   const f = summarize({ live: 12, cap: 10, over: 2, candidates: [{ name: 'a', idleMin: 3000, rssMb: 300 }], parked: [] }).findings;
   assert.equal(f.length, 1); assert.match(f[0].body, /a \(2d\)/);
+});
+// MiniMax harness: same shape as harness() above, but the pane's agent is minimax-code / mcode; no claude session file.
+function mmHarness({ exits = true, hasCtrlC = true } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'pk-mm-'));
+  const log = [];
+  let alive = true, exists = true;
+  const tmux = {
+    exists: async () => exists,
+    kill: async (n) => { log.push('kill ' + n); exists = false; },
+    sendText: async (n, t) => log.push('text ' + t),
+    sendEnter: async () => { log.push('enter'); if (exits) alive = false; },
+    ...(hasCtrlC ? { sendCtrlC: async () => log.push('ctrlc') } : {}),
+    create: async (n, cwd) => { log.push('create ' + cwd); exists = true; },
+  };
+  const p = createParking({ file: join(dir, 'parked.json'), tmux, exitWaitMs: 50, pollMs: 5, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) });
+  const facts = { minimax: { pid: 12, cwd: '/w', args: 'mcode' }, state: 'idle', attached: false, reporterWaiting: false, backgroundWork: 0, busy: [], leases: [], rssMb: 200, priority: 'P1' };
+  return { p, log, facts, file: join(dir, 'parked.json'), isAlive: async () => alive };
+}
+
+test('minimaxOfPane finds the minimax-code pid in the tree', () => {
+  const t = table([[10, 1, 'tmux pane shell'], [11, 10, 'bash -c mcode -c; exec bash -l'], [12, 11, '/home/u/.local/node-v24.21.0-linux-x64/bin/mcode']]);
+  assert.equal(minimaxOfPane(10, t, '/w').pid, 12);
+  assert.equal(minimaxOfPane(10, t, '/w').cwd, '/w');
+  assert.equal(minimaxOfPane(10, t, '/w').args, '/home/u/.local/node-v24.21.0-linux-x64/bin/mcode');
+  assert.equal(minimaxOfPane(99, t, '/w'), null);
+  const t2 = table([[1, 0, 'tmux pane'], [2, 1, '/opt/minimax-code --something']]);
+  assert.equal(minimaxOfPane(1, t2, '/w').pid, 2);
+  assert.equal(minimaxOfPane(12, table([[12, 0, '/usr/bin/python3']]), '/w'), null);
+});
+
+test('minimaxPidsUnder returns empty when no minimax-code / mcode is in the tree', () => {
+  const t = table([[1, 0, 'bash'], [2, 1, 'claude --dangerously-skip-permissions']]);
+  assert.deepEqual(minimaxPidsUnder(1, t), []);
+});
+
+test('checks for a minimax session: busy / lease / attached / reporter refusals; no Claude-specific reasons', () => {
+  const { p, facts } = mmHarness();
+  assert.deepEqual(p.checks(facts), []);
+  const bad = (patch) => p.checks({ ...facts, ...patch });
+  assert.match(bad({ minimax: null })[0], /no Claude or MiniMax/);
+  assert.match(bad({ state: 'working' })[0], /board state/);
+  assert.match(bad({ attached: true })[0], /attached/);
+  assert.match(bad({ reporterWaiting: true })[0], /pending/);
+  assert.match(bad({ backgroundWork: 2 })[0], /background/);
+  assert.match(bad({ busy: [{ pid: 1, args: 'sleep 9' }] })[0], /child process/);
+  assert.match(bad({ leases: null })[0], /vpt-lease/);
+  assert.match(bad({ leases: [{ id: 'L' }] })[0], /holds vpt-lease: L/);
+});
+
+test('minimax park: records agent + cwd, /exit + Enter, kills tmux; resume runs base -c', async () => {
+  const h = mmHarness();
+  const rec = await h.p.park('S', h.facts, { claudeAlive: h.isAlive });
+  assert.equal(rec.agent, 'minimax');
+  assert.equal(rec.cwd, '/w');
+  assert.equal(rec.priority, 'P1');
+  assert.equal(rec.rssMb, 200);
+  assert.ok(!('sessionId' in rec));
+  assert.ok(!('claudeName' in rec));
+  assert.deepEqual(h.log, ['text /exit', 'enter', 'kill S']);
+  const stored = JSON.parse(readFileSync(h.file, 'utf8')).parked.S;
+  assert.equal(stored.agent, 'minimax');
+  assert.equal(stored.cwd, '/w');
+  const started = [];
+  const out = await h.p.resume('S', { base: 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode', start: async (n, r, cmd) => started.push(cmd) });
+  assert.equal(started[0], 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode -c');
+  assert.equal(out.cwd, '/w');
+  assert.equal(out.agent, 'minimax');
+  assert.equal(out.cmd, 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode -c');
+  assert.deepEqual(JSON.parse(readFileSync(h.file, 'utf8')).parked, {});
+  await assert.rejects(h.p.resume('S', { base: 'mcode', start: async () => {} }), /not parked/);
+});
+
+test('minimax park: /exit did not take -> Ctrl-C twice then kill tmux anyway', async () => {
+  const h = mmHarness({ exits: false });
+  const rec = await h.p.park('S', h.facts, { claudeAlive: h.isAlive });
+  assert.equal(rec.agent, 'minimax');
+  assert.deepEqual(h.log, ['text /exit', 'enter', 'ctrlc', 'ctrlc', 'kill S']);
+});
+
+test('minimax park: missing sendCtrlC falls through to kill (still finishes)', async () => {
+  const h = mmHarness({ exits: false, hasCtrlC: false });
+  const rec = await h.p.park('S', h.facts, { claudeAlive: h.isAlive });
+  assert.equal(rec.agent, 'minimax');
+  assert.deepEqual(h.log, ['text /exit', 'enter', 'kill S']);
+});
+
+test('minimax park refuses with reasons and does not touch tmux', async () => {
+  const h = mmHarness();
+  await assert.rejects(h.p.park('S', { ...h.facts, leases: [{ id: 'L' }] }, { claudeAlive: h.isAlive }), (e) => e.status === 409 && e.reasons.length === 1);
+  assert.deepEqual(h.log, []);
+  assert.ok(!existsSync(h.file));
 });
