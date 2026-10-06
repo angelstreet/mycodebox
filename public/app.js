@@ -731,7 +731,7 @@ function byUrgency(list) {
 // Filters: status (state.filter, also set by the top-bar count chips),
 // project (GitHub repo / folder) and agent. All views show only matches.
 const LS_FILTERS = 'ghosty.filters';
-function projectOf(n) { return state.status[n]?.project || state.status[n]?.repo || ''; }
+function projectOf(n) { const st = state.status[n]; return st?.project || st?.repo || (st ? agentOf(n) : ''); }   // not in a git repo: label it by its agent (claude, codex, bash...)
 function matchesFilter(n) {
   // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
   // not its raw working/done/idle state.
