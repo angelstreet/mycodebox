@@ -1717,3 +1717,7 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 
 /* phones: no grid view and no filter button in the header (the filter bar below covers it) */
 @media (max-width: 720px){ .viewctl, #filterBtn{ display:none !important; } }
+
+/* grid view: only the focused card scrolls inside; touching any other card scrolls the grid / list instead */
+.grid-pane{ touch-action:pan-y; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+.grid-pane .cell:not(.focus) .reader, .grid-pane .cell:not(.focus) .xterm-viewport{ overflow:hidden !important; touch-action:auto; overscroll-behavior:auto; }
