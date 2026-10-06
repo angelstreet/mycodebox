@@ -1513,7 +1513,6 @@ body.side-dockable #menuBtn.hidden{ display:inline-flex !important; }
 #askPopup .ap-b.cf::after { content: '⚠ 2 taps'; margin-left: auto; padding-left: 8px; font-size: 11px; color: var(--warn, #d9a441); opacity: .85; white-space: nowrap; }
 /* docked list open: its own ‹ button folds it, so the hamburger is redundant, and the horizontal session tabs duplicate the list.
    Fold the list and both come back (the hamburger re-opens it). */
-body.side-docked.side-dockable #menuBtn.hidden, body.side-docked #menuBtn{ display:none !important; }
 body.side-docked #tabs{ display:none; }
 
 /* quota readout: centred in the top bar on desktop, hidden on phones */
@@ -1909,3 +1908,7 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .session-list li.grp:hover{ color:var(--ink); background:var(--bg-3); filter:brightness(1.15); }
 
 body.filterbar-on .topbar .summary{ display:none; }
+
+/* web: the hamburger stays top-left in every state and folds / unfolds the docked list, so the list's own collapse button is gone (no button swapping places) */
+body.side-dockable #menuBtn{ display:inline-flex !important; }
+#sideCollapseBtn{ display:none !important; }
