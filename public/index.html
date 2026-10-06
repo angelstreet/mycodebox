@@ -149,6 +149,10 @@
         <i data-icon="chevron-up" data-size="16"></i>
       </button>
       <button id="tchip" class="tchip" aria-label="Change send target"><i id="tdot" class="adot"></i><span id="tname" class="tn">none</span></button>
+      <button id="attachBtn" class="mic" aria-label="Attach image" title="Attach an image (or paste / drop one): its path on the codebox is added to the message">
+        <i data-icon="paperclip" data-size="20"></i>
+      </button>
+      <input type="file" id="attachFile" accept="image/*" multiple hidden />
       <textarea id="sendInput" rows="1" autocomplete="off" autocorrect="off"
              autocapitalize="off" spellcheck="false" placeholder="message…"></textarea>
       <button id="sendBtn" class="send" aria-label="Send">

@@ -38,6 +38,7 @@ const els = {
   sendInput:   $('#sendInput'),
   sendBtn:     $('#sendBtn'),
   micBtn:      $('#micBtn'),
+  attachBtn:   $('#attachBtn'),
   side:        $('#side'),
   sessionList: $('#sessionList'),
   sessionCount:$('#sessionCount'),
@@ -3855,6 +3856,38 @@ els.micBtn.onclick = () => {
   if (voice.rec) voice.rec.stop(); else voiceStart();
 };
 els.sendInput.oninput = autoGrow;
+
+// ----- image attach: button, paste or drop -> /api/upload (saved on the codebox) -> "@path" added to the message -----
+async function attachImages(files) {
+  const imgs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
+  if (!imgs.length) { toast('png, jpeg, gif or webp images only'); return; }
+  els.attachBtn.classList.add('busy');
+  try {
+    const paths = [];
+    for (const f of imgs) {
+      const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': f.type }, body: f });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      paths.push(`@${j.path}`);
+    }
+    const cur = els.sendInput.value;
+    els.sendInput.value = (cur && !/\s$/.test(cur) ? `${cur} ` : cur) + paths.join(' ') + ' ';
+    autoGrow(); els.sendInput.focus();
+  } catch (err) { toast(`upload failed: ${err.message}`, 5000); }
+  finally { els.attachBtn.classList.remove('busy'); }
+}
+els.attachBtn.onpointerdown = (e) => e.preventDefault();
+els.attachBtn.onclick = () => $('#attachFile').click();
+$('#attachFile').onchange = (e) => { attachImages(e.target.files); e.target.value = ''; };
+els.sendInput.addEventListener('paste', (e) => {
+  const fs = Array.from(e.clipboardData?.files || []).filter((f) => f.type.startsWith('image/'));
+  if (fs.length) { e.preventDefault(); attachImages(fs); }
+});
+for (const t of ['dragover', 'drop']) document.addEventListener(t, (e) => {
+  if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+  e.preventDefault();
+  if (t === 'drop') attachImages(e.dataTransfer.files);
+});
 els.sendInput.onkeydown = onDockKey;
 
 // ---------- font size / fit controls ----------

@@ -61,13 +61,13 @@ import http from 'node:http';
 import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
-import { readFile, writeFile, stat, readdir, realpath } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, realpath, mkdir } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { machinesOf, holdingsOf, deployWaitOf } from './public/platforms.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -978,6 +978,8 @@ async function readRawBody(req, max) {
   });
 }
 const transcriber = createTranscriber();
+const MAX_IMAGE = 15 * 1024 * 1024;
+const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -1304,7 +1306,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
       && req.method !== 'OPTIONS' && !/application\/json/i.test(req.headers['content-type'] || '')
-      && !(p === '/api/transcribe' && /^audio\//i.test(req.headers['content-type'] || ''))) {   // audio/* is not CORS-safelisted either
+      && !(p === '/api/transcribe' && /^audio\//i.test(req.headers['content-type'] || ''))
+      && !(p === '/api/upload' && /^image\//i.test(req.headers['content-type'] || ''))) {   // audio/* is not CORS-safelisted either
     return json(res, 415, { ok: false, error: 'content-type must be application/json' });
   }
 
@@ -1322,6 +1325,19 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, rest);
     }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/upload') {   // dock attach / paste / drop: image body -> saved on the codebox -> { path }
+    try {
+      const ext = IMG_EXT[String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()];
+      if (!ext) return json(res, 415, { ok: false, error: 'png, jpeg, gif or webp only' });
+      const img = await readRawBody(req, MAX_IMAGE);
+      if (!img.length) return json(res, 400, { ok: false, error: 'empty file' });
+      const dir = join(homedir(), '.ghosty', 'uploads');
+      await mkdir(dir, { recursive: true });
+      const file = join(dir, `${Date.now()}-${randomBytes(3).toString('hex')}.${ext}`);
+      await writeFile(file, img, { mode: 0o600 });
+      return json(res, 200, { ok: true, path: file });
+    } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/transcribe') {   // dock mic: audio body -> { text }
     try {
