@@ -3784,7 +3784,6 @@ applyRes();
 wireSideDnd();
 loadLayout();
 window.addEventListener('focus', loadLayout);
-$('#sideFullBtn').onclick = () => { setDock(false); setMode('list'); };
 applyDock();
 els.backBtn.onclick   = () => setMode(state.prevMode || (isPhone() ? 'list' : 'grid'));
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
