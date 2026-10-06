@@ -9,6 +9,7 @@
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { normalizeUsage, addTokens } from './turn-meter.js';
 
 export const TOKEN_HEADER = 'x-ghosty-reporter-token';
 export const TEXT_MAX = 8 * 1024;
@@ -45,7 +46,7 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
   const str = (v, max = TEXT_MAX) => (typeof v === 'string' ? v.slice(0, max) : '');
   const slot = (name) => {
     let s = sessions.get(name);
-    if (!s) { s = { sessionId: null, cwd: null, reporterSeenAt: 0, live: false, lastTurn: null, waiting: null, lastPrompt: null, agents: [] }; sessions.set(name, s); }
+    if (!s) { s = { sessionId: null, cwd: null, reporterSeenAt: 0, live: false, lastTurn: null, meter: null, waiting: null, lastPrompt: null, agents: [] }; sessions.set(name, s); }
     return s;
   };
   const peerSends = [];   // ring of recent peer.send texts for the dedupe pass: [{ text: full 200 head, at: ms }]
@@ -72,7 +73,7 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
     const s = slot(ev.session);
     s.reporterSeenAt = t;
     if (typeof ev.sessionId === 'string' && ev.sessionId) {
-      if (s.sessionId && s.sessionId !== ev.sessionId && ev.event !== 'session.end') { s.lastTurn = null; s.waiting = null; s.lastPrompt = null; s.agents = []; }   // /clear or resume: a new conversation
+      if (s.sessionId && s.sessionId !== ev.sessionId && ev.event !== 'session.end') { s.lastTurn = null; s.meter = null; s.waiting = null; s.lastPrompt = null; s.agents = []; }   // /clear or resume: a new conversation
       s.sessionId = ev.sessionId;
     }
     if (typeof ev.cwd === 'string' && ev.cwd) s.cwd = ev.cwd.slice(0, 500);
@@ -81,11 +82,19 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
       case 'session.start': s.waiting = null; break;
       case 'session.end': s.live = false; s.waiting = null; break;
       case 'prompt':
+        // A turn is metered from the prompt that starts it; a prompt typed mid-turn joins the running one.
+        if (ev.midTurn !== true || !s.meter || s.meter.endAt) s.meter = { startAt: t, endAt: null, tokens: null, durationMs: null };
         if (ev.synthetic === true) break;   // a background task waking the session, not the owner: not a reply
         s.lastPrompt = { text: str(ev.text), at: t };
         s.waiting = null;
         break;
       case 'turn.end': {
+        // tokens of the running turn: the session's own responses and its subagents' (a turn that ended is not added to)
+        if (!s.meter) s.meter = { startAt: null, endAt: null, tokens: null, durationMs: null };
+        if (!s.meter.endAt) {
+          s.meter.tokens = addTokens(s.meter.tokens, normalizeUsage(ev.usage));
+          if (!ev.agentId) { s.meter.endAt = t; s.meter.durationMs = Number.isFinite(ev.durationMs) && ev.durationMs >= 0 ? ev.durationMs : null; }
+        }
         if (ev.agentId) break;   // a subagent's turn is not the session's turn
         const prev = s.lastTurn;
         const merge = prev && prev.stopAt && t - prev.stopAt < MERGE_MS;
@@ -181,6 +190,16 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
     };
   }
 
+  // The metered turn of a session, once it has ended: { endAt, elapsedMs, tokens, text }. null while running / unknown.
+  // elapsedMs = prompt received -> turn end (the hook's own durationMs when the prompt was not seen); tokens null without usage.
+  function meterOf(name) {
+    const s = sessions.get(name);
+    const m = s?.meter;
+    if (!liveOf(s) || !m || !m.endAt) return null;
+    const elapsedMs = m.startAt ? m.endAt - m.startAt : m.durationMs;
+    return { endAt: m.endAt, elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : null, tokens: m.tokens, text: s.lastTurn?.text || '' };
+  }
+
   function detail(name) {
     const s = sessions.get(name);
     return s ? { session: name, live: liveOf(s), sessionId: s.sessionId, cwd: s.cwd, reporterSeenAt: s.reporterSeenAt, lastTurn: s.lastTurn, waiting: s.waiting, lastPrompt: s.lastPrompt, agents: s.agents } : null;
@@ -200,5 +219,5 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
 
   const prune = (liveNames) => { for (const k of [...sessions.keys()]) if (!liveNames.has(k)) sessions.delete(k); };
 
-  return { init, tokenOk, ingest, summary, detail, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
+  return { init, tokenOk, ingest, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
 }

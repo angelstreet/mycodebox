@@ -119,13 +119,16 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     rec.body = typeof event.body === 'string' ? event.body.slice(0, 300) : '';
     rec.url = typeof event.url === 'string' ? event.url : '/';
     rec.priority = typeof event.priority === 'string' ? event.priority : 'default';
+    if (event.turn && typeof event.turn === 'object') rec.turn = event.turn;   // the stopped turn: { elapsedMs, tokens, status, info, line, source }
     return { rec, cls };
   }
   // Re-fired stops (a re-wrap, a restart) repeat the same session + kind + text minutes apart: skip them for 6 h.
   // The map is seeded from the file's tail on first use so a service restart does not forget it.
   const seen = new Map();   // dedupe signature -> ms of the newest appended line
   let seeded = false;
-  const sigOf = (r) => [r.session || r.key, r.kind, String(r.body || r.title || '').replace(/\s+/g, '').slice(0, 160)].join('\u0000');
+  // the metered STATUS line (elapsed / tokens differ between two sightings of one stop) is not part of the signature, unless it is all there is
+  const sigText = (r) => { const t = String(r.body || r.title || ''); const rest = t.replace(/^STATUS: [^\n]*\n?/, ''); return rest.trim() ? rest : t; };
+  const sigOf = (r) => [r.session || r.key, r.kind, sigText(r).replace(/\s+/g, '').slice(0, 160)].join('\u0000');
   async function seedSeen() {
     seeded = true;
     try {

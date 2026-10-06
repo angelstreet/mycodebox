@@ -213,9 +213,14 @@ const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(done|needs-owner|bloc
 export function statusLine(lines) {
   for (const l of lines.slice(-3).reverse()) {
     const m = STATUS_LINE_RE.exec(l);
-    if (m) return { kind: m[1].toLowerCase(), text: m[2].replace(/[*_`]+\s*$/, '').trim() };
+    if (m) return { kind: m[1].toLowerCase(), text: stripSeparator(m[2].replace(/[*_`]+\s*$/, '').trim()) };
   }
   return null;
+}
+// "STATUS: done — branch x pushed": the text after the verdict loses its leading separator (— – - : ·). A hyphen only
+// counts when a space follows ("--server" and "-> x" are text, not separators).
+export function stripSeparator(text) {
+  return String(text ?? '').replace(/^(?:\s*(?:[—–·:]|[*_`]+(?=\s)|-(?=\s|$)))+\s*/, '').trim();
 }
 
 // plain = ANSI-stripped pane lines; raw = the same lines with ANSI (for the input box);

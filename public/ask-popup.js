@@ -102,7 +102,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const question = form || questionsView ? '' : baseQ;
     // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
     // and indented) before display so it fills the popup width instead of a narrow column.
-    const details = reflowPane(detailsText(st.stall, 1800));
+    const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
     return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st) };
   }
 

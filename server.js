@@ -7,6 +7,7 @@
 //   GET  /ws/:session           → WebSocket: streams pane content (1 Hz tick)
 //   POST /api/send/:session     → body {keys: "..."} → tmux send-keys + Enter
 //   GET  /api/snapshot/:session → last full pane snapshot (for first paint)
+//                                 each stopped agent also has `lastTurn` {at, elapsedMs, tokens{in,out,cacheRead,cacheWrite,total}, status, info, line, source} (turn-meter.js; null parts = unknown)
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
 //   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
@@ -78,6 +79,7 @@ import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
 import { createCredits } from './credits.js';
 import { createUsage, usageFile } from './usage-view.js';
+import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker } from './manager.js';
@@ -621,6 +623,7 @@ const reporter = createReporter({ stateDir: STATE_DIR });   // events from the g
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const layoutStore = createLayoutStore({ file: join(STATE_DIR, 'layout.json') });   // order / pins / groups of the session list
+const turnMeter = createTurnMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });   // elapsed + tokens of a finished turn, shown with its STATUS line (turn-meter.js)
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
 const deployRunner = createDeployRunner({
   stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn,
@@ -645,6 +648,11 @@ const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quo
 function notifySession(session, kind, body, meta) {
   if ((kind === 'waiting' || kind === 'asks') && loadManagerSessions().includes(session)) return;   // the manager's own session never pushes the owner
   const waiting = kind === 'waiting' || kind === 'asks';
+  // The agent's STATUS verdict + what the turn took (elapsed, tokens) + its own info, first in the body so every cut keeps it.
+  const lt = turnMeter.get(session);
+  const turn = lt && meta?.status ? { ...lt, status: meta.status, info: meta.info ?? lt.info } : lt;
+  const line = turn ? statusMeterLine(turn) : null;
+  if (line) body = [line, body && !/^\s*[*_`]*STATUS:/i.test(String(body)) ? body : null].filter(Boolean).join('\n');   // a body that is the STATUS line itself is replaced by the metered one
   alert(`${session}:${kind}`, {
     title: kind === 'asks' ? `${session} asks you` : waiting ? `${session} needs you` : `${session} is done`,
     priority: waiting ? 'high' : 'default',
@@ -653,6 +661,7 @@ function notifySession(session, kind, body, meta) {
     url: `/?s=${encodeURIComponent(session)}`,
     tag: `ghosty-${session}`,
     meta: { session, case: meta?.case || kind, question: meta?.question, answer: meta?.answer },
+    ...(line ? { turn: { ...turn, line } } : {}),
   });
 }
 
@@ -707,6 +716,7 @@ async function pollOnce() {
   const sessionNames = sessions.map((x) => x.name);
   const status = {};
   const changedSessions = [];
+  await turnMeter.refresh();
   await pool(sessions, CONCURRENCY, async (s) => {
     const p = panes.get(s.name) || { pid: 0, cmd: '', cols: 0, rows: 0, dead: false };
     let pane = null;
@@ -782,6 +792,14 @@ async function pollOnce() {
     } else if (t.realWork) t.doneAt = null;   // a genuinely new turn started
     const lastMessage = offline ? null : lastMessageOf(plain, end);
 
+    // The finished turn's meter (before the notification, which carries it). stopAt = when ghosty first saw this stop: unknown for one that predates it.
+    const stopped = state === 'done' || state === 'waiting';
+    if (!stopped || offline) t.stopAt = null;
+    else if (t.prevState !== undefined && t.prevState !== state) t.stopAt = now;
+    const lastTurn = stopped && !offline && isAgent
+      ? turnMeter.compute({ name: s.name, agent, sentAt, stopAt: t.stopAt ?? null, claude: agent === 'claude' && reporter.liveOf(s.name) ? reporter.meterOf(s.name) : null, plain })
+      : (turnMeter.forget(s.name), null);
+
     // Notifications: transitions only, never on first sight.
     if (t.prevState !== undefined && t.prevState !== state) {
       if (state === 'waiting') notifySession(s.name, 'waiting', waitReason || 'needs input');
@@ -822,6 +840,7 @@ async function pollOnce() {
       doneAt: state === 'done' ? t.doneAt : null,
       activity: state === 'working' && !offline ? activityOf(plain, end) : null,
       lastMessage,
+      lastTurn,
       replyHash: t.replyHash,
       cwd: meta.cwd, repo: meta.repo, branch: meta.branch, dirty: meta.dirty,
       project: meta.project ?? null, github: !!meta.github, worktree: meta.worktree ?? null,
@@ -838,6 +857,7 @@ async function pollOnce() {
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set(Object.keys(status)));
   reporter.prune(new Set(Object.keys(status)));
+  turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
   const claudeIdx = await claudeIndex.get();
   for (const [k, v] of Object.entries(status)) {
@@ -1671,7 +1691,7 @@ server.listen(PORT, HOST, async () => {
   await initManager({
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
-    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine }),
+    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
