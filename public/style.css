@@ -749,10 +749,11 @@ body{ display:flex; flex-direction:column; }
 /* ------------ Card header: project · branch · worktree, centred ------------ */
 /* In-flow middle slot: name block and a spacer share the free space equally,
    so the label sits in the middle and pushes (never covers) the sides. */
-.cell .h .ag{ order:0; display:inline-flex; align-items:center; gap:3px; white-space:nowrap; flex-shrink:0; }
+.cell .h .ag{ order:1; display:inline-flex; align-items:center; gap:3px; white-space:nowrap; flex-shrink:0; }
 .cell .h .ag .agent{ flex-shrink:0; }
 .cell .h .ag .agent-model{ overflow:hidden; text-overflow:ellipsis; min-width:0; }
-.cell .h .nm{ order:1; flex:0 0 auto; max-width:55%; }   /* the name takes the width it needs; the project chip shrinks first */
+.cell .h .nm{ order:0; flex:0 0 auto; max-width:60%; }   /* the name is the most important thing: right after the priority, full width, the project chip shrinks first */
+.cell .h .nm .name{ font-size:14px; font-weight:700; letter-spacing:.01em; }
 .cell .h .proj{ order:2; flex-shrink:3; }
 .cell .h::after{ content:''; order:3; flex:1 1 0; min-width:0; }
 .cell .h > :not(.ag):not(.nm):not(.proj):not(.pr){ order:4; }
