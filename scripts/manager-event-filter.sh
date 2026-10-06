@@ -7,6 +7,7 @@
 # Across runs (separate manager-wait invocations), asks / waiting / lease are also deduped for 6 h — a stop that ghosty re-emits
 # for a no-new-turn ~10 min later must not wake the manager again. The seen-keys file lives at
 # ${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}/manager-reports/.seen-keys (one "<unix_seconds> <key>" per line);
+# health events dedupe by their key (health:load, health:disk, ...) for 6 h too;
 # deploy / hold / quota / disk / credits keep per-run dedupe only (the awk array, as before).
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 SEEN_FILE="$STATE_DIR/manager-reports/.seen-keys"
@@ -27,7 +28,7 @@ jq -c --unbuffered '
     ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="lease") and (.state=="released")) | not
   ) | select(
     ((.kind=="lease") and (.state=="released") and ((.title//"")|test("\\(manager:deploy\\)"))) | not
-  ) | {k:((.session//"")+"|"+.kind+"|"+((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80])), l:.}' \
+  ) | {k:((.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end)), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
     function persist(k) { printf "%d %s\n", now, k >> seen; fflush(seen) }
     BEGIN {
@@ -42,7 +43,7 @@ jq -c --unbuffered '
       k = substr($0, RSTART+6, RLENGTH-7)
       match($0, /"kind":"[^"]*"/)
       ks = substr($0, RSTART+8, RLENGTH-9)
-      cross = (ks == "asks" || ks == "waiting" || ks == "lease")
+      cross = (ks == "asks" || ks == "waiting" || ks == "lease" || ks == "health")
       if (cross && (k in seenmap)) next
       if (!(k in runmap)) {
         runmap[k] = 1
