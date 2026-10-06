@@ -557,14 +557,14 @@ body{ display:flex; flex-direction:column; }
 .adot.minimax{ background:var(--a-minimax); } .adot.bash{ background:var(--a-bash); }
 .adot.multi{ background:var(--accent); }
 
-/* fixed-width send target chip */
+/* send target chip */
 .tchip{
-  width:88px; flex:0 0 88px; height:42px; padding:0 8px; border-radius:10px;
+  width:auto; flex:0 0 auto; min-width:88px; max-width:260px; height:42px; padding:0 8px; border-radius:10px;   /* as wide as the name needs, up to 45% of the row */
   background:var(--bg-2); color:var(--ink); border:1px solid var(--line-2);
   display:flex; align-items:center; gap:6px; overflow:hidden;
 }
 .tchip:active{ background:var(--bg-3); }
-.tchip .tn{ flex:1; min-width:0; text-align:left; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tchip .tn{ flex:0 1 auto; min-width:0; text-align:left; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dock.target-waiting .tchip{ border-color:rgba(255,95,95,.6); }
 .dock .send{ width:48px; }
 
@@ -1872,3 +1872,15 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 
 /* answer popup header: priority + name on the left, counter / arrows / hide / dismiss at the right edge */
 #askPopup .ap-name{ flex:1 1 auto; }
+
+/* phones: the send target gets its own wide slot (full session name) - toggle, target, attach, mic on the first line, the message box and Send on the second */
+@media (max-width: 600px){
+  .dock .row{ flex-wrap:wrap; align-items:center; }
+  .dock .row > #dockToggle{ order:0; }
+  .dock .row > .tchip{ order:1; flex:1 1 0; max-width:none; min-width:0; }
+  .dock .row > #attachBtn{ order:2; }
+  .dock .row > #micBtn{ order:3; }
+  .dock .row > #sendInput{ order:4; flex:1 1 calc(100% - 58px); min-width:0; }
+  .dock .row > #sendBtn{ order:5; }
+  .tchip .tn{ flex:1; }
+}
