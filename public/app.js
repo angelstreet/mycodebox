@@ -1035,12 +1035,12 @@ function renderFilterBar() {
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const agents = ['claude', 'codex', 'minimax', 'bash'].filter((a) => all.some((n) => agentOf(n) === a));
   const html =
-    `<span class="fl">status</span>` + chip('filter', null, 'all') +
+    `` + chip('filter', null, 'all') +
     states.filter((k) => count((n) => displayStateOf(n, state.status) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => displayStateOf(n, state.status) === k))).join('') +
     (count(pausedOf) || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count(pausedOf)) : '') +
-    `<span class="fsep"></span><span class="fl">project</span>` + chip('fProject', null, 'all') +
+    `<span class="fsep"></span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
-    `<span class="fsep"></span><span class="fl">agent</span>` + chip('fAgent', null, 'all') +
+    `<span class="fsep"></span>` + chip('fAgent', null, 'all') +
     agents.map((a) => chip('fAgent', a, `<span class="agent ${a}">${AGENT_LABEL[a]}</span>`, count((n) => agentOf(n) === a))).join('') +
     (anyFilter() ? `<span class="fsep"></span><button class="fclear">clear ×</button>` : '');
   if (bar.dataset.h === html) return;
