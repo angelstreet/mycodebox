@@ -1084,7 +1084,7 @@ async function parkFacts(name) {
   if (lz?.ok) leases = leasesOfSession(lz.leases, [name, claude?.info?.name || '']);
   let rssMb = null;
   const agentPid = claude?.pid || minimax?.pid;
-  if (agentPid) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(agentPid)])).stdout.trim() / 1024); } catch {} }
+  if (agentPid) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(agentPid)])).stdout.trim()) / 1024); } catch {} }
   const rw = reporter.detail(name);
   return {
     claude, minimax,
