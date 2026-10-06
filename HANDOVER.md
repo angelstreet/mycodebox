@@ -1,7 +1,7 @@
 # Ghosty Sessions — handover
 
 Where this lives: **`~/ghosty-sessions/` on `codebox` (VM 190, Tailscale `<tailscale-ip>`)**.
-Git remote: `git@github.com:angelstreet/ghosty-sessions` (public).
+Git remote: `git@github.com:angelstreet/mycodebox` (public).
 
 This file is the **first** thing to read when resuming work. Everything else
 (architecture, runbook, certs, status pill heuristic) is in `README.md` and
@@ -164,7 +164,7 @@ systemd/ghosty-sessions.service # PrivateTmp=false so the tmux socket is visible
 
 ## Repo links
 
-- GitHub: <https://github.com/angelstreet/ghosty-sessions>
+- GitHub: <https://github.com/angelstreet/mycodebox>
 - Tailscale IP: `<tailscale-ip>`
 - Tailnet: `<tailnet>.ts.net`
 

@@ -23,7 +23,7 @@ Ask the owner for nothing secret. Ask only for: the machine's Tailscale name, an
 ## Core install (about 5 minutes)
 
 ```bash
-git clone https://github.com/angelstreet/ghosty-sessions.git ~/ghosty-sessions
+git clone https://github.com/angelstreet/mycodebox.git ~/ghosty-sessions   # the folder name is yours to choose; the unit file and docs assume this one
 cd ~/ghosty-sessions
 npm install --omit=dev
 npm test          # all tests should pass before you start the service
