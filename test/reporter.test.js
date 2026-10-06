@@ -103,3 +103,115 @@ test('a new conversation (clear / resume) drops the old facts', () => {
   rep.ingest({ ...ev('session.start'), sessionId: 'sid-2' });
   assert.equal(rep.detail('sess').lastTurn, null);
 });
+
+test('peer.send returns a peer record with from=session, to=given, capped text and ISO at; session facts untouched', () => {
+  const before = rep.detail('sess');
+  const r = rep.ingest({ v: 1, event: 'peer.send', session: 'sess', sessionId: 'sid-1', cwd: '/x', at: clock, to: 'task58-b', text: 'please continue with phase 2 of the build' });
+  assert.equal(r.ok, true);
+  assert.ok(r.peer);
+  assert.equal(r.peer.type, 'peer');
+  assert.equal(r.peer.from, 'sess');
+  assert.equal(r.peer.to, 'task58-b');
+  assert.equal(r.peer.text, 'please continue with phase 2 of the build');
+  assert.match(r.peer.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  assert.equal(r.peer.agentId, undefined);
+  assert.equal(r.peer.sessionId, undefined);
+  assert.equal(r.peer.session, undefined);
+  // per-session facts are untouched
+  const after = rep.detail('sess');
+  assert.equal(after.lastTurn, before.lastTurn);
+  assert.equal(after.lastPrompt, before.lastPrompt);
+  assert.equal(after.agents.length, before.agents.length);
+  assert.equal(after.live, before.live);
+});
+
+test('peer.send text is capped to 2000 chars', () => {
+  const big = 'x'.repeat(5000);
+  const r = rep.ingest({ v: 1, event: 'peer.send', session: 'sess', sessionId: 'sid-1', cwd: '/x', at: clock, to: 'peer', text: big });
+  assert.ok(r.peer);
+  assert.equal(r.peer.text.length, 2000);
+  assert.equal(r.peer.from, 'sess');
+});
+
+test('peer.send with empty text is ignored', () => {
+  const r = rep.ingest({ v: 1, event: 'peer.send', session: 'sess', sessionId: 'sid-1', cwd: '/x', at: clock, to: 'peer', text: '' });
+  assert.equal(r.peer, undefined);
+  assert.equal(r.ignored, 'empty peer text');
+});
+
+test('peer.recv returns from=null,to=session and is logged; a recv that repeats a just-sent text is a duplicate', () => {
+  clock += 1000;
+  const sentText = 'unique signature for this peer message — ' + 'A'.repeat(220);
+  rep.ingest({ v: 1, event: 'peer.send', session: 'sess', sessionId: 'sid-1', cwd: '/x', at: clock, to: 'task58-c', text: sentText });
+  clock += 2000;
+  // a recv of the same text from another session arrives: this is a duplicate of the send we just logged
+  const dup = rep.ingest({ v: 1, event: 'peer.recv', session: 'task58-c', sessionId: 'sid-2', cwd: '/y', at: clock, text: sentText });
+  assert.equal(dup.ok, true);
+  assert.equal(dup.peer, undefined);
+  assert.equal(dup.ignored, 'duplicate peer');
+  const wrapped = rep.ingest({ v: 1, event: 'peer.recv', session: 'task58-c', sessionId: 'sid-2', cwd: '/y', at: clock, text: `<peer-message from="sess">\n${sentText}\n</peer-message>` });
+  assert.equal(wrapped.ignored, 'duplicate peer');   // the receiver sees the text inside an envelope
+  clock += 2000;
+  // a recv of a different text from yet another session: not a duplicate, logged
+  const fresh = rep.ingest({ v: 1, event: 'peer.recv', session: 'task58-d', sessionId: 'sid-3', cwd: '/z', at: clock, text: 'completely unrelated content for a peer message' });
+  assert.ok(fresh.peer);
+  assert.equal(fresh.peer.type, 'peer');
+  assert.equal(fresh.peer.from, null);
+  assert.equal(fresh.peer.to, 'task58-d');
+  assert.equal(fresh.peer.text, 'completely unrelated content for a peer message');
+  assert.match(fresh.peer.at, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test('peer.recv with empty text is ignored', () => {
+  const r = rep.ingest({ v: 1, event: 'peer.recv', session: 'peer', sessionId: 'sid-x', cwd: '/x', at: clock, text: '' });
+  assert.equal(r.peer, undefined);
+  assert.equal(r.ignored, 'empty peer text');
+});
+
+test('peer.recv shorter than 20 chars is never deduped (too short to match reliably)', () => {
+  clock += 3000;
+  rep.ingest({ v: 1, event: 'peer.send', session: 'sess', sessionId: 'sid-1', cwd: '/x', at: clock, to: 'short', text: 'tiny' });
+  clock += 2000;
+  const r = rep.ingest({ v: 1, event: 'peer.recv', session: 'short', sessionId: 'sid-9', cwd: '/y', at: clock, text: 'tiny' });
+  assert.ok(r.peer, 'too short to dedupe — logged normally');
+  assert.equal(r.peer.from, null);
+  assert.equal(r.peer.to, 'short');
+});
+
+test('peer.recv text is capped to 2000 chars', () => {
+  const big = 'q'.repeat(5000);
+  const r = rep.ingest({ v: 1, event: 'peer.recv', session: 'peer', sessionId: 'sid-x', cwd: '/x', at: clock, text: big });
+  assert.ok(r.peer);
+  assert.equal(r.peer.text.length, 2000);
+});
+
+test('the peer ring only matches the first 200 chars and only within 120 s', () => {
+  // a send: remember its head
+  clock += 1000;
+  const head = 'H'.repeat(180) + 'tail-of-message';
+  rep.ingest({ v: 1, event: 'peer.send', session: 'sess', sessionId: 'sid-1', cwd: '/x', at: clock, to: 'old', text: head + ' and more after 200 chars ' + 'X'.repeat(50) });
+  // 121 s later, a recv with the same first 200 chars must NOT be deduped (out of window)
+  clock += 121_000;
+  const r = rep.ingest({ v: 1, event: 'peer.recv', session: 'old', sessionId: 'sid-9', cwd: '/y', at: clock, text: head + ' and more after 200 chars ' + 'X'.repeat(50) });
+  assert.ok(r.peer, 'past the 120 s window: not a duplicate');
+});
+
+test('a peer record appended via logEvent lands in stalls.jsonl and is ignored by stall consumers', async () => {
+  // dynamic import so manager.js reads STATE_DIR after this test set GHOSTY_STATE_DIR
+  const { logEvent, LOG_FILE: LOG } = await import('../manager.js');
+  assert.equal(LOG, join(dir, 'stalls.jsonl'), 'manager.js loaded STATE_DIR from the env this test set');
+  const record = { type: 'peer', from: 'sess', to: 'task58-b', text: 'ghosty-level peer log entry', at: new Date().toISOString() };
+  await logEvent(record);
+  const logFile = join(dir, 'stalls.jsonl');
+  assert.ok(existsSync(logFile));
+  const lines = readFileSync(logFile, 'utf8').split('\n').filter(Boolean);
+  const peerLines = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.type === 'peer');
+  assert.ok(peerLines.length >= 1);
+  const last = peerLines[peerLines.length - 1];
+  assert.equal(last.from, 'sess');
+  assert.equal(last.to, 'task58-b');
+  assert.equal(last.text, 'ghosty-level peer log entry');
+  // the same consumers that iterate stalls.jsonl should not misread a peer record
+  const stalls = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.type === 'stall' && Date.parse(x.at) >= clock - 86400000);
+  assert.equal(stalls.length, 0, 'no stall records produced by these peer tests');
+});

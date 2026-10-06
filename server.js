@@ -1246,10 +1246,18 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --- reporter intake: loopback peers only, shared token (reporter.token, 0600) ---
+  // Cross-session peer messages (peer.send, peer.recv) are recorded as {type:'peer'} in stalls.jsonl via
+  // logEvent; the per-session facts are untouched. The response keeps the previous {ok,...} shape for
+  // every event (the peer record itself is not echoed back to the plugin).
   if (req.method === 'POST' && p === '/api/reporter/event') {
     if (!isLoopback(req.socket.remoteAddress)) return json(res, 403, { ok: false, error: 'loopback only' });
     if (!reporter.tokenOk(req.headers[TOKEN_HEADER])) return json(res, 401, { ok: false, error: 'bad token' });
-    try { return json(res, 200, reporter.ingest(await readJsonBody(req))); }
+    try {
+      const r = reporter.ingest(await readJsonBody(req));
+      if (r && r.peer) logEvent(r.peer);
+      const { peer: _peer, ...rest } = r || {};
+      return json(res, 200, rest);
+    }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token

@@ -12,6 +12,9 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const TOKEN_HEADER = 'x-ghosty-reporter-token';
 export const TEXT_MAX = 8 * 1024;
+const PEER_TEXT_MAX = 2000;           // peer messages are capped before they hit stalls.jsonl
+const PEER_RING_MAX = 50;             // last 50 sent texts remembered for the dedupe ring
+const PEER_DEDUPE_MS = 120_000;       // a recv that repeats a send within 2 min is the same one
 const LIVE_MS = 10 * 60 * 1000;       // a reporter that was silent this long is not "live" (turns can be long: any event refreshes it)
 const MERGE_MS = 15000;               // turn.end (turn.complete) and stop (Stop hook) of the same turn arrive within this
 
@@ -45,6 +48,21 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
     if (!s) { s = { sessionId: null, cwd: null, reporterSeenAt: 0, live: false, lastTurn: null, waiting: null, lastPrompt: null, agents: [] }; sessions.set(name, s); }
     return s;
   };
+  const peerSends = [];   // ring of recent peer.send texts for the dedupe pass: [{ text: full 200 head, at: ms }]
+  const peerRemember = (head, at) => {
+    peerSends.push({ text: head, at });
+    if (peerSends.length > PEER_RING_MAX) peerSends.shift();
+  };
+  const peerMatches = (head, at) => {
+    for (let i = peerSends.length - 1; i >= 0; i--) {
+      const e = peerSends[i];
+      if (at - e.at > PEER_DEDUPE_MS) { peerSends.splice(0, i + 1); break; }
+      if (e.text.length >= 20 && head.includes(e.text)) return true;   // the recv wraps the sent text in an envelope
+    }
+    return false;
+  };
+  const peerHead = (text) => text.slice(0, 200);
+  const isDupPeer = (text, at) => text.length >= 20 && peerMatches(text, at);
 
   // Returns { ok, ignored? } or throws {status}. `ev` is the parsed JSON body.
   function ingest(ev) {
@@ -94,6 +112,18 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
           ? ev.agents.slice(0, 50).map((a) => ({ id: str(a?.id, 80), type: str(a?.type, 60), status: str(a?.status, 30), description: str(a?.description, 200) }))
           : [];
         break;
+      case 'peer.send': {
+        const text = str(ev.text, PEER_TEXT_MAX);
+        if (!text) return { ok: true, ignored: 'empty peer text' };
+        peerRemember(peerHead(text), t);
+        return { ok: true, peer: { type: 'peer', from: ev.session, to: str(ev.to, 200), text, at: new Date(t).toISOString() } };
+      }
+      case 'peer.recv': {
+        const text = str(ev.text, PEER_TEXT_MAX);
+        if (!text) return { ok: true, ignored: 'empty peer text' };
+        if (isDupPeer(text, t)) return { ok: true, ignored: 'duplicate peer' };
+        return { ok: true, peer: { type: 'peer', from: null, to: ev.session, text, at: new Date(t).toISOString() } };
+      }
       default: return { ok: true, ignored: 'unknown event' };
     }
     return { ok: true };
