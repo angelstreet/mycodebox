@@ -126,7 +126,7 @@ export function leasesOfSession(leases, names) {
 }
 
 // Cap view: live Claude sessions and, when over the cap, the idle-longest ones as parking candidates.
-export function capView({ sessions, cap = SESSION_CAP, now = Date.now }) {
+export function capView({ sessions, cap = SESSION_CAP, now = Date.now() }) {
   const live = sessions.filter((s) => s.agent === 'claude' && s.state !== 'offline');
   const over = Math.max(0, live.length - cap);
   const idleLongest = live
