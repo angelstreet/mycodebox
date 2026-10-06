@@ -2224,7 +2224,8 @@ function syncPill(pp, n) {
   const t = holdPill(n);
   pp.classList.toggle('hidden', !t);
   if (t && pp.textContent !== t) pp.textContent = t;
-  pp.title = heldOf(n) ? `held by the manager: ${heldOf(n).reason}` : '';
+  pp.title = heldOf(n) ? `held by the manager: ${heldOf(n).reason} (click to resume)` : 'Paused (click to resume, sends "continue")';
+  pp.dataset.pause = n;   // the badge is a resume button: the delegated click handler toggles the pause
 }
 function syncPrioPause(el, n) {
   const pr = el.querySelector('.pr'), ph = prioBadgeHtml(n);

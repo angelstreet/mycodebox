@@ -1789,8 +1789,8 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 
 .dot.paused{ background:var(--accent); }
 
-/* the PAUSED badge is hidden for now (it showed next to "working" and confused; the play / pause button still tells) */
-.pp, .cell .h .pp, .row-item .pp, .session-list .sub .pp{ display:none !important; }
+.pp{ cursor:pointer; }
+.pp:hover{ background:var(--accent); color:#1a1206; }   /* the PAUSED badge is a resume button */
 
 /* Manager panel: status and review first, settings and history in readable sections. */
 .sheet.manager-sheet{ width:min(100%, 820px); max-width:820px; max-height:94dvh; height:min(94dvh, 920px); }
