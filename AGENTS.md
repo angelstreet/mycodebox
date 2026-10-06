@@ -4,7 +4,7 @@ Guidance for AI coding agents working in, or installing, this repo (mycodebox, r
 
 - **Install on a machine:** follow `docs/INSTALL.md`. It lists the prerequisites, the core steps, which optional
   features need what, and the security rules.
-- **What the product is and every feature:** `README.md`. Developer hand-over notes: `HANDOVER.md`.
+- **What the product is and every feature:** `README.md` (overview) and `docs/REFERENCE.md` (every feature and setting). Developer hand-over notes: `HANDOVER.md`.
 
 ## This repo is public: never leak anything
 

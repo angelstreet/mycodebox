@@ -4,7 +4,7 @@ Where this lives: **`~/ghosty-sessions/` on `codebox` (VM 190, Tailscale `<tails
 Git remote: `git@github.com:angelstreet/mycodebox` (public).
 
 This file is the **first** thing to read when resuming work. Everything else
-(architecture, runbook, certs, status pill heuristic) is in `README.md` and
+(architecture, runbook, certs, status pill heuristic) is in `docs/REFERENCE.md` and
 `certs/README.md`.
 
 ## 30-second bring-up
@@ -39,7 +39,7 @@ on (inert), AI triage **simulate**, deploy runner **off**.
 | Labels / swipe review | `public/review.js`, `/api/manager/review`, `/label`, `/unlabel` | left = no reason, right = legit; ✓/✗ the AI; `npm run stall-report` |
 | Priority / pause / holds | `session-meta.js`, `public/policy.js` | P0/P1/P2 (default P2); owner Pause = Esc + hold; manager holds never send Esc |
 | Quota | `quota.js` | Claude via `scripts/claude-statusline-ratelimits.sh` (status line), Codex via `codex app-server`, MiniMax via `coding_plan/remains` with mcode's login |
-| Jev decision log | `decisions.js`, `public/jev-view.js`, `manager.js` (`jev`, `writeBack`) | manager's Jev calls logged in the product (`VPT_TEAM_ID`), outcome write-back with a retry queue, usage tab "Jev & AI", decisions page `/?decisions=1`; README "Jev in the product's decision log" |
+| Jev decision log | `decisions.js`, `public/jev-view.js`, `manager.js` (`jev`, `writeBack`) | manager's Jev calls logged in the product (`VPT_TEAM_ID`), outcome write-back with a retry queue, usage tab "Jev & AI", decisions page `/?decisions=1`; docs/REFERENCE.md "Jev in the product's decision log" |
 | Usage | `usage/ingest.js` (unit `ghosty-usage`), `usage-view.js` | local Langfuse `~/langfuse-codebox/` (`:3100`); API-equivalent costs |
 | Session reporter | `claude-plugin/ghosty-reporter/`, `reporter.js` | see below |
 | Deploys | `deploy-runner.js`, `public/deployed.js` | queue + ledger live in the `vpt-lease` registry on proxmox (deploy skill) |
@@ -80,7 +80,7 @@ Claude exits you land in a shell at the repo root, not kicked out of the session
 
 **States** — working (pulsing green + current step), needs you (red, prompt + 1/2/3/esc), done
 (blue, agent finished its turn), idle (grey), offline. Agent badge (claude/codex/minimax/bash via
-process tree), repo/branch*, context left, model, held leases (exact `codebox:<session>` match; see README "Platforms page"), purple "waiting deploy".
+process tree), repo/branch*, context left, model, held leases (exact `codebox:<session>` match; see docs/REFERENCE.md "Platforms page"), purple "waiting deploy".
 
 **Phone (≤720px)** — board is home (sorted needs you > done > working > idle); tap row = card,
 long-press = set send target. Card: swipe header/reader left/right = next/prev session, "Aa / >_"
@@ -105,7 +105,7 @@ board, tabs, sidebar. Card headers show project · ⎇ branch(*) · ⑂ worktree
 
 **Dock** — chevron bottom-left collapses quick prompts + keys (remembered).
 
-**Alerts** — bell = Web Push subscription (see README "Web Push"; state in the state dir: vapid.json, push-subs.json, push-feed.json). Optional extra phone push via ntfy: the secret `NTFY_TOPIC` + `PUBLIC_URL` are in
+**Alerts** — bell = Web Push subscription (see docs/REFERENCE.md "Web Push"; state in the state dir: vapid.json, push-subs.json, push-feed.json). Optional extra phone push via ntfy: the secret `NTFY_TOPIC` + `PUBLIC_URL` are in
 the gitignored `~/ghosty-sessions/.env` (loaded by the unit's `EnvironmentFile=`); pushes on "needs you" and on
 disk critical (≥ 95 %, repeated every 6 h). `NTFY_DONE=1` adds turn-finished pushes.
 
@@ -133,7 +133,7 @@ exact tmux targets (`=name:`), create limited to dirs under $HOME, execFile only
 `claude-plugin/ghosty-reporter/` reports structured Claude events to `POST /api/reporter/event` (loopback + token
 from `<state dir>/reporter.token`); `reporter.js` keeps the latest per tmux session; `manager.js` prefers the
 reported final answer over the pane excerpt, logs `background_wait`, and takes the owner's reply from the reported
-prompt. Install = one `CLAUDE_CODE_PLUGIN_DIRS` line in `~/.claude/settings.json` (README, "Session reporter").
+prompt. Install = one `CLAUDE_CODE_PLUGIN_DIRS` line in `~/.claude/settings.json` (docs/REFERENCE.md, "Session reporter").
 Things to know: `Stop` is the only hook that says whether background work is in flight, and it does not fire for
 every turn end (an interrupted or declined-question turn has only `turn.complete`), so a missing count means 0;
 a finished background task wakes the session with a synthetic `<task-notification>` prompt (marked, ignored as an
@@ -203,7 +203,7 @@ Or from the Mac:
 
 ## Langfuse evaluation (TASK-44 phase 12)
 
-- Details in README "Langfuse evaluation". Code: `usage/lf-common.js` (ids + HTTP), `usage/lfeval.js` (scores + dataset sync),
+- Details in docs/REFERENCE.md "Langfuse evaluation". Code: `usage/lf-common.js` (ids + HTTP), `usage/lfeval.js` (scores + dataset sync),
   `usage/manager-parse.js` (stalls.jsonl -> generations), `usage/experiment.js` + `scripts/stops-experiment.js`,
   `usage/judge.js`, `prompts.js`, `scripts/lf-setup.js` (idempotent: prompt, dataset, LLM connection, evaluator + rule).
 - Owner steps not done headlessly (they need a service restart): (1) restart `ghosty-usage` so the tailer runs the eval

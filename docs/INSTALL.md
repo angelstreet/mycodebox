@@ -6,7 +6,7 @@ Everything that needs a secret is created on the machine and stays there; nothin
 
 mycodebox (repo `ghosty-sessions`) is a mobile-first dashboard for the Claude Code / Codex / MiniMax agents that run in
 tmux sessions on one machine. A small Node server captures every tmux pane once a second, serves a PWA over
-Tailscale, and lets the owner send keystrokes back. See `README.md` for the full feature reference.
+Tailscale, and lets the owner send keystrokes back. See `docs/REFERENCE.md` for the full feature reference.
 
 ## What you need first
 
@@ -81,7 +81,7 @@ Each one is off until you set it up. None is required for the dashboard to work.
 | **Session reporter** | exact turn / prompt / permission events from Claude sessions instead of screen guessing | Add `{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "<repo>/claude-plugin/ghosty-reporter" } }` to `~/.claude/settings.json`. Needs Claude Code 2.1.288 or newer. New sessions load it; running ones do not. | `reporter.token` is created by the server, loopback only |
 | **Voice input** (mic button) | speech to text on the machine, sent like typed text | `pip install faster-whisper` for the python3 that runs the server. `WHISPER_MODEL` picks the model (default `base`, CPU). The first use downloads the model. | none |
 | **Image attach** (paperclip, paste, drop) | uploads an image to `~/.ghosty/uploads/` and adds `@<path>` to the message | works out of the box | none |
-| **AI manager** | classifies every stop, can answer safe ones after a cancellable countdown | in the manager panel; auto-answer is off by default. Read the AI manager section of `README.md` before turning anything on. | `JEV_API_KEY` only if the owner has such a server |
+| **AI manager** | classifies every stop, can answer safe ones after a cancellable countdown | in the manager panel; auto-answer is off by default. Read the AI manager section of `docs/REFERENCE.md` before turning anything on. | `JEV_API_KEY` only if the owner has such a server |
 | **Usage and quota** | token cost per session, plan windows | `usage/ingest.js`, `systemd/ghosty-usage.service`; Langfuse is optional | Langfuse keys, in a separate env file outside the repo |
 | **Deploy queue, leases, Platforms page** | coordination of deploys and exclusive devices | specific to the author's platform (`vpt-lease` reached by `ssh proxmox`). Skip unless the owner has the same setup; without it those panels just show no data. | ssh access |
 
