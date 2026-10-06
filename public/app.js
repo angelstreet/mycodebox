@@ -12,6 +12,7 @@ import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, cred
 import { chipModel, machinesOf, holdingsOf } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
+import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';

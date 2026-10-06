@@ -13,6 +13,7 @@ const SHELL_FILES = [
   '/review.js',
   '/jev-view.js',
   '/icons.js',
+  '/tip.js',
   '/buttons.js',
   '/deployed.js',
   '/platforms.js',
