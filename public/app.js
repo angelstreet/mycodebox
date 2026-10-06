@@ -1391,7 +1391,6 @@ function buildSideRow(s) {
     <button class="edit pin" aria-label="Pin" title="Pin to the top">${icon('pin', 15)}</button>
     <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
     <button class="edit park" aria-label="Park session" title="Park: save the conversation, free its RAM (Resume brings it back)">${icon('archive', 15)}</button>
-    <button class="edit hide" aria-label="Hide session" title="Hide from the lists (it keeps running; bring it back from Hidden at the bottom)">${icon('eye-off', 15)}</button>
     <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button></span>`;
   // hover devices: the action bar floats to the right of the list (never covers the rows), level with this row
   li.addEventListener('mouseenter', () => {
@@ -1414,7 +1413,6 @@ function buildSideRow(s) {
     saveLayout(); sortSessions(); renderTabStrip(); if (state.mode === 'grid') renderGrid(); syncAll();
   };
   li.querySelector('.park').onclick = (e) => { e.stopPropagation(); parkSession(s.name); };
-  li.querySelector('.hide').onclick = (e) => { e.stopPropagation(); setHidden(s.name, true); };
   li.querySelector('.edit:not(.kill):not(.pin):not(.park):not(.hide)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
   return li;
