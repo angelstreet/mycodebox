@@ -1866,3 +1866,6 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
   .cell .h .nm{ order:0; flex:1 1 auto; max-width:none; min-width:0; }
   .cell .h > :not(.pr):not(.nm){ margin-left:0; }
 }
+
+/* answer popup header: priority + name on the left, counter / arrows / hide / dismiss at the right edge */
+#askPopup .ap-name{ flex:1 1 auto; }
