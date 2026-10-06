@@ -31,6 +31,9 @@
     <select class="wsel" id="wsSelect" aria-label="Workspace (repo)" title="Workspace: show one repo only"></select>
     <!-- fleet summary: counts per state, tap to filter -->
     <div class="summary" id="summary"></div>
+    <button class="icon-btn" id="filterBtn" aria-label="Filter sessions" title="Filter by status / project / agent">
+      <i data-icon="filter" data-size="17"></i>
+    </button>
     <div class="afs" id="activeFilters"></div>
     <div class="viewctl">
     <div class="modes" id="modeBar">
@@ -48,9 +51,6 @@
     </div>
     <button class="newbtn" id="topNewBtn" aria-label="New session" title="New session on codebox: name, model, priority, folder">
       <i data-icon="plus" data-size="15"></i><span>New</span>
-    </button>
-    <button class="icon-btn" id="filterBtn" aria-label="Filter sessions" title="Filter by status / project / agent">
-      <i data-icon="filter" data-size="17"></i>
     </button>
     <button class="icon-btn" id="alertsBtn" aria-label="Alerts feed" title="Alerts: what the manager and ghosty told you">
       <i data-icon="bell" data-size="18"></i><span class="acount hidden" id="alertsCount"></span>

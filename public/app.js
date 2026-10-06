@@ -1056,6 +1056,8 @@ function renderFilterBar() {
   els.filterBtn.classList.toggle('on', anyFilter() || show);
   renderActiveFilters();
   if (!show) return;
+  // the panel opens under the Filter button and runs to the right, kept on screen
+  requestAnimationFrame(() => { const r = els.filterBtn.getBoundingClientRect(); bar.style.right = 'auto'; bar.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - bar.offsetWidth - 12))}px`; });
   const all = state.sessions.map((s) => s.name);
   const count = (pred) => all.filter(pred).length;
   const chip = (group, val, label, n, cls = '') =>
