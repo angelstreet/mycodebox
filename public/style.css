@@ -1941,3 +1941,8 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 .fgrp .icon-btn{ flex-shrink:0; }
 .afclear{ flex-shrink:0; padding:3px 9px; border-radius:999px; font-size:11px; background:none; color:var(--accent); border:1px dashed rgba(232,154,74,.55); white-space:nowrap; }
 .afclear:hover{ background:rgba(232,154,74,.15); }
+
+/* web: the message row is a compact, centred strip so Send and the mic are a short mouse move from the box (it used to run the full window width) */
+@media (min-width: 721px){
+  .dock .row, .dock .prompts, .dock .keys{ max-width:940px; margin-inline:auto; width:100%; }
+}

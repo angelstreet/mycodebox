@@ -57,6 +57,7 @@ const els = {
 };
 
 const state = {
+  manualClosed: true,                  // the Notes fold starts collapsed
   hiddenClosed: true,                  // the Hidden fold starts collapsed
   parkedClosed: true,                  // the Parked fold starts collapsed
   sessions:   [],
