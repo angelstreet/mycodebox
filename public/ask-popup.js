@@ -116,7 +116,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const jl = (v.jev?.choice && Number.isFinite(jp[v.jev.choice]) && jp[v.jev.choice] > 0)
       ? `Jev: ${JEV_PLAIN[v.jev.choice] || v.jev.choice} ${Math.round(jp[v.jev.choice] * 100)}%`   // footer stays one short line; the Why section lists all three
       : jevLine(v.jev);
-    const a = v.aiId ? `AI ★ ${Math.round((v.aiConf || 0) * 100)}%` : 'AI: yours to decide';
+    const a = v.aiId ? `AI ★ ${Math.round((v.aiConf || 0) * 100)}%` : 'AI suggestions';
     return jl ? `${a}  ·  ${jl}` : a;
   }
 
