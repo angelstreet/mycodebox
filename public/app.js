@@ -1643,6 +1643,15 @@ function headMetaHtml(n) {
   if (lc) parts.push(lc);
   const c = ctxHtml(st);
   if (c) parts.push(c);
+  if (st.handoffs?.length) {
+    for (const h of st.handoffs) {
+      const overdue = h.state === 'overdue';
+      const hm = h.due ? new Date(h.due).toTimeString().slice(0, 5) : '';
+      const other = h.from === n ? h.to : h.from;
+      const title = `hand-off: ${h.resource} ${h.from} -> ${h.to}${hm ? ` by ${hm}` : ''}`;
+      parts.push(`<span class="chip-m hand${overdue ? ' late' : ''}" title="${escapeHtml(title)}">\u21c4 ${escapeHtml(h.resource)} \u2192 ${escapeHtml(other)}${hm ? ` ${escapeHtml(hm)}` : ''}</span>`);
+    }
+  }
   if (stateOf(n) === 'working' && st.activity) parts.push(`<span class="act">${escapeHtml(st.activity)}</span>`);
   return parts.join('<span class="sep"> \u00b7 </span>');
 }

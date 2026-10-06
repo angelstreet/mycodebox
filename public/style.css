@@ -376,6 +376,8 @@ body{ display:flex; flex-direction:column; }
 .chip-m.ctx.warn{ color:var(--accent); background:rgba(232,154,74,0.12); }
 .chip-m.ctx.crit{ color:var(--waiting); background:rgba(255,95,95,0.12); }
 .chip-m.lease{ color:var(--accent); flex-shrink:0; }
+.chip-m.hand{ color:var(--accent); flex-shrink:0; }
+.chip-m.hand.late{ color:var(--waiting); background:rgba(255,95,95,0.12); font-weight:600; }
 .empty{ margin:auto; text-align:center; color:var(--ink-3); font-size:12.5px; line-height:1.7; padding:30px 20px; }
 .empty code{ background:var(--bg-3); padding:1px 6px; border-radius:4px; color:var(--ink-2); }
 .empty .clear-f{ margin-top:10px; min-height:36px; padding:0 16px; border-radius:8px; border:1px solid var(--line-2); background:var(--bg-2); color:var(--ink); }

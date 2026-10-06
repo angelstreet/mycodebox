@@ -92,7 +92,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {} } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { const b = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); budget = { day: b.day || '', calls: b.calls || 0, cost: b.cost || 0 }; } catch {}
@@ -838,7 +838,9 @@ export function observe(s) {
       forbidden: final.forbidden, draft: final.draft, suggestion: final.suggestion,
       no_status: !!final.no_status, ...(final.status ? { status: final.status } : {}), ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
+      ...(final.handoff ? { handoff: final.handoff } : {}),
     });
+    if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;
     shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' });   // shadow: fire and forget, never awaited
     if (ws.send && !block) {   // the existing auto-answer handles this one
