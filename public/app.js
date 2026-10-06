@@ -1210,7 +1210,7 @@ function layoutSide() {
   for (const sec of (withHeaders ? sections : [{ key: 'other' }])) {
     const members = names.filter((n) => secOfName(n) === sec.key && matchesFilter(n));
     const total = names.filter((n) => secOfName(n) === sec.key).length;
-    if (withHeaders && !(sec.key === 'other' && !total)) plan.push({ hdr: sec, count: members.length === total ? String(total) : `${members.length}/${total}` });
+    if (withHeaders && !(sec.key === 'other' && !total) && !(anyFilter() && !members.length)) plan.push({ hdr: sec, count: members.length === total ? String(total) : `${members.length}/${total}` });
     const closed = L.collapsed.includes(sec.key);
     for (const n of members) plan.push({ name: n, sec: sec.key, closed });
   }
