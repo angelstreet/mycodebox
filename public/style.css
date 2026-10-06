@@ -271,8 +271,8 @@ body{ display:flex; flex-direction:column; }
 @media (max-width: 1100px){ .cell .h .tgt{ font-size:0; padding:2px 5px; } .grid-pane .cell.focus .h .tgt::before{ content:'\2192'; font-size:11px; } }
 
 .cell .h{
-  display:flex; align-items:center; gap:8px;
-  padding:7px 10px;
+  display:flex; align-items:center; gap:6px;
+  padding:6px 8px;
   background:var(--bg-2);
   border-bottom:1px solid var(--line);
   flex-shrink:0; min-height:34px;
@@ -749,7 +749,11 @@ body{ display:flex; flex-direction:column; }
 /* ------------ Card header: project · branch · worktree, centred ------------ */
 /* In-flow middle slot: name block and a spacer share the free space equally,
    so the label sits in the middle and pushes (never covers) the sides. */
-.cell .h .ag{ order:0; } .cell .h .nm{ order:1; flex:1 1 0; } .cell .h .proj{ order:2; }
+.cell .h .ag{ order:0; display:inline-flex; align-items:center; gap:3px; white-space:nowrap; flex-shrink:0; }
+.cell .h .ag .agent{ flex-shrink:0; }
+.cell .h .ag .agent-model{ overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.cell .h .nm{ order:1; flex:0 0 auto; max-width:55%; }   /* the name takes the width it needs; the project chip shrinks first */
+.cell .h .proj{ order:2; flex-shrink:3; }
 .cell .h::after{ content:''; order:3; flex:1 1 0; min-width:0; }
 .cell .h > :not(.ag):not(.nm):not(.proj):not(.pr){ order:4; }
 .cell .h .pr{ order:-1; }   /* priority first, like in the nav list */
@@ -1099,8 +1103,7 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 @media (hover:hover) and (pointer:fine){
   .cell .h .nm{ flex-direction:row; align-items:center; gap:8px; }
   .cell .h .mt{ height:auto; flex-shrink:0; }
-  .cell .h .mt .ctx, .cell .h .mt .sep{ display:none; }
-  .cell:hover .h .mt .ctx, .cell:hover .h .mt .sep{ display:inline; }
+  .cell .h .mt .ctx, .cell .h .mt .sep{ display:none; }   /* ctx % is not part of the card header (no hover reveal either) */
 }
 
 /* usage sheet: visible frame, bordered buttons, collapsible groups, filters */
@@ -1743,3 +1746,8 @@ body[data-mode="card"] .topbar .summary{ margin-left:auto; }
 
 /* nav list: two lines per session (name, then priority / agent / state); the repo-branch line is dropped */
 .session-list .sub.rb{ display:none; }
+
+/* card header on narrow cards: the repo chip and the full name come first; activity text and model give way */
+.grid-pane .cell .h{ container-type:inline-size; }
+@container (max-width:600px){ .cell .h .mt{ display:none; } }
+@container (max-width:600px){ .cell .h .ag .agent-model{ display:none; } }
