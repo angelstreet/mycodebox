@@ -180,6 +180,8 @@ const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${esc
 // Visual state: a session blocked on a deploy shows purple ('deploy'); a live needs-you prompt always wins.
 // Pure helper lives in /state.js so the top-bar summary and the status filter can reuse it.
 const vstateOf = (name) => displayStateOf(name, state.status);
+// what the lists show: a session whose stop needs the owner (the NEEDS YOU strip / answer popup) reads as 'waiting' everywhere, so the lists and the strip agree
+const listStateOf = (name) => (isOwnersTurn(state.status[name]) ? 'waiting' : displayStateOf(name, state.status));
 const deployWaitTip = (name) => state.status[name]?.deployWait?.text || '';
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 // filter bar: open by default on desktop, hidden by default on phones; the first tap on the funnel makes it your choice
@@ -1242,7 +1244,7 @@ function renderTabStrip() {
 function syncTabs() {
   for (const tab of els.tabs.children) {
     const n = tab.dataset.session;
-    const s = vstateOf(n);
+    const s = listStateOf(n);
     tab.className = `tab ${s}${n === state.active ? ' active' : ''}`;
     tab.querySelector('.dot').className = `dot ${s}`;
   }
@@ -1462,8 +1464,8 @@ function syncSide() {
     li.classList.toggle('pinned', state.layout.pins.includes(n));
     li.classList.toggle('shown', n !== state.active && shownNames.has(n));
     const dotEl = li.querySelector('.dot');
-    dotEl.className = `dot ${vstateOf(n)}`;
-    dotEl.title = vstateOf(n) === 'waiting' ? 'needs you' : vstateOf(n);
+    dotEl.className = `dot ${listStateOf(n)}`;
+    dotEl.title = listStateOf(n) === 'waiting' ? 'needs you' : listStateOf(n);
     const ag = agentBadgeHtml(n, { model: false });
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
@@ -1749,7 +1751,7 @@ function mountPopup() {
 
 function syncCell(cell) {
   const n = cell.dataset.session;
-  const s = vstateOf(n);
+  const s = listStateOf(n);
   const inCard = cell.parentElement === els.cardPane;
   const docOn = cell.classList.contains('doc-on');   // the task document can be open in a grid card too
   cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
@@ -2133,7 +2135,7 @@ function syncList() {
   } else if (!order && !els.listPane.querySelector('.empty')) { renderList(); return; }
   for (const row of els.listPane.querySelectorAll('.row-item')) {
     const n = row.dataset.session;
-    const s = vstateOf(n);
+    const s = listStateOf(n);
     row.className = `row-item ${s}${n === state.active ? ' focus' : ''}`;
     const ag = agentBadgeHtml(n);
     const agEl = row.querySelector('.ag');
