@@ -96,6 +96,7 @@ import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
+import { readOpenAsks } from './owner-asks.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -1369,6 +1370,9 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ sessions: r.sessions, status }));
     return;
+  }
+  if (req.method === 'GET' && p === '/api/owner-asks') {   // the manager's open questions for the owner (NEEDS YOU strip)
+    return json(res, 200, { asks: await readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')) });
   }
   if (req.method === 'GET' && (p.startsWith('/api/taskdocs/') || p.startsWith('/api/taskdoc/'))) {
     const one = p.startsWith('/api/taskdoc/');

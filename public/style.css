@@ -2019,3 +2019,13 @@ body:not(.res-hidden) .fgrp{ display:none; }
 /* the topic badge shares the line with Details (it used to take a whole header slot) */
 #askPopup .ap-subrow{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
 #askPopup .ap-subrow .ap-topic{ margin-left:auto; }
+
+/* the manager's open questions in the NEEDS YOU strip */
+.attention .qask{ background:none; color:var(--accent); border:1px solid var(--accent); border-radius:999px; padding:3px 10px; font-size:11px; font-weight:700; white-space:nowrap; flex-shrink:0; }
+.attention .qask:hover{ background:rgba(232,154,74,.15); }
+.attnpop.qpop{ max-width:min(430px, calc(100vw - 16px)); max-height:60vh; overflow-y:auto; gap:10px; }
+.qpop .qrow1{ font-size:12px; line-height:1.45; color:var(--ink); }
+.qpop .qrow1 b{ color:var(--accent); margin-right:4px; }
+.qpop .qopts{ display:flex; flex-direction:column; gap:1px; color:var(--ink-2); padding:2px 0 0 14px; }
+.qpop .qrec{ color:var(--working); padding-left:14px; }
+.attnpop .qgo{ background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600; }

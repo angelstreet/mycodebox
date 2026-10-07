@@ -989,7 +989,7 @@ function markAttentionOverflow() {
   if (!el) return;
   el.querySelector('.anmore')?.remove();
   document.getElementById('attnPop')?.remove();
-  const pills = [...el.querySelectorAll('button[data-session]')];
+  const pills = [...el.querySelectorAll('button[data-session], button[data-qs]')];
   pills.forEach((p) => p.classList.remove('cut'));
   el.classList.remove('ov');
   if (pills.length < 2 || el.scrollWidth <= el.clientWidth + 2) return;
@@ -1010,11 +1010,11 @@ function markAttentionOverflow() {
     if (old) { old.remove(); return; }
     const pop = document.createElement('div');
     pop.id = 'attnPop'; pop.className = 'attnpop';
-    pop.innerHTML = hidden.map((p) => `<button data-session="${escapeHtml(p.dataset.session)}">${escapeHtml(p.textContent)}</button>`).join('');
+    pop.innerHTML = hidden.map((p, i) => `<button data-i="${i}" class="${p.classList.contains('qask') ? 'qask' : ''}">${escapeHtml(p.textContent)}</button>`).join('');
     const r = more.getBoundingClientRect();
     pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 240))}px`;
     document.body.appendChild(pop);
-    for (const b of pop.querySelectorAll('button')) b.onclick = () => { pop.remove(); openCard(b.dataset.session); };
+    for (const b of pop.querySelectorAll('button')) b.onclick = () => { pop.remove(); hidden[Number(b.dataset.i)].click(); };
   };
 }
 document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#attnPop, .anmore')) document.getElementById('attnPop')?.remove(); });
@@ -1023,18 +1023,39 @@ function renderAttention() {
   // waiting sessions, plus finished ones whose closing question the AI reviewer sent to the owner
   const aiAsk = (n) => { const st = state.status[n]; return st && st.state === 'done' && needsOwner(st) && st.triage && st.triage.state !== 'pending'; };
   const waiting = state.sessions.filter((s) => stateOf(s.name) === 'waiting' || aiAsk(s.name)).sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
+  // the manager's open questions (ledger), grouped by the session they are about
+  const groups = new Map();
+  for (const q of state.ownerAsks || []) { const k = q.session || 'owner'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(q); }
+  const total = waiting.length + (state.ownerAsks || []).length;
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
-  const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|');
+  const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|') + '#' + (state.ownerAsksKey || '');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
-  els.attention.classList.toggle('none', !waiting.length);
-  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${waiting.length ? ` <b>${waiting.length}</b>` : ''}</button>${waiting.length ? '' : '<span class="dnone">none</span>'}` +
-    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('');
+  els.attention.classList.toggle('none', !total);
+  const qchip = ([sess, qs]) => `<button class="qask" data-qs="${escapeHtml(sess)}" title="${escapeHtml(qs.map((q) => `${q.id}: ${q.question}`).join('\n'))}">${qs.length > 1 ? `${qs.length} questions` : escapeHtml(qs[0].id)} \u00b7 ${escapeHtml(sess === 'owner-direct' || sess === 'owner' ? 'for you' : displayName(sess))}</button>`;
+  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` +
+    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('') +
+    [...groups.entries()].map(qchip).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
-  markAttentionOverflow();
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = () => openCard(b.dataset.session);   // straight to that session's card (single-card view); its 'asks you' chip reopens the answer popup
   }
+  for (const b of els.attention.querySelectorAll('button[data-qs]')) b.onclick = (e) => { e.stopPropagation(); showOwnerAsks(b, b.dataset.qs, groups.get(b.dataset.qs) || []); };
+  markAttentionOverflow();
+}
+
+// a small panel with the manager's open questions for one session: the text, the options, what it recommends
+function showOwnerAsks(anchor, sess, qs) {
+  document.getElementById('attnPop')?.remove();
+  const pop = document.createElement('div');
+  pop.id = 'attnPop'; pop.className = 'attnpop qpop';
+  const exists = state.sessions.some((s) => s.name === sess);
+  pop.innerHTML = qs.map((q) => `<div class="qrow1"><b>${escapeHtml(q.id)}</b> ${escapeHtml(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
+    + (exists ? `<button class="qgo" data-session="${escapeHtml(sess)}">Open ${escapeHtml(displayName(sess))}</button>` : '');
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 440))}px`;
+  document.body.appendChild(pop);
+  pop.querySelector('.qgo')?.addEventListener('click', () => { pop.remove(); openCard(sess); });
 }
 
 const saveFilters = () => lsSet(LS_FILTERS, JSON.stringify({ s: state.filter, p: state.fProject, a: state.fAgent }));   // kept in this browser: a refresh keeps the filters
@@ -3740,6 +3761,22 @@ function renderAll() {
 
 // ---------- alerts: "needs you" transitions ----------
 state.workStart = {}; state.doneToasted = {};
+// the manager's open questions for the owner (ledger): shown in the NEEDS YOU strip next to the sessions that need you
+state.ownerAsks = [];
+async function pollOwnerAsks() {
+  try {
+    const r = await fetch('/api/owner-asks');
+    if (!r.ok) return;
+    const j = await r.json();
+    const key = JSON.stringify(j.asks || []);
+    if (key === state.ownerAsksKey) return;
+    state.ownerAsksKey = key; state.ownerAsks = j.asks || [];
+    els.attention.dataset.key = '';   // force the strip to redraw
+    renderAttention();
+  } catch { /* offline: keep what we had */ }
+}
+setInterval(pollOwnerAsks, 15000);
+setTimeout(pollOwnerAsks, 1500);
 function alertTransitions() {
   const fresh = [];
   const finished = [];
