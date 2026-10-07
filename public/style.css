@@ -1998,3 +1998,8 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .attention.none .lbl{ color:var(--waiting); border-color:transparent; }
 .attention .dnone{ color:var(--ink-3); font-size:11px; }
 .attention .lbl b{ color:var(--ink); font-weight:600; }   /* the count is white; "none" is grey, like DEPLOY and LEASES */
+
+/* bigger popup: the question at the top is shown in full (no clipped line) and set apart from the log by clear borders */
+#askPopup.ap-big .ap-q{ max-height:none; overflow:visible; padding:2px 0 12px; border-bottom:1px solid var(--ink-3); }
+#askPopup .ap-det-t{ border:1px solid var(--ink-3); border-radius:8px; padding:10px 12px; }
+#askPopup.ap-big .ap-det{ margin-top:2px; }
