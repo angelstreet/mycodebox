@@ -4187,7 +4187,7 @@ if ('serviceWorker' in navigator) {
     // "Popup Reply open" = the popup is visible (not hidden/minimised). The popup uses the
     // 'hidden' class when minimised; offsetParent is null when display:none.
     const popupReplyOpen = !!popupEl && !popupEl.classList.contains('hidden') && popupEl.offsetParent !== null;
-    const g = reloadGuard({ inputText, inputFocused, popupReplyOpen });
+    const g = reloadGuard({ inputText, inputFocused, popupReplyOpen, coarse: window.matchMedia('(pointer: coarse)').matches });
     if (g.shouldReload) { swReloading = true; window.location.reload(); }
     else if (g.showToast) showReloadToast();
   };
@@ -4196,9 +4196,8 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js', { scope: '/' })
       .then((reg) => {
         console.log('[sw] registered scope=', reg.scope);
-        // Poll for updates every 5 minutes (battery-friendly; the Android webview keeps the page
-        // alive in the background, so setInterval is enough).
-        try { setInterval(() => reg.update().catch(() => {}), 5 * 60 * 1000); } catch {}
+        // Poll for updates every minute on a desktop, every 5 minutes on a phone (battery).
+        try { setInterval(() => reg.update().catch(() => {}), (window.matchMedia('(pointer: coarse)').matches ? 5 : 1) * 60 * 1000); } catch {}
         // Also check when the owner returns to the app — the most common deploy moment.
         document.addEventListener('visibilitychange', () => {
           if (document.visibilityState === 'visible') reg.update().catch(() => {});

@@ -53,3 +53,7 @@ test('reloadGuard: null inputText falls back to ""', () => {
 test('reloadGuard: a single character is enough to be "typing"', () => {
   assert.deepEqual(reloadGuard({ inputText: 'a', inputFocused: false, popupReplyOpen: false }), { shouldReload: false, showToast: true });
 });
+test('reloadGuard: desktop (not coarse) reloads under an empty focused box and an open popup, but never under typed text', () => {
+  assert.deepEqual(reloadGuard({ inputText: '', inputFocused: true, popupReplyOpen: true, coarse: false }), { shouldReload: true, showToast: false });
+  assert.deepEqual(reloadGuard({ inputText: 'hi', inputFocused: true, popupReplyOpen: false, coarse: false }), { shouldReload: false, showToast: true });
+});
