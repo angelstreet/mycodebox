@@ -3295,13 +3295,13 @@ function syncDock() {
     els.sendInput.placeholder = tg.length ? `→ ${tg.length} session${tg.length === 1 ? '' : 's'}` : 'pick targets above';
     renderMultiRow();
   } else {
-    dk.tdot.className = `adot ${n ? agentOf(n) : ''}`;
+    dk.tdot.className = `adot ${n ? agentOf(n) : ''}${n && listStateOf(n) === 'waiting' ? ' needs' : ''}`;   // red while the target needs you (same predicate as the strip and the lists)
     // phones: no room for the full title, the id ("task38", "BUG0268") is enough, and the input stays empty
     const shortName = (x) => (isPhone() ? (/^([a-z]+\d+)(?![a-z0-9])/i.exec(x)?.[1] ?? x) : x);
     dk.tname.textContent = n ? shortName(displayName(n)) : 'none';
     els.sendInput.placeholder = isPhone() ? '' : (n ? `→ ${displayName(n)}` : 'no session');
   }
-  els.dock.classList.toggle('target-waiting', !!n && !dock.multi && stateOf(n) === 'waiting');
+  els.dock.classList.toggle('target-waiting', !!n && !dock.multi && listStateOf(n) === 'waiting');
   renderPrompts();
   checkDelivery();
 }

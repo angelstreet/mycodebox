@@ -556,6 +556,7 @@ body{ display:flex; flex-direction:column; }
 .adot.claude{ background:var(--a-claude); } .adot.codex{ background:var(--a-codex); }
 .adot.minimax{ background:var(--a-minimax); } .adot.bash{ background:var(--a-bash); }
 .adot.multi{ background:var(--accent); }
+.adot.needs{ background:var(--waiting); }
 
 /* send target chip */
 .tchip{
