@@ -350,6 +350,12 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.btn) pick(btnById(t.dataset.btn));
   });
   pill.addEventListener('click', () => setMin(false));
+  // a click anywhere outside the popup hides it (the red pill brings it back)
+  document.addEventListener('pointerdown', (e) => {
+    if (minimised || el.classList.contains('hidden')) return;
+    if (e.target.closest('#askPopup, #askPopupPill, .sheet-back, .toast, .toast-reload')) return;
+    setMin(true);
+  }, true);
   document.addEventListener('keydown', (e) => {
     if (minimised || el.classList.contains('hidden') || !ctx) return;
     const tg = e.target; if (tg && (tg.tagName === 'TEXTAREA' || tg.tagName === 'INPUT' || tg.isContentEditable)) return;
