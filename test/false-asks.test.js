@@ -149,3 +149,10 @@ test('2c. "Tap the "New version" toast to load it" at the end of a done report i
   assert.equal(s.case, 'done');
   assert.equal(wouldSend(s).why, 'finished');
 });
+
+test('2d. a "?s=<session>" query string in a done report is not a question, a real "?" still is', async () => {
+  const { needsOwner } = await import('../public/buttons.js');
+  assert.equal(needsOwner({ stall: { case: 'done', question: 'A ?s=<session> link in the address bar still wins. Tap the toast.' } }), false);
+  assert.equal(needsOwner({ stall: { case: 'done', question: 'Should I deploy it?' } }), true);
+  assert.equal(needsOwner({ stall: { case: 'done', question: 'Which one? (a) or (b)' } }), true);
+});

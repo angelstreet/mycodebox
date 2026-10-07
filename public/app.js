@@ -3739,13 +3739,23 @@ function renderAll() {
 }
 
 // ---------- alerts: "needs you" transitions ----------
+state.workStart = {}; state.doneToasted = {};
 function alertTransitions() {
   const fresh = [];
+  const finished = [];
   for (const s of state.sessions) {
     const now = stateOf(s.name);
-    if (now === 'waiting' && state.prevState[s.name] && state.prevState[s.name] !== 'waiting') fresh.push(s.name);
+    const prev = state.prevState[s.name];
+    if (now === 'waiting' && prev && prev !== 'waiting') fresh.push(s.name);
+    // a session that really worked for a while and finished: a quick "<task> - Done" toast, never a popup
+    if (now === 'working' && prev !== 'working') state.workStart[s.name] = Date.now();
+    if (now === 'done' && prev === 'working' && Date.now() - (state.workStart[s.name] || Date.now()) > 15000 && state.doneToasted[s.name] !== state.status[s.name]?.doneAt) {
+      state.doneToasted[s.name] = state.status[s.name]?.doneAt;
+      finished.push(s.name);
+    }
     state.prevState[s.name] = now;
   }
+  if (finished.length && !document.hidden && !fresh.length) toast(`${finished.map(displayName).join(', ')} \u2013 Done`, 3500);
   if (!fresh.length) return;
   if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
   if (!document.hidden) {
