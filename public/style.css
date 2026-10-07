@@ -2009,3 +2009,9 @@ body:not(.res-hidden) .fgrp{ display:none; }
 /* alert row: NEEDS YOU takes whatever DEPLOY and LEASES don't need (they shrink to their text while idle), and fades at the edge when its pills overflow */
 @media (min-width: 901px){ .alertrow{ grid-template-columns:minmax(0,1fr) fit-content(32%) fit-content(32%); } }
 .attention.ov{ -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent); mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent); }
+
+/* NEEDS YOU "+N" chip and its list */
+.attention button.cut{ display:none; }
+.attention .anmore{ background:none; color:var(--waiting); border:1px dashed var(--waiting); flex-shrink:0; }
+.attnpop{ position:fixed; z-index:75; display:flex; flex-direction:column; gap:6px; padding:8px; background:var(--bg-2); border:1px solid var(--line-2); border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.6); max-width:min(320px, calc(100vw - 16px)); }
+.attnpop button{ background:var(--waiting); color:#1a0606; border:0; border-radius:999px; padding:4px 10px; font-size:11px; font-weight:700; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

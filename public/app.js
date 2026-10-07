@@ -983,10 +983,41 @@ function renderSummary() {
   document.title = counts.waiting ? `(${counts.waiting}) mycodebox` : 'mycodebox';
 }
 
+// NEEDS YOU: when the pills don't fit, the ones that don't are tucked behind a "+N" chip that lists them
 function markAttentionOverflow() {
   const el = els.attention;
-  if (el) el.classList.toggle('ov', el.scrollWidth > el.clientWidth + 2);
+  if (!el) return;
+  el.querySelector('.anmore')?.remove();
+  document.getElementById('attnPop')?.remove();
+  const pills = [...el.querySelectorAll('button[data-session]')];
+  pills.forEach((p) => p.classList.remove('cut'));
+  el.classList.remove('ov');
+  if (pills.length < 2 || el.scrollWidth <= el.clientWidth + 2) return;
+  const more = document.createElement('button');
+  more.className = 'anmore'; more.type = 'button';
+  el.appendChild(more);
+  let cut = 0;
+  while (pills.length - cut > 1) {
+    pills[pills.length - 1 - cut].classList.add('cut'); cut++;
+    more.textContent = `+${cut}`;
+    if (el.scrollWidth <= el.clientWidth + 2) break;
+  }
+  const hidden = pills.slice(pills.length - cut);
+  more.title = hidden.map((p) => p.textContent).join(', ');
+  more.onclick = (e) => {
+    e.stopPropagation();
+    const old = document.getElementById('attnPop');
+    if (old) { old.remove(); return; }
+    const pop = document.createElement('div');
+    pop.id = 'attnPop'; pop.className = 'attnpop';
+    pop.innerHTML = hidden.map((p) => `<button data-session="${escapeHtml(p.dataset.session)}">${escapeHtml(p.textContent)}</button>`).join('');
+    const r = more.getBoundingClientRect();
+    pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 240))}px`;
+    document.body.appendChild(pop);
+    for (const b of pop.querySelectorAll('button')) b.onclick = () => { pop.remove(); openCard(b.dataset.session); };
+  };
 }
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#attnPop, .anmore')) document.getElementById('attnPop')?.remove(); });
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markAttentionOverflow()).observe(els.attention);
 function renderAttention() {
   // waiting sessions, plus finished ones whose closing question the AI reviewer sent to the owner
