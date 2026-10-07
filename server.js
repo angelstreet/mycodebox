@@ -746,8 +746,8 @@ async function pollOnce() {
       }
     }
     const t = track.get(s.name) || { changeAt: 0, workingSince: null, lastWorkAt: 0, realWork: false, prevState: undefined, doneAt: null, ackFor: null, ackAt: null, reply: null, replyHash: null, contextLeft: null, model: null };
-    // A change of capture depth (card opened/closed) is not activity.
-    const paneChanged = !!(changed && prev && prev.act !== act && prev.depth === depth);
+    // A change of capture depth (card opened/closed) or of window size (a card was fitted to the pane: the text only reflows) is not activity.
+    const paneChanged = !!(changed && prev && prev.act !== act && prev.depth === depth && prev.cols === p.cols && prev.rows === p.rows);
     if (paneChanged) t.changeAt = now;   // first sight is not activity
     track.set(s.name, t);
     // Delivery ack: first pane change after the most recent send.
