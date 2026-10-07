@@ -1990,3 +1990,10 @@ body:not(.res-hidden) .fgrp{ display:none; }
 
 /* Details log: plain white text on the popup's own background, no grey box */
 #askPopup .ap-det-t{ background:none; border:0; border-top:1px solid var(--line-2); border-radius:0; padding:8px 0 2px; color:#f4f6fa; font-size:13px; line-height:1.5; }
+
+/* NEEDS YOU reads like DEPLOY and LEASES: a plain bold label, then 'none' or the count - no pill border */
+.attention .lbl{ border:0; border-radius:0; padding:0 0 1px; margin-right:4px; background:none; color:var(--waiting); font-size:11px; letter-spacing:.08em; border-bottom:2px solid transparent; }
+.attention .lbl b{ margin-left:6px; }
+.attention .lbl.on{ background:none; color:var(--waiting); border-bottom-color:var(--waiting); }
+.attention.none .lbl{ color:var(--waiting); border-color:transparent; }
+.attention .dnone{ color:var(--ink-3); font-size:11px; }

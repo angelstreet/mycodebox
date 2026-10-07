@@ -992,7 +992,7 @@ function renderAttention() {
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.classList.toggle('none', !waiting.length);
-  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU <b>${waiting.length}</b></button>` +
+  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${waiting.length ? ` <b>${waiting.length}</b>` : ''}</button>${waiting.length ? '' : '<span class="dnone">none</span>'}` +
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
