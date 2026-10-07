@@ -1963,3 +1963,21 @@ body:not(.res-hidden) .fgrp{ display:none; }
   .qchip .agent{ padding:1px 4px; }
   .qchip.on{ border-color:var(--accent); color:var(--ink); background:rgba(232,154,74,.12); }
 }
+
+/* web grid: a card whose task has a .md shows the MD button at the top right too (it used to be single-card only) */
+@media (min-width: 721px){
+  .grid-pane .cell .h .td{ display:flex; align-items:center; justify-content:center; min-width:30px; height:26px; padding:0 6px; border-radius:7px; background:var(--bg-2); border:1px solid var(--line-2); color:var(--ink-2); font-size:10.5px; font-weight:700; letter-spacing:.04em; flex-shrink:0; }
+  .grid-pane .cell .h .td.hidden{ display:none; }
+  .grid-pane .cell.doc-on .h .td{ color:var(--accent); border-color:var(--accent); }
+}
+.cell .docview, .cell .docview .mdbody{ min-width:0; max-width:100%; }
+.cell .docview .mdbody{ overflow-x:hidden; }
+.cell .docview .mdbar{ min-width:0; }
+.cell{ overflow:clip; }   /* never scrollable sideways (opening the task document used to shift the card's content)*/
+/* grid cards: when the header is tight the name shortens (ellipsis) instead of pushing the buttons out of the card */
+.grid-pane .cell .h .nm{ flex:0 1 auto; min-width:5ch; max-width:none; }
+.grid-pane .cell .h .nm .name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.grid-pane .cell .h .stw, .grid-pane .cell .h .pp, .grid-pane .cell .h .pz, .grid-pane .cell .h .td, .grid-pane .cell .h .open{ flex-shrink:0; }
+.grid-pane .cell .h .proj{ flex-shrink:30; }
+@container (max-width:430px){ .grid-pane .cell .h .ag{ display:none; } }
+.grid-pane .cell .h .rn{ display:none; }   /* the pencil took ~16px from the name; rename = double-tap the name */

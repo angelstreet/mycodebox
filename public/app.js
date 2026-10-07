@@ -1751,7 +1751,7 @@ function syncCell(cell) {
   const n = cell.dataset.session;
   const s = vstateOf(n);
   const inCard = cell.parentElement === els.cardPane;
-  const docOn = inCard && cell.classList.contains('doc-on');
+  const docOn = cell.classList.contains('doc-on');   // the task document can be open in a grid card too
   cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
   probeTaskDoc(cell, n);
   const ag = agentBadgeHtml(n);
