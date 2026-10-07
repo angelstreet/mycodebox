@@ -1997,3 +1997,4 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .attention .lbl.on{ background:none; color:var(--waiting); border-bottom-color:var(--waiting); }
 .attention.none .lbl{ color:var(--waiting); border-color:transparent; }
 .attention .dnone{ color:var(--ink-3); font-size:11px; }
+.attention .lbl b{ color:var(--ink); font-weight:600; }   /* the count is white; "none" is grey, like DEPLOY and LEASES */
