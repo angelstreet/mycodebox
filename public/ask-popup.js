@@ -93,7 +93,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     let aiId = ai?.proposed_reply ? mapAiToButton(d.buttons, d.kind, ai.proposed_reply) : null;
     const btns = d.buttons.map((b) => (b.id === aiId && ai?.forbidden ? { ...b, confirm: true } : b));   // a forbidden AI pick needs the second tap
     if (!btns.some((b) => b.reply)) btns.push({ id: 'reply', label: '\u270e reply\u2026', reply: true });   // a live menu has no Reply button of its own
-    const marked = btns.map((b) => ({ ...b, hl: !!aiId && b.id === aiId && shouldHighlight(b, st.triage) }));
+    const sugId = aiId;   // the AI's pick, kept even when it may not be highlighted (a sensitive topic): it still gets an orange border + its confidence
+    const marked = btns.map((b) => ({ ...b, hl: !!aiId && b.id === aiId && shouldHighlight(b, st.triage), sug: !!sugId && b.id === sugId }));
     if (!marked.some((b) => b.hl)) aiId = null;
     // Several decisions in one stop: when the closing text has ≥ 2 numbered decision lines, render
     // each of them in the question area (max 3) and prefix the sent button text with the last
@@ -117,7 +118,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
     // and indented) before display so it fills the popup width instead of a narrow column.
     const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, expanded ? 6000 : 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
-    return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st), forbidden: (typeof st.stall?.forbidden === 'string' && st.stall.forbidden) || (typeof ai?.forbidden === 'string' && ai.forbidden) || '' };
+    return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, sugConf: sugId ? Number(ai?.confidence) : null, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st), forbidden: (typeof st.stall?.forbidden === 'string' && st.stall.forbidden) || (typeof ai?.forbidden === 'string' && ai.forbidden) || '' };
   }
 
   function metaText(v) {
@@ -187,9 +188,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   }
 
   function btnHtml(b, label, n) {
-    const rec = b.rec ? '<span class="ap-rec">agent recommends</span>' : '';
+    const rec = b.rec ? '<span class="ap-rec">agent recommends</span>' : (b.sug && !b.hl ? `<span class="ap-rec">AI ${Math.round((ctx?.sugConf || 0) * 100)}%</span>` : '');
     const hasDesc = !!b.desc;
-    const cls = ['ap-b', b.hl ? 'hl' : '', b.rec ? 'isrec' : '', b.confirm ? 'cf' : '', b.muted ? 'muted' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op', hasDesc ? 'has-ex' : ''].filter(Boolean).join(' ');
+    const cls = ['ap-b', b.hl ? 'hl' : '', b.rec || (b.sug && !b.hl) ? 'isrec' : '', b.confirm ? 'cf' : '', b.muted ? 'muted' : '', b.id === 'yes' || b.id === 'no' ? 'yn' : b.reply ? 'rep' : 'op', hasDesc ? 'has-ex' : ''].filter(Boolean).join(' ');
     const star = b.hl ? '<i class="star">★</i>' : '';
     // The chevron is rendered INSIDE the option's own button area (small, right-aligned, stopPropagation
     // so a tap on the chevron doesn't fire the option's send). Only options with a description get it;
@@ -230,7 +231,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
     el.classList.toggle('ap-big', expanded);
-    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, expanded, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
+    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, expanded, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.sug, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);
