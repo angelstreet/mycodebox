@@ -261,7 +261,7 @@ body{ display:flex; flex-direction:column; }
 .cell.focus{ border-color:var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 16px rgba(232,154,74,0.22); }
 .cell.waiting.focus{ box-shadow: 0 0 0 2px var(--waiting), 0 0 0 4px var(--accent); }
 .cell.deploy{ border-color:var(--deploy); box-shadow:0 0 0 1px var(--deploy), 0 0 14px rgba(160,112,255,0.22); }
-.cell.done{ border-left:3px solid var(--done); }
+.cell.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); z-index:2; pointer-events:none; }   /* a marker drawn inside, not a thicker border: the card's content never shifts when the state changes */
 .grid-pane .cell.focus{ box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(232,154,74,0.35); }
 .cell .h .tgt{
   display:none; flex-shrink:0; font-size:9.5px; font-weight:700; letter-spacing:.03em;
@@ -357,7 +357,8 @@ body{ display:flex; flex-direction:column; }
 .row-item.focus{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
 .row-item.waiting{ border-color:var(--waiting); background:rgba(255,95,95,0.06); }
 .row-item.deploy{ border-color:var(--deploy); background:rgba(160,112,255,0.07); }
-.row-item.done{ border-left:3px solid var(--done); }
+.row-item{ position:relative; }
+.row-item.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); border-radius:10px 0 0 10px; pointer-events:none; }
 .row-item.offline{ opacity:.55; }
 .row-item .l1{ display:flex; align-items:center; gap:8px; min-width:0; }
 .row-item .name{ font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
