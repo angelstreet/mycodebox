@@ -109,3 +109,8 @@ test('isRoutineAlert: missing / wrong-typed tag or title is safe (returns false)
   assert.equal(isRoutineAlert({ tag: 'deploy-x', title: 'deploy x y started' }), false);
   assert.equal(isRoutineAlert({ tag: '', title: 'deploy x y started' }), false);
 });
+test('displayState: a deployWait of kind "said" (only the agent\'s words) does not make the session violet', () => {
+  assert.equal(displayState({ state: 'done', deployWait: { kind: 'said' } }), 'done');
+  assert.equal(displayState({ state: 'done', deployWait: { kind: 'requested', id: '1' } }), 'deploy');
+  assert.equal(displayState({ state: 'done', deployWait: { kind: 'waiter' } }), 'deploy');
+});

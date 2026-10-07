@@ -12,7 +12,10 @@ export const STATE_LABEL = { working: 'working', waiting: 'needs you', deploy: '
 // Display state of one session given its raw status row.
 export function displayState(status) {
   const s = (status && status.state) || 'offline';
-  return status && status.deployWait && s !== 'waiting' && s !== 'offline' ? 'deploy' : s;
+  // 'waiting deploy' (violet) only for a deploy that is really queued or has a waiter in the lease registry; a session that merely
+  // SAID it waits for one (a regex on its own text, kind 'said') keeps its real state, so it cannot flip purple <-> red
+  const real = status && status.deployWait && status.deployWait.kind !== 'said';
+  return real && s !== 'waiting' && s !== 'offline' ? 'deploy' : s;
 }
 
 // Convenience wrapper used by the page: name + status map -> display state.
