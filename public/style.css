@@ -1981,3 +1981,9 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .grid-pane .cell .h .proj{ flex-shrink:30; }
 @container (max-width:430px){ .grid-pane .cell .h .ag{ display:none; } }
 .grid-pane .cell .h .rn{ display:none; }   /* the pencil took ~16px from the name; rename = double-tap the name */
+
+/* bigger answer popup: wide and tall, so a long log can be read */
+#askPopup.ap-big{ width:min(980px, calc(100vw - 28px)); max-height:calc(100vh - var(--ask-bottom, 0px) - 28px); display:flex; flex-direction:column; }
+#askPopup.ap-big .ap-body{ overflow-y:auto; min-height:0; }
+#askPopup.ap-big .ap-det-t{ max-height:52vh; font-size:12.5px; }
+#askPopup.ap-big .ap-q{ max-height:28vh; }

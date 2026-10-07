@@ -28,6 +28,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const DISMISS_KEY = 'ghosty.askPopup.dismissed';
   const dismissed = new Set();                  // item keys (session + stop) the owner dismissed: not shown again until the stop changes or the session is opened from the strip
   let whyOpen = false;                          // expandable AI/Jev "Why" section, collapsed by default
+  let expanded = false;                         // the bigger popup (more of the log)
   let detOpen = false;                          // "Details" (tail of the closing text), collapsed by default, remembered like Why
   const picks = new Map();                      // item.key -> { questionN: optionN } (the multi-question form, owner's taps)
   const fqOpen = new Set();                     // `${item.key}|${questionN}`: question whose full option texts are expanded
@@ -39,6 +40,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const ownSend = new Map();                    // name -> ts of a send the popup made itself
   try { minimised = sessionStorage.getItem(MIN_KEY) === '1'; } catch {}
   try { whyOpen = sessionStorage.getItem(WHY_KEY) === '1'; } catch {}
+  try { expanded = sessionStorage.getItem('ghosty.askPopup.big') === '1'; } catch {}
   try { detOpen = sessionStorage.getItem(DET_KEY) === '1'; } catch {}
   try { for (const k of JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]')) dismissed.add(k); } catch {}   // survives a refresh (per device)
   const saveDismissed = () => { try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...dismissed].slice(-200))); } catch {} };
@@ -56,6 +58,12 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const setMin = (on) => {
     minimised = !!on;
     try { sessionStorage.setItem(MIN_KEY, on ? '1' : '0'); } catch {}
+    render(true);
+  };
+  const setExpanded = (on) => {
+    expanded = !!on;
+    if (expanded) { detOpen = true; try { sessionStorage.setItem(DET_KEY, '1'); } catch {} }   // bigger = read the log
+    try { sessionStorage.setItem('ghosty.askPopup.big', expanded ? '1' : '0'); } catch {}
     render(true);
   };
   const setWhy = (on) => {
@@ -107,7 +115,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const question = form || questionsView ? '' : baseQ;
     // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
     // and indented) before display so it fills the popup width instead of a narrow column.
-    const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
+    const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, expanded ? 6000 : 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
     return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st), forbidden: (typeof st.stall?.forbidden === 'string' && st.stall.forbidden) || (typeof ai?.forbidden === 'string' && ai.forbidden) || '' };
   }
 
@@ -220,7 +228,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     pill.classList.toggle('hidden', !minimised);
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
-    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
+    el.classList.toggle('ap-big', expanded);
+    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, expanded, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);
@@ -242,6 +251,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
           ${q.items.length > 1 ? `<span class="ap-cnt">${idx + 1}/${q.items.length}</span>
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
           <button class="ap-nav" data-act="next" aria-label="Next">›</button>` : ''}
+          <button class="ap-x" data-act="expand" aria-label="${expanded ? 'Smaller' : 'Bigger'}" title="${expanded ? 'Back to the small popup' : 'Bigger: read more of the log'}">${icon(expanded ? 'chevron-down' : 'expand', 16)}</button>
           <button class="ap-x" data-act="min" aria-label="Hide" title="Hide (tap the red pill to bring it back)">${icon('chevron-down', 16)}</button>
           <button class="ap-x" data-act="dismiss" aria-label="Dismiss" title="Dismiss: I won't answer this one, don't show it again">${icon('x', 16)}</button>
         </div>
@@ -322,6 +332,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.act === 'card') { const i = cur(); if (i) openCard(i.name); return; }
     if (t.dataset.act === 'prev') return move(-1);
     if (t.dataset.act === 'next') return move(+1);
+    if (t.dataset.act === 'expand') return setExpanded(!expanded);
     if (t.dataset.act === 'min') return setMin(true);
     if (t.dataset.act === 'dismiss') { const i = cur(); if (i) { dismissed.add(i.key); saveDismissed(); curKey = null; } return render(true); }
     if (t.dataset.act === 'why') return setWhy(!whyOpen);
