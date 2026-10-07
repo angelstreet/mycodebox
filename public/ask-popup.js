@@ -252,8 +252,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
           ${q.items.length > 1 ? `<span class="ap-cnt">${idx + 1}/${q.items.length}</span>
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
           <button class="ap-nav" data-act="next" aria-label="Next">›</button>` : ''}
-          <button class="ap-x" data-act="expand" aria-label="${expanded ? 'Smaller' : 'Bigger'}" title="${expanded ? 'Back to the small popup' : 'Bigger: read more of the log'}">${icon(expanded ? 'chevron-down' : 'expand', 16)}</button>
-          <button class="ap-x" data-act="min" aria-label="Hide" title="Hide (tap the red pill to bring it back)">${icon('chevron-down', 16)}</button>
+          <button class="ap-x" data-act="expand" aria-label="${expanded ? 'Smaller' : 'Bigger'}" title="${expanded ? 'Back to the small popup' : 'Bigger: read more of the log'}">${icon(expanded ? 'shrink' : 'expand', 16)}</button>
+          ${expanded ? '' : `<button class="ap-x" data-act="min" aria-label="Hide" title="Hide (tap the red pill to bring it back)">${icon('chevron-down', 16)}</button>`}
           <button class="ap-x" data-act="dismiss" aria-label="Dismiss" title="Dismiss: I won't answer this one, don't show it again">${icon('x', 16)}</button>
         </div>
         ${qBlock}
@@ -354,7 +354,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (minimised || el.classList.contains('hidden') || !ctx) return;
     const tg = e.target; if (tg && (tg.tagName === 'TEXTAREA' || tg.tagName === 'INPUT' || tg.isContentEditable)) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.key === 'Escape') { e.preventDefault(); return setMin(true); }
+    if (e.key === 'Escape') { e.preventDefault(); return expanded ? setExpanded(false) : setMin(true); }   // Esc: first back to small, then hide
     const opts = ctx.buttons.filter((b) => !b.reply);
     let b = null;
     if (/^[1-9]$/.test(e.key)) b = opts[Number(e.key) - 1];
