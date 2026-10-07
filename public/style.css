@@ -1987,3 +1987,6 @@ body:not(.res-hidden) .fgrp{ display:none; }
 #askPopup.ap-big .ap-body{ overflow-y:auto; min-height:0; }
 #askPopup.ap-big .ap-det-t{ max-height:52vh; font-size:12.5px; }
 #askPopup.ap-big .ap-q{ max-height:28vh; }
+
+/* Details log: plain white text on the popup's own background, no grey box */
+#askPopup .ap-det-t{ background:none; border:0; border-top:1px solid var(--line-2); border-radius:0; padding:8px 0 2px; color:#f4f6fa; font-size:13px; line-height:1.5; }

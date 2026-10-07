@@ -28,6 +28,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const DISMISS_KEY = 'ghosty.askPopup.dismissed';
   const dismissed = new Set();                  // item keys (session + stop) the owner dismissed: not shown again until the stop changes or the session is opened from the strip
   let whyOpen = false;                          // expandable AI/Jev "Why" section, collapsed by default
+  const detScroll = { key: null, top: null, atBottom: true, seen: false };   // where the owner scrolled the Details log to
   let expanded = false;                         // the bigger popup (more of the log)
   let detOpen = false;                          // "Details" (tail of the closing text), collapsed by default, remembered like Why
   const picks = new Map();                      // item.key -> { questionN: optionN } (the multi-question form, owner's taps)
@@ -262,7 +263,16 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         <button type="button" class="ap-meta" data-act="why" aria-expanded="${whyOpen ? 'true' : 'false'}" title="Why these buttons?">${esc(metaText(v))} <span class="ap-toggle">${whyOpen ? '▾' : '▸'}</span></button>
         ${whyOpen ? whyHtml(v) : ''}`;
     }
-    { const dt = body.querySelector('.ap-det-t'); if (dt) dt.scrollTop = dt.scrollHeight; }   // the tail is what matters
+    { const dt = body.querySelector('.ap-det-t');
+      if (dt) {
+        const last = detScroll;
+        // first time for this question: show the tail; afterwards stay where the owner is (a re-render never pushes down)
+        if (last.key !== curKey || !last.seen) dt.scrollTop = dt.scrollHeight;
+        else if (last.top != null && !last.atBottom) dt.scrollTop = last.top;
+        else dt.scrollTop = dt.scrollHeight;
+        detScroll.key = curKey; detScroll.seen = true;
+        dt.onscroll = () => { detScroll.key = curKey; detScroll.top = dt.scrollTop; detScroll.atBottom = dt.scrollHeight - dt.scrollTop - dt.clientHeight < 24; };
+      } }
     // slide in only for a stop id never shown before (and only when the popup is visible)
     const fresh = r.added.filter((it) => !known.has(it.id));
     for (const it of r.added) known.add(it.id);

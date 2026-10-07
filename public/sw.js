@@ -1,7 +1,7 @@
 // Ghosty Sessions — service worker
 // Cache the shell so the PWA launches offline (and reloads fast over Tailscale).
 
-const SHELL_CACHE = 'ghosty-shell-v120';
+const SHELL_CACHE = 'ghosty-shell-v121';
 const SHELL_FILES = [
   '/',
   '/index.html',
