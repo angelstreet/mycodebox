@@ -243,12 +243,11 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       const qBlock = v.form ? formHtml(v) : v.questions
         ? `<div class="ap-qs">${v.questions.map((qq, i) => `<div class="ap-q-row"><span class="ap-q-n">${i + 1}.</span><span class="ap-q-t">${esc(qq)}</span></div>`).join('')}<div class="ap-qs-note">${v.questions.length} decisions — Reply… to answer all</div></div>`
         : `<div class="ap-q">${esc(v.question)}</div>`;
-      const detBlock = v.details
-        ? `<button type="button" class="ap-det" data-act="details" aria-expanded="${detOpen}">Details <span class="ap-toggle">${detOpen ? '▾' : '▸'}</span></button>${detOpen ? `<pre class="ap-det-t">${esc(v.details)}</pre>` : ''}`
-        : '';
+      const topicBadge = v.buttons.some((b) => b.confirm) ? `<span class="ap-topic" title="Sensitive topic: nothing is suggested and every answer asks you to confirm">${esc(topicLabel(v.forbidden))}</span>` : '';
+      const detBtn = v.details ? `<button type="button" class="ap-det" data-act="details" aria-expanded="${detOpen}">Details <span class="ap-toggle">${detOpen ? '▾' : '▸'}</span></button>` : '';
+      const detBlock = (detBtn || topicBadge ? `<div class="ap-subrow">${detBtn}${topicBadge}</div>` : '') + (v.details && detOpen ? `<pre class="ap-det-t">${esc(v.details)}</pre>` : '');
       body.innerHTML = `<div class="ap-head">
           <span class="ap-prio ${esc(v.prio)}">${esc(v.prio)}</span>
-          ${v.buttons.some((b) => b.confirm) ? `<span class="ap-topic" title="Sensitive topic: nothing is suggested and every answer asks you to confirm">${esc(topicLabel(v.forbidden))}</span>` : ''}
           <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(state.rename?.[item.name] || item.name)}</button>
           ${q.items.length > 1 ? `<span class="ap-cnt">${idx + 1}/${q.items.length}</span>
           <button class="ap-nav" data-act="prev" aria-label="Previous">‹</button>
