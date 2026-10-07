@@ -2004,3 +2004,7 @@ body:not(.res-hidden) .fgrp{ display:none; }
 #askPopup.ap-big .ap-q{ max-height:none; overflow:visible; padding:2px 0 12px; border-bottom:1px solid var(--ink-3); }
 #askPopup .ap-det-t{ border:1px solid var(--ink-3); border-radius:8px; padding:10px 12px; }
 #askPopup.ap-big .ap-det{ margin-top:2px; }
+
+/* alert row: NEEDS YOU takes whatever DEPLOY and LEASES don't need (they shrink to their text while idle), and fades at the edge when its pills overflow */
+@media (min-width: 901px){ .alertrow{ grid-template-columns:minmax(0,1fr) fit-content(32%) fit-content(32%); } }
+.attention.ov{ -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent); mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent); }

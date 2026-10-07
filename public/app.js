@@ -983,6 +983,11 @@ function renderSummary() {
   document.title = counts.waiting ? `(${counts.waiting}) mycodebox` : 'mycodebox';
 }
 
+function markAttentionOverflow() {
+  const el = els.attention;
+  if (el) el.classList.toggle('ov', el.scrollWidth > el.clientWidth + 2);
+}
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markAttentionOverflow()).observe(els.attention);
 function renderAttention() {
   // waiting sessions, plus finished ones whose closing question the AI reviewer sent to the owner
   const aiAsk = (n) => { const st = state.status[n]; return st && st.state === 'done' && needsOwner(st) && st.triage && st.triage.state !== 'pending'; };
@@ -995,6 +1000,7 @@ function renderAttention() {
   els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${waiting.length ? ` <b>${waiting.length}</b>` : ''}</button>${waiting.length ? '' : '<span class="dnone">none</span>'}` +
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
+  markAttentionOverflow();
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = () => openCard(b.dataset.session);   // straight to that session's card (single-card view); its 'asks you' chip reopens the answer popup
   }
