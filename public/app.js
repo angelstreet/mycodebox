@@ -996,7 +996,7 @@ function renderAttention() {
     waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
-    b.onclick = () => popupApi ? popupApi.showFor(b.dataset.session) : openCard(b.dataset.session);
+    b.onclick = () => openCard(b.dataset.session);   // straight to that session's card (single-card view); its 'asks you' chip reopens the answer popup
   }
 }
 
