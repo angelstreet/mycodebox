@@ -2225,6 +2225,7 @@ function focusSession(name) {
   if (!name) return;
   const prev = state.active;
   state.active = name;
+  lsSet('ghosty.active', name);   // a refresh comes back on the same focused card
   // grid: a session that isn't on screen takes the slot of the selected card, not the last one
   if (state.mode === 'grid' && prev && prev !== name
       && !els.gridPane.querySelector(`[data-session="${cssEscape(name)}"]`)
@@ -4269,6 +4270,8 @@ if ('serviceWorker' in navigator) {
   if (isPhone() && state.mode !== 'grid') { state.mode = 'list'; state.prevMode = 'list'; }
   const rd = lsGet(LS_READER, null);
   state.reader = rd == null ? isPhone() : rd === '1';
+  const savedActive = lsGet('ghosty.active', '');
+  if (savedActive) state.active = savedActive;   // validated against the live sessions once they load
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
