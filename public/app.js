@@ -989,7 +989,7 @@ function markAttentionOverflow() {
   if (!el) return;
   el.querySelector('.anmore')?.remove();
   document.getElementById('attnPop')?.remove();
-  const pills = [...el.querySelectorAll('button[data-session], button[data-qs]')];
+  const pills = [...el.querySelectorAll('button[data-session]')];
   pills.forEach((p) => p.classList.remove('cut'));
   el.classList.remove('ov');
   if (pills.length < 2 || el.scrollWidth <= el.clientWidth + 2) return;
@@ -1026,21 +1026,27 @@ function renderAttention() {
   // the manager's open questions (ledger), grouped by the session they are about
   const groups = new Map();
   for (const q of state.ownerAsks || []) { const k = q.session || 'owner'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(q); }
-  const total = waiting.length + (state.ownerAsks || []).length;
+  // one chip per task that needs you, whatever the reason (a stop, a question, a block): just the task name
+  const names = waiting.map((s) => s.name);
+  const askOnly = [...groups.keys()].filter((k) => !names.includes(k));
+  const entries = [...names, ...askOnly];
+  const total = entries.length;
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
+  const label = (k) => (k === 'owner-direct' || k === 'owner' ? 'for you' : displayName(k));
   const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|') + '#' + (state.ownerAsksKey || '');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.classList.toggle('none', !total);
-  const qchip = ([sess, qs]) => `<button class="qask" data-qs="${escapeHtml(sess)}" title="${escapeHtml(qs.map((q) => `${q.id}: ${q.question}`).join('\n'))}">${qs.length > 1 ? `${qs.length} questions` : escapeHtml(qs[0].id)} \u00b7 ${escapeHtml(sess === 'owner-direct' || sess === 'owner' ? 'for you' : displayName(sess))}</button>`;
-  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` +
-    waiting.map((s) => `<button data-session="${escapeHtml(s.name)}"${line(s.name) ? ` title="${escapeHtml(line(s.name))}"` : ''}>${escapeHtml(displayName(s.name))}</button>`).join('') +
-    [...groups.entries()].map(qchip).join('');
+  const chip = (k) => `<button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>`;
+  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
-    b.onclick = () => openCard(b.dataset.session);   // straight to that session's card (single-card view); its 'asks you' chip reopens the answer popup
+    b.onclick = (e) => {
+      const k = b.dataset.session;
+      // a task with open questions shows them first (with a button to open the task); otherwise straight to its card
+      if (groups.has(k)) { e.stopPropagation(); showOwnerAsks(b, k, groups.get(k)); } else openCard(k);
+    };
   }
-  for (const b of els.attention.querySelectorAll('button[data-qs]')) b.onclick = (e) => { e.stopPropagation(); showOwnerAsks(b, b.dataset.qs, groups.get(b.dataset.qs) || []); };
   markAttentionOverflow();
 }
 

@@ -2029,3 +2029,5 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .qpop .qopts{ display:flex; flex-direction:column; gap:1px; color:var(--ink-2); padding:2px 0 0 14px; }
 .qpop .qrec{ color:var(--working); padding-left:14px; }
 .attnpop .qgo{ background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600; }
+
+.attention .qask{ display:none; }   /* the old amber '<n> questions' chip: every task is now one plain red chip */
