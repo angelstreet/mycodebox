@@ -3439,7 +3439,15 @@ function onDockKey(e) {
   if (e.key === 'Escape') { e.preventDefault(); for (const t of dockTargets()) sendKey(t, 'Escape'); toast('esc →', 700); return; }
   if (e.key === 'Enter' && !e.shiftKey && empty) { e.preventDefault(); for (const t of dockTargets()) sendKey(t, 'Enter'); toast('⏎ →', 700); return; }
   if (e.key === 'Enter' && !e.shiftKey && !COARSE) { e.preventDefault(); send(); return; }
-  if (e.key === 'ArrowUp' && (els.sendInput.value === '' || els.sendInput.value === dock.recalled) && dock.hist.length) {
+  // Empty input: the arrow keys also go straight to the session (menus, pickers). Alt + Up / Down browses the sent history instead.
+  const arrow = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right' }[e.key];
+  if (arrow && empty && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    e.preventDefault();
+    for (const t of dockTargets()) sendKey(t, arrow);
+    toast(`${{ Up: '\u2191', Down: '\u2193', Left: '\u2190', Right: '\u2192' }[arrow]} \u2192`, 500);
+    return;
+  }
+  if (e.key === 'ArrowUp' && ((els.sendInput.value === '' && e.altKey) || (dock.recalled !== null && els.sendInput.value === dock.recalled)) && dock.hist.length) {
     e.preventDefault();
     dock.hidx = Math.min(dock.hidx + 1, dock.hist.length - 1);
     els.sendInput.value = dock.recalled = dock.hist[dock.hidx];
