@@ -10,6 +10,7 @@ import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
+import { renderMd } from '/md.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
@@ -1082,7 +1083,7 @@ function showOwnerAsks(anchor, sess, qs) {
   // without staring at the phone.
   const audioText = `${displayName(sess)} needs you. ${qs.map((q) => `${q.id}: ${q.question}${q.recommendation ? ` Recommends ${q.recommendation}.` : ''}`).join(' ')}`;
   pop.innerHTML = `<div class="qrow-audio">${audioChipHtml({ text: audioText, label: `Read ${displayName(sess)} questions aloud` })}</div>`
-    + qs.map((q) => `<div class="qrow1"><b>${escapeHtml(q.id)}</b> ${escapeHtml(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
+    + qs.map((q) => `<div class="qrow1 mdbody"><b>${escapeHtml(q.id)}</b> ${renderMd(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
     + (exists ? `<button class="qgo" data-session="${escapeHtml(sess)}">Open ${escapeHtml(displayName(sess))}</button>` : '');
   const r = anchor.getBoundingClientRect();
   pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 440))}px`;
@@ -1240,64 +1241,6 @@ function probeTaskDoc(cell, n) {
       .finally(() => { d.busy = false; d.at = Date.now(); const c = document.querySelector(`.cell[data-session="${cssEscape(n)}"]`); if (c) probeTaskDoc(c, n); });
   }
   btn.classList.toggle('hidden', !d.files.length);
-}
-function mdInline(t) {
-  return escapeHtml(t)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
-    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:]|$)/g, '$1<i>$2</i>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-}
-function renderMd(src) {
-  const lines = String(src).replace(/\t/g, '    ').split('\n');
-  const out = [];
-  let i = 0, para = [];
-  const flush = () => { if (para.length) { out.push(`<p>${mdInline(para.join(' '))}</p>`); para = []; } };
-  const row = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
-  while (i < lines.length) {
-    const l = lines[i];
-    if (/^\s*```/.test(l)) {
-      flush(); const code = []; i++;
-      while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
-      i++; out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); continue;
-    }
-    if (!l.trim()) { flush(); i++; continue; }
-    const h = /^(#{1,6})\s+(.*)$/.exec(l);
-    if (h) { flush(); out.push(`<div class="mdh h${Math.min(h[1].length, 4)}">${mdInline(h[2])}</div>`); i++; continue; }
-    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { flush(); out.push('<hr>'); i++; continue; }
-    if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || '')) {
-      flush(); const head = row(l); i += 2; const body = [];
-      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(row(lines[i++]));
-      out.push(`<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${mdInline(c)}</th>`).join('')}</tr></thead><tbody>${
-        body.map((r) => `<tr>${r.map((c) => `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
-      continue;
-    }
-    if (/^\s*>\s?/.test(l)) {
-      flush(); const q = [];
-      while (i < lines.length && /^\s*>\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
-      out.push(`<blockquote>${mdInline(q.join(' '))}</blockquote>`); continue;
-    }
-    const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(l);
-    if (li) {
-      flush();
-      const items = [];
-      while (i < lines.length) {
-        const m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
-        if (m) { items.push({ d: Math.min(Math.floor(m[1].length / 2), 4), num: /\d/.test(m[2]), t: m[3] }); i++; }
-        else if (lines[i].trim() && /^\s{2,}\S/.test(lines[i]) && items.length) { items[items.length - 1].t += ' ' + lines[i].trim(); i++; }
-        else break;
-      }
-      out.push('<div class="mdl">' + items.map((it) => {
-        const cb = /^\[( |x|X)\]\s+(.*)$/.exec(it.t);
-        const mark = cb ? `<span class="cb${cb[1] === ' ' ? '' : ' on'}"></span>` : `<span class="bu">${it.num ? '\u2022' : '\u2022'}</span>`;
-        return `<div class="mdi" style="margin-left:${it.d * 14}px">${mark}<span>${mdInline(cb ? cb[2] : it.t)}</span></div>`;
-      }).join('') + '</div>');
-      continue;
-    }
-    para.push(l.trim()); i++;
-  }
-  flush();
-  return out.join('');
 }
 async function toggleTaskDoc(cell, n, file) {
   if (cell.classList.contains('doc-on') && !file) { cell.classList.remove('doc-on'); return; }

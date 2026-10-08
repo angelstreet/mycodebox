@@ -35,12 +35,35 @@ html, body{
   margin:0; padding:0;
   background:var(--bg); color:var(--ink);
   font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.55;
   height:100dvh; width:100%;
   overflow:hidden;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
+
+/* ------------ Readable prose (TASK-70 chat 2026-10-08) ------------
+   Claude Code's wake briefs read like a doc: long lines, generous line-height, code blocks
+   tinted and indented, inline `code` with a subtle pill. We do the same for our wake-brief
+   surfaces that opt in via class="mdbody". */
+.mdbody{ color:var(--ink); font-size:13px; line-height:1.6; user-select:text; }
+.mdbody p{ margin:0 0 10px; }
+.mdbody p:last-child{ margin-bottom:0; }
+.mdbody ul, .mdbody ol{ margin:0 0 10px 1.4em; padding:0; }
+.mdbody li{ margin:0 0 4px; }
+.mdbody li:last-child{ margin-bottom:0; }
+.mdbody h1, .mdbody h2, .mdbody h3{ margin:14px 0 6px; font-size:13.5px; line-height:1.3; color:var(--ink); }
+.mdbody h1{ font-size:14.5px; }
+.mdbody a{ color:var(--accent); text-decoration:underline; }
+.mdbody code{ background:var(--bg-2); padding:1px 5px; border-radius:4px; font-size:0.92em; color:var(--ink); }
+.mdbody pre{ background:var(--bg-2); padding:10px 12px; border-radius:6px; overflow-x:auto; margin:0 0 10px; border:1px solid var(--line-2); }
+.mdbody pre code{ background:transparent; padding:0; font-size:12px; line-height:1.5; }
+.mdbody blockquote{ margin:0 0 10px; padding:6px 10px; border-left:3px solid var(--accent); color:var(--ink-2); background:rgba(160,112,255,0.06); border-radius:0 4px 4px 0; }
+.mdbody hr{ border:0; border-top:1px solid var(--line); margin:14px 0; }
+.mdbody table{ border-collapse:collapse; margin:0 0 10px; font-size:12px; }
+.mdbody th, .mdbody td{ padding:4px 8px; border:1px solid var(--line-2); }
+.mdbody th{ background:var(--bg-2); }
 button{ font-family:inherit; cursor:pointer; }
 .hidden{ display:none !important; }
 
