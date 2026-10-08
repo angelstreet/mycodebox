@@ -995,7 +995,10 @@ function ttsJobOf(hash) {
   const st = existsSync(out);
   return { state: st ? 'ready' : 'pending', at: Date.now() };
 }
-const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+// /api/upload accepts images (png/jpeg/gif/webp) and .md files. The .md MIME types
+// vary by OS and browser: macOS often sends text/plain, Linux text/x-markdown,
+// recent browsers text/markdown. The filename check at the route covers text/plain.
+const UPLOAD_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'text/markdown': 'md', 'text/x-markdown': 'md' };
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -1323,7 +1326,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
       && req.method !== 'OPTIONS' && !/application\/json/i.test(req.headers['content-type'] || '')
       && !(p === '/api/transcribe' && /^audio\//i.test(req.headers['content-type'] || ''))
-      && !(p === '/api/upload' && /^image\//i.test(req.headers['content-type'] || ''))) {   // audio/* is not CORS-safelisted either
+      && !(p === '/api/upload' && (/^image\//i.test(req.headers['content-type'] || '') || /^text\/(markdown|x-markdown|plain)$/i.test(req.headers['content-type'] || '')))) {   // image/* and text/markdown are not CORS-safelisted either
     return json(res, 415, { ok: false, error: 'content-type must be application/json' });
   }
 
@@ -1342,10 +1345,14 @@ const server = http.createServer(async (req, res) => {
     }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
-  if (req.method === 'POST' && p === '/api/upload') {   // dock attach / paste / drop: image body -> saved on the codebox -> { path }
+  if (req.method === 'POST' && p === '/api/upload') {   // dock attach / paste / drop: image or .md body -> saved on the codebox -> { path }
     try {
-      const ext = IMG_EXT[String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()];
-      if (!ext) return json(res, 415, { ok: false, error: 'png, jpeg, gif or webp only' });
+      const ct = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+      let ext = UPLOAD_EXT[ct];
+      // text/plain (macOS often sends this for .md) is treated as .md so the owner can
+      // attach notes from TextEdit, Notes, etc. without a special picker filter.
+      if (!ext && ct === 'text/plain') ext = 'md';
+      if (!ext) return json(res, 415, { ok: false, error: 'png, jpeg, gif, webp images or .md files only' });
       const img = await readRawBody(req, MAX_IMAGE);
       if (!img.length) return json(res, 400, { ok: false, error: 'empty file' });
       const dir = join(homedir(), '.ghosty', 'uploads');

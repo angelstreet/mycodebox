@@ -4182,8 +4182,8 @@ async function attachImages(files) {
   // upload while the first is still in flight. The two concurrent POSTs /api/upload can fail
   // the second with a 'Failed to fetch' on some mobile browsers. Drop the second pick silently.
   if (els.attachBtn.classList.contains('busy')) return;
-  const imgs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
-  if (!imgs.length) { topToast('png, jpeg, gif or webp images only', 4000, 'error'); return; }
+  const imgs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type) || /^text\/(markdown|x-markdown)$/.test(f.type) || f.name?.toLowerCase().endsWith('.md'));
+  if (!imgs.length) { topToast('png, jpeg, gif, webp images or .md files only', 4000, 'error'); return; }
   els.attachBtn.classList.add('busy');
   try {
     const paths = [];
