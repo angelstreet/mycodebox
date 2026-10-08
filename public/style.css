@@ -988,6 +988,15 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 @media (max-width: 720px){
   .cell .apill{ display:none; }
   .cell .state .st, .row-item .state .st{ display:none; }
+  #fontBtn{ display:none; }   /* the topbar 'Aa' (text size/fit) button — chat-raised 2026-10-08 'no need for the aa btn in header' (the user meant this topbar button, not the per-card header) */
+  /* zen hint: when the card header is hidden via .zen, show a faint top-of-body tap target
+     so the owner can tell they're in zen and tap to exit. (the double-tap still toggles it.) */
+  .card-pane .cell.zen .b::before{
+    content:'tap to exit zen'; position:sticky; top:0; display:block; height:22px;
+    background:var(--bg-2); color:var(--ink-3); font-size:10.5px; line-height:22px;
+    text-align:center; border-bottom:1px solid var(--line-2); z-index:2;
+  }
+  .card-pane .cell.zen .b > *{ margin-top:0; }   /* the hint sits above the terminal, no extra gap */
 }
 /* Card list/grid header simplification (chat-raised 2026-10-08, ~1h before the focused
    card rule below): on a phone the card row is one line. Hide everything that isn't

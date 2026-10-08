@@ -1799,7 +1799,7 @@ function wireTap(el, onSingle, onDouble) {
     down = null;
     if (moved || long) return;                 // scroll / text selection
     const now = Date.now();
-    if (now - lastUp < 350) { lastUp = 0; onDouble(e); return; }
+    if (now - lastUp < 500) { lastUp = 0; onDouble(e); return; }   // wider window: 500ms is easier to hit on a phone than 350ms
     lastUp = now;
     onSingle();
   }, true);
