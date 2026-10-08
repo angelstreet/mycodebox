@@ -389,6 +389,13 @@ body{ display:flex; flex-direction:column; }
 .row-item.deploy{ border-color:var(--deploy); background:rgba(160,112,255,0.07); }
 .row-item{ position:relative; }
 .row-item.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); border-radius:10px 0 0 10px; pointer-events:none; }
+/* 'needs you' accent on list rows: a thick red bar on the left edge so the owner
+   can spot waiting cards while scrolling (chat-raised 2026-10-08: 'put a need
+   you'). Deploy cards get the same treatment in violet for symmetry. */
+.row-item.waiting::before,
+.row-item.deploy::before{ content:''; position:absolute; left:-1px; top:0; bottom:0; width:5px; border-radius:10px 0 0 10px; pointer-events:none; }
+.row-item.waiting::before{ background:var(--waiting); }
+.row-item.deploy::before{ background:var(--deploy); }
 .row-item.offline{ opacity:.55; }
 .row-item .l1{ display:flex; align-items:center; gap:8px; min-width:0; }
 .row-item .name{ font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
@@ -535,6 +542,29 @@ body{ display:flex; flex-direction:column; }
 }
 .toast-top.on{ opacity:1; transform:translateX(-50%) translateY(0); }
 .toast-top.error{ border-color:var(--waiting); color:var(--ink); }
+
+/* Pinned voice-transcription loading bar: shows at the top of the screen while the
+   /api/transcribe fetch is in flight (chat-raised 2026-10-08: 'we should add the
+   pinning for a loading effect'). Persistent — the owner needs to see it while the
+   keyboard is up and the dock is partially obscured. */
+.voice-loading{
+  position:fixed; left:50%; top:calc(var(--top-h, 44px) + env(safe-area-inset-top) + 4px);
+  transform:translateX(-50%) translateY(-8px);
+  display:inline-flex; align-items:center; gap:6px;
+  background:var(--bg-3); color:var(--ink);
+  border:1px solid var(--accent); border-radius:8px;
+  padding:6px 12px; font-size:12px; font-weight:600;
+  z-index:95; opacity:0; pointer-events:none;
+  transition: opacity 160ms ease, transform 160ms ease;
+  box-shadow:0 6px 16px rgba(0,0,0,.45);
+}
+.voice-loading.on{ opacity:1; transform:translateX(-50%) translateY(0); }
+.voice-loading svg{ animation:acp-spin 0.9s linear infinite; transform-origin:50% 50%; color:var(--accent); }
+
+/* tmux quick-keys: the "split" and "set" buttons added to the keys row send the
+   tmux prefix sequences C-b " and C-b :. Distinct accent border so the owner
+   knows they're tmux-level (not just text keystrokes). */
+.keys button.tmux{ border-color:rgba(160,112,255,.55); color:var(--deploy); }
 
 /* ------------ xterm ------------ */
 .xterm-viewport{ background: transparent !important; }
@@ -1364,6 +1394,18 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 /* phones: card / board rows show a status dot only (colour says it) */
 @media (max-width: 720px){
   .cell .state, .row-item .state{ padding:2px 6px; gap:0; }
+  /* List view row simplification (chat-raised 2026-10-08, 5th request).
+     The earlier .cell .h rule for the grid view didn't reach the list view's
+     .row-item .l1, so every list row still showed: [P1] priority, PAUSED
+     pill, rename pencil, and the per-card play/pause button. All four are
+     either redundant (P1 on every card, PAUSED next to the play icon) or
+     reachable through other paths (rename via long-press, pause via the
+     card pane menu). Drop them on mobile so the title and the branch pill
+     can actually fit on the row. */
+  .row-item .l1 .pr,
+  .row-item .l1 .rn,
+  .row-item .l1 .pp,
+  .row-item .l1 .pz{ display:none; }
 }
 
 /* Jev & AI tab, decisions page */

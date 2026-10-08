@@ -4127,6 +4127,9 @@ function voiceUi() {
   b.classList.toggle('rec', !!voice.rec);
   b.classList.toggle('busy', voice.busy);
   b.title = voice.rec ? 'Recording: tap to stop, transcribe and send' : voice.busy ? 'Transcribing…' : 'Voice: tap to record, tap again to transcribe and send';
+  // Pinned loading bar at the top of the screen during transcription
+  const vl = document.getElementById('voiceLoading');
+  if (vl) vl.classList.toggle('on', !!voice.busy);
 }
 async function voiceStart() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {

@@ -148,6 +148,8 @@
       <button data-key="3">3</button>
       <button data-key="y">y</button>
       <button data-key="n">n</button>
+      <button data-key='C-b &quot;' class="tmux" title="tmux: split window horizontally">split</button>
+      <button data-key='C-b :' class="tmux" title="tmux: command prompt (set option, source-file, etc.)">set</button>
       <button data-key="C-c" class="danger">^C</button>
     </div>
     <div class="row">
@@ -206,6 +208,9 @@
 
   <div id="toast" class="toast" aria-live="polite"></div>
   <div id="toast-top" class="toast-top" role="alert" aria-live="assertive"></div>
+  <div id="voiceLoading" class="voice-loading hidden" role="status" aria-live="polite">
+    <i data-icon="loader" data-size="14"></i><span>Transcribing…</span>
+  </div>
 
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/xterm-addon-fit.js"></script>
