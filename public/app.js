@@ -1238,7 +1238,8 @@ function renderFilterBar() {
   // fTask is a single boolean, not a multi-select group; render its own chip with data-g='fTask' and no data-v.
   const taskChip = `<button class="fchip fchip-task${state.fTask ? ' on' : ''}" data-g="fTask" title="Show only TASK-prefixed sessions (mm-manager / ghosty / manager/owner are hidden)">tasks<span class="n">${count((n) => /^TASK[-_]/i.test(displayName(n)))}</span></button>`;
   const html =
-    `` + chip('filter', null, 'all') +
+    `` + (anyFilter() ? `<button class="fclear-top" title="Clear every filter (status, project, agent, tasks)">clear all filters ×</button><span class="fsep"></span>` : '') +
+    chip('filter', null, 'all') +
     states.filter((k) => count((n) => filterStateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => filterStateOf(n) === k))).join('') +
     (count((n) => filterStateOf(n) === 'paused') || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count((n) => filterStateOf(n) === 'paused')) : '') +
     `<span class="fsep"></span>` + taskChip + `<span class="fsep"></span>` + chip('fProject', null, 'all') +
@@ -1259,6 +1260,7 @@ function renderFilterBar() {
     };
   }
   bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); });
+  bar.querySelector('.fclear-top')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); });
 }
 
 // ---------- task document (.md) ----------
