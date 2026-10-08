@@ -71,6 +71,7 @@ const state = {
   filter:     [],               // status values ('waiting', 'working', 'paused'...); cumulative, empty = all
   fProject:   [],               // project values, cumulative
   fAgent:     [],               // agent values, cumulative
+  fTask:      matchMedia('(max-width: 720px)').matches,   // chat-raised 2026-10-08: on mobile, default to TASK-prefix only (mm-manager / ghosty / manager/owner are noise on a phone screen). Owner can toggle off; choice persists in localStorage.
   ws:        new Map(),
   statusWs:  null,
   terms:     new Map(),
@@ -763,8 +764,10 @@ function byUrgency(list) {
     displayName(a.name).localeCompare(displayName(b.name)));
 }
 // Filters: status (state.filter, also set by the top-bar count chips),
-// project (GitHub repo / folder) and agent. All views show only matches.
+// project (GitHub repo / folder), agent, and fTask (TASK-prefix only).
+// fTask defaults to ON on ≤720px via state init above; the choice persists in localStorage.
 const LS_FILTERS = 'ghosty.filters';
+const LS_FTASK = 'ghosty.fTask';   // '1' / '0'; absent = use the viewport default
 function projectOf(n) { const st = state.status[n]; return st?.project || st?.repo || (st ? agentOf(n) : ''); }   // not in a git repo: label it by its agent (claude, codex, bash...)
 function matchesFilter(n) {
   if (state.layout.hidden.includes(n)) return false;   // hidden by the owner (sidebar eye button); listed under Hidden in the sidebar footer
@@ -774,9 +777,10 @@ function matchesFilter(n) {
   if (state.filter.length && !state.filter.includes(filterStateOf(n))) return false;
   if (state.fProject.length && !state.fProject.some((v) => projectOf(n) === (v === '-' ? '' : v))) return false;
   if (state.fAgent.length && !state.fAgent.some((v) => agentOf(n) === v)) return false;
+  if (state.fTask && !/^TASK[-_]/i.test(displayName(n))) return false;   // Q-task filter: TASK-prefix only
   return true;
 }
-function anyFilter() { return !!(state.filter.length || state.fProject.length || state.fAgent.length); }
+function anyFilter() { return !!(state.filter.length || state.fProject.length || state.fAgent.length || state.fTask); }
 const toggleIn = (arr, v) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);   // click an active value to unselect it
 function visibleSessions() {
   if (!anyFilter() && !state.layout.hidden.length) return state.sessions;
@@ -1101,6 +1105,10 @@ function setFilters(patch) {
 function loadFilters() {
   try { const f = JSON.parse(lsGet(LS_FILTERS, '{}')) || {}; state.fProject = [].concat(f.p || []); state.fAgent = [].concat(f.a || []); state.filter = [].concat(f.s || []); }
   catch { state.fProject = []; state.fAgent = []; state.filter = []; }
+  // fTask is a single boolean (not a multi-select group), so it gets its own key. If unset,
+  // keep the viewport default set in state.fTask = matchMedia('(max-width: 720px)').matches.
+  const stored = lsGet(LS_FTASK, null);
+  if (stored !== null) state.fTask = stored === '1';
 }
 
 // Filter bar: one horizontal row of chip groups. Rebuilt only when its
@@ -1129,6 +1137,7 @@ function renderActiveFilters() {
   if (!host) return;
   // the same look as in the panel: status = coloured dot + label, agent = its coloured badge, project = plain name
   const items = [
+    ...(state.fTask ? [['fTask', '1', '<span class="task-tag">tasks</span>']] : []),
     ...state.filter.map((v) => ['filter', v, `<i class="dot ${escapeHtml(v)}"></i>${escapeHtml(STATE_LABEL[v] || v)}`]),
     ...state.fProject.map((v) => ['fProject', v, escapeHtml(v === '-' ? 'no repo' : v)]),
     ...state.fAgent.map((v) => ['fAgent', v, `<span class="agent ${escapeHtml(v)}">${escapeHtml(AGENT_LABEL[v] || v)}</span>`]),
@@ -1137,9 +1146,11 @@ function renderActiveFilters() {
   const full = items.length > 2 ? `${html}<button class="afclear" title="Clear all filters">clear all \u00d7</button>` : html;   // three or more: one click clears them all
   if (host.dataset.h === full) return;
   host.dataset.h = full; host.innerHTML = full;
-  host.querySelector('.afclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); });
+  host.querySelector('.afclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); });
   for (const b of host.querySelectorAll('.afc')) b.onclick = () => {
-    const g = b.dataset.g, next = toggleIn(state[g], b.dataset.v);
+    const g = b.dataset.g;
+    if (g === 'fTask') { state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); return; }
+    const next = toggleIn(state[g], b.dataset.v);
     if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
   };
 }
@@ -1186,11 +1197,13 @@ function renderFilterBar() {
   const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline'];
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const agents = ['claude', 'codex', 'minimax'].filter((a) => all.some((n) => agentOf(n) === a));
+  // fTask is a single boolean, not a multi-select group; render its own chip with data-g='fTask' and no data-v.
+  const taskChip = `<button class="fchip fchip-task${state.fTask ? ' on' : ''}" data-g="fTask" title="Show only TASK-prefixed sessions (mm-manager / ghosty / manager/owner are hidden)">tasks<span class="n">${count((n) => /^TASK[-_]/i.test(displayName(n)))}</span></button>`;
   const html =
     `` + chip('filter', null, 'all') +
     states.filter((k) => count((n) => filterStateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => filterStateOf(n) === k))).join('') +
     (count((n) => filterStateOf(n) === 'paused') || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count((n) => filterStateOf(n) === 'paused')) : '') +
-    `<span class="fsep"></span>` + chip('fProject', null, 'all') +
+    `<span class="fsep"></span>` + taskChip + `<span class="fsep"></span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span>` + chip('fAgent', null, 'all') +
     agents.map((a) => chip('fAgent', a, `<span class="agent ${a}">${AGENT_LABEL[a]}</span>`, count((n) => agentOf(n) === a))).join('') +
@@ -1200,12 +1213,14 @@ function renderFilterBar() {
   bar.innerHTML = html;
   for (const b of bar.querySelectorAll('.fchip')) {
     b.onclick = () => {
-      const g = b.dataset.g, v = b.dataset.v || null;
+      const g = b.dataset.g;
+      if (g === 'fTask') { state.fTask = !state.fTask; lsSet(LS_FTASK, state.fTask ? '1' : '0'); renderAll(); return; }
+      const v = b.dataset.v || null;
       const next = v === null ? [] : toggleIn(state[g] || [], v);   // 'all' clears the group; a value toggles
       if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
     };
   }
-  bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); });
+  bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); });
 }
 
 // ---------- task document (.md) ----------
