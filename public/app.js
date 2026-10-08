@@ -1717,6 +1717,10 @@ function buildCell(s) {
     clearTimeout(focusTimer);
     if (e.target.closest('.nm')) { beginInlineRename(cell.querySelector('.name'), s.name); return; }
     if (state.mode !== 'card') openCard(s.name);
+    // In card mode the card is already fullscreen — a double-tap on the body toggles a
+    // 'zen' view that hides the header so the terminal/reader gets the full height.
+    // Another double-tap brings the header back. (chat-raised 2026-10-08)
+    else cell.classList.toggle('zen');
   });
   // Cancel the auto-focus when the user starts scrolling on the focused card. Capture phase
   // (true) so we see the touchmove before wireTap's pointerup considers it a tap.
@@ -3419,7 +3423,7 @@ function syncDock() {
     // phones: no room for the full title, the id ("task38", "BUG0268") is enough, and the input stays empty
     const shortName = (x) => (isPhone() ? (/^([a-z]+\d+)(?![a-z0-9])/i.exec(x)?.[1] ?? x) : x);
     dk.tname.textContent = n ? shortName(displayName(n)) : 'none';
-    els.sendInput.placeholder = isPhone() ? '' : (n ? `→ ${displayName(n)}` : 'no session');
+    els.sendInput.placeholder = isPhone() ? 'type text' : (n ? `→ ${displayName(n)}` : 'no session');
   }
   els.dock.classList.toggle('target-waiting', !!n && !dock.multi && listStateOf(n) === 'waiting');
   renderPrompts();
