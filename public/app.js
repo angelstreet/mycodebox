@@ -11,6 +11,7 @@ import { platformsBlocks } from '/platforms-view.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
+import { uploadOne } from '/upload.js';
 import { renderMd } from '/md.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
@@ -4151,6 +4152,8 @@ els.micBtn.onclick = () => {
 els.sendInput.oninput = autoGrow;
 
 // ----- image attach: button, paste or drop -> /api/upload (saved on the codebox) -> "@path" added to the message -----
+// uploadOne (in /upload.js) handles transient-error retry + timeout; see that
+// file for the contract and the unit tests.
 async function attachImages(files) {
   const imgs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
   if (!imgs.length) { topToast('png, jpeg, gif or webp images only', 4000, 'error'); return; }
@@ -4158,15 +4161,13 @@ async function attachImages(files) {
   try {
     const paths = [];
     for (const f of imgs) {
-      const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': f.type }, body: f });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await uploadOne(f);
       paths.push(`@${j.path}`);
     }
     const cur = els.sendInput.value;
     els.sendInput.value = (cur && !/\s$/.test(cur) ? `${cur} ` : cur) + paths.join(' ') + ' ';
     autoGrow(); els.sendInput.focus();
-  } catch (err) { topToast(`upload failed: ${err.message}`, 6000, 'error'); }
+  } catch (err) { topToast(`upload failed: ${err.message || 'network error'} — try again`, 6000, 'error'); }
   finally { els.attachBtn.classList.remove('busy'); }
 }
 els.attachBtn.onpointerdown = (e) => e.preventDefault();
