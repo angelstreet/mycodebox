@@ -1663,12 +1663,25 @@ function buildCell(s) {
   wireTap(cell, () => {
     focusSession(s.name);
     clearTimeout(focusTimer);
-    focusTimer = setTimeout(() => { if (!els.sendInput.disabled) els.sendInput.focus({ preventScroll: true }); }, 380);
+    // Focus the dock input 380ms after a tap so the keyboard pops up ready for typing — but
+    // cancel the timer the moment the user starts scrolling, otherwise the focus steals the
+    // scroll (chat-raised 2026-10-08: 'in mobile layout when a card is focused almost impossible
+    // to scroll it works then stop to work on each click something seems to absorb the event').
+    // The keyboard bring-up after a tap is what was 'absorbing the event' on subsequent scrolls.
+    focusTimer = setTimeout(() => { if (!els.sendInput.disabled && !cell.dataset.scrolled) els.sendInput.focus({ preventScroll: true }); }, 380);
   }, (e) => {
     clearTimeout(focusTimer);
     if (e.target.closest('.nm')) { beginInlineRename(cell.querySelector('.name'), s.name); return; }
     if (state.mode !== 'card') openCard(s.name);
   });
+  // Cancel the auto-focus when the user starts scrolling on the focused card. Capture phase
+  // (true) so we see the touchmove before wireTap's pointerup considers it a tap.
+  cell.addEventListener('touchmove', () => {
+    if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; cell.dataset.scrolled = '1'; }
+  }, { capture: true, passive: true });
+  cell.addEventListener('wheel', () => {
+    if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; cell.dataset.scrolled = '1'; }
+  }, { capture: true, passive: true });
   cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
   for (const b of cell.querySelectorAll('.mv button')) {
     b.onclick = (e) => { e.stopPropagation(); moveSession(s.name, b.dataset.dir); };
