@@ -924,6 +924,15 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 .reader th{ background:var(--bg-2); color:#fff; }
 /* phones: a working session is just the pulsing dot (no elapsed time) */
 @media (max-width: 720px){ .cell .state.working .st, .row-item .state.working .st{ display:none; } }
+/* Focused card header: drop the four "no-room" controls on mobile (TASK-70 chat 2026-10-08).
+   The user identifies sessions by name + agent + project + worktree, not by P1/P2, and
+   rename / task-doc live in the card pane menu on touch. */
+@media (max-width: 720px){
+  .cell .h .pr,
+  .cell .h .nm .rn,
+  .cell .h .proj,
+  .cell .h .td{ display:none; }
+}
 
 /* ------------ Priority badge, pause, quota (TASK-44 phase 5) ------------ */
 .prio{

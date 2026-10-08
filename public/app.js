@@ -1028,9 +1028,13 @@ function renderAttention() {
   for (const q of state.ownerAsks || []) { const k = q.session || 'owner'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(q); }
   // one chip per task that needs you, whatever the reason (a stop, a question, a block): just the task name
   const names = waiting.map((s) => s.name);
-  const askOnly = [...groups.keys()].filter((k) => !names.includes(k));
-  const entries = [...names, ...askOnly];
-  const total = entries.length;
+  // The headline count AND the rendered chips match the answer-popup pill: only sessions that
+  // actually need you now (`isOwnersTurn`). Leftover ledger questions about sessions no longer
+  // in `waiting` are NOT shown — they inflated the badge and disagreed with the dialog
+  // (TASK-70 chat 2026-10-08: dialog said 2, strip said 11). Those questions still live in the
+  // manager ledger; nothing is lost, just no longer surfaced here.
+  const entries = names;
+  const total = names.length;
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
   const label = (k) => (k === 'owner-direct' || k === 'owner' ? 'for you' : displayName(k));
   const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|') + '#' + (state.ownerAsksKey || '');
