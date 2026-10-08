@@ -1097,7 +1097,10 @@ function renderAttention() {
 function syncAlertRowVisibility() {
   if (!isPhone()) { $('#alertRow')?.classList.remove('alert-empty'); return; }
   const att = els.attention, lease = $('#leaseBar'), dep = $('#deployBanner');
-  const attEmpty = !att || att.classList.contains('none') || att.querySelector('button[data-session], button[data-needs]:not(:only-child)') === null && att.querySelectorAll('button[data-session]').length === 0;
+  // The previous version had a complex query that returned false-positive when NEEDS YOU was empty
+  // (the 'NEEDS YOU' label button was not the only child because the 'none' span was alongside it),
+  // so the row kept showing even with zero alerts. The real signal is the count of session chips.
+  const attEmpty = !att || att.querySelectorAll('button[data-session]').length === 0;
   const leaseEmpty = !lease || lease.classList.contains('idle');
   // deployBanner gets .hidden when nothing is queued; .run / .wait are active
   const depEmpty = !dep || dep.classList.contains('hidden') || dep.classList.contains('idle');
@@ -4170,6 +4173,11 @@ els.sendInput.oninput = autoGrow;
 // uploadOne (in /upload.js) handles transient-error retry + timeout; see that
 // file for the contract and the unit tests.
 async function attachImages(files) {
+  // Re-entrancy guard: the file input is separate from the attach button, so a second pick
+  // (file picker already open when the first upload started) would otherwise start a second
+  // upload while the first is still in flight. The two concurrent POSTs /api/upload can fail
+  // the second with a 'Failed to fetch' on some mobile browsers. Drop the second pick silently.
+  if (els.attachBtn.classList.contains('busy')) return;
   const imgs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
   if (!imgs.length) { topToast('png, jpeg, gif or webp images only', 4000, 'error'); return; }
   els.attachBtn.classList.add('busy');
@@ -4182,7 +4190,10 @@ async function attachImages(files) {
     const cur = els.sendInput.value;
     els.sendInput.value = (cur && !/\s$/.test(cur) ? `${cur} ` : cur) + paths.join(' ') + ' ';
     autoGrow(); els.sendInput.focus();
-  } catch (err) { topToast(`upload failed: ${err.message || 'network error'} — try again`, 6000, 'error'); }
+  } catch (err) {
+    console.error('[attach] upload failed:', err);   // keep the browser console useful for diagnosing "second time fails"
+    topToast(`upload failed: ${err.message || 'network error'} — try again`, 6000, 'error');
+  }
   finally { els.attachBtn.classList.remove('busy'); }
 }
 els.attachBtn.onpointerdown = (e) => e.preventDefault();
