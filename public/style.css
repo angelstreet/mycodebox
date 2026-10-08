@@ -1151,7 +1151,11 @@ button.prio{ cursor:pointer; }
   background:rgba(232,154,74,0.14); color:var(--accent); border:1px solid rgba(232,154,74,0.45);
 }
 .pp.hidden{ display:none; }
-.cell.paused, .row-item.paused{ box-shadow:inset 0 0 0 1px rgba(232,154,74,0.45); }
+/* Paused cards/rows used to get an orange inset box-shadow as a 'highlighted
+   border'. The owner found it noisy on mobile — the play icon and the PAUSED
+   pill already say 'paused'. Drop the border; the pause control is the signal.
+   (chat-raised 2026-10-08: 'paused task should not have the highlighted border') */
+.cell.paused, .row-item.paused{ box-shadow:none; }
 .row-item .l1 .pz{ height:28px; }
 .prio-pick{ display:flex; gap:8px; padding:4px 12px 12px; }
 .prio-opt{ flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:12px 6px; font-weight:700; }
