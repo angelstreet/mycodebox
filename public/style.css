@@ -1027,6 +1027,27 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   border-radius:5px; padding:1px 6px; font-size:10.5px; font-weight:600; line-height:1.4;
   font-variant-numeric: tabular-nums;
 }
+
+/* Copy icon on every agent-prompt surface (.mdbody / task-doc mdbar). The button
+   carries the raw markdown on a data-copy attribute; one tap copies it to the
+   clipboard (see public/copy-prompt.js for the click handler + execCommand
+   fallback). Inside .mdbody the button floats right so the rendered text wraps
+   around it. Inside .mdbar it sits at the right edge of the flex row. */
+.copy-prompt{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:26px; height:26px; padding:0;
+  background:var(--bg-2); color:var(--ink-3);
+  border:1px solid var(--line-2); border-radius:6px;
+  cursor:pointer; flex-shrink:0;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.copy-prompt:hover{ color:var(--accent); border-color:var(--accent); }
+.copy-prompt.done{ color:var(--working); border-color:var(--working); }
+.mdbody > .copy-prompt{ float:right; margin:0 0 6px 8px; }
+.mdbar > .copy-prompt{ margin-left:auto; }
+@media (max-width: 720px){
+  .copy-prompt{ width:30px; height:30px; }   /* a touch larger on phones so the 14px glyph has breathing room */
+}
 .audio-chip > .ac-speeds > .ac-speed.on{ background:var(--accent); color:#1a0606; border-color:var(--accent); }
 .audio-chip > .ac-audio{ position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; left:-9999px; }   /* keep in layout but invisible — display:none would prevent iOS Safari from playing (chat-raised 2026-10-08: 'play audio transcript dont work on phone') */
 

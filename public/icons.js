@@ -5,7 +5,7 @@
 //   - in index.html:  <i data-icon="menu" data-size="20"></i>   (hydrated at start by hydrateIcons())
 // Catalogue: menu, chevron-left/right/up/down, plus, x, check, check-check, filter, more, bot, bar-chart, bell, download,
 // expand, pencil, pause, play, timer, zap, alert, lock, git-branch, git-fork, arrow-up-to-line, arrow-down-to-line,
-// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, refresh, archive.
+// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, refresh, archive, clipboard.
 const S = (inner) => ({ s: inner });          // stroked
 const F = (inner) => ({ f: inner });          // filled
 export const ICONS = {
@@ -59,6 +59,7 @@ export const ICONS = {
   pin: S('<line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>'),
   'folder-plus': S('<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/>'),
   'trending-down': S('<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>'),
+  clipboard: S('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>'),
 };
 
 // -> '<svg …>…</svg>' (inline, inherits the text colour)

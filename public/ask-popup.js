@@ -10,6 +10,7 @@
 import { icon } from './icons.js';
 import { audioChipHtml, wireAudioChips } from './audio-chip.js';
 import { renderMd } from './md.js';
+import { copyPromptButtonHtml } from './copy-prompt.js';
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane } from './buttons.js';
 import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText, multiFormModel, multiSendText, multiComplete, topicLabel, confirmText } from './ask-model.js';
 
@@ -245,9 +246,10 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       if (v.form) btns = sendBtnHtml(v) + (reply ? btnHtml(reply, 'Other / Reply\u2026') : '');
       else if (v.kind === 'yesno') btns = opts.map((b) => btnHtml(b, b.label)).join('') + (reply ? btnHtml(reply, 'Other / Reply\u2026') : '');
       else btns = opts.map((b, i) => btnHtml(b, v.kind === 'menu' ? stripNum(b.label) : b.label, i + 1)).join('') + (reply ? btnHtml(reply, 'Other / Reply\u2026') : '');
+      const qSource = v.questions ? v.questions.join('\n\n') : v.question;
       const qBlock = v.form ? formHtml(v) : v.questions
-        ? `<div class="ap-qs mdbody">${v.questions.map((qq, i) => `<div class="ap-q-row"><span class="ap-q-n">${i + 1}.</span><span class="ap-q-t">${renderMd(qq)}</span></div>`).join('')}<div class="ap-qs-note">${v.questions.length} decisions — Reply… to answer all</div></div>`
-        : `<div class="ap-q mdbody">${renderMd(v.question)}</div>`;
+        ? `<div class="ap-qs mdbody">${copyPromptButtonHtml({ text: qSource, label: 'Copy questions' })}${v.questions.map((qq, i) => `<div class="ap-q-row"><span class="ap-q-n">${i + 1}.</span><span class="ap-q-t">${renderMd(qq)}</span></div>`).join('')}<div class="ap-qs-note">${v.questions.length} decisions — Reply… to answer all</div></div>`
+        : `<div class="ap-q mdbody">${copyPromptButtonHtml({ text: qSource, label: 'Copy question' })}${renderMd(v.question)}</div>`;
       const topicBadge = v.buttons.some((b) => b.confirm) ? `<span class="ap-topic" title="Sensitive topic: nothing is suggested and every answer asks you to confirm">${esc(topicLabel(v.forbidden))}</span>` : '';
       const detBtn = v.details ? `<button type="button" class="ap-det" data-act="details" aria-expanded="${detOpen}">Details <span class="ap-toggle">${detOpen ? '▾' : '▸'}</span></button>` : '';
       const detBlock = (detBtn || topicBadge ? `<div class="ap-subrow">${detBtn}${topicBadge}</div>` : '') + (v.details && detOpen ? `<pre class="ap-det-t">${esc(v.details)}</pre>` : '');

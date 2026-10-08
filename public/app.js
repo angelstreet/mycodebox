@@ -10,6 +10,7 @@ import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
+import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { renderMd } from '/md.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
@@ -23,6 +24,7 @@ const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
 
 hydrateIcons();
+wireCopyPrompt();
 const els = {
   topbar:      $('#topbar'),
   appTitle:    $('#appTitle'),
@@ -1112,8 +1114,12 @@ function showOwnerAsks(anchor, sess, qs, presetAudioText) {
   // without staring at the phone. presetAudioText comes from the strip (if any) and uses the
   // AI-pick wording; fall back to the dialog-local Q+A text otherwise.
   const audioText = presetAudioText || `${displayName(sess)} needs you. ${qs.map((q) => `${q.id}: ${q.question}${q.recommendation ? ` Recommends ${q.recommendation}.` : ''}`).join(' ')}`;
+  // Each question row carries a copy icon (see public/copy-prompt.js): tap it to copy the
+  // full question + numbered options + recommendation as plain text. The source is
+  // computed here so the visual HTML (md-rendered) and the copied text stay in sync.
+  const qsrcs = qs.map((q) => [q.id, q.question, q.options?.length ? q.options.map((o, i) => `${i + 1}. ${o}`).join('\n') : null, q.recommendation ? `Recommends: ${q.recommendation}` : null].filter(Boolean).join('\n'));
   pop.innerHTML = `<div class="qrow-audio">${audioChipHtml({ text: audioText, label: `Read ${displayName(sess)} questions aloud` })}</div>`
-    + qs.map((q) => `<div class="qrow1 mdbody"><b>${escapeHtml(q.id)}</b> ${renderMd(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
+    + qs.map((q, qi) => `<div class="qrow1 mdbody">${copyPromptButtonHtml({ text: qsrcs[qi], label: `Copy question ${escapeHtml(q.id)}` })}<b>${escapeHtml(q.id)}</b> ${renderMd(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
     + (exists ? `<button class="qgo" data-session="${escapeHtml(sess)}">Open ${escapeHtml(displayName(sess))}</button>` : '');
   const r = anchor.getBoundingClientRect();
   pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 440))}px`;
@@ -1288,7 +1294,8 @@ async function toggleTaskDoc(cell, n, file) {
     const opts = d.files.length > 1
       ? `<select class="mdsel">${d.files.map((f) => `<option value="${escapeHtml(f)}"${f === j.name ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('')}</select>`
       : `<span class="mdname">${escapeHtml(j.name)}</span>`;
-    dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}</div><div class="mdbody">${renderMd(j.text)}</div>`;
+    const copyBtn = copyPromptButtonHtml({ text: j.text, label: 'Copy task document' });
+    dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}${copyBtn}</div><div class="mdbody">${renderMd(j.text)}</div>`;
     dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
     const sel = dv.querySelector('.mdsel');
     if (sel) sel.onchange = () => toggleTaskDoc(cell, n, sel.value);
