@@ -3,8 +3,12 @@
 // and Jev's probabilities. Sends go through the page's askSend() (same /api/send path, same
 // confirm-on-forbidden second tap); each owner answer is logged through onAnswer() as an owner-vs-AI-vs-Jev record.
 // The queue logic is pure and lives in ask-model.js.
+// TTS audio chip: the [asks] stall body is read aloud (Q94=2 every surface). One chip per popup
+// item; audio covers the question and (when the owner expanded it) the details block. Import
+// placed at the top of the file (this comment) so the wiring below can pick the right spot.
 
 import { icon } from './icons.js';
+import { audioChipHtml, wireAudioChips } from './audio-chip.js';
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane } from './buttons.js';
 import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText, multiFormModel, multiSendText, multiComplete, topicLabel, confirmText } from './ask-model.js';
 
@@ -257,6 +261,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
           <button class="ap-x" data-act="dismiss" aria-label="Dismiss" title="Dismiss: I won't answer this one, don't show it again">${icon('x', 16)}</button>
         </div>
         ${qBlock}
+        ${audioChipHtml({ text: `${state.rename?.[item.name] || item.name} asks: ${v.question}${v.suggestion ? `. Claude suggests: ${truncText(v.suggestion.text, 90)}.` : ''}${detOpen && v.details ? ` Details: ${truncText(v.details, 200)}.` : ''}`.replace(/\s+/g, ' ').trim(), label: 'Read this stall aloud' })}
         ${detBlock}
         <div class="ap-btns ${esc(v.kind)}">${btns}</div>
         ${v.suggestion ? `<div class="ap-sug"><span class="ap-sug-t">Claude suggests: ${esc(truncText(v.suggestion.text, 90))}</span><button type="button" class="ap-use" data-act="sug" title="Send Claude's suggestion">use</button></div>` : ''}
@@ -279,6 +284,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (fresh.length && !minimised) {
       el.classList.remove('ap-anim'); void el.offsetWidth; el.classList.add('ap-anim');
     } else if (!wasHidden && !fresh.length) el.classList.remove('ap-anim');
+    wireAudioChips(body);
   }
 
   function answer(b, extra) {

@@ -9,6 +9,7 @@ import { suggestAgent } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
+import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
@@ -1037,11 +1038,22 @@ function renderAttention() {
   const total = names.length;
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
   const label = (k) => (k === 'owner-direct' || k === 'owner' ? 'for you' : displayName(k));
+  // TTS text for the chip (Q94=2, every surface gets the audio chip). Reads aloud what the
+  // chip's title would show on hover — for waiting sessions that's the AI line, for sessions
+  // with owner-asks it's the question list. Used by audio-chip.js to seed the piper render.
+  const audioText = (k) => {
+    if (groups.has(k)) {
+      const qs = groups.get(k);
+      return `${displayName(k)} needs you. ${qs.map((q) => q.question).join('. ')}`;
+    }
+    const a = state.status[k]?.triage?.ai;
+    return a && a.proposed_reply ? `${displayName(k)}: AI suggests "${a.proposed_reply}"` : `${displayName(k)} needs your answer.`;
+  };
   const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|') + '#' + (state.ownerAsksKey || '');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.classList.toggle('none', !total);
-  const chip = (k) => `<button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>`;
+  const chip = (k) => `<span class="ac-wrap"><button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>${audioChipHtml({ text: audioText(k), label: `Read ${label(k)} aloud` })}</span>`;
   els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
@@ -1052,6 +1064,7 @@ function renderAttention() {
     };
   }
   markAttentionOverflow();
+  wireAudioChips(els.attention);
 }
 
 // a small panel with the manager's open questions for one session: the text, the options, what it recommends
@@ -1060,12 +1073,18 @@ function showOwnerAsks(anchor, sess, qs) {
   const pop = document.createElement('div');
   pop.id = 'attnPop'; pop.className = 'attnpop qpop';
   const exists = state.sessions.some((s) => s.name === sess);
-  pop.innerHTML = qs.map((q) => `<div class="qrow1"><b>${escapeHtml(q.id)}</b> ${escapeHtml(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
+  // Read aloud the question list + recommendation in one breath. Options are listed in the popover
+  // visually; the audio just says the question + the recommendation so the owner can decide
+  // without staring at the phone.
+  const audioText = `${displayName(sess)} needs you. ${qs.map((q) => `${q.id}: ${q.question}${q.recommendation ? ` Recommends ${q.recommendation}.` : ''}`).join(' ')}`;
+  pop.innerHTML = `<div class="qrow-audio">${audioChipHtml({ text: audioText, label: `Read ${displayName(sess)} questions aloud` })}</div>`
+    + qs.map((q) => `<div class="qrow1"><b>${escapeHtml(q.id)}</b> ${escapeHtml(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
     + (exists ? `<button class="qgo" data-session="${escapeHtml(sess)}">Open ${escapeHtml(displayName(sess))}</button>` : '');
   const r = anchor.getBoundingClientRect();
   pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 440))}px`;
   document.body.appendChild(pop);
   pop.querySelector('.qgo')?.addEventListener('click', () => { pop.remove(); openCard(sess); });
+  wireAudioChips(pop);
 }
 
 const saveFilters = () => lsSet(LS_FILTERS, JSON.stringify({ s: state.filter, p: state.fProject, a: state.fAgent }));   // kept in this browser: a refresh keeps the filters

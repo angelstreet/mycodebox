@@ -934,6 +934,49 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   .cell .h .td{ display:none; }
 }
 
+/* ------------ TTS audio chip (TASK-70 Part 1) ------------
+   Lives inside a NEEDS YOU chip / owner-asks popover / [asks] popup body. While the backend
+   is rendering, both the play and download buttons are disabled and a CSS pulse animates the
+   loader icon. The speed selector defaults to 1x; tapping 1.25x / 1.5x swaps audio.playbackRate. */
+.audio-chip{ display:inline-flex; align-items:center; gap:4px; vertical-align:middle; }
+.audio-chip > .ac-play,
+.audio-chip > .ac-download,
+.audio-chip > .ac-loader{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:26px; height:22px; border-radius:6px; border:1px solid var(--line-2);
+  background:var(--bg-2); color:var(--ink-2);
+}
+.audio-chip > .ac-play:hover:not(:disabled),
+.audio-chip > .ac-download:hover{ background:var(--bg-3); color:var(--ink); }
+.audio-chip > .ac-play:disabled,
+.audio-chip > .ac-download.disabled,
+.audio-chip.failed > .ac-play{ opacity:0.45; cursor:not-allowed; }
+.audio-chip > .ac-loader{ border-color:transparent; background:transparent; }
+.audio-chip > .ac-loader.hidden,
+.audio-chip > .ac-download.hidden{ display:none; }
+.audio-chip.ready > .ac-loader{ display:none; }
+.audio-chip:not(.ready) > .ac-download{ display:none; }
+.audio-chip:not(.ready) > .ac-speeds{ display:none; }
+.audio-chip.loading > .ac-loader svg{ animation:acp-spin 0.9s linear infinite; transform-origin:50% 50%; }
+.audio-chip.failed > .ac-loader{ color:var(--waiting); }
+@keyframes acp-spin{ to { transform: rotate(360deg); } }
+.audio-chip > .ac-speeds{ display:inline-flex; gap:2px; margin-left:4px; }
+.audio-chip > .ac-speeds > .ac-speed{
+  border:1px solid var(--line-2); background:var(--bg-2); color:var(--ink-2);
+  border-radius:5px; padding:1px 6px; font-size:10.5px; font-weight:600; line-height:1.4;
+  font-variant-numeric: tabular-nums;
+}
+.audio-chip > .ac-speeds > .ac-speed.on{ background:var(--accent); color:#1a0606; border-color:var(--accent); }
+.audio-chip > .ac-audio{ display:none; }   /* controlled programmatically, never rendered */
+
+/* TTS chip wraps the NEEDS YOU button so the button + chip stack inline; on touch (coarse
+   pointer) the chip is a little chunkier so the play / speed buttons are easy to hit. */
+@media (pointer: coarse){
+  .audio-chip > .ac-play,
+  .audio-chip > .ac-download{ width:32px; height:28px; }
+  .audio-chip > .ac-speeds > .ac-speed{ padding:2px 8px; font-size:11.5px; }
+}
+
 /* ------------ Priority badge, pause, quota (TASK-44 phase 5) ------------ */
 .prio{
   flex-shrink:0; min-width:26px; height:20px; padding:0 6px; border-radius:6px; font-size:10.5px; font-weight:700;
