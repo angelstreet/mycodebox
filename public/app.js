@@ -168,6 +168,17 @@ function toast(msg, ms=1800) {
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => els.toast.classList.remove('on'), ms);
 }
+// Top-of-stack alert: sits at the top of the page (above the alert row), used for upload /
+// network errors where the owner is already looking (chat-raised 2026-10-08: 'error toast on
+// alert top'). Persists longer than the bottom toast because errors need reading time.
+function topToast(msg, ms=5000, kind='error') {
+  const el = $('#toast-top');
+  if (!el) return toast(msg, ms);
+  el.textContent = msg;
+  el.classList.add('on', kind);
+  clearTimeout(state.topToastTimer);
+  state.topToastTimer = setTimeout(() => el.classList.remove('on', kind), ms);
+}
 
 function stateOf(name) {
   return state.status[name]?.state || 'offline';
@@ -1061,18 +1072,19 @@ function renderAttention() {
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.classList.toggle('none', !total);
-  const chip = (k) => `<span class="ac-wrap"><button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>${audioChipHtml({ text: audioText(k), label: `Read ${label(k)} aloud` })}</span>`;
+  // Strip is one-line overview; audio chip lives on the dialog popup (showOwnerAsks below) —
+  // chat-raised 2026-10-08: 'keep that on the dialogue not the alert top not enough space'.
+  const chip = (k) => `<button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>`;
   els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = (e) => {
       const k = b.dataset.session;
       // a task with open questions shows them first (with a button to open the task); otherwise straight to its card
-      if (groups.has(k)) { e.stopPropagation(); showOwnerAsks(b, k, groups.get(k)); } else openCard(k);
+      if (groups.has(k)) { e.stopPropagation(); showOwnerAsks(b, k, groups.get(k), audioText(k)); } else openCard(k);
     };
   }
   markAttentionOverflow();
-  wireAudioChips(els.attention);
   syncAlertRowVisibility();
 }
 
@@ -1090,15 +1102,16 @@ function syncAlertRowVisibility() {
 }
 
 // a small panel with the manager's open questions for one session: the text, the options, what it recommends
-function showOwnerAsks(anchor, sess, qs) {
+function showOwnerAsks(anchor, sess, qs, presetAudioText) {
   document.getElementById('attnPop')?.remove();
   const pop = document.createElement('div');
   pop.id = 'attnPop'; pop.className = 'attnpop qpop';
   const exists = state.sessions.some((s) => s.name === sess);
   // Read aloud the question list + recommendation in one breath. Options are listed in the popover
   // visually; the audio just says the question + the recommendation so the owner can decide
-  // without staring at the phone.
-  const audioText = `${displayName(sess)} needs you. ${qs.map((q) => `${q.id}: ${q.question}${q.recommendation ? ` Recommends ${q.recommendation}.` : ''}`).join(' ')}`;
+  // without staring at the phone. presetAudioText comes from the strip (if any) and uses the
+  // AI-pick wording; fall back to the dialog-local Q+A text otherwise.
+  const audioText = presetAudioText || `${displayName(sess)} needs you. ${qs.map((q) => `${q.id}: ${q.question}${q.recommendation ? ` Recommends ${q.recommendation}.` : ''}`).join(' ')}`;
   pop.innerHTML = `<div class="qrow-audio">${audioChipHtml({ text: audioText, label: `Read ${displayName(sess)} questions aloud` })}</div>`
     + qs.map((q) => `<div class="qrow1 mdbody"><b>${escapeHtml(q.id)}</b> ${renderMd(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
     + (exists ? `<button class="qgo" data-session="${escapeHtml(sess)}">Open ${escapeHtml(displayName(sess))}</button>` : '');
@@ -4128,7 +4141,7 @@ els.sendInput.oninput = autoGrow;
 // ----- image attach: button, paste or drop -> /api/upload (saved on the codebox) -> "@path" added to the message -----
 async function attachImages(files) {
   const imgs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
-  if (!imgs.length) { toast('png, jpeg, gif or webp images only'); return; }
+  if (!imgs.length) { topToast('png, jpeg, gif or webp images only', 4000, 'error'); return; }
   els.attachBtn.classList.add('busy');
   try {
     const paths = [];
@@ -4141,7 +4154,7 @@ async function attachImages(files) {
     const cur = els.sendInput.value;
     els.sendInput.value = (cur && !/\s$/.test(cur) ? `${cur} ` : cur) + paths.join(' ') + ' ';
     autoGrow(); els.sendInput.focus();
-  } catch (err) { toast(`upload failed: ${err.message}`, 5000); }
+  } catch (err) { topToast(`upload failed: ${err.message}`, 6000, 'error'); }
   finally { els.attachBtn.classList.remove('busy'); }
 }
 els.attachBtn.onpointerdown = (e) => e.preventDefault();
