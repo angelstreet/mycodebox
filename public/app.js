@@ -1672,10 +1672,15 @@ function buildCell(s) {
   cell.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(cell.querySelector('.name'), s.name); };
   // one tap = select the card and put the cursor in the message box; two taps = open it as a full card.
   // The cursor waits out the double-tap window so the keyboard doesn't open under the second tap.
+  // Skip the auto-focus when the card is already the active session: tapping the body of an
+  // already-focused card (e.g. to scroll or read) must NOT pop the keyboard back up — only a
+  // direct tap on the input should bring it back. (chat-raised 2026-10-08)
   let focusTimer = 0;
   wireTap(cell, () => {
+    const alreadyActive = state.active === s.name;
     focusSession(s.name);
     clearTimeout(focusTimer);
+    if (alreadyActive) return;
     // Focus the dock input 380ms after a tap so the keyboard pops up ready for typing — but
     // cancel the timer the moment the user starts scrolling, otherwise the focus steals the
     // scroll (chat-raised 2026-10-08: 'in mobile layout when a card is focused almost impossible
