@@ -979,6 +979,16 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 .reader th{ background:var(--bg-2); color:#fff; }
 /* phones: a working session is just the pulsing dot (no elapsed time) */
 @media (max-width: 720px){ .cell .state.working .st, .row-item .state.working .st{ display:none; } }
+/* Phones: drop the auto-answer pill and the time text in the state badge — the
+   color dot is enough (chat-raised 2026-10-08: 'no need for the AA on card
+   focus header', 'remove the counting in mobile on header just the color dot
+   is enough'). The auto-answer pill also intercepted touch events on the
+   card body, which broke scroll until the second tap. Hiding it removes
+   the interference entirely. */
+@media (max-width: 720px){
+  .cell .apill{ display:none; }
+  .cell .state .st, .row-item .state .st{ display:none; }
+}
 /* Card list/grid header simplification (chat-raised 2026-10-08, ~1h before the focused
    card rule below): on a phone the card row is one line. Hide everything that isn't
    load-bearing — agent (who), name (what), status (state), move (reorder), open
