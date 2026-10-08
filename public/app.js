@@ -1130,6 +1130,19 @@ function showOwnerAsks(anchor, sess, qs, presetAudioText) {
 }
 
 const saveFilters = () => lsSet(LS_FILTERS, JSON.stringify({ s: state.filter, p: state.fProject, a: state.fAgent }));   // kept in this browser: a refresh keeps the filters
+// One helper for every "reset every filter" path. fTask is a separate localStorage
+// key (LS_FTASK) so it does not flow through setFilters; without this helper, every
+// clear button had its own copy of the five lines and the fTask clear kept being
+// forgotten. (chat-raised 2026-10-08, twice.)
+function clearAllFilters() {
+  state.filter = [];
+  state.fProject = [];
+  state.fAgent = [];
+  state.fTask = false;
+  lsSet(LS_FTASK, '0');
+  saveFilters();
+  renderAll();
+}
 function setFilter(f) {
   state.filter = f == null ? [] : [].concat(f);
   saveFilters();
@@ -1184,7 +1197,7 @@ function renderActiveFilters() {
   const full = items.length > 2 ? `${html}<button class="afclear" title="Clear all filters">clear all \u00d7</button>` : html;   // three or more: one click clears them all
   if (host.dataset.h === full) return;
   host.dataset.h = full; host.innerHTML = full;
-  host.querySelector('.afclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); });
+  host.querySelector('.afclear')?.addEventListener('click', clearAllFilters);
   for (const b of host.querySelectorAll('.afc')) b.onclick = () => {
     const g = b.dataset.g;
     if (g === 'fTask') { state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); return; }
@@ -1210,7 +1223,7 @@ function renderQuickRow() {
   host.dataset.h = html; host.innerHTML = html;
   for (const b of host.querySelectorAll('.qchip')) b.onclick = () => {
     const g = b.dataset.g, v = b.dataset.v;
-    if (!g) { state.filter = []; setFilters({ fProject: [], fAgent: [] }); return; }
+    if (!g) { clearAllFilters(); return; }
     const next = toggleIn(state[g] || [], v);
     if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
   };
@@ -1259,8 +1272,8 @@ function renderFilterBar() {
       if (g === 'filter') setFilter(next); else setFilters({ [g]: next });
     };
   }
-  bar.querySelector('.fclear')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); });
-  bar.querySelector('.fclear-top')?.addEventListener('click', () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); state.fTask = false; lsSet(LS_FTASK, '0'); renderAll(); });
+  bar.querySelector('.fclear')?.addEventListener('click', clearAllFilters);
+  bar.querySelector('.fclear-top')?.addEventListener('click', clearAllFilters);
 }
 
 // ---------- task document (.md) ----------
@@ -1370,7 +1383,7 @@ function layoutSide() {
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
   let fl = list.querySelector('li.sidefilt');
   if (anyFilter()) {
-    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear</button>'; fl.querySelector('button').onclick = () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); }; list.insertBefore(fl, list.firstChild); }
+    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear</button>'; fl.querySelector('button').onclick = clearAllFilters; list.insertBefore(fl, list.firstChild); }
     fl.querySelector('.ft').textContent = `Filter on: ${names.filter(matchesFilter).length}/${names.length}`;
   } else if (fl) fl.remove();
   const withHeaders = sections.length > 0;
@@ -2174,7 +2187,7 @@ function renderList() {
       ? `No session matches the filter.<br><button class="clear-f">show all ${state.sessions.length}</button>`
       : 'No tmux sessions yet.<br>Start one from the sidebar, or run <code>tmux new -s name</code>.'}</div>`;
     const cf = els.listPane.querySelector('.clear-f');
-    if (cf) cf.onclick = () => { state.filter = []; setFilters({ fProject: [], fAgent: [] }); };
+    if (cf) cf.onclick = clearAllFilters;
     return;
   }
   for (const s of rows) {
