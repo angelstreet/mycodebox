@@ -966,6 +966,10 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   }
   .cell .h .open:hover{ background:var(--accent); opacity:.9; }
   .cell .h .open svg{ width:18px; height:18px; }
+  /* Hide the red/orange alert row when every signal inside it is empty (chat-raised 2026-10-08).
+     syncAlertRowVisibility() toggles .alert-empty based on NEEDS YOU + leases + deploy banner
+     being idle. Saves ~60px of dead space when the page is otherwise quiet. */
+  #alertRow.alert-empty{ display:none; }
 }
 
 /* ------------ TTS audio chip (TASK-70 Part 1) ------------

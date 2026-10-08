@@ -661,6 +661,7 @@ function renderDeployBanner() {
   const act = list.filter((x) => x.state in rank).sort((p, q) => rank[p.state] - rank[q.state] || p.created - q.created);
   if (!act.length) {
     if (el.dataset.key !== 'idle') { el.dataset.key = 'idle'; el.className = 'deployban idle'; el.innerHTML = '<span class="lbl">DEPLOY</span><span class="dnone">none</span>'; }
+    syncAlertRowVisibility();
     return;
   }
   const blockers = [...new Set(act.filter((x) => x.state !== 'running').flatMap((x) => (x.blocking || []).map((b) => String(b.agent || b.purpose || b.id).replace(/^[^:]*:/, ''))))];
@@ -677,6 +678,7 @@ function renderDeployBanner() {
     return `<button class="dchip ${x.state === 'awaiting-approval' ? 'ask' : x.state}" data-dep-open="${escapeHtml(x.id)}" title="${escapeHtml(`${x.agent || ''}${x.purpose ? ' \u2014 ' + x.purpose : ''}`)}">${x.state === 'running' ? icon('refresh', 13, 'spin') : icon('timer', 13)}${what}${tail ? ` ${tail}` : ''}</button>`;
   }).join('') + (blockers.length ? `<span class="dblk" title="${escapeHtml(blockers.join(', '))}">${icon('lock', 12)}blocked by: <b>${escapeHtml(blockers.join(', '))}</b></span>` : '');
   for (const b of el.querySelectorAll('[data-dep-open]')) b.onclick = () => openPlatforms({ deploy: b.dataset.depOpen });
+  syncAlertRowVisibility();
 }
 
 // ---------- deploy queue (TASK-44 phase 7) ----------
@@ -707,6 +709,7 @@ function renderLeaseBar() {
     const t = ttlText(l.ttlLeftMin);
     return `<button class="lchip${blocksDeploy(l, deps) ? ' blocks' : ''}" data-plat="${escapeHtml(l.env + '|' + l.resource)}" title="${escapeHtml(`${l.resource}\n${l.agent || ''}${l.purpose ? '\n' + l.purpose : ''}`)}">${icon('lock', 12)}<b>${escapeHtml(shortResource(l))}</b>${who ? ` ${escapeHtml(who)}` : ''}${t ? ` <i>${t}</i>` : ''}</button>`;
   }).join('') : '<span class="dnone">none</span>');
+  syncAlertRowVisibility();
 }
 function onLeases(msg) {
   state.leases = msg;       // {leases, waiters, hostname} or {error}
@@ -1070,6 +1073,20 @@ function renderAttention() {
   }
   markAttentionOverflow();
   wireAudioChips(els.attention);
+  syncAlertRowVisibility();
+}
+
+// On mobile, hide the alert-row entirely when NEEDS YOU is empty AND leases are empty AND no
+// deploy is awaiting approval — saves two vertical strips of dead space (chat-raised 2026-10-08).
+// Desktop keeps all three rows; the visual signal matters more there.
+function syncAlertRowVisibility() {
+  if (!isPhone()) { $('#alertRow')?.classList.remove('alert-empty'); return; }
+  const att = els.attention, lease = $('#leaseBar'), dep = $('#deployBanner');
+  const attEmpty = !att || att.classList.contains('none') || att.querySelector('button[data-session], button[data-needs]:not(:only-child)') === null && att.querySelectorAll('button[data-session]').length === 0;
+  const leaseEmpty = !lease || lease.classList.contains('idle');
+  // deployBanner gets .hidden when nothing is queued; .run / .wait are active
+  const depEmpty = !dep || dep.classList.contains('hidden') || dep.classList.contains('idle');
+  $('#alertRow')?.classList.toggle('alert-empty', attEmpty && leaseEmpty && depEmpty);
 }
 
 // a small panel with the manager's open questions for one session: the text, the options, what it recommends
