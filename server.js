@@ -981,9 +981,9 @@ async function readRawBody(req, max) {
 }
 const transcriber = createTranscriber();
 const MAX_IMAGE = 15 * 1024 * 1024;
-// TTS (TASK-70 Part 1): piper renders wake briefs into MP3 at <STATE_DIR>/tts/<hash>.mp3 (Q95=1,
+// TTS (TASK-70 Part 1): piper renders wake briefs into WAV at <STATE_DIR>/tts/<hash>.wav (Q95=1,
 // 14-day prune at boot). Frontend POSTs {text} with the URL hash; Q96=1 async+poll — POST returns 202
-// immediately, GET /status polls until ready, GET /api/tts/<hash>.mp3 streams the file.
+// immediately, GET /status polls until ready, GET /api/tts/<hash>.wav streams the file.
 const TTS_CACHE_DIR = join(STATE_DIR, 'tts');
 const tts = createTts({ cacheDir: TTS_CACHE_DIR });
 const ttsJobs = new Map();   // hash -> {state: 'pending'|'ready'|'failed', error?: string, at: number}
@@ -1368,7 +1368,7 @@ const server = http.createServer(async (req, res) => {
   // (no binary at PIPER_BIN / ~/.local/share/piper/piper) the render fails with ENOENT — the
   // frontend chip keeps the loading pulse until the status endpoint reports failed, and the owner
   // sees a clear error. Re-POST to retry after `scripts/install-piper.sh`.
-  if (req.method === 'POST' && p.startsWith('/api/tts/') && !p.endsWith('/status') && !p.endsWith('.mp3')) {
+  if (req.method === 'POST' && p.startsWith('/api/tts/') && !p.endsWith('/status') && !p.endsWith('.wav')) {
     const hash = decodeURIComponent(p.slice('/api/tts/'.length));
     try {
       const { text } = await readJsonBody(req);
@@ -1379,7 +1379,7 @@ const server = http.createServer(async (req, res) => {
       // cache hit: file already rendered — return ready immediately
       if (existsSync(out) && statSync(out).size > 0) {
         ttsJobs.set(hash, { state: 'ready', at: Date.now() });
-        return json(res, 200, { ok: true, hash, ready: true, url: `/api/tts/${hash}.mp3` });
+        return json(res, 200, { ok: true, hash, ready: true, url: `/api/tts/${hash}.wav` });
       }
       // kick off render in the background (Q96=1); the POST returns 202 immediately
       ttsJobs.set(hash, { state: 'pending', at: Date.now() });
@@ -1398,16 +1398,16 @@ const server = http.createServer(async (req, res) => {
     if (!/^[0-9a-f]{16,64}$/i.test(hash)) return json(res, 400, { ok: false, error: 'bad hash' });
     const j = ttsJobOf(hash);
     const body = { ok: true, hash, state: j.state };
-    if (j.state === 'ready') body.url = `/api/tts/${hash}.mp3`;
+    if (j.state === 'ready') body.url = `/api/tts/${hash}.wav`;
     if (j.state === 'failed') body.error = j.error || 'render failed';
     return json(res, 200, body);
   }
-  if (req.method === 'GET' && p.startsWith('/api/tts/') && p.endsWith('.mp3')) {
-    const hash = decodeURIComponent(p.slice('/api/tts/'.length, -'.mp3'.length));
+  if (req.method === 'GET' && p.startsWith('/api/tts/') && p.endsWith('.wav')) {
+    const hash = decodeURIComponent(p.slice('/api/tts/'.length, -'.wav'.length));
     if (!/^[0-9a-f]{16,64}$/i.test(hash)) return json(res, 400, { ok: false, error: 'bad hash' });
     const out = tts.cachePath(hash);
     if (!existsSync(out)) return json(res, 404, { ok: false, error: 'not rendered yet' });
-    res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': statSync(out).size, 'cache-control': 'public, max-age=86400' });
+    res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': statSync(out).size, 'cache-control': 'public, max-age=86400' });
     createReadStream(out).on('error', () => { try { res.end(); } catch {} }).pipe(res);
     return;
   }

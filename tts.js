@@ -1,6 +1,7 @@
 // Text-to-speech (TASK-70 Part 1): piper binary talks the wake brief / stall summary aloud.
 // One worker, started on first request and stopped after IDLE_MS without a job. Cached at
-// <state dir>/tts/<hash>.mp3 so repeat plays are instant; downloads are just GET of that file.
+// Cached at <state dir>/tts/<hash>.wav (RIFF WAVE PCM 16-bit, piper's default) so repeat plays
+// are instant; downloads are just GET of that file.
 //
 // Voice: en_US-amy-low (Q93=2 — owner picked the piper default over joe-medium). Quality trade-off
 // accepted: smaller model, lower naturalness for short briefs.
@@ -41,7 +42,7 @@ export function createTts({
 
   function cachePath(hash) {
     if (!/^[0-9a-f]{16,64}$/i.test(hash)) throw new Error('bad hash');
-    return path.join(cacheDir, `${hash}.mp3`);
+    return path.join(cacheDir, `${hash}.wav`);   // piper's default output is RIFF WAVE PCM, not MP3
   }
 
   // Returns the path to a rendered mp3 for the given text. Cached by hash. Async (Q96=1).
@@ -79,14 +80,14 @@ export function createTts({
     return { path: out, hash, cached: false };
   }
 
-  // Q95=1: 14-day prune. Removes .mp3 files in cacheDir whose mtime is older than KEEP_DAYS days.
+  // Q95=1: 14-day prune. Removes .wav files in cacheDir whose mtime is older than KEEP_DAYS days.
   async function prune({ now = Date.now() } = {}) {
     const cutoff = now - KEEP_DAYS * 24 * 3600 * 1000;
     let removed = 0;
     let files = [];
     try { files = await readdir(cacheDir); } catch { return { removed: 0 }; }
     for (const f of files) {
-      if (!f.endsWith('.mp3')) continue;
+      if (!f.endsWith('.wav')) continue;
       const full = path.join(cacheDir, f);
       try {
         const st = await stat(full);
