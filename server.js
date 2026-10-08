@@ -62,7 +62,7 @@ import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
 import { readFile, writeFile, stat, readdir, realpath, mkdir } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
@@ -82,6 +82,7 @@ import { createUsage, usageFile } from './usage-view.js';
 import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
+import { createTts } from './tts.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
@@ -980,6 +981,20 @@ async function readRawBody(req, max) {
 }
 const transcriber = createTranscriber();
 const MAX_IMAGE = 15 * 1024 * 1024;
+// TTS (TASK-70 Part 1): piper renders wake briefs into MP3 at <STATE_DIR>/tts/<hash>.mp3 (Q95=1,
+// 14-day prune at boot). Frontend POSTs {text} with the URL hash; Q96=1 async+poll — POST returns 202
+// immediately, GET /status polls until ready, GET /api/tts/<hash>.mp3 streams the file.
+const TTS_CACHE_DIR = join(STATE_DIR, 'tts');
+const tts = createTts({ cacheDir: TTS_CACHE_DIR });
+const ttsJobs = new Map();   // hash -> {state: 'pending'|'ready'|'failed', error?: string, at: number}
+function ttsJobOf(hash) {
+  const j = ttsJobs.get(hash);
+  if (j) return j;
+  // synthesize a job record from the cache file on disk (handles restarts / first-request races)
+  const out = tts.cachePath(hash);
+  const st = existsSync(out);
+  return { state: st ? 'ready' : 'pending', at: Date.now() };
+}
 const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -1347,6 +1362,53 @@ const server = http.createServer(async (req, res) => {
       const r = await transcriber.transcribe(audio, { ext: extFor(req.headers['content-type']), lang: url.searchParams.get('lang') || null });
       return json(res, 200, { ok: true, ...r });
     } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  // ---- TTS (TASK-70 Part 1): wake brief -> piper -> MP3, async+poll ----
+  // The body is JSON {text}; the URL hash must equal tts.hashText(text). If piper isn't installed
+  // (no binary at PIPER_BIN / ~/.local/share/piper/piper) the render fails with ENOENT — the
+  // frontend chip keeps the loading pulse until the status endpoint reports failed, and the owner
+  // sees a clear error. Re-POST to retry after `scripts/install-piper.sh`.
+  if (req.method === 'POST' && p.startsWith('/api/tts/') && !p.endsWith('/status') && !p.endsWith('.mp3')) {
+    const hash = decodeURIComponent(p.slice('/api/tts/'.length));
+    try {
+      const { text } = await readJsonBody(req);
+      if (!text || typeof text !== 'string') return json(res, 400, { ok: false, error: 'text required' });
+      const wantHash = tts.hashText(text);
+      if (hash !== wantHash) return json(res, 400, { ok: false, error: `hash mismatch: URL=${hash}, text=${wantHash}` });
+      const out = tts.cachePath(hash);
+      // cache hit: file already rendered — return ready immediately
+      if (existsSync(out) && statSync(out).size > 0) {
+        ttsJobs.set(hash, { state: 'ready', at: Date.now() });
+        return json(res, 200, { ok: true, hash, ready: true, url: `/api/tts/${hash}.mp3` });
+      }
+      // kick off render in the background (Q96=1); the POST returns 202 immediately
+      ttsJobs.set(hash, { state: 'pending', at: Date.now() });
+      tts.render(text, hash).then((r) => {
+        ttsJobs.set(hash, { state: 'ready', at: Date.now() });
+        console.log(`[tts] ready ${hash}${r.cached ? ' (cached)' : ''}`);
+      }).catch((err) => {
+        ttsJobs.set(hash, { state: 'failed', error: err.message, at: Date.now() });
+        console.error(`[tts] failed ${hash}: ${err.message}`);
+      });
+      return json(res, 202, { ok: true, hash, ready: false });
+    } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p.startsWith('/api/tts/') && p.endsWith('/status')) {
+    const hash = decodeURIComponent(p.slice('/api/tts/'.length, -'/status'.length));
+    if (!/^[0-9a-f]{16,64}$/i.test(hash)) return json(res, 400, { ok: false, error: 'bad hash' });
+    const j = ttsJobOf(hash);
+    const body = { ok: true, hash, state: j.state };
+    if (j.state === 'ready') body.url = `/api/tts/${hash}.mp3`;
+    if (j.state === 'failed') body.error = j.error || 'render failed';
+    return json(res, 200, body);
+  }
+  if (req.method === 'GET' && p.startsWith('/api/tts/') && p.endsWith('.mp3')) {
+    const hash = decodeURIComponent(p.slice('/api/tts/'.length, -'.mp3'.length));
+    if (!/^[0-9a-f]{16,64}$/i.test(hash)) return json(res, 400, { ok: false, error: 'bad hash' });
+    const out = tts.cachePath(hash);
+    if (!existsSync(out)) return json(res, 404, { ok: false, error: 'not rendered yet' });
+    res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': statSync(out).size, 'cache-control': 'public, max-age=86400' });
+    return res.createReadStream(out).on('error', () => res.end()).pipe(res);
   }
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
     try {
@@ -1745,6 +1807,13 @@ async function leaseTick() {
 
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
+  // TTS prune (Q95=1): 14-day keep matching daily-checks.json. Runs once at boot; the cache is
+  // tiny (one MP3 per unique wake brief) so the IO is cheap. Errors are non-fatal — piper not
+  // installed yet (scripts/install-piper.sh) just means future renders will fail with ENOENT.
+  try {
+    const r = await tts.prune();
+    if (r.removed) console.log(`[tts] pruned ${r.removed} stale mp3 file${r.removed === 1 ? '' : 's'} from ${TTS_CACHE_DIR}`);
+  } catch (e) { console.error('[tts] prune', e.message); }
   try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
   // The manager agent's own auto-answers and resumes are never the owner, so gate every
   // typed send with assertAgentPane first. A bash / sleep shell with old MiniMax JSON in
