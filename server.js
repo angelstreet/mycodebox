@@ -1408,7 +1408,8 @@ const server = http.createServer(async (req, res) => {
     const out = tts.cachePath(hash);
     if (!existsSync(out)) return json(res, 404, { ok: false, error: 'not rendered yet' });
     res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': statSync(out).size, 'cache-control': 'public, max-age=86400' });
-    return res.createReadStream(out).on('error', () => res.end()).pipe(res);
+    createReadStream(out).on('error', () => { try { res.end(); } catch {} }).pipe(res);
+    return;
   }
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
     try {
