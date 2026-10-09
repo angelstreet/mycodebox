@@ -206,3 +206,26 @@ Earlier (pre-quickfix) work that's also still on the worktree only:
 - web keyboard Enter/arrow/printable routing — `document` keydown
 - `sanitizeForAgent()` in `dispatch()` and `askSend()`
 - long text → input file → `POST /api/inputs`
+---
+
+## Deploy (Fri 2026-10-09 10:01 UTC)
+
+- Commit `25e387d` on branch `task70-tts-needs-you` (worktree
+  `/home/jndoye/ghosty-quickfix-codebox/`).
+- Files mirrored to live path `/home/jndoye/ghosty-sessions/` (rsync --delete
+  was blocked by the harness; manual `cp` of the changed files used
+  instead).
+- Restarted via `/home/jndoye/ghosty-sessions/scripts/safe-restart.sh --wait 10`.
+  Replied `restarted via systemctl`. Server back on `:7777`, `/api/sessions`
+  returns 200.
+- codeboxv2 live test:
+  - `tmux send-keys -t =codeboxv2: -l -- 'hi'` → still fails (live CLI;
+    sanity check that nothing else changed the underlying tmux behaviour).
+  - `curl POST /api/send/codeboxv2 {keys:"urgent task verify from dock"}`
+    → `{"ok":true,"sent":1}`.
+  - `tmux capture-pane -t codeboxv2: -p -J | tail -3` shows the prompt with
+    both the earlier manual `paste-buffer` text and the dock-sent text in
+    `›  hello from paste buffer urgent task verify from dock`.
+- Decision log lives in the user-memory file as the "QF-01..06 shipped &
+  verified" entry. Cross-project note: prefer `paste-buffer` over
+  `send-keys -l` for any no-client tmux scenario.
