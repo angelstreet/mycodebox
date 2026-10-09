@@ -23,7 +23,7 @@ the author's (what changed). Same order in tables and section headings.
 - QF-11 — **card header clutters with 'Loading 40s' + '↯ 2212 tok/s'** — `cleanHeaderActivity()` strips them out of the visible header (data flow preserved for the manager log)
 - QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card unlocks the previous one
 - QF-13 — **filter bar had two cluttered rows: give it one clear-all + an X/Y indicator at the top** — collapse to one row, `clear all clear ×` plus `X/Y` indicator, both vanish when no filter is active
-- QF-14 — **dock: paperclip sits left of mic, task chip breathes, and icons flicker when target name changes** — DOM reorder (mic before attach) + wider fixed-width `.tchip` + fixed 42px on `.dock .mic`, fixed `width` on `.tchip` so the row doesn't reflow when the target name changes; **developed 2026-10-09**
+- QF-14 — **dock: paperclip sits left of mic, task chip breathes, and icons flicker when target name changes** — DOM reorder (mic before attach) + wider fixed-width `.tchip` (200px, no min/max breathing) + fixed 42px on `.dock .mic` (`flex:0 0 42px`) so the row doesn't reflow when the target name changes; Playwright-verified 2026-10-09 20:25, commit `f4e761e`, shipped + live
 
 Pre-existing fixes from earlier today (kept here for context, not authored in
 this quickfix):
@@ -781,8 +781,16 @@ Screenshots `screenshots/qf-14-dock-layout-phone.png` and
 
 ### Status
 - `developed`: ✅ changes in worktree
-- `under test`: ⏳ Playwright spec written; running now
-- `verified`: ⏳ pending
-- `shipped`: ⏳ pending
-- `live`: ⏳ pending
+- `under test`: ✅ Playwright spec written; `qf-14-dock-layout-phone`
+  failed against the unpatched live daemon (DOM order still
+  `[..., attachBtn, ..., micBtn]`), then after the safe-restart both
+  specs pass
+- `verified`: ✅ desktop + phone specs both pass against
+  `:7777`; screenshots in repo
+- `shipped`: ✅ mirrored to `/home/jndoye/ghosty-sessions/public/` and
+  `safe-restart.sh --wait 10` clean (HTTP 200 on `/api/sessions`)
+- `live`: ✅ live HTML at `http://localhost:7777/` serves the new
+  order (`tchip, micBtn, sendInput, sendBtn, attachBtn`) and
+  `style.css` serves `width:200px; flex:0 0 200px` on `.tchip`.
+  Commit `f4e761e` on `task70-tts-needs-you`.
 
