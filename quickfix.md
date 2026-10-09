@@ -20,6 +20,10 @@ the author's (what changed). Same order in tables and section headings.
 - QF-08 — **MD doc flashes 'loading…' on every click — should cache and show instantly** — client-side cache for `/api/taskdoc`; **developed 2026-10-09 19:19, fix in progress**
 - QF-09 — **card body overflows with no scrollbar on phone (long mcode error unreadable)** — `.cell .b` `overflow:hidden` → `overflow-y:auto; overflow-x:hidden`; **developed 2026-10-09 19:21, test pending**
 - QF-10 — **mobile filter bar shows two clear buttons; 'tasks 0' chip is clutter** — only render the bottom `.fclear`, drop the duplicate top `.fclear-top`; render the tasks chip only when `count > 0`
+- QF-11 — **card header clutters with 'Loading 40s' + '↯ 2212 tok/s'** — `cleanHeaderActivity()` strips them out of the visible header (data flow preserved for the manager log)
+- QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card unlocks the previous one
+- QF-13 — **filter bar had two cluttered rows: give it one clear-all + an X/Y indicator at the top** — collapse to one row, `clear all clear ×` plus `X/Y` indicator, both vanish when no filter is active
+- QF-14 — **dock: paperclip sits left of mic, task chip breathes, and icons flicker when target name changes** — DOM reorder (mic before attach) + wider fixed-width `.tchip` + fixed 42px on `.dock .mic`, fixed `width` on `.tchip` so the row doesn't reflow when the target name changes; **developed 2026-10-09**
 
 Pre-existing fixes from earlier today (kept here for context, not authored in
 this quickfix):
@@ -644,6 +648,141 @@ patched code both pass. Screenshot at
   this session (the test must be exercised against the live daemon
   before the `verified` step is honest)
 - `verified`: ⏳ pending — see Playwright run
+- `shipped`: ⏳ pending
+- `live`: ⏳ pending
+
+---
+
+## QF-14 — dock layout: paperclip right of mic, wider fixed task chip, no icon flicker
+
+User quote (with screenshot `/home/jndoye/.ghosty/uploads/1791574846380-49b000.png`):
+
+> "attach file on the right of audio and put the task dropdown width wider
+>  size of the moved icon and fix size to avoid flicker"
+
+Repro: any viewport. The dock is the bottom input row:
+`toggle | task chip | paperclip | input | send | mic` on desktop, and on
+phone (≤ 600 px) the CSS order is
+`toggle | task chip | paperclip | mic | input | send` — the paperclip is on
+the LEFT of the mic on phone, against the user's intent. The task chip
+(`.tchip`) is `min-width: 88px; max-width: 260px` so a long session name
+(such as `ghosty-quickfix-codebox`) pushes it wide while a short name
+(such as `wt`) collapses it; the surrounding buttons shift across that
+range. The mic / paperclip already share `width:42px; height:42px` so they
+don't grow, but they ARE allowed to sit at 42 px while the tchip breathes.
+
+### Problem
+
+1. **Wrong order on phone.** `.dock .row > #attachBtn { order:2 }` and
+   `#micBtn { order:3 }` puts the paperclip IMMEDIATELY LEFT of the mic;
+   user wants the paperclip RIGHT of the mic.
+2. **Task chip widths breathe.** Changing the send target from a 4-char
+   session name to a 24-char name widens `.tchip` from ~88 px to ~260 px
+   and slides the icons 172 px sideways. The user wants the tchip "wider
+   and fixed size" to kill the flicker.
+3. **Icon "flicker" on target change.** Because the tchip is the only
+   fluid element in the row, the buttons around it jump each time the
+   send-target changes — perceived as flicker on the mic / paperclip
+   even though they themselves are fixed.
+
+### Decision
+
+- **DOM + CSS reorder**: move the paperclip to the right of the mic in
+  BOTH the DOM (`index.html`) and the phone media query (`style.css`).
+  The desktop row order is then `toggle | tchip | mic | input | send |
+  attach`, the phone row order is `toggle | tchip | mic | input | send
+  | attach` (with `flex-wrap: wrap` so each pair fits a row).
+- **Fixed-width tchip**: replace the `min-width:88px; max-width:260px`
+  pair with a single `width: 200px` (no min, no max). Matches a 24-char
+  session name comfortably, never shrinks below whatever a `wt`-style
+  short name needs (200 px still shows the dot + name + chevron).
+- **Lock `.dock .mic` size**: confirm `width:42px; height:42px` is on
+  the shared `.dock .mic` selector (currently it is). Add `flex-shrink:
+  0` already there. Add an explicit `flex: 0 0 42px` so the box can't be
+  squeezed when the tchip is wide.
+- **Lock the tchip shape**: add `flex: 0 0 200px` so the tchip can't
+  grow or shrink even when the row has extra space.
+
+Trade-off: the tchip is now uniform 200 px wide regardless of name. Long
+names truncate with the existing `text-overflow: ellipsis`. `flex: 1`
+stretching (phone CSS) is gone in favour of a stable 200 px; on a 412 px
+viewport that still leaves 174 px for tchip-thing + the send button —
+checked against the existing `flex:1 1 calc(100% - 58px)` for `#sendInput`,
+which is the bigger user of the row space.
+
+### Touched
+
+- `public/index.html:159-171` — `.dock .row` children reordered so
+  `#micBtn` appears BEFORE `#sendInput` / `#sendBtn` / `#attachBtn`.
+  New DOM order: `dockToggle, tchip, micBtn, sendInput, sendBtn, attachBtn`.
+- `public/style.css:643-650` (`.tchip` block) — `min-width:88px;
+  max-width:260px; flex:0 0 auto` → `width:200px; flex:0 0 200px;
+  min-width:200px; max-width:200px`. The chip is now a uniform 200 px
+  rectangle regardless of the target session name.
+- `public/style.css:1987-1988` — `.dock .mic` gets `flex: 0 0 42px`
+  (in addition to the existing `width:42px; height:42px;
+  flex-shrink:0`). The two `.mic` buttons can no longer be squeezed or
+  grown, so they don't shift when the tchip changes.
+- `public/style.css:2127-2136` (phone ≤ 600 px media query) — explicit
+  orders rewritten:
+  - `dockToggle order:0`
+  - `tchip order:1, flex:0 0 200px, width:200px`
+  - `micBtn order:2`
+  - `attachBtn order:3`  ← right of mic
+  - `sendInput order:4, flex:1 1 0, min-width:120px`
+  - `sendBtn order:5`
+  Combined with `flex-wrap:wrap` on `.dock .row`, row 1 is
+  `[toggle][tchip]` (wrap from the 200 px chip) and row 2 is
+  `[mic][attach][sendInput][send]` (mic adjacent to attach; the input
+  stretches but the buttons don't).
+- `public/style.css:2127` — phone comment updated to spell out the new
+  two-row layout (was just "toggle, target, attach, mic on the first
+  line, the message box and Send on the second" — and that line is no
+  longer accurate).
+- `test/browser/qf-14-dock-layout.py` — new Playwright spec (see below).
+
+### Verifier — planned
+
+`test/browser/qf-14-dock-order.py` opens the dashboard on both desktop
+AND phone viewports and asserts:
+- The DOM order of buttons inside `.dock .row` is `dockToggle, tchip,
+  micBtn, sendInput, sendBtn, attachBtn` (verified by `nth-child`).
+- `#micBtn` and `#attachBtn` are sibling-adjacent in DOM order with
+  `#attachBtn` to the right.
+- `.tchip` `getBoundingClientRect().width === 200` (within a 1 px
+  tolerance) regardless of the target session name.
+- Buttons `#micBtn, #attachBtn, #sendBtn` have `width === 42` (within 1
+  px tolerance) and don't move more than 1 px when the target session
+  changes via `window.state.active = '…'; document.querySelector('.tchip')
+  .click() → pick a longer name`.
+- Screenshot at `screenshots/qf-14-dock-order.png` shows the new order
+  with the paperclip to the right of the mic.
+
+### Verifier — Playwright end-to-end
+
+`test/browser/qf-14-dock-layout.py` opens the dashboard on phone and
+desktop viewports and asserts:
+
+- DOM order of the children of `#dock .row` is
+  `[dockToggle, tchip, micBtn, sendInput, sendBtn, attachBtn]`
+  (`micBtn` index strictly less than `attachBtn` index).
+- Viewport layout: `attachBtn.getBoundingClientRect().left >=
+  micBtn.getBoundingClientRect().left` (paperclip to the right of the
+  mic in pixels).
+- `.dock .mic` width is exactly 42 px (within 1 px tolerance) for both
+  `#micBtn` and `#attachBtn`.
+- `.tchip` width is exactly 200 px (within 1 px tolerance).
+- Switching `window.state.active` to a long session name (≥ 12 chars if
+  one exists) does NOT shift `#micBtn` or `#attachBtn` by more than
+  1 px — the row doesn't reflow.
+
+Screenshots `screenshots/qf-14-dock-layout-phone.png` and
+`qf-14-dock-layout-desk.png` show the fixed dock at both viewports.
+
+### Status
+- `developed`: ✅ changes in worktree
+- `under test`: ⏳ Playwright spec written; running now
+- `verified`: ⏳ pending
 - `shipped`: ⏳ pending
 - `live`: ⏳ pending
 

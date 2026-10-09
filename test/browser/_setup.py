@@ -47,3 +47,20 @@ def goto_base(page: Page) -> None:
         "    || document.querySelector('#gridPane')?.innerHTML?.length",
         timeout=10_000,
     )
+
+
+def goto_base_shell(page: Page) -> None:
+    """Open the dashboard and wait only for the static HTML shell (#dock
+    present) — does NOT wait for the session list to render. Useful for
+    tests that assert against the dock / header / footer only and would
+    otherwise hang on the pre-existing phone-viewport pane render bug."""
+    page.goto(BASE)
+    page.wait_for_function(
+        "() => document.querySelector('#dock') && "
+        "    document.querySelector('#micBtn') && "
+        "    document.querySelector('#attachBtn') && "
+        "    document.querySelector('.tchip')",
+        timeout=10_000,
+    )
+    # small breather for `applyDock()` to size the tchip / toggle
+    page.wait_for_timeout(150)

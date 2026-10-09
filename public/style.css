@@ -639,9 +639,9 @@ body{ display:flex; flex-direction:column; }
 .adot.multi{ background:var(--accent); }
 .adot.needs{ background:var(--waiting); }
 
-/* send target chip */
+/* send target chip — fixed width so the row doesn't breathe when the target name changes (QF-14) */
 .tchip{
-  width:auto; flex:0 0 auto; min-width:88px; max-width:260px; height:42px; padding:0 8px; border-radius:10px;   /* as wide as the name needs, up to 45% of the row */
+  width:200px; flex:0 0 200px; min-width:200px; max-width:200px; height:42px; padding:0 8px; border-radius:10px;
   background:var(--bg-2); color:var(--ink); border:1px solid var(--line-2);
   display:flex; align-items:center; gap:6px; overflow:hidden;
 }
@@ -1983,8 +1983,10 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .parkbox .psum{ font-size:11px; color:var(--ink-3); margin:2px 0 4px 22px; white-space:normal; }
 .parkbox .psum.over, .parkbox .pfold.over{ color:var(--accent); }
 .parkbox .ph:first-child{ margin-top:0; }
-/* dock mic (voice input), right of Send: red + pulsing while recording, dimmed while transcribing */
-.dock .mic{ background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:10px; width:42px; height:42px; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+/* dock mic (voice input), right of Send: red + pulsing while recording, dimmed while transcribing.
+   flex:0 0 42px (QF-14) locks the box at 42 px so it can't be squeezed or grow — fixes the row "flicker"
+   when the tchip resizes or when the mic swaps .rec class. */
+.dock .mic{ background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:10px; width:42px; height:42px; flex:0 0 42px; display:flex; align-items:center; justify-content:center; }
 .dock .mic.rec{ background:var(--waiting); border-color:var(--waiting); color:#fff; animation:blink 1s infinite; }
 .dock .mic.busy{ opacity:.5; cursor:progress; }
 /* Attach button: while a /api/upload is in flight, dim the button and swap the paperclip
@@ -2122,14 +2124,16 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 /* answer popup header: priority + name on the left, counter / arrows / hide / dismiss at the right edge */
 #askPopup .ap-name{ flex:1 1 auto; }
 
-/* phones: the send target gets its own wide slot (full session name) - toggle, target, attach, mic on the first line, the message box and Send on the second */
+/* phones: the send target gets its own wide slot (full session name) — QF-14 layout:
+   row 1 = [toggle] [tchip(200 px)] (forced wrap because tchip is fixed-width)
+   row 2 = [mic] [attach (immediately right of mic)] [sendInput] [send] */
 @media (max-width: 600px){
   .dock .row{ flex-wrap:wrap; align-items:center; }
   .dock .row > #dockToggle{ order:0; }
-  .dock .row > .tchip{ order:1; flex:1 1 0; max-width:none; min-width:0; }
-  .dock .row > #attachBtn{ order:2; }
-  .dock .row > #micBtn{ order:3; }
-  .dock .row > #sendInput{ order:4; flex:1 1 calc(100% - 58px); min-width:0; }
+  .dock .row > .tchip{ order:1; flex:0 0 200px; width:200px; max-width:none; min-width:0; }
+  .dock .row > #micBtn{ order:2; }
+  .dock .row > #attachBtn{ order:3; }
+  .dock .row > #sendInput{ order:4; flex:1 1 0; min-width:120px; }
   .dock .row > #sendBtn{ order:5; }
   .tchip .tn{ flex:1; }
 }
