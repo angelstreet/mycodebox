@@ -339,7 +339,11 @@ export function createIngester(cfg, hooks = {}) {
     let text = ''; try { text = await fs.readFile(cfg.ledgerFile, 'utf8'); } catch {}
     // later lines for the same id are updates (a message's output_tokens grows while it streams): last one wins
     if (!forceBackfill) for (const l of text.split('\n')) { try { const r = JSON.parse(l); if (r.ts >= since) remember(r.agent === 'manager' && !r.trace ? { ...r, trace: traceIdOf('manager', r.session) } : r); } catch {} }
-    await fs.writeFile(cfg.ledgerFile, [...byId.values()].map((r) => JSON.stringify(r) + '\n').join(''));
+    // Compaction write: only when byId has something. An empty byId (forceBackfill on a fresh deploy, or every
+    // record outside the window after a long downtime) would otherwise wipe whatever's on disk — and the source
+    // files have often been rotated by then, so the wipe is irreversible.
+    const compacted = [...byId.values()].map((r) => JSON.stringify(r) + '\n').join('');
+    if (compacted) await fs.writeFile(cfg.ledgerFile, compacted);
   }
 
   function remember(r) {

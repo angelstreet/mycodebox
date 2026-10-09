@@ -391,3 +391,42 @@ test('judge rows: one generation + one ledger row with the manager trace per cal
   await ing2.tick();
   assert.ok(!lf.batches.slice(sent).flatMap((b) => b.body.batch || []).some((e) => e.type === 'trace-create' && !e.body.id));
 });
+
+// Regression: init() must not wipe a non-empty ledger when byId is empty. Two paths used to do that — --backfill
+// (skips the ledger read) and a long-downtime restart (all records fall outside backfillDays). The source files
+// have often been rotated by then, so the wipe was irreversible and cost the running ledger its 3-day history.
+test('init preserves the ledger when byId would be empty (forceBackfill or all-out-of-window)', async () => {
+  const lf = await mockLangfuse();
+  const { cfg } = await fixture(lf);
+  await fs.mkdir(cfg.stateDir, { recursive: true });
+  const old = (id, daysAgo) => JSON.stringify({ id, agent: 'claude', session: 'sess-old', cwd: '/work/demo-repo', ts: NOW - daysAgo * 86400000, model: 'claude-opus-5-5',
+    usage: { input: 1, output: 1, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 }, subagent: false, project: 'demo-repo', trace: traceIdOf('claude', 'sess-old'), cost: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0 }, label: 'sess-old' });
+  // forceBackfill path: the ledger has fresh + old rows; --backfill skips the read so byId ends up empty.
+  // The new code must NOT overwrite the file. Without the fix the file would end up empty (catastrophic: source
+  // files are often rotated, so the data is gone forever).
+  const beforeBackfill = old('claude:keep-1', 1) + '\n' + old('claude:keep-2', 30) + '\n';
+  await fs.writeFile(cfg.ledgerFile, beforeBackfill);
+  const ing1 = createIngester(cfg, hooks);
+  await ing1.init(true);
+  const afterBackfill = await fs.readFile(cfg.ledgerFile, 'utf8');
+  assert.equal(afterBackfill, beforeBackfill, 'ledger preserved across --backfill (no destructive write on empty byId)');
+  assert.equal(ing1.ledger.size, 0, 'backfill keeps byId empty so a follow-up tick re-reads from source files');
+  // out-of-window path: a non-backfill init() with a 30-day-old ledger and a 14-day window filters everything out.
+  // The fix preserves the file (so a later backfillDays bump, or a manual replay, can still use the rows).
+  const beforeOow = old('claude:oow-1', 30) + '\n' + old('claude:oow-2', 45) + '\n';
+  await fs.writeFile(cfg.ledgerFile, beforeOow);
+  const ing2 = createIngester(cfg, hooks);
+  await ing2.init(false);
+  assert.equal(await fs.readFile(cfg.ledgerFile, 'utf8'), beforeOow, 'ledger preserved when every row is outside the window');
+  // happy path: a ledger with at least one in-window row still gets compacted (the existing behaviour).
+  const mixRows = old('claude:in-1', 1) + '\n' + old('claude:oow-3', 30) + '\n';
+  await fs.writeFile(cfg.ledgerFile, mixRows);
+  const ing3 = createIngester(cfg, hooks);
+  await ing3.init(false);
+  const after = (await fs.readFile(cfg.ledgerFile, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.equal(after.length, 1, 'compaction still drops out-of-window rows when at least one in-window row exists');
+  assert.equal(after[0].id, 'claude:in-1');
+  // the in-window row is loaded into byId and surfaces in the summary
+  const s = await ing3.summary();
+  assert.equal(s.total.turns, 1);
+});
