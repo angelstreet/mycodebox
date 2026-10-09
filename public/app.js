@@ -3343,6 +3343,13 @@ async function dispatch(text, targets, isRetry) {
 async function send() {
   const keys = els.sendInput.value;
   const targets = dockTargets();
+  // Empty input on the focused card: treat the send button as 'press Enter' in the
+  // terminal — same as the owner pressing the on-screen ⏎ key. Lets the owner submit
+  // a blank prompt without typing a newline first. (chat-raised 2026-10-08)
+  if (!keys.trim() && state.active && !dock.multi) {
+    await sendKey(state.active, 'Enter');
+    return;
+  }
   if (!keys.trim()) return;
   if (!targets.length) { toast(dock.multi ? 'pick at least one target' : 'no session'); return; }
   els.sendInput.value = '';

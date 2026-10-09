@@ -99,3 +99,24 @@ belong to `TASK71-masterchief`, and `Q93`–`Q97` to this task (relabelled by
 mm-manager from my original `Q88`–`Q91`, plus `Q97` for the split decision).
 Never renumber or reuse an existing id; append from `Q98` up and say when you
 relabelled.
+
+---
+
+## Handover (2026-10-09, mm-manager auto)
+
+- **Session / branch / repo:** codebox-quickfix-migrated · `task70-tts-needs-you` · `ghosty-sessions`
+- **Worktree:** `/home/jndoye/ghosty-quickfix-codebox`
+- **Status:** code complete locally; `TTS needs-you chip` + enter-on-blank-input + remove-orange-paused-border all shipped; 180f430 + 9913cbd ready
+- **Commits on the branch before this sweep:**
+  - `180f430` feat(dock): empty sendInput + focused card = send Enter to the active session
+  - `9913cbd` fix(ui): remove orange highlighted border on paused cards/rows
+- **Carve-outs blocking handover** (never auto-applied):
+  - `git push task70-tts-needs-you` to origin
+  - open PR on origin
+  - SW redeploy to phones (the `ghosty-shell-v140` cache bump from Q119 already shipped in this branch — bd1408a was the upstream commit, the merges here picked up the cascade)
+- **Open owner questions:** Q119 (TASK-62 repair review) is unrelated but mm-manager published all 4 needs-you entries (Q118-Q121) to fix the mobile regression #2; no open question on TASK-70 itself
+- **Lease state:** n/a
+- **Test status:** A pass (UI; `send('Enter')` tested in app.js:send function; list-view simplification seen on the deployed bundle)
+- **Files changed on the branch:** `public/app.js`, `public/style.css`, `docs/tasks/TASK-70-quickfix-codebox.md` (with this Handover section)
+- **Merge to local main:** done on 2026-10-09 by mm-manager auto (push + PR still owner-direct)
+- **Followup needed:** owner pushes branch + opens PR; Q119 (TASK-62 review) is the only remaining open on the related set of merged items
