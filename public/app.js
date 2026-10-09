@@ -4330,6 +4330,11 @@ els.sendInput.onkeydown = onDockKey;
 // card behaviour on the dock quick-keys. Skipped on mobile (no physical
 // keyboard), when a sheet or the answer popup owns the keys, when an input /
 // textarea already owns the focus, or when the user isn't on a focused card.
+//
+// QF-07 — listen in CAPTURE phase so xterm's stopPropagation on the
+// helper-textarea (which it does even with disableStdin:true) doesn't
+// swallow the keydown before we see it. (Verified with Playwright trace:
+// capture-phase handler fires, bubble-phase does not.)
 document.addEventListener('keydown', (e) => {
   if (COARSE) return;
   if (state.mode !== 'card' || !state.active) return;
@@ -4338,21 +4343,30 @@ document.addEventListener('keydown', (e) => {
   if (ap && !ap.classList.contains('hidden')) return;
   if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
   const ae = document.activeElement;
-  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName || "")) {
+    // xterm creates an invisible textarea (class xterm-helper-textarea) to
+    // feed IME even with disableStdin:true. Clicking inside the card body
+    // focuses that helper, not anything user-visible. Treat it as NO_REAL_INPUT
+    // input focused" so printable keys still reach the dock.
+    if (!(ae.classList && ae.classList.contains('xterm-helper-textarea'))) return;
+  }
 
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
+    e.stopPropagation();          // (capture) don't let xterm see this Enter either
     sendKey(state.active, 'Enter');
     return;
   }
   const arrow = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right' }[e.key];
   if (arrow) {
     e.preventDefault();
+    e.stopPropagation();
     sendKey(state.active, arrow);
     return;
   }
   if (e.key.length === 1) {                                  // printable: focus the input and insert
     e.preventDefault();
+    e.stopPropagation();
     els.sendInput.focus();
     const v = els.sendInput.value;
     const start = els.sendInput.selectionStart ?? v.length;
@@ -4362,7 +4376,7 @@ document.addEventListener('keydown', (e) => {
     els.sendInput.selectionStart = els.sendInput.selectionEnd = pos;
     autoGrow();
   }
-});
+}, true /* QF-07: capture phase, see comment above */);
 
 // ---------- font size / fit controls ----------
 function wireFontUi() {
