@@ -90,6 +90,9 @@ const state = {
   toastTimer:null,
   side:      false,
   installPrompt: null,
+  // QF-12: when set, focusSession() bails on a different name. Survives reload via LS_LOCKED.
+  // Reset when the locked session disappears from state.sessions.
+  lockedSession: null,
 };
 
 // ---------- localStorage ----------
@@ -98,6 +101,7 @@ const LS_GRID    = 'ghosty.gridSize';
 const LS_MODE    = 'ghosty.mode';
 const LS_ORDER   = 'ghosty.order';
 const LS_NOTIFY  = 'ghosty.notify';
+const LS_LOCKED  = 'ghosty.lockedSession';   // QF-12: name of the card that survives nav taps
 const GRID_SIZES = [2, 4, 6, 8];
 
 function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }
@@ -649,6 +653,12 @@ function onStatus() {
     sortSessions();
     if (state.active && !names.includes(state.active) && !pendingNew(state.active)) state.active = null;
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
+    // QF-12: drop the lock when the locked session goes away (killed, renamed, daemon restart
+    // before reattach). A stale lock would block focus for every nav tap with no UI for it.
+    if (state.lockedSession && !names.includes(state.lockedSession)) {
+      state.lockedSession = null;
+      lsSet(LS_LOCKED, '');
+    }
     renderAll();
   } else {
     syncAll();
@@ -1197,7 +1207,18 @@ function renderActiveFilters() {
     ...state.fAgent.map((v) => ['fAgent', v, `<span class="agent ${escapeHtml(v)}">${escapeHtml(AGENT_LABEL[v] || v)}</span>`]),
   ];
   const html = items.map(([g, v, l]) => `<button class="afc" data-g="${g}" data-v="${escapeHtml(v)}" title="Remove this filter">${l}<span class="x" aria-hidden="true">\u00d7</span></button>`).join('');
-  const full = items.length > 2 ? `${html}<button class="afclear" title="Clear all filters">clear all \u00d7</button>` : html;   // three or more: one click clears them all
+  // QF-13 — the top row now carries the only "clear every filter" affordance. The button
+  // is shown as soon as ANY filter is on (not only at 3+ chips) and the literal label is
+  // "clear all clear ×" per the user's wording: the leading "clear all" tells what it
+  // does, the trailing "clear" emphasises the action. A "X/Y" indicator sits next to the
+  // button so the user sees how many sessions the current filter set lets through; both
+  // vanish when no filter is active (showing "33/33" or "0/33" would be noise).
+  const visible = byUrgency(visibleSessions()).length;
+  const total = state.sessions.length;
+  const indicator = items.length > 0 ? `<span class="afcount" title="visible sessions / total">${visible}/${total}</span>` : '';
+  const full = items.length > 0
+    ? `${html}<button class="afclear" title="Clear every filter (status, project, agent, tasks)">clear all clear \u00d7</button>${indicator}`
+    : html;
   if (host.dataset.h === full) return;
   host.dataset.h = full; host.innerHTML = full;
   host.querySelector('.afclear')?.addEventListener('click', clearAllFilters);
@@ -1252,13 +1273,21 @@ function renderFilterBar() {
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const agents = ['claude', 'codex', 'minimax'].filter((a) => all.some((n) => agentOf(n) === a));
   // fTask is a single boolean, not a multi-select group; render its own chip with data-g='fTask' and no data-v.
-  const taskChip = `<button class="fchip fchip-task${state.fTask ? ' on' : ''}" data-g="fTask" title="Show only TASK-prefixed sessions (mm-manager / ghosty / manager/owner are hidden)">tasks<span class="n">${count((n) => /^TASK[-_]/i.test(displayName(n)))}</span></button>`;
+  // QF-10 — only render the tasks chip when at least one session matches /^TASK[-_]/i;
+  // a "tasks 0" chip is dead UI and the user reported it as clutter.
+  const taskCount = count((n) => /^TASK[-_]/i.test(displayName(n)));
+  const taskChip = taskCount > 0
+    ? `<button class="fchip fchip-task${state.fTask ? ' on' : ''}" data-g="fTask" title="Show only TASK-prefixed sessions (mm-manager / ghosty / manager/owner are hidden)">tasks<span class="n">${taskCount}</span></button>`
+    : '';
   const html =
-    `` + (anyFilter() ? `<button class="fclear-top" title="Clear every filter (status, project, agent, tasks)">clear all filters ×</button><span class="fsep"></span>` : '') +
+    // QF-10 — removed the duplicate top "clear all filters" button; the bottom .fclear
+    // already does the same job and the top one flashed in/out on every render.
+    `` +
     chip('filter', null, 'all') +
     states.filter((k) => count((n) => filterStateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => filterStateOf(n) === k))).join('') +
     (count((n) => filterStateOf(n) === 'paused') || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count((n) => filterStateOf(n) === 'paused')) : '') +
-    `<span class="fsep"></span>` + taskChip + `<span class="fsep"></span>` + chip('fProject', null, 'all') +
+    (taskChip ? `<span class="fsep"></span>` + taskChip : '') +
+    `<span class="fsep"></span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span>` + chip('fAgent', null, 'all') +
     agents.map((a) => chip('fAgent', a, `<span class="agent ${a}">${AGENT_LABEL[a]}</span>`, count((n) => agentOf(n) === a))).join('') +
@@ -1276,12 +1305,17 @@ function renderFilterBar() {
     };
   }
   bar.querySelector('.fclear')?.addEventListener('click', clearAllFilters);
-  bar.querySelector('.fclear-top')?.addEventListener('click', clearAllFilters);
 }
 
 // ---------- task document (.md) ----------
 // Sessions named taskNN get an MD button when the server finds a TASK-NN*.md (or task.md) for them.
 state.taskDocs = new Map();   // session -> { files: [] , at }
+// QF-08 — in-memory cache for /api/taskdoc so re-opening a doc doesn't flash
+// 'loading…'. Keyed by "session\0file" so two sessions can have a same-named
+// .md without collision. Entries stay for the lifetime of the page load;
+// the network result is also refreshed in the background (stale-while-
+// revalidate) so a doc edited on the codebox still shows up within a minute.
+state.taskDocCache = new Map();   // key -> { name, text, at }
 function probeTaskDoc(cell, n) {
   const btn = cell.querySelector('.td');
   if (!btn) return;
@@ -1305,23 +1339,37 @@ async function toggleTaskDoc(cell, n, file) {
   if (!cur) return;
   dv.dataset.file = cur;
   cell.classList.add('doc-on');
-  dv.innerHTML = '<div class="rd-empty">loading\u2026</div>';
+  // QF-08 — instant render from the in-memory cache when available; only
+  // show "loading…" on a true cold open. After the fetch resolves, the body
+  // is updated in place if the server returned different text.
+  const cacheKey = `${n}\0${cur}`;
+  const cached = state.taskDocCache.get(cacheKey);
+  if (cached) renderTaskDocBody(cell, dv, n, cur, cached, d);
+  else dv.innerHTML = '<div class="rd-empty">loading\u2026</div>';
   try {
     const r = await fetch(`/api/taskdoc/${encodeURIComponent(n)}?f=${encodeURIComponent(cur)}`);
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const opts = d.files.length > 1
-      ? `<select class="mdsel">${d.files.map((f) => `<option value="${escapeHtml(f)}"${f === j.name ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('')}</select>`
-      : `<span class="mdname">${escapeHtml(j.name)}</span>`;
-    const copyBtn = copyPromptButtonHtml({ text: j.text, label: 'Copy task document' });
-    dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}${copyBtn}</div><div class="mdbody">${renderMd(j.text)}</div>`;
-    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
-    const sel = dv.querySelector('.mdsel');
-    if (sel) sel.onchange = () => toggleTaskDoc(cell, n, sel.value);
+    state.taskDocCache.set(cacheKey, j);
+    if (cell.classList.contains('doc-on') && dv.dataset.file === cur) {
+      if (!cached || cached.text !== j.text) renderTaskDocBody(cell, dv, n, cur, j, d);
+    }
   } catch {
-    dv.innerHTML = '<div class="mdbar"><button class="mdback">\u2190 session</button></div><div class="rd-empty">could not load the task document</div>';
-    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+    if (!cached) {
+      dv.innerHTML = '<div class="mdbar"><button class="mdback">\u2190 session</button></div><div class="rd-empty">could not load the task document</div>';
+      dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+    }
   }
+}
+function renderTaskDocBody(cell, dv, n, cur, j, d) {
+  const opts = d.files.length > 1
+    ? `<select class="mdsel">${d.files.map((f) => `<option value="${escapeHtml(f)}"${f === j.name ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('')}</select>`
+    : `<span class="mdname">${escapeHtml(j.name)}</span>`;
+  const copyBtn = copyPromptButtonHtml({ text: j.text, label: 'Copy task document' });
+  dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}${copyBtn}</div><div class="mdbody">${renderMd(j.text)}</div>`;
+  dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+  const sel = dv.querySelector('.mdsel');
+  if (sel) sel.onchange = () => toggleTaskDoc(cell, n, sel.value);
 }
 
 // ---------- tabs ----------
@@ -1384,11 +1432,11 @@ function layoutSide() {
   const sections = [];
   if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned' });
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
-  let fl = list.querySelector('li.sidefilt');
-  if (anyFilter()) {
-    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear</button>'; fl.querySelector('button').onclick = clearAllFilters; list.insertBefore(fl, list.firstChild); }
-    fl.querySelector('.ft').textContent = `Filter on: ${names.filter(matchesFilter).length}/${names.length}`;
-  } else if (fl) fl.remove();
+  // QF-13 — the side list no longer prepends a "Filter on: X/Y [clear]" row. The X/Y
+  // count and the clear button now live in the top active-filters bar (#activeFilters);
+  // rendering the same info in two places was confusing (chat-raised 2026-10-09 19:29,
+  // screenshots 1791574151829 / 1791574194602). Layout-side still keeps `anyFilter()`
+  // awareness via the section counts below (members/total per group).
   const withHeaders = sections.length > 0;
   if (withHeaders) sections.push({ key: 'other', title: 'Other' });
   const plan = [];
@@ -1401,7 +1449,8 @@ function layoutSide() {
   }
   const want = new Set(plan.filter((p) => p.hdr).map((p) => p.hdr.key));
   for (const [k, el] of Object.entries(hdrs)) if (!want.has(k)) { el.remove(); delete hdrs[k]; }
-  let cursor = list.querySelector('li.sidefilt')?.nextSibling || list.firstChild;
+  // QF-13 — cursor no longer starts past a sidefilt row (that row is gone).
+  let cursor = list.firstChild;
   const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
   for (const p of plan) {
     if (p.hdr) {
@@ -1679,6 +1728,7 @@ function buildCell(s) {
       <button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button>
       <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
+      <button class="lk" aria-label="Lock card" aria-pressed="false" title="Lock this card so nav taps keep it focused">${icon('lock', 14)}</button>
       <button class="open" aria-label="Open full screen" title="Open">${icon('expand', 14)}</button>
     </div>
     <div class="ask hidden"></div>
@@ -1692,6 +1742,10 @@ function buildCell(s) {
     </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
   cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
+  // QF-12: lock the card so nav taps keep it focused. Click toggles state.lockedSession;
+  // the actual focus guard lives in focusSession() so every entry point (list row, tab,
+  // dock chip, grid card) is covered by the same check.
+  cell.querySelector('.lk').onclick = (e) => { e.stopPropagation(); setLock(s.name); };
   for (const b of cell.querySelectorAll('.jump button')) {
     b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
@@ -1837,7 +1891,7 @@ async function askSend(n, id, b, via) {
   focusSession(n);
   try {
     if (b.key != null) await postSend(n, { key: b.key });
-    else await postSend(n, { keys: b.text });
+    else await postSend(n, { keys: sanitizeForAgent(b.text) });
     if (navigator.vibrate) navigator.vibrate(10);
     toast(`sent \u2192 ${displayName(n)}`, 900);
     if (id && via) fetch('/api/manager/triage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, action: via, session: n }) }).catch(() => {});
@@ -1895,6 +1949,15 @@ function syncCell(cell) {
   if (mt.dataset.h !== mh) { mt.dataset.h = mh; mt.innerHTML = mh; }
   const rd = cell.querySelector('.rd');
   rd.textContent = state.reader ? '>_' : 'Aa';
+  // QF-12: lock button reflects state.lockedSession. Icon flips between lock / unlock;
+  // the .on class drives the accent colour and aria-pressed drives screen readers.
+  const lk = cell.querySelector('.lk');
+  const locked = state.lockedSession === n;
+  lk.classList.toggle('on', locked);
+  lk.setAttribute('aria-pressed', locked ? 'true' : 'false');
+  lk.setAttribute('aria-label', locked ? 'Unlock card' : 'Lock card');
+  lk.title = locked ? 'Unlock this card' : 'Lock this card so nav taps keep it focused';
+  lk.innerHTML = icon(locked ? 'unlock' : 'lock', 14);
   if (!inCard && n === state.active) {
     // move arrows: only the directions this card can still go
     const i = state.sessions.findIndex((x) => x.name === n), N = state.sessions.length, cols = gridCols();
@@ -1944,8 +2007,35 @@ function headMetaHtml(n) {
       parts.push(`<span class="chip-m hand${overdue ? ' late' : ''}" title="${escapeHtml(title)}">\u21c4 ${escapeHtml(h.resource)} \u2192 ${escapeHtml(other)}${hm ? ` ${escapeHtml(hm)}` : ''}</span>`);
     }
   }
-  if (stateOf(n) === 'working' && st.activity) parts.push(`<span class="act">${escapeHtml(st.activity)}</span>`);
+  // QF-11: drop the live-status segments Claude's footer puts in
+  // `st.activity` ("⠧ Loading 4m7s · ⚡ 5548 tok/s · ...") before the
+  // string lands in the per-card header. The data flow itself is unchanged
+  // — server still ships `st.activity`, the manager / panes log still
+  // read it, the dashboard / status surface (and the card body) can still
+  // subscribe. The header just stops pretending to be a status bar.
+  const act = cleanHeaderActivity(st.activity);
+  if (act) parts.push(`<span class="act">${escapeHtml(act)}</span>`);
   return parts.join('<span class="sep"> \u00b7 </span>');
+}
+// Strip Claude-Code's footer line ("⠧ Loading 4m7s · ⚡ 5548 tok/s · ...")
+// from a session's activity string so the per-card header stays readable.
+// The text is built by concatenating the visual spinner, the elapsed timer,
+// the reporter throughput and the footer help text into one line; only the
+// first three bits are live status that belongs on a dashboard, not in
+// `.h`. Other activity strings ("Searched for X", "Reading file Y") keep
+// showing.
+function cleanHeaderActivity(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  // strip the leading spinner + "Loading <duration>" segment
+  s = s.replace(/^\s*[⠧⠂⠐⠈]\s*Loading\s+\S+(?:\s*·\s*)?/, '');
+  // strip the "⚡ N tok/s" throughput segment (anywhere on the line)
+  s = s.replace(/\s*·\s*⚡\s*\d[\d,.\s]*\s*tok\/s(?:\s*·\s*)?/g, ' \u00b7 ');
+  // strip a stray leading spinner with no useful text behind it
+  s = s.replace(/^\s*[⠧⠂⠐⠈]\s*/, '');
+  // tidy up double separators and trailing dots
+  s = s.replace(/\s*·\s*·\s*/g, ' \u00b7 ').replace(/\s*·\s*$/, '').trim();
+  return s;
 }
 // Centre label of a card header: project · branch · worktree.
 function projHtml(n) {
@@ -2213,10 +2303,28 @@ function renderList() {
     connectSession(s.name);
   }
   syncList();
+  // Bring the focused row into view on first paint and when focus changes. On a
+  // phone the list IS the home view; after a refresh the saved active session
+  // would otherwise scroll back off-screen. (chat-raised 2026-10-09)
+  if (state.active && state.listActiveSeen !== state.active) {
+    state.listActiveSeen = state.active;
+    const row = els.listPane.querySelector(`[data-session="${cssEscape(state.active)}"]`);
+    if (row) {
+      const lp = els.listPane.getBoundingClientRect();
+      const rr = row.getBoundingClientRect();
+      // 'nearest' on rows already visible avoids surprise jumps while the user
+      // is reading; 'center' for off-screen rows gives context above and below
+      // on a phone.
+      const visible = rr.top >= lp.top && rr.bottom <= lp.bottom;
+      row.scrollIntoView({ block: visible ? 'nearest' : 'center', behavior: 'auto' });
+    }
+  }
 }
-// tap = open card, long-press = select as send target without opening
+// tap = open card, long-press = select as send target without opening.
+// swipe L/R = navigate prev/next in urgency order (QF-04).
 function wireRow(row, name) {
   let timer = 0, sx = 0, sy = 0, fired = false;
+  let tsx = 0, tsy = 0, swiped = false;
   const cancel = () => { clearTimeout(timer); timer = 0; };
   row.addEventListener('pointerdown', (e) => {
     fired = false; sx = e.clientX; sy = e.clientY; cancel();
@@ -2229,10 +2337,35 @@ function wireRow(row, name) {
   });
   row.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
   for (const t of ['pointerup', 'pointercancel', 'pointerleave']) row.addEventListener(t, cancel);
+  // Swipe L/R: navigate prev/next in board order (chat-raised 2026-10-09:
+  // "swipe left right on a focus card to see previous or next in list").
+  // Same threshold (60 px) and vertical-tolerance (1.5×) as wireCardSwipe.
+  row.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { tsx = 0; tsy = 0; return; }
+    tsx = e.touches[0].clientX;
+    tsy = e.touches[0].clientY;
+    swiped = false;
+  }, { passive: true });
+  row.addEventListener('touchend', (e) => {
+    if (e.changedTouches.length !== 1 || !tsx) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - tsx, dy = t.clientY - tsy;
+    tsx = 0; tsy = 0;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      swiped = true;
+      // Focus the swiped row first so prev/next is relative to it, then move on.
+      if (state.active !== name) focusSession(name);
+      stepSession(dx < 0 ? 1 : -1);
+    }
+  }, { passive: true });
   row.addEventListener('contextmenu', (e) => e.preventDefault());
   row.addEventListener('click', () => {
-    if (fired) { fired = false; return; }
-    focusSession(name); openCard(name);
+    if (fired || swiped) { fired = false; swiped = false; return; }
+    focusSession(name);
+    // QF-03: ensure a list tap actually lands the user on the card. If the
+    // focused row is somehow still in list mode (race, swipe-back, etc.) the
+    // single tap should still open the card fullscreen.
+    if (state.mode !== 'card') openCard(name);
   });
 }
 for (const ev of ['touchstart', 'touchmove', 'scroll']) els.listPane.addEventListener(ev, () => { els.listPane._busyUntil = Date.now() + 1500; }, { passive: true });
@@ -2309,6 +2442,13 @@ function syncTitle() {
 }
 function focusSession(name) {
   if (!name) return;
+  // QF-12: a locked card survives nav taps. If the user clicks a different session
+  // while the lock is held, stay on the locked one and toast so they know why nothing
+  // happened. Tapping the locked card itself is a no-op (we're already focused on it).
+  if (state.lockedSession && state.lockedSession !== name) {
+    toast(`${displayName(state.lockedSession)} is locked`, 1600);
+    return;
+  }
   const prev = state.active;
   state.active = name;
   lsSet('ghosty.active', name);   // a refresh comes back on the same focused card
@@ -2330,6 +2470,24 @@ function focusSession(name) {
 function openCard(name) {
   focusSession(name);
   setMode('card');
+}
+
+// QF-12: lock / unlock a card so nav taps can't switch focus away. The click on the
+// header's lock button is the only UI entry; focusSession() is the only guard, so every
+// other way to switch focus (list row, tab, dock chip, grid card) goes through the same
+// check and is blocked automatically. State is persisted so a soft reload remembers the
+// pin; the locked name is dropped if the session disappears from the next status refresh.
+function setLock(name) {
+  if (state.lockedSession === name) {
+    state.lockedSession = null;
+    lsSet(LS_LOCKED, '');
+    toast('unlocked');
+  } else {
+    state.lockedSession = name;
+    lsSet(LS_LOCKED, name);
+    toast(`${displayName(name)} locked · nav taps won't switch`);
+  }
+  syncAll();
 }
 
 // ---------- mode switching ----------
@@ -3281,6 +3439,27 @@ function dockTargets() {
 }
 
 // ----- sending -----
+
+// Sanitise text before it is sent to a tmux-backed agent. Some characters in
+// pasted / piped input break the round-trip: a stray NUL truncates the paste,
+// ESC starts an escape sequence, BEL can hang a terminal, and CRLF from
+// clipboard breaks line-based detection downstream. We strip ASCII control
+// characters (NUL through US, plus DEL) except \n and \t, normalise line
+// endings, trim trailing whitespace per line, collapse runs of blank lines,
+// and trim leading / trailing blank lines. Valid Unicode (box-drawing, em
+// dashes, smart quotes, ...) is preserved; the agent renders those fine.
+// Idempotent: safe to call twice. (chat-raised 2026-10-09: 'the text in
+// /tmp/text.txt fails to be sent')
+function sanitizeForAgent(text) {
+  if (text == null) return '';
+  let s = String(text);
+  s = s.replace(/\r\n?/g, '\n');                                    // CRLF / lone CR -> LF
+  s = s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');                  // strip control chars (keep \n = \x0a, \t = \x09)
+  s = s.split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n');   // trim trailing whitespace per line
+  s = s.replace(/\n{3,}/g, '\n\n');                                 // 3+ blank lines -> 1 blank
+  s = s.replace(/^\n+|\n+$/g, '');                                  // trim blank lines at edges
+  return s;
+}
 async function postSend(name, body) {
   const r = await fetch(`/api/send/${encodeURIComponent(name)}`, {
     method: 'POST',
@@ -3317,7 +3496,16 @@ async function postMany(targets, keys) {
 }
 
 async function dispatch(text, targets, isRetry) {
+  text = sanitizeForAgent(text);                     // strip control chars, normalise newlines, trim (chat-raised 2026-10-09)
   if (!targets.length || !text.trim()) return false;
+  // Long pastes get uploaded as an input file; the agent reads the path. The
+  // scrollback stays one line instead of a 200-line paste (chat-raised 2026-10-09).
+  if (text.length > 1000 || text.split('\n').length > 50) {
+    try {
+      const r = await fetch('/api/inputs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+      if (r.ok) { const j = await r.json(); if (j && j.path) text = `Read ${j.path}`; }
+    } catch { /* network error: fall through, send the text inline */ }
+  }
   const at = Date.now();
   clearTimeout(dock.hideTimer);
   const snap = {};
@@ -3605,17 +3793,39 @@ function onDockKey(e) {
 // ----- target chip + picker -----
 function openPicker() {
   openSheet('Send to', (api) => {
+    let q = '';
+    // Replace the bare title with a flex row: title on the left, search input on the right.
+    // (QF-01: chat-raised 2026-10-09 — "need a search bar next right to sent to".)
+    api.title.outerHTML = `<div class="sheet-head">
+      <span class="sheet-htitle" id="pickerTitle">Send to</span>
+      <label class="sheet-hsearch" for="pickerSearch">${icon('search', 14)}
+        <input type="search" id="pickerSearch" placeholder="search sessions" autocapitalize="off" autocomplete="off" spellcheck="false" inputmode="search">
+      </label>
+    </div>`;
+    const titleEl = api.body.parentElement.querySelector('.sheet-htitle');
+    const searchEl = api.body.parentElement.querySelector('#pickerSearch');
+    const matches = () => {
+      const needle = q.trim().toLowerCase();
+      if (!needle) return sortedByNeed();
+      return sortedByNeed().filter((s) => {
+        const n = (s.name || '').toLowerCase();
+        const d = (displayName(s.name) || '').toLowerCase();
+        const rb = (repoBranch(s.name) || '').toLowerCase();
+        return n.includes(needle) || d.includes(needle) || rb.includes(needle);
+      });
+    };
     const draw = () => {
-      api.title.textContent = dock.multi ? `Send to · ${dock.sel.size} selected` : 'Send to';
-      api.body.innerHTML = sortedByNeed().map((s) => {
+      titleEl.textContent = dock.multi ? `Send to · ${dock.sel.size} selected` : 'Send to';
+      api.body.innerHTML = matches().map((s) => {
         const n = s.name, on = dock.multi ? dock.sel.has(n) : n === state.active;
         const rb = repoBranch(n);
         return `<button class="prow-s${on ? ' on' : ''}" data-n="${escapeHtml(n)}">${agentDotHtml(n)}
           <span class="pn"><b>${escapeHtml(displayName(n))}</b>${rb ? `<small>${escapeHtml(rb)}</small>` : ''}</span>
           <span class="state ${vstateOf(n)}"><i class="dot ${vstateOf(n)}"></i>${escapeHtml(stateText(n).split(' ')[0])}</span>
           ${dock.multi ? `<span class="chk">${on ? '✓' : ''}</span>` : ''}</button>`;
-      }).join('') || '<div class="sheet-empty">no sessions</div>';
+      }).join('') || `<div class="sheet-empty">${q ? 'no sessions match.' : 'no sessions'}</div>`;
     };
+    searchEl.addEventListener('input', () => { q = searchEl.value; draw(); });
     draw();
     api.body.onclick = (e) => {
       const b = e.target.closest('.prow-s');
@@ -4056,18 +4266,23 @@ function wireSwipe() {
   document.addEventListener('touchend',   onTouchEnd,   { passive: true });
 }
 
-// ---------- card: swipe left/right = next/prev session (board order) ----------
+// ---------- swipe L/R on focused card / list row = next/prev session (board order) ----------
 function stepSession(dir) {
   const order = byUrgency(visibleSessions());
   const i = order.findIndex((x) => x.name === state.active);
   const next = order[i + dir];
   if (i < 0 || !next) return;
   focusSession(next.name);
-  els.cardPane.classList.remove('sl-l', 'sl-r');
-  void els.cardPane.offsetWidth;
-  els.cardPane.classList.add(dir > 0 ? 'sl-r' : 'sl-l');
+  // Animate whichever pane is visible: card mode -> cardPane, list mode ->
+  // listPane. (QF-04: list-mode swipe now also gets the slide-in feedback.)
+  const pane = state.mode === 'card' ? els.cardPane
+            : state.mode === 'list' ? els.listPane
+            : els.gridPane;
+  pane.classList.remove('sl-l', 'sl-r');
+  void pane.offsetWidth;
+  pane.classList.add(dir > 0 ? 'sl-r' : 'sl-l');
   clearTimeout(stepSession.t);
-  stepSession.t = setTimeout(() => els.cardPane.classList.remove('sl-l', 'sl-r'), 260);
+  stepSession.t = setTimeout(() => pane.classList.remove('sl-l', 'sl-r'), 260);
   if (navigator.vibrate) navigator.vibrate(8);
 }
 function wireCardSwipe() {
@@ -4223,6 +4438,60 @@ for (const t of ['dragover', 'drop']) document.addEventListener(t, (e) => {
   if (t === 'drop') attachImages(e.dataTransfer.files);
 });
 els.sendInput.onkeydown = onDockKey;
+
+// On web (not touch), with a focused card, route bare Enter / arrow keys to the
+// active session's terminal even when the send input is not focused; any other
+// printable character focuses the input and inserts it. Mirrors the focused-
+// card behaviour on the dock quick-keys. Skipped on mobile (no physical
+// keyboard), when a sheet or the answer popup owns the keys, when an input /
+// textarea already owns the focus, or when the user isn't on a focused card.
+//
+// QF-07 — listen in CAPTURE phase so xterm's stopPropagation on the
+// helper-textarea (which it does even with disableStdin:true) doesn't
+// swallow the keydown before we see it. (Verified with Playwright trace:
+// capture-phase handler fires, bubble-phase does not.)
+document.addEventListener('keydown', (e) => {
+  if (COARSE) return;
+  if (state.mode !== 'card' || !state.active) return;
+  if (sheetEl) return;
+  const ap = document.getElementById('askPopup');
+  if (ap && !ap.classList.contains('hidden')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName || "")) {
+    // xterm creates an invisible textarea (class xterm-helper-textarea) to
+    // feed IME even with disableStdin:true. Clicking inside the card body
+    // focuses that helper, not anything user-visible. Treat it as NO_REAL_INPUT
+    // input focused" so printable keys still reach the dock.
+    if (!(ae.classList && ae.classList.contains('xterm-helper-textarea'))) return;
+  }
+
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    e.stopPropagation();          // (capture) don't let xterm see this Enter either
+    sendKey(state.active, 'Enter');
+    return;
+  }
+  const arrow = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right' }[e.key];
+  if (arrow) {
+    e.preventDefault();
+    e.stopPropagation();
+    sendKey(state.active, arrow);
+    return;
+  }
+  if (e.key.length === 1) {                                  // printable: focus the input and insert
+    e.preventDefault();
+    e.stopPropagation();
+    els.sendInput.focus();
+    const v = els.sendInput.value;
+    const start = els.sendInput.selectionStart ?? v.length;
+    const end = els.sendInput.selectionEnd ?? v.length;
+    els.sendInput.value = v.slice(0, start) + e.key + v.slice(end);
+    const pos = start + 1;
+    els.sendInput.selectionStart = els.sendInput.selectionEnd = pos;
+    autoGrow();
+  }
+}, true /* QF-07: capture phase, see comment above */);
 
 // ---------- font size / fit controls ----------
 function wireFontUi() {
@@ -4402,6 +4671,10 @@ if ('serviceWorker' in navigator) {
   state.reader = rd == null ? isPhone() : rd === '1';
   const savedActive = lsGet('ghosty.active', '');
   if (savedActive) state.active = savedActive;   // validated against the live sessions once they load
+  // QF-12: a soft reload comes back with the same card locked. Empty string = no lock.
+  // The saved name is validated once state.sessions arrives (drops ghosts automatically).
+  const savedLocked = lsGet(LS_LOCKED, '');
+  if (savedLocked) state.lockedSession = savedLocked;
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();

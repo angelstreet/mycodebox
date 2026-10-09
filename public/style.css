@@ -344,6 +344,9 @@ body{ display:flex; flex-direction:column; }
 .reader .rd-empty{ color:var(--ink-3); font-size:13px; padding:20px 0; text-align:center; }
 .card-pane.sl-r .cell{ animation: slin-r 220ms ease-out; }
 .card-pane.sl-l .cell{ animation: slin-l 220ms ease-out; }
+/* QF-04: same slide-in feedback when swiping a focused row in list mode. */
+.list-pane.sl-r .row-item.focus{ animation: slin-r 220ms ease-out; }
+.list-pane.sl-l .row-item.focus{ animation: slin-l 220ms ease-out; }
 @keyframes slin-r{ from{ transform:translateX(44px); opacity:.25; } }
 @keyframes slin-l{ from{ transform:translateX(-44px); opacity:.25; } }
 .card-pane .cell .ask .q{ white-space:normal; flex-basis:100%; }
@@ -364,7 +367,9 @@ body{ display:flex; flex-direction:column; }
 }
 .cell .ask button.yes{ background:var(--working); color:#04170b; border-color:transparent; font-weight:700; }
 
-.cell .b{ flex:1; min-height:0; padding:4px 6px; overflow:hidden; background:var(--bg-term); }
+/* QF-09: overflow-y:auto (was hidden) so the xterm host itself can scroll if its
+   content outgrows the card; xterm-viewport keeps its own overflow-y:scroll. */
+.cell .b{ flex:1; min-height:0; padding:4px 6px; overflow-y:auto; overflow-x:hidden; background:var(--bg-term); }
 .cell .xterm{ height:100% !important; padding:0; }
 .cell .xterm-viewport{ background:transparent !important; }
 
@@ -634,9 +639,9 @@ body{ display:flex; flex-direction:column; }
 .adot.multi{ background:var(--accent); }
 .adot.needs{ background:var(--waiting); }
 
-/* send target chip */
+/* send target chip — fixed width so the row doesn't breathe when the target name changes (QF-14) */
 .tchip{
-  width:auto; flex:0 0 auto; min-width:88px; max-width:260px; height:42px; padding:0 8px; border-radius:10px;   /* as wide as the name needs, up to 45% of the row */
+  width:200px; flex:0 0 200px; min-width:200px; max-width:200px; height:42px; padding:0 8px; border-radius:10px;
   background:var(--bg-2); color:var(--ink); border:1px solid var(--line-2);
   display:flex; align-items:center; gap:6px; overflow:hidden;
 }
@@ -662,6 +667,14 @@ body{ display:flex; flex-direction:column; }
 .sheet-back.on .sheet{ transform:none; opacity:1; }
 .sheet-grab{ width:36px; height:4px; border-radius:2px; background:var(--line-2); margin:8px auto 2px; flex-shrink:0; }
 .sheet-title{ padding:6px 16px 8px; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); flex-shrink:0; }
+/* QF-01: picker header — title + search input on one row. */
+.sheet-head{ display:flex; align-items:center; gap:10px; padding:8px 12px 6px; flex-shrink:0; }
+.sheet-htitle{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); flex-shrink:0; padding-left:4px; }
+.sheet-hsearch{ display:flex; align-items:center; gap:8px; flex:1; min-width:0; height:36px; padding:0 10px; background:#0a0b0e; border:1px solid var(--line-2); border-radius:10px; color:var(--ink-3); }
+.sheet-hsearch:focus-within{ border-color:var(--accent); color:var(--ink); }
+.sheet-hsearch input{ flex:1; min-width:0; background:transparent; border:0; outline:0; color:var(--ink); font-size:13px; padding:0; -webkit-appearance:none; appearance:none; }
+.sheet-hsearch input::placeholder{ color:var(--ink-3); }
+.sheet-hsearch svg{ flex-shrink:0; }
 .sheet-body{ padding:0 12px 10px; overflow-y:auto; flex:1; min-height:0; display:flex; flex-direction:column; gap:6px; user-select:text; }
 .sheet-foot{ display:flex; gap:8px; align-items:center; padding:10px 12px; border-top:1px solid var(--line); flex-shrink:0; }
 .sheet-foot .grow{ flex:1; }
@@ -821,16 +834,6 @@ body{ display:flex; flex-direction:column; }
 .filterbar .fchip.on{ border-color:var(--accent); color:var(--ink); background:rgba(232,154,74,0.10); }
 .filterbar .fchip .agent{ padding:1px 4px; }
 .filterbar .fclear{ color:var(--accent); border-color:rgba(232,154,74,0.4); }
-/* Prominent "clear all filters" button at the top of the filter bar — always visible when
-   any filter is on, including the fTask default on mobile that the per-group 'all' chip
-   does not clear. (chat-raised 2026-10-08: 'big regression in mobile layout nothing show it
-   says with filter nothing even if i remove all filters'.) */
-.filterbar .fclear-top{
-  display:inline-flex; align-items:center; gap:5px; flex-shrink:0;
-  padding:5px 12px; border-radius:999px; font-size:11.5px; font-weight:600; min-height:30px;
-  background:var(--accent); color:#1a0606; border:1px solid var(--accent);
-}
-.filterbar .fclear-top:hover{ opacity:.92; }
 #filterBtn.on{ color:var(--accent); }
 
 /* ------------ Card header: project · branch · worktree, centred ------------ */
@@ -873,8 +876,11 @@ body{ display:flex; flex-direction:column; }
 .cell .jump{
   position:absolute; right:10px; bottom:10px; z-index:4;
   display:flex; flex-direction:column; gap:6px;
-  opacity:.55; transition:opacity 140ms ease;
+  opacity:.55; transition:opacity 140ms ease, bottom 140ms ease;
 }
+/* QF-02: while the "N need you" pill is on screen, push the per-card jump
+   arrows up so they don't sit under the pill. (chat-raised 2026-10-09) */
+body.has-ask-pill .cell .jump{ bottom:84px; }
 .cell:hover .jump, .cell.focus .jump, .cell .jump:focus-within{ opacity:1; }
 .cell .jump button{
   width:34px; height:34px; border-radius:9px; padding:0;
@@ -1044,6 +1050,8 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   .cell .h .pp,
   .cell .h .pz,
   .cell .h .rd{ display:none; }
+  /* QF-12: keep the lock control on the card header on phones — the owner needs it
+     to pin a card while they poke the side list on a phone-sized viewport. */
   /* Focused card fullscreen: make the .open button a chunky touch target so the owner can
      one-tap into the fullscreen card for better reading (chat-raised 2026-10-08).
      Filled background, 18px icon, 36x36 hit area, accent-colored so it stands out. */
@@ -1086,6 +1094,11 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 .audio-chip:not(.ready) > .ac-speeds{ display:none; }
 .audio-chip.loading > .ac-loader svg{ animation:acp-spin 0.9s linear infinite; transform-origin:50% 50%; }
 .audio-chip.failed > .ac-loader{ color:var(--waiting); }
+/* QF-05: brief red flash when the user's play tap is rejected (iOS
+   NotAllowedError, codec unsupported, …). */
+.audio-chip.ac-failed{ animation: acp-flash 0.4s ease-out 1; }
+.audio-chip.ac-failed > .ac-play{ color:var(--waiting); border-color:var(--waiting); }
+@keyframes acp-flash{ 0% { background: rgba(255,95,95,0.18); } 100% { background: transparent; } }
 @keyframes acp-spin{ to { transform: rotate(360deg); } }
 .audio-chip > .ac-speeds{ display:inline-flex; gap:2px; margin-left:4px; }
 .audio-chip > .ac-speeds > .ac-speed{
@@ -1146,6 +1159,22 @@ button.prio{ cursor:pointer; }
 }
 .pz.on{ color:var(--accent); border-color:var(--accent); }
 .pz:disabled{ opacity:.4; }
+/* QF-12: lock control on the card header. Hidden in the grid / list / dock — only
+   shows on the single-card view because that's the only pane where the user is
+   working in a card and wants it pinned. The .on state uses the accent so the
+   locked card is unmistakable. */
+.cell .h .lk{ display:none; }
+.card-pane .cell .h .lk{
+  display:inline-flex; align-items:center; justify-content:center; gap:4px;
+  flex-shrink:0; min-width:32px; height:30px; padding:0 6px; border-radius:7px;
+  background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2);
+  font-size:12px; line-height:1; cursor:pointer;
+}
+.card-pane .cell .h .lk:hover{ color:var(--accent); border-color:var(--accent); }
+.card-pane .cell .h .lk.on{
+  color:var(--accent); border-color:var(--accent);
+  background:rgba(232,154,74,0.12);
+}
 .pp{
   flex-shrink:0; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:2px 7px; border-radius:999px;
   background:rgba(232,154,74,0.14); color:var(--accent); border:1px solid rgba(232,154,74,0.45);
@@ -1885,11 +1914,10 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .parkbox .pnotebody{ margin:2px 0 6px; padding:6px 8px; border:1px solid var(--ink-3); border-radius:7px; background:var(--bg-3); color:var(--ink); font-size:11.5px; line-height:1.4; white-space:pre-wrap; overflow-wrap:anywhere; }
 .parkbox .pman{ display:inline-flex; color:var(--ink-3); }
 .parkbox .prow.note:hover .pman, .parkbox .pman.on{ color:var(--accent); }
-.session-list li.sidefilt{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 12px; font-size:12px; color:var(--accent); border-bottom:1px solid var(--line); }
-.session-list li.sidefilt .sbtn{ min-height:0; height:24px; padding:0 8px; font-size:11px; }
+/* QF-13 — the "Filter on: X/Y" row used to be rendered at the top of the side list
+   (`li.sidefilt`). The X/Y count and the clear button now live in the top active-
+   filters bar; the sidefilt element and its rules are dead. */
 #askPopupPill{ display:flex; align-items:center; gap:6px; }
-.session-list li.sidefilt .ft{ white-space:nowrap; }
-.session-list li.sidefilt .sbtn{ white-space:nowrap; border:1px solid var(--ink-3); }
 /* one permanent row: left half = NEEDS YOU, right half = deploys (never appears / disappears, so nothing jumps) */
 .alertrow{ display:grid; grid-template-columns:1fr 1fr; min-height:36px; }
 .alertrow > *{ min-width:0; box-sizing:border-box; }
@@ -1920,9 +1948,8 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 /* compact sidebar: tighter list padding, section headers and row gaps */
 .session-list{ padding:2px 8px 8px; }
 .session-list li.grp{ padding:5px 8px 3px; margin:2px 0 1px; }
-.session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ margin-top:0; }
+.session-list li.grp:first-child{ margin-top:0; }
 .session-list li{ padding-top:5px; padding-bottom:5px; margin-bottom:1px; }
-.session-list li.sidefilt{ padding:4px 12px; margin-bottom:2px; }
 
 /* row actions */
 .session-list .acts{ display:contents; }
@@ -1956,8 +1983,10 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .parkbox .psum{ font-size:11px; color:var(--ink-3); margin:2px 0 4px 22px; white-space:normal; }
 .parkbox .psum.over, .parkbox .pfold.over{ color:var(--accent); }
 .parkbox .ph:first-child{ margin-top:0; }
-/* dock mic (voice input), right of Send: red + pulsing while recording, dimmed while transcribing */
-.dock .mic{ background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:10px; width:42px; height:42px; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+/* dock mic (voice input), right of Send: red + pulsing while recording, dimmed while transcribing.
+   flex:0 0 42px (QF-14) locks the box at 42 px so it can't be squeezed or grow — fixes the row "flicker"
+   when the tchip resizes or when the mic swaps .rec class. */
+.dock .mic{ background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:10px; width:42px; height:42px; flex:0 0 42px; display:flex; align-items:center; justify-content:center; }
 .dock .mic.rec{ background:var(--waiting); border-color:var(--waiting); color:#fff; animation:blink 1s infinite; }
 .dock .mic.busy{ opacity:.5; cursor:progress; }
 /* Attach button: while a /api/upload is in flight, dim the button and swap the paperclip
@@ -2005,7 +2034,7 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 
 /* a border above and below every group header (sidebar groups, Parked, Notes) */
 .session-list li.grp{ border-top:1px solid var(--line-2); border-bottom:1px solid var(--line-2); }
-.session-list li.grp:first-child, .session-list li.sidefilt + li.grp{ border-top:0; }
+.session-list li.grp:first-child{ border-top:0; }
 .parkbox .pfold{ border-top:1px solid var(--line-2); border-bottom:1px solid var(--line-2); padding:5px 0; margin-top:6px; }
 .parkbox .pfold:first-child{ border-top:0; margin-top:0; }
 
@@ -2095,14 +2124,16 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 /* answer popup header: priority + name on the left, counter / arrows / hide / dismiss at the right edge */
 #askPopup .ap-name{ flex:1 1 auto; }
 
-/* phones: the send target gets its own wide slot (full session name) - toggle, target, attach, mic on the first line, the message box and Send on the second */
+/* phones: the send target gets its own wide slot (full session name) — QF-14 layout:
+   row 1 = [toggle] [tchip(200 px)] (forced wrap because tchip is fixed-width)
+   row 2 = [mic] [attach (immediately right of mic)] [sendInput] [send] */
 @media (max-width: 600px){
   .dock .row{ flex-wrap:wrap; align-items:center; }
   .dock .row > #dockToggle{ order:0; }
-  .dock .row > .tchip{ order:1; flex:1 1 0; max-width:none; min-width:0; }
-  .dock .row > #attachBtn{ order:2; }
-  .dock .row > #micBtn{ order:3; }
-  .dock .row > #sendInput{ order:4; flex:1 1 calc(100% - 58px); min-width:0; }
+  .dock .row > .tchip{ order:1; flex:0 0 200px; width:200px; max-width:none; min-width:0; }
+  .dock .row > #micBtn{ order:2; }
+  .dock .row > #attachBtn{ order:3; }
+  .dock .row > #sendInput{ order:4; flex:1 1 0; min-width:120px; }
   .dock .row > #sendBtn{ order:5; }
   .tchip .tn{ flex:1; }
 }

@@ -4,8 +4,8 @@
 //   - in JS strings:  ${icon('pause')}  or  ${icon('timer', 14)}
 //   - in index.html:  <i data-icon="menu" data-size="20"></i>   (hydrated at start by hydrateIcons())
 // Catalogue: menu, chevron-left/right/up/down, plus, x, check, check-check, filter, more, bot, bar-chart, bell, download,
-// expand, pencil, pause, play, timer, zap, alert, lock, git-branch, git-fork, arrow-up-to-line, arrow-down-to-line,
-// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, refresh, archive, clipboard.
+// expand, pencil, pause, play, timer, zap, alert, lock, unlock, git-branch, git-fork, arrow-up-to-line, arrow-down-to-line,
+// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, refresh, archive, clipboard, search.
 const S = (inner) => ({ s: inner });          // stroked
 const F = (inner) => ({ f: inner });          // filled
 export const ICONS = {
@@ -33,6 +33,8 @@ export const ICONS = {
   zap: S('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'),
   alert: S('<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17.01"/>'),
   lock: S('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
+  // open lock: same body, but the shackle's right side stops short of the lock body (no v4)
+  unlock: S('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0"/>'),
   'git-branch': S('<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
   'git-fork': S('<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9"/><line x1="12" y1="12" x2="12" y2="15"/>'),
   'arrow-up-to-line': S('<line x1="5" y1="3" x2="19" y2="3"/><line x1="12" y1="21" x2="12" y2="8"/><polyline points="6 12 12 6 18 12"/>'),

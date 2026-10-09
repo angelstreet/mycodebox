@@ -101,7 +101,19 @@ export async function wireAudioChip(root) {
   }
 
   playBtn.addEventListener('click', async () => {
-    if (audio.paused) { try { await audio.play(); } catch {} } else { audio.pause(); }
+    if (audio.paused) {
+      // QF-05: iOS Safari rejects play() with NotAllowedError when the user-gesture
+      // context is lost, or with NotSupportedError on a bad codec. Surface the
+      // real error instead of swallowing it so the user can see what went wrong.
+      try { await audio.play(); }
+      catch (err) {
+        console.error('[tts] play failed', err);
+        root.classList.add('ac-failed');
+        const orig = playBtn.getAttribute('aria-label') || 'Play audio';
+        playBtn.setAttribute('aria-label', `audio failed: ${err && err.message ? err.message : (err && err.name) || err}`);
+        setTimeout(() => { root.classList.remove('ac-failed'); playBtn.setAttribute('aria-label', orig); }, 2400);
+      }
+    } else { audio.pause(); }
   });
   audio.addEventListener('play', () => { playBtn.innerHTML = icon('pause', 14); playBtn.setAttribute('aria-label', 'Pause audio'); });
   audio.addEventListener('pause', () => { playBtn.innerHTML = icon('play', 14); playBtn.setAttribute('aria-label', 'Play audio'); });

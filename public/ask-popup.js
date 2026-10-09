@@ -234,6 +234,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const idx = q.items.findIndex((i) => i.key === item.key);
     pill.querySelector('.ap-pill-n').textContent = String(q.items.length);
     pill.classList.toggle('hidden', !minimised);
+    document.body.classList.toggle('has-ask-pill', !minimised && !pill.classList.contains('hidden'));   // QF-02: lift the per-card jump arrows while the pill is on screen
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
     el.classList.toggle('ap-big', expanded);
