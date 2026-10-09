@@ -14,7 +14,7 @@ from __future__ import annotations
 import os, sys, pathlib
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
-BASE = os.environ.get("GHOSTY_URL", "http://localhost:7777")
+BASE = os.environ.get("GHOSTY_URL", "http://localhost:7778")   # default to the worktree test server (see scripts/test-server.sh); export GHOSTY_URL=http://localhost:7777 to test the live daemon
 VIEWPORT_PHONE = {"width": 412, "height": 915, "deviceScaleFactor": 2,
                   "isMobile": True, "hasTouch": True}
 VIEWPORT_DESK  = {"width": 1280, "height": 800}

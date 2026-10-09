@@ -24,6 +24,7 @@ the author's (what changed). Same order in tables and section headings.
 - QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card unlocks the previous one
 - QF-13 — **filter bar had two cluttered rows: give it one clear-all + an X/Y indicator at the top** — collapse to one row, `clear all clear ×` plus `X/Y` indicator, both vanish when no filter is active
 - QF-14 — **dock: paperclip sits left of mic, task chip breathes, and icons flicker when target name changes** — DOM reorder (mic before attach) + wider fixed-width `.tchip` (200px, no min/max breathing) + fixed 42px on `.dock .mic` (`flex:0 0 42px`) so the row doesn't reflow when the target name changes; Playwright-verified 2026-10-09 20:25, commit `f4e761e`, shipped + live
+- QF-15 — **NEEDS YOU pill always overlapped the per-card jump arrows** — QF-02 was a regression (predicate was inverted, class never set; no spec shipped); drop the `!` on `minimised` in `ask-popup.js:237`; added `scripts/test-server.sh` + `scripts/test-fix.sh` so every QF now runs headless against `:7778` before it touches `:7777`; **developed 2026-10-09 22:20**
 
 Pre-existing fixes from earlier today (kept here for context, not authored in
 this quickfix):
@@ -185,6 +186,58 @@ For every `verified` step on a UI fix, capture a screenshot in
 that something still looks wrong; the next agent can diff against them.
 **Never mark `verified` without a fresh screenshot from this fix's test
 run.**
+
+### 8. Test locally on the worktree before touching `:7777` (added 2026-10-09)
+
+Shipping a fix without testing it is the worst-case failure — the worktree
+says `developed`, the live daemon is still old, the user files it again
+(QF-15 was a regression of QF-02 that shipped unverified for this exact
+reason). The rule from now on:
+
+**Every QF spec runs against the WORKTREE, not the live `:7777`.**
+
+The two scripts:
+
+```bash
+bash scripts/test-server.sh start          # node server.js on :7778 with a temp STATE_DIR
+bash scripts/test-fix.sh test/browser/qf-NN-...py [more specs...]
+                                          # runs the spec(s) headless, kills :7778 on exit
+```
+
+`scripts/test-server.sh` is a tiny launcher around `node server.js` that
+picks port `7778` by default and points `GHOSTY_STATE_DIR` at a fresh
+`mktemp -d` dir, so nothing on the live daemon (`:7777`, `~/.local/state/ghosty`)
+is ever touched. Re-entrant: calling `start` while it's already running
+prints the existing PID. `stop` always cleans up.
+
+`scripts/test-fix.sh` walks every `def test_*(...)` in the given spec
+files and runs each one in its own `pytest` subprocess. That's a real
+fix, not a comment — pytest-asyncio leaves an asyncio loop running
+between test functions in the same file, and Playwright's
+`sync_playwright` refuses to start inside one with "Please use the Async
+API instead." The split-by-test-id stays robust as new tests get added
+to existing files.
+
+`test/browser/_setup.py` defaults `BASE` to
+`http://localhost:7778`, so most specs Just Work with no env var. To
+intentionally test the LIVE daemon (smoke), export
+`GHOSTY_URL=http://localhost:7777` for one pytest invocation.
+
+**Verifier sub-agent.** The "verifier" lane (rule §3 above) runs the
+spec via this same lane. From the parent turn:
+
+```bash
+# the verifier just calls:
+bash scripts/test-fix.sh test/browser/qf-NN-...py
+```
+
+If that exits non-zero, the fix is not `verified` and the next agent
+should not declare it shipped.
+
+**What still belongs on `:7777`.** The final smoke after `developed →
+under test → verified` is one curl + one Playwright pass with
+`GHOSTY_URL=http://localhost:7777` to confirm the mirrored files
+serve the patched bytes. That's `live`, not `verified`.
 
 ---
 
@@ -793,4 +846,111 @@ Screenshots `screenshots/qf-14-dock-layout-phone.png` and
   order (`tchip, micBtn, sendInput, sendBtn, attachBtn`) and
   `style.css` serves `width:200px; flex:0 0 200px` on `.tchip`.
   Commit `f4e761e` on `task70-tts-needs-you`.
+
+---
+
+## QF-15 — NEEDS YOU pill always overlapped the jump arrows (QF-02 regression, the JS predicate was inverted)
+
+User quote (with screenshot `/home/jndoye/.ghosty/uploads/1791583075491-b3da5b.png`):
+
+> "find out why this bug is still there i asked to avoid need you to be overlaying
+>  the scroll down btn explain why it is not done based on the queu"
+
+Repro: any session in `waiting` state, on any viewport. Open the
+dashboard, focus a session; the minimised "N need you" pill (red,
+`#askPopupPill`, `position: fixed; bottom: var(--ask-bottom) + 10/14px`)
+sits visually on top of the per-card `.jump[data-j="bottom"]` arrow.
+Tapping the down arrow is impossible without first dismissing the pill.
+
+### Why QF-02 didn't fix it
+
+QF-02 (commit `25e387d`, `quickfix.md:212-235`) shipped two
+coordinated changes:
+
+1. CSS — `public/style.css:891` adds
+   `body.has-ask-pill .cell .jump { bottom:84px }` to lift the
+   jump arrows above the pill.
+2. JS — `public/ask-popup.js:237` toggles `body.has-ask-pill`
+   whenever the pill's hidden class flips.
+
+The JS predicate was inverted:
+
+```js
+pill.classList.toggle('hidden', !minimised);                                                       // line 236
+document.body.classList.toggle('has-ask-pill', !minimised && !pill.classList.contains('hidden'));  // line 237 ← QF-02 (broken)
+```
+
+`!minimised` is true exactly when line 236 just HID the pill, and
+false exactly when line 236 just SHOWN it. So:
+
+| `minimised` | after line 236 (`pill.hidden`?) | line 237 evaluates to | `body.has-ask-pill` |
+|---|---|---|---|
+| `true`  (pill visible)  | `false` | `!true && !false` = `false` | ❌ |
+| `false` (pill hidden)   | `true`  | `!false && !true` = `false` | ❌ |
+
+**Both branches land on `false` — the class is never added, the CSS
+rule never matches, the per-card jump arrows stay at `bottom:10px`
+under the pill.** The fix shipped unverified: there was no Playwright
+spec for QF-02 and the phone-viewport pane-render bug (separate)
+meant none of the post-QF-02 specs ran clean either.
+
+### Decision
+
+Drop the bang:
+
+```js
+document.body.classList.toggle('has-ask-pill', minimised && !pill.classList.contains('hidden'));   // QF-15
+```
+
+Now the class flips on exactly when the pill is on screen, the CSS
+shift fires, and the jump arrow sits at `bottom:84px` (above the pill
+top, which is `card.bottom - 52px`).
+
+### Touched
+
+- `public/ask-popup.js:237` — drop the `!` on `minimised` (also
+  rewrote the trailing comment so a future reader doesn't fall into
+  the same trap).
+- `scripts/test-server.sh` — NEW. Worktree-local daemon on `:7778`,
+  throwaway `GHOSTY_STATE_DIR`, idempotent `start` / `stop` / `fg`.
+- `scripts/test-fix.sh` — NEW. Runs each `def test_*(...)` in its own
+  `pytest` subprocess (sidesteps the pytest-asyncio + sync_playwright
+  conflict on the 2nd+ test in a file), prints `--- pytest file::tid
+  ---` per test, stops the server on exit, exits with the worst code.
+- `test/browser/_setup.py` — `BASE` default flipped from
+  `http://localhost:7777` to `http://localhost:7778`; comment notes
+  how to test the live daemon by exporting `GHOSTY_URL`.
+- `test/browser/qf-15-pill-vs-jump.py` — NEW. Three tests covering
+  source-level / CSS-level / runtime-level invariants of the fix.
+  Pre-fix: source-level fails (`!minimised` present). Post-fix: all
+  three pass.
+- `quickfix.md` rule #8 (new section above this entry) — the
+  "test locally before touching `:7777`" rule that this QF forced
+  into existence. The same workflow applies to every future QF and to
+  the verifier sub-agent.
+
+### Verifier — Playwright end-to-end (run via `scripts/test-fix.sh`)
+
+```
+$ bash scripts/test-fix.sh test/browser/qf-15-pill-vs-jump.py test/browser/qf-14-dock-layout.py
+--- pytest .../qf-15-pill-vs-jump.py::test_css_rule_lifts_jump_when_body_class_set ---  ✔
+--- pytest .../qf-15-pill-vs-jump.py::test_runtime_class_flips_on_minimised_reload --- ✔
+--- pytest .../qf-15-pill-vs-jump.py::test_source_level_toggle_predicate_is_not_inverted --- ✔
+--- pytest .../qf-14-dock-layout.py::test_dock_layout_desktop_fixed_tchip_and_frozen_mic --- ✔
+--- pytest .../qf-14-dock-layout.py::test_dock_layout_paperclip_right_of_mic --- ✔
+```
+
+5/5 pass against the worktree daemon on `:7778`. Screenshots at
+`screenshots/qf-15-pill-vs-jump.png`.
+
+### Status
+- `developed`: ✅ changes in worktree
+- `under test`: ✅ spec written + failing on the unpatched body of `ask-popup.js`
+- `verified`: ✅ all 5 specs pass against `:7778` via `scripts/test-fix.sh`
+- `shipped`: ✅ mirrored `/home/jndoye/ghosty-sessions/public/ask-popup.js`,
+  `safe-restart.sh --wait 10` clean
+- `live`: ✅ live HTML at `http://localhost:7777/` serves the fixed
+  `ask-popup.js` (grep `'minimised && !pill.classList.contains'` →
+  matches, `!minimised && !pill.classList.contains` → absent). Commit
+  on `task70-tts-needs-you`.
 
