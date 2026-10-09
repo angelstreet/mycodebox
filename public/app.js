@@ -90,6 +90,9 @@ const state = {
   toastTimer:null,
   side:      false,
   installPrompt: null,
+  // QF-12: when set, focusSession() bails on a different name. Survives reload via LS_LOCKED.
+  // Reset when the locked session disappears from state.sessions.
+  lockedSession: null,
 };
 
 // ---------- localStorage ----------
@@ -98,6 +101,7 @@ const LS_GRID    = 'ghosty.gridSize';
 const LS_MODE    = 'ghosty.mode';
 const LS_ORDER   = 'ghosty.order';
 const LS_NOTIFY  = 'ghosty.notify';
+const LS_LOCKED  = 'ghosty.lockedSession';   // QF-12: name of the card that survives nav taps
 const GRID_SIZES = [2, 4, 6, 8];
 
 function lsGet(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }
@@ -649,6 +653,12 @@ function onStatus() {
     sortSessions();
     if (state.active && !names.includes(state.active) && !pendingNew(state.active)) state.active = null;
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
+    // QF-12: drop the lock when the locked session goes away (killed, renamed, daemon restart
+    // before reattach). A stale lock would block focus for every nav tap with no UI for it.
+    if (state.lockedSession && !names.includes(state.lockedSession)) {
+      state.lockedSession = null;
+      lsSet(LS_LOCKED, '');
+    }
     renderAll();
   } else {
     syncAll();
@@ -1197,7 +1207,18 @@ function renderActiveFilters() {
     ...state.fAgent.map((v) => ['fAgent', v, `<span class="agent ${escapeHtml(v)}">${escapeHtml(AGENT_LABEL[v] || v)}</span>`]),
   ];
   const html = items.map(([g, v, l]) => `<button class="afc" data-g="${g}" data-v="${escapeHtml(v)}" title="Remove this filter">${l}<span class="x" aria-hidden="true">\u00d7</span></button>`).join('');
-  const full = items.length > 2 ? `${html}<button class="afclear" title="Clear all filters">clear all \u00d7</button>` : html;   // three or more: one click clears them all
+  // QF-13 — the top row now carries the only "clear every filter" affordance. The button
+  // is shown as soon as ANY filter is on (not only at 3+ chips) and the literal label is
+  // "clear all clear ×" per the user's wording: the leading "clear all" tells what it
+  // does, the trailing "clear" emphasises the action. A "X/Y" indicator sits next to the
+  // button so the user sees how many sessions the current filter set lets through; both
+  // vanish when no filter is active (showing "33/33" or "0/33" would be noise).
+  const visible = byUrgency(visibleSessions()).length;
+  const total = state.sessions.length;
+  const indicator = items.length > 0 ? `<span class="afcount" title="visible sessions / total">${visible}/${total}</span>` : '';
+  const full = items.length > 0
+    ? `${html}<button class="afclear" title="Clear every filter (status, project, agent, tasks)">clear all clear \u00d7</button>${indicator}`
+    : html;
   if (host.dataset.h === full) return;
   host.dataset.h = full; host.innerHTML = full;
   host.querySelector('.afclear')?.addEventListener('click', clearAllFilters);
@@ -1252,13 +1273,21 @@ function renderFilterBar() {
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const agents = ['claude', 'codex', 'minimax'].filter((a) => all.some((n) => agentOf(n) === a));
   // fTask is a single boolean, not a multi-select group; render its own chip with data-g='fTask' and no data-v.
-  const taskChip = `<button class="fchip fchip-task${state.fTask ? ' on' : ''}" data-g="fTask" title="Show only TASK-prefixed sessions (mm-manager / ghosty / manager/owner are hidden)">tasks<span class="n">${count((n) => /^TASK[-_]/i.test(displayName(n)))}</span></button>`;
+  // QF-10 — only render the tasks chip when at least one session matches /^TASK[-_]/i;
+  // a "tasks 0" chip is dead UI and the user reported it as clutter.
+  const taskCount = count((n) => /^TASK[-_]/i.test(displayName(n)));
+  const taskChip = taskCount > 0
+    ? `<button class="fchip fchip-task${state.fTask ? ' on' : ''}" data-g="fTask" title="Show only TASK-prefixed sessions (mm-manager / ghosty / manager/owner are hidden)">tasks<span class="n">${taskCount}</span></button>`
+    : '';
   const html =
-    `` + (anyFilter() ? `<button class="fclear-top" title="Clear every filter (status, project, agent, tasks)">clear all filters ×</button><span class="fsep"></span>` : '') +
+    // QF-10 — removed the duplicate top "clear all filters" button; the bottom .fclear
+    // already does the same job and the top one flashed in/out on every render.
+    `` +
     chip('filter', null, 'all') +
     states.filter((k) => count((n) => filterStateOf(n) === k)).map((k) => chip('filter', k, `<i class="dot ${k}"></i>${STATE_LABEL[k]}`, count((n) => filterStateOf(n) === k))).join('') +
     (count((n) => filterStateOf(n) === 'paused') || state.filter.includes('paused') ? chip('filter', 'paused', `<i class="dot paused"></i>paused`, count((n) => filterStateOf(n) === 'paused')) : '') +
-    `<span class="fsep"></span>` + taskChip + `<span class="fsep"></span>` + chip('fProject', null, 'all') +
+    (taskChip ? `<span class="fsep"></span>` + taskChip : '') +
+    `<span class="fsep"></span>` + chip('fProject', null, 'all') +
     projects.map((p) => chip('fProject', p || '-', p ? escapeHtml(p) : '<i title="sessions not inside a git repository">no repo</i>', count((n) => projectOf(n) === p))).join('') +
     `<span class="fsep"></span>` + chip('fAgent', null, 'all') +
     agents.map((a) => chip('fAgent', a, `<span class="agent ${a}">${AGENT_LABEL[a]}</span>`, count((n) => agentOf(n) === a))).join('') +
@@ -1276,12 +1305,17 @@ function renderFilterBar() {
     };
   }
   bar.querySelector('.fclear')?.addEventListener('click', clearAllFilters);
-  bar.querySelector('.fclear-top')?.addEventListener('click', clearAllFilters);
 }
 
 // ---------- task document (.md) ----------
 // Sessions named taskNN get an MD button when the server finds a TASK-NN*.md (or task.md) for them.
 state.taskDocs = new Map();   // session -> { files: [] , at }
+// QF-08 — in-memory cache for /api/taskdoc so re-opening a doc doesn't flash
+// 'loading…'. Keyed by "session\0file" so two sessions can have a same-named
+// .md without collision. Entries stay for the lifetime of the page load;
+// the network result is also refreshed in the background (stale-while-
+// revalidate) so a doc edited on the codebox still shows up within a minute.
+state.taskDocCache = new Map();   // key -> { name, text, at }
 function probeTaskDoc(cell, n) {
   const btn = cell.querySelector('.td');
   if (!btn) return;
@@ -1305,23 +1339,37 @@ async function toggleTaskDoc(cell, n, file) {
   if (!cur) return;
   dv.dataset.file = cur;
   cell.classList.add('doc-on');
-  dv.innerHTML = '<div class="rd-empty">loading\u2026</div>';
+  // QF-08 — instant render from the in-memory cache when available; only
+  // show "loading…" on a true cold open. After the fetch resolves, the body
+  // is updated in place if the server returned different text.
+  const cacheKey = `${n}\0${cur}`;
+  const cached = state.taskDocCache.get(cacheKey);
+  if (cached) renderTaskDocBody(cell, dv, n, cur, cached, d);
+  else dv.innerHTML = '<div class="rd-empty">loading\u2026</div>';
   try {
     const r = await fetch(`/api/taskdoc/${encodeURIComponent(n)}?f=${encodeURIComponent(cur)}`);
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const opts = d.files.length > 1
-      ? `<select class="mdsel">${d.files.map((f) => `<option value="${escapeHtml(f)}"${f === j.name ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('')}</select>`
-      : `<span class="mdname">${escapeHtml(j.name)}</span>`;
-    const copyBtn = copyPromptButtonHtml({ text: j.text, label: 'Copy task document' });
-    dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}${copyBtn}</div><div class="mdbody">${renderMd(j.text)}</div>`;
-    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
-    const sel = dv.querySelector('.mdsel');
-    if (sel) sel.onchange = () => toggleTaskDoc(cell, n, sel.value);
+    state.taskDocCache.set(cacheKey, j);
+    if (cell.classList.contains('doc-on') && dv.dataset.file === cur) {
+      if (!cached || cached.text !== j.text) renderTaskDocBody(cell, dv, n, cur, j, d);
+    }
   } catch {
-    dv.innerHTML = '<div class="mdbar"><button class="mdback">\u2190 session</button></div><div class="rd-empty">could not load the task document</div>';
-    dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+    if (!cached) {
+      dv.innerHTML = '<div class="mdbar"><button class="mdback">\u2190 session</button></div><div class="rd-empty">could not load the task document</div>';
+      dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+    }
   }
+}
+function renderTaskDocBody(cell, dv, n, cur, j, d) {
+  const opts = d.files.length > 1
+    ? `<select class="mdsel">${d.files.map((f) => `<option value="${escapeHtml(f)}"${f === j.name ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('')}</select>`
+    : `<span class="mdname">${escapeHtml(j.name)}</span>`;
+  const copyBtn = copyPromptButtonHtml({ text: j.text, label: 'Copy task document' });
+  dv.innerHTML = `<div class="mdbar"><button class="mdback">\u2190 session</button>${opts}${copyBtn}</div><div class="mdbody">${renderMd(j.text)}</div>`;
+  dv.querySelector('.mdback').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); };
+  const sel = dv.querySelector('.mdsel');
+  if (sel) sel.onchange = () => toggleTaskDoc(cell, n, sel.value);
 }
 
 // ---------- tabs ----------
@@ -1384,11 +1432,11 @@ function layoutSide() {
   const sections = [];
   if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned' });
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
-  let fl = list.querySelector('li.sidefilt');
-  if (anyFilter()) {
-    if (!fl) { fl = document.createElement('li'); fl.className = 'sidefilt'; fl.innerHTML = '<span class="ft"></span><button class="sbtn" type="button">clear</button>'; fl.querySelector('button').onclick = clearAllFilters; list.insertBefore(fl, list.firstChild); }
-    fl.querySelector('.ft').textContent = `Filter on: ${names.filter(matchesFilter).length}/${names.length}`;
-  } else if (fl) fl.remove();
+  // QF-13 — the side list no longer prepends a "Filter on: X/Y [clear]" row. The X/Y
+  // count and the clear button now live in the top active-filters bar (#activeFilters);
+  // rendering the same info in two places was confusing (chat-raised 2026-10-09 19:29,
+  // screenshots 1791574151829 / 1791574194602). Layout-side still keeps `anyFilter()`
+  // awareness via the section counts below (members/total per group).
   const withHeaders = sections.length > 0;
   if (withHeaders) sections.push({ key: 'other', title: 'Other' });
   const plan = [];
@@ -1401,7 +1449,8 @@ function layoutSide() {
   }
   const want = new Set(plan.filter((p) => p.hdr).map((p) => p.hdr.key));
   for (const [k, el] of Object.entries(hdrs)) if (!want.has(k)) { el.remove(); delete hdrs[k]; }
-  let cursor = list.querySelector('li.sidefilt')?.nextSibling || list.firstChild;
+  // QF-13 — cursor no longer starts past a sidefilt row (that row is gone).
+  let cursor = list.firstChild;
   const place = (n) => { if (n === cursor) cursor = cursor.nextSibling; else list.insertBefore(n, cursor); };
   for (const p of plan) {
     if (p.hdr) {
@@ -1679,6 +1728,7 @@ function buildCell(s) {
       <button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button>
       <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
+      <button class="lk" aria-label="Lock card" aria-pressed="false" title="Lock this card so nav taps keep it focused">${icon('lock', 14)}</button>
       <button class="open" aria-label="Open full screen" title="Open">${icon('expand', 14)}</button>
     </div>
     <div class="ask hidden"></div>
@@ -1692,6 +1742,10 @@ function buildCell(s) {
     </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
   cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
+  // QF-12: lock the card so nav taps keep it focused. Click toggles state.lockedSession;
+  // the actual focus guard lives in focusSession() so every entry point (list row, tab,
+  // dock chip, grid card) is covered by the same check.
+  cell.querySelector('.lk').onclick = (e) => { e.stopPropagation(); setLock(s.name); };
   for (const b of cell.querySelectorAll('.jump button')) {
     b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
@@ -1895,6 +1949,15 @@ function syncCell(cell) {
   if (mt.dataset.h !== mh) { mt.dataset.h = mh; mt.innerHTML = mh; }
   const rd = cell.querySelector('.rd');
   rd.textContent = state.reader ? '>_' : 'Aa';
+  // QF-12: lock button reflects state.lockedSession. Icon flips between lock / unlock;
+  // the .on class drives the accent colour and aria-pressed drives screen readers.
+  const lk = cell.querySelector('.lk');
+  const locked = state.lockedSession === n;
+  lk.classList.toggle('on', locked);
+  lk.setAttribute('aria-pressed', locked ? 'true' : 'false');
+  lk.setAttribute('aria-label', locked ? 'Unlock card' : 'Lock card');
+  lk.title = locked ? 'Unlock this card' : 'Lock this card so nav taps keep it focused';
+  lk.innerHTML = icon(locked ? 'unlock' : 'lock', 14);
   if (!inCard && n === state.active) {
     // move arrows: only the directions this card can still go
     const i = state.sessions.findIndex((x) => x.name === n), N = state.sessions.length, cols = gridCols();
@@ -1944,8 +2007,35 @@ function headMetaHtml(n) {
       parts.push(`<span class="chip-m hand${overdue ? ' late' : ''}" title="${escapeHtml(title)}">\u21c4 ${escapeHtml(h.resource)} \u2192 ${escapeHtml(other)}${hm ? ` ${escapeHtml(hm)}` : ''}</span>`);
     }
   }
-  if (stateOf(n) === 'working' && st.activity) parts.push(`<span class="act">${escapeHtml(st.activity)}</span>`);
+  // QF-11: drop the live-status segments Claude's footer puts in
+  // `st.activity` ("⠧ Loading 4m7s · ⚡ 5548 tok/s · ...") before the
+  // string lands in the per-card header. The data flow itself is unchanged
+  // — server still ships `st.activity`, the manager / panes log still
+  // read it, the dashboard / status surface (and the card body) can still
+  // subscribe. The header just stops pretending to be a status bar.
+  const act = cleanHeaderActivity(st.activity);
+  if (act) parts.push(`<span class="act">${escapeHtml(act)}</span>`);
   return parts.join('<span class="sep"> \u00b7 </span>');
+}
+// Strip Claude-Code's footer line ("⠧ Loading 4m7s · ⚡ 5548 tok/s · ...")
+// from a session's activity string so the per-card header stays readable.
+// The text is built by concatenating the visual spinner, the elapsed timer,
+// the reporter throughput and the footer help text into one line; only the
+// first three bits are live status that belongs on a dashboard, not in
+// `.h`. Other activity strings ("Searched for X", "Reading file Y") keep
+// showing.
+function cleanHeaderActivity(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  // strip the leading spinner + "Loading <duration>" segment
+  s = s.replace(/^\s*[⠧⠂⠐⠈]\s*Loading\s+\S+(?:\s*·\s*)?/, '');
+  // strip the "⚡ N tok/s" throughput segment (anywhere on the line)
+  s = s.replace(/\s*·\s*⚡\s*\d[\d,.\s]*\s*tok\/s(?:\s*·\s*)?/g, ' \u00b7 ');
+  // strip a stray leading spinner with no useful text behind it
+  s = s.replace(/^\s*[⠧⠂⠐⠈]\s*/, '');
+  // tidy up double separators and trailing dots
+  s = s.replace(/\s*·\s*·\s*/g, ' \u00b7 ').replace(/\s*·\s*$/, '').trim();
+  return s;
 }
 // Centre label of a card header: project · branch · worktree.
 function projHtml(n) {
@@ -2352,6 +2442,13 @@ function syncTitle() {
 }
 function focusSession(name) {
   if (!name) return;
+  // QF-12: a locked card survives nav taps. If the user clicks a different session
+  // while the lock is held, stay on the locked one and toast so they know why nothing
+  // happened. Tapping the locked card itself is a no-op (we're already focused on it).
+  if (state.lockedSession && state.lockedSession !== name) {
+    toast(`${displayName(state.lockedSession)} is locked`, 1600);
+    return;
+  }
   const prev = state.active;
   state.active = name;
   lsSet('ghosty.active', name);   // a refresh comes back on the same focused card
@@ -2373,6 +2470,24 @@ function focusSession(name) {
 function openCard(name) {
   focusSession(name);
   setMode('card');
+}
+
+// QF-12: lock / unlock a card so nav taps can't switch focus away. The click on the
+// header's lock button is the only UI entry; focusSession() is the only guard, so every
+// other way to switch focus (list row, tab, dock chip, grid card) goes through the same
+// check and is blocked automatically. State is persisted so a soft reload remembers the
+// pin; the locked name is dropped if the session disappears from the next status refresh.
+function setLock(name) {
+  if (state.lockedSession === name) {
+    state.lockedSession = null;
+    lsSet(LS_LOCKED, '');
+    toast('unlocked');
+  } else {
+    state.lockedSession = name;
+    lsSet(LS_LOCKED, name);
+    toast(`${displayName(name)} locked · nav taps won't switch`);
+  }
+  syncAll();
 }
 
 // ---------- mode switching ----------
@@ -4556,6 +4671,10 @@ if ('serviceWorker' in navigator) {
   state.reader = rd == null ? isPhone() : rd === '1';
   const savedActive = lsGet('ghosty.active', '');
   if (savedActive) state.active = savedActive;   // validated against the live sessions once they load
+  // QF-12: a soft reload comes back with the same card locked. Empty string = no lock.
+  // The saved name is validated once state.sessions arrives (drops ghosts automatically).
+  const savedLocked = lsGet(LS_LOCKED, '');
+  if (savedLocked) state.lockedSession = savedLocked;
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();

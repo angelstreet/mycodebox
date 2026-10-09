@@ -23,12 +23,14 @@ SCREENSHOTS = ROOT / "screenshots"
 SCREENSHOTS.mkdir(exist_ok=True)
 
 
-def new_page(viewport: dict = VIEWPORT_DESK) -> tuple[Browser, BrowserContext, Page]:
+def new_page(viewport: dict = VIEWPORT_DESK, **ctx_kw) -> tuple[Browser, BrowserContext, Page]:
     """Spin up a headless chromium and a fresh context/page. Caller closes
-    the browser (we use one browser per spec to keep tests independent)."""
+    the browser (we use one browser per spec to keep tests independent).
+    Extra Playwright context kwargs (e.g. `service_workers='block'`) are
+    forwarded to `browser.new_context`."""
     p = sync_playwright().start()
     browser = p.chromium.launch(headless=True)
-    ctx = browser.new_context(viewport=viewport)
+    ctx = browser.new_context(viewport=viewport, **ctx_kw)
     page = ctx.new_page()
     page.on("console", lambda m: print(f"[browser {m.type}] {m.text}", file=sys.stderr))
     page.on("pageerror", lambda e: print(f"[browser pageerror] {e.message}", file=sys.stderr))

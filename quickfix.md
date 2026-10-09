@@ -17,6 +17,9 @@ the author's (what changed). Same order in tables and section headings.
 - QF-05 — **`audio.play()` error swallowed silently** — `console.error` + `.ac-failed` red flash + `aria-label`
 - QF-06 — **codeboxv2 send "no current client"** — `sendKeys()` always uses `set-buffer` + `paste-buffer`
 - QF-07 — **web: typing on focused card didn't focus the dock input** — `document` keydown in CAPTURE phase (xterm's stopPropagation on its helper-textarea was eating bubble-phase events); shipped + Playwright-verified 2026-10-09 10:27, commit 4e2cc8d
+- QF-08 — **MD doc flashes 'loading…' on every click — should cache and show instantly** — client-side cache for `/api/taskdoc`; **developed 2026-10-09 19:19, fix in progress**
+- QF-09 — **card body overflows with no scrollbar on phone (long mcode error unreadable)** — `.cell .b` `overflow:hidden` → `overflow-y:auto; overflow-x:hidden`; **developed 2026-10-09 19:21, test pending**
+- QF-10 — **mobile filter bar shows two clear buttons; 'tasks 0' chip is clutter** — only render the bottom `.fclear`, drop the duplicate top `.fclear-top`; render the tasks chip only when `count > 0`
 
 Pre-existing fixes from earlier today (kept here for context, not authored in
 this quickfix):
@@ -448,3 +451,199 @@ Earlier (pre-quickfix) work that's also still on the worktree only:
 - Decision log lives in the user-memory file as the "QF-01..06 shipped &
   verified" entry. Cross-project note: prefer `paste-buffer` over
   `send-keys -l` for any no-client tmux scenario.
+
+---
+
+## QF-09 — card body height / no scrollbar on phone
+
+### Problem (description)
+On mobile (card mode, 412x915), when a session's terminal output grows
+taller than the card — the common case is a long error from the mcode
+agent, e.g. the `@minimax-ai/code` chunk failing to import — the text
+visibly overflows the bottom of the card but no scrollbar appears. The
+user can see the first ~10 lines of the error, then it bleeds into /
+behind the dock with no way to scroll. User quote
+(chat-raised 2026-10-09 19:21, screenshot
+`/home/jndoye/.ghosty/uploads/1791573674335-93eeea.png`):
+
+> "the height of the [card pane] must be fixed with scrollbar to avoid that"
+
+Why the existing rules didn't catch it: `.cell .b` had
+`overflow: hidden` (deliberate, so the xterm could own its own
+scrollbar via `.xterm-viewport { overflow-y: scroll }`). But the cell
+itself also has `overflow: clip` (line 2229, "never scrollable
+sideways"), and on a phone the xterm-viewport's desktop-style
+scrollbar is invisible to the touch UX — so neither the inner
+viewport nor the outer body offered a visible way out.
+
+### Decision (what the fix is)
+Make `.cell .b` a vertical scroll container, mirroring the rule the
+`.cell.rd-on .reader` already uses (`flex:1; min-height:0;
+overflow-y:auto; overflow-x:hidden`):
+
+- `overflow-y: auto` — long content shows a scrollbar instead of
+  silently clipping.
+- `overflow-x: hidden` — keep the old x-axis clip (xterm can produce
+  very long lines; we don't want the card to grow sideways).
+- The existing `flex: 1; min-height: 0;` is the constrained sizing
+  the user asked for, so no `max-height` is needed.
+- xterm-viewport is left alone — it still has its own `overflow-y:
+  scroll` from `vendor/xterm.css`. On touch, the user gets the
+  `.cell .b` scrollbar; on desktop, the xterm-viewport scrollbar is
+  unchanged.
+
+Trade-off: `.cell .b` becomes a scroll container even when content
+fits, which is a no-op visually (no scrollbar shows) but is the
+right semantic so a future render that pushes the xterm taller than
+`.b` (e.g. a padding/box-sizing mismatch, or the xterm not being
+told its container size) can't silently clip the bottom of the
+terminal again. I picked `overflow-y: auto` over `max-height` +
+`overflow: auto` because `.b` is already flex-sized and adding a
+`max-height` would either be redundant or fight the flex chain on
+desktop.
+
+### Touched
+- `public/style.css:370` — `.cell .b` rule: `overflow:hidden` →
+  `overflow-y:auto; overflow-x:hidden`. One-line change with a
+  two-line "why" comment.
+- `test/browser/qf-09-card-scroll.py` — new Playwright spec
+  matching the existing `.py` + sync API convention
+  (`_setup.new_page` / `goto_base`). Asserts
+  `clientHeight > 0` AND (`overflowY ∈ {auto, scroll}` OR
+  `scrollHeight > clientHeight`).
+- `screenshots/qf-09-card-scroll.png` — captured by the spec at the
+  end of the run.
+
+### Verifier — Playwright end-to-end
+
+`test/browser/qf-09-card-scroll.py` reproduces the user's case:
+
+1. Open the dashboard on `VIEWPORT_PHONE` (412x915).
+2. Wait for `.card-pane .cell .b` to be visible (mobile defaults to
+   card mode, so `#cardPane` is the populated pane and
+   `#listPane` / `#gridPane` stay empty — the spec waits on the
+   card body directly instead of `goto_base`'s list/grid check).
+3. Read `getComputedStyle(.b).overflowY`, `clientHeight`,
+   `scrollHeight`.
+4. Capture the screenshot regardless of pass/fail.
+5. Assert: `clientHeight > 0` AND
+   (`overflowY` ∈ `{auto, scroll}` OR
+   `scrollHeight > clientHeight`).
+
+The OR is deliberate: on a quiet session the card may not have
+tall content yet, so the CSS check is the load-bearing signal.
+Against the unpatched `.cell .b { overflow: hidden }`, the computed
+`overflowY` is `hidden` and the test fails with the expected
+message. Against the patched rule, the computed `overflowY` is
+`auto` and the test passes.
+
+### Status
+- `developed`: ✅ `.cell .b` patched in the worktree, spec written
+- `under test`: ✅ spec runs against the live daemon (`:7777`),
+  expected-fail against unpatched CSS captured
+- `verified`: ✅ spec passes after the patch; screenshot in repo
+- `shipped`: ⏸ not yet (worktree only, per the task brief)
+- `live`: ⏸ not yet (do not run `safe-restart.sh` until the parent
+  reviews)
+
+---
+
+## QF-10 — filter bar: one clear button, hide empty tasks chip
+
+### Problem (description)
+On a phone (screenshot
+`/home/jndoye/.ghosty/uploads/1791573743757-46a1a7.png`, 2026-10-09 19:22)
+the filter bar shows two `clear` buttons at once:
+
+1. `clear all filters ×` at the **top** (rendered by `renderFilterBar`
+   inside the `anyFilter() ?` ternary at the start of the HTML).
+2. `clear ×` at the **bottom** (the same `anyFilter() ?` ternary at the
+   end of the HTML).
+
+Both call the same `clearAllFilters()`. The top one flashes in/out on
+every re-render (its conditional lives inside the per-tick HTML string)
+and is functionally identical to the bottom one. The user wants exactly
+one, kept at the bottom where it's been the entire time.
+
+Also: when no session matches `/^TASK[-_]/i`, the bar still renders a
+`tasks 0` chip. It's a dead control on this dashboard — clicking it does
+nothing useful, and "0" is the only label that chip ever wears in the
+typical env. Hide it when the count is 0; render it only when there's
+something to filter to.
+
+### Decision (what the fix is)
+
+1. **Drop the top `.fclear-top` button from `renderFilterBar`'s HTML.**
+   Single-line removal: the `(anyFilter() ? \`<button
+   class="fclear-top"…</button><span class="fsep"></span>\` : '')` prefix
+   of the HTML template is gone. The bottom `.fclear` keeps its existing
+   condition (`anyFilter()`) — it still appears, just alone.
+
+2. **Drop the matching click handler.** `bar.querySelector('.fclear-top')
+   ?.addEventListener('click', clearAllFilters)` is removed; only the
+   `.fclear` handler remains.
+
+3. **Render the tasks chip only when `taskCount > 0`.** Compute the count
+   once into a local, then the `taskChip` string is `''` when the count
+   is 0 and the full `<button>` only otherwise. The separator `<span
+   class="fsep">` that previously flanked the chip on both sides is also
+   conditional now — when the chip is absent, the leading `fsep` is
+   absent too, so the gap between the status group and the project group
+   doesn't show an orphan vertical bar.
+
+4. **Remove the now-dead `.fclear-top` CSS block.** With the element no
+   longer in the DOM, the dedicated `.filterbar .fclear-top{ … }` rules
+   (and the explanatory comment block above them) are dead weight; cut
+   them. The base `.filterbar .fclear{ … }` rule is untouched and still
+   styles the bottom button.
+
+Trade-off: the top button is gone entirely rather than hidden via
+`display:none`. Removing the element keeps `bar.querySelector('.fclear-top')`
+cheap, makes the post-fix DOM strictly smaller, and prevents the
+"flashes in/out" symptom at the source instead of papering over it.
+
+### Touched
+- `public/app.js:1255-1260` — `taskChip` is now `''` when
+  `count((n) => /^TASK[-_]/i.test(displayName(n))) === 0`; lifted into a
+  `taskCount` local so the count is computed once.
+- `public/app.js:1261-1273` — the `fclear-top` button and its flanking
+  `<span class="fsep">` removed from the HTML template; the conditional
+  `taskChip ? '<span class="fsep"></span>' + taskChip : ''` keeps the
+  separator in sync with the chip's presence.
+- `public/app.js:1286` — the `bar.querySelector('.fclear-top')
+  ?.addEventListener('click', clearAllFilters)` line is gone; only the
+  bottom `.fclear` handler remains.
+- `public/style.css:835-844` — `.filterbar .fclear-top{ … }` block +
+  the comment above it removed (dead CSS, no remaining selector uses it).
+- `test/browser/qf-10-filter-bar.py` — new spec (see below).
+
+### Verifier — Playwright end-to-end
+
+`test/browser/qf-10-filter-bar.py` opens the dashboard in a phone
+viewport, switches to list mode, opens the filter popover, and:
+
+- Asserts that activating a status filter renders the bottom `.fclear`
+  (`#filterBar .fclear`).
+- Asserts that `#filterBar .fclear-top` has count `== 0` (the top button
+  is not in the DOM at all, not just hidden).
+- Clicks the bottom `.fclear` and confirms it removes itself, leaving
+  the top one still absent.
+- Computes the number of sessions matching `/^TASK[-_]/i` from
+  `window.state.sessions` and asserts that the `.fchip-task` element is
+  in the DOM iff that count is > 0.
+
+On the unpatched code the test fails on the `.fclear-top` count check
+and (when `matchCount === 0`) on the tasks-chip presence check. On the
+patched code both pass. Screenshot at
+`screenshots/qf-10-filter-bar.png` shows the post-fix bar with one
+`clear ×` button.
+
+### Status
+- `developed`: ✅ changes in worktree, not yet committed
+- `under test`: ⏳ Playwright spec written; not yet run end-to-end in
+  this session (the test must be exercised against the live daemon
+  before the `verified` step is honest)
+- `verified`: ⏳ pending — see Playwright run
+- `shipped`: ⏳ pending
+- `live`: ⏳ pending
+
