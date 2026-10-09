@@ -16,7 +16,7 @@ the author's (what changed). Same order in tables and section headings.
 - QF-04 — **no swipe L/R on focused list row** — `wireRow` gets touchstart/touchend + `swiped` flag; `stepSession` animates listPane
 - QF-05 — **`audio.play()` error swallowed silently** — `console.error` + `.ac-failed` red flash + `aria-label`
 - QF-06 — **codeboxv2 send "no current client"** — `sendKeys()` always uses `set-buffer` + `paste-buffer`
-- QF-07 — **web: typing on focused card didn't focus the dock input** — `document` keydown handler; **bug reported 2026-10-09 10:14, fix in progress**
+- QF-07 — **web: typing on focused card didn't focus the dock input** — `document` keydown in CAPTURE phase (xterm's stopPropagation on its helper-textarea was eating bubble-phase events); shipped + Playwright-verified 2026-10-09 10:27, commit 4e2cc8d
 
 Pre-existing fixes from earlier today (kept here for context, not authored in
 this quickfix):
@@ -341,6 +341,71 @@ share one mechanism.
 Each fix was syntax-checked; `npm test` stays at 839 pass / 39
 pre-existing failures (date-sensitivity tests, unrelated to this work)
 after each one.
+
+---
+
+## QF-07 — web: typing on a focused card didn't focus the dock input
+
+### Problem (description)
+On web (desktop), open a card by clicking a list row. Click somewhere
+inside the card body so focus leaves the dock input. Press any printable
+key on the physical keyboard. Nothing happens — focus does NOT move to
+`#sendInput` and the letter does NOT appear there. Reported 2026-10-09
+10:14 UTC by Joachim.
+
+### Decision (what the fix is)
+Two changes inside the `document.addEventListener('keydown', …)` handler
+in `public/app.js`:
+
+1. **Capture phase.** Move the listener from bubble to capture
+   (`addEventListener('keydown', fn, true)`). xterm creates an invisible
+   `<textarea class="xterm-helper-textarea">` to feed IME even when the
+   terminal is configured with `disableStdin: true`. xterm's own keydown
+   handler on that textarea calls `stopPropagation()`, so a bubble-phase
+   document listener never sees the event. Capture phase runs before
+   xterm's stopPropagation. **Verified with Playwright** (capture trace
+   sees the event; bubble trace does not).
+
+2. **Allow the helper textarea through the "real input?" gate.** When
+   `document.activeElement` is xterm's helper textarea (class
+   `xterm-helper-textarea`), we now treat it as "no real input focused"
+   instead of bailing. Without this, every printable key gets rejected
+   by the original check.
+
+3. **`e.stopPropagation()`** on our own handler. Once we've routed the
+   key to the dock input, we don't want xterm to also see it (and
+   accidentally feed it to the terminal under `disableStdin:false`
+   configs, or in future).
+
+### Touched
+- `public/app.js:4333` — `document.addEventListener('keydown', …, true)`.
+- The "real input?" check now regex-tests `ae.tagName` against
+  `INPUT|TEXTAREA` and only bails when the element isn't xterm's helper.
+
+### Verifier — Playwright end-to-end
+
+`test/browser/_setup.py` and `test/browser/qf-07-keyboard-focus.py`
+reproduce the user's case (open card → click inside body → press 'h' →
+assert focus + value). Captures `screenshots/qf-07-keyboard-focus.png`.
+
+```
+[test] document.activeElement.id = 'sendInput'
+[test] #sendInput value = 'h'
+[test] PASS: typing on focused card → focus + character on #sendInput
+```
+
+Screenshot in `screenshots/qf-07-keyboard-focus.png` shows the dock
+input on focus with the orange focus ring and the typed letter `h`.
+
+### Status
+- `developed`: ✅ commit `4e2cc8d`
+- `under test`: ✅ Playwright spec written and **failing** on the
+  unpatched code (capture vs bubble trace)
+- `verified`: ✅ test passes; screenshot in repo
+- `shipped`: ✅ mirrored to live, `safe-restart.sh --wait 10` clean
+- `live`: ✅ daemon `:7777` returns 200, test passes against live
+
+---
 
 ## Deploy
 
