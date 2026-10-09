@@ -5,7 +5,7 @@
 //   - in index.html:  <i data-icon="menu" data-size="20"></i>   (hydrated at start by hydrateIcons())
 // Catalogue: menu, chevron-left/right/up/down, plus, x, check, check-check, filter, more, bot, bar-chart, bell, download,
 // expand, pencil, pause, play, timer, zap, alert, lock, git-branch, git-fork, arrow-up-to-line, arrow-down-to-line,
-// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, refresh, archive, clipboard.
+// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, refresh, archive, clipboard, search.
 const S = (inner) => ({ s: inner });          // stroked
 const F = (inner) => ({ f: inner });          // filled
 export const ICONS = {

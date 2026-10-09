@@ -267,20 +267,22 @@ async function sendKey(session, key) {
 }
 
 async function sendKeys(session, keys, enter = true) {
-  // Multi-line text goes in as ONE bracketed paste, then a separate Enter after a pause: per-line Enter would submit
-  // line 1 alone, and an Enter sent right after a fast burst is swallowed by Claude Code's paste detection.
+  // Always go through a tmux paste-buffer (QF-06). `send-keys -l` needs an
+  // attached client on some tmux versions and the user hit "no current
+  // client" with single-line text on codeboxv2. `paste-buffer` works without
+  // one. Bracketed-paste mode (`-p`) keeps it as one chunk so Claude Code's
+  // paste-detection still fires on multi-line prompts.
   const text = String(keys || '');
+  if (text.length > 1_000_000) throw httpError(400, 'text too large (max 1MB)');
   const lines = text.split('\n');
-  if (lines.length > 200) throw httpError(400, 'too many lines (max 200)');
-  if (lines.length > 1) {
-    const buf = `ghosty-send-${process.pid}-${Date.now()}`;
+  if (lines.length > 5000) throw httpError(400, 'too many lines (max 5000)');
+  if (text.length) {
+    const buf = `ghosty-send-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await exec(TMUX, ['set-buffer', '-b', buf, '--', text]);
     await exec(TMUX, ['paste-buffer', '-p', '-d', '-b', buf, '-t', tgt(session)]);
-  } else if (text.length) {
-    await exec(TMUX, ['send-keys', '-t', tgt(session), '-l', '--', text]);
   }
   if (enter) {
-    await new Promise((r) => setTimeout(r, text.length > 200 || lines.length > 1 ? 400 : 80));
+    await new Promise((r) => setTimeout(r, lines.length > 1 || text.length > 200 ? 400 : 80));
     await exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
   }
   lastSendAt.set(session, Date.now());
@@ -986,6 +988,9 @@ const MAX_IMAGE = 15 * 1024 * 1024;
 // immediately, GET /status polls until ready, GET /api/tts/<hash>.wav streams the file.
 const TTS_CACHE_DIR = join(STATE_DIR, 'tts');
 const tts = createTts({ cacheDir: TTS_CACHE_DIR });
+// Long-prompt inputs: the client uploads text here when the dock input is bigger
+// than the inline-paste threshold. Hash-keyed so identical content reuses one entry.
+const INPUTS_DIR = join(STATE_DIR, 'inputs');
 const ttsJobs = new Map();   // hash -> {state: 'pending'|'ready'|'failed', error?: string, at: number}
 function ttsJobOf(hash) {
   const j = ttsJobs.get(hash);
@@ -1535,6 +1540,25 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/api/sessions') {
     try { return json(res, 200, await createSession(await readJsonBody(req))); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  // Write a long prompt to a file and return its absolute path. The client
+  // sends "Read /path" instead of pasting the whole body, so the chat log
+  // shows one line instead of a 200-line paste. (chat-raised 2026-10-09)
+  if (req.method === 'POST' && p === '/api/inputs') {
+    try {
+      const body = await readJsonBody(req);
+      const text = String(body?.text || '');
+      if (!text.trim()) return json(res, 400, { ok: false, error: 'text required' });
+      if (text.length > 1_000_000) return json(res, 400, { ok: false, error: 'text too large (max 1MB)' });
+      await mkdir(INPUTS_DIR, { recursive: true });
+      const hash = createHash('sha256').update(text).digest('hex').slice(0, 16);
+      const filePath = join(INPUTS_DIR, `${hash}.txt`);
+      if (!existsSync(filePath)) await writeFile(filePath, text, { mode: 0o600 });
+      const st = statSync(filePath);
+      return json(res, 200, { ok: true, path: filePath, size: st.size, hash });
+    } catch (err) {
+      return json(res, err.status || 500, { ok: false, error: err.message });
+    }
   }
   if (req.method === 'GET' && p === '/api/parking') {
     try { return json(res, 200, await parkingView()); } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }

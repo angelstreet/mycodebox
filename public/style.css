@@ -344,6 +344,9 @@ body{ display:flex; flex-direction:column; }
 .reader .rd-empty{ color:var(--ink-3); font-size:13px; padding:20px 0; text-align:center; }
 .card-pane.sl-r .cell{ animation: slin-r 220ms ease-out; }
 .card-pane.sl-l .cell{ animation: slin-l 220ms ease-out; }
+/* QF-04: same slide-in feedback when swiping a focused row in list mode. */
+.list-pane.sl-r .row-item.focus{ animation: slin-r 220ms ease-out; }
+.list-pane.sl-l .row-item.focus{ animation: slin-l 220ms ease-out; }
 @keyframes slin-r{ from{ transform:translateX(44px); opacity:.25; } }
 @keyframes slin-l{ from{ transform:translateX(-44px); opacity:.25; } }
 .card-pane .cell .ask .q{ white-space:normal; flex-basis:100%; }
@@ -662,6 +665,14 @@ body{ display:flex; flex-direction:column; }
 .sheet-back.on .sheet{ transform:none; opacity:1; }
 .sheet-grab{ width:36px; height:4px; border-radius:2px; background:var(--line-2); margin:8px auto 2px; flex-shrink:0; }
 .sheet-title{ padding:6px 16px 8px; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); flex-shrink:0; }
+/* QF-01: picker header — title + search input on one row. */
+.sheet-head{ display:flex; align-items:center; gap:10px; padding:8px 12px 6px; flex-shrink:0; }
+.sheet-htitle{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); flex-shrink:0; padding-left:4px; }
+.sheet-hsearch{ display:flex; align-items:center; gap:8px; flex:1; min-width:0; height:36px; padding:0 10px; background:#0a0b0e; border:1px solid var(--line-2); border-radius:10px; color:var(--ink-3); }
+.sheet-hsearch:focus-within{ border-color:var(--accent); color:var(--ink); }
+.sheet-hsearch input{ flex:1; min-width:0; background:transparent; border:0; outline:0; color:var(--ink); font-size:13px; padding:0; -webkit-appearance:none; appearance:none; }
+.sheet-hsearch input::placeholder{ color:var(--ink-3); }
+.sheet-hsearch svg{ flex-shrink:0; }
 .sheet-body{ padding:0 12px 10px; overflow-y:auto; flex:1; min-height:0; display:flex; flex-direction:column; gap:6px; user-select:text; }
 .sheet-foot{ display:flex; gap:8px; align-items:center; padding:10px 12px; border-top:1px solid var(--line); flex-shrink:0; }
 .sheet-foot .grow{ flex:1; }
@@ -873,8 +884,11 @@ body{ display:flex; flex-direction:column; }
 .cell .jump{
   position:absolute; right:10px; bottom:10px; z-index:4;
   display:flex; flex-direction:column; gap:6px;
-  opacity:.55; transition:opacity 140ms ease;
+  opacity:.55; transition:opacity 140ms ease, bottom 140ms ease;
 }
+/* QF-02: while the "N need you" pill is on screen, push the per-card jump
+   arrows up so they don't sit under the pill. (chat-raised 2026-10-09) */
+body.has-ask-pill .cell .jump{ bottom:84px; }
 .cell:hover .jump, .cell.focus .jump, .cell .jump:focus-within{ opacity:1; }
 .cell .jump button{
   width:34px; height:34px; border-radius:9px; padding:0;
@@ -1086,6 +1100,11 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 .audio-chip:not(.ready) > .ac-speeds{ display:none; }
 .audio-chip.loading > .ac-loader svg{ animation:acp-spin 0.9s linear infinite; transform-origin:50% 50%; }
 .audio-chip.failed > .ac-loader{ color:var(--waiting); }
+/* QF-05: brief red flash when the user's play tap is rejected (iOS
+   NotAllowedError, codec unsupported, …). */
+.audio-chip.ac-failed{ animation: acp-flash 0.4s ease-out 1; }
+.audio-chip.ac-failed > .ac-play{ color:var(--waiting); border-color:var(--waiting); }
+@keyframes acp-flash{ 0% { background: rgba(255,95,95,0.18); } 100% { background: transparent; } }
 @keyframes acp-spin{ to { transform: rotate(360deg); } }
 .audio-chip > .ac-speeds{ display:inline-flex; gap:2px; margin-left:4px; }
 .audio-chip > .ac-speeds > .ac-speed{
