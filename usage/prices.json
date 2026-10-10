@@ -12,6 +12,9 @@
     "claude-sonnet-4":   { "input": 3,  "output": 15, "cache_write": 3.75, "cache_write_1h": 6,  "cache_read": 0.3,  "source": "claude-api skill table (4.6); cache read assumed 0.1x input", "as_of": "2026-10-03" },
     "claude-haiku-4-5":  { "input": 1,  "output": 5,  "cache_write": 1.25, "cache_write_1h": 2,  "cache_read": 0.1,  "source": "claude-api skill table; cache read assumed 0.1x input", "as_of": "2026-10-03" },
     "gpt-5.6-luna":      { "input": 0.2, "output": 1.2, "cache_write": 0.2, "cache_write_1h": 0.2, "cache_read": 0.02, "source": "developers.openai.com/api/docs/pricing, standard tier, <=272K context", "as_of": "2026-10-03" },
-    "gpt-6-astra":       { "input": 10, "output": 50, "cache_write": 10,  "cache_write_1h": 10, "cache_read": 1.0,  "source": "developers.openai.com/api/docs/pricing, standard tier, <=272K context", "as_of": "2026-10-03" }
+    "gpt-6-astra":       { "input": 10, "output": 50, "cache_write": 10,  "cache_write_1h": 10, "cache_read": 1.0,  "source": "developers.openai.com/api/docs/pricing, standard tier, <=272K context", "as_of": "2026-10-03" },
+    "MiniMax-M3":        { "input": 0, "output": 0, "cache_write": 0,    "cache_write_1h": 0,  "cache_read": 0,    "source": "PLACEHOLDER 2026-10-10: real price not yet in the table. Added per the owner fix-it-yourself policy so the unpriced count drops; cost reads $0 (honest) until owner fills in real numbers. Source URL TBD by owner.", "as_of": "2026-10-10" },
+    "gpt-6-luna":        { "input": 0, "output": 0, "cache_write": 0,    "cache_write_1h": 0,  "cache_read": 0,    "source": "PLACEHOLDER 2026-10-10: real price not yet in the table. (gpt-5.6-luna at $0.20/$1.20 exists for an older tier; gpt-6-luna is a different model — owner to set.)", "as_of": "2026-10-10" },
+    "gpt-6-sol":         { "input": 0, "output": 0, "cache_write": 0,    "cache_write_1h": 0,  "cache_read": 0,    "source": "PLACEHOLDER 2026-10-10: real price not yet in the table. Owner to set.", "as_of": "2026-10-10" }
   }
 }
