@@ -342,6 +342,19 @@ body{ display:flex; flex-direction:column; }
   background:#0a0b0e; border:1px solid var(--line); border-radius:8px; color:#cfd3dc;
 }
 .reader .rd-empty{ color:var(--ink-3); font-size:13px; padding:20px 0; text-align:center; }
+/* QF-16 — per-reply copy-to-clipboard + audio-transcript row at the bottom
+   of the reader. Mirror of the popup / task-doc / multi-q affordances, so
+   a user reading a reply on the web has the same controls without opening
+   a popup. The `.copy-prompt` floats right of the body text (existing rule
+   on `.mdbody > .copy-prompt`), so the audio chip sits to its right via
+   gap; on narrow widths the audio chip wraps under without breaking the
+   row. */
+.reader .rd-actions{
+  display:flex; align-items:center; gap:8px; justify-content:flex-end;
+  margin:14px 0 0; padding-top:10px; border-top:1px solid var(--line);
+}
+.reader .rd-actions .copy-prompt{ float:none; margin:0; }   /* override the mdbody float-right so the chip + button sit on one row */
+.reader .rd-actions .audio-chip{ flex:0 0 auto; }
 .card-pane.sl-r .cell{ animation: slin-r 220ms ease-out; }
 .card-pane.sl-l .cell{ animation: slin-l 220ms ease-out; }
 /* QF-04: same slide-in feedback when swiping a focused row in list mode. */

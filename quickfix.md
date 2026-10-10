@@ -29,6 +29,7 @@ the author's (what changed). Same order in tables and section headings.
 - QF-13 — **filter bar had two cluttered rows: give it one clear-all + an X/Y indicator at the top** — collapse to one row, `clear all clear ×` plus `X/Y` indicator, both vanish when no filter is active
 - QF-14 — **dock: paperclip sits left of mic, task chip breathes, and icons flicker when target name changes** — DOM reorder (mic before attach) + wider fixed-width `.tchip` (200px, no min/max breathing) + fixed 42px on `.dock .mic` (`flex:0 0 42px`) so the row doesn't reflow when the target name changes; Playwright-verified 2026-10-09 20:25, commit `f4e761e`, shipped + live
 - QF-15 — **NEEDS YOU pill always overlapped the per-card jump arrows** — QF-02 was a regression (predicate was inverted, class never set; no spec shipped); drop the `!` on `minimised` in `ask-popup.js:237`; added `scripts/test-server.sh` + `scripts/test-fix.sh` so every QF now runs headless against `:7778` before it touches `:7777`; **developed 2026-10-09 22:20**
+- QF-16 — **reader view had no copy-to-clipboard or audio-transcript on the reply itself** — append `<div class="rd-actions">` to `paintReader`'s HTML carrying `copyPromptButtonHtml` + `audioChipHtml`; same affordances already live on the popup / task doc / multi-q popover; **shipped 2026-10-10**
 
 Pre-existing fixes from earlier today (kept here for context, not authored in
 this quickfix):
@@ -1138,4 +1139,108 @@ $ bash scripts/test-fix.sh test/browser/qf-15-pill-vs-jump.py test/browser/qf-14
   `ask-popup.js` (grep `'minimised && !pill.classList.contains'` →
   matches, `!minimised && !pill.classList.contains` → absent). Commit
   on `task70-tts-needs-you`.
+
+---
+
+## QF-16 — copy-to-clipboard + audio-transcript on each reply in the reader
+
+User quote (with screenshot `/home/jndoye/.ghosty/uploads/1791584506494-ad314d.png`, 2026-10-09 22:45):
+
+> "on web i dont see the copy to clip boad audio transcrpt btn on each
+>  response why ?"
+
+Repro: open any card with a reply on the web (Reader mode = on, which
+is `state.reader = true`, default-on for phones, opt-in on desktop).
+The reader shows the last AI turn as readable text (`<p>...`, code
+blocks, tables) but offers no way to copy the text or hear it read
+aloud from that surface. The user has to open the answer popup (if
+it's a question) or the task doc to get those affordances — neither
+exists for a plain informational reply.
+
+Every other surface that renders AI text carries both:
+
+| Surface | Copy button | Audio chip |
+|---|---|---|
+| `askPopup` (questions popup) | `public/ask-popup.js:252-253` | `public/ask-popup.js:268` |
+| Multi-question popover | `public/app.js:1135-1136` | `public/app.js:1135` |
+| Task doc viewer (`.mdbar` / `.mdbody`) | `public/app.js:1368-1369` | — (chip lives in the popup) |
+| **Reader (`.cell .reader`)** | **—** | **—** |
+
+The reader was the lone missing row. This fix adds both, mirroring the
+existing `copyPromptButtonHtml` / `audioChipHtml` calls.
+
+### Decision
+
+Append a single `<div class="rd-actions">` row at the bottom of
+`paintReader`'s HTML when the reply text is non-empty. The row holds
+`copyPromptButtonHtml({ text, label: 'Copy reply' })` and
+`audioChipHtml({ text, label: 'Read reply aloud' })`. The reply text
+is the same `text` variable already in `paintReader`, after a `.trim()`
+so the copy buffer matches what's on screen.
+
+`paintReader` then wires the freshly-painted audio chip with the
+already-imported `wireAudioChips(el)`. Gated by `el._chipsWired` so we
+don't re-wire on every keystroke / poll (idempotent, but pointless).
+
+When the reply is empty (the `rd-empty` placeholder) the actions
+row is **omitted entirely** — there's nothing to copy or read.
+
+### Touched
+- `public/app.js:2113-2125` — `paintReader` builds `actions` from a
+  non-empty `audioText` (trimmed once) and appends it to `html`.
+- `public/app.js:2152-2155` — first-paint call to `wireAudioChips(el)`,
+  guarded by `el._chipsWired`. Same idempotent pattern used elsewhere.
+- `public/style.css:345-359` — `.reader .rd-actions` rule: flex row,
+  right-aligned, top border so the buttons sit clearly at the bottom
+  of the reader without colliding with the body text. The existing
+  `.mdbody > .copy-prompt{ float:right; … }` rule is overridden here
+  (`.reader .rd-actions .copy-prompt{ float:none; }`) so the chip and
+  button sit on one flex row inside the actions container.
+- `test/browser/qf-16-reader-copy-audio.py` — 3 tests
+  (source-level, CSS-level, DOM-render).
+- `scripts/test-fix.sh` — accepts `path::tid` arguments without
+  doubling the spec path (previously a caller passing a
+  `path::test_one` saw pytest try `path::test_one::test_one`).
+
+### Verifier — Playwright end-to-end
+
+```
+$ bash scripts/test-fix.sh test/browser/qf-16-reader-copy-audio.py
+--- pytest .../qf-16-reader-copy-audio.py::test_css_rule_reader_rd_actions_exists --- ✔
+--- pytest .../qf-16-reader-copy-audio.py::test_dom_render_carries_both_buttons_and_correct_labels --- ✔
+--- pytest .../qf-16-reader-copy-audio.py::test_source_level_paintReader_emits_both_buttons --- ✔
+```
+
+3/3 pass against the worktree daemon on `:7778`. Sanity rerun of the
+QF-14 and QF-15 suites (8 more specs) all still green.
+
+The source-level test scans `app.js` for the `paintReader` →
+`inlineMd` block boundary (the regex anchors at the next top-level
+function, not at the first `}` — there are several nested `}\n`
+inside the function body and even in template literals, so a naive
+depth counter is wrong). It then asserts the block contains:
+`copyPromptButtonHtml`, `audioChipHtml`, the literal
+`class="rd-actions"` attribute, and a call to `wireAudioChips`.
+
+The CSS rule check fetches `style.css` and greps for
+`.reader .rd-actions` + the inline `display:flex` it should carry.
+
+The DOM check mounts a `.cell.rd-on` with a fake reader, drives the
+exact `copyPromptButtonHtml(...) + audioChipHtml(...)` template from
+the production modules (via dynamic `import('/copy-prompt.js') +
+import('/audio-chip.js')`), then asserts the rendered `.copy-prompt`
+carries `aria-label="Copy reply"` and `data-copy` includes the text;
+the `.audio-chip` carries `aria-label="Read reply aloud"` and
+`data-text` includes the text; both live inside the same
+`.rd-actions` container which is `display: flex`.
+
+### Status
+- `developed`: ✅ changes in worktree
+- `under test`: ✅ spec written, fails on the unpatched `app.js`
+- `verified`: ✅ 3/3 specs pass against `:7778` via `scripts/test-fix.sh`,
+  QF-14 + QF-15 suites still green
+- `shipped`: ✅ mirrored `public/app.js` + `public/style.css` to
+  `/home/jndoye/ghosty-sessions/`, `safe-restart.sh --wait 10` clean
+- `live`: ✅ live HTML serves the patched bytes (curl
+  `http://localhost:7777/app.js | grep rd-actions` → match)
 

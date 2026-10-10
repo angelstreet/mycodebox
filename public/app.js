@@ -2112,7 +2112,16 @@ function paintReader(cell, n) {
   const full = c && c.full != null;
   if (full && c.full) text = c.full;
   const body = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
-  const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${body}`;
+  // QF-16 — copy the reply to the clipboard and read it aloud. Both are
+  // present on the popup / task doc / multi-question popover via
+  // copy-prompt.js + audio-chip.js; the reader was the only place they
+  // were missing. Strip leading/trailing whitespace so the copied text
+  // looks the same as what the user sees on screen.
+  const audioText = String(text || '').trim();
+  const actions = audioText
+    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${audioChipHtml({ text: audioText, label: 'Read reply aloud' })}</div>`
+    : '';
+  const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${body}${actions}`;
   if (el.dataset.h === html) return;
   // never swap the content under a finger / a fling: that cancels touch scrolling. Retry once it settles.
   if (el._busyUntil && Date.now() < el._busyUntil) {
@@ -2140,6 +2149,10 @@ function paintReader(cell, n) {
   const top = el.scrollTop;
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   el.dataset.h = html; el.innerHTML = html;
+  // Wire the freshly-painted audio chip. `wireAudioChips` is idempotent
+  // (it tags each chip with `data-wired`); re-running on every paint is
+  // harmless but pointless, so just call it once on first render.
+  if (!el._chipsWired) { wireAudioChips(el); el._chipsWired = true; }
   // newest content is at the bottom: land there on first paint, then stick only if already there
   el.scrollTop = first || atBottom ? el.scrollHeight : top;
 }
