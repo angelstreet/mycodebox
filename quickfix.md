@@ -17,19 +17,15 @@ the author's (what changed). Same order in tables and section headings.
 - QF-05 — **`audio.play()` error swallowed silently** — `console.error` + `.ac-failed` red flash + `aria-label`
 - QF-06 — **codeboxv2 send "no current client"** — `sendKeys()` always uses `set-buffer` + `paste-buffer`
 - QF-07 — **web: typing on focused card didn't focus the dock input** — `document` keydown in CAPTURE phase (xterm's stopPropagation on its helper-textarea was eating bubble-phase events); shipped + Playwright-verified 2026-10-09 10:27, commit 4e2cc8d
-- QF-08 — **MD doc flashes 'loading…' on every click — should cache and show instantly** — client-side cache for `/api/taskdoc`; **developed 2026-10-09 19:19, fix in progress**
-- QF-09 — **card body overflows with no scrollbar on phone (long mcode error unreadable)** — `.cell .b` `overflow:hidden` → `overflow-y:auto; overflow-x:hidden`; **developed 2026-10-09 19:21, test pending**
-- QF-10 — **mobile filter bar shows two clear buttons; 'tasks 0' chip is clutter** — only render the bottom `.fclear`, drop the duplicate top `.fclear-top`; render the tasks chip only when `count > 0`
-- QF-11 — **card header clutter with `Loading 40s` + `↯ 2212 tok/s`** — `cleanHeaderActivity()` strips them out of the visible header (data flow preserved for the manager log)
-- QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card while locked shows `<name> is locked` and stays put
-- QF-13 — **filter bar had two cluttered rows: give it one clear-all + X/Y indicator at top** — collapse to one row, `clear all clear ×` button + `X/Y` indicator, both vanish when no filter is active
-- QF-14 — dock layout (see QF-14 entry below) — *retrofit entry shipped 2026-10-10; QF entries for 11/12/13 originally landed in commit `06dfb3f` but the documentation pass at the time covered only 08/09/10*
-- QF-11 — **card header clutters with 'Loading 40s' + '↯ 2212 tok/s'** — `cleanHeaderActivity()` strips them out of the visible header (data flow preserved for the manager log)
-- QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card unlocks the previous one
-- QF-13 — **filter bar had two cluttered rows: give it one clear-all + an X/Y indicator at the top** — collapse to one row, `clear all clear ×` plus `X/Y` indicator, both vanish when no filter is active
+- QF-08 — **MD doc flashes 'loading…' on every click — should cache and show instantly** — client-side cache for `/api/taskdoc`; shipped 2026-10-09, commit `06dfb3f`
+- QF-09 — **card body overflows with no scrollbar on phone (long mcode error unreadable)** — `.cell .b` `overflow:hidden` → `overflow-y:auto; overflow-x:hidden`; shipped 2026-10-09, commit `06dfb3f`
+- QF-10 — **mobile filter bar shows two clear buttons; 'tasks 0' chip is clutter** — only render the bottom `.fclear`, drop the duplicate top `.fclear-top`; render the tasks chip only when `count > 0`; shipped 2026-10-09, commit `06dfb3f`
+- QF-11 — **card header clutter with `Loading 40s` + `↯ 2212 tok/s`** — `cleanHeaderActivity()` strips them out of the visible header (data flow preserved for the manager log); shipped 2026-10-09, commit `06dfb3f` (retrofit entry `8da5ec8`)
+- QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card while locked shows `<name> is locked` and stays put; shipped 2026-10-09, commit `06dfb3f` (retrofit entry `8da5ec8`)
+- QF-13 — **filter bar had two cluttered rows: give it one clear-all + X/Y indicator at top** — collapse to one row, `clear all clear ×` button + `X/Y` indicator, both vanish when no filter is active; shipped 2026-10-09, commit `06dfb3f` (retrofit entry `8da5ec8`)
 - QF-14 — **dock: paperclip sits left of mic, task chip breathes, and icons flicker when target name changes** — DOM reorder (mic before attach) + wider fixed-width `.tchip` (200px, no min/max breathing) + fixed 42px on `.dock .mic` (`flex:0 0 42px`) so the row doesn't reflow when the target name changes; Playwright-verified 2026-10-09 20:25, commit `f4e761e`, shipped + live
-- QF-15 — **NEEDS YOU pill always overlapped the per-card jump arrows** — QF-02 was a regression (predicate was inverted, class never set; no spec shipped); drop the `!` on `minimised` in `ask-popup.js:237`; added `scripts/test-server.sh` + `scripts/test-fix.sh` so every QF now runs headless against `:7778` before it touches `:7777`; **developed 2026-10-09 22:20**
-- QF-16 — **reader view had no copy-to-clipboard or audio-transcript on the reply itself** — append `<div class="rd-actions">` to `paintReader`'s HTML carrying `copyPromptButtonHtml` + `audioChipHtml`; same affordances already live on the popup / task doc / multi-q popover; **shipped 2026-10-10**
+- QF-15 — **NEEDS YOU pill always overlapped the per-card jump arrows** — QF-02 was a regression (predicate was inverted, class never set; no spec shipped); drop the `!` on `minimised` in `ask-popup.js:237`; added `scripts/test-server.sh` + `scripts/test-fix.sh` so every QF now runs headless against `:7778` before it touches `:7777`; shipped + live, commit `4bc9ef6`
+- QF-16 — **reader view had no copy-to-clipboard or audio-transcript on the reply itself** — append `<div class="rd-actions">` to `paintReader`'s HTML carrying `copyPromptButtonHtml` + `audioChipHtml`; same affordances already live on the popup / task doc / multi-q popover; shipped + live, commit `c952570`
 
 Pre-existing fixes from earlier today (kept here for context, not authored in
 this quickfix):
@@ -701,13 +697,13 @@ patched code both pass. Screenshot at
 `clear ×` button.
 
 ### Status
-- `developed`: ✅ changes in worktree, not yet committed
-- `under test`: ⏳ Playwright spec written; not yet run end-to-end in
-  this session (the test must be exercised against the live daemon
-  before the `verified` step is honest)
-- `verified`: ⏳ pending — see Playwright run
-- `shipped`: ⏳ pending
-- `live`: ⏳ pending
+- `developed`: ✅ changes in worktree
+- `under test`: ✅ Playwright spec written
+- `verified`: ✅ passes against the live daemon
+- `shipped`: ✅ committed in `06dfb3f` (2026-10-09 19:38); mirrored to
+  `/home/jndoye/ghosty-sessions/`; `safe-restart.sh --wait 10` clean
+- `live`: ✅ live `/api/sessions` returns 200; live filter bar shows
+  one `.fclear` (no `.fclear-top`); tasks chip absent when count is 0
 
 ---
 
