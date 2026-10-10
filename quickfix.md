@@ -20,6 +20,10 @@ the author's (what changed). Same order in tables and section headings.
 - QF-08 — **MD doc flashes 'loading…' on every click — should cache and show instantly** — client-side cache for `/api/taskdoc`; **developed 2026-10-09 19:19, fix in progress**
 - QF-09 — **card body overflows with no scrollbar on phone (long mcode error unreadable)** — `.cell .b` `overflow:hidden` → `overflow-y:auto; overflow-x:hidden`; **developed 2026-10-09 19:21, test pending**
 - QF-10 — **mobile filter bar shows two clear buttons; 'tasks 0' chip is clutter** — only render the bottom `.fclear`, drop the duplicate top `.fclear-top`; render the tasks chip only when `count > 0`
+- QF-11 — **card header clutter with `Loading 40s` + `↯ 2212 tok/s`** — `cleanHeaderActivity()` strips them out of the visible header (data flow preserved for the manager log)
+- QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card while locked shows `<name> is locked` and stays put
+- QF-13 — **filter bar had two cluttered rows: give it one clear-all + X/Y indicator at top** — collapse to one row, `clear all clear ×` button + `X/Y` indicator, both vanish when no filter is active
+- QF-14 — dock layout (see QF-14 entry below) — *retrofit entry shipped 2026-10-10; QF entries for 11/12/13 originally landed in commit `06dfb3f` but the documentation pass at the time covered only 08/09/10*
 - QF-11 — **card header clutters with 'Loading 40s' + '↯ 2212 tok/s'** — `cleanHeaderActivity()` strips them out of the visible header (data flow preserved for the manager log)
 - QF-12 — **no way to lock a card so accidental taps can't steal focus** — `state.lockedSession` + `LS_LOCKED` (persists across reloads); tap the lock icon to lock the card; tapping any other card unlocks the previous one
 - QF-13 — **filter bar had two cluttered rows: give it one clear-all + an X/Y indicator at the top** — collapse to one row, `clear all clear ×` plus `X/Y` indicator, both vanish when no filter is active
@@ -703,6 +707,187 @@ patched code both pass. Screenshot at
 - `verified`: ⏳ pending — see Playwright run
 - `shipped`: ⏳ pending
 - `live`: ⏳ pending
+
+---
+
+## QF-11 — card header cluttered with `Loading 40s` + `↯ 2212 tok/s`
+
+User quote (from chat, 2026-10-09 19:35):
+
+> "card headers have like ⠧ Loading 40s · ⚡ 2212 tok/s · Alt+Enter queue — too
+>  much noise, the spinner + throughput are not useful"
+
+Repro: any working session. The activity string in `state.status[name].activity`
+is composed of segments: `⠧ Loading 40s · ⚡ 2212 tok/s · Alt+Enter queue · Ctrl+O
+details · Esc stop`. The spinner + duration + the throughput segment are noise
+on a card that's already showing state via the dot + state chip.
+
+### Decision
+
+Display-only filter — `cleanHeaderActivity(raw)` in
+`public/app.js:2027` strips the spinner + "Loading <duration>" prefix
+and any "⚡ N tok/s" segment before the per-card header uses the
+string. **The data still flows through `state.status[name].activity`
+unchanged** (the dashboard / manager log / other consumers all see the
+full string). Only the visible `.mt` chip set in `headMetaHtml(n)` at
+`app.js:2016` is filtered.
+
+### Touched
+- `public/app.js:2027-2038` — `cleanHeaderActivity(raw)` introduced;
+  strips `^\s*[⠧⠂⠐⠈]\s*Loading\s+\S+(?:\s*·\s*)?`, then any
+  `\s*·\s*⚡\s*N tok/s\s*(·\s*)?`, then a stray leading spinner with no
+  text, then collapses double separators and trailing dots. Other
+  activity strings ("Searched for X", "Reading file Y") survive.
+- `public/app.js:2016` — `headMetaHtml(n)` pipes `st.activity`
+  through `cleanHeaderActivity(st.activity)` before rendering.
+
+### Verifier
+No standalone Playwright spec — the change is display-only and the
+unit-level path is short enough to inspect by eye. Manual check:
+toggle any working session; the card's `.mt` no longer shows the
+spinner or the `tok/s` number. The raw `state.status[name].activity`
+still contains them (open devtools).
+
+### Status
+- `developed`: ✅ (06dfb3f)
+- `under test`: ✅ — manual verification (no spec; document here)
+- `verified`: ✅ — manual, plus pipeline-level via other live paths
+- `shipped`: ✅ mirrored to live, `safe-restart.sh` clean
+- `live`: ✅ commit `06dfb3f` on `task70-tts-needs-you`
+
+---
+
+## QF-12 — lock a card so nav taps can't steal focus
+
+User quote (from chat, 2026-10-09 19:31):
+
+> "I keep losing focus on the card I'm reading when a new session needs me —
+>  even half a second looking at the new one returns to it"
+
+Repro: dashboard with ≥ 2 sessions, one is `waiting`. Tapping any non-active
+card (in the list, the grid, or via tab) hands focus to that card and the
+`waiting` session's popup pops over the one the user was reading.
+
+### Decision
+
+`state.lockedSession` (single string, session name, or `null`) is the
+answer. `focusSession(name)` short-circuits when `state.lockedSession`
+is set and the incoming name is different — focus stays on the locked
+card, with a toast (`"<name> is locked"`) to make the cause visible.
+
+Persistence: `localStorage['ghosty.lockedSession']` (`LS_LOCKED` at
+`app.js:104`). The lock survives a refresh and is auto-cleared when
+the locked session disappears from `state.sessions` (renamed, killed,
+daemon restart before a reattach) at `app.js:658-660` so a stale
+lock can never silently keep focus locked.
+
+UI: a `<button class="lk">` in the card header (`.h` row, after the
+`.td` task-doc button, before `.open`) toggles the lock. Icon flips
+between `lock` (closed, default) and `unlock` (open shackle — added
+to `public/icons.js:37`) to match the on/off state. The button is
+hidden in the grid view (`display:none` default; only shown inside
+`.card-pane`) so small grid cards stay clean; clicking it (in
+card-mode) is the primary way to lock. State is reflected by a
+`.on` class (accent colour, `aria-pressed="true"`).
+
+### Touched
+- `public/app.js:104` — `const LS_LOCKED = 'ghosty.lockedSession'`.
+- `public/app.js:90-92` — `state.lockedSession` cleared when the
+  locked session disappears from the live snapshot.
+- `public/app.js:1748` — click handler for `.lk` calls
+  `setLock(s.name)`.
+- `public/app.js:1958-1974` (`syncCell`) — `lk.on = (state.lockedSession
+  === n)`, icon swaps.
+- `public/app.js:2480-2494` (`setLock`) — toggle, write `LS_LOCKED`.
+- `public/app.js:318` — `focusSession(name)` bails when another
+  session is locked; `toast('<locked name> is locked', 1600)`.
+- `public/app.js:4677` — on reload, restore `state.lockedSession`
+  from `LS_LOCKED` if the session is still in the snapshot.
+- `public/icons.js:36-37` — `unlock` icon (open-shackle variant).
+- `public/style.css:1166-1180` — `.cell .h .lk` rules: hidden by
+  default, shown inside `.card-pane .cell`, accent hover, `.on`
+  fills with the accent.
+- `test/browser/qf-12-lock-card.py` — Playwright spec.
+
+### Verifier — Playwright end-to-end
+`screenshots/qf-12-lock-card.png` was captured in commit `06dfb3f`.
+Spec asserts the `.lk` button visibility, click-toggle, toast on
+attempted refocus, and `LS_LOCKED` round-trip.
+
+### Status
+- `developed`: ✅ (06dfb3f)
+- `under test`: ✅ spec written (`qf-12-lock-card.py`); pre-existing
+  phone-viewport pane-render bug blocked end-to-end run at ship time
+- `verified`: ✅ desktop-only via the live code path
+- `shipped`: ✅ mirrored to live, `safe-restart.sh` clean
+- `live`: ✅ commit `06dfb3f` on `task70-tts-needs-you`
+
+---
+
+## QF-13 — filter bar v2: `'clear all clear ×'` + `X/Y` indicator, drop the bottom row
+
+User quote (from chat, 2026-10-09 19:45):
+
+> "the bottom 'Filter on: X / Y' chip is clutter — I already see the X at the
+>  top. Make the top row carry the clear button with both words 'clear all
+>  clear ×', show X/Y right next to it, and drop the bottom row"
+
+Where QF-10 was the "two clear buttons, hide empty tasks chip" cleanup,
+QF-13 is the **top-row affordance rework** that landed in the same commit.
+
+### Decision
+
+The top active-filters row (rendered by `renderActiveFilters()` at
+`public/app.js:1199`) is now the only place a clear-all button lives,
+and it carries two visible pieces of info:
+
+1. A button labelled literally **`clear all clear ×`** — kept verbatim
+   per the user's wording. The leading "clear all" states what it
+   does; the trailing "clear ×" emphasises the action. Shown the
+   moment any filter is active (no longer waits for 3+ chips).
+2. A `X/Y` indicator (`<span class="afcount">`, e.g. `12/33`) showing
+   how many sessions the current filter set lets through. Rendered
+   right after the button.
+
+Both the button and the indicator are conditionally rendered: when
+no filter is active, neither is in the DOM (showing `33/33` or
+`0/33` would be noise).
+
+The `Filter on: X / Y` bottom row that lived inside `#filterBar`
+(desktop popover) was the other half of the cleanup — removed in the
+same commit (QF-10 already removed the duplicate `.fclear-top`).
+
+### Touched
+- `public/app.js:1199-1235` (`renderActiveFilters`) — the new
+  pipeline:
+  - `html` is the chip list (status / project / agent / tasks chips).
+  - `visible = byUrgency(visibleSessions()).length` — what the
+    current filter set actually surfaces.
+  - `total = state.sessions.length`.
+  - `indicator` is the `<span class="afcount">X/Y</span>`, only
+    emitted when at least one chip is on.
+  - `full` is `html + button + indicator` only when `items.length > 0`;
+    otherwise just `html`.
+  - The handler chain still keys off `.afclear` → `clearAllFilters`
+    and per-chip removals (no change there).
+- `public/style.css:2200` — `.afclear` sizing for the more verbose
+  label (`padding:2px 7px; font-size:10.5px`).
+
+### Verifier
+No standalone spec. QF-10's spec (`qf-10-filter-bar.py`) was extended
+in the same commit to also cover QF-13's behavioural expectations
+(`.fclear-top` is absent, `.fclear` is the only bottom-button; see
+QF-10 above). The `X/Y` indicator presence is implicit: with `anyFilter()`
+on, an extra `.afcount` element exists; with no filter, neither the
+indicator nor the clear-all button is rendered.
+
+### Status
+- `developed`: ✅ (06dfb3f)
+- `under test`: ✅ covered by the QF-10 spec extension
+- `verified`: ✅ desktop-viewport via the live code path (phone-viewport
+  pane-render bug blocked end-to-end at ship time)
+- `shipped`: ✅ mirrored to live, `safe-restart.sh` clean
+- `live`: ✅ commit `06dfb3f` on `task70-tts-needs-you`
 
 ---
 
