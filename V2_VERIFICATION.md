@@ -58,3 +58,9 @@ Exact repaired SHA `1bc82f962f82966488a83bc71d5c1eab23faa48a`: `env -i PATH="$PA
 | adapters + worktrees (Phase 3) | Sonnet + coordinator | Opus, 3 rounds | APPROVE | merge before 85cd076 | 1342/1342 both runtimes after D-011 seam fix |
 | incidents/telemetry/system-ops (§12.4) | Sonnet + coordinator | Fable, 3 rounds | APPROVE | merged with adapters | 1342/1342 both runtimes |
 | integration queue/CI gates/controller (§12.3) | Opus + coordinator | Fable, 3 rounds | APPROVE | 063380e | 1383/1383 both runtimes |
+
+## T20 browser check (Phase 6, V2 Tasks view)
+
+Command: `PLAYWRIGHT_CORE=<playwright-core dir> node scripts/v2-ui-check.js` (dev-only; playwright-core is not a dependency; prints SKIPPED and exits 0 when unset). Node v23.6.0, playwright-core 1.58.2 with its matching headless Chromium shell. Result: **PASS, 31 of 31 checks, 0 failed**, run on synthetic data only (7 seeded tasks, private `tmux -L` server, temp HOME and state, loopback port).
+
+Covered at phone (390x844) and desktop (1440x900): service worker registers and precaches the new module under `ghosty-shell-v142`; exactly one done badge and it is the accepted task; waiting, needs-owner and unknown badges are distinct; Tab order and visible focus ring; text contrast at least 4.5:1 on sampled elements; keyboard-opened detail with approve/deny only for the pending request; Escape closes; no horizontal overflow or page errors. Also: cross-origin POST refused (403); with V2 off (default) the routes answer 404 and no `v2` directory is created. Screenshots are local-only and not committed. Not covered: a real phone, a live deployment, real provider tasks.
