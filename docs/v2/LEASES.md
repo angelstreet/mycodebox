@@ -101,8 +101,9 @@ holder cannot reuse and that is rechecked before acting; **TTL** = holder loses 
 - Self-described as "a guard, not an atomic deploy lease" (`scripts/safe-restart.sh:2`).
 - An unreachable deploy API returns 2 and the script exits 2 without restarting (`scripts/safe-restart.sh:22-23`,
   `:71`); an invalid, unsuccessful or older-than-60 s snapshot is also exit 2 (`scripts/safe-restart.sh:40-58`).
-  So the code fails closed. Note: `AGENTS.md` says the script "currently treats an unreachable API as no running
-  deploy"; the code at this commit does not — the doc line is stale.
+  So the code fails closed, as `docs/INSTALL.md:170` on this branch also states. (An `AGENTS.md` wording seen in a
+  newer `main` checkout, "currently treats an unreachable API as no running deploy", does not match this script; it
+  is not part of this branch and should be checked against the code there.)
 - Requires two consecutive idle snapshots (`scripts/safe-restart.sh:65-67`); the comment at `:66` acknowledges the
   remaining race between the last check and `systemctl restart` (`:81`).
 - **Guarantee:** fresh-snapshot guard with a small race window; not atomic, not fenced.
@@ -112,14 +113,16 @@ holder cannot reuse and that is rechecked before acting; **TTL** = holder loses 
 
 ## The V2 authority: `orchestration/lease-authority.js`
 
-Interface: ARCHITECTURE §5. Resources must match one of the §5 namespaces (`validResource`), else `E_INVALID`.
+Interface: ARCHITECTURE §5. Resources must match one of the §5 namespaces (`validResource`), else `E_INVALID`;
+this includes `repo:<repo>:branch:<name>` for non-main target branches (D-008). File names are the percent-encoded
+resource (`/` -> `%2F`, `:` -> `%3A`); `%` is never valid in a resource, so two resources never share a file.
 
 What it guarantees, and how:
 
 - **Atomic conditional acquire/renew/release.** The file backend wraps read-check-write per resource in an `O_EXCL`
   lock file (`<res>.lock`). The record (`<res>.lease.json`) is replaced by temp file + `fsync` + `rename` + `fsync(dir)`,
   so readers (`validate`) never see a torn record. The locker re-reads its nonce right before committing; a lost lock
-  aborts with `E_UNAVAILABLE`.
+  aborts with `E_UNAVAILABLE`. Lock files record `{ nonce, pid, host, at }`; directories are created `0700`.
 - **Fencing.** Each acquire increments a per-resource `generation`, persisted in the record and kept across release
   and restart; `lease.token` is that generation. `validate` re-reads the record and returns `E_FENCED` when the
   generation, `lease_id` or owner differ, *before* looking at time — so a holder whose clock lies is still fenced as
@@ -130,18 +133,34 @@ What it guarantees, and how:
   the holder keeps the lease. `withLeases` releases in `finally` through the same check, so it never frees a lease that
   was taken over.
 - **Fail-closed.** Any backend error, operation timeout (`opTimeoutMs`), clock skew against a backend clock
-  (`maxSkewMs`), corrupt record, busy lock past `lockWaitMs`, or a missing record whose resource has audit history,
-  is `E_UNAVAILABLE`. It is never treated as free and an unavailable release leaves the lease to expire by TTL.
+  (`maxSkewMs`), non-finite authority clock, corrupt record, busy lock past `lockWaitMs`, or a missing record whose
+  resource has history (`<res>.seen` marker, written before the first record: an O(1) check), is `E_UNAVAILABLE`. It is never treated as free and an unavailable release leaves the lease to expire by TTL.
   Every `E_UNAVAILABLE` and every failed `validate` calls `alert`.
-- **Stale critical-section locks.** A lock file left by a crashed process is broken only when the resource's holder is
-  expired or absent **and** the lock file's mtime is older than `staleLockMs`; the break renames the file to a unique
-  name and checks dev/ino/mtime match what was judged stale (else it puts the moved lock back). A live holder's
-  resource is never unlocked by breaking: it fails closed until the holder's TTL passes.
+- **Stale critical-section locks.** A lock file left by a crashed process is broken only when (a) its recorded owner is
+  not a live process on this host (`kill(pid, 0)`; a lock from another host or without a host is judged by the other
+  two conditions only), (b) the resource's holder is expired or absent, and (c) the lock file's mtime is older than
+  `staleLockMs`. Breakers are serialized by an `O_EXCL` `<res>.break` file; under it the breaker re-stats the lock,
+  renames it to `<res>.moved` and checks dev/ino/mtime match what it judged stale. If it displaced a fresh lock
+  instead, every locker that arrives while `<res>.moved` exists backs off, so the slot stays free until the breaker
+  links the lock back (or its owner, finishing, removes `<res>.moved`). Two lockers can therefore never both be inside
+  the critical section, and no orphan lock is left (verifier test F1). A live holder's resource is never unlocked by
+  breaking: it fails closed until the holder's TTL passes.
+- **Timed-out acquire.** An acquire that fails with `E_UNAVAILABLE` returns `lease_id` and
+  `attempted: { resource, lease_id, owner, task_id }`. If the backend committed after the timeout,
+  `authority.adopt(attempted)` returns that lease to the same owner/task (never a free resource, never another
+  owner's lease) so it can be released. `acquireAll` does this itself during rollback.
 - **Ordered, all-or-nothing acquisition.** `acquireAll` dedupes and sorts resources by code-unit order, acquires
   without blocking, and releases what it got (reverse order) on the first failure.
-- **Audit.** Append-only `audit.jsonl` (one `fsync` per line) with `acquire`, `renew`, `release`, `denied`
+- **Audit.** Append-only `audit.jsonl` (`fsync` per append) with `acquire`, `adopt`, `renew`, `release`, `denied`
   (`E_HELD`/`E_INVALID`/`E_UNAVAILABLE`/non-owner), `fenced` (validate/renew failures and expired holders displaced by
   a new acquire) and `lock_broken`, each with owner, task_id, scope, approval_ref.
+- **Decision (verifier F3): grant provenance is mandatory.** The `acquire` line (and the `fenced` line for a displaced
+  expired holder) is appended inside the critical section *before* the record is committed; if it cannot be written,
+  nothing is committed and the acquire is `E_UNAVAILABLE`. So every granted token has an audit line. A crash between
+  the audit append and the record commit leaves an `acquire` line for a grant that never happened (the generation is
+  not advanced); readers must treat audit lines as "attempted at least", the record as the truth. Audit lines for
+  non-grant events (denied, renew, release, fenced on validate) stay best effort: their failure raises an
+  `audit_failed` alert but does not block a release or a validate.
 
 Executor usage:
 
@@ -166,10 +185,25 @@ if (!r.ok) block(r.code);  // E_HELD | E_UNAVAILABLE | E_INVALID: no mutation ra
 - **Check-to-act window.** Fencing protects only actions preceded by `fence.check()`. External systems (git remote,
   systemd, the deploy registry) do not check our token, so between the last check and the action a lease can expire.
   Keep TTLs well above the action duration, renew before long steps, and check immediately before each action.
-- **Lost state.** Deleting the record while `audit.jsonl` survives is detected (`E_UNAVAILABLE`). Deleting or
-  replacing the whole backend directory restarts generations at 1 and is not detected.
-- **Timeouts.** An operation that times out may still commit later; the caller sees `E_UNAVAILABLE` and the lease, if
-  any, simply expires by TTL. Audit lines are written after the commit; a crash between the two loses one audit line,
-  never a record.
-- **Lock theft window.** The pre-commit nonce check narrows but does not remove a race with a breaker; it requires a
-  critical section lasting longer than `staleLockMs` (default 30 s, versus milliseconds in practice).
+- **Lost state.** Deleting the record while its `<res>.seen` marker survives is detected (`E_UNAVAILABLE`). Deleting
+  or replacing the whole backend directory restarts generations at 1 and is not detected.
+- **Timeouts.** An operation that times out may still commit later. For acquire the caller gets `attempted` and can
+  `adopt()`/`release()`; if it does not (or the backend stays unavailable), the lease expires by TTL. A timed-out
+  renew or release may also have committed; `validate` tells which.
+- **Breaker window.** The displaced-fresh-lock case needs a lock to be replaced between the breaker's re-stat (under
+  `<res>.break`) and its rename. With serialized breakers and the live-pid veto that requires a lock owner on another
+  host or an external actor; it is handled (back-off + restore) but remains the least exercised path.
+
+### Manual recovery
+
+The backend fails closed rather than guessing. These states block a resource until an operator acts; first make sure
+no process using the backend directory is running an operation on that resource (`<res>` is the URL-encoded name):
+
+- `<res>.lock` left by a process that crashed inside the critical section while the holder's lease is still live, or
+  whose recorded pid on this host was reused by another process: wait for the holder's TTL, or remove `<res>.lock`.
+- `<res>.break` and/or `<res>.moved` left by a breaker that crashed: remove `<res>.break`; if `<res>.moved` exists and
+  `<res>.lock` does not, remove `<res>.moved` (its owner is gone or will fail its pre-commit check).
+- A corrupt `<res>.lease.json`, or a missing one with `<res>.seen` present: restore the record from backup, or rebuild
+  it with `generation` set above the highest `token` for that resource in `audit.jsonl` and `holder: null`.
+
+Every one of these surfaces as `E_UNAVAILABLE` plus a `lease_unavailable` alert naming the resource.

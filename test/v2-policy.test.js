@@ -148,3 +148,21 @@ test('the topic matcher is the manager one (stall.js), including its private ext
   } finally { setForbiddenExtra(''); }
   assert.ok(textVariants('d.e.p.l.o.y').includes('deploy'));
 });
+
+test('denied arguments, protected branch names from policy, more T02 spellings', () => {
+  const p = loadPolicy(REPO);
+  const t = task();
+  for (const argv of [['git', 'diff', '--output=x.patch'], ['git', 'log', '--output', 'x'], ['git', 'diff', '--ext-diff']]) {
+    const r = checkAction(p, t, { class: 'run_command', argv });
+    assert.deepEqual([r.allow, r.needs_approval], [false, true], argv.join(' '));
+  }
+  assert.equal(checkAction(p, t, { class: 'run_command', argv: ['git', 'diff', '--stat'] }).allow, true);
+  for (const path of ['package.json', 'scripts/leak-scan.js', '.claude/settings.json']) {
+    assert.equal(checkAction(p, t, { class: 'edit', paths: [path] }).needs_approval, true, path);
+  }
+  const custom = loadPolicy(repoWith(JSON.stringify(policy({ protected_branches: ['release-train'] }))));
+  assert.ok(checkAction(custom, task({ goal: 'merge it into release-train' }), EDIT).classes.includes('merge_protected'));
+  for (const [text, cls] of [['ship it to live', 'deploy'], ['de–ploy now', 'deploy'], ['go live tonight', 'deploy'], ['yarn publish', 'push_shared']]) {
+    assert.ok(restrictedTopics(text).some((x) => x.class === cls), text);
+  }
+});

@@ -17,15 +17,15 @@
       ["git", "log"],
       ["git", "show"],
       ["git", "add"],
-      ["git", "commit"],
-      ["rg"]
+      ["git", "commit"]
     ],
     "paths": ["."],
     "runtimes": ["claude", "codex", "opencode", "minimax", "fake"],
     "models": null
   },
-  "excluded_paths": [".env", ".env.local", "certs/key.pem", "certs/cert.pem", "node_modules"],
-  "protected_paths": [".ai", "AGENTS.md", "docs/CONTRACT.md", "systemd"],
+  "denied_args": ["--output", "--ext-diff", "--textconv", "--exec", "--upload-pack", "--receive-pack", "--pre"],
+  "excluded_paths": [".env", ".env.local", "certs/key.pem", "certs/cert.pem", "node_modules", ".git"],
+  "protected_paths": [".ai", "AGENTS.md", "docs/CONTRACT.md", "systemd", "package.json", "package-lock.json", "scripts", ".claude"],
   "prohibited_actions": ["write_live_state", "restart_live_service", "expose_publicly", "bypass_permissions"],
   "approval_policy": {
     "requires": ["merge_protected", "push_shared", "deploy", "credentials", "destructive", "host_maintenance", "money", "customer"]

@@ -120,7 +120,8 @@ test('acceptance: passing evidence on head plus an independent approve -> accept
   const t = await s.get(id);
   assert.equal(t.status, 'accepted');
   assert.equal(t.outcome, 'done');
-  await assert.rejects(s.transition(id, 'repair'), { code: 'E_ILLEGAL_TRANSITION' });
+  await assert.rejects(s.transition(id, 'repair'), { code: 'E_TERMINAL' });
+  await assert.rejects(s.recordUsage(id, { runtime: 'fake', input_tokens: 1 }), { code: 'E_TERMINAL' });
 });
 
 test('acceptance guard rejects missing evidence, unknown or failing exit, and missing verdict (GL04)', async () => {
@@ -348,7 +349,8 @@ test('T22/GL13: unknown usage stays null, never 0', async () => {
   const s2 = open(tmp());
   const { task_id: id2 } = await s2.createTask(spec());
   t = await s2.get(id2);
-  assert.deepEqual(t.usage_totals, { records: 0, input_tokens: 0, output_tokens: 0, usd: 0, unknown: [] });   // nothing spent yet is known
+  assert.deepEqual(t.usage_totals, { records: 0, input_tokens: null, output_tokens: null, usd: null,
+    unknown: ['input_tokens', 'output_tokens', 'usd'] });   // nothing measured is unknown, not zero
   await s2.recordUsage(id2, { runtime: 'fake', input_tokens: 0, output_tokens: 0, usd: 0 });   // a measured zero stays a zero
   assert.equal((await s2.get(id2)).usage[0].usd, 0);
 });
@@ -406,4 +408,43 @@ test('a torn tail after an appended partial line from another writer is also rec
   assert.equal(r.torn[0].task_id, id);
   await s2.transition(id, 'clarified');
   assert.deepEqual(logOf(dir, id).map((e) => e.kind), ['task.created', 'recovery.torn_tail', 'task.transitioned']);
+});
+
+test('actor identity: id only, normalized; id-less approve never counts, id-less reject still blocks', async () => {
+  const s = open(tmp());
+  const { task_id: id } = await s.createTask(spec());
+  await toState(s, id);
+  await s.setHead(id, SHA_A, { actor: { role: 'developer', id: ' Dev-Agent-1 ' } });
+  await pass(s, id);
+  await s.recordVerdict(id, { sha: SHA_A, actor: { role: 'verifier', runtime: 'codex', model: 'm' }, verdict: 'approve', findings: [] });
+  await assert.rejects(s.transition(id, 'accepted'), (e) => /no independent approve/.test(e.message));
+  await s.recordVerdict(id, { sha: SHA_A, actor: { role: 'verifier' }, verdict: 'reject', findings: ['broken'] });
+  await s.recordVerdict(id, { sha: SHA_A, actor: VERIFIER, verdict: 'approve', findings: [] });
+  await assert.rejects(s.transition(id, 'accepted'), (e) => /without id rejects/.test(e.message));
+  await assert.rejects(s.recordVerdict(id, { sha: SHA_A, verdict: 'approve', findings: [] }), { code: 'E_INVALID' });
+  await assert.rejects(s.recordEvidence(id, { check_id: 'unit', sha: SHA_A, command: ['npm', 'test'], exit: 0, actor: { role: 'runner' } }), { code: 'E_INVALID' });
+});
+
+test('terminal tasks: no writes after accepted or failed, no children of a cancelled parent, no raw torn-tail marker after cancel', async () => {
+  const s = open(tmp());
+  const { task_id: id } = await s.createTask(spec());
+  await s.transition(id, 'clarified');
+  await s.transition(id, 'waiting');
+  await s.transition(id, 'failed_unrecoverable');
+  await assert.rejects(s.append(id, { event_id: 'late', kind: 'task.started' }), { code: 'E_TERMINAL' });
+  const p = await s.createTask(spec());
+  await s.transition(p.task_id, 'cancelled');
+  await assert.rejects(s.append(p.task_id, { event_id: 'tt', kind: 'recovery.torn_tail', payload: {} }), { code: 'E_CANCELLED' });
+  await assert.rejects(s.createTask(spec({ parent_task_id: p.task_id })), { code: 'E_CANCELLED' });
+  await assert.rejects(s.createTask(spec({ parent_task_id: id })), { code: 'E_TERMINAL' });
+});
+
+test('D-007: a task parked in waiting during integration resumes integrating', async () => {
+  const s = open(tmp());
+  const { task_id: id } = await s.createTask(spec());
+  await toState(s, id);
+  await s.transition(id, 'integrating');
+  await s.transition(id, 'waiting', { reason: 'remote CI pending' });
+  await s.transition(id, 'integrating');
+  assert.equal((await s.get(id)).status, 'integrating');
 });

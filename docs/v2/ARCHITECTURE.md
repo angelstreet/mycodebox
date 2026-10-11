@@ -36,7 +36,7 @@ Allowed transitions (anything else throws `E_ILLEGAL_TRANSITION`):
 | evaluating | accepted, repair, replan, waiting, awaiting_approval, integrating, failed_unrecoverable |
 | repair | executing, replan, waiting, awaiting_approval |
 | replan | planned, waiting, awaiting_approval, failed_unrecoverable |
-| waiting | ready, clarified, planned, repair, replan, awaiting_approval, failed_unrecoverable |
+| waiting | ready, clarified, planned, repair, replan, awaiting_approval, integrating (D-007), failed_unrecoverable |
 | awaiting_approval | ready, clarified, planned, repair, integrating, waiting, failed_unrecoverable |
 | integrating | release_verifying, repair, waiting, awaiting_approval, unknown_external_effect |
 | release_verifying | accepted, repair, waiting, awaiting_approval |
@@ -117,8 +117,10 @@ acquireAll(resources[], opts)                              // sorted canonical o
 withLeases(resources[], opts, fn(fence))                   // release in finally with identity check
 ```
 Lease: `{ resource, lease_id, owner, task_id, token (fencing generation), acquired_at, expires_at, scope, approval_ref }`.
-Namespaces: `repo:<repo>:integration`, `repo:<repo>:main`, `environment:<env>:deploy`, `host:<id>:maintenance`,
-`service:<id>:<service>`, `worktree:<task_id>`. Unavailable backend never means free. The existing `leases.js`
+Namespaces: `repo:<repo>:integration`, `repo:<repo>:main`, `repo:<repo>:branch:<name>` (non-main target branches,
+decision D-008: `<name>` uses `[A-Za-z0-9._/-]`, no `..`, `//`, leading `-`/`/` or trailing `/`),
+`environment:<env>:deploy`, `host:<id>:maintenance`, `service:<id>:<service>`, `worktree:<task_id>`. Every resource is
+at most 150 characters. Unavailable backend never means free. The existing `leases.js`
 (read-only remote registry observer) is an *input* for platform state, not an authority.
 
 ## 6. Runtime adapters — `orchestration/adapters/<id>.js`
@@ -184,3 +186,31 @@ Read-mostly HTTP routes added to `server.js` behind the existing Origin check: `
 `POST /api/v2/tasks` (create from UI; same contract as API/schedule/agent), `POST /api/v2/tasks/:id/cancel`,
 `POST /api/v2/tasks/:id/approve` (owner only, records actor). Route handlers live in `orchestration/http.js` (testable
 without the server). The UI adds an opt-in **Tasks** view; the session board is unchanged.
+
+## Implementation notes (task core)
+
+Recorded from `v2/02-task-core` and accepted by the task-core verifier. All are additive to §1–§4 and §9.
+
+1. Extra event kinds: `action.failed`, `task.head_changed`, `policy.snapshot`, `recovery.torn_tail`.
+2. Extra optional arguments: `setHead(id, sha, { actor, event_id })`, `snapshotPolicy(id, policy, { run_id })`,
+   `{ event_id }` on the `record*` methods. Pass a stable `event_id` on any write that may be retried.
+3. Actor identity is the actor's `id` only (a string actor is its own id), trimmed, NFKC-normalized and
+   case-folded. `setHead`'s `actor` must be the developer who produced the SHA. Without an id an actor records no
+   developer and its approve never counts (its reject still blocks), so acceptance fails closed. `head_sha` starts
+   `null`, not `base_sha`.
+4. `accepted` also requires every effect to be reconciled, and leaving `unknown_external_effect` (except to cancel)
+   requires the same.
+5. Terminal tasks reject writes: `E_CANCELLED` after cancel, `E_TERMINAL` after `accepted`/`failed_unrecoverable`.
+   The only exception is reconciling an effect already in flight (`confirmed`/`possibly_applied`/`failed`).
+   A child cannot be created under a terminal parent.
+6. `recover()` returns `{ tasks: [task_id], torn, corrupt, pendingEffects }`. A corrupt line before the tail stops
+   replay; the task reads with `store_error` and outcome `unknown` and rejects writes with `E_STORE_FAILED`.
+7. Task schema: unknown top-level fields are rejected; at least one required acceptance check; top-level `max_*`
+   caps fold into `budget_policy` and a conflicting duplicate is rejected. Decision `evidence` must be non-empty.
+   `seq` is dense (an explicit seq must be the next one). Usage totals are `null` when no record exists.
+8. Recovery moves a task to `unknown_external_effect` only where the table allows it (`executing`, `integrating`);
+   otherwise the effect is reported with `moved: false` and still blocks acceptance.
+9. Policy: `loadPolicy` restores the mandatory approval classes a file omits (`validateTask` refuses the same
+   omission on a task). Project allowlists are a floor: a task allowlist can only narrow them. `denied_args`,
+   `protected_paths` and `protected_branches` are optional policy keys. The executor derives `action.class` from
+   the operation it performs, never from model output.

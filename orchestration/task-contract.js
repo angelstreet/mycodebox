@@ -18,7 +18,8 @@ const T = {
   evaluating: ['accepted', 'repair', 'replan', 'waiting', 'awaiting_approval', 'integrating', 'failed_unrecoverable'],
   repair: ['executing', 'replan', 'waiting', 'awaiting_approval'],
   replan: ['planned', 'waiting', 'awaiting_approval', 'failed_unrecoverable'],
-  waiting: ['ready', 'clarified', 'planned', 'repair', 'replan', 'awaiting_approval', 'failed_unrecoverable'],
+  // waiting -> integrating: D-007, a retryable integration block parks in waiting and resumes integration.
+  waiting: ['ready', 'clarified', 'planned', 'repair', 'replan', 'awaiting_approval', 'integrating', 'failed_unrecoverable'],
   awaiting_approval: ['ready', 'clarified', 'planned', 'repair', 'integrating', 'waiting', 'failed_unrecoverable'],
   integrating: ['release_verifying', 'repair', 'waiting', 'awaiting_approval', 'unknown_external_effect'],
   release_verifying: ['accepted', 'repair', 'waiting', 'awaiting_approval'],
@@ -128,7 +129,12 @@ export function validateTask(spec) {
       if (b.mode === 'cap' && !BUDGET_CAPS.some((k) => typeof b[k] === 'number')) err('budget_policy', "mode 'cap' needs a cap");
     }
   }
-  for (const k of BUDGET_CAPS) if (has(k) && !isCap(spec[k])) err(k, 'positive number or null');
+  for (const k of BUDGET_CAPS) {
+    if (has(k) && !isCap(spec[k])) err(k, 'positive number or null');
+    if (has(k) && spec[k] !== null && isObj(spec.budget_policy) && spec.budget_policy[k] != null && spec.budget_policy[k] !== spec[k]) {
+      err(k, `conflicts with budget_policy.${k}`);
+    }
+  }
   if (has('retry_strategy') && !isStr(spec.retry_strategy)) err('retry_strategy', 'non-empty string');
   if (has('no_progress_policy')) {
     const n = spec.no_progress_policy;
@@ -161,6 +167,15 @@ export function normalizeTask(spec, { now = () => Date.now(), randomId } = {}) {
   t.status ??= 'created';
   t.priority ??= 'balanced';
   t.budget_policy ??= { mode: 'track' };
+  // Section 3 top-level caps fold into budget_policy so there is one place to read a cap from.
+  for (const k of BUDGET_CAPS) {
+    if (t[k] === undefined || t[k] === null) { delete t[k]; continue; }
+    if (isObj(t.budget_policy)) {
+      if (t.budget_policy[k] != null && t.budget_policy[k] !== t[k]) throw new ContractError('E_INVALID_TASK', `${k} conflicts with budget_policy.${k}`);
+      t.budget_policy = { ...t.budget_policy, mode: 'cap', [k]: t[k] };
+    }
+    delete t[k];
+  }
   t.retry_strategy ??= 'evidence';
   t.no_progress_policy ??= { ...DEFAULT_NO_PROGRESS };
   t.runtime_allowlist ??= null;
@@ -181,7 +196,11 @@ export function normalizeTask(spec, { now = () => Date.now(), randomId } = {}) {
 
 // ---- subtasks may only narrow ---------------------------------------------------------------------
 
-const capsOf = (t) => Object.fromEntries(BUDGET_CAPS.map((k) => [k, t?.budget_policy?.[k] ?? t?.[k] ?? null]));
+// Unnormalized specs may carry a cap twice; the looser one is what a child could spend.
+const capsOf = (t) => Object.fromEntries(BUDGET_CAPS.map((k) => {
+  const v = [t?.budget_policy?.[k], t?.[k]].filter((x) => typeof x === 'number');
+  return [k, v.length ? Math.max(...v) : null];
+}));
 const missingFrom = (sub, sup) => (sub || []).filter((x) => !(sup || []).includes(x));
 
 export function narrowsParent(parent, child) {
@@ -195,6 +214,11 @@ export function narrowsParent(parent, child) {
   }
   for (const k of ['prohibited_actions', 'excluded_paths']) {
     for (const x of missingFrom(parent?.[k], child?.[k])) add(k, `child drops ${x}`);
+  }
+  for (const x of missingFrom(child?.runtime_capabilities, parent?.runtime_capabilities)) add('runtime_capabilities', `child adds ${x}`);
+  for (const k of BUDGET_CAPS) {
+    const a = child?.budget_policy?.[k], b = child?.[k];
+    if (typeof a === 'number' && typeof b === 'number' && a !== b) add(`budget.${k}`, `child has conflicting caps ${a} and ${b}`);
   }
   for (const x of missingFrom(parent?.approval_policy?.requires, child?.approval_policy?.requires)) {
     add('approval_policy.requires', `child drops ${x}`);
@@ -213,9 +237,9 @@ export function narrowsParent(parent, child) {
   for (const k of ['project_id', 'repository']) {
     if (parent?.[k] != null && child?.[k] !== parent[k]) add(k, 'child must keep the parent value');
   }
-  // Data policy is inherited as is: there is no order on free-form policies to narrow by.
-  if (parent?.privacy_policy !== undefined && JSON.stringify(child?.privacy_policy) !== JSON.stringify(parent.privacy_policy)) {
-    add('privacy_policy', 'child must inherit the parent privacy policy');
+  // Data and review policies are inherited as is: there is no order on free-form policies to narrow by.
+  for (const k of ['privacy_policy', 'review_policy']) {
+    if (parent?.[k] != null && JSON.stringify(child?.[k]) !== JSON.stringify(parent[k])) add(k, `child must inherit the parent ${k}`);
   }
   return { ok: v.length === 0, violations: v };
 }
@@ -263,7 +287,7 @@ export function validateDecision(d) {
     if (!isObj(a) || !isStr(a.option)) err(`alternatives[${i}].option`, 'non-empty string');
     for (const k of ['pros', 'cons']) if (a && !(isStrArr(a[k]) || typeof a[k] === 'string')) err(`alternatives[${i}].${k}`, 'string or array of strings');
   });
-  if (!Array.isArray(d.evidence)) err('evidence', 'array');
+  if (!Array.isArray(d.evidence) || !d.evidence.length) err('evidence', 'non-empty array: a decision cites what it rests on');
   if (!isObj(d.actor) || !isStr(d.actor.role)) err('actor.role', 'non-empty string');
   else for (const k of ['runtime', 'model']) if (d.actor[k] !== null && typeof d.actor[k] !== 'string') err(`actor.${k}`, 'string or null');
   if (!(d.confidence === null || (typeof d.confidence === 'number' && d.confidence >= 0 && d.confidence <= 1))) err('confidence', 'number in [0,1] or null');

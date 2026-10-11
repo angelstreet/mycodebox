@@ -28,7 +28,7 @@ export function validatePolicy(p) {
     if (!isStrArr(a.paths)) err('allowlists.paths', 'array of repo-relative path prefixes');
     for (const k of ['runtimes', 'models']) if (a[k] !== null && a[k] !== undefined && !isStrArr(a[k])) err(`allowlists.${k}`, 'array or null');
   }
-  for (const k of ['excluded_paths', 'protected_paths', 'prohibited_actions']) if (p[k] !== undefined && !isStrArr(p[k])) err(k, 'array of strings');
+  for (const k of ['excluded_paths', 'protected_paths', 'prohibited_actions', 'protected_branches', 'denied_args']) if (p[k] !== undefined && !isStrArr(p[k])) err(k, 'array of strings');
   if (!isObj(p.approval_policy) || !isStrArr(p.approval_policy.requires)) err('approval_policy.requires', 'array of action classes');
   if (p.default_risk_class !== undefined && !RISK_CLASSES.includes(p.default_risk_class)) err('default_risk_class', RISK_CLASSES.join('|'));
   return errors;
@@ -67,14 +67,35 @@ const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' 
 export function textVariants(text) {
   const base = String(text ?? '').normalize('NFKC').replace(ZERO_WIDTH, '')
     .replace(/[^\x00-\x7F]/g, (c) => HOMOGLYPH[c.toLowerCase()] ?? c);
-  const spaced = base.replace(/\b(?:[A-Za-z0-9][ ._*\-]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[ ._*\-]/g, ''));   // d e p l o y
-  const joined = spaced.replace(/([A-Za-z])[._*\-]+(?=[A-Za-z])/g, '$1');                                              // de-ploy, pass_word
+  const spaced = base.replace(/\b(?:[A-Za-z0-9][ ._*\-\u2013\u2014]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[ ._*\-\u2013\u2014]/g, ''));   // d e p l o y
+  const joined = spaced.replace(/([A-Za-z])[._*\-\u2013\u2014]+(?=[A-Za-z])/g, '$1');                                              // de-ploy, de–ploy
   const leet = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                         // d3pl0y
   return [...new Set([base, spaced, joined, leet])];
 }
 
+// One space splitting a word ("de ploy", "dep loy"): adjacent tokens joined in pairs and triples. Checked one
+// candidate at a time so an innocent join can only add a match, never hide one.
+function splitJoins(text) {
+  const t = String(text).split(/[\s\u2013\u2014]+/).filter(Boolean);
+  const out = [];
+  for (let i = 0; i < t.length - 1; i++) { out.push(t[i] + t[i + 1]); if (i < t.length - 2) out.push(t[i] + t[i + 1] + t[i + 2]); }
+  return out;
+}
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // V2 additions on top of the manager's list, for action classes the manager never had to name.
-const V2_EXTRA = [[/\bprod(?:uction)?\b/i, 'deploy'], [/\brotat(?:e|ing|ion)\b[^.\n]{0,30}\bkeys?\b/i, 'credentials']];
+const V2_EXTRA = [
+  [/\bprod(?:uction)?\b/i, 'deploy'],
+  [/\bship(?:s|ped|ping)?\b[^.\n]{0,20}\b(?:live|prod)\b|\bgo(?:es|ing)? live\b/i, 'deploy'],
+  [/\brotat(?:e|ing|ion)\b[^.\n]{0,30}\bkeys?\b/i, 'credentials'],
+  [/\b(?:npm|yarn|pnpm) publish\b|\bpublish(?:es|ed|ing)? (?:the )?(?:package|release|crate|gem)\b/i, 'push_shared'],
+];
+const DEFAULT_PROTECTED = ['main', 'master', 'trunk'];
+const branchRules = (branches) => {
+  const names = [...new Set([...DEFAULT_PROTECTED, ...(branches || [])])].map(escapeRe).join('|');
+  return [[new RegExp(`\\b(?:merg(?:e|es|ed|ing)|rebas(?:e|es|ed|ing))\\b[^.\\n]{0,30}\\b(?:${names})\\b`, 'i'), 'merge_protected'],
+    [new RegExp(`\\bpush(?:es|ed|ing)?\\b[^.\\n]{0,30}\\b(?:${names})\\b`, 'i'), 'merge_protected']];
+};
 const TOPIC_CLASS = [
   [/deploy|update_core|rollout/i, 'deploy'],
   [/systemctl|pm2|restart/i, 'host_maintenance'],
@@ -87,16 +108,23 @@ const TOPIC_CLASS = [
 ];
 
 // -> [{ topic, class }] for every restricted topic named in the text, under any variant spelling.
-export function restrictedTopics(text) {
+// protectedBranches: the policy's protected_branches, added to main/master/trunk.
+export function restrictedTopics(text, { protectedBranches } = {}) {
   const out = new Map();
-  for (const v of textVariants(text)) {
+  const extra = [...V2_EXTRA, ...branchRules(protectedBranches)];
+  const variants = textVariants(text);
+  for (const j of splitJoins(variants[0])) {
+    const m = forbiddenMatch(j);
+    if (m) { const cls = TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic'; if (!out.has(cls)) out.set(cls, { topic: m, class: cls }); }
+  }
+  for (const v of variants) {
     const m = forbiddenMatch(v);
     if (m) {
       const cls = TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic';
       out.set(cls, { topic: m, class: cls });
       if (cls === 'push_shared' && /\bmain\b/i.test(m)) out.set('merge_protected', { topic: m, class: 'merge_protected' });
     }
-    for (const [re, cls] of V2_EXTRA) { const x = v.match(re); if (x && !out.has(cls)) out.set(cls, { topic: x[0], class: cls }); }
+    for (const [re, cls] of extra) { const x = v.match(re); if (x && !out.has(cls)) out.set(cls, { topic: x[0], class: cls }); }
   }
   return [...out.values()];
 }
@@ -109,8 +137,9 @@ const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\/+/, '').replace(
 const under = (path, prefix) => { const a = norm(path), b = norm(prefix); return b === '' || b === '.' || a === b || a.startsWith(`${b}/`); };
 const argvAllowed = (argv, allow) => allow.some((pre) => pre.length <= argv.length && pre.every((s, i) => s === argv[i]));
 
-// action: { class, argv?, paths?, text?, runtime?, model? }. Anything else on it (a model's "approved: true",
-// a confidence, a verdict) is deliberately ignored: only policy and recorded approvals can authorize.
+// action: { class, argv?, paths?, text?, runtime?, model? }. The executor derives `class` from the operation it
+// is about to perform, never from model output. Anything else on it (a model's "approved: true", a confidence,
+// a verdict) is deliberately ignored: only policy and recorded approvals can authorize.
 // -> { allow, needs_approval, reason, classes }
 export function checkAction(policy, task, action = {}) {
   const deny = (needs_approval, reason, classes = []) => ({ allow: false, needs_approval, reason, classes });
@@ -131,10 +160,14 @@ export function checkAction(policy, task, action = {}) {
   if (action.paths !== undefined && !isStrArr(action.paths)) return deny(false, 'paths must be an array of strings');
   if (requires.has(cls)) need(cls, `action class ${cls} requires approval`);
   const actionText = [action.text, action.argv?.join(' '), ...(action.paths || [])].filter(Boolean).join('\n');
-  for (const t of restrictedTopics(actionText)) need(t.class, `action names restricted topic "${t.topic}" (${t.class})`);
-  if (!readOnly) for (const t of restrictedTopics(taskText(task))) need(t.class, `task text names restricted topic "${t.topic}" (${t.class})`);
+  const topicOpts = { protectedBranches: p.protected_branches };
+  for (const t of restrictedTopics(actionText, topicOpts)) need(t.class, `action names restricted topic "${t.topic}" (${t.class})`);
+  if (!readOnly) for (const t of restrictedTopics(taskText(task), topicOpts)) need(t.class, `task text names restricted topic "${t.topic}" (${t.class})`);
   for (const c of classes) if (prohibited.has(c)) return deny(false, `action falls under prohibited ${c}`, [...classes]);
 
+  // Options that turn an allowlisted read-only command into a writer or an executor (git diff --output, ...).
+  const denied = action.argv?.slice(1).find((a) => (p.denied_args || []).some((d) => a === d || a.startsWith(`${d}=`)));
+  if (denied) need('denied_argument', `argument ${denied} is denied by project policy`);
   if (action.argv && !argvAllowed(action.argv, p.allowlists.commands)) need('command_not_allowlisted', `command ${action.argv.join(' ')} is not in the project allowlist`);
   for (const path of action.paths || []) {
     if (/(^|[\\/])\.\.([\\/]|$)/.test(path) || /^([\\/]|[A-Za-z]:)/.test(path)) return deny(false, `path ${path} escapes the repository`);
@@ -144,8 +177,10 @@ export function checkAction(policy, task, action = {}) {
   }
   for (const k of ['runtime', 'model']) {
     if (action[k] === undefined) continue;
-    const list = task?.[`${k}_allowlist`] ?? p.allowlists[`${k}s`] ?? null;
-    if (list && !list.includes(action[k])) need(`${k}_not_allowlisted`, `${k} ${action[k]} is not allowlisted`);
+    // The project list is a floor: a task list can only narrow it, never admit something the project excludes.
+    for (const list of [p.allowlists[`${k}s`], task?.[`${k}_allowlist`]]) {
+      if (Array.isArray(list) && !list.includes(action[k])) { need(`${k}_not_allowlisted`, `${k} ${action[k]} is not allowlisted`); break; }
+    }
   }
   return why.length ? deny(true, why.join('; '), [...classes]) : { allow: true, needs_approval: false, reason: 'allowed by project policy', classes: [] };
 }
