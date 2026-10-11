@@ -17,15 +17,19 @@ import { createCiGates, gatesFromPolicy, remoteStatus, ciPasses } from './ci-gat
 const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const REF_RE = /^(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-// Task states from which a handoff may (re-)enter integration.
-const ENTRY_STATES = ['evaluating', 'integrating', 'awaiting_approval', 'unknown_external_effect'];
+// Task ids become ref components (refs/v2int/src/<id>): git ref rules on top of the store's id rules.
+const TASK_REF_RE = /^(?!.*\.\.)(?!.*\.lock$)(?!.*\.$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+// Task states from which a handoff may (re-)enter integration; `waiting` is a parked retryable block (D-007).
+const ENTRY_STATES = ['evaluating', 'integrating', 'waiting', 'awaiting_approval', 'unknown_external_effect'];
 const coded = (code, message, extra) => Object.assign(new Error(message), { code, ...extra });
-// Independence is compared on a stable actor id, trimmed and case-folded; a role alone identifies nobody.
-export const actorId = (a) => {
-  const id = typeof a === 'string' ? a : a && typeof a === 'object' ? a.id : null;
-  return typeof id === 'string' && id.trim() ? id.trim().toLowerCase() : null;
-};
-const errText = (e) => String(e?.stderr || e?.message || e).trim().slice(0, 300);
+// Identity is the store's: actor id only, normalized and case-folded; a role alone identifies nobody.
+export const actorId = actorKey;
+// Remote URLs may carry credentials (https://user:token@host): never let them into events, alerts or manifests.
+export const redact = (t) => String(t).replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]*@/gi, '$1***@');
+const errText = (e) => redact(String(e?.stderr || e?.message || e).trim()).slice(0, 300);
+const RETRYABLE_GIT = new Set(['E_GIT', 'E_TIMEOUT']);
+// Lease resource for a target branch: main keeps its own namespace, every other branch uses D-008.
+export const targetResource = (repo, target) => (target === 'main' ? `repo:${repo}:main` : `repo:${repo}:branch:${target}`);
 
 // ---- git runner -----------------------------------------------------------------------------------
 
@@ -109,6 +113,13 @@ export function createIntegrationController({
     await store.transition(task_id, to, { reason, actor });
     return to;
   }
+  // D-007: a retryable block after a task entered integration parks it in `waiting` with a structured wake
+  // condition (what has to change before a retry makes sense); the queue item stays parked, the audit event stays.
+  async function park(task_id, reason, wake, detail = {}) {
+    await blocked(task_id, reason, { wake, ...detail });
+    const t = await store.get(task_id);
+    if (t && ['integrating', 'unknown_external_effect'].includes(t.status)) await moveTask(task_id, 'waiting', `${reason}: wake on ${wake.kind}`);
+  }
   const decide = (task_id, d) => store.recordDecision(task_id, {
     kind: d.kind, question: d.question, alternatives: d.alternatives, chosen: d.chosen, evidence: d.evidence?.length ? d.evidence : [d.question],
     expected_effect: d.expected_effect, rationale: d.rationale, actor, confidence: null, policy_ref: d.policy_ref ?? null,
@@ -123,7 +134,7 @@ export function createIntegrationController({
     const errors = [];
     const e = (m) => errors.push(m);
     if (!h || typeof h !== 'object') return { ok: false, errors: ['handoff must be an object'] };
-    if (typeof h.task_id !== 'string' || !h.task_id) e('task_id required');
+    if (typeof h.task_id !== 'string' || !TASK_REF_RE.test(h.task_id)) e('task_id required, usable as a git ref component');
     if (!REPO_RE.test(h.repo ?? '') || !repos[h.repo]) e('repo is not configured for integration');
     if (!REF_RE.test(h.target ?? '')) e('target branch invalid');
     if (!REF_RE.test(h.source_branch ?? '')) e('source_branch invalid');
@@ -131,7 +142,12 @@ export function createIntegrationController({
     if (!SHA_RE.test(h.base_sha ?? '')) e('base_sha must be a full commit sha');
     if (!actorId(h.developer)) e('developer actor with a stable id required');
     if (!Array.isArray(h.diff_scope) || !h.diff_scope.every((p) => typeof p === 'string' && p)) e('diff_scope must list the changed paths');
-    if (h.source_repo !== undefined && (typeof h.source_repo !== 'string' || !h.source_repo || h.source_repo.startsWith('-'))) e('source_repo invalid');
+    // Fetch sources only from the configured remote or an explicit allowlist: no transport helpers, no argv.
+    if (h.source_repo !== undefined) {
+      const c = repos[h.repo];
+      const ok = typeof h.source_repo === 'string' && c && (h.source_repo === c.remote || (Array.isArray(c.source_remotes) && c.source_remotes.includes(h.source_repo)));
+      if (!ok) e('source_repo is not the configured remote or an allowlisted source remote');
+    }
     if (errors.length) return { ok: false, errors };
 
     const task = await store.get(h.task_id);
@@ -142,13 +158,10 @@ export function createIntegrationController({
     for (const c of task.acceptance_checks.filter((x) => x.required)) {
       if (!task.evidence.some((ev) => ev.check_id === c.id && ev.sha === h.source_sha && ev.exit === c.expect.exit)) e(`missing passing evidence for required check ${c.id} on ${h.source_sha}`);
     }
-    // Independent verdict on this sha: latest verdict per verifier, none rejecting, one approving, none by the developer.
-    const dev = actorId(h.developer);
-    const latest = new Map();
-    for (const v of task.verdicts.filter((x) => x.sha === h.source_sha)) { const a = actorId(v.actor); if (a) latest.set(a, v.verdict); }
-    const independent = [...latest].filter(([a]) => a !== dev);
-    if (!independent.some(([, v]) => v === 'approve')) e(latest.get(dev) === 'approve' ? 'only the developer approved: self-approval does not count' : `no independent verifier approval on ${h.source_sha}`);
-    for (const [a, v] of independent) if (v === 'reject') e(`verifier ${a} rejects ${h.source_sha}`);
+    // Independence from the store's own record of who produced the sha (setHead actor); handoff.developer is
+    // caller-supplied and only kept as provenance.
+    const ind = await store.independence(h.task_id, h.source_sha);
+    if (!ind.ok) for (const r of ind.reasons) e(`independence: ${r}`);
     const allowed = scopePaths(task);
     if (!allowed) e('task scope is not machine-checkable: task.scope.paths required');
     if (errors.length || !fetch) return { ok: !errors.length, errors, facts: { task } };
@@ -165,7 +178,11 @@ export function createIntegrationController({
         const mb = (await git(['merge-base', tgt, h.source_sha], { cwd: cfg.dir })).trim();
         changed = (await git(['diff', '--name-only', '--no-renames', mb, h.source_sha], { cwd: cfg.dir })).split('\n').filter(Boolean);
       }
-    } catch (err) { e(`git: ${errText(err)}`); }
+    } catch (err) {
+      // A network blip is not a verdict on the handoff: retryable, never a final rejection.
+      if (RETRYABLE_GIT.has(err.code)) return { ok: false, retryable: true, errors: [...errors, `git: ${errText(err)}`], facts: { task } };
+      e(`git: ${errText(err)}`);
+    }
     for (const f of changed) {
       if (!h.diff_scope.some((p) => under(f, p))) e(`changed path ${f} is not in the declared diff_scope`);
       if (!allowed.some((p) => under(f, p))) e(`changed path ${f} is outside the task scope`);
@@ -177,6 +194,7 @@ export function createIntegrationController({
   async function submit(handoff, { idempotencyKey } = {}) {
     const v = await validateHandoff(handoff);
     if (!v.ok) {
+      if (v.retryable) return { ok: false, code: 'E_RETRYABLE', errors: v.errors };
       if (v.facts?.task) await blocked(handoff.task_id, 'handoff_rejected', { errors: v.errors });
       return { ok: false, code: 'E_HANDOFF_INVALID', errors: v.errors };
     }
@@ -186,32 +204,44 @@ export function createIntegrationController({
 
   // ---- approvals (T31, GL09) ----------------------------------------------------------------------
 
-  // Valid only for this exact action, sha and target, unexpired. A model's say-so or a quiet owner never counts.
+  // Valid only for this exact repo, action, sha and target, unexpired. A model's say-so or a quiet owner never counts.
   async function approvalFor({ action, sha, target, repo, task_ids }) {
     let a = null;
     try { a = approvals ? await approvals.check({ action, sha, target, repo, task_ids, actor: owner }) : null; } catch { a = null; }
     const ok = !!a && a.ok !== false && typeof a.approval_ref === 'string' && a.approval_ref !== '' && a.sha === sha
-      && a.action === action && a.target === target && (a.expires_at == null || a.expires_at > now());
+      && a.action === action && a.target === target && a.repo === repo && (a.expires_at == null || a.expires_at > now());
     return ok ? { ok: true, approval_ref: a.approval_ref, approved_by: a.approved_by ?? null }
-      : { ok: false, reason: !approvals ? 'no approval service configured' : !a || a.ok === false ? (a?.reason || 'no approval') : 'approval does not match this action/sha/target or expired' };
+      : { ok: false, reason: !approvals ? 'no approval service configured' : !a || a.ok === false ? (a?.reason || 'no approval') : 'approval does not match this repo/action/sha/target or expired' };
   }
 
   // ---- reconciliation of uncertain effects (T30, store recovery) ------------------------------------
 
-  // Effect keys are `<kind>:<repo>:<ref>:<sha>` so the remote can be asked what really happened.
+  // Effect keys are `<kind>:<repo>:refs/heads/<ref>:<sha>` so the remote can be asked what really happened. Only
+  // effects this controller wrote (effect_id `int-...`) with a well-formed key are reconciled; others stay open.
+  const EFFECT_ID_RE = /^int-[A-Za-z0-9._-]+:r\d+(?::cand)?:[A-Za-z0-9._-]+:(?:merge|push)$/;
+  function parseKey(k) {
+    const parts = String(k).split(':');
+    if (parts.length !== 4) return null;
+    const [kind, repo, full, sha] = parts;
+    const ref = full.startsWith('refs/heads/') ? full.slice(11) : null;
+    if (!['merge', 'push'].includes(kind) || !REPO_RE.test(repo) || !repos[repo] || !ref || !REF_RE.test(ref) || !SHA_RE.test(sha)) return null;
+    return { kind, repo, ref, sha };
+  }
   async function reconcileTask(task_id) {
     const t = await store.get(task_id);
     const open = (t?.effects || []).filter((x) => x.phase === 'attempted' || x.phase === 'possibly_applied');
     let merged = false;
     for (const eff of open) {
-      const [kind, repo, ref, sha] = String(eff.idempotency_key).split(':');
+      const k = EFFECT_ID_RE.test(eff.effect_id) ? parseKey(eff.idempotency_key) : null;
+      if (!k) return { ok: false, unresolved: eff.effect_id, reason: 'not an integration effect this controller can reconcile' };
+      const { kind, repo, ref, sha } = k;
       let phase = null;
       try {
         const cfg = repoCfg(repo);
-        const remote = await remoteHead(cfg, ref.replace(/^refs\/heads\//, ''));
+        const remote = await remoteHead(cfg, ref);
         if (remote === sha) phase = 'confirmed';
         else if (remote) {
-          await fetchRef(cfg, cfg.remote, ref.replace(/^refs\/heads\//, ''), `refs/v2int/reconcile/${task_id}`);
+          await fetchRef(cfg, cfg.remote, ref, `refs/v2int/reconcile/${task_id}`);
           phase = (await git(['cat-file', '-e', `${sha}^{commit}`], { cwd: cfg.dir }).then(() => true, () => false))
             && await isAncestor(cfg.dir, sha, remote) ? 'confirmed' : 'failed';
         } else phase = 'failed';
@@ -301,7 +331,7 @@ export function createIntegrationController({
     const m = { schema_version: 1, integration_id, repo, target, owner, started_at: new Date(now()).toISOString(),
       items: pending.map((x) => ({ item_id: x.item_id, task_id: x.task_id,
         source_branch: x.handoff.source_branch, source_sha: x.handoff.source_sha, base_sha: x.handoff.base_sha,
-        developer: actorId(x.handoff.developer) })), leases: [], rounds: [], effects: [], approvals: [], outcome: null };
+        claimed_developer: actorId(x.handoff.developer) })), leases: [], rounds: [], effects: [], approvals: [], outcome: null };
     const itemState = new Map(pending.map((x) => [x.item_id, null]));
     const finishItem = async (it, state, reason, detail) => { itemState.set(it.item_id, state); await queue.finish(it.item_id, state, { reason, detail }); };
     let res;
@@ -316,7 +346,7 @@ export function createIntegrationController({
         const t = await store.get(it.task_id).catch(() => null);
         const open = (t?.effects || []).some((x) => x.phase === 'attempted' || x.phase === 'possibly_applied');
         if (open) { res.outcome = 'unknown_external_effect'; await moveTask(it.task_id, 'unknown_external_effect', `integration error: ${res.reason}`).catch(() => {}); }
-        else await blocked(it.task_id, 'integration_error', { integration_id, error: res.reason }).catch(() => {});
+        else await park(it.task_id, 'integration_error', { kind: 'retry', repo, target }, { integration_id, error: res.reason }).catch(() => {});
         await finishItem(it, open ? 'unknown' : 'blocked', res.reason).catch(() => {});
       }
     }
@@ -356,13 +386,25 @@ export function createIntegrationController({
 
     // 1. Fresh validation: evidence, verdict, branch position and scope may have changed since submit (GL12).
     const valid = [];
+    let retry = 0;
     for (const it of live) {
       const v = await validateHandoff(it.handoff);
-      if (v.ok) { valid.push({ ...it, changed: v.facts.changed }); continue; }
+      if (v.ok) {
+        const ind = await store.independence(it.task_id, it.handoff.source_sha);
+        it.developers = ind.developers;
+        const mi = m.items.find((x) => x.item_id === it.item_id); if (mi) { mi.developers = ind.developers; mi.verifiers = ind.approvers; }
+        valid.push({ ...it, changed: v.facts.changed }); continue;
+      }
+      if (v.retryable) {
+        await blocked(it.task_id, 'git_unavailable', { errors: v.errors, integration_id, wake: { kind: 'remote_reachable', repo } });
+        await finishItem(it, 'blocked', 'git unavailable during validation', { errors: v.errors });
+        retry++;
+        continue;
+      }
       await blocked(it.task_id, 'handoff_rejected', { errors: v.errors, integration_id });
       await finishItem(it, 'rejected', 'handoff invalid', { errors: v.errors });
     }
-    if (!valid.length) return { outcome: 'rejected', reason: 'no valid handoff' };
+    if (!valid.length) return retry ? { outcome: 'blocked', reason: 'git unavailable during validation' } : { outcome: 'rejected', reason: 'no valid handoff' };
     const taskIds = () => valid.filter((x) => !x.out).map((x) => x.task_id);
 
     // 2. Deployment in progress? Unknown is not idle.
@@ -376,7 +418,7 @@ export function createIntegrationController({
     }
 
     // 3. Leases: integration lane and target branch, all-or-nothing in canonical order. No lease, no mutation.
-    const resources = [`repo:${repo}:integration`, `repo:${repo}:${target}`];
+    const resources = [`repo:${repo}:integration`, targetResource(repo, target)];
     const lr = await leases.withLeases(resources, { owner, task_id: integration_id, ttl_ms: leaseTtlMs, scope: 'integration' },
       async (fence) => {
         m.leases = fence.leases.map((l) => ({ resource: l.resource, token: l.token, lease_id: l.lease_id }));
@@ -386,7 +428,7 @@ export function createIntegrationController({
           if (!['E_FENCED', 'E_EXPIRED', 'E_UNAVAILABLE'].includes(e.code)) throw e;
           // T27: the lease went away mid-run; a stale executor stops before its next protected action.
           safeAlert('lease_lost', { integration_id, repo, target, code: e.code });
-          for (const t of taskIds()) await blocked(t, 'lease_lost', { code: e.code, integration_id });
+          for (const t of taskIds()) await park(t, 'lease_lost', { kind: 'lease_free', resource: targetResource(repo, target) }, { code: e.code, integration_id });
           return { outcome: 'lease_lost', reason: e.code };
         }
       });
@@ -414,7 +456,7 @@ export function createIntegrationController({
           reversible: true, rollback: 'none needed: nothing was pushed' });
       }
       if (round >= maxRebuilds) {
-        for (const t of taskIds()) await blocked(t, 'target_unstable', { integration_id, rounds: round + 1 });
+        for (const t of taskIds()) await park(t, 'target_unstable', { kind: 'target_stable', repo, target }, { integration_id, rounds: round + 1 });
         return { outcome: 'blocked', reason: `target kept moving: ${r.reason}` };
       }
     }
@@ -432,9 +474,22 @@ export function createIntegrationController({
     const fetched = await fetchRef(cfg, cfg.remote, target, `refs/v2int/target/${target}`);
     if (fetched !== targetSha) return { outcome: 'invalidated', reason: 'target moved during fetch' };
     rec.target_sha = targetSha;
+    // F8: a source already contained in the target (merged elsewhere, or by us before a crash) needs no new merge
+    // and no approval: there is nothing left to push for it.
+    for (const it of valid.filter((x) => !x.out)) {
+      if (!(await isAncestor(cfg.dir, it.handoff.source_sha, targetSha))) continue;
+      await moveTask(it.task_id, 'release_verifying', `source ${it.handoff.source_sha} already in ${target}@${targetSha}`);
+      await finishItem(it, 'merged', 'already_in_target', { target_sha: targetSha }); it.out = true;
+    }
+    if (!taskIds().length) { m.target_sha_before = targetSha; return { outcome: 'already_merged', target_sha_before: targetSha }; }
     const wt = await worktrees.create({ repo: cfg.dir, task_id: `${integration_id}-r${round}`, base_sha: targetSha, owner });
     rec.worktree_branch = wt.branch;
+    // The worktree directory is retained as evidence (no automatic removal), but its lease is not held past the round.
+    try { return await inWorktree({ cfg, repo, target, integration_id, valid, m, fence, finishItem, taskIds, rec, scope, targetSha, wt }); }
+    finally { try { await leases.release(wt.lease); } catch { /* expires by ttl */ } }
+  }
 
+  async function inWorktree({ cfg, repo, target, integration_id, valid, m, fence, finishItem, taskIds, rec, scope, targetSha, wt }) {
     // Project policy comes from the target, not from a developer branch (agents cannot widen their own rules).
     const pol = loadPolicy(wt.path);
     if (!pol.ok) {
@@ -460,7 +515,20 @@ export function createIntegrationController({
         await finishItem(it, 'awaiting_approval', 'protected_path', { files: touchesProtected }); it.out = true;
         continue;
       }
-      const verdict = checkAction(policy, (await store.get(it.task_id)), { class: mergeClass });
+      const task = await store.get(it.task_id);
+      const excluded = (it.changed || []).filter((f) => [...(policy.excluded_paths || []), ...(task.excluded_paths || [])].some((p) => under(f, p)));
+      if (excluded.length) {
+        await moveTask(it.task_id, 'repair', `changes excluded paths: ${excluded.join(', ')}`);
+        await finishItem(it, 'returned', 'excluded_path', { files: excluded }); it.out = true;
+        continue;
+      }
+      const outside = (it.changed || []).filter((f) => !policy.allowlists.paths.some((p) => under(f, p)));
+      if (outside.length) {
+        await moveTask(it.task_id, 'awaiting_approval', `changes paths outside the project allowlist: ${outside.join(', ')}`);
+        await finishItem(it, 'awaiting_approval', 'path_not_allowlisted', { files: outside }); it.out = true;
+        continue;
+      }
+      const verdict = checkAction(policy, task, { class: mergeClass, paths: it.changed || [] });
       if (!verdict.allow && !verdict.needs_approval) {
         await moveTask(it.task_id, 'awaiting_approval', `policy refuses ${mergeClass}: ${verdict.reason}`);
         await finishItem(it, 'rejected', 'prohibited by policy', { reason: verdict.reason }); it.out = true;
@@ -497,11 +565,15 @@ export function createIntegrationController({
     // Gates on the exact integration sha with fresh temp state (T24).
     const gl = gatesFromPolicy(policy);
     if (!gl.length) {
-      for (const t of taskIds()) await blocked(t, 'no_gates_configured', { integration_id });
+      for (const t of taskIds()) await park(t, 'no_gates_configured', { kind: 'policy_change', repo }, { integration_id });
       return { outcome: 'blocked', reason: 'no gates configured: local verification cannot be claimed' };
     }
     await fence.renew();   // long step ahead; renew only succeeds for the current holder
-    const g = await gateRunner.run({ cwd: wt.path, sha, gates: gl });
+    // Heartbeat while gates run; a failed renew is not fatal here, the fence check before every mutation decides.
+    const hb = setInterval(() => { fence.renew().catch((e) => safeAlert('lease_renew_failed', { integration_id, code: e.code })); }, Math.max(1000, Math.floor(leaseTtlMs / 3)));
+    hb.unref?.();
+    let g;
+    try { g = await gateRunner.run({ cwd: wt.path, sha, gates: gl }); } finally { clearInterval(hb); }
     rec.gates = g.evidence.map((ev) => ({ ...ev, actor: actorKey(ev.actor) }));
     for (const t of taskIds()) for (const ev of g.evidence) {
       await store.recordEvidence(t, { check_id: `integration:${ev.check_id}`, sha: ev.sha, command: ev.command, exit: ev.exit,
@@ -526,7 +598,10 @@ export function createIntegrationController({
       if (expected !== sha) {
         const p = await casPush({ cfg, repo, ref: cfg.candidate_ref, sha, expected, kind: 'push', task_ids: taskIds(), scope: `${scope}:cand`, fence, effects: m.effects });
         if (p.phase === 'possibly_applied') return uncertain({ valid, finishItem, reason: 'candidate push uncertain' });
-        if (p.phase !== 'confirmed') return { outcome: 'blocked', reason: `candidate push failed: ${p.error}` };
+        if (p.phase !== 'confirmed') {
+          for (const t of taskIds()) await park(t, 'candidate_push_failed', { kind: 'retry', repo, target: cfg.candidate_ref }, { sha, error: p.error, integration_id });
+          return { outcome: 'blocked', reason: `candidate push failed: ${p.error}` };
+        }
       }
       cs = await remoteStatus(ci, sha);
     }
@@ -540,7 +615,7 @@ export function createIntegrationController({
         return { outcome: 'ci_failed', reason: 'remote CI failure', integration_sha: sha };
       }
       // pending / missing / unknown: wait, never merge on local green alone.
-      for (const t of taskIds()) await blocked(t, `remote_ci_${cs.status}`, { sha, integration_id });
+      for (const t of taskIds()) await park(t, `remote_ci_${cs.status}`, { kind: 'ci_status', repo, sha }, { sha, integration_id });
       if (cs.status !== 'pending') safeAlert('remote_ci_not_green', { integration_id, sha, status: cs.status });
       return { outcome: 'ci_blocked', reason: `remote CI ${cs.status}`, integration_sha: sha };
     }
@@ -559,13 +634,13 @@ export function createIntegrationController({
 
     // CI status rechecked right before the mutation: a status can flip between the gate and now.
     const cs2 = await remoteStatus(ci, sha);
-    if (!ciPasses(cs2.status)) { for (const t of taskIds()) await blocked(t, `remote_ci_${cs2.status}`, { sha, integration_id }); return { outcome: 'ci_blocked', reason: `remote CI ${cs2.status} at merge time`, integration_sha: sha }; }
+    if (!ciPasses(cs2.status)) { for (const t of taskIds()) await park(t, `remote_ci_${cs2.status}`, { kind: 'ci_status', repo, sha }, { sha, integration_id }); return { outcome: 'ci_blocked', reason: `remote CI ${cs2.status} at merge time`, integration_sha: sha }; }
 
     const p = await casPush({ cfg, repo, ref: target, sha, expected: targetSha, kind: 'merge', task_ids: taskIds(), scope, fence, effects: m.effects });
     if (p.phase === 'possibly_applied') return uncertain({ valid, finishItem, reason: 'push outcome unknown', sha });
     if (p.phase === 'failed') {
       if (p.moved) { rec.invalidated = 'target moved before push (CAS rejected)'; return { outcome: 'invalidated', reason: rec.invalidated }; }
-      for (const t of taskIds()) await blocked(t, 'push_failed', { sha, error: p.error, integration_id });
+      for (const t of taskIds()) await park(t, 'push_failed', { kind: 'retry', repo, target }, { sha, error: p.error, integration_id });
       return { outcome: 'blocked', reason: `push failed: ${p.error}`, integration_sha: sha };
     }
     rec.pushed = { ref: `refs/heads/${target}`, sha, uncertain_response: !!p.uncertain_response };
@@ -576,7 +651,7 @@ export function createIntegrationController({
       await moveTask(it.task_id, 'release_verifying', `merged into ${target} as ${sha}`);
       await finishItem(it, 'merged', 'merged', { sha, target_sha_before: targetSha }); it.out = true;
     }
-    // Integration worktrees are retained: worktrees.remove(retain:false) is unsafe on detached HEADs until fixed.
+    // Integration worktrees are never removed automatically (coordinator rule); only their lease is released.
     await git(['fetch', '--no-tags', '--quiet', cfg.remote, `+refs/heads/${target}:refs/v2int/target/${target}`], { cwd: cfg.dir }).catch(() => {});
     return { outcome: 'merged', integration_sha: sha, target_sha_before: targetSha };
   }

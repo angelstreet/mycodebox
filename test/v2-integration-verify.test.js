@@ -78,7 +78,7 @@ function makeController(o, { name = 'a', store, leaseDir, ci = { status: () => '
 }
 function autoApprove(extra = {}) {
   const calls = [];
-  return { calls, check: (req) => { calls.push(req); return { ok: true, approval_ref: `appr-${req.action}`, sha: req.sha, action: req.action, target: req.target, approved_by: 'owner-test', ...extra }; } };
+  return { calls, check: (req) => { calls.push(req); return { ok: true, approval_ref: `appr-${req.action}`, sha: req.sha, action: req.action, target: req.target, repo: req.repo, approved_by: 'owner-test', ...extra }; } };
 }
 function devBranch(o, branch, files, { from = 'origin/main' } = {}) {
   sh(o.dev, 'fetch', '-q', 'origin');
@@ -163,7 +163,7 @@ test('task ids that would break ref syntax are refused, never pushed, and do not
   assert.equal(o.head(), a.base);
 });
 
-test('non-main target is refused by the lease namespace (D-008 pending): blocked, alerted, nothing pushed', async () => {
+test('non-main target uses the D-008 lease repo:<r>:branch:<name> and merges only that branch', async () => {
   const o = makeOrigin('target');
   sh(o.seed, 'push', '-q', 'origin', 'main:develop');
   const w = makeController(o);
@@ -172,11 +172,11 @@ test('non-main target is refused by the lease namespace (D-008 pending): blocked
   const r = await w.controller.submit(handoff('tgt', 'feat-a', a, ['a.txt'], { target: 'develop' }));
   assert.equal(r.ok, true);
   const run = await w.controller.runNext('demo', 'develop');
-  assert.equal(run.outcome, 'blocked');
-  assert.match(run.reason, /E_INVALID/);
-  assert.equal(o.ref('develop'), a.base);
-  assert.ok(w.alerts.some((x) => x.kind === 'integration_blocked_lease'));
-  assert.equal((await w.store.get('tgt')).effects.length, 0);
+  assert.equal(run.outcome, 'merged');
+  assert.equal(o.ref('develop'), run.integration_sha);
+  assert.equal(o.head(), a.base, 'main untouched');
+  assert.deepEqual(run.manifest.leases.map((l) => l.resource), ['repo:demo:branch:develop', 'repo:demo:integration']);
+  assert.deepEqual(run.manifest.approvals.map((x) => [x.action, x.target]), [['merge', 'develop']]);
 });
 
 // ---- the push itself ----------------------------------------------------------------------------------
@@ -262,7 +262,7 @@ test('fence re-checked after the approval: a lease taken over during the approva
     rec.holder = null; fs.writeFileSync(f, JSON.stringify(rec));
     const other = createLeaseAuthority({ backend: fileBackend({ dir: leaseDir }) });
     assert.equal((await other.acquire('repo:demo:main', { owner: 'intruder', ttl_ms: 60_000 })).ok, true);
-    return { ok: true, approval_ref: 'x', sha: req.sha, action: req.action, target: req.target };
+    return { ok: true, approval_ref: 'x', sha: req.sha, action: req.action, target: req.target, repo: req.repo };
   } } });
   const before = o.head();
   const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });
@@ -325,7 +325,7 @@ test('approval replies that are malformed do not count: missing ref, ok without 
 
 // ---- defects ------------------------------------------------------------------------------------------
 
-test('independence is judged from the store, not from the handoff: a developer cannot rename itself out of the way', { todo: 'defect: validateHandoff takes "the developer" from handoff.developer (attacker-controlled); the store knows who set the head (head_actors) but view() does not expose it, so a developer who approves its own sha and hands off under another developer id is merged' }, async () => {
+test('independence is judged from the store, not from the handoff: a developer cannot rename itself out of the way', async () => {
   const o = makeOrigin('selfappr');
   const w = makeController(o);
   const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });
@@ -337,7 +337,7 @@ test('independence is judged from the store, not from the handoff: a developer c
   assert.equal(o.head(), a.base);
 });
 
-test('policy excluded_paths and path allowlist apply to the integrated diff', { todo: 'defect: checkAction is called without paths, so a branch that adds a policy-excluded file (.env) is merged into main' }, async () => {
+test('policy excluded_paths and path allowlist apply to the integrated diff', async () => {
   const o = makeOrigin('excluded');
   const w = makeController(o);
   const a = devBranch(o, 'feat-a', { '.env': 'TOKEN=fake-not-real\n' });
@@ -348,7 +348,7 @@ test('policy excluded_paths and path allowlist apply to the integrated diff', { 
   assert.equal(o.head(), a.base, '.env must never reach the shared branch');
 });
 
-test('a transient git failure during in-run validation is retryable, not a final rejection pinned by the idempotency key', { todo: 'defect: any error from fetch/ls-remote in validateHandoff becomes a FINAL "rejected" item + handoff_rejected; re-submitting the same (task, sha, target) returns that dead item, so the handoff can never be integrated' }, async () => {
+test('a transient git failure during in-run validation is retryable, not a final rejection pinned by the idempotency key', async () => {
   const o = makeOrigin('transient');
   let down = false;
   const g = spyGit({ before: (args) => { if (down && args[0] === 'fetch') throw Object.assign(new Error('could not read from remote'), { code: 'E_GIT' }); } });
@@ -368,7 +368,7 @@ test('a transient git failure during in-run validation is retryable, not a final
   assert.notEqual((await w.controller.runNext('demo', 'main')).outcome, 'empty', 'the handoff must be integrable again');
 });
 
-test('two queue instances over one directory cannot both claim the same item', { todo: 'defect: the queue has no cross-process claim (in-memory runningIn, per-process seq); two controllers sharing a queue dir both start the same item and interleave records with duplicate seq' }, async () => {
+test('two queue instances over one directory cannot both claim the same item', async () => {
   const dir = path.join(tmp, 'queue-shared');
   const qa = createIntegrationQueue({ dir });
   const a = await qa.enqueue({ task_id: 't', repo: 'demo', target: 'main' });
@@ -378,7 +378,7 @@ test('two queue instances over one directory cannot both claim the same item', {
   await assert.rejects(qb.start([a.item_id], { owner: 'B' }), /E_BUSY|E_ILLEGAL_TRANSITION/);
 });
 
-test('an approval is bound to the repository as well', { todo: 'defect: approvalFor compares sha/action/target but not repo; an approval minted for another configured repo that shares objects is accepted' }, async () => {
+test('an approval is bound to the repository as well', async () => {
   const o = makeOrigin('repo-bind');
   const w = makeController(o, { approvals: autoApprove({ repo: 'another-repo' }) });
   const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });

@@ -11,7 +11,7 @@ import { createLeaseAuthority, fileBackend, fakeBackend } from '../orchestration
 import { createWorktrees } from '../orchestration/worktrees.js';
 import { createIntegrationQueue } from '../orchestration/integration-queue.js';
 import { createCiGates, gatesFromPolicy, normalizeCiStatus, remoteStatus } from '../orchestration/ci-gates.js';
-import { createIntegrationController, createGitRunner } from '../orchestration/integration-controller.js';
+import { createIntegrationController, createGitRunner, redact } from '../orchestration/integration-controller.js';
 import { spec, clock } from './fixtures/v2-task.js';
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-int-')));
@@ -92,7 +92,7 @@ function makeController(o, { name = 'a', store, leaseDir, backend, authority, ci
 
 function autoApprove() {
   const calls = [];
-  return { calls, check: (req) => { calls.push(req); return { ok: true, approval_ref: `appr-${req.action}-${req.sha.slice(0, 8)}`, sha: req.sha, action: req.action, target: req.target, approved_by: 'owner-test' }; } };
+  return { calls, check: (req) => { calls.push(req); return { ok: true, approval_ref: `appr-${req.action}-${req.sha.slice(0, 8)}`, sha: req.sha, action: req.action, target: req.target, repo: req.repo, approved_by: 'owner-test' }; } };
 }
 // Owner grants exact (action, sha, target) triples only.
 function ownerApprovals() {
@@ -103,7 +103,7 @@ function ownerApprovals() {
     check: (req) => {
       calls.push(req);
       const g = grants.get(`${req.action}|${req.sha}|${req.target}`);
-      return g ? { ok: true, sha: req.sha, action: req.action, target: req.target, approved_by: 'owner-test', ...g } : { ok: false, reason: 'not approved' };
+      return g ? { ok: true, sha: req.sha, action: req.action, target: req.target, repo: req.repo, approved_by: 'owner-test', ...g } : { ok: false, reason: 'not approved' };
     },
   };
 }
@@ -162,12 +162,22 @@ test('integration queue: durable FIFO, one running item per target, torn tail an
   assert.equal((await q.peek('demo', 'other')).length, 1);   // other lanes are independent
   fs.appendFileSync(path.join(dir, 'queue.jsonl'), '{"seq":99,"op":"sta');   // torn, never acknowledged
   const q2 = createIntegrationQueue({ dir });
+  assert.equal((await q2.list()).length, 3);                                  // readers see the log, torn tail ignored
+  await assert.rejects(q2.finish(a.item_id, 'merged'), { code: 'E_BUSY' });   // single writer: q still owns it
+  await q.close();
+  await q2.claim();
   const items = await q2.list();
   assert.equal(items.length, 3);
   assert.equal(items.find((x) => x.item_id === a.item_id).state, 'unknown');   // was running at the crash
   assert.ok(fs.readFileSync(path.join(dir, 'queue.jsonl'), 'utf8').includes('recovered_torn_tail'));
   await q2.finish(a.item_id, 'merged');
   await assert.rejects(q2.finish(a.item_id, 'queued'), { code: 'E_ILLEGAL_TRANSITION' });
+  // A final item does not pin its idempotency key: the same handoff can be queued again.
+  const again2 = await q2.enqueue({ task_id: 'ta', repo: 'demo', target: 'main' }, { idempotencyKey: 'k-a' });
+  assert.notEqual(again2.item_id, a.item_id);
+  assert.ok(createIntegrationQueue({ dir: path.join(tmp, 'queue-unit-reload') }));
+  const q3 = createIntegrationQueue({ dir });
+  assert.equal((await q3.list()).length, 4);
 });
 
 test('handoff validation rejects missing evidence, self-approval, stale sha and out-of-scope diffs', async () => {
@@ -183,7 +193,7 @@ test('handoff validation rejects missing evidence, self-approval, stale sha and 
   await readyTask(w.store, 'v-self', { sha: b.sha, verdict: false });
   await w.store.recordVerdict('v-self', { sha: b.sha, actor: { role: 'verifier', id: ' DEV-Agent-1 ' }, verdict: 'approve', findings: [] });
   r = await w.controller.submit(handoff('v-self', 'feat-v', b, ['.']));
-  assert.match(r.errors.join('\n'), /self-approval does not count/);
+  assert.match(r.errors.join('\n'), /independence: no independent approve/);   // case-folded id = the developer
 
   await readyTask(w.store, 'v-scope', { sha: b.sha, scope: ['app.txt'] });
   r = await w.controller.submit(handoff('v-scope', 'feat-v', b, ['app.txt']));
@@ -442,11 +452,11 @@ test('T28 integration tree changed by a gate after tests: evidence invalidated a
 test('T29 remote CI red, missing, pending or unknown: no merge even with local gates green', async () => {
   const cases = [
     ['failure', { status: () => 'failure' }, 'ci_failed', 'repair'],
-    ['pending', { status: () => 'pending' }, 'ci_blocked', 'integrating'],
-    ['missing', { status: () => 'missing' }, 'ci_blocked', 'integrating'],
-    ['not configured', undefined, 'ci_blocked', 'integrating'],
-    ['other sha', { status: () => ({ status: 'success', sha: '0'.repeat(40) }) }, 'ci_blocked', 'integrating'],
-    ['garbage', { status: () => 'green' }, 'ci_blocked', 'integrating'],
+    ['pending', { status: () => 'pending' }, 'ci_blocked', 'waiting'],
+    ['missing', { status: () => 'missing' }, 'ci_blocked', 'waiting'],
+    ['not configured', undefined, 'ci_blocked', 'waiting'],
+    ['other sha', { status: () => ({ status: 'success', sha: '0'.repeat(40) }) }, 'ci_blocked', 'waiting'],
+    ['garbage', { status: () => 'green' }, 'ci_blocked', 'waiting'],
   ];
   for (const [label, ci, outcome, state] of cases) {
     const o = makeOrigin('t29');
@@ -465,6 +475,11 @@ test('T29 remote CI red, missing, pending or unknown: no merge even with local g
     assert.equal(await status(w.store, id), state, label);
     assert.equal(approvals.calls.length, 0, `${label}: never even asked to merge`);
     assert.equal((await w.store.get(id)).effects.length, 0);
+    if (state === 'waiting') {   // D-007: parked with a structured wake condition, item parked too
+      const ev = (await w.store.events(id)).filter((e) => e.kind === 'task.blocked').at(-1);
+      assert.deepEqual(ev.payload.wake, { kind: 'ci_status', repo: 'demo', sha: r.integration_sha });
+      assert.equal((await w.queue.list())[0].state, 'blocked');
+    }
   }
 });
 
@@ -520,7 +535,7 @@ test('T30 push timed out and the remote did not take it: marked failed, not retr
   assert.equal(o.head(), before);
   assert.equal(f.pushes(), 1);
   assert.deepEqual((await w.store.get('t30l')).effects.map((e) => e.phase), ['failed']);
-  assert.equal(await status(w.store, 't30l'), 'integrating');
+  assert.equal(await status(w.store, 't30l'), 'waiting');
 });
 
 test('T30 push outcome unknowable: unknown_external_effect, then reconciled from the remote without pushing again', async () => {
@@ -670,7 +685,7 @@ test('T39 E2E on a disposable remote: worktree patch -> independent verify -> in
   assert.equal(m.integration_sha, S);
   assert.equal(m.target_sha_before, before);
   assert.equal(m.remote_target_after, S);
-  assert.deepEqual(m.items.map((i) => [i.task_id, i.source_sha, i.base_sha, i.developer]), [['t39', devSha, before, 'dev-agent-1']]);
+  assert.deepEqual(m.items.map((i) => [i.task_id, i.source_sha, i.base_sha, i.developers, i.verifiers]), [['t39', devSha, before, ['dev-agent-1'], ['verifier-agent-2']]]);
   const round = m.rounds.at(-1);
   assert.equal(round.target_sha, before);
   assert.deepEqual(round.merges, [{ item_id: m.items[0].item_id, task_id: 't39', source_sha: devSha, merge_sha: S }]);
@@ -742,5 +757,40 @@ test('GL12 reopened after an upstream change: evidence, CI and approval are reva
   const re = await w2.controller.submit(handoff('gl12b', 'feat-b', b2, ['b.txt']));
   assert.equal(re.ok, false);
   assert.match(re.errors.join('\n'), /missing passing evidence for required check unit on/);
-  assert.match(re.errors.join('\n'), /no independent verifier approval/);
+  assert.match(re.errors.join('\n'), /independence: no independent approve on/);
+});
+
+// ---- verifier follow-ups (F6, F8, F10) ---------------------------------------------------------------
+
+test('F8 a source already contained in the target short-circuits to release_verifying: no merge, no approval, no push', async () => {
+  const o = makeOrigin('f8');
+  const approvals = ownerApprovals();
+  const w = makeController(o, { approvals });
+  const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });
+  await readyTask(w.store, 'f8', { sha: a.sha });
+  await w.controller.submit(handoff('f8', 'feat-a', a, ['a.txt']));
+  sh(o.seed, 'fetch', '-q', 'origin'); sh(o.seed, 'merge', '-q', '--ff-only', a.sha); sh(o.seed, 'push', '-q', 'origin', 'main');
+  const r = await w.controller.runNext('demo', 'main');
+  assert.equal(r.outcome, 'already_merged');
+  assert.equal(o.head(), a.sha);
+  assert.equal(approvals.calls.length, 0);
+  assert.equal(await status(w.store, 'f8'), 'release_verifying');
+  assert.equal((await w.queue.list())[0].state, 'merged');
+});
+
+test('F6 reconcile only touches effects this controller wrote, with a well-formed key', async () => {
+  const o = makeOrigin('f6');
+  const w = makeController(o);
+  const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });
+  await readyTask(w.store, 'f6', { sha: a.sha });
+  await w.store.recordEffect('f6', { effect_id: 'someone-else:f6:merge', idempotency_key: `merge:demo:refs/heads/main:${o.head()}`, kind: 'merge', phase: 'attempted' });
+  const r = await w.controller.reconcileTask('f6');
+  assert.equal(r.ok, false);
+  assert.deepEqual((await w.store.get('f6')).effects.map((e) => e.phase), ['attempted']);   // left for its owner, not guessed
+});
+
+test('F10 credentials in remote URLs never reach events, alerts or manifests', () => {
+  assert.equal(redact('fatal: unable to access https://user:fake-token@git.example.invalid/r.git/'), 'fatal: unable to access https://***@git.example.invalid/r.git/');
+  assert.equal(redact('ssh://git@git.example.invalid/r.git'), 'ssh://***@git.example.invalid/r.git');
+  assert.equal(redact('/tmp/plain/path'), '/tmp/plain/path');
 });
