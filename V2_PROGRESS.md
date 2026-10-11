@@ -39,7 +39,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | in progress | |
 | goal-loop | 5 | v2/05-goal-loop | merge 02+03+04+10 (be60274) | Opus | in progress | |
-| routing | 4 | v2/04-routing | c366307 | Sonnet | final verification | b9a88f2 (R1–R5 fixed after round 2) |
+| routing | 4 | v2/04-routing | c366307 | Sonnet | INTEGRATED (verifier APPROVE, 3 rounds) | b9a88f2 -> merge 71d9b39; 991/991 both runtimes |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
 | adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | done: APPROVE WITH FIXES | 190bf01 (15 todo); 1 high remove() data loss |
