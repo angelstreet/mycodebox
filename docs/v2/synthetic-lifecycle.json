@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "kind": "planned_contract_fixture",
+  "executed": false,
+  "task_id": "task-synthetic-doc-fix",
+  "repository": "fixture-repo",
+  "goal": "Update a synthetic README and verify its link",
+  "definition_of_done": [
+    "Expected link is present",
+    "Deterministic check passes on candidate SHA",
+    "Independent verifier accepts candidate SHA"
+  ],
+  "prohibited_actions": [
+    "production access",
+    "push",
+    "deploy"
+  ],
+  "expected_trace": [
+    "created",
+    "planned",
+    "ready",
+    "executing",
+    "evaluating",
+    "repair",
+    "executing",
+    "evaluating",
+    "accepted",
+    "integrating",
+    "release_verifying"
+  ],
+  "baseline_ui": [
+    {
+      "session": "fixture-agent",
+      "state": "working",
+      "label": "working"
+    },
+    {
+      "session": "fixture-agent",
+      "state": "waiting",
+      "label": "needs you"
+    },
+    {
+      "session": "fixture-agent",
+      "state": "done",
+      "label": "done"
+    }
+  ],
+  "caveat": "Baseline session done is observational, not independently verified task acceptance. Trace is a proposed fixture, not product execution evidence."
+}

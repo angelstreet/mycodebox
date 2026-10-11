@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "base_sha": "b9a83e14b7167a2efb35fa6c4367a692fadb94d1",
+  "checks": [
+    {
+      "id": "baseline-main",
+      "command": "env -i PATH=\"$PATH\" LANG=C.UTF-8 GHOSTY_STATE_DIR=\"$(mktemp -d)\" npm test",
+      "exit_code": 1,
+      "tests": 858,
+      "pass": 839,
+      "fail": 19,
+      "duration_ms": 22361.982445,
+      "started_utc": "2026-10-09T21:41:38.977643+00:00",
+      "finished_utc": "2026-10-09T21:42:01.691512+00:00",
+      "log_sha256": "c3de6e823ca5e6b5718e2d291d1e941e32d38b2a820669afd690e285deb73a33",
+      "failure": "decision-share fixtures outside real-clock seven-day window"
+    },
+    {
+      "id": "baseline-reporter",
+      "command": "env -i PATH=\"$PATH\" claude plugin test claude-plugin/ghosty-reporter",
+      "exit_code": 0,
+      "pass": 25,
+      "fail": 0,
+      "duration_ms": 4840
+    },
+    {
+      "id": "baseline-router",
+      "command": "env -i PATH=\"$PATH\" node scripts/router-dryrun.js --dry",
+      "exit_code": 0,
+      "wake_matches": 6,
+      "wake_total": 10,
+      "log_sha256": "e8b079ba0e5c40c8cfb8e9b10d67d6efdc9bf5f7cd4e8d7e83a1f6203c70142f",
+      "caveat": "dry-run completed; agreement is not universally passing"
+    },
+    {
+      "id": "baseline-repaired-integration",
+      "sha": "1bc82f962f82966488a83bc71d5c1eab23faa48a",
+      "command": "env -i PATH=\"$PATH\" LANG=C.UTF-8 GHOSTY_STATE_DIR=\"$(mktemp -d)\" npm test",
+      "exit_code": 0,
+      "duration_ms": 19511.664,
+      "log_sha256": "eda7ca4d921f409030f4046fb70d247627184b2628380490bb4664e2cd644a13",
+      "tests": 859,
+      "pass_count": 859,
+      "fail": 0,
+      "skipped": 0,
+      "test_duration_ms": 19219.862189
+    }
+  ]
+}
