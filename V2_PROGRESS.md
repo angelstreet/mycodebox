@@ -1,4 +1,4 @@
-STATUS: RUNNING — wave A/B: P1 Fable review, task-core, lease-authority, adapters in progress; routing in verification
+STATUS: RUNNING — waves A/B: fixes+verification of routing/adapters/task-core/lease; system-ops + integration-agent in development
 
 # V2 progress
 
@@ -29,14 +29,18 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | security-defaults | 1 | v2/01-security | b9a83e1 | prior run | integrated, review pending | f3d4ae6 |
 | main regressions | 1 | v2/integration | dccab06 | coordinator | done | 13d161d (placeholder price), 4bdaae6 (Node 23 test) |
 | security follow-up | 1 | v2/integration | dccab06 | coordinator | integrated, review pending | 9507d11 |
-| phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | in progress | |
-| task-core | 2 | v2/02-task-core | c366307 | Opus | in progress | |
+| phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | done: APPROVE WITH FIXES | 0e6d4d9 tests (+1 todo); F1 high forbidden paraphrases; F2–F8 med/low |
+| phase1-fixes | 1 | (next free slot) from v2/01-review | 0e6d4d9 | Sonnet | queued | fix list kept outside repo, summarized in review row |
+| task-core | 2 | v2/02-task-core | c366307 | Opus | review | 3a4fb9e; 39 tests |
+| task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | in progress | |
 | lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | review | 9e958b6; T25–T27 tests |
 | lease-verify | 12 | wt verify-08 | 9e958b6 | Fable | in progress | |
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | in progress | |
-| routing | 4 | v2/04-routing | c366307 | Sonnet | review | fd3e4d6; wake rule 6/10 -> 10/10 (shadow only) |
+| routing | 4 | v2/04-routing | c366307 | Sonnet | fixing verifier findings (3 high fail-open) | fd3e4d6; verify tests 5ddc155 |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
-| adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | in progress | |
+| adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
+| adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | in progress | |
+| integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | in progress | |
 
 ## Decision journal
 
