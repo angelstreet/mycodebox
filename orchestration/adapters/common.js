@@ -229,7 +229,8 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
     run, ctl: c,
     push(ev) {
       if (c.finished || (run.cancelled && ev.type !== 'exit')) return; // no events after cancel except the final exit
-      if (run.events.length >= MAX_EVENTS) { run.dropped_events = (run.dropped_events || 0) + 1; return; }
+      // Over the cap, junk is dropped but terminal facts (result, error) are always kept.
+      if (run.events.length >= MAX_EVENTS && ev.type !== 'result' && ev.type !== 'error') { run.dropped_events = (run.dropped_events || 0) + 1; return; }
       run.events.push({ seq: c.seq++, at: now(), run_id, ...ev });
       wake();
     },
@@ -259,7 +260,7 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
     finish({ exit = null, signal = null, spawn_error = null } = {}) {
       if (c.finished) return;
       if (c.timer) clearTimeout(c.timer);
-      if (run.cancelled || run.timed_out) c.kill('final'); // sweep stragglers in the process group
+      c.kill('final'); // always sweep the process group: a background child must not edit the tree after done
       const errText = c.errorTexts.join('\n');
       let error = null;
       if (run.timed_out) error = normalizeError({ timed_out: true });

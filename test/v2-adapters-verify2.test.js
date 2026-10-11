@@ -44,7 +44,7 @@ test('verify2: error taxonomy variants', () => {
   assert.equal(parseRetryAfterMs('retry after 1.5 minutes'), 90_000);
 });
 
-test('verify2: descendants of a finished run are stopped, no writes after done', { todo: 'defect: finish() sweeps the process group only on cancel/timeout; same-group descendants outlive a normal exit' }, async () => {
+test('verify2: descendants of a finished run are stopped, no writes after done', async () => {
   const cwd = mk('root/bg');
   const run = adapter().start({ run_id: 'bg', cwd, prompt: 'x', env: { M: 'bg' } });
   await run.done;
@@ -52,7 +52,7 @@ test('verify2: descendants of a finished run are stopped, no writes after done',
   assert.ok(!fs.existsSync(path.join(cwd, 'late.txt')));
 });
 
-test('verify2: the event cap never drops the final result', { todo: 'defect: MAX_EVENTS drops later events including result; keep result/error or drop oldest unparsed' }, async () => {
+test('verify2: the event cap never drops the final result', async () => {
   const run = adapter().start({ run_id: 'fl', cwd: mk('root/fl'), prompt: 'x', env: { M: 'flood' } });
   await run.done;
   assert.ok(run.events.some((e) => e.type === 'result' && e.text === 'END'));
@@ -92,7 +92,7 @@ test('verify2: HEAD on another branch with commits blocks removal', async () => 
   assert.ok(fs.existsSync(a.path));
 });
 
-test('verify2: metadata lease must belong to this worktree', { todo: "defect: trustedMeta does not check m.lease.resource; a substituted lease releases another task's lease" }, async () => {
+test('verify2: metadata lease must belong to this worktree', async () => {
   const s = setup('leaseswap');
   const x = await s.wt.create({ repo: s.dir, task_id: 'tx', base_sha: s.sha, owner: 'ox' });
   const y = await s.wt.create({ repo: s.dir, task_id: 'ty', base_sha: s.sha, owner: 'oy' });
@@ -105,7 +105,7 @@ test('verify2: metadata lease must belong to this worktree', { todo: "defect: tr
   assert.ok(s.held.has('worktree:ty'));
 });
 
-test('verify2: a task id can be reused after removal merged into a non-HEAD target', { todo: 'defect: branch -d keeps the merged branch (not merged into repo HEAD); re-create fails with a raw git error instead of E_EXISTS or succeeding' }, async () => {
+test('verify2: a task id can be reused after removal merged into a non-HEAD target', async () => {
   const s = setup('reuse');
   sh(s.dir, 'branch', 'release');
   const z = await s.wt.create({ repo: s.dir, task_id: 'tz', base_sha: s.sha, owner: 'o' });
