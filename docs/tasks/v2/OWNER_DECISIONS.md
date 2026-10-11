@@ -44,6 +44,12 @@ Claude Code native subagents are the default execution mechanism (`Agent` tool w
   the final full-process review. Codex CLI (`codex`, on the host) is available as a cross-provider
   verifier and for adapter tests; MiniMax via `mcode`.
 - At most 3 concurrent developer workers (host: 6 cores, 15 GB). Check load before adding more.
+- Token frugality (owner, 2026-10-11): run test suites, lint and git directly with Bash (in the background,
+  then read the log file), never through subagents. Spawn subagents only for real implementation or independent
+  review, with tight briefs; default Sonnet, Haiku for mechanical checks, Fable only for security-critical gates
+  and the final full-process review. Do not re-read big files already summarized; rely on `V2_PROGRESS.md`.
+  When waiting on a background job, end the turn with one line instead of polling; a watchdog wakes the
+  coordinator every 15 min.
 
 ## 4. "Bounded" vs "no attempt cap" — resolved
 
