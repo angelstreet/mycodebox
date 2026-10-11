@@ -68,6 +68,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | D-012 | No-progress rule: a falling failing-test count is new passing evidence; the iterations-without-progress trigger is a policy field (default 6) | pure per-check evidence | Per-check counting turned the extra trigger into an attempt counter (verifier V13) | yes |
 | D-013 | `high`/`critical` risk tasks need an owner approval bound to the exact head SHA before `accepted`, besides independent review | treat high like low | Phase 5 exit: high-risk gates trigger owner approval | yes |
 | D-014 | An owner `route` grant for a critical task is honoured by the router floor | loop asks forever | Approval must be able to unblock; grant is bound to the task | yes |
+| D-015 | Remove `leases.adoptOwn`; `acquire` accepts a caller-chosen `lease_id`, worktrees write `{resource, lease_id, owner, task_id}` ahead of acquiring and recover with `adopt(attempted)` | adoptOwn restricted to worktree namespace; fenced takeover | `E_HELD` discloses owner+task_id, so adoptOwn let any contender take over any live lease; twins also both got valid handles. Write-ahead id keeps lease identity private and fences twins | yes |
 | D-006 | Leak scan = `scripts/leak-scan.js` (generic patterns) + private denylist outside the repo (`LEAK_SCAN_EXTRA`) | patterns in repo | Real identifiers must never be committed, including in the scanner | yes |
 
 ## OWNER-REVIEW / owner actions (collected for the PR)
