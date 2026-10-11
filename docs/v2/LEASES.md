@@ -201,9 +201,18 @@ no process using the backend directory is running an operation on that resource 
 
 - `<res>.lock` left by a process that crashed inside the critical section while the holder's lease is still live, or
   whose recorded pid on this host was reused by another process: wait for the holder's TTL, or remove `<res>.lock`.
-- `<res>.break` and/or `<res>.moved` left by a breaker that crashed: remove `<res>.break`; if `<res>.moved` exists and
+- `<res>.break` left by a breaker that crashed on this host clears itself once older than `staleLockMs` and its pid is
+  gone. One from another host, or a `<res>.moved`, needs the manual step: remove `<res>.break`; if `<res>.moved` exists and
   `<res>.lock` does not, remove `<res>.moved` (its owner is gone or will fail its pre-commit check).
 - A corrupt `<res>.lease.json`, or a missing one with `<res>.seen` present: restore the record from backup, or rebuild
   it with `generation` set above the highest `token` for that resource in `audit.jsonl` and `holder: null`.
 
 Every one of these surfaces as `E_UNAVAILABLE` plus a `lease_unavailable` alert naming the resource.
+
+## Hardening after re-verification
+
+- `repo:<r>:branch:main` and `repo:<r>:branch:integration` are invalid: one real branch has one lease name.
+- Branch names are short refs: `branch:refs/heads/...` and `branch:heads/...` are invalid.
+- `validResource` also caps the percent-encoded length (200), so derived file names always fit.
+- Lost-record guard: the `<res>.seen` marker first; when record and marker are both gone, the audit log is scanned for
+  a granted token of that resource (only paid on a resource's first acquire).

@@ -73,7 +73,7 @@ test('T03 no adapter argv carries a permission/sandbox bypass flag; safe flags p
     opencode: ['run', '--format', 'json', '--model', 'm1'],
   };
   for (const name of Object.keys(CLIS)) {
-    const { rec, run } = await runCli(name, 'ok', { model: 'm1', effort: 'high' });
+    const { rec, run } = await runCli(name, 'ok', name === 'opencode' ? { model: 'm1' } : { model: 'm1', effort: 'high' });
     assert.equal(run.result.exit, 0, name);
     assert.deepEqual(findBypass(rec.argv, [rec.argv.length - 1]), [], name);
     for (const f of expect[name]) assert.ok(rec.argv.includes(f), `${name} argv lacks ${f}: ${rec.argv}`);
@@ -149,11 +149,11 @@ test('JSONL: partial and garbage lines tolerated; events normalized; session cap
 
 test('usage: reported -> numbers; not reported -> null, never 0', async () => {
   const c = await runCli('claude', 'ok');
-  assert.deepEqual(c.a.collectUsage(c.run), { input_tokens: 11, output_tokens: 7, usd: 0.25 });
+  assert.deepEqual(c.a.collectUsage(c.run), { input_tokens: 11, output_tokens: 7, usd: 0.25, incomplete: false });
   const x = await runCli('codex', 'ok');
-  assert.deepEqual(x.a.collectUsage(x.run), { input_tokens: 5, output_tokens: 3, usd: null });
+  assert.deepEqual(x.a.collectUsage(x.run), { input_tokens: 5, output_tokens: 3, usd: null, incomplete: false });
   const m = await runCli('minimax', 'ok');
-  assert.deepEqual(m.a.collectUsage(m.run), { input_tokens: null, output_tokens: null, usd: null });
+  assert.deepEqual(m.a.collectUsage(m.run), { input_tokens: null, output_tokens: null, usd: null, incomplete: false });
 });
 
 test('raw output only in the run artifact dir, never in cwd', async () => {
@@ -241,7 +241,8 @@ test('error taxonomy table', () => {
   assert.equal(cls({}), 'unknown');
   assert.equal(cls(new Error('boom')), 'unknown');
   assert.equal(cls(Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' })), 'unavailable');
-  assert.equal(normalizeError({ exit: 1, stderr: 'x' }).retryable, true); // crash
+  assert.equal(normalizeError({ exit: 1, stderr: 'x' }).retryable, false); // plain non-zero exit: deterministic
+  assert.equal(normalizeError({ signal: 'SIGKILL' }).retryable, true); // signal death (OOM/SEGV)
   assert.equal(normalizeError({ exit: 1, stderr: '401' }).retryable, false);
 });
 
@@ -266,8 +267,11 @@ test('T12 timeout kills the process group and reports class timeout', async () =
   assert.equal(run.result.timed_out, true);
   assert.equal(run.result.error.class, 'timeout');
   assert.equal(run.result.error.retryable, true);
-  assert.ok(!alive(pid));
-  assert.ok(!alive(Number(fs.readFileSync(pidFile, 'utf8'))), 'grandchild in the process group is gone too');
+  // A SIGKILLed grandchild is reparented and can stay an unreaped zombie for a moment (kill(pid, 0) still succeeds):
+  // poll with a deadline instead of checking one instant.
+  const gone = async (p) => { for (let i = 0; i < 100 && alive(p); i++) await sleep(20); return !alive(p); };
+  assert.ok(await gone(pid));
+  assert.ok(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), 'grandchild in the process group is gone too');
 });
 
 test('T14 cancel during spawn: acknowledged, process gone, no later writes', async () => {
@@ -311,13 +315,13 @@ test('fake: failing then fixed implementation across two starts', async () => {
   const r1 = a.start({ task_id: 't', cwd, prompt: 'x' });
   await r1.done;
   assert.equal(fs.readFileSync(path.join(cwd, 'src/impl.js'), 'utf8'), 'bad');
-  assert.deepEqual(a.collectUsage(r1), { input_tokens: 10, output_tokens: 2, usd: 0.01 });
+  assert.deepEqual(a.collectUsage(r1), { input_tokens: 10, output_tokens: 2, usd: 0.01, incomplete: false });
   const r2 = a.start({ task_id: 't', cwd, prompt: 'x' });
   const seen = [];
   for await (const e of a.observe(r2)) seen.push(e.type);
   assert.equal(fs.readFileSync(path.join(cwd, 'src/impl.js'), 'utf8'), 'good');
   assert.equal(seen.at(-1), 'exit');
-  assert.deepEqual(a.collectUsage(r2), { input_tokens: 1, output_tokens: 1, usd: null });
+  assert.deepEqual(a.collectUsage(r2), { input_tokens: 1, output_tokens: 1, usd: null, incomplete: false });
 });
 
 test('fake: 429, context overflow, crash, hang->timeout', async () => {
@@ -356,4 +360,89 @@ test('fake: cwd validated, script writes cannot escape cwd', async () => {
   await r.done;
   assert.ok(!fs.existsSync(path.join(cwd, '..', 'escape.txt')));
   assert.equal(r.result.exit, 1);
+});
+
+// ---- parser calibration: synthetic events with the shapes recorded in docs/v2/RUNTIME_FORMATS.md --------------
+const fixCli = path.join(binDir, 'fixture-cli');
+fs.writeFileSync(fixCli, `#!/usr/bin/env node
+const fs = require('fs');
+for (const l of JSON.parse(fs.readFileSync(process.env.FIXTURE, 'utf8'))) console.log(JSON.stringify(l));
+process.exit(Number(process.env.FIX_EXIT || 0));
+`);
+fs.chmodSync(fixCli, 0o755);
+async function fixture(factory, lines, exit = 0, aOpts = {}) {
+  const f = path.join(tmp, `fix${n++}.json`);
+  fs.writeFileSync(f, JSON.stringify(lines));
+  const stdio0 = [];
+  const cp = await import('node:child_process');
+  const a = factory({ bin: fixCli, env: baseEnv, allowedRoots: [root], spawn: (b, args, o) => { stdio0.push(o.stdio[0]); return cp.spawn(b, args, o); }, ...aOpts });
+  const run = a.start({ task_id: 't', run_id: `fx${n}`, cwd: work(), prompt: 'x', env: { FIXTURE: f, FIX_EXIT: String(exit) } });
+  await run.done;
+  return { a, run, stdio0 };
+}
+
+test('calibration claude: usage includes cache tokens; allowed rate_limit_event is not an error', async () => {
+  const { a, run } = await fixture(claude, [
+    { type: 'system', subtype: 'init', session_id: 'sid-1', model: 'm', tools: [] },
+    { type: 'system', subtype: 'thinking_tokens', estimated_tokens: 3, estimated_tokens_delta: 3 },
+    { type: 'rate_limit_event', rate_limit_info: { status: 'allowed', resetsAt: 1900000000, rateLimitType: 'five_hour', overageStatus: 'rejected', isUsingOverage: false } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 999 } }, session_id: 'sid-1' },
+    { type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.5, usage: { input_tokens: 1, cache_creation_input_tokens: 10, cache_read_input_tokens: 100, output_tokens: 4 }, session_id: 'sid-1' },
+  ]);
+  assert.deepEqual(a.collectUsage(run), { input_tokens: 111, output_tokens: 4, usd: 0.5, incomplete: false });
+  assert.equal(run.result.error, null);
+  assert.ok(run.events.some((e) => e.type === 'rate_limit' && e.status === 'allowed'));
+});
+
+test('calibration claude: rejected rate_limit_event + exit 1 -> rate_limit with retry_after from resetsAt', async () => {
+  const resets = Math.floor(Date.now() / 1000) + 600;
+  const { run } = await fixture(claude, [
+    { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: resets, rateLimitType: 'five_hour' } },
+    { type: 'result', subtype: 'error', is_error: true, result: 'blocked' },
+  ], 1);
+  assert.equal(run.result.error.class, 'rate_limit');
+  assert.ok(run.result.error.retry_after_ms > 500_000 && run.result.error.retry_after_ms <= 600_000);
+});
+
+test('calibration codex: quota error on stdout -> rate_limit; stdin is ignored; reset time best effort', async () => {
+  const lines = [
+    { type: 'thread.started', thread_id: 'thr-9' },
+    { type: 'turn.started' },
+    { type: 'error', message: "You've hit your usage limit. Upgrade or try again at 11:59 PM." },
+    { type: 'turn.failed', error: { message: "You've hit your usage limit. Upgrade or try again at 11:59 PM." } },
+  ];
+  const { run, stdio0 } = await fixture(codex, lines, 1);
+  assert.deepEqual(stdio0, ['ignore']);
+  assert.equal(run.result.error.class, 'rate_limit');
+  assert.equal(run.result.error.retryable, true);
+  assert.ok(run.result.error.retry_after_ms > 0 && run.result.error.retry_after_ms <= 86_400_000);
+  assert.equal(run.session_id, 'thr-9');
+  const unparseable = await fixture(codex, [{ type: 'error', message: 'usage limit reached, try again at tomorrow' }], 1);
+  assert.equal(unparseable.run.result.error.class, 'rate_limit');
+  assert.equal(unparseable.run.result.error.retry_after_ms, null);
+});
+
+test('calibration minimax: camelCase usage, usageIncomplete flagged, cost unknown', async () => {
+  const env = { runId: 'r', sessionId: 'mm-s1', turnId: 't', schemaVersion: 1 };
+  const { a, run } = await fixture(minimax, [
+    { ...env, type: 'exec.started', sequence: 1 }, { ...env, type: 'session.started', sequence: 2 },
+    { ...env, type: 'item.completed', item: { type: 'agent_message', text: 'OK' } },
+    { ...env, type: 'turn.completed', durationMs: 5, model: 'm', usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, totalTokens: 35 }, usageIncomplete: true, usageSource: 'provider' },
+    { ...env, type: 'exec.completed', result: 'OK' },
+  ]);
+  assert.deepEqual(a.collectUsage(run), { input_tokens: 30, output_tokens: 5, usd: null, incomplete: true });
+  assert.equal(run.session_id, 'mm-s1');
+  assert.ok(run.events.some((e) => e.type === 'text' && e.text === 'OK'));
+  const clean = await fixture(minimax, [{ ...env, type: 'turn.completed', usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, totalTokens: 25 }, usageIncomplete: false }]);
+  assert.deepEqual(clean.a.collectUsage(clean.run), { input_tokens: 20, output_tokens: 5, usd: null, incomplete: false });
+});
+
+test('verify extras: fake runtime does not follow a symlink out of cwd', async () => {
+  const cwd = work();
+  const outside = mk('fake-outside');
+  fs.symlinkSync(outside, path.join(cwd, 'dir'));
+  fs.symlinkSync(path.join(outside, 'victim.txt'), path.join(cwd, 'leaf.txt'));
+  const a = fakeFor();
+  for (const p of ['dir/f.txt', 'leaf.txt']) await a.start({ task_id: 't', cwd, prompt: 'x', script: [{ op: 'write', path: p, content: 'x' }] }).done;
+  assert.deepEqual(fs.readdirSync(outside), []);
 });

@@ -59,7 +59,7 @@ export const clarificationFor = (r) => ({ to: 'awaiting_approval', reason: r.cod
 // ---- text classification ----------------------------------------------------------------------------
 
 const ZERO_WIDTH = /[­᠎​-‏⁠-⁤﻿]/g;
-const HOMOGLYPH = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ⅼ: 'l', ı: 'i' };
+export const HOMOGLYPH = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ⅼ: 'l', ı: 'i' };
 const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
 
 // Spellings an author might use to slip a restricted action past a plain regex. Every variant is matched;
@@ -76,7 +76,8 @@ export function textVariants(text) {
 // One space splitting a word ("de ploy", "dep loy"): adjacent tokens joined in pairs and triples. Checked one
 // candidate at a time so an innocent join can only add a match, never hide one.
 function splitJoins(text) {
-  const t = String(text).split(/[\s\u2013\u2014]+/).filter(Boolean);
+  // Join characters inside a token ("de-", "de_pl") are dropped so a split plus a join char still rejoins.
+  const t = String(text).split(/[\s\u2013\u2014]+/).map((x) => x.replace(/[._*\-\u2013\u2014]/g, '')).filter(Boolean);
   const out = [];
   for (let i = 0; i < t.length - 1; i++) { out.push(t[i] + t[i + 1]); if (i < t.length - 2) out.push(t[i] + t[i + 1] + t[i + 2]); }
   return out;
@@ -96,15 +97,17 @@ const branchRules = (branches) => {
   return [[new RegExp(`\\b(?:merg(?:e|es|ed|ing)|rebas(?:e|es|ed|ing))\\b[^.\\n]{0,30}\\b(?:${names})\\b`, 'i'), 'merge_protected'],
     [new RegExp(`\\bpush(?:es|ed|ing)?\\b[^.\\n]{0,30}\\b(?:${names})\\b`, 'i'), 'merge_protected']];
 };
+// Maps the manager matcher's hit to an action class; keep in step with FORBIDDEN_PARTS in stall.js
+// (a hit no row maps still needs approval, as the generic forbidden_topic class).
 const TOPIC_CLASS = [
-  [/deploy|update_core|rollout/i, 'deploy'],
+  [/deploy|update_core|rollout|ship|release|promote|go(?:ing)? live|terraform|kill|upgrade|alter|modify/i, 'deploy'],
   [/systemctl|pm2|restart/i, 'host_maintenance'],
-  [/merge/i, 'merge_protected'],
-  [/push/i, 'push_shared'],
-  [/reset --hard|delet|remov|rm -r|drop|prune|truncate|migrat/i, 'destructive'],
-  [/\.env|credential|password|passphrase|secret|token|bearer|api[_ -]?key|ssh key|private key/i, 'credentials'],
-  [/money|pay|purchase|buy|billing|invoice|credit/i, 'money'],
-  [/customer/i, 'customer'],
+  [/merge|rebase/i, 'merge_protected'],
+  [/push|publish/i, 'push_shared'],
+  [/reset --hard|hard[- ]?reset|delet|remov|\brm\b|drop|prune|truncate|migrat|wip(?:e|ing)|overwrit/i, 'destructive'],
+  [/\.env|credential|password|passphrase|secret|token|bearer|api[_ -]?key|ssh key|private key|revok|rotat/i, 'credentials'],
+  [/money|pay|purchase|buy|billing|invoice|credit|card|charg|refund|transfer|funds/i, 'money'],
+  [/customer|client/i, 'customer'],
 ];
 
 // -> [{ topic, class }] for every restricted topic named in the text, under any variant spelling.
@@ -113,7 +116,7 @@ export function restrictedTopics(text, { protectedBranches } = {}) {
   const out = new Map();
   const extra = [...V2_EXTRA, ...branchRules(protectedBranches)];
   const variants = textVariants(text);
-  for (const j of splitJoins(variants[0])) {
+  for (const j of variants.flatMap(splitJoins)) {
     const m = forbiddenMatch(j);
     if (m) { const cls = TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic'; if (!out.has(cls)) out.set(cls, { topic: m, class: cls }); }
   }

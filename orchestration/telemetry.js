@@ -31,13 +31,13 @@ export function createTelemetry({
     else if (ts > t + maxFutureMs) freshness = 'unknown';
     else if (t - ts > maxAgeMs || (since != null && ts < since)) freshness = 'stale';
     const value = Number.isFinite(r?.value) ? r.value : null;
-    const threshold = limits[r?.name] ?? null;
+    const threshold = Object.hasOwn(limits, r?.name) ? limits[r.name] : null;
     let status = 'unknown';
     if (freshness === 'fresh' && value != null) {
       if (r.name === 'service_ready') status = value >= 1 ? 'ok' : 'pressure';
       else status = threshold != null && value >= threshold ? 'pressure' : 'ok';
     }
-    return { name: String(r?.name), value, unit: r?.unit ?? UNITS[r?.name] ?? '', ts, source: r?.source ?? 'unknown', freshness, age_ms: ts == null ? null : t - ts, status, threshold };
+    return { name: String(r?.name), value, unit: r?.unit ?? (Object.hasOwn(UNITS, r?.name) ? UNITS[r.name] : ''), ts, source: r?.source ?? 'unknown', freshness, age_ms: ts == null ? null : t - ts, status, threshold };
   }
 
   // -> { status: 'healthy'|'unhealthy'|'unknown', pressures[], unknown[], readings[], at }
@@ -51,14 +51,17 @@ export function createTelemetry({
     } catch (e) { hostErr = String(e?.code || 'unreachable'); }
     const byName = new Map(raw.map((r) => [r?.name, r]));
     const readings = required.map((n) => classify(byName.get(n) || { name: n, value: null, ts: null, source: hostErr ? `unreachable:${hostErr}` : 'missing' }, since));
-    for (const r of raw) if (!required.includes(r?.name) && r?.name in limits) readings.push(classify(r, since));
+    // A reading named like an inherited Object property is a lying probe: not a metric, and the sample is not trusted.
+    const malformed = raw.some((r) => typeof r?.name !== 'string' || r.name in Object.prototype);
+    for (const r of raw) if (!required.includes(r?.name) && Object.hasOwn(limits, r?.name)) readings.push(classify(r, since));
     if (service_id != null) {
       let s = null;
       try { s = serviceProbe ? await serviceProbe(host_id, service_id) : null; } catch { s = null; }
       readings.push(classify({ name: 'service_ready', value: s && typeof s.healthy === 'boolean' ? (s.healthy ? 1 : 0) : null, ts: s?.ts ?? null, source: s?.source ?? 'unreachable' }, since));
     }
-    const pressures = [...new Set(readings.filter((r) => r.status === 'pressure').map((r) => (r.name === 'service_ready' ? 'service.unhealthy' : METRIC_INCIDENT[r.name] || 'health.unknown')))];
+    const pressures = [...new Set(readings.filter((r) => r.status === 'pressure').map((r) => (r.name === 'service_ready' ? 'service.unhealthy' : (Object.hasOwn(METRIC_INCIDENT, r.name) ? METRIC_INCIDENT[r.name] : 'health.unknown'))))];
     const unknown = readings.filter((r) => r.status === 'unknown').map((r) => r.name);
+    if (malformed) unknown.push('malformed_reading');
     const status = pressures.length ? 'unhealthy' : unknown.length ? 'unknown' : 'healthy';
     return { status, pressures, unknown, readings, at: now() };
   }

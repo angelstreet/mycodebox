@@ -22,7 +22,11 @@ const BYPASS_PAIRS = [
   [/^(?:-s|--sandbox)$/, /^danger-full-access$/],
   [/^(?:-a|--ask-for-approval)$/, /^never$/],
   [/^(?:-c|--config)$/, /(?:sandbox_mode|sandbox)\s*=\s*["']?danger-full-access|approval_policy\s*=\s*["']?never|bypassPermissions/],
+  // Inline JSON only: a settings *file* path cannot be inspected here (residual risk, see below).
+  [/^--settings$/, /bypassPermissions|"defaultMode"\s*:\s*"bypass|skipDangerousModePermissionPrompt/],
 ];
+// Residual risk the guard cannot see (only reachable through the injected `extraArgs`, which callers must vet):
+// `--profile`/config files that relax the sandbox, `--add-dir /`, an unscoped `--allowedTools Bash`, settings files.
 
 export function findBypass(argv, skip = []) {
   const skipSet = new Set(skip);
@@ -34,6 +38,9 @@ export function findBypass(argv, skip = []) {
     if (el.startsWith('--') && el.includes('=')) {
       flag = el.slice(0, el.indexOf('='));
       inlineVal = el.slice(el.indexOf('=') + 1);
+    } else if (/^-[A-Za-z]./.test(el)) { // attached short option: -sVALUE, -s=VALUE
+      flag = el.slice(0, 2);
+      inlineVal = el.slice(2).replace(/^=/, '');
     }
     if (BYPASS_SINGLE.test(flag)) flagged.push(el);
     for (const [fre, vre] of BYPASS_PAIRS) {
@@ -43,7 +50,9 @@ export function findBypass(argv, skip = []) {
     }
   });
   const rest = argv.filter((_, i) => !skipSet.has(i));
-  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.join(' ') }).length) flagged.push('launch-config pattern');
+  // launchWarnings is advisory and also flags --full-auto for owner review; it keeps codex's workspace-write sandbox,
+  // so the hard guard does not refuse it (D-011).
+  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.filter((x) => x !== '--full-auto').join(' ') }).length) flagged.push('launch-config pattern');
   return flagged;
 }
 
@@ -79,7 +88,8 @@ export function buildEnv(source, allow = [], explicit = {}) {
     if (typeof v !== 'string') continue;
     if (BASE_ENV.test(k) || allow.some((a) => (a instanceof RegExp ? a.test(k) : a === k))) out[k] = v;
   }
-  for (const [k, v] of Object.entries(explicit || {})) if (typeof v === 'string') out[k] = v;
+  // Explicit env is trusted for names, not for code-loading hooks.
+  for (const [k, v] of Object.entries(explicit || {})) if (typeof v === 'string' && !/^(?:NODE_OPTIONS|LD_.*|DYLD_.*)$/.test(k)) out[k] = v;
   return out;
 }
 
@@ -95,18 +105,26 @@ export function resolveBin(bin, name, env, fs = nodeFs) {
 // ---- JSONL ------------------------------------------------------------------------------------
 export function createLineParser(onLine, maxLine = 1 << 20) {
   let buf = '';
+  let discarding = false; // inside the tail of a runaway line: never parse it as a new line
   return {
     write(chunk) {
-      buf += chunk;
+      let data = chunk;
+      if (discarding) {
+        const nl = data.indexOf('\n');
+        if (nl < 0) return;
+        discarding = false;
+        data = data.slice(nl + 1);
+      }
+      buf += data;
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i).replace(/\r$/, '');
         buf = buf.slice(i + 1);
         if (line.trim()) onLine(line);
       }
-      if (buf.length > maxLine) { onLine(buf); buf = ''; } // runaway line: hand over as garbage, bound memory
+      if (buf.length > maxLine) { onLine(buf.slice(0, 256)); buf = ''; discarding = true; }
     },
-    end() { if (buf.trim()) onLine(buf); buf = ''; },
+    end() { if (buf.trim() && !discarding) onLine(buf); buf = ''; },
   };
 }
 
@@ -147,36 +165,52 @@ export function genericParse(o) {
 }
 
 // ---- error taxonomy ---------------------------------------------------------------------------
-const RETRYABLE = { rate_limit: true, timeout: true, crash: true };
+const RETRYABLE = { rate_limit: true, timeout: true };
 
-export function parseRetryAfterMs(text) {
-  const m = /(?:retry[-_ ]?after|try again in|retry in|resets? in)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)?/i.exec(text || '');
-  if (!m) return null;
-  const n = Number(m[1]);
-  const u = (m[2] || 's').toLowerCase();
-  const mult = u.startsWith('ms') || u.startsWith('milli') ? 1 : u.startsWith('m') ? 60000 : 1000; // bare number = seconds (HTTP semantics)
-  return Math.round(n * mult);
+export function parseRetryAfterMs(text, nowMs = null) {
+  const m = /(?:retry[-_ ]?after|try again in|retry in|resets? in)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)?\b/i.exec(text || '');
+  if (m) {
+    const n = Number(m[1]);
+    const u = (m[2] || 's').toLowerCase();
+    const mult = /^(?:ms|milli)/.test(u) ? 1 : /^(?:m|min)/.test(u) ? 60000 : /^(?:h)/.test(u) ? 3600000 : /^d/.test(u) ? 86400000 : 1000; // bare number = seconds
+    return Math.round(n * mult);
+  }
+  // codex: "try again at 3:45 PM" in local wall-clock time; best effort, null when it does not parse.
+  const t = /try again at\s+(\d{1,2}):(\d{2})\s*(am|pm)?/i.exec(text || '');
+  if (t && nowMs !== null) {
+    let h = Number(t[1]);
+    const min = Number(t[2]);
+    if (t[3]) h = (h % 12) + (t[3].toLowerCase() === 'pm' ? 12 : 0);
+    if (h > 23 || min > 59) return null;
+    const d = new Date(nowMs);
+    d.setHours(h, min, 0, 0);
+    if (d.getTime() <= nowMs) d.setDate(d.getDate() + 1);
+    return d.getTime() - nowMs;
+  }
+  return null;
 }
 
-export function normalizeError(input) {
+export function normalizeError(input, nowMs = null) {
   const i = input || {};
   const text = `${i.stderr ?? ''}\n${i.message ?? ''}`;
   let cls;
   let retry_after_ms = null;
   if (i.timed_out) cls = 'timeout';
   else if (i.code === 'ENOENT' || i.exit === 127 || (i.code === 'EACCES' && /^spawn/.test(i.syscall || '')) || /command not found|not installed|executable file not found/i.test(text)) cls = 'unavailable';
-  else if (/rate.?limit|\b429\b|overloaded|\bquota\b|too many requests/i.test(text)) { cls = 'rate_limit'; retry_after_ms = parseRetryAfterMs(text); }
+  else if (/rate[ _-]?limit|\bHTTP[ /]*429\b|\b429 too many requests|status(?: code)?[:= ]+429|\berror[: ]+429\b|too many requests|overloaded(?:_error)?\b|(?:usage|quota|credit)s? (?:limit|exceeded|exhausted)|exceeded your (?:current )?quota|hit your usage limit|insufficient_quota|rate_limit_error/i.test(text)) { cls = 'rate_limit'; retry_after_ms = parseRetryAfterMs(text, nowMs) ?? (Number.isFinite(i.retry_after_ms) ? i.retry_after_ms : null); }
   else if (/context (?:length|window)|too long|token limit|maximum context|context_length_exceeded|exceeds? the (?:maximum|context)/i.test(text)) cls = 'context_overflow';
-  else if (/\b401\b|unauthori[sz]ed|not logged in|please log ?in|\blogin\b|\bauth(?:entication)?\b|invalid api key/i.test(text)) cls = 'auth';
-  else if (/permission denied|approval|not permitted|\beacces\b|\b403\b/i.test(text)) cls = 'permission';
+  else if (/\bHTTP[ /]*401\b|\b401 unauthori[sz]ed|status(?: code)?[:= ]+401|unauthori[sz]ed|not logged in|please (?:log ?in|run .{0,20}login)|authentication (?:failed|error|required)|invalid (?:api[ _-]?key|x-api-key)|invalid_api_key|\bauthentication_error/i.test(text)) cls = 'auth';
+  else if (/permission denied|approval (?:required|denied)|requires approval|operation not permitted|\beacces\b|status(?: code)?[:= ]+403|HTTP[ /]*403/i.test(text)) cls = 'permission';
   else if (i.signal || (typeof i.exit === 'number' && i.exit !== 0)) cls = 'crash';
   else cls = 'unknown';
-  return { class: cls, retryable: !!RETRYABLE[cls], retry_after_ms };
+  // crash is retryable only for signal deaths (OOM/SEGV/KILL); a plain non-zero exit is usually deterministic.
+  return { class: cls, retryable: !!RETRYABLE[cls] || (cls === 'crash' && !!i.signal), retry_after_ms };
 }
 
 // ---- run lifecycle ----------------------------------------------------------------------------
 const ctls = new WeakMap();
 const ID = /^[\w.-]+$/;
+const MAX_EVENTS = 50000;
 
 export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs = nodeFs, now = Date.now, timeout_ms, usageMode = 'last' }) {
   if (!ID.test(String(run_id)) || run_id === '.' || run_id === '..') throw coded('E_INVALID', 'run_id must match [\\w.-]+');
@@ -184,11 +218,11 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
   const run = {
     run_id, task_id, adapter, cwd, pid: null, session_id: null, started_at: now(), ended_at: null,
     artifact_dir: artifact_dir || null, events: [], usage: { input_tokens: null, output_tokens: null, usd: null },
-    result: null, cancelled: false, timed_out: false,
+    result: null, cancelled: false, timed_out: false, usage_incomplete: false, pgid: null,
   };
   let resolveDone;
   Object.defineProperty(run, 'done', { value: new Promise((r) => { resolveDone = r; }), enumerable: false });
-  const c = { waiters: [], errorTexts: [], stderr: '', finished: false, kill: () => {}, timer: null, seq: 0, artifactFailed: false };
+  const c = { overCap: 0, waiters: [], errorTexts: [], stderr: '', finished: false, kill: () => {}, timer: null, seq: 0, artifactFailed: false };
   ctls.set(run, c);
   if (run.artifact_dir) fs.mkdirSync(run.artifact_dir, { recursive: true, mode: 0o700 });
 
@@ -197,6 +231,8 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
     run, ctl: c,
     push(ev) {
       if (c.finished || (run.cancelled && ev.type !== 'exit')) return; // no events after cancel except the final exit
+      // Over the cap, junk is dropped but terminal facts (result, error) are always kept.
+      if (run.events.length >= MAX_EVENTS && (ev.type !== 'result' && ev.type !== 'error' || ++c.overCap > 100)) { run.dropped_events = (run.dropped_events || 0) + 1; return; }
       run.events.push({ seq: c.seq++, at: now(), run_id, ...ev });
       wake();
     },
@@ -207,9 +243,11 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
       }
     },
     noteStderr(text) { if (!run.cancelled) c.stderr = (c.stderr + text).slice(-65536); },
-    noteError(text) { if (text) c.errorTexts.push(String(text).slice(0, 2000)); },
+    noteError(text) { if (text && c.errorTexts.length < 20) c.errorTexts.push(String(text).slice(0, 2000)); },
+    noteHint(h) { if (Number.isFinite(h)) c.retryHint = h; },
     addUsage(u, mode = usageMode) {
       if (!u) return;
+      if (u.incomplete) run.usage_incomplete = true;
       for (const k of ['input_tokens', 'output_tokens', 'usd']) {
         if (u[k] === null || u[k] === undefined) continue;
         run.usage[k] = mode === 'sum' && run.usage[k] !== null ? run.usage[k] + u[k] : u[k];
@@ -224,13 +262,14 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
     finish({ exit = null, signal = null, spawn_error = null } = {}) {
       if (c.finished) return;
       if (c.timer) clearTimeout(c.timer);
-      if (run.cancelled || run.timed_out) c.kill('final'); // sweep stragglers in the process group
+      c.kill('final'); // always sweep the process group: a background child must not edit the tree after done
       const errText = c.errorTexts.join('\n');
       let error = null;
       if (run.timed_out) error = normalizeError({ timed_out: true });
       else if (run.cancelled) error = null;
       else if (spawn_error) error = normalizeError({ code: spawn_error.code, syscall: spawn_error.syscall, message: spawn_error.message });
-      else if ((exit !== 0 && exit !== null) || signal || errText) error = normalizeError({ exit, signal, stderr: `${c.stderr}\n${errText}` });
+      // An error *event* alongside exit 0 (e.g. a transient reconnect notice) is not a failed run; the event stays visible.
+      else if ((exit !== 0 && exit !== null) || signal) error = normalizeError({ exit, signal, stderr: `${c.stderr}\n${errText}`, retry_after_ms: c.retryHint }, now());
       const result = { exit, signal, timed_out: run.timed_out, cancelled: run.cancelled, error };
       run.events.push({ seq: c.seq++, at: now(), run_id, type: 'exit', ...result });
       c.finished = true;
@@ -277,11 +316,11 @@ export async function cancelRun(run) {
 }
 
 export function collectUsage(run) {
-  return { input_tokens: run.usage.input_tokens ?? null, output_tokens: run.usage.output_tokens ?? null, usd: run.usage.usd ?? null };
+  return { input_tokens: run.usage.input_tokens ?? null, output_tokens: run.usage.output_tokens ?? null, usd: run.usage.usd ?? null, incomplete: run.usage_incomplete === true };
 }
 
 // ---- process-backed run -----------------------------------------------------------------------
-export function spawnRun({ spawnFn = nodeSpawn, bin, argv, skip = [], cwd, allowedRoots, env, fs = nodeFs, now, parse, usageMode, killGraceMs = 2000, meta }) {
+export function spawnRun({ spawnFn = nodeSpawn, bin, argv, skip = [], cwd, allowedRoots, env, fs = nodeFs, now, parse, usageMode, killGraceMs = 2000, exitGraceMs = 500, meta }) {
   assertNoBypass(argv, skip);
   const realCwd = validateCwd(cwd, allowedRoots, fs);
   const core = createRunCore({ ...meta, cwd: realCwd, fs, now, usageMode });
@@ -296,6 +335,8 @@ export function spawnRun({ spawnFn = nodeSpawn, bin, argv, skip = [], cwd, allow
     return run;
   }
   run.pid = child.pid ?? null;
+  run.pgid = run.pid; // detached => leader of its own group; recorded so crash recovery can sweep orphans
+  if (run.artifact_dir && run.pid) { try { fs.writeFileSync(path.join(run.artifact_dir, 'process.json'), JSON.stringify({ pid: run.pid, pgid: run.pgid, started_at: run.started_at }), { mode: 0o600 }); } catch { /* best effort */ } }
   let escalate = null;
   const killGroup = (sig) => {
     if (!child.pid) return;
@@ -304,6 +345,7 @@ export function spawnRun({ spawnFn = nodeSpawn, bin, argv, skip = [], cwd, allow
   core.setKill((why) => {
     if (why === 'final') { killGroup('SIGKILL'); if (escalate) clearTimeout(escalate); return; }
     killGroup('SIGTERM');
+    if (escalate) clearTimeout(escalate);
     escalate = setTimeout(() => killGroup('SIGKILL'), killGraceMs);
     escalate.unref?.();
   });
@@ -313,10 +355,11 @@ export function spawnRun({ spawnFn = nodeSpawn, bin, argv, skip = [], cwd, allow
     const obj = parseJsonLine(line);
     if (!obj) { core.push({ type: 'unparsed', bytes: Buffer.byteLength(line) }); return; }
     let r;
-    try { r = parse(obj); } catch { r = genericParse(obj); }
+    try { r = parse(obj, now()); } catch { r = genericParse(obj); }
     if (r.session_id && !run.session_id) run.session_id = String(r.session_id);
     core.addUsage(r.usage);
     core.noteError(r.error_text);
+    core.noteHint(r.retry_after_ms);
     for (const ev of r.events) core.push(ev);
   });
   child.stdout?.setEncoding('utf8');
@@ -326,6 +369,14 @@ export function spawnRun({ spawnFn = nodeSpawn, bin, argv, skip = [], cwd, allow
   child.stderr?.on('data', (d) => { core.raw('stderr', d); core.noteStderr(d); });
   child.on('error', (e) => core.finish({ spawn_error: e }));
   child.on('close', (code, signal) => { lines.end(); core.finish({ exit: code, signal }); });
+  // An escaped grandchild (setsid) can hold the pipes open forever: after the leader exits, wait briefly, then cut stdio.
+  child.on('exit', (code, signal) => {
+    const t = setTimeout(() => {
+      child.stdout?.destroy(); child.stderr?.destroy();
+      lines.end(); core.finish({ exit: code, signal });
+    }, exitGraceMs);
+    t.unref?.();
+  });
   core.push({ type: 'spawned', pid: run.pid });
   return run;
 }
@@ -361,20 +412,25 @@ export function makeCliAdapter(spec) {
   return function createAdapter(opts = {}) {
     const {
       spawn = nodeSpawn, env = process.env, now = Date.now, bin, allowedRoots = [], artifactDir = null,
-      extraArgs = [], killGraceMs = 2000, probeTimeoutMs = 3000, fs = nodeFs, randomId = randomUUID,
+      extraArgs = [], killGraceMs = 2000, exitGraceMs = 500, probeTimeoutMs = 3000, fs = nodeFs, randomId = randomUUID,
     } = opts;
     const binPath = resolveBin(bin, spec.defaultBin, env, fs);
 
     function begin(o, resumeId) {
       if (!o || typeof o.prompt !== 'string' || !o.prompt) throw coded('E_INVALID', 'prompt required');
-      for (const k of ['model', 'effort']) if (o[k] != null && (typeof o[k] !== 'string' || !SAFE_VAL.test(o[k]))) throw coded('E_INVALID', `${k} has an unsafe value`);
+      for (const k of ['model', 'effort', 'session_id']) if (o[k] != null && (typeof o[k] !== 'string' || !SAFE_VAL.test(o[k]))) throw coded('E_INVALID', `${k} has an unsafe value`);
+      if (o.effort != null) {
+        if (spec.noEffort) throw unsupported(spec.id, 'effort');
+        if (spec.efforts && !spec.efforts.includes(o.effort)) throw coded('E_INVALID', `effort must be one of ${spec.efforts.join(',')}`);
+      }
+      const realCwd = validateCwd(o.cwd, allowedRoots, fs); // argv gets the validated path, not the caller's (symlink) one
       const run_id = o.run_id || randomId();
-      const head = spec.head({ ...o, cwd: o.cwd, resume_id: resumeId || null, session_id: o.session_id || (spec.ownSessionId && !resumeId ? randomUUID() : null) });
+      const head = spec.head({ ...o, cwd: realCwd, resume_id: resumeId || null, session_id: o.session_id || (spec.ownSessionId && !resumeId ? randomUUID() : null) });
       const dash = o.prompt.startsWith('-') ? ['--'] : [];
       const argv = [...head.args, ...extraArgs, ...dash, o.prompt];
       return spawnRun({
-        spawnFn: spawn, bin: binPath, argv, skip: [argv.length - 1], cwd: o.cwd, allowedRoots, fs, now,
-        env: buildEnv(env, spec.envAllow, o.env), parse: spec.parse, usageMode: spec.usageMode, killGraceMs,
+        spawnFn: spawn, bin: binPath, argv, skip: [argv.length - 1], cwd: realCwd, allowedRoots, fs, now,
+        env: buildEnv(env, spec.envAllow, o.env), parse: spec.parse, usageMode: spec.usageMode, killGraceMs, exitGraceMs,
         meta: {
           adapter: spec.id, task_id: o.task_id ?? null, run_id, artifact_dir: o.artifact_dir || (artifactDir ? path.join(artifactDir, String(run_id)) : null),
           timeout_ms: o.timeout_ms, session_id: head.session_id || resumeId || null,

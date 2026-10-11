@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { makeEvent, validateEvent } from './events.js';
+import { HOMOGLYPH } from './policy.js';
 import {
   ContractError, SCHEMA_VERSION, TERMINAL, assertTransition, canTransition, outcomeOf, validateTask, normalizeTask,
   narrowsParent, validateDecision, normalizeDecision,
@@ -23,17 +24,21 @@ const UNRESOLVED = ['attempted', 'possibly_applied'];
 // it would hide external state, which is worse than the write.
 const AFTER_TERMINAL_OK = new Set(['action.confirmed', 'action.unknown', 'action.failed']);
 const USAGE_NUM = ['input_tokens', 'output_tokens', 'usd'];
-const USAGE_KEYS = new Set([...USAGE_NUM, 'runtime', 'provider', 'model', 'unknown', 'run_id', 'attempt_id', 'ts', 'source']);
+const USAGE_KEYS = new Set([...USAGE_NUM, 'runtime', 'provider', 'model', 'unknown', 'run_id', 'attempt_id', 'ts', 'source', 'incomplete']);
 
 export const defaultStoreDir = (env = process.env) =>
   join(env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty'), 'v2');
 
 // Identity is the actor id only, compared trimmed, NFKC-normalized and case-folded. Role, runtime and model
 // say nothing about who did the work, so an actor without an id cannot show independence (-> null).
+// Format/zero-width characters, combining marks and common Cyrillic look-alikes are folded too, so a
+// look-alike id cannot pose as a different actor.
+const rawId = (a) => String(typeof a === 'string' ? a : a?.id ?? '').trim();
 export const actorKey = (a) => {
   const id = typeof a === 'string' ? a : a && typeof a === 'object' ? a.id : null;
   if (typeof id !== 'string') return null;
-  return id.normalize('NFKC').trim().toLowerCase() || null;
+  return id.normalize('NFKD').replace(/[\p{Cf}\p{M}]/gu, '').normalize('NFKC').trim().toLowerCase()
+    .replace(/[^\x00-\x7F]/g, (c) => HOMOGLYPH[c] ?? c) || null;
 };
 
 const stable = (v) => (Array.isArray(v) ? `[${v.map(stable).join(',')}]`
@@ -83,6 +88,11 @@ export function normalizeUsage(u = {}) {
   if (u.ts !== undefined) out.ts = u.ts;
   if (u.attempt_id !== undefined) out.attempt_id = u.attempt_id;
   if (u.source !== undefined) out.source = u.source;
+  // The runtime said its counts are partial (e.g. MiniMax usageIncomplete): totals must not look complete.
+  if (u.incomplete !== undefined) {
+    if (typeof u.incomplete !== 'boolean') fail('E_INVALID', 'usage: incomplete must be a boolean');
+    out.incomplete = u.incomplete;
+  }
   return out;
 }
 
@@ -91,6 +101,7 @@ export function usageTotals(records) {
   const t = { records: records.length };
   for (const k of USAGE_NUM) t[k] = !records.length || records.some((r) => r[k] === null) ? null : records.reduce((s, r) => s + r[k], 0);
   t.unknown = USAGE_NUM.filter((k) => t[k] === null);
+  if (records.some((r) => r.incomplete === true)) t.incomplete = true;
   return t;
 }
 
@@ -110,10 +121,12 @@ export function acceptanceUnmet(st) {
   }
   const latest = new Map();
   // A verdict from an actor without an id has no identity: its approve never counts, its reject still blocks.
+  const rawRejects = new Map();   // raw trimmed id -> latest verdict: a differently spelled id never clears a reject
   for (const v of st.verdicts.filter(current)) {
-    if (actorKey(v.actor)) latest.set(actorKey(v.actor), v.verdict);
+    if (actorKey(v.actor)) { latest.set(actorKey(v.actor), v.verdict); rawRejects.set(rawId(v.actor), v.verdict); }
     else if (v.verdict === 'reject') why.push(`an actor without id rejects ${head}`);
   }
+  for (const [a, v] of rawRejects) if (v === 'reject' && !devs.has(actorKey(a)) && latest.get(actorKey(a)) !== 'reject') why.push(`verifier ${a} rejects ${head}`);
   const independent = [...latest].filter(([a]) => !devs.has(a));
   if (!independent.some(([, v]) => v === 'approve')) {
     why.push([...latest].some(([a, v]) => devs.has(a) && v === 'approve')
@@ -381,7 +394,8 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       for (const e of open) pendingEffects.push({ task_id: id, effect_id: e.effect_id, idempotency_key: e.idempotency_key,
         kind: e.kind, phase: st.effects[e.effect_id].phase, state: st.task.status, moved });
     }
-    for (const id of tasks.keys()) if (!broken.has(id)) saveSnapshot(id);
+    // Broken tasks get a snapshot too, so an external reader sees store_error rather than a stale healthy state.
+    for (const id of tasks.keys()) { if (!broken.has(id)) saveSnapshot(id); else if (tasks.get(id).task) { try { saveSnapshot(id); } catch { /* reported by recover() */ } } }
     saveIndex();
     return { tasks: [...tasks.keys()], torn, corrupt, pendingEffects };
   }
@@ -416,6 +430,36 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
     })),
 
     get: async (id) => { await ensure(); const st = tasks.get(id); return st ? view(st) : null; },
+    // Read-only event log (validated lines, in seq order) for controllers that need run/approval history.
+    events: async (id) => {
+      await ensure();
+      const st = stateOf(id);
+      if (st.store_error) fail('E_STORE_FAILED', `task ${id}: ${st.store_error}`);   // a partial log is not the history
+      return readLog(join(tasksDir, id, 'events.jsonl')).events;
+    },
+    // Independence on a SHA from the store's own record of who produced it, never from caller-supplied fields.
+    independence: async (id, sha) => {
+      await ensure();
+      const st = stateOf(id);
+      if (st.store_error) return { ok: false, reasons: [`store error: ${st.store_error}`], developers: [], approvers: [] };
+      if (!sha || sha !== st.head_sha) return { ok: false, reasons: [`${sha} is not the current head`], developers: [], approvers: [] };
+      const devs = new Set(st.head_actors[sha] || []);
+      const latest = new Map();
+      let anonReject = false;
+      const rawRejects = new Map();
+      for (const v of st.verdicts.filter((r) => r.sha === sha && r.epoch === st.head_epoch)) {
+        if (actorKey(v.actor)) { latest.set(actorKey(v.actor), v.verdict); rawRejects.set(rawId(v.actor), v.verdict); }
+        else if (v.verdict === 'reject') anonReject = true;
+      }
+      for (const [a, v] of rawRejects) if (v === 'reject' && !devs.has(actorKey(a)) && latest.get(actorKey(a)) !== 'reject') latest.set(`raw:${a}`, 'reject');
+      const approvers = [...latest].filter(([a, v]) => !devs.has(a) && v === 'approve').map(([a]) => a);
+      const reasons = [];
+      if (!devs.size) reasons.push(`no developer recorded for ${sha}`);
+      if (!approvers.length) reasons.push(`no independent approve on ${sha}`);
+      for (const [a, v] of latest) if (!devs.has(a) && v === 'reject') reasons.push(`verifier ${a} rejects ${sha}`);
+      if (anonReject) reasons.push(`an actor without id rejects ${sha}`);
+      return { ok: !reasons.length, reasons, developers: [...devs], approvers };
+    },
     list: async ({ state, project_id, parent_task_id } = {}) => {
       await ensure();
       return [...tasks.values()].filter((st) => (state === undefined || st.task.status === state)
