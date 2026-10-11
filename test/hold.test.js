@@ -40,7 +40,8 @@ async function stall(name, prio) {
   tick(name, 'working', ['busy'], 0);
   tick(name, 'done', pane(CONTINUE), 1000);
   tick(name, 'done', pane(CONTINUE), 2500);
-  await sleep(40);
+  // classification is async: wait for its outcome (not a fixed 40 ms, which flakes under load); none within 1 s = none
+  for (let i = 0; i < 50 && !(m.autoOf(name) || meta.held(name)); i++) await sleep(20);
 }
 
 test('P2 at 85 % is held: not scheduled, hold logged and pushed once, no key typed', async () => {

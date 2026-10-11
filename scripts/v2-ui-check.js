@@ -165,7 +165,7 @@ async function main() {
         const sw = await page.evaluate(async () => { try { const r = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]); return { active: !!r.active, scope: r.scope }; } catch (e) { return { error: e.message }; } });
         check(`${label}: service worker registers and activates`, sw.active, JSON.stringify(sw));
         const cached = await page.evaluate(async () => { const names = await caches.keys(); const c = await caches.open(names.find((n) => n.startsWith('ghosty-shell-')) || names[0]); return { names, has: !!(await c.match('/tasks-view.js')) }; });
-        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes('ghosty-shell-v142'), JSON.stringify(cached.names));
+        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes('ghosty-shell-v143'), JSON.stringify(cached.names));
 
         await page.click('#moreBtn');
         await page.click('#tasksBtn');
@@ -228,6 +228,13 @@ async function main() {
       check('cross-origin POST /api/v2/tasks is refused (403)', bad.status === 403, `status ${bad.status}`);
       const tasksAfter = await (await fetch(`${base}/api/v2/tasks`)).json();
       check('refused request recorded nothing', tasksAfter.tasks.length === 7);
+      // Positive control: the same request from the server's own origin must succeed, else a broken route "passes" the 403 check above.
+      const ctlRepo = join(work, 'control-repo'); mkdirSync(ctlRepo);
+      const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
+      for (const a of [['init', '-q'], ['commit', '-q', '--allow-empty', '-m', 'init']]) execFileSync('git', a, { cwd: ctlRepo, env: gitEnv, stdio: 'ignore' });
+      const good = await fetch(`${base}/api/v2/tasks`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ goal: 'Same-origin control task', project_id: 'ui-control', risk_class: 'low', runtime_capabilities: ['code'], repository: ctlRepo, idempotency_key: 'ui-control-1', acceptance_checks: [{ id: 'unit', command: ['npm', 'test'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] }) });
+      check('same-origin POST /api/v2/tasks to the same route succeeds (positive control)', good.status === 201, `status ${good.status} ${good.status >= 400 ? (await good.clone().text()).slice(0, 200) : ""}`);
+      check('accepted same-origin request recorded exactly one task', (await (await fetch(`${base}/api/v2/tasks`)).json()).tasks.length === 8);
     } finally { await browser.close(); }
   } finally {
     server.kill('SIGTERM');

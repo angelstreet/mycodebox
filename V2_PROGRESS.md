@@ -18,11 +18,11 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
 | R2-1 | Clean V2_VERIFICATION.md, gates on final SHA | coordinator | todo | |
-| R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | todo | |
-| R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | todo | |
-| R2-4 | m1 m2 m3 m4 m6, T15 red-tests half, T20 same-origin control | Sonnet / Opus (m3,m6 Fable) | todo | |
-| R2-5 | OpenCode installed in user space, live smoke | coordinator | todo | |
-| R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | todo | |
+| R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge 0967a6d | 4109590+bb883c5; mcode TUI has no permission flag: full mode = `permissionMode: bypassPermissions` in its config.yaml (D-019); 1614/1614 both runtimes at ae6a613 |
+| R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge ae6a613 | b0c02bc squashed (a node_modules symlink slipped into a fix commit; squashed before any push); env ANDROID_APP_PACKAGE, ANDROID_APP_SHA256, LANGFUSE_PUBLIC_URL; PUBLIC_URL feeds hints |
+| R2-4 | m1 m2 m3 m4 m6, T15 red-tests half, T20 same-origin control | Sonnet / Opus (m3,m6 Fable) | m1 m2 m4 T15 T20: review fixes (Opus APPROVE WITH FIXES: m4 too broad, T15 did not reach reviewer); m3 m6 dev (wt r2-m3m6) | |
+| R2-5 | OpenCode installed in user space, live smoke | coordinator + Sonnet | INTEGRATED (Opus APPROVE, 2 rounds) merge d29ecf5 | opencode-ai 1.18.32 under ~/.local/opencode (pinned >2 weeks old, free models); real format: sessionID, per-step tokens summed, incomplete flagged; resume via --session verified live; --auto refused by the adapter guard; live smoke accepted |
+| R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | scoring dev (wt r2-score); bench dev (wt r2-bench) | |
 | R2-7 | Push, PR #1 round-2 section, DELIVERED | coordinator | todo | |
 
 ## Plan (waves, max 3 concurrent developers)
@@ -90,6 +90,8 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 | D-016 | One goal-loop controller per store via lease `service:<host>:goal-loop` (short TTL, renewed by the loop); a second instance fails closed | per-controller instance id in owner identity | Two same-owner controllers could step one task; the lease fences other instances without new identity machinery | yes |
 | D-017 | A store handle's implicit first access only replays (no writes); torn/unconfirmed tasks refuse writes (`recovery_pending`) until an explicit `recover()` under the controller lease | recover on first read | A second process's first read used to mark another controller's live run possibly_applied. Wiring rule: one store handle per process, shared by the HTTP routes and the loop | yes |
 | D-018 | Owner cancel always succeeds: `loop.cancel()` takes the controller lease and runs `recover()` first when the view shows `recovery_pending`, then transitions | store appends cancel over a torn tail | Appending without recovery would corrupt a torn line; recovery under the lease is the safe path and keeps T14 | yes |
+| D-019 | mcode TUI full-permission mode is its own config key `permissionMode: bypassPermissions`, documented in INSTALL, never written by code | write ~/.minimax/config.yaml from the server | mcode 0.6.5 TUI has no permission flag (only `mcode exec --permission full`); editing the user's CLI config is invasive | yes |
+| D-020 | Dashboard approve/deny/cancel go through the goal loop under the controller lease; no loop in the process → 503, another live controller → 409, nothing written | store owner lock; keep direct writes | Owner answers must never be lost or written behind the single writer's back (m3; D-016/D-017/D-018) | yes |
 | D-006 | Leak scan = `scripts/leak-scan.js` (generic patterns) + private denylist outside the repo (`LEAK_SCAN_EXTRA`) | patterns in repo | Real identifiers must never be committed, including in the scanner | yes |
 
 ## OWNER-REVIEW / owner actions (collected for the PR)

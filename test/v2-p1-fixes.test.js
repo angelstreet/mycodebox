@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { classifyStall, wouldSend, forbiddenMatch } from '../stall.js';
-import { launchWarnings } from '../launch-config.js';
+import { hasBypass } from '../launch-config.js';
 import { createParking } from '../parking.js';
 
 const ROOT = new URL('..', import.meta.url);
@@ -156,13 +156,10 @@ test('F5: the idle check treats approved as busy and the vocabulary matches the 
 test('F6: more permission/sandbox bypass spellings are flagged', () => {
   for (const flag of ['--full-auto', '-c approval_policy=never', '-c approval_policy="never"', `-c 'approval_policy="never"'`, '--config approval_policy=never',
     '-c sandbox_mode=danger-full-access', `-c 'sandbox_mode="danger-full-access"'`, '--permission off', '--permission=off', '--permission-mode=bypassPermissions']) {
-    const w = launchWarnings({ AGENT_CMD_CODEX: `codex ${flag}` });
-    assert.equal(w.length, 1, flag);
-    assert.match(w[0], /AGENT_CMD_CODEX/);
-    assert.ok(!w[0].includes(flag), 'the flag text is not echoed');
+    assert.equal(hasBypass(`codex ${flag}`), true, flag);
   }
   for (const ok of ['codex', 'codex -c approval_policy=on-request', 'codex -c model=o3', 'mcode --permission ask', 'claude --permission-mode plan', 'codex --sandbox workspace-write', 'tool --full-automatic']) {
-    assert.deepEqual(launchWarnings({ AGENT_CMD_CODEX: ok }), [], ok);
+    assert.equal(hasBypass(ok), false, ok);
   }
 });
 
@@ -183,5 +180,4 @@ test('F8: no root module or script names a bypass flag (launch-config.js is the 
   const scripts = readdirSync(new URL('scripts', ROOT)).filter((f) => /\.(sh|js|py|mjs)$/.test(f)).map((f) => `scripts/${f}`);
   assert.ok(roots.includes('server.js') && roots.includes('trust.js') && scripts.length > 3);
   for (const f of [...roots, ...scripts]) assert.doesNotMatch(src(f), BYPASS, f);
-  assert.match(src('trust.js'), /unused by session create\/resume/);
 });

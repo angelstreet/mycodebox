@@ -7,12 +7,14 @@
 //   POST /api/v2/tasks/:id/cancel    {reason?}
 //   POST /api/v2/tasks/:id/approve   {action_id, sha?, reason?}   owner action on the pending request
 //   POST /api/v2/tasks/:id/deny      {action_id, sha?, reason?}
+//   GET  /api/v2/scorecard           read-only scorecard over the store (orchestration/scorecard.js); per-run rows omitted
 //
 // Approve/deny are never blanket: the body must name the pending request's action_id (and the head SHA when the task has
 // one), and the grant covers exactly that request's classes. Silence or a mismatch changes nothing.
 // Cancel/approve/deny are recorded by the goal loop (D-018, D-020), never written here: no loop in this process -> 503 E_NO_CONTROLLER,
 // another live controller holds the lease -> 409 E_CONTROLLER_HELD. Either way the request stays pending.
 import { ContractError, TERMINAL, outcomeOf, ownerAnswerOf } from './task-contract.js';
+import { buildScorecard } from './scorecard.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
 export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -82,9 +84,11 @@ export function answeredApproval(task, events) {
 }
 
 const ANSWER_NEXT = 'answer recorded; applied when the goal loop runs';
+// Informational tasks (e.g. scoring proposals) are never dispatched: the answer is the outcome, nothing applies it.
+const INFO_ANSWER_NEXT = 'decision recorded; nothing is applied by it; cancel the task to close it';
 export function nextAction(task, pending, answered = null) {
   if (task.store_error) return 'the task log could not be replayed: state is unknown; inspect the store before doing anything else';
-  if (answered) return ANSWER_NEXT;
+  if (answered) return task.review_policy?.mode === 'informational' ? INFO_ANSWER_NEXT : ANSWER_NEXT;
   if (pending) return `owner decision needed: ${pending.question}`;
   if (task.status === 'awaiting_approval') return 'awaiting an owner decision (the request itself is not readable)';
   if (task.status === 'waiting') {
@@ -272,7 +276,25 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
   }
 
   // -> { status, body } or null when the path is not a V2 route (server.js falls through).
+  // Read-only: list + events, the same reads as GET /api/v2/tasks. Never writes, recovers or proposes anything.
+  async function scorecard() {
+    const logs = [], unreadable = [];
+    for (const t of await store.list()) {
+      if (t.store_error) { noteStoreError(t); unreadable.push({ task_id: t.task_id }); continue; }
+      logs.push({ task_id: t.task_id, events: await store.events(t.task_id) });
+    }
+    const { runs, ...sc } = buildScorecard(logs, { unreadable });
+    return { ...sc, runs_count: runs.length };
+  }
+
   async function handle({ method, pathname, readBody }) {
+    if (pathname === '/api/v2/scorecard') {
+      if (method !== 'GET') return err(405, 'E_METHOD', 'method not allowed: the scorecard is read-only');
+      try { return reply(200, { ok: true, scorecard: await scorecard() }); } catch (e) {
+        if (e?.code === 'E_STORE_FAILED') { log(`[v2] ${e.message}`); return err(503, 'E_STORE_FAILED', COARSE_ERROR); }
+        return mapError(e);
+      }
+    }
     const m = /^\/api\/v2\/tasks(?:\/([^/]+)(?:\/(cancel|approve|deny))?)?$/.exec(pathname || '');
     if (!m) return null;
     const [, id, verb] = m;

@@ -4,7 +4,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { launchWarnings } from '../../launch-config.js';
+import { hasBypass } from '../../launch-config.js';
 
 export function coded(code, msg) {
   const e = new Error(msg || code);
@@ -14,8 +14,8 @@ export function coded(code, msg) {
 export const unsupported = (adapter, op) => coded('E_UNSUPPORTED', `${adapter}: ${op} is not supported`);
 
 // ---- permission / sandbox bypass guard -------------------------------------------------------
-// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config launchWarnings.
-const BYPASS_SINGLE = /^--(?:allow-)?dangerously-[\w-]+$|^--yolo$|^--bypass-[\w-]+$/;
+// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config hasBypass (V2 workers never get the dashboard's bypass default).
+const BYPASS_SINGLE = /^--(?:allow-)?dangerously-[\w-]+$|^--yolo$|^--auto$|^--bypass-[\w-]+$/;   // --auto: opencode auto-approve
 const BYPASS_PAIRS = [
   [/^--permission-mode$/, /^bypassPermissions$/],
   [/^--permission$/, /^(?:off|full)$/],
@@ -50,9 +50,9 @@ export function findBypass(argv, skip = []) {
     }
   });
   const rest = argv.filter((_, i) => !skipSet.has(i));
-  // launchWarnings is advisory and also flags --full-auto for owner review; it keeps codex's workspace-write sandbox,
+  // hasBypass also flags --full-auto for owner review; it keeps codex's workspace-write sandbox,
   // so the hard guard does not refuse it (D-011).
-  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.filter((x) => x !== '--full-auto').join(' ') }).length) flagged.push('launch-config pattern');
+  if (!flagged.length && hasBypass(rest.filter((x) => x !== '--full-auto').join(' '))) flagged.push('launch-config pattern');
   return flagged;
 }
 
@@ -199,7 +199,7 @@ export function normalizeError(input, nowMs = null) {
   else if (i.code === 'ENOENT' || i.exit === 127 || (i.code === 'EACCES' && /^spawn/.test(i.syscall || '')) || /command not found|not installed|executable file not found/i.test(text)) cls = 'unavailable';
   else if (/rate[ _-]?limit|\bHTTP[ /]*429\b|\b429 too many requests|status(?: code)?[:= ]+429|\berror[: ]+429\b|too many requests|overloaded(?:_error)?\b|(?:usage|quota|credit)s? (?:limit|exceeded|exhausted)|exceeded your (?:current )?quota|hit your usage limit|insufficient_quota|rate_limit_error/i.test(text)) { cls = 'rate_limit'; retry_after_ms = parseRetryAfterMs(text, nowMs) ?? (Number.isFinite(i.retry_after_ms) ? i.retry_after_ms : null); }
   else if (/context (?:length|window)|too long|token limit|maximum context|context_length_exceeded|exceeds? the (?:maximum|context)/i.test(text)) cls = 'context_overflow';
-  else if (/\bHTTP[ /]*401\b|\b401 unauthori[sz]ed|status(?: code)?[:= ]+401|unauthori[sz]ed|not logged in|please (?:log ?in|run .{0,20}login)|authentication (?:failed|error|required)|invalid (?:api[ _-]?key|x-api-key)|invalid_api_key|\bauthentication_error/i.test(text)) cls = 'auth';
+  else if (/\bHTTP[ /]*401\b|\b401 unauthori[sz]ed|status(?: code)?[:= ]+401|unauthori[sz]ed|not logged in|please (?:log ?in|run .{0,20}login)|authentication (?:failed|error|required)|invalid (?:api[ _-]?key|x-api-key)|invalid_api_key|\bauthentication_error|\bProviderAuthError\b/i.test(text)) cls = 'auth';
   else if (/permission denied|approval (?:required|denied)|requires approval|operation not permitted|\beacces\b|status(?: code)?[:= ]+403|HTTP[ /]*403/i.test(text)) cls = 'permission';
   else if (i.signal || (typeof i.exit === 'number' && i.exit !== 0)) cls = 'crash';
   else cls = 'unknown';

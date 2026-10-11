@@ -4,6 +4,13 @@
 // event logs and never writes, recovers or repairs anything. Unknown stays unknown: a missing price is null, never $0.
 //
 //   node scripts/v2-score.js [--store DIR] [--since ISO] [--json]
+//   node scripts/v2-score.js --scorecard [--suite MANIFEST] [--store DIR] [--since ISO] [--json]
+//   node scripts/v2-score.js --tool-score --suite MANIFEST [--store DIR]           (JSON)
+//   node scripts/v2-score.js --compare A.json B.json                              (two tool scores, same suite version only)
+//   node scripts/v2-score.js --propose [--history FILE] [--store DIR] [--write-proposals --base-sha SHA [--project ID]]
+//
+// --propose prints proposals; it writes only with --write-proposals AND an explicit --store (never the default store):
+// one informational task per proposal in awaiting_approval, plus journal.jsonl. Nothing applies a proposal.
 //
 // Default store: $GHOSTY_STATE_DIR/v2 (or ~/.local/state/ghosty/v2). No self-modification: the output is data; the router
 // only sees it if a human passes `router_history` to route({ history }).
@@ -11,7 +18,9 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultStoreDir } from '../orchestration/store.js';
-import { RUNTIME_EFFORTS } from '../orchestration/model-registry.js';
+import { RUNTIME_EFFORTS, loadRegistry } from '../orchestration/model-registry.js';
+import { buildScorecard, toolScore, compareToolScores, taskSpecsOf } from '../orchestration/scorecard.js';
+import { generateProposals, recordProposals } from '../orchestration/proposals.js';
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REWORK_STATES = ['repair', 'replan'];
@@ -157,17 +166,98 @@ export function renderTable(r) {
     ...(r.caveats.length ? ['', 'caveats:', ...r.caveats.map((c) => `  - ${c}`)] : [])].join('\n');
 }
 
-function main(argv) {
-  const a = { store: defaultStoreDir(), json: false, since: null };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--json') a.json = true;
-    else if (argv[i] === '--store' && argv[i + 1]) a.store = argv[++i];
-    else if (argv[i] === '--since' && argv[i + 1]) a.since = argv[++i];
-    else { console.error('usage: v2-score.js [--store DIR] [--since ISO] [--json]'); return 2; }
+// Every readable task log ({ task_id, events }) plus the unreadable ones, without the store's recovery (read-only).
+export function readStoreLogs(dir) {
+  const tasksDir = join(dir, 'tasks');
+  const logs = [], unreadable = [];
+  if (!existsSync(tasksDir)) return { logs, unreadable, missing: true };
+  for (const id of readdirSync(tasksDir).sort()) {
+    const log = join(tasksDir, id, 'events.jsonl');
+    if (!ID_RE.test(id) || !existsSync(log)) continue;
+    const { events, corrupt } = readLog(log);
+    if (corrupt) unreadable.push({ task_id: id, corrupt_line: corrupt }); else logs.push({ task_id: id, events });
   }
-  const r = scoreStore(a.store, { since: a.since });
-  console.log(a.json ? JSON.stringify(r, null, 2) : renderTable(r));
+  return { logs, unreadable, missing: false };
+}
+
+export function scorecardOf(dir, { manifest = null, since = null } = {}) {
+  const { logs, unreadable, missing } = readStoreLogs(dir);
+  const sc = buildScorecard(logs, { manifest, unreadable, since });
+  if (missing) sc.caveats.unshift('no task store at this path: nothing to score');
+  return { sc, logs };
+}
+
+const fmt = (v) => (v === null || v === undefined ? 'unknown' : typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(3)) : String(v));
+export function renderScorecard(sc) {
+  const head = ['group', 'settled', 'verified', 'first pass', 'cost/verified', 'median latency', 'rework', 'owner', 'defects', 'regressions'];
+  const rows = (list) => list.map((g) => [g.key, String(g.settled), pct(g.verified_rate), pct(g.first_pass_rate), usd(g.cost.per_verified_completion_usd), dur(g.median_latency_ms),
+    String(g.rework.rounds), String(g.owner_interventions.interventions), String(g.reviewer_defects.caught), fmt(g.regressions.detected)]);
+  const table = (title, list) => {
+    const body = rows(list);
+    const w = head.map((h, i) => Math.max(i ? h.length : title.length, ...body.map((b) => b[i].length)));
+    const line = (c) => c.map((x, i) => x.padEnd(w[i])).join('  ').trimEnd();
+    return [line([title, ...head.slice(1)]), line(w.map((n) => '-'.repeat(n))), ...(body.length ? body.map(line) : ['(no settled tasks)'])].join('\n');
+  };
+  const t = sc.tasks;
+  return [`V2 scorecard (read-only)${sc.suite ? ` for suite ${sc.suite.suite_id}@${sc.suite.suite_version}` : ''}`,
+    `tasks: ${t.total} total, ${t.settled} settled, ${t.accepted} accepted, ${t.failed} failed, ${t.cancelled} cancelled, ${t.open} open, ${t.informational} informational, ${t.unreadable} unreadable`,
+    '', table('model', sc.by_model), '', table('runtime', sc.by_runtime), '', table('role', sc.by_role), '', table('task class', sc.by_task_class),
+    ...(sc.caveats.length ? ['', 'caveats:', ...sc.caveats.map((c) => `  - ${c}`)] : [])].join('\n');
+}
+
+const readJson = (f) => JSON.parse(readFileSync(f, 'utf8'));
+const USAGE = 'usage: v2-score.js [--store DIR] [--since ISO] [--json] | --scorecard [--suite F] | --tool-score --suite F | --compare A B | --propose [--history F] [--write-proposals --store DIR --base-sha SHA [--project ID]]';
+
+async function main(argv) {
+  const a = { store: defaultStoreDir(), storeGiven: false, json: false, since: null, mode: 'report', suite: null, history: null, write: false, baseSha: null, project: 'mycodebox', compare: null };
+  for (let i = 0; i < argv.length; i++) {
+    const x = argv[i], next = argv[i + 1];
+    if (x === '--json') a.json = true;
+    else if (x === '--store' && next) { a.store = argv[++i]; a.storeGiven = true; }
+    else if (x === '--since' && next) a.since = argv[++i];
+    else if (x === '--scorecard') a.mode = 'scorecard';
+    else if (x === '--tool-score') a.mode = 'tool-score';
+    else if (x === '--propose') a.mode = 'propose';
+    else if (x === '--compare' && next && argv[i + 2]) { a.mode = 'compare'; a.compare = [argv[++i], argv[++i]]; }
+    else if (x === '--suite' && next) a.suite = argv[++i];
+    else if (x === '--history' && next) a.history = argv[++i];
+    else if (x === '--write-proposals') a.write = true;
+    else if (x === '--base-sha' && next) a.baseSha = argv[++i];
+    else if (x === '--project' && next) a.project = argv[++i];
+    else { console.error(USAGE); return 2; }
+  }
+  if (a.mode === 'report') {
+    const r = scoreStore(a.store, { since: a.since });
+    console.log(a.json ? JSON.stringify(r, null, 2) : renderTable(r));
+    return 0;
+  }
+  if (a.mode === 'compare') {
+    try { console.log(JSON.stringify(compareToolScores(readJson(a.compare[0]), readJson(a.compare[1])), null, 2)); return 0; }
+    catch (e) { console.error(`refused: ${e.message}`); return 3; }
+  }
+  const manifest = a.suite ? readJson(a.suite) : null;
+  if (a.mode === 'tool-score' && !manifest) { console.error('--tool-score needs --suite MANIFEST'); return 2; }
+  if (a.write && (a.mode !== 'propose' || !a.storeGiven || !a.baseSha)) { console.error('--write-proposals needs --propose, an explicit --store DIR and --base-sha SHA'); return 2; }
+  let sc, logs;
+  try { ({ sc, logs } = scorecardOf(a.store, { manifest, since: a.since })); } catch (e) { console.error(e.message); return 2; }
+  if (a.mode === 'scorecard') { console.log(a.json ? JSON.stringify(sc, null, 2) : renderScorecard(sc)); return 0; }
+  if (a.mode === 'tool-score') { console.log(JSON.stringify(toolScore(sc, manifest), null, 2)); return 0; }
+  // propose
+  const registry = loadRegistry();
+  const routerHistory = scoreStore(a.store, { since: a.since }).router_history;
+  const { proposals } = generateProposals(sc, { registry, tasks: taskSpecsOf(logs), routerHistory, currentHistory: a.history ? readJson(a.history) : {} });
+  let recorded = null;
+  if (a.write) {
+    const [{ createTaskStore }, { createIntake }] = await Promise.all([import('../orchestration/store.js'), import('../orchestration/intake.js')]);
+    const store = createTaskStore({ dir: a.store });
+    recorded = await recordProposals(proposals, { store, intake: createIntake({ store, loadPolicy: () => ({ ok: false }) }), base_sha: a.baseSha, project_id: a.project });
+  }
+  if (a.json) console.log(JSON.stringify({ proposals, recorded }, null, 2));
+  else {
+    console.log(proposals.length ? proposals.map((p) => `- [${p.kind}] ${p.title}\n    ${p.rationale}${p.shadow ? `\n    shadow: ${p.shadow.changed.length} of ${p.shadow.evaluated} recorded task(s) would route differently` : ''}`).join('\n') : 'no proposal: no rule fired');
+    console.log(recorded ? `recorded ${recorded.filter((r) => r.created).length} new proposal task(s) in awaiting_approval; nothing was applied` : 'not recorded (use --write-proposals --store DIR --base-sha SHA); nothing was applied');
+  }
   return 0;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));
+if (process.argv[1] === fileURLToPath(import.meta.url)) main(process.argv.slice(2)).then((c) => process.exit(c), (e) => { console.error(e.message); process.exit(1); });

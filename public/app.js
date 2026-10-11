@@ -20,7 +20,7 @@ import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';
-import { listHtml, detailHtml, newFormHtml } from '/tasks-view.js';
+import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -62,6 +62,8 @@ const els = {
   filterBar:   $('#filterBar'),
 };
 
+// Name the configured https origin in the "not a secure context" toasts, else the generic wording.
+const httpsHint = () => state.links?.publicUrl || 'the HTTPS (Tailscale Serve) address';
 const state = {
   manualClosed: true,                  // the Notes fold starts collapsed
   hiddenClosed: true,                  // the Hidden fold starts collapsed
@@ -824,6 +826,7 @@ async function fetchInitial() {
     state.sessions = data.sessions || [];
     state.status   = data.status   || {};
     state.statusAt = Date.now();
+    state.links = data.links || {};   // configured langfuse / https PUBLIC_URL (server env), either may be null
     sortSessions();
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
     for (const s of state.sessions) state.prevState[s.name] = stateOf(s.name);
@@ -3050,7 +3053,6 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 }
 
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
-const LANGFUSE_URL = `http://${location.hostname}:3100`;   // Langfuse on the same host
 const SUBSCRIPTION = { manager: 'pay per call (Jev, AI reviewer)', claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
 const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: no list price for this model">&mdash;</span>' : escapeHtml(fmtUsd(c)) + unit);
 const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
@@ -3261,7 +3263,7 @@ function openUsage() {
   openSheet('Usage · API-equivalent', ({ body, foot, close }) => {
     body.closest('.sheet').classList.add('usage');
     foot.classList.remove('hidden');
-    foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
+    foot.innerHTML = `${state.links?.langfuse ? `<a class="sbtn lf" href="${escapeHtml(state.links.langfuse)}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a>` : ''}<span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', dim: 'model', range: 7, selDay: null, view: lsGet('ghosty.usageView', 'overview') };
     let tab = 'today', data = null;
@@ -3406,13 +3408,14 @@ function openTasks() {
       return j;
     };
     const bar = () => (v.page === 'list'
-      ? '<div class="tk-bar"><button class="sbtn primary" data-tk-new>New task</button><button class="sbtn" data-tk-refresh>Refresh</button></div>'
+      ? '<div class="tk-bar"><button class="sbtn primary" data-tk-new>New task</button><button class="sbtn" data-tk-refresh>Refresh</button><button class="sbtn" data-tk-score>Scorecard</button></div>'
       : '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>');
     const paint = () => {
       let h;
       if (v.err) h = `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>`;
       else if (v.page === 'new') h = '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>' + newFormHtml();
       else if (v.page === 'detail') h = v.task ? bar() + detailHtml(v.task) : '<div class="sheet-empty">loading…</div>';
+      else if (v.page === 'score') h = bar() + scorecardHtml(v.score);
       else h = v.tasks ? bar() + listHtml(v.tasks, v.approvals) : '<div class="sheet-empty">loading…</div>';
       if (h === v.last) return;
       const keep = document.activeElement?.closest?.('.tasks') ? document.activeElement.getAttribute('data-tk-open') : null;
@@ -3422,6 +3425,7 @@ function openTasks() {
     const load = async () => {
       try {
         if (v.page === 'detail') v.task = (await api(`/api/v2/tasks/${encodeURIComponent(v.id)}`)).task;
+        else if (v.page === 'score') v.score = (await api('/api/v2/scorecard')).scorecard;
         else if (v.page === 'list') { const j = await api('/api/v2/tasks'); v.tasks = j.tasks; v.approvals = j.approvals || []; }
         v.err = null;
       } catch (e) { v.err = e.status === 404 && v.page === 'list' ? 'The V2 engine is off. Start the server with GHOSTY_V2=1 to use tasks.' : `tasks unavailable: ${e.message}`; }
@@ -3443,6 +3447,7 @@ function openTasks() {
       if (!t) return;
       if (t.dataset.tkOpen) return go('detail', t.dataset.tkOpen);
       if ('tkNew' in t.dataset) return go('new');
+      if ('tkScore' in t.dataset) { v.score = null; return go('score'); }
       if ('tkBack' in t.dataset || 'tkCancelNew' in t.dataset) return go('list');
       if ('tkRefresh' in t.dataset) return load();
       const act = async (fn) => { t.disabled = true; try { await fn(); } catch (er) { toast(er.message, 3500); } await load(); };
@@ -4290,7 +4295,7 @@ async function toggleNotify() {
         referrer: document.referrer, ua: navigator.userAgent, origin: location.origin,
         push: pushSupported(), sw: !!navigator.serviceWorker?.controller,
       }) }).catch(() => {});
-      toast(!window.isSecureContext ? 'needs the HTTPS (Tailscale Serve) address'
+      toast(!window.isSecureContext ? `needs ${httpsHint()}`
         : Notification.permission === 'denied' ? 'notifications are off for this app - Android: App info > Notifications > allow, then tap the bell again'
         : 'permission not given - tap the bell again', 5000);
       return;
@@ -4437,7 +4442,7 @@ function voiceUi() {
 }
 async function voiceStart() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    toast(!window.isSecureContext ? 'the mic needs the HTTPS (Tailscale Serve) address' : 'no microphone support in this browser', 4000);
+    toast(!window.isSecureContext ? `the mic needs ${httpsHint()}` : 'no microphone support in this browser', 4000);
     return;
   }
   try { voice.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }

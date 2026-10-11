@@ -41,7 +41,7 @@ GHOSTY_STATE_DIR="$(mktemp -d)" npm test
 Run once in the foreground, with explicit network and agent-command settings:
 
 ```bash
-HOST=127.0.0.1 PORT=7777 AGENT_CMD_CLAUDE=claude AGENT_CMD_CODEX=codex node server.js
+HOST=127.0.0.1 PORT=7777 node server.js
 ```
 
 From another shell:
@@ -52,9 +52,9 @@ curl --fail --silent --show-error http://127.0.0.1:7777/api/health
 
 Expect JSON with `ok: true`. An empty session list is fine if no tmux sessions exist. Stop the foreground process with Ctrl-C before starting the service.
 
-**Defaults and upgrades:** the source now defaults to `HOST=127.0.0.1`, `AGENT_CMD_CLAUDE=claude` and `AGENT_CMD_CODEX=codex`. Create and resume no longer pre-accept folder trust; respond to the CLI trust and permission prompts yourself. Claude resume and `scripts/manager-fresh.sh` reuse `AGENT_CMD_CLAUDE`; saved process flags do not restore permission bypasses. Ensure `claude` is on the service/script PATH or configure its absolute path. The server does not automatically load `.env`.
+**Defaults and upgrades:** the source now defaults to `HOST=127.0.0.1`, `AGENT_CMD_CLAUDE=claude --dangerously-skip-permissions` and `AGENT_CMD_CODEX=codex --dangerously-bypass-approvals-and-sandbox`. Owner's chosen default (2026-10-11): dashboard-created and resumed sessions and the manager start with permission prompts skipped, and create/resume pre-accept folder trust (best effort). Claude resume and `scripts/manager-fresh.sh` reuse `AGENT_CMD_CLAUDE` (the manager restart also pre-accepts trust); an `AGENT_CMD_*` override wins verbatim, so set it to plain `claude`/`codex` to get normal prompts. The forbidden-topic filter, manager hard floors and protected-action gates are unchanged, and V2 workers keep their own launch modes. **MiniMax:** the `mcode` TUI has no permission flag; its full-permission mode is `permissionMode: bypassPermissions` in `~/.minimax/config.yaml` (headless `mcode exec` takes `--permission full`). Set it yourself; mycodebox never writes that file. mcode has no folder-trust prompt. Ensure `claude` is on the service/script PATH or configure its absolute path. The server does not automatically load `.env`.
 
-Existing environment overrides are preserved, so review service settings before upgrading: remove obsolete bypass flags and select loopback + private Serve (or an explicitly private Tailscale address). Non-loopback settings and recognized unsafe command overrides emit warnings naming the setting without logging its value. These diagnostics cannot certify arbitrary shell wrappers or external CLI configuration. Already-running agents are unchanged. No migration edits live settings or restarts the service automatically.
+Existing environment overrides are preserved, so review service settings before upgrading: select loopback + private Serve (or an explicitly private Tailscale address). A non-loopback `HOST` emits a warning without logging its value. Bypass flags no longer warn: they are the default. Already-running agents are unchanged. No migration edits live settings or restarts the service automatically.
 
 ### Persistent service configuration
 
@@ -72,8 +72,7 @@ Set these service environment entries explicitly:
 ```ini
 Environment=HOST=127.0.0.1
 Environment=PORT=7777
-Environment=AGENT_CMD_CLAUDE=claude
-Environment=AGENT_CMD_CODEX=codex
+# Optional: Environment=AGENT_CMD_CLAUDE=... / AGENT_CMD_CODEX=... replaces the default launch command verbatim (see Defaults).
 ```
 
 Set absolute CLI paths if needed. For MiniMax, override `AGENT_CMD_MINIMAX` with your installed command; the source default has a machine-specific Node path.
@@ -112,7 +111,7 @@ For a simple HTTP dashboard without Serve, bind to the node's actual Tailscale I
 ```bash
 GHOSTY_TAILSCALE_IP="$(tailscale ip -4)"
 test -n "$GHOSTY_TAILSCALE_IP" || exit 1
-HOST="$GHOSTY_TAILSCALE_IP" AGENT_CMD_CLAUDE=claude AGENT_CMD_CODEX=codex node server.js
+HOST="$GHOSTY_TAILSCALE_IP" node server.js
 ```
 
 Open `http://<tailscale-ip>:7777/`. Set the literal address in the service configuration for persistent operation; `HOST` takes an address, not the interface name `tailscale0`. Do not start this command alongside a running dashboard.
@@ -126,6 +125,8 @@ Optional does not mean every background reader defaults off. The server starts p
 
 | Feature | Setup / prerequisite | Data or credential |
 |---|---|---|
+| Android app links | `ANDROID_APP_PACKAGE` and `ANDROID_APP_SHA256` in `.env` (or a verbatim `$GHOSTY_STATE_DIR/assetlinks.json`) | Package name and public cert fingerprint; 404 when unset |
+| Langfuse link | `LANGFUSE_PUBLIC_URL` (browser-reachable; else a non-loopback `LANGFUSE_URL`) | Button hidden when neither is set |
 | Web Push | Trusted HTTPS, browser permission, bell button | Generated VAPID key and subscriptions in state dir |
 | ntfy | Private `NTFY_TOPIC`, optional `NTFY_URL`, `PUBLIC_URL` | Topic is secret; default provider is external |
 | Claude reporter | Merge the plugin setting from [REFERENCE](REFERENCE.md#session-reporter-task-44-phase-8) into existing Claude settings; compatible Claude version; new sessions | Loopback URL plus `reporter.token`; do not overwrite other settings |
@@ -153,6 +154,8 @@ Verify Node binds only to the intended address. On the owner's phone, confirm HT
 Report the private URL to the owner, enabled features, test results and anything skipped. See [usage and troubleshooting](USAGE.md).
 
 ## Update and uninstall
+
+**Set these before upgrading.** The repository no longer carries `public/.well-known/assetlinks.json` or a hard-coded Langfuse host. If you used the Android app links or the usage sheet's Langfuse button, add to `.env` first (or the features go away after the restart): `ANDROID_APP_PACKAGE` + `ANDROID_APP_SHA256` (or `$GHOSTY_STATE_DIR/assetlinks.json`), `LANGFUSE_PUBLIC_URL`, and `PUBLIC_URL` (https origin) to name it in the HTTPS hints. With `LANGFUSE_PUBLIC_URL` unset (and `LANGFUSE_URL` loopback), the usage sheet's Langfuse button is hidden instead of pointing at port 3100 on the same host. See [REFERENCE](REFERENCE.md).
 
 Check `git status --short`, preserve local changes, review the update, and securely back up state before changing versions. Record the previous commit so rollback is possible without discarding local work.
 

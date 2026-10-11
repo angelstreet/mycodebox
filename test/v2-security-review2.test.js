@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { classifyStall, wouldSend, forbiddenMatch } from '../stall.js';
-import { launchWarnings } from '../launch-config.js';
+import { hasBypass } from '../launch-config.js';
 import { createParking } from '../parking.js';
 import { writeWakesFile, startWakesLogger } from '../manager-wakes.js';
 
@@ -118,15 +118,15 @@ test('F3: an empty command aborts before tmux', (t) => {
 test('F6: more spellings of the known bypass switches are flagged; harmless config keys are not', () => {
   for (const flag of ['-a=never', '--ask-for-approval "never"', '--permission-mode "bypassPermissions"', '--sandbox=danger-full-access', '--config=approval_policy=never',
     `-c 'sandbox_mode = "danger-full-access"'`, '--dangerously-skip-permissions=true', '--yolo --model o3']) {
-    assert.equal(launchWarnings({ AGENT_CMD_CODEX: `codex ${flag}` }).length, 1, flag);
+    assert.equal(hasBypass(`codex ${flag}`), true, flag);
   }
   for (const ok of ['codex -c approval_policy=untrusted', 'codex -c sandbox_mode=read-only', 'claude --permission-mode acceptEdits', 'mcode --permission smart', 'claude --allowedTools Bash']) {
-    assert.deepEqual(launchWarnings({ AGENT_CMD_CODEX: ok }), [], ok);
+    assert.equal(hasBypass(ok), false, ok);
   }
 });
 test('F6: legacy Codex spellings', () => {
   for (const flag of ['--approval-mode full-auto', `-c 'sandbox_permissions=["disk-full-write-access"]'`]) {
-    assert.equal(launchWarnings({ AGENT_CMD_CODEX: `codex ${flag}` }).length, 1, flag);
+    assert.equal(hasBypass(`codex ${flag}`), true, flag);
   }
 });
 

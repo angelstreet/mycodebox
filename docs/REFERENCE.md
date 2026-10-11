@@ -118,7 +118,9 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `NTFY_TOPIC`  | unset   | enable optional ntfy push (Web Push is always on): a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
 | `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
 | `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
-| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
+| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`). An https value is also named in the UI's "needs the HTTPS address" hints |
+| `LANGFUSE_PUBLIC_URL` | unset | browser-reachable Langfuse URL for the usage sheet's Langfuse button and the manager panel links. The usage button falls back to `LANGFUSE_URL` only when that is not a loopback address; with neither, the button is hidden. The manager panel falls back to `LANGFUSE_URL` as is |
+| `ANDROID_APP_PACKAGE` / `ANDROID_APP_SHA256` | unset | serve `/.well-known/assetlinks.json` for the Android app: package name and signing-cert SHA-256 fingerprint(s) (`XX:..` 32 hex pairs, comma-separated). Both or neither; invalid values log a startup warning and nothing is served. Alternative: put a ready file at `$GHOSTY_STATE_DIR/assetlinks.json`. Read at startup; restart to apply. Unconfigured: 404 |
 | `HEALTH_MS`   | `5000`  | host health sample cadence (CPU, load, RAM, disk) |
 | `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
 | `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
@@ -129,7 +131,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
 | `GHOSTY_FORBIDDEN_EXTRA` | unset | extra regex of never-auto-answer words (customer names etc. — keep them out of the public repo) |
 | `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
-| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude` / `codex` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | create/resume launch commands; Claude also configures manager-fresh. Known bypass overrides produce redacted warnings; custom wrappers and CLI configuration still need owner review |
+| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | create/resume launch commands (owner's default 2026-10-11: prompts skipped, folder trust pre-accepted via `trust.js`); Claude also configures manager-fresh; an override wins verbatim, even empty. Only a non-loopback `HOST` warns |
 | `TLS_KEY` / `TLS_CERT` | `certs/key.pem` / `certs/cert.pem` under checkout | native TLS starts only when both exist; same HOST as HTTP |
 | `TLS_PORT` | `7443` (`443` if PORT=443) | native HTTPS port; HTTP remains enabled |
 | `TMUX_BIN` | `tmux` | tmux executable |
@@ -845,12 +847,13 @@ Errors are `{ ok:false, error, code }` (400 invalid, 404 not found, 409 conflict
 | `POST /api/v2/tasks/:id/cancel` | `{ reason? }` | cancels a non-terminal task as `owner` |
 | `POST /api/v2/tasks/:id/approve` | `{ action_id, sha?, reason? }` | records `approval.granted` for the pending request only. `action_id` must equal `pending_approval.action_id`; `sha` is required when the task has a head SHA and must equal it. Covers exactly that request's action classes. 409 `E_NO_PENDING_APPROVAL`, `E_STALE_ACTION` or `E_SHA_MISMATCH` otherwise |
 | `POST /api/v2/tasks/:id/deny` | same | records `approval.denied` |
+| `GET /api/v2/scorecard` | none | read-only scorecard (`by_model`, `by_runtime`, `by_role`, `by_task_class`, `caveats`, `runs_count`; per-run rows omitted), see [Scoring](v2/SCORING.md). Any other method is 405. Writes nothing |
 
 `outcome` is `done` only for state `accepted`; otherwise `not_yet_done`, `waiting`, `needs_owner`, `unrecoverable` or
 `cancelled`, and `unknown` when the task log cannot be replayed. Approve and deny only write the owner's decision to the
 task log in the same shape the goal loop reads; the task moves when the goal loop runs, which is not started by the server.
 
-The scoring report is a script, not a route: [`scripts/v2-score.js`](v2/SCORING.md).
+The full scoring report, tool score and proposals are a script: [`scripts/v2-score.js`](v2/SCORING.md); only the scorecard has a read-only route.
 
 ## Architecture
 
@@ -888,7 +891,7 @@ See the maintained [repository map](MAP.md) for components, tests and persistent
 ## Adding xterm sessions automatically
 
 Every tmux session visible to the server's Unix user/socket appears in the dashboard. See [Usage](USAGE.md#first-session)
-for creating a session without bypassing agent permissions. UI launch commands are configured above.
+for creating a session. UI launch commands are configured above.
 
 ## Security
 

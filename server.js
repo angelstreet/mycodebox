@@ -76,6 +76,7 @@ import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
 import { createPush, createAlerts, tierConfig } from './push.js';
 import { launchConfig, launchWarnings } from './launch-config.js';
+import { trustFolder } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
@@ -86,6 +87,7 @@ import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
+import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
@@ -590,6 +592,11 @@ const NTFY_DONE = process.env.NTFY_DONE === '1';   // also alert when a turn fin
 const NTFY_DEBOUNCE_MS = 60000;
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const push = createPush({ stateDir: STATE_DIR });
+const LINKS = publicLinks();   // langfuse / https PUBLIC_URL for the UI, from env only
+let assetlinks = null;         // /.well-known/assetlinks.json body from ANDROID_APP_* env or $STATE_DIR/assetlinks.json
+loadAssetlinks(process.env, STATE_DIR).then((a) => {
+  if (a?.error) console.warn(`[assetlinks] not served: ${a.error}`); else assetlinks = a;
+}).catch(() => {});
 // manager.json key `managerSessions` (default ['manager']) — same source the scorecard reads.
 const MANAGER_SESSIONS_DEFAULT = ['manager'];
 const managerConfigFile = join(STATE_DIR, 'manager.json');
@@ -1076,6 +1083,7 @@ async function createSession({ name, agent, cwd, priority }) {
   } catch (err) {
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
+  try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
   const cmd = AGENT_CMDS[agent];
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
@@ -1156,10 +1164,12 @@ async function resumeSession(name) {
   // Claude entries have no `agent` field (legacy); MiniMax entries store agent: 'minimax'. Dispatch on that.
   const isMinimax = rec.agent === 'minimax';
   const base = isMinimax ? AGENT_CMDS.minimax : AGENT_CMDS.claude;
+  const trustAgent = isMinimax ? 'minimax' : 'claude';
   const out = await parking.resume(name, {
     base,
     validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
     start: async (n, r, cmd) => {
+      try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, '-l', '--', cmd]);
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, 'Enter']);
       sessionMeta.reset(n);
@@ -1449,7 +1459,7 @@ const server = http.createServer(async (req, res) => {
       for (const [k, v] of Object.entries(r.status)) status[k] = { ...v, reply: track.get(k)?.reply ?? null };
     }
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ sessions: r.sessions, status }));
+    res.end(JSON.stringify({ sessions: r.sessions, status, links: LINKS }));
     return;
   }
   if (req.method === 'GET' && p === '/api/owner-asks') {   // the manager's open questions for the owner (NEEDS YOU strip)
@@ -1734,6 +1744,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --- static ---
+  if (req.method === 'GET' && p === '/.well-known/assetlinks.json') {
+    if (!assetlinks) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
+    res.end(assetlinks.json);
+    return;
+  }
   if (req.method === 'GET') {
     await serveStatic(req, res, p);
     return;

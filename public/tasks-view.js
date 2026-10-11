@@ -110,3 +110,24 @@ export function detailHtml(t) {
   const cancel = isTerminal(t) ? '' : `<div class="tk-actions"><button class="sbtn danger" data-tk-cancel data-id="${esc(t.task_id)}">Cancel task</button></div>`;
   return head + approval + dod + checks + verdicts + decisions + runs + roles + allowed + graph + deliv + usage + refs + hist + cancel;
 }
+
+// Read-only scorecard (GET /api/v2/scorecard). No action buttons: proposals are recorded by scripts/v2-score.js and answered
+// like any other approval request. Unknown reads "unknown", never 0.
+const pctOf = (v) => (v === null || v === undefined ? 'unknown' : `${Math.round(v * 100)}%`);
+const durOf = (ms) => (ms === null || ms === undefined ? 'unknown' : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : ms < 3_600_000 ? `${(ms / 60_000).toFixed(1)}m` : `${(ms / 3_600_000).toFixed(1)}h`);
+function scoreTable(title, groups) {
+  if (!groups?.length) return sec(title, dim('no settled task'));
+  const head = ['group', 'settled', 'verified', 'first pass', 'cost / verified', 'median latency', 'rework', 'owner', 'defects caught', 'regressions'];
+  const row = (g) => [g.key, g.settled, pctOf(g.verified_rate), pctOf(g.first_pass_rate), usd(g.cost.per_verified_completion_usd), durOf(g.median_latency_ms),
+    g.rework.rounds, g.owner_interventions.interventions, g.reviewer_defects.caught, g.regressions.detected ?? 'unknown'];
+  return sec(title, `<div class="tk-scroll"><table class="tk-score"><thead><tr>${head.map((h) => `<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${groups.map((g) => `<tr${g.small_sample ? ' class="small"' : ''}>${row(g).map((c, i) => (i ? `<td>${esc(c)}</td>` : `<th scope="row">${esc(c)}${g.small_sample ? ' <span class="tk-dim">(small sample)</span>' : ''}</th>`)).join('')}</tr>`).join('')}</tbody></table></div>`);
+}
+export function scorecardHtml(sc) {
+  if (!sc) return '<div class="sheet-empty">loading…</div>';
+  const t = sc.tasks;
+  return `<section class="tk-sec" aria-label="Scorecard"><h3 class="tk-h">${icon('layers', 14)} Scorecard (read-only)</h3>
+    <div class="tk-dim">${esc(`${t.total} tasks: ${t.settled} settled, ${t.accepted} accepted, ${t.failed} failed, ${t.cancelled} cancelled, ${t.open} open, ${t.informational} informational, ${t.unreadable} unreadable`)}</div>
+    <div class="tk-dim">Nothing here changes routing. Improvement proposals are separate tasks that wait for your approval.</div></section>`
+    + scoreTable('By model (developer)', sc.by_model) + scoreTable('By runtime', sc.by_runtime) + scoreTable('By role', sc.by_role) + scoreTable('By task class', sc.by_task_class)
+    + (sc.caveats?.length ? sec('Caveats', `<ul class="tk-ul">${sc.caveats.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`) : '');
+}
