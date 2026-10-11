@@ -1,4 +1,4 @@
-STATUS: RUNNING — all packages integrated except delivery bridge + acceptance (v2/11-e2e, Fable verification resumed after a provider rate limit); next: Fable full-process review, draft PR
+STATUS: RUNNING — all packages integrated (a8aa4c0: 1604/1604 both runtimes, acceptance 54/54, reporter 25/25); Fable full-process review running; next: address findings, push, draft PR
 
 # V2 progress
 
