@@ -44,6 +44,23 @@ if (name === 'claude') {
   out({ type: 'thread.started', thread_id: 'thr-1' });
   out({ type: 'item.completed', item: { type: 'agent_message', text: 'hello' } });
   out({ type: 'turn.completed', usage: { input_tokens: 5, output_tokens: 3 } });
+} else if (name === 'opencode') {
+  const sid = a.includes('--session') ? a[a.indexOf('--session') + 1] : 'ses_fake1';
+  const part = (x) => ({ id: 'prt_1', messageID: 'msg_1', sessionID: sid, ...x });
+  const fin = (extra) => out({ type: 'step_finish', timestamp: 6, sessionID: sid, part: part({ type: 'step-finish', ...extra }) });
+  if (mode === 'ocnocost') { fin({ reason: 'tool-calls', tokens: { input: 5, output: 1, cache: {} } }); fin({ reason: 'stop', tokens: { input: 5, output: 1 }, cost: 0 }); process.exit(0); }
+  if (mode === 'oclength') { fin({ reason: 'length', tokens: { input: 5, output: 1 }, cost: 0 }); process.exit(0); }
+  if (mode === 'oc429' || mode === 'ocauth') {
+    out({ type: 'error', timestamp: 1, sessionID: sid, error: mode === 'oc429' ? { name: 'APIError', data: { message: 'Too many', statusCode: 429 } } : { name: 'ProviderAuthError', data: { message: 'bad key' } } });
+    process.exit(1);
+  }
+  if (mode === 'ocerror') { out({ type: 'error', timestamp: 1, sessionID: sid, error: { name: 'UnknownError', data: { message: 'Unexpected server error.', ref: 'err_x' } } }); process.exit(1); }
+  out({ type: 'step_start', timestamp: 1, sessionID: sid, part: part({ type: 'step-start', snapshot: 'abc' }) });
+  out({ type: 'tool_use', timestamp: 2, sessionID: sid, part: part({ type: 'tool', tool: 'write', callID: 'c1', state: { status: 'completed', input: {}, output: 'x' } }) });
+  out({ type: 'step_finish', timestamp: 3, sessionID: sid, part: part({ type: 'step-finish', reason: 'tool-calls', tokens: { total: 120, input: 100, output: 10, reasoning: 5, cache: { write: 2, read: 3 } }, cost: 0.5 }) });
+  out({ type: 'step_start', timestamp: 4, sessionID: sid, part: part({ type: 'step-start' }) });
+  out({ type: 'text', timestamp: 5, sessionID: sid, part: part({ type: 'text', text: 'Done.' }) });
+  out({ type: 'step_finish', timestamp: 6, sessionID: sid, part: part({ type: 'step-finish', reason: 'stop', tokens: { total: 20, input: 4, output: 6, reasoning: 0, cache: { write: 0, read: 10 } }, cost: 0.25 }) });
 } else { out({ type: 'text', text: 'hello' }); out({ type: 'result' }); }
 `;
 const CLIS = { claude, codex, minimax, opencode };
@@ -170,7 +187,7 @@ test('T11 probe: not installed -> unavailable; failing --version -> unknown; ok 
   const p = await a.probeCapabilities();
   assert.equal(p.available, false);
   assert.equal(p.version, null);
-  assert.equal(p.features.resume, false);
+  assert.equal(p.features.resume, true);
   const ok = await adapterFor('claude').probeCapabilities();
   assert.equal(ok.available, true);
   assert.equal(ok.version, '9.9.9');
@@ -192,9 +209,56 @@ test('T11 probe: ambiguous failure -> unknown (non-zero --version exit, hang)', 
 
 test('T11 unsupported ops throw E_UNSUPPORTED', () => {
   const o = adapterFor('opencode');
-  assert.throws(() => o.resume({ session_id: 'abc' }), { code: 'E_UNSUPPORTED' });
+  assert.equal(o.resume.length, 1);
   for (const name of Object.keys(CLIS)) assert.throws(() => adapterFor(name).send({}, 'x'), { code: 'E_UNSUPPORTED' }, name);
   assert.throws(() => fake().send({}, 'x'), { code: 'E_UNSUPPORTED' });
+});
+
+test('opencode: real step stream is parsed, usage summed (cache counts as input), session captured, result on stop', async () => {
+  const { run } = await runCli('opencode', 'ok', { model: 'opencode/m' });
+  assert.equal(run.session_id, 'ses_fake1');
+  const types = run.events.map((e) => e.type);
+  assert.ok(types.includes('started') && types.at(-1) === 'exit');
+  assert.ok(run.events.some((e) => e.type === 'tool_use' && e.name === 'write'));
+  assert.ok(run.events.some((e) => e.type === 'text' && e.text === 'Done.'));
+  assert.equal(run.events.filter((e) => e.type === 'result').length, 1);
+  assert.deepEqual(run.usage, { input_tokens: 105 + 14, output_tokens: 15 + 6, usd: 0.75 });
+  assert.equal(run.result.error, null);
+});
+
+test('opencode: error event + exit 1 is a failed run with the message kept; resume passes --session and continues the id', async () => {
+  const { run } = await runCli('opencode', 'ocerror');
+  assert.ok(run.events.some((e) => e.type === 'error' && /Unexpected server error/.test(e.text)));
+  assert.equal(run.result.exit, 1);
+  assert.equal(run.result.error.class, 'crash');
+  const rec = path.join(tmp, 'resume-oc.json');
+  const r = adapterFor('opencode').resume({ session_id: 'ses_abc', task_id: 't', run_id: 'roc', cwd: work(), env: { FAKE_OUT: rec } });
+  await r.done;
+  const argv = JSON.parse(fs.readFileSync(rec, 'utf8')).argv;
+  assert.equal(argv[argv.indexOf('--session') + 1], 'ses_abc');
+  assert.equal(r.session_id, 'ses_abc');
+  assert.ok(!argv.includes('--auto'));
+});
+
+test('opencode: missing cost or tokens marks usage incomplete; non-tool-calls reasons are terminal', async () => {
+  const a = await runCli('opencode', 'ocnocost');
+  assert.equal(a.run.usage_incomplete, true);
+  assert.equal(a.a.collectUsage(a.run).incomplete, true);
+  const full = await runCli('opencode', 'ok');
+  assert.equal(full.a.collectUsage(full.run).incomplete, false);
+  const l = await runCli('opencode', 'oclength');
+  const res = l.run.events.find((e) => e.type === 'result');
+  assert.equal(res.ok, false);
+  assert.match(res.text, /length/);
+});
+
+test('opencode: 429 -> rate_limit, ProviderAuthError -> auth; --auto is refused as a bypass', async () => {
+  const r = await runCli('opencode', 'oc429');
+  assert.equal(r.run.result.error.class, 'rate_limit');
+  const u = await runCli('opencode', 'ocauth');
+  assert.equal(u.run.result.error.class, 'auth');
+  assert.ok(findBypass(['run', '--auto', 'p'], [2]).length);
+  assert.throws(() => adapterFor('opencode', { extraArgs: ['--auto'] }).start({ task_id: 't', run_id: 'ga', cwd: work(), prompt: 'hi' }), { code: 'E_BYPASS' });
 });
 
 test('resume maps to each CLI session flag', async () => {
