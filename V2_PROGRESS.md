@@ -18,11 +18,11 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
 | R2-1 | Clean V2_VERIFICATION.md, gates on final SHA | coordinator | todo | |
-| R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | dev (wt r2-perms) | mcode TUI has no permission flag: full mode = `permissionMode: bypassPermissions` in its config.yaml (D-019) |
-| R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | dev (wt r2-config) | |
-| R2-4 | m1 m2 m3 m4 m6, T15 red-tests half, T20 same-origin control | Sonnet / Opus (m3,m6 Fable) | todo | |
-| R2-5 | OpenCode installed in user space, live smoke | coordinator + Sonnet | dev (wt r2-opencode) | opencode-ai 1.18.32 (pinned >2 weeks old) under ~/.local/opencode, free models only; real JSON differs from fake (sessionID, part.tokens per step, step_finish) |
-| R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | todo | |
+| R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | review fixes (4109590; Opus APPROVE WITH FIXES: TOML escaping, MIGRATION/ACCEPTANCE docs) | mcode TUI has no permission flag: full mode = `permissionMode: bypassPermissions` in its config.yaml (D-019) |
+| R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | fixes 37261d0 re-check (1f3daa7 + Opus APPROVE WITH FIXES, coordinator fixed lows) | env keys ANDROID_APP_PACKAGE, ANDROID_APP_SHA256, LANGFUSE_PUBLIC_URL; PUBLIC_URL feeds hints |
+| R2-4 | m1 m2 m3 m4 m6, T15 red-tests half, T20 same-origin control | Sonnet / Opus (m3,m6 Fable) | dev m1 m2 m4 T15 T20 (wt r2-followups); m3 m6 queued (Opus author, Fable review) | |
+| R2-5 | OpenCode installed in user space, live smoke | coordinator + Sonnet | review (7e7c962; live smoke accepted, resume verified live) | opencode-ai 1.18.32 (pinned >2 weeks old) under ~/.local/opencode, free models only; real JSON differs from fake (sessionID, part.tokens per step, step_finish) |
+| R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | scoring dev (wt r2-score); bench queued | |
 | R2-7 | Push, PR #1 round-2 section, DELIVERED | coordinator | todo | |
 
 ## Plan (waves, max 3 concurrent developers)
