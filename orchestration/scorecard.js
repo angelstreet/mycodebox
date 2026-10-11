@@ -14,9 +14,19 @@ export const BENCH_LEDGER_ACTOR_ID = 'v2-bench-ledger';
 // formula version, and scores of different formulas or suite versions are never compared.
 export const TOOL_SCORE_FORMULA = 'v1';
 export const TOOL_SCORE_WEIGHTS = Object.freeze({ outcome_correctness: 0.30, verified_rate: 0.25, first_pass_rate: 0.15, cost: 0.10, latency: 0.10, owner_interventions: 0.10 });
-export const EXPECTED_OUTCOMES = Object.freeze(['done', 'awaiting_approval', 'waiting']);
-// expected outcome -> the final state that counts as correct. `done` is only `accepted`; the others never accept `accepted`.
-const EXPECTED_STATE = { done: 'accepted', awaiting_approval: 'awaiting_approval', waiting: 'waiting' };
+// One vocabulary for the bench (scripts/v2-bench.js, test/fixtures/v2-bench) and this validator. `waiting_no_progress` is
+// `waiting` whose last block reason is no_progress.
+export const EXPECTED_OUTCOMES = Object.freeze(['done', 'awaiting_approval', 'waiting', 'waiting_no_progress']);
+// Bench outcomes of runs that never created a task (suite ledger refused it, runtime unavailable, harness or intake error
+// before the task existed): task_id is null and the
+// run counts as not run, never as a task result.
+export const NOT_RUN_OUTCOMES = Object.freeze(['skipped_budget', 'not_started', 'harness_error']);
+// expected outcome -> the final state (and block reason) that counts as correct. `done` is only `accepted`; the others
+// never accept `accepted`.
+const EXPECTED_STATE = { done: 'accepted', awaiting_approval: 'awaiting_approval', waiting: 'waiting', waiting_no_progress: 'waiting' };
+const EXPECTED_REASON = { waiting_no_progress: 'no_progress' };
+const matchesExpected = (r, expected) => !!r && r.status === EXPECTED_STATE[expected] && (!EXPECTED_REASON[expected] || r.wait_reason === EXPECTED_REASON[expected]);
+const notRun = (m) => m.task_id == null && NOT_RUN_OUTCOMES.includes(m.outcome);
 const REWORK_STATES = ['repair', 'replan'];
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const TASK_CLASS_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -47,7 +57,7 @@ export function validateManifest(m) {
     m.runs.forEach((r, i) => {
       const p = `runs[${i}]`;
       if (!r || typeof r !== 'object') return err(p, 'object');
-      if (typeof r.task_id !== 'string' || !ID_RE.test(r.task_id)) err(`${p}.task_id`, 'task id');
+      if (notRun(r)) { /* not run: no task to point at */ } else if (typeof r.task_id !== 'string' || !ID_RE.test(r.task_id)) err(`${p}.task_id`, `task id (null only with outcome ${NOT_RUN_OUTCOMES.join(' or ')})`);
       else if (seen.has(r.task_id)) err(`${p}.task_id`, 'duplicate'); else seen.add(r.task_id);
       if (!EXPECTED_OUTCOMES.includes(r.expected_outcome)) err(`${p}.expected_outcome`, `one of ${EXPECTED_OUTCOMES.join(', ')}`);
       if (r.task_class != null && !(typeof r.task_class === 'string' && TASK_CLASS_RE.test(r.task_class))) err(`${p}.task_class`, 'null or [a-z0-9][a-z0-9._-]{0,63} (as in the task contract)');
@@ -88,6 +98,7 @@ export function foldRun(events) {
     const p = e.payload || {};
     if (['task.transitioned', 'task.completed', 'task.cancelled'].includes(e.kind) && typeof p.to === 'string') {
       f.status = p.to;
+      if (p.to !== 'waiting') f.wait_reason = null;   // a block reason describes the current wait only
       if (p.to === 'accepted') f.completed_at = e.timestamp;
       if (REWORK_STATES.includes(p.to)) f.rework += 1;
     } else if (e.kind === 'task.head_changed') {
@@ -250,7 +261,7 @@ function groupBy(runs, keyOf, opts) {
 // logs: [{ task_id, events }]. unreadable: [{ task_id, ... }] listed by the reader. -> scorecard (plain JSON).
 export function buildScorecard(logs, { manifest = null, unreadable = [], since = null } = {}) {
   const mf = manifestOrThrow(manifest);
-  const runOf = new Map((mf?.runs || []).map((r) => [r.task_id, r]));
+  const runOf = new Map((mf?.runs || []).filter((r) => !notRun(r)).map((r) => [r.task_id, r]));
   const sinceMs = since ? Date.parse(since) : null;
   if (since && Number.isNaN(sinceMs)) throw new Error(`since is not an ISO timestamp: ${since}`);
   const all = [];
@@ -296,7 +307,11 @@ export function buildScorecard(logs, { manifest = null, unreadable = [], since =
   if (counts.cancelled) caveats.push(`${counts.cancelled} cancelled task(s) count as settled and not verified in every rate (unlike the plain report, which leaves them out)`);
   caveats.push('latency is wall time from creation to acceptance and includes time waiting for the owner or for quota');
   if (mf) {
-    const missing = mf.runs.filter((r) => !facts.has(r.task_id)).map((r) => r.task_id);
+    const skipped = mf.runs.filter(notRun);
+    sc.not_run = skipped.map((r) => ({ bench_task_id: r.bench_task_id ?? null, runtime: r.runtime ?? null, model: r.model ?? null, outcome: r.outcome }));
+    counts.not_run = skipped.length;
+    if (skipped.length) caveats.push(`${skipped.length} manifest run(s) never started (${[...new Set(skipped.map((r) => r.outcome))].join(', ')}): not run, not counted as results`);
+    const missing = mf.runs.filter((r) => !notRun(r) && !facts.has(r.task_id)).map((r) => r.task_id);
     if (missing.length) caveats.push(`${missing.length} manifest run(s) have no task in the store: ${missing.slice(0, 10).join(', ')}`);
     const mismatch = runs.filter((r) => { const m = runOf.get(r.task_id); return m?.runtime && m?.model && r.developer.basis !== 'manifest' && `${m.runtime}:${m.model}` !== dev(r); });
     if (mismatch.length) caveats.push(`${mismatch.length} run(s) were developed by a different model than the manifest declares; credit follows the recorded developer`);
@@ -317,11 +332,16 @@ export function toolScore(scorecard, manifest) {
   const mf = manifestOrThrow(manifest);
   if (!mf) throw Object.assign(new Error('tool score needs a bench manifest'), { code: 'E_MANIFEST' });
   const byId = new Map(scorecard.runs.map((r) => [r.task_id, r]));
-  const per_run = mf.runs.map((m) => {
+  const all = mf.runs.map((m) => {
+    if (notRun(m)) return { task_id: null, bench_task_id: m.bench_task_id ?? null, task_class: m.task_class ?? 'unknown', expected: m.expected_outcome, actual: 'not_run', correct: false, run: null, not_run: m.outcome };
     const r = byId.get(m.task_id) || null;
     return { task_id: m.task_id, bench_task_id: m.bench_task_id ?? null, task_class: m.task_class ?? r?.task_class ?? 'unknown', expected: m.expected_outcome,
-      actual: r ? r.status : 'missing', correct: !!r && r.status === EXPECTED_STATE[m.expected_outcome], run: r };
+      actual: r ? (r.status === 'waiting' && r.wait_reason ? `waiting:${r.wait_reason}` : r.status) : 'missing', correct: matchesExpected(r, m.expected_outcome), run: r };
   });
+  // Components cover the runs that ran; a suite with not-run runs only gets a partial score.
+  const per_run = all.filter((p) => !p.not_run);
+  const skipped = all.filter((p) => p.not_run);
+  if (!per_run.length) throw Object.assign(new Error('tool score needs at least one run that started'), { code: 'E_MANIFEST' });
   const done = per_run.filter((p) => p.expected === 'done');
   const missing = per_run.filter((p) => !p.run).map((p) => p.task_id);
   const c = {};
@@ -346,15 +366,18 @@ export function toolScore(scorecard, manifest) {
   // partial_score: 100 x the weighted sum of the KNOWN components, not rescaled, so it is a lower bound out of 100*coverage.
   const partial_score = Math.round(1000 * known.reduce((s, [k, w]) => s + w * c[k].value, 0)) / 10;
   const coverage = round4(known.reduce((s, [, w]) => s + w, 0));
-  const score = unknownC.length ? null : partial_score;
+  const score = unknownC.length || skipped.length ? null : partial_score;
+  const reasons = [...(unknownC.length ? [`unknown component(s): ${unknownC.join(', ')}`] : []), ...(skipped.length ? [`${skipped.length} run(s) not run`] : [])];
   const caveats = [];
   if (per_run.length < 10) caveats.push('small suite: fewer than 10 runs; differences of a few points are noise');
   if (missing.length) caveats.push(`${missing.length} manifest run(s) missing from the store count as incorrect and unverified`);
+  if (skipped.length) caveats.push(`${skipped.length} of ${all.length} manifest run(s) never started: the score is partial and covers the ${per_run.length} that ran`);
   return { schema: TOOL_SCORE_SCHEMA, formula: TOOL_SCORE_FORMULA, suite_id: mf.suite_id, suite_version: mf.suite_version, weights: { ...TOOL_SCORE_WEIGHTS },
     budget_policy: { max_usd: b.max_usd ?? null, max_task_ms: b.max_task_ms ?? null },
-    runs: per_run.length, missing, components: c, score, ...(score === null ? { score_reason: `unknown component(s): ${unknownC.join(', ')}` } : {}),
+    runs: per_run.length, missing, skipped: skipped.length, run_coverage: round4(per_run.length / all.length),
+    components: c, score, ...(score === null ? { score_reason: reasons.join('; ') } : {}),
     partial_score, coverage, unknown_components: unknownC,
-    per_run: per_run.map(({ run, ...p }) => p), caveats };
+    per_run: all.map(({ run, ...p }) => p), caveats };
 }
 
 // Refuses (throws E_SUITE_MISMATCH) unless both scores are tool scores of the same formula, suite id and suite version.
@@ -366,6 +389,7 @@ export function compareToolScores(a, b) {
   if (a.suite_version !== b.suite_version) fail(`different suite versions (${a.suite_version} vs ${b.suite_version}): not comparable`);
   for (const k of ['max_usd', 'max_task_ms']) if ((a.budget_policy?.[k] ?? null) !== (b.budget_policy?.[k] ?? null)) fail(`different budget_policy.${k} (${a.budget_policy?.[k] ?? null} vs ${b.budget_policy?.[k] ?? null}): not comparable`);
   if ((a.score === null) !== (b.score === null)) fail('a partial score cannot be compared with a full score');
+  if ((a.skipped ?? 0) !== (b.skipped ?? 0) || (a.runs ?? null) !== (b.runs ?? null)) fail(`different runs (${a.runs}+${a.skipped ?? 0} not run vs ${b.runs}+${b.skipped ?? 0} not run): not comparable`);
   if (a.coverage !== b.coverage || JSON.stringify(a.unknown_components || []) !== JSON.stringify(b.unknown_components || [])) fail(`different coverage (${a.coverage} vs ${b.coverage}): not comparable`);
   const d = (x, y) => (x === null || y === null || x === undefined || y === undefined ? null : round4(y - x));
   const components = Object.fromEntries(Object.keys(TOOL_SCORE_WEIGHTS).map((k) => {

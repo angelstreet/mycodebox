@@ -38,6 +38,7 @@ import { createIntake } from '../orchestration/intake.js';
 import { route as realRoute } from '../orchestration/router.js';
 import { createAdapter as fakeAdapter } from '../orchestration/adapters/fake.js';
 import { SUITE_ID, SUITE_VERSION, TASKS, policyFor, noopFiles } from '../test/fixtures/v2-bench/tasks.js';
+import { EXPECTED_OUTCOMES, NOT_RUN_OUTCOMES } from '../orchestration/scorecard.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const MANIFEST_SCHEMA = 'mycodebox.v2.bench-run/1';
@@ -92,6 +93,18 @@ export function sameModel(a, b) {
   const na = normModel(a.model), nb = normModel(b.model);
   if (na === nb) return true;
   return (na === 'default' || nb === 'default') && familyOf(a) === familyOf(b);
+}
+
+// The smallest per-task cap that fits one developer run and one review for every planned pair: a claude run counts
+// at its --max-budget-usd (the goal loop estimates it no lower), other runtimes at their estimate.
+export function minViableTaskUsd(pairs) {
+  const cost = (p) => p.run_usd ?? p.est_usd ?? 0;
+  let best = { usd: 0, pair: null };
+  for (const x of pairs) {
+    const usd = Math.round((cost(x.dev) + cost(x.rev)) * 1e4) / 1e4;
+    if (usd > best.usd) best = { usd, pair: `${x.spec} + reviewer ${x.revSpec}` };
+  }
+  return best;
 }
 
 // ---------- suite ledger ----------
@@ -182,6 +195,9 @@ export function refuseOutDir(dir, { root = ROOT, stateDirs = [process.env.GHOSTY
   for (const s of stateDirs.filter(Boolean)) if (inside(dir, s)) throw new Error(`refusing --out ${dir}: inside the live state dir`);
 }
 
+// A run without a task never produced a task result: keep a not-run outcome, map a harness/intake error to harness_error.
+export const notRunOutcome = (rec) => (rec.task_id != null || NOT_RUN_OUTCOMES.includes(rec.outcome) ? rec.outcome : rec.outcome === 'error' ? 'harness_error' : 'not_started');
+
 // -> 'done' | 'awaiting_approval' | 'budget_stop' | 'waiting_no_progress' | 'waiting' | 'failed' | 'cancelled' | 'not_yet_done'
 export function classify(status, loop = {}) {
   switch (status) {
@@ -200,6 +216,7 @@ export function classify(status, loop = {}) {
 export async function runBench(opts) {
   const o = validateOptions({ ...DEFAULTS, ...opts });
   const tasks = selectTasks(o.tasks);
+  for (const t of tasks) if (!EXPECTED_OUTCOMES.includes(t.expected_outcome)) throw new Error(`bench task ${t.id}: expected_outcome ${t.expected_outcome} is not one of ${EXPECTED_OUTCOMES.join(', ')}`);
   const devSpecs = o.runtimes;
   const reviewerOf = (spec) => (o.fake ? (o.reviewer_map[spec] ?? 'fake-review') : (o.reviewer_map[spec] ?? DEFAULT_REVIEWERS[spec] ?? (spec.startsWith('opencode:') ? DEFAULT_REVIEWERS.opencode : null)));
   const pairs = devSpecs.map((spec) => {
@@ -217,6 +234,13 @@ export async function runBench(opts) {
   // Floored so that the reservations of every planned run fit inside the suite cap.
   const taskUsd = o.task_usd ?? Math.floor((o.max_usd / Math.max(1, planned.length)) * 1e4) / 1e4;
   if (!(taskUsd > 0)) throw new Error(`per-task budget rounds to ${taskUsd} USD for ${planned.length} runs: raise --max-usd or pass --task-usd`);
+  // A default share below one developer run plus one review would only produce budget_stop: refuse it at setup.
+  const viable = minViableTaskUsd(pairs);
+  if (o.task_usd == null && taskUsd < viable.usd) {
+    throw new Error(`default per-task budget ${taskUsd} USD (--max-usd ${o.max_usd} / ${planned.length} runs) is below the minimum viable ${viable.usd} USD `
+      + `(${viable.pair}: one developer run + one review): pass --task-usd ${viable.usd} or more (later runs are skipped once the suite cap is reached), `
+      + 'raise --max-usd, or run fewer tasks/runtimes');
+  }
   const log = o.log || (() => {});
 
   const outDir = path.resolve(o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-out-')));
@@ -358,7 +382,7 @@ export async function runBench(opts) {
       if (!gateL.ok) {
         rec.outcome = 'skipped_budget'; rec.error = gateL.reason; rec.usd = 0; rec.duration_ms = 0;
       } else if (devAvail === false || revAvail === false) {
-        rec.outcome = 'error'; rec.error = `runtime unavailable (probe): ${devAvail === false ? r.spec : r.revSpec}`; rec.usd = 0; rec.duration_ms = 0;
+        rec.outcome = 'not_started'; rec.error = `runtime unavailable (probe): ${devAvail === false ? r.spec : r.revSpec}`; rec.usd = 0; rec.duration_ms = 0;
       } else {
         log(`run ${r.task.id} x ${r.spec} (reviewer ${r.revSpec})`);
         let timedOut = false;
@@ -427,6 +451,9 @@ export async function runBench(opts) {
       }
       // Invariants: the fixture's main branch never moves; a task that must not be done is never done.
       try { rec.main_unchanged = sh(r.repo, 'rev-parse', 'main') === r.main; } catch { rec.main_unchanged = null; }
+      // No task was created: refused by the ledger (skipped_budget), runtime unavailable (not_started), or a harness/intake
+      // error before the task existed (harness_error). None of them is a task result.
+      rec.outcome = notRunOutcome(rec);
       rec.never_done_ok = r.task.expected_outcome === 'done' ? null : rec.outcome !== 'done';
       rec.outcome_correct = rec.outcome === rec.expected_outcome;
       rec.duration_ms ??= Date.now() - t0;
