@@ -40,7 +40,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | done: APPROVE WITH FIXES | c50f7ff (18 todo) |
 | system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | a0b46a6 -> merge |
-| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | Fable round 3: round-2 fixed; X1/X2 interrupted-run spend missing from ledger, X7 branch check, X6, X8; fixing | ab0d94f; verify3 31d3b4b |
+| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | Fable round 4: narrow (Y3b branch gate pre-accept, Y6 controller lease D-016, Y7); lease verifier: adoptOwn unsafe -> D-015; fixing | abe580e; verify4 f348929, lease-verify4 badc5ee |
 | routing | 4 | v2/04-routing | c366307 | Sonnet | INTEGRATED (verifier APPROVE, 3 rounds) | b9a88f2 -> merge 71d9b39; 991/991 both runtimes |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
@@ -69,6 +69,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | D-013 | `high`/`critical` risk tasks need an owner approval bound to the exact head SHA before `accepted`, besides independent review | treat high like low | Phase 5 exit: high-risk gates trigger owner approval | yes |
 | D-014 | An owner `route` grant for a critical task is honoured by the router floor | loop asks forever | Approval must be able to unblock; grant is bound to the task | yes |
 | D-015 | Remove `leases.adoptOwn`; `acquire` accepts a caller-chosen `lease_id`, worktrees write `{resource, lease_id, owner, task_id}` ahead of acquiring and recover with `adopt(attempted)` | adoptOwn restricted to worktree namespace; fenced takeover | `E_HELD` discloses owner+task_id, so adoptOwn let any contender take over any live lease; twins also both got valid handles. Write-ahead id keeps lease identity private and fences twins | yes |
+| D-016 | One goal-loop controller per store via lease `service:<host>:goal-loop` (short TTL, renewed by the loop); a second instance fails closed | per-controller instance id in owner identity | Two same-owner controllers could step one task; the lease fences other instances without new identity machinery | yes |
 | D-006 | Leak scan = `scripts/leak-scan.js` (generic patterns) + private denylist outside the repo (`LEAK_SCAN_EXTRA`) | patterns in repo | Real identifiers must never be committed, including in the scanner | yes |
 
 ## OWNER-REVIEW / owner actions (collected for the PR)
