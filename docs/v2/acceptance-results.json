@@ -1,27 +1,28 @@
 {
  "schema": "mycodebox.v2.acceptance-results/1",
  "synthetic": true,
- "generated_at": "2026-10-11T15:34:16.073Z",
- "sha": "725ad03662c2204c0ddad2681ae264db32a23511",
+ "generated_at": "2026-10-11T15:53:38.046Z",
+ "sha": "160ff369107adefc1a292fa1547d7b0fd6d3cbc9",
  "dirty": false,
  "node": "v23.6.0",
  "command": "node scripts/v2-acceptance.js",
- "duration_ms": 67446,
+ "duration_ms": 70712,
  "runner_exit": 0,
- "files": 118,
+ "files": 125,
+ "ui_check": true,
  "totals": {
-  "tests": 1523,
-  "pass": 1517,
+  "tests": 1584,
+  "pass": 1584,
   "fail": 0,
-  "todo": 6,
-  "todo_failing": 6,
+  "todo": 0,
+  "todo_failing": 0,
   "skip": 0
  },
  "matrix": {
   "rows": 54,
-  "PASS": 47,
-  "FAIL": 6,
-  "PENDING": 1,
+  "PASS": 54,
+  "FAIL": 0,
+  "PENDING": 0,
   "BLOCKED": 0,
   "MANUAL": 0
  },
@@ -369,8 +370,8 @@
   },
   {
    "id": "T14",
-   "status": "FAIL",
-   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify5.test.js: Z3 D-017 the owner can cancel a task whose recovery is pending (unconfirmed effe | test/v2-store-d017-verify.test.js: D-017: owner cancel (T14) on a recovery_pending task is honoured, not refused | test/v2-store-d017-verify.test.js: D-017: a task a full recovery would park (possibly_applied effect in executing) ",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
    "tests": [
     {
      "name": "T14 cancel during spawn: acknowledged, process gone, no later writes",
@@ -388,24 +389,9 @@
      "outcome": "pass"
     },
     {
-     "name": "Z3 D-017 the owner can cancel a task whose recovery is pending (unconfirmed effect, fresh handle, no recover() yet)",
-     "file": "test/v2-goal-loop-verify5.test.js",
-     "outcome": "todo"
-    },
-    {
      "name": "T14 cancel during a run: no commit, no evidence, no later writes; status is cancelled",
      "file": "test/v2-goal-loop.test.js",
      "outcome": "pass"
-    },
-    {
-     "name": "D-017: owner cancel (T14) on a recovery_pending task is honoured, not refused",
-     "file": "test/v2-store-d017-verify.test.js",
-     "outcome": "todo"
-    },
-    {
-     "name": "D-017: a task a full recovery would park (possibly_applied effect in executing) reads as recovery_pending too",
-     "file": "test/v2-store-d017-verify.test.js",
-     "outcome": "todo"
     },
     {
      "name": "T14: after cancel every write is rejected with E_CANCELLED; reads still work",
@@ -472,14 +458,9 @@
   },
   {
    "id": "T18",
-   "status": "FAIL",
-   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify5.test.js: Z1 D-016 recover() on a second instance while the first is alive and mid-run: th | test/v2-store-d017-verify.test.js: D-017: owner cancel (T14) on a recovery_pending task is honoured, not refused | test/v2-store-d017-verify.test.js: D-017: a task a full recovery would park (possibly_applied effect in executing) ",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
    "tests": [
-    {
-     "name": "Z1 D-016 recover() on a second instance while the first is alive and mid-run: the first must write nothing after losing the lease",
-     "file": "test/v2-goal-loop-verify5.test.js",
-     "outcome": "todo"
-    },
     {
      "name": "GL06/T18 controller crash mid-run: restart reconciles the unconfirmed run and resumes without duplicates",
      "file": "test/v2-goal-loop.test.js",
@@ -489,16 +470,6 @@
      "name": "T18 crash between a decision and its transition: the restart replays the recorded transition, no second decision",
      "file": "test/v2-goal-loop.test.js",
      "outcome": "pass"
-    },
-    {
-     "name": "D-017: owner cancel (T14) on a recovery_pending task is honoured, not refused",
-     "file": "test/v2-store-d017-verify.test.js",
-     "outcome": "todo"
-    },
-    {
-     "name": "D-017: a task a full recovery would park (possibly_applied effect in executing) reads as recovery_pending too",
-     "file": "test/v2-store-d017-verify.test.js",
-     "outcome": "todo"
     },
     {
      "name": "T18: crash mid-write of the completion leaves a torn tail; recovery drops it, no false completion",
@@ -531,9 +502,15 @@
   },
   {
    "id": "T20",
-   "status": "PENDING",
-   "reason": "owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; status set when that branch lands",
-   "tests": []
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "T20: browser check (scripts/v2-ui-check.js): 37/37 checks passed",
+     "file": "scripts/v2-ui-check.js",
+     "outcome": "pass"
+    }
+   ]
   },
   {
    "id": "T21",
@@ -640,23 +617,13 @@
   },
   {
    "id": "T25",
-   "status": "FAIL",
-   "reason": "open defect(s) recorded as todo: test/v2-lease-authority-verify5.test.js: D-016 takeover: a second instance's recover() displaces a live controller throug | test/v2-lease-authority-verify5.test.js: D-016 takeover: two restarting instances each see the other's fresh intent; the ",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
    "tests": [
     {
      "name": "T25 two integration controllers race on the same target: exactly one fenced holder mutates it",
      "file": "test/v2-integration.test.js",
      "outcome": "pass"
-    },
-    {
-     "name": "D-016 takeover: a second instance's recover() displaces a live controller through its intent file",
-     "file": "test/v2-lease-authority-verify5.test.js",
-     "outcome": "todo"
-    },
-    {
-     "name": "D-016 takeover: two restarting instances each see the other's fresh intent; the acquire loser displaces the winner",
-     "file": "test/v2-lease-authority-verify5.test.js",
-     "outcome": "todo"
     },
     {
      "name": "T25: 40 parallel acquire() through one file dir -> exactly one holder, rest E_HELD",
@@ -744,8 +711,8 @@
   },
   {
    "id": "T27",
-   "status": "FAIL",
-   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify5.test.js: Z1 D-016 recover() on a second instance while the first is alive and mid-run: th | test/v2-lease-authority-verify5.test.js: D-016 takeover: a second instance's recover() displaces a live controller throug | test/v2-lease-authority-verify5.test.js: D-016 takeover: two restarting instances each see the other's fresh intent; the ",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
    "tests": [
     {
      "name": "GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits",
@@ -753,24 +720,9 @@
      "outcome": "pass"
     },
     {
-     "name": "Z1 D-016 recover() on a second instance while the first is alive and mid-run: the first must write nothing after losing the lease",
-     "file": "test/v2-goal-loop-verify5.test.js",
-     "outcome": "todo"
-    },
-    {
      "name": "T27 lease expires mid-run and is taken over: the stale executor cannot push",
      "file": "test/v2-integration.test.js",
      "outcome": "pass"
-    },
-    {
-     "name": "D-016 takeover: a second instance's recover() displaces a live controller through its intent file",
-     "file": "test/v2-lease-authority-verify5.test.js",
-     "outcome": "todo"
-    },
-    {
-     "name": "D-016 takeover: two restarting instances each see the other's fresh intent; the acquire loser displaces the winner",
-     "file": "test/v2-lease-authority-verify5.test.js",
-     "outcome": "todo"
     },
     {
      "name": "T27 (file): lease expires mid-command -> second protected action blocked; stale token fenced despite a lying clock",
@@ -1117,14 +1069,9 @@
   },
   {
    "id": "GL06",
-   "status": "FAIL",
-   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify5.test.js: Z1 D-016 recover() on a second instance while the first is alive and mid-run: th",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
    "tests": [
-    {
-     "name": "Z1 D-016 recover() on a second instance while the first is alive and mid-run: the first must write nothing after losing the lease",
-     "file": "test/v2-goal-loop-verify5.test.js",
-     "outcome": "todo"
-    },
     {
      "name": "T12/GL06 rate limit: backoff (waiting) twice, then a compatible fallback runtime; state preserved",
      "file": "test/v2-goal-loop.test.js",
@@ -1185,8 +1132,8 @@
   },
   {
    "id": "GL10",
-   "status": "FAIL",
-   "reason": "open defect(s) recorded as todo: test/v2-lease-authority-verify5.test.js: D-016 takeover: a second instance's recover() displaces a live controller throug | test/v2-lease-authority-verify5.test.js: D-016 takeover: two restarting instances each see the other's fresh intent; the ",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
    "tests": [
     {
      "name": "GL10: maintenance that needs the repo lane waits for the running integration: canonical-order, all-or-nothing acquisition; nothing half-held; it proceeds once the integration releases",
@@ -1202,16 +1149,6 @@
      "name": "GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits",
      "file": "test/v2-acceptance-ops.test.js",
      "outcome": "pass"
-    },
-    {
-     "name": "D-016 takeover: a second instance's recover() displaces a live controller through its intent file",
-     "file": "test/v2-lease-authority-verify5.test.js",
-     "outcome": "todo"
-    },
-    {
-     "name": "D-016 takeover: two restarting instances each see the other's fresh intent; the acquire loser displaces the winner",
-     "file": "test/v2-lease-authority-verify5.test.js",
-     "outcome": "todo"
     },
     {
      "name": "GL10: lease unavailable or held by someone else -> no action, escalated, admission stays paused",
@@ -1289,57 +1226,6 @@
    ]
   }
  ],
- "open_defects": [
-  {
-   "name": "Z1 D-016 recover() on a second instance while the first is alive and mid-run: the first must write nothing after losing the lease",
-   "file": "test/v2-goal-loop-verify5.test.js",
-   "rows": [
-    "T18",
-    "T27",
-    "GL06"
-   ]
-  },
-  {
-   "name": "Z3 D-017 the owner can cancel a task whose recovery is pending (unconfirmed effect, fresh handle, no recover() yet)",
-   "file": "test/v2-goal-loop-verify5.test.js",
-   "rows": [
-    "T14"
-   ]
-  },
-  {
-   "name": "D-016 takeover: a second instance's recover() displaces a live controller through its intent file",
-   "file": "test/v2-lease-authority-verify5.test.js",
-   "rows": [
-    "T25",
-    "T27",
-    "GL10"
-   ]
-  },
-  {
-   "name": "D-016 takeover: two restarting instances each see the other's fresh intent; the acquire loser displaces the winner",
-   "file": "test/v2-lease-authority-verify5.test.js",
-   "rows": [
-    "T25",
-    "T27",
-    "GL10"
-   ]
-  },
-  {
-   "name": "D-017: owner cancel (T14) on a recovery_pending task is honoured, not refused",
-   "file": "test/v2-store-d017-verify.test.js",
-   "rows": [
-    "T14",
-    "T18"
-   ]
-  },
-  {
-   "name": "D-017: a task a full recovery would park (possibly_applied effect in executing) reads as recovery_pending too",
-   "file": "test/v2-store-d017-verify.test.js",
-   "rows": [
-    "T14",
-    "T18"
-   ]
-  }
- ],
+ "open_defects": [],
  "unmapped_failures": []
 }
