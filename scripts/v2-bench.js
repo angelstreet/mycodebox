@@ -27,6 +27,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { BENCH_LEDGER_ACTOR_ID } from '../orchestration/scorecard.js';
 import { createTaskStore } from '../orchestration/store.js';
 import { createWorktrees } from '../orchestration/worktrees.js';
 import { createLeaseAuthority, fileBackend } from '../orchestration/lease-authority.js';
@@ -42,7 +43,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const MANIFEST_SCHEMA = 'mycodebox.v2.bench-run/1';
 // Bounded iterations per task: two identical failures force one strategy change, the next stall suspends (no_progress).
 export const NO_PROGRESS = Object.freeze({ same_signature: 2, strategy_changes_without_progress: 1 });
-const BENCH_ACTOR = { role: 'owner', id: 'v2-bench-ledger' };
+const BENCH_ACTOR = { role: 'owner', id: BENCH_LEDGER_ACTOR_ID };
 const STOP_STATES = ['accepted', 'failed_unrecoverable', 'cancelled'];
 
 // Runtime profiles (cheapest settings of v2-live-smoke.js). est_usd: conservative per agent-run estimate used when a
