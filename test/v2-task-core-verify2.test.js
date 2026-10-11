@@ -92,7 +92,7 @@ test('verify2: seq is dense on write and on replay; a hand-written gap is corrup
   assert.equal((await open(dir).recover()).corrupt.length, 1);
 });
 
-test('verify2: actor identity folds homoglyphs, zero-width and combining marks', { todo: 'residual (low): actorKey is NFKC+trim+casefold only; "dev-аgent-1" (Cyrillic a), "dev-​agent-1" and "dev-agent-1́" pass as independent of dev-agent-1' }, async () => {
+test('verify2: actor identity folds homoglyphs, zero-width and combining marks', async () => {
   for (const actor of ['dev-аgent-1', 'dev-​agent-1', 'dev-agent-1́']) {
     const s = open();
     const id = await readyToAccept(s);
@@ -102,7 +102,7 @@ test('verify2: actor identity folds homoglyphs, zero-width and combining marks',
   assert.equal(actorKey('dev-​agent-1'), 'dev-agent-1');
 });
 
-test('verify2: snapshot.json of a task with a corrupt log carries the store_error, not the pre-corruption state', { todo: 'residual (low): recover() skips saveSnapshot for broken tasks, so an external reader of snapshot.json sees the stale healthy status' }, async () => {
+test('verify2: snapshot.json of a task with a corrupt log carries the store_error, not the pre-corruption state', async () => {
   const dir = tmp();
   const s = open(dir);
   const { task_id: id } = await s.createTask(spec());
@@ -116,6 +116,6 @@ test('verify2: snapshot.json of a task with a corrupt log carries the store_erro
   assert.ok(snap.store_error, `snapshot: ${JSON.stringify({ status: snap.status, store_error: snap.store_error })}`);
 });
 
-test('verify2: two-layer obfuscations (split + leet / split + join char) are caught', { todo: 'residual (low): splitJoins runs on the base variant only and splits on whitespace/dashes; "d3 pl0y", "de- ploy" and "de_pl oy" are not restricted' }, () => {
+test('verify2: two-layer obfuscations (split + leet / split + join char) are caught', () => {
   for (const t of ['d3 pl0y', 'de- ploy', 'de_pl oy']) assert.ok(restrictedTopics(t).some((x) => x.class === 'deploy'), t);
 });

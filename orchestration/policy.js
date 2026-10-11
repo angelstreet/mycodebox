@@ -59,7 +59,7 @@ export const clarificationFor = (r) => ({ to: 'awaiting_approval', reason: r.cod
 // ---- text classification ----------------------------------------------------------------------------
 
 const ZERO_WIDTH = /[­᠎​-‏⁠-⁤﻿]/g;
-const HOMOGLYPH = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ⅼ: 'l', ı: 'i' };
+export const HOMOGLYPH = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ⅼ: 'l', ı: 'i' };
 const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
 
 // Spellings an author might use to slip a restricted action past a plain regex. Every variant is matched;
@@ -76,7 +76,8 @@ export function textVariants(text) {
 // One space splitting a word ("de ploy", "dep loy"): adjacent tokens joined in pairs and triples. Checked one
 // candidate at a time so an innocent join can only add a match, never hide one.
 function splitJoins(text) {
-  const t = String(text).split(/[\s\u2013\u2014]+/).filter(Boolean);
+  // Join characters inside a token ("de-", "de_pl") are dropped so a split plus a join char still rejoins.
+  const t = String(text).split(/[\s\u2013\u2014]+/).map((x) => x.replace(/[._*\-\u2013\u2014]/g, '')).filter(Boolean);
   const out = [];
   for (let i = 0; i < t.length - 1; i++) { out.push(t[i] + t[i + 1]); if (i < t.length - 2) out.push(t[i] + t[i + 1] + t[i + 2]); }
   return out;
@@ -113,7 +114,7 @@ export function restrictedTopics(text, { protectedBranches } = {}) {
   const out = new Map();
   const extra = [...V2_EXTRA, ...branchRules(protectedBranches)];
   const variants = textVariants(text);
-  for (const j of splitJoins(variants[0])) {
+  for (const j of variants.flatMap(splitJoins)) {
     const m = forbiddenMatch(j);
     if (m) { const cls = TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic'; if (!out.has(cls)) out.set(cls, { topic: m, class: cls }); }
   }
