@@ -40,7 +40,7 @@ test('verify: task_id cannot inject options, refs or paths', async () => {
   }
 });
 
-test('verify: unmerged commits on the task branch survive a detached HEAD at base', { todo: 'defect: remove() checks HEAD, not the v2task branch tip, then branch -D drops the commits' }, async () => {
+test('verify: unmerged commits on the task branch survive a detached HEAD at base', async () => {
   const s = setup('detached');
   const a = await s.wt.create({ repo: s.dir, task_id: 'ta', base_sha: s.sha, owner: 'o' });
   const work = commit(a.path, 'work.txt');
@@ -49,7 +49,7 @@ test('verify: unmerged commits on the task branch survive a detached HEAD at bas
   assert.notEqual(sh(s.dir, 'branch', '--contains', work), '');
 });
 
-test('verify: ignored files are not deleted silently', { todo: 'defect: status ignores gitignored files; worktree remove deletes them' }, async () => {
+test('verify: ignored files are not deleted silently', async () => {
   const s = setup('ignored');
   const a = await s.wt.create({ repo: s.dir, task_id: 'tb', base_sha: s.sha, owner: 'o' });
   fs.writeFileSync(path.join(a.path, 'notes.local'), 'precious');
@@ -57,14 +57,14 @@ test('verify: ignored files are not deleted silently', { todo: 'defect: status i
   assert.ok(fs.existsSync(path.join(a.path, 'notes.local')));
 });
 
-test('verify: merged_into cannot be the task branch itself', { todo: 'defect: merged_into=v2task/<id> is trivially an ancestor; unmerged work deleted' }, async () => {
+test('verify: merged_into cannot be the task branch itself', async () => {
   const s = setup('selfmerge');
   const a = await s.wt.create({ repo: s.dir, task_id: 'td', base_sha: s.sha, owner: 'o' });
   commit(a.path, 'w.txt');
   await assert.rejects(s.wt.remove(a.path, { retain: false, owner: 'o', merged_into: 'v2task/td' }), { code: /^E_/ });
 });
 
-test('verify: tampered metadata cannot redirect branch deletion or file unlink', { todo: 'defect: remove() trusts meta.branch/task_id/repo without re-validation' }, async () => {
+test('verify: tampered metadata cannot redirect branch deletion or file unlink', async () => {
   const s = setup('tamper');
   sh(s.dir, 'checkout', '-q', '-b', 'release');
   commit(s.dir, 'rel.txt');

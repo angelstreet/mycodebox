@@ -10,12 +10,13 @@ export const createAdapter = makeCliAdapter({
   envAllow: [/^OPENCODE_/, /^ANTHROPIC_/, /^OPENAI_/, /^MINIMAX_/],
   features: { resume: false, cancel: true, json_output: true, native_subagents: 'unknown', vision: 'unknown' },
   resume: false,
+  noEffort: true, // no verified effort flag: reject instead of silently dropping
   usageMode: 'last',
   parse: genericParse,
   head(o) {
     const args = ['run', '--format', 'json'];
     if (o.model) args.push('--model', o.model);
-    return { args, session_id: null }; // effort has no verified flag: not forwarded
+    return { args, session_id: null };
   },
 });
 export default createAdapter;
