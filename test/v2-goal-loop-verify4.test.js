@@ -216,8 +216,7 @@ test('Y3 X7 variant: a detached HEAD in the task worktree suspends dispatch; res
   assert.equal(sh(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), `v2task/${task.task_id}`);
 });
 
-test('Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after',
-  { todo: 'defect: branchGate() runs at dispatch, commit and the start of evaluation, but review() re-checks only headOf() right before the accept decision; a checkout to another branch at the same commit during the review (no new SHA) passes, and the task is accepted while the worktree is off v2task/<id>. Re-run branchGate (or compare status().branch) in the pre-accept revalidation.' }, async () => {
+test('Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after', async () => {
   const env = world({ dev: [GOOD], rev: [APPROVE] });
   const task = await env.submit();
   const wt = env.wt(task.task_id);
@@ -254,18 +253,36 @@ test('Y4 X6 variant: adoptOwn never adopts a live lease of the same owner for AN
   }
 });
 
-test('Y5 X6 variant: after adopting its own live lease the worktree meta follows, so renew/remove keep working', async () => {
+// Adapted to coordinator decision D-015 (adoptOwn removed): the lost lease is now produced the way a real crash
+// produces it -- worktrees.renew() persists its write-ahead lease_id, the backend grants that lease, and the process
+// dies before the meta rewrite -- and the restart must adopt exactly that lease. (A lease merely held under the same
+// owner name, with another lease_id, is a twin and stays fenced: see Y4 and the lease verifier's finding 2.)
+test('Y5 X6 variant: after adopting its own lost lease (write-ahead id) the worktree meta follows, so renew/remove keep working', async () => {
   const env = world({ dev: [BAD, GOOD] });
   const task = await env.submit();
   assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
   env.advance(7 * 3600_000);
-  const own = await env.leases.acquire(`worktree:${task.task_id}`, { owner: 'goal-loop', task_id: task.task_id, ttl_ms: 6 * 3600_000, scope: 'worktree' });
-  assert.equal(own.ok, true);
+  const real = env.leases.acquire;
+  let granted = null;
+  env.leases.acquire = async (...a) => {
+    const r = await real(...a);
+    if (String(a[0]).startsWith('worktree:')) {
+      env.leases.acquire = real;
+      granted = r;
+      throw Object.assign(new Error('controller process crashed after acquire'), { code: 'E_TEST_CRASH' });
+    }
+    return r;
+  };
+  await env.loop.run(task.task_id).catch(() => null);   // the crash surfaces inside the lease check
+  env.leases.acquire = real;
+  assert.ok(granted?.ok, 'the worktree lease was granted before the crash');
+  env.reopen();
+  await env.loop.recover();
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
   const { loop: cp } = await env.loop.inspect(task.task_id);
   const meta = env.worktrees.owner(env.wt(task.task_id)).lease;
   assert.deepEqual([meta.lease_id, meta.token], [cp.worktree.lease.lease_id, cp.worktree.lease.token]);
-  assert.equal(meta.token, own.lease.token, 'the adopted lease is the live one');
+  assert.equal(meta.token, granted.lease.token, 'the adopted lease is the one granted before the crash');
   const renewed = await env.worktrees.renew(env.wt(task.task_id), { owner: 'goal-loop' });
   assert.equal(renewed.reacquired, false);
   const kept = await env.worktrees.remove(env.wt(task.task_id), { owner: 'goal-loop' });
@@ -273,8 +290,7 @@ test('Y5 X6 variant: after adopting its own live lease the worktree meta follows
 });
 
 // ---- open risk: two controllers on one store ------------------------------------------------------
-test('Y6 two controllers over the same store and worktree: the second refuses to step a task the first has in flight',
-  { todo: 'defect(design): nothing fences two controller instances of the same owner name. With a run in flight in controller A, controller B steps the same task: its recordInterruptedUsage() records all-null "interrupted" usage for A\'s live run (A\'s real usage is then deduplicated away), and B commits/transitions the half-written worktree, after which A\'s own transition is illegal. adoptOwn only makes this silent in the crash window; the real guard is a per-task (or per-store) controller lease taken at step() and renewed while a run is active, with a persisted controller instance id in the audit.' }, async () => {
+test('Y6 two controllers over the same store and worktree: the second refuses to step a task the first has in flight', async () => {
     const env = world({ dev: [[{ op: 'delay', ms: 400 }, ...PAID(0.3)]] });
     const task = await env.submit();
     const A = env;
@@ -290,8 +306,7 @@ test('Y6 two controllers over the same store and worktree: the second refuses to
   });
 
 // ---- X8 variant ------------------------------------------------------------------------------------
-test('Y7 X8 variant: a "raise" that does not clear the reached cap is refused up front, not accepted and re-asked',
-  { todo: 'defect(low): approve() accepts any grants.budget_policy for a cap_reached stop; a cap lower than the spend (or equal) passes, the gate stops again with the same reason, and the owner is asked again' }, async () => {
+test('Y7 X8 variant: a "raise" that does not clear the reached cap is refused up front, not accepted and re-asked', async () => {
     const env = world({ dev: [[BAD[0], { op: 'usage', input_tokens: 10, output_tokens: 10, usd: 0.8 }], GOOD], loopOpts: { estimateRun: () => ({ usd: 0.3, input_tokens: 10, output_tokens: 10, duration_ms: 1, turns: 1 }) } });
     const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 1 } });
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');

@@ -110,7 +110,8 @@ output and task text (T02).
 `createLeaseAuthority({ backend, now, randomId })`, backends: `fileBackend({ dir, fs })` (atomic via `O_EXCL` lock file +
 rename; persisted monotonically increasing generation per resource) and `fakeBackend({ fail })` for failure injection.
 ```
-acquire(resource, { owner, task_id, ttl_ms, scope, approval_ref }) -> { ok:true, lease } | { ok:false, code:'E_HELD'|'E_UNAVAILABLE'|'E_INVALID' }
+acquire(resource, { owner, task_id, ttl_ms, scope, approval_ref, lease_id? }) -> { ok:true, lease } | { ok:false, code:'E_HELD'|'E_UNAVAILABLE'|'E_INVALID' }
+adopt({ resource, lease_id, owner, task_id }) -> { ok, lease } | { ok:false, code }   // recovery with the private, write-ahead lease_id (D-015)
 renew(lease) -> { ok, lease } ; release(lease) -> { ok }
 validate(lease) -> { ok } | { ok:false, code:'E_FENCED'|'E_EXPIRED'|'E_UNAVAILABLE' }   // call immediately before every mutation
 acquireAll(resources[], opts)                              // sorted canonical order; all-or-nothing
@@ -121,7 +122,10 @@ Namespaces: `repo:<repo>:integration`, `repo:<repo>:main`, `repo:<repo>:branch:<
 decision D-008: `<name>` uses `[A-Za-z0-9._/-]`, no `..`, `//`, leading `-`/`/` or trailing `/`),
 `environment:<env>:deploy`, `host:<id>:maintenance`, `service:<id>:<service>`, `worktree:<task_id>`. Every resource is
 at most 150 characters. Unavailable backend never means free. The existing `leases.js`
-(read-only remote registry observer) is an *input* for platform state, not an authority.
+(read-only remote registry observer) is an *input* for platform state, not an authority. D-015: a caller-supplied
+`lease_id` is persisted before `acquire` (write-ahead) and is granted once per resource; crash recovery uses `adopt()`
+with it, never the owner/task_id that `E_HELD` discloses. D-016: one goal-loop controller per store holds
+`service:<host_id>:goal-loop` (see docs/v2/LEASES.md).
 
 ## 6. Runtime adapters — `orchestration/adapters/<id>.js`
 
@@ -258,10 +262,13 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
 8. Worktree lease: renewed at every dispatch and commit through `worktrees.renew(path, { owner })`, which re-acquires
    a lapsed lease nobody took (E_EXPIRED) for the same owner and rewrites the worktree meta (`lease_reacquired`
    decision). A live holder, or one that held the lease in between (E_FENCED), suspends the task until inputs change;
-   after the owner resumes it, `renew(…, { acknowledgeFence: true })` re-acquires the lease only if it is free. A live
-   lease of the same owner and task whose `lease_id` was lost (crash between acquire and the meta write) is adopted
-   via the additive `leases.adoptOwn(resource, { owner, task_id })` (audited; never a free resource or another
-   owner's lease).
-9. Task branch: `worktrees.status()` also reports `branch` (`HEAD` when detached). Dispatch, commit and evaluation
-   require the worktree to be on `v2task/<task_id>`; otherwise the task waits (`off_task_branch`, `until_ms: null`)
-   until the owner restores the branch and resumes.
+   after the owner resumes it, `renew(…, { acknowledgeFence: true })` re-acquires the lease only if it is free. A lease
+   granted just before a crash (before the meta write) is adopted with the write-ahead id persisted before the acquire
+   (`pending_lease` in the meta, `.v2-meta/<task_id>.intent.json` for create; D-015).
+9. Task branch: `worktrees.status()` also reports `branch` (`HEAD` when detached). Dispatch, commit, evaluation, the
+   pre-accept revalidation and the integration handoff require the worktree to be on `v2task/<task_id>`; otherwise the
+   task waits (`off_task_branch`, `until_ms: null`) until the owner restores the branch and resumes.
+10. Controller (D-016): `step()`/`run()` act only under the controller lease `service:<host_id>:goal-loop`; another
+   live instance makes them return `{ transitioned: false, idle: true, controller: 'E_HELD' }` with no store access.
+   `recover()` takes over a dead instance's lease and then reconciles the store. The store's implicit open is
+   read-only; a task with a torn tail or an unconfirmed effect refuses writes until an explicit `recover()`.
