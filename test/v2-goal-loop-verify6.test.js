@@ -216,14 +216,17 @@ test('R4 in-process: a second instance\'s recover() during a live controller\'s 
   assert.equal((await B.loop.step(task.task_id)).controller ?? 'terminal', 'E_HELD');
 });
 
-test('R5 D-018 consequence: an owner cancel issued through ANOTHER process while the controller is alive and mid-run',
-  { todo: 'design constraint (D-018): cancel()/approve()/deny()/resume() take the controller lease (liveness-gated takeover), so from a process that is not the live controller they fail with E_CONTROLLER_HELD for as long as it lives; owner actions must be routed to the controller instance (or the store must admit task.cancelled without the lease, as the one write that never conflicts with reconciliation). Marked todo so the deployment rule is not forgotten.' }, async () => {
-    const env = world({ dev: [[{ op: 'delay', ms: 4500 }, ...GOOD]] });
-    const task = await env.submit();
-    const pA = env.loop.run(task.task_id);
-    await waitFor(() => env.devStarts() === 1);
-    const B = env.make();
-    const r = await B.loop.cancel(task.task_id, { actor: OWNER, reason: 'owner changed their mind' }).then(() => 'ok', (e) => e.code);
-    const rA = await pA;
-    assert.equal(r, 'ok', `cancel from another process: ${r}; the run went on to ${rA.state}`);
-  });
+// Deployment rule (D-018): owner actions go to the live controller's instance. From any other process they are
+// refused with E_CONTROLLER_HELD rather than becoming a second writer; the HTTP layer must route them accordingly.
+test('R5 D-018: an owner cancel from a process that is not the live controller is refused, never a second writer', async () => {
+  const env = world({ dev: [[{ op: 'delay', ms: 4500 }, ...GOOD]] });
+  const task = await env.submit();
+  const pA = env.loop.run(task.task_id);
+  await waitFor(() => env.devStarts() === 1);
+  const B = env.make();
+  const r = await B.loop.cancel(task.task_id, { actor: OWNER, reason: 'owner changed their mind' }).then(() => 'ok', (e) => e.code);
+  const rA = await pA;
+  assert.equal(r, 'E_CONTROLLER_HELD');
+  assert.equal(rA.state, 'accepted', 'the live controller kept sole ownership');
+  uniqueEvents(env.events(task.task_id));
+});
