@@ -53,8 +53,13 @@ const wake = {
     }
     return { allowed, forced: null, reasons };
   },
+  // p0_blocked / failed deploy are "already broken" (the wake_opus criterion), so they take Opus like an escalation;
+  // disk/quota-only hot states clamp to wake_cheap. A forbidden topic removes rules_handle, and the old fall-through
+  // to the first allowed option picked 'ignore' for it: someone must look, so default to wake_cheap.
   ruleDefault(facts) {
-    return facts?.event?.escalated ? 'wake_opus' : 'rules_handle';
+    const ev = facts?.event || {};
+    if (ev.escalated || ev.p0_blocked || (ev.kind === 'deploy' && facts?.deploy?.state === 'failed')) return 'wake_opus';
+    return ev.forbidden_topic ? 'wake_cheap' : 'rules_handle';
   },
 };
 

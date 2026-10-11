@@ -43,8 +43,16 @@ test('wake: ruleDefault falls back to first allowed when the rule pick is not in
   // Here wake_opus IS inside allowed, so we get wake_opus.
   const facts = { event: { kind: 'stall', p0_blocked: true, escalated: true }, disk_pct: 30, quota: { claude: 30 } };
   assert.equal(ruleDefault('wake', facts), 'wake_opus');
-  // non-escalated + p0_blocked: rules_handle is NOT inside allowed -> first allowed
-  assert.equal(ruleDefault('wake', { event: { kind: 'stall', p0_blocked: true }, disk_pct: 30, quota: { claude: 30 } }), 'wake_cheap');
+  // disk-critical, not escalated: rules_handle is NOT inside allowed -> first allowed
+  assert.equal(ruleDefault('wake', { event: { kind: 'stall' }, disk_pct: 97, quota: { claude: 30 } }), 'wake_cheap');
+});
+test('wake: p0_blocked and failed deploy default to wake_opus (already broken); dry-run defect fix', () => {
+  assert.equal(ruleDefault('wake', { event: { kind: 'stall', p0_blocked: true }, disk_pct: 30, quota: { claude: 30 } }), 'wake_opus');
+  assert.equal(ruleDefault('wake', { event: { kind: 'deploy' }, deploy: { state: 'failed' }, disk_pct: 30, quota: { claude: 30 } }), 'wake_opus');
+  assert.equal(ruleDefault('wake', { event: { kind: 'stall', p0_blocked: true, forbidden_topic: true }, disk_pct: 30, quota: {} }), 'wake_opus');
+});
+test('wake: a forbidden topic is never ignored by default (wake_cheap, not the first-allowed fallthrough)', () => {
+  assert.equal(ruleDefault('wake', { event: { kind: 'stall', forbidden_topic: true }, disk_pct: 50, quota: { claude: 30 } }), 'wake_cheap');
 });
 
 // ---- builder ----
