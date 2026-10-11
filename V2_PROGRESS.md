@@ -31,7 +31,9 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | security follow-up | 1 | v2/integration | dccab06 | coordinator | integrated, review pending | 9507d11 |
 | phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | in progress | |
 | task-core | 2 | v2/02-task-core | c366307 | Opus | in progress | |
-| lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | in progress | |
+| lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | review | 9e958b6; T25–T27 tests |
+| lease-verify | 12 | wt verify-08 | 9e958b6 | Fable | in progress | |
+| system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | in progress | |
 | routing | 4 | v2/04-routing | c366307 | Sonnet | review | fd3e4d6; wake rule 6/10 -> 10/10 (shadow only) |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | in progress | |
