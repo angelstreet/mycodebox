@@ -112,7 +112,7 @@ export function createDelivery({ store, queue, controller: makeController, git, 
         const req = requestOf(await writer.events(task.task_id), { since, run });
         if (!req) return { next: 'awaiting_approval', reason: `integration needs the owner: ${reason}${item.detail?.files ? ` (${item.detail.files.join(', ')})` : ''}`, classes: ['integration'], keys: [] };
         const key = approvalKey({ ...req, repo });
-        return { next: 'awaiting_approval', classes: [req.class], keys: [key], required: { ...req, repo },
+        return { next: 'awaiting_approval', classes: [req.class], keys: [key], sha: req.sha, required: { ...req, repo },
           reason: `Approve ${req.action} of ${req.sha} to ${repo}/${req.target} (${req.class}); the grant covers exactly this SHA, action and target.` };
       }
       case 'returned': return { next: 'repair', reason: `integration returned the work: ${reason}`, feedback: { kind: 'integration_returned', reason, detail: item.detail ?? null } };

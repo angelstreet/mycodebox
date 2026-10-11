@@ -326,4 +326,7 @@ Recorded from `v2/11-e2e` (`orchestration/delivery.js`); additive to §10 and §
 5. `integrate.reconcile` only reads: for a controller effect key it asks the remote (`controller.effectState(key)`,
    `confirmed`/`failed`/unknown); for the loop's own hook effect it answers `applied` once every remote effect the call
    may have caused can be read. The loop records the phases itself.
+6. Dashboard: the integration approval request also carries the SHA it is about (`sha`, the integration SHA, not the
+   developer head), so `orchestration/http.js` shows that SHA, demands it on approve (`E_SHA_MISMATCH` otherwise) and
+   records grants with the request's `keys` and `request_kind`, the same shape as `goal-loop approve()`.
 

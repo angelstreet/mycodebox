@@ -1094,7 +1094,7 @@ export function createGoalLoop({
     if (r.next === 'waiting') patch.wait = { reason: 'integration', until_ms: now() + (r.retry_after_ms ?? 5 * 60_000), resume_to: 'integrating' };   // D-007
     // The grant is bound to the hook's action keys (e.g. integration:merge:<repo>:<target>:<sha>), never to the class alone.
     if (r.next === 'awaiting_approval') patch.approval = { k: ctx.k, kind: 'integration', question: r.reason || 'integration needs owner approval', classes: r.classes || [],
-      keys: Array.isArray(r.keys) ? r.keys.map(String) : [], resume_to: 'integrating' };
+      keys: Array.isArray(r.keys) ? r.keys.map(String) : [], ...(typeof r.sha === 'string' ? { sha: r.sha } : {}), resume_to: 'integrating' };
     if (r.next === 'repair' && r.feedback && typeof r.feedback === 'object') patch.feedback = r.feedback;   // e.g. merge conflict files
     return decide(ctx, decision('integration_result', 'Integration controller result: next state?', [alt(r.next, r.reason || 'reported by the integration controller', 'n/a'), alt('accept now', 'fast', 'skips integration gates')],
       r.next, { evidence: [`sha ${head}`, `key ${idempotency_key}`], expected_effect: r.next, rationale: `Integration hook returned ${r.next}.` }), { patch, to: r.next, reason: r.reason || r.next });

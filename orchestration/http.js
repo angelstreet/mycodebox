@@ -67,7 +67,7 @@ export function pendingApproval(task, events) {
   // Prefer the SHA the request was raised on; fall back to the task head.
   const sha = typeof req.sha === 'string' && SHA_RE.test(req.sha) ? req.sha : task.head_sha;
   return { action_id: `appr-${task.task_id}-${req.k}`, k: req.k, kind: req.kind ?? null, question: clip(req.question, 1000),
-    classes: Array.isArray(req.classes) ? req.classes : [], sha, resume_to: req.resume_to ?? null };
+    classes: Array.isArray(req.classes) ? req.classes : [], keys: Array.isArray(req.keys) ? req.keys : [], sha, resume_to: req.resume_to ?? null };
 }
 
 // The owner already answered the current request: the loop has not applied it yet.
@@ -256,9 +256,10 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
       const action = { kind: pending.kind, question: pending.question, classes: pending.classes };
       const base = { k: pending.k, actor: OWNER, action_id: pending.action_id, action, sha: pending.sha };
       const granted = kind === 'approve';
-      // Same event ids and payload shape as goal-loop approve()/deny(): the loop reads this record, nothing else.
+      // Same event ids and payload shape as goal-loop approve()/deny() (grants carry the request's action keys and kind,
+      // so a keyed request -- a gate, an integration push/merge of one SHA -- is answered exactly): the loop reads this record.
       await store.append(id, granted
-        ? { event_id: `appr-${id}-${pending.k}`, kind: 'approval.granted', payload: { ...base, approval_ref: pending.action_id, grants: { classes: pending.classes }, reason: p.body.reason ?? null } }
+        ? { event_id: `appr-${id}-${pending.k}`, kind: 'approval.granted', payload: { ...base, approval_ref: pending.action_id, grants: { classes: pending.classes, keys: pending.keys, request_kind: pending.kind }, reason: p.body.reason ?? null } }
         : { event_id: `deny-${id}-${pending.k}`, kind: 'approval.denied', payload: { ...base, reason: p.body.reason ?? null } });
       return reply(200, { ok: true, recorded: granted ? 'approval.granted' : 'approval.denied', action_id: pending.action_id, actor: OWNER, sha: pending.sha,
         note: 'recorded only; the task moves when the goal loop runs, which is an explicit opt-in' });

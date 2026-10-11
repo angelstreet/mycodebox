@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createV2Http } from '../orchestration/http.js';
 import { sandbox, world, mkOrigin, makeDelivery, fakeRemoteCi, states, loopDecisions, devRuns,
   GOOD, BAD, THROWS, GAMED, APPROVE, REJECT_GAMED } from './fixtures/v2-world.js';
 
@@ -58,9 +59,33 @@ test('GL14/T39: intake -> worktree -> repair loops -> independent verifier -> in
   assert.deepEqual([merge.action, merge.class, merge.target, merge.sha], ['merge', 'merge_protected', 'main', push.sha]);
   assert.equal(o.head('v2int/main'), push.sha);
   assert.equal(o.head(), before, 'main untouched until the merge approval');
-  await ownerApproves(env, id, merge);
+  // The owner decides in the dashboard: the V2 HTTP layer shows the request bound to the integration SHA, not the
+  // developer head, and records a grant carrying the request's key.
+  const api = createV2Http({ store: env.store, intake: env.intake });
+  const http = (method, pathname, body) => api.handle({ method, pathname, readBody: async () => body });
+  const board = (await http('GET', '/api/v2/tasks')).body;
+  const queued = board.approvals.find((a) => a.task_id === id);
+  const mkey = `integration:merge:demo:main:${merge.sha}`;
+  assert.deepEqual([queued.sha, queued.keys, queued.classes], [merge.sha, [mkey], ['merge_protected']], 'the approval queue names the integration SHA and its key');
+  assert.match(queued.question, new RegExp(merge.sha));
+  const devHead = (await env.view(id)).head_sha;
+  assert.notEqual(devHead, merge.sha);
+  assert.equal((await http('POST', `/api/v2/tasks/${id}/approve`, { action_id: queued.action_id, sha: devHead })).body.code, 'E_SHA_MISMATCH', 'approving the developer head does not approve the merge');
+  const ok = await http('POST', `/api/v2/tasks/${id}/approve`, { action_id: queued.action_id, sha: merge.sha, reason: 'merge reviewed' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
   r = await env.loop.run(id);
   assert.equal(r.state, 'accepted');
+  // The UI read model of the finished task (orchestration/http.js detail).
+  const ui = (await http('GET', `/api/v2/tasks/${id}`)).body.task;
+  assert.deepEqual([ui.state, ui.outcome, ui.delivery], ['accepted', 'done', { requested: true, integrated: true, label: 'integrated' }]);
+  assert.deepEqual(ui.acceptance_checks.map((x) => [x.id, x.status, x.latest_evidence.sha]), [['unit', 'passing_on_head', ui.head_sha]]);
+  assert.ok(ui.verdicts.some((x) => x.current && x.verdict === 'approve' && x.sha === ui.head_sha));
+  assert.ok(ui.verdicts.some((x) => !x.current && x.verdict === 'reject'), 'the rejected SHA is shown as not current');
+  for (const k of ['repair', 'integration_result', 'accept']) assert.ok(ui.decisions.some((d) => d.kind === k), `decision ${k} shown`);
+  assert.deepEqual(ui.leases.effects.filter((e) => ['push', 'merge'].includes(e.kind)).map((e) => [e.kind, e.phase]), [['push', 'confirmed'], ['merge', 'confirmed']]);
+  assert.deepEqual(ui.history.slice(-2).map((h) => h.to), ['release_verifying', 'accepted']);
+  assert.equal(ui.usage.usd, null, 'unknown cost shown as unknown');
+  assert.equal(ui.pending_approval, null);
 
   const v = await env.view(id);
   const S = merge.sha;
@@ -109,6 +134,8 @@ test('GL14/T39: intake -> worktree -> repair loops -> independent verifier -> in
       target_sha_before: x.manifest?.rounds?.at(-1)?.target_sha ?? null, remote_ci: x.manifest?.rounds?.at(-1)?.remote_ci?.status ?? null })),
     remote: { main_before: before, main_after: o.head(), candidate: o.head('v2int/main'), merge_parents: o.parents(S) },
     ci: ci.log, effects: v.effects.map((e) => ({ kind: e.kind, phase: e.phase })), usage_totals: v.usage_totals,
+    ui: { state: ui.state, outcome: ui.outcome, delivery: ui.delivery, checks: ui.acceptance_checks.map((x) => ({ id: x.id, status: x.status })),
+      decisions: ui.decisions.length, approval_shown: { sha: queued.sha, keys: queued.keys } },
   };
   const out = path.join(sb.TMP, 'gl14-trace.json');
   fs.writeFileSync(out, `${JSON.stringify(trace, null, 1)}\n`);
@@ -120,6 +147,7 @@ test('GL14/T39: intake -> worktree -> repair loops -> independent verifier -> in
   assert.ok(back.integration.every((x) => x.integration_sha === S), 'one integration SHA across every run');
   assert.deepEqual(back.remote, { main_before: before, main_after: S, candidate: S, merge_parents: [before, devSha] });
   assert.equal(back.usage_totals.usd, null, 'unknown spend stays unknown');
+  assert.deepEqual([back.ui.state, back.ui.delivery.label, back.ui.approval_shown.sha], ['accepted', 'integrated', S]);
   assert.ok(!JSON.stringify(back).includes(sb.TMP), 'no local paths in the trace');
 });
 
