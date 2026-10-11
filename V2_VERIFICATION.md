@@ -58,6 +58,8 @@ Exact repaired SHA `1bc82f962f82966488a83bc71d5c1eab23faa48a`: `env -i PATH="$PA
 | adapters + worktrees (Phase 3) | Sonnet + coordinator | Opus, 3 rounds | APPROVE | merge before 85cd076 | 1342/1342 both runtimes after D-011 seam fix |
 | incidents/telemetry/system-ops (§12.4) | Sonnet + coordinator | Fable, 3 rounds | APPROVE | merged with adapters | 1342/1342 both runtimes |
 | integration queue/CI gates/controller (§12.3) | Opus + coordinator | Fable, 3 rounds | APPROVE | 063380e | 1383/1383 both runtimes |
+| goal loop/verifier/roles/intake (Phase 5, §13) incl. D-015..D-018 | Opus | Fable, 6 rounds (+ lease and store re-reviews) | APPROVE | merge before b114077 | 1508/1508 both runtimes on the package branch |
+| V2 API, Tasks view, docs, scoring (Phase 6) | Sonnet + coordinator | Opus, 2 rounds | APPROVE; T20 37/37 | b114077 | see the integration gate below |
 
 ## T20 browser check (Phase 6, V2 Tasks view)
 

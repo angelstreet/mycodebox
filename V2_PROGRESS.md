@@ -1,4 +1,4 @@
-STATUS: RUNNING — all packages except goal-loop integrated; goal-loop fixing Fable findings; ui-docs in Opus review; acceptance harness in development
+STATUS: RUNNING — Phases 0–6 + §12 packages integrated (b114077); next: delivery bridge + acceptance harness verification, then Fable full-process review and draft PR
 
 # V2 progress
 
@@ -40,7 +40,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | done: APPROVE WITH FIXES | c50f7ff (18 todo) |
 | system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | a0b46a6 -> merge |
-| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | round-5 fixes 21e5f1a (1502/1502); Fable final check | Z1 liveness takeover + per-write fence, D-018 cancel |
+| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | INTEGRATED (Fable APPROVE, 6 rounds) | dc425dc -> merge |
 | routing | 4 | v2/04-routing | c366307 | Sonnet | INTEGRATED (verifier APPROVE, 3 rounds) | b9a88f2 -> merge 71d9b39; 991/991 both runtimes |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
@@ -49,7 +49,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
 | integration-verify | 12 | wt verify-09 | a14a72a | Fable | done: APPROVE WITH FIXES | 631409d (5 todo); F1 high self-approval via handoff |
 | integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | -> 063380e; usage.incomplete seam fixed in store |
-| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet + coordinator | APPROVED (Opus, 2 rounds); lows fixed d9d50f8; integrate after goal-loop | 43fe411; T20 37/37 |
+| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet + coordinator | INTEGRATED (Opus APPROVE, 2 rounds) | b114077 |
 | acceptance | 7 | v2/11-e2e | b781cdc | Opus | matrix 47 PASS / 6 FAIL (open goal-loop defects) / 1 PENDING (T20); live smoke 3/3 runtimes; now promoting delivery bridge to production | 64bcf60 |
 
 ## Decision journal
