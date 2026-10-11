@@ -67,5 +67,7 @@ other than `tool-calls` is terminal (`stop` ok; `length` etc. give `ok: false` w
 `error.name` and `error.data.{message,statusCode}`; the adapter keeps `Name: message status code: N` so 429 classifies as
 rate_limit and 401 / `ProviderAuthError` as auth.
 
+A `cost` of 0 is recorded as unknown USD, never $0: unpriced providers and free models report 0 too.
+
 Resume: `opencode run -s <sessionID> ...` continues a session (verified live: the second run answered from the first
 run's context and kept the same `sessionID`). `features.resume` is true; the adapter appends `--session <id>`.

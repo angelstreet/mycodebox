@@ -13,10 +13,12 @@ function stepUsage(p) {
   const cost = n(p?.cost);
   const inp = n(t?.input);
   const outp = n(t?.output);
-  const incomplete = !t || inp === null || outp === null || cost === null;
+  // A cost of 0 is not proof of a free run (unpriced providers and free models report 0 too): only a positive cost is USD.
+  const usd = cost !== null && cost > 0 ? cost : null;
+  const incomplete = !t || inp === null || outp === null || usd === null;
   const input_tokens = inp === null ? null : inp + (n(t.cache?.write) ?? 0) + (n(t.cache?.read) ?? 0);
   const output_tokens = outp === null ? null : outp + (n(t.reasoning) ?? 0);
-  return { input_tokens, output_tokens, usd: cost, incomplete };
+  return { input_tokens, output_tokens, usd, incomplete };
 }
 
 export function parse(o) {
@@ -24,7 +26,7 @@ export function parse(o) {
   const p = o.part && typeof o.part === 'object' ? o.part : {};
   switch (o.type) {
     case 'step_start': return { events: [{ type: 'started', session_id: sid }], session_id: sid };
-    case 'text': return { events: [{ type: 'text', text: typeof p.text === 'string' ? p.text : '' }], session_id: sid };
+    case 'text': return { events: [{ type: 'text', text: typeof p.text === 'string' ? p.text : typeof o.text === 'string' ? o.text : '' }], session_id: sid };
     case 'tool_use': return { events: [{ type: 'tool_use', name: typeof p.tool === 'string' ? p.tool : null }], session_id: sid };
     case 'step_finish': {
       const usage = stepUsage(p);
@@ -44,6 +46,8 @@ export function parse(o) {
     default: return genericParse(o);
   }
 }
+
+export { parse as parseOpencodeEvent }; // bench tests import it under this name
 
 export const createAdapter = makeCliAdapter({
   id: 'opencode',
