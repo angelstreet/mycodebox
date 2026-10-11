@@ -428,7 +428,7 @@ test('F3 closure: a really deleted source branch is rejected once; re-pushed, th
   assert.equal(await status(w.store, 'f3r'), 'release_verifying');
 });
 
-test('F3 residual: a well-formed but non-existent base_sha is a final rejection, not E_RETRYABLE forever', { todo: 'defect (low): merge-base says "Not a valid commit name", which MISSING_REF does not match, so submit() answers E_RETRYABLE for a permanently bad base_sha' }, async () => {
+test('F3 residual: a well-formed but non-existent base_sha is a final rejection, not E_RETRYABLE forever', async () => {
   const o = makeOrigin('f3bogus');
   const w = makeController(o);
   const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });
