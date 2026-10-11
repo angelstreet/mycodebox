@@ -29,9 +29,10 @@ const NAMESPACES = [
 // Length cap keeps every derived file name (`.<encoded>.<uuid>.tmp`) under the 255-byte name limit.
 export const MAX_RESOURCE_LEN = 150;
 // Encoded length bounds the derived file names too (a slash-heavy branch name expands under percent-encoding).
-// branch:main / branch:integration would alias the protected names: one real branch must have one lease name.
+// branch:main / branch:integration (or a refs/heads/ or heads/ spelling of any branch) would alias another name:
+// one real branch must have one lease name, so branch names are short refs.
 export const validResource = (r) => typeof r === 'string' && r.length <= MAX_RESOURCE_LEN && !r.includes('..')
-  && encodeURIComponent(r).length <= 200 && !/:branch:(?:main|integration)$/.test(r)
+  && encodeURIComponent(r).length <= 200 && !/:branch:(?:(?:refs\/)?heads\/)?(?:main|integration)$/.test(r) && !/:branch:(?:refs\/|heads\/)/.test(r)
   && NAMESPACES.some((re) => re.test(r));
 // Code-unit order, not localeCompare: every process must agree on the same order or ordered acquisition is moot.
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -379,7 +380,7 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
     const needle = JSON.stringify(resource);
     for (const line of txt.split('\n')) {
       if (!line.includes(needle)) continue;
-      try { const e = JSON.parse(line); if (e.resource === resource && Number.isInteger(e.token)) return true; } catch { /* torn line */ }
+      try { const e = JSON.parse(line); if (e.resource === resource && (e.op === 'acquire' || e.op === 'adopt') && Number.isInteger(e.token)) return true; } catch { /* torn line */ }   // grants only: a denied/fenced line from a stray handle is not history
     }
     return false;
   }

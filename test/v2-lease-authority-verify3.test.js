@@ -125,7 +125,6 @@ test('self-heal: a healer that cannot write (rename EACCES) fails closed and lea
 // --- lost-record guard: audit fallback ---------------------------------------------------------------------------------
 
 test('audit fallback: `rm <res>.*` after grants is detected; a resource that was only ever denied/fenced is not blocked',
-  { todo: 'defect (medium, availability): auditMentions() counts any audit line with an integer token, including the fenced/denied lines that validate()/renew()/release() append for a forged or stale lease; one validate() of a garbage lease against a never-acquired resource makes its first acquire E_UNAVAILABLE until manual recovery. Count grant lines only (op acquire/adopt), as the original auditHasHistory did' },
   async () => {
     const dir = await tmp();
     const auth = createLeaseAuthority({ backend: fileBackend({ dir }) });
@@ -165,6 +164,6 @@ test('D-008: encoded-length cap and branch aliasing rules', async () => {
   assert.equal(validResource(`repo:demo:branch:${'a/'.repeat(30)}a`), true);
   for (const r of ['repo:demo:branch:main', 'repo:demo:branch:integration', 'repo:org/demo:branch:main']) assert.equal(validResource(r), false, r);
   for (const r of ['repo:demo:branch:main-next', 'repo:demo:branch:integration/x', 'repo:demo:branch:x/main']) assert.ok(validResource(r), r);
-  // note (not asserted): refs/heads/main and heads/main are still accepted and name the same git branch as main
-  assert.ok(validResource('repo:demo:branch:refs/heads/main'));
+  // branch names are short refs: refs/heads/ and heads/ spellings would alias another lease name
+  for (const r of ['repo:demo:branch:refs/heads/main', 'repo:demo:branch:heads/main', 'repo:demo:branch:refs/heads/dev']) assert.equal(validResource(r), false, r);
 });
