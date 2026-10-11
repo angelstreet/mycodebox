@@ -268,7 +268,23 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
 9. Task branch: `worktrees.status()` also reports `branch` (`HEAD` when detached). Dispatch, commit, evaluation, the
    pre-accept revalidation and the integration handoff require the worktree to be on `v2task/<task_id>`; otherwise the
    task waits (`off_task_branch`, `until_ms: null`) until the owner restores the branch and resumes.
-10. Controller (D-016): `step()`/`run()` act only under the controller lease `service:<host_id>:goal-loop`; another
-   live instance makes them return `{ transitioned: false, idle: true, controller: 'E_HELD' }` with no store access.
-   `recover()` takes over a dead instance's lease and then reconciles the store. The store's implicit open is
-   read-only; a task with a torn tail or an unconfirmed effect refuses writes until an explicit `recover()`.
+10. Controller (D-016, D-017, D-018): `step()`/`run()` act only under the controller lease
+   `service:<host_id>:goal-loop`; another live instance makes them return `{ transitioned: false, idle: true,
+   controller: 'E_HELD' }` with no store access. Every store write and every commit re-validates that lease first
+   (fence per §5), so a displaced instance writes nothing even between heartbeats. Takeover (`recover()`, and owner
+   actions `cancel`/`approve`/`deny`/`resume`) is liveness-gated: the controller intent file records pid, host and a
+   heartbeat time; only an instance whose process is gone on this host (`kill(pid, 0)`, EPERM = alive) or whose
+   heartbeat is older than two heartbeat intervals is taken over, through its write-ahead `lease_id`. A live
+   controller is never displaced: `E_CONTROLLER_HELD`, and its TTL runs out.
+   - The store's implicit open on first access is read-only **for recovery only**: it replays the log and writes no
+     recovery events, so reading a store another controller writes cannot reconcile that controller's live run. It is
+     not a multi-writer protocol: multi-writer safety rests on the controller lease (D-016).
+   - `recover()` is called by the store's owner, the goal-loop controller, under the controller lease: at startup and
+     whenever a view shows `recovery_pending` (a torn tail, or an open effect a full recovery would reconcile).
+     Other clients (HTTP layer, scripts) treat `E_STORE_FAILED ... needs recover()` as "the controller has not
+     reconciled this task yet" and retry through the controller.
+   - Cancellation always goes through (D-018): `cancel()` takes the controller lease, runs `recover()` first when the
+     task shows `recovery_pending` (it never appends over a torn tail), then persists the cancel.
+   - Without a lease authority (`leases` not injected) there is no controller lease: `holdController` neither fences
+     nor reconciles, so a store opened read-only is never reconciled automatically (liveness gap); deployments always
+     inject the lease authority.

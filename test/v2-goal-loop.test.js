@@ -801,3 +801,24 @@ test('D-016 one controller per store: a second instance never steps; recover() t
   assert.equal((await B.run(task.task_id)).state, 'accepted');
   uniqueEvents(env.events(task.task_id));
 });
+
+test('Z1 fence per write: a controller fenced mid-run (before any heartbeat could notice) writes nothing afterwards', async () => {
+  const env = world({ dev: [[{ op: 'delay', ms: 400 }, ...GOOD]] });
+  const task = await env.submit();
+  const p = env.loop.run(task.task_id);
+  await waitFor(() => env.devStarts() === 1);
+  const before = env.events(task.task_id).length;
+  // someone takes the controller lease out from under the running instance (its heartbeat interval is 20 s)
+  const f = fs.readdirSync(env.storeDir).find((x) => /^controller\..+\.intent\.json$/.test(x));
+  const intent = JSON.parse(fs.readFileSync(path.join(env.storeDir, f), 'utf8'));
+  const ad = await env.leases.adopt({ resource: intent.resource, lease_id: intent.lease_id, owner: intent.owner, task_id: null });
+  assert.ok(ad.ok);
+  await env.leases.release(ad.lease);
+  const other = await env.leases.acquire(intent.resource, { owner: 'goal-loop', ttl_ms: 60_000, scope: 'controller someone-else' });
+  assert.ok(other.ok);
+  const r = await p;
+  assert.equal(r.idle, true);
+  assert.match(r.note, /controller lease lost/);
+  assert.equal(env.events(task.task_id).length, before, 'no store write after the fence');
+  assert.equal(sh(env.wt(task.task_id), 'rev-parse', 'HEAD'), env.repo.sha, 'no commit after the fence');
+});

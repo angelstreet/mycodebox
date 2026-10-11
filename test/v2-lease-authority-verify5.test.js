@@ -7,6 +7,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLeaseAuthority, fileBackend, fakeBackend } from '../orchestration/lease-authority.js';
+import { deadControllerIntents } from '../orchestration/goal-loop.js';
 
 const tmp = () => mkdtemp(join(tmpdir(), 'v2-lease-verify5-'));
 const W = 'worktree:task-4';
@@ -145,20 +146,28 @@ test('adopt: guessed ids against a live holder are fenced and audited; expired h
 
 // --- D-016 controller lease: the takeover pattern, reproduced with the authority alone ----------------------------------
 
-// Mirrors goal-loop.js holdController({ takeover: true }): write intent -> acquire -> on E_HELD adopt every *other*
-// intent file present, release it, acquire again. Intent files have no liveness information.
-function controller(auth, intents, instance) {
-  const intent = { resource: C, lease_id: `ctl-${instance}-0000000001`, owner: 'goal-loop', task_id: null, instance };
+// Mirrors goal-loop.js holdController({ takeover: true }) after the round-5 fix (Z1): write intent (pid, host,
+// heartbeat) -> acquire -> on E_HELD adopt only intents the goal loop's own deadControllerIntents() rule calls dead
+// (process gone on this host, or no heartbeat for 2 intervals), release, acquire again.
+const HOST = 'node-a';
+const livePids = new Set();
+function controller(auth, intents, instance, { pid, alive = true, now = () => 0 } = {}) {
+  const p = pid ?? 10_000 + intents.size;
+  if (alive) livePids.add(p); else livePids.delete(p);
+  const intent = { resource: C, lease_id: `ctl-${instance}-0000000001`, owner: 'goal-loop', task_id: null, instance, pid: p, host: HOST, heartbeat_at: now() };
   intents.set(instance, intent);
   return {
     intent,
+    die() { livePids.delete(p); },
     async hold() {
       const opts = { owner: 'goal-loop', ttl_ms: 60_000, scope: `controller ${instance}`, lease_id: intent.lease_id };
       let a = await auth.acquire(C, opts);
       if (!a.ok && a.code === 'E_HELD') {
-        for (const pi of [...intents.values()].filter((x) => x.instance !== instance)) {
+        const others = [...intents.values()].filter((x) => x.instance !== instance);
+        for (const pi of deadControllerIntents(others, { hostname: HOST, isAlive: (x) => livePids.has(x), now: now(), heartbeatMs: 20_000 })) {
           const ad = await auth.adopt({ resource: pi.resource, lease_id: pi.lease_id, owner: pi.owner, task_id: null });
-          if (ad.ok) { await auth.release(ad.lease); intents.delete(pi.instance); break; }
+          intents.delete(pi.instance);
+          if (ad.ok) { await auth.release(ad.lease); break; }
         }
         a = await auth.acquire(C, opts);
       }
@@ -168,7 +177,6 @@ function controller(auth, intents, instance) {
 }
 
 test('D-016 takeover: a second instance\'s recover() displaces a live controller through its intent file',
-  { todo: 'defect (medium, goal-loop.js:91-95 + :1140-1142): otherCtlIntents() has no liveness check and recover() (the startup path) always takes over, so a process started while the previous one is still alive adopts the LIVE controller\'s lease via its intent file, releases it and acquires; the displaced one keeps writing until its next heartbeat renew (up to ttl/3 = 20 s). Record pid+host in the intent and take over only dead same-host instances (else E_CONTROLLER_HELD; the TTL is 60 s)' },
   async () => {
     const auth = createLeaseAuthority({ backend: fakeBackend() });
     const intents = new Map();
@@ -182,17 +190,17 @@ test('D-016 takeover: a second instance\'s recover() displaces a live controller
   });
 
 test('D-016 takeover: two restarting instances each see the other\'s fresh intent; the acquire loser displaces the winner',
-  { todo: 'defect (medium, goal-loop.js:107-120): prev is every other intent present, including a concurrently restarting instance that just acquired; the loser of the acquire race adopts the winner\'s live lease, releases it and takes the resource while the winner is inside store.recover() (two writers during reconcile). Same fix: liveness-gated takeover' },
   async () => {
     const c = clock();
     const backend = fakeBackend({ now: c });
     const auth = createLeaseAuthority({ backend, now: c });
     const intents = new Map();
-    const dead = controller(auth, intents, 'inst-dead');
+    const dead = controller(auth, intents, 'inst-dead', { now: c });
     const d = await dead.hold();
     assert.ok(d.ok);
+    dead.die();                                      // its process exits
     c.t += 30_000;                                   // the dead instance's lease is still live when the restarts happen
-    const A = controller(auth, intents, 'inst-A'), B = controller(auth, intents, 'inst-B');
+    const A = controller(auth, intents, 'inst-A', { now: c }), B = controller(auth, intents, 'inst-B', { now: c });
     const a = await A.hold();                        // A wins: took over the dead instance
     assert.ok(a.ok);
     const b = await B.hold();                        // B: E_HELD by A, then "takes over" A through A's intent
@@ -203,7 +211,9 @@ test('D-016 takeover: two restarting instances each see the other\'s fresh inten
 test('D-016 takeover of a dead instance works and fences the dead handle; a third party without the intent cannot', async () => {
   const auth = createLeaseAuthority({ backend: fakeBackend() });
   const intents = new Map();
-  const dead = (await controller(auth, intents, 'inst-dead').hold()).lease;
+  const deadCtl = controller(auth, intents, 'inst-dead');
+  const dead = (await deadCtl.hold()).lease;
+  deadCtl.die();
   const stranger = await auth.adopt({ resource: C, lease_id: 'ctl-guess-00000000001', owner: 'goal-loop', task_id: null });
   assert.equal(stranger.code, 'E_FENCED');
   const next = await controller(auth, intents, 'inst-next').hold();

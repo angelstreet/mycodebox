@@ -12,6 +12,7 @@
 // writes nothing new.
 import nodeFs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { TERMINAL, failureSignature, ContractError } from './task-contract.js';
 import { checkAction as policyCheckAction, loadPolicy as realLoadPolicy, clarificationFor } from './policy.js';
@@ -47,6 +48,20 @@ export function readTaskEvents(storeDir, task_id, fs = nodeFs) {
   return out;
 }
 
+// Store methods that write: each is fenced by the controller lease (D-016).
+const STORE_WRITES = ['createTask', 'append', 'transition', 'setHead', 'recordEvidence', 'recordVerdict', 'recordDecision', 'recordUsage', 'recordEffect', 'snapshotPolicy'];
+// Same rule as the lease backend's lock files: EPERM means the process exists.
+export function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+// Z1: controller intents a successor may take over -- the process is gone on this host, or its heartbeat is older than
+// two heartbeat intervals. Anything else is a live controller (E_CONTROLLER_HELD; let its TTL run out). Pure.
+export function deadControllerIntents(intents, { hostname, isAlive = pidAlive, now, heartbeatMs }) {
+  return (intents || []).filter((x) => (x.host === hostname && !isAlive(x.pid))
+    || (Number.isFinite(x.heartbeat_at) && now - x.heartbeat_at > 2 * heartbeatMs));
+}
+
 export const wantsDelivery = (task) => task?.review_policy?.deliver === true
   || (task?.resources || []).some((r) => typeof r === 'string' && /^repo:.+:integration$/.test(r));
 
@@ -73,10 +88,14 @@ export function createGoalLoop({
   // ---------- D-016: one controller per store ----------
   // A controller lease `service:<host>:goal-loop` (short TTL, renewed by step()/run() and by a heartbeat while a step
   // runs). A second live instance gets E_HELD and fails closed (no step, no write). The instance id is audit data (the
-  // lease scope), never identity. recover() is the restart path: it takes over a dead instance's lease through that
-  // instance's write-ahead lease_id (adopt -> release -> acquire: the old handle is fenced), then reconciles the store.
-  const ctlCfg = { resource: `service:${hostId}:goal-loop`, ttl_ms: 60_000, instance: randomUUID(), ...controller };
-  const ctl = { lease: null, recovered: false, lost: false };
+  // lease scope), never identity. Takeover (recover(), cancel()) is liveness-gated (Z1): only an instance that is dead
+  // -- its pid gone on this host, or no heartbeat for 2 heartbeat intervals -- is taken over, through its write-ahead
+  // lease_id (adopt -> release -> acquire: its handle is fenced). Every store write and every commit re-validates the
+  // controller lease first (fence per §5), so a displaced instance writes nothing even between heartbeats.
+  const hbMs = Math.max(1000, Math.floor((controller.ttl_ms ?? 60_000) / 3));
+  const ctlCfg = { resource: `service:${hostId}:goal-loop`, ttl_ms: 60_000, instance: randomUUID(), hostname: os.hostname(), pid: process.pid,
+    isAlive: pidAlive, ...controller };
+  const ctl = { lease: null, recovered: false, lost: false, intent: null };
   const ctlIntentPath = (inst) => path.join(store.dir, `controller.${inst}.intent.json`);
   function writeCtlIntent(intent) {
     fs.mkdirSync(store.dir, { recursive: true });
@@ -93,49 +112,84 @@ export function createGoalLoop({
     try { names = fs.readdirSync(store.dir).filter((f) => /^controller\..+\.intent\.json$/.test(f)); } catch { return []; }
     return names.flatMap((f) => { try { const x = JSON.parse(fs.readFileSync(path.join(store.dir, f), 'utf8')); return x?.instance !== ctlCfg.instance && x?.resource === ctlCfg.resource ? [x] : []; } catch { return []; } });
   }
+  const beat = () => { if (ctl.intent) { ctl.intent = { ...ctl.intent, heartbeat_at: now() }; try { writeCtlIntent(ctl.intent); } catch { /* next beat */ } } };
+  // Liveness-gated takeover: dead by pid now; otherwise watch the heartbeat for 2 intervals (injected sleep).
+  async function deadIntents() {
+    const snap = otherCtlIntents();
+    const opts = { hostname: ctlCfg.hostname, isAlive: ctlCfg.isAlive, now: now(), heartbeatMs: hbMs };
+    const dead = deadControllerIntents(snap, opts);
+    const unsure = snap.filter((x) => !dead.includes(x));
+    if (!unsure.length) return dead;
+    await sleep(2 * hbMs);
+    const later = new Map(otherCtlIntents().map((x) => [x.instance, x]));
+    for (const x of unsure) {
+      const y = later.get(x.instance);
+      if (y && y.heartbeat_at === x.heartbeat_at) dead.push(y);   // no heartbeat for 2 intervals: dead
+    }
+    return dead;
+  }
   // -> { ok } | { ok:false, code, diagnosis }
   async function holdController({ takeover = false, reconcile = true } = {}) {
     if (!leases) return { ok: true };
     if (ctl.lease) {
       let v;
       try { v = await leases.validate(ctl.lease); } catch { v = { ok: false, code: 'E_UNAVAILABLE' }; }
-      if (v?.ok) { try { const r = await leases.renew(ctl.lease); if (r?.ok) ctl.lease = r.lease; } catch { /* validated */ } ctl.lost = false; return { ok: true }; }
+      if (v?.ok) { try { const r = await leases.renew(ctl.lease); if (r?.ok) ctl.lease = r.lease; } catch { /* validated */ } beat(); ctl.lost = false; return { ok: true }; }
       if (v?.code === 'E_UNAVAILABLE') return { ok: false, code: 'E_UNAVAILABLE', diagnosis: 'controller lease backend unavailable: not stepping (fail closed)' };
       // Expired or fenced: someone may have written since; reconcile the store again once control is regained.
       ctl.lease = null;
       ctl.recovered = false;
     }
-    const prev = takeover ? otherCtlIntents() : [];
-    const intent = { resource: ctlCfg.resource, lease_id: `ctl-${randomUUID()}`, owner: ACTOR, task_id: null, instance: ctlCfg.instance };
+    const intent = { resource: ctlCfg.resource, lease_id: `ctl-${randomUUID()}`, owner: ACTOR, task_id: null, instance: ctlCfg.instance,
+      pid: ctlCfg.pid, host: ctlCfg.hostname, started_at: now(), heartbeat_at: now() };
     writeCtlIntent(intent);   // D-015 write-ahead
     const opts = { owner: ACTOR, ttl_ms: ctlCfg.ttl_ms, scope: `controller ${ctlCfg.instance}`, lease_id: intent.lease_id };
     let a;
     try { a = await leases.acquire(ctlCfg.resource, opts); } catch { a = { ok: false, code: 'E_UNAVAILABLE' }; }
     if (!a?.ok && a?.code === 'E_HELD' && takeover) {
-      for (const pi of prev) {
+      for (const pi of await deadIntents()) {
         const ad = await leases.adopt({ resource: pi.resource, lease_id: pi.lease_id, owner: pi.owner, task_id: null }).catch(() => null);
-        if (ad?.ok) { await leases.release(ad.lease).catch(() => null); dropCtlIntent(pi.instance); break; }
+        dropCtlIntent(pi.instance);   // dead either way: its lease is adopted now or already gone
+        if (ad?.ok) { await leases.release(ad.lease).catch(() => null); break; }
       }
       try { a = await leases.acquire(ctlCfg.resource, opts); } catch { a = { ok: false, code: 'E_UNAVAILABLE' }; }
     }
     if (!a?.ok) {
       if (a?.code !== 'E_UNAVAILABLE') dropCtlIntent(ctlCfg.instance);
-      return { ok: false, code: a?.code || 'E_UNAVAILABLE',
-        diagnosis: a?.code === 'E_HELD' ? `another goal-loop controller holds ${ctlCfg.resource} (until ${new Date(a.holder?.expires_at ?? 0).toISOString()}): this instance does not step (D-016)` : `controller lease not acquired (${a?.code ?? 'unavailable'})` };
+      return { ok: false, code: a?.code === 'E_HELD' ? 'E_HELD' : a?.code || 'E_UNAVAILABLE',
+        diagnosis: a?.code === 'E_HELD' ? `another goal-loop controller holds ${ctlCfg.resource} (until ${new Date(a.holder?.expires_at ?? 0).toISOString()}) and is alive: this instance does not step (D-016)` : `controller lease not acquired (${a?.code ?? 'unavailable'})` };
     }
     ctl.lease = a.lease;
+    ctl.intent = intent;
     ctl.lost = false;
-    if (reconcile && !ctl.recovered) { await store.recover(); ctl.recovered = true; }
+    if (reconcile && !ctl.recovered) { await rawStore.recover(); ctl.recovered = true; }
     return { ok: true };
   }
   function heartbeat() {
     if (!leases || !ctl.lease) return () => {};
     const t = setInterval(async () => {
       if (!ctl.lease) return;
-      try { const r = await leases.renew(ctl.lease); if (r?.ok) ctl.lease = r.lease; else ctl.lost = true; } catch { ctl.lost = true; }
-    }, Math.max(1000, Math.floor(ctlCfg.ttl_ms / 3)));
+      try { const r = await leases.renew(ctl.lease); if (r?.ok) { ctl.lease = r.lease; beat(); } else ctl.lost = true; } catch { ctl.lost = true; }
+    }, hbMs);
     t.unref?.();
     return () => clearInterval(t);
+  }
+  // Fence per §5: validate the controller lease immediately before a write. -> throws E_CONTROLLER_LOST
+  async function fence() {
+    if (!leases) return;
+    let v;
+    try { v = ctl.lease ? await leases.validate(ctl.lease) : { ok: false, code: 'E_NO_LEASE' }; } catch { v = { ok: false, code: 'E_UNAVAILABLE' }; }
+    if (!v?.ok) { ctl.lost = true; throw coded('E_CONTROLLER_LOST', `controller lease ${v?.code ?? 'invalid'}: no write`); }
+  }
+  // Every store write of this loop goes through the fence; reads and recover() do not.
+  const rawStore = store;
+  store = Object.freeze({ ...rawStore, ...Object.fromEntries(STORE_WRITES.filter((k) => typeof rawStore[k] === 'function')
+    .map((k) => [k, async (...a) => { await fence(); return rawStore[k](...a); }])) });
+
+  // Owner actions write too: they act under the controller lease (taking over a dead controller if needed).
+  async function ownerControl() {
+    const h = await holdController({ takeover: true });
+    if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
   }
 
   const active = new Map();   // task_id -> { adapter, run } | { kill }: what cancel() must stop (agent run or acceptance check)
@@ -512,7 +566,7 @@ export function createGoalLoop({
   const g = (cwd, args) => git(args, { cwd });
   const headOf = async (cwd) => (await g(cwd, ['rev-parse', 'HEAD'])).trim();
   async function commitAll(id, cwd, msg) {
-    const stop = async () => { if (await isCancelled(id)) throw coded('E_CANCELLED', `task ${id} is cancelled`); };
+    const stop = async () => { if (await isCancelled(id)) throw coded('E_CANCELLED', `task ${id} is cancelled`); await fence(); };   // T14 + fence before the commit
     await stop();
     await g(cwd, ['add', '-A']);
     const staged = (await g(cwd, ['diff', '--cached', '--name-only'])).trim();
@@ -1117,6 +1171,7 @@ export function createGoalLoop({
       return await HANDLERS[ctx.v.status](ctx);
     } catch (e) {
       if (e.code === 'E_CANCELLED') return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
+      if (e.code === 'E_CONTROLLER_LOST') return result(ctx, null, `controller lease lost: no writes (${e.message})`, { idle: true });
       if (INFRA_CODES[e.code] || INFRA_CODES[e.cause?.code]) return onInfra(ctx, INFRA_CODES[e.code] ? e : e.cause);
       throw e;
     }
@@ -1145,9 +1200,13 @@ export function createGoalLoop({
       const open = (await store.list()).filter((t) => !TERMINAL.includes(t.status)).map((t) => t.task_id);
       return { ...r, resumable: open };
     },
-    // T14: persist the cancel first, then stop whatever runs; the store rejects every later write.
+    // T14 / D-018: cancellation always goes through. The canceller takes the controller lease (liveness-gated
+    // takeover of a dead controller), reconciles a recovery_pending task first (never appending over a torn tail),
+    // persists the cancel, then stops whatever runs; the store rejects every later write.
     async cancel(id, { actor, reason } = {}) {
       if (!actor) throw coded('E_INVALID', 'cancel needs an actor');
+      await ownerControl();
+      if ((await store.get(id))?.recovery_pending) await rawStore.recover();
       const t = await store.transition(id, 'cancelled', { reason: reason ?? 'cancelled', actor });
       const a = active.get(id);
       if (a?.kill) a.kill();
@@ -1157,6 +1216,7 @@ export function createGoalLoop({
     // Explicit owner decisions on a pending request. Only recorded approvals ever authorize anything.
     async approve(id, { actor, approval_ref = null, grants = {} } = {}) {
       if (!actor) throw coded('E_INVALID', 'approval needs an actor');
+      await ownerControl();
       const ctx = await load(id);
       if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
       const req = ctx.cp.approval;
@@ -1179,6 +1239,7 @@ export function createGoalLoop({
     },
     async deny(id, { actor, reason = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'denial needs an actor');
+      await ownerControl();
       const ctx = await load(id);
       if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
       return store.append(id, { event_id: `deny-${id}-${ctx.cp.approval.k}`, kind: 'approval.denied', payload: { k: ctx.cp.approval.k, actor, reason } });
@@ -1186,6 +1247,7 @@ export function createGoalLoop({
     // Owner nudge for a no-progress wait (an input change the loop cannot observe itself).
     async resume(id, { actor, reason = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'resume needs an actor');
+      await ownerControl();
       const ctx = await load(id);
       if (ctx.v.status !== 'waiting') throw coded('E_ILLEGAL_TRANSITION', 'task is not waiting');
       return store.append(id, { event_id: `resume-${id}-${ctx.k}`, kind: 'approval.granted', payload: { k: ctx.k - 1, kind: 'resume', actor, reason } });

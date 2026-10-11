@@ -146,7 +146,7 @@ test('D-017: the goal loop steps a recovery_pending task only after recovering u
   assert.equal((await store.get(id)).effects[0].phase, 'possibly_applied');
 });
 
-test('D-017: owner cancel (T14) on a recovery_pending task is honoured, not refused', { todo: 'finding: goal-loop cancel() calls store.transition directly and surfaces E_STORE_FAILED on a task that needs recover(); it should recover under the controller lease first, as stepUnderLease does' }, async () => {
+test('D-017: owner cancel (T14) on a recovery_pending task is honoured, not refused', async () => {
   const dir = tmp();
   const id = await executingWithEffect(dir);
   const store = open(dir);
@@ -155,7 +155,7 @@ test('D-017: owner cancel (T14) on a recovery_pending task is honoured, not refu
   assert.equal((await store.get(id)).status, 'cancelled');
 });
 
-test('D-017: a task a full recovery would park (possibly_applied effect in executing) reads as recovery_pending too', { todo: 'finding (low): the read-only open flags only `attempted` effects; an executing task with a possibly_applied effect accepts writes although recover() would move it to unknown_external_effect' }, async () => {
+test('D-017: a task a full recovery would park (possibly_applied effect in executing) reads as recovery_pending too', async () => {
   const dir = tmp();
   const s = open(dir);
   const { task_id: id } = await s.createTask(spec());
