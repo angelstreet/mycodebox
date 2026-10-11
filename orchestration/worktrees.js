@@ -72,7 +72,10 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     const out = await git(['status', '--porcelain=v1', '-uall', '--ignored'], { cwd: real });
     const lines = out.split('\n').filter(Boolean);
     const head = (await git(['rev-parse', 'HEAD'], { cwd: real })).trim();
+    // 'HEAD' when detached: callers compare it with the task branch before committing or accepting (X7).
+    const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: real })).trim();
     return {
+      branch,
       dirty: lines.some((l) => !l.startsWith('??') && !l.startsWith('!!')),
       untracked: lines.some((l) => l.startsWith('??')),
       ignored: lines.some((l) => l.startsWith('!!')),
@@ -144,6 +147,11 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     assertOwner(m, opts);
     const r = await leases.renew(m.lease);
     if (r?.ok) { writeMeta({ ...m, lease: r.lease }); return { lease: r.lease, reacquired: false }; }
+    // X6: a crash between acquire and writeMeta leaves a live lease held by this very owner and task: adopt it.
+    if ((r?.code === 'E_FENCED' || r?.code === 'E_EXPIRED') && typeof leases.adoptOwn === 'function') {
+      const own = await leases.adoptOwn(m.lease.resource, { owner: m.owner, task_id: m.task_id });
+      if (own?.ok) { writeMeta({ ...m, lease: own.lease }); return { lease: own.lease, reacquired: true, adopted: true }; }
+    }
     const fenced = r?.code === 'E_FENCED' && opts.acknowledgeFence === true;
     if (r?.code !== 'E_EXPIRED' && !fenced) throw coded(r?.code || 'E_FENCED', 'lease renew failed');
     const a = await leases.acquire(m.lease.resource, { owner: m.owner, task_id: m.task_id, ttl_ms, scope: 'worktree' });

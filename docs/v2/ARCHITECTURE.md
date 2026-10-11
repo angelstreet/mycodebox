@@ -231,13 +231,16 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    count the same way; only unbilled waits back off on a timer. One classifier for developer and reviewer runs:
    billed = measured spend, an incomplete usage record, or a run that started and failed with unknown usage (unknown
    is not zero); unbilled = refused before work (`rate_limit`, `unavailable`, `auth`) or never started. Every review
-   attempt has its own run id (`…-a<n>`), so each one is in the ledger and counts against a cap.
+   attempt has its own run id (`…-a<n>`), so each one is in the ledger and counts against a cap. A run that started
+   but never recorded usage (controller crash) gets an all-null usage record (`source: interrupted…`) on the next
+   step and is an unknown ledger entry until then: totals become unknown and a cap stops on it.
 3. Approvals: a request carries action keys; a grant covers exactly those keys (an agent's request is keyed by its
    run, so a later identical request is asked again) and `approve()` refuses classes or budget authorizations the
    request did not ask for. Denying an agent-requested action continues the task with "refused" feedback; denying
    any other gate ends it (`failed_unrecoverable`). An approved budget stop authorizes the next run when the stop exists
    only because a cost is unknown (no estimate, or a provider that reports no USD); it never waives a reached cap. The
-   developer's first estimate is the router's price-based `cost_est_usd`, kept in the strategy at assignment.
+   developer's first estimate is the router's price-based `cost_est_usd`, kept in the strategy at assignment. A reached
+   cap is asked as "raise or cancel"; `approve()` without a higher `budget_policy` is refused (`E_INVALID`).
 4. Risk (D-013, D-014): `risk_class` high/critical additionally needs the policy's `security_reviewer` verdict (when
    the policy names that registry entry) and an owner approval bound to the exact head SHA before `accepted`. An owner
    approval of a critical task's routing question (bound to task + base SHA) is passed to the router as
@@ -255,4 +258,10 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
 8. Worktree lease: renewed at every dispatch and commit through `worktrees.renew(path, { owner })`, which re-acquires
    a lapsed lease nobody took (E_EXPIRED) for the same owner and rewrites the worktree meta (`lease_reacquired`
    decision). A live holder, or one that held the lease in between (E_FENCED), suspends the task until inputs change;
-   after the owner resumes it, `renew(…, { acknowledgeFence: true })` re-acquires the lease only if it is free.
+   after the owner resumes it, `renew(…, { acknowledgeFence: true })` re-acquires the lease only if it is free. A live
+   lease of the same owner and task whose `lease_id` was lost (crash between acquire and the meta write) is adopted
+   via the additive `leases.adoptOwn(resource, { owner, task_id })` (audited; never a free resource or another
+   owner's lease).
+9. Task branch: `worktrees.status()` also reports `branch` (`HEAD` when detached). Dispatch, commit and evaluation
+   require the worktree to be on `v2task/<task_id>`; otherwise the task waits (`off_task_branch`, `until_ms: null`)
+   until the owner restores the branch and resumes.

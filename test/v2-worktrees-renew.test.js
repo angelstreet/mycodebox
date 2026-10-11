@@ -70,3 +70,29 @@ test('acknowledgeFence never takes a lease a foreign owner still holds', async (
   assert.equal((await s.leases.acquire('worktree:task-3', { owner: 'someone-else', task_id: 'x', ttl_ms: 3600_000 })).ok, true);
   await assert.rejects(s.wt.renew(c.path, { owner: 'goal-loop', acknowledgeFence: true }), { code: 'E_HELD' });
 });
+
+test('X6 adoptOwn returns only the live lease of exactly this owner and task; renew adopts it after a crash before writeMeta', async () => {
+  const s = setup();
+  const c = await s.wt.create({ repo: s.repo, task_id: 'task-4', base_sha: s.sha, owner: 'goal-loop' });
+  s.clock.advance(2 * 3600_000);
+  // what a crash between acquire and writeMeta leaves: a live lease of the same owner+task the meta does not know
+  const lost = await s.leases.acquire('worktree:task-4', { owner: 'goal-loop', task_id: 'task-4', ttl_ms: 3600_000, scope: 'worktree' });
+  assert.equal(lost.ok, true);
+  assert.equal((await s.leases.adoptOwn('worktree:task-4', { owner: 'someone-else', task_id: 'task-4' })).code, 'E_FENCED');
+  assert.equal((await s.leases.adoptOwn('worktree:task-4', { owner: 'goal-loop', task_id: 'other' })).code, 'E_FENCED');
+  assert.equal((await s.leases.adoptOwn('worktree:task-x', { owner: 'goal-loop', task_id: 'task-x' })).code, 'E_FENCED', 'never acquires a free resource');
+  const r = await s.wt.renew(c.path, { owner: 'goal-loop' });
+  assert.equal(r.adopted, true);
+  assert.equal(r.lease.lease_id, lost.lease.lease_id);
+  assert.equal(s.wt.owner(c.path).lease.lease_id, lost.lease.lease_id, 'meta follows the adopted lease');
+  s.clock.advance(2 * 3600_000);
+  assert.equal((await s.leases.adoptOwn('worktree:task-4', { owner: 'goal-loop', task_id: 'task-4' })).code, 'E_EXPIRED');
+});
+
+test('X7 status() reports the checked-out branch (HEAD when detached)', async () => {
+  const s = setup();
+  const c = await s.wt.create({ repo: s.repo, task_id: 'task-5', base_sha: s.sha, owner: 'goal-loop' });
+  assert.equal((await s.wt.status(c.path)).branch, 'v2task/task-5');
+  sh(c.path, 'checkout', '-q', '--detach');
+  assert.equal((await s.wt.status(c.path)).branch, 'HEAD');
+});

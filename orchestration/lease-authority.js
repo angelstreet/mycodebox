@@ -154,6 +154,26 @@ export function createLeaseAuthority({
   }
   const clockNowSafe = () => { try { return clockNow(); } catch { return NaN; } };
 
+  // Re-claims the live lease of exactly this (owner, task_id) when its lease_id was lost with the process that
+  // acquired it (crash between acquire and persisting the lease). Never acquires a free resource and never returns
+  // another owner's or another task's lease. Owner names are not secrets: this proves no more than an owner-name
+  // check already does (worktrees.assertOwner), and every adoption is audited.
+  async function adoptOwn(resource, { owner, task_id } = {}) {
+    if (!validResource(resource) || !str(owner) || !str(task_id)) return fail('E_INVALID', 'adoptOwn needs resource, owner and task_id');
+    let out;
+    try {
+      out = await call(() => backend.read(resource));
+    } catch (e) {
+      safeAlert('lease_unavailable', { op: 'adoptOwn', resource, owner, error: errMsg(e) });
+      return fail('E_UNAVAILABLE', errMsg(e));
+    }
+    const h = out?.holder;
+    if (!h || h.owner !== owner || h.task_id !== task_id || out.generation !== h.token) return fail('E_FENCED');
+    if (!(clockNowSafe() < h.expires_at)) return fail('E_EXPIRED');
+    await audit({ op: 'adopt_own', resource, lease_id: h.lease_id, token: h.token, ...who(h) });
+    return { ok: true, lease: { ...h } };
+  }
+
   async function renew(lease) {
     if (!isLease(lease)) return fail('E_INVALID', 'not a lease');
     let out;
@@ -287,7 +307,7 @@ export function createLeaseAuthority({
     }
   }
 
-  return { acquire, adopt, renew, release, validate, acquireAll, withLeases, fence };
+  return { acquire, adopt, adoptOwn, renew, release, validate, acquireAll, withLeases, fence };
 }
 
 export const fence = (authority, leases) => authority.fence(leases);

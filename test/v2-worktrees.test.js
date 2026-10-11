@@ -72,7 +72,7 @@ test('T05 a second owner cannot claim or remove the first owner\'s worktree', as
 test('T05 dirty or untracked trees are never removed; retain is the default', async () => {
   const s = setup('r3');
   const a = await s.wt.create({ repo: s.dir, task_id: 'task-a', base_sha: s.sha, owner: 'o' });
-  assert.deepEqual(await s.wt.status(a.path), { dirty: false, untracked: false, ignored: false, head: s.sha });
+  assert.deepEqual(await s.wt.status(a.path), { branch: 'v2task/task-a', dirty: false, untracked: false, ignored: false, head: s.sha });
   fs.writeFileSync(path.join(a.path, 'a.txt'), 'changed\n');
   assert.equal((await s.wt.status(a.path)).dirty, true);
   await rejects(s.wt.remove(a.path, { retain: false, owner: 'o' }), 'E_DIRTY');

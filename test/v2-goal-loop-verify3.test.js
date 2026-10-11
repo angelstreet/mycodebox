@@ -130,8 +130,7 @@ function dieAt(store, when) {
 }
 
 // ---- GL13: a run that started but whose usage was never recorded -----------------------------------
-test('X1 GL13 a controller crash between the reviewer start and its usage record leaves that attempt as UNKNOWN spend (in the ledger, and a cap stops on it)',
-  { todo: 'defect: ledger() is built from usage.recorded events only; a task.started review attempt with no usage record (crash before recordUsage; the review is not an effect, so recover() does not reconcile it) is simply absent, so its spend is neither counted nor unknown and a cap check passes as if it cost nothing' }, async () => {
+test('X1 GL13 a controller crash between the reviewer start and its usage record leaves that attempt as UNKNOWN spend (in the ledger, and a cap stops on it)', async () => {
     const env = world({ dev: [PAID(0.3)], rev: [APPROVE_PAID(0.3)], loopOpts: { estimateRun: () => ({ usd: 0.3, input_tokens: 10, output_tokens: 10, duration_ms: 1, turns: 1 }) } });
     const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 1 } });
     const { store, dead } = dieAt(env.store, (k, a) => k === 'recordUsage' && /\.review-/.test(String(a[1]?.run_id)));
@@ -151,8 +150,7 @@ test('X1 GL13 a controller crash between the reviewer start and its usage record
     assert.ok(r.state === 'awaiting_approval' || r.state === 'accepted');
   });
 
-test('X2 GL13 a controller crash between a developer run start and its usage record leaves that run as UNKNOWN spend after crash recovery',
-  { todo: 'defect: sUnknownEffect() marks the interrupted run\'s effect failed but records no usage for it; the provider may have billed the whole run, yet the ledger shows nothing for it (neither amount nor unknown)' }, async () => {
+test('X2 GL13 a controller crash between a developer run start and its usage record leaves that run as UNKNOWN spend after crash recovery', async () => {
     const env = world({ dev: [PAID(0.3), PAID(0.3)], rev: [APPROVE_PAID(0.1)] });
     const task = await env.submit();
     const { store, dead } = dieAt(env.store, (k, a) => k === 'recordUsage' && /\.run\d+$/.test(String(a[1]?.run_id)));
@@ -244,8 +242,7 @@ test('X5 ack attack: a project-policy change resumes a lease_held wait but is NO
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
 });
 
-test('X6 ack attack: after a crash inside worktrees.renew() between acquire and the meta rewrite, the lease is held by this task\'s OWN owner; the restart adopts it instead of suspending',
-  { todo: 'defect: renew() gets E_FENCED on the stale meta lease and, without acknowledgeFence, throws; with the owner\'s acknowledgement, acquire() returns E_HELD because the live holder is the task itself (same owner, same task_id, newer token). The task is stuck until that lease expires (up to 6 h). renew() should adopt a live holder whose owner and task_id are its own (leases.adopt exists).' }, async () => {
+test('X6 ack attack: after a crash inside worktrees.renew() between acquire and the meta rewrite, the lease is held by this task\'s OWN owner; the restart adopts it instead of suspending', async () => {
     const env = world({ dev: [BAD, GOOD] });
     const task = await env.submit();
     assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
@@ -261,8 +258,7 @@ test('X6 ack attack: after a crash inside worktrees.renew() between acquire and 
     assert.equal(r.state, 'accepted', `own live lease treated as foreign: ${r.state} (${lastWait(await env.view(task.task_id))?.diagnosis})`);
   });
 
-test('X7 ack attack: a foreign holder that moved the worktree off its task branch; after the acknowledged resume the accepted SHA must be the task branch tip',
-  { todo: 'defect: the loop never checks that the worktree is on v2task/<task_id> before committing; after a fence the intruder may have checked out another branch (or detached HEAD), and commitAll() then lands the run on that branch; the task is accepted on a SHA the task branch does not contain, so a delivery of v2task/<id> would ship the wrong tip' }, async () => {
+test('X7 ack attack: a foreign holder that moved the worktree off its task branch; after the acknowledged resume the accepted SHA must be the task branch tip', async () => {
     const env = world({ dev: [BAD, GOOD] });
     const task = await env.submit();
     const intruder = await heldThenResume(env, task);
@@ -282,8 +278,7 @@ test('X7 ack attack: a foreign holder that moved the worktree off its task branc
   });
 
 // ---- budget confirmation edge: a reached cap ------------------------------------------------------
-test('X8 confirming a REACHED cap without raising it is refused (or honoured), never answered with the identical question again',
-  { todo: 'defect(judgement): approve() accepts a bare confirmation of a "would exceed max_usd" stop; budgetGate then re-asks the identical question (only unknown-cost stops are waivable). The approval should be refused with E_INVALID ("cap reached: raise it") or the question should not offer "confirm" for a reached cap.' }, async () => {
+test('X8 confirming a REACHED cap without raising it is refused (or honoured), never answered with the identical question again', async () => {
     const env = world({ dev: [[...BAD.slice(0, 1), { op: 'usage', input_tokens: 10, output_tokens: 10, usd: 0.8 }], GOOD], loopOpts: { estimateRun: () => ({ usd: 0.3, input_tokens: 10, output_tokens: 10, duration_ms: 1, turns: 1 }) } });
     const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 1 } });
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
