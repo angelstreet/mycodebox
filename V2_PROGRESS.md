@@ -1,4 +1,4 @@
-STATUS: RUNNING — all packages integrated (a8aa4c0: 1604/1604 both runtimes, acceptance 54/54, reporter 25/25); Fable full-process review running; next: address findings, push, draft PR
+STATUS: DELIVERED f31a996 https://github.com/angelstreet/mycodebox/pull/1
 
 # V2 progress
 
@@ -7,7 +7,7 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-All packages integrated and reviewed. Remaining: final gate + reporter on the final SHA, push, draft PR, DELIVERED line.
+Delivered: draft PR #1 at f31a996 (tested SHA; this commit only updates this file). Owner decides on ready/merge/deploy.
 
 ## Plan (waves, max 3 concurrent developers)
 
