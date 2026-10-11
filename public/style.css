@@ -2324,3 +2324,6 @@ body:not(.res-hidden) .fgrp{ display:none; }
 @media (max-width:600px){ .tk-actions .sbtn, .tk-bar .sbtn{ flex:1 1 130px; } }
 .tk-deliv{ font-size:11px; color:#ffc24d; border:1px solid currentColor; border-radius:6px; padding:0 6px; }
 .tk-queue{ border:1px solid var(--deploy); border-radius:10px; padding:6px 8px 8px; display:flex; flex-direction:column; gap:6px; background:rgba(160,112,255,.08); margin-bottom:6px; }
+.tk-scroll{ overflow-x:auto; max-width:100%; }
+.tk-score{ border-collapse:collapse; font-size:11.5px; min-width:100%; } .tk-score th, .tk-score td{ text-align:left; padding:3px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+.tk-score thead th{ color:var(--ink-2); font-weight:600; } .tk-score tr.small{ opacity:.75; }

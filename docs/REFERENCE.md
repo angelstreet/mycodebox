@@ -847,12 +847,13 @@ Errors are `{ ok:false, error, code }` (400 invalid, 404 not found, 409 conflict
 | `POST /api/v2/tasks/:id/cancel` | `{ reason? }` | cancels a non-terminal task as `owner` |
 | `POST /api/v2/tasks/:id/approve` | `{ action_id, sha?, reason? }` | records `approval.granted` for the pending request only. `action_id` must equal `pending_approval.action_id`; `sha` is required when the task has a head SHA and must equal it. Covers exactly that request's action classes. 409 `E_NO_PENDING_APPROVAL`, `E_STALE_ACTION` or `E_SHA_MISMATCH` otherwise |
 | `POST /api/v2/tasks/:id/deny` | same | records `approval.denied` |
+| `GET /api/v2/scorecard` | none | read-only scorecard (`by_model`, `by_runtime`, `by_role`, `by_task_class`, `caveats`, `runs_count`; per-run rows omitted), see [Scoring](v2/SCORING.md). Any other method is 405. Writes nothing |
 
 `outcome` is `done` only for state `accepted`; otherwise `not_yet_done`, `waiting`, `needs_owner`, `unrecoverable` or
 `cancelled`, and `unknown` when the task log cannot be replayed. Approve and deny only write the owner's decision to the
 task log in the same shape the goal loop reads; the task moves when the goal loop runs, which is not started by the server.
 
-The scoring report is a script, not a route: [`scripts/v2-score.js`](v2/SCORING.md).
+The full scoring report, tool score and proposals are a script: [`scripts/v2-score.js`](v2/SCORING.md); only the scorecard has a read-only route.
 
 ## Architecture
 

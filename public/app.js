@@ -20,7 +20,7 @@ import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';
-import { listHtml, detailHtml, newFormHtml } from '/tasks-view.js';
+import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -3408,13 +3408,14 @@ function openTasks() {
       return j;
     };
     const bar = () => (v.page === 'list'
-      ? '<div class="tk-bar"><button class="sbtn primary" data-tk-new>New task</button><button class="sbtn" data-tk-refresh>Refresh</button></div>'
+      ? '<div class="tk-bar"><button class="sbtn primary" data-tk-new>New task</button><button class="sbtn" data-tk-refresh>Refresh</button><button class="sbtn" data-tk-score>Scorecard</button></div>'
       : '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>');
     const paint = () => {
       let h;
       if (v.err) h = `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>`;
       else if (v.page === 'new') h = '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>' + newFormHtml();
       else if (v.page === 'detail') h = v.task ? bar() + detailHtml(v.task) : '<div class="sheet-empty">loading…</div>';
+      else if (v.page === 'score') h = bar() + scorecardHtml(v.score);
       else h = v.tasks ? bar() + listHtml(v.tasks, v.approvals) : '<div class="sheet-empty">loading…</div>';
       if (h === v.last) return;
       const keep = document.activeElement?.closest?.('.tasks') ? document.activeElement.getAttribute('data-tk-open') : null;
@@ -3424,6 +3425,7 @@ function openTasks() {
     const load = async () => {
       try {
         if (v.page === 'detail') v.task = (await api(`/api/v2/tasks/${encodeURIComponent(v.id)}`)).task;
+        else if (v.page === 'score') v.score = (await api('/api/v2/scorecard')).scorecard;
         else if (v.page === 'list') { const j = await api('/api/v2/tasks'); v.tasks = j.tasks; v.approvals = j.approvals || []; }
         v.err = null;
       } catch (e) { v.err = e.status === 404 && v.page === 'list' ? 'The V2 engine is off. Start the server with GHOSTY_V2=1 to use tasks.' : `tasks unavailable: ${e.message}`; }
@@ -3445,6 +3447,7 @@ function openTasks() {
       if (!t) return;
       if (t.dataset.tkOpen) return go('detail', t.dataset.tkOpen);
       if ('tkNew' in t.dataset) return go('new');
+      if ('tkScore' in t.dataset) { v.score = null; return go('score'); }
       if ('tkBack' in t.dataset || 'tkCancelNew' in t.dataset) return go('list');
       if ('tkRefresh' in t.dataset) return load();
       const act = async (fn) => { t.disabled = true; try { await fn(); } catch (er) { toast(er.message, 3500); } await load(); };
