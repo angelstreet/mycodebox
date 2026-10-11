@@ -26,7 +26,9 @@ export const ROWS = [
 const DISPOSITION = {
   T20: { status: 'MANUAL', reason: 'browser check outside node --test: PLAYWRIGHT_CORE=<dir> node scripts/v2-ui-check.js (dev-only); last recorded result in V2_VERIFICATION.md "T20 browser check"' },
 };
-const LEGACY_FOR = { T16: (f) => !path.basename(f).startsWith('v2-') };
+// T16's pre-V2 set is pinned to origin/main's test list (scripts/pre-v2-tests.json, regenerated from `git ls-tree`;
+// a committed manifest works offline in CI), not whatever non-v2 files the current tree happens to hold.
+export const PRE_V2_FILES = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'pre-v2-tests.json'), 'utf8')).files;
 // Open defects recorded by independent verifiers as `todo` tests without a matrix prefix, mapped to the rows whose
 // requirement they contradict (file -> leading token -> rows). A mapped todo makes its row FAIL until fixed.
 const DEFECT_ROWS = {
@@ -56,26 +58,38 @@ export function fileGaps(files, results, root = ROOT) {
   return files.filter((f) => !own.has(abs(f)));
 }
 
-export function classify(results) {
+export function classify(results, { legacyFiles = PRE_V2_FILES } = {}) {
   const rows = [];
+  const legacySet = new Set(legacyFiles);
+  const legacyMissing = legacyFiles.filter((f) => !results.some((r) => r.file === f && !r.skip));   // deleted or fully skipped pre-V2 file is a regression
   for (const id of ROWS) {
     const tests = results.filter((r) => idsOf(r.name).includes(id) || defectRows(r).includes(id));
     const ran = tests.filter((r) => !r.skip);
     const failed = ran.filter((r) => r.outcome === 'fail' && !r.todo);
     const todo = tests.filter((r) => r.todo && r.outcome === 'fail');   // a passing todo no longer shows the defect
-    const legacy = LEGACY_FOR[id] ? results.filter((r) => r.file && LEGACY_FOR[id](r.file)) : null;
+    const legacy = id === 'T16' ? results.filter((r) => r.file && legacySet.has(r.file)) : null;
     const legacyFailed = legacy ? legacy.filter((r) => r.outcome === 'fail' && !r.todo) : [];
     let status, reason;
     if (!tests.length && DISPOSITION[id]) ({ status, reason } = DISPOSITION[id]);
     else if (!ran.some((r) => !r.todo)) { status = 'FAIL'; reason = 'no executed test carries this id'; }
     else if (failed.length) { status = 'FAIL'; reason = `${failed.length} mapped test(s) failed`; }
     else if (todo.length) { status = 'FAIL'; reason = `open defect(s) recorded as todo: ${todo.map((r) => `${r.file}: ${r.name.slice(0, 80)}`).join(' | ')}`; }
-    else if (legacy && (!legacy.length || legacyFailed.length)) { status = 'FAIL'; reason = `${legacyFailed.length} pre-V2 regression test(s) failed`; }
+    else if (legacy && (!legacy.length || legacyFailed.length || legacyMissing.length)) { status = 'FAIL'; reason = `${legacyFailed.length} pre-V2 regression test(s) failed${legacyMissing.length ? `; no executed test for ${legacyMissing.length} pinned pre-V2 file(s) (${legacyMissing.slice(0, 3).join(' ')}${legacyMissing.length > 3 ? ' ...' : ''}); a partial --files run cannot pass T16` : ''}`; }
     else { status = 'PASS'; reason = `${ran.length} test(s) passed${legacy ? `; ${legacy.length} pre-V2 regression tests passed` : ''}`; }
     rows.push({ id, status, reason, tests: tests.map((r) => ({ name: r.name, file: r.file, outcome: r.todo ? 'todo' : r.skip ? 'skip' : r.outcome })),
       ...(legacy ? { regression: { files: [...new Set(legacy.map((r) => r.file))].length, tests: legacy.length, failed: legacyFailed.map((r) => `${r.file}: ${r.name}`) } } : {}) });
   }
   return rows;
+}
+
+// Failures and open defects that no matrix row owns would otherwise vanish from the verdict: a failing test whose
+// prefix names no real row (typo, T99) and a failing todo with no row from its prefix or DEFECT_ROWS.
+export function unmapped(results) {
+  const known = (n) => idsOf(n).some((i) => ROWS.includes(i));
+  return [
+    ...results.filter((r) => r.outcome === 'fail' && !r.todo && !known(r.name)),
+    ...results.filter((r) => r.todo && r.outcome === 'fail' && !known(r.name) && !defectRows(r).length),
+  ].map((r) => ({ name: r.name, file: r.file, error: r.error }));
 }
 
 function main() {
@@ -110,7 +124,7 @@ function main() {
     matrix: { rows: rows.length, PASS: count('PASS'), FAIL: count('FAIL'), PENDING: count('PENDING'), BLOCKED: count('BLOCKED'), MANUAL: count('MANUAL') },
     rows,
     open_defects: results.filter((r) => r.todo && r.outcome === 'fail').map((r) => ({ name: r.name, file: r.file, rows: [...new Set([...idsOf(r.name), ...defectRows(r)])] })),
-    unmapped_failures: results.filter((r) => r.outcome === 'fail' && !r.todo && !idsOf(r.name).length).map((r) => ({ name: r.name, file: r.file, error: r.error })),
+    unmapped_failures: unmapped(results),
   };
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, `${JSON.stringify(out, null, 1)}\n`);

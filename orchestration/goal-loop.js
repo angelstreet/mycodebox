@@ -1031,8 +1031,8 @@ export function createGoalLoop({
       const resumed = ctx.events.some((e) => e.kind === 'approval.granted' && e.payload.kind === 'resume' && e.payload.k === ctx.k - 1);
       const changed = policyRef(readPolicy(ctx)) !== w.policy_hash;
       if (!resumed && !changed) return result(ctx, null, `waiting (${w.reason}): ${w.next_action || 'until inputs change'}`, { idle: true });
-      return decide(ctx, decision('resume', 'Inputs changed after a no-progress wait: resume?', [alt('resume with a replan', 'new inputs can change the outcome', 'more spend'), alt('stay waiting', 'no spend', 'ignores the new input')],
-        'resume with a replan', { evidence: [resumed ? 'owner resumed' : 'project policy changed'], expected_effect: 'replan from scratch', rationale: 'No-progress counters reset on new inputs.' }),
+      return decide(ctx, decision('resume', 'Inputs changed after a wait: resume?', [alt('resume with a replan', 'new inputs can change the outcome', 'more spend'), alt('stay waiting', 'no spend', 'ignores the new input')],
+        'resume with a replan', { evidence: [resumed ? 'owner resumed' : 'project policy changed'], expected_effect: 'replan from scratch', rationale: 'Counters reset on new inputs (owner resume or policy change).' }),
       { patch: { changes: 0, tried: [], stale: 0, streak: { signature: null, count: 0 }, exclude: [], ...(w.reason === 'lease_held' && resumed ? { lease_ack: true } : {}) },
         to: w.resume_to || 'replan', reason: 'inputs changed' });
     }
@@ -1091,6 +1091,20 @@ export function createGoalLoop({
       return askOwner(ctx, { kind: 'integration', question: `Integration was applied but the controller reports no usable state: ${r?.reason || 'no result'}`, reason: r?.reason || 'no result', classes: ['integration'] }, { resume_to: 'integrating' });
     }
     const patch = { integration: { next: r.next, reason: r.reason ?? null, release_verified: r.release_verified === true }, integration_unknown: 0 };
+    // A policy block the bridge marks (queue item awaiting approval with no controller request: protected path, path not
+    // allowlisted, target policy) has no key an owner grant could cover: waiting with a diagnosis, not a dead end. Other
+    // keyless results (post-merge CI red, rejected, no developer...) stay owner decisions with their deny path.
+    // The owner ends a policy block with cancel.
+    if (r.next === 'awaiting_approval' && r.block === 'policy') {
+      const diagnosis = r.reason || 'integration blocked by policy';
+      const next_action = 'fix the cause (project policy, protected/allowlisted paths or the integration target), then resume the task';
+      return decide(ctx, decision('integration_policy_block', 'Integration blocked with no approval request: what now?', [
+        alt('wait with a diagnosis', 'there is nothing the owner could approve; revisited when the policy changes or the owner resumes', 'task stays open'),
+        alt('ask the owner', 'a request with no action key can never be granted', 'dead end: the approval covers nothing')],
+      'wait with a diagnosis', { evidence: [`sha ${head}`, `key ${idempotency_key}`], expected_effect: 'waiting until inputs change', rationale: `Policy block without an approval request: ${diagnosis}` }),
+      { patch: { ...patch, wait: { reason: 'policy_block', until_ms: null, resume_to: 'integrating', diagnosis, next_action, policy_hash: policyRef(readPolicy(ctx)) } }, to: 'waiting', reason: 'policy_block',
+        emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'policy_block', diagnosis, next_action } }] });
+    }
     if (r.next === 'waiting') patch.wait = { reason: 'integration', until_ms: now() + (r.retry_after_ms ?? 5 * 60_000), resume_to: 'integrating' };   // D-007
     // The grant is bound to the hook's action keys (e.g. integration:merge:<repo>:<target>:<sha>), never to the class alone.
     if (r.next === 'awaiting_approval') patch.approval = { k: ctx.k, kind: 'integration', question: r.reason || 'integration needs owner approval', classes: r.classes || [],

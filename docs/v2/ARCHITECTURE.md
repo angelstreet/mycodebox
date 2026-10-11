@@ -318,7 +318,9 @@ Recorded from `v2/11-e2e` (`orchestration/delivery.js`); additive to §10 and §
    returns only the calling task's proposals); each of those tasks rebuilds its state in its own hook call from its
    queue item and its own task log. An approval question is bound to the block at hand: the controller request
    written during this call (or carrying this run's integration id); a block that writes no request (protected path,
-   path not allowlisted, target policy) is a keyless owner question naming the queue item's reason.
+   path not allowlisted, target policy) carries no key an owner grant could cover, so the goal loop moves the task to
+   `waiting` (`reason: policy_block`, diagnosis naming the queue item's reason, next action) instead of a keyless
+   `awaiting_approval`; an owner resume or a policy change revisits it.
 4. Approvals: each controller request (candidate push, merge) is returned with the key
    `integration:<action>:<repo>:<target>:<sha>`; the loop's integration approval request carries it (`keys`), the
    owner grant copies it, and the controller's approval check accepts only a grant whose keys contain the exact key

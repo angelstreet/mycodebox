@@ -15,7 +15,9 @@ The statuses below were produced by `node scripts/v2-acceptance.js` at the commi
   carries the id, or an independent verifier recorded an open defect against the row (a failing `todo` test; the
   runner maps verifier defects without a matrix prefix to the rows they contradict, in `DEFECT_ROWS`). **MANUAL**: evidence that cannot run inside `node --test`; T20 (the browser check) becomes
   PASS/FAIL when the runner is started with `PLAYWRIGHT_CORE` set, MANUAL otherwise. **PENDING / BLOCKED**: not used.
-- T16 additionally requires every test in every pre-V2 test file to pass.
+- T16 additionally requires every test in every pre-V2 test file to pass. "Pre-V2" is pinned to `origin/main`'s test list in
+  the committed manifest `scripts/pre-v2-tests.json` (regenerate from `git ls-tree --name-only origin/main test/`; offline-safe),
+  and a pinned file with no results fails the row. A failure or open defect that maps to no matrix row fails the run.
 - `test/v2-acceptance-matrix.test.js` pins these rules.
 
 Scope labels say exactly what ran: *fake runtime* = the scriptable in-process adapter
@@ -227,6 +229,7 @@ Suite at `4303d43` on Node v23.6.0: 1606 tests, 1606 pass, 0 fail, 0 todo, 0 ski
 1 test(s) passed.
 
 - `test/v2-goal-loop.test.js` › T15 tests pass but the reviewer keeps disagreeing: evidence cannot settle it -> owner decides, never accepted
+- `test/v2-goal-loop.test.js` › T15 reviewer approves but the required tests are red: never accepted, back to repair (evidence outranks the verdict)
 
 ### T16 — PASS
 
@@ -264,7 +267,7 @@ Suite at `4303d43` on Node v23.6.0: 1606 tests, 1606 pass, 0 fail, 0 todo, 0 ski
 
 1 test(s) passed. Runs only with PLAYWRIGHT_CORE set (dev-only, not a dependency); without it the runner marks the row MANUAL.
 
-- `scripts/v2-ui-check.js` › T20: browser check (scripts/v2-ui-check.js): 37/37 checks passed
+- `scripts/v2-ui-check.js` › T20: browser check (scripts/v2-ui-check.js): 39/39 checks passed (includes the same-origin positive control for the 403 check)
 
 ### T21 — PASS
 
