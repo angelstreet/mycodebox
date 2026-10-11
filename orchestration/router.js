@@ -32,13 +32,18 @@ const text1 = (v) => { if (v == null) return ''; if (typeof v === 'string') retu
 
 // Floors the router always applies itself, whatever checker is injected (a lax or missing policy cannot waive them):
 // non-object task, critical risk, forbidden topic. Unknown/missing risk only adds an approval requirement.
-export function routerFloor(task) {
+// floorGrants: floors an explicit, recorded owner approval has waived for THIS task (D-014). Only 'critical_risk' is
+// waivable; the caller (goal loop) binds the grant to the task and its base/head before passing it.
+export const WAIVABLE_FLOORS = Object.freeze(['critical_risk']);
+export function routerFloor(task, { floorGrants = [] } = {}) {
   if (!task || typeof task !== 'object' || Array.isArray(task)) return { allow: false, needs_approval: true, reason: 'task is not an object: nothing to route' };
   if (taskText(task).includes(UNSERIALIZABLE)) return { allow: false, needs_approval: true, reason: 'task text is not serializable: cannot check forbidden topics' };
   const risk = normRisk(task.risk_class);
-  if (risk === 'critical') return { allow: false, needs_approval: true, reason: 'risk_class critical: no automatic action' };
+  const waived = Array.isArray(floorGrants) && floorGrants.includes('critical_risk');
+  if (risk === 'critical' && !waived) return { allow: false, needs_approval: true, reason: 'risk_class critical: no automatic action' };
   const hit = forbiddenMatch(taskText(task));
   if (hit) return { allow: false, needs_approval: true, reason: `forbidden topic "${hit}": owner decides` };
+  if (risk === 'critical') return { allow: true, needs_approval: false, reason: 'risk_class critical: routing approved by the owner for this task (D-014)' };
   if (!RISKS.includes(risk)) return { allow: true, needs_approval: true, reason: `risk_class ${JSON.stringify(task.risk_class ?? null)} is not a known level: owner approval required` };
   return { allow: true, needs_approval: false, reason: 'no router floor hit' };
 }
@@ -228,7 +233,7 @@ function rank(cands, weights, complexity) {
 
 // ---------- route ----------
 export function route(task, { registry, policy = null, history = {}, weights = null, mode = 'shadow', checkAction = defaultCheckAction,
-  now = Date.now, exclude = [], allowFake = false, maxPriceAgeDays = 90, realpath = null } = {}) {
+  now = Date.now, exclude = [], allowFake = false, maxPriceAgeDays = 90, realpath = null, floorGrants = [] } = {}) {
   if (mode !== 'shadow') { const e = new Error(`router mode "${mode}" not supported: shadow only`); e.code = 'E_NOT_LIVE'; throw e; }
   if (!registry) throw new TypeError('route: registry required');
   const entries = registry.entries();
@@ -239,7 +244,7 @@ export function route(task, { registry, policy = null, history = {}, weights = n
 
   // Floor 0: router floors (always) then the policy checker (frozen signature checkAction(policy, task, action)).
   // Fail closed: a throwing/async/empty checker denies, and only allow === true passes.
-  const own = routerFloor(task);
+  const own = routerFloor(task, { floorGrants });
   let act;
   if (!own.allow) act = own;
   else {
@@ -314,6 +319,18 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   return finish(task, { choice: choice.id, candidates: cands, rejected, rationale, confidence, fallback, work, mode, auto_allowed: !requires_approval, requires_approval, state_hint: requires_approval ? 'awaiting_approval' : null, policyRef, now });
 }
 
+// A decision always shows what else was possible (store requires non-empty; §9 asks for real alternatives): a route
+// with fewer than two feasible candidates still names the non-runtime options (D3).
+function withFloorAlternatives(alts) {
+  const extra = [
+    { option: 'needs_owner', pros: ['owner can widen allowlists, approve the floor or change the task'], cons: ['blocks until the owner acts'] },
+    { option: 'wait for a compatible runtime', pros: ['no policy is relaxed'], cons: ['no progress until a runtime passes the floors'] },
+  ];
+  const out = [...alts];
+  for (const e of extra) if (out.length < 2 || !alts.length) { if (!out.some((a) => a.option === e.option)) out.push(e); }
+  return out;
+}
+
 function finish(task, r) {
   const { now, policyRef, ...out } = r;
   const chosen = out.choice ?? 'needs_owner';
@@ -322,7 +339,7 @@ function finish(task, r) {
   const decision = {
     decision_id: `rt-${id}`, task_id: task?.task_id ?? null, ts: new Date(now()).toISOString(), kind: 'route',
     question: `Which runtime/model should handle task ${task?.task_id ?? '(unnamed)'}?`,
-    alternatives: out.candidates.map((c) => ({ option: c.id, pros: [`score ${c.score}`, `quality ${c.quality}`], cons: [c.cost_est_usd == null ? 'cost unknown' : `est. $${c.cost_est_usd} per verified completion`, ...(c.history ? [] : ['no history'])] })),
+    alternatives: withFloorAlternatives(out.candidates.map((c) => ({ option: c.id, pros: [`score ${c.score}`, `quality ${c.quality}`], cons: [c.cost_est_usd == null ? 'cost unknown' : `est. $${c.cost_est_usd} per verified completion`, ...(c.history ? [] : ['no history'])] }))),
     chosen, evidence, expected_effect: out.mode === 'shadow' ? 'shadow: recorded only, no runtime is started and live behaviour is unchanged' : 'runtime assignment',
     rationale: out.rationale.join(' '), actor: { role: 'router', runtime: null, model: null },
     confidence: out.choice == null ? null : out.confidence, policy_ref: policyRef, reversible: true, rollback: 'discard the shadow record; nothing was executed',

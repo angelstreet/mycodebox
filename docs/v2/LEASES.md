@@ -216,3 +216,28 @@ Every one of these surfaces as `E_UNAVAILABLE` plus a `lease_unavailable` alert 
 - `validResource` also caps the percent-encoded length (200), so derived file names always fit.
 - Lost-record guard: the `<res>.seen` marker first; when record and marker are both gone, the audit log is scanned for
   a granted token of that resource (only paid on a resource's first acquire).
+
+## Write-ahead lease ids and crash recovery (decision D-015)
+
+- `acquire(resource, { ..., lease_id })` accepts an optional caller-supplied `lease_id` (`[A-Za-z0-9._:-]{16,128}`).
+  It is granted at most once per resource: the record keeps the last 256 granted ids (`used_ids`) and a reused id is
+  `E_INVALID`. Without `lease_id` the authority generates one as before.
+- A caller that must survive a crash between `acquire` and persisting the granted lease writes the intended
+  `{ resource, lease_id, owner, task_id }` durably *before* calling `acquire`, and recovers with the existing
+  `adopt(attempted)` using that persisted id. `adopt` needs the private `lease_id`; the owner and task_id that `E_HELD`
+  discloses to every contender are not enough. A twin under the same owner name with a different id stays fenced.
+- Failed `adopt()` calls are audited as `denied` (`action: 'adopt'`) with the claimed owner/task_id (never the claimed
+  lease_id): failed adoptions are the spoofing signal.
+- Users: `worktrees.create/renew` (intent file `.v2-meta/<task_id>.intent.json` before a create's acquire;
+  `pending_lease` in the worktree meta before a re-acquire) and the goal loop's controller lease
+  (`<store dir>/controller.<instance>.intent.json`).
+- The short-lived `adoptOwn(resource, { owner, task_id })` from the goal-loop branch is removed: owner and task_id are
+  disclosed by `E_HELD`, so it let any caller take over any live lease (lease verifier, round 4).
+
+## Controller lease (decision D-016)
+
+One goal-loop controller per store: `service:<host_id>:goal-loop`, TTL 60 s, renewed by `step()`/`run()` and by a
+heartbeat while a step runs, scope `controller <instance id>` (the instance id is audit data, not identity). A second
+live instance gets `E_HELD` and does not step or write. `recover()` is the restart path: it adopts the previous
+instance's lease through that instance's write-ahead id, releases it and acquires a new one (the old handle is fenced),
+then runs the store's writing `recover()`. The store's implicit open on first access is read-only.

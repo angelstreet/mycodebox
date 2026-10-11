@@ -12,7 +12,8 @@
 // writes nothing new.
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import os from 'node:os';
+import { createHash, randomUUID } from 'node:crypto';
 import { TERMINAL, failureSignature, ContractError } from './task-contract.js';
 import { checkAction as policyCheckAction, loadPolicy as realLoadPolicy, clarificationFor } from './policy.js';
 import { route as realRoute, fallbackPlan as realFallbackPlan } from './router.js';
@@ -28,6 +29,11 @@ const INFRA_CODES = { ENOSPC: 'host.disk_pressure', EDQUOT: 'host.disk_pressure'
   ENFILE: 'host.memory_pressure', EAGAIN: 'runner.starved', EIO: 'health.unknown' };
 const HARNESS_LIKE = /missing_artifact|unknown_exit|timeout|unavailable/;
 const MAX_BACKOFF_MS = 15 * 60_000;
+// Errors a provider returns before doing (and charging for) any work.
+const UNBILLED_CLASSES = ['rate_limit', 'unavailable', 'auth'];
+// D-012: iterations without new passing evidence (any signatures) that force a strategy change; no_progress_policy
+// .iterations_without_progress overrides it per task.
+export const DEFAULT_ITERATIONS_WITHOUT_PROGRESS = 6;
 
 const hashOf = (v) => createHash('sha256').update(JSON.stringify(v ?? null)).digest('hex').slice(0, 12);
 const coded = (code, message) => new ContractError(code, message);
@@ -40,6 +46,20 @@ export function readTaskEvents(storeDir, task_id, fs = nodeFs) {
   const out = [];
   for (const line of text.split('\n')) { if (!line) continue; try { out.push(JSON.parse(line)); } catch { break; } }
   return out;
+}
+
+// Store methods that write: each is fenced by the controller lease (D-016).
+const STORE_WRITES = ['createTask', 'append', 'transition', 'setHead', 'recordEvidence', 'recordVerdict', 'recordDecision', 'recordUsage', 'recordEffect', 'snapshotPolicy'];
+// Same rule as the lease backend's lock files: EPERM means the process exists.
+export function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+// Z1: controller intents a successor may take over -- the process is gone on this host, or its heartbeat is older than
+// two heartbeat intervals. Anything else is a live controller (E_CONTROLLER_HELD; let its TTL run out). Pure.
+export function deadControllerIntents(intents, { hostname, isAlive = pidAlive, now, heartbeatMs }) {
+  return (intents || []).filter((x) => (x.host === hostname && !isAlive(x.pid))
+    || (Number.isFinite(x.heartbeat_at) && now - x.heartbeat_at > 2 * heartbeatMs));
 }
 
 export const wantsDelivery = (task) => task?.review_policy?.deliver === true
@@ -55,25 +75,135 @@ export function createGoalLoop({
   store, registry, adapters = {}, worktrees, worktreeRoot, verifier, integrate = null,
   loadPolicy = (task) => realLoadPolicy(task.repository), checkAction = policyCheckAction,
   route = realRoute, fallbackPlan = realFallbackPlan, budget = realBudget,
-  admission = null, systemOps = null, incidents = null, leases = null,
+  admission = null, systemOps = null, opsRequester = null, incidents = null, leases = null,
   git = defaultGit, fs = nodeFs, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  readEvents = (id) => readTaskEvents(store.dir, id, fs), reviewRoot, allowFake = false, hostId = 'local',
+  readEvents = (id) => (typeof store.events === 'function' ? store.events(id) : readTaskEvents(store.dir, id, fs)), reviewRoot, allowFake = false, hostId = 'local',
   runTimeoutMs = 30 * 60_000, estimateRun = null, quota = () => null,
   commitIdentity = { name: 'mycodebox goal loop', email: 'goal-loop@localhost.invalid' },
+  controller = {},
 } = {}) {
   if (!store || !registry || !worktrees || !worktreeRoot || !verifier || !reviewRoot) {
     throw new Error('goal loop: store, registry, worktrees, worktreeRoot, verifier and reviewRoot are required');
   }
-  const active = new Map();   // task_id -> { adapter, run }: what cancel() must stop
+  // ---------- D-016: one controller per store ----------
+  // A controller lease `service:<host>:goal-loop` (short TTL, renewed by step()/run() and by a heartbeat while a step
+  // runs). A second live instance gets E_HELD and fails closed (no step, no write). The instance id is audit data (the
+  // lease scope), never identity. Takeover (recover(), cancel()) is liveness-gated (Z1): only an instance that is dead
+  // -- its pid gone on this host, or no heartbeat for 2 heartbeat intervals -- is taken over, through its write-ahead
+  // lease_id (adopt -> release -> acquire: its handle is fenced). Every store write and every commit re-validates the
+  // controller lease first (fence per §5), so a displaced instance writes nothing even between heartbeats.
+  const hbMs = Math.max(1000, Math.floor((controller.ttl_ms ?? 60_000) / 3));
+  const ctlCfg = { resource: `service:${hostId}:goal-loop`, ttl_ms: 60_000, instance: randomUUID(), hostname: os.hostname(), pid: process.pid,
+    isAlive: pidAlive, ...controller };
+  const ctl = { lease: null, recovered: false, lost: false, intent: null };
+  const ctlIntentPath = (inst) => path.join(store.dir, `controller.${inst}.intent.json`);
+  function writeCtlIntent(intent) {
+    fs.mkdirSync(store.dir, { recursive: true });
+    const f = ctlIntentPath(intent.instance);
+    const tmp = `${f}.${process.pid}.tmp`;
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try { fs.writeSync(fd, JSON.stringify(intent)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, f);
+    try { const d = fs.openSync(store.dir, 'r'); try { fs.fsyncSync(d); } finally { fs.closeSync(d); } } catch { /* best effort */ }
+  }
+  const dropCtlIntent = (inst) => { try { fs.unlinkSync(ctlIntentPath(inst)); } catch { /* none */ } };
+  function otherCtlIntents() {
+    let names = [];
+    try { names = fs.readdirSync(store.dir).filter((f) => /^controller\..+\.intent\.json$/.test(f)); } catch { return []; }
+    return names.flatMap((f) => { try { const x = JSON.parse(fs.readFileSync(path.join(store.dir, f), 'utf8')); return x?.instance !== ctlCfg.instance && x?.resource === ctlCfg.resource ? [x] : []; } catch { return []; } });
+  }
+  const beat = () => { if (ctl.intent) { ctl.intent = { ...ctl.intent, heartbeat_at: now() }; try { writeCtlIntent(ctl.intent); } catch { /* next beat */ } } };
+  // Liveness-gated takeover: dead by pid now; otherwise watch the heartbeat for 2 intervals (injected sleep).
+  async function deadIntents() {
+    const snap = otherCtlIntents();
+    const opts = { hostname: ctlCfg.hostname, isAlive: ctlCfg.isAlive, now: now(), heartbeatMs: hbMs };
+    const dead = deadControllerIntents(snap, opts);
+    const unsure = snap.filter((x) => !dead.includes(x));
+    if (!unsure.length) return dead;
+    await sleep(2 * hbMs);
+    const later = new Map(otherCtlIntents().map((x) => [x.instance, x]));
+    for (const x of unsure) {
+      const y = later.get(x.instance);
+      if (y && y.heartbeat_at === x.heartbeat_at) dead.push(y);   // no heartbeat for 2 intervals: dead
+    }
+    return dead;
+  }
+  // -> { ok } | { ok:false, code, diagnosis }
+  async function holdController({ takeover = false, reconcile = true } = {}) {
+    if (!leases) return { ok: true };
+    if (ctl.lease) {
+      let v;
+      try { v = await leases.validate(ctl.lease); } catch { v = { ok: false, code: 'E_UNAVAILABLE' }; }
+      if (v?.ok) { try { const r = await leases.renew(ctl.lease); if (r?.ok) ctl.lease = r.lease; } catch { /* validated */ } beat(); ctl.lost = false; return { ok: true }; }
+      if (v?.code === 'E_UNAVAILABLE') return { ok: false, code: 'E_UNAVAILABLE', diagnosis: 'controller lease backend unavailable: not stepping (fail closed)' };
+      // Expired or fenced: someone may have written since; reconcile the store again once control is regained.
+      ctl.lease = null;
+      ctl.recovered = false;
+    }
+    const intent = { resource: ctlCfg.resource, lease_id: `ctl-${randomUUID()}`, owner: ACTOR, task_id: null, instance: ctlCfg.instance,
+      pid: ctlCfg.pid, host: ctlCfg.hostname, started_at: now(), heartbeat_at: now() };
+    writeCtlIntent(intent);   // D-015 write-ahead
+    const opts = { owner: ACTOR, ttl_ms: ctlCfg.ttl_ms, scope: `controller ${ctlCfg.instance}`, lease_id: intent.lease_id };
+    let a;
+    try { a = await leases.acquire(ctlCfg.resource, opts); } catch { a = { ok: false, code: 'E_UNAVAILABLE' }; }
+    if (!a?.ok && a?.code === 'E_HELD' && takeover) {
+      for (const pi of await deadIntents()) {
+        const ad = await leases.adopt({ resource: pi.resource, lease_id: pi.lease_id, owner: pi.owner, task_id: null }).catch(() => null);
+        dropCtlIntent(pi.instance);   // dead either way: its lease is adopted now or already gone
+        if (ad?.ok) { await leases.release(ad.lease).catch(() => null); break; }
+      }
+      try { a = await leases.acquire(ctlCfg.resource, opts); } catch { a = { ok: false, code: 'E_UNAVAILABLE' }; }
+    }
+    if (!a?.ok) {
+      if (a?.code !== 'E_UNAVAILABLE') dropCtlIntent(ctlCfg.instance);
+      return { ok: false, code: a?.code === 'E_HELD' ? 'E_HELD' : a?.code || 'E_UNAVAILABLE',
+        diagnosis: a?.code === 'E_HELD' ? `another goal-loop controller holds ${ctlCfg.resource} (until ${new Date(a.holder?.expires_at ?? 0).toISOString()}) and is alive: this instance does not step (D-016)` : `controller lease not acquired (${a?.code ?? 'unavailable'})` };
+    }
+    ctl.lease = a.lease;
+    ctl.intent = intent;
+    ctl.lost = false;
+    if (reconcile && !ctl.recovered) { await rawStore.recover(); ctl.recovered = true; }
+    return { ok: true };
+  }
+  function heartbeat() {
+    if (!leases || !ctl.lease) return () => {};
+    const t = setInterval(async () => {
+      if (!ctl.lease) return;
+      try { const r = await leases.renew(ctl.lease); if (r?.ok) { ctl.lease = r.lease; beat(); } else ctl.lost = true; } catch { ctl.lost = true; }
+    }, hbMs);
+    t.unref?.();
+    return () => clearInterval(t);
+  }
+  // Fence per §5: validate the controller lease immediately before a write. -> throws E_CONTROLLER_LOST
+  async function fence() {
+    if (!leases) return;
+    let v;
+    try { v = ctl.lease ? await leases.validate(ctl.lease) : { ok: false, code: 'E_NO_LEASE' }; } catch { v = { ok: false, code: 'E_UNAVAILABLE' }; }
+    if (!v?.ok) { ctl.lost = true; throw coded('E_CONTROLLER_LOST', `controller lease ${v?.code ?? 'invalid'}: no write`); }
+  }
+  // Every store write of this loop goes through the fence; reads and recover() do not.
+  const rawStore = store;
+  store = Object.freeze({ ...rawStore, ...Object.fromEntries(STORE_WRITES.filter((k) => typeof rawStore[k] === 'function')
+    .map((k) => [k, async (...a) => { await fence(); return rawStore[k](...a); }])) });
+
+  // Owner actions write too: they act under the controller lease (taking over a dead controller if needed).
+  async function ownerControl() {
+    const h = await holdController({ takeover: true });
+    if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
+  }
+
+  const active = new Map();   // task_id -> { adapter, run } | { kill }: what cancel() must stop (agent run or acceptance check)
 
   // ---------- context: everything a step decides from, folded from the persisted log ----------
   async function load(id) {
     const v = await store.get(id);
     if (!v) throw coded('E_NOT_FOUND', `task ${id} not found`);
-    const events = readEvents(id);
-    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, tried: [], exclude: [],
+    if (v.store_error) return { id, v, broken: true };   // a partial log is not the history: never decide from it
+    const events = await readEvents(id);
+    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, best_failing: null, tried: [], exclude: [],
       feedback: null, wait: null, approval: null, provider: null, worktree: null, flaky: [], interpretation: null, plan: null,
-      verify_only: false, integration: null, integration_unknown: 0, review_unavailable: 0 };
+      verify_only: false, integration: null, integration_unknown: 0, review_unavailable: 0,
+      review_fail: { signature: null, count: 0, changes: 0, excluded: [], strict: false } };
     let pending = null;
     const k = v.history.length;
     for (const d of v.decisions) {
@@ -91,6 +221,8 @@ export function createGoalLoop({
   }
 
   const isCancelled = async (id) => (await store.get(id))?.status === 'cancelled';
+  // Stop before a write when the task was cancelled or this instance lost the controller lease mid-step.
+  const halted = async (id) => ctl.lost || (await isCancelled(id));
   const result = (ctx, transitioned, note, extra = {}) => ({ task_id: ctx.id, from: ctx.v.status, state: transitioned ? transitioned : ctx.v.status,
     transitioned: !!transitioned, note, ...extra });
 
@@ -114,7 +246,10 @@ export function createGoalLoop({
   const note = (ctx, tag, d, patch = {}) => store.recordDecision(ctx.id, { decision_id: `gl-${ctx.id}-${ctx.k}-${tag}`, ...d, loop: { k: ctx.k, patch } });
 
   // ---------- policy, grants, gates ----------
-  const grantsOf = (ctx) => new Set(ctx.events.filter((e) => e.kind === 'approval.granted').flatMap((e) => e.payload.grants?.classes || []));
+  // A grant covers exactly the action keys of the request it answers (#7): the same gate question keeps its key across
+  // steps, an agent's request is keyed by its run, so a later identical request is asked again.
+  const grantsOf = (ctx) => new Set(ctx.events.filter((e) => e.kind === 'approval.granted').flatMap((e) => e.payload.grants?.keys || []));
+  const actionKey = (a, scope = '') => `${scope}${a.class}:${hashOf({ argv: a.argv ?? null, text: a.text ?? null, paths: a.paths ?? null })}`;
   function effectiveBudgetPolicy(ctx) {
     let bp = ctx.v.budget_policy;
     for (const e of ctx.events) if (e.kind === 'approval.granted' && e.payload.grants?.budget_policy) bp = { ...bp, ...e.payload.grants.budget_policy };
@@ -126,12 +261,13 @@ export function createGoalLoop({
     return r && typeof r === 'object' ? r : { ok: false, code: 'E_POLICY_INVALID', errors: [{ path: '', message: 'loader returned nothing' }] };
   }
   const policyRef = (p) => (p?.ok ? `policy@${hashOf(p.policy)}` : null);
-  function allowed(policy, task, action, grants) {
+  function allowed(policy, task, action, grants, key = actionKey(action)) {
     const r = checkAction(policy, task, action);
-    if (r.allow) return { ok: true };
-    // An owner grant can only cover approval classes; a prohibition or a missing policy is never grantable.
-    if (r.needs_approval && r.classes?.length && r.classes.every((c) => grants.has(c))) return { ok: true, granted: r.classes };
-    return { ok: false, ...r };
+    if (r.allow) return { ok: true, key };
+    // An owner grant only covers an approval-class request with this exact key; a prohibition or a missing policy is
+    // never grantable.
+    if (r.needs_approval && grants.has(key)) return { ok: true, granted: r.classes, key };
+    return { ok: false, ...r, key };
   }
   // T01 + T02/GL09: the policy is re-read and every action class checked before work; text cannot authorize.
   function gate(ctx, p) {
@@ -140,18 +276,18 @@ export function createGoalLoop({
     const acts = [{ class: 'execute' }, ...ctx.v.acceptance_checks.map((c) => ({ class: 'test', argv: c.command }))];
     for (const a of acts) {
       const r = allowed(p.policy, ctx.v, a, grants);
-      if (!r.ok) return { kind: r.needs_approval ? 'approval' : 'prohibited', question: `Policy blocks ${a.class}${a.argv ? ` ${a.argv.join(' ')}` : ''}: ${r.reason}`, reason: r.reason, classes: r.classes || [] };
+      if (!r.ok) return { kind: r.needs_approval ? 'approval' : 'prohibited', question: `Policy blocks ${a.class}${a.argv ? ` ${a.argv.join(' ')}` : ''}: ${r.reason}`, reason: r.reason, classes: r.classes || [], keys: r.needs_approval ? [r.key] : [] };
     }
     return null;
   }
-  function askOwner(ctx, g, { resume_to, kind = 'policy_gate', policy_ref = null, extra = {} }) {
-    const req = { k: ctx.k, kind: g.kind, question: g.question, classes: g.classes, resume_to, ...extra };
+  function askOwner(ctx, g, { resume_to, kind = 'policy_gate', policy_ref = null, extra = {}, patch = {} }) {
+    const req = { k: ctx.k, kind: g.kind, question: g.question, classes: g.classes || [], keys: g.keys || [], resume_to, ...extra };
     return decide(ctx, decision(kind, 'Can the task proceed without the owner?', [
       alt('ask the owner and wait', 'policy and approval classes win over goal text and model output', 'the task pauses'),
       alt('proceed automatically', 'faster', 'not authorized: silence or a recommendation is not approval')],
     'ask the owner and wait', { evidence: [g.reason || g.question], expected_effect: 'awaiting_approval until an explicit owner decision',
       rationale: `Mandatory owner decision (${g.kind}): ${g.question}`, policy_ref }), {
-      patch: { approval: req }, to: 'awaiting_approval', reason: g.question,
+      patch: { ...patch, approval: req }, to: 'awaiting_approval', reason: g.question,
       emit: [{ event_id: `appr-req-${ctx.id}-${ctx.k}`, kind: 'approval.requested', payload: req }],
     });
   }
@@ -172,45 +308,89 @@ export function createGoalLoop({
     const routerPolicy = { runtime_allowlist: pol.allowlists.runtimes ?? null, model_allowlist: pol.allowlists.models ?? null,
       allowed_roots: [worktreeRoot], version: hashOf(pol) };
     const task = { ...ctx.v, worktree_path: ctx.cp.worktree?.path ?? null };
-    // A free-text privacy_policy (e.g. 'project') names no provider list; the router reads only object policies with
-    // allowed_providers and would treat a string as "match nothing". Provider limits then come from the project policy.
-    if (typeof task.privacy_policy === 'string') delete task.privacy_policy;
+    // The documented template default 'project' means "the project's provider allowlist" (#11). Any other string is
+    // left to the router, which matches nothing for it: an unknown privacy policy fails closed (no route).
+    if (task.privacy_policy === 'project') task.privacy_policy = { allowed_providers: pol.provider_allowlist ?? null };
     if (pol.provider_allowlist) routerPolicy.provider_allowlist = pol.provider_allowlist;
-    const check = (_p, t) => { const r = allowed(pol, t, { class: 'route' }, grants); return r.ok ? { allow: true, needs_approval: false, reason: 'policy allows' } : { allow: false, needs_approval: r.needs_approval, reason: r.reason }; };
-    return route(task, { registry: reg, policy: routerPolicy, checkAction: check, allowFake, exclude, now, realpath: (x) => fs.realpathSync(x) });
+    const key = routeKey(ctx);
+    const check = (_p, t) => { const r = allowed(pol, t, { class: 'route' }, grants, key); return r.ok ? { allow: true, needs_approval: false, reason: 'policy allows' } : { allow: false, needs_approval: r.needs_approval, reason: r.reason }; };
+    // D-014: an owner approval of this task's routing question (bound to task + base) waives the critical-risk floor.
+    const floorGrants = grants.has(key) ? ['critical_risk'] : [];
+    return route(task, { registry: reg, policy: routerPolicy, checkAction: check, allowFake, exclude, now, realpath: (x) => fs.realpathSync(x), floorGrants });
   }
+  const routeKey = (ctx) => `route:${ctx.v.base_sha}`;
   const adapterFor = (entryId) => adapters[entryId] || adapters[entryId.split(':')[0]] || null;
 
   // ---------- budget ----------
   function ledger(ctx) {
     const started = new Map(ctx.events.filter((e) => e.kind === 'task.started').map((e) => [e.payload.run_id, e]));
-    return { entries: ctx.events.filter((e) => e.kind === 'usage.recorded').map((e) => {
+    const used = ctx.events.filter((e) => e.kind === 'usage.recorded');
+    const entries = used.map((e) => {
       const s = started.get(e.payload.run_id);
       return { attempt_id: e.payload.run_id, kind: s?.payload.role || 'unknown', usd: e.payload.usd, input_tokens: e.payload.input_tokens,
         output_tokens: e.payload.output_tokens, duration_ms: s ? Date.parse(e.timestamp) - Date.parse(s.timestamp) : null, turns: 1 };
-    }) };
+    });
+    // X1/X2 (GL13): a run that started but has no usage record is unknown spend, never free.
+    const seen = new Set(used.map((e) => e.payload.run_id));
+    for (const [run_id, s] of started) {
+      if (!seen.has(run_id)) entries.push({ attempt_id: run_id, kind: s.payload.role, usd: null, input_tokens: null, output_tokens: null, duration_ms: null, turns: 1 });
+    }
+    return { entries };
   }
-  function estimate(ctx, entry, role) {
+  // Runs this process is not running that started and never recorded usage (crash between start and usage): record
+  // them as unknown so the ledger and usage totals say "unknown", not a lower number. Deterministic ids: replay-safe.
+  async function recordInterruptedUsage(ctx) {
+    if (active.has(ctx.id)) return false;
+    const used = new Set(ctx.events.filter((e) => e.kind === 'usage.recorded').map((e) => e.payload.run_id));
+    const missing = ctx.events.filter((e) => e.kind === 'task.started' && !used.has(e.payload.run_id));
+    for (const e of missing) {
+      const entry = registry.get(e.payload.entry) || {};
+      await store.recordUsage(ctx.id, { runtime: entry.runtime ?? e.payload.runtime ?? null, provider: entry.provider ?? null, model: entry.model ?? e.payload.model ?? null,
+        run_id: e.payload.run_id, input_tokens: null, output_tokens: null, usd: null, source: 'interrupted: no usage recorded before a controller restart' }, { event_id: `usage-${e.payload.run_id}` });
+    }
+    return missing.length > 0;
+  }
+  function estimate(ctx, entry, role, routeHint = null) {
     if (estimateRun) return estimateRun({ task: ctx.v, entry, role, ledger: ledger(ctx) });
     // Measured performance first: the mean of this model's known spend on this task; otherwise unknown (never 0).
     const runs = ledger(ctx).entries.filter((e) => e.kind === role && ctx.events.some((s) => s.kind === 'task.started' && s.payload.run_id === e.attempt_id && s.payload.entry === entry));
     const mean = (k) => { const xs = runs.map((r) => r[k]).filter((x) => typeof x === 'number'); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
-    return { usd: mean('usd'), input_tokens: mean('input_tokens'), output_tokens: mean('output_tokens'), duration_ms: mean('duration_ms'), turns: 1 };
+    // No run of this entry yet: the router's price-based estimate when it has one (#5), else unknown.
+    const usd = mean('usd') ?? routeHint?.candidates?.find((c) => c.id === entry)?.cost_est_usd
+      ?? (role === 'developer' && ctx.cp.strategy?.entry === entry ? ctx.cp.strategy.cost_est_usd : null) ?? null;
+    return { usd, input_tokens: mean('input_tokens'), output_tokens: mean('output_tokens'), duration_ms: mean('duration_ms'), turns: 1 };
+  }
+  // #5: an explicit owner approval of a budget stop authorizes the NEXT run even when its cost cannot be estimated
+  // (bound to that request: consumed by the first run started after it). It never overrides a reached cap.
+  function nextRunAuthorized(ctx) {
+    const g = ctx.events.filter((e) => e.kind === 'approval.granted' && e.payload.grants?.request_kind === 'budget').at(-1);
+    return !!g && !ctx.events.some((e) => e.kind === 'task.started' && e.seq > g.seq);
   }
   // T13/GL13: before every start. A cap is a hard stop -> awaiting_approval; quota -> waiting with backoff.
-  async function budgetGate(ctx, entry, role, resume_to) {
-    const b = budget.check({ ...ctx.v, budget_policy: effectiveBudgetPolicy(ctx) }, ledger(ctx), estimate(ctx, entry, role), { quota: quota(entry) });
+  async function budgetGate(ctx, entry, role, resume_to, { patch = {}, routeHint = null } = {}) {
+    const b = budget.check({ ...ctx.v, budget_policy: effectiveBudgetPolicy(ctx) }, ledger(ctx), estimate(ctx, entry, role, routeHint), { quota: quota(entry) });
     if (b.allow) return null;
+    // #5/W3: stops that exist only because a cost is unknown (estimate, or a provider that reports no USD) are
+    // waived for one run by an owner confirmation; a reached cap never is.
+    const reasons = b.reason.split('; ');
+    const onlyUnknown = b.state_hint === 'awaiting_approval' && reasons.every((x) => /estimate unknown|spend unknown/.test(x));
+    if (onlyUnknown && nextRunAuthorized(ctx)) return null;
+    const spendUnknown = reasons.some((x) => /spend unknown/.test(x));
     const evd = [`spent ${JSON.stringify(b.spent)}`, `unknown ${b.unknown_spend.join(',') || 'none'}`];
     const emit = [{ event_id: `budget-${ctx.id}-${ctx.k}`, kind: 'budget.threshold', payload: { reason: b.reason, spent: b.spent, state_hint: b.state_hint } }];
     if (b.state_hint === 'waiting') {
       const delay = Math.min(MAX_BACKOFF_MS, b.backoff_ms ?? 60_000);
       return decide(ctx, decision('budget_wait', 'Start another run now?', [alt('wait for quota reset', 'no spend while exhausted', 'delay'), alt('start anyway', 'progress', 'provider refuses / overspends quota')],
         'wait for quota reset', { evidence: evd, expected_effect: `retry after ${delay} ms`, rationale: b.reason }), {
-        patch: { wait: { reason: 'quota', until_ms: now() + delay, resume_to } }, to: 'waiting', reason: b.reason, emit });
+        patch: { ...patch, wait: { reason: 'quota', until_ms: now() + delay, resume_to } }, to: 'waiting', reason: b.reason, emit });
     }
-    return askOwner(ctx, { kind: 'budget', question: `Budget stop: ${b.reason}. Raise or confirm the authorization to continue.`, reason: b.reason, classes: ['budget'] },
-      { resume_to, kind: 'budget_stop', extra: { spent: b.spent } }).then((r) => store.append(ctx.id, { event_id: emit[0].event_id, ...emit[0] }).then(() => r));
+    const question = onlyUnknown
+      ? (spendUnknown
+        ? `Budget stop: the cap cannot be enforced for this provider because it reports no USD (${b.reason}). Confirm to authorize one more run, or raise/remove the cap.`
+        : `Budget stop: ${b.reason}. Confirm to authorize one run of unknown cost, or raise/remove the cap.`)
+      : `Budget cap reached: ${b.reason}. Raise the cap (approve with a higher budget_policy) or cancel the task.`;
+    return askOwner(ctx, { kind: 'budget', question, reason: b.reason, classes: ['budget'] },
+      { resume_to, kind: 'budget_stop', extra: { spent: b.spent, cap_reached: !onlyUnknown, entry, role }, patch }).then((r) => store.append(ctx.id, { event_id: emit[0].event_id, ...emit[0] }).then(() => r));
   }
 
   // ---------- failure classification and the no-progress rule ----------
@@ -226,17 +406,22 @@ export function createGoalLoop({
     }
     return null;
   }
-  async function onFailure(ctx, { signature, feedback, passing, then = 'repair', thenPatch = {}, reviewOnly = false, p }) {
+  async function onFailure(ctx, { signature, feedback, passing, failing = null, then = 'repair', thenPatch = {}, reviewOnly = false, p }) {
     const np = ctx.v.no_progress_policy;
     const cp = ctx.cp;
-    const progress = passing > cp.best;
+    // D-012: new passing evidence = more required checks pass, or fewer tests fail inside the failing checks.
+    const fewerFailing = failing != null && cp.best_failing != null && failing < cp.best_failing;
+    const progress = passing > cp.best || fewerFailing;
+    const bestFailing = failing == null ? cp.best_failing : cp.best_failing == null ? failing : Math.min(cp.best_failing, failing);
+    const stagnation = np.iterations_without_progress ?? DEFAULT_ITERATIONS_WITHOUT_PROGRESS;
     const streak = { signature, count: signature === cp.streak.signature ? cp.streak.count + 1 : 1 };
     const stale = progress ? 0 : cp.stale + 1;
     const changes = progress ? 0 : cp.changes;
     const tried = progress ? [] : cp.tried;
-    const base = { streak, stale, best: Math.max(cp.best, passing), changes, tried, feedback, provider: null, verify_only: false, review_unavailable: 0 };
-    const evidence = [`signature ${signature}`, `same signature ${streak.count}x in a row`, `iterations without new passing evidence: ${stale}`, `strategy changes without progress: ${changes}`];
-    const needChange = streak.count >= np.same_signature || stale >= 2 * np.same_signature;
+    const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, feedback, provider: null, verify_only: false, review_unavailable: 0 };
+    const evidence = [`signature ${signature}`, `same signature ${streak.count}x in a row`, `iterations without new passing evidence: ${stale} (limit ${stagnation})`,
+      `strategy changes without progress: ${changes}`, `failing tests ${failing ?? 'n/a'} (best ${cp.best_failing ?? 'n/a'})${progress ? ': progress' : ''}`];
+    const needChange = streak.count >= np.same_signature || stale >= stagnation;
     if (!needChange) {
       return decide(ctx, decision('repair', 'How to respond to this failure?', [
         alt('targeted repair with structured feedback', 'the failure is specific and new or below the no-progress threshold', 'another run'),
@@ -282,7 +467,33 @@ export function createGoalLoop({
   }
 
   // Provider/runtime errors from a developer run (T12, GL06): router fallback taxonomy, bounded and recorded.
-  async function onRunError(ctx, err, p) {
+  // One classifier for developer and reviewer runs (W4b/W5). Billed = measured spend, an incomplete record, or a run
+  // that started and then failed with unknown usage (unknown is not zero). Unbilled = refused at the door: rate limit,
+  // runtime unavailable, auth. -> boolean
+  function isBilled({ started, errorClass, usage }) {
+    const u = usage || {};
+    if (u.incomplete === true || ['input_tokens', 'output_tokens', 'usd'].some((k) => typeof u[k] === 'number' && u[k] > 0)) return true;
+    if (!started) return false;
+    return !UNBILLED_CLASSES.includes(errorClass);
+  }
+  const billedRun = (ctx, run_id, errorClass) => {
+    const u = ctx.events.find((e) => e.kind === 'usage.recorded' && e.payload.run_id === run_id)?.payload;
+    const started = ctx.events.some((e) => e.kind === 'action.confirmed' && e.payload.effect_id === `devrun-${run_id}`) && !ctx.events.some((e) => e.kind === 'tool.failed' && e.payload.run_id === run_id && e.payload.not_started);
+    return isBilled({ started, errorClass, usage: u });
+  };
+  // OWNER_DECISIONS §4 as clarified: unbilled waits may back off on a timer; billed identical retries count toward the
+  // no-progress rule and suspend (waiting, until_ms:null, diagnosis, next action). -> step result
+  function suspend(ctx, kind, { diagnosis, next_action, evidence, resume_to, p, extraPatch = {} }) {
+    return decide(ctx, decision(kind, 'Keep retrying?', [
+      alt('suspend in waiting with a diagnosis', 'no runaway spend; revisited when inputs change', 'goal not reached yet'),
+      alt('retry again', 'might clear', 'billed identical retries already failed; nothing has changed between tries'),
+      alt('declare failure', 'final', 'new inputs (runtime fixed, owner resume) can still succeed')],
+    'suspend in waiting with a diagnosis', { evidence, expected_effect: 'no further runs until inputs change or the owner resumes', rationale: `No-progress rule (OWNER_DECISIONS §4): ${diagnosis}`, policy_ref: policyRef(p) }),
+    { patch: { ...extraPatch, wait: { reason: 'no_progress', until_ms: null, resume_to, diagnosis, next_action, policy_hash: policyRef(p) } }, to: 'waiting', reason: 'no_progress',
+      emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'no_progress', diagnosis, next_action } }] });
+  }
+
+  async function onRunError(ctx, err, p, run_id) {
     const s = ctx.cp.strategy;
     const prev = ctx.cp.provider;
     const attempt = prev && prev.class === err.class && prev.entry === s.entry ? prev.count : 0;
@@ -298,6 +509,12 @@ export function createGoalLoop({
       alt('compact context / larger model', 'fixes context exhaustion', 'loses detail'), alt('ask the owner', 'safe for auth/permission', 'routine provider errors are not owner questions')],
     chosen, { evidence, expected_effect: effect, rationale: plan.reason, policy_ref: policyRef(p) });
     const emit = err.class === 'rate_limit' ? [{ event_id: `ratelimited-${ctx.id}-${ctx.k}`, kind: 'model.rate_limited', payload: { entry: s.entry, retry_after_ms: err.retry_after_ms ?? null } }] : [];
+    // #4: a billed failure repeated on the same runtime with no switch left is a blind retry loop: suspend.
+    if (['backoff', 'wait'].includes(plan.action) && billedRun(ctx, run_id, err.class) && provider.count >= ctx.v.no_progress_policy.same_signature) {
+      return suspend(ctx, 'no_progress', { p, resume_to: 'repair', extraPatch: { provider },
+        diagnosis: `developer runtime ${s.entry} failed with ${err.class} ${provider.count}x in a row after billing; ${plan.reason}`,
+        next_action: `check ${s.entry} health or enable another compatible runtime, then resume the task`, evidence });
+    }
     switch (plan.action) {
       case 'backoff': case 'wait': {
         const delay = Math.min(MAX_BACKOFF_MS, plan.delay_ms ?? 60_000);
@@ -327,10 +544,12 @@ export function createGoalLoop({
     const type = INFRA_CODES[e.code] || 'health.unknown';
     let incident_id = null;
     try {
-      if (systemOps?.requestOperation) {
-        const r = await systemOps.requestOperation({ task_id: ctx.id, role: ACTOR, op: { type, host_id: hostId, symptom: `goal loop ${ctx.v.status}: ${e.code}`, action: 'investigate', dedup_key: `${type}:${hostId}:goal-loop` } });
-        incident_id = r.incident_id;
-      } else if (incidents?.report) {
+      const op = { type, host_id: hostId, symptom: `goal loop ${ctx.v.status}: ${e.code}`, action: 'investigate', dedup_key: `${type}:${hostId}:goal-loop` };
+      // Request-only handle (System Operations' `requester`): the loop can never execute an operation itself.
+      const req = opsRequester || systemOps?.requester;
+      if (req?.request) incident_id = (await req.request({ task_id: ctx.id, role: ACTOR, op })).incident_id;
+      else if (systemOps?.requestOperation) incident_id = (await systemOps.requestOperation({ task_id: ctx.id, role: ACTOR, op })).incident_id;
+      else if (incidents?.report) {
         incident_id = (await incidents.report({ type, host_id: hostId, symptom: `goal loop ${ctx.v.status}: ${e.code}`, reporter: { reporter: ACTOR, task_id: ctx.id } })).incident.incident_id;
       }
     } catch { incident_id = null; }
@@ -346,16 +565,47 @@ export function createGoalLoop({
   // ---------- git helpers (task worktree only) ----------
   const g = (cwd, args) => git(args, { cwd });
   const headOf = async (cwd) => (await g(cwd, ['rev-parse', 'HEAD'])).trim();
-  async function commitAll(cwd, msg) {
+  async function commitAll(id, cwd, msg) {
+    const stop = async () => { if (await isCancelled(id)) throw coded('E_CANCELLED', `task ${id} is cancelled`); await fence(); };   // T14 + fence before the commit
+    await stop();
     await g(cwd, ['add', '-A']);
     const staged = (await g(cwd, ['diff', '--cached', '--name-only'])).trim();
+    await stop();   // re-checked right before the write that names a SHA
     if (staged) await g(cwd, ['-c', `user.name=${commitIdentity.name}`, '-c', `user.email=${commitIdentity.email}`, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', msg]);
     return headOf(cwd);
   }
-  async function leaseOk(ctx) {
-    const l = ctx.cp.worktree?.lease;
-    if (!leases || !l) return true;
-    try { return (await leases.validate(l))?.ok === true; } catch { return false; }
+  // #1/W1: the worktree lease is renewed at every dispatch/commit through worktrees.renew(), which also re-acquires a
+  // lapsed lease for the same owner and rewrites the worktree meta (remove()/renew() keep working). A live or
+  // intervening foreign holder suspends the task until inputs change. -> null | step result
+  async function ensureLease(ctx, resume_to) {
+    const wt = ctx.cp.worktree;
+    if (!leases || !wt?.lease) return null;
+    let r;
+    // After the owner resumed a lease_held wait, an intervening (now released) holder is acknowledged; head and
+    // evidence are revalidated before anything counts.
+    try { r = await worktrees.renew(wt.path, { owner: ACTOR, acknowledgeFence: ctx.cp.lease_ack === true }); } catch (e) { r = { error: e }; }
+    if (r.lease) {
+      if (!r.reacquired) return null;
+      const worktree = { ...wt, lease: r.lease };
+      await note(ctx, `lease-${r.lease.token}`, decision('lease_reacquired', 'The worktree lease lapsed: re-acquire it?', [
+        alt('re-acquire as the same owner', 'nobody held it since; the worktree is still ours; head is revalidated before any evidence counts', 'new fencing token'),
+        alt('suspend', 'cautious', 'no reason: the resource is free and owned by this task')], 're-acquire as the same owner', {
+        evidence: ['renew E_EXPIRED', `new token ${r.lease.token}`], expected_effect: 'continue with a fresh lease (worktree meta updated)', rationale: 'Lease expired while the task was waiting or long-running; re-acquired under the same owner.' }),
+      { worktree, lease_ack: false });
+      ctx.cp.worktree = worktree;
+      return null;
+    }
+    const code = r.error?.code;
+    if (['E_HELD', 'E_FENCED', 'E_FOREIGN'].includes(code)) {
+      const diagnosis = `worktree lease ${wt.lease.resource}: ${code}${r.error.holder?.owner ? ` (held by ${r.error.holder.owner})` : ''}`;
+      return decide(ctx, decision('lease_unavailable', 'Another owner holds or held the worktree lease: proceed?', [alt('suspend until inputs change', 'never write under someone else\'s lease', 'blocked'), alt('proceed', 'progress', 'unfenced writes')],
+        'suspend until inputs change', { evidence: [diagnosis], expected_effect: 'no writes until the holder releases or the owner resumes', rationale: 'Fail closed on a foreign lease holder.' }),
+      { patch: { wait: { reason: 'lease_held', until_ms: null, resume_to, diagnosis, next_action: 'check who holds the worktree lease, release it, then resume the task', policy_hash: policyRef(readPolicy(ctx)) } }, to: 'waiting', reason: 'lease held by another owner' });
+    }
+    // Backend unavailable: unbilled, timed retry (absence of an answer is not availability).
+    return decide(ctx, decision('lease_unavailable', 'Lease backend unavailable: proceed?', [alt('wait', 'absence of a lease is not availability', 'delay'), alt('proceed', 'progress', 'unfenced writes')],
+      'wait', { evidence: [`renew ${code ?? 'unknown'}: ${String(r.error?.message ?? '').slice(0, 200)}`], expected_effect: 'retry after backoff', rationale: 'Fail closed on the worktree lease.' }),
+    { patch: { wait: { reason: 'lease_unavailable', until_ms: now() + 60_000, resume_to } }, to: 'waiting', reason: 'lease unavailable' });
   }
 
   // ---------- states ----------
@@ -387,14 +637,27 @@ export function createGoalLoop({
     let wt = ctx.cp.worktree;
     if (!wt) {
       if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
-      try {
-        const c = await worktrees.create({ repo: ctx.v.repository, task_id: ctx.id, base_sha: base, owner: ACTOR });
-        wt = { path: c.path, branch: c.branch, lease: c.lease };
-      } catch (e) {
-        if (e.code !== 'E_EXISTS') throw e;
-        const o = worktrees.owner(path.join(worktreeRoot, ctx.id));   // created before a crash: reuse, never duplicate
-        if (!o || o.task_id !== ctx.id) throw e;
-        wt = { path: fs.realpathSync(path.join(worktreeRoot, ctx.id)), branch: o.branch, lease: o.lease };
+      // #2: a worktree created before a crash (meta written) is ours: reuse it before trying to acquire again.
+      const target = path.join(worktreeRoot, ctx.id);
+      const mine = () => { try { const o = worktrees.owner(target); return o && o.task_id === ctx.id && o.owner === ACTOR ? o : null; } catch { return null; } };
+      const reuse = (o) => ({ path: fs.realpathSync(target), branch: o.branch, lease: o.lease });
+      const o0 = mine();
+      if (o0) wt = reuse(o0);
+      else {
+        try {
+          const c = await worktrees.create({ repo: ctx.v.repository, task_id: ctx.id, base_sha: base, owner: ACTOR });
+          wt = { path: c.path, branch: c.branch, lease: c.lease };
+        } catch (e) {
+          const o = mine();
+          if (o) wt = reuse(o);
+          else if (e.code === 'E_HELD') {
+            // Held but no worktree recorded: a crash inside create (ours) or a foreign holder. Wait for the lease to lapse.
+            const until = Math.max(now() + 60_000, Number(e.holder?.expires_at) || 0);
+            return decide(ctx, decision('lease_unavailable', 'Worktree lease held with no worktree recorded: proceed?', [alt('wait for the lease to lapse', 'never two holders', 'delay'), alt('steal it', 'progress', 'unfenced')],
+              'wait for the lease to lapse', { evidence: [`holder ${e.holder?.owner ?? 'unknown'}`], expected_effect: 'retry create after expiry', rationale: 'Fail closed on an existing lease.' }),
+            { patch: { wait: { reason: 'lease_held', until_ms: until, resume_to: 'clarified' } }, to: 'waiting', reason: 'worktree lease held' });
+          } else throw e;
+        }
       }
     }
     const plan = { rev: 0, dag: [{ id: 'develop', role: 'developer' }, { id: 'verify', role: 'tester', after: ['develop'] }, { id: 'review', role: 'tester', after: ['verify'] },
@@ -413,20 +676,26 @@ export function createGoalLoop({
     const g0 = gate(ctx, p);
     if (g0) return askOwner(ctx, g0, { resume_to: 'planned', policy_ref: policyRef(p) });
     const r = await routeFor(ctx, p);
-    // The router's own §9 record (deterministic id). A no-choice route has no alternatives, which the store refuses;
-    // that outcome is recorded by the loop's own decision below instead.
-    if (r.decision.alternatives.length) await store.recordDecision(ctx.id, r.decision);
+    await store.recordDecision(ctx.id, r.decision);   // the router's own §9 record (deterministic id, >= 2 alternatives)
     if (!r.choice || r.requires_approval) {
-      if (r.state_hint === 'waiting') {
-        return decide(ctx, decision('no_route', 'No runtime passes the floors: what next?', [alt('wait for a compatible runtime', 'never routes around the floors', 'delay'), alt('relax the floors', 'progress', 'not permitted')],
-          'wait for a compatible runtime', { evidence: [`route ${r.decision.decision_id}`, ...r.rejected.slice(0, 5).map((x) => `${x.id}: ${x.reason}`)], expected_effect: 're-route after backoff', rationale: r.rationale.join(' ') }),
-        { patch: { wait: { reason: 'no_route', until_ms: now() + 5 * 60_000, resume_to: 'planned' } }, to: 'waiting', reason: 'no compatible runtime' });
+      const granted = grantsOf(ctx).has(routeKey(ctx));
+      // #15: no feasible runtime is not fixed by time; #8: a granted routing question the router still refuses is
+      // never asked again. Both wait for new inputs (policy, registry, owner resume) with a diagnosis.
+      if (r.state_hint === 'waiting' || granted) {
+        const diagnosis = granted ? `routing refused even with the owner's approval: ${r.rationale.join(' ')}` : `no runtime passes the floors: ${r.rejected.slice(0, 5).map((x) => `${x.id}: ${x.reason}`).join('; ')}`;
+        return decide(ctx, decision('no_route', 'No runtime can be routed: what next?', [alt('wait until inputs change', 'never routes around the floors; no blind retries', 'blocked until policy, runtimes or the task change'), alt('relax the floors', 'progress', 'not permitted')],
+          'wait until inputs change', { evidence: [`route ${r.decision.decision_id}`, ...r.rejected.slice(0, 5).map((x) => `${x.id}: ${x.reason}`)], expected_effect: 're-route when inputs change', rationale: r.rationale.join(' ') }),
+        { patch: { wait: { reason: 'no_route', until_ms: null, resume_to: 'planned', diagnosis, next_action: 'install/enable a compatible runtime, widen the allowlists or change the task; then resume', policy_hash: policyRef(p) } },
+          to: 'waiting', reason: 'no compatible runtime' });
       }
-      return askOwner(ctx, { kind: 'route', question: `Routing needs the owner: ${r.rationale.join(' ')}`, reason: r.rationale.join(' '), classes: ['route'] }, { resume_to: 'planned', policy_ref: policyRef(p) });
+      return askOwner(ctx, { kind: 'route', question: `Routing needs the owner: ${r.rationale.join(' ')}`, reason: r.rationale.join(' '), classes: ['route'], keys: [routeKey(ctx)] }, { resume_to: 'planned', policy_ref: policyRef(p) });
     }
     const prev = ctx.cp.strategy || { harness: 'standard', plan_rev: 0, compact: false };
-    const strategy = { ...prev, entry: r.choice, effort: ctx.cp.interpretation?.effort ?? null };
-    return decide(ctx, decision('assign_developer', 'Which runtime/model runs the developer role?', r.candidates.slice(0, 4).map((c) => alt(c.id, `score ${c.score}`, c.cost_est_usd == null ? 'cost unknown' : `est $${c.cost_est_usd}`)),
+    const strategy = { ...prev, entry: r.choice, effort: ctx.cp.interpretation?.effort ?? null,
+      cost_est_usd: r.candidates.find((c) => c.id === r.choice)?.cost_est_usd ?? null };   // W2b: the developer gate's first estimate
+    const alts = r.candidates.slice(0, 4).map((c) => alt(c.id, `score ${c.score}`, c.cost_est_usd == null ? 'cost unknown' : `est $${c.cost_est_usd}`));
+    if (alts.length < 2) alts.push(alt('wait for another compatible runtime', 'more choice', 'only one runtime passes the floors; waiting adds nothing'));
+    return decide(ctx, decision('assign_developer', 'Which runtime/model runs the developer role?', alts,
       r.choice, { evidence: [`router decision ${r.decision.decision_id}`], expected_effect: `developer runs on ${r.choice}`, rationale: `Router selection used for this V2 task: ${r.rationale.at(-1)}`,
         confidence: r.confidence, policy_ref: policyRef(p) }), { patch: { strategy }, to: 'ready', reason: `assigned ${r.choice}` });
   }
@@ -446,12 +715,28 @@ export function createGoalLoop({
       const stop = await budgetGate(ctx, ctx.cp.strategy.entry, 'developer', ctx.v.status === 'repair' ? 'repair' : 'ready');
       if (stop) return stop;
     }
-    if (!(await leaseOk(ctx))) return leaseWait(ctx, ctx.v.status);
+    const lw = await ensureLease(ctx, ctx.v.status);
+    if (lw) return lw;
+    const bw = await branchGate(ctx, ctx.v.status);
+    if (bw) return bw;
     return move(ctx, 'executing', ctx.cp.verify_only ? 'resume verification' : `dispatch run ${ctx.id}.run${runNumber(ctx) + 1}`);
   }
-  const leaseWait = (ctx, resume_to) => decide(ctx, decision('lease_unavailable', 'Worktree lease invalid: proceed?', [alt('wait', 'absence of a lease is not availability', 'delay'), alt('proceed', 'progress', 'unfenced writes')],
-    'wait', { evidence: ['worktree lease validate failed'], expected_effect: 'retry after backoff', rationale: 'Fail closed on the worktree lease.' }),
-  { patch: { wait: { reason: 'lease_unavailable', until_ms: now() + 60_000, resume_to } }, to: 'waiting', reason: 'lease unavailable' });
+  // X7: work is only committed and accepted on the task branch; anything else (another branch, detached HEAD) suspends
+  // the task with a diagnosis. -> null | step result
+  async function branchGate(ctx, resume_to, st = null) {
+    const wt = ctx.cp.worktree;
+    if (!wt?.branch) return null;
+    const cur = st || await worktrees.status(wt.path);
+    if (cur.branch === wt.branch) return null;
+    const diagnosis = `worktree is on ${cur.branch === 'HEAD' ? 'a detached HEAD' : `branch ${cur.branch}`} at ${short(cur.head)}, not on the task branch ${wt.branch}`;
+    return decide(ctx, decision('off_task_branch', 'The worktree left the task branch: continue?', [
+      alt('suspend until the owner restores the task branch', 'a SHA the task branch does not contain must never be accepted or delivered', 'blocked'),
+      alt('commit/verify where it is', 'progress', 'evidence and delivery would name the wrong branch'),
+      alt('switch back automatically', 'progress', 'could discard someone else\'s work in the worktree')], 'suspend until the owner restores the task branch', {
+      evidence: [diagnosis], expected_effect: 'no commit or acceptance until the worktree is back on its branch', rationale: 'Out-of-band checkout detected.' }),
+    { patch: { wait: { reason: 'off_task_branch', until_ms: null, resume_to, diagnosis, next_action: `check out ${wt.branch} in the task worktree (keep or discard the foreign commits deliberately), then resume`, policy_hash: policyRef(readPolicy(ctx)) } },
+      to: 'waiting', reason: 'worktree off the task branch' });
+  }
   const runNumber = (ctx) => ctx.v.history.filter((h) => h.to === 'executing').length;
 
   async function sExecuting(ctx) {
@@ -480,13 +765,14 @@ export function createGoalLoop({
         error = r.error;
       } catch (e) { error = adapter ? adapter.normalizeError(e) : { class: 'unavailable', retryable: true, retry_after_ms: null }; }
       finally { active.delete(ctx.id); }
+      if (ctl.lost) return result(ctx, null, 'controller lease lost during the run: no writes (the new controller reconciles it)', { idle: true });
       if (await isCancelled(ctx.id)) {   // T14: no writes after cancel except the truthful effect outcome
         await store.recordEffect(ctx.id, { effect_id, phase: 'failed' });
         return result(ctx, 'cancelled', 'cancelled during run', { terminal: true, transitioned: false });
       }
       const u = run ? adapter.collectUsage(run) : { input_tokens: null, output_tokens: null, usd: null };
       await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, run_id, ...u }, { event_id: `usage-${run_id}` });
-      if (error) await store.append(ctx.id, { event_id: `fail-${run_id}`, kind: 'tool.failed', payload: { run_id, error } });
+      if (error) await store.append(ctx.id, { event_id: `fail-${run_id}`, kind: 'tool.failed', payload: { run_id, error, ...(run ? {} : { not_started: true }) } });
       // Actions the agent asked for are checked against policy, never executed by the loop (GL09).
       const grants = grantsOf(ctx);
       const reqs = (run?.events || []).filter((e) => e.type === 'action_request').slice(0, 20);
@@ -495,8 +781,8 @@ export function createGoalLoop({
         // The class comes from the operation itself (argv/text), never from the model's own label for it.
         const argv = Array.isArray(a.argv) && a.argv.length ? a.argv.map(String) : undefined;
         const action = { class: argv ? 'command' : 'request', argv, text: [a.text, a.class].filter(Boolean).map(String).join(' ') || undefined };
-        const r = allowed(p.policy, ctx.v, action, grants);
-        if (!r.ok) await store.append(ctx.id, { event_id: `actreq-${run_id}-${n++}`, kind: 'approval.requested', payload: { run_id, action, reason: r.reason, classes: r.classes || [], prohibited: !r.needs_approval } });
+        const r = allowed(p.policy, ctx.v, action, grants, actionKey(action, `agent:${run_id}:`));
+        if (!r.ok) await store.append(ctx.id, { event_id: `actreq-${run_id}-${n++}`, kind: 'approval.requested', payload: { run_id, action, reason: r.reason, classes: r.classes || [], key: r.key, prohibited: !r.needs_approval } });
       }
       await store.recordEffect(ctx.id, { effect_id, phase: 'confirmed' });
       ctx = await load(ctx.id);
@@ -505,19 +791,23 @@ export function createGoalLoop({
     const reqs = ctx.events.filter((e) => e.kind === 'approval.requested' && e.payload.run_id === run_id);
     if (reqs.length) {
       return askOwner(ctx, { kind: 'agent_action', question: `The developer asked for restricted action(s): ${reqs.map((e) => `${e.payload.action.class}${e.payload.action.argv ? ` (${e.payload.action.argv.join(' ')})` : ''}`).join('; ')}. Not executed.`,
-        reason: reqs.map((e) => e.payload.reason).join('; '), classes: [...new Set(reqs.flatMap((e) => e.payload.classes))] }, { resume_to: 'repair', kind: 'agent_action', policy_ref: policyRef(p) });
+        reason: reqs.map((e) => e.payload.reason).join('; '), classes: [...new Set(reqs.flatMap((e) => e.payload.classes))], keys: reqs.map((e) => e.payload.key),
+        actions: reqs.map((e) => e.payload.action) }, { resume_to: 'repair', kind: 'agent_action', policy_ref: policyRef(p), extra: { actions: reqs.map((e) => e.payload.action) } });
     }
-    if (failed) return onRunError(ctx, failed.payload.error, p);
+    if (failed) return onRunError(ctx, failed.payload.error, p, run_id);
     // Commit what the developer produced so the evidence names an exact SHA.
     if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
-    if (!(await leaseOk(ctx))) return leaseWait(ctx, 'repair');   // the run's files stay in the worktree for the next run
-    const head = await commitAll(wt.path, `v2task ${ctx.id}: ${run_id}`);
+    const lw = await ensureLease(ctx, 'repair');   // the run's files stay in the worktree for the next run
+    if (lw) return lw;
+    const bw = await branchGate(ctx, 'repair');
+    if (bw) return bw;
+    const head = await commitAll(ctx.id, wt.path, `v2task ${ctx.id}: ${run_id}`);
     const changed = (await g(wt.path, ['diff', '--name-only', `${ctx.v.base_sha}`, head])).split('\n').filter(Boolean);
     if (changed.length) {
-      const r = allowed(p.policy, ctx.v, { class: 'edit', paths: changed }, grantsOf(ctx));
+      const r = allowed(p.policy, ctx.v, { class: 'edit', paths: changed }, grantsOf(ctx), actionKey({ class: 'edit', paths: changed }, `edit:${head}:`));
       if (!r.ok) {
         await store.setHead(ctx.id, head, { actor: { role: 'developer', id: s.entry }, event_id: `head-${run_id}` });
-        return askOwner(ctx, { kind: 'paths', question: `The change touches paths outside policy: ${r.reason}`, reason: r.reason, classes: r.classes || [] }, { resume_to: 'repair', kind: 'scope_gate', policy_ref: policyRef(p) });
+        return askOwner(ctx, { kind: 'paths', question: `The change touches paths outside policy: ${r.reason}`, reason: r.reason, classes: r.classes || [], keys: r.needs_approval ? [r.key] : [] }, { resume_to: 'repair', kind: 'scope_gate', policy_ref: policyRef(p) });
       }
     }
     await store.setHead(ctx.id, head, { actor: { role: 'developer', id: s.entry }, event_id: `head-${run_id}` });
@@ -543,12 +833,15 @@ export function createGoalLoop({
     const wt = ctx.cp.worktree;
     const head = ctx.head;
     const st = await worktrees.status(wt.path);
+    const bw = await branchGate(ctx, 'ready', st);
+    if (bw) return bw;
     if (st.head !== head) return revalidate(ctx, st.head, 'Source changed after the last commit/verification (T10): re-verify on the current SHA.');
     if (st.dirty) {
       return onFailure(ctx, { signature: failureSignature({ test: 'worktree', errorClass: 'uncommitted_changes' }), passing: 0, p,
         feedback: { kind: 'uncommitted_changes', note: 'Tracked files changed outside a recorded run; the controller will commit your next run.' } });
     }
-    const vr = await verifier.runChecks({ store, task: ctx.v, cwd: wt.path, sha: head, epoch: ctx.epoch, existing: ctx.evidence, actor: VERIFIER_ACTOR, isCancelled: () => isCancelled(ctx.id) });
+    const vr = await verifier.runChecks({ store, task: ctx.v, cwd: wt.path, sha: head, epoch: ctx.epoch, existing: ctx.evidence, actor: VERIFIER_ACTOR, isCancelled: () => halted(ctx.id),
+      register: (kill) => (kill ? active.set(ctx.id, { kill }) : active.delete(ctx.id)) });   // T14: cancel kills a running check
     if (vr.cancelled) return result(ctx, 'cancelled', 'cancelled during verification', { terminal: true, transitioned: false });
     const after = await headOf(wt.path);
     if (after !== head) return revalidate(ctx, after, 'Source changed during verification (T10/GL12): rerun on the new SHA.');
@@ -576,7 +869,8 @@ export function createGoalLoop({
     if (failing.length) {
       const f = failing[0];
       const first = f.failures[0] || {};
-      return onFailure(ctx, { signature: failureSignature({ test: `${f.check_id}:${first.test ?? '?'}`, errorClass: first.error_class }), passing, p, feedback: feedbackOf('test_failure', failing) });
+      const failingTests = failing.reduce((n, r) => n + Math.max(1, r.failures.length), 0);
+      return onFailure(ctx, { signature: failureSignature({ test: `${f.check_id}:${first.test ?? '?'}`, errorClass: first.error_class }), passing, failing: failingTests, p, feedback: feedbackOf('test_failure', failing) });
     }
     // Every required check passes on this exact SHA. A SHA once seen flaky is never accepted.
     if (ctx.cp.flaky.some((x) => x.endsWith(`@${head}`))) {
@@ -585,68 +879,144 @@ export function createGoalLoop({
     return review(ctx, p, results);
   }
 
+  // ---------- independent evaluation ----------
+  const devEntriesOf = (ctx) => [...new Set(ctx.events.filter((e) => e.kind === 'task.started' && e.payload.role === 'developer').map((e) => e.payload.entry))];
+
+  // #15: no runtime independent of the developers: time does not fix that, new inputs do.
+  const noReviewer = (ctx, why) => decide(ctx, decision('evaluator_unavailable', 'No independent evaluator can be routed: accept on tests alone?', [
+    alt('wait until inputs change', 'acceptance needs an independent verdict (GL04); retrying the same floors changes nothing', 'blocked'),
+    alt('accept on tests alone', 'fast', 'never: unavailable is not approval')], 'wait until inputs change', {
+    evidence: [why], expected_effect: 'resume when a reviewer runtime becomes available, the policy changes or the owner resumes', rationale: `Evaluator unavailable: ${why}` }),
+  { patch: { verify_only: true, wait: { reason: 'evaluator_unavailable', until_ms: null, resume_to: 'ready', diagnosis: why, next_action: 'enable a reviewer runtime different from the developer(s), then resume', policy_hash: policyRef(readPolicy(ctx)) } },
+    to: 'waiting', reason: 'no independent evaluator' });
+
+  // Unbilled transient unavailability (nothing ran, or the runtime reported itself unavailable): timed backoff.
+  function reviewBackoff(ctx, why, extraPatch = {}) {
+    const n = ctx.cp.review_unavailable + 1;
+    const delay = Math.min(MAX_BACKOFF_MS, 60_000 * 2 ** (n - 1));
+    return decide(ctx, decision('evaluator_unavailable', 'Independent evaluation unavailable: accept on tests alone?', [
+      alt('wait and retry the evaluation', 'acceptance needs an independent verdict (GL04)', 'delay'), alt('accept on tests alone', 'fast', 'never: unavailable is not approval')],
+    'wait and retry the evaluation', { evidence: [why], expected_effect: `re-evaluate in ${delay} ms without a developer run`, rationale: `Evaluator unavailable: ${why}` }),
+    { patch: { ...extraPatch, review_unavailable: n, verify_only: true, wait: { reason: 'evaluator_unavailable', until_ms: now() + delay, resume_to: 'ready' } }, to: 'waiting', reason: 'evaluator unavailable' });
+  }
+
+  // #3: a billed review that produced no usable verdict is a failure signature under the no-progress rule: identical
+  // failures 3x -> another reviewer, else a stricter answer format; strategy changes exhausted -> suspend.
+  async function reviewerFailure(ctx, p, entry, out, devEntries) {
+    const np = ctx.v.no_progress_policy;
+    const rf = ctx.cp.review_fail;
+    const signature = `review:${entry} :: ${out.error?.class || 'no_verdict'}`;
+    const count = rf.signature === signature ? rf.count + 1 : 1;
+    const evidence = [`signature ${signature}`, `same failure ${count}x`, `reviewer strategy changes ${rf.changes}`];
+    if (count < np.same_signature) return reviewBackoff(ctx, `reviewer ${entry}: ${out.error?.class || 'no verdict'} (${count}x)`, { review_fail: { ...rf, signature, count } });
+    let other = null;
+    try { const r = await routeFor(ctx, p, { exclude: [...devEntries, ...rf.excluded, entry] }); other = r.choice; } catch { other = null; }
+    const pick = rf.changes >= np.strategy_changes_without_progress ? null : other ? 'other_reviewer' : !rf.strict ? 'strict_format' : null;
+    if (!pick) {
+      return suspend(ctx, 'no_progress', { p, resume_to: 'ready', extraPatch: { verify_only: true, review_fail: { ...rf, signature, count } }, evidence,
+        diagnosis: `independent evaluation produced no usable verdict: ${signature} ${count}x after ${rf.changes} reviewer change(s)`,
+        next_action: 'check the reviewer runtimes (output format, health), enable another reviewer, then resume' });
+    }
+    const review_fail = { signature: null, count: 0, changes: rf.changes + 1, excluded: pick === 'other_reviewer' ? [...rf.excluded, entry] : rf.excluded, strict: rf.strict || pick === 'strict_format' };
+    return decide(ctx, decision('reviewer_strategy_change', `Reviewer failed identically ${count}x: what changes?`, [
+      alt('other_reviewer', other ? `router ranks ${other} next` : 'n/a', other ? 'different reviewer behaviour' : 'no other independent reviewer'),
+      alt('strict_format', 'states the required answer format explicitly', 'same reviewer'), alt('blind retry', 'cheap', 'billed identical retries are forbidden')],
+    pick, { evidence, expected_effect: pick === 'other_reviewer' ? `next review by ${other}` : 'next review demands the JSON verdict only', rationale: 'No-progress rule applied to billed reviews.' }),
+    { patch: { review_fail, verify_only: true, wait: { reason: 'reviewer_change', until_ms: now(), resume_to: 'ready' } }, to: 'waiting', reason: `reviewer strategy change: ${pick}` });
+  }
+
+  // One evaluation by `role` on the exact head SHA. -> { verdict } | { stop: step result }
+  async function obtainVerdict(ctx, p, { role, devEntries, fixedEntry = null }) {
+    const head = ctx.head;
+    const existing = ctx.verdicts.filter((x) => !devEntries.includes(x.actor?.id) && (x.actor?.role || 'reviewer') === role).at(-1);
+    if (existing) return { verdict: existing };
+    if (await isCancelled(ctx.id)) return { stop: result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false }) };
+    const rf = ctx.cp.review_fail;
+    let r = null;
+    let choice = fixedEntry;
+    if (!choice) { r = await routeFor(ctx, p, { exclude: [...devEntries, ...rf.excluded] }); choice = r.choice; }
+    if (!choice || devEntries.includes(choice)) return { stop: await noReviewer(ctx, `no ${role} runtime independent of ${devEntries.join(', ')}${fixedEntry ? ` (policy names ${fixedEntry})` : ''}`) };
+    const stop = await budgetGate(ctx, choice, 'reviewer', 'ready', { patch: { verify_only: true }, routeHint: r });   // #6
+    if (stop) return { stop };
+    const adapter = adapterFor(choice);
+    if (!adapter) return { stop: await reviewBackoff(ctx, `no adapter for ${choice}`) };
+    // Per reviewer and role: a later, more independent reviewer on the same SHA gets its own run, usage and verdict ids.
+    // N1: every attempt gets its own run id (attempt index), so retried reviews are never deduplicated out of the ledger.
+    const runBase = `${ctx.id}.${role === 'reviewer' ? 'review' : role}-${short(head)}-e${ctx.epoch}-${choice.replace(/[^\w.-]/g, '_')}`;
+    const attempt = ctx.events.filter((e) => e.kind === 'task.started' && String(e.payload.run_id).startsWith(`${runBase}-a`)).length;
+    const run_id = `${runBase}-a${attempt}`;
+    const dir = path.join(reviewRoot, `${ctx.id}-${short(head)}-e${ctx.epoch}-${role}`);
+    const wt = ctx.cp.worktree;
+    const entry = registry.get(choice);
+    let out;
+    try {
+      try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* not there */ }
+      await g(wt.path, ['worktree', 'add', '--detach', dir, head]);   // independent, read-only checkout of the exact SHA
+      const diff = await g(wt.path, ['diff', ctx.v.base_sha, head]);
+      await store.append(ctx.id, { event_id: `start-${run_id}`, kind: 'task.started', payload: { run_id, role: 'reviewer', review_role: role, entry: choice, runtime: entry?.runtime ?? null, model: entry?.model ?? null } });
+      out = await verifier.review({ adapter, entry, task: ctx.v, sha: head, cwd: fs.realpathSync(dir), diff, evidence: ctx.evidence.length ? ctx.evidence : (await load(ctx.id)).evidence,
+        run_id: run_id.replace(/[^\w.-]/g, '_'), timeout_ms: runTimeoutMs, role, strict: rf.strict, onStart: (run) => active.set(ctx.id, { adapter, run }) });
+    } finally {
+      active.delete(ctx.id);
+      try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* best effort; the dir is outside the task worktree */ }
+    }
+    if (ctl.lost) return { stop: result(ctx, null, 'controller lease lost during the review: no writes', { idle: true }) };
+    if (await isCancelled(ctx.id)) return { stop: result(ctx, 'cancelled', 'cancelled during review', { terminal: true, transitioned: false }) };
+    const u = out.usage || {};
+    await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, run_id,
+      input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, usd: u.usd ?? null, ...(u.incomplete ? { incomplete: true } : {}) }, { event_id: `usage-${run_id}` });
+    if (out.verdict === 'unavailable') {
+      const billed = isBilled({ started: !!out.run, errorClass: out.error?.class, usage: out.usage });
+      if (!billed) return { stop: await reviewBackoff(ctx, `${role} ${choice}: ${out.error?.class || 'no verdict'}`) };
+      return { stop: await reviewerFailure(await load(ctx.id), p, choice, out, devEntries) };
+    }
+    const verdict = { sha: head, actor: { role, id: choice }, verdict: out.verdict, findings: out.findings };
+    await store.recordVerdict(ctx.id, verdict, { event_id: `verdict-${run_id}` });
+    return { verdict };
+  }
+
   async function review(ctx, p, results) {
     const head = ctx.head;
-    const devEntries = [...new Set(ctx.events.filter((e) => e.kind === 'task.started' && e.payload.role === 'developer').map((e) => e.payload.entry))];
-    let verdict = ctx.verdicts.filter((x) => !devEntries.includes(x.actor?.id)).at(-1) || null;
-    if (!verdict) {
-      if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
-      const r = await routeFor(ctx, p, { exclude: devEntries });
-      const unavailable = async (why) => {
-        const n = ctx.cp.review_unavailable + 1;
-        const delay = Math.min(MAX_BACKOFF_MS, 60_000 * 2 ** (n - 1));
-        return decide(ctx, decision('evaluator_unavailable', 'Independent evaluation unavailable: accept on tests alone?', [
-          alt('wait and retry the evaluation', 'acceptance needs an independent verdict (GL04)', 'delay'), alt('accept on tests alone', 'fast', 'never: unavailable is not approval')],
-        'wait and retry the evaluation', { evidence: [why], expected_effect: `re-evaluate in ${delay} ms without a developer run`, rationale: `Evaluator unavailable: ${why}` }),
-        { patch: { review_unavailable: n, verify_only: true, wait: { reason: 'evaluator_unavailable', until_ms: now() + delay, resume_to: 'ready' } }, to: 'waiting', reason: 'evaluator unavailable' });
-      };
-      if (!r.choice) return unavailable(`no reviewer runtime independent of ${devEntries.join(', ')}`);
-      const stop = await budgetGate(ctx, r.choice, 'reviewer', 'ready');
-      if (stop) return stop;
-      const adapter = adapterFor(r.choice);
-      if (!adapter) return unavailable(`no adapter for ${r.choice}`);
-      // Per reviewer: a later, more independent reviewer on the same SHA gets its own run, usage and verdict ids.
-      const run_id = `${ctx.id}.review-${short(head)}-e${ctx.epoch}-${r.choice.replace(/[^\w.-]/g, '_')}`;
-      const dir = path.join(reviewRoot, `${ctx.id}-${short(head)}-e${ctx.epoch}`);
-      const wt = ctx.cp.worktree;
-      let out;
-      try {
-        try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* not there */ }
-        await g(wt.path, ['worktree', 'add', '--detach', dir, head]);   // independent, read-only checkout of the exact SHA
-        const diff = await g(wt.path, ['diff', ctx.v.base_sha, head]);
-        const entry = registry.get(r.choice);
-        await store.append(ctx.id, { event_id: `start-${run_id}`, kind: 'task.started', payload: { run_id, role: 'reviewer', entry: r.choice, runtime: entry?.runtime ?? null, model: entry?.model ?? null } });
-        out = await verifier.review({ adapter, entry, task: ctx.v, sha: head, cwd: fs.realpathSync(dir), diff, evidence: ctx.evidence.length ? ctx.evidence : (await load(ctx.id)).evidence,
-          run_id: run_id.replace(/[^\w.-]/g, '_'), timeout_ms: runTimeoutMs, onStart: (run) => active.set(ctx.id, { adapter, run }) });
-      } finally {
-        active.delete(ctx.id);
-        try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* best effort; the dir is outside the task worktree */ }
+    const devEntries = devEntriesOf(ctx);
+    const roles = ['reviewer'];
+    const risky = ['high', 'critical'].includes(ctx.v.risk_class);
+    // D-013: elevated risk adds the policy's security reviewer (when named) and an owner approval bound to this SHA.
+    const securityEntry = risky && typeof p.policy?.security_reviewer === 'string' ? p.policy.security_reviewer : null;
+    if (securityEntry) roles.push('security');
+    const verdicts = [];
+    for (const role of roles) {
+      const cur = role === 'reviewer' ? ctx : await load(ctx.id);   // fresh ledger/verdicts after the first review
+      const got = await obtainVerdict(cur, p, { role, devEntries, fixedEntry: role === 'security' ? securityEntry : null });
+      if (got.stop) return got.stop;
+      if (got.verdict.verdict === 'reject') {
+        const f = got.verdict.findings[0] || { id: 'unspecified' };
+        return onFailure(await load(ctx.id), { signature: failureSignature({ test: `${role === 'reviewer' ? 'review' : `review:${role}`}:${f.id}`, errorClass: 'review_reject' }),
+          passing: passingRequired(ctx, results), p, reviewOnly: true,
+          feedback: { kind: 'review_reject', sha: head, reviewer: got.verdict.actor.id, role, findings: got.verdict.findings,
+            note: `Deterministic checks pass, but the independent ${role} rejected the change. Address every blocker finding.` } });
       }
-      if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled during review', { terminal: true, transitioned: false });
-      const entry = registry.get(r.choice);
-      const u = out.usage || {};
-      await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, run_id,
-        input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, usd: u.usd ?? null }, { event_id: `usage-${run_id}` });
-      if (out.verdict === 'unavailable') return unavailable(`reviewer ${r.choice}: ${out.error?.class || 'no verdict'}`);
-      verdict = { sha: head, actor: { role: 'reviewer', id: r.choice }, verdict: out.verdict, findings: out.findings };
-      await store.recordVerdict(ctx.id, verdict, { event_id: `verdict-${run_id}` });
+      verdicts.push(got.verdict);
     }
-    if (verdict.verdict === 'reject') {
-      const f = verdict.findings[0] || { id: 'unspecified' };
-      return onFailure(ctx, { signature: failureSignature({ test: `review:${f.id}`, errorClass: 'review_reject' }), passing: passingRequired(ctx, results), p, reviewOnly: true,
-        feedback: { kind: 'review_reject', sha: head, reviewer: verdict.actor.id, findings: verdict.findings,
-          note: 'Deterministic checks pass, but the independent reviewer rejected the change. Address every blocker finding.' } });
+    const fresh = await load(ctx.id);
+    // Revalidate right before acceptance: never accept on a SHA the worktree no longer has (GL12), nor while the
+    // worktree is off the task branch at the same SHA (Y3b).
+    const st2 = await worktrees.status(ctx.cp.worktree.path);
+    const bw = await branchGate(fresh, 'ready', st2);
+    if (bw) return bw;
+    if (st2.head !== head) return revalidate(fresh, st2.head, 'Source changed between review and acceptance.');
+    if (risky && !grantsOf(fresh).has(`accept:${head}`)) {
+      return askOwner(fresh, { kind: 'risk_acceptance', question: `risk_class ${ctx.v.risk_class}: accept ${short(head)}? Checks pass and ${verdicts.map((x) => `${x.actor.role} ${x.actor.id}`).join(', ')} approved.`,
+        reason: `risk_class ${ctx.v.risk_class} requires an owner approval bound to the exact head SHA (D-013)`, classes: ['risk_acceptance'], keys: [`accept:${head}`] },
+      { resume_to: 'ready', kind: 'risk_gate', policy_ref: policyRef(p), patch: { verify_only: true }, extra: { sha: head } });
     }
-    // Revalidate right before acceptance: never accept on a SHA the worktree no longer has (GL12).
-    const now2 = await headOf(ctx.cp.worktree.path);
-    if (now2 !== head) return revalidate(ctx, now2, 'Source changed between review and acceptance.');
     // Delivery requested -> integrating even without a wired hook: the task then waits there, it never skips delivery.
     const deliver = !!ctx.cp.interpretation?.delivery;
-    return decide(ctx, decision('accept', 'All criteria met: what next?', [
+    return decide(fresh, decision('accept', 'All criteria met: what next?', [
       alt(deliver ? 'hand off to integration' : 'accept', 'every required check passes on the exact SHA and an independent reviewer approved', 'none known'),
       alt('more review', 'extra assurance', 'no open finding justifies it')], deliver ? 'hand off to integration' : 'accept', {
-      evidence: [`sha ${head}`, ...results.map((r) => `${r.check_id}: ${r.status}`), `reviewer ${verdict.actor.id}: approve`],
-      expected_effect: deliver ? 'integration controller takes over (authorized gates only)' : 'task accepted', rationale: 'Definition of done verified on the exact SHA with independent approval.',
+      evidence: [`sha ${head}`, ...results.map((r) => `${r.check_id}: ${r.status}`), ...verdicts.map((x) => `${x.actor.role} ${x.actor.id}: approve`)],
+      expected_effect: deliver ? 'integration controller takes over (authorized gates only)' : 'task accepted (verified in the task worktree, not integrated)',
+      rationale: 'Definition of done verified on the exact SHA with independent approval.',
       reversible: false, rollback: 'reopen as a new task; accepted is terminal' }),
     { patch: { feedback: null, verify_only: false }, to: deliver ? 'integrating' : 'accepted', reason: `verified ${short(head)}` });
   }
@@ -663,7 +1033,8 @@ export function createGoalLoop({
       if (!resumed && !changed) return result(ctx, null, `waiting (${w.reason}): ${w.next_action || 'until inputs change'}`, { idle: true });
       return decide(ctx, decision('resume', 'Inputs changed after a no-progress wait: resume?', [alt('resume with a replan', 'new inputs can change the outcome', 'more spend'), alt('stay waiting', 'no spend', 'ignores the new input')],
         'resume with a replan', { evidence: [resumed ? 'owner resumed' : 'project policy changed'], expected_effect: 'replan from scratch', rationale: 'No-progress counters reset on new inputs.' }),
-      { patch: { changes: 0, tried: [], stale: 0, streak: { signature: null, count: 0 }, exclude: [] }, to: w.resume_to || 'replan', reason: 'inputs changed' });
+      { patch: { changes: 0, tried: [], stale: 0, streak: { signature: null, count: 0 }, exclude: [], ...(w.reason === 'lease_held' && resumed ? { lease_ack: true } : {}) },
+        to: w.resume_to || 'replan', reason: 'inputs changed' });
     }
     if (w.reason === 'infra' && admission?.isPaused?.()) {
       return result(ctx, null, 'waiting (infra): admission paused', { until_ms: now() + 60_000 });
@@ -676,7 +1047,20 @@ export function createGoalLoop({
     if (!req) return result(ctx, null, 'awaiting approval', { idle: true });
     const d = ctx.events.filter((e) => ['approval.granted', 'approval.denied'].includes(e.kind) && e.payload.k === req.k).at(-1);
     if (!d) return result(ctx, null, `awaiting approval: ${req.question}`, { idle: true });   // silence is never approval (GL09)
-    if (d.kind === 'approval.denied') return move(ctx, 'failed_unrecoverable', `owner denied: ${d.payload.reason || 'no reason given'}`);
+    if (d.kind === 'approval.denied') {
+      // #13: refusing an action the developer asked for (never executed anyway) continues the task without it;
+      // only gates the goal cannot proceed without end it.
+      if (req.kind === 'agent_action') {
+        return decide(ctx, decision('action_refused', 'The owner refused the requested action: continue?', [
+          alt('continue without the action', 'the goal may not need it; the developer is told it was refused', 'another run'),
+          alt('end the task', 'final', 'the refusal was about one action, not the goal')], 'continue without the action', {
+          evidence: [`denied by ${d.payload.actor?.id ?? 'owner'}: ${d.payload.reason ?? 'no reason given'}`], expected_effect: 'repair run without the refused action',
+          rationale: 'Owner denial of an agent-requested action is feedback, not a task failure.' }),
+        { patch: { feedback: { kind: 'action_refused', actions: req.actions || [], note: `The owner denied/refused: ${(req.actions || []).map((a) => (a.argv || [a.class]).join(' ')).join('; ')}. Reason: ${d.payload.reason ?? 'none given'}. Reach the goal without it.` } },
+          to: 'repair', reason: 'action refused by the owner' });
+      }
+      return move(ctx, 'failed_unrecoverable', `owner denied: ${d.payload.reason || 'no reason given'}`);
+    }
     return move(ctx, req.resume_to, `owner approved (${d.payload.approval_ref || 'no ref'})`);
   }
 
@@ -689,6 +1073,11 @@ export function createGoalLoop({
     const confirmed = effs.some((e) => e.phase === 'confirmed');
     const effect_id = `integrate-${short(head)}-${effs.length}`;
     if (!confirmed) {
+      // Y3b: hand off only the task branch at the verified SHA.
+      const st = await worktrees.status(ctx.cp.worktree.path);
+      const bw = await branchGate(ctx, 'integrating', st);
+      if (bw) return bw;
+      if (st.head !== head) return revalidate(ctx, st.head, 'Source changed before the integration handoff.');
       if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
       await store.recordEffect(ctx.id, { effect_id, idempotency_key, kind: 'integration', phase: 'attempted' });
     }
@@ -764,14 +1153,25 @@ export function createGoalLoop({
     release_verifying: sReleaseVerifying, unknown_external_effect: sUnknownEffect };
 
   async function step(id) {
+    const h = await holdController();
+    if (!h.ok) return { task_id: id, from: null, state: null, transitioned: false, idle: true, controller: h.code, note: h.diagnosis };
+    const stop = heartbeat();
+    try { return await stepUnderLease(id); } finally { stop(); }
+  }
+
+  async function stepUnderLease(id) {
     const ctx = await load(id);
+    if (ctx.broken) return result(ctx, null, `store error: ${ctx.v.store_error}; repair the log before stepping`, { idle: true });
+    if (ctx.v.recovery_pending) { await store.recover(); return stepUnderLease(id); }   // we hold the controller lease
     if (TERMINAL.includes(ctx.v.status)) return result(ctx, null, 'terminal', { terminal: true });
     if (isInformational(ctx.v)) return result(ctx, null, 'informational task: not dispatched by the goal loop', { idle: true });
+    if (await recordInterruptedUsage(ctx)) return stepUnderLease(id);
     try {
       if (ctx.pending) return await applyNext(ctx, ctx.pending);   // crash between decision and transition
       return await HANDLERS[ctx.v.status](ctx);
     } catch (e) {
       if (e.code === 'E_CANCELLED') return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
+      if (e.code === 'E_CONTROLLER_LOST') return result(ctx, null, `controller lease lost: no writes (${e.message})`, { idle: true });
       if (INFRA_CODES[e.code] || INFRA_CODES[e.cause?.code]) return onInfra(ctx, INFRA_CODES[e.code] ? e : e.cause);
       throw e;
     }
@@ -793,29 +1193,53 @@ export function createGoalLoop({
     step, run,
     // Startup: replay the store (unconfirmed effects -> unknown_external_effect); steps resume from there (T18).
     async recover() {
+      const h = await holdController({ takeover: true, reconcile: false });
+      if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
       const r = await store.recover();
+      ctl.recovered = true;
       const open = (await store.list()).filter((t) => !TERMINAL.includes(t.status)).map((t) => t.task_id);
       return { ...r, resumable: open };
     },
-    // T14: persist the cancel first, then stop whatever runs; the store rejects every later write.
+    // T14 / D-018: cancellation always goes through. The canceller takes the controller lease (liveness-gated
+    // takeover of a dead controller), reconciles a recovery_pending task first (never appending over a torn tail),
+    // persists the cancel, then stops whatever runs; the store rejects every later write.
     async cancel(id, { actor, reason } = {}) {
       if (!actor) throw coded('E_INVALID', 'cancel needs an actor');
+      await ownerControl();
+      if ((await store.get(id))?.recovery_pending) await rawStore.recover();
       const t = await store.transition(id, 'cancelled', { reason: reason ?? 'cancelled', actor });
       const a = active.get(id);
-      if (a) { try { await a.adapter.cancel(a.run); } catch { /* the run ends with the process group */ } }
+      if (a?.kill) a.kill();
+      else if (a) { try { await a.adapter.cancel(a.run); } catch { /* the run ends with the process group */ } }
       return t;
     },
     // Explicit owner decisions on a pending request. Only recorded approvals ever authorize anything.
     async approve(id, { actor, approval_ref = null, grants = {} } = {}) {
       if (!actor) throw coded('E_INVALID', 'approval needs an actor');
+      await ownerControl();
       const ctx = await load(id);
       if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
       const req = ctx.cp.approval;
+      // #7b: a grant can only cover what was asked: the request's classes and action keys, budget only for a budget stop.
       const classes = grants.classes ?? req.classes;
-      return store.append(id, { event_id: `appr-${id}-${req.k}`, kind: 'approval.granted', payload: { k: req.k, actor, approval_ref, grants: { ...grants, classes } } });
+      if (!Array.isArray(classes) || classes.some((c) => !req.classes.includes(c))) throw coded('E_INVALID', `grant exceeds the request (asked: ${req.classes.join(', ') || 'none'})`);
+      if (grants.budget_policy !== undefined && req.kind !== 'budget') throw coded('E_INVALID', 'budget authorization only answers a budget stop');
+      // X8: a reached cap is not waivable by a bare confirmation: the owner raises it (or cancels).
+      if (req.kind === 'budget' && req.cap_reached && !grants.budget_policy) throw coded('E_INVALID', 'cap reached: raise it (grants.budget_policy) or cancel the task');
+      if (req.kind === 'budget' && req.cap_reached) {
+        // Y7: the raise must clear what is spent plus the next run's estimate, or the same stop would come straight back.
+        const raised = { ...effectiveBudgetPolicy(ctx), ...grants.budget_policy };
+        const b2 = budget.check({ ...ctx.v, budget_policy: raised }, ledger(ctx), estimate(ctx, req.entry, req.role), { quota: null });
+        const capLeft = !b2.allow && b2.state_hint === 'awaiting_approval' && !b2.reason.split('; ').every((x) => /estimate unknown|spend unknown/.test(x));
+        if (capLeft) throw coded('E_INVALID', `the raise does not clear spend + estimate: ${b2.reason}`);
+      }
+      for (const k of Object.keys(grants)) if (!['classes', 'budget_policy'].includes(k)) throw coded('E_INVALID', `unknown grant field ${k}`);
+      const payload = { k: req.k, actor, approval_ref, grants: { classes, keys: req.keys || [], request_kind: req.kind, ...(grants.budget_policy ? { budget_policy: grants.budget_policy } : {}) } };
+      return store.append(id, { event_id: `appr-${id}-${req.k}`, kind: 'approval.granted', payload });
     },
     async deny(id, { actor, reason = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'denial needs an actor');
+      await ownerControl();
       const ctx = await load(id);
       if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
       return store.append(id, { event_id: `deny-${id}-${ctx.cp.approval.k}`, kind: 'approval.denied', payload: { k: ctx.cp.approval.k, actor, reason } });
@@ -823,6 +1247,7 @@ export function createGoalLoop({
     // Owner nudge for a no-progress wait (an input change the loop cannot observe itself).
     async resume(id, { actor, reason = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'resume needs an actor');
+      await ownerControl();
       const ctx = await load(id);
       if (ctx.v.status !== 'waiting') throw coded('E_ILLEGAL_TRANSITION', 'task is not waiting');
       return store.append(id, { event_id: `resume-${id}-${ctx.k}`, kind: 'approval.granted', payload: { k: ctx.k - 1, kind: 'resume', actor, reason } });

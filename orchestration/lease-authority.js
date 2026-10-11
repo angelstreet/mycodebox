@@ -39,6 +39,8 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 export const canonicalOrder = (resources) => [...new Set(resources)].sort(cmp);
 
 export const MAX_TTL_MS = 24 * 3600 * 1000;
+const LEASE_ID_RE = /^[A-Za-z0-9._:-]{16,128}$/;
+const USED_IDS_KEPT = 256;
 const unavailable = (msg) => Object.assign(new Error(msg), { code: 'E_UNAVAILABLE' });
 const fail = (code, error) => (error ? { ok: false, code, error } : { ok: false, code });
 const str = (v) => typeof v === 'string' && v.length > 0 && v.length <= 200;
@@ -102,12 +104,20 @@ export function createLeaseAuthority({
       await audit({ op: 'denied', resource: String(resource).slice(0, 200), code: 'E_INVALID', reason: bad, ...who(opts) });
       return fail('E_INVALID', bad);
     }
-    const lease_id = String(randomId());
+    // D-015: a caller may supply the lease_id (write-ahead: persisted before acquire, so a crash between acquire and
+    // persisting the result can be recovered with adopt()). Validated, never reused on this resource.
+    if (opts.lease_id !== undefined && !(typeof opts.lease_id === 'string' && LEASE_ID_RE.test(opts.lease_id))) {
+      await audit({ op: 'denied', resource, code: 'E_INVALID', reason: 'invalid lease_id', ...who(opts) });
+      return fail('E_INVALID', 'lease_id must match [A-Za-z0-9._:-]{16,128}');
+    }
+    const lease_id = opts.lease_id ?? String(randomId());
     let out;
     try {
       out = await call(() => backend.update(resource, (rec) => {
         const t = clockNow();
         if (rec?.holder && t < rec.holder.expires_at) return { result: { held: rec.holder } };
+        const used = Array.isArray(rec?.used_ids) ? rec.used_ids : [];
+        if (opts.lease_id !== undefined && (used.includes(lease_id) || rec?.holder?.lease_id === lease_id)) return { result: { reused: true } };
         const token = (rec ? rec.generation : 0) + 1;
         const lease = {
           resource, lease_id, owner: opts.owner, task_id: opts.task_id ?? null, token, acquired_at: t,
@@ -119,13 +129,19 @@ export function createLeaseAuthority({
           ...(prev ? [{ at: t, op: 'fenced', resource, code: 'E_EXPIRED', token: prev.token, lease_id: prev.lease_id, by_token: token, ...who(prev) }] : []),
           { at: t, op: 'acquire', resource, lease_id, token, expires_at: lease.expires_at, ...who(opts) },
         ];
-        return { next: { resource, generation: token, holder: lease, updated_at: t }, audit: lines, result: { lease } };
+        // The ids granted on this resource (bounded): a supplied lease_id is never granted twice.
+        const used_ids = [...used, lease_id].slice(-USED_IDS_KEPT);
+        return { next: { resource, generation: token, holder: lease, updated_at: t, used_ids }, audit: lines, result: { lease } };
       }, { now }));
     } catch (e) {
       await audit({ op: 'denied', resource, code: 'E_UNAVAILABLE', lease_id, error: errMsg(e), ...who(opts) });
       safeAlert('lease_unavailable', { op: 'acquire', resource, owner: opts.owner, lease_id, error: errMsg(e) });
       // The backend may still commit after a timeout: hand back the identity so the caller can adopt() and release it.
       return { ...fail('E_UNAVAILABLE', errMsg(e)), lease_id, attempted: { resource, lease_id, owner: opts.owner, task_id: opts.task_id ?? null } };
+    }
+    if (out.reused) {
+      await audit({ op: 'denied', resource, code: 'E_INVALID', reason: 'lease_id reused', ...who(opts) });
+      return fail('E_INVALID', 'lease_id was already granted on this resource');
     }
     if (out.held) {
       await audit({ op: 'denied', resource, code: 'E_HELD', held_by: out.held.owner, held_token: out.held.token, ...who(opts) });
@@ -147,8 +163,10 @@ export function createLeaseAuthority({
       return fail('E_UNAVAILABLE', errMsg(e));
     }
     const h = out?.holder;
-    if (!h || h.lease_id !== a.lease_id || h.owner !== a.owner || h.task_id !== (a.task_id ?? null) || out.generation !== h.token) return fail('E_FENCED');
-    if (!(clockNowSafe() < h.expires_at)) return fail('E_EXPIRED');
+    // Failed adoptions are the spoofing signal: audited with the claimed identity (never the claimed lease_id).
+    const deny = async (code) => { await audit({ op: 'denied', action: 'adopt', resource: a.resource, code, ...who(a) }); return fail(code); };
+    if (!h || h.lease_id !== a.lease_id || h.owner !== a.owner || h.task_id !== (a.task_id ?? null) || out.generation !== h.token) return deny('E_FENCED');
+    if (!(clockNowSafe() < h.expires_at)) return deny('E_EXPIRED');
     await audit({ op: 'adopt', resource: a.resource, lease_id: h.lease_id, token: h.token, ...who(h) });
     return { ok: true, lease: { ...h } };
   }
