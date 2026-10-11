@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Opt-in REAL-provider smoke of the V2 goal loop (spec Phase 3/7: live smoke only with opt-in and recorded cost).
-//   V2_LIVE_SMOKE=claude|codex|minimax node scripts/v2-live-smoke.js
+//   V2_LIVE_SMOKE=claude|codex|minimax|opencode node scripts/v2-live-smoke.js
 // Spends real quota: one trivial task (write hello.txt with a fixed line) in a disposable git repo under the system
 // temp dir, never inside this checkout. Developer = the chosen real CLI through its V2 adapter (normal permission
 // mode, cheapest settings: claude-haiku-4-5 with --max-budget-usd 0.10; codex default model, low effort; minimax
@@ -28,6 +28,7 @@ const WHICH = process.env.V2_LIVE_SMOKE;
 const PROFILES = {
   claude: { module: '../orchestration/adapters/claude.js', model: 'claude-haiku-4-5', provider: 'anthropic', efforts: ['low', 'medium'], effort: null, extraArgs: ['--max-budget-usd', '0.10'], passModel: true },
   codex: { module: '../orchestration/adapters/codex.js', model: 'default', provider: 'openai', efforts: ['low'], effort: 'low', extraArgs: [], passModel: false },
+  opencode: { module: '../orchestration/adapters/opencode.js', model: 'opencode/big-pickle', provider: 'multi', efforts: [], effort: null, extraArgs: [], passModel: true }, // free model; cost is reported by the CLI
   minimax: { module: '../orchestration/adapters/minimax.js', model: 'default', provider: 'minimax', efforts: [], effort: null, extraArgs: [], passModel: false },
 };
 const LINE = 'hello from mycodebox v2';
@@ -36,7 +37,7 @@ const CHECK = ['node', '-e', `const s=require('fs').readFileSync('hello.txt','ut
 async function main() {
   const p = PROFILES[WHICH];
   if (!p) {
-    process.stderr.write('usage: V2_LIVE_SMOKE=claude|codex|minimax node scripts/v2-live-smoke.js  (spends real provider quota)\n');
+    process.stderr.write('usage: V2_LIVE_SMOKE=claude|codex|minimax|opencode node scripts/v2-live-smoke.js  (spends real provider quota)\n');
     process.exitCode = 2;
     return;
   }
@@ -61,7 +62,7 @@ async function main() {
     for (const d of [wtRoot, reviewRoot, path.join(tmp, 'vtmp')]) fs.mkdirSync(d, { recursive: true });
 
     const { createAdapter } = await import(p.module);
-    const real = createAdapter({ allowedRoots: [wtRoot], extraArgs: p.extraArgs, killGraceMs: 2000 });
+    const real = createAdapter({ allowedRoots: [wtRoot], extraArgs: p.extraArgs, killGraceMs: 2000, probeTimeoutMs: 15000 });
     out.cli_version = (await real.probeCapabilities()).version;
     // Cheapest settings: drop the registry's placeholder model name where the CLI default is wanted; fixed effort.
     const dev = { ...real, start: (o) => real.start({ ...o, model: p.passModel ? o.model : undefined, effort: p.effort ?? undefined }) };
