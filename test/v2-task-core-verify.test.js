@@ -58,7 +58,7 @@ test('verify: a verifier later recorded as a developer of the SHA loses independ
   await assert.rejects(s.transition(id, 'accepted'), (e) => /self-approval/.test(e.message));
 });
 
-test('verify: acceptance needs an approve from an actor whose identity differs beyond case and whitespace', { todo: 'defect: actorKey does not normalize; "DEV-AGENT-1" and " dev-agent-1 " pass as independent of dev-agent-1' }, async () => {
+test('verify: acceptance needs an approve from an actor whose identity differs beyond case and whitespace', async () => {
   for (const actor of [{ role: 'verifier', id: 'DEV-AGENT-1' }, ' dev-agent-1 ', 'Dev-Agent-1']) {
     const s = open();
     const id = await readyToAccept(s);
@@ -68,7 +68,7 @@ test('verify: acceptance needs an approve from an actor whose identity differs b
   assert.equal(actorKey(' A '), actorKey('a'));
 });
 
-test('verify: actors without an id cannot show independence', { todo: 'defect: role-only actors ({ role: "developer" } vs { role: "verifier" }) count as independent' }, async () => {
+test('verify: actors without an id cannot show independence', async () => {
   const s = open();
   const { task_id: id } = await s.createTask(spec());
   await toState(s, id);
@@ -90,7 +90,7 @@ test('verify: same event_id with a different payload is dropped (first write win
   assert.deepEqual(logOf(dir, id).map((e) => e.seq), [1, 2]);
 });
 
-test('verify: an explicit seq cannot push the log past a representable integer', { todo: 'defect: auto-assigned seq skips the strict-increase check; after an explicit MAX_SAFE_INTEGER seq two events share seq 2^53 and recovery marks the task corrupt (bricked)' }, async () => {
+test('verify: an explicit seq cannot push the log past a representable integer', async () => {
   const dir = tmp();
   const s = open(dir);
   const { task_id: id } = await s.createTask(spec());
@@ -112,7 +112,7 @@ test('verify: recover() called while a write is queued does not duplicate seq', 
   assert.deepEqual((await open(dir).recover()).corrupt, []);
 });
 
-test('verify: a task with a corrupt log is marked as such in reads, not shown as a healthy partial state', { todo: 'defect: get()/list() return the partial replay (status created) with no corrupt marker; only recover() reports it' }, async () => {
+test('verify: a task with a corrupt log is marked as such in reads, not shown as a healthy partial state', async () => {
   const dir = tmp();
   const s = open(dir);
   const { task_id: id } = await s.createTask(spec());
@@ -145,7 +145,7 @@ test('verify: __proto__ keys in persisted JSON never pollute prototypes; prototy
   assert.equal(Object.prototype.phase, undefined);
 });
 
-test('verify: effect ids that are Object.prototype names are usable', { todo: 'defect: st.effects is a plain object; effect_id "constructor"/"toString" is refused as E_EFFECT_EXISTS' }, async () => {
+test('verify: effect ids that are Object.prototype names are usable', async () => {
   const s = open();
   const { task_id: id } = await s.createTask(spec());
   await toState(s, id, 'executing');
@@ -153,7 +153,7 @@ test('verify: effect ids that are Object.prototype names are usable', { todo: 'd
   assert.equal(Object.prototype.phase, undefined);
 });
 
-test('verify: policy snapshot immutability compares content, not a caller-supplied hash', { todo: 'defect: a raw policy.snapshot with the same run_id and copied hash replaces the policy content' }, async () => {
+test('verify: policy snapshot immutability compares content, not a caller-supplied hash', async () => {
   const s = open();
   const { task_id: id } = await s.createTask(spec());
   await s.snapshotPolicy(id, { v: 1 }, { run_id: 'r1' });
@@ -174,7 +174,7 @@ test('verify: task.created cannot be appended to an existing or unknown task; ta
 
 // ---- policy ----
 
-test('verify: a task allowlist cannot widen the project allowlist', { todo: 'defect: checkAction uses task.runtime_allowlist ?? policy.allowlists.runtimes, so a task spec admits runtimes/models the project policy excludes' }, () => {
+test('verify: a task allowlist cannot widen the project allowlist', () => {
   const p = loadPolicy(REPO);
   const t = normalizeTask(spec({ runtime_allowlist: ['evil-cli'], model_allowlist: ['m-evil'] }), clock());
   assert.equal(checkAction(p, t, { class: 'run_agent', runtime: 'evil-cli' }).allow, false);
@@ -183,7 +183,7 @@ test('verify: a task allowlist cannot widen the project allowlist', { todo: 'def
   assert.equal(checkAction(p2, t, { class: 'run_agent', model: 'm-evil' }).allow, false);
 });
 
-test('verify: sample .ai/project.json does not allowlist arbitrary execution via rg --pre or edits under .git', { todo: 'defect: ["rg"] prefix admits `rg --pre <cmd>`; .git is neither excluded nor protected, so hooks are editable and then run by the allowlisted `git commit`' }, () => {
+test('verify: sample .ai/project.json does not allowlist arbitrary execution via rg --pre or edits under .git', () => {
   const p = loadPolicy(REPO);
   const t = normalizeTask(spec(), clock());
   assert.equal(checkAction(p, t, { class: 'run_command', argv: ['rg', '--pre', 'sh', 'x'] }).allow, false);
@@ -203,7 +203,7 @@ test('verify: path checks hold (traversal, absolute, ./ prefix, case, near-miss 
   assert.equal(checkAction(p, t, { class: 'read', paths: ['.env.production'] }).allow, false);   // credentials topic
 });
 
-test('verify: T02 cheap splits and protected-branch names are caught', { todo: 'defect: "de ploy" (one split), "merge into master" and "npm publish" are not restricted; protected_branches from the policy are not used by the matcher' }, () => {
+test('verify: T02 cheap splits and protected-branch names are caught', () => {
   for (const [text, cls] of [['please de ploy it', 'deploy'], ['dep loy the build', 'deploy'], ['merge into master', 'merge_protected'], ['npm publish', 'push_shared']]) {
     assert.ok(restrictedTopics(text).some((x) => x.class === cls), text);
   }
@@ -219,12 +219,12 @@ test('verify: T02 matcher catches the documented obfuscations (regression pin fo
 
 // ---- subtasks ----
 
-test('verify: a child cannot widen runtime_capabilities beyond its parent', { todo: 'defect: narrowsParent ignores runtime_capabilities' }, () => {
+test('verify: a child cannot widen runtime_capabilities beyond its parent', () => {
   const parent = normalizeTask(spec({ runtime_capabilities: ['edit'] }), clock());
   assert.equal(narrowsParent(parent, { ...parent, runtime_capabilities: ['edit', 'shell', 'network'] }).ok, false);
 });
 
-test('verify: conflicting top-level and budget_policy caps are rejected or reconciled', { todo: 'defect: max_usd: 50 next to budget_policy.max_usd: 2 passes validateTask and narrowsParent reads only the smaller one' }, () => {
+test('verify: conflicting top-level and budget_policy caps are rejected or reconciled', () => {
   const parent = normalizeTask(spec({ budget_policy: { mode: 'cap', max_usd: 5 } }), clock());
   const child = { ...parent, budget_policy: { mode: 'cap', max_usd: 2 }, max_usd: 50 };
   assert.equal(narrowsParent(parent, child).ok, false);

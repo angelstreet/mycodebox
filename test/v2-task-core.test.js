@@ -163,7 +163,7 @@ test('events: makeEvent fills the envelope, validateEvent rejects bad kinds and 
 test('decision records follow §9', () => {
   const { now, randomId } = clock();
   const d = normalizeDecision({ kind: 'route', question: 'which runtime?', alternatives: [{ option: 'fake', pros: ['cheap'], cons: [] }],
-    chosen: 'fake', expected_effect: 'test passes', rationale: 'deterministic', actor: { role: 'manager', runtime: null, model: null },
+    chosen: 'fake', evidence: ['registry:fake'], expected_effect: 'test passes', rationale: 'deterministic', actor: { role: 'manager', runtime: null, model: null },
     reversible: true, rollback: 'route to another runtime' }, { task_id: 't1', now, randomId });
   assert.deepEqual(validateDecision(d), { ok: true, errors: [] });
   assert.equal(d.confidence, null);
@@ -173,4 +173,26 @@ test('decision records follow §9', () => {
   bad({ reversible: 'yes' }, 'reversible');
   bad({ rollback: null }, 'rollback');
   bad({ actor: { runtime: 'x' } }, 'actor.role');
+  bad({ evidence: [] }, 'evidence');
+});
+
+test('D-007: waiting -> integrating is allowed', () => {
+  assert.ok(canTransition('waiting', 'integrating'));
+  assertTransition('waiting', 'integrating');
+});
+
+test('top-level Section 3 caps fold into budget_policy; conflicting caps are rejected', () => {
+  const { now, randomId } = clock();
+  const t = normalizeTask(spec({ max_usd: 3 }), { now, randomId });
+  assert.deepEqual(t.budget_policy, { mode: 'cap', max_usd: 3 });
+  assert.equal('max_usd' in t, false);
+  assert.equal(validateTask(t).ok, true);
+  assert.throws(() => normalizeTask(spec({ max_usd: 50, budget_policy: { mode: 'cap', max_usd: 2 } }), { now, randomId }), { code: 'E_INVALID_TASK' });
+  assert.ok(validateTask({ ...t, max_usd: 50, budget_policy: { mode: 'cap', max_usd: 2 } }).errors.some((e) => e.path === 'max_usd'));
+});
+
+test('narrowsParent: review_policy is inherited', () => {
+  const parent = normalizeTask(spec({ review_policy: { verifiers: 2 } }), clock());
+  assert.equal(narrowsParent(parent, { ...parent, review_policy: { verifiers: 1 } }).ok, false);
+  assert.equal(narrowsParent(parent, { ...parent, runtime_capabilities: ['edit'] }).ok, true);
 });
