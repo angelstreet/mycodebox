@@ -91,8 +91,8 @@ More, such as deploy coordination, usage reports and the session reporter plugin
 
 You need Linux, Node.js 20+, Git, tmux and Tailscale. Follow the [installation and configuration guide](docs/INSTALL.md)
 as the Unix user who owns your tmux sessions. It covers the first local run, private Tailscale access, service setup,
-verification and optional features. The listener and agent launch commands must be configured explicitly; the source
-defaults are not suitable for a private installation.
+verification and optional features. The listener defaults to loopback and Claude/Codex use normal CLI permission
+checks. Configure private Tailscale access and review existing command overrides when upgrading.
 
 Once connected, follow [Usage](docs/USAGE.md) to select a session, read its answer and send a reply.
 

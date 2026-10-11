@@ -5,7 +5,8 @@
 #   scripts/manager-fresh.sh            (cron: nightly)
 set -euo pipefail
 S=manager; BASE="${GHOSTY_URL:-http://127.0.0.1:7777}"; H=(-H 'content-type: application/json' -H "origin: $BASE")
-CMD="$HOME/.local/bin/claude --dangerously-skip-permissions --model opus --remote-control manager -n manager"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CMD=$(node "$SCRIPT_DIR/manager-command.js")
 state() { curl -s -m 5 "$BASE/api/sessions" | python3 -c "import json,sys;v=json.load(sys.stdin)['status'].get('$S',{});s=v.get('stall') if isinstance(v.get('stall'),dict) else {};print(v.get('state'), 'draft' if s.get('draft') else 'ok')"; }
 tmux has-session -t "=$S" 2>/dev/null || { echo "no $S session"; exit 1; }
 for i in $(seq 1 120); do case "$(state)" in "done ok"|"idle ok") break;; esac; sleep 30; done

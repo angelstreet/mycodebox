@@ -120,7 +120,7 @@ builtin_table() {
 | owner_decision | never guess; escalate with a one-line proposed reply |
 | waiting_deploy | never answer; check leases and escalate the deploy request / blocking lease |
 | owner_action | escalate, batched, with `stall.action` |
-| permission | escalate (sessions run --dangerously-skip-permissions; never press 1) |
+| permission | escalate (never approve a permission prompt on the owner's behalf) |
 | error | GET /api/quota: plan's 5h window full -> wait for resetsAt; API error -> re-check 10 min, escalate after 30 min |
 | done, no question | nothing (no_status on P0/P1 may justify the ask_status question) |
 | background_wait | nothing; re-check 15 min; > 60 min treat as done |

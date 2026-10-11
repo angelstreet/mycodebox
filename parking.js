@@ -110,6 +110,9 @@ const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 // Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude) + the model and remote-control the old process had + --resume.
 export function resumeCommand({ base, args, name, sessionId }) {
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) {
+    throw Object.assign(new Error('invalid resume session id'), { status: 400 });
+  }
   const parts = [base];
   const model = /--model[= ]([A-Za-z0-9._\[\]-]+)/.exec(args || '');
   if (model && !/--model\b/.test(base)) parts.push('--model', model[1]);
@@ -256,15 +259,17 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
     },
     // Recreates the tmux session in the recorded folder and starts the agent. Claude: resumeCommand(base, rec.args, rec.claudeName, rec.sessionId).
     // MiniMax: `${base} -c` (reuses AGENT_CMDS.minimax + ' -c' to continue the latest session in the recorded cwd).
-    async resume(name, { base, start }) {
+    async resume(name, { base, start, validate = async () => {} }) {
       await load();
       const rec = data.parked[name];
       if (!rec) throw err(404, 'not parked');
+      if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,40}$/.test(name)) throw err(400, 'invalid session name');
+      await validate(rec);
       if (await tmux.exists(name)) throw err(409, 'a tmux session with that name already exists');
-      await tmux.create(name, rec.cwd);
       let cmd;
       if (rec.agent === 'minimax') cmd = `${base} -c`;
       else cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId });
+      await tmux.create(name, rec.cwd);
       await start(name, rec, cmd);
       delete data.parked[name];
       await save();

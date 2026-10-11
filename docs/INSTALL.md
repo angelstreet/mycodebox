@@ -52,7 +52,9 @@ curl --fail --silent --show-error http://127.0.0.1:7777/api/health
 
 Expect JSON with `ok: true`. An empty session list is fine if no tmux sessions exist. Stop the foreground process with Ctrl-C before starting the service.
 
-**Why explicit settings:** the current source defaults to `HOST=0.0.0.0`; Claude and Codex UI launch commands include permission/sandbox bypass flags. The commands above override those defaults for new UI sessions. They do not change existing agents or every other launch path, such as parking/resume. Review those paths before using them. The server does not automatically load `.env`.
+**Defaults and upgrades:** the source now defaults to `HOST=127.0.0.1`, `AGENT_CMD_CLAUDE=claude` and `AGENT_CMD_CODEX=codex`. Create and resume no longer pre-accept folder trust; respond to the CLI trust and permission prompts yourself. Claude resume and `scripts/manager-fresh.sh` reuse `AGENT_CMD_CLAUDE`; saved process flags do not restore permission bypasses. Ensure `claude` is on the service/script PATH or configure its absolute path. The server does not automatically load `.env`.
+
+Existing environment overrides are preserved, so review service settings before upgrading: remove obsolete bypass flags and select loopback + private Serve (or an explicitly private Tailscale address). Non-loopback settings and recognized unsafe command overrides emit warnings naming the setting without logging its value. These diagnostics cannot certify arbitrary shell wrappers or external CLI configuration. Already-running agents are unchanged. No migration edits live settings or restarts the service automatically.
 
 ### Persistent service configuration
 
@@ -165,6 +167,6 @@ curl --fail --silent --show-error "$GHOSTY_URL/api/deploys"
 scripts/safe-restart.sh
 ```
 
-Adapt `GHOSTY_URL` for direct mode. **The script currently treats an unreachable API as no running deploy**, so a failed check is not permission to restart; inspect the deployment state and resolve reachability first. Never restart during a deploy. Deploy children can survive a restart, but that is recovery behavior, not a reason to bypass the guard. Repeat health and phone checks after an update. If it fails, restore the reviewed previous code/dependencies and compatible backup through the same guarded procedure; do not blindly reset a shared checkout.
+Adapt `GHOSTY_URL` for direct mode. The guard requires a successful registry snapshot no older than 60 seconds; unreachable, stale, future or ambiguous responses block restart. Running deployments always block; queued or awaiting-approval work blocks while the runner is enabled. It checks again immediately before the service restart and never falls back to killing a PID. `--wait` optionally accepts an integer from 0 to 1440 minutes (10 when omitted); waiting does not bypass the guard. These checks do not provide atomic fencing against a deployment starting after the final check. Never restart during a deploy. Deploy children can survive a restart, but that is recovery behavior, not a reason to bypass the guard. Repeat health and phone checks after an update. If it fails, restore the reviewed previous code/dependencies and compatible backup through the same guarded procedure; do not blindly reset a shared checkout.
 
 Uninstall only when requested: confirm no deploy is running, disable/stop the dashboard service and any optional units you installed, remove its copied unit and reload systemd. Remove only this app's Serve endpoint (inspect shared Serve configuration first). Remove its checkout if desired. State, uploads, private env files, certificates and agent settings need separate retention/removal decisions; never delete the owner's agent home directories or tmux sessions as cleanup.

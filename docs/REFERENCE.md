@@ -86,7 +86,7 @@ Use source defaults and the current installation's saved settings to determine w
 Follow [INSTALL](INSTALL.md) for Tailscale setup, access policy, HTTPS and service operation.
 The recommended mode is private Tailscale Serve forwarding to `HOST=127.0.0.1` on port 7777.
 Direct access binds to a literal Tailscale IP and optionally serves native TLS on 7443.
-The source default `0.0.0.0` listens on every IPv4 interface; no host firewall protection is implied by this repository.
+The source default `127.0.0.1` listens on loopback; explicit listener overrides must preserve private access.
 PWA, push and microphone features need trusted HTTPS; clicking through a self-signed warning is not a reliable substitute.
 
 ## Run the service
@@ -111,7 +111,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | var | default | meaning |
 |---|---|---|
 | `PORT`        | `7777` | listen port |
-| `HOST`        | `0.0.0.0` | listen address; explicitly use `127.0.0.1` behind private Serve, or a literal Tailscale IP; not an interface name |
+| `HOST`        | `127.0.0.1` | listen address; explicitly use `127.0.0.1` behind private Serve, or a literal Tailscale IP; not an interface name |
 | `TICK_MS`     | `1000`  | pane capture cadence |
 | `PANE_LINES`  | `1000`  | scrollback lines captured for a session with an open card (a WebSocket viewer); the unit sets 2000 |
 | `PANE_LINES_BG` | `300` | scrollback lines for every other session (state, reply and manager only need the tail) |
@@ -129,7 +129,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
 | `GHOSTY_FORBIDDEN_EXTRA` | unset | extra regex of never-auto-answer words (customer names etc. — keep them out of the public repo) |
 | `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
-| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | source UI launch defaults; override with normal installed commands in INSTALL. Other launch paths must be reviewed separately |
+| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude` / `codex` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | create/resume launch commands; Claude also configures manager-fresh. Known bypass overrides produce redacted warnings; custom wrappers and CLI configuration still need owner review |
 | `TLS_KEY` / `TLS_CERT` | `certs/key.pem` / `certs/cert.pem` under checkout | native TLS starts only when both exist; same HOST as HTTP |
 | `TLS_PORT` | `7443` (`443` if PORT=443) | native HTTPS port; HTTP remains enabled |
 | `TMUX_BIN` | `tmux` | tmux executable |

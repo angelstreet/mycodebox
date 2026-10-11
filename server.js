@@ -61,7 +61,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
-import { readFile, writeFile, stat, readdir, realpath, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, mkdir } from 'node:fs/promises';
 import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
@@ -73,7 +73,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
 import { createPush, createAlerts, tierConfig } from './push.js';
-import { trustFolder } from './trust.js';
+import { launchConfig, launchWarnings } from './launch-config.js';
+import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
@@ -101,7 +102,9 @@ import { readOpenAsks } from './owner-asks.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
-const HOST = process.env.HOST || '0.0.0.0';
+const launch = launchConfig();
+const HOST = launch.host;
+for (const warning of launchWarnings()) console.warn(`[launch] ${warning}`);
 const TICK_MS = Number(process.env.TICK_MS || 1000);
 const PANE_LINES = Number(process.env.PANE_LINES || 1000);            // depth for a session someone has open
 const PANE_LINES_BG = Number(process.env.PANE_LINES_BG || 300);         // depth for the rest (state only needs the tail)
@@ -1023,12 +1026,7 @@ async function readJsonBody(req) {
 
 const HOME = homedir();
 const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
-const AGENT_CMDS = {
-  claude:  process.env.AGENT_CMD_CLAUDE  ?? 'claude --dangerously-skip-permissions',
-  codex:   process.env.AGENT_CMD_CODEX   ?? 'codex --dangerously-bypass-approvals-and-sandbox',
-  minimax: process.env.AGENT_CMD_MINIMAX ?? 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode',
-  bash:    process.env.AGENT_CMD_BASH    ?? '',
-};
+const AGENT_CMDS = launch.commands;
 const RESIZE_ALLOW = process.env.GHOSTY_RESIZE_ALLOW ? new RegExp(process.env.GHOSTY_RESIZE_ALLOW) : null;
 
 // Resize a DETACHED session's window to cols x rows so the agent re-renders
@@ -1056,13 +1054,7 @@ async function createSession({ name, agent, cwd, priority }) {
   if (priority !== undefined && !isPriority(priority)) throw httpError(400, 'priority must be P0, P1 or P2');
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
   if (!Object.hasOwn(AGENT_CMDS, agent)) throw httpError(400, 'agent must be claude|codex|minimax|bash');
-  let dir;
-  try {
-    dir = await realpath(cwd || HOME);
-    if (!(await stat(dir)).isDirectory()) throw new Error();
-  } catch { throw httpError(400, 'cwd must be an existing directory'); }
-  const home = await realpath(HOME);
-  if (dir !== home && !dir.startsWith(home + sep)) throw httpError(400, 'cwd must be under $HOME');
+  const dir = await sessionDirectory(cwd || HOME, HOME);
   // tmux silently rewrites '.' and ':' in session names to '_'.
   const real = name.replace(/[.:]/g, '_');
   if (await sessionExists(real)) throw httpError(409, 'session already exists');
@@ -1071,7 +1063,6 @@ async function createSession({ name, agent, cwd, priority }) {
   } catch (err) {
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
-  try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
   const cmd = AGENT_CMDS[agent];
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
@@ -1152,11 +1143,10 @@ async function resumeSession(name) {
   // Claude entries have no `agent` field (legacy); MiniMax entries store agent: 'minimax'. Dispatch on that.
   const isMinimax = rec.agent === 'minimax';
   const base = isMinimax ? AGENT_CMDS.minimax : AGENT_CMDS.claude;
-  const trustAgent = isMinimax ? 'minimax' : 'claude';
   const out = await parking.resume(name, {
     base,
+    validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
     start: async (n, r, cmd) => {
-      try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, '-l', '--', cmd]);
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, 'Enter']);
       sessionMeta.reset(n);

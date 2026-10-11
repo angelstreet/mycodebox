@@ -239,3 +239,16 @@ test('minimax park refuses with reasons and does not touch tmux', async () => {
   assert.deepEqual(h.log, []);
   assert.ok(!existsSync(h.file));
 });
+test('resume validates saved records before creating tmux or executing a command', async () => {
+  const h = harness();
+  await h.p.park('S', h.facts, { claudeAlive: h.isAlive });
+  h.log.length = 0;
+  await assert.rejects(h.p.resume('S', { base: 'claude', validate: async () => { throw new Error('invalid saved cwd'); }, start: async () => { throw new Error('must not start'); } }), /invalid saved cwd/);
+  assert.deepEqual(h.log, []);
+  const saved = JSON.parse(readFileSync(h.file, 'utf8'));
+  saved.parked.S.sessionId = 'fake;echo nope';
+  writeFileSync(h.file, JSON.stringify(saved));
+  const fresh = createParking({ file: h.file, tmux: { exists: async () => false, create: async () => h.log.push('create') } });
+  await assert.rejects(fresh.resume('S', { base: 'claude', start: async () => h.log.push('start') }), /invalid resume session id/);
+  assert.deepEqual(h.log, []);
+});
