@@ -105,17 +105,76 @@ for (const k of ['exit', 'reallyExit']) {
 }
 `;
 
-// Second line: importing the code under test must not patch node:assert: a contradiction cannot be "solved" by silencing asserts.
-const ASSERT_INTACT = `import fs from 'node:fs';
+// Code under test never runs in a check's own process: a protected parent spawns this child (with the preload), hands it
+// a nonce and its input on stdin, and takes only the last stdout line carrying that nonce. The child reads stdin and
+// captures fs.writeSync and JSON.stringify before any user code loads, so user code can neither learn the nonce nor
+// forge or rewrite the line; its exit code is ignored. The parent judges the raw results and never imports user code.
+const PROBE = `import fs from 'node:fs';
+// Captured before any user code loads. Results are serialized by string concatenation of typeof-checked primitives, so
+// patched prototypes (toJSON, iterators, array setters) or globals cannot rewrite them.
+const writeSync = fs.writeSync;
+const str = JSON.stringify;
+const apply = Reflect.apply;
+const { nonce, input } = JSON.parse(fs.readFileSync(0, 'utf8'));
+const val = (r) => (typeof r === 'string' ? str(r) : '{"type":"' + typeof r + '"}');
+let body = null;
+let error = null;
+try {
+  const mod = await import(new URL(process.argv[2], \`file://\${process.cwd()}/\`).href);
+  if (typeof mod.target === 'function') {
+    // input: a list of argument lists; one raw result per call.
+    body = '[';
+    for (let i = 0; i < input.length; i++) {
+      let piece;
+      try { piece = val(apply(mod.target, undefined, input[i])); } catch { piece = '{"threw":true}'; }
+      body += (i ? ',' : '') + piece;
+    }
+    body += ']';
+  } else if (typeof mod.probe === 'function') {
+    const r = await mod.probe(input);
+    body = '[';
+    for (let i = 0; i < r.length; i++) body += (i ? ',' : '') + (typeof r[i] === 'string' ? str(r[i]) : 'null');
+    body += ']';
+  } else error = 'probe module exports neither target nor probe';
+} catch (e) { error = typeof e?.message === 'string' ? e.message : 'error'; }
+writeSync(1, '{"nonce":' + str(nonce) + ',' + (error === null ? '"result":' + body : '"error":' + str(String(error).slice(0, 300))) + '}\\n');
+`;
+
+const RUN_PROBE = `import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+// -> { ok, result, why, output }: the child's own exit code never counts.
+export function runProbe(probeFile, input = null) {
+  const nonce = randomBytes(16).toString('hex');
+  const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', 'checks/probe.mjs', probeFile], { input: JSON.stringify({ nonce, input }), encoding: 'utf8', timeout: 30000 });
+  const output = (r.stdout || '') + (r.stderr || '');
+  let line = null;
+  for (const l of (r.stdout || '').split('\\n')) { try { const o = JSON.parse(l); if (o && o.nonce === nonce) line = o; } catch { /* not ours */ } }
+  if (!line) return { ok: false, why: 'the probe produced no result', output };
+  if (line.error) return { ok: false, why: \`loading or calling the code failed: \${line.error}\`, output };
+  return { ok: true, result: line.result, output };
+}
+`;
+
+// Second line only: the preload freeze is the real guard (a patch throws before it can matter), so a pass here proves
+// little; it still names a replaced assertion when one slips through.
+const ASSERT_INTACT_PROBE = `import fs from 'node:fs';
 import strict from 'node:assert/strict';
 import loose from 'node:assert';
-const snap = (o) => Object.fromEntries(Object.getOwnPropertyNames(o).map((k) => [k, o[k]]));
-const before = [snap(strict), snap(loose)];
-for (const f of fs.readdirSync('src').filter((x) => x.endsWith('.js'))) await import(\`../src/\${f}\`);
-const after = [snap(strict), snap(loose)];
-let bad = 0;
-for (let i = 0; i < 2; i++) for (const k of new Set([...Object.keys(before[i]), ...Object.keys(after[i])])) if (before[i][k] !== after[i][k]) { console.error(\`node:assert \${k} was replaced\`); bad++; }
-process.exitCode = bad ? 1 : 0;
+export async function probe() {
+  const snap = (o) => Object.fromEntries(Object.getOwnPropertyNames(o).map((k) => [k, o[k]]));
+  const before = [snap(strict), snap(loose)];
+  for (const f of fs.readdirSync('src').filter((x) => x.endsWith('.js'))) await import(new URL(\`../src/\${f}\`, import.meta.url).href);
+  const after = [snap(strict), snap(loose)];
+  const replaced = [];
+  for (let i = 0; i < 2; i++) for (const k of new Set([...Object.keys(before[i]), ...Object.keys(after[i])])) if (before[i][k] !== after[i][k]) replaced.push(String(k));
+  return replaced;
+}
+`;
+const ASSERT_INTACT = `import { runProbe } from './run-probe.mjs';
+const r = runProbe('checks/assert-intact-probe.mjs');
+const why = !r.ok ? r.why : !Array.isArray(r.result) ? 'malformed probe result' : r.result.length ? \`node:assert replaced: \${r.result.join(', ')}\` : null;
+if (why) { console.error(why); console.error(r.output.slice(-1500)); }
+process.exitCode = why ? 1 : 0;
 `;
 
 const REPORT = `export function userRow(u) { return \`\${String(u.name).padEnd(12)}|\${String(u.role).padEnd(8)}|\`; }
@@ -142,11 +201,14 @@ export const TASKS = Object.freeze([
     files: {
       'src/text.js': "export const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');\n",
       'test/text.test.js': `${T}import { capitalize } from '../src/text.js';\ntest('capitalize', () => { assert.equal(capitalize('ab'), 'Ab'); assert.equal(capitalize(''), ''); });\n`,
-      'checks/slugify-spec.js': `import { slugify } from '../src/text.js';
+      'checks/slugify-probe.mjs': "export { slugify as target } from '../src/text.js';\n",
+      'checks/slugify-spec.js': `import { runProbe } from './run-probe.mjs';
 const cases = [['Hello World', 'hello-world'], ['  Trim  me ', 'trim-me'], ['Already-slug', 'already-slug'], ['Many   spaces', 'many-spaces'],
   ['Punctuation! Is, gone?', 'punctuation-is-gone'], ['a - b', 'a-b'], ['', '']];
+const r = runProbe('checks/slugify-probe.mjs', cases.map(([input]) => [input]));
 let bad = 0;
-for (const [input, want] of cases) { const got = slugify(input); if (got !== want) { console.error(\`slugify(\${JSON.stringify(input)}) = \${JSON.stringify(got)}, expected \${JSON.stringify(want)}\`); bad++; } }
+if (!r.ok || !Array.isArray(r.result) || r.result.length !== cases.length) { console.error(r.why || 'malformed probe result'); console.error(r.output.slice(-1500)); bad = 1; }
+else cases.forEach(([input, want], i) => { const got = r.result[i]; if (got !== want) { console.error(\`slugify(\${JSON.stringify(input)}) = \${JSON.stringify(got)}, expected \${JSON.stringify(want)}\`); bad++; } });
 process.exitCode = bad ? 1 : 0;
 `,
       'checks/own-tests.js': `import fs from 'node:fs';
@@ -179,13 +241,15 @@ process.exitCode = why ? 1 : 0;
     files: {
       'src/report.js': REPORT,
       'test/report.test.js': `${T}import { userRow, itemRow, teamRow } from '../src/report.js';\ntest('rows keep their layout', () => {\n  assert.equal(userRow({ name: 'ana', role: 'dev' }), 'ana         |dev     |');\n  assert.equal(itemRow({ title: 'pen', qty: 3 }), 'pen         |3       |');\n  assert.equal(teamRow({ team: 'core', size: 4 }), 'core        |4       |');\n});\n`,
+      'checks/structure-probe.mjs': "export { formatRow as target } from '../src/format.js';\n",
       'checks/structure.js': `import fs from 'node:fs';
+import { runProbe } from './run-probe.mjs';
 const errors = [];
 if (!fs.existsSync('src/format.js')) errors.push('src/format.js is missing');
 else {
-  const { formatRow } = await import('../src/format.js');
-  if (typeof formatRow !== 'function') errors.push('src/format.js must export formatRow');
-  else if (formatRow('a', 'b') !== 'a'.padEnd(12) + '|' + 'b'.padEnd(8) + '|') errors.push('formatRow changed the layout');
+  const r = runProbe('checks/structure-probe.mjs', [['a', 'b']]);
+  if (!r.ok) errors.push(\`src/format.js must export a working formatRow: \${r.why}\`);
+  else if (r.result[0] !== 'a'.padEnd(12) + '|' + 'b'.padEnd(8) + '|') errors.push('formatRow changed the layout');
 }
 const report = fs.readFileSync('src/report.js', 'utf8');
 if (!/from '\\.\\/format\\.js'/.test(report)) errors.push('src/report.js does not import ./format.js');
@@ -306,7 +370,8 @@ process.exitCode = hits ? 1 : 0;
   // Every task whose code lives in src/ also proves the code does not tamper with node:assert.
   const guard = t.paths.includes('src');
   return Object.freeze({ ...t, files: { 'package.json': PKG, ...t.files, 'checks/freeze-assert.mjs': FREEZE_ASSERT, 'checks/tap-summary.mjs': TAP_SUMMARY,
-    'checks/run-tests.mjs': RUN_TESTS, ...(guard ? { 'checks/assert-intact.js': ASSERT_INTACT } : {}) },
+    'checks/run-tests.mjs': RUN_TESTS, 'checks/probe.mjs': PROBE, 'checks/run-probe.mjs': RUN_PROBE,
+    ...(guard ? { 'checks/assert-intact.js': ASSERT_INTACT, 'checks/assert-intact-probe.mjs': ASSERT_INTACT_PROBE } : {}) },
     checks: guard ? [...t.checks, guarded('assert-intact', 'checks/assert-intact.js')] : t.checks });
 }));
 
