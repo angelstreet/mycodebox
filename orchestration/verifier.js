@@ -33,7 +33,8 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
   const baseEnv = Object.fromEntries(ENV_KEYS.filter((k) => typeof env[k] === 'string').map((k) => [k, env[k]]));
 
   // -> { exit: integer|null, duration_ms, output, error }
-  function runCheck(check, { cwd }) {
+  // register(kill|null): lets the caller stop a running check on cancel (T14); cleared when the check ends.
+  function runCheck(check, { cwd, register = () => {} }) {
     return new Promise((resolve) => {
       const stateDir = fs.mkdtempSync(path.join(tmpRoot, 'v2-check-state-'));
       const t0 = now();
@@ -44,6 +45,7 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
         if (done) return;
         done = true;
         clearTimeout(timer);
+        register(null);
         try { fs.rmSync(stateDir, { recursive: true, force: true }); } catch { /* temp dir, best effort */ }
         resolve({ exit: timedOut ? null : exit, duration_ms: Math.max(0, now() - t0), output: out, error: timedOut ? 'timeout' : error });
       };
@@ -56,6 +58,7 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
         timedOut = true;
         try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
       }, check.timeout_ms || timeoutMs);
+      register(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } } });
       const take = (d) => { if (out.length < MAX_OUT) out += String(d).slice(0, MAX_OUT - out.length); };
       child.stdout?.on('data', take);
       child.stderr?.on('data', take);
@@ -81,7 +84,7 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
 
   // existing: evidence already recorded for this SHA in the current head epoch (reused, never rerun: crash-safe).
   // -> results[{ check_id, required, status: pass|fail|flaky|unavailable, exits[], failures[], output_tail, evidence_ids[] }]
-  async function runChecks({ store, task, cwd, sha, epoch, existing = [], actor, isCancelled = async () => false }) {
+  async function runChecks({ store, task, cwd, sha, epoch, existing = [], actor, isCancelled = async () => false, register = () => {} }) {
     const results = [];
     for (const check of task.acceptance_checks) {
       const prior = existing.filter((e) => e.check_id === check.id);
@@ -92,7 +95,8 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
         // Cancellation is checked before every spawn: no check runs after cancel (T14).
         if (await isCancelled()) return { cancelled: true, results };
         const i = runs.length;
-        const r = await runCheck(check, { cwd });
+        const r = await runCheck(check, { cwd, register });
+        if (await isCancelled()) return { cancelled: true, results };   // a killed check is not evidence
         const artifactOk = !check.artifact || fs.existsSync(path.join(cwd, check.artifact));
         const log = saveArtifact(task.task_id, sha, check.id, i, r.output + (r.error ? `\n[runner] ${r.error}\n` : ''));
         await store.recordEvidence(task.task_id, { check_id: check.id, sha, command: check.command, exit: r.exit,
@@ -119,11 +123,12 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
   }
 
   // -> { verdict: 'approve'|'reject'|'unavailable', findings[], usage, error, run }
-  async function review({ adapter, entry, task, sha, cwd, diff, evidence, run_id, timeout_ms, onStart = () => {} }) {
+  // role: 'reviewer' | 'security'; strict: demand the bare JSON verdict (after unparseable answers).
+  async function review({ adapter, entry, task, sha, cwd, diff, evidence, run_id, timeout_ms, role = 'reviewer', strict = false, onStart = () => {} }) {
     let run;
     try {
-      run = adapter.start({ task_id: task.task_id, run_id, cwd, model: entry.model, effort: null, timeout_ms, role: 'reviewer',
-        prompt: reviewerPrompt({ task, sha, diff, evidence }) });
+      run = adapter.start({ task_id: task.task_id, run_id, cwd, model: entry.model, effort: null, timeout_ms, role: 'reviewer', review_role: role,
+        prompt: reviewerPrompt({ task, sha, diff, evidence, role, strict }) });
     } catch (e) {
       return { verdict: 'unavailable', findings: [], usage: null, error: { class: e.code === 'E_UNSUPPORTED' ? 'unavailable' : 'crash', message: e.message }, run: null };
     }
