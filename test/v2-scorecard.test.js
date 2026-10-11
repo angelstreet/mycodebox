@@ -2,7 +2,7 @@
 // stores only. Unknown stays unknown; tool scores of different suite versions are never compared; proposals never apply.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,11 @@ import { buildScorecard, toolScore, compareToolScores, validateManifest, taskSpe
 import { generateProposals, recordProposals, shadowDiff } from '../orchestration/proposals.js';
 import { readStoreLogs, scoreStore } from '../scripts/v2-score.js';
 import { spec, SHA_A, SHA_B } from './fixtures/v2-task.js';
+
+// Every temp store is removed after the file (they used to pile up in /tmp).
+const made = [];
+const tmp = (prefix) => { const d = mkdtempSync(join(tmpdir(), prefix)); made.push(d); return d; };
+test.after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 
 const SCRIPT = new URL('../scripts/v2-score.js', import.meta.url).pathname;
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -63,7 +68,7 @@ test('task_class is an optional contract label (string or null)', () => {
 });
 
 test('per run and per model/runtime/role/task class: verified, first pass, cost, latency, rework, owner, defects', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-sc-'));
+  const dir = tmp('v2-sc-');
   const s = storeIn(dir);
   await accepted(s, 'a1', 'claude:claude-sonnet-5-5', { usd: [0.1, 0.05], over: { task_class: 'docs' } });
   await accepted(s, 'a2', 'claude:claude-sonnet-5-5', { usd: [0.25], rework: 2, reject: 1, approvals: 1, resumes: 1 });
@@ -101,7 +106,7 @@ test('per run and per model/runtime/role/task class: verified, first pass, cost,
 });
 
 test('unknown stays unknown: unpriced cost, no latency, regressions not derivable, owner messages', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-sc-'));
+  const dir = tmp('v2-sc-');
   const s = storeIn(dir);
   await accepted(s, 'a1', 'claude:claude-sonnet-5-5', { usd: [null] });
   await failed(s, 'f1', 'codex:gpt-6-astra');
@@ -122,7 +127,7 @@ test('unknown stays unknown: unpriced cost, no latency, regressions not derivabl
 });
 
 test('regression after acceptance: a later failing run of the same check on the accepted SHA; a later pass is "none"', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-sc-'));
+  const dir = tmp('v2-sc-');
   const s = storeIn(dir);
   await accepted(s, 'a1', 'claude:claude-sonnet-5-5');
   await accepted(s, 'a2', 'claude:claude-sonnet-5-5', { sha: SHA_B });
@@ -167,7 +172,7 @@ test('manifest: schema enforced, task_class taken from it, missing runs listed',
   assert.equal(validateManifest(manifest({ budget_policy: { max_usd: 0 } })).ok, false);
   assert.equal(validateManifest(manifest({ runs: [{ task_id: 'a', expected_outcome: 'done', task_class: '<b>x</b>' }] })).ok, false, 'task_class follows the contract pattern');
   assert.throws(() => buildScorecard([], { manifest: { schema: 'nope' } }), (e) => e.code === 'E_MANIFEST');
-  const dir = await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')));
+  const dir = await bench(tmp('v2-bench-'));
   const m = manifest(); m.runs.push({ task_id: 'b-gone', expected_outcome: 'done' });
   const r = sc(dir, { manifest: m });
   assert.equal(r.runs.find((x) => x.task_id === 'b-done').task_class, 'docs');
@@ -178,7 +183,7 @@ test('manifest: schema enforced, task_class taken from it, missing runs listed',
 test('tool score: expected outcome is correct only when the task ended there, never done; formula and weights', async () => {
   const W = Object.values(TOOL_SCORE_WEIGHTS).reduce((a, b) => a + b, 0);
   assert.ok(Math.abs(W - 1) < 1e-9);
-  const good = toolScore(sc(await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')))), manifest());
+  const good = toolScore(sc(await bench(tmp('v2-bench-'))), manifest());
   assert.deepEqual(good.per_run.map((p) => p.correct), [true, true, true]);
   assert.equal(good.components.outcome_correctness.value, 1);
   assert.equal(good.components.verified_rate.value, 1);
@@ -189,12 +194,12 @@ test('tool score: expected outcome is correct only when the task ended there, ne
   const expect = 100 * (0.3 + 0.25 + 0.15 + 0.1 * 0.6 + 0.1 * good.components.latency.value + 0.1);
   assert.ok(Math.abs(good.score - expect) < 0.1);
   // An approval-gated bench task that the tool finished as done is wrong, whatever else it did.
-  const bad = toolScore(sc(await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')), { apprAccepted: true })), manifest());
+  const bad = toolScore(sc(await bench(tmp('v2-bench-'), { apprAccepted: true })), manifest());
   assert.equal(bad.per_run.find((p) => p.task_id === 'b-appr').correct, false);
   assert.ok(bad.components.outcome_correctness.value < 0.7);
   assert.ok(bad.score < good.score);
   // Unknown budget -> unknown component -> unknown score, with the reason.
-  const nob = toolScore(sc(await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')))), manifest({ budget_policy: { max_usd: 1 } }));
+  const nob = toolScore(sc(await bench(tmp('v2-bench-'))), manifest({ budget_policy: { max_usd: 1 } }));
   assert.equal(nob.score, null);
   assert.match(nob.score_reason, /latency/);
   // partial score: known components only, not rescaled, with their weight sum as coverage
@@ -208,9 +213,9 @@ test('tool score: expected outcome is correct only when the task ended there, ne
 });
 
 test('compareToolScores: per-component diff on the same suite version; refuses different versions, suites or formulas', async () => {
-  const dir = await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')));
+  const dir = await bench(tmp('v2-bench-'));
   const a = toolScore(sc(dir), manifest());
-  const b = toolScore(sc(await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')), { apprAccepted: true })), manifest());
+  const b = toolScore(sc(await bench(tmp('v2-bench-'), { apprAccepted: true })), manifest());
   const d = compareToolScores(a, b);
   assert.ok(d.score.delta < 0);
   assert.ok(d.components.outcome_correctness.delta < 0);
@@ -245,7 +250,7 @@ const snapDir = (dir) => {
 };
 
 async function weakModelStore() {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-prop-'));
+  const dir = tmp('v2-prop-');
   const s = storeIn(dir);
   for (let i = 0; i < 6; i++) await accepted(s, `ok${i}`, 'claude:claude-sonnet-5-5', { usd: [0.1], reject: 1, rework: 2 });
   for (let i = 0; i < 5; i++) await failed(s, `bad${i}`, 'codex:gpt-6-astra');
@@ -331,7 +336,7 @@ test('GET /api/v2/scorecard is read-only: same bytes before and after, non-GET i
 
 test('tasks view renders the scorecard read-only: unknown is "unknown", markup escaped, no action buttons', async () => {
   const { scorecardHtml } = await import('../public/tasks-view.js');
-  const dir = mkdtempSync(join(tmpdir(), 'v2-sc-'));
+  const dir = tmp('v2-sc-');
   const s = storeIn(dir);
   await accepted(s, 'a1', 'claude:<b>x</b>', { usd: [null] });   // a model id is free text after the runtime
   const h = scorecardHtml(sc(dir));
@@ -344,8 +349,8 @@ test('tasks view renders the scorecard read-only: unknown is "unknown", markup e
 });
 
 test('CLI: --scorecard, --tool-score --suite, --compare refuses across versions, --write-proposals needs an explicit store', async () => {
-  const dir = await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')));
-  const env = { PATH: process.env.PATH, GHOSTY_STATE_DIR: mkdtempSync(join(tmpdir(), 'v2-state-')) };
+  const dir = await bench(tmp('v2-bench-'));
+  const env = { PATH: process.env.PATH, GHOSTY_STATE_DIR: tmp('v2-state-') };
   const run = (args) => execFileSync(process.execPath, [SCRIPT, ...args], { env, encoding: 'utf8' });
   const j = JSON.parse(run(['--store', dir, '--scorecard', '--json']));
   assert.equal(j.schema, 'mycodebox.v2.scorecard/1');
@@ -368,7 +373,7 @@ test('CLI: --scorecard, --tool-score --suite, --compare refuses across versions,
 });
 
 test('cancelled tasks count as settled and not verified in the scorecard rates', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-sc-'));
+  const dir = tmp('v2-sc-');
   const s = storeIn(dir);
   await accepted(s, 'a1', 'claude:claude-sonnet-5-5');
   await s.createTask(tspec('c1')); await s.setHead('c1', SHA_B, { actor: { role: 'developer', id: 'claude:claude-sonnet-5-5' } });
