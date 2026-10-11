@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createTaskStore } from '../orchestration/store.js';
@@ -57,6 +57,9 @@ test('task_class is an optional contract label (string or null)', () => {
   const n = (o) => normalizeTask(spec({ task_id: 'x', status: 'created', approval_policy: { requires: [] }, ...o }));
   assert.equal(validateTask(n({ task_class: 'docs' })).ok, true);
   assert.equal(validateTask(n({ task_class: 3 })).ok, false);
+  assert.equal(validateTask(n({ task_class: null })).ok, true);
+  for (const bad of ['Docs', '-x', '', 'a b', 'x'.repeat(65), '<b>x</b>', '../etc']) assert.equal(validateTask(n({ task_class: bad })).ok, false, bad);
+  assert.equal(validateTask(n({ task_class: 'ui.v2_fix-1' })).ok, true);
 });
 
 test('per run and per model/runtime/role/task class: verified, first pass, cost, latency, rework, owner, defects', async () => {
@@ -162,6 +165,7 @@ test('manifest: schema enforced, task_class taken from it, missing runs listed',
   assert.equal(validateManifest(manifest({ schema: 'x' })).ok, false);
   assert.equal(validateManifest(manifest({ runs: [{ task_id: 'a', expected_outcome: 'merged' }] })).ok, false);
   assert.equal(validateManifest(manifest({ budget_policy: { max_usd: 0 } })).ok, false);
+  assert.equal(validateManifest(manifest({ runs: [{ task_id: 'a', expected_outcome: 'done', task_class: '<b>x</b>' }] })).ok, false, 'task_class follows the contract pattern');
   assert.throws(() => buildScorecard([], { manifest: { schema: 'nope' } }), (e) => e.code === 'E_MANIFEST');
   const dir = await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')));
   const m = manifest(); m.runs.push({ task_id: 'b-gone', expected_outcome: 'done' });
@@ -193,6 +197,13 @@ test('tool score: expected outcome is correct only when the task ended there, ne
   const nob = toolScore(sc(await bench(mkdtempSync(join(tmpdir(), 'v2-bench-')))), manifest({ budget_policy: { max_usd: 1 } }));
   assert.equal(nob.score, null);
   assert.match(nob.score_reason, /latency/);
+  // partial score: known components only, not rescaled, with their weight sum as coverage
+  assert.equal(nob.coverage, 0.9);
+  assert.deepEqual(nob.unknown_components, ['latency']);
+  assert.ok(Math.abs(nob.partial_score - (good.score - 100 * 0.1 * good.components.latency.value)) < 0.2);
+  assert.equal(good.coverage, 1);
+  assert.equal(good.partial_score, good.score);
+  assert.deepEqual([good.components.cost.cost_known_runs, good.components.cost.cost_coverage], [3, 1]);
   assert.match(nob.components.latency.reason, /max_task_ms/);
 });
 
@@ -206,6 +217,18 @@ test('compareToolScores: per-component diff on the same suite version; refuses d
   assert.equal(d.components.verified_rate.delta, 0);
   const v2 = toolScore(sc(dir), manifest({ suite_version: '2' }));
   assert.throws(() => compareToolScores(a, v2), (e) => e.code === 'E_SUITE_MISMATCH' && /suite versions/.test(e.message));
+  // different budgets, partial vs full, and different coverages are not comparable either
+  const budget = toolScore(sc(dir), manifest({ budget_policy: { max_usd: 2, max_task_ms: 3_600_000 } }));
+  assert.throws(() => compareToolScores(a, budget), (e) => e.code === 'E_SUITE_MISMATCH' && /max_usd/.test(e.message));
+  const partial = toolScore(sc(dir), manifest({ budget_policy: { max_usd: 1 } }));
+  assert.throws(() => compareToolScores(a, partial), (e) => e.code === 'E_SUITE_MISMATCH');
+  const p1 = { ...partial, budget_policy: a.budget_policy };
+  assert.throws(() => compareToolScores(a, p1), (e) => e.code === 'E_SUITE_MISMATCH' && /partial/.test(e.message));
+  const p2 = { ...p1, coverage: 0.8, unknown_components: ['cost', 'latency'] };
+  assert.throws(() => compareToolScores(p1, p2), (e) => e.code === 'E_SUITE_MISMATCH' && /coverage/.test(e.message));
+  const same = compareToolScores(p1, p1);
+  assert.equal(same.partial_score.delta, 0);
+  assert.equal(same.score.delta, null);
   assert.throws(() => compareToolScores(a, { ...a, suite_id: 'other' }), (e) => e.code === 'E_SUITE_MISMATCH');
   assert.throws(() => compareToolScores(a, { ...a, formula: 'v0' }), (e) => e.code === 'E_SUITE_MISMATCH');
   assert.throws(() => compareToolScores(a, {}), (e) => e.code === 'E_SUITE_MISMATCH');
@@ -310,7 +333,7 @@ test('tasks view renders the scorecard read-only: unknown is "unknown", markup e
   const { scorecardHtml } = await import('../public/tasks-view.js');
   const dir = mkdtempSync(join(tmpdir(), 'v2-sc-'));
   const s = storeIn(dir);
-  await accepted(s, 'a1', 'claude:claude-sonnet-5-5', { usd: [null], over: { task_class: '<b>x</b>' } });
+  await accepted(s, 'a1', 'claude:<b>x</b>', { usd: [null] });   // a model id is free text after the runtime
   const h = scorecardHtml(sc(dir));
   assert.match(h, /Scorecard \(read-only\)/);
   assert.match(h, /unknown/);
@@ -342,4 +365,46 @@ test('CLI: --scorecard, --tool-score --suite, --compare refuses across versions,
   assert.equal(existsSync(join(dir, 'journal.jsonl')), false);
   // the legacy report and its router_history are unchanged in shape
   assert.ok('router_history' in JSON.parse(run(['--store', dir, '--json'])));
+});
+
+test('cancelled tasks count as settled and not verified in the scorecard rates', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'v2-sc-'));
+  const s = storeIn(dir);
+  await accepted(s, 'a1', 'claude:claude-sonnet-5-5');
+  await s.createTask(tspec('c1')); await s.setHead('c1', SHA_B, { actor: { role: 'developer', id: 'claude:claude-sonnet-5-5' } });
+  await s.transition('c1', 'cancelled');
+  const r = sc(dir);
+  const m = r.by_model.find((g) => g.key === 'claude:claude-sonnet-5-5');
+  assert.deepEqual([m.settled, m.verified, m.failed, m.cancelled], [2, 1, 0, 1]);
+  assert.equal(m.verified_rate, 0.5);
+  assert.equal(m.first_pass_rate, 0.5);
+  assert.ok(r.caveats.some((c) => /cancelled task/.test(c)));
+  assert.ok(r.caveats.some((c) => /latency .* includes time waiting/.test(c)));
+});
+
+test('proposals: the journal decides (a crash after createTask still journals), live controller refuses, approved proposal says nothing applies', async () => {
+  const { dir, s } = await weakModelStore();
+  const { logs } = readStoreLogs(dir);
+  const { proposals } = generateProposals(buildScorecard(logs), { registry: loadRegistry({ now: NOW }), tasks: taskSpecsOf(logs), now: NOW, routerHistory: scoreStore(dir).router_history });
+  const intake = createIntake({ store: s, loadPolicy: () => ({ ok: false }) });
+  const p = proposals[0];
+  // simulate a crash after the task was created but before the journal line
+  await intake.createTask({ task_id: `proposal-${p.proposal_id}`, goal: 'g', project_id: 'fixture-project', base_sha: SHA_A, risk_class: 'medium',
+    acceptance_checks: [{ id: 'owner-review', command: ['node', 'x'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] },
+  { source: 'agent', actor_id: 'v2-score', idempotencyKey: `proposal:${p.proposal_id}`, template: 'informational' });
+  const rec = await recordProposals([p], { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW });
+  assert.equal(rec[0].created, true);
+  assert.equal(readFileSync(join(dir, 'journal.jsonl'), 'utf8').trim().split('\n').length, 1);
+  const api = createV2Http({ store: s, intake });
+  const t = (await api.handle({ method: 'GET', pathname: `/api/v2/tasks/${rec[0].task_id}` })).body.task;
+  assert.equal(t.state, 'awaiting_approval', 'the half-recorded task is completed on replay');
+  await api.handle({ method: 'POST', pathname: `/api/v2/tasks/${rec[0].task_id}/approve`, readBody: async () => ({ action_id: t.pending_approval.action_id }) });
+  const after = (await api.handle({ method: 'GET', pathname: `/api/v2/tasks/${rec[0].task_id}` })).body.task;
+  assert.match(after.next_action, /nothing is applied/);
+  assert.doesNotMatch(after.next_action, /goal loop/);
+  // a live goal-loop controller on the store refuses the write
+  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', resource: 'service:h:goal-loop', pid: process.pid, host: hostname(), heartbeat_at: Date.now() }));
+  await assert.rejects(recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW }), (e) => e.code === 'E_CONTROLLER_LIVE');
+  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', resource: 'service:h:goal-loop', pid: 999999999, host: hostname(), heartbeat_at: 0 }));
+  assert.equal((await recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW })).length, proposals.length - 1, 'a dead controller does not block');
 });

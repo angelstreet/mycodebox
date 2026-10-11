@@ -17,6 +17,7 @@ export const EXPECTED_OUTCOMES = Object.freeze(['done', 'awaiting_approval', 'wa
 const EXPECTED_STATE = { done: 'accepted', awaiting_approval: 'awaiting_approval', waiting: 'waiting' };
 const REWORK_STATES = ['repair', 'replan'];
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const TASK_CLASS_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const OWNER_MESSAGES_UNKNOWN = 'no V2 event records owner chat messages; only approval requests, answers and resume grants are counted';
 const REOPEN_UNKNOWN = 'the store refuses any transition out of accepted, so a reopen cannot be recorded; regressions come from later evidence only';
 
@@ -47,7 +48,8 @@ export function validateManifest(m) {
       if (typeof r.task_id !== 'string' || !ID_RE.test(r.task_id)) err(`${p}.task_id`, 'task id');
       else if (seen.has(r.task_id)) err(`${p}.task_id`, 'duplicate'); else seen.add(r.task_id);
       if (!EXPECTED_OUTCOMES.includes(r.expected_outcome)) err(`${p}.expected_outcome`, `one of ${EXPECTED_OUTCOMES.join(', ')}`);
-      for (const k of ['bench_task_id', 'task_class', 'runtime', 'model', 'reviewer_runtime', 'reviewer_model']) {
+      if (r.task_class != null && !(typeof r.task_class === 'string' && TASK_CLASS_RE.test(r.task_class))) err(`${p}.task_class`, 'null or [a-z0-9][a-z0-9._-]{0,63} (as in the task contract)');
+      for (const k of ['bench_task_id', 'runtime', 'model', 'reviewer_runtime', 'reviewer_model']) {
         if (r[k] != null && typeof r[k] !== 'string') err(`${p}.${k}`, 'string or null');
       }
     });
@@ -161,7 +163,9 @@ function costOf(f) {
 }
 
 function runRecord(f, run, regression) {
-  const settled = f.status === 'accepted' || f.status === 'failed_unrecoverable';
+  // Settled = terminal. A cancelled (non-informational) task counts as settled and not verified: cancelling work the tool
+  // could not finish must not raise its rates. The group's `cancelled` count shows how many.
+  const settled = f.status === 'accepted' || f.status === 'failed_unrecoverable' || f.status === 'cancelled';
   const accepted = f.status === 'accepted';
   const cost = costOf(f);
   const latency = accepted && f.completed_at ? Date.parse(f.completed_at) - Date.parse(f.created_at) : null;
@@ -184,12 +188,12 @@ function runRecord(f, run, regression) {
 // ---------- groups ----------
 
 function aggregate(key, extra, runs, { defectsBy = null, facts = null } = {}) {
-  const g = { key, ...extra, settled: 0, verified: 0, failed: 0, first_pass: 0, _lat: [], _usd: 0, spend_unknown_tasks: 0, rework: 0,
+  const g = { key, ...extra, settled: 0, verified: 0, failed: 0, cancelled: 0, first_pass: 0, _lat: [], _usd: 0, spend_unknown_tasks: 0, rework: 0,
     owner: { approvals_requested: 0, approvals_granted: 0, approvals_denied: 0, resumes: 0, interventions: 0 },
     defects: { caught: 0, findings: 0, tasks_with_defects: 0 }, reg: { detected: 0, none: 0, unknown: 0, refs: [] } };
   for (const r of runs) {
     g.settled += 1;
-    if (r.verified) g.verified += 1; else g.failed += 1;
+    if (r.verified) g.verified += 1; else if (r.status === 'cancelled') g.cancelled += 1; else g.failed += 1;
     if (r.first_pass) g.first_pass += 1;
     if (r.latency_ms !== null) g._lat.push(r.latency_ms);
     if (r.cost_usd === null) g.spend_unknown_tasks += 1; else g._usd += r.cost_usd;
@@ -213,7 +217,7 @@ function aggregate(key, extra, runs, { defectsBy = null, facts = null } = {}) {
   unknown.owner_messages = OWNER_MESSAGES_UNKNOWN;
   unknown.reopened = REOPEN_UNKNOWN;
   return {
-    key: g.key, ...extra, settled: g.settled, verified: g.verified, failed: g.failed,
+    key: g.key, ...extra, settled: g.settled, verified: g.verified, failed: g.failed, cancelled: g.cancelled,
     verified_rate, first_pass: g.first_pass, first_pass_rate: g.settled ? g.first_pass / g.settled : null,
     cost: { per_verified_completion_usd: per_verified, usd_known_total: g.settled > g.spend_unknown_tasks ? g._usd : null, spend_unknown_tasks: g.spend_unknown_tasks },
     median_latency_ms: lat,
@@ -279,6 +283,8 @@ export function buildScorecard(logs, { manifest = null, unreadable = [], since =
   if (sc.by_model.some((g) => g.runtime === 'unknown')) caveats.push('some tasks have no registry developer, usage or manifest entry: grouped under runtime "unknown"');
   if (settled.some((r) => r.regression?.status === 'unknown')) caveats.push('regressions are unknown for accepted tasks whose SHA was never re-checked later; reopening is not recordable');
   caveats.push('owner chat messages are not recorded as V2 events: owner interventions count approval requests and resume grants only');
+  if (counts.cancelled) caveats.push(`${counts.cancelled} cancelled task(s) count as settled and not verified in every rate (unlike the plain report, which leaves them out)`);
+  caveats.push('latency is wall time from creation to acceptance and includes time waiting for the owner or for quota');
   if (mf) {
     const missing = mf.runs.filter((r) => !facts.has(r.task_id)).map((r) => r.task_id);
     if (missing.length) caveats.push(`${missing.length} manifest run(s) have no task in the store: ${missing.slice(0, 10).join(', ')}`);
@@ -316,6 +322,9 @@ export function toolScore(scorecard, manifest) {
   if (!b.max_usd) c.cost = comp(null, 'manifest budget_policy.max_usd missing');
   else if (per_run.some((p) => !p.run || p.run.cost_usd === null)) c.cost = comp(null, `${per_run.filter((p) => !p.run || p.run.cost_usd === null).length} run(s) with unknown cost`);
   else c.cost = comp(clamp01(1 - per_run.reduce((s, p) => s + p.run.cost_usd, 0) / b.max_usd));
+  const costKnown = per_run.filter((p) => p.run && p.run.cost_usd !== null).length;
+  c.cost.cost_known_runs = costKnown;
+  c.cost.cost_coverage = round4(costKnown / per_run.length);
   if (!b.max_task_ms) c.latency = comp(null, 'manifest budget_policy.max_task_ms missing');
   else if (!done.length) c.latency = comp(null, 'no run expects done');
   else if (done.some((p) => p.run?.status === 'accepted' && p.run.latency_ms === null)) c.latency = comp(null, 'an accepted run has no latency');
@@ -323,13 +332,18 @@ export function toolScore(scorecard, manifest) {
   else c.latency = comp(done.reduce((s, p) => s + (p.run?.status === 'accepted' ? clamp01(1 - p.run.latency_ms / b.max_task_ms) : 0), 0) / done.length);
   c.owner_interventions = done.length ? comp(done.filter((p) => p.run && p.run.owner.interventions === 0).length / done.length) : comp(null, 'no run expects done');
   const unknownC = Object.entries(c).filter(([, v]) => v.value === null).map(([k]) => k);
-  const score = unknownC.length ? null : Math.round(1000 * Object.entries(TOOL_SCORE_WEIGHTS).reduce((s, [k, w]) => s + w * c[k].value, 0)) / 10;
+  const known = Object.entries(TOOL_SCORE_WEIGHTS).filter(([k]) => c[k].value !== null);
+  // partial_score: 100 x the weighted sum of the KNOWN components, not rescaled, so it is a lower bound out of 100*coverage.
+  const partial_score = Math.round(1000 * known.reduce((s, [k, w]) => s + w * c[k].value, 0)) / 10;
+  const coverage = round4(known.reduce((s, [, w]) => s + w, 0));
+  const score = unknownC.length ? null : partial_score;
   const caveats = [];
   if (per_run.length < 10) caveats.push('small suite: fewer than 10 runs; differences of a few points are noise');
   if (missing.length) caveats.push(`${missing.length} manifest run(s) missing from the store count as incorrect and unverified`);
   return { schema: TOOL_SCORE_SCHEMA, formula: TOOL_SCORE_FORMULA, suite_id: mf.suite_id, suite_version: mf.suite_version, weights: { ...TOOL_SCORE_WEIGHTS },
     budget_policy: { max_usd: b.max_usd ?? null, max_task_ms: b.max_task_ms ?? null },
     runs: per_run.length, missing, components: c, score, ...(score === null ? { score_reason: `unknown component(s): ${unknownC.join(', ')}` } : {}),
+    partial_score, coverage, unknown_components: unknownC,
     per_run: per_run.map(({ run, ...p }) => p), caveats };
 }
 
@@ -340,10 +354,14 @@ export function compareToolScores(a, b) {
   if (a.formula !== b.formula) fail(`different formulas (${a.formula} vs ${b.formula}): not comparable`);
   if (a.suite_id !== b.suite_id) fail(`different suites (${a.suite_id} vs ${b.suite_id}): not comparable`);
   if (a.suite_version !== b.suite_version) fail(`different suite versions (${a.suite_version} vs ${b.suite_version}): not comparable`);
+  for (const k of ['max_usd', 'max_task_ms']) if ((a.budget_policy?.[k] ?? null) !== (b.budget_policy?.[k] ?? null)) fail(`different budget_policy.${k} (${a.budget_policy?.[k] ?? null} vs ${b.budget_policy?.[k] ?? null}): not comparable`);
+  if ((a.score === null) !== (b.score === null)) fail('a partial score cannot be compared with a full score');
+  if (a.coverage !== b.coverage || JSON.stringify(a.unknown_components || []) !== JSON.stringify(b.unknown_components || [])) fail(`different coverage (${a.coverage} vs ${b.coverage}): not comparable`);
   const d = (x, y) => (x === null || y === null || x === undefined || y === undefined ? null : round4(y - x));
   const components = Object.fromEntries(Object.keys(TOOL_SCORE_WEIGHTS).map((k) => {
     const x = a.components[k]?.value ?? null, y = b.components[k]?.value ?? null;
     return [k, { a: x, b: y, delta: d(x, y), weighted_delta: d(x, y) === null ? null : round4(d(x, y) * 100 * TOOL_SCORE_WEIGHTS[k]) }];
   }));
-  return { suite_id: a.suite_id, suite_version: a.suite_version, formula: a.formula, score: { a: a.score, b: b.score, delta: d(a.score, b.score) }, components };
+  return { suite_id: a.suite_id, suite_version: a.suite_version, formula: a.formula, coverage: a.coverage, score: { a: a.score, b: b.score, delta: d(a.score, b.score) },
+    partial_score: { a: a.partial_score, b: b.partial_score, delta: d(a.partial_score, b.partial_score) }, components };
 }

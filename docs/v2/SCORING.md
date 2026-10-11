@@ -95,15 +95,18 @@ in a dry run, reviews the recommendation and decides. Nothing in this repository
 unreadable, since })` folds each task log into a per-run record and aggregates settled runs four ways: `by_model` and
 `by_runtime` (developer credit, as above), `by_role` (`developer:<entry>` and `reviewer:<entry>`; a task with two reviewers
 counts in both reviewer rows, and each reviewer row counts only the defects that reviewer raised) and `by_task_class`
-(`task.task_class`, else the bench manifest, else `unknown`). Every group carries `small_sample` (fewer than 5 settled) and an
+(`task.task_class`, else the bench manifest, else `unknown`; a class matches `[a-z0-9][a-z0-9._-]{0,63}`). Every group carries `small_sample` (fewer than 5 settled) and an
 `unknown` map naming each metric that could not be derived and why. Informational tasks (including proposals) are never scored.
+
+Unlike the plain report above, the scorecard counts a **cancelled** non-informational task as settled and not verified, so
+cancelling work a tool could not finish never raises its rates; each group reports `cancelled` separately.
 
 | Metric | Definition | Events |
 |---|---|---|
 | `verified`, `verified_rate` | accepted / settled (as above) | `task.transitioned`/`task.completed` |
 | `first_pass`, `first_pass_rate` | accepted with zero entries into `repair` or `replan`, over settled | transitions |
 | `cost.per_verified_completion_usd` | same rule as above: all spend over verified, `null` if any settled task has unknown cost or nothing was verified | `usage.recorded` |
-| `median_latency_ms` | creation to acceptance over verified tasks | timestamps |
+| `median_latency_ms` | creation to acceptance over verified tasks, wall time: it **includes** time waiting for the owner (approvals) and for quota | timestamps |
 | `rework.rounds` | entries into `repair`/`replan` | transitions |
 | `owner_interventions` | `approvals_requested` (`approval.requested`), `approvals_granted` (`approval.granted` except `kind: resume`), `approvals_denied` (`approval.denied`), `resumes` (`approval.granted` with `kind: resume`, the owner's nudge to retry), `interventions = approvals_requested + resumes`. `messages` is always `null`: no V2 event records owner chat messages | approval events |
 | `reviewer_defects` | `caught`: `reject` verdicts from an actor that is not a developer of the SHA it judged; `findings`: their findings count. All verdicts precede acceptance (the store refuses writes after it) | `verification.failed` with a verdict, `task.head_changed` actors |
@@ -149,10 +152,16 @@ score = 100 * (0.30 * outcome_correctness + 0.25 * verified_rate + 0.15 * first_
 | `latency` | mean over runs expecting `done` of `1 - latency / max_task_ms` (clamped; not accepted = 0); unknown without `max_task_ms` |
 | `owner_interventions` | runs expecting `done` that needed no approval request or resume / runs expecting `done` |
 
-Any unknown component makes `score` `null` with `score_reason`; a partial score is never reported. `compareToolScores(a, b)`
-returns the score delta and per-component `a`, `b`, `delta`, `weighted_delta`, and **refuses** (`E_SUITE_MISMATCH`) when the
-formula, `suite_id` or `suite_version` differ: a new suite version is a new baseline. Suites under 10 runs carry a
-small-suite caveat.
+Any unknown component makes `score` `null` with `score_reason`. Alongside it the result always carries
+`partial_score` (100 x the weighted sum of the **known** components, not rescaled: a lower bound out of `100 * coverage`),
+`coverage` (the sum of the known components' weights) and `unknown_components`. The cost component also reports
+`cost_known_runs` and `cost_coverage` (known-cost runs / all runs): with a placeholder price (for example a model whose
+price row is `PLACEHOLDER`) cost is unknown, and the partial score is what can be compared.
+
+`compareToolScores(a, b)` returns the score and partial-score deltas and per-component `a`, `b`, `delta`, `weighted_delta`.
+It **refuses** (`E_SUITE_MISMATCH`) when the formula, `suite_id`, `suite_version`, `budget_policy.max_usd` or
+`budget_policy.max_task_ms` differ, when one score is full and the other partial, or when the two cover different
+components: a new suite version or budget is a new baseline. Suites under 10 runs carry a small-suite caveat.
 
 ## Proposals (approval-gated)
 
@@ -176,10 +185,18 @@ and the proposed history, weights or exclusion, and lists the tasks whose choice
 **informational** task (`proposal-<id>`, risk at least `medium`), with a decision record and an `approval.requested`
 event, and moves it to `awaiting_approval`, so the Tasks view shows it in the approval queue. It appends one line per new
 proposal to `journal.jsonl` in the store directory (append-only; rationale, evidence refs, change, shadow diff,
-`applied: false`). The same proposal maps to the same task and event ids, so a replay records nothing new.
+`applied: false`). The same proposal maps to the same task and event ids, so a replay records nothing new; whether a
+journal line is written is decided by the journal itself (proposal id not yet journaled), so a crash between creating
+the task and appending the line is completed on the next run.
+
+`recordProposals` refuses (`E_CONTROLLER_LIVE`) while a goal-loop controller is alive on the store (its
+`controller.*.intent.json` has a live pid on this host or a fresh heartbeat). A running server with `GHOSTY_V2=1` also keeps
+the store in memory and will not see tasks written behind its back until restart: record into the store of a stopped
+server, or into a copy of the store directory.
 
 Nothing applies a proposal. The goal loop never dispatches informational tasks, so approving one only records the owner's
-decision; a person then makes the change in a separate, reviewed task. Tests assert that the registry, router, roles,
+decision; the task then says "decision recorded; nothing is applied by it; cancel the task to close it". A person makes
+any change in a separate, reviewed task. Tests assert that the registry, router, roles,
 goal loop, policy and price files are byte-identical after generating, recording and approving proposals.
 
 ## Scorecard caveats

@@ -81,9 +81,11 @@ export function answeredApproval(task, events) {
 }
 
 const ANSWER_NEXT = 'answer recorded; applied when the goal loop runs';
+// Informational tasks (e.g. scoring proposals) are never dispatched: the answer is the outcome, nothing applies it.
+const INFO_ANSWER_NEXT = 'decision recorded; nothing is applied by it; cancel the task to close it';
 export function nextAction(task, pending, answered = null) {
   if (task.store_error) return 'the task log could not be replayed: state is unknown; inspect the store before doing anything else';
-  if (answered) return ANSWER_NEXT;
+  if (answered) return task.review_policy?.mode === 'informational' ? INFO_ANSWER_NEXT : ANSWER_NEXT;
   if (pending) return `owner decision needed: ${pending.question}`;
   if (task.status === 'awaiting_approval') return 'awaiting an owner decision (the request itself is not readable)';
   if (task.status === 'waiting') {

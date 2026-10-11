@@ -67,6 +67,7 @@ const OPTIONAL = ['schema_version', 'title', 'repository', 'excluded_paths', 'ru
   'allocations', 'created_at', 'updated_at', 'task_class'];
 const KNOWN = new Set([...REQUIRED, ...OPTIONAL]);
 const SHA_RE = /^[0-9a-f]{7,64}$/;
+const TASK_CLASS_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string' && v.trim() !== '';
@@ -145,10 +146,11 @@ export function validateTask(spec) {
   for (const k of ['excluded_paths', 'runtime_allowlist', 'model_allowlist', 'preferred_models', 'handoff_refs']) {
     if (has(k) && spec[k] !== null && !isStrArr(spec[k])) err(k, 'array of strings or null');
   }
-  // task_class: a free label for scoring (docs/v2/SCORING.md), never a permission.
-  for (const k of ['repository', 'worktree_id', 'branch', 'parent_task_id', 'title', 'context_summary', 'task_class']) {
+  for (const k of ['repository', 'worktree_id', 'branch', 'parent_task_id', 'title', 'context_summary']) {
     if (has(k) && spec[k] !== null && typeof spec[k] !== 'string') err(k, 'string or null');
   }
+  // task_class: a short label for scoring (docs/v2/SCORING.md), never a permission.
+  if (has('task_class') && spec.task_class !== null && !(typeof spec.task_class === 'string' && TASK_CLASS_RE.test(spec.task_class))) err('task_class', 'null or [a-z0-9][a-z0-9._-]{0,63}');
   for (const k of ['deadline', 'created_at', 'updated_at']) if (has(k) && spec[k] !== null && !isIso(spec[k])) err(k, 'ISO timestamp or null');
   return { ok: errors.length === 0, errors };
 }

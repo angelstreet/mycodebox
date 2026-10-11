@@ -4,10 +4,12 @@
 // request, plus a line in the append-only decision journal. There is no code path here, or anywhere, that applies a
 // proposal: approving one records the owner's decision; a person makes any change in a separate, reviewed task.
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { hostname as osHostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { route, DEFAULT_WEIGHTS } from './router.js';
 import { RISK_CLASSES } from './task-contract.js';
+import { deadControllerIntents, pidAlive } from './goal-loop.js';
 
 export const JOURNAL_SCHEMA = 'mycodebox.v2.journal/1';
 export const PROPOSAL_ACTOR = 'v2-score';
@@ -123,14 +125,33 @@ export function generateProposals(sc, { registry, tasks = [], now = () => Date.n
   return { proposals: out };
 }
 
+// Live goal-loop controllers on this store (D-016 intent files): a writer outside the controller must not race one.
+export function liveControllers(storeDir, { now = Date.now(), hostname = osHostname(), isAlive = pidAlive, heartbeatMs = 20_000 } = {}) {
+  let names = [];
+  try { names = readdirSync(storeDir).filter((f) => /^controller\..+\.intent\.json$/.test(f)); } catch { return []; }
+  const intents = names.flatMap((f) => { try { return [JSON.parse(readFileSync(join(storeDir, f), 'utf8'))]; } catch { return []; } });
+  const dead = new Set(deadControllerIntents(intents, { hostname, isAlive, now, heartbeatMs }));
+  return intents.filter((x) => !dead.has(x));
+}
+
+const journaled = (path) => {
+  if (!existsSync(path)) return new Set();
+  return new Set(readFileSync(path, 'utf8').split('\n').flatMap((l) => { try { const j = JSON.parse(l); return j?.kind === 'proposal.recorded' ? [j.proposal_id] : []; } catch { return []; } }));
+};
+
 // Records each proposal as an informational V2 task in awaiting_approval with a pending approval request, and journals
 // it. Idempotent: the same proposal maps to the same task id, idempotency key and event ids; a replay journals nothing.
-export async function recordProposals(proposals, { store, intake, base_sha, project_id, journalPath = join(store.dir, 'journal.jsonl'), now = () => Date.now(), actor_id = PROPOSAL_ACTOR }) {
+// Refuses (E_CONTROLLER_LIVE) while a goal-loop controller is alive on the store; a running server also caches the store in
+// memory, so record into a stopped server's store or a copy (SCORING.md).
+export async function recordProposals(proposals, { store, intake, base_sha, project_id, journalPath = join(store.dir, 'journal.jsonl'), now = () => Date.now(), actor_id = PROPOSAL_ACTOR, controllers = liveControllers }) {
   if (!store || !intake) throw new Error('recordProposals: store and intake required');
+  const live = controllers(store.dir);
+  if (live.length) throw Object.assign(new Error(`a goal-loop controller is live on this store (pid ${live.map((x) => x.pid).join(', ')}): stop it or record into a copy`), { code: 'E_CONTROLLER_LIVE' });
   const out = [];
+  const inJournal = journaled(journalPath);
   for (const p of proposals) {
     const task_id = `proposal-${p.proposal_id}`.slice(0, 128);
-    const existed = !!(await store.get(task_id));
+    const journaledBefore = inJournal.has(p.proposal_id);   // the journal decides: a crash after createTask still journals on replay
     const summary = JSON.stringify({ rationale: p.rationale, change: p.change, text: p.text, shadow: p.shadow && { evaluated: p.shadow.evaluated, changed: p.shadow.changed.length } });
     const { task } = await intake.createTask({
       task_id, title: p.title.slice(0, 200), project_id, base_sha, risk_class: atLeast(p.risk_class, 'medium'),
@@ -150,13 +171,13 @@ export async function recordProposals(proposals, { store, intake, base_sha, proj
       await store.append(task_id, { event_id: `appr-req-${task_id}-0`, kind: 'approval.requested', payload: req });
       await store.transition(task_id, 'awaiting_approval', { reason: req.question, actor: actor_id, event_id: `proposal-${task_id}-to-awaiting_approval` });
     }
-    if (!existed) {
+    if (!journaledBefore) {
       mkdirSync(dirname(journalPath), { recursive: true });
       appendFileSync(journalPath, `${JSON.stringify({ schema: JOURNAL_SCHEMA, ts: new Date(now()).toISOString(), kind: 'proposal.recorded', proposal_id: p.proposal_id,
         proposal_kind: p.kind, task_id, title: p.title, rationale: p.rationale, evidence_refs: p.evidence_refs, change: p.change, text: p.text,
         shadow: p.shadow && { evaluated: p.shadow.evaluated, errors: p.shadow.errors, changed: p.shadow.changed }, applied: false })}\n`, { flag: 'a' });
     }
-    out.push({ proposal_id: p.proposal_id, task_id, created: !existed });
+    out.push({ proposal_id: p.proposal_id, task_id, created: !journaledBefore });
   }
   return out;
 }
