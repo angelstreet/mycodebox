@@ -1,4 +1,4 @@
-STATUS: RUNNING — devs: integration-agent, goal-loop, phase1-fixes; verifying routing/adapters/task-core/lease/system-ops
+STATUS: RUNNING — devs: goal-loop, adapters-fixes, system-ops-fixes; Fable re-checks: phase1, task-core, lease, integration-controller
 
 # V2 progress
 
@@ -30,22 +30,22 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | main regressions | 1 | v2/integration | dccab06 | coordinator | done | 13d161d (placeholder price), 4bdaae6 (Node 23 test) |
 | security follow-up | 1 | v2/integration | dccab06 | coordinator | integrated, review pending | 9507d11 |
 | phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | done: APPROVE WITH FIXES | 0e6d4d9 tests (+1 todo); F1 high forbidden paraphrases; F2–F8 med/low |
-| phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet + coordinator | round-2 review APPROVE WITH FIXES (non-blocking); residual R1–R5 + manager-wakes race fixed by coordinator; awaiting Fable round 3 | 0789bdc, 6247742 tests | fix list kept outside repo, summarized in review row |
+| phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet + coordinator | round 3 review (Fable) | 0789bdc, ab70292 (R1–R5, manager-wakes race); 964/964 both runtimes |
 | task-core | 2 | v2/02-task-core | c366307 | Opus | review | 3a4fb9e; 39 tests |
 | task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | done: APPROVE WITH FIXES | a5f83d2 (11 todo); 2 high |
-| task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus | in progress (+D-007) | |
+| task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus | re-verification (Fable) | c246b9f; 979/979; D-007 added |
 | lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | review | 9e958b6; T25–T27 tests |
 | lease-verify | 12 | wt verify-08 | 9e958b6 | Fable | done: APPROVE WITH FIXES | 5d19f6b (4 todo); F1 breaker race |
-| lease-fixes | 12 | v2/08-lease-authority | 9e958b6 | Opus | in progress | |
+| lease-fixes | 12 | v2/08-lease-authority | 9e958b6 | Opus | re-verification (Fable) | a5c508e; 961/961; races 20x20; D-008 added |
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | done: APPROVE WITH FIXES | c50f7ff (18 todo) |
-| system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet | queued | |
+| system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet | in progress | |
 | goal-loop | 5 | v2/05-goal-loop | merge 02+03+04+10 (be60274) | Opus | in progress | |
 | routing | 4 | v2/04-routing | c366307 | Sonnet | INTEGRATED (verifier APPROVE, 3 rounds) | b9a88f2 -> merge 71d9b39; 991/991 both runtimes |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
 | adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | done: APPROVE WITH FIXES | 190bf01 (15 todo); 1 high remove() data loss |
-| adapters-fixes | 3 | v2/03-adapters | 106bd36 | Sonnet | queued (next slot) | |
+| adapters-fixes | 3 | v2/03-adapters | 106bd36 | Sonnet | in progress | |
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
 | integration-verify | 12 | wt verify-09 | a14a72a | Fable | in progress | |
 
