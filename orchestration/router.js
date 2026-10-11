@@ -27,12 +27,14 @@ const EPS = 1e-9;
 // ---------- hard floors ----------
 export const normRisk = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : null);
 const RISKS = ['low', 'medium', 'high', 'critical'];
-const text1 = (v) => (v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
+const UNSERIALIZABLE = '\u0000unserializable';
+const text1 = (v) => { if (v == null) return ''; if (typeof v === 'string') return v; try { return JSON.stringify(v) ?? ''; } catch { return UNSERIALIZABLE; } };
 
 // Floors the router always applies itself, whatever checker is injected (a lax or missing policy cannot waive them):
 // non-object task, critical risk, forbidden topic. Unknown/missing risk only adds an approval requirement.
 export function routerFloor(task) {
   if (!task || typeof task !== 'object' || Array.isArray(task)) return { allow: false, needs_approval: true, reason: 'task is not an object: nothing to route' };
+  if (taskText(task).includes(UNSERIALIZABLE)) return { allow: false, needs_approval: true, reason: 'task text is not serializable: cannot check forbidden topics' };
   const risk = normRisk(task.risk_class);
   if (risk === 'critical') return { allow: false, needs_approval: true, reason: 'risk_class critical: no automatic action' };
   const hit = forbiddenMatch(taskText(task));
@@ -41,6 +43,7 @@ export function routerFloor(task) {
   return { allow: true, needs_approval: false, reason: 'no router floor hit' };
 }
 
+// High-risk approval is policy.js's job (approval_policy); this stub only mirrors it conservatively until it is injected.
 // Conservative stand-in until orchestration/policy.js is injected. Frozen signature (ARCHITECTURE §4):
 // checkAction(policy, task, action). Fail closed.
 export function defaultCheckAction(policy, task, action) {
@@ -103,7 +106,8 @@ function allowlists(task, policy) {
   const first = (...vs) => vs.map(list).reduce((acc, v) => inter(acc, v), null);
   const t = task || {};
   const pol = policy && typeof policy === 'object' ? policy : {};
-  const pp = t.privacy_policy && typeof t.privacy_policy === 'object' ? t.privacy_policy : {};
+  const ppBad = t.privacy_policy != null && (typeof t.privacy_policy !== 'object' || Array.isArray(t.privacy_policy));   // malformed privacy policy matches nothing
+  const pp = !ppBad && t.privacy_policy ? t.privacy_policy : {};
   let classProviders = null;
   if (t.privacy_class != null) {   // a privacy class the policy does not map must not widen to every provider
     const m = pol.privacy_class_providers;
@@ -112,12 +116,30 @@ function allowlists(task, policy) {
   return {
     runtimes: first(t.runtime_allowlist, pol.runtime_allowlist),
     models: first(t.model_allowlist, pol.model_allowlist),
-    providers: first(pp.allowed_providers, pol.provider_allowlist, classProviders),
+    providers: first(ppBad ? MATCH_NOTHING : pp.allowed_providers, pol.provider_allowlist, classProviders),
   };
 }
 
+// Working-directory floor. Root config: `policy.allowed_roots` (absolute paths; the goal loop must pass the V2 worktree
+// root there or every worktree route is denied). Paths are resolved with the injected `realpath` (e.g. fs.realpathSync)
+// when given, so symlinks cannot escape a root; otherwise lexically.
+export const WORKDIR_ROOTS_KEY = 'allowed_roots';
+export function workdirFloor(task, policy, realpath = null) {
+  const rp = (p) => { if (!realpath) return resolve(p); try { return resolve(realpath(p)); } catch { return null; } };
+  for (const k of ['cwd', 'worktree', 'worktree_path']) {
+    if (task[k] == null) continue;
+    const roots = policy && Array.isArray(policy[WORKDIR_ROOTS_KEY]) ? policy[WORKDIR_ROOTS_KEY].filter((r) => typeof r === 'string' && isAbsolute(r)) : [];
+    if (typeof task[k] !== 'string' || !isAbsolute(task[k])) return `${k} must be an absolute path`;
+    if (!roots.length) return `${k} given but no allowed working-directory roots are configured (policy.${WORKDIR_ROOTS_KEY})`;
+    const p = rp(task[k]);
+    if (p == null) return `${k} cannot be resolved`;
+    if (!roots.some((r) => { const rr = rp(r); return rr != null && (p === rr || p.startsWith(rr.endsWith(sep) ? rr : rr + sep)); })) return `${k} ${p} is outside the allowed roots`;
+  }
+  return null;
+}
+
 // Task-shape floors that apply to every candidate. Returns a reason or null.
-function shapeFloor(task, policy, estimate) {
+function shapeFloor(task, policy, realpath) {
   for (const k of ['required_capabilities', 'runtime_capabilities']) {
     const v = task[k];
     if (v != null && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) return `malformed ${k}: expected an array of strings`;
@@ -126,17 +148,7 @@ function shapeFloor(task, policy, estimate) {
   if (c != null && !(known(ctxNum(c)) && ctxNum(c) >= 0)) return 'malformed context_tokens_estimate: expected a non-negative number';
   const e = task.estimate;
   if (e != null && (typeof e !== 'object' || Object.values(e).some((v) => v != null && !(known(v) && v >= 0)))) return 'malformed estimate: amounts must be non-negative numbers';
-  void estimate;
-  // Working directory floor: when a cwd/worktree is given it must sit inside an allowed root; no roots configured = deny.
-  for (const k of ['cwd', 'worktree', 'worktree_path']) {
-    if (task[k] == null) continue;
-    const roots = policy && Array.isArray(policy.allowed_roots) ? policy.allowed_roots.filter((r) => typeof r === 'string' && isAbsolute(r)) : [];
-    if (typeof task[k] !== 'string' || !isAbsolute(task[k])) return `${k} must be an absolute path`;
-    if (!roots.length) return `${k} given but no allowed working-directory roots are configured`;
-    const p = resolve(task[k]);
-    if (!roots.some((r) => { const rr = resolve(r); return p === rr || p.startsWith(rr.endsWith(sep) ? rr : rr + sep); })) return `${k} ${p} is outside the allowed roots`;
-  }
-  return null;
+  return workdirFloor(task, policy, realpath);
 }
 const ctxNum = (c) => (typeof c === 'number' ? c : typeof c === 'string' && c.trim() !== '' ? Number(c) : NaN);
 
@@ -163,8 +175,10 @@ function floors(task, entry, ctx) {
 
 // ---------- score ----------
 function metrics(entry, hist, estimate, workType, ctx) {
-  const h = hist?.by_type?.[workType] && hist.by_type[workType].attempts >= MIN_HISTORY_ATTEMPTS ? hist.by_type[workType] : hist;
-  const meaningful = !!(h && known(h.attempts) && h.attempts >= MIN_HISTORY_ATTEMPTS && known(h.verified));
+  const typed = hist?.by_type?.[workType];
+  const h = typed && validHistory(typed) && typed.attempts >= MIN_HISTORY_ATTEMPTS ? typed : hist;
+  const history_invalid = !!(h && !validHistory(h));   // corrupt counts are ignored, never trusted
+  const meaningful = !!(h && !history_invalid && h.attempts >= MIN_HISTORY_ATTEMPTS);
   const quality = meaningful ? (h.verified + 1) / (h.attempts + 2) : TIER_PRIOR[entry.tier];
   const reliability = meaningful && known(h.errors) ? (h.attempts - h.errors + 1) / (h.attempts + 2) : PRIOR_RELIABILITY;
   const latency = known(h?.latency_ms) && meaningful ? h.latency_ms : entry.latency_ms;
@@ -176,7 +190,18 @@ function metrics(entry, hist, estimate, workType, ctx) {
     cost = ((estimate.input_tokens * entry.price.input + estimate.output_tokens * entry.price.output) / 1e6) / quality;
     cost_basis = 'price_estimate';
   } else if (priceStatus(entry, ctx) === 'stale') cost_basis = 'stale_price';
-  return { quality, reliability, latency: known(latency) ? latency : null, cost, cost_basis, history: meaningful };
+  return { quality, reliability, latency: known(latency) ? latency : null, cost, cost_basis, history: meaningful, history_invalid };
+}
+
+// Counts must be coherent: integers, 0 <= verified <= attempts, 0 <= errors <= attempts, total_usd (if given) >= 0.
+function validHistory(h) {
+  if (!h || typeof h !== 'object') return false;
+  const int = (v) => Number.isInteger(v) && v >= 0;
+  if (!int(h.attempts) || !int(h.verified) || h.verified > h.attempts) return false;
+  if (h.errors != null && (!int(h.errors) || h.errors > h.attempts)) return false;
+  if (h.total_usd != null && !(known(h.total_usd) && h.total_usd >= 0)) return false;
+  if (h.latency_ms != null && !(known(h.latency_ms) && h.latency_ms >= 0)) return false;
+  return true;
 }
 
 function norm(values, invert) {   // min-max over known values; unknown -> null
@@ -203,7 +228,7 @@ function rank(cands, weights, complexity) {
 
 // ---------- route ----------
 export function route(task, { registry, policy = null, history = {}, weights = null, mode = 'shadow', checkAction = defaultCheckAction,
-  now = Date.now, exclude = [], allowFake = false, maxPriceAgeDays = 90 } = {}) {
+  now = Date.now, exclude = [], allowFake = false, maxPriceAgeDays = 90, realpath = null } = {}) {
   if (mode !== 'shadow') { const e = new Error(`router mode "${mode}" not supported: shadow only`); e.code = 'E_NOT_LIVE'; throw e; }
   if (!registry) throw new TypeError('route: registry required');
   const entries = registry.entries();
@@ -231,7 +256,7 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   const requires_approval = !!act.needs_approval;
   if (requires_approval) rationale.push(`Policy: ${act.reason}. A choice is proposed but must be approved before it runs.`);
 
-  const shape = shapeFloor(task, policy);
+  const shape = !Array.isArray(exclude) ? 'malformed exclude: expected an array of ids' : shapeFloor(task, policy, realpath);
   if (shape) {
     for (const e of entries) rejected.push({ id: e.id, reason: `task: ${shape}` });
     rationale.push(`Task rejected before ranking: ${shape}.`);
@@ -259,7 +284,7 @@ export function route(task, { registry, policy = null, history = {}, weights = n
     const m = metrics(e, history?.[e.id], estimate, work.type, priceCtx);
     return { id: e.id, runtime: e.runtime, provider: e.provider, model: e.model, tier: e.tier, context_tokens: e.context_tokens,
       availability: e.availability, quality: round6(m.quality), reliability: round6(m.reliability), latency_ms: m.latency,
-      cost_est_usd: m.cost == null ? null : round6(m.cost), cost_basis: m.cost_basis, history: m.history, score: 0 };
+      cost_est_usd: m.cost == null ? null : round6(m.cost), cost_basis: m.cost_basis, history: m.history, history_invalid: m.history_invalid, score: 0 };
   });
   rank(cands, w, work.complexity);
   const choice = cands[0];
@@ -268,6 +293,8 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   rationale.push(`Work type "${work.type}" (complexity ${work.complexity}); ${feasible.length} of ${entries.length} candidates pass the hard floors.`);
   if (work.needs_discovery) rationale.push('Work type unknown: needs a discovery step first; confidence is capped, not high.');
   if (cands.some((c) => !c.history)) rationale.push(`No meaningful history (< ${MIN_HISTORY_ATTEMPTS} attempts) for ${cands.filter((c) => !c.history).length} candidate(s): conservative tier priors used (light ${TIER_PRIOR.light}, standard ${TIER_PRIOR.standard}, strong ${TIER_PRIOR.strong}), reliability ${PRIOR_RELIABILITY}.`);
+  const badHist = cands.filter((c) => c.history_invalid).map((c) => c.id);
+  if (badHist.length) rationale.push(`History for ${badHist.join(', ')} is inconsistent (counts out of range) and was ignored: priors used.`);
   const unk = cands.filter((c) => c.cost_est_usd == null);
   if (unk.length) rationale.push(`Unknown/stale cost for ${unk.map((c) => c.id).join(', ')}: ranked after known-cost candidates at equal quality, never treated as cheapest or $0.`);
   rationale.push(`Chose ${choice.id} (score ${choice.score}) with weights q=${w.quality} c=${w.cost} l=${w.latency} r=${w.reliability}.`);
@@ -331,7 +358,7 @@ function planFallback(result, { error_class, failed = result?.choice, attempt = 
     case 'quota_exhausted': return wait('provider quota exhausted: wait for reset, no spend meanwhile');
     case 'rate_limit':
     case 'timeout': {
-      if (attempt < max_backoffs) return { action: 'backoff', next: failed, delay_ms: known(retry_after_ms) ? retry_after_ms : Math.min(900000, 30000 * 2 ** attempt), state_hint: 'waiting', reason: `${error_class}: backoff ${attempt + 1}/${max_backoffs} before switching` };
+      if (attempt < max_backoffs) return { action: 'backoff', next: failed, delay_ms: known(retry_after_ms) && retry_after_ms > 0 ? Math.min(900000, retry_after_ms) : Math.min(900000, 30000 * 2 ** attempt), state_hint: 'waiting', reason: `${error_class}: backoff ${attempt + 1}/${max_backoffs} before switching` };
       const nx = otherProvider[0] || pool[0];
       return nx ? { action: 'switch', next: nx.id, delay_ms: 0, state_hint: null, reason: `${error_class} persists after ${max_backoffs} backoffs: compatible ${nx.provider} candidate` } : wait(`${error_class}: no compatible alternative inside the allowlist`);
     }

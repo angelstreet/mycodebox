@@ -1,5 +1,5 @@
 // Re-verification of v2/04-routing after the F1-F14 fixes. Passing tests pin adversarial variants of the fixed
-// findings; `{ todo: 'defect: ...' }` tests document what is still open.
+// findings; `defect:` tests were open and are now fixed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadRegistry } from '../orchestration/model-registry.js';
@@ -70,9 +70,9 @@ test('verify2: budget variants: string estimate/ledger amounts and non-object po
   assert.equal(check({}, null, {}).allow, true);   // track mode never stops, even without a ledger
 });
 
-// ---------- still open (todo) ----------
+// ---------- formerly open defects (fixed) ----------
 
-test('defect: corrupt history (verified > attempts, negative errors) must not drive ranking', { todo: 'defect: metrics() trusts history counts; verified:500/attempts:5 gives quality 71.6 and errors:-50 reliability 8, so a fabricated record wins (T22)' }, () => {
+test('defect: corrupt history (verified > attempts, negative errors) must not drive ranking', () => {
   const history = { 'minimax:MiniMax-M3': { attempts: 5, verified: 500, errors: -50, total_usd: 1 } };
   const r = R(task(), { history });
   const c = r.candidates.find((x) => x.id === 'minimax:MiniMax-M3');
@@ -80,15 +80,15 @@ test('defect: corrupt history (verified > attempts, negative errors) must not dr
   assert.equal(c.history, false);
 });
 
-test('defect: a per-attempt cap with a missing/malformed ledger is unknown spend', { todo: 'defect: F8 fixed for whole-task caps only; per_attempt caps with ledger null or entries:"x" still allow' }, () => {
+test('defect: a per-attempt cap with a missing/malformed ledger is unknown spend', () => {
   for (const l of [null, { entries: 'x' }]) assert.equal(check({ budget_policy: { per_attempt: { max_usd: 2 } } }, l, { usd: 1, attempt_id: 'a1' }).allow, false);
 });
 
-test('defect: a malformed privacy_policy must not widen to every provider', { todo: 'defect: privacy_policy that is not an object (e.g. a string) is ignored, so every provider stays eligible' }, () => {
+test('defect: a malformed privacy_policy must not widen to every provider', () => {
   assert.deepEqual(ids(R(task({ privacy_policy: 'anthropic-only' }))), []);
 });
 
-test('defect: retry_after_ms is bounded (no negative or unbounded delay)', { todo: 'defect: fallbackPlan passes retry_after_ms through unclamped: -1 retries immediately, 1e13 waits ~300 years' }, () => {
+test('defect: retry_after_ms is bounded (no negative or unbounded delay)', () => {
   const r = R(task());
   const d1 = fallbackPlan(r, { error_class: 'rate_limit', attempt: 0, retry_after_ms: -1 }).delay_ms;
   const d2 = fallbackPlan(r, { error_class: 'rate_limit', attempt: 0, retry_after_ms: 1e13 }).delay_ms;
