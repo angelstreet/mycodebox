@@ -79,8 +79,24 @@ appended there. Two parallel queues, one per worktree-of-the-super-repo.
   NOT TASK-numbered** (per the standing rule: *"Sessions in ghosty-sessions /
   mycodebox are not TASK-numbered"*) — `codebox-quickfix` is the session name.
   The MD file keeps the `TASK-<NN>-slug.md` shape for cross-repo slotting.
-- No push to `main`, no merge, no deploy from this task. Deploy happens via
-  `update_core.sh` on `main`, after CI is green for that exact commit.
+- **Worker uses its own worktree, then merges to `main`.** This task's
+  worker IS the merger — there is no "ready to merge" handoff to the
+  owner. Sequence:
+  1. commit on `task70-tts-needs-you`
+  2. `GHOSTY_STATE_DIR="$(mktemp -d)" npm test` (any browser specs the
+     change requires, run via `scripts/test-server.sh` + `scripts/test-fix.sh`
+     on `:7778`, not `:7777`)
+  3. `git push -u origin task70-tts-needs-you`
+  4. fast-forward and push: `git checkout main && git merge --ff-only
+     task70-tts-needs-you && git push origin main`
+  5. restart only when the merge lands runtime / public changes
+     (`scripts/safe-restart.sh`); doc-only merges skip step 5.
+
+  Owner-confirmed correction, 2026-10-11: replaces the older
+  "no push / no merge" rule (MEMORY.md "Worker uses worktree, then merges
+  to main"). The carve-outs that still hold here: no `.env` changes, no
+  secrets in code / logs / commits, no DB writes, no lease changes —
+  the same list that gates mm-manager in alert-only mode.
 - No `.env` changes. No secrets in code, logs, or commits.
 - For ghosty-sessions worktrees: the worktree path uses the
   `/home/jndoye/ghosty-<slug>/` prefix — not the `/home/jndoye/vpt-<slug>/`

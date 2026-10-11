@@ -240,6 +240,45 @@ under test → verified` is one curl + one Playwright pass with
 `GHOSTY_URL=http://localhost:7777` to confirm the mirrored files
 serve the patched bytes. That's `live`, not `verified`.
 
+### 9. Worker merges to main after each shipped QF (added 2026-10-11)
+
+Per `MEMORY.md` ("Worker uses worktree, then merges to main") and the
+hard rules in `docs/tasks/TASK-70-quickfix-codebox.md`, **the worker
+that develops a QF is also the worker that merges it to `main`** —
+there is no "ready to merge" handoff. This is `codebox-quickfix-migrated`
+(or its successor), operating from its own worktree at
+`/home/jndoye/ghosty-quickfix-codebox` on branch `task70-tts-needs-you`.
+
+Sequence after the QF reaches `shipped`:
+
+```bash
+git push -u origin task70-tts-needs-you
+git checkout main
+git merge --ff-only task70-tts-needs-you   # or a 3-way merge if main diverged
+git push origin main
+```
+
+If the merge commit (or any of its parents) touches `public/`,
+`server.js`, `tts.js`, `audio-chip.js`, `ask-popup.js`, `style.css`,
+`sw.js`, or any module loaded at runtime, finish the QF with:
+
+```bash
+bash scripts/safe-restart.sh
+curl -fsS "$GHOSTY_URL/api/sessions" | head -c 200
+```
+
+A doc-only merge (this file plus `docs/tasks/TASK-70-*.md`) skips the
+restart. Any merge that contains untracked `tmp/`, IDE metadata,
+screenshots, or other non-runtime artefacts is fine to ship if those
+files are already in `.gitignore` — never stage a blanket `git add .`.
+
+Carve-outs that still bind this rule (same list as
+mm-manager alert-only): **no `.env` changes, no secrets in
+code/logs/commits, no DB writes, no lease changes.** Those need an
+explicit owner "go" in the moment. Everything else — UI fixes,
+refactors, doc corrections, test additions, deploy-runner scripts —
+is in-scope for the worker to merge.
+
 ---
 
 ## QF-01 — search bar next to "Send to" picker
