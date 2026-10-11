@@ -28,6 +28,8 @@ const INFRA_CODES = { ENOSPC: 'host.disk_pressure', EDQUOT: 'host.disk_pressure'
   ENFILE: 'host.memory_pressure', EAGAIN: 'runner.starved', EIO: 'health.unknown' };
 const HARNESS_LIKE = /missing_artifact|unknown_exit|timeout|unavailable/;
 const MAX_BACKOFF_MS = 15 * 60_000;
+// Errors a provider returns before doing (and charging for) any work.
+const UNBILLED_CLASSES = ['rate_limit', 'unavailable', 'auth'];
 // D-012: iterations without new passing evidence (any signatures) that force a strategy change; no_progress_policy
 // .iterations_without_progress overrides it per task.
 export const DEFAULT_ITERATIONS_WITHOUT_PROGRESS = 6;
@@ -197,11 +199,31 @@ export function createGoalLoop({
   // ---------- budget ----------
   function ledger(ctx) {
     const started = new Map(ctx.events.filter((e) => e.kind === 'task.started').map((e) => [e.payload.run_id, e]));
-    return { entries: ctx.events.filter((e) => e.kind === 'usage.recorded').map((e) => {
+    const used = ctx.events.filter((e) => e.kind === 'usage.recorded');
+    const entries = used.map((e) => {
       const s = started.get(e.payload.run_id);
       return { attempt_id: e.payload.run_id, kind: s?.payload.role || 'unknown', usd: e.payload.usd, input_tokens: e.payload.input_tokens,
         output_tokens: e.payload.output_tokens, duration_ms: s ? Date.parse(e.timestamp) - Date.parse(s.timestamp) : null, turns: 1 };
-    }) };
+    });
+    // X1/X2 (GL13): a run that started but has no usage record is unknown spend, never free.
+    const seen = new Set(used.map((e) => e.payload.run_id));
+    for (const [run_id, s] of started) {
+      if (!seen.has(run_id)) entries.push({ attempt_id: run_id, kind: s.payload.role, usd: null, input_tokens: null, output_tokens: null, duration_ms: null, turns: 1 });
+    }
+    return { entries };
+  }
+  // Runs this process is not running that started and never recorded usage (crash between start and usage): record
+  // them as unknown so the ledger and usage totals say "unknown", not a lower number. Deterministic ids: replay-safe.
+  async function recordInterruptedUsage(ctx) {
+    if (active.has(ctx.id)) return false;
+    const used = new Set(ctx.events.filter((e) => e.kind === 'usage.recorded').map((e) => e.payload.run_id));
+    const missing = ctx.events.filter((e) => e.kind === 'task.started' && !used.has(e.payload.run_id));
+    for (const e of missing) {
+      const entry = registry.get(e.payload.entry) || {};
+      await store.recordUsage(ctx.id, { runtime: entry.runtime ?? e.payload.runtime ?? null, provider: entry.provider ?? null, model: entry.model ?? e.payload.model ?? null,
+        run_id: e.payload.run_id, input_tokens: null, output_tokens: null, usd: null, source: 'interrupted: no usage recorded before a controller restart' }, { event_id: `usage-${e.payload.run_id}` });
+    }
+    return missing.length > 0;
   }
   function estimate(ctx, entry, role, routeHint = null) {
     if (estimateRun) return estimateRun({ task: ctx.v, entry, role, ledger: ledger(ctx) });
@@ -209,7 +231,8 @@ export function createGoalLoop({
     const runs = ledger(ctx).entries.filter((e) => e.kind === role && ctx.events.some((s) => s.kind === 'task.started' && s.payload.run_id === e.attempt_id && s.payload.entry === entry));
     const mean = (k) => { const xs = runs.map((r) => r[k]).filter((x) => typeof x === 'number'); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
     // No run of this entry yet: the router's price-based estimate when it has one (#5), else unknown.
-    const usd = mean('usd') ?? routeHint?.candidates?.find((c) => c.id === entry)?.cost_est_usd ?? null;
+    const usd = mean('usd') ?? routeHint?.candidates?.find((c) => c.id === entry)?.cost_est_usd
+      ?? (role === 'developer' && ctx.cp.strategy?.entry === entry ? ctx.cp.strategy.cost_est_usd : null) ?? null;
     return { usd, input_tokens: mean('input_tokens'), output_tokens: mean('output_tokens'), duration_ms: mean('duration_ms'), turns: 1 };
   }
   // #5: an explicit owner approval of a budget stop authorizes the NEXT run even when its cost cannot be estimated
@@ -222,8 +245,12 @@ export function createGoalLoop({
   async function budgetGate(ctx, entry, role, resume_to, { patch = {}, routeHint = null } = {}) {
     const b = budget.check({ ...ctx.v, budget_policy: effectiveBudgetPolicy(ctx) }, ledger(ctx), estimate(ctx, entry, role, routeHint), { quota: quota(entry) });
     if (b.allow) return null;
-    const onlyUnknownEstimate = b.state_hint === 'awaiting_approval' && b.reason.split('; ').every((x) => /estimate unknown/.test(x));
-    if (onlyUnknownEstimate && nextRunAuthorized(ctx)) return null;
+    // #5/W3: stops that exist only because a cost is unknown (estimate, or a provider that reports no USD) are
+    // waived for one run by an owner confirmation; a reached cap never is.
+    const reasons = b.reason.split('; ');
+    const onlyUnknown = b.state_hint === 'awaiting_approval' && reasons.every((x) => /estimate unknown|spend unknown/.test(x));
+    if (onlyUnknown && nextRunAuthorized(ctx)) return null;
+    const spendUnknown = reasons.some((x) => /spend unknown/.test(x));
     const evd = [`spent ${JSON.stringify(b.spent)}`, `unknown ${b.unknown_spend.join(',') || 'none'}`];
     const emit = [{ event_id: `budget-${ctx.id}-${ctx.k}`, kind: 'budget.threshold', payload: { reason: b.reason, spent: b.spent, state_hint: b.state_hint } }];
     if (b.state_hint === 'waiting') {
@@ -232,8 +259,13 @@ export function createGoalLoop({
         'wait for quota reset', { evidence: evd, expected_effect: `retry after ${delay} ms`, rationale: b.reason }), {
         patch: { ...patch, wait: { reason: 'quota', until_ms: now() + delay, resume_to } }, to: 'waiting', reason: b.reason, emit });
     }
-    return askOwner(ctx, { kind: 'budget', question: `Budget stop: ${b.reason}. Raise or confirm the authorization to continue.`, reason: b.reason, classes: ['budget'] },
-      { resume_to, kind: 'budget_stop', extra: { spent: b.spent }, patch }).then((r) => store.append(ctx.id, { event_id: emit[0].event_id, ...emit[0] }).then(() => r));
+    const question = onlyUnknown
+      ? (spendUnknown
+        ? `Budget stop: the cap cannot be enforced for this provider because it reports no USD (${b.reason}). Confirm to authorize one more run, or raise/remove the cap.`
+        : `Budget stop: ${b.reason}. Confirm to authorize one run of unknown cost, or raise/remove the cap.`)
+      : `Budget cap reached: ${b.reason}. Raise the cap (approve with a higher budget_policy) or cancel the task.`;
+    return askOwner(ctx, { kind: 'budget', question, reason: b.reason, classes: ['budget'] },
+      { resume_to, kind: 'budget_stop', extra: { spent: b.spent, cap_reached: !onlyUnknown }, patch }).then((r) => store.append(ctx.id, { event_id: emit[0].event_id, ...emit[0] }).then(() => r));
   }
 
   // ---------- failure classification and the no-progress rule ----------
@@ -310,9 +342,20 @@ export function createGoalLoop({
   }
 
   // Provider/runtime errors from a developer run (T12, GL06): router fallback taxonomy, bounded and recorded.
-  // A run whose usage shows it was billed (any measured amount, or an incomplete record).
-  const billedRun = (ctx, run_id) => ctx.events.some((e) => e.kind === 'usage.recorded' && e.payload.run_id === run_id
-    && (e.payload.incomplete === true || ['input_tokens', 'output_tokens', 'usd'].some((k) => typeof e.payload[k] === 'number' && e.payload[k] > 0)));
+  // One classifier for developer and reviewer runs (W4b/W5). Billed = measured spend, an incomplete record, or a run
+  // that started and then failed with unknown usage (unknown is not zero). Unbilled = refused at the door: rate limit,
+  // runtime unavailable, auth. -> boolean
+  function isBilled({ started, errorClass, usage }) {
+    const u = usage || {};
+    if (u.incomplete === true || ['input_tokens', 'output_tokens', 'usd'].some((k) => typeof u[k] === 'number' && u[k] > 0)) return true;
+    if (!started) return false;
+    return !UNBILLED_CLASSES.includes(errorClass);
+  }
+  const billedRun = (ctx, run_id, errorClass) => {
+    const u = ctx.events.find((e) => e.kind === 'usage.recorded' && e.payload.run_id === run_id)?.payload;
+    const started = ctx.events.some((e) => e.kind === 'action.confirmed' && e.payload.effect_id === `devrun-${run_id}`) && !ctx.events.some((e) => e.kind === 'tool.failed' && e.payload.run_id === run_id && e.payload.not_started);
+    return isBilled({ started, errorClass, usage: u });
+  };
   // OWNER_DECISIONS §4 as clarified: unbilled waits may back off on a timer; billed identical retries count toward the
   // no-progress rule and suspend (waiting, until_ms:null, diagnosis, next action). -> step result
   function suspend(ctx, kind, { diagnosis, next_action, evidence, resume_to, p, extraPatch = {} }) {
@@ -342,7 +385,7 @@ export function createGoalLoop({
     chosen, { evidence, expected_effect: effect, rationale: plan.reason, policy_ref: policyRef(p) });
     const emit = err.class === 'rate_limit' ? [{ event_id: `ratelimited-${ctx.id}-${ctx.k}`, kind: 'model.rate_limited', payload: { entry: s.entry, retry_after_ms: err.retry_after_ms ?? null } }] : [];
     // #4: a billed failure repeated on the same runtime with no switch left is a blind retry loop: suspend.
-    if (['backoff', 'wait'].includes(plan.action) && billedRun(ctx, run_id) && provider.count >= ctx.v.no_progress_policy.same_signature) {
+    if (['backoff', 'wait'].includes(plan.action) && billedRun(ctx, run_id, err.class) && provider.count >= ctx.v.no_progress_policy.same_signature) {
       return suspend(ctx, 'no_progress', { p, resume_to: 'repair', extraPatch: { provider },
         diagnosis: `developer runtime ${s.entry} failed with ${err.class} ${provider.count}x in a row after billing; ${plan.reason}`,
         next_action: `check ${s.entry} health or enable another compatible runtime, then resume the task`, evidence });
@@ -406,37 +449,37 @@ export function createGoalLoop({
     if (staged) await g(cwd, ['-c', `user.name=${commitIdentity.name}`, '-c', `user.email=${commitIdentity.email}`, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', msg]);
     return headOf(cwd);
   }
-  // #1: the worktree lease is renewed at every dispatch/commit; an expired lease nobody else took is re-acquired by
-  // the same owner (recorded); a lease another owner holds suspends the task until inputs change. -> null | step result
+  // #1/W1: the worktree lease is renewed at every dispatch/commit through worktrees.renew(), which also re-acquires a
+  // lapsed lease for the same owner and rewrites the worktree meta (remove()/renew() keep working). A live or
+  // intervening foreign holder suspends the task until inputs change. -> null | step result
   async function ensureLease(ctx, resume_to) {
-    const l = ctx.cp.worktree?.lease;
-    if (!leases || !l) return null;
-    let v;
-    try { v = await leases.validate(l); } catch { v = { ok: false, code: 'E_UNAVAILABLE' }; }
-    if (v?.ok) { try { await leases.renew(l); } catch { /* validate passed; next dispatch renews again */ } return null; }
-    if (v?.code === 'E_EXPIRED' || v?.code === 'E_FENCED') {
-      let a;
-      try { a = await leases.acquire(l.resource, { owner: l.owner, task_id: ctx.id, ttl_ms: l.ttl_ms || 6 * 3600_000, scope: 'worktree' }); } catch { a = { ok: false, code: 'E_UNAVAILABLE' }; }
-      if (a?.ok) {
-        const worktree = { ...ctx.cp.worktree, lease: a.lease };
-        await note(ctx, `lease-${a.lease.token}`, decision('lease_reacquired', 'The worktree lease lapsed: re-acquire it?', [
-          alt('re-acquire as the same owner', 'nobody else holds it; the worktree is still ours; head is revalidated before any evidence counts', 'new fencing token'),
-          alt('suspend', 'cautious', 'no reason: the resource is free and owned by this task')], 're-acquire as the same owner', {
-          evidence: [`validate ${v.code}`, `new token ${a.lease.token}`], expected_effect: 'continue with a fresh lease', rationale: 'Lease expired while the task was waiting or long-running; re-acquired under the same owner (fencing token advanced).' }),
-        { worktree });
-        ctx.cp.worktree = worktree;
-        return null;
-      }
-      if (a?.code === 'E_HELD') {
-        const diagnosis = `worktree lease ${l.resource} is held by ${a.holder?.owner ?? 'another owner'}`;
-        return decide(ctx, decision('lease_unavailable', 'Another owner holds the worktree lease: proceed?', [alt('suspend until inputs change', 'never write under someone else\'s lease', 'blocked'), alt('proceed', 'progress', 'unfenced writes')],
-          'suspend until inputs change', { evidence: [diagnosis], expected_effect: 'no writes until the holder releases or the owner resumes', rationale: 'Fail closed on a foreign lease holder.' }),
-        { patch: { wait: { reason: 'lease_held', until_ms: null, resume_to, diagnosis, next_action: 'release the foreign lease or resume the task', policy_hash: policyRef(readPolicy(ctx)) } }, to: 'waiting', reason: 'lease held by another owner' });
-      }
+    const wt = ctx.cp.worktree;
+    if (!leases || !wt?.lease) return null;
+    let r;
+    // After the owner resumed a lease_held wait, an intervening (now released) holder is acknowledged; head and
+    // evidence are revalidated before anything counts.
+    try { r = await worktrees.renew(wt.path, { owner: ACTOR, acknowledgeFence: ctx.cp.lease_ack === true }); } catch (e) { r = { error: e }; }
+    if (r.lease) {
+      if (!r.reacquired) return null;
+      const worktree = { ...wt, lease: r.lease };
+      await note(ctx, `lease-${r.lease.token}`, decision('lease_reacquired', 'The worktree lease lapsed: re-acquire it?', [
+        alt('re-acquire as the same owner', 'nobody held it since; the worktree is still ours; head is revalidated before any evidence counts', 'new fencing token'),
+        alt('suspend', 'cautious', 'no reason: the resource is free and owned by this task')], 're-acquire as the same owner', {
+        evidence: ['renew E_EXPIRED', `new token ${r.lease.token}`], expected_effect: 'continue with a fresh lease (worktree meta updated)', rationale: 'Lease expired while the task was waiting or long-running; re-acquired under the same owner.' }),
+      { worktree, lease_ack: false });
+      ctx.cp.worktree = worktree;
+      return null;
+    }
+    const code = r.error?.code;
+    if (['E_HELD', 'E_FENCED', 'E_FOREIGN'].includes(code)) {
+      const diagnosis = `worktree lease ${wt.lease.resource}: ${code}${r.error.holder?.owner ? ` (held by ${r.error.holder.owner})` : ''}`;
+      return decide(ctx, decision('lease_unavailable', 'Another owner holds or held the worktree lease: proceed?', [alt('suspend until inputs change', 'never write under someone else\'s lease', 'blocked'), alt('proceed', 'progress', 'unfenced writes')],
+        'suspend until inputs change', { evidence: [diagnosis], expected_effect: 'no writes until the holder releases or the owner resumes', rationale: 'Fail closed on a foreign lease holder.' }),
+      { patch: { wait: { reason: 'lease_held', until_ms: null, resume_to, diagnosis, next_action: 'check who holds the worktree lease, release it, then resume the task', policy_hash: policyRef(readPolicy(ctx)) } }, to: 'waiting', reason: 'lease held by another owner' });
     }
     // Backend unavailable: unbilled, timed retry (absence of an answer is not availability).
     return decide(ctx, decision('lease_unavailable', 'Lease backend unavailable: proceed?', [alt('wait', 'absence of a lease is not availability', 'delay'), alt('proceed', 'progress', 'unfenced writes')],
-      'wait', { evidence: [`validate ${v?.code ?? 'unknown'}`], expected_effect: 'retry after backoff', rationale: 'Fail closed on the worktree lease.' }),
+      'wait', { evidence: [`renew ${code ?? 'unknown'}: ${String(r.error?.message ?? '').slice(0, 200)}`], expected_effect: 'retry after backoff', rationale: 'Fail closed on the worktree lease.' }),
     { patch: { wait: { reason: 'lease_unavailable', until_ms: now() + 60_000, resume_to } }, to: 'waiting', reason: 'lease unavailable' });
   }
 
@@ -523,7 +566,8 @@ export function createGoalLoop({
       return askOwner(ctx, { kind: 'route', question: `Routing needs the owner: ${r.rationale.join(' ')}`, reason: r.rationale.join(' '), classes: ['route'], keys: [routeKey(ctx)] }, { resume_to: 'planned', policy_ref: policyRef(p) });
     }
     const prev = ctx.cp.strategy || { harness: 'standard', plan_rev: 0, compact: false };
-    const strategy = { ...prev, entry: r.choice, effort: ctx.cp.interpretation?.effort ?? null };
+    const strategy = { ...prev, entry: r.choice, effort: ctx.cp.interpretation?.effort ?? null,
+      cost_est_usd: r.candidates.find((c) => c.id === r.choice)?.cost_est_usd ?? null };   // W2b: the developer gate's first estimate
     const alts = r.candidates.slice(0, 4).map((c) => alt(c.id, `score ${c.score}`, c.cost_est_usd == null ? 'cost unknown' : `est $${c.cost_est_usd}`));
     if (alts.length < 2) alts.push(alt('wait for another compatible runtime', 'more choice', 'only one runtime passes the floors; waiting adds nothing'));
     return decide(ctx, decision('assign_developer', 'Which runtime/model runs the developer role?', alts,
@@ -548,7 +592,25 @@ export function createGoalLoop({
     }
     const lw = await ensureLease(ctx, ctx.v.status);
     if (lw) return lw;
+    const bw = await branchGate(ctx, ctx.v.status);
+    if (bw) return bw;
     return move(ctx, 'executing', ctx.cp.verify_only ? 'resume verification' : `dispatch run ${ctx.id}.run${runNumber(ctx) + 1}`);
+  }
+  // X7: work is only committed and accepted on the task branch; anything else (another branch, detached HEAD) suspends
+  // the task with a diagnosis. -> null | step result
+  async function branchGate(ctx, resume_to, st = null) {
+    const wt = ctx.cp.worktree;
+    if (!wt?.branch) return null;
+    const cur = st || await worktrees.status(wt.path);
+    if (cur.branch === wt.branch) return null;
+    const diagnosis = `worktree is on ${cur.branch === 'HEAD' ? 'a detached HEAD' : `branch ${cur.branch}`} at ${short(cur.head)}, not on the task branch ${wt.branch}`;
+    return decide(ctx, decision('off_task_branch', 'The worktree left the task branch: continue?', [
+      alt('suspend until the owner restores the task branch', 'a SHA the task branch does not contain must never be accepted or delivered', 'blocked'),
+      alt('commit/verify where it is', 'progress', 'evidence and delivery would name the wrong branch'),
+      alt('switch back automatically', 'progress', 'could discard someone else\'s work in the worktree')], 'suspend until the owner restores the task branch', {
+      evidence: [diagnosis], expected_effect: 'no commit or acceptance until the worktree is back on its branch', rationale: 'Out-of-band checkout detected.' }),
+    { patch: { wait: { reason: 'off_task_branch', until_ms: null, resume_to, diagnosis, next_action: `check out ${wt.branch} in the task worktree (keep or discard the foreign commits deliberately), then resume`, policy_hash: policyRef(readPolicy(ctx)) } },
+      to: 'waiting', reason: 'worktree off the task branch' });
   }
   const runNumber = (ctx) => ctx.v.history.filter((h) => h.to === 'executing').length;
 
@@ -584,7 +646,7 @@ export function createGoalLoop({
       }
       const u = run ? adapter.collectUsage(run) : { input_tokens: null, output_tokens: null, usd: null };
       await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, run_id, ...u }, { event_id: `usage-${run_id}` });
-      if (error) await store.append(ctx.id, { event_id: `fail-${run_id}`, kind: 'tool.failed', payload: { run_id, error } });
+      if (error) await store.append(ctx.id, { event_id: `fail-${run_id}`, kind: 'tool.failed', payload: { run_id, error, ...(run ? {} : { not_started: true }) } });
       // Actions the agent asked for are checked against policy, never executed by the loop (GL09).
       const grants = grantsOf(ctx);
       const reqs = (run?.events || []).filter((e) => e.type === 'action_request').slice(0, 20);
@@ -611,6 +673,8 @@ export function createGoalLoop({
     if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
     const lw = await ensureLease(ctx, 'repair');   // the run's files stay in the worktree for the next run
     if (lw) return lw;
+    const bw = await branchGate(ctx, 'repair');
+    if (bw) return bw;
     const head = await commitAll(ctx.id, wt.path, `v2task ${ctx.id}: ${run_id}`);
     const changed = (await g(wt.path, ['diff', '--name-only', `${ctx.v.base_sha}`, head])).split('\n').filter(Boolean);
     if (changed.length) {
@@ -643,6 +707,8 @@ export function createGoalLoop({
     const wt = ctx.cp.worktree;
     const head = ctx.head;
     const st = await worktrees.status(wt.path);
+    const bw = await branchGate(ctx, 'ready', st);
+    if (bw) return bw;
     if (st.head !== head) return revalidate(ctx, st.head, 'Source changed after the last commit/verification (T10): re-verify on the current SHA.');
     if (st.dirty) {
       return onFailure(ctx, { signature: failureSignature({ test: 'worktree', errorClass: 'uncommitted_changes' }), passing: 0, p,
@@ -749,7 +815,10 @@ export function createGoalLoop({
     const adapter = adapterFor(choice);
     if (!adapter) return { stop: await reviewBackoff(ctx, `no adapter for ${choice}`) };
     // Per reviewer and role: a later, more independent reviewer on the same SHA gets its own run, usage and verdict ids.
-    const run_id = `${ctx.id}.${role === 'reviewer' ? 'review' : role}-${short(head)}-e${ctx.epoch}-${choice.replace(/[^\w.-]/g, '_')}`;
+    // N1: every attempt gets its own run id (attempt index), so retried reviews are never deduplicated out of the ledger.
+    const runBase = `${ctx.id}.${role === 'reviewer' ? 'review' : role}-${short(head)}-e${ctx.epoch}-${choice.replace(/[^\w.-]/g, '_')}`;
+    const attempt = ctx.events.filter((e) => e.kind === 'task.started' && String(e.payload.run_id).startsWith(`${runBase}-a`)).length;
+    const run_id = `${runBase}-a${attempt}`;
     const dir = path.join(reviewRoot, `${ctx.id}-${short(head)}-e${ctx.epoch}-${role}`);
     const wt = ctx.cp.worktree;
     const entry = registry.get(choice);
@@ -770,7 +839,7 @@ export function createGoalLoop({
     await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, run_id,
       input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, usd: u.usd ?? null, ...(u.incomplete ? { incomplete: true } : {}) }, { event_id: `usage-${run_id}` });
     if (out.verdict === 'unavailable') {
-      const billed = !!out.run && out.error?.class !== 'unavailable';
+      const billed = isBilled({ started: !!out.run, errorClass: out.error?.class, usage: out.usage });
       if (!billed) return { stop: await reviewBackoff(ctx, `${role} ${choice}: ${out.error?.class || 'no verdict'}`) };
       return { stop: await reviewerFailure(await load(ctx.id), p, choice, out, devEntries) };
     }
@@ -834,7 +903,8 @@ export function createGoalLoop({
       if (!resumed && !changed) return result(ctx, null, `waiting (${w.reason}): ${w.next_action || 'until inputs change'}`, { idle: true });
       return decide(ctx, decision('resume', 'Inputs changed after a no-progress wait: resume?', [alt('resume with a replan', 'new inputs can change the outcome', 'more spend'), alt('stay waiting', 'no spend', 'ignores the new input')],
         'resume with a replan', { evidence: [resumed ? 'owner resumed' : 'project policy changed'], expected_effect: 'replan from scratch', rationale: 'No-progress counters reset on new inputs.' }),
-      { patch: { changes: 0, tried: [], stale: 0, streak: { signature: null, count: 0 }, exclude: [] }, to: w.resume_to || 'replan', reason: 'inputs changed' });
+      { patch: { changes: 0, tried: [], stale: 0, streak: { signature: null, count: 0 }, exclude: [], ...(w.reason === 'lease_held' && resumed ? { lease_ack: true } : {}) },
+        to: w.resume_to || 'replan', reason: 'inputs changed' });
     }
     if (w.reason === 'infra' && admission?.isPaused?.()) {
       return result(ctx, null, 'waiting (infra): admission paused', { until_ms: now() + 60_000 });
@@ -952,6 +1022,7 @@ export function createGoalLoop({
     if (ctx.broken) return result(ctx, null, `store error: ${ctx.v.store_error}; repair the log before stepping`, { idle: true });
     if (TERMINAL.includes(ctx.v.status)) return result(ctx, null, 'terminal', { terminal: true });
     if (isInformational(ctx.v)) return result(ctx, null, 'informational task: not dispatched by the goal loop', { idle: true });
+    if (await recordInterruptedUsage(ctx)) return step(id);
     try {
       if (ctx.pending) return await applyNext(ctx, ctx.pending);   // crash between decision and transition
       return await HANDLERS[ctx.v.status](ctx);
@@ -1001,6 +1072,8 @@ export function createGoalLoop({
       const classes = grants.classes ?? req.classes;
       if (!Array.isArray(classes) || classes.some((c) => !req.classes.includes(c))) throw coded('E_INVALID', `grant exceeds the request (asked: ${req.classes.join(', ') || 'none'})`);
       if (grants.budget_policy !== undefined && req.kind !== 'budget') throw coded('E_INVALID', 'budget authorization only answers a budget stop');
+      // X8: a reached cap is not waivable by a bare confirmation: the owner raises it (or cancels).
+      if (req.kind === 'budget' && req.cap_reached && !grants.budget_policy) throw coded('E_INVALID', 'cap reached: raise it (grants.budget_policy) or cancel the task');
       for (const k of Object.keys(grants)) if (!['classes', 'budget_policy'].includes(k)) throw coded('E_INVALID', `unknown grant field ${k}`);
       const payload = { k: req.k, actor, approval_ref, grants: { classes, keys: req.keys || [], request_kind: req.kind, ...(grants.budget_policy ? { budget_policy: grants.budget_policy } : {}) } };
       return store.append(id, { event_id: `appr-${id}-${req.k}`, kind: 'approval.granted', payload });
