@@ -50,7 +50,9 @@ test('a stall is logged once after it settles, then its outcome when work resume
   assert.equal(stalls.length, 1);
   assert.equal(stalls[0].case, 'continue');
   assert.deepEqual(stalls[0].wouldSend, { text: 'Yes, continue.' });
-  assert.deepEqual(pushes.at(-1), ['s1', 'continue']);
+  // The owner push follows the stall record asynchronously: wait for it rather than racing it under load.
+  for (let i = 0; i < 250 && !pushes.some(([n]) => n === 's1'); i++) await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(pushes.filter(([n]) => n === 's1').at(-1), ['s1', 'continue']);
 
   const after = [...p.slice(0, -4), '❯ yes', '⏺ Working on phase 2', '✶ Thinking…', RULE, '❯ ', RULE, 'x'];
   tick('s1', 'working', after, 9000);
