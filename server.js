@@ -55,6 +55,8 @@
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
 //   GET|PUT /api/layout         → the session list's order / pins / groups ({order,pins,groups,groupNames,collapsed}); PUT merges the keys it carries
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
+//   GET  /api/v2/tasks, /api/v2/tasks/:id → V2 task board (orchestration/http.js); GHOSTY_V2=1 only, else 404 and nothing is built
+//   POST /api/v2/tasks          → create a task (recorded, never started); POST /api/v2/tasks/:id/cancel | approve | deny (owner actions)
 //   GET  /*                     → static files in ./public
 
 import http from 'node:http';
@@ -1020,6 +1022,17 @@ async function readJsonBody(req) {
   });
 }
 
+// V2 task engine routes: opt-in (GHOSTY_V2=1). Off means nothing is imported or constructed: no store, no timers.
+// The goal loop is never started here; creating a task only records it.
+const V2_ON = process.env.GHOSTY_V2 === '1';
+let v2Http = null;
+if (V2_ON) {
+  const [{ createTaskStore }, { createIntake }, { createV2Http }] = await Promise.all([
+    import('./orchestration/store.js'), import('./orchestration/intake.js'), import('./orchestration/http.js')]);
+  const v2Store = createTaskStore({ dir: join(STATE_DIR, 'v2') });
+  v2Http = createV2Http({ store: v2Store, intake: createIntake({ store: v2Store }) });
+}
+
 // ---------------------------------------------------------------------------
 // Session lifecycle + directory picker
 // ---------------------------------------------------------------------------
@@ -1318,6 +1331,14 @@ const server = http.createServer(async (req, res) => {
       && !(p === '/api/transcribe' && /^audio\//i.test(req.headers['content-type'] || ''))
       && !(p === '/api/upload' && (/^image\//i.test(req.headers['content-type'] || '') || /^text\/(markdown|x-markdown|plain)$/i.test(req.headers['content-type'] || '')))) {   // image/* and text/markdown are not CORS-safelisted either
     return json(res, 415, { ok: false, error: 'content-type must be application/json' });
+  }
+
+  // --- V2 task routes (behind the Origin + JSON content-type checks above) ---
+  if (p.startsWith('/api/v2/')) {
+    if (!v2Http) return json(res, 404, { ok: false, error: 'V2 engine is off (set GHOSTY_V2=1)' });
+    const r = await v2Http.handle({ method: req.method, pathname: p, readBody: () => readJsonBody(req) });
+    if (r) return json(res, r.status, r.body);
+    return json(res, 404, { ok: false, error: 'not found' });
   }
 
   // --- reporter intake: loopback peers only, shared token (reporter.token, 0600) ---

@@ -15,6 +15,7 @@ phone/laptop on Tailscale
                                  -> stall + manager -> log / proposed reply / guarded action
 Claude reporter -> loopback + token -> reporter.js -> structured turn facts
 usage transcripts -> usage/ingest.js -> ledger + summary -> usage-view.js
+GHOSTY_V2=1: /api/v2/tasks -> orchestration/http.js -> intake + task store ($GHOSTY_STATE_DIR/v2); goal loop is a module, not started by the server
 ```
 
 The recommended endpoint is Tailscale Serve forwarding to loopback. Native TLS is an alternative; see [INSTALL](INSTALL.md).
@@ -33,6 +34,14 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Session priority, layout, parking | `session-meta.js`, `layout.js`, `parking.js`, `public/policy.js` | `test/layout.test.js`, `test/parking.test.js`, `test/policy.test.js` |
 | Usage, quota, health | `usage/`, `usage-view.js`, `quota.js`, `health.js`, `turn-meter.js` | `test/usage.test.js`, `test/quota-live.test.js`, `test/turn-meter.test.js` |
 | Optional platform operations | `deploy-runner.js`, `leases.js`, `lease-watch.js`, `handoffs.js`, `vpt-locks.js` | `test/deploy-runner.test.js`, `test/lease-watch.test.js`, `test/handoffs.test.js` |
+| V2 task contract, store, policy, intake | `orchestration/task-contract.js`, `store.js`, `policy.js`, `intake.js`, `events.js` | `test/v2-task-core*.test.js`, `test/v2-store*.test.js`, `test/v2-policy.test.js` |
+| V2 goal loop and verifier | `orchestration/goal-loop.js`, `verifier.js`, `roles.js` | `test/v2-goal-loop.test.js` |
+| V2 router, registry, budget (shadow only) | `orchestration/router.js`, `model-registry.js`, `models.json`, `budget.js` | `test/v2-routing*.test.js`, `test/v2-budget.test.js` |
+| V2 runtime adapters, worktrees | `orchestration/adapters/`, `worktrees.js` | `test/v2-adapters*.test.js`, `test/v2-worktrees*.test.js` |
+| V2 leases, incidents, system operations | `orchestration/lease-authority.js`, `incidents.js`, `telemetry.js`, `system-ops.js` | `test/v2-lease-authority*.test.js`, `test/v2-system-ops*.test.js` |
+| V2 HTTP routes and Tasks view | `orchestration/http.js` (wired in `server.js` behind `GHOSTY_V2=1`), `public/tasks-view.js` | `test/v2-http.test.js`, `test/v2-tasks-view.test.js`; browser: `scripts/v2-ui-check.js` (dev only) |
+| V2 scoring report | `scripts/v2-score.js`, [SCORING](v2/SCORING.md) | `test/v2-score.test.js` |
+| Documentation links | `README.md`, `docs/` | `test/v2-docs-links.test.js` |
 | Operations and reports | `scripts/`, `systemd/` | `test/daily-checks.test.js`, `test/scorecard.test.js` |
 
 Find a route with `rg -n '/api/<name>' server.js api-extras.js`; follow imported helpers and matching `test/` files.
@@ -42,6 +51,7 @@ Do not import `server.js` into a unit test: importing it starts listeners and ba
 
 | Location | Contents | Handling |
 |---|---|---|
+| `$GHOSTY_STATE_DIR/v2` | V2 task store: `tasks/<id>/events.jsonl` (source of truth), derived `snapshot.json`, `index.json` | Created only when `GHOSTY_V2=1` and a task is touched; separate from V1 state; removing it reverts V2 (see [migration](v2/MIGRATION.md)) |
 | `$GHOSTY_STATE_DIR` (default `~/.local/state/ghosty`) | Manager switches, `layout.json`, session metadata, budgets, logs, reporter token, push keys, deploy records and usage summaries | Private; back up securely; use a fresh temp directory for tests |
 | `~/.ghosty/uploads/` | Attached images | Private; outside GHOSTY_STATE_DIR; include separately in backup/removal decisions |
 | `.env` or a private service environment file | Local settings and optional credentials | Not automatically loaded by Node; mode 0600; never commit |

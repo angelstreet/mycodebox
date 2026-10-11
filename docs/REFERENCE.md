@@ -133,6 +133,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `TLS_KEY` / `TLS_CERT` | `certs/key.pem` / `certs/cert.pem` under checkout | native TLS starts only when both exist; same HOST as HTTP |
 | `TLS_PORT` | `7443` (`443` if PORT=443) | native HTTPS port; HTTP remains enabled |
 | `TMUX_BIN` | `tmux` | tmux executable |
+| `GHOSTY_V2` | unset | `1` enables the V2 task routes (`/api/v2/tasks`, store in `$GHOSTY_STATE_DIR/v2`). Unset: those routes return 404 and nothing is constructed. It never starts the goal loop |
 
 ### Langfuse evaluation (TASK-44 phase 12)
 
@@ -828,6 +829,28 @@ in / out / cache r / cache w (`12.3M`). A session row opens that session's card;
 - A summary written on an earlier UTC day (dead tailer) reports no today usage and no outliers. The Today tab and
   per-session `today` / `days` need the tailer that writes the `today` block: after updating, restart `ghosty-usage`.
 - Helpers (pure, unit-tested): `public/usage.js`; server side `usage-view.js`; tests `test/usageview.test.js`.
+
+## V2 task API (opt-in)
+
+Enabled only with `GHOSTY_V2=1`. Handlers are in `orchestration/http.js` (tested without the server); `server.js` runs
+them after its Origin check and the JSON content-type check for non-GET requests. Store: `$GHOSTY_STATE_DIR/v2`.
+All bodies are JSON objects, max 64 KB, with unknown fields rejected. Task ids match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
+Errors are `{ ok:false, error, code }` (400 invalid, 404 not found, 409 conflict or terminal, 413 too large, 503 store failed).
+
+| Route | Body | Result |
+|---|---|---|
+| `GET /api/v2/tasks` | none | `{ tasks:[{ task_id, title, goal (200 chars), state, outcome, next_action, updated_at, created_at, project_id, risk_class, source, parent_task_id, delivery{ requested, integrated, label }, store_error }], approvals:[pending requests across all tasks] }`, newest first. `store_error` is a coarse text; the detail is in the server log |
+| `GET /api/v2/tasks/:id` | none | the summary plus goal, scope, `definition_of_done`, `base_sha`, `head_sha`, `acceptance_checks[{ id, command, required, status, latest_evidence{ sha, exit, duration_ms, artifact, actor, ts, on_head } }]`, `verdicts`, `decisions` (rationale, evidence, alternatives), `usage` (`null` = unknown; `incomplete: true` = partial counts; per-record too), `runs` (role, runtime, model, effort, start/end, outcome, usage), `roles`, `allowed_actions` (approval classes, prohibited actions, policy allowlists once a run read the policy), `parent_task_id` and `children`, `delivery`, `leases{ resources, effects }`, `incidents`, `history`, `pending_approval` |
+| `POST /api/v2/tasks` | `goal` (required) and optional `title, repository (absolute path), base_sha, project_id, scope, acceptance_checks, definition_of_done, risk_class, priority, runtime_capabilities, prohibited_actions, runtime_allowlist, model_allowlist, budget_policy, template (goal or informational), idempotency_key` | 201 with the summary and `defaults_applied`. Goes through `orchestration/intake.js` with source `ui` and actor `owner`; the same key returns the same task. Records only: nothing is started |
+| `POST /api/v2/tasks/:id/cancel` | `{ reason? }` | cancels a non-terminal task as `owner` |
+| `POST /api/v2/tasks/:id/approve` | `{ action_id, sha?, reason? }` | records `approval.granted` for the pending request only. `action_id` must equal `pending_approval.action_id`; `sha` is required when the task has a head SHA and must equal it. Covers exactly that request's action classes. 409 `E_NO_PENDING_APPROVAL`, `E_STALE_ACTION` or `E_SHA_MISMATCH` otherwise |
+| `POST /api/v2/tasks/:id/deny` | same | records `approval.denied` |
+
+`outcome` is `done` only for state `accepted`; otherwise `not_yet_done`, `waiting`, `needs_owner`, `unrecoverable` or
+`cancelled`, and `unknown` when the task log cannot be replayed. Approve and deny only write the owner's decision to the
+task log in the same shape the goal loop reads; the task moves when the goal loop runs, which is not started by the server.
+
+The scoring report is a script, not a route: [`scripts/v2-score.js`](v2/SCORING.md).
 
 ## Architecture
 
