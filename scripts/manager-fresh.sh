@@ -6,6 +6,8 @@
 set -euo pipefail
 S=manager; BASE="${GHOSTY_URL:-http://127.0.0.1:7777}"; H=(-H 'content-type: application/json' -H "origin: $BASE")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# The timer's PATH may lack the user-local CLI dir the old hard-coded path used.
+export PATH="$HOME/.local/bin:$PATH"
 CMD=$(node "$SCRIPT_DIR/manager-command.js")
 state() { curl -s -m 5 "$BASE/api/sessions" | python3 -c "import json,sys;v=json.load(sys.stdin)['status'].get('$S',{});s=v.get('stall') if isinstance(v.get('stall'),dict) else {};print(v.get('state'), 'draft' if s.get('draft') else 'ok')"; }
 tmux has-session -t "=$S" 2>/dev/null || { echo "no $S session"; exit 1; }
