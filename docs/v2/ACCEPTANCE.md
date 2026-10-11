@@ -15,7 +15,9 @@ The statuses below were produced by `node scripts/v2-acceptance.js` at the commi
   carries the id, or an independent verifier recorded an open defect against the row (a failing `todo` test; the
   runner maps verifier defects without a matrix prefix to the rows they contradict, in `DEFECT_ROWS`). **MANUAL**: evidence that cannot run inside `node --test`; T20 (the browser check) becomes
   PASS/FAIL when the runner is started with `PLAYWRIGHT_CORE` set, MANUAL otherwise. **PENDING / BLOCKED**: not used.
-- T16 additionally requires every test in every pre-V2 test file to pass.
+- T16 additionally requires every test in every pre-V2 test file to pass. "Pre-V2" is pinned to `origin/main`'s test list in
+  the committed manifest `scripts/pre-v2-tests.json` (regenerate from `git ls-tree --name-only origin/main test/`; offline-safe),
+  and a pinned file with no results fails the row. A failure or open defect that maps to no matrix row fails the run.
 - `test/v2-acceptance-matrix.test.js` pins these rules.
 
 Scope labels say exactly what ran: *fake runtime* = the scriptable in-process adapter
