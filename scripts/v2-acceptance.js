@@ -30,6 +30,8 @@ const LEGACY_FOR = { T16: (f) => !path.basename(f).startsWith('v2-') };
 const DEFECT_ROWS = {
   'test/v2-goal-loop-verify.test.js': { V1: ['GL06'], V2: ['T13'], V3: ['T13'], V4: ['GL09'], V5: ['T14'], V6: ['GL09'], V7: ['GL09'], V7b: ['GL09'],
     V8: ['GL04', 'GL07'], V9: ['GL07'], V10: ['GL09'], V12b: ['T18', 'GL06'], V13: ['GL07'] },
+  'test/v2-goal-loop-verify4.test.js': { Y3b: ['T10', 'GL12'], Y6: ['T06', 'T18'], Y7: ['T13'] },
+  'test/v2-lease-authority-verify4.test.js': { 'adoptOwn:': ['T25', 'T27', 'GL10'] },
 };
 const defectRows = (r) => (r.todo && r.file ? DEFECT_ROWS[r.file]?.[String(r.name).split(/\s/)[0]] ?? [] : []);
 
