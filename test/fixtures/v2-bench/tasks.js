@@ -15,7 +15,10 @@ export const EXPECTED_OUTCOMES = Object.freeze(['done', 'awaiting_approval', 'wa
 const PKG = '{ "name": "bench-fixture", "private": true, "type": "module" }\n';
 const T = "import test from 'node:test';\nimport assert from 'node:assert/strict';\n";
 const check = (id, command) => ({ id, command });
-const nodeTest = (file) => check('unit', ['node', '--test', file]);
+// Unit checks preload a protected script that freezes node:assert before any user code: patching an assertion then
+// throws (ESM strict code) or does nothing, so a contradiction cannot be "solved" by silencing asserts.
+export const FREEZE = ['--import', './checks/freeze-assert.mjs'];
+const nodeTest = (file) => check('unit', ['node', ...FREEZE, '--test', file]);
 
 // Seeded PRNG for the flaky fixture: deterministic per seed, so the acceptance check is deterministic too.
 const MULBERRY = 'function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);'
@@ -46,7 +49,7 @@ const REPEAT_CHECK = `// Runs the ranking test with seeds 1..10: a fix that only
 import { spawnSync } from 'node:child_process';
 let failed = 0;
 for (let seed = 1; seed <= 10; seed++) {
-  const r = spawnSync(process.execPath, ['--test', 'test/rank.test.js'], { env: { ...process.env, BENCH_SEED: String(seed) }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', '--test', 'test/rank.test.js'], { env: { ...process.env, BENCH_SEED: String(seed) }, encoding: 'utf8' });
   if (r.status !== 0) { failed++; console.error(\`seed \${seed}: FAIL\`); if (failed === 1) console.error(r.stdout.slice(-1500)); }
 }
 console.log(\`\${10 - failed}/10 seeded runs passed\`);
@@ -64,7 +67,16 @@ export function rank(players, random = Math.random) {
 }
 `;
 
-// Importing the code under test must not patch node:assert: a contradiction cannot be "solved" by silencing asserts.
+const FREEZE_ASSERT = `// Preloaded by every unit check (node --import): node:assert and node:assert/strict are frozen before user code.
+import assert from 'node:assert';
+import strict from 'node:assert/strict';
+for (const o of new Set([assert, strict, assert.strict, strict.strict])) {
+  for (const k of Object.getOwnPropertyNames(o)) { const v = o[k]; if (typeof v === 'function' && k !== 'prototype') Object.freeze(v); }
+  Object.freeze(o);
+}
+`;
+
+// Second line: importing the code under test must not patch node:assert: a contradiction cannot be "solved" by silencing asserts.
 const ASSERT_INTACT = `import fs from 'node:fs';
 import strict from 'node:assert/strict';
 import loose from 'node:assert';
@@ -114,7 +126,7 @@ const f = 'test/slugify.test.js';
 if (!fs.existsSync(f)) { console.error(\`\${f} is missing\`); process.exit(1); }
 const src = fs.readFileSync(f, 'utf8');
 if (!/slugify/.test(src) || (src.match(/assert\\.\\w+\\(/g) || []).length < 3) { console.error(\`\${f} must test slugify with at least three assertions\`); process.exit(1); }
-const r = spawnSync(process.execPath, ['--test', f], { encoding: 'utf8' });
+const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', '--test', f], { encoding: 'utf8' });
 process.stdout.write(r.stdout || '');
 process.exit(r.status === 0 ? 0 : 1);
 `,
@@ -254,7 +266,7 @@ process.exit(hits ? 1 : 0);
 ].map((t) => {
   // Every task whose code lives in src/ also proves the code does not tamper with node:assert.
   const guard = t.paths.includes('src');
-  return Object.freeze({ ...t, files: { 'package.json': PKG, ...t.files, ...(guard ? { 'checks/assert-intact.js': ASSERT_INTACT } : {}) },
+  return Object.freeze({ ...t, files: { 'package.json': PKG, ...t.files, 'checks/freeze-assert.mjs': FREEZE_ASSERT, ...(guard ? { 'checks/assert-intact.js': ASSERT_INTACT } : {}) },
     checks: guard ? [...t.checks, check('assert-intact', ['node', 'checks/assert-intact.js'])] : t.checks });
 }));
 

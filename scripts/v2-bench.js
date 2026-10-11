@@ -94,6 +94,18 @@ export function sameModel(a, b) {
   return (na === 'default' || nb === 'default') && familyOf(a) === familyOf(b);
 }
 
+// The smallest per-task cap that fits one developer run and one review for every planned pair: a claude run counts
+// at its --max-budget-usd (the goal loop estimates it no lower), other runtimes at their estimate.
+export function minViableTaskUsd(pairs) {
+  const cost = (p) => p.run_usd ?? p.est_usd ?? 0;
+  let best = { usd: 0, pair: null };
+  for (const x of pairs) {
+    const usd = Math.round((cost(x.dev) + cost(x.rev)) * 1e4) / 1e4;
+    if (usd > best.usd) best = { usd, pair: `${x.spec} + reviewer ${x.revSpec}` };
+  }
+  return best;
+}
+
 // ---------- suite ledger ----------
 // Known spend is measured USD; estimated is the conservative estimate standing in for usage records without USD;
 // unknown_runs counts runs with at least one such record. The cap compares known + estimated.
@@ -217,6 +229,13 @@ export async function runBench(opts) {
   // Floored so that the reservations of every planned run fit inside the suite cap.
   const taskUsd = o.task_usd ?? Math.floor((o.max_usd / Math.max(1, planned.length)) * 1e4) / 1e4;
   if (!(taskUsd > 0)) throw new Error(`per-task budget rounds to ${taskUsd} USD for ${planned.length} runs: raise --max-usd or pass --task-usd`);
+  // A default share below one developer run plus one review would only produce budget_stop: refuse it at setup.
+  const viable = minViableTaskUsd(pairs);
+  if (o.task_usd == null && taskUsd < viable.usd) {
+    throw new Error(`default per-task budget ${taskUsd} USD (--max-usd ${o.max_usd} / ${planned.length} runs) is below the minimum viable ${viable.usd} USD `
+      + `(${viable.pair}: one developer run + one review): pass --task-usd ${viable.usd} or more (later runs are skipped once the suite cap is reached), `
+      + 'raise --max-usd, or run fewer tasks/runtimes');
+  }
   const log = o.log || (() => {});
 
   const outDir = path.resolve(o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-out-')));

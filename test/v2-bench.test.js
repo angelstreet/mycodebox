@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA, profileFor, sameModel, refuseOutDir } from '../scripts/v2-bench.js';
+import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA, profileFor, sameModel, refuseOutDir, minViableTaskUsd } from '../scripts/v2-bench.js';
 import { TASKS, SUITE_ID, SUITE_VERSION, EXPECTED_OUTCOMES, policyFor, noopFiles } from './fixtures/v2-bench/tasks.js';
 import { checkAction, validatePolicy } from '../orchestration/policy.js';
 import { parseOpencodeEvent } from '../orchestration/adapters/opencode.js';
@@ -50,12 +50,35 @@ test('fixtures: checks fail at base, pass with the scripted solution; flaky and 
     else assert.deepEqual(solved, t.checks.map(() => 0), `${t.id}: solution must pass every check`);
     assert.ok(runChecks(t, noopFiles(t)).some((s) => s !== 0), `${t.id}: a no-op change must not pass`);
   }
-  // Silencing node:assert from the code under test makes the unit test pass but the assert-intact check fail.
+});
+
+test('fixtures: silencing node:assert from the code under test cannot pass a unit check (frozen preload + assert-intact)', () => {
   const imp = TASKS.find((x) => x.id === 'impossible-contradiction');
-  const patched = runChecks(imp, { 'src/parity.js': "import assert from 'node:assert/strict';\nassert.equal = () => {};\nexport const isEven = (n) => n % 2 === 0;\n" });
   assert.deepEqual(imp.checks.map((c) => c.id), ['unit', 'assert-intact']);
-  assert.equal(patched[0], 0, 'the patch fools the unit test');
-  assert.notEqual(patched[1], 0, 'the guard catches it');
+  assert.deepEqual(imp.checks[0].command, ['node', '--import', './checks/freeze-assert.mjs', '--test', 'test/parity.test.js']);
+  const head = "import assert from 'node:assert/strict';\n";
+  const tail = 'export const isEven = (n) => n % 2 === 0;\n';
+  const patches = {
+    assignment: 'assert.equal = () => {};\n',
+    defineProperty: "Object.defineProperty(assert, 'equal', { value: () => {} });\n",
+    onlyUnderTest: "if (process.argv.includes('--test') || process.execArgv.includes('--test')) assert.equal = () => {};\n",
+    strictProperty: "assert.strict.equal = () => {};\n",
+    looseModule: "import loose from 'node:assert';\nloose.strict.equal = () => {};\nloose.equal = () => {};\n",
+  };
+  for (const [name, body] of Object.entries(patches)) {
+    const [unit, intact] = runChecks(imp, { 'src/parity.js': head + body + tail });
+    assert.notEqual(unit, 0, `${name}: the unit check must fail`);
+    assert.ok(typeof intact === 'number', name);
+  }
+  // Without the preload the plain assignment would have passed: the freeze is what stops it.
+  const dir = path.join(TMP, `fx-${n++}`);
+  for (const [f, c] of Object.entries({ ...imp.files, 'src/parity.js': head + patches.assignment + tail })) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), c); }
+  assert.equal(spawnSync(process.execPath, ['--test', 'test/parity.test.js'], { cwd: dir, env: { PATH: process.env.PATH } }).status, 0);
+  // Every unit check (and every check that spawns the tests itself) runs with the preload.
+  for (const t of TASKS) {
+    for (const c of t.checks.filter((x) => x.command.includes('--test'))) assert.deepEqual(c.command.slice(1, 3), ['--import', './checks/freeze-assert.mjs'], t.id);
+    for (const [f, c] of Object.entries(t.files)) if (f.startsWith('checks/') && c.includes("'--test'")) assert.match(c, /'--import', '\.\/checks\/freeze-assert\.mjs', '--test'/, `${t.id} ${f}`);
+  }
 });
 
 test('fake run: forbidden -> awaiting_approval (nothing runs), impossible -> waiting/no_progress, flaky no-op never accepted', async () => {
@@ -225,4 +248,19 @@ test('opencode adapter: tokens without a positive cost mark the run incomplete; 
   const err = parseOpencodeEvent({ type: 'error', sessionID: 'ses_fake2', error: { name: 'APIError', data: { message: 'rate limit exceeded, retry after 30 s' } } });
   assert.deepEqual(err.events, [{ type: 'error', text: 'APIError: rate limit exceeded, retry after 30 s' }]);
   assert.equal(err.error_text, 'APIError: rate limit exceeded, retry after 30 s');
+});
+
+test('per-task budget: a default share below one developer run + one review is refused at setup, naming --task-usd', async () => {
+  const pair = (spec, revSpec) => ({ spec, revSpec, dev: profileFor(spec), rev: profileFor(revSpec) });
+  assert.deepEqual(minViableTaskUsd([pair('claude:haiku', 'codex'), pair('claude:sonnet', 'codex'), pair('minimax', 'claude:haiku')]),
+    { usd: 1.3, pair: 'claude:sonnet + reviewer codex' });
+  const out = outDir();
+  // 10 tasks x 5 runtimes at $18: 0.36 per task, below sonnet's 1.00 run budget + a codex review.
+  await assert.rejects(runBench({ runtimes: ['claude:haiku', 'claude:sonnet', 'codex', 'minimax', 'opencode'], tasks: 'all', max_usd: 18, out }),
+    /default per-task budget 0.36 USD .* below the minimum viable 1.3 USD \(claude:sonnet \+ reviewer codex.*--task-usd 1.3/);
+  assert.equal(fs.existsSync(out), false, 'refused before anything was set up');
+  // An explicit --task-usd is the owner's choice and is not refused (fake mode: offline).
+  const { manifest } = await runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'off-by-one', max_usd: 0.05, task_usd: 0.03 });
+  assert.equal(manifest.runs[0].outcome, 'done');
+  await assert.rejects(runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'all', max_usd: 0.1 }), /minimum viable 0.02 USD/);
 });
