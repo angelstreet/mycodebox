@@ -138,3 +138,78 @@ While working, keep line 1 of `V2_PROGRESS.md` as `STATUS: RUNNING — <current 
 If truly blocked on the owner with no independent work left, use `STATUS: OWNER-BLOCKED — <question>`.
 Push `v2/integration` and active task branches after every phase checkpoint so progress is visible
 on GitHub.
+
+## 10. Round 2 (owner, 2026-10-11)
+
+These override earlier text in this file and the V2 specs where they conflict. The owner also decides the AGENTS.md /
+`docs/CONTRACT.md` wording for item 2.
+
+### 0. Context you must know
+- GitHub history was rewritten tonight to scrub the tailnet host/IP (replaced by `<tailnet-host>`, `<tailnet>`,
+  `<tailscale-ip>`). Your clone is reset to the rewritten `origin/v2/integration`. Every SHA quoted in V2_PROGRESS.md,
+  V2_VERIFICATION.md, docs/v2/* and the PR text is now a **pre-rewrite SHA** — say so where they appear, and quote
+  current SHAs for everything you run from now on.
+- Only branch from `origin/*`. Never push anything containing the real tailnet name or Tailscale IP (both are in the private denylist); extend the private leak
+  denylist with both and keep running the leak scan before every push.
+- Token frugality rules (OWNER_DECISIONS §3) still apply. Keep your own context small: read files partially, rely on
+  V2_PROGRESS.md.
+- Do **not** wire the V2 engine into `server.js` in this round.
+
+### 1. Clean V2_VERIFICATION.md
+Rewrite it as one coherent, current document: status at the top, gates on the exact current SHA (npm test on Node 23.6 and
+24.21, reporter suite, acceptance matrix summary linking `docs/v2/ACCEPTANCE.md`, T20 browser check, leak scan), live
+provider smoke table, and an explicit "not covered" list. No stale "NOT RUN" headers, no references to missing sections, no
+contradictions with the PR. History may go to a short appendix. Re-run the gates on the final SHA at the end of the round.
+
+### 2. Sessions never ask for permission (owner decision)
+Dashboard-created and resumed sessions must start without permission prompts:
+- Claude: `--dangerously-skip-permissions`; Codex: `--dangerously-bypass-approvals-and-sandbox` (yolo);
+  MiniMax `mcode`: its full-permission mode (find the exact flag with `mcode --help`).
+- Restore automatic folder trust for Claude and MiniMax (the removed `trustFolder` behaviour) so no trust dialog appears.
+- Cover every launch path: create, resume, park/wake, manager (`managerCommand`, `manager-fresh.sh`), scripts.
+- `AGENT_CMD_*` env overrides still win. Drop the "bypass" startup warnings for these defaults; keep the HOST warning.
+- Update AGENTS.md, docs/CONTRACT.md, docs/INSTALL.md, README to state this is the owner's chosen default. The
+  forbidden-topic filter, manager hard floors and protected-action gates (merge/push/deploy/credentials) are unchanged.
+- V2 orchestration workers (adapters) keep their current launch modes unless the dry run (§6) shows a worker blocked by
+  a permission prompt; then run workers with the bypass flags inside their isolated worktree and record the decision.
+
+### 3. No tailnet identifiers in the repo, but keep the features working
+- `public/.well-known/assetlinks.json` (Android app link) must be produced from configuration (env, e.g. package name and
+  cert fingerprint) or served from the state dir — not committed with a real tailnet name.
+- The Langfuse link and the "use the https address" hints must come from configuration (check what the branch already does).
+- Document the new `.env` keys in INSTALL and put "set these before upgrading" in the owner-action list.
+
+### 4. Close every follow-up
+m1, m2, m3, m4, m6, the T15 "reviewer approves, tests red" test, the T20 same-origin positive control, and anything else
+still open in V2_PROGRESS.md. Each with tests and an independent reviewer (Sonnet author / Opus reviewer; Fable only for
+m3 and m6). Remove each from the open list only when its test passes on the current SHA.
+
+### 5. OpenCode
+Install OpenCode in user space on the host (no sudo, e.g. under ~/.local). Run its live smoke with
+`scripts/v2-live-smoke.js`; fix the adapter if the real output format differs from the fake.
+
+### 6. Scoring, then a dry run — before any wiring
+Goal (owner): be able to score the tool and improve it automatically, safely.
+
+a. **Scorecard**, per task run and aggregated per model / runtime / role / task class: verified completion rate,
+   first-pass acceptance, cost per verified completion, latency, rework rounds, owner interventions (approvals asked,
+   nudges), defects caught by the independent reviewer, regressions after acceptance. Unknown stays unknown.
+b. **Tool score**: a small composite with documented weights, computed over a fixed benchmark suite (below), so two
+   versions of mycodebox can be compared run against run.
+c. **Auto-improve, approval-gated**: from scores, generate *proposals* (router weight / model registry changes evaluated in
+   shadow with the decision diff shown; role prompt or harness changes), each recorded as a V2 task in
+   `awaiting_approval`. Nothing applies itself without owner approval. Log proposals in the decision journal.
+d. Show the scorecard read-only in the Tasks view and via `scripts/v2-score.js`. Update docs/v2/SCORING.md.
+
+**Dry run (benchmark suite)**: 8–12 easy-to-verify tasks in disposable git repos, run through the goal-loop harness (not the
+server) with real runtimes — Claude (Haiku and Sonnet), Codex, MiniMax, OpenCode — and an independent reviewer of a
+different model. Include: fix a failing unit test; add a small function with tests; refactor keeping tests green; a doc fix
+with link check; a task that asks for a forbidden action (must stop at awaiting_approval); a task whose test cannot pass
+(must end `waiting`/no_progress, never done); a flaky test (must be diagnosed, not accepted blindly). Owner-authorized
+real-provider spend for this round: **USD 20 total**, set as an explicit `budget_policy` and reported. Score every run
+with (a)/(b), fix the defects the dry run exposes (repair loop), and re-run until the suite is stable. Commit the suite
+(`scripts/v2-bench.js` + fixtures, synthetic only) so it can be re-run after wiring.
+
+### 7. Deliver round 2
+Push `v2/integration`, update the PR #1 description (round-2 section: what changed, scorecard and dry-run results, updated
+owner actions), keep it draft. Then set line 1 of V2_PROGRESS.md to `STATUS: DELIVERED <sha> <pr-url> (round 2)`.

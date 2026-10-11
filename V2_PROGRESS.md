@@ -1,4 +1,4 @@
-STATUS: DELIVERED f31a996 https://github.com/angelstreet/mycodebox/pull/1
+STATUS: RUNNING — round 2: §1–§7 of OWNER_DECISIONS §10 starting (pre-rewrite SHAs above are historical)
 
 # V2 progress
 
@@ -7,7 +7,23 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Delivered: draft PR #1 at f31a996 (tested SHA; this commit only updates this file). Owner decides on ready/merge/deploy.
+Round 2 (OWNER_DECISIONS §10) in progress; see "Round 2" below. SHAs quoted before round 2 in this file, in
+V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
+scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
+
+## Round 2
+
+Base: `origin/v2/integration` e1a9a5b (post-rewrite).
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R2-1 | Clean V2_VERIFICATION.md, gates on final SHA | coordinator | todo | |
+| R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | todo | |
+| R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | todo | |
+| R2-4 | m1 m2 m3 m4 m6, T15 red-tests half, T20 same-origin control | Sonnet / Opus (m3,m6 Fable) | todo | |
+| R2-5 | OpenCode installed in user space, live smoke | coordinator | todo | |
+| R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | todo | |
+| R2-7 | Push, PR #1 round-2 section, DELIVERED | coordinator | todo | |
 
 ## Plan (waves, max 3 concurrent developers)
 
