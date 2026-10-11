@@ -28,7 +28,10 @@ const NAMESPACES = [
 ];
 // Length cap keeps every derived file name (`.<encoded>.<uuid>.tmp`) under the 255-byte name limit.
 export const MAX_RESOURCE_LEN = 150;
+// Encoded length bounds the derived file names too (a slash-heavy branch name expands under percent-encoding).
+// branch:main / branch:integration would alias the protected names: one real branch must have one lease name.
 export const validResource = (r) => typeof r === 'string' && r.length <= MAX_RESOURCE_LEN && !r.includes('..')
+  && encodeURIComponent(r).length <= 200 && !/:branch:(?:main|integration)$/.test(r)
   && NAMESPACES.some((re) => re.test(r));
 // Code-unit order, not localeCompare: every process must agree on the same order or ordered acquisition is moot.
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -340,6 +343,9 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
       if (e.code !== 'ENOENT') throw wrap('read', e);
       // O(1) lost-state guard: restarting the generation after a lost record could reuse a token.
       if (await statOrNull(path(resource, 'seen'))) throw unavailable('lease record missing but resource has history');
+      // Marker gone too (e.g. all of the resource's files removed): the audit log is the last witness. Only paid when
+      // both record and marker are missing, i.e. a resource's first acquire.
+      if (await auditMentions(resource)) throw unavailable('lease record missing but audit shows history');
       return null;
     }
     return parseRecord(txt, resource);
@@ -367,6 +373,17 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
     }
   }
 
+  async function auditMentions(resource) {
+    let txt;
+    try { txt = await p.readFile(auditPath, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return false; throw wrap('audit read', e); }
+    const needle = JSON.stringify(resource);
+    for (const line of txt.split('\n')) {
+      if (!line.includes(needle)) continue;
+      try { const e = JSON.parse(line); if (e.resource === resource && Number.isInteger(e.token)) return true; } catch { /* torn line */ }
+    }
+    return false;
+  }
+
   async function appendAudit(entries) {
     try { await writeDurable(auditPath, entries.map((e) => JSON.stringify(e) + '\n').join(''), 'a'); }
     catch (e) { throw wrap('audit', e); }
@@ -381,7 +398,16 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
     const rec = await readRecord(resource);                         // corrupt -> throws: never break on doubt
     if (rec?.holder && clock() < rec.holder.expires_at) return;     // live holder: wait, then fail closed
     let bh;
-    try { bh = await p.open(bp, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') return; throw wrap('break lock', e); }
+    try { bh = await p.open(bp, 'wx', 0o600); } catch (e) {
+      if (e.code !== 'EEXIST') throw wrap('break lock', e);
+      // A breaker that died on this host leaves <r>.break behind: clear it once old and its pid is gone (next try breaks).
+      const bst = await statOrNull(bp), binfo = await readJson(bp);
+      if (bst && binfo?.host === host && !pidAlive(binfo.pid) && now() - bst.mtimeMs >= staleLockMs) {
+        const aside = `${bp}.${randomUUID()}`;
+        try { await p.rename(bp, aside); if (sameFile(bst, await statOrNull(aside))) await p.unlink(aside); else await p.rename(aside, bp).catch(() => {}); } catch { /* fail closed */ }
+      }
+      return;
+    }
     try {
       try { await bh.writeFile(JSON.stringify({ pid: process.pid, host, at: now() })); } finally { await bh.close(); }
       if (!sameFile(st, await statOrNull(lp))) return;              // changed since judged: not ours to break

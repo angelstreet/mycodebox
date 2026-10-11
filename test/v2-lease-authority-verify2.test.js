@@ -33,21 +33,28 @@ function hookedFs(hooks = {}) {
 
 // --- crashed breaker leftovers -------------------------------------------------------------------------------------------
 
-test('crashed breaker left <res>.break next to a stale lock: fails closed, never two holders, recovers once .break is removed', async () => {
+test('crashed breaker left <res>.break next to a stale lock: a dead breaker\'s .break self-heals, never two holders; a live one blocks', async () => {
   const dir = await tmp();
   const auth = createLeaseAuthority({ backend: fileBackend({ dir, lockWaitMs: 200, staleLockMs: 10 }) });
   const lp = join(dir, `${K}.lock`), bp = join(dir, `${K}.break`);
+  // live breaker on this host (our own pid): fail closed, nothing broken
   await writeFile(lp, JSON.stringify({ nonce: 'crashed', pid: 2 ** 22 + 4242, host: hostname() }));
   await ageFile(lp);
+  await writeFile(bp, JSON.stringify({ pid: process.pid, host: hostname() }));
+  await ageFile(bp);
+  const live = await Promise.all([auth.acquire(R, opts('a')), auth.acquire(R, opts('b'))]);
+  assert.deepEqual(live.map((r) => r.code), ['E_UNAVAILABLE', 'E_UNAVAILABLE']);
+  assert.ok(realFs.existsSync(lp) && realFs.existsSync(bp), 'a live breaker is never second-guessed');
+  // dead breaker: its .break is cleared, a later attempt breaks the stale lock; at most one holder at every step
   await writeFile(bp, JSON.stringify({ pid: 2 ** 22 + 4243, host: hostname() }));
   await ageFile(bp);
-  const rs = await Promise.all([auth.acquire(R, opts('a')), auth.acquire(R, opts('b')), auth.acquire(R, opts('c'))]);
-  assert.deepEqual(rs.map((r) => r.code), ['E_UNAVAILABLE', 'E_UNAVAILABLE', 'E_UNAVAILABLE']);
-  assert.ok(realFs.existsSync(lp), 'the stale lock is not broken while a breaker (even a dead one) holds .break');
-  await unlink(bp);                                   // manual recovery per LEASES.md
-  const after = await Promise.all([auth.acquire(R, opts('a')), auth.acquire(R, opts('b'))]);
-  assert.equal(after.filter((r) => r.ok).length, 1);
-  assert.equal(after.find((r) => !r.ok).code, 'E_HELD');
+  const holders = [];
+  for (let i = 0; i < 4 && !holders.length; i++) {
+    const rs = await Promise.all([auth.acquire(R, opts('a')), auth.acquire(R, opts('b')), auth.acquire(R, opts('c'))]);
+    assert.ok(rs.filter((r) => r.ok).length <= 1, JSON.stringify(rs.map((r) => r.code)));
+    holders.push(...rs.filter((r) => r.ok));
+  }
+  assert.equal(holders.length, 1, 'recovers without manual steps');
   assert.equal(await files(dir, '.break').then((l) => l.length), 0);
 });
 
@@ -228,7 +235,6 @@ test('.seen: with the marker intact, a deleted record is detected by every opera
 });
 
 test('.seen: per-resource cleanup (`rm <res>.*`) silently restarts the generation although audit.jsonl still holds the history',
-  { todo: 'defect (low): the lost-record guard moved from audit.jsonl to a per-resource marker; removing the resource\'s files together (the manual-recovery shape) restarts generation at 1 undetected, while the audit log in the same directory records token 2 for that resource' },
   async () => {
     const dir = await tmp();
     const auth = createLeaseAuthority({ backend: fileBackend({ dir }) });
@@ -241,7 +247,6 @@ test('.seen: per-resource cleanup (`rm <res>.*`) silently restarts the generatio
 // --- D-008 branch namespace ----------------------------------------------------------------------------------------------
 
 test('D-008: repo:<repo>:branch:main / :branch:integration alias the protected namespaces and can be held concurrently',
-  { todo: 'defect (medium, namespace): the same real branch is lockable under two names; a caller holding repo:demo:branch:integration and one holding repo:demo:integration both get ok. Reject (E_INVALID) or canonicalize branch:main -> main and branch:integration -> integration' },
   async () => {
     const auth = createLeaseAuthority({ backend: fakeBackend() });
     const a = await auth.acquire('repo:demo:integration', opts('integration-agent'));
@@ -269,7 +274,6 @@ test('D-008: percent-encoded file names: no traversal, no collisions between loo
 });
 
 test('D-008: a slash-heavy branch name at the 150-char cap still fails closed (derived file name too long), never leaks a tmp file',
-  { todo: 'defect (low): F5\'s cap (150) assumes <=~2 encoded separators; a branch name with many "/" encodes past 255 bytes. Fail-closed (E_UNAVAILABLE) but validResource should reject it' },
   async () => {
     const r = `repo:demo:branch:${'a/'.repeat(66)}a`;
     assert.equal(r.length, 150);
