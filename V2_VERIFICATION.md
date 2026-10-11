@@ -38,3 +38,11 @@ Exact repaired SHA `1bc82f962f82966488a83bc71d5c1eab23faa48a`: `env -i PATH="$PA
 | Same with Node 24.21.0 | PASS | 913/913, exit 0. Before 13d161d: 1 failure (main dccab06 made unknown MiniMax-M3 cost read $0). |
 | `claude plugin test claude-plugin/ghosty-reporter` (Claude Code 2.1.296, mock tests) | PASS | 25/25, exit 0, 2.1 s. No real provider call. |
 | Leak scan `scripts/leak-scan.js` + private denylist, per commit `origin/main..c366307` | PASS | clean on every commit. |
+
+## Live runtime format capture (opt-in real provider calls)
+
+| Runtime | Model | Prompt | Result | Cost |
+|---|---|---|---|---|
+| Claude Code 2.1.296 | claude-haiku-4-5, plan mode, `--max-budget-usd 0.05` | trivial "OK" | exit 0, stream shapes recorded in docs/v2/RUNTIME_FORMATS.md | $0.0265 (reported `total_cost_usd`) |
+| Codex CLI 0.162.1 | account default, effort low, read-only sandbox | trivial "OK" | exit 1: account usage limit (structured stdout error event) | $0 billed (rejected before inference) |
+| MiniMax Code 0.6.3 | account default, permission smart | trivial "OK" | exit 0, shapes recorded | unknown (no USD reported; 12,067 tokens) |
