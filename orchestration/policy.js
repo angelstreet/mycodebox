@@ -3,7 +3,7 @@
 // actions, approval classes and the manager's forbidden-topic matcher win over task text and model output.
 import * as realFs from 'node:fs';
 import { join } from 'node:path';
-import { forbiddenMatch } from '../stall.js';
+import { forbiddenMatch, FORBIDDEN_RE } from '../stall.js';
 import { MANDATORY_APPROVAL, RISK_CLASSES } from './task-contract.js';
 
 export const POLICY_PATH = join('.ai', 'project.json');
@@ -112,18 +112,25 @@ const TOPIC_CLASS = [
 
 // -> [{ topic, class }] for every restricted topic named in the text, under any variant spelling.
 // protectedBranches: the policy's protected_branches, added to main/master/trunk.
+// Every hit counts, not only the first: "deploy the token from .env" needs both a deploy and a credentials grant.
+const ALL_HITS = new RegExp(FORBIDDEN_RE.source, 'gi');
+const hitsOf = (t) => {
+  const hits = [...String(t).matchAll(ALL_HITS)].map((x) => x[0]);
+  const extra = forbiddenMatch(t);   // also covers the private GHOSTY_FORBIDDEN_EXTRA list
+  return extra && !hits.includes(extra) ? [...hits, extra] : hits;
+};
+const classOf = (m) => TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic';
+
 export function restrictedTopics(text, { protectedBranches } = {}) {
   const out = new Map();
   const extra = [...V2_EXTRA, ...branchRules(protectedBranches)];
   const variants = textVariants(text);
   for (const j of variants.flatMap(splitJoins)) {
-    const m = forbiddenMatch(j);
-    if (m) { const cls = TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic'; if (!out.has(cls)) out.set(cls, { topic: m, class: cls }); }
+    for (const m of hitsOf(j)) { const cls = classOf(m); if (!out.has(cls)) out.set(cls, { topic: m, class: cls }); }
   }
   for (const v of variants) {
-    const m = forbiddenMatch(v);
-    if (m) {
-      const cls = TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic';
+    for (const m of hitsOf(v)) {
+      const cls = classOf(m);
       out.set(cls, { topic: m, class: cls });
       if (cls === 'push_shared' && /\bmain\b/i.test(m)) out.set('merge_protected', { topic: m, class: 'merge_protected' });
     }

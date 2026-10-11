@@ -17,3 +17,10 @@ test('T02: every manager-blocked phrasing maps to a concrete approval class', ()
     assert.ok(got.includes(cls), `${text}: ${JSON.stringify(got)}`);
   }
 });
+
+test('T02/GL09: a text naming several restricted topics needs every class, not just the first hit', () => {
+  const got = restrictedTopics('deploy the token from .env to prod').map((x) => x.class);
+  for (const cls of ['deploy', 'credentials']) assert.ok(got.includes(cls), JSON.stringify(got));
+  const got2 = restrictedTopics('refund the customer and wipe the cache').map((x) => x.class);
+  for (const cls of ['money', 'customer', 'destructive']) assert.ok(got2.includes(cls), JSON.stringify(got2));
+});
