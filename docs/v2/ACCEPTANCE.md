@@ -13,7 +13,7 @@ The statuses below were produced by `node scripts/v2-acceptance.js` at the commi
   names, SHA, Node version, timestamp; no captured output).
 - **PASS**: at least one mapped test executed and every mapped test passed. **FAIL**: a mapped test failed, no test
   carries the id, or an independent verifier recorded an open defect against the row (a failing `todo` test; the
-  runner maps the goal-loop verifier's `V*` defects to the rows they contradict). **PENDING**: owned by another
+  runner maps verifier defects without a matrix prefix to the rows they contradict, in `DEFECT_ROWS`). **PENDING**: owned by another
   package whose evidence has not landed. **BLOCKED / MANUAL**: not used by any row at this commit.
 - T16 additionally requires every test in every pre-V2 test file to pass.
 - `test/v2-acceptance-matrix.test.js` pins these rules.
@@ -27,13 +27,14 @@ status functions. No test calls a real provider, a real remote, systemd or the l
 
 | Status | Rows |
 |---|---|
-| PASS | 53 |
-| FAIL | 0 |
+| PASS | 45 |
+| FAIL | 8: T06, T10, T13, T18, T25, T27, GL10, GL12 |
 | PENDING | 1: T20 |
 | BLOCKED | 0 |
 | MANUAL | 0 |
 
-Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 0 skipped.
+Suite at `e44acc5ce535` on Node v23.6.0: 1496 tests, 1490 pass, 0 fail, 6 todo, 0 skipped.
+Open verifier defects (failing `todo`): 6; each FAIL row lists the ones that contradict it.
 
 ## Matrix
 
@@ -44,28 +45,28 @@ Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 
 | T03 | CLI startup, resume, park | No bypass permissions by default, validated argv/cwd | unit + integration (real adapters against stub CLIs; launch-config, parking, session-directory) | **PASS** |
 | T04 | Network listener, origin and reporter endpoint | Default loopback, rejected unauthorized route | unit (launch-config, reporter.js handlers) + static source check of server.js routes | **PASS** |
 | T05 | Parallel worktrees | No shared mutable worktree; same repo can host disjoint agents | integration (real git worktrees, file lease authority) | **PASS** |
-| T06 | Duplicate event/outcome | Exactly one state transition/effect | unit (store) + crash E2E (goal loop restart, duplicate owner decision) | **PASS** |
+| T06 | Duplicate event/outcome | Exactly one state transition/effect | unit (store) + crash E2E (goal loop restart, duplicate owner decision) | **FAIL** |
 | T07 | Restart between attempted and confirmed side effect | Remains unknown until reconciled; no blind duplicate | integration (store restart + fake external sink); remote variant in T30 (disposable bare remote) | **PASS** |
 | T08 | Source MCP or provider unavailable | State says unavailable/blocked, not empty/success | integration (goal loop, real Claude adapter with a missing binary, fake runtimes; CI/telemetry/lease sources) | **PASS** |
 | T09 | Unit test fails | Cannot mark completed; bounded fix/review/abort | E2E (goal loop, real git + node --test acceptance check, fake runtime) | **PASS** |
-| T10 | Failed verification after source change | Revalidate commit SHA and rerun affected tests | E2E (goal loop, real git, fake runtime) | **PASS** |
+| T10 | Failed verification after source change | Revalidate commit SHA and rerun affected tests | E2E (goal loop, real git, fake runtime) | **FAIL** |
 | T11 | Adapter capability absent | Reject unsupported route, provide compatible fallback | contract (adapters vs stub CLIs, router) + E2E (GL11 cross-provider) | **PASS** |
 | T12 | Rate limit / timeout / quota exhausted | Backoff and bounded compatible fallback | integration (adapters vs stub CLIs, router, goal loop with fake runtime) | **PASS** |
-| T13 | Budget/time/turn cap | Stop/ask owner, no extra spending after cap | unit (budget.js) + E2E (goal loop, fake runtime with synthetic usd) | **PASS** |
+| T13 | Budget/time/turn cap | Stop/ask owner, no extra spending after cap | unit (budget.js) + E2E (goal loop, fake runtime with synthetic usd) | **FAIL** |
 | T14 | Cancellation during spawn/check | No unauthorized subsequent execution, status accurate | integration (adapters, real process groups) + E2E (goal loop) | **PASS** |
 | T15 | Reviewer disagrees with maker | Test evidence and policy decide; owner if unresolved | integration (goal loop, scripted fake reviewer) | **PASS** |
 | T16 | Existing dashboard/send/reply/status and push | No regression in original workflows | regression (every pre-V2 test file) + static import graph of server.js + inert-import check | **PASS** |
 | T17 | Forbidden topic in manager auto-send | No send; human escalation | security regression (unit, manager.js) | **PASS** |
-| T18 | Reboot/state recovery | Resume only confirmed work; no lost or duplicate events | E2E (store crash injection, goal loop controller crash + restart) | **PASS** |
+| T18 | Reboot/state recovery | Resume only confirmed work; no lost or duplicate events | E2E (store crash injection, goal loop controller crash + restart) | **FAIL** |
 | T19 | Existing state migration | Read old state safely and reversibly | integration (temp GHOSTY_STATE_DIR seeded with synthetic legacy files) | **PASS** |
 | T20 | Mobile/desktop app/PWA | Screens, keyboard, service worker, responsive task view | browser E2E (owned by v2/06-ui-docs, scripts/v2-ui-check.js) | **PENDING** |
 | T21 | Safe restart with unreachable API | Refuse and show reason; never assume idle | security (scripts/safe-restart.sh executed with stub curl, sudo and systemctl on PATH) | **PASS** |
 | T22 | Usage unknown / stale pricing | Do not report $0 or route on fabricated metrics | unit (store, budget, router, registry) | **PASS** |
 | T23 | External write confirmation | Advance bookmark/ledger only after confirmation | integration (store effect ledger + fake external sink); remote variant in T30 | **PASS** |
 | T24 | Multi-agent branch integration | Conflicts detected, checks re-run on merge SHA | Git E2E (integration controller, disposable bare remote) | **PASS** |
-| T25 | Two Integration Agents race for the same branch | Exactly one fenced lease holder mutates branch | integration (file lease authority, separate node processes) + Git E2E | **PASS** |
+| T25 | Two Integration Agents race for the same branch | Exactly one fenced lease holder mutates branch | integration (file lease authority, separate node processes) + Git E2E | **FAIL** |
 | T26 | Lease backend unavailable or stale | No merge/push/restart; state blocked and operator alerted | integration (fake/file lease backends) + Git E2E | **PASS** |
-| T27 | Lease expires mid-command | Stale executor cannot commit an additional protected action | integration (lease authority, lying clock) + Git E2E (integration controller, cross-role takeover) | **PASS** |
+| T27 | Lease expires mid-command | Stale executor cannot commit an additional protected action | integration (lease authority, lying clock) + Git E2E (integration controller, cross-role takeover) | **FAIL** |
 | T28 | Integration branch updated after tests | SHA mismatch invalidates previous gate; all required tests rerun | Git E2E (controller alone, and goal loop + controller with upstream commits) | **PASS** |
 | T29 | Remote CI red, missing, or pending | No merge, even when local tests are green | Git E2E (disposable bare remote, fake remote CI status) | **PASS** |
 | T30 | Push times out after remote accepted it | Query remote SHA first; do not double-push/mark failed blindly | Git E2E (disposable bare remote, injected push timeouts) | **PASS** |
@@ -88,9 +89,9 @@ Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 
 | GL07 | No-progress loop | Diagnostic replan/backoff/suspend; no false success, no runaway | E2E (goal loop) | **PASS** |
 | GL08 | Automatic decisions | Structured rationale, alternatives, evidence, undo; no owner question for safe choices | E2E (goal loop decision journal) | **PASS** |
 | GL09 | Credentials, merge/push, deploy, destructive repair | Explicit policy authorization regardless of goal text; silence is never approval | E2E (goal loop) + integration (system ops) | **PASS** |
-| GL10 | Lease race / stale fencing; Integration vs System Ops | Fail closed; no conflicting resource mutation; ordered acquisition | integration + Git E2E (goal loop + integration controller + system ops on one lease authority) | **PASS** |
+| GL10 | Lease race / stale fencing; Integration vs System Ops | Fail closed; no conflicting resource mutation; ordered acquisition | integration + Git E2E (goal loop + integration controller + system ops on one lease authority) | **FAIL** |
 | GL11 | Cross-provider, native delegation, worker fallback | Identical acceptance checks satisfied on every path | E2E (real Claude/Codex adapters vs stub CLIs, native-subagent fake runtime, worker fallback) | **PASS** |
-| GL12 | Reopened after crash/conflict/upstream change | Revalidate evidence against current SHA; never trust stale CI | unit (store) + E2E (goal loop) + Git E2E (controller, goal loop + controller) | **PASS** |
+| GL12 | Reopened after crash/conflict/upstream change | Revalidate evidence against current SHA; never trust stale CI | unit (store) + E2E (goal loop) + Git E2E (controller, goal loop + controller) | **FAIL** |
 | GL13 | Costs and tokens | Measured where available; unknown stays unknown; throttle without inventing authorization | unit (store) + E2E (goal loop) | **PASS** |
 | GL14 | Full disposable repo | Intake -> worktree -> repair loops -> independent verifier -> integration staging -> CI-equivalent verification -> accepted/release-ready; UI and machine-readable trace | Git E2E (goal loop + integration controller + disposable bare remote + fake remote CI); trace JSON asserted | **PASS** |
 
@@ -146,10 +147,11 @@ Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 
 - `test/v2-worktrees.test.js` › T05 a second owner cannot claim or remove the first owner's worktree
 - `test/v2-worktrees.test.js` › T05 dirty or untracked trees are never removed; retain is the default
 
-### T06 — PASS
+### T06 — FAIL
 
-3 test(s) passed.
+open defect(s) recorded as todo.
 
+- open defect: `test/v2-goal-loop-verify4.test.js` › Y6 two controllers over the same store and worktree: the second refuses to step a task the first has in flight
 - `test/v2-acceptance-effects.test.js` › T06: an owner decision delivered twice across a controller restart is one event and one transition
 - `test/v2-store.test.js` › T06: same createTask key -> one task, also concurrently and after restart
 - `test/v2-store.test.js` › T06: the same event twice has exactly one effect; seq is strictly increasing
@@ -176,10 +178,11 @@ Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 
 
 - `test/v2-goal-loop.test.js` › GL02/T09 failing first run -> structured feedback -> fix -> pass on exact SHA -> independent approve
 
-### T10 — PASS
+### T10 — FAIL
 
-1 test(s) passed.
+open defect(s) recorded as todo.
 
+- open defect: `test/v2-goal-loop-verify4.test.js` › Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after
 - `test/v2-goal-loop.test.js` › T10/GL12 source changes after verification: SHA revalidated, checks and review rerun on the new SHA
 
 ### T11 — PASS
@@ -203,10 +206,11 @@ Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 
 - `test/v2-goal-loop.test.js` › T12/GL06 rate limit: backoff (waiting) twice, then a compatible fallback runtime; state preserved
 - `test/v2-routing.test.js` › T12: rate limit/timeout -> backoff first, then compatible fallback, never outside the allowlist
 
-### T13 — PASS
+### T13 — FAIL
 
-3 test(s) passed.
+open defect(s) recorded as todo.
 
+- open defect: `test/v2-goal-loop-verify4.test.js` › Y7 X8 variant: a "raise" that does not clear the reached cap is refused up front, not accepted and re-asked
 - `test/v2-budget.test.js` › T13: cap reached -> awaiting_approval and no further spend; even a zero estimate is refused at the cap
 - `test/v2-budget.test.js` › T13: estimate that would exceed the cap is refused before starting
 - `test/v2-goal-loop.test.js` › T13 explicit budget cap: stop before overspend -> awaiting_approval; an owner extension continues within it
@@ -243,10 +247,11 @@ Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 
 - `test/v2-security-review.test.js` › T17: the AI reviewer re-check catches a forbidden proposal text even when the question looked harmless
 - `test/v2-security-review.test.js` › T17: plain paraphrases of forbidden topics are recognised by the rule filter
 
-### T18 — PASS
+### T18 — FAIL
 
-5 test(s) passed.
+open defect(s) recorded as todo.
 
+- open defect: `test/v2-goal-loop-verify4.test.js` › Y6 two controllers over the same store and worktree: the second refuses to step a task the first has in flight
 - `test/v2-goal-loop.test.js` › GL06/T18 controller crash mid-run: restart reconciles the unconfirmed run and resumes without duplicates
 - `test/v2-goal-loop.test.js` › T18 crash between a decision and its transition: the restart replays the recorded transition, no second decision
 - `test/v2-store.test.js` › T18: crash mid-write of the completion leaves a torn tail; recovery drops it, no false completion
@@ -298,10 +303,13 @@ owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; s
 - `test/v2-integration.test.js` › T24 non-conflicting branches: merged sequentially, gates run once on the final merge sha
 - `test/v2-integration.test.js` › T24 red gate on the merge sha returns the work even though each branch was green alone
 
-### T25 — PASS
+### T25 — FAIL
 
-4 test(s) passed.
+open defect(s) recorded as todo.
 
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> two calls take over a live integration lease
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: two controllers under one owner name and task -> adoption hands the twin's live lease to the first, both pass validate
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: rejected attempts are audited with the claimed identity
 - `test/v2-integration.test.js` › T25 two integration controllers race on the same target: exactly one fenced holder mutates it
 - `test/v2-lease-authority.test.js` › T25: 40 parallel acquire() through one file dir -> exactly one holder, rest E_HELD
 - `test/v2-lease-authority.test.js` › T25: separate node processes contend on the same resources -> exactly one holder per resource
@@ -324,10 +332,13 @@ owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; s
 - `test/v2-lease-authority.test.js` › T26: unwritable backend dir -> E_UNAVAILABLE
 - `test/v2-lease-authority.test.js` › T26: stale lock file is never broken while its holder lease is live (fails closed)
 
-### T27 — PASS
+### T27 — FAIL
 
-5 test(s) passed.
+open defect(s) recorded as todo.
 
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> two calls take over a live integration lease
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: two controllers under one owner name and task -> adoption hands the twin's live lease to the first, both pass validate
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: rejected attempts are audited with the claimed identity
 - `test/v2-acceptance-ops.test.js` › GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits
 - `test/v2-integration.test.js` › T27 lease expires mid-run and is taken over: the stale executor cannot push
 - `test/v2-lease-authority.test.js` › T27 (file): lease expires mid-command -> second protected action blocked; stale token fenced despite a lying clock
@@ -491,10 +502,13 @@ owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; s
 - `test/v2-goal-loop.test.js` › GL09 privileged actions need explicit authorization whatever the goal text says; silence is never approval
 - `test/v2-system-ops.test.js` › GL09: only the system-operations role executes; its non-allowlisted or destructive ops still need approval
 
-### GL10 — PASS
+### GL10 — FAIL
 
-4 test(s) passed. system-ops.js acquires a single host/service resource; maintenance that also needs the repo lane is modelled with acquireAll on the same authority.
+open defect(s) recorded as todo. system-ops.js acquires a single host/service resource; maintenance that also needs the repo lane is modelled with acquireAll on the same authority.
 
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> two calls take over a live integration lease
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: two controllers under one owner name and task -> adoption hands the twin's live lease to the first, both pass validate
+- open defect: `test/v2-lease-authority-verify4.test.js` › adoptOwn: rejected attempts are audited with the claimed identity
 - `test/v2-acceptance-ops.test.js` › GL10: maintenance that needs the repo lane waits for the running integration: canonical-order, all-or-nothing acquisition; nothing half-held; it proceeds once the integration releases
 - `test/v2-acceptance-ops.test.js` › GL10: Integration and System Ops race for overlapping resources in opposite orders: never a deadlock, never split holdings, at most one holder per round
 - `test/v2-acceptance-ops.test.js` › GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits
@@ -506,10 +520,11 @@ owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; s
 
 - `test/v2-acceptance-cross-provider.test.js` › GL11/T11: real Claude and Codex adapters (stub CLIs), a native-subagent runtime and the ordinary-worker fallback all satisfy the identical acceptance checks
 
-### GL12 — PASS
+### GL12 — FAIL
 
-4 test(s) passed.
+open defect(s) recorded as todo.
 
+- open defect: `test/v2-goal-loop-verify4.test.js` › Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after
 - `test/v2-acceptance-gl14.test.js` › GL12/T28: integration branch with new upstream commits: the approved SHA goes stale, gates and CI rerun on the rebuilt SHA, a fresh approval is required
 - `test/v2-goal-loop.test.js` › T10/GL12 source changes after verification: SHA revalidated, checks and review rerun on the new SHA
 - `test/v2-integration.test.js` › GL12 reopened after an upstream change: evidence, CI and approval are revalidated against the new SHA

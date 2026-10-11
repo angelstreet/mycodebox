@@ -1,26 +1,26 @@
 {
  "schema": "mycodebox.v2.acceptance-results/1",
  "synthetic": true,
- "generated_at": "2026-10-11T14:26:31.337Z",
- "sha": "4dfe8e76c1bb81e02e71817eb6c73636d0194074",
+ "generated_at": "2026-10-11T15:14:05.275Z",
+ "sha": "e44acc5ce5358386eaa344b97b898a30519d0b3a",
  "dirty": false,
  "node": "v23.6.0",
  "command": "node scripts/v2-acceptance.js",
- "duration_ms": 75249,
+ "duration_ms": 81768,
  "runner_exit": 0,
- "files": 110,
+ "files": 115,
  "totals": {
-  "tests": 1453,
-  "pass": 1453,
+  "tests": 1496,
+  "pass": 1490,
   "fail": 0,
-  "todo": 0,
-  "todo_failing": 0,
+  "todo": 6,
+  "todo_failing": 6,
   "skip": 0
  },
  "matrix": {
   "rows": 54,
-  "PASS": 53,
-  "FAIL": 0,
+  "PASS": 45,
+  "FAIL": 8,
   "PENDING": 1,
   "BLOCKED": 0,
   "MANUAL": 0
@@ -188,13 +188,18 @@
   },
   {
    "id": "T06",
-   "status": "PASS",
-   "reason": "3 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify4.test.js: Y6 two controllers over the same store and worktree: the second refuses to step ",
    "tests": [
     {
      "name": "T06: an owner decision delivered twice across a controller restart is one event and one transition",
      "file": "test/v2-acceptance-effects.test.js",
      "outcome": "pass"
+    },
+    {
+     "name": "Y6 two controllers over the same store and worktree: the second refuses to step a task the first has in flight",
+     "file": "test/v2-goal-loop-verify4.test.js",
+     "outcome": "todo"
     },
     {
      "name": "T06: same createTask key -> one task, also concurrently and after restart",
@@ -266,9 +271,14 @@
   },
   {
    "id": "T10",
-   "status": "PASS",
-   "reason": "1 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify4.test.js: Y3b X7 variant: a branch switch between verification and acceptance is caught be",
    "tests": [
+    {
+     "name": "Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after",
+     "file": "test/v2-goal-loop-verify4.test.js",
+     "outcome": "todo"
+    },
     {
      "name": "T10/GL12 source changes after verification: SHA revalidated, checks and review rerun on the new SHA",
      "file": "test/v2-goal-loop.test.js",
@@ -347,8 +357,8 @@
   },
   {
    "id": "T13",
-   "status": "PASS",
-   "reason": "3 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify4.test.js: Y7 X8 variant: a \"raise\" that does not clear the reached cap is refused up front",
    "tests": [
     {
      "name": "T13: cap reached -> awaiting_approval and no further spend; even a zero estimate is refused at the cap",
@@ -359,6 +369,11 @@
      "name": "T13: estimate that would exceed the cap is refused before starting",
      "file": "test/v2-budget.test.js",
      "outcome": "pass"
+    },
+    {
+     "name": "Y7 X8 variant: a \"raise\" that does not clear the reached cap is refused up front, not accepted and re-asked",
+     "file": "test/v2-goal-loop-verify4.test.js",
+     "outcome": "todo"
     },
     {
      "name": "T13 explicit budget cap: stop before overspend -> awaiting_approval; an owner extension continues within it",
@@ -457,9 +472,14 @@
   },
   {
    "id": "T18",
-   "status": "PASS",
-   "reason": "5 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify4.test.js: Y6 two controllers over the same store and worktree: the second refuses to step ",
    "tests": [
+    {
+     "name": "Y6 two controllers over the same store and worktree: the second refuses to step a task the first has in flight",
+     "file": "test/v2-goal-loop-verify4.test.js",
+     "outcome": "todo"
+    },
     {
      "name": "GL06/T18 controller crash mid-run: restart reconciles the unconfirmed run and resumes without duplicates",
      "file": "test/v2-goal-loop.test.js",
@@ -610,13 +630,28 @@
   },
   {
    "id": "T25",
-   "status": "PASS",
-   "reason": "4 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-lease-authority-verify4.test.js: adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> tw | test/v2-lease-authority-verify4.test.js: adoptOwn: two controllers under one owner name and task -> adoption hands the tw | test/v2-lease-authority-verify4.test.js: adoptOwn: rejected attempts are audited with the claimed identity",
    "tests": [
     {
      "name": "T25 two integration controllers race on the same target: exactly one fenced holder mutates it",
      "file": "test/v2-integration.test.js",
      "outcome": "pass"
+    },
+    {
+     "name": "adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> two calls take over a live integration lease",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
+    },
+    {
+     "name": "adoptOwn: two controllers under one owner name and task -> adoption hands the twin's live lease to the first, both pass validate",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
+    },
+    {
+     "name": "adoptOwn: rejected attempts are audited with the claimed identity",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
     },
     {
      "name": "T25: 40 parallel acquire() through one file dir -> exactly one holder, rest E_HELD",
@@ -704,8 +739,8 @@
   },
   {
    "id": "T27",
-   "status": "PASS",
-   "reason": "5 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-lease-authority-verify4.test.js: adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> tw | test/v2-lease-authority-verify4.test.js: adoptOwn: two controllers under one owner name and task -> adoption hands the tw | test/v2-lease-authority-verify4.test.js: adoptOwn: rejected attempts are audited with the claimed identity",
    "tests": [
     {
      "name": "GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits",
@@ -716,6 +751,21 @@
      "name": "T27 lease expires mid-run and is taken over: the stale executor cannot push",
      "file": "test/v2-integration.test.js",
      "outcome": "pass"
+    },
+    {
+     "name": "adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> two calls take over a live integration lease",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
+    },
+    {
+     "name": "adoptOwn: two controllers under one owner name and task -> adoption hands the twin's live lease to the first, both pass validate",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
+    },
+    {
+     "name": "adoptOwn: rejected attempts are audited with the claimed identity",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
     },
     {
      "name": "T27 (file): lease expires mid-command -> second protected action blocked; stale token fenced despite a lying clock",
@@ -1125,8 +1175,8 @@
   },
   {
    "id": "GL10",
-   "status": "PASS",
-   "reason": "4 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-lease-authority-verify4.test.js: adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> tw | test/v2-lease-authority-verify4.test.js: adoptOwn: two controllers under one owner name and task -> adoption hands the tw | test/v2-lease-authority-verify4.test.js: adoptOwn: rejected attempts are audited with the claimed identity",
    "tests": [
     {
      "name": "GL10: maintenance that needs the repo lane waits for the running integration: canonical-order, all-or-nothing acquisition; nothing half-held; it proceeds once the integration releases",
@@ -1142,6 +1192,21 @@
      "name": "GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits",
      "file": "test/v2-acceptance-ops.test.js",
      "outcome": "pass"
+    },
+    {
+     "name": "adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> two calls take over a live integration lease",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
+    },
+    {
+     "name": "adoptOwn: two controllers under one owner name and task -> adoption hands the twin's live lease to the first, both pass validate",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
+    },
+    {
+     "name": "adoptOwn: rejected attempts are audited with the claimed identity",
+     "file": "test/v2-lease-authority-verify4.test.js",
+     "outcome": "todo"
     },
     {
      "name": "GL10: lease unavailable or held by someone else -> no action, escalated, admission stays paused",
@@ -1164,13 +1229,18 @@
   },
   {
    "id": "GL12",
-   "status": "PASS",
-   "reason": "4 test(s) passed",
+   "status": "FAIL",
+   "reason": "open defect(s) recorded as todo: test/v2-goal-loop-verify4.test.js: Y3b X7 variant: a branch switch between verification and acceptance is caught be",
    "tests": [
     {
      "name": "GL12/T28: integration branch with new upstream commits: the approved SHA goes stale, gates and CI rerun on the rebuilt SHA, a fresh approval is required",
      "file": "test/v2-acceptance-gl14.test.js",
      "outcome": "pass"
+    },
+    {
+     "name": "Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after",
+     "file": "test/v2-goal-loop-verify4.test.js",
+     "outcome": "todo"
     },
     {
      "name": "T10/GL12 source changes after verification: SHA revalidated, checks and review rerun on the new SHA",
@@ -1219,6 +1289,57 @@
    ]
   }
  ],
- "open_defects": [],
+ "open_defects": [
+  {
+   "name": "Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after",
+   "file": "test/v2-goal-loop-verify4.test.js",
+   "rows": [
+    "T10",
+    "GL12"
+   ]
+  },
+  {
+   "name": "Y6 two controllers over the same store and worktree: the second refuses to step a task the first has in flight",
+   "file": "test/v2-goal-loop-verify4.test.js",
+   "rows": [
+    "T06",
+    "T18"
+   ]
+  },
+  {
+   "name": "Y7 X8 variant: a \"raise\" that does not clear the reached cap is refused up front, not accepted and re-asked",
+   "file": "test/v2-goal-loop-verify4.test.js",
+   "rows": [
+    "T13"
+   ]
+  },
+  {
+   "name": "adoptOwn: the identity it needs is exactly what E_HELD hands to any caller -> two calls take over a live integration lease",
+   "file": "test/v2-lease-authority-verify4.test.js",
+   "rows": [
+    "T25",
+    "T27",
+    "GL10"
+   ]
+  },
+  {
+   "name": "adoptOwn: two controllers under one owner name and task -> adoption hands the twin's live lease to the first, both pass validate",
+   "file": "test/v2-lease-authority-verify4.test.js",
+   "rows": [
+    "T25",
+    "T27",
+    "GL10"
+   ]
+  },
+  {
+   "name": "adoptOwn: rejected attempts are audited with the claimed identity",
+   "file": "test/v2-lease-authority-verify4.test.js",
+   "rows": [
+    "T25",
+    "T27",
+    "GL10"
+   ]
+  }
+ ],
  "unmapped_failures": []
 }
