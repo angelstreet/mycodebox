@@ -28,6 +28,7 @@ export const actorId = actorKey;
 export const redact = (t) => String(t).replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]*@/gi, '$1***@');
 const errText = (e) => redact(String(e?.stderr || e?.message || e).trim()).slice(0, 300);
 const RETRYABLE_GIT = new Set(['E_GIT', 'E_TIMEOUT']);
+const MISSING_REF = /couldn't find remote ref|unknown revision|not a valid object name|not a valid commit name|bad revision|no such ref/i;
 // Lease resource for a target branch: main keeps its own namespace, every other branch uses D-008.
 export const targetResource = (repo, target) => (target === 'main' ? `repo:${repo}:main` : `repo:${repo}:branch:${target}`);
 
@@ -180,7 +181,8 @@ export function createIntegrationController({
       }
     } catch (err) {
       // A network blip is not a verdict on the handoff: retryable, never a final rejection.
-      if (RETRYABLE_GIT.has(err.code)) return { ok: false, retryable: true, errors: [...errors, `git: ${errText(err)}`], facts: { task } };
+      // A missing ref is a verdict, though: retrying a deleted branch forever helps no one.
+      if (RETRYABLE_GIT.has(err.code) && !MISSING_REF.test(errText(err))) return { ok: false, retryable: true, errors: [...errors, `git: ${errText(err)}`], facts: { task } };
       e(`git: ${errText(err)}`);
     }
     for (const f of changed) {

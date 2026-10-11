@@ -50,7 +50,9 @@ export function findBypass(argv, skip = []) {
     }
   });
   const rest = argv.filter((_, i) => !skipSet.has(i));
-  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.join(' ') }).length) flagged.push('launch-config pattern');
+  // launchWarnings is advisory and also flags --full-auto for owner review; it keeps codex's workspace-write sandbox,
+  // so the hard guard does not refuse it (D-011).
+  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.filter((x) => x !== '--full-auto').join(' ') }).length) flagged.push('launch-config pattern');
   return flagged;
 }
 
@@ -220,7 +222,7 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
   };
   let resolveDone;
   Object.defineProperty(run, 'done', { value: new Promise((r) => { resolveDone = r; }), enumerable: false });
-  const c = { waiters: [], errorTexts: [], stderr: '', finished: false, kill: () => {}, timer: null, seq: 0, artifactFailed: false };
+  const c = { overCap: 0, waiters: [], errorTexts: [], stderr: '', finished: false, kill: () => {}, timer: null, seq: 0, artifactFailed: false };
   ctls.set(run, c);
   if (run.artifact_dir) fs.mkdirSync(run.artifact_dir, { recursive: true, mode: 0o700 });
 
@@ -230,7 +232,7 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
     push(ev) {
       if (c.finished || (run.cancelled && ev.type !== 'exit')) return; // no events after cancel except the final exit
       // Over the cap, junk is dropped but terminal facts (result, error) are always kept.
-      if (run.events.length >= MAX_EVENTS && ev.type !== 'result' && ev.type !== 'error') { run.dropped_events = (run.dropped_events || 0) + 1; return; }
+      if (run.events.length >= MAX_EVENTS && (ev.type !== 'result' && ev.type !== 'error' || ++c.overCap > 100)) { run.dropped_events = (run.dropped_events || 0) + 1; return; }
       run.events.push({ seq: c.seq++, at: now(), run_id, ...ev });
       wake();
     },

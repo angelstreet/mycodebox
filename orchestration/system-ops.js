@@ -293,6 +293,8 @@ export function createSystemOps({
     // Retrying the same logical operation (same correlation key) or a keyless duplicate only links; a new explicit
     // operation on an open incident is a fresh instruction and still goes through lease, deploy check and allowlist.
     if (deduped && (replay || !op.dedup_key)) return { executed: false, actions_run: 0, incident_id: incident.incident_id, deduped: true, outcome: 'linked' };
+    // A failed rollback left the host in an unknown state: no new instruction runs until the owner acknowledges.
+    if (incident.state === 'reconciling') return { executed: false, actions_run: 0, incident_id: incident.incident_id, deduped, outcome: 'needs_owner_ack' };
     const steps = op.steps !== undefined ? op.steps : (op.action ? [{ action: op.action, params: op.params || {} }] : null);
     const r = await handle(incident.incident_id, { steps });
     return { executed: r.actions_run > 0, mitigated: r.outcome === 'mitigated', incident_id: incident.incident_id, deduped, ...r };

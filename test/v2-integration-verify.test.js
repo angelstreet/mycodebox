@@ -368,6 +368,17 @@ test('a transient git failure during in-run validation is retryable, not a final
   assert.notEqual((await w.controller.runNext('demo', 'main')).outcome, 'empty', 'the handoff must be integrable again');
 });
 
+test('a source branch deleted after the handoff is a final rejection, not retried forever', async () => {
+  const o = makeOrigin('deleted-src');
+  const gone = spyGit({ before: (args) => { if (args[0] === 'fetch' && args.some((a) => String(a).includes('feat-gone'))) throw Object.assign(new Error("fatal: couldn't find remote ref refs/heads/feat-gone"), { code: 'E_GIT' }); } });
+  const w = makeController(o, { git: gone.git });
+  const a = devBranch(o, 'feat-gone', { 'g.txt': 'g\n' });
+  await readyTask(w.store, 'gone', { sha: a.sha });
+  const s = await w.controller.submit(handoff('gone', 'feat-gone', a, ['g.txt']));
+  assert.notEqual(s.code, 'E_RETRYABLE');
+  assert.equal(s.ok, false);
+});
+
 test('two queue instances over one directory cannot both claim the same item', async () => {
   const dir = path.join(tmp, 'queue-shared');
   const qa = createIntegrationQueue({ dir });
@@ -387,4 +398,42 @@ test('an approval is bound to the repository as well', async () => {
   const r = await w.controller.runNext('demo', 'main');
   assert.equal(r.outcome, 'awaiting_approval');
   assert.equal(o.head(), a.base);
+});
+
+// ---- F3 closure (9515250): missing refs are final, and a final rejection does not strand the handoff ------
+
+test('F3 closure: a really deleted source branch is rejected once; re-pushed, the same handoff resubmits and merges', async () => {
+  const o = makeOrigin('f3real');
+  const w = makeController(o);
+  const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });
+  await readyTask(w.store, 'f3r', { sha: a.sha });
+  await w.controller.submit(handoff('f3r', 'feat-a', a, ['a.txt']));
+  sh(o.dev, 'push', '-q', 'origin', '--delete', 'feat-a');
+  const r = await w.controller.runNext('demo', 'main');
+  assert.equal(r.outcome, 'rejected');
+  const item = (await w.queue.list())[0];
+  assert.equal(item.state, 'rejected');
+  assert.match(item.detail.errors.join('\n'), /couldn't find remote ref/);
+  assert.equal(item.attempts, 1);
+  assert.equal((await w.controller.runNext('demo', 'main')).outcome, 'empty');   // not retried
+  // A missing target branch is final too, and never retried.
+  const s0 = await w.controller.submit(handoff('f3r', 'feat-a', a, ['a.txt'], { target: 'nope' }));
+  assert.equal(s0.code, 'E_HANDOFF_INVALID');
+  // The developer restores the branch: the same (task, sha, target) is accepted again and integrates.
+  sh(o.dev, 'push', '-q', 'origin', 'feat-a');
+  const s = await w.controller.submit(handoff('f3r', 'feat-a', a, ['a.txt']));
+  assert.equal(s.ok, true);
+  assert.notEqual(s.item.item_id, item.item_id);
+  assert.equal((await w.controller.runNext('demo', 'main')).outcome, 'merged');
+  assert.equal(await status(w.store, 'f3r'), 'release_verifying');
+});
+
+test('F3 residual: a well-formed but non-existent base_sha is a final rejection, not E_RETRYABLE forever', async () => {
+  const o = makeOrigin('f3bogus');
+  const w = makeController(o);
+  const a = devBranch(o, 'feat-a', { 'a.txt': 'a\n' });
+  await readyTask(w.store, 'f3b', { sha: a.sha });
+  const s = await w.controller.submit(handoff('f3b', 'feat-a', a, ['a.txt'], { base_sha: 'f'.repeat(40) }));
+  assert.equal(s.ok, false);
+  assert.equal(s.code, 'E_HANDOFF_INVALID');
 });
