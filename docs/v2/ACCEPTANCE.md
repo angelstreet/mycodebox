@@ -33,7 +33,7 @@ status functions. No test calls a real provider, a real remote, systemd or the l
 | BLOCKED | 0 |
 | MANUAL | 0 |
 
-Suite at `3fcaa17ce786` on Node v23.6.0: 1590 tests, 1590 pass, 0 fail, 0 todo, 0 skipped.
+Suite at `7af3c652b454` on Node v23.6.0: 1604 tests, 1604 pass, 0 fail, 0 todo, 0 skipped.
 
 ## Matrix
 
@@ -172,8 +172,9 @@ Suite at `3fcaa17ce786` on Node v23.6.0: 1590 tests, 1590 pass, 0 fail, 0 todo, 
 
 ### T09 — PASS
 
-1 test(s) passed.
+2 test(s) passed.
 
+- `test/v2-acceptance-strengthen.test.js` › T09: a unit test that keeps failing never completes: targeted repairs, forced strategy changes, no review of a failing SHA, a bounded no-progress stop, and the owner can abort
 - `test/v2-goal-loop.test.js` › GL02/T09 failing first run -> structured feedback -> fix -> pass on exact SHA -> independent approve
 
 ### T10 — PASS
@@ -229,7 +230,7 @@ Suite at `3fcaa17ce786` on Node v23.6.0: 1590 tests, 1590 pass, 0 fail, 0 todo, 
 
 ### T16 — PASS
 
-2 test(s) passed; 921 pre-V2 regression tests passed. Row is PASS only when every test in the pre-V2 test files passes as well (scripts/v2-acceptance.js).
+2 test(s) passed; 921 pre-V2 regression tests passed. Row is PASS only when every test in the pre-V2 test files passes as well (scripts/v2-acceptance.js). Seven pre-V2 test files differ from origin/main; see "T16 disclosure" below (router wake defaults changed on purpose).
 
 - `test/v2-acceptance-state.test.js` › T16: server.js loads no V2 module at startup: none in its static import graph; any V2 import is dynamic and behind GHOSTY_V2
 - `test/v2-acceptance-state.test.js` › T16: every V2 module is importable without side effects: no timers, listeners, child processes or files
@@ -488,8 +489,10 @@ Suite at `3fcaa17ce786` on Node v23.6.0: 1590 tests, 1590 pass, 0 fail, 0 todo, 
 
 ### GL09 — PASS
 
-2 test(s) passed.
+4 test(s) passed.
 
+- `test/v2-acceptance-strengthen.test.js` › GL09: credentials need explicit authorization whatever the goal says; an agent asking for a secret is gated, a denial continues without it; silence never authorizes
+- `test/v2-acceptance-strengthen.test.js` › GL09: protected push and merge stay unapplied through owner silence; a denial ends the delivery with the remote untouched
 - `test/v2-goal-loop.test.js` › GL09 privileged actions need explicit authorization whatever the goal text says; silence is never approval
 - `test/v2-system-ops.test.js` › GL09: only the system-operations role executes; its non-allowlisted or destructive ops still need approval
 
@@ -510,9 +513,11 @@ Suite at `3fcaa17ce786` on Node v23.6.0: 1590 tests, 1590 pass, 0 fail, 0 todo, 
 
 ### GL12 — PASS
 
-4 test(s) passed.
+6 test(s) passed.
 
 - `test/v2-acceptance-gl14.test.js` › GL12/T28: integration branch with new upstream commits: the approved SHA goes stale, gates and CI rerun on the rebuilt SHA, a fresh approval is required
+- `test/v2-acceptance-strengthen.test.js` › GL12: reopened after a controller crash, the task revalidates against the current worktree SHA: stale evidence and review never count
+- `test/v2-acceptance-strengthen.test.js` › GL12: reopened after an integration merge conflict, the repaired SHA is re-verified and re-integrated; nothing from the conflicting SHA carries over
 - `test/v2-goal-loop.test.js` › T10/GL12 source changes after verification: SHA revalidated, checks and review rerun on the new SHA
 - `test/v2-integration.test.js` › GL12 reopened after an upstream change: evidence, CI and approval are revalidated against the new SHA
 - `test/v2-store.test.js` › GL12: a new head SHA invalidates earlier evidence and verdicts, even when it moves back
@@ -549,9 +554,28 @@ output is printed or kept. Results of each run are recorded in `V2_VERIFICATION.
 | `test/v2-acceptance-effects.test.js` | T23 (×2), T07/T23, T06 crash E2E |
 | `test/v2-acceptance-unavailable.test.js` | T08 (×4) |
 | `test/v2-acceptance-state.test.js` | T16 (×2), T19 |
+| `test/v2-acceptance-strengthen.test.js` | T09 (bounded fix/review/abort), GL09 ×2 (credentials; push/merge silence and denial), GL12 ×2 (reopen after crash, after merge conflict) |
 | `test/v2-delivery.test.js` | `orchestration/delivery.js` unit: handoff facts from the store, idempotent resubmit, single writer, SHA-bound approvals, CI pending → waiting, conflict → repair, unknown → reconcile |
 | `test/v2-minimax-node.test.js` | minimax adapter `nodeDir` / `MCODE_NODE_DIR` |
 | `test/fixtures/v2-world.js` | shared disposable worlds; `makeDelivery` wires `orchestration/delivery.js` over a real controller |
+
+## T16 disclosure: pre-V2 tests changed on `v2/integration`
+
+T16 runs every pre-V2 test file, but seven of them differ from `origin/main`
+(`git diff origin/main...v2/integration -- test/`, files that exist on main):
+
+| File | Change | Expectation changed? |
+|---|---|---|
+| `test/router.test.js` | wake floor: a forbidden topic now also removes `ignore`; `p0_blocked` and a failed deploy default to `wake_opus` (fd3e4d6, c93d5a7) | **yes**: deliberate behaviour change (router dry-run defect fix, OWNER_DECISIONS §8) |
+| `test/usage.test.js` | added: a PLACEHOLDER zero price row is unknown, not $0 (13d161d) | new assertion; existing ones unchanged |
+| `test/parking.test.js` | added: resume validates a saved record before tmux or exec (f3d4ae6, Phase 1 security) | new assertion; existing ones unchanged |
+| `test/manager.test.js` | waits for the asynchronous owner push and filters to its own session (6a1fcf3) | no: load-flake fix; same expected push |
+| `test/reporter-manager.test.js` | counts only its own session's pushes (4be4187) | no: load-flake fix |
+| `test/decision-share.test.js` | pins the fixture clock (e54e779) | no: clock pinning; same expected values |
+| `test/vpt-locks.test.js` | keeps the event loop alive across the abort-timeout case (4bdaae6) | no: runner-drain fix |
+
+"No regression" therefore holds for every original workflow except the router wake defaults, which changed on purpose
+and are covered by `test/router.test.js` and `test/v2-routing-verify.test.js`.
 
 ## Known gaps behind PASS rows
 
@@ -562,3 +586,9 @@ output is printed or kept. Results of each run are recorded in `V2_VERIFICATION.
   (pinned by `test/v2-system-ops-verify.test.js`).
 - **T04 Origin check** is asserted on the source of server.js; the T20 browser check exercises it once (cross-origin
   POST refused) but only when PLAYWRIGHT_CORE is available.
+- **Dashboard approvals write directly**: `orchestration/http.js` appends `approval.granted/denied` with
+  `store.append`, not through the goal loop's controller lease (D-016/D-018 route owner actions through the loop).
+  The record is idempotent by event id and carries the request's keys, so it is safe as data, but it is a second
+  writer of the task log.
+- **Topic classes are first-match**: "read the deploy token from .env" is classed `deploy` only, not `credentials`.
+  It still needs approval; a grant for `deploy` would cover it.

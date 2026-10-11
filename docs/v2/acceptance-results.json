@@ -1,18 +1,20 @@
 {
  "schema": "mycodebox.v2.acceptance-results/1",
  "synthetic": true,
- "generated_at": "2026-10-11T15:57:37.998Z",
- "sha": "3fcaa17ce786ae47af5da0c8a628ea1616537ab5",
+ "generated_at": "2026-10-11T17:52:03.811Z",
+ "sha": "7af3c652b454a8182fc55f206b14f5dbbb920bb7",
  "dirty": false,
  "node": "v23.6.0",
  "command": "node scripts/v2-acceptance.js",
- "duration_ms": 76976,
+ "duration_ms": 112673,
  "runner_exit": 0,
- "files": 126,
+ "files": 129,
+ "files_with_tests": 129,
+ "files_without_tests": [],
  "ui_check": true,
  "totals": {
-  "tests": 1590,
-  "pass": 1590,
+  "tests": 1604,
+  "pass": 1604,
   "fail": 0,
   "todo": 0,
   "todo_failing": 0,
@@ -256,8 +258,13 @@
   {
    "id": "T09",
    "status": "PASS",
-   "reason": "1 test(s) passed",
+   "reason": "2 test(s) passed",
    "tests": [
+    {
+     "name": "T09: a unit test that keeps failing never completes: targeted repairs, forced strategy changes, no review of a failing SHA, a bounded no-progress stop, and the owner can abort",
+     "file": "test/v2-acceptance-strengthen.test.js",
+     "outcome": "pass"
+    },
     {
      "name": "GL02/T09 failing first run -> structured feedback -> fix -> pass on exact SHA -> independent approve",
      "file": "test/v2-goal-loop.test.js",
@@ -1116,8 +1123,18 @@
   {
    "id": "GL09",
    "status": "PASS",
-   "reason": "2 test(s) passed",
+   "reason": "4 test(s) passed",
    "tests": [
+    {
+     "name": "GL09: credentials need explicit authorization whatever the goal says; an agent asking for a secret is gated, a denial continues without it; silence never authorizes",
+     "file": "test/v2-acceptance-strengthen.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL09: protected push and merge stay unapplied through owner silence; a denial ends the delivery with the remote untouched",
+     "file": "test/v2-acceptance-strengthen.test.js",
+     "outcome": "pass"
+    },
     {
      "name": "GL09 privileged actions need explicit authorization whatever the goal text says; silence is never approval",
      "file": "test/v2-goal-loop.test.js",
@@ -1172,11 +1189,21 @@
   {
    "id": "GL12",
    "status": "PASS",
-   "reason": "4 test(s) passed",
+   "reason": "6 test(s) passed",
    "tests": [
     {
      "name": "GL12/T28: integration branch with new upstream commits: the approved SHA goes stale, gates and CI rerun on the rebuilt SHA, a fresh approval is required",
      "file": "test/v2-acceptance-gl14.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL12: reopened after a controller crash, the task revalidates against the current worktree SHA: stale evidence and review never count",
+     "file": "test/v2-acceptance-strengthen.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL12: reopened after an integration merge conflict, the repaired SHA is re-verified and re-integrated; nothing from the conflicting SHA carries over",
+     "file": "test/v2-acceptance-strengthen.test.js",
      "outcome": "pass"
     },
     {
