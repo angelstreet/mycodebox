@@ -35,7 +35,9 @@ export function sanitizeText(v, max = MAX_TEXT) {
   s = s.replace(/\b(Basic|Bearer)\s+[A-Za-z0-9+/=._~-]+/gi, '$1 [redacted]');
   s = s.replace(/(--?(?:token|secret|password|passwd|api-?key))[ =]+\S+/gi, '$1 [redacted]');
   // Compound names too (REPORTER_TOKEN, access_token, VAPID_PRIVATE_KEY, NTFY_TOPIC, secret_key), and `NAME value`.
-  s = s.replace(/(["']?)\b([\w-]*(?:token|secret|password|passwd|api[_-]?key|authorization|private[_-]?key|topic|_key))(["']?)(?:\s*[=:]\s*|\s+)(["']?)[^\s"',;}]+/gi, '$1$2$3=[redacted]');
+  s = s.replace(/(["']?)\b([\w-]*(?:token|secret|password|passwd|api[_-]?key|authorization|private[_-]?key|topic|[_-]key))(["']?)\s*[=:]\s*(["']?)[^\s"',;}]+/gi, '$1$2$3=[redacted]');
+  // `NAME value` only for env-style ALL-CAPS names, so prose like "token budget" stays readable.
+  s = s.replace(/\b((?:[A-Z][A-Z0-9_-]*)?(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|AUTHORIZATION|PRIVATE[_-]?KEY|TOPIC|[_-]KEY|PASSWORD))\s+(?![=:\[])[^\s"',;}]+/g, '$1=[redacted]');
   s = s.replace(/\b(?:sk|pk|ghp|gho|ghs|github_pat|xox[abpr]|AKIA)[-_A-Za-z0-9]{8,}/g, '[redacted]');
   s = s.replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}/g, (m) => (HEX_ID.test(m) ? m : '[redacted]'));
   s = s.replace(/\b[\w-]+(?:\.[\w-]+)*\.ts\.net\b/gi, '[host]');

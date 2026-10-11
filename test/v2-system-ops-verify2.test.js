@@ -184,7 +184,7 @@ test('F11: recheck, handleReport and a keyless/replayed execute never resume or 
   assert.equal(h.admission.isPaused(), true);
 });
 
-test('F11: execute() with a NEW correlation key re-runs actions on a reconciling incident without owner acknowledgement', async () => {
+test('F11: execute() with a NEW correlation key does not re-run actions on a reconciling incident before owner acknowledgement', async () => {
   const h = await harness();
   const id = await reconciling(h);
   h.actions.throttle_concurrency = { execute: async () => { h.calls.push({ name: 'again' }); } };
