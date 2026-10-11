@@ -368,6 +368,17 @@ test('a transient git failure during in-run validation is retryable, not a final
   assert.notEqual((await w.controller.runNext('demo', 'main')).outcome, 'empty', 'the handoff must be integrable again');
 });
 
+test('a source branch deleted after the handoff is a final rejection, not retried forever', async () => {
+  const o = makeOrigin('deleted-src');
+  const gone = spyGit({ before: (args) => { if (args[0] === 'fetch' && args.some((a) => String(a).includes('feat-gone'))) throw Object.assign(new Error("fatal: couldn't find remote ref refs/heads/feat-gone"), { code: 'E_GIT' }); } });
+  const w = makeController(o, { git: gone.git });
+  const a = devBranch(o, 'feat-gone', { 'g.txt': 'g\n' });
+  await readyTask(w.store, 'gone', { sha: a.sha });
+  const s = await w.controller.submit(handoff('gone', 'feat-gone', a, ['g.txt']));
+  assert.notEqual(s.code, 'E_RETRYABLE');
+  assert.equal(s.ok, false);
+});
+
 test('two queue instances over one directory cannot both claim the same item', async () => {
   const dir = path.join(tmp, 'queue-shared');
   const qa = createIntegrationQueue({ dir });
