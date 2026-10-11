@@ -58,3 +58,14 @@ Exact repaired SHA `1bc82f962f82966488a83bc71d5c1eab23faa48a`: `env -i PATH="$PA
 | adapters + worktrees (Phase 3) | Sonnet + coordinator | Opus, 3 rounds | APPROVE | merge before 85cd076 | 1342/1342 both runtimes after D-011 seam fix |
 | incidents/telemetry/system-ops (§12.4) | Sonnet + coordinator | Fable, 3 rounds | APPROVE | merged with adapters | 1342/1342 both runtimes |
 | integration queue/CI gates/controller (§12.3) | Opus + coordinator | Fable, 3 rounds | APPROVE | 063380e | 1383/1383 both runtimes |
+
+## Live goal-loop smoke (opt-in real provider calls, `scripts/v2-live-smoke.js`, disposable temp repo, scripted fake reviewer)
+
+| Runtime | CLI | Model | Effort | Outcome | Input tokens | Output tokens | Cost |
+|---|---|---|---|---|---|---|---|
+| claude | 2.1.296 | claude-haiku-4-5 (`--max-budget-usd 0.10`) | default | accepted, 1 developer run, check exit 0, ~19 s | 111,713 | 1,093 | $0.0467667 |
+| minimax | 0.6.3 | CLI default | default | accepted, 1 run, ~16 s | 41,059 | 421 | unknown (no USD reported) |
+| codex | 0.162.1 | CLI default | low | accepted, 1 run, ~21 s | 76,913 | 353 | unknown (no USD reported) |
+
+A first MiniMax attempt failed (`crash`): `mcode` 0.6.3 refuses Node 23.6 and needs Node 24 first on PATH.
+These runs prove the adapters drive real CLIs end to end on a trivial task; they are not a quality benchmark.
