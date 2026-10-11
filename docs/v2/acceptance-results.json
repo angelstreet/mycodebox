@@ -1,20 +1,20 @@
 {
  "schema": "mycodebox.v2.acceptance-results/1",
  "synthetic": true,
- "generated_at": "2026-10-11T17:52:03.811Z",
- "sha": "7af3c652b454a8182fc55f206b14f5dbbb920bb7",
+ "generated_at": "2026-10-11T18:20:37.352Z",
+ "sha": "469aa49b91e88d1d23c99557cbbe848dd15f0828",
  "dirty": false,
  "node": "v23.6.0",
  "command": "node scripts/v2-acceptance.js",
- "duration_ms": 112673,
+ "duration_ms": 134438,
  "runner_exit": 0,
  "files": 129,
  "files_with_tests": 129,
  "files_without_tests": [],
  "ui_check": true,
  "totals": {
-  "tests": 1604,
-  "pass": 1604,
+  "tests": 1605,
+  "pass": 1605,
   "fail": 0,
   "todo": 0,
   "todo_failing": 0,
@@ -49,10 +49,15 @@
   {
    "id": "T02",
    "status": "PASS",
-   "reason": "2 test(s) passed",
+   "reason": "3 test(s) passed",
    "tests": [
     {
      "name": "T02: every manager-blocked phrasing maps to a concrete approval class",
+     "file": "test/v2-policy-classes.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T02/GL09: a text naming several restricted topics needs every class, not just the first hit",
      "file": "test/v2-policy-classes.test.js",
      "outcome": "pass"
     },
@@ -1123,7 +1128,7 @@
   {
    "id": "GL09",
    "status": "PASS",
-   "reason": "4 test(s) passed",
+   "reason": "5 test(s) passed",
    "tests": [
     {
      "name": "GL09: credentials need explicit authorization whatever the goal says; an agent asking for a secret is gated, a denial continues without it; silence never authorizes",
@@ -1138,6 +1143,11 @@
     {
      "name": "GL09 privileged actions need explicit authorization whatever the goal text says; silence is never approval",
      "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T02/GL09: a text naming several restricted topics needs every class, not just the first hit",
+     "file": "test/v2-policy-classes.test.js",
      "outcome": "pass"
     },
     {
