@@ -1056,8 +1056,10 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   .cell .h .pp,
   .cell .h .pz,
   .cell .h .rd{ display:none; }
-  /* QF-12: keep the lock control on the card header on phones — the owner needs it
-     to pin a card while they poke the side list on a phone-sized viewport. */
+  /* QF-18: lock control is web-only (per owner, 2026-10-11). The
+     .card-pane .cell .h .lk rules below are gated on min-width: 721px so
+     the button is hidden on phones via the default `.cell .h .lk{
+     display:none }` rule. */
   /* Focused card fullscreen: make the .open button a chunky touch target so the owner can
      one-tap into the fullscreen card for better reading (chat-raised 2026-10-08).
      Filled background, 18px icon, 36x36 hit area, accent-colored so it stands out. */
@@ -1165,21 +1167,28 @@ button.prio{ cursor:pointer; }
 }
 .pz.on{ color:var(--accent); border-color:var(--accent); }
 .pz:disabled{ opacity:.4; }
-/* QF-12: lock control on the card header. Hidden in the grid / list / dock — only
-   shows on the single-card view because that's the only pane where the user is
-   working in a card and wants it pinned. The .on state uses the accent so the
-   locked card is unmistakable. */
+/* QF-12 + QF-18: lock control on the card header. Hidden in the grid / list /
+   dock — only shows on the single-card view AND only on desktop, because the
+   focused card header is dense on a phone and there's no room for an extra
+   control. focusSession()'s lock guard is left in place on phones — if a
+   lock was set on desktop and the app is opened on phone later, tapping
+   another card will toast "<name> is locked". To unlock from phone, open
+   the app on desktop (or run
+   `localStorage.removeItem('ghosty.lockedSession')` in the browser console).
+   The .on state uses the accent so the locked card is unmistakable. */
 .cell .h .lk{ display:none; }
-.card-pane .cell .h .lk{
-  display:inline-flex; align-items:center; justify-content:center; gap:4px;
-  flex-shrink:0; min-width:32px; height:30px; padding:0 6px; border-radius:7px;
-  background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2);
-  font-size:12px; line-height:1; cursor:pointer;
-}
-.card-pane .cell .h .lk:hover{ color:var(--accent); border-color:var(--accent); }
-.card-pane .cell .h .lk.on{
-  color:var(--accent); border-color:var(--accent);
-  background:rgba(232,154,74,0.12);
+@media (min-width: 721px){
+  .card-pane .cell .h .lk{
+    display:inline-flex; align-items:center; justify-content:center; gap:4px;
+    flex-shrink:0; min-width:32px; height:30px; padding:0 6px; border-radius:7px;
+    background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2);
+    font-size:12px; line-height:1; cursor:pointer;
+  }
+  .card-pane .cell .h .lk:hover{ color:var(--accent); border-color:var(--accent); }
+  .card-pane .cell .h .lk.on{
+    color:var(--accent); border-color:var(--accent);
+    background:rgba(232,154,74,0.12);
+  }
 }
 .pp{
   flex-shrink:0; font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:2px 7px; border-radius:999px;
