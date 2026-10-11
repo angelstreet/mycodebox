@@ -1,5 +1,6 @@
 // MiniMax Code (`mcode`): `mcode exec --cwd <dir> --output-format stream-json --permission smart`. Never --permission off/full.
-import { makeCliAdapter, genericParse } from './common.js';
+import path from 'node:path';
+import { makeCliAdapter, genericParse, coded } from './common.js';
 
 const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
@@ -33,7 +34,7 @@ function parse(o) {
   }
 }
 
-export const createAdapter = makeCliAdapter({
+const createCli = makeCliAdapter({
   id: 'minimax',
   provider_ids: ['minimax'],
   defaultBin: 'mcode',
@@ -52,4 +53,14 @@ export const createAdapter = makeCliAdapter({
     return { args, session_id: null };
   },
 });
+// mcode 0.6.3 runs on Node 22.19+/24/25/26 and refuses Node 23 (its `#!/usr/bin/env node` takes the first node on
+// PATH). `nodeDir` (or MCODE_NODE_DIR in the adapter env) names a directory with a supported `node`; it is put first
+// on the child's PATH for runs and probes. Absent: PATH is used as is and an unsupported node shows up as a failed run.
+export function createAdapter(opts = {}) {
+  const env = opts.env ?? process.env;
+  const nodeDir = opts.nodeDir ?? env.MCODE_NODE_DIR ?? null;
+  if (nodeDir == null || nodeDir === '') return createCli(opts);
+  if (typeof nodeDir !== 'string' || !path.isAbsolute(nodeDir) || nodeDir.includes('\0') || nodeDir.includes(path.delimiter)) throw coded('E_INVALID', 'nodeDir must be an absolute directory path');
+  return createCli({ ...opts, env: { ...env, PATH: [nodeDir, env.PATH].filter(Boolean).join(path.delimiter) } });
+}
 export default createAdapter;

@@ -1082,7 +1082,8 @@ export function createGoalLoop({
       await store.recordEffect(ctx.id, { effect_id, idempotency_key, kind: 'integration', phase: 'attempted' });
     }
     // The hook must be idempotent by key: after a crash or an unknown outcome it is asked again with the same key.
-    const r = await integrate(ctx.v, { sha: head, worktree: ctx.cp.worktree, idempotency_key });
+    // `store` is this loop's fenced handle: an integration bridge writes through it (one writer, D-016), never its own.
+    const r = await integrate(ctx.v, { sha: head, worktree: ctx.cp.worktree, idempotency_key, store });
     const ok = ['release_verifying', 'repair', 'waiting', 'awaiting_approval'].includes(r?.next);
     if (!confirmed) await store.recordEffect(ctx.id, { effect_id, phase: ok ? 'confirmed' : 'possibly_applied' });
     if (!ok) {
@@ -1091,7 +1092,10 @@ export function createGoalLoop({
     }
     const patch = { integration: { next: r.next, reason: r.reason ?? null, release_verified: r.release_verified === true }, integration_unknown: 0 };
     if (r.next === 'waiting') patch.wait = { reason: 'integration', until_ms: now() + (r.retry_after_ms ?? 5 * 60_000), resume_to: 'integrating' };   // D-007
-    if (r.next === 'awaiting_approval') patch.approval = { k: ctx.k, kind: 'integration', question: r.reason || 'integration needs owner approval', classes: r.classes || [], resume_to: 'integrating' };
+    // The grant is bound to the hook's action keys (e.g. integration:merge:<repo>:<target>:<sha>), never to the class alone.
+    if (r.next === 'awaiting_approval') patch.approval = { k: ctx.k, kind: 'integration', question: r.reason || 'integration needs owner approval', classes: r.classes || [],
+      keys: Array.isArray(r.keys) ? r.keys.map(String) : [], ...(typeof r.sha === 'string' ? { sha: r.sha } : {}), resume_to: 'integrating' };
+    if (r.next === 'repair' && r.feedback && typeof r.feedback === 'object') patch.feedback = r.feedback;   // e.g. merge conflict files
     return decide(ctx, decision('integration_result', 'Integration controller result: next state?', [alt(r.next, r.reason || 'reported by the integration controller', 'n/a'), alt('accept now', 'fast', 'skips integration gates')],
       r.next, { evidence: [`sha ${head}`, `key ${idempotency_key}`], expected_effect: r.next, rationale: `Integration hook returned ${r.next}.` }), { patch, to: r.next, reason: r.reason || r.next });
   }
@@ -1113,7 +1117,7 @@ export function createGoalLoop({
       if (!integrate?.reconcile) return result(ctx, null, `unknown external effect ${foreign.map((e) => e.effect_id).join(', ')}: reconcile required`, { idle: true });
       const seen = [];
       for (const e of foreign) {
-        const r = await integrate.reconcile(ctx.v, { effect_id: e.effect_id, idempotency_key: e.idempotency_key });
+        const r = await integrate.reconcile(ctx.v, { effect_id: e.effect_id, idempotency_key: e.idempotency_key, store });
         if (r?.applied === true) await store.recordEffect(ctx.id, { effect_id: e.effect_id, phase: 'confirmed' });
         else if (r?.applied === false) await store.recordEffect(ctx.id, { effect_id: e.effect_id, phase: 'failed' });
         else return result(ctx, null, `effect ${e.effect_id} still unknown`, { idle: true });

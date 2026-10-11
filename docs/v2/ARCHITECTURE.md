@@ -288,3 +288,45 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    - Without a lease authority (`leases` not injected) there is no controller lease: `holdController` neither fences
      nor reconciles, so a store opened read-only is never reconciled automatically (liveness gap); deployments always
      inject the lease authority.
+
+## Implementation notes (delivery bridge)
+
+Recorded from `v2/11-e2e` (`orchestration/delivery.js`); additive to §10 and §11.
+
+1. `createDelivery({ store, queue, controller: ({ store, approvals }) => controller, git, ci, repo, target, retryMs })`
+   returns `{ integrate, controllerStore, approvals, controller }`; `integrate(task, { sha, worktree, idempotency_key,
+   store })` and `integrate.reconcile(task, { effect_id, idempotency_key, store })` are the goal loop's delivery hook
+   (implementation note 5 of the goal loop). The goal loop passes its fenced store handle as `store` in both calls.
+2. One writer (D-016/D-017). The controller is built over `controllerStore`: every non-transition write goes to the
+   loop's fenced handle of the current hook call (so it re-validates the loop's controller lease) and is refused with
+   `E_NO_WRITER` outside a call; `transition()` is recorded as a proposal and never applied. The bridge maps the
+   controller's durable queue item state to the loop's next state (`merged` -> `release_verifying` with
+   `release_verified` when the remote target contains the integration SHA and remote CI is green on it;
+   `awaiting_approval` -> `awaiting_approval`; `returned` -> `repair` with feedback; `unknown` -> unknown outcome;
+   `rejected`/`cancelled` -> owner; anything parked -> `waiting` with a retry), and the loop applies it with its own
+   decision. Every task transition is therefore written by the goal loop.
+3. Handoff facts come from the store and git: developer = the actor recorded by `setHead` for the SHA
+   (`store.independence`), diff scope = `git diff --name-only base..sha` in the task worktree, source = the task
+   branch in `task.repository` (which the controller config must list in `source_remotes`). While a queue item is not
+   final, resubmitting is idempotent (`task:sha:target`). The integration queue re-queues a key whose item is FINAL,
+   so the bridge looks the key up first and never hands off a SHA whose item is `merged` (no controller run); should a
+   merged SHA reach the controller anyway (queue reset), the controller finds it already in the target (F8) and stops
+   before any push. A `merged` item maps to `release_verifying` only when the remote target contains the integration
+   SHA (`detail.sha`, or `detail.target_sha` for F8) and remote CI is green on it; unknown containment or CI, or an
+   unknown SHA, is `waiting` with a retry, and a contradiction (not contained, CI red) goes to the owner.
+   Batch runs: one controller run can finish other tasks' items. Their proposed transitions are dropped (this call
+   returns only the calling task's proposals); each of those tasks rebuilds its state in its own hook call from its
+   queue item and its own task log. An approval question is bound to the block at hand: the controller request
+   written during this call (or carrying this run's integration id); a block that writes no request (protected path,
+   path not allowlisted, target policy) is a keyless owner question naming the queue item's reason.
+4. Approvals: each controller request (candidate push, merge) is returned with the key
+   `integration:<action>:<repo>:<target>:<sha>`; the loop's integration approval request carries it (`keys`), the
+   owner grant copies it, and the controller's approval check accepts only a grant whose keys contain the exact key
+   for the request at hand. A class-only grant, or one for another SHA, action, target or repo, never counts.
+5. `integrate.reconcile` only reads: for a controller effect key it asks the remote (`controller.effectState(key)`,
+   `confirmed`/`failed`/unknown); for the loop's own hook effect it answers `applied` once every remote effect the call
+   may have caused can be read. The loop records the phases itself.
+6. Dashboard: the integration approval request also carries the SHA it is about (`sha`, the integration SHA, not the
+   developer head), so `orchestration/http.js` shows that SHA, demands it on approve (`E_SHA_MISMATCH` otherwise) and
+   records grants with the request's `keys` and `request_kind`, the same shape as `goal-loop approve()`.
+

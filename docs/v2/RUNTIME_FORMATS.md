@@ -33,6 +33,12 @@ JSONL with `type` and envelope `runId, sessionId, turnId, sequence, schemaVersio
 (`durationMs, model, usage{ inputTokens, outputTokens, cacheReadTokens, totalTokens }, usageIncomplete, usageSource`),
 `exec.completed` (`result`). No USD cost is reported: cost stays unknown unless priced. Honour `usageIncomplete`.
 
+Runtime requirement (observed 2026-10-11 in the V2 live smoke): `mcode` 0.6.3 is a `#!/usr/bin/env node` script that
+supports Node 22.19+, 24, 25 or 26 and refuses Node 23.6 ("current version is 23.6.0", exit 1; the adapter then reports
+a failed run). The first `node` on PATH must be a supported one. The adapter takes `nodeDir` (or `MCODE_NODE_DIR` in its
+env) and puts that directory first on the child PATH for runs and probes; without it PATH is used as is. Installs whose
+default `node` is 23.x must set `MCODE_NODE_DIR` (owner action for the service environment).
+
 ## OpenCode
 
 Not installed on the host: adapter verified against a fake CLI only; live smoke BLOCKED (runtime not installed).

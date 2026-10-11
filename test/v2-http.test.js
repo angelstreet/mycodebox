@@ -161,7 +161,7 @@ test('approve: needs the explicit pending action_id and sha; records owner + act
   assert.equal(ev.payload.actor, 'owner');
   assert.equal(ev.payload.action_id, p.action_id);
   assert.equal(ev.payload.sha, SHA_A);
-  assert.deepEqual(ev.payload.grants, { classes: ['deploy'] }, 'covers exactly the requested classes');
+  assert.deepEqual(ev.payload.grants, { classes: ['deploy'], keys: p.keys, request_kind: p.kind }, 'covers exactly the requested classes and action keys (same shape as goal-loop approve())');
   assert.equal(ev.event_id, `appr-${id}-${req.k}`, 'same event id as the goal loop approve()');
   assert.equal((await store.get(id)).status, 'awaiting_approval', 'recording is not executing: the loop moves the task');
   assert.equal((await call('POST', `/api/v2/tasks/${id}/deny`, { action_id: p.action_id, sha: SHA_A })).body.code, 'E_NO_PENDING_APPROVAL', 'answered once');
