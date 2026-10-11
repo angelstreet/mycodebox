@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 600" width="980" height="600" role="img" aria-labelledby="t d" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title id="t">mycodebox V2 architecture: shipped modules and planned modules</title>
+  <desc id="d">The owner reaches server.js over Tailscale. Behind the opt-in V2 routes sit the task store, policy, intake, goal loop, router in shadow mode, verifier, runtime adapters, worktrees, lease authority and system operations. Integration push and merge, live routing, automatic goal loop start and automatic scoring feedback are planned only.</desc>
+  <style>
+    .box{fill:#f4f7f5;stroke:#1f6f43;stroke-width:2}
+    .plan{fill:#fafafa;stroke:#6b7280;stroke-width:2;stroke-dasharray:7 5}
+    .own{fill:#eef2ff;stroke:#3949ab;stroke-width:2}
+    .h{font-size:15px;font-weight:700;fill:#111827}
+    .s{font-size:12.5px;fill:#374151}
+    .tag{font-size:11.5px;font-weight:700}
+    .ok{fill:#1f6f43} .pl{fill:#4b5563}
+    .ar{stroke:#374151;stroke-width:1.8;fill:none;marker-end:url(#a)}
+    .arp{stroke:#6b7280;stroke-width:1.8;fill:none;stroke-dasharray:6 5;marker-end:url(#a)}
+    .lg{font-size:13px;fill:#111827}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#374151"/></marker></defs>
+  <rect width="980" height="600" fill="#ffffff"/>
+  <text x="20" y="28" class="h" font-size="18">mycodebox V2: what exists in code and tests, and what is planned</text>
+
+  <rect x="20" y="44" width="940" height="52" rx="8" class="own"/>
+  <text x="36" y="66" class="h">Owner: phone or laptop over Tailscale (no app login; the tailnet policy is the gate)</text>
+  <text x="36" y="86" class="s">Session board (V1, unchanged) and the opt-in Tasks view. V2 is off unless the server starts with GHOSTY_V2=1.</text>
+
+  <rect x="20" y="118" width="940" height="52" rx="8" class="box"/>
+  <text x="36" y="140" class="h">server.js: /api/v2/tasks routes (orchestration/http.js)</text>
+  <text x="36" y="160" class="s">Behind the existing Origin check: list, detail, create, cancel, approve, deny. Records only; never starts the loop.</text>
+  <text x="820" y="140" class="tag ok">SHIPPED, OPT-IN</text>
+  <path class="ar" d="M490 96 V118"/>
+
+  <rect x="20" y="198" width="300" height="118" rx="8" class="box"/>
+  <text x="34" y="220" class="h">Task store and contract</text>
+  <text x="34" y="240" class="s">Per-task events.jsonl, replay on restart,</text>
+  <text x="34" y="256" class="s">states, outcome (only accepted = done),</text>
+  <text x="34" y="272" class="s">evidence by SHA, verdicts, decisions,</text>
+  <text x="34" y="288" class="s">usage (unknown stays unknown), effects.</text>
+  <text x="34" y="308" class="tag ok">SHIPPED</text>
+
+  <rect x="340" y="198" width="300" height="118" rx="8" class="box"/>
+  <text x="354" y="220" class="h">Goal loop (module)</text>
+  <text x="354" y="240" class="s">Deterministic controller: plan, run,</text>
+  <text x="354" y="256" class="s">check, review, repair or replan, wait,</text>
+  <text x="354" y="272" class="s">ask the owner. Tested with fake CLIs.</text>
+  <text x="354" y="288" class="s">Not started by the server.</text>
+  <text x="354" y="308" class="tag ok">SHIPPED AS A MODULE</text>
+
+  <rect x="660" y="198" width="300" height="118" rx="8" class="box"/>
+  <text x="674" y="220" class="h">Policy, intake, verifier</text>
+  <text x="674" y="240" class="s">Policy and approval classes beat model</text>
+  <text x="674" y="256" class="s">text. One intake for UI, API, schedule</text>
+  <text x="674" y="272" class="s">and agent tasks. Deterministic checks</text>
+  <text x="674" y="288" class="s">on the exact SHA.</text>
+  <text x="674" y="308" class="tag ok">SHIPPED</text>
+
+  <path class="ar" d="M490 170 V198"/>
+  <path class="ar" d="M320 257 H340"/>
+  <path class="ar" d="M640 257 H660"/>
+
+  <rect x="20" y="344" width="300" height="104" rx="8" class="box"/>
+  <text x="34" y="366" class="h">Router and model registry</text>
+  <text x="34" y="386" class="s">Rule-based choice per task, budget</text>
+  <text x="34" y="402" class="s">stops, fallback plans. Shadow mode only:</text>
+  <text x="34" y="418" class="s">it recommends, nothing is routed live.</text>
+  <text x="34" y="438" class="tag ok">SHIPPED (SHADOW)</text>
+
+  <rect x="340" y="344" width="300" height="104" rx="8" class="box"/>
+  <text x="354" y="366" class="h">Runtime adapters and worktrees</text>
+  <text x="354" y="386" class="s">Claude, Codex, MiniMax: fake-tested,</text>
+  <text x="354" y="402" class="s">live format captured. OpenCode: fake only.</text>
+  <text x="354" y="418" class="s">One git worktree per task.</text>
+  <text x="354" y="438" class="tag ok">SHIPPED (FAKE-TESTED)</text>
+
+  <rect x="660" y="344" width="300" height="104" rx="8" class="box"/>
+  <text x="674" y="366" class="h">Leases and system operations</text>
+  <text x="674" y="386" class="s">Fail-closed leases, incidents,</text>
+  <text x="674" y="402" class="s">admission pause, allowlisted actions.</text>
+  <text x="674" y="418" class="s">Unknown ownership blocks the action.</text>
+  <text x="674" y="438" class="tag ok">IN CODE; NOT WIRED TO SERVER</text>
+
+  <path class="ar" d="M170 316 V344"/>
+  <path class="ar" d="M490 316 V344"/>
+  <path class="ar" d="M810 316 V344"/>
+
+  <rect x="20" y="478" width="225" height="92" rx="8" class="plan"/>
+  <text x="34" y="500" class="h">Integration agent</text>
+  <text x="34" y="518" class="s">In code and tests; not wired</text>
+  <text x="34" y="534" class="s">to the server or the loop.</text>
+  <text x="34" y="556" class="tag pl">NOT WIRED</text>
+
+  <rect x="260" y="478" width="225" height="92" rx="8" class="plan"/>
+  <text x="274" y="500" class="h">Live routing</text>
+  <text x="274" y="518" class="s">The router choosing runtimes</text>
+  <text x="274" y="534" class="s">for real tasks, after shadow runs.</text>
+  <text x="274" y="556" class="tag pl">PLANNED</text>
+
+  <rect x="500" y="478" width="225" height="92" rx="8" class="plan"/>
+  <text x="514" y="500" class="h">Automatic loop start</text>
+  <text x="514" y="518" class="s">Server-side scheduling of the</text>
+  <text x="514" y="534" class="s">goal loop. Today: explicit opt-in.</text>
+  <text x="514" y="556" class="tag pl">PLANNED</text>
+
+  <rect x="740" y="478" width="220" height="92" rx="8" class="plan"/>
+  <text x="754" y="500" class="h">Scores into routing</text>
+  <text x="754" y="518" class="s">Report script exists;</text>
+  <text x="754" y="534" class="s">feeding it is manual.</text>
+  <text x="754" y="556" class="tag pl">REPORT SHIPPED</text>
+
+  <rect x="640" y="580" width="12" height="12" class="box"/><text x="658" y="591" class="lg">exists in code and tests</text>
+  <rect x="820" y="580" width="12" height="12" class="plan"/><text x="838" y="591" class="lg">planned</text>
+</svg>

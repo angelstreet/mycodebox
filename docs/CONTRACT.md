@@ -19,6 +19,7 @@ Read [AGENTS.md](../AGENTS.md) first. This contract applies to repository change
 - Reporter/alert writes require both the reporter token and loopback access. Keep tokens private even behind a local proxy.
 - Preserve exact tmux targeting, input validation and Origin checks. Proxies must support WebSocket upgrades and preserve the browser-facing Host.
 - No credentials, real infrastructure identifiers or captured session output in tracked files, commits, issues or PRs. Use obvious synthetic fixtures.
+- V2 is opt-in: `GHOSTY_V2=1` enables `/api/v2/*`; without it the routes answer 404 and nothing is constructed (no store, no timers, no polling). The server never starts the goal loop; creating a task only records it. Only an `accepted` task (passing required checks on the exact SHA plus an independent approve) is shown as done. Owner approvals must name the pending request (`action_id`, and the head SHA when set); never add a blanket approve. Unknown usage and prices stay unknown, never 0.
 - Use `public/icons.js` for icons, ES modules and the existing dependency set. Explain any new dependency.
 
 ## Validation and delivery

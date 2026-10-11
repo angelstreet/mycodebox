@@ -7,6 +7,7 @@
     <a href="#quick-start"><b>Quick start</b></a> •
     <a href="#screenshots"><b>Screenshots</b></a> •
     <a href="#features"><b>Features</b></a> •
+    <a href="#current-capabilities--v2-roadmap"><b>V2 roadmap</b></a> •
     <a href="docs/INSTALL.md"><b>Install (with an AI agent)</b></a> •
     <a href="docs/REFERENCE.md"><b>Reference</b></a>
   </p>
@@ -87,6 +88,89 @@ More, such as deploy coordination, usage reports and the session reporter plugin
 
 ---
 
+## Current capabilities / V2 roadmap
+
+The session board above is what mycodebox does today. V2 adds a task engine next to it: a goal, deterministic checks,
+an independent review and an honest outcome. **V2 is off by default** and part of it is not built yet. This section
+separates what has code and tests from what is planned. Evidence is in [V2_VERIFICATION.md](V2_VERIFICATION.md);
+nothing here is a claim about a live deployment.
+
+![mycodebox V2 architecture: shipped modules and planned modules](docs/images/v2-architecture.svg)
+
+How one V2 task is meant to run:
+
+![A task goes to the router, a runtime in its own worktree, deterministic tests, an independent review, then accept, repair or replan, or owner approval](docs/images/v2-workflow.svg)
+
+### What exists in code and tests, and what does not
+
+| Area | Status | What that means |
+|---|---|---|
+| Session board, replies, manager, usage | Shipped (V1) | Unchanged. |
+| Task store and contract (`orchestration/`) | In code and tests | Durable per-task logs, crash recovery, strict states. Only `accepted` is shown as done; waiting, needs owner and unknown are separate. |
+| Policy, intake, deterministic verifier | In code and tests | Project policy and approval classes win over model text. One intake path for UI, API, schedule and agent tasks. |
+| Goal loop | In code and tests, as a module | Tested with fake CLIs. **The server never starts it**: creating a task records it. Running it is an explicit, later opt-in. |
+| Router and model registry | In code and tests, shadow only | It recommends; nothing is routed live. Prices marked `PLACEHOLDER` are unknown, never $0. |
+| Runtime adapters and worktrees | In code and tests with fake CLIs | Live output formats captured once per runtime (see the matrix). |
+| Lease authority, incidents, admission pause (System Operations) | In code and tests; not wired to the server or the loop | Fail-closed: unknown ownership blocks. |
+| Integration agent (queue, CI gates, owner-authorized push and merge) | In code and tests; not wired to the server or the loop | Nothing pushes or merges from the dashboard. |
+| `/api/v2/tasks` routes and the **V2 tasks** view | In code and tests; browser-checked on synthetic data | Needs `GHOSTY_V2=1`. See [V2 task board](docs/USAGE.md#v2-task-board-opt-in). |
+| Scoring report (`scripts/v2-score.js`) | In code and tests | Read-only. Feeding it to the router is manual. See [scoring](docs/v2/SCORING.md). |
+| End-to-end acceptance T01 to T40, live provider runs | **Not run yet** | Planned for the integration phase. |
+| Live routing, automatic loop start, wiring integration and System Operations into the running server | **Planned** | Not available. |
+| Tasks view gaps | **Deferred** | No graphical task graph (parent and children are listed), no per-run logs or live streaming, no editing of a task after creation, no retry-history timeline beyond the state history and runs list. |
+
+### Safety model
+
+- No login. The tailnet policy is the only gate for who can reach the server. Never expose it publicly. The listener
+  defaults to loopback; set `HOST` explicitly for Tailscale access ([install](docs/INSTALL.md)).
+- V2 routes sit behind the same Origin and JSON checks as every other write route. They are absent (404) unless
+  `GHOSTY_V2=1`.
+- Agent CLIs run with their normal permission prompts by default. Restricted actions (merge to a protected branch,
+  deploy, credentials, destructive, host maintenance, money, customer) always need an explicit owner approval that names
+  the request. Silence, or a model's recommendation, is never approval.
+- Provider egress: Claude, Codex and MiniMax send prompts to their own services. mycodebox does not add providers on
+  its own, and the optional manager, reviewer and evaluation features send data only when configured.
+- The task state lives in `$GHOSTY_STATE_DIR/v2`, apart from the V1 state.
+
+### Use cases
+
+| You want to | Today | With V2 (opt-in) |
+|---|---|---|
+| See which agent needs you | Session board | Same board |
+| Answer an agent from your phone | Card, reply, quick keys | Same |
+| Track what an agent was asked and whether it was verified | Not available | Tasks view: goal, evidence on an exact SHA, verdicts, decisions |
+| Approve a restricted action once, on purpose | Not available | Approve or deny a named request in the Tasks view |
+| Compare models by verified completions and cost | Usage tab (cost and tokens) | `node scripts/v2-score.js` over the task store |
+
+### Feature matrix by runtime
+
+| Runtime | Adapter in code | Fake-CLI tests | Live output format captured | Live task run |
+|---|---|---|---|---|
+| Claude Code | Yes | Yes | Yes ([formats](docs/v2/RUNTIME_FORMATS.md)) | No |
+| Codex CLI | Yes | Yes | Yes (the capture hit an account usage limit and recorded that error shape) | No |
+| MiniMax Code | Yes | Yes | Yes (no USD cost is reported, so cost is unknown) | No |
+| OpenCode | Yes | Fake only | **BLOCKED**: not installed on the development host | No |
+
+### Try the V2 board locally
+
+```sh
+GHOSTY_V2=1 HOST=127.0.0.1 PORT=7788 GHOSTY_STATE_DIR="$(mktemp -d)" node server.js
+# open http://127.0.0.1:7788 , More menu, "V2 tasks"
+```
+
+Use a throwaway state directory for a trial. The server also discovers your tmux sessions, so read the
+[agent contract](docs/CONTRACT.md) before running a second instance next to a live one. Upgrading an existing install:
+[migration notes](docs/v2/MIGRATION.md).
+
+### Tests
+
+The matrix of what ran, with commands and results, is [V2_VERIFICATION.md](V2_VERIFICATION.md); the V2 scenarios T01 to
+T40 and GL01 to GL14 are listed in the [task plan](docs/tasks/v2/MYCODEBOXV2_AGENT_TASK.md). Run the suite with
+`GHOSTY_STATE_DIR="$(mktemp -d)" npm test`. The optional browser check is
+`PLAYWRIGHT_CORE=<path> node scripts/v2-ui-check.js` (it skips when unset). To contribute, follow [AGENTS.md](AGENTS.md).
+
+---
+
 ## Quick start
 
 You need Linux, Node.js 20+, Git, tmux and Tailscale. Follow the [installation and configuration guide](docs/INSTALL.md)
@@ -115,6 +199,7 @@ Start at the [documentation index](docs/README.md).
 - [Repository map](docs/MAP.md): components, data flow, state and tests
 - [Agent rules](AGENTS.md) and [agent contract](docs/CONTRACT.md): safety, workflow and completion checks
 - [Technical reference](docs/REFERENCE.md): settings, feature APIs and implementation details
+- [V2 architecture](docs/v2/ARCHITECTURE.md), [migration notes](docs/v2/MIGRATION.md), [scoring](docs/v2/SCORING.md) and [verification](V2_VERIFICATION.md)
 - [Handover](HANDOVER.md): development context and known limitations
 
 ## Community & support
