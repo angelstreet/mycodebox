@@ -3,24 +3,33 @@
 // on every doubt (an unreadable, slow, skewed or corrupt backend is E_UNAVAILABLE, never "free").
 // The authority holds the rules; a backend only provides an atomic read-modify-write per resource plus an audit log.
 //   backend.read(resource)                  -> record | null      (record = { resource, generation, holder })
-//   backend.update(resource, mutate, ctx)   -> mutate(record|null) returns { next?, result }; next is committed atomically
-//   backend.audit(entry)                    -> append-only provenance
+//   backend.update(resource, mutate, ctx)   -> mutate(record|null) returns { next?, audit?, result }; `audit` lines are
+//                                              persisted before `next`, and `next` is committed atomically, or neither
+//   backend.audit(entry)                    -> append-only provenance (best effort for non-grant events)
 //   backend.time?()                         -> the backend's clock, when it has its own (skew check)
 // Any backend error is thrown; the authority maps it to E_UNAVAILABLE.
 import * as nodeFs from 'node:fs';
 import { join } from 'node:path';
+import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 const SEG = '[A-Za-z0-9][A-Za-z0-9._-]{0,99}';
+// File names use encodeURIComponent: '/' and ':' become %2F / %3A and '%' is never valid in a resource, so the
+// mapping is injective (no two resources share files).
 const NAMESPACES = [
   new RegExp(`^repo:${SEG}(?:/${SEG})?:(?:integration|main)$`),
+  // D-008: non-main target branches. Git-like names; no leading '-' or '/', no trailing '/', no '//' or '..'.
+  new RegExp(`^repo:${SEG}(?:/${SEG})?:branch:(?![-/])(?!.*//)[A-Za-z0-9._/-]+(?<!/)$`),
   new RegExp(`^environment:${SEG}:deploy$`),
   new RegExp(`^host:${SEG}:maintenance$`),
   new RegExp(`^service:${SEG}:${SEG}$`),
   new RegExp(`^worktree:${SEG}$`),
 ];
-export const validResource = (r) => typeof r === 'string' && !r.includes('..') && NAMESPACES.some((re) => re.test(r));
+// Length cap keeps every derived file name (`.<encoded>.<uuid>.tmp`) under the 255-byte name limit.
+export const MAX_RESOURCE_LEN = 150;
+export const validResource = (r) => typeof r === 'string' && r.length <= MAX_RESOURCE_LEN && !r.includes('..')
+  && NAMESPACES.some((re) => re.test(r));
 // Code-unit order, not localeCompare: every process must agree on the same order or ordered acquisition is moot.
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 export const canonicalOrder = (resources) => [...new Set(resources)].sort(cmp);
@@ -65,12 +74,15 @@ export function createLeaseAuthority({
 } = {}) {
   if (!backend) throw new Error('lease authority: backend required');
 
+  // A broken clock (NaN, Infinity) would read every holder as expired: fail closed instead.
+  const clockNow = () => { const t = now(); if (!Number.isFinite(t)) throw unavailable('authority clock is not finite'); return t; };
   const safeAlert = (kind, detail) => { try { alert({ kind, at: now(), ...detail }); } catch {} };
   async function audit(entry) {
     try { await withTimeout(backend.audit({ at: now(), ...entry }), opTimeoutMs); }
     catch (e) { safeAlert('audit_failed', { op: entry.op, resource: entry.resource, error: String(e?.message || e) }); }
   }
   async function call(fn) {
+    clockNow();
     if (typeof backend.time === 'function') {
       const bt = await withTimeout(backend.time(), opTimeoutMs);
       if (!Number.isFinite(bt) || Math.abs(bt - now()) > maxSkewMs) throw unavailable('clock skew between authority and backend');
@@ -90,35 +102,60 @@ export function createLeaseAuthority({
     let out;
     try {
       out = await call(() => backend.update(resource, (rec) => {
-        const t = now();
+        const t = clockNow();
         if (rec?.holder && t < rec.holder.expires_at) return { result: { held: rec.holder } };
         const token = (rec ? rec.generation : 0) + 1;
         const lease = {
           resource, lease_id, owner: opts.owner, task_id: opts.task_id ?? null, token, acquired_at: t,
           expires_at: t + opts.ttl_ms, ttl_ms: opts.ttl_ms, scope: opts.scope ?? null, approval_ref: opts.approval_ref ?? null,
         };
-        return { next: { resource, generation: token, holder: lease, updated_at: t }, result: { lease, previous: rec?.holder || null } };
+        const prev = rec?.holder || null;
+        // Provenance is part of the grant: the backend persists these lines before the record, or commits nothing.
+        const lines = [
+          ...(prev ? [{ at: t, op: 'fenced', resource, code: 'E_EXPIRED', token: prev.token, lease_id: prev.lease_id, by_token: token, ...who(prev) }] : []),
+          { at: t, op: 'acquire', resource, lease_id, token, expires_at: lease.expires_at, ...who(opts) },
+        ];
+        return { next: { resource, generation: token, holder: lease, updated_at: t }, audit: lines, result: { lease } };
       }, { now }));
     } catch (e) {
-      await audit({ op: 'denied', resource, code: 'E_UNAVAILABLE', error: errMsg(e), ...who(opts) });
-      safeAlert('lease_unavailable', { op: 'acquire', resource, owner: opts.owner, error: errMsg(e) });
-      return fail('E_UNAVAILABLE', errMsg(e));
+      await audit({ op: 'denied', resource, code: 'E_UNAVAILABLE', lease_id, error: errMsg(e), ...who(opts) });
+      safeAlert('lease_unavailable', { op: 'acquire', resource, owner: opts.owner, lease_id, error: errMsg(e) });
+      // The backend may still commit after a timeout: hand back the identity so the caller can adopt() and release it.
+      return { ...fail('E_UNAVAILABLE', errMsg(e)), lease_id, attempted: { resource, lease_id, owner: opts.owner, task_id: opts.task_id ?? null } };
     }
     if (out.held) {
       await audit({ op: 'denied', resource, code: 'E_HELD', held_by: out.held.owner, held_token: out.held.token, ...who(opts) });
       return { ok: false, code: 'E_HELD', holder: { owner: out.held.owner, task_id: out.held.task_id, expires_at: out.held.expires_at } };
     }
-    if (out.previous) await audit({ op: 'fenced', resource, code: 'E_EXPIRED', token: out.previous.token, lease_id: out.previous.lease_id, by_token: out.lease.token, ...who(out.previous) });
-    await audit({ op: 'acquire', resource, lease_id, token: out.lease.token, expires_at: out.lease.expires_at, ...who(opts) });
     return { ok: true, lease: { ...out.lease } };
   }
+
+  // Re-claims a lease whose acquire reported E_UNAVAILABLE but committed anyway: only the exact attempted identity
+  // (resource, lease_id, owner, task_id) of the current unexpired holder. Never acquires a free resource.
+  async function adopt(attempted) {
+    const a = attempted || {};
+    if (!validResource(a.resource) || !str(a.lease_id) || !str(a.owner)) return fail('E_INVALID', 'not an attempted lease');
+    let out;
+    try {
+      out = await call(() => backend.read(a.resource));
+    } catch (e) {
+      safeAlert('lease_unavailable', { op: 'adopt', resource: a.resource, owner: a.owner, lease_id: a.lease_id, error: errMsg(e) });
+      return fail('E_UNAVAILABLE', errMsg(e));
+    }
+    const h = out?.holder;
+    if (!h || h.lease_id !== a.lease_id || h.owner !== a.owner || h.task_id !== (a.task_id ?? null) || out.generation !== h.token) return fail('E_FENCED');
+    if (!(clockNowSafe() < h.expires_at)) return fail('E_EXPIRED');
+    await audit({ op: 'adopt', resource: a.resource, lease_id: h.lease_id, token: h.token, ...who(h) });
+    return { ok: true, lease: { ...h } };
+  }
+  const clockNowSafe = () => { try { return clockNow(); } catch { return NaN; } };
 
   async function renew(lease) {
     if (!isLease(lease)) return fail('E_INVALID', 'not a lease');
     let out;
     try {
       out = await call(() => backend.update(lease.resource, (rec) => {
-        const t = now();
+        const t = clockNow();
         const code = identity(rec, lease, t);
         if (code) return { result: { code } };
         const holder = { ...rec.holder, expires_at: t + rec.holder.ttl_ms, renewed_at: t };
@@ -171,7 +208,7 @@ export function createLeaseAuthority({
       safeAlert('lease_unavailable', { op: 'validate', resource: lease.resource, owner: lease.owner, error: errMsg(e) });
       return fail('E_UNAVAILABLE', errMsg(e));
     }
-    const code = identity(rec, lease, now());
+    const code = identity(rec, lease, clockNowSafe());   // NaN reads as expired: fail closed
     if (!code) return { ok: true };
     await audit({ op: 'fenced', action: 'validate', resource: lease.resource, code, token: lease.token, lease_id: lease.lease_id, current_token: rec?.generation ?? null, ...who(lease) });
     safeAlert('lease_fenced', { resource: lease.resource, owner: lease.owner, code });
@@ -215,6 +252,12 @@ export function createLeaseAuthority({
     for (const r of canonicalOrder(resources)) {
       const res = await acquire(r, opts);
       if (!res.ok) {
+        // A timed-out acquire may have committed: adopt it so the rollback releases it too.
+        if (res.attempted) {
+          const ad = await adopt(res.attempted);
+          if (ad.ok) got.push(ad.lease);
+          else if (ad.code === 'E_UNAVAILABLE') safeAlert('ghost_lease_possible', { resource: r, owner: opts.owner, lease_id: res.lease_id });
+        }
         for (const l of got.reverse()) {
           const rr = await release(l);
           if (!rr.ok) safeAlert('release_failed', { resource: l.resource, owner: l.owner, code: rr.code });
@@ -240,31 +283,44 @@ export function createLeaseAuthority({
     }
   }
 
-  return { acquire, renew, release, validate, acquireAll, withLeases, fence };
+  return { acquire, adopt, renew, release, validate, acquireAll, withLeases, fence };
 }
 
 export const fence = (authority, leases) => authority.fence(leases);
 
 // ---------------------------------------------------------------------------------------------------------------------
-// File backend: one directory, shared by every process on this host.
-//   <res>.lease.json  authoritative record { resource, generation, holder }, replaced by tmp+fsync+rename+fsync(dir)
-//   <res>.lock        O_EXCL critical section around read-check-write; holds a random nonce
-//   audit.jsonl       append-only provenance (fsync per line)
-// A crashed process can leave a lock file behind. It is only broken when the resource's holder is expired (or none)
-// AND the lock file is older than staleLockMs; the break is rename-to-unique, then the moved file's dev/ino/mtime must
-// match what was judged stale (else a fresh lock was moved: put it back). A locker re-checks its nonce right before
-// committing, so a lost lock fails closed.
+// File backend: one directory on a local filesystem, shared by every process on this host. Per resource <r>:
+//   <r>.lease.json  authoritative record { resource, generation, holder }; tmp+fsync+rename+fsync(dir)
+//   <r>.seen        history marker written before the first record: a missing record with a marker is lost state
+//   <r>.lock        O_EXCL critical section around read-check-write: { nonce, pid, host, at }
+//   <r>.break       O_EXCL: serializes stale-lock breakers
+//   <r>.moved       a lock a breaker has displaced; while it exists new lockers back off
+//   audit.jsonl     append-only provenance (fsync per append); grant lines are written inside the critical section
+// A lock is broken only if its owner is not a live process on this host, the resource's holder is expired or absent,
+// and the lock file is older than staleLockMs. The breaker holds <r>.break, re-stats the lock, renames it to <r>.moved
+// and checks dev/ino/mtime. On a mismatch it displaced a fresh lock: lockers that arrive meanwhile see <r>.moved and
+// back off, so the slot stays free until the breaker links the lock back (or its owner, finishing, removes <r>.moved).
+// A crashed breaker leaves <r>.break / <r>.moved behind: the resource then fails closed until manual recovery
+// (docs/v2/LEASES.md).
 export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs = 5000, randomId = randomUUID, now = Date.now } = {}) {
   if (!dir) throw new Error('fileBackend: dir required');
   const p = fs.promises || fs;
+  const host = hostname();
   const key = (r) => encodeURIComponent(r);
-  const recPath = (r) => join(dir, `${key(r)}.lease.json`);
-  const lockPath = (r) => join(dir, `${key(r)}.lock`);
+  const path = (r, ext) => join(dir, `${key(r)}.${ext}`);
   const auditPath = join(dir, 'audit.jsonl');
   const nap = (ms) => new Promise((r) => setTimeout(r, ms));
   const wrap = (what, e) => (e?.code === 'E_UNAVAILABLE' ? e : unavailable(`${what}: ${e?.code || e?.message || e}`));
+  const sameFile = (a, b) => !!a && !!b && a.dev === b.dev && a.ino === b.ino && a.mtimeMs === b.mtimeMs;
+  const statOrNull = async (f) => { try { return await p.stat(f); } catch (e) { if (e.code === 'ENOENT') return null; throw wrap('stat', e); } };
+  const readJson = async (f) => { try { return JSON.parse(await p.readFile(f, 'utf8')); } catch { return null; } };
+  const readNonce = async (f) => (await readJson(f))?.nonce ?? null;
+  const pidAlive = (pid) => {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+  };
   let ready = null;
-  const ensureDir = () => (ready ||= p.mkdir(dir, { recursive: true }).catch((e) => { ready = null; throw wrap('mkdir', e); }));
+  const ensureDir = () => (ready ||= p.mkdir(dir, { recursive: true, mode: 0o700 }).catch((e) => { ready = null; throw wrap('mkdir', e); }));
 
   function parseRecord(txt, resource) {
     let r;
@@ -277,23 +333,13 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
     return r;
   }
 
-  // A missing record with audit history means state was lost: restarting the generation could reuse a token.
-  async function auditHasHistory(resource) {
-    let txt;
-    try { txt = await p.readFile(auditPath, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return false; throw wrap('audit read', e); }
-    for (const line of txt.split('\n')) {
-      if (!line.includes(resource)) continue;
-      try { const e = JSON.parse(line); if (e.resource === resource && e.op === 'acquire') return true; } catch {}   // torn tail
-    }
-    return false;
-  }
-
   async function readRecord(resource) {
     let txt;
-    try { txt = await p.readFile(recPath(resource), 'utf8'); }
+    try { txt = await p.readFile(path(resource, 'lease.json'), 'utf8'); }
     catch (e) {
       if (e.code !== 'ENOENT') throw wrap('read', e);
-      if (await auditHasHistory(resource)) throw unavailable('lease record missing but audit has history');
+      // O(1) lost-state guard: restarting the generation after a lost record could reuse a token.
+      if (await statOrNull(path(resource, 'seen'))) throw unavailable('lease record missing but resource has history');
       return null;
     }
     return parseRecord(txt, resource);
@@ -304,12 +350,16 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
     try { await dh.sync(); } finally { await dh.close(); }
   }
 
+  async function writeDurable(file, text, flags) {
+    const fh = await p.open(file, flags, 0o600);
+    try { await fh.writeFile(text); await fh.sync(); } finally { await fh.close(); }
+  }
+
   async function writeRecord(resource, rec) {
     const tmp = join(dir, `.${key(resource)}.${randomId()}.tmp`);
     try {
-      const fh = await p.open(tmp, 'wx', 0o600);
-      try { await fh.writeFile(JSON.stringify(rec)); await fh.sync(); } finally { await fh.close(); }
-      await p.rename(tmp, recPath(resource));
+      await writeDurable(tmp, JSON.stringify(rec), 'wx');
+      await p.rename(tmp, path(resource, 'lease.json'));
       await fsyncDir();
     } catch (e) {
       await p.unlink(tmp).catch(() => {});
@@ -317,30 +367,47 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
     }
   }
 
-  const readNonce = async (lp) => { try { return JSON.parse(await p.readFile(lp, 'utf8')).nonce ?? null; } catch { return null; } };
+  async function appendAudit(entries) {
+    try { await writeDurable(auditPath, entries.map((e) => JSON.stringify(e) + '\n').join(''), 'a'); }
+    catch (e) { throw wrap('audit', e); }
+  }
 
-  async function maybeBreak(resource, lp, clock) {
-    let st;
-    try { st = await p.stat(lp); } catch (e) { if (e.code === 'ENOENT') return; throw wrap('lock stat', e); }
-    if (now() - st.mtimeMs < staleLockMs) return;
+  async function maybeBreak(resource, clock) {
+    const lp = path(resource, 'lock'), moved = path(resource, 'moved'), bp = path(resource, 'break');
+    const st = await statOrNull(lp);
+    if (!st || now() - st.mtimeMs < staleLockMs) return;
+    const info = await readJson(lp);
+    if (info?.host === host && pidAlive(info.pid)) return;          // owner still running here: never break
     const rec = await readRecord(resource);                         // corrupt -> throws: never break on doubt
     if (rec?.holder && clock() < rec.holder.expires_at) return;     // live holder: wait, then fail closed
-    const aside = `${lp}.broken-${randomId()}`;
-    try { await p.rename(lp, aside); } catch (e) { if (e.code === 'ENOENT') return; throw wrap('lock break', e); }
-    let st2 = null;
-    try { st2 = await p.stat(aside); } catch {}
-    if (st2 && st2.dev === st.dev && st2.ino === st.ino && st2.mtimeMs === st.mtimeMs) {
-      await p.unlink(aside).catch(() => {});
-      await audit({ at: now(), op: 'lock_broken', resource, lock_age_ms: now() - st.mtimeMs }).catch(() => {});
-      return;
-    }
-    // Moved somebody's fresh lock: restore it if the slot is still free; otherwise its owner's pre-commit check fails.
-    await p.link(aside, lp).catch(() => {});
-    await p.unlink(aside).catch(() => {});
+    let bh;
+    try { bh = await p.open(bp, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') return; throw wrap('break lock', e); }
+    try {
+      try { await bh.writeFile(JSON.stringify({ pid: process.pid, host, at: now() })); } finally { await bh.close(); }
+      if (!sameFile(st, await statOrNull(lp))) return;              // changed since judged: not ours to break
+      try { await p.rename(lp, moved); } catch (e) { if (e.code === 'ENOENT') return; throw wrap('lock break', e); }
+      if (sameFile(st, await statOrNull(moved))) {
+        await p.unlink(moved).catch(() => {});
+        await appendAudit([{ at: now(), op: 'lock_broken', resource, lock_age_ms: now() - st.mtimeMs, lock_pid: info?.pid ?? null }]).catch(() => {});
+        return;
+      }
+      // Displaced a fresh lock. New lockers back off while <r>.moved exists, so the slot frees up for the restore.
+      const deadline = performance.now() + Math.max(lockWaitMs, 1000) * 4;
+      for (;;) {
+        try { await p.link(moved, lp); break; }
+        catch (e) {
+          if (e.code === 'ENOENT') return;                          // its owner finished and removed it
+          if (e.code !== 'EEXIST') throw wrap('lock restore', e);
+        }
+        if (performance.now() > deadline) throw unavailable('lock restore timed out; manual recovery needed');
+        await nap(2);
+      }
+      await p.unlink(moved).catch(() => {});
+    } finally { await p.unlink(bp).catch(() => {}); }
   }
 
   async function lock(resource, clock) {
-    const lp = lockPath(resource);
+    const lp = path(resource, 'lock'), moved = path(resource, 'moved');
     const nonce = String(randomId());
     const deadline = performance.now() + lockWaitMs;
     for (let i = 0; ; i++) {
@@ -348,27 +415,36 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
       try { fh = await p.open(lp, 'wx', 0o600); }
       catch (e) { if (e.code !== 'EEXIST') throw wrap('lock', e); }
       if (fh) {
-        try { await fh.writeFile(JSON.stringify({ nonce, pid: process.pid, at: now() })); await fh.sync(); await fh.close(); }
+        try { await fh.writeFile(JSON.stringify({ nonce, pid: process.pid, host, at: now() })); await fh.sync(); await fh.close(); }
         catch (e) { await fh.close().catch(() => {}); await p.unlink(lp).catch(() => {}); throw wrap('lock write', e); }
-        return nonce;
+        let displaced;
+        try { displaced = await statOrNull(moved); } catch (e) { await unlock(resource, nonce); throw e; }
+        if (!displaced) return nonce;
+        await unlock(resource, nonce);                              // a breaker is restoring someone's lock: yield
+      } else {
+        await maybeBreak(resource, clock);
       }
-      await maybeBreak(resource, lp, clock);
       if (performance.now() > deadline) throw unavailable('lease lock busy');
       await nap(Math.min(50, 1 + Math.floor(Math.random() * (2 + i))));
     }
   }
 
-  async function unlock(resource, nonce) {
-    const lp = lockPath(resource);
-    if ((await readNonce(lp)) === nonce) await p.unlink(lp).catch(() => {});
+  // Our lock may sit at <r>.moved while a breaker restores it: wait (bounded) for it to come back.
+  async function ownsLock(resource, nonce) {
+    const deadline = performance.now() + lockWaitMs;
+    for (;;) {
+      if ((await readNonce(path(resource, 'lock'))) === nonce) return true;
+      if ((await readNonce(path(resource, 'moved'))) !== nonce || performance.now() > deadline) return false;
+      await nap(2);
+    }
   }
 
-  async function audit(entry) {
-    await ensureDir();
-    try {
-      const fh = await p.open(auditPath, 'a', 0o600);
-      try { await fh.writeFile(JSON.stringify(entry) + '\n'); await fh.sync(); } finally { await fh.close(); }
-    } catch (e) { throw wrap('audit', e); }
+  async function unlock(resource, nonce) {
+    const lp = path(resource, 'lock'), moved = path(resource, 'moved');
+    if ((await readNonce(lp)) === nonce) { await p.unlink(lp).catch(() => {}); return; }
+    if ((await readNonce(moved)) !== nonce) return;
+    await p.unlink(moved).catch(() => {});                          // the breaker's restore then finds nothing to link
+    if ((await readNonce(lp)) === nonce) await p.unlink(lp).catch(() => {});   // ...unless it linked first
   }
 
   return {
@@ -379,22 +455,25 @@ export function fileBackend({ dir, fs = nodeFs, staleLockMs = 30000, lockWaitMs 
       const nonce = await lock(resource, clock);
       try {
         const rec = await readRecord(resource);
-        const { next, result } = mutate(rec);
+        const { next, audit: lines, result } = mutate(rec);
         if (next) {
-          if ((await readNonce(lockPath(resource))) !== nonce) throw unavailable('lease lock lost before commit');
+          if (!(await ownsLock(resource, nonce))) throw unavailable('lease lock lost before commit');
+          if (lines?.length) await appendAudit(lines);
+          if (!rec) await writeDurable(path(resource, 'seen'), JSON.stringify({ resource }), 'w').then(fsyncDir).catch((e) => { throw wrap('history marker', e); });
           await writeRecord(resource, next);
         }
         return result;
       } finally { await unlock(resource, nonce); }
     },
-    audit,
+    async audit(entry) { await ensureDir(); await appendAudit([entry]); },
   };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // In-memory backend with failure injection. `fail` is a mode string or (op, resource) => mode, settable later:
 //   'unavailable' | 'stale' -> every op throws; 'timeout' -> ops never settle (the authority's op timeout fires);
-//   'partial_write' -> a committing update leaves the record corrupt and throws; 'clock_skew' -> time() is off by skewMs.
+//   'partial_write' -> a committing update leaves the record corrupt and throws; 'clock_skew' -> time() is off by skewMs;
+//   'audit_fail' -> audit appends throw (a grant then commits nothing).
 export function fakeBackend({ fail = null, skewMs = 60000, now = Date.now } = {}) {
   const records = new Map();
   const corrupt = new Set();
@@ -410,6 +489,10 @@ export function fakeBackend({ fail = null, skewMs = 60000, now = Date.now } = {}
     if (corrupt.has(resource)) throw unavailable('corrupt lease record');
     return f;
   }
+  const append = (entries) => {
+    if (failing('audit') === 'audit_fail') throw unavailable('injected: audit append failed');
+    for (const e of entries) auditLog.push(clone(e));
+  };
   return {
     kind: 'fake', records, auditLog,
     setFail(f) { mode = f; },
@@ -418,13 +501,14 @@ export function fakeBackend({ fail = null, skewMs = 60000, now = Date.now } = {}
     async read(resource) { await gate('read', resource); return clone(records.get(resource) || null); },
     async update(resource, mutate) {
       const f = await gate('update', resource);
-      const { next, result } = mutate(clone(records.get(resource) || null));
+      const { next, audit: lines, result } = mutate(clone(records.get(resource) || null));
       if (next) {
+        if (lines?.length) append(lines);
         if (f === 'partial_write') { corrupt.add(resource); throw unavailable('injected: partial write'); }
         records.set(resource, clone(next));
       }
       return result;
     },
-    async audit(entry) { auditLog.push(clone(entry)); },
+    async audit(entry) { append([entry]); },
   };
 }

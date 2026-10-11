@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { makeEvent, validateEvent } from './events.js';
+import { HOMOGLYPH } from './policy.js';
 import {
   ContractError, SCHEMA_VERSION, TERMINAL, assertTransition, canTransition, outcomeOf, validateTask, normalizeTask,
   narrowsParent, validateDecision, normalizeDecision,
@@ -19,17 +20,25 @@ const TRANSITION_KINDS = { 'task.transitioned': null, 'task.cancelled': 'cancell
 const EFFECT_KIND = { attempted: 'action.attempted', confirmed: 'action.confirmed', possibly_applied: 'action.unknown', failed: 'action.failed' };
 const PHASE_OF = Object.fromEntries(Object.entries(EFFECT_KIND).map(([p, k]) => [k, p]));
 const UNRESOLVED = ['attempted', 'possibly_applied'];
-// Recording what really happened to an effect already in flight stays allowed after cancel: refusing it
-// would hide external state, which is worse than the write.
-const AFTER_CANCEL_OK = new Set(['action.confirmed', 'action.unknown', 'action.failed', 'recovery.torn_tail']);
+// Recording what really happened to an effect already in flight stays allowed in a terminal state: refusing
+// it would hide external state, which is worse than the write.
+const AFTER_TERMINAL_OK = new Set(['action.confirmed', 'action.unknown', 'action.failed']);
 const USAGE_NUM = ['input_tokens', 'output_tokens', 'usd'];
 const USAGE_KEYS = new Set([...USAGE_NUM, 'runtime', 'provider', 'model', 'unknown', 'run_id', 'attempt_id', 'ts', 'source']);
 
 export const defaultStoreDir = (env = process.env) =>
   join(env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty'), 'v2');
 
-export const actorKey = (a) => (typeof a === 'string' ? a
-  : a && typeof a === 'object' ? (a.id || [a.role, a.runtime, a.model].filter(Boolean).join('/')) : '') || null;
+// Identity is the actor id only, compared trimmed, NFKC-normalized and case-folded. Role, runtime and model
+// say nothing about who did the work, so an actor without an id cannot show independence (-> null).
+// Format/zero-width characters, combining marks and common Cyrillic look-alikes are folded too, so a
+// look-alike id cannot pose as a different actor.
+export const actorKey = (a) => {
+  const id = typeof a === 'string' ? a : a && typeof a === 'object' ? a.id : null;
+  if (typeof id !== 'string') return null;
+  return id.normalize('NFKD').replace(/[\p{Cf}\p{M}]/gu, '').normalize('NFKC').trim().toLowerCase()
+    .replace(/[^\x00-\x7F]/g, (c) => HOMOGLYPH[c] ?? c) || null;
+};
 
 const stable = (v) => (Array.isArray(v) ? `[${v.map(stable).join(',')}]`
   : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`
@@ -38,7 +47,8 @@ const hashOf = (v) => createHash('sha256').update(stable(v)).digest('hex').slice
 const deepFreeze = (o) => { if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); Object.values(o).forEach(deepFreeze); } return o; };
 
 const blank = () => ({ task: null, seq: 0, ids: new Set(), idempotency_key: null, head_sha: null, head_epoch: 0,
-  head_actors: {}, evidence: [], verdicts: [], decisions: [], usage: [], effects: {}, policy_snapshot: null, history: [] });
+  head_actors: Object.create(null), evidence: [], verdicts: [], decisions: [], usage: [], effects: Object.create(null),
+  policy_snapshot: null, history: [], store_error: null });
 
 // ---- validation of record payloads ----------------------------------------------------------------
 
@@ -50,12 +60,13 @@ function checkEvidence(e) {
   if (!(e?.exit === null || Number.isInteger(e?.exit))) bad.push('exit (integer, null = unknown)');
   if (!(e?.duration_ms === null || (typeof e?.duration_ms === 'number' && e.duration_ms >= 0))) bad.push('duration_ms');
   if (!(e?.artifact === null || typeof e?.artifact === 'string')) bad.push('artifact');
-  if (!actorKey(e?.actor)) bad.push('actor');
+  if (!actorKey(e?.actor)) bad.push('actor (needs an id)');
   if (bad.length) fail('E_INVALID', `evidence: invalid ${bad.join(', ')}`);
 }
 
 function checkVerdict(v) {
-  if (!SHA_RE.test(v?.sha ?? '') || !actorKey(v?.actor) || !['approve', 'reject'].includes(v?.verdict) || !Array.isArray(v?.findings)) {
+  const hasActor = (typeof v?.actor === 'string' && v.actor.trim()) || (v?.actor && typeof v.actor === 'object');
+  if (!SHA_RE.test(v?.sha ?? '') || !hasActor || !['approve', 'reject'].includes(v?.verdict) || !Array.isArray(v?.findings)) {
     fail('E_INVALID', 'verdict needs { sha, actor, verdict: approve|reject, findings[] }');
   }
 }
@@ -79,9 +90,10 @@ export function normalizeUsage(u = {}) {
   return out;
 }
 
+// No records means nothing was measured, which is unknown, not zero.
 export function usageTotals(records) {
   const t = { records: records.length };
-  for (const k of USAGE_NUM) t[k] = records.some((r) => r[k] === null) ? null : records.reduce((s, r) => s + r[k], 0);
+  for (const k of USAGE_NUM) t[k] = !records.length || records.some((r) => r[k] === null) ? null : records.reduce((s, r) => s + r[k], 0);
   t.unknown = USAGE_NUM.filter((k) => t[k] === null);
   return t;
 }
@@ -101,7 +113,11 @@ export function acceptanceUnmet(st) {
     if (!ok) why.push(`required check ${c.id}: no passing evidence on current head ${head}`);
   }
   const latest = new Map();
-  for (const v of st.verdicts.filter(current)) latest.set(actorKey(v.actor), v.verdict);
+  // A verdict from an actor without an id has no identity: its approve never counts, its reject still blocks.
+  for (const v of st.verdicts.filter(current)) {
+    if (actorKey(v.actor)) latest.set(actorKey(v.actor), v.verdict);
+    else if (v.verdict === 'reject') why.push(`an actor without id rejects ${head}`);
+  }
   const independent = [...latest].filter(([a]) => !devs.has(a));
   if (!independent.some(([, v]) => v === 'approve')) {
     why.push([...latest].some(([a, v]) => devs.has(a) && v === 'approve')
@@ -148,6 +164,8 @@ function step(st, ev) {
   switch (ev.kind) {
     case 'task.head_changed': {
       if (!SHA_RE.test(p.sha ?? '')) fail('E_INVALID', 'head sha must be a hex commit sha');
+      // The actor is the developer who produced this SHA; acceptance compares verifiers against it. An actor
+      // without an id is kept in the log but records no developer, so acceptance stays unmet (fail closed).
       const actor = p.actor == null ? null : actorKey(p.actor);
       return () => {
         if (p.sha !== st.head_sha) { st.head_sha = p.sha; st.head_epoch += 1; }   // older evidence no longer counts
@@ -199,8 +217,9 @@ function step(st, ev) {
     }
     case 'policy.snapshot': {
       const cur = st.policy_snapshot;
-      if (cur && cur.run_id === (p.run_id ?? null) && cur.hash !== p.hash) fail('E_POLICY_IMMUTABLE', 'policy snapshot is immutable within a run');
-      return () => { st.policy_snapshot = deepFreeze({ run_id: p.run_id ?? null, hash: p.hash, policy: structuredClone(p.policy), ts: ev.timestamp }); };
+      const hash = hashOf(p.policy);   // never trust a supplied hash
+      if (cur && cur.run_id === (p.run_id ?? null) && cur.hash !== hash) fail('E_POLICY_IMMUTABLE', 'policy snapshot is immutable within a run');
+      return () => { st.policy_snapshot = deepFreeze({ run_id: p.run_id ?? null, hash, policy: structuredClone(p.policy), ts: ev.timestamp }); };
     }
     default:
       return () => {};   // logged and deduplicated, no derived state
@@ -211,7 +230,9 @@ function view(st) {
   const v = structuredClone({ ...st.task, head_sha: st.head_sha, seq: st.seq, evidence: st.evidence, verdicts: st.verdicts,
     decisions: st.decisions, usage: st.usage, effects: Object.values(st.effects), history: st.history,
     policy_snapshot: st.policy_snapshot, idempotency_key: st.idempotency_key });
-  v.outcome = outcomeOf(st.task.status);
+  // A task whose log could not be replayed is not in a known state, whatever the partial replay says.
+  v.outcome = st.store_error ? 'unknown' : outcomeOf(st.task.status);
+  v.store_error = st.store_error;
   v.usage_totals = usageTotals(st.usage);
   return v;
 }
@@ -263,14 +284,19 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
     const id = ev.task_id;
     if (broken.has(id)) fail('E_STORE_FAILED', `task ${id} needs recover(): ${broken.get(id)}`);
     if (st.ids.has(ev.event_id)) return { applied: false, event_id: ev.event_id };
-    if (st.task?.status === 'cancelled' && !internal && !AFTER_CANCEL_OK.has(ev.kind)) fail('E_CANCELLED', `task ${id} is cancelled`);
-    if (ev.seq === null) ev = { ...ev, seq: st.seq + 1 };
-    else if (!(ev.seq > st.seq)) fail('E_SEQ', `seq ${ev.seq} not after ${st.seq}`);
+    const status = st.task?.status;
+    if (TERMINAL.includes(status) && !internal && !AFTER_TERMINAL_OK.has(ev.kind)) {
+      fail(status === 'cancelled' ? 'E_CANCELLED' : 'E_TERMINAL', `task ${id} is ${status}`);
+    }
+    // seq is dense: an explicit seq must be the next one, so it cannot skip ahead or overflow.
+    const next = st.seq + 1;
+    if (ev.seq === null) ev = { ...ev, seq: next };
+    if (ev.seq !== next || !Number.isSafeInteger(ev.seq)) fail('E_SEQ', `seq ${ev.seq} is not the next seq ${next}`);
     const v = validateEvent(ev, { requireSeq: true });
     if (!v.ok) fail('E_INVALID_EVENT', 'invalid event', v.errors);
     const commit = step(st, ev);
     const before = st.task?.status;
-    try { appendLine(id, ev); } catch (e) { broken.set(id, `log write failed: ${e.message}`); throw e; }
+    try { appendLine(id, ev); } catch (e) { broken.set(id, st.store_error = `log write failed: ${e.message}`); throw e; }
     commit();
     if (ev.kind === 'task.created' && st.idempotency_key != null) idem.set(st.idempotency_key, id);
     st.seq = ev.seq;
@@ -310,6 +336,7 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
     tasks.clear(); idem.clear(); broken.clear();
     const torn = [], corrupt = [], pendingEffects = [];
     fs.mkdirSync(tasksDir, { recursive: true });
+    for (const f of fs.readdirSync(dir)) if (/^index\.json\..*\.tmp$/.test(f)) fs.rmSync(join(dir, f), { force: true });
     for (const id of fs.readdirSync(tasksDir).sort()) {
       const tdir = join(tasksDir, id), log = join(tdir, 'events.jsonl');
       if (!ID_RE.test(id) || !fs.statSync(tdir).isDirectory()) continue;
@@ -323,7 +350,7 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       const st = blank();
       for (const ev of r.events) {
         try {
-          if (st.ids.has(ev.event_id) || ev.seq <= st.seq) throw new Error(`duplicate event or seq at ${ev.seq}`);
+          if (st.ids.has(ev.event_id) || ev.seq !== st.seq + 1) throw new Error(`duplicate event or seq gap at ${ev.seq}`);
           step(st, ev)();
           st.seq = ev.seq; st.ids.add(ev.event_id);
           if (st.task) st.task.updated_at = ev.timestamp;
@@ -332,7 +359,7 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       if (!st.task) continue;   // creation never acknowledged
       tasks.set(id, st);
       if (st.idempotency_key) idem.set(st.idempotency_key, id);
-      if (r.corrupt) { corrupt.push({ task_id: id, ...r.corrupt }); broken.set(id, `corrupt log: ${r.corrupt.error}`); continue; }
+      if (r.corrupt) { corrupt.push({ task_id: id, ...r.corrupt }); broken.set(id, st.store_error = `corrupt log: ${r.corrupt.error}`); continue; }
       if (r.tornBytes) {
         torn.push({ task_id: id, dropped_bytes: r.tornBytes });
         write(st, makeEvent({ task_id: id, kind: 'recovery.torn_tail', payload: { recovered_torn_tail: true, dropped_bytes: r.tornBytes } }, { now, randomId }), { internal: true });
@@ -358,7 +385,8 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       for (const e of open) pendingEffects.push({ task_id: id, effect_id: e.effect_id, idempotency_key: e.idempotency_key,
         kind: e.kind, phase: st.effects[e.effect_id].phase, state: st.task.status, moved });
     }
-    for (const id of tasks.keys()) if (!broken.has(id)) saveSnapshot(id);
+    // Broken tasks get a snapshot too, so an external reader sees store_error rather than a stale healthy state.
+    for (const id of tasks.keys()) { if (!broken.has(id)) saveSnapshot(id); else if (tasks.get(id).task) { try { saveSnapshot(id); } catch { /* reported by recover() */ } } }
     saveIndex();
     return { tasks: [...tasks.keys()], torn, corrupt, pendingEffects };
   }
@@ -377,7 +405,9 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       if (task.status !== 'created') fail('E_INVALID_TASK', 'a new task starts in created');
       if (tasks.has(task.task_id)) fail('E_EXISTS', `task ${task.task_id} already exists`);
       if (task.parent_task_id) {
-        const n = narrowsParent(stateOf(task.parent_task_id).task, task);
+        const parent = stateOf(task.parent_task_id).task;
+        if (TERMINAL.includes(parent.status)) fail(parent.status === 'cancelled' ? 'E_CANCELLED' : 'E_TERMINAL', `parent ${parent.task_id} is ${parent.status}`);
+        const n = narrowsParent(parent, task);
         if (!n.ok) fail('E_NARROWING', 'subtask weakens parent constraints', n.violations);
       }
       fs.mkdirSync(join(tasksDir, task.task_id), { recursive: true });
@@ -391,6 +421,27 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
     })),
 
     get: async (id) => { await ensure(); const st = tasks.get(id); return st ? view(st) : null; },
+    // Read-only event log (validated lines, in seq order) for controllers that need run/approval history.
+    events: async (id) => { await ensure(); stateOf(id); return readLog(join(tasksDir, id, 'events.jsonl')).events; },
+    // Independence on a SHA from the store's own record of who produced it, never from caller-supplied fields.
+    independence: async (id, sha) => {
+      await ensure();
+      const st = stateOf(id);
+      if (!sha || sha !== st.head_sha) return { ok: false, reasons: [`${sha} is not the current head`], developers: [], approvers: [] };
+      const devs = new Set(st.head_actors[sha] || []);
+      const latest = new Map();
+      let anonReject = false;
+      for (const v of st.verdicts.filter((r) => r.sha === sha && r.epoch === st.head_epoch)) {
+        if (actorKey(v.actor)) latest.set(actorKey(v.actor), v.verdict); else if (v.verdict === 'reject') anonReject = true;
+      }
+      const approvers = [...latest].filter(([a, v]) => !devs.has(a) && v === 'approve').map(([a]) => a);
+      const reasons = [];
+      if (!devs.size) reasons.push(`no developer recorded for ${sha}`);
+      if (!approvers.length) reasons.push(`no independent approve on ${sha}`);
+      for (const [a, v] of latest) if (!devs.has(a) && v === 'reject') reasons.push(`verifier ${a} rejects ${sha}`);
+      if (anonReject) reasons.push(`an actor without id rejects ${sha}`);
+      return { ok: !reasons.length, reasons, developers: [...devs], approvers };
+    },
     list: async ({ state, project_id, parent_task_id } = {}) => {
       await ensure();
       return [...tasks.values()].filter((st) => (state === undefined || st.task.status === state)
@@ -413,6 +464,7 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       }));
     },
 
+    // `actor` is the developer who produced `sha` (needs an id); without one, acceptance cannot show independence.
     setHead: (id, sha, { actor, event_id } = {}) => mutate(id, { kind: 'task.head_changed', event_id, payload: { sha, actor: actor ?? null } }),
 
     recordEvidence: (id, e = {}, { event_id } = {}) => mutate(id, { kind: 'evidence.recorded', event_id, payload: {

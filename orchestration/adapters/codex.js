@@ -12,6 +12,7 @@ function parse(o) {
   }
   if (t === 'turn.completed') return { events: [{ type: 'result', ok: true, text: null }], usage: usageFrom(o) };
   if (t === 'turn.failed' || t === 'error') {
+    // Quota exhaustion arrives here on stdout ("usage limit ... try again at <time>"), not on stderr.
     const msg = o.error?.message ?? o.message ?? 'error';
     return { events: [{ type: 'error', text: String(msg) }], error_text: String(msg) };
   }

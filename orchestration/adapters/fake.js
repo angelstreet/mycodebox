@@ -45,7 +45,14 @@ export function createAdapter(opts = {}) {
           const rel = path.relative(realCwd, target);
           if (rel.startsWith('..') || path.isAbsolute(rel) || !rel) { core.noteError('script write escapes cwd'); exit = 1; break; }
           fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.writeFileSync(target, String(s.content ?? ''));
+          // Never follow a symlink out of cwd: check the real parent, then open the leaf with O_NOFOLLOW.
+          const realParent = fs.realpathSync(path.dirname(target));
+          const pr = path.relative(realCwd, realParent);
+          if (pr.startsWith('..') || path.isAbsolute(pr)) { core.noteError('script write escapes cwd'); exit = 1; break; }
+          try {
+            const fd = fs.openSync(path.join(realParent, path.basename(target)), nodeFs.constants.O_WRONLY | nodeFs.constants.O_CREAT | nodeFs.constants.O_TRUNC | nodeFs.constants.O_NOFOLLOW, 0o644);
+            try { fs.writeSync(fd, String(s.content ?? '')); } finally { fs.closeSync(fd); }
+          } catch { core.noteError('script write refused'); exit = 1; break; }
           core.push({ type: 'tool_use', name: 'write', path: rel });
         } else if (s.op === 'emit') core.push({ ...s.event });
         else if (s.op === 'usage') core.addUsage({ input_tokens: s.input_tokens ?? null, output_tokens: s.output_tokens ?? null, usd: s.usd ?? null });

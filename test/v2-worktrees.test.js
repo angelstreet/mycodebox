@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createWorktrees } from '../orchestration/worktrees.js';
+import { createLeaseAuthority, fileBackend } from '../orchestration/lease-authority.js';
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-wt-')));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -22,25 +23,15 @@ function mkRepo(name) {
   return { dir, sha: sh(dir, 'rev-parse', 'HEAD') };
 }
 
-// Minimal stand-in with the ARCHITECTURE section 5 shape (acquire/validate/release).
-function fakeLeases() {
-  const held = new Map();
-  let gen = 0;
-  return {
-    acquire(resource, { owner, task_id }) {
-      if (held.has(resource)) return { ok: false, code: 'E_HELD' };
-      const lease = { resource, lease_id: `l${++gen}`, owner, task_id, token: gen };
-      held.set(resource, lease);
-      return { ok: true, lease };
-    },
-    validate(lease) { return held.get(lease.resource)?.lease_id === lease.lease_id ? { ok: true } : { ok: false, code: 'E_FENCED' }; },
-    release(lease) { if (held.get(lease.resource)?.lease_id === lease.lease_id) held.delete(lease.resource); return { ok: true }; },
-    held,
-  };
-}
+// The real authority (file backend in the temp dir); ARCHITECTURE section 5.
+const isHeld = async (s, id) => {
+  const r = await s.leases.acquire(`worktree:${id}`, { owner: 'probe', ttl_ms: 1000 });
+  if (r.ok) await s.leases.release(r.lease); // probe only
+  return r.code === 'E_HELD';
+};
 function setup(name) {
   const repo = mkRepo(name);
-  const leases = fakeLeases();
+  const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(tmp, `${name}-leases`) }) });
   const root = path.join(tmp, `${name}-wt`);
   const wt = createWorktrees({ root, repoAllowlist: [repo.dir], leases });
   return { ...repo, leases, root, wt };
@@ -60,7 +51,7 @@ test('T05 two tasks get two disjoint worktrees on one repo, each on its own bran
   assert.ok(!fs.existsSync(path.join(b.path, 'only-a.txt')));
   assert.equal(s.wt.owner(a.path).owner, 'dev-a');
   assert.equal(s.wt.owner(b.path).owner, 'dev-b');
-  assert.ok(s.leases.held.has('worktree:task-a') && s.leases.held.has('worktree:task-b'));
+  assert.ok(await isHeld(s, 'task-a') && await isHeld(s, 'task-b'));
 });
 
 test('T05 a second owner cannot claim or remove the first owner\'s worktree', async () => {
@@ -73,14 +64,15 @@ test('T05 a second owner cannot claim or remove the first owner\'s worktree', as
   await rejects(other.remove(a.path, { retain: false, owner: 'dev-b' }), 'E_FOREIGN');
   assert.ok(fs.existsSync(a.path));
   // lost lease (fenced) also blocks removal even for the right owner
-  s.leases.held.clear();
+  await s.leases.release(a.lease);
   await rejects(s.wt.remove(a.path, { retain: false, owner: 'dev-a' }), 'E_FENCED');
+  assert.ok(fs.existsSync(a.path));
 });
 
 test('T05 dirty or untracked trees are never removed; retain is the default', async () => {
   const s = setup('r3');
   const a = await s.wt.create({ repo: s.dir, task_id: 'task-a', base_sha: s.sha, owner: 'o' });
-  assert.deepEqual(await s.wt.status(a.path), { dirty: false, untracked: false, head: s.sha });
+  assert.deepEqual(await s.wt.status(a.path), { dirty: false, untracked: false, ignored: false, head: s.sha });
   fs.writeFileSync(path.join(a.path, 'a.txt'), 'changed\n');
   assert.equal((await s.wt.status(a.path)).dirty, true);
   await rejects(s.wt.remove(a.path, { retain: false, owner: 'o' }), 'E_DIRTY');
@@ -102,7 +94,7 @@ test('clean owned tree is removed with retain:false; lease released; branch dele
   const a = await s.wt.create({ repo: s.dir, task_id: 'task-a', base_sha: s.sha, owner: 'o' });
   assert.deepEqual(await s.wt.remove(a.path, { retain: false, owner: 'o' }), { removed: true, retained: false });
   assert.ok(!fs.existsSync(a.path));
-  assert.ok(!s.leases.held.has('worktree:task-a'));
+  assert.ok(!(await isHeld(s, 'task-a')));
   assert.equal(sh(s.dir, 'branch', '--list', 'v2task/task-a'), '');
   const again = await s.wt.create({ repo: s.dir, task_id: 'task-a', base_sha: s.sha, owner: 'o2' }); // reusable after removal
   assert.ok(fs.existsSync(again.path));
@@ -129,7 +121,7 @@ test('repo allowlist, task_id, branch, sha validated', async () => {
   await rejects(s.wt.create({ repo: s.dir, task_id: 't1', base_sha: 'HEAD' }), 'E_INVALID');
   await rejects(s.wt.create({ repo: s.dir, task_id: 't1', base_sha: s.sha, branch: 'main' }), 'E_INVALID');
   await assert.rejects(s.wt.create({ repo: s.dir, task_id: 't1', base_sha: 'f'.repeat(40) })); // unknown commit
-  assert.ok(!s.leases.held.has('worktree:t1'), 'lease released after failed create');
+  assert.ok(!(await isHeld(s, 't1')), 'lease released after failed create');
   assert.equal(fs.readdirSync(s.root).filter((x) => !x.startsWith('.')).length, 0);
 });
 
@@ -152,4 +144,52 @@ test('paths must resolve inside root: .. and symlink escape rejected', async () 
   fs.mkdirSync(stray);
   assert.equal(s.wt.owner(stray), null);
   await rejects(s.wt.remove(stray, { retain: false }), 'E_FOREIGN');
+});
+
+test('ownership by lease: the holder\'s lease removes; a stale copy or other lease does not; renew refreshes meta', async () => {
+  const s = setup('r8');
+  const a = await s.wt.create({ repo: s.dir, task_id: 'task-a', base_sha: s.sha, owner: 'o' });
+  await rejects(s.wt.remove(a.path, { retain: false }), 'E_FOREIGN'); // neither owner nor lease
+  await rejects(s.wt.remove(a.path, { retain: false, lease: { ...a.lease, token: a.lease.token + 1 } }), 'E_FOREIGN');
+  const r = await s.wt.renew(a.path, { lease: a.lease });
+  assert.ok(r.lease.expires_at >= a.lease.expires_at);
+  await rejects(s.wt.renew(a.path, { owner: 'someone-else' }), 'E_FOREIGN');
+  assert.equal((await s.wt.remove(a.path, { retain: false, lease: a.lease })).removed, true);
+});
+
+test('lease is validated before the git mutation: a fenced lease never reaches worktree add', async () => {
+  const s = setup('r9');
+  const calls = [];
+  const leases = { ...s.leases, acquire: async (...x) => s.leases.acquire(...x), validate: async () => ({ ok: false, code: 'E_FENCED' }), release: (l) => s.leases.release(l) };
+  const wt = createWorktrees({ root: s.root, repoAllowlist: [s.dir], leases, git: async (args, o) => { calls.push(args[0]); return (await import('../orchestration/worktrees.js')).defaultGit(args, o); } });
+  await rejects(wt.create({ repo: s.dir, task_id: 'task-f', base_sha: s.sha }), 'E_FENCED');
+  assert.ok(!calls.includes('worktree'));
+  assert.ok(!(await isHeld(s, 'task-f')));
+});
+
+test('acquire reporting E_UNAVAILABLE with an attempted handle is adopted, not leaked', async () => {
+  const s = setup('r10');
+  let adopted = null;
+  const leases = {
+    ...s.leases,
+    validate: (l) => s.leases.validate(l),
+    release: (l) => s.leases.release(l),
+    acquire: async (res, o) => { const r = await s.leases.acquire(res, o); return { ok: false, code: 'E_UNAVAILABLE', attempted: { resource: res, lease_id: r.lease.lease_id, owner: o.owner, task_id: o.task_id } }; },
+    adopt: async (att) => { adopted = att; return s.leases.adopt(att); },
+  };
+  const wt = createWorktrees({ root: s.root, repoAllowlist: [s.dir], leases });
+  const a = await wt.create({ repo: s.dir, task_id: 'task-u', base_sha: s.sha, owner: 'o' });
+  assert.equal(adopted.resource, 'worktree:task-u');
+  assert.equal((await wt.remove(a.path, { retain: false, lease: a.lease })).removed, true);
+});
+
+test('ignored files block removal (they would be deleted with the tree)', async () => {
+  const s = setup('r11');
+  fs.writeFileSync(path.join(s.dir, '.gitignore'), '*.local\n');
+  sh(s.dir, 'add', '.'); sh(s.dir, 'commit', '-q', '-m', 'ignore');
+  const sha = sh(s.dir, 'rev-parse', 'HEAD');
+  const a = await s.wt.create({ repo: s.dir, task_id: 'task-i', base_sha: sha, owner: 'o' });
+  fs.writeFileSync(path.join(a.path, 'x.local'), 'keep');
+  await rejects(s.wt.remove(a.path, { retain: false, owner: 'o' }), 'E_IGNORED');
+  assert.ok(fs.existsSync(path.join(a.path, 'x.local')));
 });
