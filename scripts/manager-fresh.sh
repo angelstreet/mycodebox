@@ -32,7 +32,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 pgrep -P "$pane" -f claude >/dev/null && { echo "claude did not exit"; exit 1; }
-node --input-type=module -e "import {trustFolder} from '$SCRIPT_DIR/../trust.js'; await trustFolder('claude', process.argv[1]).catch(()=>{})" "$(tmux display -p -t "=$S:" '#{pane_current_path}')" || true   # best effort
+node --input-type=module -e "import {pathToFileURL} from 'node:url'; const {trustFolder}=await import(pathToFileURL(process.argv[1]).href); await trustFolder('claude', process.argv[2]).catch(()=>{})" "$SCRIPT_DIR/../trust.js" "$(tmux display -p -t "=$S:" '#{pane_current_path}')" || true   # best effort
 tmux send-keys -t "=$S:" -l "$CMD"; sleep 0.3; tmux send-keys -t "=$S:" Enter
 ready=0
 for i in $(seq 1 30); do sleep 2; if tmux capture-pane -p -t "=$S:" | grep -q "remote-control is active"; then ready=1; break; fi; done

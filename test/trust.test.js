@@ -34,3 +34,20 @@ test('trustCodex appends a trusted block once', async () => {
   assert.match(t, /\[projects\."\/home\/u\/p"\]\ntrust_level = "trusted"/);
   assert.match(t, /^model = "x"/);
 });
+
+test('trustCodex refuses control characters in the folder and writes atomically', async () => {
+  const { mkdtemp, writeFile, readFile, readdir, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { trustCodex } = await import('../trust.js');
+  const root = await mkdtemp(join(tmpdir(), 'trust-ctl-'));
+  try {
+    const f = join(root, 'config.toml');
+    await writeFile(f, 'model = "x"\n');
+    for (const d of ['/h/a\nb\t\x01c', '/h/a\n[projects."/x"]', '/h/\x7f']) assert.equal(await trustCodex(d, f), false);
+    assert.equal(await readFile(f, 'utf8'), 'model = "x"\n');
+    assert.equal(await trustCodex('/h/ok', f), true);
+    assert.match(await readFile(f, 'utf8'), /\[projects\."\/h\/ok"\]\ntrust_level = "trusted"/);
+    assert.deepEqual((await readdir(root)).filter((n) => n.endsWith('.tmp')), []);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -43,7 +43,7 @@ Provider-neutral roles, runtime-specific adapters. A task may use Claude Managed
 
 ## Leases, safety and release
 
-Acquire an atomic lease with fencing token for each mutable shared resource; absence of a lease is not proof of availability. Task-specific worktrees are isolated. Integration branch and main shared mutations, deployment, host-wide maintenance and service restart each have separate lease requirements and approval policy. Never push/merge/deploy just to satisfy a goal without explicit applicable authorization. Before a protected operation, recheck current head SHA, evidence, required CI, permission, approval and fencing. Preserve existing repository restrictions (Tailscale-only, no secret leakage, forbidden topics, normal CLI permissions, fail-closed restart).
+Acquire an atomic lease with fencing token for each mutable shared resource; absence of a lease is not proof of availability. Task-specific worktrees are isolated. Integration branch and main shared mutations, deployment, host-wide maintenance and service restart each have separate lease requirements and approval policy. Never push/merge/deploy just to satisfy a goal without explicit applicable authorization. Before a protected operation, recheck current head SHA, evidence, required CI, permission, approval and fencing. Preserve existing repository restrictions (Tailscale-only, no secret leakage, forbidden topics, normal CLI permissions for V2 workers (dashboard sessions follow the owner's 2026-10-11 skip-permissions default), fail-closed restart).
 
 ## Required automated tests (add these to V2 CI and evidence ledger)
 
