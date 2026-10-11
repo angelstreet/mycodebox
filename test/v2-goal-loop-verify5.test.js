@@ -138,8 +138,7 @@ function dieAt(store, when) {
 const CTL = { controller: { ttl_ms: 3000 } };   // heartbeat every 1 s (ttl/3, floor 1 s)
 
 // ---- D-016: takeover of a LIVE controller ---------------------------------------------------------
-test('Z1 D-016 recover() on a second instance while the first is alive and mid-run: the first must write nothing after losing the lease',
-  { todo: 'defect: recover() adopts and fences a LIVE controller\'s lease (nothing checks the holder is dead), and the fenced instance only learns it at its next heartbeat tick (ttl/3): a run that ends inside that window still records usage, confirms/alters the effect and commits in the worktree the new instance is already working in. Either recover() must refuse to take over a lease that is still being heartbeated, or every store write/commit must re-validate the controller lease first.' }, async () => {
+test('Z1 D-016 recover() on a second instance while the first is alive and mid-run: the first must write nothing after losing the lease', async () => {
     const env = world({ dev: [[{ op: 'delay', ms: 600 }, ...PAID(0.3)], PAID(0.3)], loopOpts: CTL });
     const task = await env.submit();
     const flag = { on: false }, late = [];
@@ -185,8 +184,7 @@ test('Z2 D-016 the controller lease expires during a long run (heartbeat renew f
   uniqueEvents(env.events(task.task_id));
 });
 
-test('Z3 D-017 the owner can cancel a task whose recovery is pending (unconfirmed effect, fresh handle, no recover() yet)',
-  { todo: 'defect: under D-017 a fresh store handle refuses every write on a task with an unconfirmed effect until recover(); loop.cancel() goes straight to store.transition and fails with E_STORE_FAILED, so between a controller crash and its recovery the owner cannot cancel (GOAL_LOOP_CONTRACT: always allow owner cancellation). cancel() should be allowed through (it is the one write that never conflicts with reconciliation), or the API layer must recover first.' }, async () => {
+test('Z3 D-017 the owner can cancel a task whose recovery is pending (unconfirmed effect, fresh handle, no recover() yet)', async () => {
   const env = world({ dev: [PAID(0.3)] });
   const task = await env.submit();
   const { store, dead } = dieAt(env.store, (k, a) => k === 'recordUsage' && /\.run\d+$/.test(String(a[1]?.run_id)));

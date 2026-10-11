@@ -390,7 +390,11 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       const open = Object.values(st.effects).filter((e) => UNRESOLVED.includes(e.phase));
       if (!open.length) continue;
       if (readOnly) {
-        if (open.some((x) => x.phase === 'attempted')) st.recovery_pending ??= 'unconfirmed effect';
+        // S2: pending whenever a full recover() would write: an attempted effect (-> possibly_applied), or any open
+        // effect on a task it would park in unknown_external_effect.
+        const from = st.task.status;
+        const wouldPark = !TERMINAL.includes(from) && from !== 'unknown_external_effect' && canTransition(from, 'unknown_external_effect');
+        if (open.some((x) => x.phase === 'attempted') || wouldPark) st.recovery_pending ??= 'unconfirmed effect';
         for (const e of open) pendingEffects.push({ task_id: id, effect_id: e.effect_id, idempotency_key: e.idempotency_key, kind: e.kind, phase: e.phase, state: st.task.status, moved: false });
         continue;
       }
