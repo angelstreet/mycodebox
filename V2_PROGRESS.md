@@ -35,11 +35,11 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | in progress | |
 | lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | review | 9e958b6; T25–T27 tests |
 | lease-verify | 12 | wt verify-08 | 9e958b6 | Fable | done: APPROVE WITH FIXES | 5d19f6b (4 todo); F1 breaker race |
-| lease-fixes | 12 | v2/08-lease-authority | 9e958b6 | Opus | queued (next slot) | |
+| lease-fixes | 12 | v2/08-lease-authority | 9e958b6 | Opus | in progress | |
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | in progress | |
 | goal-loop | 5 | v2/05-goal-loop | merge 02+03+04+10 (be60274) | Opus | in progress | |
-| routing | 4 | v2/04-routing | c366307 | Sonnet | re-verification | c93d5a7 fixes F1–F14 (verify tests 6cd7e26) |
+| routing | 4 | v2/04-routing | c366307 | Sonnet | final verification | b9a88f2 (R1–R5 fixed after round 2) |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
 | adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | done: APPROVE WITH FIXES | 190bf01 (15 todo); 1 high remove() data loss |
