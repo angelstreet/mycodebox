@@ -10,6 +10,8 @@
 //
 // Approve/deny are never blanket: the body must name the pending request's action_id (and the head SHA when the task has
 // one), and the grant covers exactly that request's classes. Silence or a mismatch changes nothing.
+// Approve/deny are recorded by the goal loop (D-020), never written here: no loop in this process -> 503 E_NO_CONTROLLER,
+// another live controller holds the lease -> 409 E_CONTROLLER_HELD. Either way the request stays pending.
 import { ContractError, TERMINAL, outcomeOf } from './task-contract.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -37,7 +39,10 @@ const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
 const STATUS_OF = { E_NOT_FOUND: 404, E_EXISTS: 409, E_TERMINAL: 409, E_CANCELLED: 409, E_ILLEGAL_TRANSITION: 409,
-  E_STORE_FAILED: 503, E_EFFECT_UNRECONCILED: 409, E_ACCEPTANCE_UNMET: 409 };
+  E_STORE_FAILED: 503, E_EFFECT_UNRECONCILED: 409, E_ACCEPTANCE_UNMET: 409,
+  // owner answers through the goal loop (D-020)
+  E_CONTROLLER_HELD: 409, E_CONTROLLER_LOST: 409, E_ALREADY_ANSWERED: 409, E_STALE_ACTION: 409, E_SHA_MISMATCH: 409 };
+const NO_CONTROLLER = 'no goal loop runs in this process: owner decisions are recorded only by the controller (D-020); nothing was written';
 function mapError(e) {
   if (e instanceof ContractError) {
     const status = STATUS_OF[e.code] || (/^E_(INVALID|INTAKE|NARROWING)/.test(e.code) ? 400 : 500);
@@ -226,7 +231,8 @@ function checkDecisionBody(b) {
 
 // ---- handler --------------------------------------------------------------------------------------
 
-// deps: { store, intake, loop? }. `loop` is optional and only used to stop a live run on cancel; this module never starts it.
+// deps: { store, intake, loop? }. `loop` stops a live run on cancel and is the only writer of approve/deny (D-020): without
+// it those routes answer 503 E_NO_CONTROLLER. This module never starts it.
 export function createV2Http({ store, intake, loop = null, log = (m) => console.error(m) } = {}) {
   if (!store || !intake) throw new Error('v2 http: store and intake required');
   const logged = new Set();
@@ -253,16 +259,17 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
       if (!pending) return err(409, 'E_NO_PENDING_APPROVAL', 'nothing awaits an owner decision on this task');
       if (p.body.action_id !== pending.action_id) return err(409, 'E_STALE_ACTION', 'action_id does not match the pending request; reload and decide again');
       if (pending.sha && p.body.sha !== pending.sha) return err(409, 'E_SHA_MISMATCH', 'sha must be the task head the request was raised on');
-      const action = { kind: pending.kind, question: pending.question, classes: pending.classes };
-      const base = { k: pending.k, actor: OWNER, action_id: pending.action_id, action, sha: pending.sha };
+      // D-020: the goal loop is the only writer. It re-checks the request under its controller lease and records the
+      // answer (grants carry the request's classes, action keys and kind, so a keyed request -- a gate, an integration
+      // push/merge of one SHA -- is answered exactly). No loop here, or a live controller elsewhere: refused, not written.
+      if (!loop?.approve || !loop?.deny) return err(503, 'E_NO_CONTROLLER', NO_CONTROLLER);
       const granted = kind === 'approve';
-      // Same event ids and payload shape as goal-loop approve()/deny() (grants carry the request's action keys and kind,
-      // so a keyed request -- a gate, an integration push/merge of one SHA -- is answered exactly): the loop reads this record.
-      await store.append(id, granted
-        ? { event_id: `appr-${id}-${pending.k}`, kind: 'approval.granted', payload: { ...base, approval_ref: pending.action_id, grants: { classes: pending.classes, keys: pending.keys, request_kind: pending.kind }, reason: p.body.reason ?? null } }
-        : { event_id: `deny-${id}-${pending.k}`, kind: 'approval.denied', payload: { ...base, reason: p.body.reason ?? null } });
+      const binding = { k: pending.k, sha: pending.sha };
+      const meta = { action_id: pending.action_id, action: { kind: pending.kind, question: pending.question, classes: pending.classes }, sha: pending.sha, reason: p.body.reason ?? null };
+      if (granted) await loop.approve(id, { actor: OWNER, approval_ref: pending.action_id, binding, meta });
+      else await loop.deny(id, { actor: OWNER, reason: p.body.reason ?? null, binding, meta });
       return reply(200, { ok: true, recorded: granted ? 'approval.granted' : 'approval.denied', action_id: pending.action_id, actor: OWNER, sha: pending.sha,
-        note: 'recorded only; the task moves when the goal loop runs, which is an explicit opt-in' });
+        note: 'recorded by the goal loop; the task moves on its next step' });
     });
   }
 

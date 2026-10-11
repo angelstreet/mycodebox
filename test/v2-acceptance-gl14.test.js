@@ -61,7 +61,7 @@ test('GL14/T39: intake -> worktree -> repair loops -> independent verifier -> in
   assert.equal(o.head(), before, 'main untouched until the merge approval');
   // The owner decides in the dashboard: the V2 HTTP layer shows the request bound to the integration SHA, not the
   // developer head, and records a grant carrying the request's key.
-  const api = createV2Http({ store: env.store, intake: env.intake });
+  const api = createV2Http({ store: env.store, intake: env.intake, loop: env.loop });   // D-020: the loop records the grant
   const http = (method, pathname, body) => api.handle({ method, pathname, readBody: async () => body });
   const board = (await http('GET', '/api/v2/tasks')).body;
   const queued = board.approvals.find((a) => a.task_id === id);

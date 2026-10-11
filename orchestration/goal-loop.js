@@ -192,6 +192,35 @@ export function createGoalLoop({
     if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
   }
 
+  // D-020: owner answers (dashboard routes included) are written here only, one at a time per task, and a request is
+  // answered once: read-check-write under the controller lease, so a second writer can neither race nor double-answer.
+  const answering = new Map();
+  const answerSerial = (id, fn) => {
+    const run = (answering.get(id) || Promise.resolve()).then(fn);
+    const tail = run.catch(() => {});
+    answering.set(id, tail);
+    tail.then(() => { if (answering.get(id) === tail) answering.delete(id); });
+    return run;
+  };
+  const SHA_RE = /^[0-9a-f]{7,64}$/;
+  // -> { req, repeat }: the pending request, and its earlier identical answer (a retried delivery is a no-op, T06); the
+  // opposite answer is refused. `binding` ({ k, sha? }) is what the caller showed the owner, re-checked under the lease.
+  function openRequest(ctx, kind, binding) {
+    if (ctx.broken) throw coded('E_STORE_FAILED', `task ${ctx.id}: log unreadable, no owner answer recorded`);
+    const req = ctx.cp.approval;
+    if (ctx.v.status !== 'awaiting_approval' || !req) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
+    const prior = ctx.events.find((e) => (e.kind === 'approval.granted' || e.kind === 'approval.denied') && e.payload?.k === req.k);
+    if (prior && prior.kind !== kind) throw coded('E_ALREADY_ANSWERED', `this request is already answered (${prior.kind})`);
+    if (binding) {
+      if (binding.k !== req.k) throw coded('E_STALE_ACTION', 'the pending request changed; reload and decide again');
+      const sha = typeof req.sha === 'string' && SHA_RE.test(req.sha) ? req.sha : ctx.v.head_sha ?? null;
+      if (sha && binding.sha !== sha) throw coded('E_SHA_MISMATCH', 'sha must be the task head the request was raised on');
+    }
+    return { req, repeat: prior ? { applied: false, event_id: prior.event_id } : null };
+  }
+  // Audit fields a dashboard answer carries (action id, the request as shown, SHA, reason); never authority.
+  const answerMeta = (m) => (m ? { action_id: m.action_id ?? null, action: m.action ?? null, sha: m.sha ?? null, reason: m.reason ?? null } : {});
+
   const active = new Map();   // task_id -> { adapter, run } | { kill }: what cancel() must stop (agent run or acceptance check)
 
   // ---------- context: everything a step decides from, folded from the persisted log ----------
@@ -1218,35 +1247,42 @@ export function createGoalLoop({
       return t;
     },
     // Explicit owner decisions on a pending request. Only recorded approvals ever authorize anything.
-    async approve(id, { actor, approval_ref = null, grants = {} } = {}) {
+    // `binding`/`meta` come from the dashboard route (D-020): the request it showed and the audit fields it records.
+    async approve(id, { actor, approval_ref = null, grants = {}, binding = null, meta = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'approval needs an actor');
-      await ownerControl();
-      const ctx = await load(id);
-      if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
-      const req = ctx.cp.approval;
-      // #7b: a grant can only cover what was asked: the request's classes and action keys, budget only for a budget stop.
-      const classes = grants.classes ?? req.classes;
-      if (!Array.isArray(classes) || classes.some((c) => !req.classes.includes(c))) throw coded('E_INVALID', `grant exceeds the request (asked: ${req.classes.join(', ') || 'none'})`);
-      if (grants.budget_policy !== undefined && req.kind !== 'budget') throw coded('E_INVALID', 'budget authorization only answers a budget stop');
-      // X8: a reached cap is not waivable by a bare confirmation: the owner raises it (or cancels).
-      if (req.kind === 'budget' && req.cap_reached && !grants.budget_policy) throw coded('E_INVALID', 'cap reached: raise it (grants.budget_policy) or cancel the task');
-      if (req.kind === 'budget' && req.cap_reached) {
-        // Y7: the raise must clear what is spent plus the next run's estimate, or the same stop would come straight back.
-        const raised = { ...effectiveBudgetPolicy(ctx), ...grants.budget_policy };
-        const b2 = budget.check({ ...ctx.v, budget_policy: raised }, ledger(ctx), estimate(ctx, req.entry, req.role), { quota: null });
-        const capLeft = !b2.allow && b2.state_hint === 'awaiting_approval' && !b2.reason.split('; ').every((x) => /estimate unknown|spend unknown/.test(x));
-        if (capLeft) throw coded('E_INVALID', `the raise does not clear spend + estimate: ${b2.reason}`);
-      }
-      for (const k of Object.keys(grants)) if (!['classes', 'budget_policy'].includes(k)) throw coded('E_INVALID', `unknown grant field ${k}`);
-      const payload = { k: req.k, actor, approval_ref, grants: { classes, keys: req.keys || [], request_kind: req.kind, ...(grants.budget_policy ? { budget_policy: grants.budget_policy } : {}) } };
-      return store.append(id, { event_id: `appr-${id}-${req.k}`, kind: 'approval.granted', payload });
+      return answerSerial(id, async () => {
+        await ownerControl();
+        const ctx = await load(id);
+        const { req, repeat } = openRequest(ctx, 'approval.granted', binding);
+        if (repeat) return repeat;
+        // #7b: a grant can only cover what was asked: the request's classes and action keys, budget only for a budget stop.
+        const classes = grants.classes ?? req.classes;
+        if (!Array.isArray(classes) || classes.some((c) => !req.classes.includes(c))) throw coded('E_INVALID', `grant exceeds the request (asked: ${req.classes.join(', ') || 'none'})`);
+        if (grants.budget_policy !== undefined && req.kind !== 'budget') throw coded('E_INVALID', 'budget authorization only answers a budget stop');
+        // X8: a reached cap is not waivable by a bare confirmation: the owner raises it (or cancels).
+        if (req.kind === 'budget' && req.cap_reached && !grants.budget_policy) throw coded('E_INVALID', 'cap reached: raise it (grants.budget_policy) or cancel the task');
+        if (req.kind === 'budget' && req.cap_reached) {
+          // Y7: the raise must clear what is spent plus the next run's estimate, or the same stop would come straight back.
+          const raised = { ...effectiveBudgetPolicy(ctx), ...grants.budget_policy };
+          const b2 = budget.check({ ...ctx.v, budget_policy: raised }, ledger(ctx), estimate(ctx, req.entry, req.role), { quota: null });
+          const capLeft = !b2.allow && b2.state_hint === 'awaiting_approval' && !b2.reason.split('; ').every((x) => /estimate unknown|spend unknown/.test(x));
+          if (capLeft) throw coded('E_INVALID', `the raise does not clear spend + estimate: ${b2.reason}`);
+        }
+        for (const k of Object.keys(grants)) if (!['classes', 'budget_policy'].includes(k)) throw coded('E_INVALID', `unknown grant field ${k}`);
+        const payload = { k: req.k, actor, ...answerMeta(meta), approval_ref,
+          grants: { classes, keys: req.keys || [], request_kind: req.kind, ...(grants.budget_policy ? { budget_policy: grants.budget_policy } : {}) } };
+        return store.append(id, { event_id: `appr-${id}-${req.k}`, kind: 'approval.granted', payload });
+      });
     },
-    async deny(id, { actor, reason = null } = {}) {
+    async deny(id, { actor, reason = null, binding = null, meta = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'denial needs an actor');
-      await ownerControl();
-      const ctx = await load(id);
-      if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
-      return store.append(id, { event_id: `deny-${id}-${ctx.cp.approval.k}`, kind: 'approval.denied', payload: { k: ctx.cp.approval.k, actor, reason } });
+      return answerSerial(id, async () => {
+        await ownerControl();
+        const ctx = await load(id);
+        const { req, repeat } = openRequest(ctx, 'approval.denied', binding);
+        if (repeat) return repeat;
+        return store.append(id, { event_id: `deny-${id}-${req.k}`, kind: 'approval.denied', payload: { k: req.k, actor, ...answerMeta(meta), reason } });
+      });
     },
     // Owner nudge for a no-progress wait (an input change the loop cannot observe itself).
     async resume(id, { actor, reason = null } = {}) {

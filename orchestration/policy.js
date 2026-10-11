@@ -3,7 +3,7 @@
 // actions, approval classes and the manager's forbidden-topic matcher win over task text and model output.
 import * as realFs from 'node:fs';
 import { join } from 'node:path';
-import { forbiddenMatch, FORBIDDEN_RE } from '../stall.js';
+import { forbiddenMatch, FORBIDDEN_RE, normalizeSplits } from '../stall.js';
 import { MANDATORY_APPROVAL, RISK_CLASSES } from './task-contract.js';
 
 export const POLICY_PATH = join('.ai', 'project.json');
@@ -70,7 +70,7 @@ export function textVariants(text) {
   const spaced = base.replace(/\b(?:[A-Za-z0-9][ ._*\-\u2013\u2014]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[ ._*\-\u2013\u2014]/g, ''));   // d e p l o y
   const joined = spaced.replace(/([A-Za-z])[._*\-\u2013\u2014]+(?=[A-Za-z])/g, '$1');                                              // de-ploy, de–ploy
   const leet = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                         // d3pl0y
-  return [...new Set([base, spaced, joined, leet])];
+  return [...new Set([base, spaced, joined, leet, normalizeSplits(base)])];   // "mer ge into main": rejoined in context
 }
 
 // One space splitting a word ("de ploy", "dep loy"): adjacent tokens joined in pairs and triples. Checked one

@@ -214,9 +214,36 @@ export function setForbiddenExtra(pattern) {
   forbiddenExtra = pattern ? new RegExp(pattern, 'i') : null;
 }
 
+// Protected verbs a split spelling may hide ("mer ge", "pu-sh", "de.ploy"). Verbs only: rejoining nouns ("pass words")
+// would flag normal prose.
+const SPLIT_VERB_RE = /^(?:(?:re)?deploy(?:s|ed|ing|ment)?|merg(?:e|es|ed|ing)|rebas(?:e|es|ed|ing)|push(?:es|ed|ing)?|publish(?:es|ed|ing)?|rollout|delet(?:e|es|ed|ing|ion)|remov(?:e|es|ed|ing)|wip(?:e|es|ed|ing)|prun(?:e|es|ed|ing)|truncat(?:e|es|ed|ing)|overwrit(?:e|es|ing)|migrat(?:e|es|ed|ing|ion)|revok(?:e|es|ed|ing)|rotat(?:e|es|ed|ing)|restart(?:s|ed|ing)?|refund(?:s|ed|ing)?|purchas(?:e|es|ed|ing))$/i;
+const SPLIT_SEP_RE = /^[ ._\-\u2013\u2014]$/;
+// NFKC, format characters (zero-width, soft hyphen, word joiner) removed, and letter runs split by single spaces,
+// hyphens or dots rejoined only when the joined token is a protected verb. Up to 6 fragments ("d e p l o y").
+export function normalizeSplits(text) {
+  const parts = String(text ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '').match(/[A-Za-z]+|[^A-Za-z]+/g) || [];
+  const out = [];
+  for (let i = 0; i < parts.length;) {
+    let joined = null, end = i;
+    if (/^[A-Za-z]/.test(parts[i])) {
+      for (let j = i + 2, w = parts[i]; j < parts.length && j <= i + 10 && SPLIT_SEP_RE.test(parts[j - 1]) && /^[A-Za-z]/.test(parts[j]); j += 2) {
+        w += parts[j];
+        if (SPLIT_VERB_RE.test(w) && (j + 1 >= parts.length || !/^[A-Za-z]/.test(parts[j + 1] ?? ''))) { joined = w; end = j; }
+      }
+    }
+    if (joined) { out.push(joined); i = end + 1; } else { out.push(parts[i]); i += 1; }
+  }
+  return out.join('');
+}
+
 export function forbiddenMatch(text) {
-  const m = String(text).match(FORBIDDEN_RE) || (forbiddenExtra && String(text).match(forbiddenExtra));
-  return m ? m[0] : null;
+  const match = (t) => t.match(FORBIDDEN_RE) || (forbiddenExtra && t.match(forbiddenExtra));
+  const raw = String(text);
+  const m = match(raw);
+  if (m) return m[0];
+  const n = normalizeSplits(raw);   // the forbidden-topic filter always wins: a split spelling is still the topic
+  const k = n !== raw && match(n);
+  return k ? k[0] : null;
 }
 
 export function menuOptions(lines) {

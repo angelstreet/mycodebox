@@ -8,7 +8,14 @@ import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
 import { createIntake } from '../orchestration/intake.js';
 import { createV2Http } from '../orchestration/http.js';
+import { createGoalLoop } from '../orchestration/goal-loop.js';
+import { createRegistry } from '../orchestration/model-registry.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+// D-020: approve/deny are recorded by the goal loop; the smallest loop the factory accepts (never steps here).
+const REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
+  capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };
+const loopOver = (store) => createGoalLoop({ store, registry: createRegistry(REGISTRY), adapters: {}, worktrees: {},
+  worktreeRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), verifier: {}, reviewRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), allowFake: true });
 
 const DEV = { role: 'developer', id: 'dev-1' };
 const POLICY = { ok: true, policy: { project_id: 'fixture-project', test_command: ['npm', 'test'] } };
@@ -16,7 +23,7 @@ const POLICY = { ok: true, policy: { project_id: 'fixture-project', test_command
 function setup() {
   const store = createTaskStore({ dir: mkdtempSync(join(tmpdir(), 'v2-http-')), ...clock() });
   const intake = createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A });
-  const api = createV2Http({ store, intake });
+  const api = createV2Http({ store, intake, loop: loopOver(store) });
   const call = (method, pathname, body) => api.handle({ method, pathname, readBody: async () => body });
   return { store, api, call };
 }
