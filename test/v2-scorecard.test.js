@@ -405,6 +405,17 @@ test('proposals: the journal decides (a crash after createTask still journals), 
   // a live goal-loop controller on the store refuses the write
   writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', resource: 'service:h:goal-loop', pid: process.pid, host: hostname(), heartbeat_at: Date.now() }));
   await assert.rejects(recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW }), (e) => e.code === 'E_CONTROLLER_LIVE');
-  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', resource: 'service:h:goal-loop', pid: 999999999, host: hostname(), heartbeat_at: 0 }));
-  assert.equal((await recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW })).length, proposals.length - 1, 'a dead controller does not block');
+  // an idle loop: live pid on this host, heartbeat two minutes old -> still live
+  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', resource: 'service:h:goal-loop', pid: process.pid, host: hostname(), heartbeat_at: Date.now() - 120_000 }));
+  await assert.rejects(recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW }), (e) => e.code === 'E_CONTROLLER_LIVE');
+  // no pid/host and no heartbeat: cannot be judged dead -> refuse
+  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x' }));
+  await assert.rejects(recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW }), (e) => e.code === 'E_CONTROLLER_LIVE');
+  // another host: a stale heartbeat is dead, a fresh one live
+  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', pid: 1, host: 'other-host.invalid', heartbeat_at: Date.now() }));
+  await assert.rejects(recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW }), (e) => e.code === 'E_CONTROLLER_LIVE');
+  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', pid: 1, host: 'other-host.invalid', heartbeat_at: Date.now() - 120_000 }));
+  assert.equal((await recordProposals([], { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW })).length, 0);
+  writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', resource: 'service:h:goal-loop', pid: 999999999, host: hostname(), heartbeat_at: Date.now() }));
+  assert.equal((await recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW })).length, proposals.length - 1, 'a dead pid on this host does not block, even with a fresh heartbeat');
 });

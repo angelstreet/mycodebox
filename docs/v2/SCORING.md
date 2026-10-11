@@ -174,7 +174,7 @@ least 5 settled tasks:
 |---|---|---|
 | `router_history` | the score report's `router_history` has an entry with 5+ attempts and differs from the history in use (`--history FILE`, default none = priors) | shadow |
 | `router_weights` | overall first pass < 50%: quality +0.1, cost -0.1; or verified >= 90%, first pass >= 80% and all costs known: cost +0.1, quality -0.1 (renormalized) | shadow |
-| `model_registry` | a model's verified rate < 50%: exclude it from routing (`models.json` or the project `model_allowlist`) | shadow with `exclude` |
+| `model_registry` | a model's verified rate < 50%: exclude it from routing (`models.json` or the project `model_allowlist`). Owner-cancelled tasks count against the model (settled, not verified), so a model whose work the owner keeps cancelling can be proposed for exclusion | shadow with `exclude` |
 | `role_prompt` | reviewer rejects per settled task >= 0.5 for a developer model: developer prompt text | text only |
 | `harness` | rework rounds per settled task >= 1.5, or owner interventions per settled task >= 1 | text only |
 
@@ -189,10 +189,12 @@ proposal to `journal.jsonl` in the store directory (append-only; rationale, evid
 journal line is written is decided by the journal itself (proposal id not yet journaled), so a crash between creating
 the task and appending the line is completed on the next run.
 
-`recordProposals` refuses (`E_CONTROLLER_LIVE`) while a goal-loop controller is alive on the store (its
-`controller.*.intent.json` has a live pid on this host or a fresh heartbeat). A running server with `GHOSTY_V2=1` also keeps
-the store in memory and will not see tasks written behind its back until restart: record into the store of a stopped
-server, or into a copy of the store directory.
+`recordProposals` refuses (`E_CONTROLLER_LIVE`) while a goal-loop controller may be alive on the store: a
+`controller.*.intent.json` from this host whose pid is alive (whatever its heartbeat age: an idle loop beats only while
+stepping), one from another host with a heartbeat younger than 40 s, or one that cannot be judged (no pid/host and no
+heartbeat). This check is not enough on its own: a loop that never stepped has no controller file, and a running server
+with `GHOSTY_V2=1` keeps the store in memory and will not see tasks written behind its back until restart. **Stop the
+server, or record into a copy of the store directory.**
 
 Nothing applies a proposal. The goal loop never dispatches informational tasks, so approving one only records the owner's
 decision; the task then says "decision recorded; nothing is applied by it; cancel the task to close it". A person makes

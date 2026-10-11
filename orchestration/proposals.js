@@ -9,7 +9,7 @@ import { hostname as osHostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { route, DEFAULT_WEIGHTS } from './router.js';
 import { RISK_CLASSES } from './task-contract.js';
-import { deadControllerIntents, pidAlive } from './goal-loop.js';
+import { pidAlive } from './goal-loop.js';
 
 export const JOURNAL_SCHEMA = 'mycodebox.v2.journal/1';
 export const PROPOSAL_ACTOR = 'v2-score';
@@ -126,12 +126,17 @@ export function generateProposals(sc, { registry, tasks = [], now = () => Date.n
 }
 
 // Live goal-loop controllers on this store (D-016 intent files): a writer outside the controller must not race one.
+// Same host: a live pid is live whatever its heartbeat (an idle loop only beats while stepping). Other hosts: a fresh
+// heartbeat is live. An intent without a usable pid/host and heartbeat cannot be judged dead: it counts as live.
 export function liveControllers(storeDir, { now = Date.now(), hostname = osHostname(), isAlive = pidAlive, heartbeatMs = 20_000 } = {}) {
   let names = [];
   try { names = readdirSync(storeDir).filter((f) => /^controller\..+\.intent\.json$/.test(f)); } catch { return []; }
-  const intents = names.flatMap((f) => { try { return [JSON.parse(readFileSync(join(storeDir, f), 'utf8'))]; } catch { return []; } });
-  const dead = new Set(deadControllerIntents(intents, { hostname, isAlive, now, heartbeatMs }));
-  return intents.filter((x) => !dead.has(x));
+  const intents = names.flatMap((f) => { try { return [JSON.parse(readFileSync(join(storeDir, f), 'utf8'))]; } catch { return [{ unreadable: f }]; } });
+  return intents.filter((x) => {
+    if (x?.host === hostname && Number.isInteger(x.pid)) return isAlive(x.pid);
+    if (Number.isFinite(x?.heartbeat_at)) return now - x.heartbeat_at <= 2 * heartbeatMs;
+    return true;
+  });
 }
 
 const journaled = (path) => {
@@ -146,7 +151,7 @@ const journaled = (path) => {
 export async function recordProposals(proposals, { store, intake, base_sha, project_id, journalPath = join(store.dir, 'journal.jsonl'), now = () => Date.now(), actor_id = PROPOSAL_ACTOR, controllers = liveControllers }) {
   if (!store || !intake) throw new Error('recordProposals: store and intake required');
   const live = controllers(store.dir);
-  if (live.length) throw Object.assign(new Error(`a goal-loop controller is live on this store (pid ${live.map((x) => x.pid).join(', ')}): stop it or record into a copy`), { code: 'E_CONTROLLER_LIVE' });
+  if (live.length) throw Object.assign(new Error(`a goal-loop controller is live on this store (pid ${live.map((x) => x.pid ?? 'unknown').join(', ')}): stop it or record into a copy`), { code: 'E_CONTROLLER_LIVE' });
   const out = [];
   const inJournal = journaled(journalPath);
   for (const p of proposals) {
