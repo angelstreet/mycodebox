@@ -13,7 +13,7 @@ import { createV2Http } from '../orchestration/http.js';
 import { validateTask, normalizeTask } from '../orchestration/task-contract.js';
 import { loadRegistry } from '../orchestration/model-registry.js';
 import { route } from '../orchestration/router.js';
-import { buildScorecard, toolScore, compareToolScores, validateManifest, taskSpecsOf, TOOL_SCORE_WEIGHTS, BENCH_SCHEMA } from '../orchestration/scorecard.js';
+import { buildScorecard, toolScore, compareToolScores, validateManifest, taskSpecsOf, TOOL_SCORE_WEIGHTS, BENCH_SCHEMA, BENCH_LEDGER_ACTOR_ID } from '../orchestration/scorecard.js';
 import { generateProposals, recordProposals, shadowDiff } from '../orchestration/proposals.js';
 import { readStoreLogs, scoreStore } from '../scripts/v2-score.js';
 import { spec, SHA_A, SHA_B } from './fixtures/v2-task.js';
@@ -423,4 +423,19 @@ test('proposals: the journal decides (a crash after createTask still journals), 
   assert.equal((await recordProposals([], { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW })).length, 0);
   writeFileSync(join(dir, 'controller.x.intent.json'), JSON.stringify({ instance: 'x', resource: 'service:h:goal-loop', pid: 999999999, host: hostname(), heartbeat_at: Date.now() }));
   assert.equal((await recordProposals(proposals.slice(1), { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW })).length, proposals.length - 1, 'a dead pid on this host does not block, even with a fresh heartbeat');
+});
+
+test('budget stops: a bench-ledger grant is budget_auto, an owner grant is an intervention', async () => {
+  const dir = tmp('v2-sc-bud-');
+  const s = storeIn(dir);
+  for (const [id, actor] of [['bud-ledger', { role: 'owner', id: BENCH_LEDGER_ACTOR_ID }], ['bud-owner', { role: 'owner', id: 'owner' }]]) {
+    await s.createTask(tspec(id)); await s.transition(id, 'waiting');
+    await s.append(id, { event_id: `req-${id}`, kind: 'approval.requested', payload: { k: 7, kind: 'budget', question: 'unknown cost' } });
+    await s.append(id, { event_id: `gr-${id}`, kind: 'approval.granted', payload: { k: 7, actor, grants: { request_kind: 'budget' } } });
+    await s.transition(id, 'failed_unrecoverable');
+  }
+  const sc2 = sc(dir);
+  const run = Object.fromEntries(sc2.runs.map((r) => [r.task_id, r]));
+  assert.deepEqual([run['bud-ledger'].owner.interventions, run['bud-ledger'].owner.budget_auto, run['bud-ledger'].owner.approvals_granted], [0, 1, 0]);
+  assert.deepEqual([run['bud-owner'].owner.interventions, run['bud-owner'].owner.budget_auto], [1, 0]);
 });

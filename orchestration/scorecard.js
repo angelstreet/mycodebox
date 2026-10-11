@@ -8,6 +8,8 @@ export const SCORECARD_SCHEMA = 'mycodebox.v2.scorecard/1';
 export const BENCH_SCHEMA = 'mycodebox.v2.bench-run/1';
 export const TOOL_SCORE_SCHEMA = 'mycodebox.v2.tool-score/1';
 export const SMALL_SAMPLE = 5;
+// Actor id of the bench runner's suite-ledger budget confirmation (scripts/v2-bench.js): policy-authorized, not an owner act.
+export const BENCH_LEDGER_ACTOR_ID = 'v2-bench-ledger';
 // Tool score: weights sum to 1, each component in [0,1]; score = 100 * sum(weight * component). Changing a weight is a new
 // formula version, and scores of different formulas or suite versions are never compared.
 export const TOOL_SCORE_FORMULA = 'v1';
@@ -80,7 +82,7 @@ export function foldRun(events) {
   if (!task) return null;
   const f = { task_id: created.task_id, task, status: task.status, created_at: created.timestamp, completed_at: null,
     info: task.review_policy?.mode === 'informational', head_sha: null, producers: new Map(), devs: new Map(), last_actor: null,
-    usage: [], rework: 0, owner: { approvals_requested: 0, approvals_granted: 0, approvals_denied: 0, resumes: 0 },
+    usage: [], rework: 0, owner: { approvals_requested: 0, approvals_granted: 0, approvals_denied: 0, resumes: 0, budget_auto: 0 },
     verdicts: [], evidence: [], wait_reason: null };
   for (const e of events) {
     const p = e.payload || {};
@@ -103,6 +105,14 @@ export function foldRun(events) {
     } else if (e.kind === 'evidence.recorded') {
       f.evidence.push({ check_id: p.check_id, sha: p.sha, command: p.command, exit: Number.isInteger(p.exit) ? p.exit : null, ts: e.timestamp, seq: e.seq });
     } else if (e.kind === 'task.blocked') f.wait_reason = p.reason ?? null;
+  }
+  // A budget stop answered by the bench ledger's grant (matched by the approval index k) is a policy-authorized confirmation,
+  // not an owner intervention: count it as budget_auto and drop both events from the owner counters.
+  for (const r of events.filter((e) => e.kind === 'approval.requested' && e.payload?.kind === 'budget')) {
+    const d = events.filter((e) => ['approval.granted', 'approval.denied'].includes(e.kind) && e.payload?.k === r.payload.k && e.payload?.kind !== 'resume').at(-1);
+    if (d?.kind === 'approval.granted' && actorId(d.payload.actor) === BENCH_LEDGER_ACTOR_ID) {
+      f.owner.budget_auto += 1; f.owner.approvals_requested -= 1; f.owner.approvals_granted -= 1;
+    }
   }
   return f;
 }
@@ -189,7 +199,7 @@ function runRecord(f, run, regression) {
 
 function aggregate(key, extra, runs, { defectsBy = null, facts = null } = {}) {
   const g = { key, ...extra, settled: 0, verified: 0, failed: 0, cancelled: 0, first_pass: 0, _lat: [], _usd: 0, spend_unknown_tasks: 0, rework: 0,
-    owner: { approvals_requested: 0, approvals_granted: 0, approvals_denied: 0, resumes: 0, interventions: 0 },
+    owner: { approvals_requested: 0, approvals_granted: 0, approvals_denied: 0, resumes: 0, budget_auto: 0, interventions: 0 },
     defects: { caught: 0, findings: 0, tasks_with_defects: 0 }, reg: { detected: 0, none: 0, unknown: 0, refs: [] } };
   for (const r of runs) {
     g.settled += 1;
