@@ -36,11 +36,14 @@ test('T08: every runtime unavailable (a real adapter whose CLI is missing, a fak
   assert.deepEqual(v.evidence, []);
   assert.equal(v.usage_totals.usd, null, 'no usage recorded is unknown, not $0');
   neverDone(v);
-  // Time passing re-checks (re-routes), and it still reports waiting while the providers stay down.
-  env.advance(10 * 60_000);
-  for (let i = 0; i < 6 && (await env.view(task.task_id)).status === 'waiting'; i++) await env.loop.step(task.task_id);
+  // Time alone changes nothing (no blind retry); an input change (owner resume) re-checks and still reports waiting.
+  env.advance(24 * 3600_000);
+  for (let i = 0; i < 3; i++) assert.equal((await env.loop.step(task.task_id)).transitioned, false);
+  assert.equal(loopDecisions(await env.view(task.task_id), 'no_route').length, 1);
+  await env.loop.resume(task.task_id, { actor: { role: 'owner', id: 'owner-1' }, reason: 'retry after installing a runtime' });
   assert.equal((await env.loop.run(task.task_id, { until: ['waiting'] })).state, 'waiting');
-  assert.equal(loopDecisions(await env.view(task.task_id), 'no_route').length, 2, 're-checked once the backoff elapsed');
+  for (let i = 0; i < 4 && loopDecisions(await env.view(task.task_id), 'no_route').length < 2; i++) await env.loop.step(task.task_id);
+  assert.equal(loopDecisions(await env.view(task.task_id), 'no_route').length, 2, 're-checked on the new input, still unavailable');
   neverDone(await env.view(task.task_id));
 });
 

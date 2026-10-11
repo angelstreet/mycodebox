@@ -72,7 +72,7 @@ function deliveryWorld({ beforeGates = null, approvals = null, opsOpts = {}, lea
   return { o, ci, env, c, hook: box.hook, sys, leases, gateCalls, stateRoot };
 }
 const approveRequired = async (env, id, req) => env.loop.approve(id, { actor: OWNER, approval_ref: `owner-${req.action}-${req.sha.slice(0, 8)}`,
-  grants: { repo: 'demo', action: req.action, sha: req.sha, target: req.target, classes: [req.class] } });
+  grants: { classes: [req.class] } });
 async function deliverToAccepted(w, id) {
   for (let i = 0; i < 6; i++) {
     const r = await w.env.loop.run(id);

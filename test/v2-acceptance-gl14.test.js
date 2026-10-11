@@ -27,7 +27,7 @@ function delivery({ dev, rev }) {
 // The owner approves exactly what the controller asked for: one action on one SHA to one target.
 async function ownerApproves(env, id, required) {
   await env.loop.approve(id, { actor: OWNER, approval_ref: `owner-${required.action}-${required.sha.slice(0, 8)}`,
-    grants: { repo: 'demo', action: required.action, sha: required.sha, target: required.target, classes: [required.class] } });
+    grants: { classes: [required.class] } });
 }
 const lastRequired = (hook) => hook.runs.filter((r) => r.outcome === 'awaiting_approval').at(-1).required;
 

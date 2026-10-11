@@ -191,19 +191,25 @@ export function proposalStore(store) {
   return out;
 }
 
-// Owner approvals for the controller come from the task log only: an approval.granted event that names this exact
-// repo, action, SHA and target. Nothing else (a model, a quiet owner, an approval for another SHA) counts.
-export function storeApprovals(store) {
+// Owner approvals for the controller come from the task log only. An owner grant answers the loop's approval request,
+// which was raised right after the controller's own `approval.requested` event naming { action, sha, target }: the
+// grant is bound to exactly that request and that repo. A grant for an earlier request (another SHA), a quiet owner
+// or a model's say-so never counts.
+export function storeApprovals(store, { repo = 'demo' } = {}) {
   const calls = [];
   return {
     calls,
     async check(req) {
       calls.push(req);
+      if (req.repo !== repo) return { ok: false, reason: `approvals are bound to repo ${repo}` };
       for (const id of req.task_ids || []) {
         const evs = await store.events(id);
-        const g = evs.filter((e) => e.kind === 'approval.granted' && e.payload.grants?.action === req.action && e.payload.grants?.sha === req.sha
-          && e.payload.grants?.target === req.target && e.payload.grants?.repo === req.repo).at(-1);
-        if (g) return { ok: true, approval_ref: g.payload.approval_ref, repo: req.repo, sha: req.sha, action: req.action, target: req.target, approved_by: g.payload.actor?.id ?? null };
+        for (const g of evs.filter((e) => e.kind === 'approval.granted' && e.payload.grants?.request_kind === 'integration')) {
+          const asked = evs.filter((e) => e.kind === 'approval.requested' && e.payload.required && e.seq < g.seq).at(-1)?.payload.required;
+          if (asked && asked.action === req.action && asked.sha === req.sha && asked.target === req.target) {
+            return { ok: true, approval_ref: g.payload.approval_ref, repo, sha: req.sha, action: req.action, target: req.target, approved_by: g.payload.actor?.id ?? null };
+          }
+        }
       }
       return { ok: false, reason: 'no owner approval for this action/sha/target' };
     },
