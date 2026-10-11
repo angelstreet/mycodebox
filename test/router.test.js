@@ -27,9 +27,11 @@ test('wake: any quota value >= 95 keeps only wake_cheap + wake_opus', () => {
   const f = floor('wake', { event: { kind: 'stall' }, disk_pct: 40, quota: { claude: 30, mini: 96 } });
   assert.deepEqual(f.allowed, ['wake_cheap', 'wake_opus']);
 });
-test('wake: forbidden_topic removes rules_handle but leaves the rest', () => {
+test('wake: forbidden_topic removes rules_handle and ignore (a model may not ignore it either)', () => {
   const f = floor('wake', { event: { kind: 'stall', forbidden_topic: true }, disk_pct: 40, quota: { claude: 30 } });
-  assert.deepEqual(f.allowed, ['ignore', 'wake_cheap', 'wake_opus']);
+  assert.deepEqual(f.allowed, ['wake_cheap', 'wake_opus']);
+  const hot = floor('wake', { event: { kind: 'stall', forbidden_topic: true, p0_blocked: true }, disk_pct: 40, quota: {} });
+  assert.deepEqual(hot.allowed, ['wake_cheap', 'wake_opus']);
 });
 test('wake: ruleDefault is wake_opus when escalated', () => {
   assert.equal(ruleDefault('wake', { event: { escalated: true }, disk_pct: 30, quota: { claude: 30 } }), 'wake_opus');

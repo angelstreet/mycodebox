@@ -3,6 +3,7 @@
 // rationale, confidence, fallback, decision }. Pure: no I/O, no clock unless injected. Nothing here starts a runtime.
 import { createHash } from 'node:crypto';
 import { forbiddenMatch } from '../stall.js';
+import { resolve, sep, isAbsolute } from 'node:path';
 import { checkEffort, priceStatus, TIERS } from './model-registry.js';
 
 export const WORK_TYPES = ['research', 'coding', 'debugging', 'ui', 'test', 'security', 'operations', 'docs', 'unknown'];
@@ -19,26 +20,42 @@ const PRIOR_RELIABILITY = 0.8;
 const MIN_HISTORY_ATTEMPTS = 5;
 const DEFAULT_ESTIMATE = { input_tokens: 30000, output_tokens: 8000 };
 const MIN_TIER_BY_RISK = { low: 'light', medium: 'light', high: 'standard', critical: 'strong' };
+const UNKNOWN_RISK_TIER = 'strong';   // unknown risk is treated as high-stakes: strongest tier only, and approval
 const MAX_FALLBACKS = 3;
 const EPS = 1e-9;
 
-// ---------- hard-floor stub ----------
-// Conservative stand-in until orchestration/policy.js is injected: critical risk or a forbidden topic is denied
-// (no automatic route), high risk needs approval. Fail closed.
-export function defaultCheckAction(task, action) {
-  if (task?.risk_class === 'critical') return { allow: false, needs_approval: true, reason: 'risk_class critical: no automatic action' };
+// ---------- hard floors ----------
+export const normRisk = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : null);
+const RISKS = ['low', 'medium', 'high', 'critical'];
+const text1 = (v) => (v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
+
+// Floors the router always applies itself, whatever checker is injected (a lax or missing policy cannot waive them):
+// non-object task, critical risk, forbidden topic. Unknown/missing risk only adds an approval requirement.
+export function routerFloor(task) {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return { allow: false, needs_approval: true, reason: 'task is not an object: nothing to route' };
+  const risk = normRisk(task.risk_class);
+  if (risk === 'critical') return { allow: false, needs_approval: true, reason: 'risk_class critical: no automatic action' };
   const hit = forbiddenMatch(taskText(task));
   if (hit) return { allow: false, needs_approval: true, reason: `forbidden topic "${hit}": owner decides` };
-  if (task?.risk_class === 'high') return { allow: true, needs_approval: true, reason: 'risk_class high: owner approval required' };
-  void action;
+  if (!RISKS.includes(risk)) return { allow: true, needs_approval: true, reason: `risk_class ${JSON.stringify(task.risk_class ?? null)} is not a known level: owner approval required` };
+  return { allow: true, needs_approval: false, reason: 'no router floor hit' };
+}
+
+// Conservative stand-in until orchestration/policy.js is injected. Frozen signature (ARCHITECTURE §4):
+// checkAction(policy, task, action). Fail closed.
+export function defaultCheckAction(policy, task, action) {
+  void policy; void action;
+  const f = routerFloor(task);
+  if (!f.allow || f.needs_approval) return f;
+  if (normRisk(task.risk_class) === 'high') return { allow: true, needs_approval: true, reason: 'risk_class high: owner approval required' };
   return { allow: true, needs_approval: false, reason: 'no policy block' };
 }
 
 function taskText(task) {
   const parts = [task?.goal, task?.title, task?.description];
   // prohibited_actions is excluded on purpose: it lists what the task must NOT do and would match every forbidden topic.
-  for (const k of ['scope', 'definition_of_done']) if (task?.[k] != null) parts.push(typeof task[k] === 'string' ? task[k] : JSON.stringify(task[k]));
-  return parts.filter((x) => typeof x === 'string' && x).join('\n');
+  for (const k of ['scope', 'definition_of_done']) parts.push(task?.[k]);
+  return parts.map(text1).filter(Boolean).join('\n');
 }
 
 // ---------- classify ----------
@@ -60,7 +77,7 @@ export function classifyWork(task) {
   const scope = task?.scope;
   const files = Array.isArray(scope) ? scope.length : Array.isArray(scope?.paths) ? scope.paths.length : Array.isArray(scope?.files) ? scope.files.length : null;
   const deps = Array.isArray(task?.dependencies) ? task.dependencies.length : 0;
-  const impact = { low: 0.1, medium: 0.4, high: 0.7, critical: 1 }[task?.risk_class] ?? 0.4;
+  const impact = { low: 0.1, medium: 0.4, high: 0.7, critical: 1 }[normRisk(task?.risk_class)] ?? 1;
   const ambiguity = type === 'unknown' ? 1 : 0.2;
   const fileScore = files == null ? 0.4 : Math.min(1, files / 10);
   const complexity = round2(0.35 * fileScore + 0.15 * Math.min(1, deps / 5) + 0.25 * ambiguity + 0.25 * impact);
@@ -72,17 +89,56 @@ const round2 = (x) => Math.round(x * 100) / 100;
 const round6 = (x) => Math.round(x * 1e6) / 1e6;
 const known = (v) => typeof v === 'number' && Number.isFinite(v);
 const inter = (a, b) => (a && b ? a.filter((x) => b.includes(x)) : (a || b || null));
-const list = (v) => (Array.isArray(v) && v.length ? v : null);
+// Allowlist semantics: absent (null/undefined) = no restriction; present = exactly that list. A present-but-empty or
+// malformed list matches nothing (fail closed). A bare string is a one-element list.
+const MATCH_NOTHING = [];
+function list(v) {
+  if (v == null) return null;
+  if (typeof v === 'string') return v ? [v] : MATCH_NOTHING;
+  if (Array.isArray(v)) return v.every((x) => typeof x === 'string' && x) ? v : v.filter((x) => typeof x === 'string' && x);
+  return MATCH_NOTHING;
+}
 
 function allowlists(task, policy) {
   const first = (...vs) => vs.map(list).reduce((acc, v) => inter(acc, v), null);
-  const privClass = task?.privacy_class;
+  const t = task || {};
+  const pol = policy && typeof policy === 'object' ? policy : {};
+  const pp = t.privacy_policy && typeof t.privacy_policy === 'object' ? t.privacy_policy : {};
+  let classProviders = null;
+  if (t.privacy_class != null) {   // a privacy class the policy does not map must not widen to every provider
+    const m = pol.privacy_class_providers;
+    classProviders = m && typeof m === 'object' && typeof t.privacy_class === 'string' && Object.hasOwn(m, t.privacy_class) ? m[t.privacy_class] : MATCH_NOTHING;
+  }
   return {
-    runtimes: first(task?.runtime_allowlist, policy?.runtime_allowlist),
-    models: first(task?.model_allowlist, policy?.model_allowlist),
-    providers: first(task?.privacy_policy?.allowed_providers, policy?.provider_allowlist, privClass ? policy?.privacy_class_providers?.[privClass] : null),
+    runtimes: first(t.runtime_allowlist, pol.runtime_allowlist),
+    models: first(t.model_allowlist, pol.model_allowlist),
+    providers: first(pp.allowed_providers, pol.provider_allowlist, classProviders),
   };
 }
+
+// Task-shape floors that apply to every candidate. Returns a reason or null.
+function shapeFloor(task, policy, estimate) {
+  for (const k of ['required_capabilities', 'runtime_capabilities']) {
+    const v = task[k];
+    if (v != null && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) return `malformed ${k}: expected an array of strings`;
+  }
+  const c = task.context_tokens_estimate;
+  if (c != null && !(known(ctxNum(c)) && ctxNum(c) >= 0)) return 'malformed context_tokens_estimate: expected a non-negative number';
+  const e = task.estimate;
+  if (e != null && (typeof e !== 'object' || Object.values(e).some((v) => v != null && !(known(v) && v >= 0)))) return 'malformed estimate: amounts must be non-negative numbers';
+  void estimate;
+  // Working directory floor: when a cwd/worktree is given it must sit inside an allowed root; no roots configured = deny.
+  for (const k of ['cwd', 'worktree', 'worktree_path']) {
+    if (task[k] == null) continue;
+    const roots = policy && Array.isArray(policy.allowed_roots) ? policy.allowed_roots.filter((r) => typeof r === 'string' && isAbsolute(r)) : [];
+    if (typeof task[k] !== 'string' || !isAbsolute(task[k])) return `${k} must be an absolute path`;
+    if (!roots.length) return `${k} given but no allowed working-directory roots are configured`;
+    const p = resolve(task[k]);
+    if (!roots.some((r) => { const rr = resolve(r); return p === rr || p.startsWith(rr.endsWith(sep) ? rr : rr + sep); })) return `${k} ${p} is outside the allowed roots`;
+  }
+  return null;
+}
+const ctxNum = (c) => (typeof c === 'number' ? c : typeof c === 'string' && c.trim() !== '' ? Number(c) : NaN);
 
 function floors(task, entry, ctx) {
   const { al, caps, effort, ctxTokens, minTier, exclude, allowFake, now, maxAgeDays } = ctx;
@@ -101,7 +157,7 @@ function floors(task, entry, ctx) {
     if (entry.context_tokens == null) return `context size unknown, cannot satisfy ${ctxTokens} tokens`;
     if (entry.context_tokens < ctxTokens) return `context ${entry.context_tokens} < required ${ctxTokens}`;
   }
-  if (TIERS.indexOf(entry.tier) < TIERS.indexOf(minTier)) return `tier ${entry.tier} below the ${minTier} floor for risk_class ${task?.risk_class}`;
+  if (TIERS.indexOf(entry.tier) < TIERS.indexOf(minTier)) return `tier ${entry.tier} below the ${minTier} floor for risk_class ${JSON.stringify(task?.risk_class ?? null)}`;
   return null;
 }
 
@@ -114,7 +170,8 @@ function metrics(entry, hist, estimate, workType, ctx) {
   const latency = known(h?.latency_ms) && meaningful ? h.latency_ms : entry.latency_ms;
   // cost per verified completion: observed spend when known, else price x estimate / quality. Stale/unknown price = unknown.
   let cost = null; let cost_basis = 'unknown';
-  if (meaningful && known(h.total_usd) && h.verified > 0) { cost = h.total_usd / h.verified; cost_basis = 'history'; }
+  // a $0 history is not a verified $0 cost
+  if (meaningful && known(h.total_usd) && h.total_usd > 0 && h.verified > 0) { cost = h.total_usd / h.verified; cost_basis = 'history'; }
   else if (priceStatus(entry, ctx) === 'fresh') {
     cost = ((estimate.input_tokens * entry.price.input + estimate.output_tokens * entry.price.output) / 1e6) / quality;
     cost_basis = 'price_estimate';
@@ -155,10 +212,16 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   const rejected = [];
   const rationale = [];
 
-  // Floor 0: policy / forbidden topic / risk. Fail closed (a throwing checker denies). Nothing is ranked on denial.
+  // Floor 0: router floors (always) then the policy checker (frozen signature checkAction(policy, task, action)).
+  // Fail closed: a throwing/async/empty checker denies, and only allow === true passes.
+  const own = routerFloor(task);
   let act;
-  try { act = checkAction(task, { kind: 'route', work_type: work.type }) || { allow: false, reason: 'checkAction returned nothing' }; }
-  catch (e) { act = { allow: false, needs_approval: true, reason: `checkAction failed: ${e.message}` }; }
+  if (!own.allow) act = own;
+  else {
+    try { act = checkAction(policy, task, { kind: 'route', work_type: work.type }); } catch (e) { act = { allow: false, needs_approval: true, reason: `checkAction failed: ${e.message}` }; }
+    if (!act || typeof act !== 'object' || act.allow !== true) act = { allow: false, needs_approval: true, reason: (act && typeof act === 'object' && act.reason) || 'checkAction did not return allow:true' };
+    else if (own.needs_approval) act = { ...act, needs_approval: true, reason: own.reason };
+  }
   const policyRef = policy?.version != null ? `policy@${policy.version}` : (policy?.id || 'policy:default-stub');
   if (!act.allow) {
     for (const e of entries) rejected.push({ id: e.id, reason: `policy: ${act.reason}` });
@@ -168,9 +231,16 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   const requires_approval = !!act.needs_approval;
   if (requires_approval) rationale.push(`Policy: ${act.reason}. A choice is proposed but must be approved before it runs.`);
 
-  const caps = [...new Set([...(task?.required_capabilities || []), ...(task?.runtime_capabilities || [])])].sort();
-  const minTier = MIN_TIER_BY_RISK[task?.risk_class] || 'standard';
-  const ctx = { al: allowlists(task, policy), caps, effort: task?.effort ?? null, ctxTokens: known(task?.context_tokens_estimate) ? task.context_tokens_estimate : null, minTier, exclude, allowFake, ...priceCtx };
+  const shape = shapeFloor(task, policy);
+  if (shape) {
+    for (const e of entries) rejected.push({ id: e.id, reason: `task: ${shape}` });
+    rationale.push(`Task rejected before ranking: ${shape}.`);
+    return finish(task, { choice: null, candidates: [], rejected, rationale, confidence: 1, fallback: [], work, mode, auto_allowed: false, requires_approval: true, state_hint: 'awaiting_approval', policyRef, now });
+  }
+
+  const caps = [...new Set([...(task.required_capabilities || []), ...(task.runtime_capabilities || [])])].sort();
+  const minTier = MIN_TIER_BY_RISK[normRisk(task.risk_class)] || UNKNOWN_RISK_TIER;
+  const ctx = { al: allowlists(task, policy), caps, effort: task?.effort ?? null, ctxTokens: task.context_tokens_estimate != null ? ctxNum(task.context_tokens_estimate) : null, minTier, exclude, allowFake, ...priceCtx };
   const feasible = [];
   for (const e of entries) {
     const why = floors(task, e, ctx);
@@ -183,7 +253,7 @@ export function route(task, { registry, policy = null, history = {}, weights = n
     return finish(task, { choice: null, candidates: [], rejected, rationale, confidence: 1, fallback: [], work, mode, auto_allowed: false, requires_approval: true, state_hint: 'waiting', policyRef, now });
   }
 
-  const estimate = { ...DEFAULT_ESTIMATE, ...(task?.estimate || {}) };
+  const estimate = { ...DEFAULT_ESTIMATE, ...Object.fromEntries(Object.entries(task.estimate || {}).filter(([, v]) => known(v))) };
   const w = { ...(weights || PRIORITY_WEIGHTS[task?.priority] || DEFAULT_WEIGHTS) };
   const cands = feasible.map((e) => {
     const m = metrics(e, history?.[e.id], estimate, work.type, priceCtx);
@@ -237,7 +307,10 @@ function finish(task, r) {
 // plan = fallbackPlan(result, { error_class, failed, attempt, retry_after_ms }) -> { action, next, delay_ms, state_hint, reason }
 // Only candidates that already passed the floors (result.candidates/fallback) can be picked, so a provider failure can
 // never route outside the allowlists or around the risk policy. permission/auth/deploy never fall back.
-const NO_FALLBACK = new Set(['permission', 'auth', 'credentials', 'deploy']);
+// Error classes are lower-cased and prefix-matched: anything that smells like permission/credentials/deploy/policy never
+// falls back automatically, and a class we do not recognise is treated the same way (owner decides), not switched.
+const NO_FALLBACK_PREFIXES = ['permission', 'auth', 'credential', 'secret', 'deploy', 'policy', 'forbidden', 'approval', 'unknown'];
+const KNOWN_CLASSES = new Set(['rate_limit', 'timeout', 'context_overflow', 'unavailable', 'crash', 'quota_exhausted', 'quota']);
 export function fallbackPlan(result, opts = {}) {
   // A fallback inherits the approval requirement of the original route: failure never relaxes policy.
   return { ...planFallback(result, opts), requires_approval: !!result?.requires_approval };
@@ -245,12 +318,17 @@ export function fallbackPlan(result, opts = {}) {
 function planFallback(result, { error_class, failed = result?.choice, attempt = 0, retry_after_ms = null, max_backoffs = 2 } = {}) {
   const stop = (reason, state_hint = 'awaiting_approval') => ({ action: 'approval', next: null, delay_ms: null, state_hint, reason });
   if (!result || result.auto_allowed === false && result.choice == null) return stop('no authorised route to fall back from');
-  if (NO_FALLBACK.has(error_class)) return stop(`${error_class}: no automatic fallback, owner approval required`);
+  const ec = typeof error_class === 'string' ? error_class.trim().toLowerCase() : '';
+  if (NO_FALLBACK_PREFIXES.some((p) => ec.startsWith(p)) || !KNOWN_CLASSES.has(ec)) return stop(`${ec || 'missing'} error class: no automatic fallback, owner approval required`);
+  // `failed` is caller-supplied: it must be one of the floored candidates, or it could be echoed back as `next`.
+  if (failed != null && !(result.candidates || []).some((c) => c.id === failed)) return stop('failed runtime is not in the floored candidate set');
   const pool = (result.candidates || []).filter((c) => c.id !== failed);
   const cur = (result.candidates || []).find((c) => c.id === failed);
   const otherProvider = pool.filter((c) => !cur || c.provider !== cur.provider);
   const wait = (reason) => ({ action: 'wait', next: null, delay_ms: Math.min(900000, 30000 * 2 ** Math.min(attempt, 5)), state_hint: 'waiting', reason });
-  switch (error_class) {
+  switch (ec) {
+    case 'quota':
+    case 'quota_exhausted': return wait('provider quota exhausted: wait for reset, no spend meanwhile');
     case 'rate_limit':
     case 'timeout': {
       if (attempt < max_backoffs) return { action: 'backoff', next: failed, delay_ms: known(retry_after_ms) ? retry_after_ms : Math.min(900000, 30000 * 2 ** attempt), state_hint: 'waiting', reason: `${error_class}: backoff ${attempt + 1}/${max_backoffs} before switching` };

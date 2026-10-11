@@ -45,16 +45,18 @@ export function validateRegistryDoc(doc) {
     if (!Array.isArray(m.efforts)) err(`${p}.efforts`, 'efforts must be an array');
     else for (const e of m.efforts) if (!RUNTIME_EFFORTS[m.runtime].includes(e)) err(`${p}.efforts`, `effort ${JSON.stringify(e)} is not supported by runtime ${m.runtime}`);
     if (m.context_tokens != null && !(Number.isInteger(m.context_tokens) && m.context_tokens > 0)) err(`${p}.context_tokens`, 'positive integer or null (unknown)');
-    if (m.price != null && !(m.price && Number.isFinite(m.price.input) && Number.isFinite(m.price.output))) err(`${p}.price`, 'price must be {input,output} or null');
+    if (m.price != null && !(m.price && Number.isFinite(m.price.input) && Number.isFinite(m.price.output) && m.price.input >= 0 && m.price.output >= 0)) err(`${p}.price`, 'price must be {input,output} (non-negative) or null');
   });
   return { ok: !errors.length, errors };
 }
 
 // price: explicit entry price wins; otherwise resolve from the price table. null = unknown.
 function resolvePrice(m, prices) {
-  if (m.price) return { price: { input: m.price.input, output: m.price.output }, price_as_of: m.price_as_of || null };
+  // A non-positive price is unknown unless the entry is explicitly flagged free: a $0 row is usually a placeholder.
+  const ok = (p) => p && Number.isFinite(p.input) && Number.isFinite(p.output) && (m.free === true || (p.input > 0 && p.output > 0));
+  if (m.price) return ok(m.price) ? { price: { input: m.price.input, output: m.price.output }, price_as_of: m.price_as_of || null } : { price: null, price_as_of: null };
   const row = prices ? priceFor(prices, m.price_model || m.model) : null;
-  return row ? { price: { input: row.input, output: row.output }, price_as_of: row.as_of || prices.as_of || null } : { price: null, price_as_of: null };
+  return ok(row) ? { price: { input: row.input, output: row.output }, price_as_of: row.as_of || prices.as_of || null } : { price: null, price_as_of: null };
 }
 
 function build(doc, prices) {
@@ -62,7 +64,7 @@ function build(doc, prices) {
     id: entryId(m), runtime: m.runtime, provider: m.provider, model: m.model, tier: m.tier,
     capabilities: [...m.capabilities], efforts: [...m.efforts],
     context_tokens: m.context_tokens ?? null, latency_ms: m.latency_ms ?? null,
-    ...resolvePrice(m, prices), source: m.source || 'static', test_only: !!m.test_only,
+    ...resolvePrice(m, prices), source: m.source || 'static', test_only: !!m.test_only, free: m.free === true,
     availability: 'unknown', routable: true, unroutable_reason: null,
   }));
   return makeRegistry({ version: doc.version, as_of: doc.as_of || null, entries });

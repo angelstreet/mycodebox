@@ -9,7 +9,22 @@ export const DIMENSIONS = [
   { key: 'duration_ms', cap: 'max_duration_ms' },
 ];
 export const DEFAULT_BUDGET_POLICY = Object.freeze({ mode: 'track' });
-const known = (v) => typeof v === 'number' && Number.isFinite(v);
+const known = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;   // negative = invalid, treated as unknown
+const present = (v) => v !== undefined && v !== null;
+const invalid = (v) => present(v) && !known(v);
+
+// Caps the owner set but that are not usable numbers (string, NaN, negative): they must stop, never become track mode.
+export function malformedCaps(p) {
+  if (!present(p)) return [];
+  if (typeof p !== 'object' || Array.isArray(p)) return ['budget_policy'];
+  const bad = [];
+  for (const d of DIMENSIONS) if (invalid(p[d.cap])) bad.push(d.cap);
+  if (present(p.per_attempt)) {
+    if (typeof p.per_attempt !== 'object' || Array.isArray(p.per_attempt)) bad.push('per_attempt');
+    else for (const d of DIMENSIONS) if (invalid(p.per_attempt[d.cap])) bad.push(`per_attempt.${d.cap}`);
+  }
+  return bad;
+}
 
 export function normalizeBudgetPolicy(p) {
   const bp = p && typeof p === 'object' ? p : DEFAULT_BUDGET_POLICY;
@@ -26,14 +41,19 @@ export function normalizeBudgetPolicy(p) {
 // (developer, verifier, retry, repair...). Per dimension: value = sum of the known entries, or null when entries exist
 // but none reported it; unknown_count = entries that did not report it (the sum is then a lower bound).
 export function summarize(ledger) {
-  const entries = Array.isArray(ledger?.entries) ? ledger.entries : [];
-  const spent = {}; const unknown = []; const by_kind = {};
+  const ledger_invalid = !(ledger && typeof ledger === 'object' && Array.isArray(ledger.entries));
+  const entries = ledger_invalid ? [] : ledger.entries;
+  const spent = {}; const unknown = []; const by_kind = {}; const negative = [];
   for (const d of DIMENSIONS) {
     let sum = 0; let n = 0; let miss = 0;
-    for (const e of entries) { if (known(e?.[d.key])) { sum += e[d.key]; n++; } else miss++; }
-    spent[d.key] = entries.length === 0 ? 0 : (n ? sum : null);
-    spent[`${d.key}_unknown_entries`] = miss;
-    if (miss) unknown.push(d.key);
+    for (const e of entries) {
+      const v = e?.[d.key];
+      if (known(v)) { sum += v; n++; } else { miss++; if (invalid(v)) negative.push(d.key); }
+    }
+    // A missing/malformed ledger is unknown spend, not zero.
+    spent[d.key] = ledger_invalid ? null : entries.length === 0 ? 0 : (n ? sum : null);
+    spent[`${d.key}_unknown_entries`] = ledger_invalid ? 1 : miss;
+    if (miss || ledger_invalid) unknown.push(d.key);
   }
   for (const e of entries) {
     const k = e?.kind || 'unspecified';
@@ -41,7 +61,7 @@ export function summarize(ledger) {
     by_kind[k].entries++;
     if (known(e?.usd)) by_kind[k].usd += e.usd;
   }
-  return { spent, unknown, by_kind, entries: entries.length };
+  return { spent, unknown, by_kind, entries: entries.length, ledger_invalid, invalid_dimensions: [...new Set(negative)] };
 }
 
 function verdict(allow, reason, state_hint, extra = {}) { return { allow, reason, state_hint, ...extra }; }
@@ -55,37 +75,39 @@ export function check(task, ledger, estimate = {}, { quota = null } = {}) {
   const base = { mode: bp.mode, spent: sum.spent, unknown_spend: sum.unknown, by_kind: sum.by_kind, warnings: [] };
   const est = estimate && typeof estimate === 'object' ? estimate : {};
 
-  // Quota exhaustion is a wait, not a budget decision; missing quota data is only a warning.
-  if (quota?.status === 'exhausted') {
-    return verdict(false, 'provider quota exhausted: waiting with backoff', 'waiting', { ...base, backoff_ms: known(quota.retry_after_ms) ? quota.retry_after_ms : null, quota: 'exhausted' });
-  }
-  if (!quota || quota.status === 'unknown') base.warnings.push('quota unknown: could not observe provider quota');
-  base.quota = quota?.status === 'ok' ? 'ok' : 'unknown';
-
   const stops = [];
-  const attemptSpend = (key) => {
-    const id = est.attempt_id;
-    if (!id) return 0;
-    return (ledger?.entries || []).filter((e) => e?.attempt_id === id && known(e[key])).reduce((a, e) => a + e[key], 0);
-  };
+  const bad = malformedCaps(task?.budget_policy);
+  if (bad.length) stops.push(`malformed cap ${bad.join(', ')}: not a non-negative number, cannot enforce`);
+  base.quota = quota?.status === 'ok' ? 'ok' : quota?.status === 'exhausted' ? 'exhausted' : 'unknown';
+  if (base.quota === 'unknown') base.warnings.push('quota unknown: could not observe provider quota');
+
+  const attemptEntries = (est.attempt_id && sum.entries) ? ledger.entries.filter((e) => e?.attempt_id === est.attempt_id) : [];
   for (const d of DIMENSIONS) {
-    // whole task
     const cap = bp[d.cap];
-    if (cap != null) {
-      const s = sum.spent[d.key];
-      if (sum.spent[`${d.key}_unknown_entries`] > 0) stops.push(`${d.key}: spend unknown for ${sum.spent[`${d.key}_unknown_entries`]} ledger entr${sum.spent[`${d.key}_unknown_entries`] === 1 ? 'y' : 'ies'}, cannot verify against ${d.cap}=${cap}`);
+    const acap = bp.per_attempt?.[d.cap];
+    if (cap == null && acap == null) continue;
+    if (invalid(est[d.key])) { stops.push(`${d.key}: negative or invalid estimate rejected`); continue; }
+    if (cap != null) {   // whole task
+      const s = sum.spent[d.key]; const miss = sum.spent[`${d.key}_unknown_entries`];
+      if (sum.ledger_invalid) stops.push(`${d.key}: ledger missing or malformed, spend unknown, cannot verify against ${d.cap}=${cap}`);
+      else if (sum.invalid_dimensions.includes(d.key)) stops.push(`${d.key}: negative or invalid ledger amount, cannot verify against ${d.cap}=${cap}`);
+      else if (miss > 0) stops.push(`${d.key}: spend unknown for ${miss} ledger entr${miss === 1 ? 'y' : 'ies'}, cannot verify against ${d.cap}=${cap}`);
       else if (s >= cap) stops.push(`${d.key}: cap ${d.cap}=${cap} reached (spent ${s})`);
       else if (!known(est[d.key])) stops.push(`${d.key}: estimate unknown, may exceed ${d.cap}=${cap}`);
       else if (s + est[d.key] > cap) stops.push(`${d.key}: ${s} spent + ${est[d.key]} estimated would exceed ${d.cap}=${cap}`);
     }
-    // single attempt
-    const acap = bp.per_attempt?.[d.cap];
-    if (acap != null) {
-      if (!known(est[d.key])) stops.push(`${d.key}: attempt estimate unknown, may exceed per-attempt ${d.cap}=${acap}`);
-      else if (attemptSpend(d.key) + est[d.key] > acap) stops.push(`${d.key}: attempt would exceed per-attempt ${d.cap}=${acap}`);
+    if (acap != null) {   // single attempt
+      const own = attemptEntries.filter((e) => known(e[d.key])).reduce((a, e) => a + e[d.key], 0);
+      if (attemptEntries.some((e) => !known(e[d.key]))) stops.push(`${d.key}: spend unknown inside this attempt, cannot verify against per-attempt ${d.cap}=${acap}`);
+      else if (!known(est[d.key])) stops.push(`${d.key}: attempt estimate unknown, may exceed per-attempt ${d.cap}=${acap}`);
+      else if (own + est[d.key] > acap) stops.push(`${d.key}: attempt would exceed per-attempt ${d.cap}=${acap}`);
     }
   }
+  // A reached/unverifiable cap wins over a quota wait: spending needs the owner either way.
   if (stops.length) return verdict(false, stops.join('; '), 'awaiting_approval', base);
+  if (quota?.status === 'exhausted') {
+    return verdict(false, 'provider quota exhausted: waiting with backoff', 'waiting', { ...base, backoff_ms: known(quota.retry_after_ms) ? quota.retry_after_ms : null });
+  }
   const caps = DIMENSIONS.some((d) => bp[d.cap] != null) || !!bp.per_attempt;
   return verdict(true, caps ? 'within explicit caps' : 'track mode: no caps set, spend is measured only', null, base);
 }

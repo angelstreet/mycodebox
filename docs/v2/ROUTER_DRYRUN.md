@@ -30,6 +30,16 @@ accidental first-allowed option.
 Result after the fix: wake rule 10/10 (was 6/10). Regression tests in `test/router.test.js` (the old assertion that
 p0_blocked defaults to `wake_cheap` encoded the defect and was replaced).
 
+## Exposure of `ruleDefault`, and the wake floor (verifier follow-up)
+
+`ruleDefault` is not private. It is sent to Jev as `refs.rule_default` in the decide request and it reaches the manager
+LLM prompt through the manager-events lines written for `scripts/mm-manager.sh`. A wrong default therefore also biases
+the model, which is why the three P0/failed-deploy defects mattered beyond the dry-run number.
+
+The wake floor as first fixed still let Jev pick `ignore` on a forbidden topic (only `rules_handle` was removed). That is
+now closed too: a forbidden topic removes both `rules_handle` and `ignore`, leaving `wake_cheap`/`wake_opus`. Test:
+`wake: forbidden_topic removes rules_handle and ignore` in `test/router.test.js`.
+
 ## Other points (not in scope of the 6/10, recorded for completeness)
 
 | point | rule-default agreement | cause | action |

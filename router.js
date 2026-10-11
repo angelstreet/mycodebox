@@ -48,8 +48,8 @@ const wake = {
     if (hot) reasons.push('p0 blocked / failed deploy / disk or quota critical');
     let allowed = hot ? ['wake_cheap', 'wake_opus'] : ['ignore', 'rules_handle', 'wake_cheap', 'wake_opus'];
     if (ev.forbidden_topic) {
-      allowed = allowed.filter((id) => id !== 'rules_handle');
-      reasons.push('forbidden topic: rules-only auto-answer is off the table');
+      allowed = allowed.filter((id) => id !== 'rules_handle' && id !== 'ignore');
+      reasons.push('forbidden topic: neither a rules-only auto-answer nor ignoring is allowed; someone must look');
     }
     return { allowed, forced: null, reasons };
   },

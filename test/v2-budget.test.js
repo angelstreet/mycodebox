@@ -96,3 +96,16 @@ test('policy normalisation drops non-numeric caps (no accidental 0 cap) and is d
   const a = check(T({ max_usd: 5 }), { entries: [entry()] }, { usd: 1 });
   assert.deepEqual(a, check(T({ max_usd: 5 }), { entries: [entry()] }, { usd: 1 }));
 });
+
+test('F13: cap reached wins over exhausted quota (awaiting_approval, not waiting)', () => {
+  const r = check(T({ max_usd: 1 }), { entries: [entry({ usd: 1 })] }, { usd: 1 }, { quota: { status: 'exhausted' } });
+  assert.equal(r.state_hint, 'awaiting_approval');
+  assert.equal(check(T({ max_usd: 10 }), { entries: [entry({ usd: 1 })] }, { usd: 1 }, { quota: { status: 'exhausted' } }).state_hint, 'waiting');
+});
+
+test('F6: malformed caps (string, NaN, negative, bad per_attempt, non-object policy) stop', () => {
+  for (const bp of [{ max_usd: '5' }, { max_duration_ms: NaN }, { max_usd: -1 }, { per_attempt: 'x' }, { per_attempt: { max_usd: 'a' } }, 'cap']) {
+    const r = check(T(bp), { entries: [] }, { usd: 1 });
+    assert.equal(r.allow, false, JSON.stringify(bp)); assert.equal(r.state_hint, 'awaiting_approval');
+  }
+});

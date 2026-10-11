@@ -143,7 +143,7 @@ test('Phase 4 exit: injected checkAction wins; a throwing or empty checker fails
   // injected checker that asks for approval: choice proposed but not auto
   const a = R(task(), { checkAction: () => ({ allow: true, needs_approval: true, reason: 'merge_protected' }) });
   assert.ok(a.choice); assert.equal(a.auto_allowed, false); assert.equal(a.requires_approval, true);
-  assert.equal(defaultCheckAction(task({ risk_class: 'high' })).needs_approval, true);
+  assert.equal(defaultCheckAction(null, task({ risk_class: 'high' })).needs_approval, true);
 });
 
 test('Phase 4 exit: provider failure cannot bypass risk policy (fallback inherits floors and approval)', () => {
@@ -284,4 +284,39 @@ test('determinism: same inputs -> deep-equal output, input objects unmutated', (
   assert.deepEqual(a, b);
   assert.equal(JSON.stringify(t), snap);
   assert.equal(a.decision.decision_id, b.decision.decision_id);
+});
+
+test('F4: checkAction is called with the frozen signature (policy, task, action)', () => {
+  let seen;
+  const policy = { id: 'p1', version: 7 };
+  const t = task();
+  const r = R(t, { policy, checkAction: (...a) => { seen = a; return { allow: true, needs_approval: false }; } });
+  assert.equal(seen[0], policy); assert.equal(seen[1], t); assert.equal(seen[2].kind, 'route');
+  assert.equal(r.decision.policy_ref, 'policy@7');
+});
+
+test('F12: working-directory floor (inside an allowed root, no roots configured = deny); numeric-string context is parsed', () => {
+  const pol = { allowed_roots: ['/srv/wt'] };
+  assert.ok(R(task({ cwd: '/srv/wt/t-1' }), { policy: pol }).choice);
+  assert.equal(R(task({ cwd: '/srv/wt/../etc' }), { policy: pol }).choice, null);
+  assert.equal(R(task({ cwd: '/srv/wt-evil' }), { policy: pol }).choice, null);
+  assert.equal(R(task({ cwd: 'relative/dir' }), { policy: pol }).choice, null);
+  assert.equal(R(task({ worktree: '/srv/wt/x' })).choice, null);
+  assert.match(R(task({ context_tokens_estimate: 'lots' })).rejected[0].reason, /malformed context_tokens_estimate/);
+  assert.ok(!ids(R(task({ context_tokens_estimate: '300000' }))).includes('claude:claude-haiku-4-5'));
+});
+
+test('F5/F13: unknown error class -> approval; quota exhausted -> wait', () => {
+  const r = R(task());
+  assert.equal(fallbackPlan(r, { error_class: 'banana' }).action, 'approval');
+  assert.equal(fallbackPlan(r, { error_class: 'unknown' }).action, 'approval');
+  const q = fallbackPlan(r, { error_class: 'quota_exhausted', attempt: 1 });
+  assert.equal(q.action, 'wait'); assert.equal(q.next, null); assert.equal(q.state_hint, 'waiting');
+});
+
+test('F10: free is only known when explicitly flagged', () => {
+  const m = (o) => ({ runtime: 'minimax', provider: 'm', model: 'MiniMax-M3', tier: 'standard', capabilities: ['code'], efforts: [], context_tokens: 1000, price: { input: 0, output: 0 }, price_as_of: '2026-10-10', ...o });
+  assert.equal(route(task(), { registry: createRegistry({ version: 1, models: [m({ free: true })] }), now }).candidates[0].cost_est_usd, 0);
+  assert.equal(route(task(), { registry: createRegistry({ version: 1, models: [m()] }), now }).candidates[0].cost_est_usd, null);
+  assert.equal(validateRegistryDoc({ version: 1, models: [m({ price: { input: -1, output: 1 } })] }).ok, false);
 });
