@@ -46,7 +46,10 @@ test('store: failures (network, http 401, bad json, not configured) are {ok:fals
   assert.equal((await createVptLockStore({ jevUrl: '', apiKey: '' }).get()).ok, false);
   // timeout guard: a hung server resolves to ok:false within timeoutMs
   const hung = mk((url, init) => new Promise((_, rej) => init.signal.addEventListener('abort', () => rej(new Error('timed out')))), { timeoutMs: 50 });
+  // AbortSignal.timeout does not keep the loop alive; on some Node versions the runner would drain first.
+  const keepAlive = setTimeout(() => {}, 5000);
   const t0 = Date.now(); const r = await hung.get();
+  clearTimeout(keepAlive);
   assert.equal(r.ok, false); assert.ok(Date.now() - t0 < 2000);
 });
 
