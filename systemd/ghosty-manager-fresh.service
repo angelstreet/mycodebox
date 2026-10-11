@@ -9,6 +9,7 @@ Type=oneshot
 User=<user>
 Environment=HOME=/home/<user>
 # Same private settings as the dashboard unit: without this AGENT_CMD_CLAUDE is ignored here.
+# Default relaunch skips permission prompts (owner decision 2026-10-11, see launch-config.js); AGENT_CMD_CLAUDE wins verbatim.
 EnvironmentFile=-/home/<user>/ghosty-sessions/.env
 ExecStart=/home/<user>/ghosty-sessions/scripts/manager-fresh.sh
 TimeoutStartSec=75min

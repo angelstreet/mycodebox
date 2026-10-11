@@ -27,15 +27,19 @@ const tmp = (t, prefix) => { const d = mkdtempSync(join(tmpdir(), prefix)); t.af
 // T03 — launch defaults, resume reconstruction, cwd validation
 // ---------------------------------------------------------------------------
 
-test('T03: no default agent, manager or resume command carries a permission or sandbox bypass', () => {
+test('T03: default claude/codex/manager/resume commands carry the owner-chosen bypass flags (2026-10-11); minimax and bash do not', () => {
   for (const env of [{}, { HOME: '/home/user', PATH: '/usr/bin' }]) {
-    for (const [agent, cmd] of Object.entries(launchConfig(env).commands)) assert.doesNotMatch(cmd, BYPASS_RE, agent);
-    assert.doesNotMatch(managerCommand(env), BYPASS_RE);
+    const c = launchConfig(env).commands;
+    assert.match(c.claude, /--dangerously-skip-permissions/);
+    assert.match(c.codex, /--dangerously-bypass-approvals-and-sandbox/);
+    assert.doesNotMatch(c.minimax, BYPASS_RE);
+    assert.equal(c.bash, '');
+    assert.match(managerCommand(env), /^claude --dangerously-skip-permissions /);
     assert.deepEqual(launchWarnings(env), []);
-    assert.doesNotMatch(resumeCommand({ base: launchConfig(env).commands.claude, args: '', name: 'x', sessionId: 'abc' }), BYPASS_RE);
+    assert.equal(resumeCommand({ base: c.claude, args: 'claude --dangerously-skip-permissions', name: 'x', sessionId: 'abc' }), 'claude --dangerously-skip-permissions --resume abc');
   }
-  assert.equal(launchConfig({}).commands.claude, 'claude');
-  assert.equal(launchConfig({}).commands.codex, 'codex');
+  assert.equal(launchConfig({}).commands.claude, 'claude --dangerously-skip-permissions');
+  assert.equal(launchConfig({}).commands.codex, 'codex --dangerously-bypass-approvals-and-sandbox');
 });
 
 test('T03: resume never restores a saved process flag; only model, remote-control name and the id come back', () => {
@@ -43,7 +47,7 @@ test('T03: resume never restores a saved process flag; only model, remote-contro
     const args = `/home/user/.local/bin/claude ${flag} --model opus --remote-control X -n X --allowedTools Bash`;
     const cmd = resumeCommand({ base: 'claude', args, name: 'X', sessionId: 'abc' });
     assert.equal(cmd, "claude --model opus --remote-control 'X' -n 'X' --resume abc", flag);
-    assert.doesNotMatch(cmd, BYPASS_RE, flag);
+    assert.doesNotMatch(cmd, BYPASS_RE, flag);   // recorded args never inject a flag; a bypass only comes from the base command
   }
   // the saved model value is reduced to a plain token: no shell metacharacters or second option survive
   assert.equal(resumeCommand({ base: 'claude', args: 'claude --model opus;echo --remote-control X', name: 'X', sessionId: 'abc' }),
@@ -136,7 +140,7 @@ test('T03: prototype-named sessions are not parked records', async (t) => {
   assert.deepEqual(log, []);
 });
 
-test('T03: no bypass flag survives anywhere in the server, scripts or modules (launch-config detects them, nothing else names them)', () => {
+test('T03: bypass flags are named only in launch-config (the default) and nowhere else in the server, scripts or modules', () => {
   const files = ['server.js', 'parking.js', 'session-directory.js', 'manager.js', 'stall.js', 'deploy-runner.js', 'leases.js', 'handoffs.js',
     ...readdirSync(new URL('scripts', ROOT)).filter((f) => /\.(sh|js|py)$/.test(f)).map((f) => `scripts/${f}`),
     ...readdirSync(new URL('systemd', ROOT)).map((f) => `systemd/${f}`)];
@@ -145,7 +149,8 @@ test('T03: no bypass flag survives anywhere in the server, scripts or modules (l
   assert.match(server, /const AGENT_CMDS = launch\.commands/);
   assert.match(server, /const dir = await sessionDirectory\(cwd \|\| HOME, HOME\)/);
   assert.match(server, /validate: async \(r\) => \{ r\.cwd = await sessionDirectory\(r\.cwd, HOME\); \}/);
-  assert.doesNotMatch(server, /trustFolder/);
+  assert.match(server, /trustFolder\(agent, dir\)/);
+  assert.match(server, /trustFolder\(trustAgent, r\.cwd\)/);
   // every tmux call is an argv array; no shell string ever carries a session name or a command
   assert.doesNotMatch(server, /exec\(TMUX, `|exec\(`\$\{TMUX\}|shell:\s*true/);
   assert.match(server, /\['send-keys', '-t', `=\$\{real\}:`, '-l', '--', cmd\]/);
@@ -160,14 +165,14 @@ test('T03: the manager command helper keeps an explicit override verbatim and it
   const run = (env) => spawnSync(process.execPath, ['scripts/manager-command.js'], { cwd: new URL('.', ROOT).pathname, env, encoding: 'utf8' });
   const clean = run({});
   assert.equal(clean.status, 0);
-  assert.equal(clean.stdout, 'claude --model opus --remote-control manager -n manager');
+  assert.equal(clean.stdout, 'claude --dangerously-skip-permissions --model opus --remote-control manager -n manager');
   assert.equal(clean.stderr, '');
   const marker = 'synthetic-private-value-9f2a';
   const override = `/opt/wrap/claude --dangerously-skip-permissions --token ${marker}`;
   const r = run({ AGENT_CMD_CLAUDE: override, HOST: '192.0.2.10' });
   assert.equal(r.status, 0);
   assert.equal(r.stdout, `${override} --model opus --remote-control manager -n manager`);   // the owner's choice stands
-  assert.match(r.stderr, /AGENT_CMD_CLAUDE/);
+  assert.doesNotMatch(r.stderr, /AGENT_CMD_CLAUDE/);   // bypass flags no longer draw a warning
   assert.match(r.stderr, /HOST/);
   assert.ok(!r.stderr.includes(marker) && !r.stderr.includes('192.0.2.10') && !r.stderr.includes('/opt/wrap'), 'diagnostics never carry values');
 });

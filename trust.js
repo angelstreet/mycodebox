@@ -1,5 +1,3 @@
-// NOTE: unused by session create/resume (server.js no longer pre-accepts trust; the agent's own folder prompt stays on).
-// Kept only with its tests; do not wire it back into a launch path without the owner's decision (see test/launch-config.test.js).
 // Pre-accept the "do you trust this folder?" prompt of a coding agent, so a session started from the UI goes straight to work.
 //   claude  ~/.claude.json  projects[dir].hasTrustDialogAccepted = true  (merged into the freshest copy, written atomically)
 //   codex   ~/.codex/config.toml  [projects."dir"] trust_level = "trusted"

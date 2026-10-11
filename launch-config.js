@@ -3,14 +3,16 @@ export function launchConfig(env = process.env) {
   return {
     host: env.HOST || '127.0.0.1',
     commands: {
-      claude: env.AGENT_CMD_CLAUDE ?? 'claude',
-      codex: env.AGENT_CMD_CODEX ?? 'codex',
+      claude: env.AGENT_CMD_CLAUDE ?? 'claude --dangerously-skip-permissions',
+      codex: env.AGENT_CMD_CODEX ?? 'codex --dangerously-bypass-approvals-and-sandbox',
       minimax: env.AGENT_CMD_MINIMAX ?? 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode',
       bash: env.AGENT_CMD_BASH ?? '',
     },
   };
 }
 
+// Owner decision (2026-10-11): dashboard sessions, resumes and the manager start with permission prompts skipped.
+// minimax: the mcode TUI has no CLI flag; its full-permission mode is `permissionMode: bypassPermissions` in ~/.minimax/config.yaml (see INSTALL).
 // Known switches that turn off a CLI's permission prompts or sandbox (Claude, Codex, mcode).
 const BYPASS_RES = [
   /--(?:allow-)?dangerously-[\w-]+|--(?:yolo|full-auto)\b|--bypass-[\w-]+/,
@@ -25,16 +27,17 @@ const BYPASS_RES = [
   /--settings(?:=|\s+)[^\n]*(?:bypassPermissions|"defaultMode"\s*:\s*"bypass|skipDangerousModePermissionPrompt)/,  // inline JSON
 ];
 
-// Advisory only: shell wrappers and external CLI config cannot be certified here.
+// True when a command line (or joined argv) carries a known bypass switch. The V2 orchestration adapters use this as a hard guard.
+export function hasBypass(cmd) {
+  return BYPASS_RES.some((re) => re.test(String(cmd || '')));
+}
+export const bypassPatterns = () => [...BYPASS_RES];
+
+// Advisory only: the bypass flags are the default now, so only a non-loopback HOST is worth a warning.
 export function launchWarnings(env = process.env) {
   const warnings = [];
   if (env.HOST && !['127.0.0.1', '::1', 'localhost'].includes(env.HOST)) {
     warnings.push('HOST overrides loopback; verify private Tailscale binding and access policy.');
-  }
-  for (const key of ['AGENT_CMD_CLAUDE', 'AGENT_CMD_CODEX', 'AGENT_CMD_MINIMAX', 'AGENT_CMD_BASH']) {
-    if (BYPASS_RES.some((re) => re.test(env[key] || ''))) {
-      warnings.push(`${key} contains a known permission or sandbox bypass; review this explicit override.`);
-    }
   }
   return warnings;
 }

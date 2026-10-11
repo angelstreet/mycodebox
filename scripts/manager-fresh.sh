@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Restart the manager agent in a FRESH Claude session (short context = cheap wakes). Its state lives in files
 # (manager.json, manager-actions.jsonl, manager-events.jsonl + its last-seen, MANAGER.md), so nothing that matters is lost.
+# The relaunch reuses AGENT_CMD_CLAUDE (default skips permission prompts: owner decision 2026-10-11) and pre-accepts folder trust.
 # Waits (up to 60 min) until the manager is idle with no draft, /exit, relaunch on Opus, send the restart kickoff.
 #   scripts/manager-fresh.sh            (cron: nightly)
 set -euo pipefail
@@ -31,6 +32,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 pgrep -P "$pane" -f claude >/dev/null && { echo "claude did not exit"; exit 1; }
+node --input-type=module -e "import {trustFolder} from '$SCRIPT_DIR/../trust.js'; await trustFolder('claude', process.argv[1]).catch(()=>{})" "$(tmux display -p -t "=$S:" '#{pane_current_path}')" || true   # best effort
 tmux send-keys -t "=$S:" -l "$CMD"; sleep 0.3; tmux send-keys -t "=$S:" Enter
 ready=0
 for i in $(seq 1 30); do sleep 2; if tmux capture-pane -p -t "=$S:" | grep -q "remote-control is active"; then ready=1; break; fi; done

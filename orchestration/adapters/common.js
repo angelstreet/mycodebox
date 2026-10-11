@@ -4,7 +4,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { launchWarnings } from '../../launch-config.js';
+import { hasBypass } from '../../launch-config.js';
 
 export function coded(code, msg) {
   const e = new Error(msg || code);
@@ -14,7 +14,7 @@ export function coded(code, msg) {
 export const unsupported = (adapter, op) => coded('E_UNSUPPORTED', `${adapter}: ${op} is not supported`);
 
 // ---- permission / sandbox bypass guard -------------------------------------------------------
-// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config launchWarnings.
+// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config hasBypass (V2 workers never get the dashboard's bypass default).
 const BYPASS_SINGLE = /^--(?:allow-)?dangerously-[\w-]+$|^--yolo$|^--bypass-[\w-]+$/;
 const BYPASS_PAIRS = [
   [/^--permission-mode$/, /^bypassPermissions$/],
@@ -50,9 +50,9 @@ export function findBypass(argv, skip = []) {
     }
   });
   const rest = argv.filter((_, i) => !skipSet.has(i));
-  // launchWarnings is advisory and also flags --full-auto for owner review; it keeps codex's workspace-write sandbox,
+  // hasBypass also flags --full-auto for owner review; it keeps codex's workspace-write sandbox,
   // so the hard guard does not refuse it (D-011).
-  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.filter((x) => x !== '--full-auto').join(' ') }).length) flagged.push('launch-config pattern');
+  if (!flagged.length && hasBypass(rest.filter((x) => x !== '--full-auto').join(' '))) flagged.push('launch-config pattern');
   return flagged;
 }
 
