@@ -18,10 +18,10 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
 | R2-1 | Clean V2_VERIFICATION.md, gates on final SHA | coordinator | todo | |
-| R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | todo | |
-| R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | todo | |
+| R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | dev (wt r2-perms) | mcode TUI has no permission flag: full mode = `permissionMode: bypassPermissions` in its config.yaml (D-019) |
+| R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | dev (wt r2-config) | |
 | R2-4 | m1 m2 m3 m4 m6, T15 red-tests half, T20 same-origin control | Sonnet / Opus (m3,m6 Fable) | todo | |
-| R2-5 | OpenCode installed in user space, live smoke | coordinator | todo | |
+| R2-5 | OpenCode installed in user space, live smoke | coordinator + Sonnet | dev (wt r2-opencode) | opencode-ai 1.18.32 (pinned >2 weeks old) under ~/.local/opencode, free models only; real JSON differs from fake (sessionID, part.tokens per step, step_finish) |
 | R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | todo | |
 | R2-7 | Push, PR #1 round-2 section, DELIVERED | coordinator | todo | |
 
