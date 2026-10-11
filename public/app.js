@@ -552,7 +552,6 @@ function writeToTerm(session, pane, dims) {
       paintTerm(session);
     }
   }
-  onPane(session, pane);
 }
 
 // ---------- WebSocket ----------
@@ -739,12 +738,6 @@ function onLeases(msg) {
   state.leases = msg;       // {leases, waiters, hostname} or {error}
   renderLeaseBar();
   if (state.platSheet) state.platSheet();
-}
-
-function onPane(session, pane) {
-  if (state.mode !== 'list') return;
-  const row = els.listPane.querySelector(`[data-session="${cssEscape(session)}"] .last`);
-  if (row) row.textContent = rowLast(session);
 }
 
 // Stable alphabetical order by display name. Cards must not jump around
@@ -2279,15 +2272,6 @@ function renderGrid() {
 }
 
 // ---------- board (list view) ----------
-// line 2 of a board row: what is it doing / what did it last say
-function rowLast(n) {
-  const st = state.status[n] || {};
-  const s = stateOf(n);
-  if (s === 'waiting' && st.waitReason) return st.waitReason;
-  if (s === 'working' && st.activity) return st.activity;
-  if ((s === 'done' || s === 'waiting') && st.lastTurn?.line) return st.lastTurn.line;   // STATUS: verdict · elapsed · tokens · the agent's info
-  return st.lastMessage || lastLine(state.paneText.get(n) || '') || ' ';
-}
 function renderList() {
   if (renaming(els.listPane)) return;
   els.listPane.innerHTML = '';
@@ -2306,10 +2290,8 @@ function renderList() {
     row.dataset.session = s.name;
     row.innerHTML = `
       <div class="l1"><span class="pr"></span><span class="ag"></span><span class="name">${escapeHtml(displayName(s.name))}</span><button class="rn" aria-label="Rename session" title="Rename">${icon('pencil', 12)}</button><span class="lb"></span><span class="pp hidden">paused</span><span class="stw"></span><button class="pz" aria-label="Pause session" title="Pause (Esc, then hold)">${icon('pause', 14)}</button></div>
-      <div class="last"></div>
       <div class="apill hidden"></div>
       <div class="meta"></div>`;
-    row.querySelector('.last').textContent = rowLast(s.name);
     row.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(row.querySelector('.name'), s.name); };
     wireRow(row, s.name);
     els.listPane.appendChild(row);
@@ -2417,8 +2399,6 @@ function syncList() {
     const lb = row.querySelector('.lb'), lh = leaseChipHtml(state.status[n] || {}, 'chip-m');
     if (lb.dataset.h !== lh) { lb.dataset.h = lh; lb.innerHTML = lh; }
     syncAutoPill(row.querySelector('.apill'), n);
-    const last = row.querySelector('.last'), lt = rowLast(n);
-    if (last.textContent !== lt) last.textContent = lt;
     const mh = rowChipsHtml(n), meta = row.querySelector('.meta');
     if (meta.dataset.h !== mh) { meta.dataset.h = mh; meta.innerHTML = mh; }
     meta.classList.toggle('hidden', !mh);
