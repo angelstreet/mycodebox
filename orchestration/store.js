@@ -33,6 +33,7 @@ export const defaultStoreDir = (env = process.env) =>
 // say nothing about who did the work, so an actor without an id cannot show independence (-> null).
 // Format/zero-width characters, combining marks and common Cyrillic look-alikes are folded too, so a
 // look-alike id cannot pose as a different actor.
+const rawId = (a) => String(typeof a === 'string' ? a : a?.id ?? '').trim();
 export const actorKey = (a) => {
   const id = typeof a === 'string' ? a : a && typeof a === 'object' ? a.id : null;
   if (typeof id !== 'string') return null;
@@ -114,10 +115,12 @@ export function acceptanceUnmet(st) {
   }
   const latest = new Map();
   // A verdict from an actor without an id has no identity: its approve never counts, its reject still blocks.
+  const rawRejects = new Map();   // raw trimmed id -> latest verdict: a differently spelled id never clears a reject
   for (const v of st.verdicts.filter(current)) {
-    if (actorKey(v.actor)) latest.set(actorKey(v.actor), v.verdict);
+    if (actorKey(v.actor)) { latest.set(actorKey(v.actor), v.verdict); rawRejects.set(rawId(v.actor), v.verdict); }
     else if (v.verdict === 'reject') why.push(`an actor without id rejects ${head}`);
   }
+  for (const [a, v] of rawRejects) if (v === 'reject' && !devs.has(actorKey(a)) && latest.get(actorKey(a)) !== 'reject') why.push(`verifier ${a} rejects ${head}`);
   const independent = [...latest].filter(([a]) => !devs.has(a));
   if (!independent.some(([, v]) => v === 'approve')) {
     why.push([...latest].some(([a, v]) => devs.has(a) && v === 'approve')
@@ -422,18 +425,27 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
 
     get: async (id) => { await ensure(); const st = tasks.get(id); return st ? view(st) : null; },
     // Read-only event log (validated lines, in seq order) for controllers that need run/approval history.
-    events: async (id) => { await ensure(); stateOf(id); return readLog(join(tasksDir, id, 'events.jsonl')).events; },
+    events: async (id) => {
+      await ensure();
+      const st = stateOf(id);
+      if (st.store_error) fail('E_STORE_FAILED', `task ${id}: ${st.store_error}`);   // a partial log is not the history
+      return readLog(join(tasksDir, id, 'events.jsonl')).events;
+    },
     // Independence on a SHA from the store's own record of who produced it, never from caller-supplied fields.
     independence: async (id, sha) => {
       await ensure();
       const st = stateOf(id);
+      if (st.store_error) return { ok: false, reasons: [`store error: ${st.store_error}`], developers: [], approvers: [] };
       if (!sha || sha !== st.head_sha) return { ok: false, reasons: [`${sha} is not the current head`], developers: [], approvers: [] };
       const devs = new Set(st.head_actors[sha] || []);
       const latest = new Map();
       let anonReject = false;
+      const rawRejects = new Map();
       for (const v of st.verdicts.filter((r) => r.sha === sha && r.epoch === st.head_epoch)) {
-        if (actorKey(v.actor)) latest.set(actorKey(v.actor), v.verdict); else if (v.verdict === 'reject') anonReject = true;
+        if (actorKey(v.actor)) { latest.set(actorKey(v.actor), v.verdict); rawRejects.set(rawId(v.actor), v.verdict); }
+        else if (v.verdict === 'reject') anonReject = true;
       }
+      for (const [a, v] of rawRejects) if (v === 'reject' && !devs.has(actorKey(a)) && latest.get(actorKey(a)) !== 'reject') latest.set(`raw:${a}`, 'reject');
       const approvers = [...latest].filter(([a, v]) => !devs.has(a) && v === 'approve').map(([a]) => a);
       const reasons = [];
       if (!devs.size) reasons.push(`no developer recorded for ${sha}`);

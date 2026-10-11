@@ -77,7 +77,7 @@ async function corruptAfterApprove(dir) {
   return id;
 }
 
-test('verify3: independence() and events() refuse or flag a task whose log is corrupt', { todo: 'finding (low-medium): on a corrupt-log task independence() answers ok:true from the partial replay (stale head A) and events() silently stops at the corrupt line; a controller could merge on it' }, async () => {
+test('verify3: independence() and events() refuse or flag a task whose log is corrupt', async () => {
   const dir = tmp();
   const id = await corruptAfterApprove(dir);
   const s = open(dir);
@@ -88,7 +88,7 @@ test('verify3: independence() and events() refuse or flag a task whose log is co
   await assert.rejects(s.events(id), { code: 'E_STORE_FAILED' });
 });
 
-test('verify3: a reject from one verifier is not hidden by a later approve from an id that folds to the same key', { todo: 'finding (low): verdicts are collapsed per folded key, so "josé" rejects then "jose" approves -> independent approve, reject lost (same for casing)' }, async () => {
+test('verify3: a reject from one verifier is not hidden by a later approve from an id that folds to the same key', async () => {
   const s = open();
   const { task_id: id } = await s.createTask(spec());
   await toState(s, id);
