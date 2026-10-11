@@ -11,8 +11,8 @@ const PATTERNS = [
   ['private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ['api token', /\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/],
   ['bearer/secret assignment', /\b(?:api[_-]?key|secret|token|password|passwd|vapid[_-]?private)\b\s*[:=]\s*['"][A-Za-z0-9+/_.=-]{16,}['"]/i],
-  ['tailnet name', /\b[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\b/i],
-  ['home path', /\/home\/(?!<user>|user\b|me\b|owner\b)[a-z_][a-z0-9_-]*/],
+  ['tailnet name', /\b[a-z0-9-]+\.(?!tail1234\.|example\.|tailnet\.)[a-z0-9-]+\.ts\.net\b/i],   // obvious fakes allowed
+  ['home path', /\/home\/(?!<user>|user\b|me\b|owner\b|someone\b|alice\b|bob\b|example\b)[a-z_][a-z0-9_-]*/],
   ['e-mail', /\b[A-Za-z0-9._%+-]+@(?!example\.(?:com|org|net)\b|anthropic\.com\b|users\.noreply\.github\.com\b)(?![A-Za-z0-9.-]*\.(?:invalid|test|example|localhost|local)\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/],   // RFC 2606 reserved names are fakes
   // Documentation (RFC 5737), loopback, unspecified and version-like strings are allowed.
   ['ipv4 address', /\b(?!(?:127|0)\.)(?!192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/],
