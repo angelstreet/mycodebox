@@ -78,7 +78,10 @@ test('T25: the losing contender never runs its protected action (withLeases)', a
   const runs = [a, b].map((auth, i) => auth.withLeases([R], opts(`int-${i}`), async (f) => {
     await f.check(); mutations.push(i); await gate; return i;
   }));
-  await new Promise((r) => setTimeout(r, 100));
+  // the winner is parked on the gate, so the loser must settle first (never by a timer: a slow loser would otherwise
+  // legitimately acquire after the winner released)
+  const loser = await Promise.race(runs);
+  assert.equal(loser.ok, false);
   release();
   const res = await Promise.all(runs);
   assert.equal(mutations.length, 1);
@@ -411,4 +414,132 @@ test('lease record carries the §5 fields', async () => {
     resource: 'environment:staging:deploy', lease_id: 'lease-1', owner: 'sysops', task_id: 'task-sysops', token: 1,
     acquired_at: c.t, expires_at: c.t + 5000, ttl_ms: 5000, scope: 'merge', approval_ref: 'appr-1',
   });
+});
+
+// --- verifier fixes (F1-F6) ------------------------------------------------------------------------------------------
+
+test('F2: a timed-out acquire that commits later can be adopted by the same owner and released; others cannot adopt', async () => {
+  const inner = fakeBackend();
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const backend = { ...inner, async update(...a) { await held; return inner.update(...a); } };
+  const auth = createLeaseAuthority({ backend, opTimeoutMs: 20 });
+  const r = await auth.acquire(R, opts('a'));
+  assert.equal(r.code, 'E_UNAVAILABLE');
+  assert.deepEqual(r.attempted, { resource: R, lease_id: r.lease_id, owner: 'a', task_id: 'task-a' });
+  release(); await new Promise((res) => setTimeout(res, 10));
+  assert.equal((await auth.adopt({ ...r.attempted, owner: 'b' })).code, 'E_FENCED');
+  assert.equal((await auth.adopt({ ...r.attempted, task_id: 'other' })).code, 'E_FENCED');
+  assert.equal((await auth.adopt({ ...r.attempted, lease_id: 'forged' })).code, 'E_FENCED');
+  const ad = await auth.adopt(r.attempted);
+  assert.ok(ad.ok);
+  assert.equal(ad.lease.lease_id, r.lease_id);
+  assert.ok((await auth.release(ad.lease)).ok);
+  assert.equal(inner.records.get(R).holder, null);
+  assert.ok(inner.auditLog.some((e) => e.op === 'adopt'));
+  // adopt never acquires a free resource
+  assert.equal((await auth.adopt(r.attempted)).code, 'E_FENCED');
+});
+
+test('F2: acquireAll rollback adopts and releases a timed-out resource the backend committed', async () => {
+  const inner = fakeBackend();
+  let calls = 0;
+  // the first update on main commits but answers too late; later ops are fast
+  const backend = { ...inner, async update(res, ...a) {
+    const out = await inner.update(res, ...a);
+    if (res === 'repo:demo:main' && calls++ === 0) await new Promise((r) => setTimeout(r, 60));
+    return out;
+  } };
+  const auth = createLeaseAuthority({ backend, opTimeoutMs: 20 });
+  const r = await auth.acquireAll([R, 'repo:demo:main'], opts('a'));
+  assert.equal(r.code, 'E_UNAVAILABLE');
+  assert.equal(inner.records.get(R).holder, null);
+  assert.equal(inner.records.get('repo:demo:main').holder, null, 'the ghost was adopted and released');
+});
+
+test('F3: the acquire audit line is mandatory: audit failure grants nothing (fake backend)', async () => {
+  const backend = fakeBackend({ fail: 'audit_fail' });
+  const auth = createLeaseAuthority({ backend });
+  assert.equal((await auth.acquire(R, opts('a'))).code, 'E_UNAVAILABLE');
+  assert.equal(backend.records.size, 0);
+  backend.setFail(null);
+  const a = await auth.acquire(R, opts('a'));
+  assert.ok(a.ok);
+  assert.equal(a.lease.token, 1);
+  assert.ok(backend.auditLog.some((e) => e.op === 'acquire' && e.lease_id === a.lease.lease_id));
+});
+
+test('F4: non-finite clock fails closed in acquire, renew and validate', async () => {
+  const backend = fakeBackend();
+  const good = createLeaseAuthority({ backend });
+  const a = (await good.acquire(R, opts('a'))).lease;
+  for (const bad of [NaN, Infinity]) {
+    const broken = createLeaseAuthority({ backend, now: () => bad });
+    assert.equal((await broken.acquire(R, opts('b'))).code, 'E_UNAVAILABLE');
+    assert.equal((await broken.renew(a)).code, 'E_UNAVAILABLE');
+    assert.equal((await broken.validate(a)).ok, false);
+  }
+  assert.deepEqual(await good.validate(a), { ok: true });
+});
+
+test('F5: resource names are capped so derived file names fit', async () => {
+  const long = `service:${'a'.repeat(70)}:${'b'.repeat(71)}`;
+  assert.equal(long.length, 150);
+  assert.ok(validResource(long));
+  assert.equal(validResource(`service:${'a'.repeat(70)}:${'b'.repeat(72)}`), false);
+  const dir = await tmp();
+  const auth = createLeaseAuthority({ backend: fileBackend({ dir }) });
+  const l = await auth.acquire(long, opts('a'));
+  assert.ok(l.ok, JSON.stringify(l));
+});
+
+test('F6: a lock whose owner is a live process on this host is never broken; lock records pid and host', async () => {
+  const dir = await tmp();
+  const c = clock(Date.now());
+  const auth = createLeaseAuthority({ backend: fileBackend({ dir, lockWaitMs: 150, staleLockMs: 10 }), now: c });
+  await auth.acquire(R, opts('a', { ttl_ms: 1000 }));
+  c.t += 5000;                                                  // holder expired
+  const lp = join(dir, `${encodeURIComponent(R)}.lock`);
+  const { hostname } = await import('node:os');
+  await writeFile(lp, JSON.stringify({ nonce: 'alive', pid: process.pid, host: hostname() }));
+  const old = new Date(Date.now() - 60_000);
+  await utimes(lp, old, old);
+  assert.equal((await auth.acquire(R, opts('b'))).code, 'E_UNAVAILABLE');
+  assert.equal(JSON.parse(await readFile(lp, 'utf8')).nonce, 'alive');
+  // a dead pid on this host is breakable
+  await writeFile(lp, JSON.stringify({ nonce: 'dead', pid: 2 ** 22 + 12345, host: hostname() }));
+  await utimes(lp, old, old);
+  assert.ok((await auth.acquire(R, opts('b'))).ok);
+});
+
+test('backend dir is created 0700 and a history marker guards lost records', async () => {
+  const base = await tmp();
+  const dir = join(base, 'leases');
+  const auth = createLeaseAuthority({ backend: fileBackend({ dir }) });
+  assert.ok((await auth.acquire(R, opts('a'))).ok);
+  assert.equal(realFs.statSync(dir).mode & 0o777, 0o700);
+  assert.ok(realFs.existsSync(join(dir, `${encodeURIComponent(R)}.seen`)));
+});
+
+test('D-008: repo:<repo>:branch:<name> namespace, validated and mapped to distinct files', async () => {
+  const good = ['repo:demo:branch:feature/x', 'repo:org/demo:branch:release-1.2', 'repo:demo:branch:v2/08-lease.fix',
+    'repo:demo:branch:a', 'repo:demo:branch:main-next', 'repo:demo:branch:x/y/z_1'];
+  const bad = ['repo:demo:branch:', 'repo:demo:branch:-x', 'repo:demo:branch:/x', 'repo:demo:branch:x/', 'repo:demo:branch:a//b',
+    'repo:demo:branch:a..b', 'repo:demo:branch:../main', 'repo:demo:branch:a b', 'repo:demo:branch:a:b', 'repo:demo:branch:a%2Fb',
+    'repo:demo:branch:a~1', 'repo:demo:branches:x', 'repo:demo:branch', `repo:demo:branch:${'b'.repeat(140)}`];
+  for (const r of good) assert.ok(validResource(r), r);
+  for (const r of bad) assert.equal(validResource(r), false, r);
+  const dir = await tmp();
+  const auth = createLeaseAuthority({ backend: fileBackend({ dir }) });
+  // names that a naive '/'->'_' or '/'->'-' mapping would collide
+  const pair = ['repo:demo:branch:a/b', 'repo:demo:branch:a_b', 'repo:demo:branch:a-b', 'repo:demo:branch:a.b'];
+  const leases = [];
+  for (const r of pair) { const l = await auth.acquire(r, opts('a')); assert.ok(l.ok, r); leases.push(l.lease); }
+  for (const l of leases) { assert.equal(l.token, 1); assert.deepEqual(await auth.validate(l), { ok: true }); }
+  const names = realFs.readdirSync(dir).filter((n) => n.endsWith('.lease.json'));
+  assert.equal(names.length, pair.length);
+  assert.ok(names.every((n) => !n.includes('/')));
+  assert.equal((await auth.acquire('repo:demo:branch:a/b', opts('b'))).code, 'E_HELD');
+  assert.deepEqual(canonicalOrder(['repo:demo:main', 'repo:demo:branch:z', 'repo:demo:integration']),
+    ['repo:demo:branch:z', 'repo:demo:integration', 'repo:demo:main']);
 });

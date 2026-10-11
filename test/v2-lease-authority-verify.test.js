@@ -1,6 +1,6 @@
 // Independent verification of orchestration/lease-authority.js (package v2/08). Adversarial cases the author's suite
-// does not cover. Tests marked `todo: 'defect: ...'` reproduce a real defect deterministically (fs hooks instead of
-// timing) and assert the *correct* behaviour, so they report as todo until the defect is fixed.
+// does not cover. The defect tests (F1-F4) reproduce the original defects deterministically (fs hooks instead of
+// timing) and assert the correct behaviour; they were `todo` until the fixes landed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, utimes, unlink, readdir } from 'node:fs/promises';
@@ -33,7 +33,6 @@ function hookedFs(hooks = {}) {
 // --- stale-lock breaking ---------------------------------------------------------------------------------------------
 
 test('two stale-lock breakers: the slower one moves a fresh lock, a third locker enters, two acquires commit one generation',
-  { todo: 'defect: maybeBreak renames an already-replaced lock; between that rename and the restoring link() a third process can take the slot while the moved lock\'s owner is already past its nonce check -> two ok:true acquires with the same token, and the restored lock is an orphan that freezes the resource (even the holder\'s own release) until TTL' },
   async (t) => {
     const dir = await tmp();
     const lp = join(dir, `${encodeURIComponent(R)}.lock`);
@@ -60,7 +59,7 @@ test('two stale-lock breakers: the slower one moves a fresh lock, a third locker
     const y = await py;
 
     assert.equal(y.ok, false);
-    // observe everything first so the todo output shows the whole failure, then assert the correct behaviour
+    // observe everything first so a failure shows the whole picture, then assert the correct behaviour
     const winners = [x, w].filter((r) => r.ok);
     const locks = (await readdir(dir)).filter((f) => f.endsWith('.lock'));
     const wv = await W.validate(w.lease), xv = await X.validate(x.lease);
@@ -103,7 +102,6 @@ test('stale-lock break is serialized: a breaker never touches a lock created aft
 // --- timeouts ----------------------------------------------------------------------------------------------------------
 
 test('acquire that times out but commits later: the caller holds a lease it was told it does not hold, with no handle to release it',
-  { todo: 'defect (liveness): a timed-out acquire returns E_UNAVAILABLE without the lease_id it generated; if the backend commits afterwards the resource is held by a ghost the owner cannot release or adopt until ttl_ms (up to 24 h)' },
   async () => {
     const inner = fakeBackend();
     const g = gate();
@@ -136,7 +134,6 @@ test('acquire that times out but commits later is at least fail-closed: nobody e
 // --- audit provenance --------------------------------------------------------------------------------------------------
 
 test('audit append fails but the lease is still granted: provenance is lost silently (alert only)',
-  { todo: 'defect (low, policy): spec 12.2 lists audit provenance as part of the lease record and the lost-record guard (auditHasHistory) depends on it; an acquire whose audit line cannot be written returns ok:true, so a later record loss restarts the generation undetected' },
   async () => {
     const dir = await tmp();
     const enospc = Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
@@ -149,25 +146,27 @@ test('audit append fails but the lease is still granted: provenance is lost sile
     assert.equal(r.code, 'E_UNAVAILABLE');
   });
 
-test('audit append failure: the lost-record guard no longer fires, generation restarts at 1', async () => {
-  // Documents the consequence of the policy above with today's behaviour (plain test: it passes as the code is).
+test('audit append failure: nothing is granted, so the lost-record guard cannot be bypassed', async () => {
+  // Policy (F3): the acquire audit line is written inside the critical section before the record; if it cannot be
+  // written the grant is refused, the resource never gets a record without provenance, and generations never restart.
   const dir = await tmp();
   const enospc = Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
-  const fs = hookedFs({ open: async (p) => { if (String(p).endsWith('audit.jsonl')) throw enospc; } });
+  let broken = false;
+  const fs = hookedFs({ open: async (p) => { if (broken && String(p).endsWith('audit.jsonl')) throw enospc; } });
   const auth = createLeaseAuthority({ backend: fileBackend({ dir, fs }), alert: () => {} });
   const a = await auth.acquire(R, opts('a'));
   assert.ok(a.ok);
   assert.ok((await auth.release(a.lease)).ok);
+  broken = true;
+  assert.equal((await auth.acquire(R, opts('b'))).code, 'E_UNAVAILABLE');
+  broken = false;
   await unlink(join(dir, `${encodeURIComponent(R)}.lease.json`));
-  const b = await auth.acquire(R, opts('b'));
-  assert.ok(b.ok);
-  assert.equal(b.lease.token, 1, 'token 1 reused after record loss without audit history');
+  assert.equal((await auth.acquire(R, opts('b'))).code, 'E_UNAVAILABLE', 'record lost after history: never restart at token 1');
 });
 
 // --- clocks ------------------------------------------------------------------------------------------------------------
 
 test('non-finite authority clock must fail closed, not displace a live holder',
-  { todo: 'defect (low): acquire treats a non-finite now() as "holder expired" (NaN < expires_at is false) and takes over a live lease with NaN acquired_at/expires_at' },
   async () => {
     const backend = fakeBackend();
     const good = createLeaseAuthority({ backend });
@@ -225,8 +224,9 @@ test('fenced former owner cannot release or renew after takeover; the new holder
 });
 
 test('acquireAll: a timed-out middle resource is not left held by the caller\'s own ghost after rollback', async () => {
-  // The rollback releases only what acquireAll got back; a lease the backend commits after the timeout is a ghost
-  // (see the todo above). This pins the fail-closed half: nothing the caller was told it holds survives rollback.
+  // The rollback also tries adopt() on the timed-out resource; here that read times out as well, so a lease the
+  // backend commits afterwards is a ghost until TTL. This pins the fail-closed half: nothing the caller was told it
+  // holds survives rollback.
   const inner = fakeBackend();
   let slow = true;
   const g = gate();
