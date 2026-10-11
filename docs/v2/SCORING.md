@@ -38,11 +38,15 @@ Each settled task is credited to exactly one model and one runtime, so groups ne
 - accepted: the developer recorded for the accepted head SHA;
 - failed: the last developer recorded, else the model of the last usage record, else `unknown`.
 
+Only registry-shaped ids (`<known runtime>:<model>`) count as developers or models. Other actors, such as `external:worktree` written by worktree revalidation or a human id, are ignored for credit and are never exported to the router.
+
 | Metric | Definition |
 |---|---|
 | `settled` | settled tasks credited to the group |
 | `verified`, `verified_rate` | accepted tasks credited to the group, and `verified / settled` (`null` when nothing settled) |
-| `cost.per_verified_completion_usd` | total `usd` of **all** usage records on the group's verified tasks (developer and reviewer), divided by `verified`. **`null` if any of those tasks has an unknown cost** (a usage record without `usd`, or no usage at all). A partial mean is never reported. `cost.usd_known_total` and the known/unknown counts show what is known |
+| `cost.per_verified_completion_usd` | **all** known spend credited to the group, failed tasks included (developer and reviewer usage), divided by `verified`. A model that burns money on failures is not cheap. **`null` if any settled task credited to the group has an unknown cost**: no usage record, a `null` `usd`, or usage flagged `incomplete`. A partial mean is never reported |
+| `cost.spend_on_accepted` | spend on the group's verified tasks only (`null` if none has a known cost), shown separately for comparison |
+| `cost.usd_known_total`, `cost.spend_unknown_tasks` | total known spend over settled tasks, and how many settled tasks had unknown cost |
 | `median_latency_ms` | median of (acceptance time minus creation time) over verified tasks; `null` when there are none. Includes time spent waiting for the owner or quota |
 | `rework.transitions` | number of entries into `repair` or `replan` across the group's settled tasks, plus `per_settled_task` |
 
@@ -52,7 +56,7 @@ Each settled task is credited to exactly one model and one runtime, so groups ne
 - A model is credited by its developer role. A strong reviewer's cost is inside the developer group's cost per
   completion, and its review is not credited separately.
 - Latency is wall time including waits, so it mixes model speed with quota and approval delays.
-- Cost is only as known as the price table: `PLACEHOLDER` or missing prices make `usd` unknown, which makes the figure unknown.
+- Cost is only as known as the price table: `PLACEHOLDER` or missing prices make `usd` unknown, which makes the figure unknown. Usage marked `incomplete` (a runtime that reported partial counts) is treated as unknown cost too.
 - Task difficulty differs between models unless routing was random; a higher rate may reflect easier work. Do not rank
   models from a few tasks, or from tasks that were not comparable.
 - Rework counts transitions, not attempts inside a run.
@@ -69,7 +73,7 @@ Each settled task is credited to exactly one model and one runtime, so groups ne
 Keys are registry entry ids (`runtime:model`). `attempts` is `settled`, `verified` is `verified`, and `errors` is the failed
 count, so `verified <= attempts` and `errors <= attempts` (the router's coherence rule). `latency_ms` and `total_usd` are
 **omitted when unknown**, never zero-filled, so the router falls back to its priors for that term. The router reads
-`total_usd / verified` as the cost per verified completion, which is what the report computes. Entries for `unknown`
+`total_usd / verified` as the cost per verified completion; `total_usd` here is the group's total spend including failed tasks, and it is omitted whenever the figure is unknown. Entries for `unknown`
 runtimes are not exported.
 
 The router ignores an entry with fewer than its minimum attempts, and ignores an incoherent one (the rationale says so),

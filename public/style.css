@@ -2322,3 +2322,5 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .tk-new{ display:flex; flex-direction:column; gap:4px; } .tk-note{ color:var(--ink-2); font-size:12px; margin-top:6px; } .tk-err{ color:#ff8a8a; font-size:12px; min-height:1em; }
 .sheet.tasks button:focus-visible, .sheet.tasks summary:focus-visible, .sheet.tasks textarea:focus-visible, .sheet.tasks input:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 @media (max-width:600px){ .tk-actions .sbtn, .tk-bar .sbtn{ flex:1 1 130px; } }
+.tk-deliv{ font-size:11px; color:#ffc24d; border:1px solid currentColor; border-radius:6px; padding:0 6px; }
+.tk-queue{ border:1px solid var(--deploy); border-radius:10px; padding:6px 8px 8px; display:flex; flex-direction:column; gap:6px; background:rgba(160,112,255,.08); margin-bottom:6px; }

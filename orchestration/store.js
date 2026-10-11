@@ -236,7 +236,7 @@ function step(st, ev) {
 }
 
 function view(st) {
-  const v = structuredClone({ ...st.task, head_sha: st.head_sha, seq: st.seq, evidence: st.evidence, verdicts: st.verdicts,
+  const v = structuredClone({ ...st.task, head_sha: st.head_sha, seq: st.seq, head_epoch: st.head_epoch, evidence: st.evidence, verdicts: st.verdicts,
     decisions: st.decisions, usage: st.usage, effects: Object.values(st.effects), history: st.history,
     policy_snapshot: st.policy_snapshot, idempotency_key: st.idempotency_key });
   // A task whose log could not be replayed is not in a known state, whatever the partial replay says.

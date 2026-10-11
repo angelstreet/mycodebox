@@ -11,6 +11,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultStoreDir } from '../orchestration/store.js';
+import { RUNTIME_EFFORTS } from '../orchestration/model-registry.js';
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REWORK_STATES = ['repair', 'replan'];
@@ -29,6 +30,8 @@ function readLog(path) {
   return { events, corrupt: null };
 }
 
+// Only registry-shaped ids (<known runtime>:<model>) are models. Other actors (external:worktree, a human id) are not.
+const isRegistryId = (id) => { const s = String(id || ''); const i = s.indexOf(':'); return i > 0 && s.length > i + 1 && Object.hasOwn(RUNTIME_EFFORTS, s.slice(0, i)); };
 const splitEntry = (id) => { const s = String(id || ''); const i = s.indexOf(':'); return i > 0 ? { runtime: s.slice(0, i), model: s.slice(i + 1) } : { runtime: 'unknown', model: s || 'unknown' }; };
 const median = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
@@ -47,10 +50,9 @@ export function foldTask(events) {
     } else if (e.kind === 'task.head_changed') {
       if (p.sha !== f.head_sha) f.head_sha = p.sha;
       const id = typeof p.actor === 'string' ? p.actor : p.actor?.id;
-      if (typeof id === 'string' && id) f.producers.set(p.sha, id);   // the last developer recorded for that SHA
-      if (id) f.last_actor = id;
+      if (isRegistryId(id)) { f.producers.set(p.sha, id); f.last_actor = id; }   // the last developer recorded for that SHA
     } else if (e.kind === 'usage.recorded') {
-      f.usage.push({ runtime: p.runtime ?? null, model: p.model ?? null, usd: Number.isFinite(p.usd) ? p.usd : null, input_tokens: p.input_tokens ?? null, output_tokens: p.output_tokens ?? null });
+      f.usage.push({ runtime: p.runtime ?? null, model: p.model ?? null, incomplete: p.incomplete === true, usd: Number.isFinite(p.usd) && p.incomplete !== true ? p.usd : null, input_tokens: p.input_tokens ?? null, output_tokens: p.output_tokens ?? null });
     }
   }
   return f;
@@ -61,21 +63,23 @@ export function foldTask(events) {
 export function creditOf(f) {
   const id = (f.status === 'accepted' && f.producers.get(f.head_sha)) || f.last_actor;
   if (id) return { ...splitEntry(id), basis: 'developer' };
-  const u = f.usage.at(-1);
-  if (u?.runtime || u?.model) return { runtime: u.runtime ?? 'unknown', model: u.model ?? 'unknown', basis: 'last_usage' };
+  const u = f.usage.findLast((x) => isRegistryId(`${x.runtime}:${x.model}`));
+  if (u) return { runtime: u.runtime ?? 'unknown', model: u.model ?? 'unknown', basis: 'last_usage' };
   return { runtime: 'unknown', model: 'unknown', basis: 'none' };
 }
 
-const blankGroup = (key, extra = {}) => ({ key, ...extra, settled: 0, verified: 0, failed: 0, _lat: [], _usd: 0, cost_known: 0, cost_unknown: 0, rework_transitions: 0 });
+const blankGroup = (key, extra = {}) => ({ key, ...extra, settled: 0, verified: 0, failed: 0, _lat: [], _usd: 0, _usd_acc: 0, cost_known: 0, cost_unknown: 0, spend_unknown_tasks: 0, rework_transitions: 0 });
 
 function finish(g) {
   const lat = median(g._lat);
   return { key: g.key, ...(g.runtime !== undefined ? { runtime: g.runtime } : {}), ...(g.model !== undefined ? { model: g.model } : {}),
     settled: g.settled, verified: g.verified, failed: g.failed,
     verified_rate: g.settled ? g.verified / g.settled : null,
-    cost: { known_completions: g.cost_known, unknown_completions: g.cost_unknown, usd_known_total: g.cost_known ? g._usd : null,
-      // a mean over a mixed known/unknown set would be fabricated, so one unknown makes the whole figure unknown
-      per_verified_completion_usd: g.verified && !g.cost_unknown ? g._usd / g.verified : null },
+    // Cost per verified completion = ALL spend credited to the group (failed tasks too: a model that burns money on failures is
+    // not cheap) / verified. One settled task with unknown cost makes the figure unknown; a partial mean is never reported.
+    cost: { known_completions: g.cost_known, unknown_completions: g.cost_unknown, spend_unknown_tasks: g.spend_unknown_tasks,
+      usd_known_total: g.settled - g.spend_unknown_tasks > 0 ? g._usd : null, spend_on_accepted: g.cost_known ? g._usd_acc : null,
+      per_verified_completion_usd: g.verified && !g.spend_unknown_tasks ? g._usd / g.verified : null },
     median_latency_ms: lat,
     rework: { transitions: g.rework_transitions, per_settled_task: g.settled ? g.rework_transitions / g.settled : null } };
 }
@@ -102,17 +106,18 @@ export function scoreStore(dir, { since = null } = {}) {
     const accepted = f.status === 'accepted';
     out.tasks[accepted ? 'accepted' : 'failed'] += 1;
     const c = creditOf(f);
-    const costKnown = f.usage.length > 0 && f.usage.every((u) => u.usd !== null);
+    const costKnown = f.usage.length > 0 && f.usage.every((u) => u.usd !== null && !u.incomplete);
     const taskUsd = costKnown ? f.usage.reduce((s, u) => s + u.usd, 0) : null;
     const latency = accepted && f.completed_at ? Date.parse(f.completed_at) - Date.parse(f.created_at) : null;
     for (const [map, key, extra] of [[models, `${c.runtime}:${c.model}`, { runtime: c.runtime, model: c.model }], [runtimes, c.runtime, { runtime: c.runtime }]]) {
       const g = map.get(key) || map.set(key, blankGroup(key, extra)).get(key);
       g.settled += 1;
       g.rework_transitions += f.rework;
+      if (costKnown) g._usd += taskUsd; else g.spend_unknown_tasks += 1;
       if (!accepted) { g.failed += 1; continue; }
       g.verified += 1;
       if (Number.isFinite(latency) && latency >= 0) g._lat.push(latency);
-      if (costKnown) { g.cost_known += 1; g._usd += taskUsd; } else g.cost_unknown += 1;
+      if (costKnown) { g.cost_known += 1; g._usd_acc += taskUsd; } else g.cost_unknown += 1;
     }
   }
   const order = (a, b) => b.settled - a.settled || a.key.localeCompare(b.key);
@@ -124,12 +129,12 @@ export function scoreStore(dir, { since = null } = {}) {
     if (g.runtime === 'unknown') continue;
     out.router_history[g.key] = { attempts: g.settled, verified: g.verified, errors: g.failed,
       ...(g.median_latency_ms !== null ? { latency_ms: g.median_latency_ms } : {}),
-      ...(g.cost.usd_known_total !== null && !g.cost.unknown_completions ? { total_usd: g.cost.usd_known_total } : {}) };
+      ...(g.cost.per_verified_completion_usd !== null ? { total_usd: g.cost.usd_known_total } : {}) };
   }
   if (out.tasks.unreadable.length) out.caveats.push(`${out.tasks.unreadable.length} task log(s) could not be replayed and are excluded, not counted as success or failure`);
-  if (out.by_model.some((g) => g.cost.unknown_completions)) out.caveats.push('some verified completions have unknown cost (no usage record or an unpriced model); their groups show cost per completion as unknown');
+  if (out.by_model.some((g) => g.spend_unknown_tasks || g.cost.spend_unknown_tasks)) out.caveats.push('some settled tasks have unknown cost (no usage record, an unpriced model or incomplete usage); their groups show cost per verified completion as unknown');
   if (out.by_model.some((g) => g.settled < 5)) out.caveats.push('small samples: groups with fewer than 5 settled tasks are anecdotes, not rankings');
-  if (out.by_model.some((g) => g.runtime === 'unknown')) out.caveats.push('some tasks have no recorded developer or usage: grouped under runtime "unknown"');
+  if (out.by_model.some((g) => g.runtime === 'unknown')) out.caveats.push('some tasks have no registry developer or usage (external or human actors are not models): grouped under runtime "unknown"');
   return out;
 }
 

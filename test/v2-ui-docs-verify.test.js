@@ -1,5 +1,5 @@
 // Independent verifier tests for package v2/06-ui-docs (Phase 6): http.js read model and owner actions, the Tasks view
-// renderers, v2-score.js math, and server.js V2 wiring (static). Defects found are marked `todo: 'defect: ...'`.
+// renderers, v2-score.js math, and server.js V2 wiring (static). Defects it found were fixed in the same package (formerly todo).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, appendFileSync, chmodSync, readdirSync } from 'node:fs';
@@ -122,7 +122,7 @@ test('a corrupt task log reads as unknown in API and view, never done', async ()
   assert.ok(!/done/i.test(listHtml([row]).match(/tk-badge[^]*?<\/span><\/span>/)[0]));
 });
 
-test('store_error exposed by GET does not leak absolute filesystem paths', { todo: 'defect: store_error carries the raw fs error message (absolute state-dir path) to every GET /api/v2/tasks client' }, async () => {
+test('store_error exposed by GET does not leak absolute filesystem paths', async () => {
   const { dir, store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   chmodSync(join(dir, 'tasks', id, 'events.jsonl'), 0o444);
@@ -136,7 +136,7 @@ test('store_error exposed by GET does not leak absolute filesystem paths', { tod
 // UX truthfulness
 // ---------------------------------------------------------------------------------------------------------------
 
-test('evidence for a reverted SHA (A -> B -> A) is not shown as passing on the current head', { todo: 'defect: http.js detail() compares evidence/verdicts by sha only, ignoring the store head epoch; the store does not count them' }, async () => {
+test('evidence for a reverted SHA (A -> B -> A) is not shown as passing on the current head', async () => {
   const { store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   await store.setHead(id, SHA_A, { actor: DEV });
@@ -149,7 +149,7 @@ test('evidence for a reverted SHA (A -> B -> A) is not shown as passing on the c
   assert.equal(t.verdicts[0].current, false);
 });
 
-test('partial usage (incomplete: true) is surfaced, not shown as complete totals', { todo: 'defect: http.js detail() drops usage_totals.incomplete and per-record incomplete; tasks-view shows partial MiniMax counts as complete' }, async () => {
+test('partial usage (incomplete: true) is surfaced, not shown as complete totals', async () => {
   const { store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   await store.recordUsage(id, { runtime: 'minimax', model: 'm', input_tokens: 10, output_tokens: 5, usd: null, incomplete: true, run_id: 'r1' });
@@ -158,7 +158,7 @@ test('partial usage (incomplete: true) is surfaced, not shown as complete totals
   assert.match(detailHtml(t), /partial|incomplete/i);
 });
 
-test('D5: an accepted task without delivery is labelled verified in worktree, not integrated', { todo: 'defect: badge says "done (accepted)" for every accepted task; detail exposes neither review_policy.deliver nor whether integration ran' }, async () => {
+test('D5: an accepted task without delivery is labelled verified in worktree, not integrated', async () => {
   const { store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   await acceptOn(store, id);
@@ -166,7 +166,7 @@ test('D5: an accepted task without delivery is labelled verified in worktree, no
   assert.match(detailHtml(t) + listHtml([t]), /not integrated/i);
 });
 
-test('after the owner answered, next_action says the answer awaits the loop (not "request not readable" / "decision needed")', { todo: 'defect: list keeps saying "owner decision needed" and detail says "the request itself is not readable" once the request is answered' }, async () => {
+test('after the owner answered, next_action says the answer awaits the loop (not "request not readable" / "decision needed")', async () => {
   const { store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   const req = await askOwner(store, id);
@@ -241,14 +241,16 @@ test('scoring math: even-count median, rate, cost per verified, unknown makes co
   const m = r.by_model.find((g) => g.key === 'claude:m');
   assert.equal(m.settled, 5); assert.equal(m.verified, 4); assert.equal(m.verified_rate, 0.8);
   assert.equal(m.median_latency_ms, 2500);
-  assert.ok(Math.abs(m.cost.per_verified_completion_usd - 0.2) < 1e-9);
+  // all spend counts: 4 accepted at 0.20 + one failed task at 0.50 = 1.30 over 4 verified (accepted-only would be 0.20)
+  assert.ok(Math.abs(m.cost.per_verified_completion_usd - 0.325) < 1e-9);
+  assert.ok(Math.abs(m.cost.spend_on_accepted - 0.8) < 1e-9);
   const n = r.by_model.find((g) => g.key === 'codex:n');
   assert.equal(n.cost.per_verified_completion_usd, null, 'one unknown -> null, never a partial mean');
   assert.equal(r.router_history['codex:n'].total_usd, undefined);
   assert.equal(readdirSync(join(dir, 'tasks')).length, 7);
 });
 
-test('scoring: incomplete usage records make the cost unknown', { todo: 'defect: v2-score.js ignores usage.incomplete; partial MiniMax figures are scored as complete cost' }, async () => {
+test('scoring: incomplete usage records make the cost unknown', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
   const st = timedStore(dir);
   await acceptedAt(st, 'p0', 'minimax:m', { done: 1000, usd: [0.01], incomplete: true });
@@ -256,7 +258,7 @@ test('scoring: incomplete usage records make the cost unknown', { todo: 'defect:
   assert.equal(g.cost.per_verified_completion_usd, null);
 });
 
-test('scoring: spend on failed tasks counts toward cost per verified completion', { todo: 'defect (design): cost per verified completion sums only accepted tasks; a model that burns $ on failures looks as cheap as a reliable one, and router_history.total_usd inherits it' }, async () => {
+test('scoring: spend on failed tasks counts toward cost per verified completion', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
   const st = timedStore(dir);
   await acceptedAt(st, 'ok', 'claude:cheap', { done: 1000, usd: [0.1] });
@@ -265,7 +267,7 @@ test('scoring: spend on failed tasks counts toward cost per verified completion'
   assert.ok(g.cost.per_verified_completion_usd > 4, `reported ${g.cost.per_verified_completion_usd}`);
 });
 
-test('scoring: a head set by worktree revalidation (external:worktree) is not exported as a router model', { todo: 'defect: goal-loop setHead actor "external:worktree" becomes runtime "external", model "worktree" in by_model and router_history' }, async () => {
+test('scoring: a head set by worktree revalidation (external:worktree) is not exported as a router model', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
   const st = timedStore(dir);
   await acceptedAt(st, 'x', 'external:worktree', { done: 1000 });

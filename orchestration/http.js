@@ -56,18 +56,32 @@ function loopMemory(decisions) {
   return cp;
 }
 
+function answeredEvent(req, events) {
+  return events.find((e) => (e.kind === 'approval.granted' || e.kind === 'approval.denied') && e.payload?.k === req.k);
+}
+
 export function pendingApproval(task, events) {
   if (task.status !== 'awaiting_approval' || task.store_error) return null;
   const req = loopMemory(task.decisions).approval;
-  if (!req || !Number.isInteger(req.k)) return null;
-  const answered = events.some((e) => (e.kind === 'approval.granted' || e.kind === 'approval.denied') && e.payload?.k === req.k);
-  if (answered) return null;
+  if (!req || !Number.isInteger(req.k) || answeredEvent(req, events)) return null;
+  // Prefer the SHA the request was raised on; fall back to the task head.
+  const sha = typeof req.sha === 'string' && SHA_RE.test(req.sha) ? req.sha : task.head_sha;
   return { action_id: `appr-${task.task_id}-${req.k}`, k: req.k, kind: req.kind ?? null, question: clip(req.question, 1000),
-    classes: Array.isArray(req.classes) ? req.classes : [], sha: task.head_sha, resume_to: req.resume_to ?? null };
+    classes: Array.isArray(req.classes) ? req.classes : [], sha, resume_to: req.resume_to ?? null };
 }
 
-export function nextAction(task, pending) {
+// The owner already answered the current request: the loop has not applied it yet.
+export function answeredApproval(task, events) {
+  if (task.status !== 'awaiting_approval' || task.store_error) return null;
+  const req = loopMemory(task.decisions).approval;
+  const e = req && Number.isInteger(req.k) ? answeredEvent(req, events) : null;
+  return e ? e.kind === 'approval.granted' ? 'granted' : 'denied' : null;
+}
+
+const ANSWER_NEXT = 'answer recorded; applied when the goal loop runs';
+export function nextAction(task, pending, answered = null) {
   if (task.store_error) return 'the task log could not be replayed: state is unknown; inspect the store before doing anything else';
+  if (answered) return ANSWER_NEXT;
   if (pending) return `owner decision needed: ${pending.question}`;
   if (task.status === 'awaiting_approval') return 'awaiting an owner decision (the request itself is not readable)';
   if (task.status === 'waiting') {
@@ -77,19 +91,76 @@ export function nextAction(task, pending) {
   return NEXT[task.status] ?? null;
 }
 
-const usageValue = (v) => (v === undefined ? null : v);   // unknown stays null; never 0
-
-function summary(t) {
-  return { task_id: t.task_id, title: t.title ?? null, goal: clip(t.goal, 200), state: t.status, outcome: t.outcome,
-    next_action: nextAction(t, t.status === 'awaiting_approval' ? loopMemory(t.decisions).approval : null), updated_at: t.updated_at, created_at: t.created_at, project_id: t.project_id,
-    risk_class: t.risk_class, source: t.created_by?.kind ?? null, store_error: t.store_error ?? null };
+// Delivery: an accepted task is verified in its worktree; it is integrated only after the integrating states ran.
+export function deliveryOf(t) {
+  const requested = t.review_policy?.deliver === true || (t.resources || []).some((r) => typeof r === 'string' && /^repo:.+:integration$/.test(r));
+  const integrated = t.history.some((h) => h.to === 'integrating' || h.to === 'release_verifying');
+  const label = integrated ? 'integrated' : t.status === 'accepted' ? 'verified in worktree, not integrated' : requested ? 'integration requested, not yet integrated' : 'no integration requested';
+  return { requested, integrated, label };
 }
 
-function detail(t, events) {
-  const pending = pendingApproval(t, events);
+const usageValue = (v) => (v === undefined ? null : v);   // unknown stays null; never 0
+
+// store_error can carry a raw filesystem message (absolute paths): clients get a coarse text, the server log the detail.
+const COARSE_ERROR = 'task log unreadable; see server log';
+
+function summary(t, { pending = null, answered = null } = {}) {
+  return { task_id: t.task_id, title: t.title ?? null, goal: clip(t.goal, 200), state: t.status, outcome: t.outcome,
+    next_action: nextAction(t, pending, answered), updated_at: t.updated_at, created_at: t.created_at, project_id: t.project_id,
+    risk_class: t.risk_class, source: t.created_by?.kind ?? null, parent_task_id: t.parent_task_id ?? null,
+    store_error: t.store_error ? COARSE_ERROR : null, delivery: deliveryOf(t) };
+}
+
+// Runs from the log: task.started (who, effort), the run's effect (start/end), usage by run_id, tool.failed (error class).
+function runsOf(t, events) {
+  const runs = new Map();
+  const at = (e) => e.timestamp ?? null;
+  for (const e of events) {
+    const p = e.payload || {};
+    if (e.kind === 'task.started' && p.run_id) runs.set(p.run_id, { run_id: p.run_id, role: p.role ?? 'developer', runtime: p.runtime ?? null, model: p.model ?? null,
+      effort: p.effort ?? null, started_at: at(e), ended_at: null, outcome: 'running', usage: null });
+  }
+  const verdictRuns = new Set(events.filter((e) => /^verdict-/.test(e.event_id || '')).map((e) => e.event_id.slice('verdict-'.length)));
+  for (const u of t.usage) {
+    if (!u.run_id) continue;
+    const r = runs.get(u.run_id) || runs.set(u.run_id, { run_id: u.run_id, role: verdictRuns.has(u.run_id) ? 'reviewer' : 'unknown', runtime: u.runtime ?? null,
+      model: u.model ?? null, effort: null, started_at: null, ended_at: u.ts ?? null, outcome: 'finished', usage: null }).get(u.run_id);
+    r.usage = { input_tokens: usageValue(u.input_tokens), output_tokens: usageValue(u.output_tokens), usd: usageValue(u.usd), incomplete: u.incomplete === true };
+  }
+  for (const eff of t.effects) {
+    const id = /^devrun-(.+)$/.exec(eff.effect_id)?.[1];
+    const r = id && runs.get(id);
+    if (!r) continue;
+    const last = eff.history?.at(-1);
+    r.outcome = eff.phase === 'confirmed' ? 'finished' : eff.phase === 'attempted' ? 'running' : eff.phase === 'possibly_applied' ? 'unknown' : 'failed';
+    if (eff.phase !== 'attempted') r.ended_at = last?.ts ?? null;
+  }
+  for (const e of events) if (e.kind === 'tool.failed' && runs.has(e.payload?.run_id)) runs.get(e.payload.run_id).outcome = `failed: ${clip(e.payload.error?.class ?? 'error', 60)}`;
+  return [...runs.values()];
+}
+
+function rolesOf(t, events) {
+  const devs = new Set();
+  for (const e of events) if (e.kind === 'task.head_changed') { const id = typeof e.payload.actor === 'string' ? e.payload.actor : e.payload.actor?.id; if (id) devs.add(id); }
+  const revs = new Set(t.verdicts.map((v) => (typeof v.actor === 'string' ? v.actor : v.actor?.id)).filter(Boolean));
+  return { developers: [...devs], reviewers: [...revs] };
+}
+
+function allowedActions(t) {
+  const pol = t.policy_snapshot?.policy;
+  return { source: pol ? 'policy snapshot of the latest run' : 'task contract only (no policy snapshot yet)',
+    approval_required: t.approval_policy?.requires ?? [], prohibited_actions: [...new Set([...(t.prohibited_actions || []), ...(pol?.prohibited_actions || [])])],
+    allowed_commands: pol ? pol.allowlists.commands.map((c) => c.join(' ')) : null, allowed_paths: pol ? pol.allowlists.paths : null,
+    protected_branches: pol?.protected_branches ?? null };
+}
+
+function detail(t, events, children = []) {
+  const { pending, answered } = { pending: pendingApproval(t, events), answered: answeredApproval(t, events) };
+  // Current means this SHA in this head epoch: a reverted head (A, B, A) starts evidence over, as in the store.
+  const current = (e) => !!t.head_sha && e.sha === t.head_sha && e.epoch === t.head_epoch;
   const checks = t.acceptance_checks.map((c) => {
     const all = t.evidence.filter((e) => e.check_id === c.id);
-    const onHead = all.filter((e) => t.head_sha && e.sha === t.head_sha);
+    const onHead = all.filter(current);
     const latest = (onHead.length ? onHead : all).at(-1) || null;
     const passes = !!latest && onHead.includes(latest) && latest.exit === c.expect.exit;
     return { id: c.id, command: c.command, expect: c.expect, required: c.required, evidence_type: c.evidence_type,
@@ -100,19 +171,20 @@ function detail(t, events) {
   const totals = t.usage_totals;
   const incidents = [...new Set(events.map((e) => e.payload?.incident_id).filter((x) => typeof x === 'string'))];
   return {
-    ...summary(t),
-    next_action: nextAction(t, pending),
+    ...summary(t, { pending, answered }),
     goal: t.goal, scope: t.scope, definition_of_done: t.definition_of_done, base_sha: t.base_sha, head_sha: t.head_sha,
     branch: t.branch ?? null, worktree_id: t.worktree_id ?? null, repository: t.repository ?? null,
     priority: t.priority, budget_policy: t.budget_policy,
     acceptance_checks: checks,
-    verdicts: t.verdicts.map((v) => ({ sha: v.sha, actor: v.actor, verdict: v.verdict, findings: v.findings, ts: v.ts, current: v.sha === t.head_sha })),
+    verdicts: t.verdicts.map((v) => ({ sha: v.sha, actor: v.actor, verdict: v.verdict, findings: v.findings, ts: v.ts, current: current(v) })),
     decisions: t.decisions.map((d) => ({ decision_id: d.decision_id, kind: d.kind, question: d.question, chosen: d.chosen,
       rationale: d.rationale, evidence: d.evidence, expected_effect: d.expected_effect, actor: d.actor, ts: d.ts ?? null,
       alternatives: Array.isArray(d.alternatives) ? d.alternatives.map((a) => a?.option ?? a) : [] })),
     usage: { input_tokens: usageValue(totals.input_tokens), output_tokens: usageValue(totals.output_tokens), usd: usageValue(totals.usd),
-      unknown: totals.unknown, records: t.usage.map((u) => ({ runtime: u.runtime, model: u.model, input_tokens: usageValue(u.input_tokens),
-        output_tokens: usageValue(u.output_tokens), usd: usageValue(u.usd), unknown: u.unknown, ts: u.ts ?? null })) },
+      unknown: totals.unknown, incomplete: totals.incomplete === true, records: t.usage.map((u) => ({ runtime: u.runtime, model: u.model, input_tokens: usageValue(u.input_tokens),
+        output_tokens: usageValue(u.output_tokens), usd: usageValue(u.usd), unknown: u.unknown, incomplete: u.incomplete === true, ts: u.ts ?? null })) },
+    runs: runsOf(t, events), roles: rolesOf(t, events), allowed_actions: allowedActions(t),
+    parent_task_id: t.parent_task_id ?? null, children: children.map((c) => ({ task_id: c.task_id, state: c.status, outcome: c.outcome, goal: clip(c.goal, 120) })),
     leases: { resources: t.resources, effects: t.effects.map((e) => ({ effect_id: e.effect_id, kind: e.kind, phase: e.phase })) },
     incidents,
     history: t.history,
@@ -153,8 +225,10 @@ function checkDecisionBody(b) {
 // ---- handler --------------------------------------------------------------------------------------
 
 // deps: { store, intake, loop? }. `loop` is optional and only used to stop a live run on cancel; this module never starts it.
-export function createV2Http({ store, intake, loop = null } = {}) {
+export function createV2Http({ store, intake, loop = null, log = (m) => console.error(m) } = {}) {
   if (!store || !intake) throw new Error('v2 http: store and intake required');
+  const logged = new Set();
+  const noteStoreError = (t) => { if (t.store_error && !logged.has(`${t.task_id}:${t.store_error}`)) { logged.add(`${t.task_id}:${t.store_error}`); log(`[v2] task ${t.task_id}: ${t.store_error}`); } };
   const chains = new Map();   // per-task: owner actions are read-check-write, so they are serialized
   const serial = (id, fn) => {
     const run = (chains.get(id) || Promise.resolve()).then(fn);
@@ -197,10 +271,28 @@ export function createV2Http({ store, intake, loop = null } = {}) {
     if (id !== undefined && !ID_RE.test(id)) return err(400, 'E_INVALID', 'invalid task id');
     try {
       if (method === 'GET' && !verb) {
-        if (!id) return reply(200, { ok: true, tasks: (await store.list()).map(summary).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))) });
+        if (!id) {
+          const all = await store.list();
+          const approvals = [];
+          const tasks = [];
+          for (const t of all) {
+            let st = {};
+            if (t.status === 'awaiting_approval' && !t.store_error) {
+              const events = await store.events(t.task_id);
+              st = { pending: pendingApproval(t, events), answered: answeredApproval(t, events) };
+              if (st.pending) approvals.push({ task_id: t.task_id, goal: clip(t.goal, 200), ...st.pending });
+            }
+            noteStoreError(t);
+            tasks.push(summary(t, st));
+          }
+          const newest = (a, b) => String(b.updated_at).localeCompare(String(a.updated_at));
+          return reply(200, { ok: true, tasks: tasks.sort(newest), approvals });
+        }
         const t = await store.get(id);
         if (!t) return err(404, 'E_NOT_FOUND', 'task not found');
-        return reply(200, { ok: true, task: detail(t, await store.events(id)) });
+        noteStoreError(t);
+        // an unreadable log has no trustworthy events: show what the snapshot says (outcome unknown) and nothing derived from the log
+        return reply(200, { ok: true, task: detail(t, t.store_error ? [] : await store.events(id), await store.list({ parent_task_id: id })) });
       }
       if (method !== 'POST' || (id && !verb)) return err(405, 'E_METHOD', 'method not allowed');
       let raw;
@@ -230,7 +322,10 @@ export function createV2Http({ store, intake, loop = null } = {}) {
         return reply(200, { ok: true, state: after.status, outcome: outcomeOf(after.status) });
       }
       return await decide(id, verb, raw);
-    } catch (e) { return mapError(e); }
+    } catch (e) {
+      if (e?.code === 'E_STORE_FAILED') { log(`[v2] ${e.message}`); return err(503, 'E_STORE_FAILED', COARSE_ERROR); }
+      return mapError(e);
+    }
   }
 
   return { handle, detail, summary };

@@ -173,7 +173,7 @@ async function main() {
         await page.waitForTimeout(400);
         await page.screenshot({ path: join(out, `${label}-tasks-list.png`) });
 
-        const rows = await page.$$eval('.sheet.tasks .tk-row', (els) => els.map((e) => ({ id: e.dataset.tkOpen, cls: e.className, badge: e.querySelector('.tk-badge')?.textContent.trim(), badgeCls: e.querySelector('.tk-badge')?.className })));
+        const rows = await page.$$eval('.sheet.tasks .tk-row:not([data-tk-queue])', (els) => els.map((e) => ({ id: e.dataset.tkOpen, cls: e.className, badge: e.querySelector('.tk-badge')?.textContent.trim(), badgeCls: e.querySelector('.tk-badge')?.className })));
         const doneBadges = rows.filter((r) => /\bdone\b/i.test(r.badge) || r.badgeCls.includes(' done'));
         check(`${label}: exactly one done badge and it is the accepted task`, doneBadges.length === 1 && doneBadges[0].id === 't-done', JSON.stringify(doneBadges.map((r) => r.id)));
         check(`${label}: no non-accepted row mentions "done" in its badge`, rows.filter((r) => r.id !== 't-done').every((r) => !/done/i.test(r.badge)), rows.map((r) => `${r.id}:${r.badge}`).join(' | '));
@@ -183,15 +183,22 @@ async function main() {
         // keyboard focus order: Tab from the sheet through the controls, DOM order, visible focus ring
         await page.evaluate(() => document.querySelector('.sheet.tasks [data-tk-new]').focus());
         const order = [];
-        for (let i = 0; i < 11; i++) {
+        for (let i = 0; i < 12; i++) {
           order.push(await page.evaluate(() => { const e = document.activeElement; const cs = getComputedStyle(e); return { tag: e.tagName, key: e.dataset.tkOpen || e.dataset.tkNew !== undefined && 'new' || e.dataset.tkRefresh !== undefined && 'refresh' || e.dataset.a || e.textContent.trim().slice(0, 20), inSheet: !!e.closest('.sheet.tasks'), ring: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0 }; }));
           await page.keyboard.press('Tab');
         }
         const keys = order.map((o) => o.key);
         const domRows = rows.map((r) => r.id);
-        check(`${label}: Tab order is New, Refresh, then rows in list order, then close`, JSON.stringify(keys.slice(0, 10)) === JSON.stringify(['new', 'refresh', ...domRows, 'close'].slice(0, 10)) , keys.join(','));
-        check(`${label}: focused controls sit in the sheet and show a focus ring`, order.slice(1, 10).every((o) => o.inSheet && o.ring), JSON.stringify(order.slice(1, 10).filter((o) => !(o.inSheet && o.ring)).slice(0, 2)));   // [0] was focused by script, which is not :focus-visible
+        const expected = ['new', 'refresh', 't-owner' /* the approval queue comes first */, ...domRows, 'close'];
+        check(`${label}: Tab order is New, Refresh, the approval queue, rows in list order, then close`, JSON.stringify(keys.slice(0, expected.length)) === JSON.stringify(expected), keys.join(','));
+        check(`${label}: Tab is trapped in the sheet (after close it wraps back to New task)`, keys[expected.length] === 'new', keys[expected.length]);
+        check(`${label}: focused controls sit in the sheet and show a focus ring`, order.slice(1, 12).every((o) => o.inSheet && o.ring), JSON.stringify(order.slice(1, 12).filter((o) => !(o.inSheet && o.ring)).slice(0, 2)));   // [0] was focused by script, which is not :focus-visible
 
+        const queue = await page.$$eval('.sheet.tasks .tk-queue .tk-row', (els) => els.map((e) => e.dataset.tkOpen));
+        const queueFirst = await page.evaluate(() => { const q = document.querySelector('.sheet.tasks .tk-queue'), r = document.querySelector('.sheet.tasks .tk-row:not([data-tk-queue])'); return !!q && !!r && !!(q.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING); });
+        check(`${label}: the Needs owner queue lists exactly the pending request, above the task rows`, JSON.stringify(queue) === '["t-owner"]' && queueFirst, JSON.stringify(queue));
+        const listText = await page.innerText('.sheet.tasks');
+        check(`${label}: the accepted task is labelled "verified in worktree, not integrated"`, /verified in worktree, not integrated/.test(listText));
         const ratios = await page.evaluate(CONTRAST);
         const low = ratios.filter((r) => r.ratio < 4.5);
         check(`${label}: text contrast >= 4.5:1 on ${ratios.length} sampled elements`, low.length === 0, low.slice(0, 4).map((r) => `${r.text} ${r.ratio}`).join('; '));
@@ -210,7 +217,7 @@ async function main() {
         await page.waitForTimeout(300);
         await page.screenshot({ path: join(out, `${label}-tasks-detail-accepted.png`) });
         const dtxt = await page.innerText('.sheet.tasks');
-        check(`${label}: accepted detail shows evidence SHA, unknown cost and no approve button`, /sha b2c3d4e5f607/.test(dtxt) && /cost unknown/.test(dtxt) && !(await page.$('.sheet.tasks [data-tk-approve]')));
+        check(`${label}: accepted detail shows evidence SHA, unknown cost, the not-integrated label, runs/roles/allowed actions, no approve button`, /sha b2c3d4e5f607/.test(dtxt) && /cost unknown/.test(dtxt) && /not integrated/i.test(dtxt) && /runs/i.test(dtxt) && /Roles/i.test(dtxt) && /Allowed actions/i.test(dtxt) && !(await page.$('.sheet.tasks [data-tk-approve]')));
         await page.keyboard.press('Escape');
         check(`${label}: Escape closes the view`, await page.waitForSelector('.sheet.tasks', { state: 'detached', timeout: 3000 }).then(() => true, () => false));
         check(`${label}: no page errors`, errors.length === 0, errors.slice(0, 2).join('; '));

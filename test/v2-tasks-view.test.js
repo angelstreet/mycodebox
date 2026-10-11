@@ -74,3 +74,18 @@ test('service worker precaches the new module and the cache version moved on', (
   assert.match(sw, /'\/tasks-view\.js'/);
   assert.match(sw, /ghosty-shell-v142/);
 });
+
+test('approval queue on top of the list; accepted tasks show delivery; partial usage, runs, roles, graph render', () => {
+  const q = [{ task_id: 't-q', goal: 'g', action_id: 'appr-t-q-0', question: 'Deploy?', classes: ['deploy'], sha: null }];
+  const l = listHtml([task('accepted', { delivery: { requested: false, integrated: false, label: 'verified in worktree, not integrated' } })], q);
+  assert.ok(l.indexOf('tk-queue') < l.indexOf('tk-row accepted') || l.indexOf('tk-queue') < l.indexOf('data-tk-open="t-accepted"'));
+  assert.match(l, /Needs owner \(1\)/);
+  assert.match(l, /not integrated/);
+  assert.equal(listHtml([task('created')], []).includes('tk-queue'), false);
+  const h = detailHtml(detail({ state: 'accepted', outcome: 'done', pending_approval: null, delivery: { requested: true, integrated: false, label: 'verified in worktree, not integrated' },
+    usage: { input_tokens: 1, output_tokens: 1, usd: null, unknown: ['usd'], incomplete: true, records: [] },
+    runs: [{ run_id: 'r', role: 'developer', runtime: 'claude', model: 'm', effort: 'high', outcome: 'finished', started_at: 's', ended_at: 'e', usage: null }],
+    roles: { developers: ['claude:m'], reviewers: [] }, allowed_actions: { source: 'x', approval_required: ['deploy'], prohibited_actions: [], allowed_commands: null, allowed_paths: null },
+    parent_task_id: 'p-1', children: [{ task_id: 'c-1', state: 'created', goal: 'x' }] }));
+  for (const re of [/partial/, /not integrated/, /effort high/, /usage unknown/, /developer: claude:m/, /unknown until a run reads the policy/, /data-tk-open="p-1"/, /data-tk-open="c-1"/]) assert.match(h, re);
+});

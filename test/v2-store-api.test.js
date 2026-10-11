@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
-import { spec, clock, SHA_A } from './fixtures/v2-task.js';
+import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
 
 const open = () => createTaskStore({ dir: mkdtempSync(join(tmpdir(), 'v2-store-api-')), ...clock() });
 const DEV = { role: 'developer', id: 'dev-1' };
@@ -46,4 +46,17 @@ test('usage: an adapter-reported incomplete flag is kept and makes totals incomp
   assert.equal(v.usage_totals.incomplete, true);
   assert.equal(v.usage_totals.usd, null);
   await assert.rejects(s.recordUsage(id, { runtime: 'x', incomplete: 'yes' }), { code: 'E_INVALID' });
+});
+
+test('view exposes head_epoch: a reverted head (A, B, A) is a new epoch, and evidence records carry theirs', async () => {
+  const s = open();
+  const { task_id: id } = await s.createTask(spec());
+  assert.equal((await s.get(id)).head_epoch, 0);
+  await s.setHead(id, SHA_A, { actor: DEV });
+  await s.recordEvidence(id, { check_id: 'unit', sha: SHA_A, command: ['npm', 'test'], exit: 0, actor: { role: 'tester', id: 't' } });
+  await s.setHead(id, SHA_B, { actor: DEV });
+  await s.setHead(id, SHA_A, { actor: DEV });
+  const v = await s.get(id);
+  assert.equal(v.head_epoch, 3);
+  assert.equal(v.evidence[0].epoch, 1);
 });

@@ -2,7 +2,7 @@
 // (approval is explicit and never blanket), T22 (unknown usage stays null).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
@@ -179,10 +179,73 @@ test('deny records the denial; concurrent approve+deny: exactly one wins', async
   assert.equal(kinds.length, 1);
 });
 
-test('a task with an unreadable log is unknown, not done', async () => {
+test('a really corrupted log reads as unknown with a coarse error; the detail goes to the server log only', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'v2-http-'));
+  const s1 = createTaskStore({ dir, ...clock() });
+  const { task_id: id } = await s1.createTask(spec());
+  await s1.transition(id, 'clarified');
+  const log = join(dir, 'tasks', id, 'events.jsonl');
+  const lines = readFileSync(log, 'utf8').split('\n'); lines.splice(1, 0, '{broken'); writeFileSync(log, lines.join('\n'));
+  const store = createTaskStore({ dir, ...clock() });
+  const logged = [];
+  const api = createV2Http({ store, intake: createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A }), log: (m) => logged.push(m) });
+  const row = (await api.handle({ method: 'GET', pathname: '/api/v2/tasks' })).body.tasks[0];
+  assert.deepEqual([row.outcome, row.store_error], ['unknown', 'task log unreadable; see server log']);
+  assert.ok(logged.some((m) => m.includes('corrupt log')), 'detail is logged server-side');
+  const dr = await api.handle({ method: 'GET', pathname: `/api/v2/tasks/${id}` }); const d = dr.body.task;
+  assert.equal(d.outcome, 'unknown');
+  assert.equal(JSON.stringify(d).includes(dir), false);
+});
+
+test('detail: runs, roles, allowed actions and task graph come from the log', async () => {
   const { store, call } = setup();
-  const { task_id: id } = await store.createTask(spec());
+  const { task_id: id } = await store.createTask(spec({ prohibited_actions: ['write_live_state'] }));
+  const child = await store.createTask(spec({ task_id: 'child-1', parent_task_id: id, prohibited_actions: ['write_live_state'] }));
+  await store.append(id, { event_id: 'start-r1', kind: 'task.started', payload: { run_id: 'r1', role: 'developer', entry: 'claude:m1', runtime: 'claude', model: 'm1', effort: 'high' } });
+  await store.recordEffect(id, { effect_id: 'devrun-r1', idempotency_key: 'k', kind: 'developer_run', phase: 'attempted' });
+  await store.recordEffect(id, { effect_id: 'devrun-r1', phase: 'confirmed' });
+  await store.recordUsage(id, { runtime: 'claude', model: 'm1', input_tokens: 7, output_tokens: null, usd: null, run_id: 'r1' }, { event_id: 'usage-r1' });
+  await store.setHead(id, SHA_A, { actor: { role: 'developer', id: 'claude:m1' } });
+  await store.recordVerdict(id, { sha: SHA_A, actor: { role: 'reviewer', id: 'codex:rev' }, verdict: 'approve', findings: [] }, { event_id: 'verdict-r2' });
+  await store.recordUsage(id, { runtime: 'codex', model: 'rev', input_tokens: 3, output_tokens: 1, usd: 0.01, run_id: 'r2' }, { event_id: 'usage-r2' });
+  await store.snapshotPolicy(id, { prohibited_actions: ['push_force'], allowlists: { commands: [['npm', 'test']], paths: ['src/'] }, protected_branches: ['main'] }, { run_id: 'r1' });
   const t = (await call('GET', `/api/v2/tasks/${id}`)).body.task;
-  assert.equal(t.store_error, null);
-  assert.notEqual(t.outcome, 'done');
+  const r1 = t.runs.find((r) => r.run_id === 'r1');
+  assert.deepEqual([r1.role, r1.runtime, r1.model, r1.effort, r1.outcome], ['developer', 'claude', 'm1', 'high', 'finished']);
+  assert.deepEqual([r1.usage.input_tokens, r1.usage.output_tokens, r1.usage.usd], [7, null, null]);
+  assert.equal(t.runs.find((r) => r.run_id === 'r2').role, 'reviewer');
+  assert.deepEqual(t.roles, { developers: ['claude:m1'], reviewers: ['codex:rev'] });
+  assert.ok(t.allowed_actions.approval_required.includes('deploy'));
+  assert.deepEqual(t.allowed_actions.prohibited_actions.sort(), ['push_force', 'write_live_state']);
+  assert.deepEqual(t.allowed_actions.allowed_commands, ['npm test']);
+  assert.deepEqual(t.children.map((c) => c.task_id), [child.task_id]);
+  const c = (await call('GET', '/api/v2/tasks/child-1')).body.task;
+  assert.equal(c.parent_task_id, id);
+});
+
+test('list carries a cross-task approval queue; delivery is exposed; the request SHA wins over the head', async () => {
+  const { store, call } = setup();
+  const a = await store.createTask(spec()); const b = await store.createTask(spec());
+  await store.setHead(a.task_id, SHA_B, { actor: DEV });
+  await askOwner(store, a.task_id, { sha: SHA_A });
+  await askOwner(store, b.task_id);
+  const r = (await call('GET', '/api/v2/tasks')).body;
+  assert.deepEqual(r.approvals.map((x) => x.task_id).sort(), [a.task_id, b.task_id].sort());
+  assert.equal(r.approvals.find((x) => x.task_id === a.task_id).sha, SHA_A, 'the SHA the request was raised on');
+  assert.equal(r.tasks.find((x) => x.task_id === a.task_id).delivery.integrated, false);
+  const aid = r.approvals.find((x) => x.task_id === a.task_id).action_id;
+  assert.equal((await call('POST', `/api/v2/tasks/${a.task_id}/approve`, { action_id: aid, sha: SHA_B })).status, 409);
+  assert.equal((await call('POST', `/api/v2/tasks/${a.task_id}/approve`, { action_id: aid, sha: SHA_A })).status, 200);
+  assert.deepEqual((await call('GET', '/api/v2/tasks')).body.approvals.map((x) => x.task_id), [b.task_id]);
+});
+
+test('delivery: requested by deliver flag or integration resource; integrated only after the integrating states', async () => {
+  const { store, call } = setup();
+  const x = await store.createTask(spec({ review_policy: { deliver: true } }));
+  const y = await store.createTask(spec({ resources: ['repo:fake:integration'] }));
+  const d = async (id) => (await call('GET', `/api/v2/tasks/${id}`)).body.task.delivery;
+  assert.equal((await d(x.task_id)).requested, true);
+  assert.equal((await d(y.task_id)).requested, true);
+  for (const st of ['clarified', 'planned', 'ready', 'executing', 'evaluating', 'integrating']) await store.transition(x.task_id, st);
+  assert.equal((await d(x.task_id)).integrated, true);
 });

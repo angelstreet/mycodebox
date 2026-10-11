@@ -31,6 +31,7 @@ async function failed(s, id, who) {
   await s.createTask(spec({ task_id: id }));
   await s.transition(id, 'waiting');
   await s.setHead(id, SHA_B, { actor: { role: 'developer', id: who } });
+  await s.recordUsage(id, { runtime: who.split(':')[0], model: who.split(':')[1], usd: 0.05, input_tokens: 1, output_tokens: 1, run_id: `${id}-u` });
   await s.transition(id, 'failed_unrecoverable');
 }
 
@@ -58,7 +59,8 @@ test('per-model and per-runtime: rate, cost per verified completion, latency, re
   assert.ok(m1.median_latency_ms > 0);
   const m2 = r.by_model.find((g) => g.key === 'codex:m2');
   assert.deepEqual([m2.settled, m2.verified], [2, 1]);
-  assert.ok(Math.abs(m2.cost.per_verified_completion_usd - 0.2) < 1e-9);
+  assert.ok(Math.abs(m2.cost.per_verified_completion_usd - 0.25) < 1e-9, 'all spend (0.20 accepted + 0.05 failed) over 1 verified');
+  assert.ok(Math.abs(m2.cost.spend_on_accepted - 0.2) < 1e-9);
   assert.deepEqual(r.by_runtime.map((g) => g.key).sort(), ['claude', 'codex']);
   assert.equal(r.by_runtime.find((g) => g.key === 'claude').verified, 2);
 });
@@ -133,4 +135,15 @@ test('--since filters by creation time; missing store reports it; CLI prints tab
   const j = JSON.parse(execFileSync(process.execPath, [SCRIPT, '--store', dir, '--json'], { env, encoding: 'utf8' }));
   assert.equal(j.tasks.accepted, 3);
   assert.throws(() => execFileSync(process.execPath, [SCRIPT, '--bogus'], { env, stdio: 'pipe' }), (e) => e.status === 2);
+});
+
+test('a failed task with no usage record makes the group cost unknown (spend on it cannot be known)', async () => {
+  const dir = await build();
+  const s = storeIn(dir);
+  await s.createTask(spec({ task_id: 'f-nousage' })); await s.transition('f-nousage', 'waiting');
+  await s.setHead('f-nousage', SHA_B, { actor: { role: 'developer', id: 'codex:m2' } });
+  await s.transition('f-nousage', 'failed_unrecoverable');
+  const m2 = scoreStore(dir).by_model.find((g) => g.key === 'codex:m2');
+  assert.equal(m2.cost.per_verified_completion_usd, null);
+  assert.ok(m2.cost.spend_on_accepted > 0, 'accepted-only spend is still reported separately');
 });

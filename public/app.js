@@ -3398,7 +3398,7 @@ function openTasks() {
     foot.classList.remove('hidden');
     foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
-    const v = { page: 'list', id: null, tasks: null, task: null, err: null, last: '' };
+    const v = { page: 'list', id: null, tasks: null, approvals: [], task: null, err: null, last: '' };
     const api = async (path, opt) => {
       const r = await fetch(path, opt && { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(opt) });
       const j = await r.json().catch(() => ({}));
@@ -3413,7 +3413,7 @@ function openTasks() {
       if (v.err) h = `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>`;
       else if (v.page === 'new') h = '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>' + newFormHtml();
       else if (v.page === 'detail') h = v.task ? bar() + detailHtml(v.task) : '<div class="sheet-empty">loading…</div>';
-      else h = v.tasks ? bar() + listHtml(v.tasks) : '<div class="sheet-empty">loading…</div>';
+      else h = v.tasks ? bar() + listHtml(v.tasks, v.approvals) : '<div class="sheet-empty">loading…</div>';
       if (h === v.last) return;
       const keep = document.activeElement?.closest?.('.tasks') ? document.activeElement.getAttribute('data-tk-open') : null;
       v.last = h; body.innerHTML = h;
@@ -3422,12 +3422,22 @@ function openTasks() {
     const load = async () => {
       try {
         if (v.page === 'detail') v.task = (await api(`/api/v2/tasks/${encodeURIComponent(v.id)}`)).task;
-        else if (v.page === 'list') v.tasks = (await api('/api/v2/tasks')).tasks;
+        else if (v.page === 'list') { const j = await api('/api/v2/tasks'); v.tasks = j.tasks; v.approvals = j.approvals || []; }
         v.err = null;
       } catch (e) { v.err = e.status === 404 && v.page === 'list' ? 'The V2 engine is off. Start the server with GHOSTY_V2=1 to use tasks.' : `tasks unavailable: ${e.message}`; }
       paint();
     };
     const go = (page, id = null) => { v.page = page; v.id = id; v.err = null; v.task = null; paint(); load().then(() => (body.querySelector('button, textarea')?.focus())); };
+    // modal semantics: Tab cycles inside the sheet (controls in the body and the foot), Escape is handled globally
+    const sheet = body.closest('.sheet');
+    sheet.addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab') return;
+      const f = [...sheet.querySelectorAll('button:not([disabled]), summary, textarea, input, a[href]')].filter((x) => x.offsetParent);
+      if (!f.length) return;
+      const first = f[0], last = f.at(-1);
+      if (e.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
     body.onclick = async (e) => {
       const t = e.target.closest('button');
       if (!t) return;

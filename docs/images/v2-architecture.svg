@@ -74,7 +74,7 @@
   <text x="674" y="386" class="s">Fail-closed leases, incidents,</text>
   <text x="674" y="402" class="s">admission pause, allowlisted actions.</text>
   <text x="674" y="418" class="s">Unknown ownership blocks the action.</text>
-  <text x="674" y="438" class="tag ok">SHIPPED</text>
+  <text x="674" y="438" class="tag ok">IN CODE; NOT WIRED TO SERVER</text>
 
   <path class="ar" d="M170 316 V344"/>
   <path class="ar" d="M490 316 V344"/>
@@ -82,9 +82,9 @@
 
   <rect x="20" y="478" width="225" height="92" rx="8" class="plan"/>
   <text x="34" y="500" class="h">Integration agent</text>
-  <text x="34" y="518" class="s">Owner-authorized push and</text>
-  <text x="34" y="534" class="s">merge; remote CI on the SHA.</text>
-  <text x="34" y="556" class="tag pl">PLANNED</text>
+  <text x="34" y="518" class="s">In code and tests; not wired</text>
+  <text x="34" y="534" class="s">to the server or the loop.</text>
+  <text x="34" y="556" class="tag pl">NOT WIRED</text>
 
   <rect x="260" y="478" width="225" height="92" rx="8" class="plan"/>
   <text x="274" y="500" class="h">Live routing</text>

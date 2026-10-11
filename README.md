@@ -111,11 +111,13 @@ How one V2 task is meant to run:
 | Goal loop | In code and tests, as a module | Tested with fake CLIs. **The server never starts it**: creating a task records it. Running it is an explicit, later opt-in. |
 | Router and model registry | In code and tests, shadow only | It recommends; nothing is routed live. Prices marked `PLACEHOLDER` are unknown, never $0. |
 | Runtime adapters and worktrees | In code and tests with fake CLIs | Live output formats captured once per runtime (see the matrix). |
-| Lease authority, incidents, admission pause | In code and tests | Fail-closed: unknown ownership blocks. |
+| Lease authority, incidents, admission pause (System Operations) | In code and tests; not wired to the server or the loop | Fail-closed: unknown ownership blocks. |
+| Integration agent (queue, CI gates, owner-authorized push and merge) | In code and tests; not wired to the server or the loop | Nothing pushes or merges from the dashboard. |
 | `/api/v2/tasks` routes and the **V2 tasks** view | In code and tests; browser-checked on synthetic data | Needs `GHOSTY_V2=1`. See [V2 task board](docs/USAGE.md#v2-task-board-opt-in). |
 | Scoring report (`scripts/v2-score.js`) | In code and tests | Read-only. Feeding it to the router is manual. See [scoring](docs/v2/SCORING.md). |
 | End-to-end acceptance T01 to T40, live provider runs | **Not run yet** | Planned for the integration phase. |
-| Integration agent (owner-authorized push and merge), live routing, automatic loop start | **Planned** | Not available. |
+| Live routing, automatic loop start, wiring integration and System Operations into the running server | **Planned** | Not available. |
+| Tasks view gaps | **Deferred** | No graphical task graph (parent and children are listed), no per-run logs or live streaming, no editing of a task after creation, no retry-history timeline beyond the state history and runs list. |
 
 ### Safety model
 
