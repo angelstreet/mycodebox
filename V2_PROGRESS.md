@@ -7,7 +7,7 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-See the task ledger: start or resume every row whose state is `ready`/`in progress`; review rows in `review`.
+All packages integrated and reviewed. Remaining: final gate + reporter on the final SHA, push, draft PR, DELIVERED line.
 
 ## Plan (waves, max 3 concurrent developers)
 
@@ -50,7 +50,8 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | integration-verify | 12 | wt verify-09 | a14a72a | Fable | done: APPROVE WITH FIXES | 631409d (5 todo); F1 high self-approval via handoff |
 | integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | -> 063380e; usage.incomplete seam fixed in store |
 | ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet + coordinator | INTEGRATED (Opus APPROVE, 2 rounds) | b114077 |
-| acceptance | 7 | v2/11-e2e | b781cdc | Opus | matrix 47 PASS / 6 FAIL (open goal-loop defects) / 1 PENDING (T20); live smoke 3/3 runtimes; now promoting delivery bridge to production | 64bcf60 |
+| acceptance + delivery bridge | 7 | v2/11-e2e | b781cdc | Opus | INTEGRATED (Fable DV1-DV4 fixes re-probed in the final review) | 469aa49; matrix 54/54 PASS |
+| final full-process review | 9 | wt fable-final | a8aa4c0 | Fable | APPROVE; M1/M2/m5/m7 fixed in 4303d43; m1-m4, m6 and two test gaps recorded below | 4303d43 |
 
 ## Decision journal
 
@@ -84,6 +85,17 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 - Forbidden-topic floor (stall.js) was widened after review; Fable lists low-severity false positives (e.g. "call the client method", "publish the event") that now need an owner tap. Safe direction; tune only with a fresh review.
 - V2 execution is not wired into the server: when it is, the HTTP routes and the goal loop must share one store handle in one process, and `recover()` must run under the controller lease at startup (D-016, D-017).
 - `usage/prices.json` PLACEHOLDER rows (MiniMax-M3, gpt-6-luna, gpt-6-sol) need real prices; until then cost shows unknown.
+- The branch scrubs a hard-coded tailnet IP and host name from `public/app.js` (pre-existing on `main`), but they stay in
+  `main`'s git history: rotate or accept; a history rewrite of `main` is owner-only.
+- Set `MCODE_NODE_DIR` in the service environment where `node` is 23.x (mcode 0.6.3 needs Node 24).
+- OpenCode live smoke BLOCKED: runtime not installed.
+- Integration worktrees under the integration controller's work dir accumulate; clean them up manually.
+- Final-review follow-ups (minor, none release-critical): m1 acceptance T16 "pre-V2" set should pin to `origin/main`'s
+  test list; m2 runner should exit nonzero on a defect mapped to no row; m3 dashboard grants are a second store writer
+  (route through `loop.approve()` or add a store owner lock before wiring); m4 policy blocks without a request leave
+  a keyless approval dead end (should be `waiting` with a diagnosis); m6 split "mer ge into main" not classed (the
+  controller still derives `merge_protected` from the real target); T15 "reviewer approves, tests red" half and a T20
+  same-origin positive control are untested.
 
 ---
 
