@@ -29,3 +29,12 @@ Use a clean task worktree, environment limited to PATH/LANG and fresh GHOSTY_STA
 ## Local baseline integration
 
 Exact repaired SHA `1bc82f962f82966488a83bc71d5c1eab23faa48a`: `env -i PATH="$PATH" LANG=C.UTF-8 GHOSTY_STATE_DIR="$(mktemp -d)" npm test` exited 0; 859 passed, zero failed/skipped; test duration 19,219.862 ms (wall 19,511.664 ms). Documentation-only checkpoint follows this tested SHA. Phase 0 completion covers inventory, fixtures and recorded baseline outcomes; router discrepancies and all V2 acceptance gates remain open.
+
+## Integration checkpoint c366307 (Phase 1 integrated on origin/main dccab06)
+
+| Check | Result | Evidence |
+|---|---|---|
+| `env -i PATH=/usr/local/bin:… LANG=C.UTF-8 NODE_BIN=/usr/local/bin GHOSTY_STATE_DIR=$(mktemp -d) npm test` (Node 23.6.0) | PASS | 913/913, exit 0. Before 4bdaae6: 5 failures (unref'd abort timer in vpt-locks test) + 1 (placeholder price). |
+| Same with Node 24.21.0 | PASS | 913/913, exit 0. Before 13d161d: 1 failure (main dccab06 made unknown MiniMax-M3 cost read $0). |
+| `claude plugin test claude-plugin/ghosty-reporter` (Claude Code 2.1.296, mock tests) | PASS | 25/25, exit 0, 2.1 s. No real provider call. |
+| Leak scan `scripts/leak-scan.js` + private denylist, per commit `origin/main..c366307` | PASS | clean on every commit. |

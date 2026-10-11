@@ -1,4 +1,4 @@
-STATUS: RUNNING — Phase 1 integrated on v2/integration; Fable review of Phase 1 + wave A (task core, lease authority, registry/routing) next
+STATUS: RUNNING — wave A/B: P1 Fable review, task-core, lease-authority, adapters in progress; routing in verification
 
 # V2 progress
 
@@ -29,6 +29,12 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | security-defaults | 1 | v2/01-security | b9a83e1 | prior run | integrated, review pending | f3d4ae6 |
 | main regressions | 1 | v2/integration | dccab06 | coordinator | done | 13d161d (placeholder price), 4bdaae6 (Node 23 test) |
 | security follow-up | 1 | v2/integration | dccab06 | coordinator | integrated, review pending | 9507d11 |
+| phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | in progress | |
+| task-core | 2 | v2/02-task-core | c366307 | Opus | in progress | |
+| lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | in progress | |
+| routing | 4 | v2/04-routing | c366307 | Sonnet | review | fd3e4d6; wake rule 6/10 -> 10/10 (shadow only) |
+| routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
+| adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | in progress | |
 
 ## Decision journal
 
