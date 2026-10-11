@@ -246,7 +246,8 @@ export async function computeWakes({ stateDir = stateDirDefault(), claudeDir = c
 // without losing history). Without it the file is replaced whole.
 export async function writeWakesFile(stateDir, wakes, day = null) {
   await mkdir(stateDir, { recursive: true });
-  const f = join(stateDir, WAKES_FILE), tmp = `${f}.tmp`;
+  // Unique tmp: two overlapping writers must never truncate or rename each other's file.
+  const f = join(stateDir, WAKES_FILE), tmp = `${f}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   let keep = [];
   if (day) {
     try { keep = (await readFile(f, 'utf8')).split('\n').filter(Boolean).filter((l) => { try { return dayOf(JSON.parse(l).start) !== day; } catch { return false; } }); } catch { /* no file yet */ }
@@ -267,10 +268,13 @@ export function startWakesLogger({ stateDir, claudeDir, intervalMs = 10 * 60 * 1
       await writeWakesFile(stateDir, wakes, day);
     } catch (e) { log.error?.('[manager-wakes] log', e.message); }
   };
-  run();
-  const t = setInterval(run, intervalMs);
+  // Runs are chained: the constructor's first run and a caller's run() must not read-modify-write concurrently.
+  let chain = Promise.resolve();
+  const serial = () => (chain = chain.then(run));
+  serial();
+  const t = setInterval(serial, intervalMs);
   t.unref?.();
-  return { run, stop: () => clearInterval(t) };
+  return { run: serial, stop: () => clearInterval(t) };
 }
 
 // Cached on-demand view for the HTTP route: { day, summary, wakes, transcripts }.

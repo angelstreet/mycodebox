@@ -13,7 +13,8 @@ state() { curl -s -m 5 "$BASE/api/sessions" | python3 -c "import json,sys;v=json
 # Abort BEFORE touching tmux if the launch command cannot run: typing it into a shell would only print "command not found",
 # and the KICK text after it would then be typed into that bare shell. Skip leading VAR=value words (env prefixes).
 exe=
-for w in $CMD; do case "$w" in *=*) ;; *) exe=$w; break;; esac; done
+# Also look through wrappers (env, exec, nohup, command) and their options to the real executable.
+for w in $CMD; do case "$w" in *=*|env|exec|nohup|command|-*) ;; *) exe=$w; break;; esac; done
 if [ -z "$exe" ] || ! command -v "$exe" >/dev/null 2>&1; then
   echo "manager command not found: '${exe:-<empty>}' (check AGENT_CMD_CLAUDE and that its .env is loaded); not restarted" >&2; exit 1
 fi

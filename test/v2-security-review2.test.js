@@ -33,7 +33,7 @@ test('F1: routine continue questions in everyday wording still auto-answer (no f
   assert.equal(classify('Shall I continue?', 'I restarted the dev server and it works.').forbidden, null);
 });
 
-test('F1 residual: still-unrecognised deploy / money / credential / deletion phrasings', { todo: 'defect: FORBIDDEN_RE misses publish to npm, push the release tag, terraform apply, email the client, refund/transfer funds, revoke the token, rotate the signing key, rm <dir>, hard-reset, kill production pods, upgrade the live database, restart <name> (no "service" word) — all classify as continue and the rule path sends' }, () => {
+test('F1 residual: still-unrecognised deploy / money / credential / deletion phrasings', () => {
   for (const q of ['Shall I continue and publish the package to npm?', 'Shall I continue and push the release tag?', 'Shall I continue and apply the terraform plan?',
     'Shall I continue and email the client?', 'Shall I continue and refund the order?', 'Shall I continue and transfer the funds?', 'Shall I continue and revoke the token?',
     'Shall I continue and rotate the signing key?', 'Shall I continue and rm the build directory?', 'Shall I continue and hard-reset the branch?',
@@ -44,7 +44,7 @@ test('F1 residual: still-unrecognised deploy / money / credential / deletion phr
   }
 });
 
-test('F1 tuning: over-broad matches escalate harmless questions (safe direction, but every one costs an owner tap)', { todo: 'tuning: "charge ahead with the fee", "go live-reload", "rebase onto feature/main-menu", "release the lock on the live session", "promote the helper ... in staging/" are escalated as forbidden' }, () => {
+test('F1 tuning: over-broad matches escalate harmless questions (safe direction, but every one costs an owner tap)', () => {
   for (const q of ['Shall I continue and charge ahead with the fee calculation?', 'Shall I continue and go live-reload?', 'Shall I continue with the rebase onto feature/main-menu?',
     'Shall I continue and release the lock on the live session?', 'Shall I continue and promote the helper to a shared module in staging/?']) {
     assert.equal(forbiddenMatch(q), null, q);
@@ -94,16 +94,7 @@ if (cmd === 'pgrep') process.exit(1);
   return { ...r, calls, kicks: calls.filter(([c, ...a]) => c === 'curl' && a.includes('@-') && /Fresh start of the AI manager/.test(a.at(-1))), tmux: calls.filter(([c]) => c === 'tmux') };
 }
 
-test('F3: a wrapper prefix (env, exec) slips past the executable check; the remote-control gate still keeps the kickoff out of a bare shell', (t) => {
-  for (const cmd of ['env FOO=1 no-such-agent-xyz', 'exec no-such-agent-xyz']) {
-    const r = freshRun(t, { env: { AGENT_CMD_CLAUDE: cmd }, pane: 'bash: no-such-agent-xyz: command not found\n' });
-    assert.equal(r.status, 1, cmd);
-    assert.match(r.stderr, /kickoff NOT sent/);
-    assert.equal(r.kicks.length, 0);
-    assert.ok(r.tmux.some(([, ...a]) => a.includes('-l')), `${cmd}: the command was typed into the pane (first gate missed it)`);
-  }
-});
-test('F3: the executable check sees through env/exec wrappers', { todo: 'defect: manager-fresh.sh resolves `env`/`exec` as the executable, so a broken wrapped command is typed into the manager pane before the second gate catches it' }, (t) => {
+test('F3: the executable check sees through env/exec wrappers', (t) => {
   for (const cmd of ['env FOO=1 no-such-agent-xyz', 'exec no-such-agent-xyz']) {
     const r = freshRun(t, { env: { AGENT_CMD_CLAUDE: cmd } });
     assert.equal(r.status, 1, cmd);
@@ -133,7 +124,7 @@ test('F6: more spellings of the known bypass switches are flagged; harmless conf
     assert.deepEqual(launchWarnings({ AGENT_CMD_CODEX: ok }), [], ok);
   }
 });
-test('F6: legacy Codex spellings', { todo: 'low: --approval-mode full-auto and -c sandbox_permissions=["disk-full-write-access"] (older Codex CLIs) are not flagged; advisory only' }, () => {
+test('F6: legacy Codex spellings', () => {
   for (const flag of ['--approval-mode full-auto', `-c 'sandbox_permissions=["disk-full-write-access"]'`]) {
     assert.equal(launchWarnings({ AGENT_CMD_CODEX: `codex ${flag}` }).length, 1, flag);
   }
@@ -144,7 +135,7 @@ test('F6: legacy Codex spellings', { todo: 'low: --approval-mode full-auto and -
 // <file>.tmp and rename it: the loser's rename fails with ENOENT (swallowed by log.error) and, when the second open
 // truncates the tmp between the first writer's write and rename, the renamed file is momentarily EMPTY — exactly the
 // [] !== [1, 3] seen once in a loaded full-suite run. Pre-existing (manager-wakes.js unchanged since bc8429b).
-test('manager-wakes: an overlapping first run and a second run never race on the same tmp file', { todo: 'defect: writeWakesFile uses a fixed <file>.tmp and startWakesLogger does not serialise runs; concurrent runs log "ENOENT ... rename" and can expose an empty file (flaky manager-wakes.test.js:113)' }, async (t) => {
+test('manager-wakes: an overlapping first run and a second run never race on the same tmp file', async (t) => {
   const errors = [];
   for (let i = 0; i < 60; i++) {
     const dir = tmp(t, 'rv2-wakes-');

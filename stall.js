@@ -190,18 +190,21 @@ const FORBIDDEN_PARTS = [
   // deploys and service control
   String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
   String.raw`systemctl (?:restart|stop|start)|pm2 (?:restart|stop|delete)`,
-  String.raw`\brestart\b[^.\n]{0,30}\b(?:service|server|unit|host|daemon)\b`,   // "restart the ghosty service"
-  String.raw`\b(?:ship|release|roll ?out|promote)\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b|\bgo(?:ing)? live\b`,
+  String.raw`\brestart\b[^.\n]{0,30}\b(?:service|server|unit|host|daemon|ghosty)\b`,   // "restart the ghosty service"
+  // "live"/"staging"/"main" followed by - or / is a word part or a path ("live-reload", "staging/", "feature/main-menu").
+  String.raw`\b(?:ship|release(?! (?:the |a |its |my )?locks?\b)|roll ?out|promote)\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])|\bgo(?:ing)? live\b(?![-/])`,
+  String.raw`\bpublish(?:ed|ing)?\b|\bpush(?:ed|ing)?\b[^.\n]{0,30}\btags?\b|\bterraform\b[^.\n]{0,20}\b(?:apply|destroy)\b|\bapply\b[^.\n]{0,20}\bterraform\b`,
+  String.raw`\bkill\b[^.\n]{0,30}\bprod(?:uction)?\b|\b(?:upgrade|alter|modify)\b[^.\n]{0,20}\b(?:live|prod(?:uction)?)\b(?![-/])`,
   // git history and main
-  String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\brebase\b[^.\n]{0,30}\b(?:main|master)\b`,
-  String.raw`\bgit push\b|force[- ]?push|reset --hard`,
+  String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`,
+  String.raw`\bgit push\b|force[- ]?push|reset --hard|\bhard[- ]?reset\b`,
   // destructive data operations
-  String.raw`\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm -r|\bprune\b|\btruncate\b|\bwipe\b|\bwiping\b|\boverwrit(?:e|ing)\b`,
+  String.raw`\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm\b|\bprune\b|\btruncate\b|\bwipe\b|\bwiping\b|\boverwrit(?:e|ing)\b`,
   String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b|\bmigrat(?:e|ion)`,
   // credentials and secrets
-  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key`,
+  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevok(?:e|ing)\b|\brotat(?:e|ing)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b`,
   // money and customers
-  String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer`,
+  String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
 ];
 export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
 

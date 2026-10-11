@@ -19,7 +19,8 @@ const BYPASS_RES = [
   /--sandbox(?:=|\s+)['"]?danger-full-access\b/,
   /(?:--ask-for-approval|-a)(?:=|\s+)['"]?never\b/,
   /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?approval_policy\s*=\s*\\?['"]?never\b/,   // -c approval_policy=never / ="never"
-  /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?sandbox_mode\s*=\s*\\?['"]?danger-full-access\b/,
+  /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?sandbox_mode\s*=\s*\\?['"]?danger-full-access\b/,  /--approval-mode(?:=|\s+)['"]?full-auto\b/,                                // older Codex CLIs
+  /sandbox_permissions\s*=[^\n]*disk-full-(?:write|read-write)-access/,
 ];
 
 // Advisory only: shell wrappers and external CLI config cannot be certified here.
