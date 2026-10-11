@@ -1,5 +1,5 @@
-// Independent verification of orchestration/delivery.js (v2/11-e2e). Defects are marked { todo: 'defect: ...' } and
-// assert the wanted behaviour; their leading DVn token is what scripts/v2-acceptance.js DEFECT_ROWS maps to matrix
+// Independent verification of orchestration/delivery.js (v2/11-e2e). DV1-DV4 were recorded as todo defects and fixed;
+// they assert the wanted behaviour; their leading DVn token is what scripts/v2-acceptance.js DEFECT_ROWS maps to matrix
 // rows. Part 1: scripted controller + real task store (as in v2-delivery.test.js). Part 2: the real integration
 // controller on a disposable bare remote with a crash between the controller's merge push and its confirmation record
 // (the window the single-writer design has to survive without a second push).
@@ -66,7 +66,7 @@ const refuse = async (handle, task_id, required, items) => {
   Object.assign(itemOf(items, task_id), { state: 'awaiting_approval', reason: 'approval required' });
 };
 
-test('DV1 delivery: an approval question is bound to the block at hand, not to an earlier request on the task log', { todo: 'defect: mapItem() takes the LAST approval.requested on the task log; a later awaiting_approval that writes none (protected_path, path_not_allowlisted, invalid target policy) is reported with the stale key and question' }, async () => {
+test('DV1 delivery: an approval question is bound to the block at hand, not to an earlier request on the task log', async () => {
   const pushKey = approvalKey({ action: 'push', repo: 'demo', target: 'v2int/main', sha: SHA_M });
   let round = 0;
   const w = await setup(async ({ handle, items, ids: [id] }) => {
@@ -85,7 +85,7 @@ test('DV1 delivery: an approval question is bound to the block at hand, not to a
   assert.match(r2.reason, /protected_path/);
 });
 
-test('DV2 delivery: a merged item always leaves the loop something to wake on', { todo: 'defect: released() answers release_verified:false with next:release_verifying when the integration SHA is unknown (F8 already_in_target: detail has target_sha only, no merge effect on this task) or the CI read fails transiently; sReleaseVerifying then idles forever (no wait, no owner question) although the merge landed' }, async () => {
+test('DV2 delivery: a merged item always leaves the loop something to wake on', async () => {
   // F8: the source was already in the target (merged by another lane or before a crash): no merge effect on this task.
   const f8 = await setup(async ({ handle, items, ids: [id] }) => {
     await handle.transition(id, 'release_verifying', {});
@@ -124,7 +124,7 @@ test('delivery: a displaced goal loop cannot push through the controller: the at
   assert.deepEqual((await w.store.get(w.id)).effects, [], 'nothing written under a lost lease');
 });
 
-test('DV3 delivery: the controller handle refuses every writing store method outside a hook call, including recover() and init()', { todo: 'defect: controllerStore forwards only the WRITES list; recover() and init() (both write recovery events) pass through to the raw store with no E_NO_WRITER, outside the loop fence' }, async () => {
+test('DV3 delivery: the controller handle refuses every writing store method outside a hook call, including recover() and init()', async () => {
   const w = await setup(async () => ({ outcome: 'empty' }));
   await assert.rejects(w.ctl().handle.append(w.id, { event_id: 'x1', kind: 'task.blocked', payload: {} }), { code: 'E_NO_WRITER' });
   await assert.rejects(Promise.resolve().then(() => w.ctl().handle.recover()), { code: 'E_NO_WRITER' });
@@ -150,7 +150,7 @@ test('delivery: a batch run finishes another task\'s item; that task\'s transiti
   assert.equal((await w.store.get(a)).status, 'integrating', 'A is not transitioned by B\'s call either: the loop applies its own');
 });
 
-test('DV4 delivery: with the real queue a final item is re-queued and run again on resubmit (ARCHITECTURE delivery note 3 claims the opposite)', { todo: 'defect: integration-queue.enqueue() creates a new item when the key\'s item is FINAL, so a crash-retry or any later call for a merged SHA runs the controller again (F8 keeps it safe: already_in_target, no push); the documented "an item already final is not run again" is only true of the scripted queue in v2-delivery.test.js' }, async () => {
+test('DV4 delivery: with the real queue (which re-queues a FINAL key on enqueue) a SHA already merged is not handed off or run again', async () => {
   const q = createIntegrationQueue({ dir: path.join(TMP, `q${++n}`) });
   const w = await setup(async ({ handle, ids: [id] }) => {
     const [it] = await q.peek('demo', 'main');

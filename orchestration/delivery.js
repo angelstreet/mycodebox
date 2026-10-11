@@ -33,21 +33,27 @@ export function createDelivery({ store, queue, controller: makeController, git, 
   for (const [k, v] of Object.entries({ store, queue, makeController, git, repo })) if (!v) throw coded('E_CONFIG', `delivery: ${k} required`);
   let writer = null;
   const proposals = [];
+  // Reads pass through; every other method (writes, and recover()/init(), which write recovery events) is refused
+  // outside a hook call, and recover()/init() always: only the goal loop reconciles its store.
+  const READS = new Set(['get', 'list', 'events', 'independence']);
   const controllerStore = new Proxy(Object.create(null), {
     get(_, k) {
       if (k === 'dir') return store.dir;
       if (k === 'transition') {
-        return async (task_id, to, o = {}) => { proposals.push({ task_id, to, reason: o.reason ?? null }); return (writer || store).get(task_id); };
-      }
-      if (WRITES.includes(k)) {
-        return async (...a) => {
-          if (!writer) throw coded('E_NO_WRITER', `delivery: ${String(k)} outside a goal-loop hook call (the loop is the only writer)`);
-          return writer[k](...a);
+        return async (task_id, to, o = {}) => {
+          if (!writer) throw coded('E_NO_WRITER', 'delivery: transition outside a goal-loop hook call');
+          proposals.push({ task_id, to, reason: o.reason ?? null });
+          return writer.get(task_id);
         };
       }
       const src = writer || store;
       const v = src[k];
-      return typeof v === 'function' ? v.bind(src) : v;
+      if (typeof v !== 'function') return v;
+      if (READS.has(k)) return v.bind(src);
+      return async (...a) => {
+        if (!writer || !WRITES.includes(k)) throw coded('E_NO_WRITER', `delivery: ${String(k)} ${writer ? 'is reserved to the goal loop' : 'outside a goal-loop hook call'} (the loop is the only writer)`);
+        return writer[k](...a);
+      };
     },
   });
 
@@ -74,28 +80,37 @@ export function createDelivery({ store, queue, controller: makeController, git, 
     try { return await fn(); } finally { writer = null; }
   }
 
-  const lastRequired = (evs) => evs.filter((e) => e.kind === 'approval.requested' && e.payload?.required).at(-1)?.payload.required ?? null;
+  // The approval request of THIS block: written during this hook call (seq after its start) or carrying the run's
+  // integration id. An older request on the log (an earlier SHA, an already granted push) never answers a later block.
+  const requestOf = (evs, { since, run }) => evs.filter((e) => e.kind === 'approval.requested' && e.payload?.required
+    && (e.seq > since || (run?.integration_id && e.payload.integration_id === run.integration_id))).at(-1)?.payload.required ?? null;
   const openControllerEffects = (t) => (t?.effects || []).filter((e) => OPEN.includes(e.phase) && CONTROLLER_KEY.test(e.idempotency_key || ''));
 
-  // Merged: release verified when the remote target contains the integration SHA and remote CI is green on it.
+  // Merged: release verified when the remote target contains the integration SHA and remote CI is green on it. Unknown
+  // (SHA, containment or CI unreadable or not final yet) is a retryable wait, never a dead end; a contradiction is
+  // the owner's. F8 (already in target, merged by another lane or before a crash) names the target SHA that contains it.
   async function released(task_id, item) {
     const t = await writer.get(task_id);
     const merge = (t.effects || []).filter((e) => e.kind === 'merge' && e.phase === 'confirmed').at(-1);
-    const sha = item.detail?.sha ?? (merge ? String(merge.idempotency_key).split(':').at(-1) : null);
-    if (!sha) return { next: 'release_verifying', release_verified: false, reason: 'merged; integration SHA unknown' };
+    const sha = item.detail?.sha ?? item.detail?.target_sha ?? (merge ? String(merge.idempotency_key).split(':').at(-1) : null);
+    const wait = (why) => ({ next: 'waiting', retry_after_ms: retryMs, reason: `merged; release not verified yet: ${why}` });
+    if (!sha) return wait('integration SHA unknown');
     const contained = await ctl.effectState(`merge:${repo}:refs/heads/${target}:${sha}`, `${task_id}-release`);
+    if (contained === 'failed') return { next: 'awaiting_approval', classes: ['integration'], keys: [], reason: `queue says merged but ${repo}/${target} does not contain ${sha}: owner review` };
+    if (contained !== 'confirmed') return wait(`remote ${repo}/${target} unreadable`);
     const cs = await remoteStatus(ci, sha);
-    const ok = contained === 'confirmed' && ciPasses(cs.status);
-    return { next: 'release_verifying', release_verified: ok, integration_sha: sha, reason: `merged ${sha} into ${repo}/${target}; remote contains it: ${contained ?? 'unknown'}; CI ${cs.status}` };
+    if (cs.status === 'failure') return { next: 'awaiting_approval', classes: ['integration'], keys: [], reason: `merged ${sha} into ${repo}/${target} but remote CI is red on it: owner decision` };
+    if (!ciPasses(cs.status)) return wait(`remote CI ${cs.status} on ${sha}`);
+    return { next: 'release_verifying', release_verified: true, integration_sha: sha, reason: `merged ${sha} into ${repo}/${target}; remote contains it; CI success` };
   }
 
-  async function mapItem(task, item, run) {
+  async function mapItem(task, item, run, since) {
     const reason = item.reason ?? run?.reason ?? item.state;
     switch (item.state) {
       case 'merged': return released(task.task_id, item);
       case 'awaiting_approval': {
-        const req = lastRequired(await writer.events(task.task_id));
-        if (!req) return { next: 'awaiting_approval', reason: `integration needs the owner: ${reason}`, classes: ['integration'], keys: [] };
+        const req = requestOf(await writer.events(task.task_id), { since, run });
+        if (!req) return { next: 'awaiting_approval', reason: `integration needs the owner: ${reason}${item.detail?.files ? ` (${item.detail.files.join(', ')})` : ''}`, classes: ['integration'], keys: [] };
         const key = approvalKey({ ...req, repo });
         return { next: 'awaiting_approval', classes: [req.class], keys: [key], required: { ...req, repo },
           reason: `Approve ${req.action} of ${req.sha} to ${repo}/${req.target} (${req.class}); the grant covers exactly this SHA, action and target.` };
@@ -114,15 +129,23 @@ export function createDelivery({ store, queue, controller: makeController, git, 
     const diff_scope = String(await git(['diff', '--name-only', task.base_sha, sha], { cwd: worktree.path })).split('\n').filter(Boolean);
     const handoff = { task_id: task.task_id, repo, target, source_branch: worktree.branch, source_sha: sha, base_sha: task.base_sha,
       developer: { role: 'developer', id: developer }, diff_scope, source_repo: task.repository };
-    const sub = await ctl.submit(handoff);   // idempotent by task:sha:target
-    if (!sub.ok) return { next: 'awaiting_approval', reason: `handoff rejected: ${(sub.errors || []).join('; ')}`, classes: ['integration'], keys: [] };
-    let run = null;
-    let item = await queue.get(sub.item.item_id);
-    if (!['merged', 'returned', 'rejected', 'cancelled'].includes(item.state)) {
-      run = await ctl.runNext(repo, target);
+    const since = (await writer.get(task.task_id)).seq;
+    // The queue re-queues a FINAL key on enqueue; a SHA already merged is never handed off again (no controller run).
+    const key = `${task.task_id}:${sha}:${target}`;
+    const done = typeof queue.list === 'function' ? (await queue.list({ repo, target })).filter((x) => x.idempotency_key === key).at(-1) : null;
+    let item;
+    if (done?.state === 'merged') item = done;
+    else {
+      const sub = await ctl.submit(handoff);   // idempotent by task:sha:target while the item is not final
+      if (!sub.ok) return { next: 'awaiting_approval', reason: `handoff rejected: ${(sub.errors || []).join('; ')}`, classes: ['integration'], keys: [] };
       item = await queue.get(sub.item.item_id);
     }
-    const out = await mapItem(task, item, run);
+    let run = null;
+    if (!['merged', 'returned', 'rejected', 'cancelled'].includes(item.state)) {
+      run = await ctl.runNext(repo, target);
+      item = await queue.get(item.item_id);
+    }
+    const out = await mapItem(task, item, run, since);
     return { ...out, item_id: item.item_id, item_state: item.state, run_outcome: run?.outcome ?? null, manifest_path: run?.manifest_path ?? null,
       proposals: proposals.splice(0).filter((p) => p.task_id === task.task_id) };
   }

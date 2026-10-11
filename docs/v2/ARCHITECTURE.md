@@ -307,8 +307,18 @@ Recorded from `v2/11-e2e` (`orchestration/delivery.js`); additive to §10 and §
    decision. Every task transition is therefore written by the goal loop.
 3. Handoff facts come from the store and git: developer = the actor recorded by `setHead` for the SHA
    (`store.independence`), diff scope = `git diff --name-only base..sha` in the task worktree, source = the task
-   branch in `task.repository` (which the controller config must list in `source_remotes`). Resubmitting is
-   idempotent (`task:sha:target`); an item already final is not run again.
+   branch in `task.repository` (which the controller config must list in `source_remotes`). While a queue item is not
+   final, resubmitting is idempotent (`task:sha:target`). The integration queue re-queues a key whose item is FINAL,
+   so the bridge looks the key up first and never hands off a SHA whose item is `merged` (no controller run); should a
+   merged SHA reach the controller anyway (queue reset), the controller finds it already in the target (F8) and stops
+   before any push. A `merged` item maps to `release_verifying` only when the remote target contains the integration
+   SHA (`detail.sha`, or `detail.target_sha` for F8) and remote CI is green on it; unknown containment or CI, or an
+   unknown SHA, is `waiting` with a retry, and a contradiction (not contained, CI red) goes to the owner.
+   Batch runs: one controller run can finish other tasks' items. Their proposed transitions are dropped (this call
+   returns only the calling task's proposals); each of those tasks rebuilds its state in its own hook call from its
+   queue item and its own task log. An approval question is bound to the block at hand: the controller request
+   written during this call (or carrying this run's integration id); a block that writes no request (protected path,
+   path not allowlisted, target policy) is a keyless owner question naming the queue item's reason.
 4. Approvals: each controller request (candidate push, merge) is returned with the key
    `integration:<action>:<repo>:<target>:<sha>`; the loop's integration approval request carries it (`keys`), the
    owner grant copies it, and the controller's approval check accepts only a grant whose keys contain the exact key

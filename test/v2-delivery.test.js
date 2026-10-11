@@ -114,6 +114,7 @@ test('delivery: approvals are bound to the exact action, repo, target and SHA th
   assert.deepEqual([ok.ok, ok.sha, ok.action, ok.target, ok.repo, ok.approved_by], [true, SHA_M, 'merge', 'main', 'demo', 'owner-1']);
   assert.equal((await check({ repo: 'other' })).ok, false, 'another repo');
   assert.equal((await check({ target: 'release' })).ok, false, 'another target');
+  w.effects.set(`merge:demo:refs/heads/main:${SHA_M}`, 'confirmed');
   assert.equal((await w.call()).next, 'release_verifying');
 });
 
