@@ -75,13 +75,22 @@ export function profileFor(spec, { fake = false } = {}) {
 }
 export const entryOf = (p) => `${p.runtime}:${p.model}`;
 
-// The model behind a profile, whatever runtime serves it: provider + model name without a provider/ prefix.
-// opencode:anthropic/claude-haiku-4-5 and claude:haiku are the same model. A CLI default ('default') is unknown, so it
-// matches every model of its provider (codex vs opencode:openai/*, minimax vs opencode:minimax/*).
+// The model behind a profile, whatever runtime or gateway serves it. Names are compared normalised (no provider/
+// prefix, lowercase, '.' -> '-', no -YYYYMMDD snapshot suffix), whatever the provider: opencode:openrouter/
+// claude-sonnet-5-5 is claude:sonnet. A CLI default ('default') is unknown, so it matches every model of its provider
+// family; gateways (opencode, openrouter) take the family from the model name (claude, gpt/codex, minimax).
+const GATEWAYS = ['opencode', 'openrouter'];
+export const normModel = (m) => String(m).split('/').pop().toLowerCase().replace(/\./g, '-').replace(/-\d{8}$/, '');
+function familyOf(p) {
+  const prov = String(p.provider).toLowerCase();
+  if (!GATEWAYS.includes(prov)) return prov;
+  const n = normModel(p.model);
+  return /claude/.test(n) ? 'anthropic' : /gpt|codex/.test(n) ? 'openai' : /minimax/.test(n) ? 'minimax' : prov;
+}
 export function sameModel(a, b) {
-  const base = (p) => String(p.model).split('/').pop();
-  if (a.provider !== b.provider) return false;
-  return base(a) === base(b) || base(a) === 'default' || base(b) === 'default';
+  const na = normModel(a.model), nb = normModel(b.model);
+  if (na === nb) return true;
+  return (na === 'default' || nb === 'default') && familyOf(a) === familyOf(b);
 }
 
 // ---------- suite ledger ----------
@@ -206,6 +215,7 @@ export async function runBench(opts) {
   const ledger = createSuiteLedger({ max_usd: o.max_usd });
   // Floored so that the reservations of every planned run fit inside the suite cap.
   const taskUsd = o.task_usd ?? Math.floor((o.max_usd / Math.max(1, planned.length)) * 1e4) / 1e4;
+  if (!(taskUsd > 0)) throw new Error(`per-task budget rounds to ${taskUsd} USD for ${planned.length} runs: raise --max-usd or pass --task-usd`);
   const log = o.log || (() => {});
 
   const outDir = path.resolve(o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-out-')));
@@ -306,7 +316,13 @@ export async function runBench(opts) {
     };
     // Measured performance first (mean known USD of this entry so far in the suite), else the profile's estimate.
     const measured = new Map();
-    const estUsd = (id) => { const xs = measured.get(id) || []; return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : (profiles.get(id)?.est_usd ?? null); };
+    // A claude run may spend up to its --max-budget-usd: never estimate below that bound, or it could pass the cap.
+    const estUsd = (id) => {
+      const xs = measured.get(id) || [];
+      const est = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : (profiles.get(id)?.est_usd ?? null);
+      const p = profiles.get(id);
+      return p?.run_usd ? Math.max(est ?? 0, Math.min(p.run_usd, taskUsd)) : est;
+    };
     const estimateRun = ({ entry }) => ({ usd: estUsd(entry), input_tokens: null, output_tokens: null, duration_ms: null, turns: 1 });
 
     const storeDir = path.join(outDir, 'store');

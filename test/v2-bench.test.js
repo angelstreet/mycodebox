@@ -195,7 +195,11 @@ test('reviewer independence: the same model is refused across runtimes, before a
   assert.equal(sameModel(p('claude:haiku'), p('codex')), false);
   assert.equal(sameModel(p('opencode'), p('claude:haiku')), false);
   assert.equal(sameModel(p('opencode'), p('opencode:opencode/mimo-v2.6-flash-free')), false);
-  for (const [dev, rev] of [['opencode:anthropic/claude-haiku-4-5', 'claude:haiku'], ['opencode:openai/gpt-6-luna', 'codex'], ['opencode:minimax/MiniMax-M3', 'minimax'], ['codex', 'opencode:openai/gpt-6-astra']]) {
+  for (const [dev, rev] of [['opencode:opencode/claude-haiku-4-5', 'claude:haiku'], ['opencode:opencode/gpt-5-codex', 'codex'],
+    ['opencode:openrouter/claude-sonnet-5-5', 'claude:sonnet'], ['opencode:anthropic/claude-haiku-4.5', 'claude:haiku'],
+    ['opencode:anthropic/claude-haiku-4-5-20251001', 'claude:haiku']]) assert.equal(sameModel(p(dev), p(rev)), true, `${dev} vs ${rev}`);
+  for (const [dev, rev] of [['opencode:anthropic/claude-haiku-4-5', 'claude:haiku'], ['opencode:opencode/gpt-5-codex', 'codex'],
+    ['opencode:anthropic/claude-haiku-4-5-20251001', 'claude:haiku'], ['opencode:openai/gpt-6-luna', 'codex'], ['opencode:minimax/MiniMax-M3', 'minimax'], ['codex', 'opencode:openai/gpt-6-astra']]) {
     const out = outDir();
     await assert.rejects(runBench({ runtimes: [dev], reviewer_map: { [dev]: rev }, out, tasks: 'off-by-one' }), /same model/, `${dev} reviewed by ${rev}`);
     assert.equal(fs.existsSync(out), false, 'refused before anything was set up');
@@ -203,6 +207,7 @@ test('reviewer independence: the same model is refused across runtimes, before a
   // The default reviewer of an anthropic model served through opencode is not claude:haiku.
   await assert.rejects(runBench({ runtimes: ['opencode:anthropic/claude-haiku-4-5'], out: outDir(), tasks: 'off-by-one' }), /same model/);
   assert.equal(p('opencode').est_usd > 0, true, 'a free model is never estimated at $0');
+  await assert.rejects(runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'all', max_usd: 0.0001 }), /per-task budget rounds to 0/);
 });
 
 test('out dir: refused inside the repository or the live state dir', () => {
