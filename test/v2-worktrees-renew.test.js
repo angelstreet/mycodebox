@@ -30,7 +30,7 @@ function setup() {
   const clock = { now: () => t, advance: (ms) => { t += ms; } };
   const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(base, 'leases') }), now: clock.now });
   const wt = createWorktrees({ root: path.join(base, 'wt'), repoAllowlist: [repo], leases, git, ttl_ms: 3600_000 });
-  return { repo, sha: sh(repo, 'rev-parse', 'HEAD'), leases, wt, clock };
+  return { repo, sha: sh(repo, 'rev-parse', 'HEAD'), leases, wt, clock, root: fs.realpathSync(path.join(base, 'wt')) };
 }
 
 test('renew re-acquires a lapsed lease for the same owner and rewrites the meta: remove() by owner works afterwards', async () => {
@@ -71,22 +71,55 @@ test('acknowledgeFence never takes a lease a foreign owner still holds', async (
   await assert.rejects(s.wt.renew(c.path, { owner: 'goal-loop', acknowledgeFence: true }), { code: 'E_HELD' });
 });
 
-test('X6 adoptOwn returns only the live lease of exactly this owner and task; renew adopts it after a crash before writeMeta', async () => {
+// A crash inside the call that acquires: the backend grants the lease, then the process dies before persisting it.
+function crashAfterAcquire(leases) {
+  const real = leases.acquire;
+  const box = { granted: null };
+  leases.acquire = async (...a) => {
+    const r = await real(...a);
+    leases.acquire = real;
+    box.granted = r;
+    throw Object.assign(new Error('controller process crashed after acquire'), { code: 'E_TEST_CRASH' });
+  };
+  return box;
+}
+
+test('X6/D-015 a crash between re-acquire and the meta rewrite is recovered with adopt() and the write-ahead id; a twin stays fenced', async () => {
   const s = setup();
   const c = await s.wt.create({ repo: s.repo, task_id: 'task-4', base_sha: s.sha, owner: 'goal-loop' });
   s.clock.advance(2 * 3600_000);
-  // what a crash between acquire and writeMeta leaves: a live lease of the same owner+task the meta does not know
-  const lost = await s.leases.acquire('worktree:task-4', { owner: 'goal-loop', task_id: 'task-4', ttl_ms: 3600_000, scope: 'worktree' });
-  assert.equal(lost.ok, true);
-  assert.equal((await s.leases.adoptOwn('worktree:task-4', { owner: 'someone-else', task_id: 'task-4' })).code, 'E_FENCED');
-  assert.equal((await s.leases.adoptOwn('worktree:task-4', { owner: 'goal-loop', task_id: 'other' })).code, 'E_FENCED');
-  assert.equal((await s.leases.adoptOwn('worktree:task-x', { owner: 'goal-loop', task_id: 'task-x' })).code, 'E_FENCED', 'never acquires a free resource');
+  const box = crashAfterAcquire(s.leases);
+  await assert.rejects(s.wt.renew(c.path, { owner: 'goal-loop' }), { code: 'E_TEST_CRASH' });
+  assert.ok(box.granted.ok, 'the lease was granted before the crash');
+  assert.equal(s.wt.owner(c.path).lease.lease_id, c.lease.lease_id, 'meta still holds the lapsed lease');
   const r = await s.wt.renew(c.path, { owner: 'goal-loop' });
   assert.equal(r.adopted, true);
-  assert.equal(r.lease.lease_id, lost.lease.lease_id);
-  assert.equal(s.wt.owner(c.path).lease.lease_id, lost.lease.lease_id, 'meta follows the adopted lease');
+  assert.equal(r.lease.lease_id, box.granted.lease.lease_id);
+  assert.equal(s.wt.owner(c.path).lease.lease_id, box.granted.lease.lease_id, 'meta follows the adopted lease');
+  assert.equal((await s.wt.remove(c.path, { owner: 'goal-loop', retain: false })).removed, true);
+});
+
+test('X6/D-015 a crash inside create() after acquire: the next create adopts its own write-ahead lease instead of E_HELD', async () => {
+  const s = setup();
+  const box = crashAfterAcquire(s.leases);
+  await assert.rejects(s.wt.create({ repo: s.repo, task_id: 'task-6', base_sha: s.sha, owner: 'goal-loop' }), { code: 'E_TEST_CRASH' });
+  assert.ok(box.granted.ok);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.root, '.v2-meta', 'task-6.intent.json'), 'utf8')).lease_id, box.granted.lease.lease_id, 'intent persisted before acquire');
+  const c = await s.wt.create({ repo: s.repo, task_id: 'task-6', base_sha: s.sha, owner: 'goal-loop' });
+  assert.equal(c.lease.lease_id, box.granted.lease.lease_id, 'the granted lease was adopted, not a second one acquired');
+  const intent = path.join(s.root, '.v2-meta', 'task-6.intent.json');
+  assert.ok(!fs.existsSync(intent), 'the write-ahead intent is dropped once the meta is written');
+});
+
+test('D-015 a twin acquiring under the same owner and task (its own lease_id) is never adopted by renew', async () => {
+  const s = setup();
+  const c = await s.wt.create({ repo: s.repo, task_id: 'task-7', base_sha: s.sha, owner: 'goal-loop' });
   s.clock.advance(2 * 3600_000);
-  assert.equal((await s.leases.adoptOwn('worktree:task-4', { owner: 'goal-loop', task_id: 'task-4' })).code, 'E_EXPIRED');
+  const twin = await s.leases.acquire('worktree:task-7', { owner: 'goal-loop', task_id: 'task-7', ttl_ms: 3600_000, scope: 'worktree' });
+  assert.ok(twin.ok);
+  await assert.rejects(s.wt.renew(c.path, { owner: 'goal-loop' }), (e) => ['E_HELD', 'E_FENCED'].includes(e.code));
+  await assert.rejects(s.wt.renew(c.path, { owner: 'goal-loop', acknowledgeFence: true }), { code: 'E_HELD' });
+  assert.deepEqual(await s.leases.validate(twin.lease), { ok: true });
 });
 
 test('X7 status() reports the checked-out branch (HEAD when detached)', async () => {

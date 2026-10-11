@@ -779,3 +779,25 @@ test('D2 a task whose log is corrupt is never stepped (store_error), and the loo
   assert.match(r.note, /store error/);
   assert.equal(env.devStarts(), 0);
 });
+
+test('D-016 one controller per store: a second instance never steps; recover() takes over (write-ahead adopt) and fences the old one', async () => {
+  const env = world();
+  const task = await env.submit();
+  const A = env.loop;
+  assert.equal((await A.step(task.task_id)).state, 'clarified');
+  const before = env.events(task.task_id).length;
+  env.reopen();                                   // controller B over the same store dir and lease backend
+  const B = env.loop;
+  const rB = await B.step(task.task_id);
+  assert.equal(rB.transitioned, false);
+  assert.equal(rB.controller, 'E_HELD');
+  assert.match(rB.note, /another goal-loop controller holds service:local:goal-loop/);
+  assert.equal(env.events(task.task_id).length, before, 'the second instance wrote nothing');
+  // B is the restart after A died: recover() adopts A's lease through A's write-ahead id, releases it, re-acquires
+  await B.recover();
+  const rA = await A.step(task.task_id);
+  assert.equal(rA.transitioned, false, 'the old instance is fenced');
+  assert.equal(rA.controller, 'E_HELD');
+  assert.equal((await B.run(task.task_id)).state, 'accepted');
+  uniqueEvents(env.events(task.task_id));
+});

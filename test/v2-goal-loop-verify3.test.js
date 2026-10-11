@@ -242,21 +242,37 @@ test('X5 ack attack: a project-policy change resumes a lease_held wait but is NO
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
 });
 
+// Adapted to coordinator decision D-015: a lease merely held under this owner name with another lease_id is a twin and
+// stays fenced; the crash this probe targets is reproduced faithfully instead (write-ahead id persisted, lease granted,
+// process dies before the meta rewrite), and the restart must adopt exactly that lease.
 test('X6 ack attack: after a crash inside worktrees.renew() between acquire and the meta rewrite, the lease is held by this task\'s OWN owner; the restart adopts it instead of suspending', async () => {
-    const env = world({ dev: [BAD, GOOD] });
-    const task = await env.submit();
-    assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
-    env.advance(7 * 3600_000);
-    // what a crash between leases.acquire and writeMeta leaves behind
-    const own = await env.leases.acquire(`worktree:${task.task_id}`, { owner: 'goal-loop', task_id: task.task_id, ttl_ms: 6 * 3600_000, scope: 'worktree' });
-    assert.equal(own.ok, true);
-    let r = await env.loop.run(task.task_id);
-    if (r.state === 'waiting') {   // give the owner's acknowledgement a chance too
-      await env.loop.resume(task.task_id, { actor: OWNER });
-      r = await env.loop.run(task.task_id);
+  const env = world({ dev: [BAD, GOOD] });
+  const task = await env.submit();
+  assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
+  env.advance(7 * 3600_000);
+  const real = env.leases.acquire;
+  let granted = null;
+  env.leases.acquire = async (...a) => {
+    const r = await real(...a);
+    if (String(a[0]).startsWith('worktree:')) {
+      env.leases.acquire = real;
+      granted = r;
+      throw Object.assign(new Error('controller process crashed after acquire'), { code: 'E_TEST_CRASH' });
     }
-    assert.equal(r.state, 'accepted', `own live lease treated as foreign: ${r.state} (${lastWait(await env.view(task.task_id))?.diagnosis})`);
-  });
+    return r;
+  };
+  await env.loop.run(task.task_id).catch(() => null);
+  env.leases.acquire = real;
+  assert.ok(granted?.ok, 'the lease was granted to this owner before the crash');
+  env.reopen();
+  await env.loop.recover();
+  let r = await env.loop.run(task.task_id);
+  if (r.state === 'waiting') {   // give the owner's acknowledgement a chance too
+    await env.loop.resume(task.task_id, { actor: OWNER });
+    r = await env.loop.run(task.task_id);
+  }
+  assert.equal(r.state, 'accepted', `own lost lease treated as foreign: ${r.state} (${lastWait(await env.view(task.task_id))?.diagnosis})`);
+});
 
 test('X7 ack attack: a foreign holder that moved the worktree off its task branch; after the acknowledged resume the accepted SHA must be the task branch tip', async () => {
     const env = world({ dev: [BAD, GOOD] });

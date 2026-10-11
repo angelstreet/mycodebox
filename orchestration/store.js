@@ -49,7 +49,7 @@ const deepFreeze = (o) => { if (o && typeof o === 'object' && !Object.isFrozen(o
 
 const blank = () => ({ task: null, seq: 0, ids: new Set(), idempotency_key: null, head_sha: null, head_epoch: 0,
   head_actors: Object.create(null), evidence: [], verdicts: [], decisions: [], usage: [], effects: Object.create(null),
-  policy_snapshot: null, history: [], store_error: null });
+  policy_snapshot: null, history: [], store_error: null, recovery_pending: null });
 
 // ---- validation of record payloads ----------------------------------------------------------------
 
@@ -242,6 +242,7 @@ function view(st) {
   // A task whose log could not be replayed is not in a known state, whatever the partial replay says.
   v.outcome = st.store_error ? 'unknown' : outcomeOf(st.task.status);
   v.store_error = st.store_error;
+  v.recovery_pending = st.recovery_pending;   // set by a read-only open: run recover() before writing
   v.usage_totals = usageTotals(st.usage);
   return v;
 }
@@ -292,6 +293,7 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
   function write(st, ev, { internal = false } = {}) {
     const id = ev.task_id;
     if (broken.has(id)) fail('E_STORE_FAILED', `task ${id} needs recover(): ${broken.get(id)}`);
+    if (st.recovery_pending && !internal) fail('E_STORE_FAILED', `task ${id} needs recover(): ${st.recovery_pending}`);
     if (st.ids.has(ev.event_id)) return { applied: false, event_id: ev.event_id };
     const status = st.task?.status;
     if (TERMINAL.includes(status) && !internal && !AFTER_TERMINAL_OK.has(ev.kind)) {
@@ -317,9 +319,13 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
   }
 
   const stateOf = (id) => tasks.get(id) || fail('E_NOT_FOUND', `task ${id} not found`);
-  // A failed recovery is retried by the next call instead of poisoning the store forever.
-  const start = () => (initP = recover().catch((e) => { initP = null; throw e; }));
-  const ensure = () => initP || start();
+  // A failed recovery is retried by the next call instead of poisoning the store forever. The implicit open on first
+  // access is READ-ONLY (D-016): it replays the logs but writes nothing (no truncation, no recovery events, no
+  // snapshots), so merely reading a store another controller is writing cannot reconcile that controller's live run.
+  // Tasks that need reconciliation (torn tail, unconfirmed effect) refuse writes until an explicit recover().
+  let full = false;   // has a writing recover() run in this handle?
+  const start = (opts = {}) => { if (!opts.readOnly) full = true; return (initP = recover(opts).catch((e) => { initP = null; if (!opts.readOnly) full = false; throw e; })); };
+  const ensure = () => initP || start({ readOnly: true });
   // Every mutation: wait for recovery, take the task lock, write one event.
   const mutate = (id, fields, opts) => ensure().then(() => withLock(id, () =>
     write(stateOf(id), makeEvent({ ...fields, task_id: id }, { now, randomId }), opts)));
@@ -341,18 +347,21 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
     return { events, goodBytes: end, tornBytes: buf.length - end, corrupt };
   }
 
-  async function recover() {
+  async function recover({ readOnly = false } = {}) {
     tasks.clear(); idem.clear(); broken.clear();
     const torn = [], corrupt = [], pendingEffects = [];
-    fs.mkdirSync(tasksDir, { recursive: true });
-    for (const f of fs.readdirSync(dir)) if (/^index\.json\..*\.tmp$/.test(f)) fs.rmSync(join(dir, f), { force: true });
+    if (readOnly && !fs.existsSync(tasksDir)) return { tasks: [], torn, corrupt, pendingEffects, read_only: true };
+    if (!readOnly) {
+      fs.mkdirSync(tasksDir, { recursive: true });
+      for (const f of fs.readdirSync(dir)) if (/^index\.json\..*\.tmp$/.test(f)) fs.rmSync(join(dir, f), { force: true });
+    }
     for (const id of fs.readdirSync(tasksDir).sort()) {
       const tdir = join(tasksDir, id), log = join(tdir, 'events.jsonl');
       if (!ID_RE.test(id) || !fs.statSync(tdir).isDirectory()) continue;
-      for (const f of fs.readdirSync(tdir)) if (f.endsWith('.tmp')) fs.rmSync(join(tdir, f), { force: true });
+      if (!readOnly) for (const f of fs.readdirSync(tdir)) if (f.endsWith('.tmp')) fs.rmSync(join(tdir, f), { force: true });
       if (!fs.existsSync(log)) continue;
       const r = readLog(log);
-      if (r.tornBytes) {
+      if (r.tornBytes && !readOnly) {
         fs.truncateSync(log, r.goodBytes);
         const fd = fs.openSync(log, 'r+'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       }
@@ -369,7 +378,8 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       tasks.set(id, st);
       if (st.idempotency_key) idem.set(st.idempotency_key, id);
       if (r.corrupt) { corrupt.push({ task_id: id, ...r.corrupt }); broken.set(id, st.store_error = `corrupt log: ${r.corrupt.error}`); continue; }
-      if (r.tornBytes) {
+      if (r.tornBytes && readOnly) { st.recovery_pending = 'torn tail'; torn.push({ task_id: id, dropped_bytes: r.tornBytes }); }
+      else if (r.tornBytes) {
         torn.push({ task_id: id, dropped_bytes: r.tornBytes });
         write(st, makeEvent({ task_id: id, kind: 'recovery.torn_tail', payload: { recovered_torn_tail: true, dropped_bytes: r.tornBytes } }, { now, randomId }), { internal: true });
       }
@@ -379,6 +389,11 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       if (broken.has(id)) continue;
       const open = Object.values(st.effects).filter((e) => UNRESOLVED.includes(e.phase));
       if (!open.length) continue;
+      if (readOnly) {
+        if (open.some((x) => x.phase === 'attempted')) st.recovery_pending ??= 'unconfirmed effect';
+        for (const e of open) pendingEffects.push({ task_id: id, effect_id: e.effect_id, idempotency_key: e.idempotency_key, kind: e.kind, phase: e.phase, state: st.task.status, moved: false });
+        continue;
+      }
       for (const e of open.filter((x) => x.phase === 'attempted')) {
         write(st, makeEvent({ task_id: id, kind: 'action.unknown', event_id: `recover:${e.effect_id}:possibly_applied`,
           payload: { effect_id: e.effect_id, reason: 'restart before confirmation' } }, { now, randomId }), { internal: true });
@@ -394,6 +409,7 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
       for (const e of open) pendingEffects.push({ task_id: id, effect_id: e.effect_id, idempotency_key: e.idempotency_key,
         kind: e.kind, phase: st.effects[e.effect_id].phase, state: st.task.status, moved });
     }
+    if (readOnly) return { tasks: [...tasks.keys()], torn, corrupt, pendingEffects, read_only: true };
     // Broken tasks get a snapshot too, so an external reader sees store_error rather than a stale healthy state.
     for (const id of tasks.keys()) { if (!broken.has(id)) saveSnapshot(id); else if (tasks.get(id).task) { try { saveSnapshot(id); } catch { /* reported by recover() */ } } }
     saveIndex();
@@ -402,8 +418,8 @@ export function createTaskStore({ dir = defaultStoreDir(), fs = realFs, now = ()
 
   return {
     dir,
-    init: ensure,
-    recover: start,   // replays from disk; call at startup, not concurrently with writes
+    init: () => (full && initP) || start(),   // explicit open by the store's owner: full (writing) recovery, once
+    recover: () => start(),   // replays from disk and reconciles (writes); call at startup under the controller lease
 
     createTask: (spec, { idempotencyKey } = {}) => ensure().then(() => withLock('\0create', () => {
       if (idempotencyKey != null && idem.has(idempotencyKey)) return view(tasks.get(idem.get(idempotencyKey)));
