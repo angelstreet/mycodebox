@@ -52,3 +52,4 @@ Exact repaired SHA `1bc82f962f82966488a83bc71d5c1eab23faa48a`: `env -i PATH="$PA
 | Package | Author | Verifier | Verdict | Integrated SHA | Full suite on integrated SHA |
 |---|---|---|---|---|---|
 | routing/registry/budget (Phase 4) | Sonnet | Opus (independent context), 3 rounds | APPROVE (F1–F14, R1–R5 fixed; 0 open) | 71d9b39 | Node 23.6 991/991 exit 0; Node 24.21 991/991 exit 0; dry-run wake 10/10 |
+| Phase 1 security floors (restart guard, launch defaults, review fixes F1–F8, R1–R5, manager-wakes race) | prior run + Sonnet + coordinator | Fable, 3 rounds | APPROVE | 8567083 | Node 23.6 1042/1042 exit 0; Node 24.21 1042/1042 exit 0 |

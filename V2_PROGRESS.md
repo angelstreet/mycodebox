@@ -30,7 +30,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | main regressions | 1 | v2/integration | dccab06 | coordinator | done | 13d161d (placeholder price), 4bdaae6 (Node 23 test) |
 | security follow-up | 1 | v2/integration | dccab06 | coordinator | integrated, review pending | 9507d11 |
 | phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | done: APPROVE WITH FIXES | 0e6d4d9 tests (+1 todo); F1 high forbidden paraphrases; F2–F8 med/low |
-| phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet + coordinator | round 3 review (Fable) | 0789bdc, ab70292 (R1–R5, manager-wakes race); 964/964 both runtimes |
+| phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | ab70292 -> merge 8567083; 1042/1042 both runtimes |
 | task-core | 2 | v2/02-task-core | c366307 | Opus | review | 3a4fb9e; 39 tests |
 | task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | done: APPROVE WITH FIXES | a5f83d2 (11 todo); 2 high |
 | task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus | re-verification (Fable) | c246b9f; 979/979; D-007 added |
@@ -70,6 +70,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
   warning; owner should switch to `127.0.0.1` + private Serve or a literal Tailscale IP.
 - Live install has no `AGENT_CMD_CLAUDE`/`AGENT_CMD_CODEX` overrides: after upgrade, new and resumed Claude/Codex
   sessions use normal permission prompts and folder-trust prompts (intended safe default; owner-visible change).
+- Forbidden-topic floor (stall.js) was widened after review; Fable lists low-severity false positives (e.g. "call the client method", "publish the event") that now need an owner tap. Safe direction; tune only with a fresh review.
 - `usage/prices.json` PLACEHOLDER rows (MiniMax-M3, gpt-6-luna, gpt-6-sol) need real prices; until then cost shows unknown.
 
 ---
