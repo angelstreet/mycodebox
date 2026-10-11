@@ -2,6 +2,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -53,6 +54,24 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     fs.renameSync(tmp, f);
     fsyncDir(metaDir);
   }
+  // D-015 write-ahead: the intended { resource, lease_id, owner, task_id } is persisted (atomic, fsync) BEFORE acquire,
+  // so a crash between acquire and persisting the granted lease is recovered with leases.adopt() and that private id.
+  // A twin whose lease_id differs from the persisted one stays fenced.
+  const intentFile = (task_id) => path.join(metaDir, `${task_id}.intent.json`);
+  function writeIntent(task_id, intent) {
+    fs.mkdirSync(metaDir, { recursive: true, mode: 0o700 });
+    const f = intentFile(task_id);
+    const tmp = `${f}.${process.pid}.tmp`;
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try { fs.writeSync(fd, JSON.stringify(intent)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, f);
+    fsyncDir(metaDir);
+  }
+  function readIntent(task_id) { try { return JSON.parse(fs.readFileSync(intentFile(task_id), 'utf8')); } catch { return null; } }
+  function dropIntent(task_id) { try { fs.unlinkSync(intentFile(task_id)); fsyncDir(metaDir); } catch { /* none */ } }
+  const newIntent = (task_id, owner) => ({ resource: `worktree:${task_id}`, lease_id: `wt-${task_id}-${randomUUID()}`.slice(0, 128), owner, task_id });
+  const validIntent = (x, task_id, owner) => !!x && x.resource === `worktree:${task_id}` && x.owner === owner && x.task_id === task_id && typeof x.lease_id === 'string';
+
   // Called immediately before every git mutation: a fenced or expired lease means someone else may own this now.
   async function guard(lease) {
     const v = await leases.validate(lease);
@@ -72,7 +91,10 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     const out = await git(['status', '--porcelain=v1', '-uall', '--ignored'], { cwd: real });
     const lines = out.split('\n').filter(Boolean);
     const head = (await git(['rev-parse', 'HEAD'], { cwd: real })).trim();
+    // 'HEAD' when detached: callers compare it with the task branch before committing or accepting (X7).
+    const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: real })).trim();
     return {
+      branch,
       dirty: lines.some((l) => !l.startsWith('??') && !l.startsWith('!!')),
       untracked: lines.some((l) => l.startsWith('??')),
       ignored: lines.some((l) => l.startsWith('!!')),
@@ -99,10 +121,17 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     if (!within(realRoot, target)) throw coded('E_PATH', 'path escapes root');
     const who2 = who || task_id;
 
-    let acq = await leases.acquire(`worktree:${task_id}`, { owner: who2, task_id, ttl_ms, scope: 'worktree' });
-    // The backend may have committed despite reporting E_UNAVAILABLE: adopt exactly that attempt or fail closed.
-    if (!acq?.ok && acq?.code === 'E_UNAVAILABLE' && acq.attempted && typeof leases.adopt === 'function') acq = await leases.adopt(acq.attempted);
-    if (!acq?.ok) throw coded(acq?.code || 'E_UNAVAILABLE', `worktree lease not acquired (${acq?.code || 'unavailable'})`);
+    // A crash after a previous create's acquire (before its meta) left our own intent: adopt that lease if still live.
+    const prev = readIntent(task_id);
+    let acq = validIntent(prev, task_id, who2) && typeof leases.adopt === 'function' ? await leases.adopt(prev) : null;
+    if (!acq?.ok) {
+      const intent = newIntent(task_id, who2);
+      writeIntent(task_id, intent);
+      acq = await leases.acquire(`worktree:${task_id}`, { owner: who2, task_id, ttl_ms, scope: 'worktree', lease_id: intent.lease_id });
+      // The backend may have committed despite reporting E_UNAVAILABLE: adopt exactly that attempt or fail closed.
+      if (!acq?.ok && acq?.code === 'E_UNAVAILABLE' && acq.attempted && typeof leases.adopt === 'function') acq = await leases.adopt(acq.attempted);
+      if (!acq?.ok) { if (acq?.code !== 'E_UNAVAILABLE') dropIntent(task_id); throw coded(acq?.code || 'E_UNAVAILABLE', `worktree lease not acquired (${acq?.code || 'unavailable'})`); }
+    }
     const lease = acq.lease;
     let added = false;
     try {
@@ -116,12 +145,14 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
       const real = fs.realpathSync(target);
       const head = (await git(['rev-parse', 'HEAD'], { cwd: real })).trim();
       writeMeta({ task_id, owner: who2, repo: realRepo, branch: want, base_sha, path: real, lease, created_head: head });
+      dropIntent(task_id);
       return { path: real, branch: want, head, lease };
     } catch (e) {
       if (added) {
         try { await guard(lease); await git(['worktree', 'remove', '--force', target], { cwd: realRepo }); await git(['branch', '-D', want], { cwd: realRepo }); } catch { /* rollback best effort */ }
       }
       try { await leases.release(lease); } catch { /* lease expires by ttl */ }
+      dropIntent(task_id);
       throw e;
     }
   }
@@ -133,15 +164,37 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     } else if (!who || who !== m.owner) throw coded('E_FOREIGN', 'worktree is owned by another owner');
   }
 
+  // A lapsed lease (E_EXPIRED: nobody took it since) is re-acquired by the same owner and the meta rewritten
+  // atomically, so remove()/renew() keep working. Never over a live holder (E_HELD). After another owner held it in
+  // between (E_FENCED) only with opts.acknowledgeFence (an explicit owner decision after inspecting the tree), and
+  // still only when the lease is free. -> { lease, reacquired }
   async function renew(p, opts = {}) {
     const real = resolveExisting(p);
     const m = trustedMeta(real);
     if (!m) throw coded('E_FOREIGN', 'not a managed worktree');
     assertOwner(m, opts);
     const r = await leases.renew(m.lease);
-    if (!r?.ok) throw coded(r?.code || 'E_FENCED', 'lease renew failed');
-    writeMeta({ ...m, lease: r.lease });
-    return { lease: r.lease };
+    if (r?.ok) { writeMeta({ ...m, lease: r.lease, pending_lease: null }); return { lease: r.lease, reacquired: false }; }
+    // X6/D-015: a crash between a previous re-acquire and its meta rewrite left a granted lease under the persisted
+    // write-ahead id: adopt exactly that one (a twin with another id stays fenced).
+    if ((r?.code === 'E_FENCED' || r?.code === 'E_EXPIRED') && validIntent(m.pending_lease, m.task_id, m.owner) && typeof leases.adopt === 'function') {
+      const own = await leases.adopt(m.pending_lease);
+      if (own?.ok) { writeMeta({ ...m, lease: own.lease, pending_lease: null }); return { lease: own.lease, reacquired: true, adopted: true }; }
+    }
+    const fenced = r?.code === 'E_FENCED' && opts.acknowledgeFence === true;
+    if (r?.code !== 'E_EXPIRED' && !fenced) throw coded(r?.code || 'E_FENCED', 'lease renew failed');
+    const intent = newIntent(m.task_id, m.owner);
+    writeMeta({ ...m, pending_lease: intent });   // write-ahead before acquire
+    const a = await leases.acquire(m.lease.resource, { owner: m.owner, task_id: m.task_id, ttl_ms, scope: 'worktree', lease_id: intent.lease_id });
+    if (!a?.ok) throw Object.assign(coded(a?.code || 'E_UNAVAILABLE', `lease re-acquire failed (${a?.code || 'unavailable'})`), a?.holder ? { holder: a.holder } : {});
+    // The generation advanced past ours by exactly this acquire: anything else means another holder came in between.
+    if (!fenced && a.lease.token !== m.lease.token + 1) {
+      try { await leases.release(a.lease); } catch { /* ttl covers it */ }
+      writeMeta({ ...m, pending_lease: null });
+      throw coded('E_FENCED', 'another owner held this worktree lease since it lapsed');
+    }
+    writeMeta({ ...m, lease: a.lease, pending_lease: null });
+    return { lease: a.lease, reacquired: true };
   }
 
   // retain defaults to true: only an explicit retain:false on a clean, merged, owned tree deletes anything.

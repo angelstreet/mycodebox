@@ -110,7 +110,8 @@ output and task text (T02).
 `createLeaseAuthority({ backend, now, randomId })`, backends: `fileBackend({ dir, fs })` (atomic via `O_EXCL` lock file +
 rename; persisted monotonically increasing generation per resource) and `fakeBackend({ fail })` for failure injection.
 ```
-acquire(resource, { owner, task_id, ttl_ms, scope, approval_ref }) -> { ok:true, lease } | { ok:false, code:'E_HELD'|'E_UNAVAILABLE'|'E_INVALID' }
+acquire(resource, { owner, task_id, ttl_ms, scope, approval_ref, lease_id? }) -> { ok:true, lease } | { ok:false, code:'E_HELD'|'E_UNAVAILABLE'|'E_INVALID' }
+adopt({ resource, lease_id, owner, task_id }) -> { ok, lease } | { ok:false, code }   // recovery with the private, write-ahead lease_id (D-015)
 renew(lease) -> { ok, lease } ; release(lease) -> { ok }
 validate(lease) -> { ok } | { ok:false, code:'E_FENCED'|'E_EXPIRED'|'E_UNAVAILABLE' }   // call immediately before every mutation
 acquireAll(resources[], opts)                              // sorted canonical order; all-or-nothing
@@ -121,7 +122,10 @@ Namespaces: `repo:<repo>:integration`, `repo:<repo>:main`, `repo:<repo>:branch:<
 decision D-008: `<name>` uses `[A-Za-z0-9._/-]`, no `..`, `//`, leading `-`/`/` or trailing `/`),
 `environment:<env>:deploy`, `host:<id>:maintenance`, `service:<id>:<service>`, `worktree:<task_id>`. Every resource is
 at most 150 characters. Unavailable backend never means free. The existing `leases.js`
-(read-only remote registry observer) is an *input* for platform state, not an authority.
+(read-only remote registry observer) is an *input* for platform state, not an authority. D-015: a caller-supplied
+`lease_id` is persisted before `acquire` (write-ahead) and is granted once per resource; crash recovery uses `adopt()`
+with it, never the owner/task_id that `E_HELD` discloses. D-016: one goal-loop controller per store holds
+`service:<host_id>:goal-loop` (see docs/v2/LEASES.md).
 
 ## 6. Runtime adapters — `orchestration/adapters/<id>.js`
 
@@ -214,3 +218,73 @@ Recorded from `v2/02-task-core` and accepted by the task-core verifier. All are 
    omission on a task). Project allowlists are a floor: a task allowlist can only narrow them. `denied_args`,
    `protected_paths` and `protected_branches` are optional policy keys. The executor derives `action.class` from
    the operation it performs, never from model output.
+
+## Implementation notes (goal loop)
+
+Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
+
+1. Checkpoint: the loop's own decision records carry an additive `loop: { k, patch, next? }` field. Loop memory is
+   the fold of those patches; a decision with `next` and id `gl-<task>-<k>` (k = transitions so far) is replayed, not
+   re-decided, after a crash between the decision and its transition. Events come from `store.events(id)`; a task
+   with `store_error` is never stepped.
+2. No-progress rule: same failure signature `same_signature` times in a row, or `no_progress_policy.
+   iterations_without_progress` (default 6, D-012) iterations without new passing evidence, forces a strategy change
+   (replan, different model, harness change). New passing evidence = more required checks pass, or fewer failing tests
+   inside them. `strategy_changes_without_progress` changes without progress -> `waiting` (`until_ms: null`,
+   diagnosis, next action). Billed identical retries (developer runtime errors, reviewer runs without a usable verdict)
+   count the same way; only unbilled waits back off on a timer. One classifier for developer and reviewer runs:
+   billed = measured spend, an incomplete usage record, or a run that started and failed with unknown usage (unknown
+   is not zero); unbilled = refused before work (`rate_limit`, `unavailable`, `auth`) or never started. Every review
+   attempt has its own run id (`…-a<n>`), so each one is in the ledger and counts against a cap. A run that started
+   but never recorded usage (controller crash) gets an all-null usage record (`source: interrupted…`) on the next
+   step and is an unknown ledger entry until then: totals become unknown and a cap stops on it.
+3. Approvals: a request carries action keys; a grant covers exactly those keys (an agent's request is keyed by its
+   run, so a later identical request is asked again) and `approve()` refuses classes or budget authorizations the
+   request did not ask for. Denying an agent-requested action continues the task with "refused" feedback; denying
+   any other gate ends it (`failed_unrecoverable`). An approved budget stop authorizes the next run when the stop exists
+   only because a cost is unknown (no estimate, or a provider that reports no USD); it never waives a reached cap. The
+   developer's first estimate is the router's price-based `cost_est_usd`, kept in the strategy at assignment. A reached
+   cap is asked as "raise or cancel"; `approve()` without a higher `budget_policy` is refused (`E_INVALID`).
+4. Risk (D-013, D-014): `risk_class` high/critical additionally needs the policy's `security_reviewer` verdict (when
+   the policy names that registry entry) and an owner approval bound to the exact head SHA before `accepted`. An owner
+   approval of a critical task's routing question (bound to task + base SHA) is passed to the router as
+   `floorGrants: ['critical_risk']`; no other router floor is waivable.
+5. Delivery (D5): a task asks for delivery with `review_policy.deliver: true` or a `repo:<repo>:integration` entry in
+   `resources`. It then goes `evaluating -> integrating` through the injected `integrate(task, { sha, worktree,
+   idempotency_key })` hook (optional `integrate.reconcile`), and waits in `integrating` when no hook is wired. A task
+   accepted without delivery is "verified in the task worktree, not integrated" and the UI must label it so.
+6. Privacy: the template default `privacy_policy: 'project'` maps to the project's `provider_allowlist`; any other
+   string reaches the router unchanged and fails closed (no route).
+7. Agent action requests: the loop gates `action_request` run events (class derived from argv/text, never from the
+   model's label). Only the fake runtime emits them today; the Claude/Codex/MiniMax/OpenCode parsers do not yet map
+   CLI permission prompts to `action_request`. Their own permission modes (`acceptEdits`, `workspace-write`,
+   `smart`) remain the floor for those runtimes until they do.
+8. Worktree lease: renewed at every dispatch and commit through `worktrees.renew(path, { owner })`, which re-acquires
+   a lapsed lease nobody took (E_EXPIRED) for the same owner and rewrites the worktree meta (`lease_reacquired`
+   decision). A live holder, or one that held the lease in between (E_FENCED), suspends the task until inputs change;
+   after the owner resumes it, `renew(…, { acknowledgeFence: true })` re-acquires the lease only if it is free. A lease
+   granted just before a crash (before the meta write) is adopted with the write-ahead id persisted before the acquire
+   (`pending_lease` in the meta, `.v2-meta/<task_id>.intent.json` for create; D-015).
+9. Task branch: `worktrees.status()` also reports `branch` (`HEAD` when detached). Dispatch, commit, evaluation, the
+   pre-accept revalidation and the integration handoff require the worktree to be on `v2task/<task_id>`; otherwise the
+   task waits (`off_task_branch`, `until_ms: null`) until the owner restores the branch and resumes.
+10. Controller (D-016, D-017, D-018): `step()`/`run()` act only under the controller lease
+   `service:<host_id>:goal-loop`; another live instance makes them return `{ transitioned: false, idle: true,
+   controller: 'E_HELD' }` with no store access. Every store write and every commit re-validates that lease first
+   (fence per §5), so a displaced instance writes nothing even between heartbeats. Takeover (`recover()`, and owner
+   actions `cancel`/`approve`/`deny`/`resume`) is liveness-gated: the controller intent file records pid, host and a
+   heartbeat time; only an instance whose process is gone on this host (`kill(pid, 0)`, EPERM = alive) or whose
+   heartbeat is older than two heartbeat intervals is taken over, through its write-ahead `lease_id`. A live
+   controller is never displaced: `E_CONTROLLER_HELD`, and its TTL runs out.
+   - The store's implicit open on first access is read-only **for recovery only**: it replays the log and writes no
+     recovery events, so reading a store another controller writes cannot reconcile that controller's live run. It is
+     not a multi-writer protocol: multi-writer safety rests on the controller lease (D-016).
+   - `recover()` is called by the store's owner, the goal-loop controller, under the controller lease: at startup and
+     whenever a view shows `recovery_pending` (a torn tail, or an open effect a full recovery would reconcile).
+     Other clients (HTTP layer, scripts) treat `E_STORE_FAILED ... needs recover()` as "the controller has not
+     reconciled this task yet" and retry through the controller.
+   - Cancellation always goes through (D-018): `cancel()` takes the controller lease, runs `recover()` first when the
+     task shows `recovery_pending` (it never appends over a torn tail), then persists the cancel.
+   - Without a lease authority (`leases` not injected) there is no controller lease: `holdController` neither fences
+     nor reconciles, so a store opened read-only is never reconciled automatically (liveness gap); deployments always
+     inject the lease authority.
