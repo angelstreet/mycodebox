@@ -41,7 +41,8 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | routing | 4 | v2/04-routing | c366307 | Sonnet | re-verification | c93d5a7 fixes F1–F14 (verify tests 6cd7e26) |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
-| adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | in progress | |
+| adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | done: APPROVE WITH FIXES | 190bf01 (15 todo); 1 high remove() data loss |
+| adapters-fixes | 3 | v2/03-adapters | 106bd36 | Sonnet | queued (next slot) | |
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | in progress | |
 
 ## Decision journal
