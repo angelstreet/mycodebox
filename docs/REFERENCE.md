@@ -118,7 +118,9 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `NTFY_TOPIC`  | unset   | enable optional ntfy push (Web Push is always on): a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
 | `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
 | `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
-| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
+| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`). An https value is also named in the UI's "needs the HTTPS address" hints |
+| `LANGFUSE_PUBLIC_URL` | unset | browser-reachable Langfuse URL for the usage sheet's Langfuse button and the manager panel links. The usage button falls back to `LANGFUSE_URL` only when that is not a loopback address; with neither, the button is hidden. The manager panel falls back to `LANGFUSE_URL` as is |
+| `ANDROID_APP_PACKAGE` / `ANDROID_APP_SHA256` | unset | serve `/.well-known/assetlinks.json` for the Android app: package name and signing-cert SHA-256 fingerprint(s) (`XX:..` 32 hex pairs, comma-separated). Both or neither; invalid values log a startup warning and nothing is served. Alternative: put a ready file at `$GHOSTY_STATE_DIR/assetlinks.json`. Read at startup; restart to apply. Unconfigured: 404 |
 | `HEALTH_MS`   | `5000`  | host health sample cadence (CPU, load, RAM, disk) |
 | `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
 | `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
