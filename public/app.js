@@ -20,6 +20,7 @@ import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';
+import { listHtml, detailHtml, newFormHtml } from '/tasks-view.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -3389,6 +3390,77 @@ function openDecisions() {
   });
 }
 
+
+// ----- V2 Tasks view (⋮ menu; the server answers 404 unless GHOSTY_V2=1) -----
+function openTasks() {
+  openSheet('V2 tasks', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('tasks');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    const v = { page: 'list', id: null, tasks: null, task: null, err: null, last: '' };
+    const api = async (path, opt) => {
+      const r = await fetch(path, opt && { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(opt) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(j.error || `HTTP ${r.status}`), { status: r.status });
+      return j;
+    };
+    const bar = () => (v.page === 'list'
+      ? '<div class="tk-bar"><button class="sbtn primary" data-tk-new>New task</button><button class="sbtn" data-tk-refresh>Refresh</button></div>'
+      : '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>');
+    const paint = () => {
+      let h;
+      if (v.err) h = `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>`;
+      else if (v.page === 'new') h = '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>' + newFormHtml();
+      else if (v.page === 'detail') h = v.task ? bar() + detailHtml(v.task) : '<div class="sheet-empty">loading…</div>';
+      else h = v.tasks ? bar() + listHtml(v.tasks) : '<div class="sheet-empty">loading…</div>';
+      if (h === v.last) return;
+      const keep = document.activeElement?.closest?.('.tasks') ? document.activeElement.getAttribute('data-tk-open') : null;
+      v.last = h; body.innerHTML = h;
+      if (keep) body.querySelector(`[data-tk-open="${CSS.escape(keep)}"]`)?.focus();
+    };
+    const load = async () => {
+      try {
+        if (v.page === 'detail') v.task = (await api(`/api/v2/tasks/${encodeURIComponent(v.id)}`)).task;
+        else if (v.page === 'list') v.tasks = (await api('/api/v2/tasks')).tasks;
+        v.err = null;
+      } catch (e) { v.err = e.status === 404 && v.page === 'list' ? 'The V2 engine is off. Start the server with GHOSTY_V2=1 to use tasks.' : `tasks unavailable: ${e.message}`; }
+      paint();
+    };
+    const go = (page, id = null) => { v.page = page; v.id = id; v.err = null; v.task = null; paint(); load().then(() => (body.querySelector('button, textarea')?.focus())); };
+    body.onclick = async (e) => {
+      const t = e.target.closest('button');
+      if (!t) return;
+      if (t.dataset.tkOpen) return go('detail', t.dataset.tkOpen);
+      if ('tkNew' in t.dataset) return go('new');
+      if ('tkBack' in t.dataset || 'tkCancelNew' in t.dataset) return go('list');
+      if ('tkRefresh' in t.dataset) return load();
+      const act = async (fn) => { t.disabled = true; try { await fn(); } catch (er) { toast(er.message, 3500); } await load(); };
+      if ('tkCancel' in t.dataset) { if (confirm('Cancel this task? Running work is stopped and the task cannot be resumed.')) act(() => api(`/api/v2/tasks/${encodeURIComponent(t.dataset.id)}/cancel`, {})); return; }
+      for (const [flag, verb] of [['tkApprove', 'approve'], ['tkDeny', 'deny']]) {
+        if (flag in t.dataset) {
+          const sha = t.dataset.sha;
+          act(() => api(`/api/v2/tasks/${encodeURIComponent(v.id)}/${verb}`, { action_id: t.dataset.aid, ...(sha ? { sha } : {}) }));
+          return;
+        }
+      }
+    };
+    body.onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target, errEl = f.querySelector('[data-tk-err]');
+      const goal = f.goal.value.trim(), repository = f.repository.value.trim();
+      const argv = f.check.value.split('\n').map((x) => x.trim()).filter(Boolean);
+      const spec = { goal, ...(repository ? { repository } : {}),
+        ...(argv.length ? { acceptance_checks: [{ id: 'check-1', command: argv, expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] } : {}),
+        idempotency_key: `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` };
+      try { const j = await api('/api/v2/tasks', spec); toast('task recorded (not started)', 2500); v.page = 'detail'; v.id = j.task.task_id; v.err = null; v.task = null; paint(); load(); }
+      catch (er) { errEl.textContent = er.message; }
+    };
+    const timer = setInterval(() => { if (!body.isConnected) clearInterval(timer); else if (v.page !== 'new') load(); }, 5000);
+    paint(); load().then(() => body.querySelector('button')?.focus());
+  });
+}
+$('#tasksBtn').onclick = openTasks;
 
 // ----- generic bottom sheet -----
 let sheetEl = null;

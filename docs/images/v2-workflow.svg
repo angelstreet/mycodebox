@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 375" width="980" height="375" role="img" aria-labelledby="t d" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title id="t">mycodebox V2 task workflow</title>
+  <desc id="d">A task goes to the router, then to a runtime in its own worktree, then deterministic tests on the exact commit, then an independent review. The result is accept, repair or replan, or an owner approval or wait. Only a task that passes both checks and review is accepted.</desc>
+  <style>
+    .n{fill:#f4f7f5;stroke:#1f6f43;stroke-width:2}
+    .g{fill:#eef2ff;stroke:#3949ab;stroke-width:2}
+    .w{fill:#fff7ed;stroke:#b45309;stroke-width:2}
+    .h{font-size:14px;font-weight:700;fill:#111827}
+    .s{font-size:12px;fill:#374151}
+    .ar{stroke:#374151;stroke-width:1.8;fill:none;marker-end:url(#a)}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#374151"/></marker></defs>
+  <rect width="980" height="375" fill="#ffffff"/>
+  <text x="20" y="28" class="h" font-size="17">One task, start to outcome</text>
+
+  <rect x="20" y="52" width="160" height="92" rx="8" class="g"/>
+  <text x="32" y="76" class="h">1. Task</text>
+  <text x="32" y="96" class="s">goal, checks, done</text><text x="32" y="112" class="s">criteria, policy,</text><text x="32" y="128" class="s">budget</text>
+
+  <rect x="205" y="52" width="170" height="92" rx="8" class="n"/>
+  <text x="217" y="76" class="h">2. Router</text>
+  <text x="217" y="96" class="s">picks runtime and model</text><text x="217" y="112" class="s">within policy; unknown</text><text x="217" y="128" class="s">cost stays unknown</text>
+
+  <rect x="400" y="52" width="190" height="92" rx="8" class="n"/>
+  <text x="412" y="76" class="h">3. Runtime run</text>
+  <text x="412" y="96" class="s">developer edits in its own</text><text x="412" y="112" class="s">git worktree; the commit</text><text x="412" y="128" class="s">gives an exact SHA</text>
+
+  <rect x="615" y="52" width="165" height="92" rx="8" class="n"/>
+  <text x="627" y="76" class="h">4. Tests</text>
+  <text x="627" y="96" class="s">deterministic commands</text><text x="627" y="112" class="s">on that SHA; the exit</text><text x="627" y="128" class="s">code is the evidence</text>
+
+  <rect x="805" y="52" width="160" height="92" rx="8" class="n"/>
+  <text x="817" y="76" class="h">5. Review</text>
+  <text x="817" y="96" class="s">an actor other than the</text><text x="817" y="112" class="s">developer approves or</text><text x="817" y="128" class="s">rejects the same SHA</text>
+
+  <path class="ar" d="M180 98 H205"/><path class="ar" d="M375 98 H400"/><path class="ar" d="M590 98 H615"/><path class="ar" d="M780 98 H805"/>
+
+  <path class="ar" d="M885 144 V210"/>
+  <rect x="705" y="210" width="260" height="84" rx="8" class="n"/>
+  <text x="717" y="234" class="h">Accept (outcome: done)</text>
+  <text x="717" y="254" class="s">every required check passes and</text><text x="717" y="270" class="s">an independent approve exists</text><text x="717" y="286" class="s">on the current SHA</text>
+
+  <path class="ar" d="M840 144 C 800 180, 600 170, 540 210"/>
+  <rect x="365" y="210" width="290" height="84" rx="8" class="n"/>
+  <text x="377" y="234" class="h">Repair or replan</text>
+  <text x="377" y="254" class="s">failed evidence or a rejection goes</text><text x="377" y="270" class="s">back to a developer with findings;</text><text x="377" y="286" class="s">a stalled loop stops and waits</text>
+
+  <path class="ar" d="M365 252 H315"/>
+  <rect x="20" y="210" width="295" height="84" rx="8" class="w"/>
+  <text x="32" y="234" class="h">Owner approval, wait, or unknown</text>
+  <text x="32" y="254" class="s">restricted action, cap reached, quota,</text><text x="32" y="270" class="s">or an effect that may have happened:</text><text x="32" y="286" class="s">the task says so and pauses</text>
+
+  <text x="20" y="338" class="s">Only an accepted task is shown as done. Waiting, needs owner and unknown are separate states.</text>
+  <text x="20" y="356" class="s">Nothing here starts by itself: the goal loop is an explicit opt-in, and approvals are recorded owner decisions.</text>
+</svg>
