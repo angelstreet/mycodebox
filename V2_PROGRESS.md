@@ -40,7 +40,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | done: APPROVE WITH FIXES | c50f7ff (18 todo) |
 | system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | a0b46a6 -> merge |
-| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | Fable: APPROVE WITH FIXES (5 high: billed runaway retries, lease expiry, crash window, capped start); fixing | 68611d8; verify tests cf4cc04 |
+| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | fixes done c31e9bf (1431/1431); Fable re-verification | 16 findings + D-012..D-014 |
 | routing | 4 | v2/04-routing | c366307 | Sonnet | INTEGRATED (verifier APPROVE, 3 rounds) | b9a88f2 -> merge 71d9b39; 991/991 both runtimes |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
@@ -49,7 +49,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
 | integration-verify | 12 | wt verify-09 | a14a72a | Fable | done: APPROVE WITH FIXES | 631409d (5 todo); F1 high self-approval via handoff |
 | integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | -> 063380e; usage.incomplete seam fixed in store |
-| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet | review (Opus) | 0590f70; 1433/1433 both runtimes; T20 browser 31/31 |
+| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet | Opus: APPROVE WITH FIXES (truthfulness/scope, no security defects); fixing | 0590f70; verify tests a09a0ca |
 
 ## Decision journal
 
