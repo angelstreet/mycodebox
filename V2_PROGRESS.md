@@ -40,7 +40,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | done: APPROVE WITH FIXES | c50f7ff (18 todo) |
 | system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | a0b46a6 -> merge |
-| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | Fable round 2: 16/16 fixed; N1 (review retries hidden from ledger), W1 (lease meta) + 4 residuals; fixing | c31e9bf; verify2 67b1234 |
+| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | Fable round 3: round-2 fixed; X1/X2 interrupted-run spend missing from ledger, X7 branch check, X6, X8; fixing | ab0d94f; verify3 31d3b4b |
 | routing | 4 | v2/04-routing | c366307 | Sonnet | INTEGRATED (verifier APPROVE, 3 rounds) | b9a88f2 -> merge 71d9b39; 991/991 both runtimes |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
