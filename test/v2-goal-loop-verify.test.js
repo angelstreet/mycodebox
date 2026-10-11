@@ -149,8 +149,7 @@ async function drive(env, id, { maxSteps = 60, stopWhen = () => false } = {}) {
 }
 
 // ---- 1. worktree lease expiry ---------------------------------------------------------------------
-test('V1 a task that outlives its 6 h worktree lease still completes (lease renewed or re-acquired by its owner)',
-  { todo: 'defect: worktrees.create takes a 6 h lease that nothing renews; after expiry leaseOk() fails forever and the task ping-pongs waiting(lease_unavailable) <-> ready every 60 s, writing a decision each time (unbounded log growth, no progress, no owner signal)' }, async () => {
+test('V1 a task that outlives its 6 h worktree lease still completes (lease renewed or re-acquired by its owner)', async () => {
     const env = world({ dev: [BAD, GOOD] });
     const task = await env.submit();
     assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
@@ -163,8 +162,7 @@ test('V1 a task that outlives its 6 h worktree lease still completes (lease rene
   });
 
 // ---- 2/3. budget gate at the review stage and the first-run estimate ----------------------------------
-test('V2 a budget stop raised before the REVIEW does not cost an extra developer run once the owner extends the budget',
-  { todo: 'defect: review() calls budgetGate with resume_to=ready but never sets verify_only, so the approved resume dispatches a NEW developer run on an already-passing SHA before the reviewer runs' }, async () => {
+test('V2 a budget stop raised before the REVIEW does not cost an extra developer run once the owner extends the budget', async () => {
     const env = world({ dev: [impl('(a, b) => a + b', { input_tokens: 1000, output_tokens: 200, usd: 0.4 })], rev: [APPROVE],
       loopOpts: { estimateRun: ({ role }) => ({ usd: role === 'reviewer' ? 0.7 : 0.4, input_tokens: 1000, output_tokens: 200, duration_ms: 1000, turns: 1 }) } });
     const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 1 } });
@@ -177,8 +175,7 @@ test('V2 a budget stop raised before the REVIEW does not cost an extra developer
     assert.equal(env.devStarts(), 1, 'no developer run was pending: only the review should resume');
   });
 
-test('V3 a capped task without an injected estimator can be started by one explicit owner confirmation',
-  { todo: 'defect: estimate() is unknown before the first run of an entry, budget.check turns "estimate unknown" into a stop, and the owner\'s approval (even re-stating the cap) is followed by the identical stop again: a capped task can never start unless the cap is removed' }, async () => {
+test('V3 a capped task without an injected estimator can be started by one explicit owner confirmation', async () => {
     const env = world({ dev: [GOOD] });
     const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 5 } });
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
@@ -189,8 +186,7 @@ test('V3 a capped task without an injected estimator can be started by one expli
   });
 
 // ---- 4. critical risk: approval changes nothing ----------------------------------------------------
-test('V4 an owner approval of the routing gate for a critical task is honoured (no identical re-ask)',
-  { todo: 'defect: router.routerFloor blocks risk_class=critical unconditionally and the loop\'s grant is not consulted there, so approve -> planned -> same question again, forever; the owner cannot act and the loop never says it cannot run critical tasks' }, async () => {
+test('V4 an owner approval of the routing gate for a critical task is honoured (no identical re-ask)', async () => {
     const env = world();
     const task = await env.submit({ risk_class: 'critical' });
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
@@ -202,8 +198,7 @@ test('V4 an owner approval of the routing gate for a critical task is honoured (
   });
 
 // ---- 5. cancel during an acceptance check ---------------------------------------------------------
-test('V5 cancel while an acceptance check is running kills the check process (T14)',
-  { todo: 'defect: verifier.runCheck has no cancel hook and the loop does not register checks in `active`; a cancelled task\'s check keeps running until its own timeout (default 120 s)' }, async () => {
+test('V5 cancel while an acceptance check is running kills the check process (T14)', async () => {
     const env = world({ dev: [GOOD] });
     const task = await env.submit({ acceptance_checks: [{ id: 'hang', command: ['node', '--test', 'test/hang.test.js'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true, timeout_ms: 6000 }] });
     const p = env.loop.run(task.task_id);
@@ -222,8 +217,7 @@ test('V5 cancel while an acceptance check is running kills the check process (T1
   });
 
 // ---- 6/7. approvals: deny semantics, binding, clamping ----------------------------------------------
-test('V6 denying a developer\'s requested action continues the task without that action instead of killing it',
-  { todo: 'defect(judgement): sAwaitingApproval maps every approval.denied to failed_unrecoverable; for an agent_action request (the loop never executes it anyway) the truthful outcome is "continue, action refused", with the refusal fed back to the developer' }, async () => {
+test('V6 denying a developer\'s requested action continues the task without that action instead of killing it', async () => {
     const env = world({ dev: [[PUSH, ...GOOD], GOOD] });
     const task = await env.submit();
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
@@ -233,8 +227,7 @@ test('V6 denying a developer\'s requested action continues the task without that
     assert.match(env.ad.log.dev[1].prompt, /denied|refused/i, 'the developer learns the action was refused');
   });
 
-test('V7 an owner grant is bound to the request it answers: the same restricted action asked again is asked again',
-  { todo: 'defect: grantsOf() is the union of every approval.granted class over the task\'s life, so after one approval a later identical (or merely same-class) request passes allowed() silently and is never recorded as approval.requested' }, async () => {
+test('V7 an owner grant is bound to the request it answers: the same restricted action asked again is asked again', async () => {
     const env = world({ dev: [[PUSH, ...GOOD], [PUSH, ...GOOD], GOOD] });
     const task = await env.submit();
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
@@ -245,8 +238,7 @@ test('V7 an owner grant is bound to the request it answers: the same restricted 
     assert.equal(agentAsks.length, 2, `second push request on run 2 must be surfaced again; got ${agentAsks.length} (state ${r.state})`);
   });
 
-test('V7b approve() refuses grants beyond the classes that were requested',
-  { todo: 'defect: approve() records whatever grants.classes the caller passes; an approval of a push request can grant deploy/credentials for the rest of the task' }, async () => {
+test('V7b approve() refuses grants beyond the classes that were requested', async () => {
     const env = world({ dev: [[PUSH, ...GOOD], GOOD] });
     const task = await env.submit();
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
@@ -254,8 +246,7 @@ test('V7b approve() refuses grants beyond the classes that were requested',
   });
 
 // ---- 8/9. unbounded identical retries -------------------------------------------------------------
-test('V8 a reviewer that keeps answering without a verdict is not retried identically forever (no-progress rule applies to billed reviews)',
-  { todo: 'defect: review() re-routes with exclude=devEntries only, so the same reviewer entry is re-run with the same prompt at 1,2,4..15 min intervals forever; each run is billed (usage recorded) and nothing changes between tries (no reviewer switch, no harness change, no inputs-change wait)' }, async () => {
+test('V8 a reviewer that keeps answering without a verdict is not retried identically forever (no-progress rule applies to billed reviews)', async () => {
     const env = world({ dev: [GOOD], rev: [PROSE] });
     const task = await env.submit();
     await drive(env, task.task_id, { maxSteps: 80, stopWhen: () => env.revStarts() >= 10 });
@@ -267,8 +258,7 @@ test('V8 a reviewer that keeps answering without a verdict is not retried identi
       `${env.revStarts()} identical reviewer runs (${[...entries].join(',')}) and ${unavailable} unavailable decisions, ${v.usage_totals.usd ?? 'unknown'} USD, no strategy change or suspension`);
   });
 
-test('V9 a developer runtime that crashes after billing, with no alternative left, is not re-run identically forever',
-  { todo: 'defect: onRunError -> fallbackPlan wait (capped 15 min) -> repair -> run again; with usage recorded on every crash this is a billed blind retry loop that the no-progress rule never sees (it only counts test signatures)' }, async () => {
+test('V9 a developer runtime that crashes after billing, with no alternative left, is not re-run identically forever', async () => {
     const env = world({ dev: [[{ op: 'usage', input_tokens: 2000, output_tokens: 10, usd: 0.1 }, ...fail('Segmentation fault', 139)]] });
     const task = await env.submit();
     await drive(env, task.task_id, { maxSteps: 120, stopWhen: () => env.devStarts() >= 15 });
@@ -282,8 +272,7 @@ test('V9 a developer runtime that crashes after billing, with no alternative lef
   });
 
 // ---- 10. elevated risk ----------------------------------------------------------------------------
-test('V10 a high-risk task is not accepted on the independent reviewer alone (security reviewer / owner gate, Phase 5 exit)',
-  { todo: 'defect(spec gap): roles.js defines a security role that the loop never invokes; policy.js has no risk handling; a risk_class=high task is accepted exactly like a low-risk one' }, async () => {
+test('V10 a high-risk task is not accepted on the independent reviewer alone (security reviewer / owner gate, Phase 5 exit)', async () => {
     const env = world();
     const task = await env.submit({ risk_class: 'high' });
     const r = await env.loop.run(task.task_id);
@@ -293,8 +282,7 @@ test('V10 a high-risk task is not accepted on the independent reviewer alone (se
   });
 
 // ---- 11. privacy policy string dropped before routing (author deviation 4) -------------------------
-test('V11 an unrecognised privacy_policy string fails closed at routing instead of being dropped',
-  { todo: 'defect: routeFor() deletes any string privacy_policy (not just the documented "project" default) before calling the router; the router would have matched nothing (fail closed), the loop routes to any provider (fail open)' }, async () => {
+test('V11 an unrecognised privacy_policy string fails closed at routing instead of being dropped', async () => {
     const env = world();
     const task = await env.submit({ privacy_policy: 'no_external_providers' });
     const { r } = await drive(env, task.task_id, { maxSteps: 30 });
@@ -364,14 +352,12 @@ test('V12 crash sweep (GL06/T18): a crash at every store-write boundary of the r
   assert.deepEqual(other, [], `crash points that did not recover: ${JSON.stringify(other)}`);
 });
 
-test('V12b a crash between worktrees.create() and the plan decision is recoverable on restart',
-  { todo: 'defect: worktrees.create acquires the lease BEFORE checking existence, so the restart gets E_HELD (not E_EXISTS, the only code sClarified reuses); every step throws for up to 6 h, after which E_EXISTS reuses the worktree with its already-expired lease (see V1)' }, async () => {
+test('V12b a crash between worktrees.create() and the plan decision is recoverable on restart', async () => {
     assert.deepEqual(sweep.bad, [], `crash points that did not recover: ${JSON.stringify(sweep.bad)}`);
   });
 
 // ---- 13. the extra no-progress trigger vs measurable progress --------------------------------------
-test('V13 monotone progress inside a single acceptance check (one more test passing per iteration) is progress, not "no new passing evidence"',
-  { todo: 'ruling on the author\'s extra trigger (stale >= 2*same_signature): acceptable in principle (oscillation is no progress) but progress is measured per CHECK, so with one check every failing iteration is "stale" even when the failing-test count drops each time; the trigger then forces replan at 6 and suspends at 24 like an attempt counter' }, async () => {
+test('V13 monotone progress inside a single acceptance check (one more test passing per iteration) is progress, not "no new passing evidence"', async () => {
     const env = world({ dev: Array.from({ length: 8 }, (_, i) => [{ op: 'write', path: 'src/multi.js', content: `export const N = ${i + 1};\n` }, { op: 'usage', input_tokens: 10, output_tokens: 10 }]) });
     const task = await env.submit({ acceptance_checks: [{ id: 'multi', command: ['node', '--test', 'test/multi.test.js'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] });
     assert.equal((await env.loop.run(task.task_id)).state, 'accepted');

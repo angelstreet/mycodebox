@@ -15,6 +15,7 @@ import { createVerifier } from '../orchestration/verifier.js';
 import { createGoalLoop } from '../orchestration/goal-loop.js';
 import { createIntake } from '../orchestration/intake.js';
 import { validateDecision } from '../orchestration/task-contract.js';
+import { route } from '../orchestration/router.js';
 import { clock } from './fixtures/v2-task.js';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-gl-')));
@@ -106,7 +107,7 @@ function world({ dev = [], rev = [], policy, loopOpts = {}, storeWrap = (s) => s
   let t = Date.parse('2026-10-11T08:00:00Z');
   const now = () => t;
   const sleep = async (ms) => { t += ms; };
-  const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(base, 'leases') }) });
+  const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(base, 'leases') }), now });   // shares the fake clock: expiry is observable
   const worktrees = createWorktrees({ root: wtRoot, repoAllowlist: [repo.dir], leases, git });
   const registry = createRegistry(REGISTRY);
   const verifier = createVerifier({ tmpRoot: path.join(base, 'vtmp'), artifactRoot: path.join(base, 'artifacts'), timeoutMs: 20_000 });
@@ -494,9 +495,15 @@ test('GL09 privileged actions need explicit authorization whatever the goal text
   assert.ok(ask.payload.classes.includes('push_shared'));
   assert.equal(sh(b.repo.dir, 'remote').length, 0);
   assert.equal(sh(b.repo.dir, 'rev-parse', 'main'), b.repo.sha, 'main untouched');
-  // an explicit owner decision is the only way forward; denial ends the task truthfully
+  // an explicit owner decision is the only way forward; refusing the action continues the task without it (#13)
   await b.loop.deny(tb.task_id, { actor: { role: 'owner', id: 'owner-1' }, reason: 'no pushes from tasks' });
-  assert.equal((await b.loop.step(tb.task_id)).state, 'failed_unrecoverable');
+  assert.equal((await b.loop.step(tb.task_id)).state, 'repair');
+  assert.equal((await b.loop.run(tb.task_id)).state, 'accepted');
+  assert.match(b.ad.log.dev[1].prompt, /refused/);
+  assert.equal(sh(b.repo.dir, 'rev-parse', 'main'), b.repo.sha, 'main still untouched');
+  // denying a gate the goal cannot proceed without ends the task truthfully
+  await a.loop.deny(ta.task_id, { actor: { role: 'owner', id: 'owner-1' }, reason: 'no production deploys' });
+  assert.equal((await a.loop.step(ta.task_id)).state, 'failed_unrecoverable');
 
   // (c) the developer edits the read-only project policy
   const c = world({ dev: [[{ op: 'write', path: '.ai/project.json', content: '{"schema_version":1}' }, ...GOOD]] });
@@ -672,7 +679,7 @@ test('infrastructure failure under the task opens a System Operations incident a
     return git(args, o);
   };
   let paused = true;
-  const env = world({ loopOpts: { git: flakyGit, systemOps: { requestOperation: async (r) => { ops.push(r); return { incident_id: 'inc-test-1', executed: false }; } },
+  const env = world({ loopOpts: { git: flakyGit, opsRequester: { request: async (r) => { ops.push(r); return { incident_id: 'inc-test-1', executed: false }; } },
     admission: { isPaused: () => paused, reasons: () => (paused ? ['incident:inc-test-0'] : []) } } });
   const task = await env.submit();
   assert.equal((await env.loop.run(task.task_id, { until: ['waiting'] })).state, 'waiting');
@@ -687,4 +694,85 @@ test('infrastructure failure under the task opens a System Operations incident a
   assert.equal(inc[0].loop.patch.wait.incident_id, 'inc-test-1');
   assert.equal(ops[0].op.type, 'host.disk_pressure');
   assert.equal(ops[0].role, 'goal-loop', 'the loop only requests operations');
+});
+
+// ---- verifier follow-ups (decisions D3, D-012, D-013, #7, #1, D2) ------------------------------------
+test('D3 router: a no-route or single-candidate decision still lists at least two alternatives (valid §9 record)', () => {
+  const reg = createRegistry(REGISTRY).withProbes({ fake: { available: true, models: ['dev-a', 'dev-b', 'rev'], efforts: ['low'], features: {} } });
+  const base = { task_id: 'task-r', goal: 'Implement add', risk_class: 'low', runtime_capabilities: ['code'] };
+  const none = route({ ...base, runtime_capabilities: ['vision'] }, { registry: reg, allowFake: true, checkAction: () => ({ allow: true }) });
+  assert.equal(none.choice, null);
+  const one = route(base, { registry: reg, allowFake: true, exclude: ['fake:dev-b', 'fake:rev'], checkAction: () => ({ allow: true }) });
+  assert.equal(one.choice, 'fake:dev-a');
+  for (const r of [none, one]) {
+    assert.ok(r.decision.alternatives.length >= 2);
+    assert.deepEqual(validateDecision({ ...r.decision, task_id: 'task-r' }).errors, []);
+  }
+  // D-014: only an explicit floor grant waives the critical-risk floor
+  const crit = { ...base, risk_class: 'critical' };
+  assert.equal(route(crit, { registry: reg, allowFake: true, checkAction: () => ({ allow: true }) }).choice, null);
+  assert.ok(route(crit, { registry: reg, allowFake: true, checkAction: () => ({ allow: true }), floorGrants: ['critical_risk'] }).choice);
+});
+
+test('D-012 iterations_without_progress is configurable: varying failures with no new evidence force a recorded change', async () => {
+  const env = world({ dev: [BAD, impl("() => { throw new TypeError('nope'); }"), BAD, GOOD] });
+  const task = await env.submit({ no_progress_policy: { same_signature: 3, strategy_changes_without_progress: 3, iterations_without_progress: 2 } });
+  assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
+  const v = await env.view(task.task_id);
+  const sc = loopDecisions(v, 'strategy_change');
+  assert.equal(sc.length, 1, 'two stale iterations (different signatures) forced one change');
+  assert.ok(sc[0].evidence.some((e) => /limit 2/.test(e)));
+});
+
+test('D-013 high risk: security reviewer named by the policy, then an owner approval bound to the exact head SHA', async () => {
+  const env = world({ policy: { ...POLICY, security_reviewer: 'fake:rev' } });
+  const task = await env.submit({ risk_class: 'high' });
+  assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
+  let v = await env.view(task.task_id);
+  assert.deepEqual(v.verdicts.map((x) => [x.actor.role, x.verdict]), [['reviewer', 'approve'], ['security', 'approve']]);
+  const ask = env.events(task.task_id).filter((e) => e.kind === 'approval.requested').at(-1);
+  assert.equal(ask.payload.kind, 'risk_acceptance');
+  assert.deepEqual(ask.payload.keys, [`accept:${v.head_sha}`]);
+  await assert.rejects(env.loop.approve(task.task_id, { actor: { role: 'owner', id: 'owner-1' }, grants: { classes: ['deploy'] } }), { code: 'E_INVALID' });
+  await assert.rejects(env.loop.approve(task.task_id, { actor: { role: 'owner', id: 'owner-1' }, grants: { budget_policy: { max_usd: 9 } } }), { code: 'E_INVALID' });
+  await env.loop.approve(task.task_id, { actor: { role: 'owner', id: 'owner-1' }, approval_ref: 'risk-ok' });
+  assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
+  assert.equal(env.devStarts(), 1, 'the approval resumes verification only');
+  v = await env.view(task.task_id);
+  assert.equal(v.verdicts.length, 2, 'verdicts on the same SHA are reused, not re-bought');
+});
+
+test('#1 a worktree lease taken by another owner suspends the task (no blind retries); an expired free one is re-acquired', async () => {
+  const env = world({ dev: [BAD, GOOD] });
+  const task = await env.submit();
+  assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
+  env.advance(7 * 3600_000);
+  const intruder = await env.leases.acquire(`worktree:${task.task_id}`, { owner: 'someone-else', task_id: 'other', ttl_ms: 3600_000 });
+  assert.equal(intruder.ok, true);
+  const r = await env.loop.run(task.task_id);
+  assert.equal(r.state, 'waiting');
+  assert.equal(r.idle, true);
+  const w = loopDecisions(await env.view(task.task_id)).at(-1).loop.patch.wait;
+  assert.equal(w.reason, 'lease_held');
+  assert.equal(w.until_ms, null);
+  assert.equal(env.devStarts(), 1);
+  await env.leases.release(intruder.lease);
+  await env.loop.resume(task.task_id, { actor: { role: 'owner', id: 'owner-1' } });
+  assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
+  assert.equal(loopDecisions(await env.view(task.task_id), 'lease_reacquired').length, 1);
+});
+
+test('D2 a task whose log is corrupt is never stepped (store_error), and the loop reads events from the store', async () => {
+  const env = world();
+  const task = await env.submit();
+  await env.loop.step(task.task_id);
+  const log = path.join(env.storeDir, 'tasks', task.task_id, 'events.jsonl');
+  const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+  fs.writeFileSync(log, `${[lines[0], '{"not": "an event"}', ...lines.slice(1)].join('\n')}\n`);
+  env.reopen();
+  await env.loop.recover();
+  const r = await env.loop.step(task.task_id);
+  assert.equal(r.transitioned, false);
+  assert.match(r.note, /store error/);
+  assert.equal(env.devStarts(), 0);
 });

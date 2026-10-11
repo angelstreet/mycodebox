@@ -214,3 +214,41 @@ Recorded from `v2/02-task-core` and accepted by the task-core verifier. All are 
    omission on a task). Project allowlists are a floor: a task allowlist can only narrow them. `denied_args`,
    `protected_paths` and `protected_branches` are optional policy keys. The executor derives `action.class` from
    the operation it performs, never from model output.
+
+## Implementation notes (goal loop)
+
+Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
+
+1. Checkpoint: the loop's own decision records carry an additive `loop: { k, patch, next? }` field. Loop memory is
+   the fold of those patches; a decision with `next` and id `gl-<task>-<k>` (k = transitions so far) is replayed, not
+   re-decided, after a crash between the decision and its transition. Events come from `store.events(id)`; a task
+   with `store_error` is never stepped.
+2. No-progress rule: same failure signature `same_signature` times in a row, or `no_progress_policy.
+   iterations_without_progress` (default 6, D-012) iterations without new passing evidence, forces a strategy change
+   (replan, different model, harness change). New passing evidence = more required checks pass, or fewer failing tests
+   inside them. `strategy_changes_without_progress` changes without progress -> `waiting` (`until_ms: null`,
+   diagnosis, next action). Billed identical retries (developer runtime errors, reviewer runs without a usable verdict)
+   count the same way; only unbilled waits (quota, provider unavailable before any run, lease backend) back off on a
+   timer.
+3. Approvals: a request carries action keys; a grant covers exactly those keys (an agent's request is keyed by its
+   run, so a later identical request is asked again) and `approve()` refuses classes or budget authorizations the
+   request did not ask for. Denying an agent-requested action continues the task with "refused" feedback; denying
+   any other gate ends it (`failed_unrecoverable`). An approved budget stop authorizes the next run even when its cost
+   cannot be estimated (never past a reached cap).
+4. Risk (D-013, D-014): `risk_class` high/critical additionally needs the policy's `security_reviewer` verdict (when
+   the policy names that registry entry) and an owner approval bound to the exact head SHA before `accepted`. An owner
+   approval of a critical task's routing question (bound to task + base SHA) is passed to the router as
+   `floorGrants: ['critical_risk']`; no other router floor is waivable.
+5. Delivery (D5): a task asks for delivery with `review_policy.deliver: true` or a `repo:<repo>:integration` entry in
+   `resources`. It then goes `evaluating -> integrating` through the injected `integrate(task, { sha, worktree,
+   idempotency_key })` hook (optional `integrate.reconcile`), and waits in `integrating` when no hook is wired. A task
+   accepted without delivery is "verified in the task worktree, not integrated" and the UI must label it so.
+6. Privacy: the template default `privacy_policy: 'project'` maps to the project's `provider_allowlist`; any other
+   string reaches the router unchanged and fails closed (no route).
+7. Agent action requests: the loop gates `action_request` run events (class derived from argv/text, never from the
+   model's label). Only the fake runtime emits them today; the Claude/Codex/MiniMax/OpenCode parsers do not yet map
+   CLI permission prompts to `action_request`. Their own permission modes (`acceptEdits`, `workspace-write`,
+   `smart`) remain the floor for those runtimes until they do.
+8. Worktree lease: renewed at every dispatch and commit; an expired lease nobody took is re-acquired by the same owner
+   (`lease_reacquired` decision, new fencing token kept in loop memory; the worktree meta keeps the original lease);
+   a lease held by another owner suspends the task until inputs change.

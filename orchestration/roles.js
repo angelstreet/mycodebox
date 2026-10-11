@@ -71,9 +71,11 @@ export function developerPrompt({ task, strategy = {}, feedback = null, summary 
 }
 
 // The reviewer answers with one JSON object; anything else is treated as "evaluator unavailable", never as approval.
-export function reviewerPrompt({ task, sha, diff, evidence = [], rubric = REVIEW_RUBRIC }) {
+export function reviewerPrompt({ task, sha, diff, evidence = [], rubric = REVIEW_RUBRIC, role = 'reviewer', strict = false }) {
   return [
-    'ROLE: independent reviewer. You did not write this change. Review the diff and evidence against the original requirements.',
+    role === 'security'
+      ? 'ROLE: independent security reviewer. You did not write this change. Review it for secrets, permission changes, destructive or external effects and scope violations.'
+      : 'ROLE: independent reviewer. You did not write this change. Review the diff and evidence against the original requirements.',
     'You may not edit files. Your verdict is advisory evidence; the deterministic checks are the tests.',
     contractBlock(task),
     `CANDIDATE SHA: ${sha}`,
@@ -81,6 +83,7 @@ export function reviewerPrompt({ task, sha, diff, evidence = [], rubric = REVIEW
     `RUBRIC:\n${list(rubric.map((r) => `${r.id}: ${r.text}`))}`,
     `DIFF (base..candidate):\n${clip(diff, 20000)}`,
     'ANSWER with exactly one JSON object on the last line: {"verdict":"approve"|"reject","findings":[{"id":"<rubric id>","severity":"blocker"|"minor","message":"..."}]}',
+    ...(strict ? ['STRICT FORMAT: earlier answers had no parseable verdict. Output ONLY that JSON object, nothing else. A reject needs at least one finding.'] : []),
   ].join('\n\n');
 }
 
