@@ -109,7 +109,7 @@ export function lastActivityOf({ info, reporterAt }) {
 
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-// Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude) + the model and remote-control the old process had + --resume.
+// Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude, which carries the bypass flag by default; recorded args never add one) + the model and remote-control the old process had + --resume.
 export function resumeCommand({ base, args, name, sessionId }) {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) {
     throw Object.assign(new Error('invalid resume session id'), { status: 400 });

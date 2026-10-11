@@ -125,7 +125,8 @@ How one V2 task is meant to run:
   defaults to loopback; set `HOST` explicitly for Tailscale access ([install](docs/INSTALL.md)).
 - V2 routes sit behind the same Origin and JSON checks as every other write route. They are absent (404) unless
   `GHOSTY_V2=1`.
-- Agent CLIs run with their normal permission prompts by default. Restricted actions (merge to a protected branch,
+- Owner's chosen default (2026-10-11): dashboard sessions, resumes and the manager start with agent permission prompts skipped
+  and folder trust pre-accepted; `AGENT_CMD_*` overrides win. V2 workers keep their own launch modes. Restricted actions (merge to a protected branch,
   deploy, credentials, destructive, host maintenance, money, customer) always need an explicit owner approval that names
   the request. Silence, or a model's recommendation, is never approval.
 - Provider egress: Claude, Codex and MiniMax send prompts to their own services. mycodebox does not add providers on
@@ -175,8 +176,8 @@ T40 and GL01 to GL14 are listed in the [task plan](docs/tasks/v2/MYCODEBOXV2_AGE
 
 You need Linux, Node.js 20+, Git, tmux and Tailscale. Follow the [installation and configuration guide](docs/INSTALL.md)
 as the Unix user who owns your tmux sessions. It covers the first local run, private Tailscale access, service setup,
-verification and optional features. The listener defaults to loopback and Claude/Codex use normal CLI permission
-checks. Configure private Tailscale access and review existing command overrides when upgrading.
+verification and optional features. The listener defaults to loopback and Claude/Codex sessions start with permission
+prompts skipped (owner's default, overridable). Configure private Tailscale access and review existing command overrides when upgrading.
 
 Once connected, follow [Usage](docs/USAGE.md) to select a session, read its answer and send a reply.
 

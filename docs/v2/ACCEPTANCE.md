@@ -41,7 +41,7 @@ Suite at `4303d43` on Node v23.6.0: 1606 tests, 1606 pass, 0 fail, 0 todo, 0 ski
 |---|---|---|---|---|
 | T01 | Project policy absent or invalid | Refuse execution, request owner clarification | unit (policy.js) + integration (goal loop, real git, fake runtime) | **PASS** |
 | T02 | Restricted action disguised in task text | Policy wins regardless of model | unit/security (policy.js, manager forbidden-topic matcher) | **PASS** |
-| T03 | CLI startup, resume, park | No bypass permissions by default, validated argv/cwd | unit + integration (real adapters against stub CLIs; launch-config, parking, session-directory) | **PASS** |
+| T03 | CLI startup, resume, park | Validated argv/cwd; V2 workers never get bypass flags (owner decision 2026-10-11 supersedes the original "no bypass by default" for dashboard sessions) | unit + integration (real adapters against stub CLIs; launch-config, parking, session-directory) | **PASS** |
 | T04 | Network listener, origin and reporter endpoint | Default loopback, rejected unauthorized route | unit (launch-config, reporter.js handlers) + static source check of server.js routes | **PASS** |
 | T05 | Parallel worktrees | No shared mutable worktree; same repo can host disjoint agents | integration (real git worktrees, file lease authority) | **PASS** |
 | T06 | Duplicate event/outcome | Exactly one state transition/effect | unit (store) + crash E2E (goal loop restart, duplicate owner decision) | **PASS** |
@@ -118,14 +118,14 @@ Suite at `4303d43` on Node v23.6.0: 1606 tests, 1606 pass, 0 fail, 0 todo, 0 ski
 - `test/v2-adapters.test.js` › T03 bypass guard throws on injected flags in every form; prompt text is not scanned
 - `test/v2-adapters.test.js` › T03 cwd must be a real directory inside an allowed root (incl. symlink escape)
 - `test/v2-adapters.test.js` › T03 shell metacharacters in the prompt arrive verbatim as one argv element and are not executed
-- `test/v2-security-review.test.js` › T03: no default agent, manager or resume command carries a permission or sandbox bypass
+- `test/v2-security-review.test.js` › T03: default claude/codex/manager/resume commands carry the owner-chosen bypass flags (2026-10-11); minimax and bash do not
 - `test/v2-security-review.test.js` › T03: resume never restores a saved process flag; only model, remote-control name and the id come back
 - `test/v2-security-review.test.js` › T03: a saved remote-control name is single-quoted for the shell
 - `test/v2-security-review.test.js` › T03: a resume id must be a plain token (no options, paths, whitespace, control characters or non-strings)
 - `test/v2-security-review.test.js` › T03: sessionDirectory rejects prefix siblings, files, missing dirs, traversal, symlink escapes and non-strings
 - `test/v2-security-review.test.js` › T03: a tampered parked record cannot escape $HOME, start before validation, or resume without a cwd
 - `test/v2-security-review.test.js` › T03: prototype-named sessions are not parked records
-- `test/v2-security-review.test.js` › T03: no bypass flag survives anywhere in the server, scripts or modules (launch-config detects them, nothing else names them)
+- `test/v2-security-review.test.js` › T03: bypass flags are named only in launch-config (the default) and nowhere else in the server, scripts or modules
 - `test/v2-security-review.test.js` › T03: the manager command helper keeps an explicit override verbatim and its diagnostics name only the setting
 
 ### T04 — PASS

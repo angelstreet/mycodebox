@@ -291,6 +291,7 @@ ONLY if Jev's source is "rule" (Jev was unsure) AND the event is NOT forced by a
 
   claude -p "<question with the facts>" --model sonnet --output-format json --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task"
 
+(This is a headless, tool-restricted read-only call, not a dashboard session launch: the owner's skip-permissions default does not apply to it.)
 (Keep exactly this order and the comma-separated, quoted tool list: --disallowedTools is variadic and would
 swallow the question otherwise.)
 

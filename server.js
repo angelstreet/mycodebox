@@ -76,6 +76,7 @@ import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
 import { createPush, createAlerts, tierConfig } from './push.js';
 import { launchConfig, launchWarnings } from './launch-config.js';
+import { trustFolder } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
@@ -1076,6 +1077,7 @@ async function createSession({ name, agent, cwd, priority }) {
   } catch (err) {
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
+  try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
   const cmd = AGENT_CMDS[agent];
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
@@ -1156,10 +1158,12 @@ async function resumeSession(name) {
   // Claude entries have no `agent` field (legacy); MiniMax entries store agent: 'minimax'. Dispatch on that.
   const isMinimax = rec.agent === 'minimax';
   const base = isMinimax ? AGENT_CMDS.minimax : AGENT_CMDS.claude;
+  const trustAgent = isMinimax ? 'minimax' : 'claude';
   const out = await parking.resume(name, {
     base,
     validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
     start: async (n, r, cmd) => {
+      try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, '-l', '--', cmd]);
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, 'Enter']);
       sessionMeta.reset(n);
