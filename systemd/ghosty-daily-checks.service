@@ -1,10 +1,12 @@
+# EXAMPLE: copy to /etc/systemd/system/ and replace every <user> and /home/<user>/ghosty-sessions with your own
+# user and checkout path (see docs/INSTALL.md). Not installable as is.
 [Unit]
 Description=Ghosty: token-free daily checks (CI/CD results, leak gate; wakes the AI manager only on findings)
 
 [Service]
 Type=oneshot
-User=jndoye
-Environment=HOME=/home/jndoye
-ExecStart=/usr/local/bin/node /home/jndoye/ghosty-sessions/scripts/daily-checks.js
+User=<user>
+Environment=HOME=/home/<user>
+ExecStart=/usr/local/bin/node /home/<user>/ghosty-sessions/scripts/daily-checks.js
 TimeoutStartSec=45min
 Nice=10

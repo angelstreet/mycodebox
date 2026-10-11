@@ -149,3 +149,59 @@ test('freshness cutoff is inclusive and enabled idle runner can restart', (t) =>
   assert.equal(r.status, 0, r.stderr);
   assert.equal(restarts(r).length, 1);
 });
+
+// ---- Independent Phase 1 review additions (T21): refuse with a reason, never retry unknown, never kill ----
+test('T21: unreachable API refuses with a visible reason and runs nothing, even when asked to wait', (t) => {
+  for (const args of [[], ['--wait', '5']]) {
+    const r = invoke(t, [{ code: 7, body: '' }], args);
+    assert.equal(r.status, 2, args.join(' '));
+    assert.match(r.stderr, /NOT restarting: deploy API unavailable/);
+    assert.equal(r.calls.filter(([c]) => c !== 'curl' && c !== 'date').length, 0, 'no sleep, sudo or systemctl');
+  }
+});
+test('T21: a stale or malformed snapshot while waiting is unknown, not busy: no retry, exit 2', (t) => {
+  for (const body of [snapshot({ at: NOW - 60001 }), snapshot({ at: '1791201600000' }), snapshot({ at: 1e400 }), '', snapshot({ ok: 'true' })]) {
+    const r = invoke(t, [response(body)], ['--wait', '1']);
+    assert.equal(r.status, 2, JSON.stringify(body));
+    assert.match(r.stderr, /NOT restarting: invalid, unsuccessful, or stale deploy snapshot/);
+    assert.equal(r.calls.filter(([c]) => c === 'sleep').length, 0);
+    assert.equal(restarts(r).length, 0);
+  }
+});
+test('T21: a state outside the known vocabulary is refused whether or not the runner is on', (t) => {
+  for (const enabled of [false, true]) {
+    for (const state of ['starting', 'RUNNING', '', null]) {
+      const r = invoke(t, [response(snapshot({ enabled, deploys: [deploy(state)] }))]);
+      assert.equal(r.status, 2, `${state} enabled=${enabled}`);
+      assert.equal(restarts(r).length, 0);
+    }
+  }
+});
+test('T21: --wait 0 refuses busy work at once; --wait=N is not a form the script accepts', (t) => {
+  const busy = invoke(t, [response(snapshot({ running: { test: 'test-deploy' } }))], ['--wait', '0']);
+  assert.equal(busy.status, 1);
+  assert.match(busy.stderr, /NOT restarting: deploy work is running or can start automatically/);
+  assert.equal(busy.calls.filter(([c]) => c === 'sleep').length, 0);
+  assert.equal(restarts(busy).length, 0);
+  const form = invoke(t, [response()], ['--wait=5']);
+  assert.equal(form.status, 2);
+  assert.equal(form.calls.length, 0);
+});
+test('T21: the script owns no kill path and restarts only through systemctl', () => {
+  const script = readFileSync(resolve('scripts/safe-restart.sh'), 'utf8');
+  assert.match(script, /^set -euo pipefail$/m);
+  assert.doesNotMatch(script, /\b(?:kill|pkill|killall|pgrep|fuser|pidof)\b|\.pid\b/);
+  assert.deepEqual(script.match(/systemctl \w+[^\n;]*/g), ['systemctl restart ghosty-sessions']);
+  assert.match(script, /sudo -n systemctl restart ghosty-sessions/);
+});
+test('F5: an approved deploy is busy (exit 1, waitable) whether or not the runner is on', (t) => {
+  for (const enabled of [false, true]) {
+    const r = invoke(t, [response(snapshot({ enabled, deploys: [deploy('approved')] }))]);
+    assert.equal(r.status, 1, `enabled=${enabled}`);
+    assert.match(r.stderr, /deploy work is running or can start automatically/);
+    assert.equal(restarts(r).length, 0);
+  }
+  const waited = invoke(t, [response(snapshot({ deploys: [deploy('approved')] })), response()], ['--wait', '1']);
+  assert.equal(waited.status, 0, waited.stderr);
+  assert.equal(waited.calls.filter(([c]) => c === 'sleep').length, 1);
+});

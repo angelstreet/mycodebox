@@ -11,6 +11,18 @@ export function launchConfig(env = process.env) {
   };
 }
 
+// Known switches that turn off a CLI's permission prompts or sandbox (Claude, Codex, mcode).
+const BYPASS_RES = [
+  /--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo|full-auto)\b/,
+  /--permission-mode(?:=|\s+)['"]?bypassPermissions\b/,
+  /--permission(?:=|\s+)['"]?off\b/,                                        // mcode
+  /--sandbox(?:=|\s+)['"]?danger-full-access\b/,
+  /(?:--ask-for-approval|-a)(?:=|\s+)['"]?never\b/,
+  /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?approval_policy\s*=\s*\\?['"]?never\b/,   // -c approval_policy=never / ="never"
+  /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?sandbox_mode\s*=\s*\\?['"]?danger-full-access\b/,  /--approval-mode(?:=|\s+)['"]?full-auto\b/,                                // older Codex CLIs
+  /sandbox_permissions\s*=[^\n]*disk-full-(?:write|read-write)-access/,
+];
+
 // Advisory only: shell wrappers and external CLI config cannot be certified here.
 export function launchWarnings(env = process.env) {
   const warnings = [];
@@ -18,7 +30,7 @@ export function launchWarnings(env = process.env) {
     warnings.push('HOST overrides loopback; verify private Tailscale binding and access policy.');
   }
   for (const key of ['AGENT_CMD_CLAUDE', 'AGENT_CMD_CODEX', 'AGENT_CMD_MINIMAX', 'AGENT_CMD_BASH']) {
-    if (/--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)\b|--permission-mode(?:=|\s+)['"]?bypassPermissions\b|--sandbox(?:=|\s+)['"]?danger-full-access\b|(?:--ask-for-approval|-a)(?:=|\s+)['"]?never\b/.test(env[key] || '')) {
+    if (BYPASS_RES.some((re) => re.test(env[key] || ''))) {
       warnings.push(`${key} contains a known permission or sandbox bypass; review this explicit override.`);
     }
   }

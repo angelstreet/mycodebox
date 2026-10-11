@@ -44,7 +44,7 @@ try:
     if not isinstance(d.get("deploys"), list): raise ValueError()
     if not isinstance(d.get("envs"), list) or any(not isinstance(e, str) or not e for e in d["envs"]): raise ValueError()
     if any(not key or not isinstance(value, str) or not value for key, value in d["running"].items()): raise ValueError()
-    states = {"awaiting-approval", "queued", "running", "done", "failed", "cancelled"}
+    states = {"awaiting-approval", "queued", "approved", "running", "done", "failed", "cancelled"}
     ids = set()
     busy = bool(d["running"])
     for item in d["deploys"]:
@@ -52,7 +52,8 @@ try:
         if any(not isinstance(item.get(k), str) or not item[k] for k in ("id", "env")): raise ValueError()
         if item["id"] in ids: raise ValueError()
         ids.add(item["id"])
-        busy |= item["state"] == "running" or (d["enabled"] and item["state"] in {"queued", "awaiting-approval"})
+        # approved = owner said yes, the runner starts it as soon as its leases are free: busy whether or not the runner is on
+        busy |= item["state"] in {"running", "approved"} or (d["enabled"] and item["state"] in {"queued", "awaiting-approval"})
 except Exception:
     print("NOT restarting: invalid, unsuccessful, or stale deploy snapshot", file=sys.stderr)
     sys.exit(2)
