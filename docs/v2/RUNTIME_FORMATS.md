@@ -41,4 +41,8 @@ default `node` is 23.x must set `MCODE_NODE_DIR` (owner action for the service e
 
 ## OpenCode
 
-Not installed on the host: adapter verified against a fake CLI only; live smoke BLOCKED (runtime not installed).
+Live capture (opencode 1.18, `opencode run --format json`, via scripts/v2-bench.js): every line is
+`{ type, timestamp, sessionID, part }`. `type` is `step_start`, `text` (answer in `part.text`), tool events, and
+`step_finish` with that step's `part.tokens` (`input`, `output`, `reasoning`, `cache.read`, `cache.write`) and `part.cost`.
+The adapter sums usage per step (input includes cache tokens, output includes reasoning). A `cost` of 0 is recorded as
+unknown USD, never $0: unpriced providers report 0 too. Other shapes fall back to the generic parser.
