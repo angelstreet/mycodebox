@@ -126,6 +126,8 @@ Optional does not mean every background reader defaults off. The server starts p
 
 | Feature | Setup / prerequisite | Data or credential |
 |---|---|---|
+| Android app links | `ANDROID_APP_PACKAGE` and `ANDROID_APP_SHA256` in `.env` (or a verbatim `$GHOSTY_STATE_DIR/assetlinks.json`) | Package name and public cert fingerprint; 404 when unset |
+| Langfuse link | `LANGFUSE_PUBLIC_URL` (browser-reachable; else a non-loopback `LANGFUSE_URL`) | Button hidden when neither is set |
 | Web Push | Trusted HTTPS, browser permission, bell button | Generated VAPID key and subscriptions in state dir |
 | ntfy | Private `NTFY_TOPIC`, optional `NTFY_URL`, `PUBLIC_URL` | Topic is secret; default provider is external |
 | Claude reporter | Merge the plugin setting from [REFERENCE](REFERENCE.md#session-reporter-task-44-phase-8) into existing Claude settings; compatible Claude version; new sessions | Loopback URL plus `reporter.token`; do not overwrite other settings |
@@ -153,6 +155,8 @@ Verify Node binds only to the intended address. On the owner's phone, confirm HT
 Report the private URL to the owner, enabled features, test results and anything skipped. See [usage and troubleshooting](USAGE.md).
 
 ## Update and uninstall
+
+**Set these before upgrading.** The repository no longer carries `public/.well-known/assetlinks.json` or a hard-coded Langfuse host. If you used the Android app links or the usage sheet's Langfuse button, add to `.env` first (or the features go away after the restart): `ANDROID_APP_PACKAGE` + `ANDROID_APP_SHA256` (or `$GHOSTY_STATE_DIR/assetlinks.json`), `LANGFUSE_PUBLIC_URL`, and `PUBLIC_URL` (https origin) to name it in the HTTPS hints. With `LANGFUSE_PUBLIC_URL` unset (and `LANGFUSE_URL` loopback), the usage sheet's Langfuse button is hidden instead of pointing at port 3100 on the same host. See [REFERENCE](REFERENCE.md).
 
 Check `git status --short`, preserve local changes, review the update, and securely back up state before changing versions. Record the previous commit so rollback is possible without discarding local work.
 

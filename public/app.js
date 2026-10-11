@@ -62,6 +62,8 @@ const els = {
   filterBar:   $('#filterBar'),
 };
 
+// Name the configured https origin in the "not a secure context" toasts, else the generic wording.
+const httpsHint = () => state.links?.publicUrl || 'the HTTPS (Tailscale Serve) address';
 const state = {
   manualClosed: true,                  // the Notes fold starts collapsed
   hiddenClosed: true,                  // the Hidden fold starts collapsed
@@ -824,6 +826,7 @@ async function fetchInitial() {
     state.sessions = data.sessions || [];
     state.status   = data.status   || {};
     state.statusAt = Date.now();
+    state.links = data.links || {};   // configured langfuse / https PUBLIC_URL (server env), either may be null
     sortSessions();
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
     for (const s of state.sessions) state.prevState[s.name] = stateOf(s.name);
@@ -3050,7 +3053,6 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 }
 
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
-const LANGFUSE_URL = `http://${location.hostname}:3100`;   // Langfuse on the same host
 const SUBSCRIPTION = { manager: 'pay per call (Jev, AI reviewer)', claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
 const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: no list price for this model">&mdash;</span>' : escapeHtml(fmtUsd(c)) + unit);
 const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
@@ -3261,7 +3263,7 @@ function openUsage() {
   openSheet('Usage · API-equivalent', ({ body, foot, close }) => {
     body.closest('.sheet').classList.add('usage');
     foot.classList.remove('hidden');
-    foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
+    foot.innerHTML = `${state.links?.langfuse ? `<a class="sbtn lf" href="${escapeHtml(state.links.langfuse)}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a>` : ''}<span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', dim: 'model', range: 7, selDay: null, view: lsGet('ghosty.usageView', 'overview') };
     let tab = 'today', data = null;
@@ -4290,7 +4292,7 @@ async function toggleNotify() {
         referrer: document.referrer, ua: navigator.userAgent, origin: location.origin,
         push: pushSupported(), sw: !!navigator.serviceWorker?.controller,
       }) }).catch(() => {});
-      toast(!window.isSecureContext ? 'needs the HTTPS (Tailscale Serve) address'
+      toast(!window.isSecureContext ? `needs ${httpsHint()}`
         : Notification.permission === 'denied' ? 'notifications are off for this app - Android: App info > Notifications > allow, then tap the bell again'
         : 'permission not given - tap the bell again', 5000);
       return;
@@ -4437,7 +4439,7 @@ function voiceUi() {
 }
 async function voiceStart() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    toast(!window.isSecureContext ? 'the mic needs the HTTPS (Tailscale Serve) address' : 'no microphone support in this browser', 4000);
+    toast(!window.isSecureContext ? `the mic needs ${httpsHint()}` : 'no microphone support in this browser', 4000);
     return;
   }
   try { voice.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
