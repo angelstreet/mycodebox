@@ -6,7 +6,8 @@
 // mode, cheapest settings: claude-haiku-4-5 with --max-budget-usd 0.10; codex default model, low effort; minimax
 // default model). Reviewer = a scripted fake (approve), so only the developer run costs anything. The acceptance
 // check is a deterministic `node -e` on the committed SHA. Prints one JSON object: runtime, model, tokens, cost
-// (unknown stays null), outcome. No model output is printed or kept.
+// (unknown stays null), outcome. No model output is printed or kept. minimax: set MCODE_NODE_DIR to a Node 24 bin dir
+// when the default node is 23.x (mcode 0.6.3 refuses it; see docs/v2/RUNTIME_FORMATS.md).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

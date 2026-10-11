@@ -21,8 +21,10 @@ export const ROWS = [
   ...Array.from({ length: 40 }, (_, i) => `T${String(i + 1).padStart(2, '0')}`),
   ...Array.from({ length: 14 }, (_, i) => `GL${String(i + 1).padStart(2, '0')}`),
 ];
+// T20 is a browser check outside node --test (scripts/v2-ui-check.js, needs PLAYWRIGHT_CORE). With PLAYWRIGHT_CORE set
+// the runner executes it and the row is PASS/FAIL from its exit code; otherwise the row is MANUAL.
 const DISPOSITION = {
-  T20: { status: 'PENDING', reason: 'owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; status set when that branch lands' },
+  T20: { status: 'MANUAL', reason: 'browser check outside node --test: PLAYWRIGHT_CORE=<dir> node scripts/v2-ui-check.js (dev-only); last recorded result in V2_VERIFICATION.md "T20 browser check"' },
 };
 const LEGACY_FOR = { T16: (f) => !path.basename(f).startsWith('v2-') };
 // Open defects recorded by independent verifiers as `todo` tests without a matrix prefix, mapped to the rows whose
@@ -79,6 +81,12 @@ function main() {
   const results = fs.existsSync(jsonl) ? fs.readFileSync(jsonl, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
   fs.rmSync(tmp, { recursive: true, force: true });
   const git = (...a) => { try { return execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim(); } catch { return null; } };
+  if (process.env.PLAYWRIGHT_CORE && !args.includes('--files')) {
+    const ui = spawnSync(process.execPath, ['scripts/v2-ui-check.js'], { cwd: ROOT, encoding: 'utf8', timeout: 10 * 60_000, env: process.env });
+    const summary = /(\d+)\/(\d+) checks passed/.exec(ui.stdout || '');
+    results.push({ outcome: ui.status === 0 && summary ? 'pass' : 'fail', name: `T20: browser check (scripts/v2-ui-check.js): ${summary ? summary[0] : 'no summary'}`,
+      file: 'scripts/v2-ui-check.js', todo: false, skip: false, duration_ms: 0, error: ui.status === 0 ? null : `exit ${ui.status}` });
+  }
   const rows = classify(results);
   const count = (s) => rows.filter((r) => r.status === s).length;
   const out = {

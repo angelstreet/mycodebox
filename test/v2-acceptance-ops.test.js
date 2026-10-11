@@ -12,7 +12,7 @@ import { createIncidentStore } from '../orchestration/incidents.js';
 import { createTelemetry } from '../orchestration/telemetry.js';
 import { createSystemOps, createAdmissionController } from '../orchestration/system-ops.js';
 import { createLeaseAuthority, fileBackend } from '../orchestration/lease-authority.js';
-import { sandbox, world, mkOrigin, makeController, integrationHook, fakeRemoteCi, states, loopDecisions, devRuns, GOOD, APPROVE } from './fixtures/v2-world.js';
+import { sandbox, world, mkOrigin, makeDelivery, fakeRemoteCi, states, loopDecisions, devRuns, GOOD, APPROVE } from './fixtures/v2-world.js';
 
 const sb = sandbox('v2-acc-ops-');
 const HOST = 'host-a';
@@ -54,7 +54,7 @@ function opsFor(stateRoot, leases, { throttleTo = 30, cleanupTo = 50, onCleanup 
 
 // A delivery world (loop + controller + System Ops) sharing one lease authority. `beforeGates` runs inside the
 // controller's gate step, i.e. while it holds repo:demo:integration and repo:demo:main.
-function deliveryWorld({ beforeGates = null, approvals = null, opsOpts = {}, leaseNow = null, leaseTtlMs } = {}) {
+function deliveryWorld({ beforeGates = null, opsOpts = {}, leaseNow = null, leaseTtlMs } = {}) {
   const o = mkOrigin(sb);
   const ci = fakeRemoteCi(o);
   const box = {};
@@ -67,8 +67,9 @@ function deliveryWorld({ beforeGates = null, approvals = null, opsOpts = {}, lea
   const real = createCiGates({ git: createGitRunner({ env: sb.GIT_ENV }), artifactsDir: path.join(o.dir, 'gate-artifacts'), actor: { role: 'integration', id: 'integrator-a' } });
   const gateCalls = [];
   const gates = { run: async (x) => { gateCalls.push(x.sha); if (beforeGates) await beforeGates(x, gateCalls.length); return real.run(x); } };
-  const c = makeController(sb, o, { store: env.store, ci, leases, gates, approvals, ...(leaseNow ? { now: leaseNow } : {}), ...(leaseTtlMs ? { leaseTtlMs } : {}) });
-  box.hook = integrationHook(sb, { controller: c.controller, store: env.store, ci, o });
+  const c = makeDelivery(sb, o, { store: env.store, ci, leases, gates, ...(leaseNow ? { now: leaseNow } : {}), ...(leaseTtlMs ? { leaseTtlMs } : {}) });
+  box.hook = c.integrate;
+  box.hook.runs = c.runs;
   return { o, ci, env, c, hook: box.hook, sys, leases, gateCalls, stateRoot };
 }
 const approveRequired = async (env, id, req) => env.loop.approve(id, { actor: OWNER, approval_ref: `owner-${req.action}-${req.sha.slice(0, 8)}`,
@@ -271,21 +272,22 @@ test('GL10/T27: stale fencing across roles: the integrator\'s lease expires mid-
   let t = Date.now();
   const clock = () => t;
   let takeover = null;
-  const preApproved = { check: (req) => ({ ok: true, approval_ref: `pre-${req.action}`, repo: req.repo, sha: req.sha, action: req.action, target: req.target, approved_by: 'owner-test' }) };
   const w = deliveryWorld({
-    leaseNow: clock, leaseTtlMs: 60_000, approvals: preApproved,
+    leaseNow: clock, leaseTtlMs: 60_000,
     beforeGates: async (_x, n) => {
-      if (n !== 1) return;
+      if (n !== 2) return;                                 // run 1 stops at the push approval; run 2 is approved
       t += 10 * 60_000;                                    // the gate step outlives the integrator's lease
       takeover = await w.leases.acquireAll(['repo:demo:integration', 'repo:demo:main'], { owner: 'system-ops', ttl_ms: 600_000, scope: 'maintenance' });
     },
   });
   const id = (await w.env.submit(DELIVER)).task_id;
   const before = w.o.head();
+  assert.equal((await w.env.loop.run(id)).state, 'awaiting_approval');
+  await approveRequired(w.env, id, w.hook.runs.at(-1).required);
   const r = await w.env.loop.run(id, { until: ['waiting'] });
   assert.equal(takeover.ok, true, 'expired lease is free for the next holder');
   assert.equal(r.state, 'waiting');
-  assert.equal(w.hook.runs[0].outcome, 'lease_lost');
+  assert.equal(w.hook.runs[1].outcome, 'lease_lost');
   assert.equal(w.o.head('v2int/main'), null, 'no candidate push');
   assert.equal(w.o.head(), before, 'no merge');
   assert.ok(w.c.alerts.some((x) => x.kind === 'lease_lost'));

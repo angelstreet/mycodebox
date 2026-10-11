@@ -27,7 +27,7 @@ test('acceptance runner: PASS needs an executed passing test; failures, missing 
   assert.equal(rows.T05.status, 'FAIL', 'an open defect on the row');
   assert.equal(rows.T06.status, 'PASS');
   assert.equal(rows.T16.status, 'PASS');
-  assert.equal(rows.T20.status, 'PENDING');
+  assert.equal(rows.T20.status, 'MANUAL', 'browser check outside node --test unless PLAYWRIGHT_CORE is set');
   const broken = Object.fromEntries(classify([r('T16: inert'), r('legacy broke', 'fail', { file: 'test/push.test.js' })]).map((x) => [x.id, x]));
   assert.equal(broken.T16.status, 'FAIL', 'T16 also needs every pre-V2 test green');
   const mapped = Object.fromEntries(classify([r('T14: ok'), { ...r('V5 cancel kills the check', 'fail', { todo: 'defect' }), file: 'test/v2-goal-loop-verify.test.js' }]).map((x) => [x.id, x]));

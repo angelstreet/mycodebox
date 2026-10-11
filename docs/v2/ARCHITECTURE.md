@@ -288,3 +288,32 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    - Without a lease authority (`leases` not injected) there is no controller lease: `holdController` neither fences
      nor reconciles, so a store opened read-only is never reconciled automatically (liveness gap); deployments always
      inject the lease authority.
+
+## Implementation notes (delivery bridge)
+
+Recorded from `v2/11-e2e` (`orchestration/delivery.js`); additive to §10 and §11.
+
+1. `createDelivery({ store, queue, controller: ({ store, approvals }) => controller, git, ci, repo, target, retryMs })`
+   returns `{ integrate, controllerStore, approvals, controller }`; `integrate(task, { sha, worktree, idempotency_key,
+   store })` and `integrate.reconcile(task, { effect_id, idempotency_key, store })` are the goal loop's delivery hook
+   (implementation note 5 of the goal loop). The goal loop passes its fenced store handle as `store` in both calls.
+2. One writer (D-016/D-017). The controller is built over `controllerStore`: every non-transition write goes to the
+   loop's fenced handle of the current hook call (so it re-validates the loop's controller lease) and is refused with
+   `E_NO_WRITER` outside a call; `transition()` is recorded as a proposal and never applied. The bridge maps the
+   controller's durable queue item state to the loop's next state (`merged` -> `release_verifying` with
+   `release_verified` when the remote target contains the integration SHA and remote CI is green on it;
+   `awaiting_approval` -> `awaiting_approval`; `returned` -> `repair` with feedback; `unknown` -> unknown outcome;
+   `rejected`/`cancelled` -> owner; anything parked -> `waiting` with a retry), and the loop applies it with its own
+   decision. Every task transition is therefore written by the goal loop.
+3. Handoff facts come from the store and git: developer = the actor recorded by `setHead` for the SHA
+   (`store.independence`), diff scope = `git diff --name-only base..sha` in the task worktree, source = the task
+   branch in `task.repository` (which the controller config must list in `source_remotes`). Resubmitting is
+   idempotent (`task:sha:target`); an item already final is not run again.
+4. Approvals: each controller request (candidate push, merge) is returned with the key
+   `integration:<action>:<repo>:<target>:<sha>`; the loop's integration approval request carries it (`keys`), the
+   owner grant copies it, and the controller's approval check accepts only a grant whose keys contain the exact key
+   for the request at hand. A class-only grant, or one for another SHA, action, target or repo, never counts.
+5. `integrate.reconcile` only reads: for a controller effect key it asks the remote (`controller.effectState(key)`,
+   `confirmed`/`failed`/unknown); for the loop's own hook effect it answers `applied` once every remote effect the call
+   may have caused can be read. The loop records the phases itself.
+

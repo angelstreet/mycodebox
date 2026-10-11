@@ -16,6 +16,7 @@ import { createGoalLoop } from '../../orchestration/goal-loop.js';
 import { createIntake } from '../../orchestration/intake.js';
 import { createIntegrationQueue } from '../../orchestration/integration-queue.js';
 import { createIntegrationController, createGitRunner } from '../../orchestration/integration-controller.js';
+import { createDelivery } from '../../orchestration/delivery.js';
 import { clock } from './v2-task.js';
 
 // ---- synthetic project ------------------------------------------------------------------------------
@@ -179,43 +180,6 @@ export async function waitFor(pred, ms = 10_000) {
 }
 
 // ---- integration controller on the disposable origin ---------------------------------------------------------
-// The goal loop is the single writer of task state: the controller's own transitions become proposals the bridge
-// reads back (`wanted`), while its evidence, blocks, decisions and remote effects land in the same task log.
-export function proposalStore(store) {
-  const wanted = [];
-  const out = Object.create(null);
-  for (const [k, v] of Object.entries(store)) out[k] = typeof v === 'function' ? v.bind(store) : v;
-  out.dir = store.dir;
-  out.transition = async (id, to, o = {}) => { wanted.push({ task_id: id, to, reason: o.reason ?? null }); return store.get(id); };
-  out.wanted = wanted;
-  return out;
-}
-
-// Owner approvals for the controller come from the task log only. An owner grant answers the loop's approval request,
-// which was raised right after the controller's own `approval.requested` event naming { action, sha, target }: the
-// grant is bound to exactly that request and that repo. A grant for an earlier request (another SHA), a quiet owner
-// or a model's say-so never counts.
-export function storeApprovals(store, { repo = 'demo' } = {}) {
-  const calls = [];
-  return {
-    calls,
-    async check(req) {
-      calls.push(req);
-      if (req.repo !== repo) return { ok: false, reason: `approvals are bound to repo ${repo}` };
-      for (const id of req.task_ids || []) {
-        const evs = await store.events(id);
-        for (const g of evs.filter((e) => e.kind === 'approval.granted' && e.payload.grants?.request_kind === 'integration')) {
-          const asked = evs.filter((e) => e.kind === 'approval.requested' && e.payload.required && e.seq < g.seq).at(-1)?.payload.required;
-          if (asked && asked.action === req.action && asked.sha === req.sha && asked.target === req.target) {
-            return { ok: true, approval_ref: g.payload.approval_ref, repo, sha: req.sha, action: req.action, target: req.target, approved_by: g.payload.actor?.id ?? null };
-          }
-        }
-      }
-      return { ok: false, reason: 'no owner approval for this action/sha/target' };
-    },
-  };
-}
-
 // Fake remote CI: it only knows commits published on the candidate ref; each new SHA is pending once, then success.
 export function fakeRemoteCi(o, { candidate = 'v2int/main', red = new Set() } = {}) {
   const seen = new Map();
@@ -232,7 +196,10 @@ export function fakeRemoteCi(o, { candidate = 'v2int/main', red = new Set() } = 
   return { status, log, red };
 }
 
-export function makeController(sb, o, { store, name = 'a', ci, approvals, deploys = { status: () => 'idle' }, leases, candidate_ref = 'v2int/main', alert, gates, leaseTtlMs, now } = {}) {
+// The production bridge (orchestration/delivery.js) over a real integration controller on the disposable origin. The
+// returned `integrate` is what the goal loop is given; every call's result is kept in `runs` (with the controller run
+// outcome and its manifest) for assertions.
+export function makeDelivery(sb, o, { store, name = 'a', ci, deploys = { status: () => 'idle' }, leases, candidate_ref = 'v2int/main', gates, leaseTtlMs, now } = {}) {
   const base = path.join(o.dir, `ctl-${name}`);
   fs.mkdirSync(base, { recursive: true });
   const mirror = path.join(base, 'mirror');
@@ -241,43 +208,23 @@ export function makeController(sb, o, { store, name = 'a', ci, approvals, deploy
   const auth = leases || createLeaseAuthority({ backend: fileBackend({ dir: path.join(o.dir, 'int-leases') }) });
   const wts = createWorktrees({ git: run, root: path.join(base, 'wt'), repoAllowlist: [mirror], leases: auth });
   const queue = createIntegrationQueue({ dir: path.join(base, 'queue') });
-  const pstore = proposalStore(store);
   const alerts = [];
-  const controller = createIntegrationController({
-    store: pstore, leases: auth, worktrees: wts, git: run, ci, approvals: approvals || storeApprovals(store), deploys, queue, owner: `integrator-${name}`,
-    repos: { demo: { dir: mirror, remote: o.origin, source_remotes: [o.repo], ...(candidate_ref ? { candidate_ref } : {}) } },
-    alert: (a) => { alerts.push(a); alert?.(a); }, manifestDir: path.join(base, 'manifests'), artifactsDir: path.join(base, 'artifacts'),
-    ...(gates ? { gates } : {}), ...(leaseTtlMs ? { leaseTtlMs } : {}), ...(now ? { now } : {}),
+  const delivery = createDelivery({
+    store, queue, git: sb.git, ci, repo: 'demo', target: 'main',
+    controller: ({ store: handle, approvals }) => createIntegrationController({
+      store: handle, leases: auth, worktrees: wts, git: run, ci, approvals, deploys, queue, owner: `integrator-${name}`,
+      repos: { demo: { dir: mirror, remote: o.origin, source_remotes: [o.repo], ...(candidate_ref ? { candidate_ref } : {}) } },
+      alert: (a) => alerts.push(a), manifestDir: path.join(base, 'manifests'), artifactsDir: path.join(base, 'artifacts'),
+      ...(gates ? { gates } : {}), ...(leaseTtlMs ? { leaseTtlMs } : {}), ...(now ? { now } : {}),
+    }),
   });
-  return { controller, queue, leases: auth, mirror, alerts, base, wanted: pstore.wanted };
-}
-
-// The goal loop's integrate(task) hook backed by the real integration controller. Outcomes map onto the loop's
-// next states; the handoff names the task worktree branch in the developer clone (source_repo) and its exact SHA.
-export function integrationHook(sb, { controller, store, ci, o, repo = 'demo', target = 'main', retryMs = 60_000 }) {
   const runs = [];
-  const integrate = async (task, { sha, worktree }) => {
-    const ind = await store.independence(task.task_id, sha);
-    const developer = { role: 'developer', id: ind.developers?.[0] ?? 'unknown' };
-    const diff_scope = (await sb.git(['diff', '--name-only', task.base_sha, sha], { cwd: worktree.path })).split('\n').filter(Boolean);
-    const h = { task_id: task.task_id, repo, target, source_branch: worktree.branch, source_sha: sha, base_sha: task.base_sha, developer, diff_scope, source_repo: task.repository };
-    const sub = await controller.submit(h);
-    if (!sub.ok) { runs.push({ submit: sub }); return { next: 'awaiting_approval', reason: `handoff rejected: ${sub.errors.join('; ')}`, classes: ['integration'] }; }
-    const r = await controller.runNext(repo, target);
-    runs.push(r);
-    switch (r.outcome) {
-      case 'merged': case 'reconciled': {
-        const head = o.head(target);
-        const cs = ci.status(head);
-        return { next: 'release_verifying', release_verified: head === r.integration_sha && cs.status === 'success', reason: `merged ${r.integration_sha}; post-merge CI ${cs.status}` };
-      }
-      case 'awaiting_approval': return { next: 'awaiting_approval', reason: r.reason, classes: [r.required?.class ?? 'integration'], required: r.required };
-      case 'ci_blocked': case 'busy': case 'blocked': case 'empty': case 'lease_lost': return { next: 'waiting', retry_after_ms: retryMs, reason: `${r.outcome}: ${r.reason ?? ''}` };
-      case 'gates_failed': case 'ci_failed': case 'conflict': case 'returned': return { next: 'repair', reason: `${r.outcome}: ${r.reason ?? ''}` };
-      default: return { next: 'unknown', reason: `${r.outcome}: ${r.reason ?? ''}` };
-    }
+  const integrate = async (task, ctx) => {
+    const r = await delivery.integrate(task, ctx);
+    const manifest = r.manifest_path && fs.existsSync(r.manifest_path) ? JSON.parse(fs.readFileSync(r.manifest_path, 'utf8')) : null;
+    runs.push({ ...r, outcome: r.run_outcome, manifest, integration_sha: r.integration_sha ?? manifest?.rounds?.at(-1)?.integration_sha ?? r.required?.sha ?? null });
+    return r;
   };
-  integrate.reconcile = async (task) => { const r = await controller.reconcileTask(task.task_id); return r.ok ? { applied: true } : {}; };
-  integrate.runs = runs;
-  return integrate;
+  integrate.reconcile = (task, ctx) => delivery.integrate.reconcile(task, ctx);
+  return { delivery, integrate, runs, queue, leases: auth, mirror, alerts, base, wanted: () => runs.flatMap((r) => r.proposals || []) };
 }

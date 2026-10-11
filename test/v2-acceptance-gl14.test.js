@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sandbox, world, mkOrigin, makeController, integrationHook, fakeRemoteCi, states, loopDecisions, devRuns,
+import { sandbox, world, mkOrigin, makeDelivery, fakeRemoteCi, states, loopDecisions, devRuns,
   GOOD, BAD, THROWS, GAMED, APPROVE, REJECT_GAMED } from './fixtures/v2-world.js';
 
 const sb = sandbox('v2-acc-gl14-');
@@ -20,12 +20,17 @@ function delivery({ dev, rev }) {
   const integrate = (...a) => box.hook(...a);
   integrate.reconcile = (...a) => box.hook.reconcile(...a);
   const env = world(sb, { repo: { dir: o.repo, sha: o.sha }, dev, rev, loopOpts: { integrate } });
-  const c = makeController(sb, o, { store: env.store, ci });
-  box.hook = integrationHook(sb, { controller: c.controller, store: env.store, ci, o });
+  const c = makeDelivery(sb, o, { store: env.store, ci });   // orchestration/delivery.js over the real controller
+  box.hook = c.integrate;
+  box.hook.runs = c.runs;
   return { o, ci, env, c, hook: box.hook };
 }
-// The owner approves exactly what the controller asked for: one action on one SHA to one target.
+// The owner approves exactly what the controller asked for: the loop's request carries the delivery key
+// integration:<action>:<repo>:<target>:<sha>, and the grant covers that key only.
 async function ownerApproves(env, id, required) {
+  const v = await env.view(id);
+  const asked = v.decisions.filter((d) => d.loop?.patch?.approval).at(-1).loop.patch.approval;
+  assert.deepEqual(asked.keys, [`integration:${required.action}:demo:${required.target}:${required.sha}`], 'the loop request names the exact action, repo, target and SHA');
   await env.loop.approve(id, { actor: OWNER, approval_ref: `owner-${required.action}-${required.sha.slice(0, 8)}`,
     grants: { classes: [required.class] } });
 }
@@ -90,7 +95,8 @@ test('GL14/T39: intake -> worktree -> repair loops -> independent verifier -> in
   assert.ok(v.history.some((h) => h.from === 'waiting' && h.to === 'integrating'), 'CI pending parks in waiting and resumes integrating');
   assert.equal(v.outcome, 'done');
   // The controller's own transitions were proposals; the loop applied each of them, in order, as the single writer.
-  assert.deepEqual([...new Set(c.wanted.filter((w) => w.task_id === id).map((w) => w.to))], ['awaiting_approval', 'waiting', 'release_verifying']);
+  assert.deepEqual([...new Set(c.wanted().filter((w) => w.task_id === id && w.to !== 'integrating').map((w) => w.to))], ['awaiting_approval', 'waiting', 'release_verifying']);
+  assert.ok(v.history.every((h) => h.actor === 'goal-loop'), 'every task transition was written by the loop itself');
   assert.equal(new Set(env.events(id).map((e) => e.event_id)).size, env.events(id).length, 'no duplicate event');
 
   // Machine-readable trace (synthetic), then read back and assert.

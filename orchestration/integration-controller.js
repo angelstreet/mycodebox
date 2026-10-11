@@ -229,6 +229,22 @@ export function createIntegrationController({
     if (!['merge', 'push'].includes(kind) || !REPO_RE.test(repo) || !repos[repo] || !ref || !REF_RE.test(ref) || !SHA_RE.test(sha)) return null;
     return { kind, repo, ref, sha };
   }
+  // Read-only: what the remote says about one effect key. -> 'confirmed' | 'failed' | null (key not ours, or the
+  // remote cannot be read: unknown stays unknown). Used by reconcileTask and by the goal-loop delivery bridge.
+  async function effectState(key, scope = 'probe') {
+    const k = parseKey(key);
+    if (!k) return null;
+    const { repo, ref, sha } = k;
+    try {
+      const cfg = repoCfg(repo);
+      const remote = await remoteHead(cfg, ref);
+      if (remote === sha) return 'confirmed';
+      if (!remote) return 'failed';
+      await fetchRef(cfg, cfg.remote, ref, `refs/v2int/reconcile/${scope}`);
+      return (await git(['cat-file', '-e', `${sha}^{commit}`], { cwd: cfg.dir }).then(() => true, () => false))
+        && await isAncestor(cfg.dir, sha, remote) ? 'confirmed' : 'failed';
+    } catch { return null; }
+  }
   async function reconcileTask(task_id) {
     const t = await store.get(task_id);
     const open = (t?.effects || []).filter((x) => x.phase === 'attempted' || x.phase === 'possibly_applied');
@@ -236,21 +252,10 @@ export function createIntegrationController({
     for (const eff of open) {
       const k = EFFECT_ID_RE.test(eff.effect_id) ? parseKey(eff.idempotency_key) : null;
       if (!k) return { ok: false, unresolved: eff.effect_id, reason: 'not an integration effect this controller can reconcile' };
-      const { kind, repo, ref, sha } = k;
-      let phase = null;
-      try {
-        const cfg = repoCfg(repo);
-        const remote = await remoteHead(cfg, ref);
-        if (remote === sha) phase = 'confirmed';
-        else if (remote) {
-          await fetchRef(cfg, cfg.remote, ref, `refs/v2int/reconcile/${task_id}`);
-          phase = (await git(['cat-file', '-e', `${sha}^{commit}`], { cwd: cfg.dir }).then(() => true, () => false))
-            && await isAncestor(cfg.dir, sha, remote) ? 'confirmed' : 'failed';
-        } else phase = 'failed';
-      } catch { phase = null; }
+      const phase = await effectState(eff.idempotency_key, task_id);
       if (!phase) return { ok: false, unresolved: eff.effect_id };
       await store.recordEffect(task_id, { effect_id: eff.effect_id, idempotency_key: eff.idempotency_key, kind: eff.kind, phase });
-      if (phase === 'confirmed' && kind === 'merge') merged = true;
+      if (phase === 'confirmed' && k.kind === 'merge') merged = true;
     }
     return { ok: true, merged };
   }
@@ -677,5 +682,5 @@ export function createIntegrationController({
     return { outcome: 'unknown_external_effect', reason, integration_sha: sha ?? null };
   }
 
-  return { submit, validateHandoff, runNext, reconcileTask, remoteHead: (repo, ref) => remoteHead(repoCfg(repo), ref) };
+  return { submit, validateHandoff, runNext, reconcileTask, effectState, remoteHead: (repo, ref) => remoteHead(repoCfg(repo), ref) };
 }
