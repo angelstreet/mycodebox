@@ -32,6 +32,9 @@ const DEFECT_ROWS = {
     V8: ['GL04', 'GL07'], V9: ['GL07'], V10: ['GL09'], V12b: ['T18', 'GL06'], V13: ['GL07'] },
   'test/v2-goal-loop-verify4.test.js': { Y3b: ['T10', 'GL12'], Y6: ['T06', 'T18'], Y7: ['T13'] },
   'test/v2-lease-authority-verify4.test.js': { 'adoptOwn:': ['T25', 'T27', 'GL10'] },
+  'test/v2-goal-loop-verify5.test.js': { Z1: ['T18', 'T27', 'GL06'], Z3: ['T14'] },
+  'test/v2-lease-authority-verify5.test.js': { 'D-016': ['T25', 'T27', 'GL10'] },
+  'test/v2-store-d017-verify.test.js': { 'D-017:': ['T14', 'T18'] },
 };
 const defectRows = (r) => (r.todo && r.file ? DEFECT_ROWS[r.file]?.[String(r.name).split(/\s/)[0]] ?? [] : []);
 
