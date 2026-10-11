@@ -229,6 +229,7 @@ Suite at `4303d43` on Node v23.6.0: 1606 tests, 1606 pass, 0 fail, 0 todo, 0 ski
 1 test(s) passed.
 
 - `test/v2-goal-loop.test.js` › T15 tests pass but the reviewer keeps disagreeing: evidence cannot settle it -> owner decides, never accepted
+- `test/v2-goal-loop.test.js` › T15 reviewer approves but the required tests are red: never accepted, back to repair (evidence outranks the verdict)
 
 ### T16 — PASS
 
@@ -266,7 +267,7 @@ Suite at `4303d43` on Node v23.6.0: 1606 tests, 1606 pass, 0 fail, 0 todo, 0 ski
 
 1 test(s) passed. Runs only with PLAYWRIGHT_CORE set (dev-only, not a dependency); without it the runner marks the row MANUAL.
 
-- `scripts/v2-ui-check.js` › T20: browser check (scripts/v2-ui-check.js): 37/37 checks passed
+- `scripts/v2-ui-check.js` › T20: browser check (scripts/v2-ui-check.js): 39/39 checks passed (includes the same-origin positive control for the 403 check)
 
 ### T21 — PASS
 

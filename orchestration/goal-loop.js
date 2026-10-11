@@ -1091,6 +1091,18 @@ export function createGoalLoop({
       return askOwner(ctx, { kind: 'integration', question: `Integration was applied but the controller reports no usable state: ${r?.reason || 'no result'}`, reason: r?.reason || 'no result', classes: ['integration'] }, { resume_to: 'integrating' });
     }
     const patch = { integration: { next: r.next, reason: r.reason ?? null, release_verified: r.release_verified === true }, integration_unknown: 0 };
+    // A block with no controller request (protected path, path not allowlisted, target policy) carries no key: an owner
+    // grant could never cover anything, so it is a waiting task with a diagnosis, not a keyless awaiting_approval dead end.
+    if (r.next === 'awaiting_approval' && !(Array.isArray(r.keys) && r.keys.length)) {
+      const diagnosis = r.reason || 'integration blocked by policy';
+      const next_action = 'fix the cause (project policy, protected/allowlisted paths or the integration target), then resume the task';
+      return decide(ctx, decision('integration_policy_block', 'Integration blocked with no approval request: what now?', [
+        alt('wait with a diagnosis', 'there is nothing the owner could approve; revisited when the policy changes or the owner resumes', 'task stays open'),
+        alt('ask the owner', 'a request with no action key can never be granted', 'dead end: the approval covers nothing')],
+      'wait with a diagnosis', { evidence: [`sha ${head}`, `key ${idempotency_key}`], expected_effect: 'waiting until inputs change', rationale: `Policy block without an approval request: ${diagnosis}` }),
+      { patch: { ...patch, wait: { reason: 'policy_block', until_ms: null, resume_to: 'integrating', diagnosis, next_action, policy_hash: policyRef(readPolicy(ctx)) } }, to: 'waiting', reason: 'policy_block',
+        emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'policy_block', diagnosis, next_action } }] });
+    }
     if (r.next === 'waiting') patch.wait = { reason: 'integration', until_ms: now() + (r.retry_after_ms ?? 5 * 60_000), resume_to: 'integrating' };   // D-007
     // The grant is bound to the hook's action keys (e.g. integration:merge:<repo>:<target>:<sha>), never to the class alone.
     if (r.next === 'awaiting_approval') patch.approval = { k: ctx.k, kind: 'integration', question: r.reason || 'integration needs owner approval', classes: r.classes || [],
