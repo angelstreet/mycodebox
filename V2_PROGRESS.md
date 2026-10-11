@@ -1,4 +1,4 @@
-STATUS: RUNNING — devs: goal-loop, adapters-fixes, system-ops-fixes; Fable re-checks: phase1, task-core, lease, integration-controller
+STATUS: RUNNING — devs: integration-fixes, ui-docs; verifying goal-loop, adapters, system-ops, task-core, lease; next: E2E T/GL matrix
 
 # V2 progress
 
@@ -33,22 +33,23 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | ab70292 -> merge 8567083; 1042/1042 both runtimes |
 | task-core | 2 | v2/02-task-core | c366307 | Opus | review | 3a4fb9e; 39 tests |
 | task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | done: APPROVE WITH FIXES | a5f83d2 (11 todo); 2 high |
-| task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus | re-verification (Fable) | c246b9f; 979/979; D-007 added |
+| task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus + coordinator | Fable APPROVE at c246b9f; residuals + store.events()/independence() by coordinator at 18e3485, final check pending | 988/988 both runtimes |
 | lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | review | 9e958b6; T25–T27 tests |
 | lease-verify | 12 | wt verify-08 | 9e958b6 | Fable | done: APPROVE WITH FIXES | 5d19f6b (4 todo); F1 breaker race |
 | lease-fixes | 12 | v2/08-lease-authority | 9e958b6 | Opus | re-verification (Fable) | a5c508e; 961/961; races 20x20; D-008 added |
 | system-ops | 12 | v2/10-system-ops | 9e958b6 | Sonnet | review | b5ffaac; T32–T38, T40 |
 | system-ops-verify | 12 | wt verify-10 | b5ffaac | Fable | done: APPROVE WITH FIXES | c50f7ff (18 todo) |
-| system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet | in progress | |
-| goal-loop | 5 | v2/05-goal-loop | merge 02+03+04+10 (be60274) | Opus | in progress | |
+| system-ops-fixes | 12 | v2/10-system-ops | b5ffaac | Sonnet | re-verification (Fable) | b6c07f0; 1017/1017 |
+| goal-loop | 5 | v2/05-goal-loop | be60274 | Opus | review (Fable) | 68611d8; GL01–GL09, GL12, GL13, T09–T15, T18, minimum E2E |
 | routing | 4 | v2/04-routing | c366307 | Sonnet | INTEGRATED (verifier APPROVE, 3 rounds) | b9a88f2 -> merge 71d9b39; 991/991 both runtimes |
 | routing-verify | 4 | wt verify-04 | fd3e4d6 | Opus | in progress | |
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
 | adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | done: APPROVE WITH FIXES | 190bf01 (15 todo); 1 high remove() data loss |
-| adapters-fixes | 3 | v2/03-adapters | 106bd36 | Sonnet | in progress | |
+| adapters-fixes | 3 | v2/03-adapters | 106bd36 | Sonnet | re-verification (Opus) | e74c699; 1018/1018 |
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
 | integration-verify | 12 | wt verify-09 | a14a72a | Fable | done: APPROVE WITH FIXES | 631409d (5 todo); F1 high self-approval via handoff |
-| integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus | queued (next slot) | |
+| integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus | in progress (+D-007, D-008, store.independence) | |
+| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet | in progress | API, Tasks view, README/MAP/MIGRATION, scoring, T20 browser |
 
 ## Decision journal
 
