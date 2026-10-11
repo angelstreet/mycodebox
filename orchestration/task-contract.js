@@ -64,7 +64,7 @@ const REQUIRED = ['task_id', 'project_id', 'goal', 'scope', 'prohibited_actions'
 const OPTIONAL = ['schema_version', 'title', 'repository', 'excluded_paths', 'runtime_allowlist', 'model_allowlist',
   'priority', 'budget_policy', ...BUDGET_CAPS, 'retry_strategy', 'no_progress_policy', 'deadline', 'preferred_models',
   'review_policy', 'schedule', 'worktree_id', 'branch', 'parent_task_id', 'handoff_refs', 'context_summary',
-  'allocations', 'created_at', 'updated_at'];
+  'allocations', 'created_at', 'updated_at', 'task_class'];
 const KNOWN = new Set([...REQUIRED, ...OPTIONAL]);
 const SHA_RE = /^[0-9a-f]{7,64}$/;
 
@@ -145,7 +145,8 @@ export function validateTask(spec) {
   for (const k of ['excluded_paths', 'runtime_allowlist', 'model_allowlist', 'preferred_models', 'handoff_refs']) {
     if (has(k) && spec[k] !== null && !isStrArr(spec[k])) err(k, 'array of strings or null');
   }
-  for (const k of ['repository', 'worktree_id', 'branch', 'parent_task_id', 'title', 'context_summary']) {
+  // task_class: a free label for scoring (docs/v2/SCORING.md), never a permission.
+  for (const k of ['repository', 'worktree_id', 'branch', 'parent_task_id', 'title', 'context_summary', 'task_class']) {
     if (has(k) && spec[k] !== null && typeof spec[k] !== 'string') err(k, 'string or null');
   }
   for (const k of ['deadline', 'created_at', 'updated_at']) if (has(k) && spec[k] !== null && !isIso(spec[k])) err(k, 'ISO timestamp or null');

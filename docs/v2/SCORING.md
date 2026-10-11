@@ -10,7 +10,15 @@ registry, any policy or any file. There is no automatic self-modification; a per
 node scripts/v2-score.js                          # table, store = $GHOSTY_STATE_DIR/v2
 node scripts/v2-score.js --json                   # machine-readable
 node scripts/v2-score.js --store DIR --since 2026-10-01T00:00:00Z
+node scripts/v2-score.js --scorecard [--suite MANIFEST] [--json]   # full scorecard (see Scorecard)
+node scripts/v2-score.js --tool-score --suite MANIFEST             # tool score over a bench run (JSON)
+node scripts/v2-score.js --compare A.json B.json                   # two tool scores; refused across suite versions (exit 3)
+node scripts/v2-score.js --propose [--history FILE]                # print proposals, write nothing
+node scripts/v2-score.js --propose --write-proposals --store DIR --base-sha SHA [--project ID]
 ```
+
+The scorecard is also served read-only at `GET /api/v2/scorecard` (V2 on) and shown under **Scorecard** in the Tasks view.
+Only `--write-proposals` writes, and only with an explicit `--store`: see [Proposals](#proposals-approval-gated).
 
 It reads `tasks/<id>/events.jsonl` directly. It never calls the store's recovery, so scoring a live store cannot
 truncate or rewrite anything. A torn last line is ignored. A corrupt line before the tail makes the task unreadable: it is
@@ -80,3 +88,103 @@ The router ignores an entry with fewer than its minimum attempts, and ignores an
 so thin or corrupt data cannot steer a choice. The router runs in shadow mode only: the history changes a
 recommendation, not a live route. To use it, a person saves the JSON, passes the `router_history` object as `history`
 in a dry run, reviews the recommendation and decides. Nothing in this repository does that automatically.
+
+## Scorecard
+
+`orchestration/scorecard.js` (pure; not the root `scorecard.js`, which scores the manager). `buildScorecard(logs, { manifest,
+unreadable, since })` folds each task log into a per-run record and aggregates settled runs four ways: `by_model` and
+`by_runtime` (developer credit, as above), `by_role` (`developer:<entry>` and `reviewer:<entry>`; a task with two reviewers
+counts in both reviewer rows, and each reviewer row counts only the defects that reviewer raised) and `by_task_class`
+(`task.task_class`, else the bench manifest, else `unknown`). Every group carries `small_sample` (fewer than 5 settled) and an
+`unknown` map naming each metric that could not be derived and why. Informational tasks (including proposals) are never scored.
+
+| Metric | Definition | Events |
+|---|---|---|
+| `verified`, `verified_rate` | accepted / settled (as above) | `task.transitioned`/`task.completed` |
+| `first_pass`, `first_pass_rate` | accepted with zero entries into `repair` or `replan`, over settled | transitions |
+| `cost.per_verified_completion_usd` | same rule as above: all spend over verified, `null` if any settled task has unknown cost or nothing was verified | `usage.recorded` |
+| `median_latency_ms` | creation to acceptance over verified tasks | timestamps |
+| `rework.rounds` | entries into `repair`/`replan` | transitions |
+| `owner_interventions` | `approvals_requested` (`approval.requested`), `approvals_granted` (`approval.granted` except `kind: resume`), `approvals_denied` (`approval.denied`), `resumes` (`approval.granted` with `kind: resume`, the owner's nudge to retry), `interventions = approvals_requested + resumes`. `messages` is always `null`: no V2 event records owner chat messages | approval events |
+| `reviewer_defects` | `caught`: `reject` verdicts from an actor that is not a developer of the SHA it judged; `findings`: their findings count. All verdicts precede acceptance (the store refuses writes after it) | `verification.failed` with a verdict, `task.head_changed` actors |
+| `regressions` | see below; `detected` is `null` when no accepted task of the group was re-checked | `evidence.recorded` across tasks |
+
+**Regressions after acceptance**, conservatively: a check command that passed on task A's accepted head SHA ran again later
+(any other task, timestamp after A's acceptance) on that exact SHA and exited differently from A's expectation. The same
+SHA is the same code, so the acceptance did not hold (flaky or environment-dependent). A later run of a command A never
+passed, or on another SHA, is not counted. A task whose SHA was never re-checked is `unknown`, not "no regression". An
+accepted task cannot be reopened (the store refuses transitions out of `accepted`), so reopening is reported as not derivable.
+
+## Bench manifest
+
+A bench run (`scripts/v2-bench.js`, built separately) produces a normal task store plus a manifest:
+
+```json
+{ "schema": "mycodebox.v2.bench-run/1", "suite_id": "core", "suite_version": "3",
+  "budget_policy": { "max_usd": 5, "max_task_ms": 1800000 },
+  "runs": [ { "task_id": "bench-0001", "bench_task_id": "docs-link", "task_class": "docs", "expected_outcome": "done",
+              "runtime": "claude", "model": "<model>", "reviewer_runtime": "codex", "reviewer_model": "<model>" } ] }
+```
+
+`expected_outcome` is `done`, `awaiting_approval` or `waiting`. `task_id` must be unique; `suite_version` is a string (an
+integer is accepted and stringified). `budget_policy.max_usd` is the fixed budget for the whole suite; `max_task_ms` the
+per-task latency budget. Declared `runtime`/`model` are a fallback only: credit follows the recorded developer, and a
+mismatch is listed in the caveats. Manifest runs with no task in the store are listed and count as incorrect.
+
+## Tool score
+
+`toolScore(scorecard, manifest)` over a fixed suite (`suite_id` + `suite_version`), formula `v1`:
+
+```
+score = 100 * (0.30 * outcome_correctness + 0.25 * verified_rate + 0.15 * first_pass_rate
+             + 0.10 * cost + 0.10 * latency + 0.10 * owner_interventions)
+```
+
+| Component | Value in [0,1] |
+|---|---|
+| `outcome_correctness` | runs whose final state matches the expectation / all runs. `done` = `accepted`; `awaiting_approval` = ended in `awaiting_approval`; `waiting` = ended in `waiting`. A run expected to stop that ended `accepted` is wrong |
+| `verified_rate` | accepted / runs expecting `done` |
+| `first_pass_rate` | accepted with zero repair/replan / runs expecting `done` |
+| `cost` | `1 - total spend / budget_policy.max_usd`, clamped; unknown if the budget is missing or any run's cost is unknown |
+| `latency` | mean over runs expecting `done` of `1 - latency / max_task_ms` (clamped; not accepted = 0); unknown without `max_task_ms` |
+| `owner_interventions` | runs expecting `done` that needed no approval request or resume / runs expecting `done` |
+
+Any unknown component makes `score` `null` with `score_reason`; a partial score is never reported. `compareToolScores(a, b)`
+returns the score delta and per-component `a`, `b`, `delta`, `weighted_delta`, and **refuses** (`E_SUITE_MISMATCH`) when the
+formula, `suite_id` or `suite_version` differ: a new suite version is a new baseline. Suites under 10 runs carry a
+small-suite caveat.
+
+## Proposals (approval-gated)
+
+`orchestration/proposals.js`. `generateProposals(scorecard, { registry, tasks, routerHistory, currentHistory, currentWeights })`
+is pure and returns proposals; each has `kind`, `title`, `rationale`, `evidence_refs`, `change` or `text`, `risk_class`
+(at least `medium`; registry changes `high`), `shadow` and `applies_itself: false`. Rules fire only for groups with at
+least 5 settled tasks:
+
+| Kind | Rule | Evaluation |
+|---|---|---|
+| `router_history` | the score report's `router_history` has an entry with 5+ attempts and differs from the history in use (`--history FILE`, default none = priors) | shadow |
+| `router_weights` | overall first pass < 50%: quality +0.1, cost -0.1; or verified >= 90%, first pass >= 80% and all costs known: cost +0.1, quality -0.1 (renormalized) | shadow |
+| `model_registry` | a model's verified rate < 50%: exclude it from routing (`models.json` or the project `model_allowlist`) | shadow with `exclude` |
+| `role_prompt` | reviewer rejects per settled task >= 0.5 for a developer model: developer prompt text | text only |
+| `harness` | rework rounds per settled task >= 1.5, or owner interventions per settled task >= 1 | text only |
+
+Shadow evaluation runs `route()` (shadow mode, nothing starts) on every recorded non-informational task with the current
+and the proposed history, weights or exclusion, and lists the tasks whose choice differs (`shadow.changed`).
+
+`recordProposals` (the only writer, used by `--write-proposals`) records each proposal through the normal intake as an
+**informational** task (`proposal-<id>`, risk at least `medium`), with a decision record and an `approval.requested`
+event, and moves it to `awaiting_approval`, so the Tasks view shows it in the approval queue. It appends one line per new
+proposal to `journal.jsonl` in the store directory (append-only; rationale, evidence refs, change, shadow diff,
+`applied: false`). The same proposal maps to the same task and event ids, so a replay records nothing new.
+
+Nothing applies a proposal. The goal loop never dispatches informational tasks, so approving one only records the owner's
+decision; a person then makes the change in a separate, reviewed task. Tests assert that the registry, router, roles,
+goal loop, policy and price files are byte-identical after generating, recording and approving proposals.
+
+## Scorecard caveats
+
+- Owner chat messages are not V2 events; owner interventions undercount them. Cancelled tasks (an owner decision) are not scored.
+- Reviewer rows overlap when a task had several reviewers; developer rows never do.
+- Regressions depend on later evidence on the same SHA; most accepted tasks will show `unknown` until something re-runs a check.
+- The tool score is only as fair as the suite: compare tools on the same `suite_version` and treat small suites as anecdotes.
