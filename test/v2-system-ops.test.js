@@ -44,7 +44,7 @@ async function harness({ backend, deploy = { state: 'none' }, actions: actOverri
     ...actOverrides,
   };
   const ops = createSystemOps({
-    incidents, leases, telemetry, actions, deploys, admission, now: c, notify: (n) => notes.push(n), stateRoot: root, plans, leaseTtlMs: ttl,
+    incidents, leases, telemetry, actions, deploys, admission, now: c, notify: (n) => notes.push(n), stateRoot: root, plans, leaseTtlMs: ttl, minCleanupAgeMs: 1,
   });
   return { root, c, m, telemetry, incidents, leases, calls, admission, deployState, notes, actions, ops, tmpRoot: join(root, 'v2-tmp') };
 }
@@ -71,7 +71,7 @@ test('incidents: contract fields, durable replay, torn tail dropped, resolved is
   await s2.resolve(incident.incident_id, { reason: 'ok' });
   await assert.rejects(s2.escalate(incident.incident_id, {}), { code: 'E_ILLEGAL_TRANSITION' });
   const kinds = (await s2.events()).map((e) => e.kind);
-  assert.deepEqual(kinds.filter((k) => !k.includes('action')), ['incident.opened', 'incident.acknowledged', 'incident.mitigation_requested', 'incident.resolved']);
+  assert.deepEqual(kinds.filter((k) => !k.includes('action') && k !== 'recovered_torn_tail'), ['incident.opened', 'incident.acknowledged', 'incident.mitigation_requested', 'incident.resolved']);
   await assert.rejects(s2.report({ ...rep(), type: 'bogus' }), { code: 'E_INVALID' });
   assert.equal(INCIDENT_TYPES.length, 9);
 });
@@ -424,4 +424,38 @@ test('GL09: only the system-operations role executes; its non-allowlisted or des
   // a request that dedups onto an open incident is linked, not run twice
   const dup = await h.ops.requestOperation({ task_id: 'ops-3', role: 'system-operations', op: { type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency', dedup_key: 'k2' } });
   assert.equal(dup.deduped, true); assert.equal(h.calls.length, 1);
+});
+
+// --- verifier follow-ups ---------------------------------------------------------------------------------------------
+
+test('T40: the request-only facade never executes, whatever role string it is given', async () => {
+  const h = await harness();
+  h.m.cpu_pct = 99;
+  for (const role of ['developer', 'system-operations']) {
+    const r = await h.ops.requester.request({ task_id: 'd', role, op: { type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency' } });
+    assert.equal(r.executed, false); assert.equal(r.state, 'mitigation_requested');
+  }
+  assert.deepEqual(h.calls, []);
+  assert.equal(Object.isFrozen(h.ops.requester), true);
+});
+
+test('T37: a reconciling incident needs owner acknowledgement before recheck can resolve it', async () => {
+  const h = await harness({ plans: { 'host.cpu_pressure': [{ action: 'throttle_concurrency', params: {} }] } });
+  h.actions.throttle_concurrency = { execute: async () => { throw new Error('x'); } };
+  h.m.cpu_pct = 99;
+  const r = await h.ops.handleReport(rep());
+  h.m.cpu_pct = 20;
+  assert.match((await h.ops.recheck(r.incident_id)).why, /acknowledgement/);
+  await h.ops.ownerAcknowledge(r.incident_id, { by: 'owner' });
+  assert.equal((await h.ops.recheck(r.incident_id)).resumed, true);
+  assert.equal(h.admission.isPaused(), false);
+});
+
+test('verify follow-up: observed pressure, not the reported type, drives the plan; actions_run is reported separately', async () => {
+  const h = await harness();
+  h.m.cpu_pct = 99;
+  const r = await h.ops.handleReport(rep({ type: 'host.memory_pressure' }));
+  assert.equal(r.outcome, 'not_reproduced'); assert.deepEqual(h.calls, []);
+  const x = await h.ops.execute({ type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency' });
+  assert.equal(x.executed, true); assert.equal(x.actions_run, 1);
 });

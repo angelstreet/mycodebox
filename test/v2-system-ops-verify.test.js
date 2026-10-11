@@ -31,7 +31,7 @@ async function harness({ actions: extra = {}, plans, incidentsDir } = {}) {
   const admission = createAdmissionController({ file: join(root, 'admission.json'), now: c });
   const deploys = { status: async () => ({ state: 'none' }) };
   const actions = { throttle_concurrency: rec('throttle_concurrency'), clear_v2_tmp_artifacts_older_than: rec('clear_v2_tmp_artifacts_older_than'), ...extra };
-  const ops = createSystemOps({ incidents, leases, telemetry, actions, deploys, admission, now: c, stateRoot: root, plans });
+  const ops = createSystemOps({ incidents, leases, telemetry, actions, deploys, admission, now: c, stateRoot: root, plans, minCleanupAgeMs: 5 });
   return { root, c, m, incidents, leases, calls, admission, actions, ops, tmpRoot: join(root, 'v2-tmp') };
 }
 const rep = (o = {}) => ({ type: 'host.cpu_pressure', host_id: H, symptom: 'cpu high', reporter: { reporter: 'dev-1', task_id: 'task-1' }, ...o });
@@ -61,7 +61,7 @@ test('verify: a non-array `steps` from the ops role cannot execute anything', as
   assert.deepEqual(h.calls, []);
 });
 
-test('verify: a step whose `action` getter changes between check and run cannot reach a non-allowlisted executor', { todo: 'defect: steps are re-read at execute time (actions[step.action]); snapshot/freeze the plan before checkStep, or restrict `actions` to ALLOWED_ACTIONS at construction' }, async () => {
+test('verify: a step whose `action` getter changes between check and run cannot reach a non-allowlisted executor', async () => {
   const h = await harness({ actions: { kill_session: { execute: async () => { h.calls.push({ name: 'kill_session' }); } } } });
   h.m.disk_pct = 97;
   let reads = 0;
@@ -72,7 +72,7 @@ test('verify: a step whose `action` getter changes between check and run cannot 
 
 // --- V2 temp root ---------------------------------------------------------------------------------------------------
 
-test('verify: temp cleanup rejects a NOT-YET-EXISTING leaf under a symlinked parent (realpath fallback to lexical path)', { todo: 'defect: realpath() falls back to resolve() on ENOENT, so <tmpRoot>/link/new (link -> outside) passes checkStep; realpath the deepest existing ancestor and fail closed on any realpath error' }, async () => {
+test('verify: temp cleanup rejects a NOT-YET-EXISTING leaf under a symlinked parent (realpath fallback to lexical path)', async () => {
   const h = await harness();
   h.m.disk_pct = 97;
   await mkdir(h.tmpRoot, { recursive: true });
@@ -107,7 +107,7 @@ test('verify: no executor ships for clear_v2_tmp_artifacts_older_than; the injec
   assert.equal(h.admission.isPaused(), true);
 });
 
-test('verify: ops role may wipe the whole V2 temp root (older_than_ms: 1) with no floor', { todo: 'defect(policy): no minimum age for temp cleanup; consider a floor (e.g. >= 1h) or owner approval below it' }, async () => {
+test('verify: ops role may wipe the whole V2 temp root (older_than_ms: 1) with no floor', async () => {
   const h = await harness();
   h.m.disk_pct = 97;
   const r = await opsReq(h, [{ action: 'clear_v2_tmp_artifacts_older_than', params: { older_than_ms: 1 } }]);
@@ -117,14 +117,14 @@ test('verify: ops role may wipe the whole V2 temp root (older_than_ms: 1) with n
 
 // --- triage: reported type vs observed pressure --------------------------------------------------------------------
 
-test('verify: the remediation plan follows the REPORTED type, not the observed pressure (disk cleanup on a CPU-only pressure)', { todo: 'defect: handle() ignores assessment.pressures; pick the plan from observed pressures (or require the reported type to be among them), else not_reproduced' }, async () => {
+test('verify: the remediation plan follows the REPORTED type, not the observed pressure (disk cleanup on a CPU-only pressure)', async () => {
   const h = await harness();
   h.m.cpu_pct = 99; h.m.disk_pct = 10;                                 // plenty of disk
   const r = await h.ops.handleReport(rep({ type: 'host.disk_pressure', symptom: 'claims disk full' }));
   assert.ok(!h.calls.some((x) => x.name === 'clear_v2_tmp_artifacts_older_than'), `temp cleanup ran on a host with 10% disk: ${JSON.stringify(r)}`);
 });
 
-test('verify: a service restart request for a HEALTHY service is raised to the owner when only an unrelated host metric is under pressure', { todo: 'defect: same root cause as above; a service.unhealthy report with service_ready ok should resolve as not_reproduced' }, async () => {
+test('verify: a service restart request for a HEALTHY service is raised to the owner when only an unrelated host metric is under pressure', async () => {
   const h = await harness();
   h.m.cpu_pct = 99; h.m.svc = true;
   const r = await h.ops.handleReport(rep({ type: 'service.unhealthy', service_id: 'api' }));
@@ -152,7 +152,7 @@ test('verify: telemetry never reports healthy with any required metric unknown, 
   assert.equal((await t2.assess(H, { service_id: 'api' })).status, 'unknown');
 });
 
-test('verify: prototype-named probe readings (constructor, __proto__) are not treated as configured metrics', { todo: 'defect(low): `r.name in limits` is true for inherited keys; use Object.hasOwn(limits, name)' }, async () => {
+test('verify: prototype-named probe readings (constructor, __proto__) are not treated as configured metrics', async () => {
   const c = () => 1_800_000_000_000;
   const ok = (n, v) => ({ name: n, value: v, unit: '%', ts: c(), source: 'p' });
   const t = createTelemetry({ now: c, probe: async () => [ok('cpu_pct', 1), ok('mem_pct', 1), ok('disk_pct', 1), ok('constructor', 1), ok('hasOwnProperty', 1)] });
@@ -160,7 +160,7 @@ test('verify: prototype-named probe readings (constructor, __proto__) are not tr
   assert.ok(!a.readings.some((r) => ['constructor', 'hasOwnProperty'].includes(r.name)), JSON.stringify(a.readings.map((r) => r.name)));
 });
 
-test('verify: admission pause with a prototype-key reason silently does not pause', { todo: 'defect: createAdmissionController stores reasons in a plain object; pause("__proto__"|"constructor"|"toString") is a no-op (isPaused() stays false); use Object.create(null) or a Map' }, async () => {
+test('verify: admission pause with a prototype-key reason silently does not pause', async () => {
   const a = createAdmissionController({});
   for (const reason of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
     a.pause(reason);
@@ -169,7 +169,7 @@ test('verify: admission pause with a prototype-key reason silently does not paus
   }
 });
 
-test('verify: admission state file with reasons as an array or non-object is treated as paused (fail closed)', { todo: 'defect: {"reasons":[]} and {"reasons":"x"} load as not paused; only a plain object with string keys should be accepted' }, async () => {
+test('verify: admission state file with reasons as an array or non-object is treated as paused (fail closed)', async () => {
   const dir = await tmp();
   for (const body of ['{"reasons":[]}', '{"reasons":"x"}', '{"reasons":null}', '[]', '"str"']) {
     const file = join(dir, 'a.json');
@@ -190,7 +190,7 @@ test('verify: recheck never resumes on a reading older than the incident repair 
   assert.equal((await h.ops.recheck(r.incident_id)).resumed, true);
 });
 
-test('verify: recheck auto-resolves a RECONCILING incident (rollback failed) on a fresh healthy reading, hiding the failed rollback', { todo: 'defect(judgement): a reconciling incident whose rollback_failed should need owner acknowledgement before auto-resolve; recheck() currently resolves it as "recovered"' }, async () => {
+test('verify: recheck auto-resolves a RECONCILING incident (rollback failed) on a fresh healthy reading, hiding the failed rollback', async () => {
   const h = await harness({ plans: { 'host.cpu_pressure': [{ action: 'throttle_concurrency', params: { max: 1 } }] } });
   h.actions.throttle_concurrency = { execute: async () => { throw new Error('half applied'); }, undo: async () => { throw new Error('undo failed too'); } };
   h.m.cpu_pct = 99;
@@ -225,7 +225,7 @@ test('verify: anyone who can call requestOperation can pass role="system-operati
   assert.equal(r.outcome, 'approval_required');                      // throttle did not relieve the fake pressure
 });
 
-test('verify: `executed` is false even though an allowlisted action really ran (it means "mitigated", not "executed")', { todo: 'defect(low, audit): requestOperation returns executed:false after an action executed but was insufficient; report executed_actions/actions_ran separately from the outcome' }, async () => {
+test('verify: `executed` is false even though an allowlisted action really ran (it means "mitigated", not "executed")', async () => {
   const h = await harness();
   h.m.cpu_pct = 99;
   const r = await h.ops.requestOperation({ task_id: 'ops', role: SYSTEM_ROLE, op: { type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency' } });
@@ -235,7 +235,7 @@ test('verify: `executed` is false even though an allowlisted action really ran (
 
 // --- dedup -------------------------------------------------------------------------------------------------------------
 
-test('verify: a caller-chosen dedup_key defeats dedup; the same host issue remediates once per distinct key', { todo: 'defect: dedup_key is caller-controlled; derive the canonical key server-side (type:host:service) and keep the caller key only as a link/correlation field' }, async () => {
+test('verify: a caller-chosen dedup_key defeats dedup; the same host issue remediates once per distinct key', async () => {
   const h = await harness();
   h.m.cpu_pct = 99;
   h.actions.throttle_concurrency = { execute: async () => { h.calls.push({ name: 'throttle_concurrency' }); } };   // pressure persists
@@ -246,15 +246,15 @@ test('verify: a caller-chosen dedup_key defeats dedup; the same host issue remed
   assert.equal(h.calls.length, 1, 'remediation ran more than once for one host issue');
 });
 
-test('verify: dedup_key collisions through sanitization link unrelated reports (conservative, but surprising)', async () => {
+test('verify: caller dedup_key collisions no longer link unrelated reports (canonical key is type:host:service)', async () => {
   const h = await harness();
   const a = await h.incidents.report(rep({ dedup_key: 'net:192.0.2.1' }));
   const b = await h.incidents.report(rep({ dedup_key: 'net:192.0.2.2', type: 'host.memory_pressure' }));
-  assert.equal(b.deduped, true);                                       // both become 'net:[ip]'
-  assert.equal(a.incident.incident_id, b.incident.incident_id);
+  assert.equal(b.deduped, false);
+  assert.notEqual(a.incident.incident_id, b.incident.incident_id);
 });
 
-test('verify: two store instances on the same directory do not see each other (duplicate incidents, seq collisions)', { todo: 'defect(documentation/single-instance): no cross-process dedup; document that exactly one System Operations instance may own an incident dir, or lock/re-read the log before report()' }, async () => {
+test('verify: two store instances on the same directory do not see each other (duplicate incidents, seq collisions)', async () => {
   const dir = join(await tmp(), 'inc');
   const s1 = createIncidentStore({ dir, now: () => 1 });
   const s2 = createIncidentStore({ dir, now: () => 1 });
@@ -266,7 +266,7 @@ test('verify: two store instances on the same directory do not see each other (d
 
 // --- sanitization --------------------------------------------------------------------------------------------------------
 
-test('verify: sanitizer gaps: bare 64-hex secrets, JSON-quoted keys, Basic auth, CLI --token, ANSI/control characters', { todo: 'defect: sanitizeText keeps 64-hex strings (openssl rand -hex 32 secrets) as "git SHAs", misses "token":"v", Basic <b64>, --token v, and leaves ESC/C0 control chars that a terminal UI would interpret' }, async () => {
+test('verify: sanitizer gaps: bare 64-hex secrets, JSON-quoted keys, Basic auth, CLI --token, ANSI/control characters', async () => {
   const hex64 = 'deadbeef'.repeat(8);
   assert.ok(!sanitizeText(`x-api-token ${hex64}`).includes(hex64), 'bare 64-hex kept');
   assert.ok(!sanitizeText('{"api_key":"short12secret"}').includes('short12secret'), 'JSON-quoted key value kept');
@@ -276,7 +276,7 @@ test('verify: sanitizer gaps: bare 64-hex secrets, JSON-quoted keys, Basic auth,
   assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(out), 'control characters kept');
 });
 
-test('verify: sanitizeText is superlinear on long alphanumeric runs (reporter can stall the ops process)', { todo: 'defect: the e-mail/token regexes backtrack O(n^2) on a long word and the 500-char cap is applied AFTER them; 30k chars ~ 0.8 s, 80k ~ 6 s, 1 MB ~ minutes; slice the input (e.g. 4*max) before the regex pass' }, () => {
+test('verify: sanitizeText is superlinear on long alphanumeric runs (reporter can stall the ops process)', () => {
   const t = performance.now();
   sanitizeText('z'.repeat(30_000));
   assert.ok(performance.now() - t < 200, `took ${(performance.now() - t).toFixed(0)} ms`);
@@ -290,7 +290,7 @@ test('verify: sanitizer handles what it claims (regression guard for the strings
   assert.equal(sanitizeText(12345), '12345');
 });
 
-test('verify: transition details with keys outside {reason, action, by} bypass sanitization and land in the public record', { todo: 'defect: cleanDetail spreads ...d first; whitelist the persisted detail fields (or sanitize every string value recursively)' }, async () => {
+test('verify: transition details with keys outside {reason, action, by} bypass sanitization and land in the public record', async () => {
   const dir = await tmp();
   const s = createIncidentStore({ dir });
   const { incident } = await s.report(rep());
@@ -320,7 +320,7 @@ test('verify: event vocabulary contains exactly the seven spec kinds; internal k
   assert.deepEqual(internal, ['incident.report_linked', 'incident.action_recorded', 'incident.reconciling']);
 });
 
-test('verify: a corrupt line in the MIDDLE of the log truncates all later valid history', { todo: 'defect: init() treats any unparsable/unknown-kind line as the torn tail and truncates from there, destroying later valid events; only a final line without newline (or final unparsable line) is a torn tail; anything else must fail init (E_UNAVAILABLE), never truncate' }, async () => {
+test('verify: a corrupt line in the MIDDLE of the log truncates all later valid history', async () => {
   const dir = await tmp();
   const s = createIncidentStore({ dir, now: () => 1, randomId: () => 'r' });
   const { incident } = await s.report(rep());
@@ -334,7 +334,7 @@ test('verify: a corrupt line in the MIDDLE of the log truncates all later valid 
   assert.ok(init.error || after.length === 3, `valid acknowledged event was truncated: ${after.length} lines left`);
 });
 
-test('verify: an unknown (future) event kind in the log is not silently destroyed', { todo: 'defect: same truncation path as above; forward-compatible kinds should be kept (or init should fail), not deleted' }, async () => {
+test('verify: an unknown (future) event kind in the log is not silently destroyed', async () => {
   const dir = await tmp();
   const s = createIncidentStore({ dir, now: () => 1 });
   const { incident } = await s.report(rep());
@@ -345,7 +345,7 @@ test('verify: an unknown (future) event kind in the log is not silently destroye
   assert.notEqual(await readFile(file, 'utf8'), before, 'future event kind was truncated away');
 });
 
-test('verify: torn tail recovery is not recorded as an event (ARCHITECTURE ground rule: record recovered_torn_tail)', { todo: 'defect(contract): init() returns {torn:true} but persists nothing; the ground rules ask for a recovered_torn_tail record' }, async () => {
+test('verify: torn tail recovery is not recorded as an event (ARCHITECTURE ground rule: record recovered_torn_tail)', async () => {
   const dir = await tmp();
   const s = createIncidentStore({ dir, now: () => 1 });
   await s.report(rep());
