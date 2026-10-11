@@ -32,7 +32,8 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | done: APPROVE WITH FIXES | 0e6d4d9 tests (+1 todo); F1 high forbidden paraphrases; F2–F8 med/low |
 | phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet | re-verification (Fable) | 0789bdc | fix list kept outside repo, summarized in review row |
 | task-core | 2 | v2/02-task-core | c366307 | Opus | review | 3a4fb9e; 39 tests |
-| task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | in progress | |
+| task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | done: APPROVE WITH FIXES | a5f83d2 (11 todo); 2 high |
+| task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus | queued FIRST (blocks goal-loop, integration) | |
 | lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | review | 9e958b6; T25–T27 tests |
 | lease-verify | 12 | wt verify-08 | 9e958b6 | Fable | done: APPROVE WITH FIXES | 5d19f6b (4 todo); F1 breaker race |
 | lease-fixes | 12 | v2/08-lease-authority | 9e958b6 | Opus | in progress | |
