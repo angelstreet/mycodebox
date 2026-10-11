@@ -50,7 +50,9 @@ export function findBypass(argv, skip = []) {
     }
   });
   const rest = argv.filter((_, i) => !skipSet.has(i));
-  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.join(' ') }).length) flagged.push('launch-config pattern');
+  // launchWarnings is advisory and also flags --full-auto for owner review; it keeps codex's workspace-write sandbox,
+  // so the hard guard does not refuse it (D-011).
+  if (!flagged.length && launchWarnings({ AGENT_CMD_CLAUDE: rest.filter((x) => x !== '--full-auto').join(' ') }).length) flagged.push('launch-config pattern');
   return flagged;
 }
 
