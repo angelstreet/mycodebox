@@ -49,7 +49,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
 | integration-verify | 12 | wt verify-09 | a14a72a | Fable | done: APPROVE WITH FIXES | 631409d (5 todo); F1 high self-approval via handoff |
 | integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | -> 063380e; usage.incomplete seam fixed in store |
-| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet | Opus: APPROVE WITH FIXES (truthfulness/scope, no security defects); fixing | 0590f70; verify tests a09a0ca |
+| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet + coordinator | APPROVED (Opus, 2 rounds); lows fixed d9d50f8; integrate after goal-loop | 43fe411; T20 37/37 |
 
 ## Decision journal
 
