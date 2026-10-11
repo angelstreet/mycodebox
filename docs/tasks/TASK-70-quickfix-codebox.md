@@ -2,7 +2,7 @@
 
 **Session:** `codebox-quickfix`
 **Repo / worktree:** `ghosty-sessions` (= mycodebox) at
-`~/ghosty-quickfix-codebox`, branch `codebox-quickfix`. This task
+`<worktree>`, branch `<quickfix-branch>`. This task
 **lives on the codebox project** — the manager UI repo, not vpt-manager.
 **State:** **Done** — codebox `task70-tts-needs-you` branch merged into `main` 2026-10-09 (commit `3e17ff2`); the `needs-you` chip rendering on `Rec.tsx` (and the fr/de strings) is live on `main`. Branch has been parked (as `task70-tts-needs-you`); further codebox quickfix rows land via the parent queue. (Last updated 2026-10-09 by mm-manager.)
 **Raised by:** owner, 2026-10-07 · **Manager:** mm-manager
@@ -105,7 +105,7 @@ relabelled.
 ## Handover (2026-10-09, mm-manager auto)
 
 - **Session / branch / repo:** codebox-quickfix-migrated · `task70-tts-needs-you` · `ghosty-sessions`
-- **Worktree:** `~/ghosty-quickfix-codebox`
+- **Worktree:** `<worktree>`
 - **Status:** code complete locally; `TTS needs-you chip` + enter-on-blank-input + remove-orange-paused-border all shipped; 180f430 + 9913cbd ready
 - **Commits on the branch before this sweep:**
   - `180f430` feat(dock): empty sendInput + focused card = send Enter to the active session
