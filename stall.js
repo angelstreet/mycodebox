@@ -214,21 +214,45 @@ export function setForbiddenExtra(pattern) {
   forbiddenExtra = pattern ? new RegExp(pattern, 'i') : null;
 }
 
-// Protected verbs a split spelling may hide ("mer ge", "pu-sh", "de.ploy"). Verbs only: rejoining nouns ("pass words")
-// would flag normal prose.
-const SPLIT_VERB_RE = /^(?:(?:re)?deploy(?:s|ed|ing|ment)?|merg(?:e|es|ed|ing)|rebas(?:e|es|ed|ing)|push(?:es|ed|ing)?|publish(?:es|ed|ing)?|rollout|delet(?:e|es|ed|ing|ion)|remov(?:e|es|ed|ing)|wip(?:e|es|ed|ing)|prun(?:e|es|ed|ing)|truncat(?:e|es|ed|ing)|overwrit(?:e|es|ing)|migrat(?:e|es|ed|ing|ion)|revok(?:e|es|ed|ing)|rotat(?:e|es|ed|ing)|restart(?:s|ed|ing)?|refund(?:s|ed|ing)?|purchas(?:e|es|ed|ing))$/i;
-const SPLIT_SEP_RE = /^[ ._\-\u2013\u2014]$/;
-// NFKC, format characters (zero-width, soft hyphen, word joiner) removed, and letter runs split by single spaces,
-// hyphens or dots rejoined only when the joined token is a protected verb. Up to 6 fragments ("d e p l o y").
+// ---- spelling variants (shared with orchestration/policy.js) -----------------------------------------------------
+// Spellings an author might use to slip a restricted topic past a plain regex. Every variant is matched in addition
+// to the raw text: a variant can only add a match (fail closed), never remove one.
+export const HOMOGLYPH = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ⅼ: 'l', ı: 'i' };
+// Cyrillic/Greek letters that look Latin (lower-cased before lookup). Store identities keep the narrower HOMOGLYPH.
+const CONFUSABLE = { ...HOMOGLYPH, к: 'k', м: 'm', н: 'h', т: 't', в: 'b', ԛ: 'q', ԝ: 'w', ɡ: 'g',
+  α: 'a', β: 'b', ε: 'e', η: 'n', ι: 'i', κ: 'k', ν: 'v', ο: 'o', ρ: 'p', τ: 't', υ: 'u', χ: 'x', γ: 'y', ω: 'w' };
+const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
+// Protected verbs and nouns a split spelling may hide ("mer ge", "pass word", "cust omer"). Rejoined only when the
+// whole joined token is one of these, so "the mer chant" or "a de bug log" stay as written.
+const SPLIT_WORD_RE = new RegExp(`^(?:${[
+  '(?:re)?deploy(?:s|ed|ing|ment)?', 'merg(?:e|es|ed|ing)', 'rebas(?:e|es|ed|ing)', 'push(?:es|ed|ing)?', 'publish(?:es|ed|ing)?',
+  'ship(?:s|ped|ping)?', 'rollout', 'promot(?:e|es|ed|ing)', 'delet(?:e|es|ed|ing|ion)', 'remov(?:e|es|ed|ing)', 'wip(?:e|es|ed|ing)',
+  'prun(?:e|es|ed|ing)', 'truncat(?:e|es|ed|ing)', 'overwrit(?:e|es|ing)', 'migrat(?:e|es|ed|ing|ion)', 'revok(?:e|es|ed|ing)',
+  'rotat(?:e|es|ed|ing)', 'restart(?:s|ed|ing)?', 'refund(?:s|ed|ing)?', 'purchas(?:e|es|ed|ing)', 'payment', 'billing',
+  'password', 'passwd', 'passphrase', 'secrets?', 'credentials?', 'customers?', 'invoices?', 'apikeys?', 'tokens?', 'prod', 'production',
+].join('|')})$`, 'i');
+const SPLIT_SEP_RE = /^[ \t._*/|\-–—]{1,3}$/;
+const MAX_FRAGMENTS = 8;   // "d e p l o y m e n t" is 10; anything longer is not a split word (and keeps this linear)
+
+// Base form: compatibility-decomposed, combining marks and format characters (zero-width, soft hyphen, word joiner)
+// removed, confusable letters mapped to Latin.
+export function baseForm(text) {
+  return String(text ?? '').normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '')
+    .replace(/[^\x00-\x7F]/g, (c) => CONFUSABLE[c.toLowerCase()] ?? c);
+}
+
+// Letter runs split by 1-3 separator characters (space, tab, . _ * / | hyphen, dash) rejoined only when the joined
+// token is a protected word; whitespace runs collapsed. "mer ge into main" -> "merge into main".
 export function normalizeSplits(text) {
-  const parts = String(text ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '').match(/[A-Za-z]+|[^A-Za-z]+/g) || [];
+  const parts = baseForm(text).replace(/[ \t]+/g, ' ').match(/[A-Za-z]+|[^A-Za-z]+/g) || [];
   const out = [];
   for (let i = 0; i < parts.length;) {
-    let joined = null, end = i;
+    let end = i, joined = null;
     if (/^[A-Za-z]/.test(parts[i])) {
-      for (let j = i + 2, w = parts[i]; j < parts.length && j <= i + 10 && SPLIT_SEP_RE.test(parts[j - 1]) && /^[A-Za-z]/.test(parts[j]); j += 2) {
+      let w = parts[i];
+      for (let j = i + 2, n = 2; j < parts.length && n <= MAX_FRAGMENTS && SPLIT_SEP_RE.test(parts[j - 1]); j += 2, n += 1) {
         w += parts[j];
-        if (SPLIT_VERB_RE.test(w) && (j + 1 >= parts.length || !/^[A-Za-z]/.test(parts[j + 1] ?? ''))) { joined = w; end = j; }
+        if (SPLIT_WORD_RE.test(w)) { joined = w; end = j; }
       }
     }
     if (joined) { out.push(joined); i = end + 1; } else { out.push(parts[i]); i += 1; }
@@ -236,14 +260,23 @@ export function normalizeSplits(text) {
   return out.join('');
 }
 
+export function textVariants(text) {
+  const nfkc = String(text ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/[^\x00-\x7F]/g, (c) => CONFUSABLE[c.toLowerCase()] ?? c);
+  const base = baseForm(text);
+  const spaced = base.replace(/\b(?:[A-Za-z0-9][ ._*\-–—]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[ ._*\-–—]/g, ''));   // d e p l o y
+  const joined = spaced.replace(/([A-Za-z])[._*\-–—]+(?=[A-Za-z])/g, '$1');                                              // de-ploy, de–ploy
+  const leet = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                         // d3pl0y
+  return [...new Set([nfkc, base, spaced, joined, leet, normalizeSplits(text), normalizeSplits(leet)])];
+}
+
 export function forbiddenMatch(text) {
   const match = (t) => t.match(FORBIDDEN_RE) || (forbiddenExtra && t.match(forbiddenExtra));
   const raw = String(text);
   const m = match(raw);
   if (m) return m[0];
-  const n = normalizeSplits(raw);   // the forbidden-topic filter always wins: a split spelling is still the topic
-  const k = n !== raw && match(n);
-  return k ? k[0] : null;
+  // The forbidden-topic filter always wins: a disguised spelling is still the topic.
+  for (const v of textVariants(raw)) { if (v === raw) continue; const k = match(v); if (k) return k[0]; }
+  return null;
 }
 
 export function menuOptions(lines) {

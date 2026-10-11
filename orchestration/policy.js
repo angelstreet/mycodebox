@@ -3,7 +3,7 @@
 // actions, approval classes and the manager's forbidden-topic matcher win over task text and model output.
 import * as realFs from 'node:fs';
 import { join } from 'node:path';
-import { forbiddenMatch, FORBIDDEN_RE, normalizeSplits } from '../stall.js';
+import { forbiddenMatch, FORBIDDEN_RE, textVariants, HOMOGLYPH } from '../stall.js';
 import { MANDATORY_APPROVAL, RISK_CLASSES } from './task-contract.js';
 
 export const POLICY_PATH = join('.ai', 'project.json');
@@ -58,20 +58,8 @@ export const clarificationFor = (r) => ({ to: 'awaiting_approval', reason: r.cod
 
 // ---- text classification ----------------------------------------------------------------------------
 
-const ZERO_WIDTH = /[­᠎​-‏⁠-⁤﻿]/g;
-export const HOMOGLYPH = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ⅼ: 'l', ı: 'i' };
-const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
-
-// Spellings an author might use to slip a restricted action past a plain regex. Every variant is matched;
-// extra variants can only add matches (fail closed), never remove one.
-export function textVariants(text) {
-  const base = String(text ?? '').normalize('NFKC').replace(ZERO_WIDTH, '')
-    .replace(/[^\x00-\x7F]/g, (c) => HOMOGLYPH[c.toLowerCase()] ?? c);
-  const spaced = base.replace(/\b(?:[A-Za-z0-9][ ._*\-\u2013\u2014]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[ ._*\-\u2013\u2014]/g, ''));   // d e p l o y
-  const joined = spaced.replace(/([A-Za-z])[._*\-\u2013\u2014]+(?=[A-Za-z])/g, '$1');                                              // de-ploy, de–ploy
-  const leet = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                         // d3pl0y
-  return [...new Set([base, spaced, joined, leet, normalizeSplits(base)])];   // "mer ge into main": rejoined in context
-}
+// Spelling variants live in stall.js (one set for the manager filter and this classifier).
+export { textVariants, HOMOGLYPH };
 
 // One space splitting a word ("de ploy", "dep loy"): adjacent tokens joined in pairs and triples. Checked one
 // candidate at a time so an innocent join can only add a match, never hide one.

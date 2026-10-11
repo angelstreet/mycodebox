@@ -10,9 +10,9 @@
 //
 // Approve/deny are never blanket: the body must name the pending request's action_id (and the head SHA when the task has
 // one), and the grant covers exactly that request's classes. Silence or a mismatch changes nothing.
-// Approve/deny are recorded by the goal loop (D-020), never written here: no loop in this process -> 503 E_NO_CONTROLLER,
+// Cancel/approve/deny are recorded by the goal loop (D-018, D-020), never written here: no loop in this process -> 503 E_NO_CONTROLLER,
 // another live controller holds the lease -> 409 E_CONTROLLER_HELD. Either way the request stays pending.
-import { ContractError, TERMINAL, outcomeOf } from './task-contract.js';
+import { ContractError, TERMINAL, outcomeOf, ownerAnswerOf } from './task-contract.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
 export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -61,9 +61,7 @@ function loopMemory(decisions) {
   return cp;
 }
 
-function answeredEvent(req, events) {
-  return events.find((e) => (e.kind === 'approval.granted' || e.kind === 'approval.denied') && e.payload?.k === req.k);
-}
+const answeredEvent = (req, events) => ownerAnswerOf(events, req.k);
 
 export function pendingApproval(task, events) {
   if (task.status !== 'awaiting_approval' || task.store_error) return null;
@@ -231,8 +229,8 @@ function checkDecisionBody(b) {
 
 // ---- handler --------------------------------------------------------------------------------------
 
-// deps: { store, intake, loop? }. `loop` stops a live run on cancel and is the only writer of approve/deny (D-020): without
-// it those routes answer 503 E_NO_CONTROLLER. This module never starts it.
+// deps: { store, intake, loop? }. `loop` is the only writer of cancel/approve/deny (D-018, D-020): without it those
+// routes answer 503 E_NO_CONTROLLER. This module never starts it.
 export function createV2Http({ store, intake, loop = null, log = (m) => console.error(m) } = {}) {
   if (!store || !intake) throw new Error('v2 http: store and intake required');
   const logged = new Set();
@@ -327,7 +325,9 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
         if (!t) return err(404, 'E_NOT_FOUND', 'task not found');
         if (TERMINAL.includes(t.status)) return err(409, t.status === 'cancelled' ? 'E_CANCELLED' : 'E_TERMINAL', `task is ${t.status}`);
         const reason = p.body.reason || 'cancelled by owner';
-        if (loop?.cancel) await loop.cancel(id, { actor: OWNER, reason }); else await store.transition(id, 'cancelled', { reason, actor: OWNER });
+        // D-018/D-020: cancel goes through the loop (controller lease, recovery first); no loop here -> nothing written.
+        if (!loop?.cancel) return err(503, 'E_NO_CONTROLLER', NO_CONTROLLER);
+        await loop.cancel(id, { actor: OWNER, reason });
         const after = await store.get(id);
         return reply(200, { ok: true, state: after.status, outcome: outcomeOf(after.status) });
       }
