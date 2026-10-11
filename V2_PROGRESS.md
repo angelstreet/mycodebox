@@ -1,4 +1,4 @@
-STATUS: RUNNING — Phases 0–6 + §12 packages integrated (b114077); next: delivery bridge + acceptance harness verification, then Fable full-process review and draft PR
+STATUS: RUNNING — all packages integrated except delivery bridge + acceptance (v2/11-e2e, Fable verification resumed after a provider rate limit); next: Fable full-process review, draft PR
 
 # V2 progress
 
