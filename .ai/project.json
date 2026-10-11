@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "project_id": "mycodebox",
+  "repository": "mycodebox",
+  "default_branch": "main",
+  "protected_branches": ["main"],
+  "test_command": ["npm", "test"],
+  "default_risk_class": "medium",
+  "privacy_policy": "public-repo: no credentials, real hosts, IPs, e-mails or captured session output in tracked files",
+  "allowlists": {
+    "commands": [
+      ["npm", "test"],
+      ["node", "--test"],
+      ["node", "--check"],
+      ["git", "status"],
+      ["git", "diff"],
+      ["git", "log"],
+      ["git", "show"],
+      ["git", "add"],
+      ["git", "commit"]
+    ],
+    "paths": ["."],
+    "runtimes": ["claude", "codex", "opencode", "minimax", "fake"],
+    "models": null
+  },
+  "denied_args": ["--output", "--ext-diff", "--textconv", "--exec", "--upload-pack", "--receive-pack", "--pre"],
+  "excluded_paths": [".env", ".env.local", "certs/key.pem", "certs/cert.pem", "node_modules", ".git"],
+  "protected_paths": [".ai", "AGENTS.md", "docs/CONTRACT.md", "systemd", "package.json", "package-lock.json", "scripts", ".claude"],
+  "prohibited_actions": ["write_live_state", "restart_live_service", "expose_publicly", "bypass_permissions"],
+  "approval_policy": {
+    "requires": ["merge_protected", "push_shared", "deploy", "credentials", "destructive", "host_maintenance", "money", "customer"]
+  }
+}
