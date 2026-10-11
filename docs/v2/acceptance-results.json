@@ -1,0 +1,1224 @@
+{
+ "schema": "mycodebox.v2.acceptance-results/1",
+ "synthetic": true,
+ "generated_at": "2026-10-11T14:26:31.337Z",
+ "sha": "4dfe8e76c1bb81e02e71817eb6c73636d0194074",
+ "dirty": false,
+ "node": "v23.6.0",
+ "command": "node scripts/v2-acceptance.js",
+ "duration_ms": 75249,
+ "runner_exit": 0,
+ "files": 110,
+ "totals": {
+  "tests": 1453,
+  "pass": 1453,
+  "fail": 0,
+  "todo": 0,
+  "todo_failing": 0,
+  "skip": 0
+ },
+ "matrix": {
+  "rows": 54,
+  "PASS": 53,
+  "FAIL": 0,
+  "PENDING": 1,
+  "BLOCKED": 0,
+  "MANUAL": 0
+ },
+ "rows": [
+  {
+   "id": "T01",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "T01 missing project policy -> awaiting_approval with a clarification; fixed policy + approval -> proceeds",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T01: missing or invalid policy -> refuse, awaiting_approval with a clarification request",
+     "file": "test/v2-policy.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T02",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "T02: every manager-blocked phrasing maps to a concrete approval class",
+     "file": "test/v2-policy-classes.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T02: a restricted action disguised in task text needs approval whatever the model says",
+     "file": "test/v2-policy.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T03",
+   "status": "PASS",
+   "reason": "13 test(s) passed",
+   "tests": [
+    {
+     "name": "T03 no adapter argv carries a permission/sandbox bypass flag; safe flags present",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03 bypass guard throws on injected flags in every form; prompt text is not scanned",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03 cwd must be a real directory inside an allowed root (incl. symlink escape)",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03 shell metacharacters in the prompt arrive verbatim as one argv element and are not executed",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: no default agent, manager or resume command carries a permission or sandbox bypass",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: resume never restores a saved process flag; only model, remote-control name and the id come back",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: a saved remote-control name is single-quoted for the shell",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: a resume id must be a plain token (no options, paths, whitespace, control characters or non-strings)",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: sessionDirectory rejects prefix siblings, files, missing dirs, traversal, symlink escapes and non-strings",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: a tampered parked record cannot escape $HOME, start before validation, or resume without a cwd",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: prototype-named sessions are not parked records",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: no bypass flag survives anywhere in the server, scripts or modules (launch-config detects them, nothing else names them)",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T03: the manager command helper keeps an explicit override verbatim and its diagnostics name only the setting",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T04",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
+   "tests": [
+    {
+     "name": "T04: loopback by default, an explicit tailnet HOST is honoured, warnings never carry the value",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T04: isLoopback accepts only loopback literals",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T04: the alert channel needs loopback AND the token before it reads a body",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T04: reporter token is created 0600, compared in full, and nothing matches before init",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T04: server routes keep loopback + token on the reporter intake and the Origin check on every mutating request",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T05",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T05 two tasks get two disjoint worktrees on one repo, each on its own branch",
+     "file": "test/v2-worktrees.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T05 a second owner cannot claim or remove the first owner's worktree",
+     "file": "test/v2-worktrees.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T05 dirty or untracked trees are never removed; retain is the default",
+     "file": "test/v2-worktrees.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T06",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T06: an owner decision delivered twice across a controller restart is one event and one transition",
+     "file": "test/v2-acceptance-effects.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T06: same createTask key -> one task, also concurrently and after restart",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T06: the same event twice has exactly one effect; seq is strictly increasing",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T07",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "T07/T23: restart between attempted and confirmed -> unknown_external_effect; reconciled from the destination, never re-sent; not-applied becomes failed and may be retried once",
+     "file": "test/v2-acceptance-effects.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T07: attempted-but-unconfirmed effect across restart -> unknown_external_effect, never repeated",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T08",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "T08: every runtime unavailable (a real adapter whose CLI is missing, a fake whose probe says down) -> waiting(no_route), not an empty success",
+     "file": "test/v2-acceptance-unavailable.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T08: the only allowed provider disappears mid-task -> waiting with backoff, the failure recorded, no fallback outside the allowlist, never success",
+     "file": "test/v2-acceptance-unavailable.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T08: the source repository or its base commit cannot be read -> waiting(evidence_unavailable), not \"nothing changed\"",
+     "file": "test/v2-acceptance-unavailable.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T08: status sources behind the gates fail closed: unreachable CI is unknown (never success), unreachable telemetry is unknown (never healthy), an unavailable lease authority grants nothing",
+     "file": "test/v2-acceptance-unavailable.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T09",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL02/T09 failing first run -> structured feedback -> fix -> pass on exact SHA -> independent approve",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T10",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "T10/GL12 source changes after verification: SHA revalidated, checks and review rerun on the new SHA",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T11",
+   "status": "PASS",
+   "reason": "7 test(s) passed",
+   "tests": [
+    {
+     "name": "GL11/T11: real Claude and Codex adapters (stub CLIs), a native-subagent runtime and the ordinary-worker fallback all satisfy the identical acceptance checks",
+     "file": "test/v2-acceptance-cross-provider.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T11 probe: not installed -> unavailable; failing --version -> unknown; ok -> version",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T11 probe: ambiguous failure -> unknown (non-zero --version exit, hang)",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T11 unsupported ops throw E_UNSUPPORTED",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T11: capability absent (vision) -> rejected with reason, compatible fallback offered",
+     "file": "test/v2-routing.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T11: effort xhigh unsupported -> those entries rejected with reason; supported ones stay",
+     "file": "test/v2-routing.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T11: runtime unavailable by probe -> rejected, others offered; all unavailable -> no choice, waiting",
+     "file": "test/v2-routing.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T12",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "T12 429 stderr -> rate_limit with retry_after_ms, retryable",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T12 timeout kills the process group and reports class timeout",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T12/GL06 rate limit: backoff (waiting) twice, then a compatible fallback runtime; state preserved",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T12: rate limit/timeout -> backoff first, then compatible fallback, never outside the allowlist",
+     "file": "test/v2-routing.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T13",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T13: cap reached -> awaiting_approval and no further spend; even a zero estimate is refused at the cap",
+     "file": "test/v2-budget.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T13: estimate that would exceed the cap is refused before starting",
+     "file": "test/v2-budget.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T13 explicit budget cap: stop before overspend -> awaiting_approval; an owner extension continues within it",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T14",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
+   "tests": [
+    {
+     "name": "T14 cancel during spawn: acknowledged, process gone, no later writes",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T14 cancel escalates to SIGKILL when SIGTERM is ignored; events stop after cancel",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T14 fake: cancel during spawn -> acknowledged, no later writes",
+     "file": "test/v2-adapters.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T14 cancel during a run: no commit, no evidence, no later writes; status is cancelled",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T14: after cancel every write is rejected with E_CANCELLED; reads still work",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T15",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "T15 tests pass but the reviewer keeps disagreeing: evidence cannot settle it -> owner decides, never accepted",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T16",
+   "status": "PASS",
+   "reason": "2 test(s) passed; 921 pre-V2 regression tests passed",
+   "tests": [
+    {
+     "name": "T16: server.js loads no V2 module at startup: none in its static import graph; any V2 import is dynamic and behind GHOSTY_V2",
+     "file": "test/v2-acceptance-state.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T16: every V2 module is importable without side effects: no timers, listeners, child processes or files",
+     "file": "test/v2-acceptance-state.test.js",
+     "outcome": "pass"
+    }
+   ],
+   "regression": {
+    "files": 71,
+    "tests": 921,
+    "failed": []
+   }
+  },
+  {
+   "id": "T17",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T17: a forbidden topic blocks every answer source — rule, Jev continue, Jev take_recommended — in every case",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T17: the AI reviewer re-check catches a forbidden proposal text even when the question looked harmless",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T17: plain paraphrases of forbidden topics are recognised by the rule filter",
+     "file": "test/v2-security-review.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T18",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
+   "tests": [
+    {
+     "name": "GL06/T18 controller crash mid-run: restart reconciles the unconfirmed run and resumes without duplicates",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T18 crash between a decision and its transition: the restart replays the recorded transition, no second decision",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T18: crash mid-write of the completion leaves a torn tail; recovery drops it, no false completion",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T18: crash after the log write but before the snapshot: the event is durable and a retry is a no-op",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T18: crash while writing task.created -> no half task; the same key creates it once later",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T19",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "T19: V2 state lives under $GHOSTY_STATE_DIR/v2 only; legacy files stay byte-identical; removing v2/ restores the old tree exactly",
+     "file": "test/v2-acceptance-state.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T20",
+   "status": "PENDING",
+   "reason": "owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; status set when that branch lands",
+   "tests": []
+  },
+  {
+   "id": "T21",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
+   "tests": [
+    {
+     "name": "T21: unreachable API refuses with a visible reason and runs nothing, even when asked to wait",
+     "file": "test/safe-restart.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T21: a stale or malformed snapshot while waiting is unknown, not busy: no retry, exit 2",
+     "file": "test/safe-restart.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T21: a state outside the known vocabulary is refused whether or not the runner is on",
+     "file": "test/safe-restart.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T21: --wait 0 refuses busy work at once; --wait=N is not a form the script accepts",
+     "file": "test/safe-restart.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T21: the script owns no kill path and restarts only through systemctl",
+     "file": "test/safe-restart.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T22",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "T22: unknown spend with a cap -> awaiting_approval, reported unknown, never 0",
+     "file": "test/v2-budget.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T22: unknown/placeholder/stale pricing is never $0 and never ranked cheapest",
+     "file": "test/v2-routing.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T22: stale price (older than the max age) is treated as unknown for ranking",
+     "file": "test/v2-routing.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T22/GL13: unknown usage stays null, never 0",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T23",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T23: the ledger advances only after the destination confirms; no confirmation, no acceptance and no second send",
+     "file": "test/v2-acceptance-effects.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T23: a rejected or unreachable destination never advances the ledger; only a positive acknowledgement does",
+     "file": "test/v2-acceptance-effects.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T07/T23: restart between attempted and confirmed -> unknown_external_effect; reconciled from the destination, never re-sent; not-applied becomes failed and may be retried once",
+     "file": "test/v2-acceptance-effects.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T24",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T24 conflicting branches: conflict detected and returned to its developer with files; the other merges",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T24 non-conflicting branches: merged sequentially, gates run once on the final merge sha",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T24 red gate on the merge sha returns the work even though each branch was green alone",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T25",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "T25 two integration controllers race on the same target: exactly one fenced holder mutates it",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T25: 40 parallel acquire() through one file dir -> exactly one holder, rest E_HELD",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T25: separate node processes contend on the same resources -> exactly one holder per resource",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T25: the losing contender never runs its protected action (withLeases)",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T26",
+   "status": "PASS",
+   "reason": "12 test(s) passed",
+   "tests": [
+    {
+     "name": "T26 lease backend unavailable or stale: no merge/push, blocked and alerted",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26 deployment state unknown blocks integration before any lease or mutation",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: fake backend 'unavailable' -> acquire/validate E_UNAVAILABLE, mutation never runs, alert + audit",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: fake backend 'stale' -> acquire/validate E_UNAVAILABLE, mutation never runs, alert + audit",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: fake backend 'timeout' -> acquire/validate E_UNAVAILABLE, mutation never runs, alert + audit",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: fake backend 'clock_skew' -> acquire/validate E_UNAVAILABLE, mutation never runs, alert + audit",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: partial write leaves the resource unavailable (not free) until repaired",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: file backend corrupt record -> acquire and validate E_UNAVAILABLE; torn tmp file is ignored",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: file backend record deleted while audit has history -> E_UNAVAILABLE, generation not restarted",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: file backend I/O error -> E_UNAVAILABLE and alert",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: unwritable backend dir -> E_UNAVAILABLE",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T26: stale lock file is never broken while its holder lease is live (fails closed)",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T27",
+   "status": "PASS",
+   "reason": "5 test(s) passed",
+   "tests": [
+    {
+     "name": "GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T27 lease expires mid-run and is taken over: the stale executor cannot push",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T27 (file): lease expires mid-command -> second protected action blocked; stale token fenced despite a lying clock",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T27 (fake): lease expires mid-command -> second protected action blocked; stale token fenced despite a lying clock",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T27: expired holder is fenced (not merely stale) when a new owner takes over without release",
+     "file": "test/v2-lease-authority.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T28",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "GL12/T28: integration branch with new upstream commits: the approved SHA goes stale, gates and CI rerun on the rebuilt SHA, a fresh approval is required",
+     "file": "test/v2-acceptance-gl14.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T28 target updated after tests: previous gate invalidated, rebuilt on the new target, all gates rerun",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T28 integration tree changed by a gate after tests: evidence invalidated and gates rerun on a clean tree",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T29",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "T29 remote CI red, missing, pending or unknown: no merge even with local gates green",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T30",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T30 push times out after the remote accepted it: remote queried, no double push, marked confirmed",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T30 push timed out and the remote did not take it: marked failed, not retried blindly, not success",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T30 push outcome unknowable: unknown_external_effect, then reconciled from the remote without pushing again",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T31",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "T31 unapproved merge is refused and audited; approvals for another sha/action/target or expired do not count",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T31 policy-prohibited merge is refused even with an approval",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T32",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "T38/T40/T32: host pressure under a running task -> the loop only requests an operation -> System Ops runs a scoped, reversible cleanup under its lease -> fresh healthy reading -> admission resumes -> the task completes",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T32: disk pressure -> incident, admission paused, only V2-temp cleanup runs, remaining pressure needs approval",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T32: deletion outside the V2 temp root, symlink escapes and non-allowlisted actions need approval and never run",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T32: worktree storage / tmux exhaustion have no allowlisted remediation -> approval_required",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T33",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T33: CPU pressure during integration -> System Ops throttles under its own host lease and pauses admission; the integration keeps its leases and state and still merges; queued work resumes on a fresh healthy reading",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T33: CPU pressure during integration -> throttle + admission pause; task state and integration lease untouched",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T33: throttling does not help -> stays paused and escalates to the owner",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T34",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "T34: recovery while a deployment is active or unknown -> approval_required, no restart/actions, lease released",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T34: a service restart is only ever requested (approval_required), never executed, even with no deploy",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T35",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "T35: telemetry stale, unreachable, future-dated or non-numeric is unknown, never healthy",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T35: stale/unreachable health at intake -> incident.unknown + escalated, admission paused, no actions",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T36",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "T36: two developers report the same host issue -> one incident, linked reports, one remediation",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T37",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T37: action fails mid-execution -> checkpoint, undo, incident stays open (reconciling), lease released, admission paused",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T37: lease lost between actions -> next action fenced and not executed, no undo under a dead lease, reconciling",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T37: a reconciling incident needs owner acknowledgement before recheck can resolve it",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T38",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T38/T40/T32: host pressure under a running task -> the loop only requests an operation -> System Ops runs a scoped, reversible cleanup under its lease -> fresh healthy reading -> admission resumes -> the task completes",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T38: queued tasks resume only after a FRESH healthy reading and a released maintenance lease",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T38: one incident cannot resume admission paused for another; lease backend failure never resumes",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T39",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "GL14/T39: intake -> worktree -> repair loops -> independent verifier -> integration on a disposable remote -> gates -> remote CI -> SHA-bound owner approval -> accepted; machine-readable trace",
+     "file": "test/v2-acceptance-gl14.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T39 E2E on a disposable remote: worktree patch -> independent verify -> integration -> gates -> CI -> approved push/merge, exact SHAs in a manifest",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "T40",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "T38/T40/T32: host pressure under a running task -> the loop only requests an operation -> System Ops runs a scoped, reversible cleanup under its lease -> fresh healthy reading -> admission resumes -> the task completes",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T40: a developer run that asks for host maintenance gets an owner approval request; nothing reaches a System Ops executor",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T40: developer/tester/integration requests become mitigation_requested incidents and are never executed",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T40: the request-only facade never executes, whatever role string it is given",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL01",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "GL01 UI, API, schedule and agent tasks get the same goal contract and the same loop",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL01: tasks from ui, api, schedule and agent get the same contract",
+     "file": "test/v2-task-core.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL02",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "GL02/T09 failing first run -> structured feedback -> fix -> pass on exact SHA -> independent approve",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL02 no 3-attempt cutoff: three different failures in a row, then success",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL03",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL03 identical failures force evidence-based strategy changes (replan, then a different model), then success",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL04",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL04 unknown check result and missing artifacts never pass; unavailable evaluator -> waiting, never accepted",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL05",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL05 independent reviewer rejects a superficially passing patch; developer repairs; checks rerun",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL06",
+   "status": "PASS",
+   "reason": "3 test(s) passed",
+   "tests": [
+    {
+     "name": "T12/GL06 rate limit: backoff (waiting) twice, then a compatible fallback runtime; state preserved",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL06 provider outage -> compatible fallback; context exhaustion -> compacted fresh run",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL06/T18 controller crash mid-run: restart reconciles the unconfirmed run and resumes without duplicates",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL07",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL07 no progress: 3 strategy changes without new passing evidence -> waiting(no_progress), no runaway",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL08",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL08 every automatic decision is a structured record; routine choices never ask the owner",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL09",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "GL09 privileged actions need explicit authorization whatever the goal text says; silence is never approval",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL09: only the system-operations role executes; its non-allowlisted or destructive ops still need approval",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL10",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "GL10: maintenance that needs the repo lane waits for the running integration: canonical-order, all-or-nothing acquisition; nothing half-held; it proceeds once the integration releases",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL10: Integration and System Ops race for overlapping resources in opposite orders: never a deadlock, never split holdings, at most one holder per round",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL10/T27: stale fencing across roles: the integrator's lease expires mid-gate and System Ops takes the lane; the stale integrator pushes nothing and the task waits",
+     "file": "test/v2-acceptance-ops.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL10: lease unavailable or held by someone else -> no action, escalated, admission stays paused",
+     "file": "test/v2-system-ops.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL11",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL11/T11: real Claude and Codex adapters (stub CLIs), a native-subagent runtime and the ordinary-worker fallback all satisfy the identical acceptance checks",
+     "file": "test/v2-acceptance-cross-provider.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL12",
+   "status": "PASS",
+   "reason": "4 test(s) passed",
+   "tests": [
+    {
+     "name": "GL12/T28: integration branch with new upstream commits: the approved SHA goes stale, gates and CI rerun on the rebuilt SHA, a fresh approval is required",
+     "file": "test/v2-acceptance-gl14.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T10/GL12 source changes after verification: SHA revalidated, checks and review rerun on the new SHA",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL12 reopened after an upstream change: evidence, CI and approval are revalidated against the new SHA",
+     "file": "test/v2-integration.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "GL12: a new head SHA invalidates earlier evidence and verdicts, even when it moves back",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL13",
+   "status": "PASS",
+   "reason": "2 test(s) passed",
+   "tests": [
+    {
+     "name": "GL13 usage measured where reported, unknown stays null; exhausted quota throttles without spend",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T22/GL13: unknown usage stays null, never 0",
+     "file": "test/v2-store.test.js",
+     "outcome": "pass"
+    }
+   ]
+  },
+  {
+   "id": "GL14",
+   "status": "PASS",
+   "reason": "1 test(s) passed",
+   "tests": [
+    {
+     "name": "GL14/T39: intake -> worktree -> repair loops -> independent verifier -> integration on a disposable remote -> gates -> remote CI -> SHA-bound owner approval -> accepted; machine-readable trace",
+     "file": "test/v2-acceptance-gl14.test.js",
+     "outcome": "pass"
+    }
+   ]
+  }
+ ],
+ "open_defects": [],
+ "unmapped_failures": []
+}

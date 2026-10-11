@@ -27,15 +27,13 @@ status functions. No test calls a real provider, a real remote, systemd or the l
 
 | Status | Rows |
 |---|---|
-| PASS | 46 |
-| FAIL (open verifier defects) | 7: T13, T14, T18, GL04, GL06, GL07, GL09 |
-| PENDING | 1: T20 (UI package) |
-| BLOCKED / MANUAL | 0 |
+| PASS | 53 |
+| FAIL | 0 |
+| PENDING | 1: T20 |
+| BLOCKED | 0 |
+| MANUAL | 0 |
 
-Suite at this commit: 1448 tests, 1434 pass, 0 fail, 14 `todo` (all open defects in
-`test/v2-goal-loop-verify.test.js`, owned by `v2/05-goal-loop`). Every FAIL row has passing tests of its own; it is
-FAIL only because a verifier-recorded defect contradicts its requirement. It becomes PASS without editing this file
-once the defect's test passes and its `todo` is removed (rerun the script).
+Suite at `4dfe8e76c1bb` on Node v23.6.0: 1453 tests, 1453 pass, 0 fail, 0 todo, 0 skipped.
 
 ## Matrix
 
@@ -53,12 +51,12 @@ once the defect's test passes and its `todo` is removed (rerun the script).
 | T10 | Failed verification after source change | Revalidate commit SHA and rerun affected tests | E2E (goal loop, real git, fake runtime) | **PASS** |
 | T11 | Adapter capability absent | Reject unsupported route, provide compatible fallback | contract (adapters vs stub CLIs, router) + E2E (GL11 cross-provider) | **PASS** |
 | T12 | Rate limit / timeout / quota exhausted | Backoff and bounded compatible fallback | integration (adapters vs stub CLIs, router, goal loop with fake runtime) | **PASS** |
-| T13 | Budget/time/turn cap | Stop/ask owner, no extra spending after cap | unit (budget.js) + E2E (goal loop, fake runtime with synthetic usd) | **FAIL** |
-| T14 | Cancellation during spawn/check | No unauthorized subsequent execution, status accurate | integration (adapters, real process groups) + E2E (goal loop) | **FAIL** |
+| T13 | Budget/time/turn cap | Stop/ask owner, no extra spending after cap | unit (budget.js) + E2E (goal loop, fake runtime with synthetic usd) | **PASS** |
+| T14 | Cancellation during spawn/check | No unauthorized subsequent execution, status accurate | integration (adapters, real process groups) + E2E (goal loop) | **PASS** |
 | T15 | Reviewer disagrees with maker | Test evidence and policy decide; owner if unresolved | integration (goal loop, scripted fake reviewer) | **PASS** |
 | T16 | Existing dashboard/send/reply/status and push | No regression in original workflows | regression (every pre-V2 test file) + static import graph of server.js + inert-import check | **PASS** |
 | T17 | Forbidden topic in manager auto-send | No send; human escalation | security regression (unit, manager.js) | **PASS** |
-| T18 | Reboot/state recovery | Resume only confirmed work; no lost or duplicate events | E2E (store crash injection, goal loop controller crash + restart) | **FAIL** |
+| T18 | Reboot/state recovery | Resume only confirmed work; no lost or duplicate events | E2E (store crash injection, goal loop controller crash + restart) | **PASS** |
 | T19 | Existing state migration | Read old state safely and reversibly | integration (temp GHOSTY_STATE_DIR seeded with synthetic legacy files) | **PASS** |
 | T20 | Mobile/desktop app/PWA | Screens, keyboard, service worker, responsive task view | browser E2E (owned by v2/06-ui-docs, scripts/v2-ui-check.js) | **PENDING** |
 | T21 | Safe restart with unreachable API | Refuse and show reason; never assume idle | security (scripts/safe-restart.sh executed with stub curl, sudo and systemctl on PATH) | **PASS** |
@@ -84,12 +82,12 @@ once the defect's test passes and its `todo` is removed (rerun the script).
 | GL01 | Task from UI/API/schedule/agent | Equivalent goal contract and loop | unit (task contract) + E2E (goal loop) | **PASS** |
 | GL02 | First implementation fails a deterministic test | Structured feedback, fix, pass on exact SHA, independent approve; no 3-attempt cutoff | E2E (goal loop, real git, node --test check, fake runtime + scripted reviewer) | **PASS** |
 | GL03 | Repeated identical failure | Replan/harness/model change by evidence; >= 4 failing iterations before success | E2E (goal loop) | **PASS** |
-| GL04 | Missing artifacts / unavailable evaluator | waiting/blocked, never completed | E2E (goal loop) | **FAIL** |
+| GL04 | Missing artifacts / unavailable evaluator | waiting/blocked, never completed | E2E (goal loop) | **PASS** |
 | GL05 | Reviewer rejects a superficially passing patch | Developer repairs; checks rerun | E2E (goal loop, scripted reviewer) | **PASS** |
-| GL06 | Provider outage, rate limit, context exhaustion, crash | Task state preserved; resume idempotently | E2E (goal loop, crash injection) | **FAIL** |
-| GL07 | No-progress loop | Diagnostic replan/backoff/suspend; no false success, no runaway | E2E (goal loop) | **FAIL** |
+| GL06 | Provider outage, rate limit, context exhaustion, crash | Task state preserved; resume idempotently | E2E (goal loop, crash injection) | **PASS** |
+| GL07 | No-progress loop | Diagnostic replan/backoff/suspend; no false success, no runaway | E2E (goal loop) | **PASS** |
 | GL08 | Automatic decisions | Structured rationale, alternatives, evidence, undo; no owner question for safe choices | E2E (goal loop decision journal) | **PASS** |
-| GL09 | Credentials, merge/push, deploy, destructive repair | Explicit policy authorization regardless of goal text; silence is never approval | E2E (goal loop) + integration (system ops) | **FAIL** |
+| GL09 | Credentials, merge/push, deploy, destructive repair | Explicit policy authorization regardless of goal text; silence is never approval | E2E (goal loop) + integration (system ops) | **PASS** |
 | GL10 | Lease race / stale fencing; Integration vs System Ops | Fail closed; no conflicting resource mutation; ordered acquisition | integration + Git E2E (goal loop + integration controller + system ops on one lease authority) | **PASS** |
 | GL11 | Cross-provider, native delegation, worker fallback | Identical acceptance checks satisfied on every path | E2E (real Claude/Codex adapters vs stub CLIs, native-subagent fake runtime, worker fallback) | **PASS** |
 | GL12 | Reopened after crash/conflict/upstream change | Revalidate evidence against current SHA; never trust stale CI | unit (store) + E2E (goal loop) + Git E2E (controller, goal loop + controller) | **PASS** |
@@ -205,21 +203,18 @@ once the defect's test passes and its `todo` is removed (rerun the script).
 - `test/v2-goal-loop.test.js` › T12/GL06 rate limit: backoff (waiting) twice, then a compatible fallback runtime; state preserved
 - `test/v2-routing.test.js` › T12: rate limit/timeout -> backoff first, then compatible fallback, never outside the allowlist
 
-### T13 — FAIL
+### T13 — PASS
 
-open defect(s) recorded as todo.
+3 test(s) passed.
 
-- open defect: `test/v2-goal-loop-verify.test.js` › V2 a budget stop raised before the REVIEW does not cost an extra developer run once the owner extends the budget
-- open defect: `test/v2-goal-loop-verify.test.js` › V3 a capped task without an injected estimator can be started by one explicit owner confirmation
 - `test/v2-budget.test.js` › T13: cap reached -> awaiting_approval and no further spend; even a zero estimate is refused at the cap
 - `test/v2-budget.test.js` › T13: estimate that would exceed the cap is refused before starting
 - `test/v2-goal-loop.test.js` › T13 explicit budget cap: stop before overspend -> awaiting_approval; an owner extension continues within it
 
-### T14 — FAIL
+### T14 — PASS
 
-open defect(s) recorded as todo.
+5 test(s) passed.
 
-- open defect: `test/v2-goal-loop-verify.test.js` › V5 cancel while an acceptance check is running kills the check process (T14)
 - `test/v2-adapters.test.js` › T14 cancel during spawn: acknowledged, process gone, no later writes
 - `test/v2-adapters.test.js` › T14 cancel escalates to SIGKILL when SIGTERM is ignored; events stop after cancel
 - `test/v2-adapters.test.js` › T14 fake: cancel during spawn -> acknowledged, no later writes
@@ -248,11 +243,10 @@ open defect(s) recorded as todo.
 - `test/v2-security-review.test.js` › T17: the AI reviewer re-check catches a forbidden proposal text even when the question looked harmless
 - `test/v2-security-review.test.js` › T17: plain paraphrases of forbidden topics are recognised by the rule filter
 
-### T18 — FAIL
+### T18 — PASS
 
-open defect(s) recorded as todo.
+5 test(s) passed.
 
-- open defect: `test/v2-goal-loop-verify.test.js` › V12b a crash between worktrees.create() and the plan decision is recoverable on restart
 - `test/v2-goal-loop.test.js` › GL06/T18 controller crash mid-run: restart reconciles the unconfirmed run and resumes without duplicates
 - `test/v2-goal-loop.test.js` › T18 crash between a decision and its transition: the restart replays the recorded transition, no second decision
 - `test/v2-store.test.js` › T18: crash mid-write of the completion leaves a torn tail; recovery drops it, no false completion
@@ -458,11 +452,10 @@ owned by the UI package (v2/06-ui-docs): browser check scripts/v2-ui-check.js; s
 
 - `test/v2-goal-loop.test.js` › GL03 identical failures force evidence-based strategy changes (replan, then a different model), then success
 
-### GL04 — FAIL
+### GL04 — PASS
 
-open defect(s) recorded as todo.
+1 test(s) passed.
 
-- open defect: `test/v2-goal-loop-verify.test.js` › V8 a reviewer that keeps answering without a verdict is not retried identically forever (no-progress rule applies to billed reviews)
 - `test/v2-goal-loop.test.js` › GL04 unknown check result and missing artifacts never pass; unavailable evaluator -> waiting, never accepted
 
 ### GL05 — PASS
@@ -471,23 +464,18 @@ open defect(s) recorded as todo.
 
 - `test/v2-goal-loop.test.js` › GL05 independent reviewer rejects a superficially passing patch; developer repairs; checks rerun
 
-### GL06 — FAIL
+### GL06 — PASS
 
-open defect(s) recorded as todo.
+3 test(s) passed.
 
-- open defect: `test/v2-goal-loop-verify.test.js` › V1 a task that outlives its 6 h worktree lease still completes (lease renewed or re-acquired by its owner)
-- open defect: `test/v2-goal-loop-verify.test.js` › V12b a crash between worktrees.create() and the plan decision is recoverable on restart
 - `test/v2-goal-loop.test.js` › T12/GL06 rate limit: backoff (waiting) twice, then a compatible fallback runtime; state preserved
 - `test/v2-goal-loop.test.js` › GL06 provider outage -> compatible fallback; context exhaustion -> compacted fresh run
 - `test/v2-goal-loop.test.js` › GL06/T18 controller crash mid-run: restart reconciles the unconfirmed run and resumes without duplicates
 
-### GL07 — FAIL
+### GL07 — PASS
 
-open defect(s) recorded as todo.
+1 test(s) passed.
 
-- open defect: `test/v2-goal-loop-verify.test.js` › V8 a reviewer that keeps answering without a verdict is not retried identically forever (no-progress rule applies to billed reviews)
-- open defect: `test/v2-goal-loop-verify.test.js` › V9 a developer runtime that crashes after billing, with no alternative left, is not re-run identically forever
-- open defect: `test/v2-goal-loop-verify.test.js` › V13 monotone progress inside a single acceptance check (one more test passing per iteration) is progress, not "no new passing evidence"
 - `test/v2-goal-loop.test.js` › GL07 no progress: 3 strategy changes without new passing evidence -> waiting(no_progress), no runaway
 
 ### GL08 — PASS
@@ -496,15 +484,10 @@ open defect(s) recorded as todo.
 
 - `test/v2-goal-loop.test.js` › GL08 every automatic decision is a structured record; routine choices never ask the owner
 
-### GL09 — FAIL
+### GL09 — PASS
 
-open defect(s) recorded as todo.
+2 test(s) passed.
 
-- open defect: `test/v2-goal-loop-verify.test.js` › V4 an owner approval of the routing gate for a critical task is honoured (no identical re-ask)
-- open defect: `test/v2-goal-loop-verify.test.js` › V6 denying a developer's requested action continues the task without that action instead of killing it
-- open defect: `test/v2-goal-loop-verify.test.js` › V7 an owner grant is bound to the request it answers: the same restricted action asked again is asked again
-- open defect: `test/v2-goal-loop-verify.test.js` › V7b approve() refuses grants beyond the classes that were requested
-- open defect: `test/v2-goal-loop-verify.test.js` › V10 a high-risk task is not accepted on the independent reviewer alone (security reviewer / owner gate, Phase 5 exit)
 - `test/v2-goal-loop.test.js` › GL09 privileged actions need explicit authorization whatever the goal text says; silence is never approval
 - `test/v2-system-ops.test.js` › GL09: only the system-operations role executes; its non-allowlisted or destructive ops still need approval
 
@@ -575,6 +558,7 @@ output is printed or kept. Results of each run are recorded in `V2_VERIFICATION.
   unless `GHOSTY_V2` is set; T19 places V2 state the way the frozen layout prescribes).
 - **System Ops role identity**: `requestOperation` trusts its `role` string; the wiring must hand out `requester` only
   (pinned by `test/v2-system-ops-verify.test.js`).
-- **`run()` with a permanent wait**: `goal-loop.run()` keeps re-checking a `waiting` task whose backoff elapses
-  (for example no runtime available). With the real clock that is a 5-minute poll, not spend; callers that want to
-  stop at the first wait pass `until: ['waiting']`.
+- **SHA binding of integration approvals**: the loop's integration approval request carries classes but no action key
+  (unlike gate and risk approvals, which carry `keys` such as `accept:<sha>`), so `loop.approve()` records no SHA. The
+  fixture `storeApprovals` binds each grant to the controller's own preceding `approval.requested { action, sha,
+  target }`; the production bridge must keep that binding (or the loop must carry the controller's key).
