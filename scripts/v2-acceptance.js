@@ -61,7 +61,7 @@ export function fileGaps(files, results, root = ROOT) {
 export function classify(results, { legacyFiles = PRE_V2_FILES } = {}) {
   const rows = [];
   const legacySet = new Set(legacyFiles);
-  const legacyMissing = legacyFiles.filter((f) => !results.some((r) => r.file === f));   // a deleted pre-V2 file is a regression
+  const legacyMissing = legacyFiles.filter((f) => !results.some((r) => r.file === f && !r.skip));   // deleted or fully skipped pre-V2 file is a regression
   for (const id of ROWS) {
     const tests = results.filter((r) => idsOf(r.name).includes(id) || defectRows(r).includes(id));
     const ran = tests.filter((r) => !r.skip);
@@ -74,7 +74,7 @@ export function classify(results, { legacyFiles = PRE_V2_FILES } = {}) {
     else if (!ran.some((r) => !r.todo)) { status = 'FAIL'; reason = 'no executed test carries this id'; }
     else if (failed.length) { status = 'FAIL'; reason = `${failed.length} mapped test(s) failed`; }
     else if (todo.length) { status = 'FAIL'; reason = `open defect(s) recorded as todo: ${todo.map((r) => `${r.file}: ${r.name.slice(0, 80)}`).join(' | ')}`; }
-    else if (legacy && (!legacy.length || legacyFailed.length || legacyMissing.length)) { status = 'FAIL'; reason = `${legacyFailed.length} pre-V2 regression test(s) failed${legacyMissing.length ? `; no results for pinned file(s) ${legacyMissing.join(' ')}` : ''}`; }
+    else if (legacy && (!legacy.length || legacyFailed.length || legacyMissing.length)) { status = 'FAIL'; reason = `${legacyFailed.length} pre-V2 regression test(s) failed${legacyMissing.length ? `; no executed test for ${legacyMissing.length} pinned pre-V2 file(s) (${legacyMissing.slice(0, 3).join(' ')}${legacyMissing.length > 3 ? ' ...' : ''}); a partial --files run cannot pass T16` : ''}`; }
     else { status = 'PASS'; reason = `${ran.length} test(s) passed${legacy ? `; ${legacy.length} pre-V2 regression tests passed` : ''}`; }
     rows.push({ id, status, reason, tests: tests.map((r) => ({ name: r.name, file: r.file, outcome: r.todo ? 'todo' : r.skip ? 'skip' : r.outcome })),
       ...(legacy ? { regression: { files: [...new Set(legacy.map((r) => r.file))].length, tests: legacy.length, failed: legacyFailed.map((r) => `${r.file}: ${r.name}`) } } : {}) });

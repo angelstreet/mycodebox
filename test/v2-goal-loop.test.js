@@ -358,16 +358,20 @@ test('T15 tests pass but the reviewer keeps disagreeing: evidence cannot settle 
   assert.ok(v.evidence.length > 0 && v.evidence.every((e) => e.exit === 0), 'checks ran and every one passed');
 });
 
-test('T15 reviewer approves but the required tests are red: never accepted, back to repair (evidence outranks the verdict)', async () => {
-  const BROKEN = impl('(a, b) => 0');
-  const env = world({ dev: [BROKEN], rev: [APPROVE] });
-  const task = await env.submit({ no_progress_policy: { same_signature: 2, strategy_changes_without_progress: 1 } });
+test('T15 reviewer approves but the required tests are red: the store refuses accepted and the loop never accepts (evidence outranks the verdict)', async () => {
+  // Round 1 reaches the reviewer (green, rejected); round 2 is red. An approve then lands on the red head anyway.
+  const env = world({ dev: [GAMED, impl('(a, b) => 0')], rev: [REJECT_GAMED, APPROVE] });
+  const task = await env.submit({ no_progress_policy: { same_signature: 5, strategy_changes_without_progress: 3 } });
   assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
+  assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
+  assert.equal(env.ad.log.rev.length, 1, 'the reviewer ran (round 1) but red round 2 never reaches it');
   let v = await env.view(task.task_id);
-  assert.ok(v.evidence.length > 0 && v.evidence.every((e) => e.exit !== 0), 'the required check is red');
-  assert.equal(v.verdicts.filter((x) => x.verdict === 'approve' && v.evidence.some((e) => e.sha === x.sha && e.exit !== 0)).length, 0, 'no approval is recorded against red evidence');
-  // Even when the loop runs on (reviewer script still says approve), the red SHA is never accepted.
-  await env.loop.run(task.task_id);
+  assert.ok(v.evidence.filter((e) => e.sha === v.head_sha).every((e) => e.exit !== 0), 'the required check is red on the head');
+  await env.store.recordVerdict(task.task_id, { sha: v.head_sha, actor: { role: 'reviewer', id: 'fake:rev' }, verdict: 'approve', findings: [] });
+  await env.store.transition(task.task_id, 'executing');   // the legal route to evaluating, where accepted is allowed
+  await env.store.transition(task.task_id, 'evaluating');
+  await assert.rejects(env.store.transition(task.task_id, 'accepted'), (e) => e.code === 'E_ACCEPTANCE_UNMET' && /required check unit/.test(e.message));
+  await env.loop.step(task.task_id);
   v = await env.view(task.task_id);
   assert.ok(!states(v).includes('accepted'));
   assert.notEqual(v.status, 'accepted');
@@ -843,7 +847,7 @@ test('Z1 fence per write: a controller fenced mid-run (before any heartbeat coul
 
 test('m4 a policy block that carries no approval request goes to waiting with reason, diagnosis and next action, not a keyless awaiting_approval', async () => {
   // delivery bridge shape for a protected path / path not allowlisted / target policy: no controller request, so no key
-  const integrate = async () => ({ next: 'awaiting_approval', classes: ['integration'], keys: [], reason: 'integration needs the owner: changes protected paths (.ai/x)' });
+  const integrate = async () => ({ next: 'awaiting_approval', classes: ['integration'], keys: [], block: 'policy', reason: 'integration needs the owner: changes protected paths (.ai/x)' });
   integrate.reconcile = async () => ({ applied: false });
   const env = world({ loopOpts: { integrate } });
   const task = await env.submit({ review_policy: { mode: 'goal_loop', independent_review: true, deliver: true } });
@@ -856,4 +860,22 @@ test('m4 a policy block that carries no approval request goes to waiting with re
   assert.match(wait.diagnosis, /protected paths/);
   assert.ok(wait.next_action);
   assert.equal(wait.until_ms, null, 'revisited on an owner resume or a policy change, not on a timer');
+});
+
+test('m4 other keyless integration results (post-merge CI red) stay owner decisions: deny ends the task; a policy block ends by cancel', async () => {
+  const red = async () => ({ next: 'awaiting_approval', classes: ['integration'], keys: [], reason: 'merged but remote CI is red: owner decision' });
+  red.reconcile = async () => ({ applied: false });
+  const env = world({ loopOpts: { integrate: red } });
+  const task = await env.submit({ review_policy: { mode: 'goal_loop', independent_review: true, deliver: true } });
+  assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval', 'not a policy block');
+  await env.loop.deny(task.task_id, { actor: { role: 'owner', id: 'owner-1' }, reason: 'no' });
+  assert.equal((await env.loop.run(task.task_id)).state, 'failed_unrecoverable');
+
+  const blocked = async () => ({ next: 'awaiting_approval', classes: ['integration'], keys: [], block: 'policy', reason: 'integration needs the owner: changes protected paths' });
+  blocked.reconcile = async () => ({ applied: false });
+  const b = world({ loopOpts: { integrate: blocked } });
+  const tb = await b.submit({ review_policy: { mode: 'goal_loop', independent_review: true, deliver: true } });
+  assert.equal((await b.loop.run(tb.task_id)).state, 'waiting');
+  await b.loop.cancel(tb.task_id, { actor: { role: 'owner', id: 'owner-1' } });
+  assert.equal((await b.view(tb.task_id)).status, 'cancelled');
 });

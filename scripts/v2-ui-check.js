@@ -233,7 +233,7 @@ async function main() {
       const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
       for (const a of [['init', '-q'], ['commit', '-q', '--allow-empty', '-m', 'init']]) execFileSync('git', a, { cwd: ctlRepo, env: gitEnv, stdio: 'ignore' });
       const good = await fetch(`${base}/api/v2/tasks`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ goal: 'Same-origin control task', project_id: 'ui-control', risk_class: 'low', runtime_capabilities: ['code'], repository: ctlRepo, idempotency_key: 'ui-control-1', acceptance_checks: [{ id: 'unit', command: ['npm', 'test'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] }) });
-      check('same-origin POST /api/v2/tasks to the same route succeeds (positive control)', good.status === 201 || good.status === 200, `status ${good.status} ${good.status >= 400 ? (await good.clone().text()).slice(0, 200) : ""}`);
+      check('same-origin POST /api/v2/tasks to the same route succeeds (positive control)', good.status === 201, `status ${good.status} ${good.status >= 400 ? (await good.clone().text()).slice(0, 200) : ""}`);
       check('accepted same-origin request recorded exactly one task', (await (await fetch(`${base}/api/v2/tasks`)).json()).tasks.length === 8);
     } finally { await browser.close(); }
   } finally {

@@ -110,7 +110,7 @@ export function createDelivery({ store, queue, controller: makeController, git, 
       case 'merged': return released(task.task_id, item);
       case 'awaiting_approval': {
         const req = requestOf(await writer.events(task.task_id), { since, run });
-        if (!req) return { next: 'awaiting_approval', reason: `integration needs the owner: ${reason}${item.detail?.files ? ` (${item.detail.files.join(', ')})` : ''}`, classes: ['integration'], keys: [] };
+        if (!req) return { next: 'awaiting_approval', reason: `integration needs the owner: ${reason}${item.detail?.files ? ` (${item.detail.files.join(', ')})` : ''}`, classes: ['integration'], keys: [], block: 'policy' };   // only this case: the queue blocked with no request
         const key = approvalKey({ ...req, repo });
         return { next: 'awaiting_approval', classes: [req.class], keys: [key], sha: req.sha, required: { ...req, repo },
           reason: `Approve ${req.action} of ${req.sha} to ${repo}/${req.target} (${req.class}); the grant covers exactly this SHA, action and target.` };

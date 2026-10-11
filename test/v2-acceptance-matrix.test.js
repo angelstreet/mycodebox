@@ -46,10 +46,13 @@ test('m1 acceptance runner: T16 pre-V2 set is pinned to the origin/main manifest
   assert.equal(t16([...base, r('b', 'test/gone.test.js')]).status, 'PASS');
   assert.equal(t16([...base, r('b', 'test/gone.test.js'), r('new', 'test/added-later.test.js', 'fail')]).status, 'PASS', 'a non-v2 file absent from origin/main is not part of the pinned set');
   assert.ok(PRE_V2_FILES.length >= 60 && PRE_V2_FILES.every((f) => /^test\/[^/]+\.test\.js$/.test(f)) && !PRE_V2_FILES.some((f) => f.startsWith('test/v2-')));
-  // Offline CI has no origin/main; where it exists the manifest must equal its test list.
-  let main = null;
-  try { main = execFileSync('git', ['ls-tree', '--name-only', 'origin/main', 'test/'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { /* no remote ref */ }
-  if (main) assert.deepEqual(main.split('\n').filter((f) => f.endsWith('.test.js')).sort(), PRE_V2_FILES);
+  // Offline CI may lack the commit; where it exists the manifest must equal the test list at the sha it records.
+  const src = JSON.parse(fs.readFileSync(new URL('../scripts/pre-v2-tests.json', import.meta.url), 'utf8')).source.split(' ').at(-1);
+  let at = null;
+  try { at = execFileSync('git', ['ls-tree', '--name-only', src, 'test/'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { /* commit not available */ }
+  if (at) assert.deepEqual(at.split('\n').filter((f) => f.endsWith('.test.js')).sort(), PRE_V2_FILES);
+  const skipped = classify([r('T16: inert', 'test/v2-x.test.js'), { ...r('a', 'test/push.test.js'), skip: true }], { legacyFiles: ['test/push.test.js'] }).find((x) => x.id === 'T16');
+  assert.equal(skipped.status, 'FAIL', 'a skipped test is not an executed test of the pinned file');
   assert.ok(fs.existsSync(new URL('../scripts/pre-v2-tests.json', import.meta.url)));
 });
 
