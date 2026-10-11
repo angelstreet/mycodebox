@@ -48,13 +48,18 @@ const wake = {
     if (hot) reasons.push('p0 blocked / failed deploy / disk or quota critical');
     let allowed = hot ? ['wake_cheap', 'wake_opus'] : ['ignore', 'rules_handle', 'wake_cheap', 'wake_opus'];
     if (ev.forbidden_topic) {
-      allowed = allowed.filter((id) => id !== 'rules_handle');
-      reasons.push('forbidden topic: rules-only auto-answer is off the table');
+      allowed = allowed.filter((id) => id !== 'rules_handle' && id !== 'ignore');
+      reasons.push('forbidden topic: neither a rules-only auto-answer nor ignoring is allowed; someone must look');
     }
     return { allowed, forced: null, reasons };
   },
+  // p0_blocked / failed deploy are "already broken" (the wake_opus criterion), so they take Opus like an escalation;
+  // disk/quota-only hot states clamp to wake_cheap. A forbidden topic removes rules_handle, and the old fall-through
+  // to the first allowed option picked 'ignore' for it: someone must look, so default to wake_cheap.
   ruleDefault(facts) {
-    return facts?.event?.escalated ? 'wake_opus' : 'rules_handle';
+    const ev = facts?.event || {};
+    if (ev.escalated || ev.p0_blocked || (ev.kind === 'deploy' && facts?.deploy?.state === 'failed')) return 'wake_opus';
+    return ev.forbidden_topic ? 'wake_cheap' : 'rules_handle';
   },
 };
 
