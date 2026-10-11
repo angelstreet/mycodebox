@@ -314,7 +314,7 @@ test('T17: the AI reviewer re-check catches a forbidden proposal text even when 
 
 // Rule-level filter gaps found during review: each of these is a deploy / delete / money question that classifies as
 // `continue` and would be typed by the rule path (autoSend on, countdown elapsed) because FORBIDDEN_RE does not match.
-test('T17: plain paraphrases of forbidden topics are recognised by the rule filter', { todo: 'defect: FORBIDDEN_RE misses redeploy / rebase onto main / drop the database / ship or release to production / restart the <name> service / charge the card / wipe or overwrite production — classified as continue and sent' }, () => {
+test('T17: plain paraphrases of forbidden topics are recognised by the rule filter', () => {
   for (const q of ['Shall I redeploy staging and continue?', 'Should I continue and rebase this onto main?', 'Shall I continue and drop the database?',
     'Shall I continue and ship it to prod?', 'Shall I continue and release v2 to production?', 'Shall I continue and restart the ghosty service?',
     'Shall I continue and charge the card on file?', 'Shall I continue and wipe the old data?', 'Should I continue and overwrite the production config?']) {

@@ -184,7 +184,26 @@ const OWNER_ACTION_RE = /(?:^|[,;:.]\s+(?:so\s+)?|\bplease\s+|\byou (?:need to|c
 const STATUS_RE = /\b(?:done|finished|complete[d]?|tested|verified|passed|passing|green|failing|failed|left|remaining|to do|todo|next|blocked|pending|not (?:yet )?(?:tested|deployed|done|run)|untested|still needs?|status)\b|\b\d+\s+(?:passed|failed|tests?)\b/i;
 const NEXT_STEP = /\bnext(?::| is| step| phase| I'?d| I will| I'll)|\bI'?ll (?:now|next|then)\b|\bthen I(?:'ll| will)\b|\bstill to do\b|\bremaining\b/i;
 
-export const FORBIDDEN_RE = /\bdeploy|update_core|\brollout\b|systemctl (?:restart|stop|start)|pm2 (?:restart|stop|delete)|\brestart (?:the )?(?:service|server|unit|host)|\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\bgit push\b|force[- ]?push|reset --hard|\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm -r|\bdrop (?:table|database|schema)|\bprune\b|\btruncate\b|\bmigrat(?:e|ion)|\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcustomer/i;
+// Topics the AI manager and the rule path must never answer (AGENTS.md: the forbidden-topic filter always wins).
+// One alternative per line so a paraphrase can be added without untangling a wall of regex; matched case-insensitively.
+const FORBIDDEN_PARTS = [
+  // deploys and service control
+  String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
+  String.raw`systemctl (?:restart|stop|start)|pm2 (?:restart|stop|delete)`,
+  String.raw`\brestart\b[^.\n]{0,30}\b(?:service|server|unit|host|daemon)\b`,   // "restart the ghosty service"
+  String.raw`\b(?:ship|release|roll ?out|promote)\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b|\bgo(?:ing)? live\b`,
+  // git history and main
+  String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\brebase\b[^.\n]{0,30}\b(?:main|master)\b`,
+  String.raw`\bgit push\b|force[- ]?push|reset --hard`,
+  // destructive data operations
+  String.raw`\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm -r|\bprune\b|\btruncate\b|\bwipe\b|\bwiping\b|\boverwrit(?:e|ing)\b`,
+  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b|\bmigrat(?:e|ion)`,
+  // credentials and secrets
+  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key`,
+  // money and customers
+  String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer`,
+];
+export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
 
 let forbiddenExtra = null;
 // Extra forbidden words that must not live in a public repo (customer names, ...): GHOSTY_FORBIDDEN_EXTRA.
