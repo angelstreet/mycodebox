@@ -178,12 +178,13 @@ test('F11: recheck, handleReport and a keyless/replayed execute never resume or 
   h.actions.throttle_concurrency = { execute: async () => { h.calls.push({ name: 'again' }); } };
   assert.equal((await h.ops.handleReport(rep())).outcome, 'linked');
   assert.equal((await h.ops.execute({ type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency' })).outcome, 'linked');
-  assert.equal((await h.ops.execute({ type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency', dedup_key: 'same' })).actions_run ?? 0, 1);
+  // a new instruction on a reconciling incident waits for the owner (see the next test)
+  assert.equal((await h.ops.execute({ type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency', dedup_key: 'same' })).outcome, 'needs_owner_ack');
   assert.equal((await h.ops.execute({ type: 'host.cpu_pressure', host_id: H, action: 'throttle_concurrency', dedup_key: 'same' })).outcome, 'linked');   // replay
   assert.equal(h.admission.isPaused(), true);
 });
 
-test('F11: execute() with a NEW correlation key re-runs actions on a reconciling incident without owner acknowledgement', { todo: 'defect(low, judgement): recheck() gates on reconciling but execute() does not; a fresh instruction on an incident whose rollback failed should need ownerAcknowledge() first (or at least state it in the result)' }, async () => {
+test('F11: execute() with a NEW correlation key re-runs actions on a reconciling incident without owner acknowledgement', async () => {
   const h = await harness();
   const id = await reconciling(h);
   h.actions.throttle_concurrency = { execute: async () => { h.calls.push({ name: 'again' }); } };
@@ -258,7 +259,7 @@ test('F3: canonical key ignores caller keys; distinct host/service/type stay dis
   assert.equal(f.deduped, false);
 });
 
-test('F3: host ids differing only by case open separate incidents for the same host', { todo: 'defect(low): canonical key is case-sensitive while hosts are not; normalise host/service ids (lower-case) in canonicalKey or reject mixed case' }, async () => {
+test('F3: host ids differing only by case open separate incidents for the same host', async () => {
   const h = await harness();
   const a = await h.incidents.report(rep({ host_id: 'Host-A' }));
   const b = await h.incidents.report(rep({ host_id: 'host-a' }));
@@ -295,7 +296,7 @@ test('F5/F1: fixed patterns hold and the scrub is linear (1 MB well under 100 ms
   assert.equal(sanitizeText('word '.repeat(2000)).length, 500);
 });
 
-test('F5: this repo\'s own secret names (REPORTER_TOKEN, *_TOKEN, VAPID_PRIVATE_KEY, NTFY_TOPIC, secret_key) with short values', { todo: 'defect(medium): the key-name pattern is anchored with \\b so compound names (REPORTER_TOKEN=, access_token=, GITHUB_TOKEN:, VAPID_PRIVATE_KEY=, "refresh_token":, secret_key=) and NTFY_TOPIC= are not redacted when the value is < 32 chars; allow a [\\w-]* prefix and add key|topic|private_key' }, () => {
+test('F5: this repo\'s own secret names (REPORTER_TOKEN, *_TOKEN, VAPID_PRIVATE_KEY, NTFY_TOPIC, secret_key) with short values', () => {
   const cases = ['REPORTER_TOKEN=tk_short', 'access_token=short1', 'GITHUB_TOKEN: short2', 'VAPID_PRIVATE_KEY=short3', '{"refresh_token":"short4"}', 'NTFY_TOPIC=mytopic7', 'secret_key=short11', 'PASSWORD short10'];
   for (const c of cases) {
     const v = c.match(/[=:\s"]+"?([A-Za-z0-9_]+)"?\}?$/)[1];
@@ -303,7 +304,7 @@ test('F5: this repo\'s own secret names (REPORTER_TOKEN, *_TOKEN, VAPID_PRIVATE_
   }
 });
 
-test('F5: C1 control characters (U+0080-U+009F, e.g. 8-bit CSI) and bidi overrides pass through', { todo: 'defect(low): strip \\u0080-\\u009f and \\u202a-\\u202e/\\u2066-\\u2069 as well; xterm-class terminals interpret U+009B as CSI' }, () => {
+test('F5: C1 control characters (U+0080-U+009F, e.g. 8-bit CSI) and bidi overrides pass through', () => {
   const s = sanitizeText('x \u009b31m y ‮ z');
   assert.ok(!/[\u0080-\u009f‪-‮⁦-⁩]/.test(s));
 });

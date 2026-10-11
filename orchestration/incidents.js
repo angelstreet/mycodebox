@@ -28,12 +28,14 @@ const HEX_ID = /^[0-9a-f]{40}$/i;   // only a git SHA-1 is exempt: 64-hex is a t
 // The input is cut to ~4x the cap BEFORE any regex so a hostile reporter cannot make the scrub superlinear (ReDoS).
 export function sanitizeText(v, max = MAX_TEXT) {
   if (v == null) return '';
-  let s = String(v).slice(0, max * 4).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+  // C0/C1 controls (U+009B is CSI on xterm-class terminals) and bidi overrides are stripped.
+  let s = String(v).slice(0, max * 4).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, '');
   s = s.replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]');
   s = s.replace(/(?:\/home|\/Users|\/root)(?:\/[^\s"'`;,)]*)?/g, '[path]').replace(/~\/[^\s"'`;,)]*/g, '[path]');
   s = s.replace(/\b(Basic|Bearer)\s+[A-Za-z0-9+/=._~-]+/gi, '$1 [redacted]');
   s = s.replace(/(--?(?:token|secret|password|passwd|api-?key))[ =]+\S+/gi, '$1 [redacted]');
-  s = s.replace(/(["']?)\b(token|secret|password|passwd|api[_-]?key|authorization)(["']?)\s*[=:]\s*(["']?)[^\s"',;}]+/gi, '$1$2$3=[redacted]');
+  // Compound names too (REPORTER_TOKEN, access_token, VAPID_PRIVATE_KEY, NTFY_TOPIC, secret_key), and `NAME value`.
+  s = s.replace(/(["']?)\b([\w-]*(?:token|secret|password|passwd|api[_-]?key|authorization|private[_-]?key|topic|_key))(["']?)(?:\s*[=:]\s*|\s+)(["']?)[^\s"',;}]+/gi, '$1$2$3=[redacted]');
   s = s.replace(/\b(?:sk|pk|ghp|gho|ghs|github_pat|xox[abpr]|AKIA)[-_A-Za-z0-9]{8,}/g, '[redacted]');
   s = s.replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}/g, (m) => (HEX_ID.test(m) ? m : '[redacted]'));
   s = s.replace(/\b[\w-]+(?:\.[\w-]+)*\.ts\.net\b/gi, '[host]');
@@ -193,7 +195,8 @@ export function createIncidentStore({ dir, fs = nodeFs, now = Date.now, randomId
   });
 
   // Canonical key is derived here, never taken from the caller (a caller key would defeat dedup, T36).
-  const canonicalKey = (type, host, svc) => `${type}:${host}:${svc ?? '-'}`;
+  // Host and service ids compare case-insensitively: Host-A and host-a are one host.
+  const canonicalKey = (type, host, svc) => `${type}:${String(host).toLowerCase()}:${svc == null ? '-' : String(svc).toLowerCase()}`;
   const findOpen = (key) => [...incidents.values()].find((i) => i.dedup_key === key && i.state !== 'resolved');
 
   const transition = (kind) => (id, detail = {}) => op(async () => {
