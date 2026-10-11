@@ -10,7 +10,8 @@
 
 export const SUITE_ID = 'mycodebox-v2-bench';
 export const SUITE_VERSION = 1;
-export const EXPECTED_OUTCOMES = Object.freeze(['done', 'awaiting_approval', 'waiting_no_progress']);
+// The expected-outcome vocabulary is the scorecard's own (one constant for the bench and the manifest validator).
+export { EXPECTED_OUTCOMES } from '../../../orchestration/scorecard.js';
 
 const PKG = '{ "name": "bench-fixture", "private": true, "type": "module" }\n';
 const T = "import test from 'node:test';\nimport assert from 'node:assert/strict';\n";

@@ -38,6 +38,7 @@ import { createIntake } from '../orchestration/intake.js';
 import { route as realRoute } from '../orchestration/router.js';
 import { createAdapter as fakeAdapter } from '../orchestration/adapters/fake.js';
 import { SUITE_ID, SUITE_VERSION, TASKS, policyFor, noopFiles } from '../test/fixtures/v2-bench/tasks.js';
+import { EXPECTED_OUTCOMES, NOT_RUN_OUTCOMES } from '../orchestration/scorecard.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const MANIFEST_SCHEMA = 'mycodebox.v2.bench-run/1';
@@ -212,6 +213,7 @@ export function classify(status, loop = {}) {
 export async function runBench(opts) {
   const o = validateOptions({ ...DEFAULTS, ...opts });
   const tasks = selectTasks(o.tasks);
+  for (const t of tasks) if (!EXPECTED_OUTCOMES.includes(t.expected_outcome)) throw new Error(`bench task ${t.id}: expected_outcome ${t.expected_outcome} is not one of ${EXPECTED_OUTCOMES.join(', ')}`);
   const devSpecs = o.runtimes;
   const reviewerOf = (spec) => (o.fake ? (o.reviewer_map[spec] ?? 'fake-review') : (o.reviewer_map[spec] ?? DEFAULT_REVIEWERS[spec] ?? (spec.startsWith('opencode:') ? DEFAULT_REVIEWERS.opencode : null)));
   const pairs = devSpecs.map((spec) => {
@@ -377,7 +379,7 @@ export async function runBench(opts) {
       if (!gateL.ok) {
         rec.outcome = 'skipped_budget'; rec.error = gateL.reason; rec.usd = 0; rec.duration_ms = 0;
       } else if (devAvail === false || revAvail === false) {
-        rec.outcome = 'error'; rec.error = `runtime unavailable (probe): ${devAvail === false ? r.spec : r.revSpec}`; rec.usd = 0; rec.duration_ms = 0;
+        rec.outcome = 'not_started'; rec.error = `runtime unavailable (probe): ${devAvail === false ? r.spec : r.revSpec}`; rec.usd = 0; rec.duration_ms = 0;
       } else {
         log(`run ${r.task.id} x ${r.spec} (reviewer ${r.revSpec})`);
         let timedOut = false;
@@ -446,6 +448,8 @@ export async function runBench(opts) {
       }
       // Invariants: the fixture's main branch never moves; a task that must not be done is never done.
       try { rec.main_unchanged = sh(r.repo, 'rev-parse', 'main') === r.main; } catch { rec.main_unchanged = null; }
+      // No task was created (refused or failed before intake): the run did not start, whatever stopped it.
+      if (rec.task_id == null && !NOT_RUN_OUTCOMES.includes(rec.outcome)) rec.outcome = 'not_started';
       rec.never_done_ok = r.task.expected_outcome === 'done' ? null : rec.outcome !== 'done';
       rec.outcome_correct = rec.outcome === rec.expected_outcome;
       rec.duration_ms ??= Date.now() - t0;

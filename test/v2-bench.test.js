@@ -10,6 +10,8 @@ import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST
 import { TASKS, SUITE_ID, SUITE_VERSION, EXPECTED_OUTCOMES, policyFor, noopFiles } from './fixtures/v2-bench/tasks.js';
 import { checkAction, validatePolicy } from '../orchestration/policy.js';
 import { parseOpencodeEvent } from '../orchestration/adapters/opencode.js';
+import { validateManifest, toolScore } from '../orchestration/scorecard.js';
+import { scorecardOf, scoreStore } from '../scripts/v2-score.js';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-test-')));
 after(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -263,4 +265,41 @@ test('per-task budget: a default share below one developer run + one review is r
   const { manifest } = await runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'off-by-one', max_usd: 0.05, task_usd: 0.03 });
   assert.equal(manifest.runs[0].outcome, 'done');
   await assert.rejects(runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'all', max_usd: 0.1 }), /minimum viable 0.02 USD/);
+});
+
+test('end to end: a fake bench over all 10 tasks (one run refused by the ledger) validates and scores', async () => {
+  // Fake spend: 0.015 per accepted run, 0.05 for the impossible task. Reserving 0.06 per run under a 0.21 cap leaves the
+  // last run (rename-callers) without room: skipped_budget, no task.
+  const { manifest, outDir: od } = await runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'all', max_usd: 0.21, task_usd: 0.06 });
+  assert.equal(manifest.runs.length, 10);
+  const last = manifest.runs.at(-1);
+  assert.equal(last.outcome, 'skipped_budget');
+  assert.equal(last.task_id, null);
+  assert.deepEqual(manifest.runs.slice(0, 9).map((r) => r.outcome_correct), Array(9).fill(true));
+  assert.ok(manifest.runs.every((r) => EXPECTED_OUTCOMES.includes(r.expected_outcome)));
+  const v = validateManifest(manifest);
+  assert.deepEqual(v.errors, []);
+  const { sc } = scorecardOf(path.join(od, manifest.store_dir), { manifest });
+  assert.equal(sc.tasks.total, 9);
+  assert.equal(sc.tasks.not_run, 1);
+  assert.deepEqual(sc.not_run, [{ bench_task_id: 'rename-callers', runtime: 'fake', model: 'fake-dev', outcome: 'skipped_budget' }]);
+  assert.ok(sc.caveats.some((c) => /never started/.test(c)));
+  const ts = toolScore(sc, manifest);
+  assert.equal(ts.runs, 9);
+  assert.equal(ts.skipped, 1);
+  assert.equal(ts.run_coverage, 0.9);
+  assert.deepEqual(ts.missing, []);
+  assert.equal(ts.components.outcome_correctness.value, 1, 'forbidden -> awaiting_approval and impossible -> waiting/no_progress both count as correct');
+  assert.equal(ts.score, null);
+  assert.match(ts.score_reason, /1 run\(s\) not run/);
+  assert.ok(ts.partial_score > 0);
+  const imp = ts.per_run.find((p) => p.bench_task_id === 'impossible-contradiction');
+  assert.deepEqual([imp.expected, imp.actual, imp.correct], ['waiting_no_progress', 'waiting:no_progress', true]);
+  assert.deepEqual(ts.per_run.at(-1), { task_id: null, bench_task_id: 'rename-callers', task_class: 'refactor', expected: 'done', actual: 'not_run', correct: false, not_run: 'skipped_budget' });
+  // A not-run run is only valid without a task; a waiting expectation names a known reason.
+  assert.equal(validateManifest({ ...manifest, runs: [{ ...last, outcome: 'done' }] }).ok, false);
+  assert.equal(validateManifest({ ...manifest, runs: [{ ...manifest.runs[0], expected_outcome: 'waiting_forever' }] }).ok, false);
+  const plain = scoreStore(path.join(od, manifest.store_dir));
+  assert.equal(plain.tasks.total, 9);
+  assert.equal(plain.tasks.accepted, 7);
 });
