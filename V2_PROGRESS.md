@@ -47,7 +47,8 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | done: APPROVE WITH FIXES | 190bf01 (15 todo); 1 high remove() data loss |
 | adapters-fixes | 3 | v2/03-adapters | 106bd36 | Sonnet | in progress | |
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
-| integration-verify | 12 | wt verify-09 | a14a72a | Fable | in progress | |
+| integration-verify | 12 | wt verify-09 | a14a72a | Fable | done: APPROVE WITH FIXES | 631409d (5 todo); F1 high self-approval via handoff |
+| integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus | queued (next slot) | |
 
 ## Decision journal
 
