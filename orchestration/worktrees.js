@@ -35,7 +35,8 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     const id = path.basename(real);
     const m = TASK_ID.test(id) ? readMeta(id) : null;
     if (!m || m.path !== real) return null;
-    if (m.task_id !== id || m.branch !== `v2task/${id}` || typeof m.repo !== 'string' || !allow.includes(m.repo)) {
+    if (m.task_id !== id || m.branch !== `v2task/${id}` || typeof m.repo !== 'string' || !allow.includes(m.repo)
+      || m.lease?.resource !== `worktree:${id}` || (m.lease?.task_id != null && m.lease.task_id !== id)) {
       throw coded('E_FOREIGN', 'worktree metadata is invalid');
     }
     return m;
@@ -106,6 +107,8 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     let added = false;
     try {
       if (fs.existsSync(target) || readMeta(task_id)) throw coded('E_EXISTS', 'worktree already exists');
+      const branchExists = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${want}`], { cwd: realRepo }).then(() => true, () => false);
+      if (branchExists) throw coded('E_EXISTS', `branch ${want} already exists`);
       await git(['cat-file', '-e', `${base_sha}^{commit}`], { cwd: realRepo });
       await guard(lease);
       await git(['worktree', 'add', '-b', want, target, base_sha], { cwd: realRepo });
@@ -173,7 +176,8 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     }
     await guard(m.lease);
     await git(['worktree', 'remove', real], { cwd: m.repo }); // no --force: git re-checks cleanliness
-    try { await guard(m.lease); await git(['branch', '-d', m.branch], { cwd: m.repo }); } catch { /* kept if git deems it unmerged */ }
+    // Merge was verified above for this exact tip: delete by compare-and-swap so a tip that moved since is kept.
+    try { await guard(m.lease); await git(['update-ref', '-d', `refs/heads/${m.branch}`, tip], { cwd: m.repo }); } catch { /* kept */ }
     try { fs.unlinkSync(metaFile(m.task_id)); fsyncDir(metaDir); } catch { /* ignore */ }
     try { await leases.release(m.lease); } catch { /* ttl covers it */ }
     return { removed: true, retained: false };

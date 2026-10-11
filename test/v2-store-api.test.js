@@ -36,3 +36,14 @@ test('independence(): developer from setHead, not from the caller; look-alike id
   await s.recordVerdict(id, { sha: SHA_A, actor: { role: 'verifier', id: 'rev-2' }, verdict: 'reject', findings: ['x'] });
   assert.equal((await s.independence(id, SHA_A)).ok, false, 'an independent reject blocks');
 });
+
+test('usage: an adapter-reported incomplete flag is kept and makes totals incomplete; non-boolean refused', async () => {
+  const s = open();
+  const { task_id: id } = await s.createTask(spec());
+  await s.recordUsage(id, { runtime: 'minimax', provider: 'minimax', model: 'm', input_tokens: 10, output_tokens: 2, usd: null, incomplete: true });
+  const v = await s.get(id);
+  assert.equal(v.usage.at(-1).incomplete, true);
+  assert.equal(v.usage_totals.incomplete, true);
+  assert.equal(v.usage_totals.usd, null);
+  await assert.rejects(s.recordUsage(id, { runtime: 'x', incomplete: 'yes' }), { code: 'E_INVALID' });
+});

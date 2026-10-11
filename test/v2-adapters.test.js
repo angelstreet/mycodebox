@@ -267,8 +267,11 @@ test('T12 timeout kills the process group and reports class timeout', async () =
   assert.equal(run.result.timed_out, true);
   assert.equal(run.result.error.class, 'timeout');
   assert.equal(run.result.error.retryable, true);
-  assert.ok(!alive(pid));
-  assert.ok(!alive(Number(fs.readFileSync(pidFile, 'utf8'))), 'grandchild in the process group is gone too');
+  // A SIGKILLed grandchild is reparented and can stay an unreaped zombie for a moment (kill(pid, 0) still succeeds):
+  // poll with a deadline instead of checking one instant.
+  const gone = async (p) => { for (let i = 0; i < 100 && alive(p); i++) await sleep(20); return !alive(p); };
+  assert.ok(await gone(pid));
+  assert.ok(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), 'grandchild in the process group is gone too');
 });
 
 test('T14 cancel during spawn: acknowledged, process gone, no later writes', async () => {

@@ -4,7 +4,7 @@ import { makeCliAdapter, usageFrom } from './common.js';
 const OK_STATUS = /^(?:allowed|allowed_warning|ok)$/i;
 
 // Shapes follow docs/v2/RUNTIME_FORMATS.md (live capture). Unknown fields map to null, never to a guess.
-function parse(o) {
+function parse(o, nowMs = Date.now()) {
   const events = [];
   let error_text = null;
   let retry_after_ms;
@@ -22,7 +22,7 @@ function parse(o) {
     events.push({ type: 'rate_limit', status, resets_at: resets });
     if (status && !OK_STATUS.test(status)) {
       error_text = `rate limit ${status}`;
-      if (resets) retry_after_ms = Math.max(0, resets - Date.now());
+      if (resets) retry_after_ms = Math.max(0, resets - nowMs);
     }
   } else if (o.type === 'result') {
     events.push({ type: 'result', ok: o.is_error !== true, text: typeof o.result === 'string' ? o.result : null });

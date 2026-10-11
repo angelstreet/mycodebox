@@ -53,3 +53,8 @@ Exact repaired SHA `1bc82f962f82966488a83bc71d5c1eab23faa48a`: `env -i PATH="$PA
 |---|---|---|---|---|---|
 | routing/registry/budget (Phase 4) | Sonnet | Opus (independent context), 3 rounds | APPROVE (F1–F14, R1–R5 fixed; 0 open) | 71d9b39 | Node 23.6 991/991 exit 0; Node 24.21 991/991 exit 0; dry-run wake 10/10 |
 | Phase 1 security floors (restart guard, launch defaults, review fixes F1–F8, R1–R5, manager-wakes race) | prior run + Sonnet + coordinator | Fable, 3 rounds | APPROVE | 8567083 | Node 23.6 1042/1042 exit 0; Node 24.21 1042/1042 exit 0 |
+| task contract/store/events/policy (Phase 2) | Opus + coordinator | Fable, 4 rounds | APPROVE (0 open) | e2bf65f | Node 23.6 1125/1125 exit 0; Node 24.21 1125/1125 exit 0 |
+| lease authority (§12.2) | Opus + coordinator | Fable, 4 rounds | APPROVE (0 open) | dc04001 | 1195/1195 both runtimes |
+| adapters + worktrees (Phase 3) | Sonnet + coordinator | Opus, 3 rounds | APPROVE | merge before 85cd076 | 1342/1342 both runtimes after D-011 seam fix |
+| incidents/telemetry/system-ops (§12.4) | Sonnet + coordinator | Fable, 3 rounds | APPROVE | merged with adapters | 1342/1342 both runtimes |
+| integration queue/CI gates/controller (§12.3) | Opus + coordinator | Fable, 3 rounds | APPROVE | 063380e | 1383/1383 both runtimes |

@@ -97,15 +97,17 @@ const branchRules = (branches) => {
   return [[new RegExp(`\\b(?:merg(?:e|es|ed|ing)|rebas(?:e|es|ed|ing))\\b[^.\\n]{0,30}\\b(?:${names})\\b`, 'i'), 'merge_protected'],
     [new RegExp(`\\bpush(?:es|ed|ing)?\\b[^.\\n]{0,30}\\b(?:${names})\\b`, 'i'), 'merge_protected']];
 };
+// Maps the manager matcher's hit to an action class; keep in step with FORBIDDEN_PARTS in stall.js
+// (a hit no row maps still needs approval, as the generic forbidden_topic class).
 const TOPIC_CLASS = [
-  [/deploy|update_core|rollout/i, 'deploy'],
+  [/deploy|update_core|rollout|ship|release|promote|go(?:ing)? live|terraform|kill|upgrade|alter|modify/i, 'deploy'],
   [/systemctl|pm2|restart/i, 'host_maintenance'],
-  [/merge/i, 'merge_protected'],
-  [/push/i, 'push_shared'],
-  [/reset --hard|delet|remov|rm -r|drop|prune|truncate|migrat/i, 'destructive'],
-  [/\.env|credential|password|passphrase|secret|token|bearer|api[_ -]?key|ssh key|private key/i, 'credentials'],
-  [/money|pay|purchase|buy|billing|invoice|credit/i, 'money'],
-  [/customer/i, 'customer'],
+  [/merge|rebase/i, 'merge_protected'],
+  [/push|publish/i, 'push_shared'],
+  [/reset --hard|hard[- ]?reset|delet|remov|\brm\b|drop|prune|truncate|migrat|wip(?:e|ing)|overwrit/i, 'destructive'],
+  [/\.env|credential|password|passphrase|secret|token|bearer|api[_ -]?key|ssh key|private key|revok|rotat/i, 'credentials'],
+  [/money|pay|purchase|buy|billing|invoice|credit|card|charg|refund|transfer|funds/i, 'money'],
+  [/customer|client/i, 'customer'],
 ];
 
 // -> [{ topic, class }] for every restricted topic named in the text, under any variant spelling.
