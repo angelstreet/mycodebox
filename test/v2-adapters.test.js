@@ -47,6 +47,13 @@ if (name === 'claude') {
 } else if (name === 'opencode') {
   const sid = a.includes('--session') ? a[a.indexOf('--session') + 1] : 'ses_fake1';
   const part = (x) => ({ id: 'prt_1', messageID: 'msg_1', sessionID: sid, ...x });
+  const fin = (extra) => out({ type: 'step_finish', timestamp: 6, sessionID: sid, part: part({ type: 'step-finish', ...extra }) });
+  if (mode === 'ocnocost') { fin({ reason: 'tool-calls', tokens: { input: 5, output: 1, cache: {} } }); fin({ reason: 'stop', tokens: { input: 5, output: 1 }, cost: 0 }); process.exit(0); }
+  if (mode === 'oclength') { fin({ reason: 'length', tokens: { input: 5, output: 1 }, cost: 0 }); process.exit(0); }
+  if (mode === 'oc429' || mode === 'ocauth') {
+    out({ type: 'error', timestamp: 1, sessionID: sid, error: mode === 'oc429' ? { name: 'APIError', data: { message: 'Too many', statusCode: 429 } } : { name: 'ProviderAuthError', data: { message: 'bad key' } } });
+    process.exit(1);
+  }
   if (mode === 'ocerror') { out({ type: 'error', timestamp: 1, sessionID: sid, error: { name: 'UnknownError', data: { message: 'Unexpected server error.', ref: 'err_x' } } }); process.exit(1); }
   out({ type: 'step_start', timestamp: 1, sessionID: sid, part: part({ type: 'step-start', snapshot: 'abc' }) });
   out({ type: 'tool_use', timestamp: 2, sessionID: sid, part: part({ type: 'tool', tool: 'write', callID: 'c1', state: { status: 'completed', input: {}, output: 'x' } }) });
@@ -231,6 +238,27 @@ test('opencode: error event + exit 1 is a failed run with the message kept; resu
   assert.equal(argv[argv.indexOf('--session') + 1], 'ses_abc');
   assert.equal(r.session_id, 'ses_abc');
   assert.ok(!argv.includes('--auto'));
+});
+
+test('opencode: missing cost or tokens marks usage incomplete; non-tool-calls reasons are terminal', async () => {
+  const a = await runCli('opencode', 'ocnocost');
+  assert.equal(a.run.usage_incomplete, true);
+  assert.equal(a.a.collectUsage(a.run).incomplete, true);
+  const full = await runCli('opencode', 'ok');
+  assert.equal(full.a.collectUsage(full.run).incomplete, false);
+  const l = await runCli('opencode', 'oclength');
+  const res = l.run.events.find((e) => e.type === 'result');
+  assert.equal(res.ok, false);
+  assert.match(res.text, /length/);
+});
+
+test('opencode: 429 -> rate_limit, ProviderAuthError -> auth; --auto is refused as a bypass', async () => {
+  const r = await runCli('opencode', 'oc429');
+  assert.equal(r.run.result.error.class, 'rate_limit');
+  const u = await runCli('opencode', 'ocauth');
+  assert.equal(u.run.result.error.class, 'auth');
+  assert.ok(findBypass(['run', '--auto', 'p'], [2]).length);
+  assert.throws(() => adapterFor('opencode', { extraArgs: ['--auto'] }).start({ task_id: 't', run_id: 'ga', cwd: work(), prompt: 'hi' }), { code: 'E_BYPASS' });
 });
 
 test('resume maps to each CLI session flag', async () => {

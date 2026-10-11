@@ -42,7 +42,9 @@ default `node` is 23.x must set `MCODE_NODE_DIR` (owner action for the service e
 ## OpenCode
 
 Verified live against opencode 1.18.32 (2026-10-11), `opencode run --format json --model opencode/big-pickle "<prompt>"`
-(free model; no credentials). The CLI took no permission prompt in the probe or the smoke; `--auto` is never passed.
+(free model; no credentials). OpenCode's default permissions already allow edit and bash in `run` mode (no prompt was
+seen in the probe or the smoke), so V2 OpenCode workers rely on the isolated worktree, not on prompts. `--auto` is never
+passed and the bypass guard refuses it in `extraArgs`.
 `--version` takes about 2 s on a loaded host: probe timeouts below 5 s can report `unknown`.
 
 JSONL, one object per line, envelope `type, timestamp, sessionID` and a `part` object:
@@ -57,6 +59,13 @@ JSONL, one object per line, envelope `type, timestamp, sessionID` and a `part` o
 Usage is per step, so the adapter sums `step_finish` (`usageMode: 'sum'`). Like Claude, total input counts cache tokens
 (`input + cache.write + cache.read`; `tokens.input` alone excludes them) and output includes `reasoning` (`total` =
 input + output + reasoning + cache). `usd` is `part.cost` and is a known zero for free models because the CLI reports it.
+
+Incomplete usage: a `step_finish` without `tokens`, `tokens.input`/`output` or `cost` marks the run's usage incomplete
+(missing cache/reasoning count as 0). A run cancelled or timed out mid-step has no terminal `step_finish`, so its summed
+usage covers finished steps only; treat usage of a run without a `result` event as incomplete. Any `step_finish` reason
+other than `tool-calls` is terminal (`stop` ok; `length` etc. give `ok: false` with a reason text). Error lines carry
+`error.name` and `error.data.{message,statusCode}`; the adapter keeps `Name: message status code: N` so 429 classifies as
+rate_limit and 401 / `ProviderAuthError` as auth.
 
 Resume: `opencode run -s <sessionID> ...` continues a session (verified live: the second run answered from the first
 run's context and kept the same `sessionID`). `features.resume` is true; the adapter appends `--session <id>`.
