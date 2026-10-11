@@ -30,10 +30,10 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | main regressions | 1 | v2/integration | dccab06 | coordinator | done | 13d161d (placeholder price), 4bdaae6 (Node 23 test) |
 | security follow-up | 1 | v2/integration | dccab06 | coordinator | integrated, review pending | 9507d11 |
 | phase1-review | 1 | v2/01-review, wt review-p1 | c366307 | Fable | done: APPROVE WITH FIXES | 0e6d4d9 tests (+1 todo); F1 high forbidden paraphrases; F2–F8 med/low |
-| phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet | re-verification (Fable) | 0789bdc | fix list kept outside repo, summarized in review row |
+| phase1-fixes | 1 | v2/01-fixes | 0e6d4d9 | Sonnet + coordinator | round-2 review APPROVE WITH FIXES (non-blocking); residual R1–R5 + manager-wakes race fixed by coordinator; awaiting Fable round 3 | 0789bdc, 6247742 tests | fix list kept outside repo, summarized in review row |
 | task-core | 2 | v2/02-task-core | c366307 | Opus | review | 3a4fb9e; 39 tests |
 | task-core-verify | 2 | wt verify-02 | 3a4fb9e | Fable | done: APPROVE WITH FIXES | a5f83d2 (11 todo); 2 high |
-| task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus | queued FIRST (blocks goal-loop, integration) | |
+| task-core-fixes | 2 | v2/02-task-core | 3a4fb9e | Opus | in progress (+D-007) | |
 | lease-authority | 12 | v2/08-lease-authority | c366307 | Opus | review | 9e958b6; T25–T27 tests |
 | lease-verify | 12 | wt verify-08 | 9e958b6 | Fable | done: APPROVE WITH FIXES | 5d19f6b (4 todo); F1 breaker race |
 | lease-fixes | 12 | v2/08-lease-authority | 9e958b6 | Opus | in progress | |
@@ -46,7 +46,8 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | adapters+worktrees | 3 | v2/03-adapters | c366307 | Sonnet | review | 106bd36 (fake CLIs only) |
 | adapters-verify | 3 | wt verify-03 | 106bd36 | Opus | done: APPROVE WITH FIXES | 190bf01 (15 todo); 1 high remove() data loss |
 | adapters-fixes | 3 | v2/03-adapters | 106bd36 | Sonnet | queued (next slot) | |
-| integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | in progress | |
+| integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
+| integration-verify | 12 | wt verify-09 | a14a72a | Fable | in progress | |
 
 ## Decision journal
 
@@ -57,6 +58,9 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | D-003 | Canonical test runtime: both `/usr/local/bin/node` (v23.6, what the live unit's `env node` resolves to) and Node 24.21 must pass | Node 24 only | Prior evidence used Node 24 only and hid 5 Node 23 failures (unref'd abort timer in a test) | yes |
 | D-004 | Project policy file is `.ai/project.json`, not YAML | add YAML dep; hand-rolled YAML | One-runtime-dependency rule; JSON is built in | yes |
 | D-005 | Example unit binds loopback; live unit untouched; `manager-fresh.sh` prepends `$HOME/.local/bin` to PATH | leave example at 0.0.0.0 | Example contradicted the security contract; prior run removed the absolute CLI path the timer relied on | yes |
+| D-007 | Add `waiting -> integrating` transition | keep blocks as events only | Integration controller must park retryable blocks (lease busy, CI pending) visibly as `waiting` and resume | yes |
+| D-008 | Lease namespace adds `repo:<r>:branch:<name>` | main-only targets | Integration to non-main targets needs a fenced lease too | yes |
+| D-009 | Coordinator authors small residual fixes when every developer slot is busy; an independent Fable verifier checks them | wait for a slot | Owner's 3-developer cap; independence preserved (author != verifier) | yes |
 | D-006 | Leak scan = `scripts/leak-scan.js` (generic patterns) + private denylist outside the repo (`LEAK_SCAN_EXTRA`) | patterns in repo | Real identifiers must never be committed, including in the scanner | yes |
 
 ## OWNER-REVIEW / owner actions (collected for the PR)
