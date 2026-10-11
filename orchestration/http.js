@@ -94,7 +94,8 @@ export function nextAction(task, pending, answered = null) {
 // Delivery: an accepted task is verified in its worktree; it is integrated only after the integrating states ran.
 export function deliveryOf(t) {
   const requested = t.review_policy?.deliver === true || (t.resources || []).some((r) => typeof r === 'string' && /^repo:.+:integration$/.test(r));
-  const integrated = t.history.some((h) => h.to === 'integrating' || h.to === 'release_verifying');
+  // Integrated only when acceptance came through release verification; an integration that went back to repair is not.
+  const integrated = t.history.some((h) => h.from === 'release_verifying' && h.to === 'accepted');
   const label = integrated ? 'integrated' : t.status === 'accepted' ? 'verified in worktree, not integrated' : requested ? 'integration requested, not yet integrated' : 'no integration requested';
   return { requested, integrated, label };
 }
@@ -150,7 +151,8 @@ function allowedActions(t) {
   const pol = t.policy_snapshot?.policy;
   return { source: pol ? 'policy snapshot of the latest run' : 'task contract only (no policy snapshot yet)',
     approval_required: t.approval_policy?.requires ?? [], prohibited_actions: [...new Set([...(t.prohibited_actions || []), ...(pol?.prohibited_actions || [])])],
-    allowed_commands: pol ? pol.allowlists.commands.map((c) => c.join(' ')) : null, allowed_paths: pol ? pol.allowlists.paths : null,
+    allowed_commands: Array.isArray(pol?.allowlists?.commands) ? pol.allowlists.commands.map((c) => (Array.isArray(c) ? c.join(' ') : String(c))) : null,
+    allowed_paths: pol?.allowlists?.paths ?? null,
     protected_branches: pol?.protected_branches ?? null };
 }
 

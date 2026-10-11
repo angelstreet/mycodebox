@@ -307,7 +307,7 @@ test('XSS: queue, runs, roles, allowed actions, task graph and delivery are esca
   }
 });
 
-test('delivery: "integrated" only when the accepted transition came out of release_verifying', { todo: 'defect (low): deliveryOf() says integrated if the history ever entered integrating, even when integration failed and acceptance came straight from evaluating' }, async () => {
+test('delivery: "integrated" only when the accepted transition came out of release_verifying', async () => {
   const { store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   for (const s of ['clarified', 'planned', 'ready', 'executing', 'evaluating', 'integrating', 'repair', 'executing', 'evaluating']) await store.transition(id, s);
@@ -330,7 +330,7 @@ test('approval binds the SHA the request was raised on, even after the head move
   assert.equal((await call('POST', `/api/v2/tasks/${id}/approve`, { action_id: aid, sha: SHA_A })).status, 200);
 });
 
-test('a malformed policy snapshot does not crash the detail route into an internal error', { todo: 'defect (low): allowedActions() assumes pol.allowlists; a snapshot without it turns GET detail into 500 E_INTERNAL' }, async () => {
+test('a malformed policy snapshot does not crash the detail route into an internal error', async () => {
   const { store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   await store.snapshotPolicy(id, { project_id: 'p' }, { run_id: 'r1' });

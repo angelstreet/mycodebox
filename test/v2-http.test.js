@@ -239,7 +239,7 @@ test('list carries a cross-task approval queue; delivery is exposed; the request
   assert.deepEqual((await call('GET', '/api/v2/tasks')).body.approvals.map((x) => x.task_id), [b.task_id]);
 });
 
-test('delivery: requested by deliver flag or integration resource; integrated only after the integrating states', async () => {
+test('delivery: requested by deliver flag or integration resource; integrated only when accepted through release verification', async () => {
   const { store, call } = setup();
   const x = await store.createTask(spec({ review_policy: { deliver: true } }));
   const y = await store.createTask(spec({ resources: ['repo:fake:integration'] }));
@@ -247,5 +247,7 @@ test('delivery: requested by deliver flag or integration resource; integrated on
   assert.equal((await d(x.task_id)).requested, true);
   assert.equal((await d(y.task_id)).requested, true);
   for (const st of ['clarified', 'planned', 'ready', 'executing', 'evaluating', 'integrating']) await store.transition(x.task_id, st);
-  assert.equal((await d(x.task_id)).integrated, true);
+  // entering integration is not being integrated: only accepted-from-release_verifying counts
+  assert.equal((await d(x.task_id)).integrated, false);
+  assert.equal((await d(x.task_id)).label, 'integration requested, not yet integrated');
 });
