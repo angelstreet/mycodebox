@@ -37,6 +37,7 @@ const DEFECT_ROWS = {
   'test/v2-goal-loop-verify5.test.js': { Z1: ['T18', 'T27', 'GL06'], Z3: ['T14'] },
   'test/v2-lease-authority-verify5.test.js': { 'D-016': ['T25', 'T27', 'GL10'] },
   'test/v2-store-d017-verify.test.js': { 'D-017:': ['T14', 'T18'] },
+  'test/v2-delivery-verify.test.js': { DV1: ['T31'], DV2: ['GL14'] },
 };
 const defectRows = (r) => (r.todo && r.file ? DEFECT_ROWS[r.file]?.[String(r.name).split(/\s/)[0]] ?? [] : []);
 
@@ -44,6 +45,15 @@ const defectRows = (r) => (r.todo && r.file ? DEFECT_ROWS[r.file]?.[String(r.nam
 export function idsOf(name) {
   const m = /^((?:T|GL)\d{2}(?:\s*[/,+]\s*(?:T|GL)\d{2})*)(?=[\s:(]|$)/.exec(String(name));
   return m ? m[1].split(/[/,+]/).map((s) => s.trim()) : [];
+}
+
+// Test files that produced no test of their own. node --test reports a file that registers no test, or whose process
+// exits 0 before its tests finish, as ONE passing entry named by the file's absolute path (Node 23 and 24), and a file
+// absent at launch (the shell expands the glob then) produces nothing: either shrinks the suite with 0 failures.
+export function fileGaps(files, results, root = ROOT) {
+  const abs = (f) => path.resolve(root, f);
+  const own = new Set(results.filter((r) => r.file && r.name !== abs(r.file) && r.name !== r.file).map((r) => abs(r.file)));
+  return files.filter((f) => !own.has(abs(f)));
 }
 
 export function classify(results) {
@@ -88,12 +98,13 @@ function main() {
       file: 'scripts/v2-ui-check.js', todo: false, skip: false, duration_ms: 0, error: ui.status === 0 ? null : `exit ${ui.status}` });
   }
   const rows = classify(results);
+  const gaps = fileGaps(files, results);
   const count = (s) => rows.filter((r) => r.status === s).length;
   const out = {
     schema: 'mycodebox.v2.acceptance-results/1', synthetic: true,
     generated_at: new Date().toISOString(), sha: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain', '--', '.', `:!${path.relative(ROOT, OUT)}`, ':!docs/v2/ACCEPTANCE.md') ? true : false,   // its own outputs do not count
     node: process.version, command: `node scripts/v2-acceptance.js${args.length ? ` ${args.join(' ')}` : ''}`, duration_ms: Date.now() - t0,
-    runner_exit: run.status, files: files.length, ui_check: !!process.env.PLAYWRIGHT_CORE && !args.includes('--files'),
+    runner_exit: run.status, files: files.length, files_with_tests: files.length - gaps.length, files_without_tests: gaps, ui_check: !!process.env.PLAYWRIGHT_CORE && !args.includes('--files'),
     totals: { tests: results.length, pass: results.filter((r) => r.outcome === 'pass' && !r.todo).length, fail: results.filter((r) => r.outcome === 'fail' && !r.todo).length,
       todo: results.filter((r) => r.todo).length, todo_failing: results.filter((r) => r.todo && r.outcome === 'fail').length, skip: results.filter((r) => r.skip).length },
     matrix: { rows: rows.length, PASS: count('PASS'), FAIL: count('FAIL'), PENDING: count('PENDING'), BLOCKED: count('BLOCKED'), MANUAL: count('MANUAL') },
@@ -104,8 +115,8 @@ function main() {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, `${JSON.stringify(out, null, 1)}\n`);
   const line = (r) => `${r.id.padEnd(5)} ${r.status.padEnd(8)} ${r.reason}`;
-  process.stdout.write(`\n${rows.map(line).join('\n')}\n\nmatrix: ${JSON.stringify(out.matrix)}  tests: ${JSON.stringify(out.totals)}\nwrote ${path.relative(ROOT, OUT)}\n`);
-  process.exitCode = count('FAIL') || out.unmapped_failures.length || run.status !== 0 ? 1 : 0;
+  process.stdout.write(`\n${rows.map(line).join('\n')}\n\nmatrix: ${JSON.stringify(out.matrix)}  tests: ${JSON.stringify(out.totals)}  files: ${out.files_with_tests}/${out.files}\n${gaps.length ? `files without a test of their own: ${gaps.join(' ')}\n` : ''}wrote ${path.relative(ROOT, OUT)}\n`);
+  process.exitCode = count('FAIL') || out.unmapped_failures.length || gaps.length || run.status !== 0 ? 1 : 0;
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main();
