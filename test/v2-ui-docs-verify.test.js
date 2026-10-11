@@ -285,3 +285,55 @@ test('scoring: a torn tail appended after scoring started is tolerated and nothi
   assert.equal(r.tasks.accepted, 1);
   assert.deepEqual(readFileSync(log), before);
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Re-verification of 43fe411 (new fields: queue, runs, roles, allowed actions, graph, delivery)
+// ---------------------------------------------------------------------------------------------------------------
+
+test('XSS: queue, runs, roles, allowed actions, task graph and delivery are escaped', () => {
+  const base = { task_id: 'x', goal: EVIL, state: 'accepted', outcome: 'done', next_action: null, head_sha: null, base_sha: null,
+    definition_of_done: [], acceptance_checks: [], verdicts: [], decisions: [], incidents: [], history: [],
+    usage: { input_tokens: null, output_tokens: null, usd: null, unknown: [], incomplete: true, records: [] },
+    leases: { resources: [], effects: [] }, pending_approval: null,
+    delivery: { requested: true, integrated: false, label: EVIL },
+    runs: [{ run_id: EVIL, role: EVIL, runtime: EVIL, model: EVIL, effort: EVIL, started_at: EVIL, ended_at: EVIL, outcome: EVIL, usage: { input_tokens: 1, output_tokens: 1, usd: null, incomplete: true } }],
+    roles: { developers: [EVIL], reviewers: [EVIL] },
+    allowed_actions: { source: EVIL, approval_required: [EVIL], prohibited_actions: [EVIL], allowed_commands: [EVIL], allowed_paths: [EVIL] },
+    parent_task_id: `p"${EVIL}`, children: [{ task_id: `c"${EVIL}`, state: EVIL, outcome: EVIL, goal: EVIL }] };
+  const q = [{ task_id: `q"${EVIL}`, goal: EVIL, question: EVIL, classes: [EVIL], action_id: EVIL, sha: EVIL }];
+  for (const html of [detailHtml(base), listHtml([base], q), listHtml([], q)]) {
+    assert.ok(!/<img/i.test(html)); assert.ok(!/onerror="/.test(html));
+    for (const m of html.matchAll(/data-(?:aid|sha|id|tk-open)="([^"]*)"/g)) assert.ok(!/[<>'"]/.test(m[1]));
+  }
+});
+
+test('delivery: "integrated" only when the accepted transition came out of release_verifying', { todo: 'defect (low): deliveryOf() says integrated if the history ever entered integrating, even when integration failed and acceptance came straight from evaluating' }, async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  for (const s of ['clarified', 'planned', 'ready', 'executing', 'evaluating', 'integrating', 'repair', 'executing', 'evaluating']) await store.transition(id, s);
+  await store.setHead(id, SHA_A, { actor: DEV });
+  for (const c of ['unit', 'lint']) await store.recordEvidence(id, { check_id: c, sha: SHA_A, command: ['npm', 'test'], exit: 0, actor: { role: 'tester', id: 't' } });
+  await store.recordVerdict(id, { sha: SHA_A, actor: REV, verdict: 'approve', findings: [] });
+  await store.transition(id, 'accepted');   // straight from evaluating: the earlier integration attempt failed
+  const t = (await call('GET', `/api/v2/tasks/${id}`)).body.task;
+  assert.notEqual(t.delivery.label, 'integrated', JSON.stringify(t.delivery));
+});
+
+test('approval binds the SHA the request was raised on, even after the head moved', async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  await store.setHead(id, SHA_A, { actor: DEV });
+  const req = await askOwner(store, id, { sha: SHA_A });
+  await store.setHead(id, SHA_B, { actor: DEV });
+  const aid = `appr-${id}-${req.k}`;
+  assert.equal((await call('POST', `/api/v2/tasks/${id}/approve`, { action_id: aid, sha: SHA_B })).body.code, 'E_SHA_MISMATCH');
+  assert.equal((await call('POST', `/api/v2/tasks/${id}/approve`, { action_id: aid, sha: SHA_A })).status, 200);
+});
+
+test('a malformed policy snapshot does not crash the detail route into an internal error', { todo: 'defect (low): allowedActions() assumes pol.allowlists; a snapshot without it turns GET detail into 500 E_INTERNAL' }, async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  await store.snapshotPolicy(id, { project_id: 'p' }, { run_id: 'r1' });
+  const r = await call('GET', `/api/v2/tasks/${id}`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+});
