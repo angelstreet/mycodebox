@@ -41,7 +41,8 @@ async function stall(name, plain, state = 'done') {
   tick(name, 'working', ['busy'], 0);
   tick(name, state, plain, 1000);
   tick(name, state, plain, 2500);
-  await sleep(40);
+  // classification is async: wait for its outcome (not a fixed 40 ms, which flakes under load); none within 1 s = none
+  for (let i = 0; i < 50 && !(m.autoOf(name)); i++) await sleep(20);
 }
 const on = (extra = {}) => m.setManagerConfig({ enabled: true, autoSend: true, autoCases: ['continue', 'menu_recommended'], minConfidence: 0.8, delayMs: DELAY, maxPerSessionPerHour: 4, ...extra });
 const sentTo = (name) => [...keys, ...texts].filter((x) => x[0] === name);
