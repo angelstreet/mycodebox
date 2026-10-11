@@ -701,7 +701,7 @@ export function createGoalLoop({
       return askOwner(ctx, { kind: 'integration', question: `Integration was applied but the controller reports no usable state: ${r?.reason || 'no result'}`, reason: r?.reason || 'no result', classes: ['integration'] }, { resume_to: 'integrating' });
     }
     const patch = { integration: { next: r.next, reason: r.reason ?? null, release_verified: r.release_verified === true }, integration_unknown: 0 };
-    if (r.next === 'waiting') patch.wait = { reason: 'integration', until_ms: now() + (r.retry_after_ms ?? 5 * 60_000), resume_to: 'repair' };
+    if (r.next === 'waiting') patch.wait = { reason: 'integration', until_ms: now() + (r.retry_after_ms ?? 5 * 60_000), resume_to: 'integrating' };   // D-007
     if (r.next === 'awaiting_approval') patch.approval = { k: ctx.k, kind: 'integration', question: r.reason || 'integration needs owner approval', classes: r.classes || [], resume_to: 'integrating' };
     return decide(ctx, decision('integration_result', 'Integration controller result: next state?', [alt(r.next, r.reason || 'reported by the integration controller', 'n/a'), alt('accept now', 'fast', 'skips integration gates')],
       r.next, { evidence: [`sha ${head}`, `key ${idempotency_key}`], expected_effect: r.next, rationale: `Integration hook returned ${r.next}.` }), { patch, to: r.next, reason: r.reason || r.next });

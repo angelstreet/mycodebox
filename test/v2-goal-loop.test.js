@@ -633,16 +633,18 @@ test('E2E submit -> route -> worktree -> failing test -> verifier rejection -> f
 // ---- delivery hook, infrastructure, admission -----------------------------------------------------
 test('delivery: accepted work goes through the injected integrate(task) hook; an unknown outcome is reconciled, never repeated blindly', async () => {
   const calls = [];
-  // first call: the remote does not answer; reconcile shows nothing happened; the retry with the same key succeeds
-  const integrate = async (task, ctx) => { calls.push({ id: task.task_id, ...ctx }); return calls.length === 1 ? { next: 'pushed?', reason: 'remote did not answer' } : { next: 'release_verifying', release_verified: true, reason: 'gates green' }; };
+  // first call: the remote does not answer; reconcile shows nothing happened; the retry with the same key waits on CI, then succeeds
+  const integrate = async (task, ctx) => { calls.push({ id: task.task_id, ...ctx }); return calls.length === 1 ? { next: 'pushed?', reason: 'remote did not answer' }
+    : calls.length === 2 ? { next: 'waiting', retry_after_ms: 1000, reason: 'remote CI pending' } : { next: 'release_verifying', release_verified: true, reason: 'gates green' }; };
   integrate.reconcile = async () => ({ applied: false });
   const env = world({ loopOpts: { integrate } });
   const task = await env.submit({ review_policy: { mode: 'goal_loop', independent_review: true, deliver: true } });
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
   const v = await env.view(task.task_id);
   assert.ok(['integrating', 'unknown_external_effect', 'release_verifying', 'accepted'].every((s) => states(v).includes(s)));
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3, 'unknown -> reconciled retry -> CI pending wait -> verified');
   assert.equal(calls[0].sha, v.head_sha);
+  assert.ok(v.history.some((h) => h.from === 'waiting' && h.to === 'integrating'), 'D-007: a pending integration resumes in integrating');
   assert.equal(new Set(calls.map((c) => c.idempotency_key)).size, 1, 'same idempotency key on the retry');
   assert.deepEqual(v.effects.filter((e) => e.kind === 'integration').map((e) => e.phase), ['failed', 'confirmed']);
 
