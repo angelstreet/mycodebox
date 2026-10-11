@@ -195,6 +195,9 @@ export function refuseOutDir(dir, { root = ROOT, stateDirs = [process.env.GHOSTY
   for (const s of stateDirs.filter(Boolean)) if (inside(dir, s)) throw new Error(`refusing --out ${dir}: inside the live state dir`);
 }
 
+// A run without a task never produced a task result: keep a not-run outcome, map a harness/intake error to harness_error.
+export const notRunOutcome = (rec) => (rec.task_id != null || NOT_RUN_OUTCOMES.includes(rec.outcome) ? rec.outcome : rec.outcome === 'error' ? 'harness_error' : 'not_started');
+
 // -> 'done' | 'awaiting_approval' | 'budget_stop' | 'waiting_no_progress' | 'waiting' | 'failed' | 'cancelled' | 'not_yet_done'
 export function classify(status, loop = {}) {
   switch (status) {
@@ -448,8 +451,9 @@ export async function runBench(opts) {
       }
       // Invariants: the fixture's main branch never moves; a task that must not be done is never done.
       try { rec.main_unchanged = sh(r.repo, 'rev-parse', 'main') === r.main; } catch { rec.main_unchanged = null; }
-      // No task was created (refused or failed before intake): the run did not start, whatever stopped it.
-      if (rec.task_id == null && !NOT_RUN_OUTCOMES.includes(rec.outcome)) rec.outcome = 'not_started';
+      // No task was created: refused by the ledger (skipped_budget), runtime unavailable (not_started), or a harness/intake
+      // error before the task existed (harness_error). None of them is a task result.
+      rec.outcome = notRunOutcome(rec);
       rec.never_done_ok = r.task.expected_outcome === 'done' ? null : rec.outcome !== 'done';
       rec.outcome_correct = rec.outcome === rec.expected_outcome;
       rec.duration_ms ??= Date.now() - t0;

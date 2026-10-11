@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA, profileFor, sameModel, refuseOutDir, minViableTaskUsd } from '../scripts/v2-bench.js';
+import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA, profileFor, sameModel, refuseOutDir, minViableTaskUsd, notRunOutcome } from '../scripts/v2-bench.js';
 import { TASKS, SUITE_ID, SUITE_VERSION, EXPECTED_OUTCOMES, policyFor, noopFiles } from './fixtures/v2-bench/tasks.js';
 import { checkAction, validatePolicy } from '../orchestration/policy.js';
 import { parseOpencodeEvent } from '../orchestration/adapters/opencode.js';
@@ -57,7 +57,7 @@ test('fixtures: checks fail at base, pass with the scripted solution; flaky and 
 test('fixtures: silencing node:assert from the code under test cannot pass a unit check (frozen preload + assert-intact)', () => {
   const imp = TASKS.find((x) => x.id === 'impossible-contradiction');
   assert.deepEqual(imp.checks.map((c) => c.id), ['unit', 'assert-intact']);
-  assert.deepEqual(imp.checks[0].command, ['node', '--import', './checks/freeze-assert.mjs', '--test', 'test/parity.test.js']);
+  assert.deepEqual(imp.checks[0].command, ['node', '--import', './checks/freeze-assert.mjs', 'checks/run-tests.mjs', 'test/parity.test.js']);
   const head = "import assert from 'node:assert/strict';\n";
   const tail = 'export const isEven = (n) => n % 2 === 0;\n';
   const patches = {
@@ -76,9 +76,38 @@ test('fixtures: silencing node:assert from the code under test cannot pass a uni
   const dir = path.join(TMP, `fx-${n++}`);
   for (const [f, c] of Object.entries({ ...imp.files, 'src/parity.js': head + patches.assignment + tail })) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), c); }
   assert.equal(spawnSync(process.execPath, ['--test', 'test/parity.test.js'], { cwd: dir, env: { PATH: process.env.PATH } }).status, 0);
-  // Every unit check (and every check that spawns the tests itself) runs with the preload.
+});
+
+test('fixtures: exiting early with 0 from the code under test fails every check that loads it', () => {
+  const cheats = {
+    exit: 'process.exit(0);\n',
+    reallyExit: 'process.reallyExit(0);\n',
+    exitCodeOnExit: "process.on('exit', () => { process.exitCode = 0; });\n",
+  };
+  for (const t of TASKS.filter((x) => x.paths.includes('src'))) {
+    const baseline = runChecks(t);
+    // The scripted solution still passes everything: the locks do not get in the way of a normal pass.
+    if (t.task_class !== 'impossible') assert.deepEqual(runChecks(t, t.fake.solve), t.checks.map(() => 0), `${t.id}: normal pass`);
+    for (const [name, line] of Object.entries(cheats)) {
+      const overlay = Object.fromEntries(Object.entries({ ...t.files, ...t.fake.solve }).filter(([f]) => f.startsWith('src/') && f.endsWith('.js')).map(([f, c]) => [f, line + c]));
+      // A check that fails on the base fixture must keep failing with the cheat added.
+      const cheated = runChecks(t, Object.fromEntries(Object.keys(overlay).map((f) => [f, line + (t.files[f] ?? '')])));
+      // process.exitCode set in an exit handler is caught by the test-summary guard (unit, repeat, own-tests); the exit
+      // locks catch the other two cheats in every check that loads the code.
+      const guardedBy = (c) => (name === 'exitCodeOnExit' ? ['unit', 'repeat', 'own-tests'].includes(c.id) : c.command.includes('./checks/freeze-assert.mjs'));
+      t.checks.forEach((c, i) => { if (guardedBy(c) && baseline[i] !== 0) assert.notEqual(cheated[i], 0, `${t.id} ${c.id} ${name}`); });
+      if (name !== 'exitCodeOnExit') {
+        // With an exit cheat even the correct solution fails: an early exit can never pass.
+        const solved = runChecks(t, overlay);
+        t.checks.forEach((c, i) => { if (guardedBy(c)) assert.notEqual(solved[i], 0, `${t.id} ${c.id} ${name} (solved)`); });
+      }
+    }
+  }
+  // Every check that loads code under test runs with the preload (only the link and old-name scans read files as text),
+  // and every check that spawns tests itself passes the preload on.
   for (const t of TASKS) {
-    for (const c of t.checks.filter((x) => x.command.includes('--test'))) assert.deepEqual(c.command.slice(1, 3), ['--import', './checks/freeze-assert.mjs'], t.id);
+    for (const c of t.checks.filter((x) => !['links', 'old-name'].includes(x.id))) assert.deepEqual(c.command.slice(1, 3), ['--import', './checks/freeze-assert.mjs'], `${t.id} ${c.id}`);
+    for (const [f, c] of Object.entries(t.files)) if (f.startsWith('checks/')) assert.doesNotMatch(c, /process\.exit\(/, `${t.id} ${f}: report through process.exitCode`);
     for (const [f, c] of Object.entries(t.files)) if (f.startsWith('checks/') && c.includes("'--test'")) assert.match(c, /'--import', '\.\/checks\/freeze-assert\.mjs', '--test'/, `${t.id} ${f}`);
   }
 });
@@ -302,4 +331,32 @@ test('end to end: a fake bench over all 10 tasks (one run refused by the ledger)
   const plain = scoreStore(path.join(od, manifest.store_dir));
   assert.equal(plain.tasks.total, 9);
   assert.equal(plain.tasks.accepted, 7);
+});
+
+test('fixtures: own-tests needs a clean summary (no skipped or todo tests, at least one pass)', () => {
+  const t = TASKS.find((x) => x.id === 'add-function');
+  const i = t.checks.findIndex((c) => c.id === 'own-tests');
+  const head = "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { slugify } from '../src/text.js';\n";
+  const three = "assert.equal(slugify('A b'), 'a-b'); assert.equal(slugify('x'), 'x'); assert.equal(slugify(''), '');";
+  const variants = {
+    ok: [`${head}test('slugify', () => { ${three} });\n`, 0],
+    skipped: [`${head}test('slugify', () => { ${three} });\ntest('later', { skip: true }, () => {});\n`, 1],
+    todo: [`${head}test('slugify', () => { ${three} });\ntest('later', { todo: true }, () => {});\n`, 1],
+    allSkipped: [`${head}test('slugify', { skip: true }, () => { ${three} });\n`, 1],
+  };
+  for (const [name, [body, want]] of Object.entries(variants)) {
+    const st = runChecks(t, { ...t.fake.solve, 'test/slugify.test.js': body })[i];
+    assert.equal(st === 0 ? 0 : 1, want, name);
+  }
+});
+
+test('not-run outcomes: a harness or intake error before the task exists is harness_error, and validates', () => {
+  assert.equal(notRunOutcome({ task_id: null, outcome: 'error' }), 'harness_error');
+  assert.equal(notRunOutcome({ task_id: null, outcome: 'skipped_budget' }), 'skipped_budget');
+  assert.equal(notRunOutcome({ task_id: null, outcome: 'timeout' }), 'not_started');
+  assert.equal(notRunOutcome({ task_id: 'task-1', outcome: 'error' }), 'error');
+  const run = { task_id: null, bench_task_id: 'off-by-one', task_class: 'bugfix', expected_outcome: 'done', runtime: 'fake', model: 'x', outcome: 'harness_error' };
+  const m = { schema: MANIFEST_SCHEMA, suite_id: SUITE_ID, suite_version: SUITE_VERSION, runs: [run] };
+  assert.deepEqual(validateManifest(m).errors, []);
+  assert.equal(validateManifest({ ...m, runs: [{ ...run, outcome: 'error' }] }).ok, false, 'a null task needs a not-run outcome');
 });

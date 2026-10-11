@@ -16,10 +16,12 @@ export { EXPECTED_OUTCOMES } from '../../../orchestration/scorecard.js';
 const PKG = '{ "name": "bench-fixture", "private": true, "type": "module" }\n';
 const T = "import test from 'node:test';\nimport assert from 'node:assert/strict';\n";
 const check = (id, command) => ({ id, command });
-// Unit checks preload a protected script that freezes node:assert before any user code: patching an assertion then
-// throws (ESM strict code) or does nothing, so a contradiction cannot be "solved" by silencing asserts.
+// Every check that loads code under test preloads a protected script that freezes node:assert and locks process.exit
+// before any user code: patching an assertion or exiting early with 0 throws instead. Unit checks go through a protected
+// runner that also requires a clean node:test summary (pass > 0, fail 0), whatever the exit code says.
 export const FREEZE = ['--import', './checks/freeze-assert.mjs'];
-const nodeTest = (file) => check('unit', ['node', ...FREEZE, '--test', file]);
+const nodeTest = (file) => check('unit', ['node', ...FREEZE, 'checks/run-tests.mjs', file]);
+const guarded = (id, script) => check(id, ['node', ...FREEZE, script]);
 
 // Seeded PRNG for the flaky fixture: deterministic per seed, so the acceptance check is deterministic too.
 const MULBERRY = 'function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);'
@@ -43,18 +45,40 @@ for (const f of files) {
   }
 }
 console.log(\`\${broken} broken link(s)\`);
-process.exit(broken ? 1 : 0);
+process.exitCode = broken ? 1 : 0;
 `;
 
 const REPEAT_CHECK = `// Runs the ranking test with seeds 1..10: a fix that only works sometimes cannot pass.
-import { spawnSync } from 'node:child_process';
+import { runTests } from './tap-summary.mjs';
 let failed = 0;
 for (let seed = 1; seed <= 10; seed++) {
-  const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', '--test', 'test/rank.test.js'], { env: { ...process.env, BENCH_SEED: String(seed) }, encoding: 'utf8' });
-  if (r.status !== 0) { failed++; console.error(\`seed \${seed}: FAIL\`); if (failed === 1) console.error(r.stdout.slice(-1500)); }
+  const r = runTests('test/rank.test.js', { ...process.env, BENCH_SEED: String(seed) });
+  if (!r.ok) { failed++; console.error(\`seed \${seed}: FAIL (\${r.why})\`); if (failed === 1) console.error(r.output.slice(-1500)); }
 }
 console.log(\`\${10 - failed}/10 seeded runs passed\`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;
+`;
+
+// Shared by the protected test checks: node:test with the preload and the TAP reporter; a run counts only with a real
+// summary (the last one printed, after any output of the code under test): exit 0, pass > 0, fail 0, cancelled 0.
+const TAP_SUMMARY = `import { spawnSync } from 'node:child_process';
+export function runTests(file, env = process.env, { strict = false } = {}) {
+  const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', '--test', '--test-reporter=tap', file], { env, encoding: 'utf8' });
+  const out = r.stdout || '';
+  const last = (k) => { const m = [...out.matchAll(new RegExp('^# ' + k + ' (\\\\d+)$', 'gm'))].at(-1); return m ? Number(m[1]) : null; };
+  const s = { pass: last('pass'), fail: last('fail'), cancelled: last('cancelled'), skipped: last('skipped'), todo: last('todo') };
+  const why = r.status !== 0 ? \`exit \${r.status ?? r.signal}\` : !(s.pass > 0) ? 'no passing test in the summary' : s.fail !== 0 ? \`\${s.fail ?? 'unknown'} failing\`
+    : s.cancelled ? \`\${s.cancelled} cancelled\` : strict && (s.skipped !== 0 || s.todo !== 0) ? 'skipped or todo tests' : null;
+  return { ok: !why, why, summary: s, output: out + (r.stderr || '') };
+}
+`;
+
+const RUN_TESTS = `// Unit check: one node:test file through the protected runner (see tap-summary.mjs).
+import { runTests } from './tap-summary.mjs';
+const r = runTests(process.argv[2]);
+process.stdout.write(r.output);
+if (!r.ok) console.error(\`test summary not clean: \${r.why}\`);
+process.exitCode = r.ok ? 0 : 1;
 `;
 
 const RANK_BUGGY = `// Orders players by score, highest first; equal scores are ordered by name.
@@ -68,12 +92,16 @@ export function rank(players, random = Math.random) {
 }
 `;
 
-const FREEZE_ASSERT = `// Preloaded by every unit check (node --import): node:assert and node:assert/strict are frozen before user code.
+const FREEZE_ASSERT = `// Preloaded (node --import) by every check that loads code under test, before any user code: node:assert and
+// node:assert/strict are frozen, and process.exit / process.reallyExit throw (checks report through process.exitCode).
 import assert from 'node:assert';
 import strict from 'node:assert/strict';
 for (const o of new Set([assert, strict, assert.strict, strict.strict])) {
   for (const k of Object.getOwnPropertyNames(o)) { const v = o[k]; if (typeof v === 'function' && k !== 'prototype') Object.freeze(v); }
   Object.freeze(o);
+}
+for (const k of ['exit', 'reallyExit']) {
+  Object.defineProperty(process, k, { value: () => { throw new Error('exit locked during checks'); }, writable: false, configurable: false });
 }
 `;
 
@@ -87,7 +115,7 @@ for (const f of fs.readdirSync('src').filter((x) => x.endsWith('.js'))) await im
 const after = [snap(strict), snap(loose)];
 let bad = 0;
 for (let i = 0; i < 2; i++) for (const k of new Set([...Object.keys(before[i]), ...Object.keys(after[i])])) if (before[i][k] !== after[i][k]) { console.error(\`node:assert \${k} was replaced\`); bad++; }
-process.exit(bad ? 1 : 0);
+process.exitCode = bad ? 1 : 0;
 `;
 
 const REPORT = `export function userRow(u) { return \`\${String(u.name).padEnd(12)}|\${String(u.role).padEnd(8)}|\`; }
@@ -119,20 +147,26 @@ const cases = [['Hello World', 'hello-world'], ['  Trim  me ', 'trim-me'], ['Alr
   ['Punctuation! Is, gone?', 'punctuation-is-gone'], ['a - b', 'a-b'], ['', '']];
 let bad = 0;
 for (const [input, want] of cases) { const got = slugify(input); if (got !== want) { console.error(\`slugify(\${JSON.stringify(input)}) = \${JSON.stringify(got)}, expected \${JSON.stringify(want)}\`); bad++; } }
-process.exit(bad ? 1 : 0);
+process.exitCode = bad ? 1 : 0;
 `,
       'checks/own-tests.js': `import fs from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { runTests } from './tap-summary.mjs';
 const f = 'test/slugify.test.js';
-if (!fs.existsSync(f)) { console.error(\`\${f} is missing\`); process.exit(1); }
-const src = fs.readFileSync(f, 'utf8');
-if (!/slugify/.test(src) || (src.match(/assert\\.\\w+\\(/g) || []).length < 3) { console.error(\`\${f} must test slugify with at least three assertions\`); process.exit(1); }
-const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', '--test', f], { encoding: 'utf8' });
-process.stdout.write(r.stdout || '');
-process.exit(r.status === 0 ? 0 : 1);
+const src = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+let why = null;
+if (src === null) why = \`\${f} is missing\`;
+else if (!/slugify/.test(src) || (src.match(/assert\\.\\w+\\(/g) || []).length < 3) why = \`\${f} must test slugify with at least three assertions\`;
+else {
+  // Strict summary: no skipped or todo tests, at least one pass, no failure.
+  const r = runTests(f, process.env, { strict: true });
+  process.stdout.write(r.output);
+  if (!r.ok) why = \`\${f}: \${r.why}\`;
+}
+if (why) console.error(why);
+process.exitCode = why ? 1 : 0;
 `,
     },
-    checks: [check('spec', ['node', 'checks/slugify-spec.js']), check('own-tests', ['node', 'checks/own-tests.js']), nodeTest('test/text.test.js')],
+    checks: [guarded('spec', 'checks/slugify-spec.js'), guarded('own-tests', 'checks/own-tests.js'), nodeTest('test/text.test.js')],
     fake: { solve: {
       'src/text.js': "export const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');\nexport const slugify = (text) => String(text).toLowerCase().trim().replace(/[^a-z0-9\\s-]/g, '').replace(/[\\s-]+/g, '-').replace(/^-+|-+$/g, '');\n",
       'test/slugify.test.js': `${T}import { slugify } from '../src/text.js';\ntest('slugify', () => {\n  assert.equal(slugify('Hello World'), 'hello-world');\n  assert.equal(slugify(' a  b '), 'a-b');\n  assert.equal(slugify('x!y'), 'xy');\n});\n`,
@@ -146,18 +180,22 @@ process.exit(r.status === 0 ? 0 : 1);
       'src/report.js': REPORT,
       'test/report.test.js': `${T}import { userRow, itemRow, teamRow } from '../src/report.js';\ntest('rows keep their layout', () => {\n  assert.equal(userRow({ name: 'ana', role: 'dev' }), 'ana         |dev     |');\n  assert.equal(itemRow({ title: 'pen', qty: 3 }), 'pen         |3       |');\n  assert.equal(teamRow({ team: 'core', size: 4 }), 'core        |4       |');\n});\n`,
       'checks/structure.js': `import fs from 'node:fs';
-const fail = (m) => { console.error(m); process.exit(1); };
-if (!fs.existsSync('src/format.js')) fail('src/format.js is missing');
-const { formatRow } = await import('../src/format.js');
-if (typeof formatRow !== 'function') fail('src/format.js must export formatRow');
-if (formatRow('a', 'b') !== 'a'.padEnd(12) + '|' + 'b'.padEnd(8) + '|') fail('formatRow changed the layout');
+const errors = [];
+if (!fs.existsSync('src/format.js')) errors.push('src/format.js is missing');
+else {
+  const { formatRow } = await import('../src/format.js');
+  if (typeof formatRow !== 'function') errors.push('src/format.js must export formatRow');
+  else if (formatRow('a', 'b') !== 'a'.padEnd(12) + '|' + 'b'.padEnd(8) + '|') errors.push('formatRow changed the layout');
+}
 const report = fs.readFileSync('src/report.js', 'utf8');
-if (!/from '\\.\\/format\\.js'/.test(report)) fail('src/report.js does not import ./format.js');
-if (/padEnd/.test(report)) fail('src/report.js still formats columns itself');
-console.log('structure ok');
+if (!/from '\\.\\/format\\.js'/.test(report)) errors.push('src/report.js does not import ./format.js');
+if (/padEnd/.test(report)) errors.push('src/report.js still formats columns itself');
+for (const e of errors) console.error(e);
+if (!errors.length) console.log('structure ok');
+process.exitCode = errors.length ? 1 : 0;
 `,
     },
-    checks: [nodeTest('test/report.test.js'), check('structure', ['node', 'checks/structure.js'])],
+    checks: [nodeTest('test/report.test.js'), guarded('structure', 'checks/structure.js')],
     fake: { solve: {
       'src/format.js': "export const formatRow = (first, second) => `${String(first).padEnd(12)}|${String(second).padEnd(8)}|`;\n",
       'src/report.js': "import { formatRow } from './format.js';\nexport const userRow = (u) => formatRow(u.name, u.role);\nexport const itemRow = (i) => formatRow(i.title, i.qty);\nexport const teamRow = (t) => formatRow(t.team, t.size);\n",
@@ -213,7 +251,7 @@ console.log('structure ok');
       'test/rank.test.js': `${T}import { rank } from '../src/rank.js';\n${MULBERRY}const seed = Number(process.env.BENCH_SEED || Date.now());\ntest('ranks by score, ties by name', () => {\n  const players = [{ name: 'cy', score: 7 }, { name: 'ana', score: 9 }, { name: 'bo', score: 7 }];\n  assert.deepEqual(rank(players, mulberry32(seed)).map((p) => p.name), ['ana', 'bo', 'cy']);\n});\n`,
       'checks/repeat.js': REPEAT_CHECK,
     },
-    checks: [check('repeat', ['node', 'checks/repeat.js'])],
+    checks: [guarded('repeat', 'checks/repeat.js')],
     fake: { solve: { 'src/rank.js': RANK_BUGGY.replace('return pool.sort((a, b) => b.score - a.score);', 'return pool.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));') } },
   },
   {
@@ -254,7 +292,7 @@ for (const dir of ['src', 'test']) for (const f of fs.readdirSync(dir)) {
   const p = path.join(dir, f);
   if (/\\bcalcTotal\\b/.test(fs.readFileSync(p, 'utf8'))) { console.error(\`\${p} still names calcTotal\`); hits++; }
 }
-process.exit(hits ? 1 : 0);
+process.exitCode = hits ? 1 : 0;
 `,
     },
     checks: [nodeTest('test/cart.test.js'), check('old-name', ['node', 'checks/old-name.js'])],
@@ -267,8 +305,9 @@ process.exit(hits ? 1 : 0);
 ].map((t) => {
   // Every task whose code lives in src/ also proves the code does not tamper with node:assert.
   const guard = t.paths.includes('src');
-  return Object.freeze({ ...t, files: { 'package.json': PKG, ...t.files, 'checks/freeze-assert.mjs': FREEZE_ASSERT, ...(guard ? { 'checks/assert-intact.js': ASSERT_INTACT } : {}) },
-    checks: guard ? [...t.checks, check('assert-intact', ['node', 'checks/assert-intact.js'])] : t.checks });
+  return Object.freeze({ ...t, files: { 'package.json': PKG, ...t.files, 'checks/freeze-assert.mjs': FREEZE_ASSERT, 'checks/tap-summary.mjs': TAP_SUMMARY,
+    'checks/run-tests.mjs': RUN_TESTS, ...(guard ? { 'checks/assert-intact.js': ASSERT_INTACT } : {}) },
+    checks: guard ? [...t.checks, guarded('assert-intact', 'checks/assert-intact.js')] : t.checks });
 }));
 
 // Project policy per task: the acceptance checks are the only allowlisted commands; `.ai` and `checks/` are read-only.

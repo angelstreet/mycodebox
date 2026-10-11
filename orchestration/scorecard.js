@@ -17,9 +17,10 @@ export const TOOL_SCORE_WEIGHTS = Object.freeze({ outcome_correctness: 0.30, ver
 // One vocabulary for the bench (scripts/v2-bench.js, test/fixtures/v2-bench) and this validator. `waiting_no_progress` is
 // `waiting` whose last block reason is no_progress.
 export const EXPECTED_OUTCOMES = Object.freeze(['done', 'awaiting_approval', 'waiting', 'waiting_no_progress']);
-// Bench outcomes of runs that never created a task (suite ledger refused it, runtime unavailable): task_id is null and the
+// Bench outcomes of runs that never created a task (suite ledger refused it, runtime unavailable, harness or intake error
+// before the task existed): task_id is null and the
 // run counts as not run, never as a task result.
-export const NOT_RUN_OUTCOMES = Object.freeze(['skipped_budget', 'not_started']);
+export const NOT_RUN_OUTCOMES = Object.freeze(['skipped_budget', 'not_started', 'harness_error']);
 // expected outcome -> the final state (and block reason) that counts as correct. `done` is only `accepted`; the others
 // never accept `accepted`.
 const EXPECTED_STATE = { done: 'accepted', awaiting_approval: 'awaiting_approval', waiting: 'waiting', waiting_no_progress: 'waiting' };

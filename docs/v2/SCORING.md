@@ -131,9 +131,10 @@ A bench run (`scripts/v2-bench.js`, built separately) produces a normal task sto
 
 `expected_outcome` is `done`, `awaiting_approval`, `waiting` or `waiting_no_progress` (`waiting` whose last block reason is
 `no_progress`); `EXPECTED_OUTCOMES` in `orchestration/scorecard.js` is the one list the bench and the validator share. A run
-with `outcome` `skipped_budget` or `not_started` never created a task: its `task_id` is `null`, the scorecard lists it
-under `not_run`, and the tool score leaves it out of every component, reports `skipped` and `run_coverage`, and stays
-partial (`score` `null`). `task_id` must be unique; `suite_version` is a string (an
+with `outcome` `skipped_budget`, `not_started` or `harness_error` never created a task: its `task_id` is `null`, the
+scorecard lists it under `not_run`, and the tool score leaves it out of every component, reports `skipped` and
+`run_coverage`, and stays partial (`score` `null`). Its `partial_score` then covers only the runs that started: it is not a
+lower bound for the whole suite. `task_id` must be unique; `suite_version` is a string (an
 integer is accepted and stringified). `budget_policy.max_usd` is the fixed budget for the whole suite; `max_task_ms` the
 per-task latency budget. Declared `runtime`/`model` are a fallback only: credit follows the recorded developer, and a
 mismatch is listed in the caveats. Manifest runs with no task in the store are listed and count as incorrect.
