@@ -66,7 +66,9 @@ export function priceFor(prices, model) {
   for (const k of Object.keys(prices.models || {})) {
     if (model.startsWith(k) && (!best || k.length > best.length)) best = k;
   }
-  return best ? prices.models[best] : null;
+  // A PLACEHOLDER row marks a known-unpriced model: cost stays unknown, never a fabricated $0.
+  if (!best || /^PLACEHOLDER\b/.test(prices.models[best].source || '')) return null;
+  return prices.models[best];
 }
 
 // u = { input, output, cache_read, cache_write_5m, cache_write_1h }. null when the model has no price.
