@@ -231,18 +231,22 @@ const SPLIT_WORD_RE = new RegExp(`^(?:${[
   'rotat(?:e|es|ed|ing)', 'restart(?:s|ed|ing)?', 'refund(?:s|ed|ing)?', 'purchas(?:e|es|ed|ing)', 'payment', 'billing',
   'password', 'passwd', 'passphrase', 'secrets?', 'credentials?', 'customers?', 'invoices?', 'apikeys?', 'tokens?', 'prod', 'production',
 ].join('|')})$`, 'i');
-const SPLIT_SEP_RE = /^[ \t._*/|\-–—]{1,3}$/;
+// Any 1-3 non-alphanumerics (space, tab, newline, punctuation, fillers) may split a protected word: the rejoin is
+// gated on the joined token being protected, so the separator class need not be.
+const SPLIT_SEP_RE = /^[^A-Za-z0-9]{1,3}$/;
 const MAX_FRAGMENTS = 8;   // "d e p l o y m e n t" is 10; anything longer is not a split word (and keeps this linear)
+// Invisible letters (Hangul fillers, halfwidth filler, braille blank) that are neither marks nor format characters.
+const FILLERS = /[\u115F\u1160\u3164\uFFA0\u2800]/g;
 
-// Base form: compatibility-decomposed, combining marks and format characters (zero-width, soft hyphen, word joiner)
-// removed, confusable letters mapped to Latin.
+// Base form: compatibility-decomposed, combining marks, format characters (zero-width, soft hyphen, word joiner) and
+// fillers removed, other whitespace (Ogham space, ...) as a plain space, confusable letters mapped to Latin.
 export function baseForm(text) {
-  return String(text ?? '').normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '')
+  return String(text ?? '').normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '').replace(FILLERS, '').replace(/[^\S\n\r]/g, ' ')
     .replace(/[^\x00-\x7F]/g, (c) => CONFUSABLE[c.toLowerCase()] ?? c);
 }
 
-// Letter runs split by 1-3 separator characters (space, tab, . _ * / | hyphen, dash) rejoined only when the joined
-// token is a protected word; whitespace runs collapsed. "mer ge into main" -> "merge into main".
+// Letter runs split by 1-3 non-alphanumerics (including a line break) rejoined only when the joined token is a
+// protected word; whitespace runs collapsed. "mer ge into main" -> "merge into main", "dep\nloy" -> "deploy".
 export function normalizeSplits(text) {
   const parts = baseForm(text).replace(/[ \t]+/g, ' ').match(/[A-Za-z]+|[^A-Za-z]+/g) || [];
   const out = [];
@@ -260,13 +264,32 @@ export function normalizeSplits(text) {
   return out.join('');
 }
 
+// A space splitting ANY forbidden keyword ("merge into ma in", "go li ve", ".e nv"): two or three adjacent tokens of
+// one line joined, read in their surrounding words (same line only: the [^.\n] windows of FORBIDDEN_RE are kept).
+// Only joins that contain a keyword stem are tried, and each window is a few tokens: linear in the input.
+const KEYWORD_STEM_RE = /deploy|update_core|roll|systemctl|pm2|restart|servi|server|daemon|ghosty|ship|releas|promot|prod|staging|live|publish|push|tag|terraform|apply|destroy|kill|upgrad|alter|modify|main|master|merg|rebas|git|force|reset|hard|delet|remov|rm|prun|truncat|wip|overwrit|drop|table|database|db|schema|migrat|env|credential|password|passphrase|secret|token|bearer|api|key|ssh|private|revok|rotat|cert|money|pay|purchas|buy|billing|invoice|credit|card|charg|customer|refund|transfer|fund|mail|message|contact|call|reply|client/i;
+export function* windowJoins(text) {
+  for (const line of baseForm(text).split(/\r?\n|\r/)) {
+    const t = line.split(/[ \t]+/).filter(Boolean);
+    for (let i = 0; i < t.length - 1; i++) {
+      for (let n = 2; n <= 3 && i + n <= t.length; n++) {
+        const joined = t.slice(i, i + n).join('');
+        if (joined.length > 40 || !KEYWORD_STEM_RE.test(joined)) continue;
+        yield [...t.slice(Math.max(0, i - 8), i), joined, ...t.slice(i + n, i + n + 10)].join(' ');
+      }
+    }
+  }
+}
+
 export function textVariants(text) {
   const nfkc = String(text ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/[^\x00-\x7F]/g, (c) => CONFUSABLE[c.toLowerCase()] ?? c);
   const base = baseForm(text);
-  const spaced = base.replace(/\b(?:[A-Za-z0-9][ ._*\-–—]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[ ._*\-–—]/g, ''));   // d e p l o y
-  const joined = spaced.replace(/([A-Za-z])[._*\-–—]+(?=[A-Za-z])/g, '$1');                                              // de-ploy, de–ploy
-  const leet = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                         // d3pl0y
-  return [...new Set([nfkc, base, spaced, joined, leet, normalizeSplits(text), normalizeSplits(leet)])];
+  const spaced = base.replace(/\b(?:[A-Za-z0-9][^A-Za-z0-9\n\r]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[^A-Za-z0-9]/g, ''));   // d e p l o y, d,e,p,l,o,y
+  const joined = spaced.replace(/([A-Za-z])[^A-Za-z0-9\s]+(?=[A-Za-z])/g, '$1');                                                     // de-ploy, de(ploy
+  const leetI = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                                       // d3pl0y
+  const leetL = joined.replace(/[013457@$]/g, (c) => (c === '1' ? 'l' : LEET[c]));                                                   // dep1oy
+  const digitless = joined.replace(/([A-Za-z])[0-9]+(?=[A-Za-z])/g, '$1');                                                          // de2ploy
+  return [...new Set([nfkc, base, spaced, joined, leetI, leetL, digitless, normalizeSplits(text), normalizeSplits(leetI), normalizeSplits(leetL)])];
 }
 
 export function forbiddenMatch(text) {
@@ -276,6 +299,7 @@ export function forbiddenMatch(text) {
   if (m) return m[0];
   // The forbidden-topic filter always wins: a disguised spelling is still the topic.
   for (const v of textVariants(raw)) { if (v === raw) continue; const k = match(v); if (k) return k[0]; }
+  for (const w of windowJoins(raw)) { const k = match(w); if (k) return k[0]; }
   return null;
 }
 

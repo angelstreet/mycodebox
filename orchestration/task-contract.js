@@ -56,6 +56,11 @@ export function ownerAnswerOf(events, k) {
   return all.find((e) => e.kind === 'approval.denied') ?? all[0] ?? null;
 }
 
+// Grants whose request's answer (ownerAnswerOf) is a grant: a grant and a denial on one k authorize nothing.
+export function effectiveGrants(events) {
+  return (events || []).filter((e) => e.kind === 'approval.granted' && e.payload?.kind !== 'resume' && ownerAnswerOf(events, e.payload?.k)?.kind === 'approval.granted');
+}
+
 export function outcomeOf(state) {
   if (!STATES.includes(state)) throw new ContractError('E_INVALID', `unknown state ${state}`);
   return { accepted: 'done', waiting: 'waiting', awaiting_approval: 'needs_owner', failed_unrecoverable: 'unrecoverable',

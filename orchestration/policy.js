@@ -3,7 +3,7 @@
 // actions, approval classes and the manager's forbidden-topic matcher win over task text and model output.
 import * as realFs from 'node:fs';
 import { join } from 'node:path';
-import { forbiddenMatch, FORBIDDEN_RE, textVariants, HOMOGLYPH } from '../stall.js';
+import { forbiddenMatch, FORBIDDEN_RE, textVariants, windowJoins, HOMOGLYPH } from '../stall.js';
 import { MANDATORY_APPROVAL, RISK_CLASSES } from './task-contract.js';
 
 export const POLICY_PATH = join('.ai', 'project.json');
@@ -115,6 +115,15 @@ export function restrictedTopics(text, { protectedBranches } = {}) {
   const variants = textVariants(text);
   for (const j of variants.flatMap(splitJoins)) {
     for (const m of hitsOf(j)) { const cls = classOf(m); if (!out.has(cls)) out.set(cls, { topic: m, class: cls }); }
+  }
+  // Same in-context joins as the manager filter ("merge into ma in", "push to mas ter"): never fewer classes than it.
+  for (const w of windowJoins(text)) {
+    for (const m of [...String(w).matchAll(ALL_HITS)].map((x) => x[0])) {
+      const cls = classOf(m);
+      if (!out.has(cls)) out.set(cls, { topic: m, class: cls });
+      if (cls === 'push_shared' && /\bmain\b/i.test(m) && !out.has('merge_protected')) out.set('merge_protected', { topic: m, class: 'merge_protected' });
+    }
+    for (const [re, cls] of extra) { const x = w.match(re); if (x && !out.has(cls)) out.set(cls, { topic: x[0], class: cls }); }
   }
   for (const v of variants) {
     for (const m of hitsOf(v)) {

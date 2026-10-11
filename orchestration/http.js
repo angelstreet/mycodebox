@@ -43,7 +43,7 @@ const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.s
 const STATUS_OF = { E_NOT_FOUND: 404, E_EXISTS: 409, E_TERMINAL: 409, E_CANCELLED: 409, E_ILLEGAL_TRANSITION: 409,
   E_STORE_FAILED: 503, E_EFFECT_UNRECONCILED: 409, E_ACCEPTANCE_UNMET: 409,
   // owner answers through the goal loop (D-020)
-  E_CONTROLLER_HELD: 409, E_CONTROLLER_LOST: 409, E_ALREADY_ANSWERED: 409, E_STALE_ACTION: 409, E_SHA_MISMATCH: 409 };
+  E_CONTROLLER_HELD: 409, E_CONTROLLER_LOST: 409, E_ALREADY_ANSWERED: 409, E_STALE_ACTION: 409, E_SHA_MISMATCH: 409, E_LEASE_UNAVAILABLE: 503 };
 const NO_CONTROLLER = 'no goal loop runs in this process: owner decisions are recorded only by the controller (D-020); nothing was written';
 function mapError(e) {
   if (e instanceof ContractError) {

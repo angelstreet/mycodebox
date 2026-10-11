@@ -81,10 +81,10 @@ test('negatives: normal prose stays unflagged; existing rules still decide the r
     assert.equal(classes(t).filter((c) => c !== 'money').length, 0, `${t} -> ${classes(t)}`);
   }
   for (const t of ['implement merge sort', 'merge the two lists', 'the main function', 'push notifications for the app', 'a de bug log', 'summer gem into main',
-    'we pass words to the function', 'the mer chant', 'pre-merge checks', 'e.g. push it later', 'café au lait in the main hall']) {
+    'the mer chant', 'pre-merge checks', 'e.g. push it later', 'café au lait in the main hall']) {
     assert.equal(forbiddenMatch(t), null, t);
   }
-  // The V2 classifier's pairwise joins already read "pass words" as a credential (existing rule, unchanged here).
+  // Both filters now read "pass words" as a credential (the V2 pairwise join rule, shared): an extra owner tap.
   // "deploy key docs" names the deploy topic in the existing rules: still flagged (more owner taps is the safe side).
   assert.ok(forbiddenMatch('update the deploy key docs'));
   assert.ok(classes('update the deploy key docs').includes('deploy'));
@@ -95,5 +95,44 @@ test('variants stay linear on long adversarial input (bounded joins, no backtrac
     const t0 = Date.now();
     forbiddenMatch(t); restrictedTopics(t.slice(0, 4000));
     assert.ok(Date.now() - t0 < 2000, `${t.length} chars took ${Date.now() - t0} ms`);
+  }
+});
+
+// Re-check round: any non-alphanumeric separator, invisible fillers, digits, line breaks, and every forbidden keyword.
+test('F1 any 1-3 non-alphanumeric separator, fillers, digits: caught by the manager filter and the V2 classifier', () => {
+  const seps = [',', ':', "'", '(', ')', '+', '=', ';', '&', '~', '#', '\\', '%', '^', '<', '`', '[', 'ㅤ', 'ᅟ', '⠀', ' '];
+  const texts = [...seps.map((c) => `de${c}ploy it`), 'de(ploy) it', 'de2ploy it', 'dep1oy it', 'd3pl0y it', 'de9ploy it'];
+  for (const t of texts) {
+    assert.ok(forbiddenMatch(t), `${JSON.stringify(t)} -> forbiddenMatch`);
+    assert.ok(classes(t).includes('deploy'), `${JSON.stringify(t)} -> deploy (got ${classes(t)})`);
+  }
+});
+
+test('F2 a line break splitting one protected word is rejoined; the same-line windows stay', () => {
+  for (const [t, cls] of [['Should I run the dep\nloy script now?', 'deploy'], ['mer\nge this into main?', 'merge_protected'], ['rotate the pass\nword', 'credentials']]) {
+    assert.ok(forbiddenMatch(t), JSON.stringify(t));
+    assert.ok(classes(t).includes(cls), `${JSON.stringify(t)} -> ${cls} (got ${classes(t)})`);
+  }
+  assert.equal(forbiddenMatch('merge the lists\nthen open main.js'), null, 'merge ... main across a line break is not one topic');
+});
+
+test('F3 a space inside any forbidden keyword: the split text is classed like the plain text, in both filters', () => {
+  const pairs = [['merge into ma in', 'merge into main'], ['push to mas ter', 'push to master'], ['should I bu y it', 'should I buy it'],
+    ['mo ney left', 'money left'], ['ki ll prod', 'kill prod'], ['dr op the table', 'drop the table'], ['re set --hard', 'reset --hard'],
+    ['go li ve', 'go live'], ['re lease to prod', 'release to prod'], ['ship to sta ging', 'ship to staging'], ['push the ta gs', 'push the tags'],
+    ['copy .e nv', 'copy .env'], ['add the ssh ke y', 'add the ssh key'], ['the bea rer header', 'the bearer header'],
+    ['e mail the client', 'email the client'], ['pa y now', 'pay now'], ['ter raform apply', 'terraform apply']];
+  for (const [split, plain] of pairs) {
+    assert.ok(classes(plain).length, `fixture: ${plain} is restricted`);
+    assert.equal(!!forbiddenMatch(split), !!forbiddenMatch(plain), `manager: ${split} vs ${plain}`);
+    for (const c of classes(plain)) assert.ok(classes(split).includes(c), `V2: ${split} -> ${c} (got ${classes(split)})`);
+  }
+});
+
+test('F3 in-context joins stay linear on 64 KB of keyword fragments', () => {
+  for (const t of ['ma in '.repeat(11000), 'de ploy ma in\n'.repeat(5000), 'pa y '.repeat(13000)]) {
+    const t0 = Date.now();
+    forbiddenMatch(t); restrictedTopics(t.slice(0, 8000));
+    assert.ok(Date.now() - t0 < 3000, `${t.length} chars took ${Date.now() - t0} ms`);
   }
 });

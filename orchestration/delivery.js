@@ -18,6 +18,7 @@
 // controller is checking. The bridge returns those keys with `awaiting_approval`, the loop stores them on its request
 // and `approve()` copies them into the grant, so an approval for one SHA, action, target or repo never covers another.
 import { remoteStatus, ciPasses } from './ci-gates.js';
+import { effectiveGrants } from './task-contract.js';
 
 const coded = (code, message) => Object.assign(new Error(message), { code });
 const WRITES = ['createTask', 'append', 'setHead', 'recordEvidence', 'recordVerdict', 'recordDecision', 'recordUsage', 'recordEffect', 'snapshotPolicy'];
@@ -63,7 +64,7 @@ export function createDelivery({ store, queue, controller: makeController, git, 
       const key = approvalKey(req);
       for (const id of req.task_ids || []) {
         const evs = await (writer || store).events(id);
-        const g = evs.filter((e) => e.kind === 'approval.granted' && e.payload.grants?.request_kind === 'integration'
+        const g = effectiveGrants(evs).filter((e) => e.payload.grants?.request_kind === 'integration'
           && (e.payload.grants.keys || []).includes(key)).at(-1);
         if (g) return { ok: true, approval_ref: g.payload.approval_ref ?? `grant-${g.event_id}`, repo: req.repo, sha: req.sha, action: req.action, target: req.target, approved_by: g.payload.actor?.id ?? null };
       }

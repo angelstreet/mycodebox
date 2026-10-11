@@ -14,7 +14,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
-import { TERMINAL, failureSignature, ContractError, ownerAnswerOf } from './task-contract.js';
+import { TERMINAL, failureSignature, ContractError, ownerAnswerOf, effectiveGrants } from './task-contract.js';
 import { checkAction as policyCheckAction, loadPolicy as realLoadPolicy, clarificationFor } from './policy.js';
 import { route as realRoute, fallbackPlan as realFallbackPlan } from './router.js';
 import * as realBudget from './budget.js';
@@ -206,7 +206,8 @@ export function createGoalLoop({
     usage.owners += 1;
     try {
       const h = await hold({ takeover: true, watch: false });
-      if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
+      // A live holder is a conflict (409, retry); a lease backend that cannot answer is not (503).
+      if (!h.ok) throw h.code === 'E_HELD' ? coded('E_CONTROLLER_HELD', h.diagnosis) : coded('E_LEASE_UNAVAILABLE', h.diagnosis);
       return await fn();
     } finally { usage.owners -= 1; await releaseIdle(); }
   }
@@ -296,11 +297,12 @@ export function createGoalLoop({
   // ---------- policy, grants, gates ----------
   // A grant covers exactly the action keys of the request it answers (#7): the same gate question keeps its key across
   // steps, an agent's request is keyed by its run, so a later identical request is asked again.
-  const grantsOf = (ctx) => new Set(ctx.events.filter((e) => e.kind === 'approval.granted').flatMap((e) => e.payload.grants?.keys || []));
+  // Only a grant that is the recorded answer to its request counts (a grant + denial on one k authorizes nothing).
+  const grantsOf = (ctx) => new Set(effectiveGrants(ctx.events).flatMap((e) => e.payload.grants?.keys || []));
   const actionKey = (a, scope = '') => `${scope}${a.class}:${hashOf({ argv: a.argv ?? null, text: a.text ?? null, paths: a.paths ?? null })}`;
   function effectiveBudgetPolicy(ctx) {
     let bp = ctx.v.budget_policy;
-    for (const e of ctx.events) if (e.kind === 'approval.granted' && e.payload.grants?.budget_policy) bp = { ...bp, ...e.payload.grants.budget_policy };
+    for (const e of effectiveGrants(ctx.events)) if (e.payload.grants?.budget_policy) bp = { ...bp, ...e.payload.grants.budget_policy };
     return bp;
   }
   function readPolicy(ctx) {
@@ -411,7 +413,7 @@ export function createGoalLoop({
   // #5: an explicit owner approval of a budget stop authorizes the NEXT run even when its cost cannot be estimated
   // (bound to that request: consumed by the first run started after it). It never overrides a reached cap.
   function nextRunAuthorized(ctx) {
-    const g = ctx.events.filter((e) => e.kind === 'approval.granted' && e.payload.grants?.request_kind === 'budget').at(-1);
+    const g = effectiveGrants(ctx.events).filter((e) => e.payload.grants?.request_kind === 'budget').at(-1);
     return !!g && !ctx.events.some((e) => e.kind === 'task.started' && e.seq > g.seq);
   }
   // T13/GL13: before every start. A cap is a hard stop -> awaiting_approval; quota -> waiting with backoff.
@@ -1270,12 +1272,15 @@ export function createGoalLoop({
     step, run,
     // Startup: replay the store (unconfirmed effects -> unknown_external_effect); steps resume from there (T18).
     async recover() {
-      const h = await hold({ takeover: true, reconcile: false });
-      if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
-      const r = await store.recover();
-      ctl.recovered = true;
-      const open = (await store.list()).filter((t) => !TERMINAL.includes(t.status)).map((t) => t.task_id);
-      return { ...r, resumable: open };
+      usage.busy += 1;   // a concurrent owner action's releaseIdle() must not drop the lease mid-recover
+      try {
+        const h = await hold({ takeover: true, reconcile: false });
+        if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
+        const r = await store.recover();
+        ctl.recovered = true;
+        const open = (await store.list()).filter((t) => !TERMINAL.includes(t.status)).map((t) => t.task_id);
+        return { ...r, resumable: open };
+      } finally { usage.busy -= 1; }
     },
     // T14 / D-018: cancellation always goes through. The canceller takes the controller lease (liveness-gated
     // takeover of a dead controller), reconciles a recovery_pending task first (never appending over a torn tail),

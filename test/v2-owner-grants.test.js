@@ -12,7 +12,7 @@ import { createV2Http } from '../orchestration/http.js';
 import { createGoalLoop } from '../orchestration/goal-loop.js';
 import { createRegistry } from '../orchestration/model-registry.js';
 import { createLeaseAuthority, fileBackend } from '../orchestration/lease-authority.js';
-import { ownerAnswerOf } from '../orchestration/task-contract.js';
+import { ownerAnswerOf, effectiveGrants } from '../orchestration/task-contract.js';
 import { spec, clock, SHA_A } from './fixtures/v2-task.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'v2-grants-'));
@@ -211,4 +211,62 @@ test('one answer selector for the loop and the routes: a pre-D-020 log holding b
   await assert.rejects(loop.approve(id, { actor: 'owner' }), (e) => e.code === 'E_ALREADY_ANSWERED');
   assert.equal((await call('GET', `/api/v2/tasks/${id}`)).body.task.pending_approval, null);
   assert.equal((await loop.step(id)).state, 'failed_unrecoverable', 'the loop applies the denial, not the later grant');
+});
+
+test('a grant and a denial on the same request authorize nothing: loop grant keys, budget raises and integration approvals', async () => {
+  const k = 3;
+  const grant = (over = {}) => ({ event_id: `g${k}`, seq: 1, kind: 'approval.granted', payload: { k, actor: 'owner', grants: { classes: ['merge_protected'], keys: ['integration:merge:demo:main:abc1234'], request_kind: 'integration', ...over } } });
+  const deny = { event_id: `d${k}`, seq: 2, kind: 'approval.denied', payload: { k, actor: 'owner' } };
+  assert.equal(effectiveGrants([grant()]).length, 1);
+  assert.deepEqual(effectiveGrants([grant(), deny]), []);
+  assert.deepEqual(effectiveGrants([deny, grant({ budget_policy: { max_usd: 99 } })]), []);
+  // delivery's approvals.check reads the same rule
+  const { createDelivery, approvalKey } = await import('../orchestration/delivery.js');
+  const dir = tmp();
+  const store = createTaskStore({ dir, ...clock() });
+  const { task_id: id } = await store.createTask(spec());
+  const key = approvalKey({ action: 'merge', repo: 'demo', target: 'main', sha: 'abc1234' });
+  await store.append(id, { event_id: 'g-int', kind: 'approval.granted', payload: { k: 7, actor: 'owner', grants: { classes: ['merge_protected'], keys: [key], request_kind: 'integration' } } });
+  const d = createDelivery({ store, queue: {}, controller: () => ({}), git: {}, ci: {}, repo: 'demo' });
+  const check = () => d.approvals.check({ action: 'merge', sha: 'abc1234', target: 'main', repo: 'demo', task_ids: [id] });
+  assert.equal((await check()).ok, true);
+  await store.append(id, { event_id: 'd-int', kind: 'approval.denied', payload: { k: 7, actor: 'owner' } });
+  assert.equal((await check()).ok, false, 'the denial on the same request wins');
+});
+
+test('owner action with the lease backend down: 503 E_LEASE_UNAVAILABLE, not a held controller', async () => {
+  const dir = tmp();
+  const store = createTaskStore({ dir, ...clock() });
+  const down = { acquire: async () => { throw new Error('backend down'); }, validate: async () => ({ ok: false, code: 'E_UNAVAILABLE' }),
+    renew: async () => ({ ok: false }), release: async () => ({ ok: true }), adopt: async () => ({ ok: false }) };
+  const loop = loopOver(store, { leases: down });
+  const api = createV2Http({ store, intake: createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A }), loop, log: () => {} });
+  const { task_id: id } = await store.createTask(spec());
+  const req = await askOwner(store, id);
+  const r = await api.handle({ method: 'POST', pathname: `/api/v2/tasks/${id}/approve`, readBody: async () => ({ action_id: req.action_id, sha: SHA_A }) });
+  assert.deepEqual([r.status, r.body.code], [503, 'E_LEASE_UNAVAILABLE']);
+  assert.equal((await answers(store, id)).length, 0);
+});
+
+test('recover() keeps the controller lease while it runs: an owner action finishing meanwhile does not release it', async () => {
+  const dir = tmp();
+  const storeDir = path.join(dir, 'v2');
+  const real = createLeaseAuthority({ backend: fileBackend({ dir: path.join(dir, 'leases') }) });
+  const log = [];
+  const leases = { ...real, acquire: (...a) => real.acquire(...a), validate: (...a) => real.validate(...a), renew: (...a) => real.renew(...a),
+    adopt: (...a) => real.adopt(...a), release: (...a) => { log.push('release'); return real.release(...a); } };
+  const raw = createTaskStore({ dir: storeDir, ...clock() });
+  let open;
+  const gate = new Promise((r) => { open = r; });
+  const store = { ...raw, dir: raw.dir, recover: async (...a) => { log.push('recover:start'); await gate; const r = await raw.recover(...a); log.push('recover:end'); return r; } };
+  for (const k of Object.keys(raw)) if (typeof raw[k] === 'function' && k !== 'recover') store[k] = raw[k].bind(raw);
+  const loop = loopOver(store, { leases });
+  const { task_id: id } = await raw.createTask(spec());
+  const req = await askOwner(raw, id);
+  const pRec = loop.recover();
+  while (!log.includes('recover:start')) await new Promise((r) => setTimeout(r, 5));
+  assert.equal((await loop.approve(id, { actor: 'owner', approval_ref: req.action_id })).applied, true);
+  open();
+  await pRec;
+  assert.ok(!log.slice(0, log.indexOf('recover:end')).includes('release'), `no release before recover ended: ${log.join(', ')}`);
 });
