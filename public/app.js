@@ -3050,7 +3050,7 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 }
 
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
-const LANGFUSE_URL = 'http://<tailscale-ip>:3100';   // tailnet
+const LANGFUSE_URL = `http://${location.hostname}:3100`;   // Langfuse on the same host
 const SUBSCRIPTION = { manager: 'pay per call (Jev, AI reviewer)', claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
 const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: no list price for this model">&mdash;</span>' : escapeHtml(fmtUsd(c)) + unit);
 const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
@@ -4290,7 +4290,7 @@ async function toggleNotify() {
         referrer: document.referrer, ua: navigator.userAgent, origin: location.origin,
         push: pushSupported(), sw: !!navigator.serviceWorker?.controller,
       }) }).catch(() => {});
-      toast(!window.isSecureContext ? 'needs the https://<tailnet-host>:7443 address'
+      toast(!window.isSecureContext ? 'needs the HTTPS (Tailscale Serve) address'
         : Notification.permission === 'denied' ? 'notifications are off for this app - Android: App info > Notifications > allow, then tap the bell again'
         : 'permission not given - tap the bell again', 5000);
       return;
@@ -4437,7 +4437,7 @@ function voiceUi() {
 }
 async function voiceStart() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    toast(!window.isSecureContext ? 'the mic needs the https://<tailnet-host>:7443 address' : 'no microphone support in this browser', 4000);
+    toast(!window.isSecureContext ? 'the mic needs the HTTPS (Tailscale Serve) address' : 'no microphone support in this browser', 4000);
     return;
   }
   try { voice.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }

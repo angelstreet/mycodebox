@@ -13,14 +13,16 @@ export function launchConfig(env = process.env) {
 
 // Known switches that turn off a CLI's permission prompts or sandbox (Claude, Codex, mcode).
 const BYPASS_RES = [
-  /--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo|full-auto)\b/,
+  /--(?:allow-)?dangerously-[\w-]+|--(?:yolo|full-auto)\b|--bypass-[\w-]+/,
   /--permission-mode(?:=|\s+)['"]?bypassPermissions\b/,
-  /--permission(?:=|\s+)['"]?off\b/,                                        // mcode
-  /--sandbox(?:=|\s+)['"]?danger-full-access\b/,
+  /--permission(?:=|\s+)['"]?(?:off|full)\b/,                               // mcode
+  /(?:--sandbox|(?:^|\s)-s)(?:=|\s+)?['"]?danger-full-access\b/,
   /(?:--ask-for-approval|-a)(?:=|\s+)['"]?never\b/,
   /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?approval_policy\s*=\s*\\?['"]?never\b/,   // -c approval_policy=never / ="never"
-  /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?sandbox_mode\s*=\s*\\?['"]?danger-full-access\b/,  /--approval-mode(?:=|\s+)['"]?full-auto\b/,                                // older Codex CLIs
+  /(?:^|\s)(?:-c|--config)(?:=|\s+)['"]?sandbox_mode\s*=\s*\\?['"]?danger-full-access\b/,
+  /--approval-mode(?:=|\s+)['"]?full-auto\b/,                                // older Codex CLIs
   /sandbox_permissions\s*=[^\n]*disk-full-(?:write|read-write)-access/,
+  /--settings(?:=|\s+)[^\n]*(?:bypassPermissions|"defaultMode"\s*:\s*"bypass|skipDangerousModePermissionPrompt)/,  // inline JSON
 ];
 
 // Advisory only: shell wrappers and external CLI config cannot be certified here.

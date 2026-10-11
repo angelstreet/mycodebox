@@ -251,7 +251,10 @@ test('GL03 identical failures force evidence-based strategy changes (replan, the
   }
   const runs = started(env, task.task_id);
   assert.equal(runs.length, 8);
-  assert.ok(runs.slice(0, 7).length >= 4, 'at least four consecutive failing iterations');
+  // BAD patches are byte-identical, so their check evidence collapses onto one SHA: the 7 failing iterations show
+  // as dev runs plus the 3x-signature evidence above, and the accepted SHA's checks pass.
+  assert.ok(v.evidence.some((e) => e.exit !== 0), 'failing checks recorded');
+  assert.equal(v.evidence.at(-1).exit, 0);
   assert.equal(runs[0].entry, 'fake:dev-a');
   assert.equal(runs[6].entry, 'fake:dev-b', 'model changed after the second forced change');
   assert.match(env.ad.log.dev[3].prompt, /PLAN REVISION 1/);
@@ -352,7 +355,7 @@ test('T15 tests pass but the reviewer keeps disagreeing: evidence cannot settle 
   const v = await env.view(task.task_id);
   assert.equal(loopDecisions(v).at(-1).loop.patch.approval.kind, 'review_disagreement');
   assert.ok(!states(v).includes('accepted'));
-  assert.ok(v.evidence.every((e) => e.exit === 0), 'every check passed');
+  assert.ok(v.evidence.length > 0 && v.evidence.every((e) => e.exit === 0), 'checks ran and every one passed');
 });
 
 // ---- GL06 / T12 -----------------------------------------------------------------------------------

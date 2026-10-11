@@ -67,3 +67,13 @@ test('directory validation rejects traversal and symlink escapes', async () => {
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('advisory warnings cover the bypass forms the adapter hard guard refuses', () => {
+  for (const c of ['mcode exec --permission full', 'codex -s danger-full-access', 'codex -sdanger-full-access',
+    'claude --allow-dangerously-skip-permissions', 'claude --settings {"permissions":{"defaultMode":"bypassPermissions"}}']) {
+    assert.equal(launchWarnings({ AGENT_CMD_CLAUDE: c }).length, 1, c);
+  }
+  for (const c of ['claude --permission-mode acceptEdits', 'mcode --permission smart', 'codex -s workspace-write']) {
+    assert.equal(launchWarnings({ AGENT_CMD_CLAUDE: c }).length, 0, c);
+  }
+});

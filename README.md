@@ -115,7 +115,7 @@ How one V2 task is meant to run:
 | Integration agent (queue, CI gates, owner-authorized push and merge) | In code and tests; not wired to the server or the loop | Nothing pushes or merges from the dashboard. |
 | `/api/v2/tasks` routes and the **V2 tasks** view | In code and tests; browser-checked on synthetic data | Needs `GHOSTY_V2=1`. See [V2 task board](docs/USAGE.md#v2-task-board-opt-in). |
 | Scoring report (`scripts/v2-score.js`) | In code and tests | Read-only. Feeding it to the router is manual. See [scoring](docs/v2/SCORING.md). |
-| End-to-end acceptance T01 to T40, live provider runs | **Not run yet** | Planned for the integration phase. |
+| End-to-end acceptance T01 to T40, GL01 to GL14 | 54 of 54 rows PASS (`scripts/v2-acceptance.js`) | Deterministic E2E on fake runtimes and real git; see [acceptance matrix](docs/v2/ACCEPTANCE.md). One live smoke per installed runtime (OpenCode not installed). |
 | Live routing, automatic loop start, wiring integration and System Operations into the running server | **Planned** | Not available. |
 | Tasks view gaps | **Deferred** | No graphical task graph (parent and children are listed), no per-run logs or live streaming, no editing of a task after creation, no retry-history timeline beyond the state history and runs list. |
 

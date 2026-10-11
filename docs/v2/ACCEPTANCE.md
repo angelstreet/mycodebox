@@ -590,5 +590,3 @@ and are covered by `test/router.test.js` and `test/v2-routing-verify.test.js`.
   `store.append`, not through the goal loop's controller lease (D-016/D-018 route owner actions through the loop).
   The record is idempotent by event id and carries the request's keys, so it is safe as data, but it is a second
   writer of the task log.
-- **Topic classes are first-match**: "read the deploy token from .env" is classed `deploy` only, not `credentials`.
-  It still needs approval; a grant for `deploy` would cover it.
