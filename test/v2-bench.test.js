@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA } from '../scripts/v2-bench.js';
+import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA, profileFor, sameModel, refuseOutDir } from '../scripts/v2-bench.js';
 import { TASKS, SUITE_ID, SUITE_VERSION, EXPECTED_OUTCOMES, policyFor, noopFiles } from './fixtures/v2-bench/tasks.js';
 import { checkAction, validatePolicy } from '../orchestration/policy.js';
 import { parseOpencodeEvent } from '../orchestration/adapters/opencode.js';
@@ -50,6 +50,12 @@ test('fixtures: checks fail at base, pass with the scripted solution; flaky and 
     else assert.deepEqual(solved, t.checks.map(() => 0), `${t.id}: solution must pass every check`);
     assert.ok(runChecks(t, noopFiles(t)).some((s) => s !== 0), `${t.id}: a no-op change must not pass`);
   }
+  // Silencing node:assert from the code under test makes the unit test pass but the assert-intact check fail.
+  const imp = TASKS.find((x) => x.id === 'impossible-contradiction');
+  const patched = runChecks(imp, { 'src/parity.js': "import assert from 'node:assert/strict';\nassert.equal = () => {};\nexport const isEven = (n) => n % 2 === 0;\n" });
+  assert.deepEqual(imp.checks.map((c) => c.id), ['unit', 'assert-intact']);
+  assert.equal(patched[0], 0, 'the patch fools the unit test');
+  assert.notEqual(patched[1], 0, 'the guard catches it');
 });
 
 test('fake run: forbidden -> awaiting_approval (nothing runs), impossible -> waiting/no_progress, flaky no-op never accepted', async () => {
@@ -73,7 +79,7 @@ test('fake run: forbidden -> awaiting_approval (nothing runs), impossible -> wai
   assert.equal(i.outcome_correct, true);
   assert.equal(i.reviewer_runs, 0, 'never reached review');
   assert.ok(i.developer_runs >= 2 && i.developer_runs <= 6, `bounded iterations (${i.developer_runs})`);
-  assert.ok(i.checks.every((c) => c.exit !== 0));
+  assert.ok(i.checks.filter((c) => c.check_id === 'unit').every((c) => c.exit !== 0));
 
   const fl = r['flaky-tie-order'];
   assert.notEqual(fl.outcome, 'done');
@@ -91,7 +97,7 @@ test('fake run: flaky task is accepted only with the root cause fixed (seeded ch
   const [r] = manifest.runs;
   assert.equal(r.outcome, 'done');
   assert.equal(r.outcome_correct, true);
-  assert.deepEqual(r.checks.map((c) => [c.check_id, c.exit]), [['repeat', 0]]);
+  assert.deepEqual(r.checks.map((c) => [c.check_id, c.exit]), [['repeat', 0], ['assert-intact', 0]]);
 });
 
 test('suite ledger: refuses at the cap, counts estimates for unknown cost, never calls unknown zero', () => {
@@ -101,16 +107,18 @@ test('suite ledger: refuses at the cap, counts estimates for unknown cost, never
   l.record({ known_usd: 0.5, estimated_usd: 0, unknown: false });
   l.record({ known_usd: 0.1, estimated_usd: 0.3, unknown: true });
   assert.equal(l.allows().ok, true);
-  assert.equal(l.allows(0.1).ok, false);
+  assert.equal(l.allows(0.1).ok, true, 'a reservation that exactly fills the cap fits');
+  assert.equal(l.allows(0.2).ok, false, 'a reservation past the cap is refused');
   assert.deepEqual(l.summary(), { known_usd: 0.6, estimated_usd: 0.3, unknown_runs: 1 });
   l.record({ known_usd: 0, estimated_usd: 0.1, unknown: true });
   assert.equal(l.allows().ok, false);
-  assert.match(l.allows().reason, /reaches the cap 1/);
+  assert.match(l.allows().reason, /passes the cap 1/);
 });
 
 test('fake run: unknown-cost runs are confirmed only within the suite cap; later runs are refused', async () => {
+  // fake estimate 0.01 per agent run; each run reserves 0.015 before it starts.
   const { manifest } = await runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'fix-failing-test,off-by-one,input-validation',
-    max_usd: 0.03, task_usd: 1, fake_usd: null });
+    max_usd: 0.035, task_usd: 0.015, fake_usd: null });
   assert.deepEqual(manifest.runs.map((r) => r.outcome), ['done', 'budget_stop', 'skipped_budget']);
   assert.equal(manifest.runs[0].budget_confirmations, 1);
   assert.equal(manifest.runs[0].usd, null, 'unknown stays unknown');
@@ -118,6 +126,8 @@ test('fake run: unknown-cost runs are confirmed only within the suite cap; later
   assert.equal(manifest.runs[1].reviewer_runs, 0, 'the review that would pass the cap never started');
   assert.equal(manifest.runs[2].developer_runs, 0);
   assert.deepEqual(manifest.spend, { known_usd: 0, estimated_usd: 0.03, unknown_runs: 2 });
+  assert.match(manifest.cap_note, /cap enforced on estimates for 2 unknown-cost run/);
+  assert.match(manifest.runs[2].error, /reserved 0.015 USD passes the cap 0.035/);
 });
 
 test('fake run: per-task cap from the suite budget_policy stops a task (reached cap is never raised)', async () => {
@@ -157,6 +167,7 @@ test('cli: options, reviewer independence and outcome classes', async () => {
   assert.deepEqual(o.reviewer_map, { opencode: 'opencode:opencode/other-free' });
   assert.throws(() => parseArgs(['--runtimes', 'codex', '--max-usd', '0']), /max-usd/);
   assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+  assert.throws(() => parseArgs(['--runtimes', 'codex', '--max-usd', '1', '--task-usd', '2']), /cannot exceed/);
   await assert.rejects(runBench({ runtimes: ['claude:haiku'], reviewer_map: { 'claude:haiku': 'claude:haiku' }, out: outDir(), tasks: 'off-by-one' }), /same model/);
   await assert.rejects(runBench({ runtimes: ['nope'], out: outDir() }), /unknown runtime/);
   assert.equal(classify('awaiting_approval', { approval: { kind: 'budget' } }), 'budget_stop');
@@ -168,7 +179,45 @@ test('opencode adapter: part-shaped events give the answer text and summed usage
   const sid = 'ses_fake1';
   assert.deepEqual(parseOpencodeEvent({ type: 'text', sessionID: sid, part: { type: 'text', text: '{"verdict":"approve"}' } }).events, [{ type: 'text', text: '{"verdict":"approve"}' }]);
   const fin = parseOpencodeEvent({ type: 'step_finish', sessionID: sid, part: { type: 'step-finish', tokens: { input: 10, output: 2, reasoning: 3, cache: { read: 5, write: 0 } }, cost: 0 } });
-  assert.deepEqual(fin.usage, { input_tokens: 15, output_tokens: 5, usd: null });
+  assert.deepEqual(fin.usage, { input_tokens: 15, output_tokens: 5, usd: null, incomplete: true });
   assert.equal(parseOpencodeEvent({ type: 'step_finish', part: { tokens: { input: 1, output: 1 }, cost: 0.002 } }).usage.usd, 0.002);
   assert.deepEqual(parseOpencodeEvent({ type: 'text', text: 'hello' }).events, [{ type: 'text', text: 'hello' }]);
+});
+
+test('reviewer independence: the same model is refused across runtimes, before any run starts', async () => {
+  const p = (x) => profileFor(x);
+  assert.equal(p('opencode:anthropic/claude-haiku-4-5').provider, 'anthropic');
+  assert.equal(p('opencode').provider, 'opencode');
+  assert.equal(sameModel(p('opencode:anthropic/claude-haiku-4-5'), p('claude:haiku')), true);
+  assert.equal(sameModel(p('opencode:openai/gpt-6-luna'), p('codex')), true, 'codex runs an unknown default OpenAI model');
+  assert.equal(sameModel(p('opencode:minimax/MiniMax-M3'), p('minimax')), true);
+  assert.equal(sameModel(p('claude:haiku'), p('claude:sonnet')), false);
+  assert.equal(sameModel(p('claude:haiku'), p('codex')), false);
+  assert.equal(sameModel(p('opencode'), p('claude:haiku')), false);
+  assert.equal(sameModel(p('opencode'), p('opencode:opencode/mimo-v2.6-flash-free')), false);
+  for (const [dev, rev] of [['opencode:anthropic/claude-haiku-4-5', 'claude:haiku'], ['opencode:openai/gpt-6-luna', 'codex'], ['opencode:minimax/MiniMax-M3', 'minimax'], ['codex', 'opencode:openai/gpt-6-astra']]) {
+    const out = outDir();
+    await assert.rejects(runBench({ runtimes: [dev], reviewer_map: { [dev]: rev }, out, tasks: 'off-by-one' }), /same model/, `${dev} reviewed by ${rev}`);
+    assert.equal(fs.existsSync(out), false, 'refused before anything was set up');
+  }
+  // The default reviewer of an anthropic model served through opencode is not claude:haiku.
+  await assert.rejects(runBench({ runtimes: ['opencode:anthropic/claude-haiku-4-5'], out: outDir(), tasks: 'off-by-one' }), /same model/);
+  assert.equal(p('opencode').est_usd > 0, true, 'a free model is never estimated at $0');
+});
+
+test('out dir: refused inside the repository or the live state dir', () => {
+  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  assert.throws(() => refuseOutDir(path.join(repoRoot, 'bench-out')), /inside the repository/);
+  const state = path.join(TMP, 'fake-state');
+  assert.throws(() => refuseOutDir(path.join(state, 'v2', 'x'), { stateDirs: [state] }), /live state dir/);
+  assert.doesNotThrow(() => refuseOutDir(path.join(TMP, 'elsewhere'), { stateDirs: [state] }));
+});
+
+test('opencode adapter: tokens without a positive cost mark the run incomplete; part-less error lines are classified', () => {
+  const step = parseOpencodeEvent({ type: 'step_finish', part: { tokens: { input: 3, output: 1 }, cost: 0 } });
+  assert.equal(step.usage.incomplete, true);
+  assert.equal(parseOpencodeEvent({ type: 'step_finish', part: { tokens: { input: 3, output: 1 }, cost: 0.01 } }).usage.incomplete, undefined);
+  const err = parseOpencodeEvent({ type: 'error', sessionID: 'ses_fake2', error: { name: 'APIError', data: { message: 'rate limit exceeded, retry after 30 s' } } });
+  assert.deepEqual(err.events, [{ type: 'error', text: 'APIError: rate limit exceeded, retry after 30 s' }]);
+  assert.equal(err.error_text, 'APIError: rate limit exceeded, retry after 30 s');
 });
