@@ -93,7 +93,7 @@ function main() {
     schema: 'mycodebox.v2.acceptance-results/1', synthetic: true,
     generated_at: new Date().toISOString(), sha: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain', '--', '.', `:!${path.relative(ROOT, OUT)}`, ':!docs/v2/ACCEPTANCE.md') ? true : false,   // its own outputs do not count
     node: process.version, command: `node scripts/v2-acceptance.js${args.length ? ` ${args.join(' ')}` : ''}`, duration_ms: Date.now() - t0,
-    runner_exit: run.status, files: files.length,
+    runner_exit: run.status, files: files.length, ui_check: !!process.env.PLAYWRIGHT_CORE && !args.includes('--files'),
     totals: { tests: results.length, pass: results.filter((r) => r.outcome === 'pass' && !r.todo).length, fail: results.filter((r) => r.outcome === 'fail' && !r.todo).length,
       todo: results.filter((r) => r.todo).length, todo_failing: results.filter((r) => r.todo && r.outcome === 'fail').length, skip: results.filter((r) => r.skip).length },
     matrix: { rows: rows.length, PASS: count('PASS'), FAIL: count('FAIL'), PENDING: count('PENDING'), BLOCKED: count('BLOCKED'), MANUAL: count('MANUAL') },
