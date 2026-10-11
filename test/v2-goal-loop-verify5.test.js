@@ -194,8 +194,12 @@ test('Z3 D-017 the owner can cancel a task whose recovery is pending (unconfirme
   env.reopen();   // e.g. the HTTP layer's handle right after a restart, before the controller recovered
   const seen = await env.view(task.task_id);
   assert.equal(seen.status, 'executing');
-  const r = await env.loop.cancel(task.task_id, { actor: OWNER, reason: 'owner cancels during recovery' }).then(() => 'ok', (e) => e.code);
-  assert.equal(r, 'ok', 'cancellation must always be possible');
+  const cancel = () => env.loop.cancel(task.task_id, { actor: OWNER, reason: 'owner cancels during recovery' }).then(() => 'ok', (e) => e.code);
+  // The crashed instance's intent is in this same (live) process: an owner action does not sit out the liveness
+  // window inside the request (D-020 review item 4); it answers E_CONTROLLER_HELD at once and the client retries.
+  assert.equal(await cancel(), 'E_CONTROLLER_HELD');
+  env.advance(41_000);   // > 2 heartbeat intervals without a beat: provably dead
+  assert.equal(await cancel(), 'ok', 'cancellation must always be possible');
   assert.equal((await env.view(task.task_id)).status, 'cancelled');
   await env.loop.recover();
   assert.equal((await env.view(task.task_id)).status, 'cancelled', 'recovery keeps the cancel');
@@ -217,7 +221,10 @@ test('Z4 D-016 a controller asleep in a timed wait past its lease TTL is superse
   assert.equal(rA.controller, 'E_HELD');
   assert.equal(env.events(task.task_id).length, before, 'the superseded instance wrote nothing');
   assert.equal((await B.loop.run(task.task_id)).state, 'accepted');
-  assert.equal((await A.run(task.task_id)).controller, 'E_HELD');
+  // run() does not give up on E_HELD (D-020 review item 2): it waits out the holder's TTL, then finds the task done.
+  const settled = env.events(task.task_id).length;
+  assert.equal((await A.run(task.task_id)).terminal, true);
+  assert.equal(env.events(task.task_id).length, settled, 'nothing written by the superseded instance');
   uniqueEvents(env.events(task.task_id));
 });
 

@@ -10,6 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { createTaskStore } from '../orchestration/store.js';
 import { createIntake } from '../orchestration/intake.js';
 import { createV2Http } from '../orchestration/http.js';
+import { createGoalLoop } from '../orchestration/goal-loop.js';
+import { createRegistry } from '../orchestration/model-registry.js';
 import { validateTask, normalizeTask } from '../orchestration/task-contract.js';
 import { loadRegistry } from '../orchestration/model-registry.js';
 import { route } from '../orchestration/router.js';
@@ -24,6 +26,11 @@ const tmp = (prefix) => { const d = mkdtempSync(join(tmpdir(), prefix)); made.pu
 test.after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 
 const SCRIPT = new URL('../scripts/v2-score.js', import.meta.url).pathname;
+// D-020: owner answers are recorded by the goal loop; the smallest loop the factory accepts (never steps here).
+const LOOP_REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
+  capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };
+const loopOver = (store) => createGoalLoop({ store, registry: createRegistry(LOOP_REGISTRY), adapters: {}, worktrees: {},
+  worktreeRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), verifier: {}, reviewRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), allowFake: true });
 const ROOT = new URL('..', import.meta.url).pathname;
 const T0 = Date.parse('2026-01-01T00:00:00Z');
 const NOW = () => Date.parse('2026-10-11T00:00:00Z');
@@ -292,7 +299,7 @@ test('proposals: generated with shadow evidence, recorded as awaiting_approval t
   const journal = readFileSync(join(dir, 'journal.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(journal.length, proposals.length);
   for (const j of journal) { assert.equal(j.kind, 'proposal.recorded'); assert.equal(j.applied, false); assert.ok(j.rationale && j.evidence_refs.length); }
-  const api = createV2Http({ store: s, intake });
+  const api = createV2Http({ store: s, intake, loop: loopOver(s) });
   for (const r of rec) {
     const t = (await api.handle({ method: 'GET', pathname: `/api/v2/tasks/${r.task_id}` })).body.task;
     assert.equal(t.state, 'awaiting_approval');
@@ -400,7 +407,7 @@ test('proposals: the journal decides (a crash after createTask still journals), 
   const rec = await recordProposals([p], { store: s, intake, base_sha: SHA_A, project_id: 'fixture-project', now: NOW });
   assert.equal(rec[0].created, true);
   assert.equal(readFileSync(join(dir, 'journal.jsonl'), 'utf8').trim().split('\n').length, 1);
-  const api = createV2Http({ store: s, intake });
+  const api = createV2Http({ store: s, intake, loop: loopOver(s) });
   const t = (await api.handle({ method: 'GET', pathname: `/api/v2/tasks/${rec[0].task_id}` })).body.task;
   assert.equal(t.state, 'awaiting_approval', 'the half-recorded task is completed on replay');
   await api.handle({ method: 'POST', pathname: `/api/v2/tasks/${rec[0].task_id}/approve`, readBody: async () => ({ action_id: t.pending_approval.action_id }) });

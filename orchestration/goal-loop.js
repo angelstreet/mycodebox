@@ -14,7 +14,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
-import { TERMINAL, failureSignature, ContractError } from './task-contract.js';
+import { TERMINAL, failureSignature, ContractError, ownerAnswerOf, effectiveGrants } from './task-contract.js';
 import { checkAction as policyCheckAction, loadPolicy as realLoadPolicy, clarificationFor } from './policy.js';
 import { route as realRoute, fallbackPlan as realFallbackPlan } from './router.js';
 import * as realBudget from './budget.js';
@@ -114,12 +114,13 @@ export function createGoalLoop({
   }
   const beat = () => { if (ctl.intent) { ctl.intent = { ...ctl.intent, heartbeat_at: now() }; try { writeCtlIntent(ctl.intent); } catch { /* next beat */ } } };
   // Liveness-gated takeover: dead by pid now; otherwise watch the heartbeat for 2 intervals (injected sleep).
-  async function deadIntents() {
+  // watch: false (owner actions, inside an HTTP request): no waiting; an unsure intent counts as alive (client retries).
+  async function deadIntents({ watch = true } = {}) {
     const snap = otherCtlIntents();
     const opts = { hostname: ctlCfg.hostname, isAlive: ctlCfg.isAlive, now: now(), heartbeatMs: hbMs };
     const dead = deadControllerIntents(snap, opts);
     const unsure = snap.filter((x) => !dead.includes(x));
-    if (!unsure.length) return dead;
+    if (!unsure.length || !watch) return dead;
     await sleep(2 * hbMs);
     const later = new Map(otherCtlIntents().map((x) => [x.instance, x]));
     for (const x of unsure) {
@@ -129,7 +130,7 @@ export function createGoalLoop({
     return dead;
   }
   // -> { ok } | { ok:false, code, diagnosis }
-  async function holdController({ takeover = false, reconcile = true } = {}) {
+  async function holdController({ takeover = false, reconcile = true, watch = true } = {}) {
     if (!leases) return { ok: true };
     if (ctl.lease) {
       let v;
@@ -147,7 +148,7 @@ export function createGoalLoop({
     let a;
     try { a = await leases.acquire(ctlCfg.resource, opts); } catch { a = { ok: false, code: 'E_UNAVAILABLE' }; }
     if (!a?.ok && a?.code === 'E_HELD' && takeover) {
-      for (const pi of await deadIntents()) {
+      for (const pi of await deadIntents({ watch })) {
         const ad = await leases.adopt({ resource: pi.resource, lease_id: pi.lease_id, owner: pi.owner, task_id: null }).catch(() => null);
         dropCtlIntent(pi.instance);   // dead either way: its lease is adopted now or already gone
         if (ad?.ok) { await leases.release(ad.lease).catch(() => null); break; }
@@ -165,6 +166,19 @@ export function createGoalLoop({
     if (reconcile && !ctl.recovered) { await rawStore.recover(); ctl.recovered = true; }
     return { ok: true };
   }
+  // Acquire/renew/release one at a time: concurrent owner actions and steps share this instance's single lease.
+  let ctlQueue = Promise.resolve();
+  const ctlSerial = (fn) => { const r = ctlQueue.then(fn); ctlQueue = r.catch(() => {}); return r; };
+  const hold = (opts) => ctlSerial(() => holdController(opts));
+  // D-020: an owner action from an instance that is not stepping does not keep the controller lease (the process
+  // that runs the loop must not wait out our TTL). In use by a step/run or another owner action: kept.
+  const usage = { busy: 0, owners: 0 };
+  const releaseIdle = () => ctlSerial(async () => {
+    if (!leases || !ctl.lease || usage.busy || usage.owners) return;
+    await leases.release(ctl.lease).catch(() => null);
+    dropCtlIntent(ctlCfg.instance);
+    ctl.lease = null; ctl.intent = null; ctl.recovered = false;   // whoever writes next under the lease reconciles first
+  });
   function heartbeat() {
     if (!leases || !ctl.lease) return () => {};
     const t = setInterval(async () => {
@@ -187,10 +201,45 @@ export function createGoalLoop({
     .map((k) => [k, async (...a) => { await fence(); return rawStore[k](...a); }])) });
 
   // Owner actions write too: they act under the controller lease (taking over a dead controller if needed).
-  async function ownerControl() {
-    const h = await holdController({ takeover: true });
-    if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
+  // No liveness watch here (item: owner actions answer at once): a controller that is not provably dead is held.
+  async function asOwner(fn) {
+    usage.owners += 1;
+    try {
+      const h = await hold({ takeover: true, watch: false });
+      // A live holder is a conflict (409, retry); a lease backend that cannot answer is not (503).
+      if (!h.ok) throw h.code === 'E_HELD' ? coded('E_CONTROLLER_HELD', h.diagnosis) : coded('E_LEASE_UNAVAILABLE', h.diagnosis);
+      return await fn();
+    } finally { usage.owners -= 1; await releaseIdle(); }
   }
+
+  // D-020: owner answers (dashboard routes included) are written here only, one at a time per task, and a request is
+  // answered once: read-check-write under the controller lease, so a second writer can neither race nor double-answer.
+  const answering = new Map();
+  const answerSerial = (id, fn) => {
+    const run = (answering.get(id) || Promise.resolve()).then(fn);
+    const tail = run.catch(() => {});
+    answering.set(id, tail);
+    tail.then(() => { if (answering.get(id) === tail) answering.delete(id); });
+    return run;
+  };
+  const SHA_RE = /^[0-9a-f]{7,64}$/;
+  // -> { req, repeat }: the pending request, and its earlier identical answer (a retried delivery is a no-op, T06); the
+  // opposite answer is refused. `binding` ({ k, sha? }) is what the caller showed the owner, re-checked under the lease.
+  function openRequest(ctx, kind, binding) {
+    if (ctx.broken) throw coded('E_STORE_FAILED', `task ${ctx.id}: log unreadable, no owner answer recorded`);
+    const req = ctx.cp.approval;
+    if (ctx.v.status !== 'awaiting_approval' || !req) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
+    const prior = ownerAnswerOf(ctx.events, req.k);
+    if (prior && prior.kind !== kind) throw coded('E_ALREADY_ANSWERED', `this request is already answered (${prior.kind})`);
+    if (binding) {
+      if (binding.k !== req.k) throw coded('E_STALE_ACTION', 'the pending request changed; reload and decide again');
+      const sha = typeof req.sha === 'string' && SHA_RE.test(req.sha) ? req.sha : ctx.v.head_sha ?? null;
+      if (sha && binding.sha !== sha) throw coded('E_SHA_MISMATCH', 'sha must be the task head the request was raised on');
+    }
+    return { req, repeat: prior ? { applied: false, event_id: prior.event_id } : null };
+  }
+  // Audit fields a dashboard answer carries (action id, the request as shown, SHA, reason); never authority.
+  const answerMeta = (m) => (m ? { action_id: m.action_id ?? null, action: m.action ?? null, sha: m.sha ?? null, reason: m.reason ?? null } : {});
 
   const active = new Map();   // task_id -> { adapter, run } | { kill }: what cancel() must stop (agent run or acceptance check)
 
@@ -248,11 +297,12 @@ export function createGoalLoop({
   // ---------- policy, grants, gates ----------
   // A grant covers exactly the action keys of the request it answers (#7): the same gate question keeps its key across
   // steps, an agent's request is keyed by its run, so a later identical request is asked again.
-  const grantsOf = (ctx) => new Set(ctx.events.filter((e) => e.kind === 'approval.granted').flatMap((e) => e.payload.grants?.keys || []));
+  // Only a grant that is the recorded answer to its request counts (a grant + denial on one k authorizes nothing).
+  const grantsOf = (ctx) => new Set(effectiveGrants(ctx.events).flatMap((e) => e.payload.grants?.keys || []));
   const actionKey = (a, scope = '') => `${scope}${a.class}:${hashOf({ argv: a.argv ?? null, text: a.text ?? null, paths: a.paths ?? null })}`;
   function effectiveBudgetPolicy(ctx) {
     let bp = ctx.v.budget_policy;
-    for (const e of ctx.events) if (e.kind === 'approval.granted' && e.payload.grants?.budget_policy) bp = { ...bp, ...e.payload.grants.budget_policy };
+    for (const e of effectiveGrants(ctx.events)) if (e.payload.grants?.budget_policy) bp = { ...bp, ...e.payload.grants.budget_policy };
     return bp;
   }
   function readPolicy(ctx) {
@@ -363,7 +413,7 @@ export function createGoalLoop({
   // #5: an explicit owner approval of a budget stop authorizes the NEXT run even when its cost cannot be estimated
   // (bound to that request: consumed by the first run started after it). It never overrides a reached cap.
   function nextRunAuthorized(ctx) {
-    const g = ctx.events.filter((e) => e.kind === 'approval.granted' && e.payload.grants?.request_kind === 'budget').at(-1);
+    const g = effectiveGrants(ctx.events).filter((e) => e.payload.grants?.request_kind === 'budget').at(-1);
     return !!g && !ctx.events.some((e) => e.kind === 'task.started' && e.seq > g.seq);
   }
   // T13/GL13: before every start. A cap is a hard stop -> awaiting_approval; quota -> waiting with backoff.
@@ -1045,7 +1095,7 @@ export function createGoalLoop({
   async function sAwaitingApproval(ctx) {
     const req = ctx.cp.approval;
     if (!req) return result(ctx, null, 'awaiting approval', { idle: true });
-    const d = ctx.events.filter((e) => ['approval.granted', 'approval.denied'].includes(e.kind) && e.payload.k === req.k).at(-1);
+    const d = ownerAnswerOf(ctx.events, req.k);
     if (!d) return result(ctx, null, `awaiting approval: ${req.question}`, { idle: true });   // silence is never approval (GL09)
     if (d.kind === 'approval.denied') {
       // #13: refusing an action the developer asked for (never executed anyway) continues the task without it;
@@ -1171,10 +1221,13 @@ export function createGoalLoop({
     release_verifying: sReleaseVerifying, unknown_external_effect: sUnknownEffect };
 
   async function step(id) {
-    const h = await holdController();
-    if (!h.ok) return { task_id: id, from: null, state: null, transitioned: false, idle: true, controller: h.code, note: h.diagnosis };
-    const stop = heartbeat();
-    try { return await stepUnderLease(id); } finally { stop(); }
+    usage.busy += 1;
+    try {
+      const h = await hold();
+      if (!h.ok) return { task_id: id, from: null, state: null, transitioned: false, idle: true, controller: h.code, note: h.diagnosis };
+      const stop = heartbeat();
+      try { return await stepUnderLease(id); } finally { stop(); }
+    } finally { usage.busy -= 1; }
   }
 
   async function stepUnderLease(id) {
@@ -1196,79 +1249,97 @@ export function createGoalLoop({
   }
 
   // Loops steps until a terminal state, an `until` state, or nothing can happen without time/owner/new inputs.
+  // The heartbeat lives as long as run(): a controller idle in a timed wait is alive, never taken over as dead. Another
+  // live controller (E_HELD) is waited out for one lease TTL and asked again, not silently given up on.
   async function run(id, { until = [] } = {}) {
     const stop = typeof until === 'function' ? until : (r) => until.includes(r.state);
-    for (;;) {
-      const r = await step(id);
-      if (r.terminal || TERMINAL.includes(r.state) || stop(r)) return r;
-      if (r.transitioned || r.again) continue;
-      if (r.until_ms != null) { await sleep(Math.max(0, r.until_ms - now())); continue; }
-      return r;
-    }
+    usage.busy += 1;
+    let hb = null;
+    try {
+      for (;;) {
+        const r = await step(id);
+        if (!hb && ctl.lease) hb = heartbeat();
+        if (r.controller === 'E_HELD') { await sleep(ctlCfg.ttl_ms); continue; }
+        if (r.terminal || TERMINAL.includes(r.state) || stop(r)) return r;
+        if (r.transitioned || r.again) continue;
+        if (r.until_ms != null) { await sleep(Math.max(0, r.until_ms - now())); continue; }
+        return r;
+      }
+    } finally { hb?.(); usage.busy -= 1; }
   }
 
   return {
     step, run,
     // Startup: replay the store (unconfirmed effects -> unknown_external_effect); steps resume from there (T18).
     async recover() {
-      const h = await holdController({ takeover: true, reconcile: false });
-      if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
-      const r = await store.recover();
-      ctl.recovered = true;
-      const open = (await store.list()).filter((t) => !TERMINAL.includes(t.status)).map((t) => t.task_id);
-      return { ...r, resumable: open };
+      usage.busy += 1;   // a concurrent owner action's releaseIdle() must not drop the lease mid-recover
+      try {
+        const h = await hold({ takeover: true, reconcile: false });
+        if (!h.ok) throw coded('E_CONTROLLER_HELD', h.diagnosis);
+        const r = await store.recover();
+        ctl.recovered = true;
+        const open = (await store.list()).filter((t) => !TERMINAL.includes(t.status)).map((t) => t.task_id);
+        return { ...r, resumable: open };
+      } finally { usage.busy -= 1; }
     },
     // T14 / D-018: cancellation always goes through. The canceller takes the controller lease (liveness-gated
     // takeover of a dead controller), reconciles a recovery_pending task first (never appending over a torn tail),
     // persists the cancel, then stops whatever runs; the store rejects every later write.
     async cancel(id, { actor, reason } = {}) {
       if (!actor) throw coded('E_INVALID', 'cancel needs an actor');
-      await ownerControl();
-      if ((await store.get(id))?.recovery_pending) await rawStore.recover();
-      const t = await store.transition(id, 'cancelled', { reason: reason ?? 'cancelled', actor });
-      const a = active.get(id);
-      if (a?.kill) a.kill();
-      else if (a) { try { await a.adapter.cancel(a.run); } catch { /* the run ends with the process group */ } }
-      return t;
+      return asOwner(async () => {
+        if ((await store.get(id))?.recovery_pending) await rawStore.recover();
+        const t = await store.transition(id, 'cancelled', { reason: reason ?? 'cancelled', actor });
+        const a = active.get(id);
+        if (a?.kill) a.kill();
+        else if (a) { try { await a.adapter.cancel(a.run); } catch { /* the run ends with the process group */ } }
+        return t;
+      });
     },
     // Explicit owner decisions on a pending request. Only recorded approvals ever authorize anything.
-    async approve(id, { actor, approval_ref = null, grants = {} } = {}) {
+    // `binding`/`meta` come from the dashboard route (D-020): the request it showed and the audit fields it records.
+    async approve(id, { actor, approval_ref = null, grants = {}, binding = null, meta = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'approval needs an actor');
-      await ownerControl();
-      const ctx = await load(id);
-      if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
-      const req = ctx.cp.approval;
-      // #7b: a grant can only cover what was asked: the request's classes and action keys, budget only for a budget stop.
-      const classes = grants.classes ?? req.classes;
-      if (!Array.isArray(classes) || classes.some((c) => !req.classes.includes(c))) throw coded('E_INVALID', `grant exceeds the request (asked: ${req.classes.join(', ') || 'none'})`);
-      if (grants.budget_policy !== undefined && req.kind !== 'budget') throw coded('E_INVALID', 'budget authorization only answers a budget stop');
-      // X8: a reached cap is not waivable by a bare confirmation: the owner raises it (or cancels).
-      if (req.kind === 'budget' && req.cap_reached && !grants.budget_policy) throw coded('E_INVALID', 'cap reached: raise it (grants.budget_policy) or cancel the task');
-      if (req.kind === 'budget' && req.cap_reached) {
-        // Y7: the raise must clear what is spent plus the next run's estimate, or the same stop would come straight back.
-        const raised = { ...effectiveBudgetPolicy(ctx), ...grants.budget_policy };
-        const b2 = budget.check({ ...ctx.v, budget_policy: raised }, ledger(ctx), estimate(ctx, req.entry, req.role), { quota: null });
-        const capLeft = !b2.allow && b2.state_hint === 'awaiting_approval' && !b2.reason.split('; ').every((x) => /estimate unknown|spend unknown/.test(x));
-        if (capLeft) throw coded('E_INVALID', `the raise does not clear spend + estimate: ${b2.reason}`);
-      }
-      for (const k of Object.keys(grants)) if (!['classes', 'budget_policy'].includes(k)) throw coded('E_INVALID', `unknown grant field ${k}`);
-      const payload = { k: req.k, actor, approval_ref, grants: { classes, keys: req.keys || [], request_kind: req.kind, ...(grants.budget_policy ? { budget_policy: grants.budget_policy } : {}) } };
-      return store.append(id, { event_id: `appr-${id}-${req.k}`, kind: 'approval.granted', payload });
+      return answerSerial(id, () => asOwner(async () => {
+        const ctx = await load(id);
+        const { req, repeat } = openRequest(ctx, 'approval.granted', binding);
+        if (repeat) return repeat;
+        // #7b: a grant can only cover what was asked: the request's classes and action keys, budget only for a budget stop.
+        const classes = grants.classes ?? req.classes;
+        if (!Array.isArray(classes) || classes.some((c) => !req.classes.includes(c))) throw coded('E_INVALID', `grant exceeds the request (asked: ${req.classes.join(', ') || 'none'})`);
+        if (grants.budget_policy !== undefined && req.kind !== 'budget') throw coded('E_INVALID', 'budget authorization only answers a budget stop');
+        // X8: a reached cap is not waivable by a bare confirmation: the owner raises it (or cancels).
+        if (req.kind === 'budget' && req.cap_reached && !grants.budget_policy) throw coded('E_INVALID', 'cap reached: raise it (grants.budget_policy) or cancel the task');
+        if (req.kind === 'budget' && req.cap_reached) {
+          // Y7: the raise must clear what is spent plus the next run's estimate, or the same stop would come straight back.
+          const raised = { ...effectiveBudgetPolicy(ctx), ...grants.budget_policy };
+          const b2 = budget.check({ ...ctx.v, budget_policy: raised }, ledger(ctx), estimate(ctx, req.entry, req.role), { quota: null });
+          const capLeft = !b2.allow && b2.state_hint === 'awaiting_approval' && !b2.reason.split('; ').every((x) => /estimate unknown|spend unknown/.test(x));
+          if (capLeft) throw coded('E_INVALID', `the raise does not clear spend + estimate: ${b2.reason}`);
+        }
+        for (const k of Object.keys(grants)) if (!['classes', 'budget_policy'].includes(k)) throw coded('E_INVALID', `unknown grant field ${k}`);
+        const payload = { k: req.k, actor, ...answerMeta(meta), approval_ref,
+          grants: { classes, keys: req.keys || [], request_kind: req.kind, ...(grants.budget_policy ? { budget_policy: grants.budget_policy } : {}) } };
+        return store.append(id, { event_id: `appr-${id}-${req.k}`, kind: 'approval.granted', payload });
+      }));
     },
-    async deny(id, { actor, reason = null } = {}) {
+    async deny(id, { actor, reason = null, binding = null, meta = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'denial needs an actor');
-      await ownerControl();
-      const ctx = await load(id);
-      if (ctx.v.status !== 'awaiting_approval' || !ctx.cp.approval) throw coded('E_ILLEGAL_TRANSITION', 'nothing awaits approval');
-      return store.append(id, { event_id: `deny-${id}-${ctx.cp.approval.k}`, kind: 'approval.denied', payload: { k: ctx.cp.approval.k, actor, reason } });
+      return answerSerial(id, () => asOwner(async () => {
+        const ctx = await load(id);
+        const { req, repeat } = openRequest(ctx, 'approval.denied', binding);
+        if (repeat) return repeat;
+        return store.append(id, { event_id: `deny-${id}-${req.k}`, kind: 'approval.denied', payload: { k: req.k, actor, ...answerMeta(meta), reason } });
+      }));
     },
     // Owner nudge for a no-progress wait (an input change the loop cannot observe itself).
     async resume(id, { actor, reason = null } = {}) {
       if (!actor) throw coded('E_INVALID', 'resume needs an actor');
-      await ownerControl();
-      const ctx = await load(id);
-      if (ctx.v.status !== 'waiting') throw coded('E_ILLEGAL_TRANSITION', 'task is not waiting');
-      return store.append(id, { event_id: `resume-${id}-${ctx.k}`, kind: 'approval.granted', payload: { k: ctx.k - 1, kind: 'resume', actor, reason } });
+      return asOwner(async () => {
+        const ctx = await load(id);
+        if (ctx.v.status !== 'waiting') throw coded('E_ILLEGAL_TRANSITION', 'task is not waiting');
+        return store.append(id, { event_id: `resume-${id}-${ctx.k}`, kind: 'approval.granted', payload: { k: ctx.k - 1, kind: 'resume', actor, reason } });
+      });
     },
     // Read model for UI/API: state, outcome, next action, loop memory.
     async inspect(id) {
