@@ -1,4 +1,4 @@
-STATUS: RUNNING — Phases 1–4 + leases/system-ops/integration integrated (1383 tests green); goal-loop in Fable review; ui-docs to review; acceptance harness in development
+STATUS: RUNNING — all packages except goal-loop integrated; goal-loop fixing Fable findings; ui-docs in Opus review; acceptance harness in development
 
 # V2 progress
 
@@ -49,7 +49,7 @@ See the task ledger: start or resume every row whose state is `ready`/`in progre
 | integration-agent | 12 | v2/09-integration-agent | merge of 02+08+03 | Opus | review | a14a72a (b7d0788); T24–T31, T39, GL12 |
 | integration-verify | 12 | wt verify-09 | a14a72a | Fable | done: APPROVE WITH FIXES | 631409d (5 todo); F1 high self-approval via handoff |
 | integration-fixes | 12 | v2/09-integration-agent | a14a72a | Opus + coordinator | INTEGRATED (Fable APPROVE, 3 rounds) | -> 063380e; usage.incomplete seam fixed in store |
-| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet | built 90510e8 (T20 31/31 browser checks); merging integration, then Opus review | |
+| ui-docs | 6 | v2/06-ui-docs | a292b90 | Sonnet | review (Opus) | 0590f70; 1433/1433 both runtimes; T20 browser 31/31 |
 
 ## Decision journal
 
