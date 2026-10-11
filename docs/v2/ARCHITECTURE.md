@@ -117,8 +117,10 @@ acquireAll(resources[], opts)                              // sorted canonical o
 withLeases(resources[], opts, fn(fence))                   // release in finally with identity check
 ```
 Lease: `{ resource, lease_id, owner, task_id, token (fencing generation), acquired_at, expires_at, scope, approval_ref }`.
-Namespaces: `repo:<repo>:integration`, `repo:<repo>:main`, `environment:<env>:deploy`, `host:<id>:maintenance`,
-`service:<id>:<service>`, `worktree:<task_id>`. Unavailable backend never means free. The existing `leases.js`
+Namespaces: `repo:<repo>:integration`, `repo:<repo>:main`, `repo:<repo>:branch:<name>` (non-main target branches,
+decision D-008: `<name>` uses `[A-Za-z0-9._/-]`, no `..`, `//`, leading `-`/`/` or trailing `/`),
+`environment:<env>:deploy`, `host:<id>:maintenance`, `service:<id>:<service>`, `worktree:<task_id>`. Every resource is
+at most 150 characters. Unavailable backend never means free. The existing `leases.js`
 (read-only remote registry observer) is an *input* for platform state, not an authority.
 
 ## 6. Runtime adapters — `orchestration/adapters/<id>.js`
