@@ -742,7 +742,7 @@ test('D-013 high risk: security reviewer named by the policy, then an owner appr
   assert.equal(v.verdicts.length, 2, 'verdicts on the same SHA are reused, not re-bought');
 });
 
-test('#1 a worktree lease taken by another owner suspends the task (no blind retries); an expired free one is re-acquired', async () => {
+test('#1/W1 a worktree lease taken by another owner suspends the task (no blind retries); after the owner resumes, the freed lease is re-acquired and the meta follows', async () => {
   const env = world({ dev: [BAD, GOOD] });
   const task = await env.submit();
   assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
@@ -760,6 +760,9 @@ test('#1 a worktree lease taken by another owner suspends the task (no blind ret
   await env.loop.resume(task.task_id, { actor: { role: 'owner', id: 'owner-1' } });
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
   assert.equal(loopDecisions(await env.view(task.task_id), 'lease_reacquired').length, 1);
+  const { loop: cp } = await env.loop.inspect(task.task_id);
+  const meta = env.worktrees.owner(env.wt(task.task_id)).lease;
+  assert.deepEqual([meta.lease_id, meta.token], [cp.worktree.lease.lease_id, cp.worktree.lease.token], 'worktree meta holds the lease the loop uses');
 });
 
 test('D2 a task whose log is corrupt is never stepped (store_error), and the loop reads events from the store', async () => {

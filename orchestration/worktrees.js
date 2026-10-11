@@ -133,15 +133,28 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     } else if (!who || who !== m.owner) throw coded('E_FOREIGN', 'worktree is owned by another owner');
   }
 
+  // A lapsed lease (E_EXPIRED: nobody took it since) is re-acquired by the same owner and the meta rewritten
+  // atomically, so remove()/renew() keep working. Never over a live holder (E_HELD). After another owner held it in
+  // between (E_FENCED) only with opts.acknowledgeFence (an explicit owner decision after inspecting the tree), and
+  // still only when the lease is free. -> { lease, reacquired }
   async function renew(p, opts = {}) {
     const real = resolveExisting(p);
     const m = trustedMeta(real);
     if (!m) throw coded('E_FOREIGN', 'not a managed worktree');
     assertOwner(m, opts);
     const r = await leases.renew(m.lease);
-    if (!r?.ok) throw coded(r?.code || 'E_FENCED', 'lease renew failed');
-    writeMeta({ ...m, lease: r.lease });
-    return { lease: r.lease };
+    if (r?.ok) { writeMeta({ ...m, lease: r.lease }); return { lease: r.lease, reacquired: false }; }
+    const fenced = r?.code === 'E_FENCED' && opts.acknowledgeFence === true;
+    if (r?.code !== 'E_EXPIRED' && !fenced) throw coded(r?.code || 'E_FENCED', 'lease renew failed');
+    const a = await leases.acquire(m.lease.resource, { owner: m.owner, task_id: m.task_id, ttl_ms, scope: 'worktree' });
+    if (!a?.ok) throw Object.assign(coded(a?.code || 'E_UNAVAILABLE', `lease re-acquire failed (${a?.code || 'unavailable'})`), a?.holder ? { holder: a.holder } : {});
+    // The generation advanced past ours by exactly this acquire: anything else means another holder came in between.
+    if (!fenced && a.lease.token !== m.lease.token + 1) {
+      try { await leases.release(a.lease); } catch { /* ttl covers it */ }
+      throw coded('E_FENCED', 'another owner held this worktree lease since it lapsed');
+    }
+    writeMeta({ ...m, lease: a.lease });
+    return { lease: a.lease, reacquired: true };
   }
 
   // retain defaults to true: only an explicit retain:false on a clean, merged, owned tree deletes anything.

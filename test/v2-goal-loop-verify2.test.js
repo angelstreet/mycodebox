@@ -140,8 +140,7 @@ async function drive(env, id, { maxSteps = 60, stopWhen = () => false } = {}) {
 }
 
 // ---- (a) lease re-acquire vs worktree meta -------------------------------------------------------
-test('W1 (risk a) after the loop re-acquires an expired worktree lease, the worktree module still recognises its owner (renew/remove not fenced out)',
-  { todo: 'defect: ensureLease() re-acquires through leases.acquire and keeps the new lease only in loop memory; the worktree meta keeps the lapsed lease, so worktrees.renew()/remove() guard() the stale lease (E_EXPIRED/E_FENCED) and the new lease is E_FOREIGN: the tree can never be cleaned up through the API. Re-acquire via a worktrees method that rewrites the meta.' }, async () => {
+test('W1 (risk a) after the loop re-acquires an expired worktree lease, the worktree module still recognises its owner (renew/remove not fenced out)', async () => {
     const env = world({ dev: [BAD, GOOD] });
     const task = await env.submit();
     assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
@@ -176,8 +175,7 @@ test('W2 (risk b) capped task, no estimator, unpriced registry: one owner confir
   assert.ok(budgetAsks.every((e) => /estimate unknown/.test(e.payload.question)));
 });
 
-test('W2b #5 the router\'s price-based estimate is used for the DEVELOPER run too: a priced registry under a cap starts without an owner confirmation',
-  { todo: 'defect(#5 incomplete): estimate() falls back to routeHint.candidates[].cost_est_usd, but sDispatch() calls budgetGate without a routeHint (only the reviewer path passes one) and the route result is not kept in loop memory; the first developer run of every capped task still stops for the owner even when the registry prices the model' }, async () => {
+test('W2b #5 the router\'s price-based estimate is used for the DEVELOPER run too: a priced registry under a cap starts without an owner confirmation', async () => {
     const env = world({ dev: [GOOD_PAID], registry: PRICED });
     const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 5 } });
     const r = await env.loop.run(task.task_id);
@@ -185,8 +183,7 @@ test('W2b #5 the router\'s price-based estimate is used for the DEVELOPER run to
     assert.equal(asks(env, task.task_id).filter((e) => e.payload.kind === 'budget').length, 0, 'no owner question for priced runs far under the cap');
   });
 
-test('W3 #5 variant: unknown SPEND on a prior run under a cap, confirmed once by the owner, authorizes the next run (no identical re-ask)',
-  { todo: 'defect: nextRunAuthorized() only waives an "estimate unknown" stop; a "spend unknown for N ledger entries" stop (provider reports no USD) re-asks the identical question after every confirmation; the owner can only escape by removing the cap' }, async () => {
+test('W3 #5 variant: unknown SPEND on a prior run under a cap, confirmed once by the owner, authorizes the next run (no identical re-ask)', async () => {
     const env = world({ dev: [impl('(a, b) => a - b', { input_tokens: 10, output_tokens: 10 }), GOOD], loopOpts: { estimateRun: () => ({ usd: 0.1, input_tokens: 10, output_tokens: 10, duration_ms: 1, turns: 1 }) } });
     const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 1 } });
     assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
@@ -212,8 +209,7 @@ test('W4 (risk c) a rate-limited developer run that recorded no usage backs off 
   assert.equal(env.events(task.task_id).filter((e) => e.kind === 'model.rate_limited').length, env.devStarts());
 });
 
-test('W4b a crash whose usage is UNKNOWN (adapter reports nothing) is not treated as free: it counts toward suspension like a billed one',
-  { todo: 'defect: billedRun() requires a positive token/USD number or incomplete:true; a runtime that never reports usage (all null) makes every crash "unbilled", so the run is retried on a capped timer forever ("unknown is not 0" cuts both ways: unknown spend is not no spend)' }, async () => {
+test('W4b a crash whose usage is UNKNOWN (adapter reports nothing) is not treated as free: it counts toward suspension like a billed one', async () => {
     const env = world({ dev: [fail('Segmentation fault', 139)] });
     const task = await env.submit();
     await drive(env, task.task_id, { maxSteps: 120, stopWhen: () => env.devStarts() >= 15 });
@@ -225,8 +221,7 @@ test('W4b a crash whose usage is UNKNOWN (adapter reports nothing) is not treate
     assert.ok(after <= v.no_progress_policy.same_signature, `${after} identical crash runs with unknown usage after "no alternative" (total ${runs.length}), state ${v.status}`);
   });
 
-test('W5 a rate-limited REVIEWER gets the same unbilled timed backoff as a developer, not a no-progress suspension',
-  { todo: 'defect(consistency): obtainVerdict() classes a review run as billed unless error.class === "unavailable"; a 429 (rate_limit) from the reviewer is counted as a billed identical failure, so three of them exhaust reviewer strategies and suspend the task until the owner resumes, while the same error on the developer backs off on a timer' }, async () => {
+test('W5 a rate-limited REVIEWER gets the same unbilled timed backoff as a developer, not a no-progress suspension', async () => {
     const env = world({ dev: [GOOD], rev: [fail('429 Too Many Requests')] });
     const task = await env.submit();
     await drive(env, task.task_id, { maxSteps: 120, stopWhen: () => env.revStarts() >= 12 });
@@ -387,8 +382,7 @@ test('W9 unparseable reviewer: 3 identical -> other reviewer, 3 more -> strict f
   assert.equal((await env.loop.step(task.task_id)).state, 'ready');
 });
 
-test('W9b every billed review attempt is in the ledger and counts against the cap (T13/GL13)',
-  { todo: 'defect: the review run_id is review-<sha>-e<epoch>-<entry>, so a retried review by the same reviewer on the same SHA reuses it and its usage-<run_id>/start-<run_id> events are deduplicated away: 9 billed attempts (1.8 USD) show as 0.4 USD, and a 1 USD cap is overrun without a budget stop' }, async () => {
+test('W9b every billed review attempt is in the ledger and counts against the cap (T13/GL13)', async () => {
     const PROSE = [{ op: 'emit', event: { type: 'text', text: 'Looks fine to me, ship it.' } }, { op: 'usage', input_tokens: 500, output_tokens: 50, usd: 0.2 }];
     const env = world({ dev: [impl('(a, b) => a + b', { input_tokens: 10, output_tokens: 10, usd: 0.3 })], rev: [PROSE],
       loopOpts: { estimateRun: () => ({ usd: 0.2, input_tokens: 10, output_tokens: 10, duration_ms: 1, turns: 1 }) } });

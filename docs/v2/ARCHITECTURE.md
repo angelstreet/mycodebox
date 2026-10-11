@@ -228,13 +228,16 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    (replan, different model, harness change). New passing evidence = more required checks pass, or fewer failing tests
    inside them. `strategy_changes_without_progress` changes without progress -> `waiting` (`until_ms: null`,
    diagnosis, next action). Billed identical retries (developer runtime errors, reviewer runs without a usable verdict)
-   count the same way; only unbilled waits (quota, provider unavailable before any run, lease backend) back off on a
-   timer.
+   count the same way; only unbilled waits back off on a timer. One classifier for developer and reviewer runs:
+   billed = measured spend, an incomplete usage record, or a run that started and failed with unknown usage (unknown
+   is not zero); unbilled = refused before work (`rate_limit`, `unavailable`, `auth`) or never started. Every review
+   attempt has its own run id (`…-a<n>`), so each one is in the ledger and counts against a cap.
 3. Approvals: a request carries action keys; a grant covers exactly those keys (an agent's request is keyed by its
    run, so a later identical request is asked again) and `approve()` refuses classes or budget authorizations the
    request did not ask for. Denying an agent-requested action continues the task with "refused" feedback; denying
-   any other gate ends it (`failed_unrecoverable`). An approved budget stop authorizes the next run even when its cost
-   cannot be estimated (never past a reached cap).
+   any other gate ends it (`failed_unrecoverable`). An approved budget stop authorizes the next run when the stop exists
+   only because a cost is unknown (no estimate, or a provider that reports no USD); it never waives a reached cap. The
+   developer's first estimate is the router's price-based `cost_est_usd`, kept in the strategy at assignment.
 4. Risk (D-013, D-014): `risk_class` high/critical additionally needs the policy's `security_reviewer` verdict (when
    the policy names that registry entry) and an owner approval bound to the exact head SHA before `accepted`. An owner
    approval of a critical task's routing question (bound to task + base SHA) is passed to the router as
@@ -249,6 +252,7 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    model's label). Only the fake runtime emits them today; the Claude/Codex/MiniMax/OpenCode parsers do not yet map
    CLI permission prompts to `action_request`. Their own permission modes (`acceptEdits`, `workspace-write`,
    `smart`) remain the floor for those runtimes until they do.
-8. Worktree lease: renewed at every dispatch and commit; an expired lease nobody took is re-acquired by the same owner
-   (`lease_reacquired` decision, new fencing token kept in loop memory; the worktree meta keeps the original lease);
-   a lease held by another owner suspends the task until inputs change.
+8. Worktree lease: renewed at every dispatch and commit through `worktrees.renew(path, { owner })`, which re-acquires
+   a lapsed lease nobody took (E_EXPIRED) for the same owner and rewrites the worktree meta (`lease_reacquired`
+   decision). A live holder, or one that held the lease in between (E_FENCED), suspends the task until inputs change;
+   after the owner resumes it, `renew(…, { acknowledgeFence: true })` re-acquires the lease only if it is free.
