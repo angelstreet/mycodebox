@@ -78,7 +78,7 @@ function main() {
   const count = (s) => rows.filter((r) => r.status === s).length;
   const out = {
     schema: 'mycodebox.v2.acceptance-results/1', synthetic: true,
-    generated_at: new Date().toISOString(), sha: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain') ? true : false,
+    generated_at: new Date().toISOString(), sha: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain', '--', '.', `:!${path.relative(ROOT, OUT)}`, ':!docs/v2/ACCEPTANCE.md') ? true : false,   // its own outputs do not count
     node: process.version, command: `node scripts/v2-acceptance.js${args.length ? ` ${args.join(' ')}` : ''}`, duration_ms: Date.now() - t0,
     runner_exit: run.status, files: files.length,
     totals: { tests: results.length, pass: results.filter((r) => r.outcome === 'pass' && !r.todo).length, fail: results.filter((r) => r.outcome === 'fail' && !r.todo).length,
