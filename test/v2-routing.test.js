@@ -320,3 +320,36 @@ test('F10: free is only known when explicitly flagged', () => {
   assert.equal(route(task(), { registry: createRegistry({ version: 1, models: [m()] }), now }).candidates[0].cost_est_usd, null);
   assert.equal(validateRegistryDoc({ version: 1, models: [m({ price: { input: -1, output: 1 } })] }).ok, false);
 });
+
+test('R5: exclude:null and a circular goal give clean no-route results, not throws', () => {
+  const r1 = R(task(), { exclude: null });
+  assert.equal(r1.choice, null); assert.equal(r1.auto_allowed, false);
+  const circ = { toString() { return 'x'; } }; circ.self = circ;
+  const r2 = R(task({ goal: circ }));
+  assert.equal(r2.choice, null); assert.equal(r2.requires_approval, true);
+});
+
+test('R5: a future price_as_of is stale (unknown cost)', () => {
+  const doc = { version: 1, models: [{ runtime: 'claude', provider: 'a', model: 'claude-sonnet-5-5', tier: 'standard', capabilities: ['code'], efforts: [], context_tokens: 1000, price: { input: 1, output: 1 }, price_as_of: '2027-01-01' }] };
+  const reg1 = createRegistry(doc);
+  assert.equal(priceStatus(reg1.get('claude:claude-sonnet-5-5'), { now: NOW }), 'stale');
+  assert.equal(route(task(), { registry: reg1, now }).candidates[0].cost_est_usd, null);
+});
+
+test('R1: inconsistent history is ignored and the rationale says so', () => {
+  const bad = [{ attempts: 5, verified: 6, errors: 0 }, { attempts: 5, verified: 1, errors: -1 }, { attempts: 5.5, verified: 1 }, { attempts: 10, verified: 5, errors: 11 }, { attempts: 10, verified: 5, total_usd: -3 }];
+  for (const h of bad) {
+    const r = R(task(), { history: { 'minimax:MiniMax-M3': h } });
+    assert.equal(r.candidates.find((c) => c.id === 'minimax:MiniMax-M3').history, false, JSON.stringify(h));
+    assert.match(r.rationale.join(' '), /inconsistent .* ignored/);
+  }
+});
+
+test('working-directory floor resolves symlinks with an injected realpath, lexical otherwise', () => {
+  const pol = { allowed_roots: ['/srv/wt'] };
+  const rp = (p) => (p === '/srv/wt/link' ? '/etc' : p);
+  assert.equal(R(task({ cwd: '/srv/wt/link' }), { policy: pol }).choice !== null, true);            // lexical: inside
+  assert.equal(R(task({ cwd: '/srv/wt/link' }), { policy: pol, realpath: rp }).choice, null);        // symlink escapes
+  assert.equal(R(task({ cwd: '/srv/wt/ok' }), { policy: pol, realpath: rp }).choice !== null, true);
+  assert.equal(R(task({ cwd: '/srv/wt/gone' }), { policy: pol, realpath: () => { throw new Error('ENOENT'); } }).choice, null);
+});

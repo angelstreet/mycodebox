@@ -1,5 +1,5 @@
 // Budget checks (ARCHITECTURE §8, OWNER_DECISIONS §4). Default { mode:'track' } measures and never stops. An explicit
-// max_usd / max_input_tokens / max_output_tokens / max_duration_ms is a hard stop that leads to awaiting_approval,
+// max_usd / max_input_tokens / max_output_tokens / max_duration_ms / max_turns is a hard stop that leads to awaiting_approval,
 // never silent overspend. Unknown spend stays unknown (null) and cannot satisfy a cap check. Pure.
 
 export const DIMENSIONS = [
@@ -7,6 +7,7 @@ export const DIMENSIONS = [
   { key: 'input_tokens', cap: 'max_input_tokens' },
   { key: 'output_tokens', cap: 'max_output_tokens' },
   { key: 'duration_ms', cap: 'max_duration_ms' },
+  { key: 'turns', cap: 'max_turns' },
 ];
 export const DEFAULT_BUDGET_POLICY = Object.freeze({ mode: 'track' });
 const known = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;   // negative = invalid, treated as unknown
@@ -97,6 +98,7 @@ export function check(task, ledger, estimate = {}, { quota = null } = {}) {
       else if (s + est[d.key] > cap) stops.push(`${d.key}: ${s} spent + ${est[d.key]} estimated would exceed ${d.cap}=${cap}`);
     }
     if (acap != null) {   // single attempt
+      if (sum.ledger_invalid) { stops.push(`${d.key}: ledger missing or malformed, spend unknown, cannot verify against per-attempt ${d.cap}=${acap}`); continue; }
       const own = attemptEntries.filter((e) => known(e[d.key])).reduce((a, e) => a + e[d.key], 0);
       if (attemptEntries.some((e) => !known(e[d.key]))) stops.push(`${d.key}: spend unknown inside this attempt, cannot verify against per-attempt ${d.cap}=${acap}`);
       else if (!known(est[d.key])) stops.push(`${d.key}: attempt estimate unknown, may exceed per-attempt ${d.cap}=${acap}`);

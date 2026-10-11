@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { check, summarize, remaining, normalizeBudgetPolicy } from '../orchestration/budget.js';
 
-const entry = (o = {}) => ({ attempt_id: 'a1', kind: 'developer', usd: 1, input_tokens: 100, output_tokens: 50, duration_ms: 1000, ...o });
+const entry = (o = {}) => ({ attempt_id: 'a1', kind: 'developer', usd: 1, input_tokens: 100, output_tokens: 50, duration_ms: 1000, turns: 1, ...o });
 const T = (bp) => ({ task_id: 't', budget_policy: bp });
 
 test('default track mode: never stops, even with huge or unknown spend; measured only', () => {
@@ -108,4 +108,14 @@ test('F6: malformed caps (string, NaN, negative, bad per_attempt, non-object pol
     const r = check(T(bp), { entries: [] }, { usd: 1 });
     assert.equal(r.allow, false, JSON.stringify(bp)); assert.equal(r.state_hint, 'awaiting_approval');
   }
+});
+
+test('R5: max_turns is a hard-stop dimension; unknown turns under a cap -> awaiting_approval', () => {
+  const l = (n) => ({ entries: [entry({ turns: n })] });
+  assert.equal(check(T({ max_turns: 10 }), l(4), { turns: 5 }).allow, true);
+  assert.match(check(T({ max_turns: 10 }), l(4), { turns: 7 }).reason, /turns.*would exceed/);
+  assert.match(check(T({ max_turns: 10 }), l(10), { turns: 0 }).reason, /turns.*reached/);
+  const u = check(T({ max_turns: 10 }), { entries: [entry({ turns: null })] }, { turns: 1 });
+  assert.equal(u.allow, false); assert.equal(u.state_hint, 'awaiting_approval');
+  assert.equal(check(T({ max_turns: 'ten' }), l(1), { turns: 1 }).allow, false);
 });

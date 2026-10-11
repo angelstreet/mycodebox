@@ -129,5 +129,6 @@ export function priceStatus(entry, { now = Date.now(), maxAgeDays = DEFAULT_MAX_
   if (!entry.price) return 'unknown';
   const t = entry.price_as_of ? Date.parse(entry.price_as_of) : NaN;
   if (!Number.isFinite(t)) return 'stale';
-  return (now - t) / 86400000 > maxAgeDays ? 'stale' : 'fresh';
+  const ageDays = (now - t) / 86400000;
+  return ageDays > maxAgeDays || ageDays < -1 ? 'stale' : 'fresh';   // a future date (> 1 day skew) is not trusted either
 }
