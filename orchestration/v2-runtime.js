@@ -255,7 +255,14 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
     const { requester } = createSystemOps({ incidents, leases, telemetry, actions: {}, admission: createAdmissionController({}),
       deploys: { status: async () => ({ state: 'unknown' }) } });
     const git = createGitRunner({ env: { PATH: env.PATH, HOME: env.HOME, LANG: 'C', GIT_TERMINAL_PROMPT: '0' } });
-    const loop = createGoalLoop({ store, registry, adapters, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
+    // A claude run may spend up to its own --max-budget-usd (the same bound start() passes), so never estimate it lower:
+    // otherwise a task could overspend its cap by up to one run. Other runtimes: null = measured mean / registry figure.
+    const estimateRun = ({ task, entry }) => {
+      if (!String(entry).startsWith('claude:')) return null;
+      const left = info.get(task?.task_id)?.capLeft;
+      return { usd: Math.max(0.01, Math.min(cfg.claudeRunUsd, left ?? Infinity)), input_tokens: null, output_tokens: null, duration_ms: null, turns: 1 };
+    };
+    const loop = createGoalLoop({ store, registry, adapters, estimateRun, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
       worktreeRoot: roots[0], reviewRoot: roots[1], verifier: createVerifier({ tmpRoot: path.join(cfg.workRoot, 'vtmp'), artifactRoot: path.join(cfg.workRoot, 'artifacts') }),
       leases, route: pinnedRoute(realRoute), allowFake, hostId: HOST_ID, integrate: createServerIntegrate({ git, pushRemote: cfg.pushRemote }),
       opsRequester: requester, incidents, ...(cfg.runTimeoutMs ? { runTimeoutMs: cfg.runTimeoutMs } : {}) });

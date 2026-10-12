@@ -402,7 +402,8 @@ export function createGoalLoop({
     return missing.length > 0;
   }
   function estimate(ctx, entry, role, routeHint = null) {
-    if (estimateRun) return estimateRun({ task: ctx.v, entry, role, ledger: ledger(ctx) });
+    // An estimateRun that answers null defers to the measured mean below (the server's covers claude runs only).
+    if (estimateRun) { const r = estimateRun({ task: ctx.v, entry, role, ledger: ledger(ctx) }); if (r) return r; }
     // Measured performance first: the mean of this model's known spend on this task; otherwise unknown (never 0).
     const runs = ledger(ctx).entries.filter((e) => e.kind === role && ctx.events.some((s) => s.kind === 'task.started' && s.payload.run_id === e.attempt_id && s.payload.entry === entry));
     const mean = (k) => { const xs = runs.map((r) => r[k]).filter((x) => typeof x === 'number'); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };

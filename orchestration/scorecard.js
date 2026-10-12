@@ -86,7 +86,7 @@ const manifestOrThrow = (m) => {
 
 // One task log -> facts, or null without task.created. Read-only over the events; never re-judges acceptance (the store
 // refuses `accepted` without passing required checks and an independent approve).
-export function foldRun(events) {
+export function foldRun(events, { httpSuite = false } = {}) {
   const created = events.find((e) => e.kind === 'task.created');
   const task = created?.payload?.task;
   if (!task) return null;
@@ -121,7 +121,11 @@ export function foldRun(events) {
   // not an owner intervention: count it as budget_auto and drop both events from the owner counters.
   for (const r of events.filter((e) => e.kind === 'approval.requested' && e.payload?.kind === 'budget')) {
     const d = events.filter((e) => ['approval.granted', 'approval.denied'].includes(e.kind) && e.payload?.k === r.payload.k && e.payload?.kind !== 'resume').at(-1);
-    if (d?.kind === 'approval.granted' && actorId(d.payload.actor) === BENCH_LEDGER_ACTOR_ID) {
+    // The HTTP bench driver answers through the dashboard route (actor owner); its grant carries the ledger's reason. Only
+    // for a manifest that says driver:'http', and never a raise of a reached cap (that grant names a budget_policy).
+    const viaHttp = httpSuite && d?.kind === 'approval.granted' && actorId(d.payload.actor) === 'owner' && d.payload.grants?.request_kind === 'budget'
+      && !d.payload.grants?.budget_policy && typeof d.payload.reason === 'string' && d.payload.reason.startsWith('suite-ledger ');
+    if (d?.kind === 'approval.granted' && (actorId(d.payload.actor) === BENCH_LEDGER_ACTOR_ID || viaHttp)) {
       f.owner.budget_auto += 1; f.owner.approvals_requested -= 1; f.owner.approvals_granted -= 1;
     }
   }
@@ -266,7 +270,7 @@ export function buildScorecard(logs, { manifest = null, unreadable = [], since =
   if (since && Number.isNaN(sinceMs)) throw new Error(`since is not an ISO timestamp: ${since}`);
   const all = [];
   for (const { events } of logs) {
-    const f = foldRun(events);
+    const f = foldRun(events, { httpSuite: mf?.driver === 'http' });
     if (!f || (sinceMs !== null && Date.parse(f.created_at) < sinceMs)) continue;
     all.push(f);
   }

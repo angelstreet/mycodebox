@@ -48,8 +48,26 @@ export function spendOf(records, estOf) {
   return { known_usd: known, estimated_usd: estimated, unknown: unknown > 0, unknown_records: unknown, usd: records.length === 0 ? 0 : allKnown ? known : null };
 }
 
+// Real runs need the owner's CLI logins, not the whole service environment: PATH, HOME, locale, proxies and the provider
+// auth/config variables only (no NTFY_*, USAGE_SUMMARY, JEV_*, PUBLIC_URL, AGENT_CMD_*, GHOSTY_*; those are set or dropped here).
+const ENV_KEEP = /^(PATH|HOME|LANG|LC_[A-Z]+|USER|LOGNAME|SHELL|TMPDIR|TMUX_TMPDIR|XDG_[A-Z_]+|SSL_CERT_(FILE|DIR)|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy|(ANTHROPIC|OPENAI|CODEX|MINIMAX|MCODE|OPENCODE|OPENROUTER|CLAUDE)_[A-Z0-9_]+)$/;
+export function realEnv(src) {
+  const out = {};
+  for (const [k, v] of Object.entries(src)) if (ENV_KEEP.test(k) && v != null) out[k] = v;
+  out.LANG ||= 'C.UTF-8';
+  return out;
+}
+
+// Dies with the driver: a detached watcher that, once the driver process is gone (SIGKILL, crash), kills the server, the
+// private tmux server and the temp dir. It leaves quietly when the server is already gone (normal stop). Not in server.js.
+const REAPER = `const [dp, sp, tmux, sock, sockFile, tmp] = process.argv.slice(1); const fs = require('fs'); const alive = (p) => { try { process.kill(Number(p), 0); return true; } catch { return false; } };
+const t = setInterval(() => { if (!alive(sp)) process.exit(0); if (alive(dp)) return; clearInterval(t);
+  try { process.kill(Number(sp), 'SIGTERM'); } catch {} setTimeout(() => { try { process.kill(Number(sp), 'SIGKILL'); } catch {}
+    try { require('child_process').execFileSync(tmux, ['-L', sock, 'kill-server'], { stdio: 'ignore' }); } catch {}
+    try { fs.rmSync(sockFile, { force: true }); if (tmp && /v2-bench-http-/.test(tmp)) fs.rmSync(tmp, { recursive: true, force: true }); } catch {} process.exit(0); }, 3000); }, 500);`;
+
 // The disposable server. Returns { base, api, stop, log }. `dir` holds the tmux wrapper and the fake HOME, `stateDir` the server's state (kept: it is the benchmark's task store).
-export async function startServer({ dir, stateDir, workRoot, repos, registryFile, fake, fakeScripts, pathDirs = [], claudeRunUsd, runTimeoutMs, concurrency = 1, log = () => {} }) {
+export async function startServer({ dir, keepDir = false, stateDir, workRoot, repos, registryFile, fake, fakeScripts, pathDirs = [], claudeRunUsd, runTimeoutMs, concurrency = 1, log = () => {} }) {
   const sock = `v2bench-${randomBytes(4).toString('hex')}`;
   const realTmux = ['/usr/bin/tmux', '/usr/local/bin/tmux', '/bin/tmux'].find((p) => fs.existsSync(p)) || 'tmux';
   const wrapper = path.join(dir, 'tmux-wrapper.sh');
@@ -60,8 +78,7 @@ export async function startServer({ dir, stateDir, workRoot, repos, registryFile
   const port = await freePort();
   // Real runs need the owner's CLI logins (HOME and the provider environment, as the in-process harness has); a fake run
   // gets a bare environment and a temp HOME.
-  const base = fake ? { PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: path.join(dir, 'home') } : { ...process.env, LANG: process.env.LANG || 'C.UTF-8' };
-  for (const k of Object.keys(base)) if (/^(GHOSTY_|TMUX$|TMUX_PANE$|TLS_|HOST$|PORT$)/.test(k)) delete base[k];
+  const base = fake ? { PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: path.join(dir, 'home') } : realEnv(process.env);
   if (fake) fs.mkdirSync(base.HOME, { recursive: true });
   const env = { ...base, HOST: '127.0.0.1', PORT: String(port), GHOSTY_STATE_DIR: state, TMUX_BIN: wrapper,
     TLS_KEY: path.join(dir, 'none.pem'), TLS_CERT: path.join(dir, 'none.pem'),   // missing files: no TLS listener
@@ -75,6 +92,8 @@ export async function startServer({ dir, stateDir, workRoot, repos, registryFile
   const keep = (d) => { lines.push(...String(d).split('\n').filter((l) => l.trim() && !/listSessions/.test(l))); if (lines.length > 400) lines = lines.slice(-300); };
   const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', keep); child.stderr.on('data', keep);
+  const reaper = spawn(process.execPath, ['-e', REAPER, String(process.pid), String(child.pid), realTmux, sock, sockFile, keepDir ? '' : dir], { detached: true, stdio: 'ignore' });
+  reaper.unref();
   const exited = new Promise((r) => child.on('exit', (code, sig) => r({ code, sig })));
   let done = false;
   const url = `http://127.0.0.1:${port}`;
@@ -112,7 +131,7 @@ export async function startServer({ dir, stateDir, workRoot, repos, registryFile
     })();
     if (st.state !== 'running') throw new Error(`V2 engine refused to run: ${st.reason}`);
     log(`server up on ${url} (state ${state}, tmux socket ${sock})`);
-    return { url, port, api, stop, status: st, logText: () => lines.join('\n'), pid: child.pid, sock, realTmux };
+    return { url, port, api, stop, status: st, logText: () => lines.join('\n'), pid: child.pid, sock, sockFile, realTmux };
   } catch (e) { await stop(); throw e; }
 }
 
@@ -149,7 +168,7 @@ export async function runBenchHttp(opts) {
   };
 
   let server = null;
-  const cleanup = async () => { await server?.stop(); };
+  const cleanup = async () => { await server?.stop(); if (!o.keep) fs.rmSync(tmp, { recursive: true, force: true }); };
   const onSignal = (sig) => { cleanup().finally(() => process.exit(sig === 'SIGINT' ? 130 : 143)); };
   process.once('SIGINT', onSignal); process.once('SIGTERM', onSignal);
   try {
@@ -198,10 +217,10 @@ export async function runBenchHttp(opts) {
       fs.writeFileSync(registryFile, `${JSON.stringify(registryDoc(profiles), null, 1)}\n`);
     }
     const claudeBound = Math.max(0, ...[...profiles.values()].filter((p) => p.run_usd).map((p) => Math.min(p.run_usd, taskUsd)));
-    server = await startServer({ dir: tmp, stateDir, workRoot, repos: runs.map((r) => r.repo), registryFile, fake: o.fake, fakeScripts,
+    server = await startServer({ dir: tmp, keepDir: o.keep, stateDir, workRoot, repos: runs.map((r) => r.repo), registryFile, fake: o.fake, fakeScripts,
       pathDirs: [...new Set([...profiles.values()].flatMap((p) => p.pathDirs || []))], claudeRunUsd: claudeBound || undefined,
       runTimeoutMs: Math.round(o.agent_timeout_min * 60_000), concurrency: o.concurrency, log });
-    manifest.server = { runtimes: server.status.runtimes, concurrency: server.status.concurrency, test_fake_adapter: !!server.status.test_fake_adapter };
+    manifest.server = { pid: server.pid, tmux_socket: server.sock, runtimes: server.status.runtimes, concurrency: server.status.concurrency, test_fake_adapter: !!server.status.test_fake_adapter };
     for (const [id, p] of profiles) manifest.runtimes[id] = { available: o.fake ? true : server.status.runtimes?.[p.runtime]?.available ?? 'unknown', version: server.status.runtimes?.[p.runtime]?.version ?? null };
     writeManifest();
 
@@ -236,17 +255,23 @@ export async function runBenchHttp(opts) {
           if (c.status !== 201) { const e = new Error(`create -> ${c.status} ${c.body?.code || ''}`); e.code = `create_${c.status}_${c.body?.code || ''}`; throw e; }
           rec.task_id = c.body.task.task_id;
           const deadline = t0 + o.run_timeout_min * 60_000;
+          let since = { state: null, at: 0 };
           for (;;) {
             if (Date.now() > deadline) { timedOut = true; break; }
             const t = await get();
             if (STOP_STATES.includes(t.state)) break;
+            // Nothing further will happen on its own (round 2 recorded these as not_yet_done): an unreadable log, an external
+            // effect to reconcile, or integration that does not move for a minute.
+            if (t.store_error || t.state === 'unknown_external_effect') break;
+            if (since.state !== t.state) since = { state: t.state, at: Date.now() };
+            if (['integrating', 'release_verifying'].includes(t.state) && Date.now() - since.at > 60_000) break;
             if (t.state === 'awaiting_approval') {
               const p = t.pending_approval;
               if (!p) { await sleep(Math.min(o.poll_ms, 250)); continue; }   // answered; the loop moves on shortly
               // Only a stop that exists because a cost is unknown, never a reached cap or any other owner question.
               if (o.confirm_unknown && p.kind === 'budget' && p.cap_reached === false) {
                 const sp = spendOf(t.usage.records, estUsd);
-                const ok = ledger.allows(sp.known_usd + sp.estimated_usd + (estUsd(p.entry) ?? 0) + taskUsd * 0);
+                const ok = ledger.allows(sp.known_usd + sp.estimated_usd + (estUsd(p.entry) ?? 0) + taskUsd * Math.max(0, inflight - 1));   // the other runs in flight keep their reservations
                 if (ok.ok) {
                   const a = await server.api('POST', `/api/v2/tasks/${rec.task_id}/approve`, { action_id: p.action_id, ...(p.sha ? { sha: p.sha } : {}), reason: `suite-ledger ${ok.committed}/${o.max_usd}` });
                   if (a.status === 200) { rec.budget_confirmations += 1; await sleep(Math.min(o.poll_ms, 250)); continue; }

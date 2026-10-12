@@ -313,3 +313,13 @@ cost estimates come from the router's prices or stop as unknown (answered by the
 evidence per check; `stop_note` comes from the last decision. `OUT/state` is the throwaway server state (it holds a
 generated reporter token and VAPID keys): keep it out of the repository. `--fake` uses the server's test-only scripted
 adapter and needs `--runtimes fake-dev` (test/v2-bench-http.test.js).
+
+HTTP driver notes (review fixes): a budget stop for unknown cost is approved with the reason `suite-ledger <committed>/<cap>`;
+`v2-score.js` counts such a grant (budget request, no cap raise) as `budget_auto`, not an owner intervention, only for a
+manifest with `driver: "http"`, so an existing run dir is re-scored in place with no rerun:
+`node scripts/v2-score.js --tool-score --suite OUT/manifest.json --store OUT/state/v2` (and `--scorecard ...`). The server
+estimates a claude run at its own `--max-budget-usd` bound (never lower), so a task cannot overspend its cap by a run. Claude
+runs share one `GHOSTY_V2_CLAUDE_RUN_USD` (the largest claude `run_usd`, at most the per-task cap; haiku is not held to 0.25 as in
+round 2). The child server gets only PATH, HOME, locale, proxy and provider auth variables, and a detached watcher kills it,
+its private tmux server and the temp dir if the driver dies (SIGKILL included). A task stuck in `unknown_external_effect`,
+with an unreadable log, or in `integrating`/`release_verifying` for 60 s is recorded as `not_yet_done`.
