@@ -14,7 +14,8 @@ export function coded(code, msg) {
 export const unsupported = (adapter, op) => coded('E_UNSUPPORTED', `${adapter}: ${op} is not supported`);
 
 // ---- permission / sandbox bypass guard -------------------------------------------------------
-// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config hasBypass (V2 workers never get the dashboard's bypass default).
+// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config hasBypass (V2 workers never get the dashboard's bypass
+// default; the one adapter-owned exception is mcode exec `--permission full`, D-023, passed as trusted argv indices).
 const BYPASS_SINGLE = /^--(?:allow-)?dangerously-[\w-]+$|^--yolo$|^--auto$|^--bypass-[\w-]+$/;   // --auto: opencode auto-approve
 const BYPASS_PAIRS = [
   [/^--permission-mode$/, /^bypassPermissions$/],
@@ -269,8 +270,10 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
       c.kill('final'); // always sweep the process group: a background child must not edit the tree after done
       const errText = c.errorTexts.join('\n');
       let error = null;
-      // A run that hit a provider rate limit / quota and then sat until our timer is a quota wait, not a stall.
-      if (run.timed_out) error = isRateLimitText(`${c.stderr}\n${errText}`) ? { ...normalizeError({ stderr: `${c.stderr}\n${errText}`, retry_after_ms: c.retryHint }, now()), timed_out: true } : normalizeError({ timed_out: true });
+      // A run that hit a provider rate limit / quota and then sat until our timer is a quota wait, not a stall. Only parsed
+      // error events and the last 2 KiB of stderr count: older child output ("overloaded function") must not hide a stall.
+      const recent = `${c.stderr.slice(-2048)}\n${errText}`;
+      if (run.timed_out) error = isRateLimitText(recent) ? { ...normalizeError({ stderr: recent, retry_after_ms: c.retryHint }, now()), timed_out: true } : normalizeError({ timed_out: true });
       else if (run.cancelled) error = null;
       else if (spawn_error) error = normalizeError({ code: spawn_error.code, syscall: spawn_error.syscall, message: spawn_error.message });
       // An error *event* alongside exit 0 (e.g. a transient reconnect notice) is not a failed run; the event stays visible.

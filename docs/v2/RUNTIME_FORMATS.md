@@ -28,7 +28,7 @@ JSONL with `type`: `thread.started` (`thread_id`), `turn.started`, `item.*` (`it
 
 ## MiniMax Code 0.6.3 / 0.6.5 — `mcode exec --cwd <dir> --output-format stream-json --permission full`
 
-V2 exec workers run `--permission full` inside their isolated worktree (D-023). Run flags the adapter passes from the
+V2 exec workers (developers and reviewers) run `--permission full`, started in their worktree; `--cwd` is not a sandbox (D-023). Run flags the adapter passes from the
 run limits (D-024): `--model minimax/<model>` (mcode refuses a bare model name: "--model must use provider/model"),
 `--effort <low|medium|high|xhigh|max>` (MiniMax-M3.1-Flash-Preview; MiniMax-M3 has no effort levels), `--timeout`
 (controller timer + 30 s), `--max-steps N`, and `--mode lightweight` (0.6.5 only; no tool schemas, cannot join a

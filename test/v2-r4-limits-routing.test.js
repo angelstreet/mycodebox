@@ -119,6 +119,7 @@ if (a[0] === '--version') { console.log('mcode 0.6.5'); process.exit(0); }
 if (process.env.FAKE_OUT) fs.writeFileSync(process.env.FAKE_OUT, JSON.stringify({ argv: a }));
 if (mode === 'quota') { console.error('Error: usage limit exceeded for your plan (code 2056), try again in 3600 seconds'); process.exit(1); }
 if (mode === 'event429') { console.log(JSON.stringify({ type: 'turn.failed', sessionId: 's', error: { message: 'HTTP 429 Too Many Requests' } })); process.exit(1); }
+if (mode === 'oldnoise') { console.error('TypeError: overloaded function; quota limit exceeded in fixture'); console.error('x'.repeat(4096)); setInterval(() => {}, 1000); return; }
 if (mode === 'retrying') { console.error('rate limit reached, retrying...'); setInterval(() => {}, 1000); return; }
 console.log(JSON.stringify({ type: 'exec.started', sessionId: 's1' }));
 console.log(JSON.stringify({ type: 'turn.completed', sessionId: 's1', usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } }));
@@ -145,6 +146,10 @@ test('minimax exec: --permission full (trusted, D-023), provider/model ids, --ma
   assert.equal(argv[argv.indexOf('--timeout') + 1], '180s');
   assert.ok(!argv.includes('--mode'));
   assert.deepEqual(a.limitSupport, { max_steps: true, context_mode: true, effort: true });
+  // the trusted pair is located, not positional: it is exactly the adapter's own --permission full
+  const at = argv.indexOf('--permission');
+  assert.equal(argv[at + 1], 'full');
+  assert.equal(argv.filter((x) => x === '--permission').length, 1);
   // an already qualified id is kept; M3 still runs
   assert.equal(mcodeModel('minimax/MiniMax-M3'), 'minimax/MiniMax-M3');
   const m3 = await mrun({ model: 'MiniMax-M3' });
@@ -179,6 +184,10 @@ test('minimax quota / rate limit (stderr, stream event, or a run that sat retryi
     assert.equal(normalizeError({ exit: 1, stderr: text }).class, 'rate_limit', text);
   }
   assert.equal(normalizeError({ timed_out: true }).class, 'timeout');
+  // old child output that merely looks like a limit stays a stall: only parsed error events and the last 2 KiB count
+  const st = await mrun({ timeout_ms: 300 }, 'oldnoise');
+  assert.equal(st.run.result.timed_out, true);
+  assert.equal(st.run.result.error.class, 'timeout');
 });
 
 test('mcode next to MCODE_NODE_DIR is preferred over ~/.local/bin', async () => {

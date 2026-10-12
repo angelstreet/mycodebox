@@ -1,5 +1,5 @@
-// MiniMax Code (`mcode`): `mcode exec --cwd <dir> --output-format stream-json --permission full`. V2 exec workers run
-// inside their isolated task/review worktree, so the adapter's own `--permission full` is trusted (D-023, OWNER_DECISIONS
+// MiniMax Code (`mcode`): `mcode exec --cwd <dir> --output-format stream-json --permission full`. V2 exec workers are
+// started in their task/review worktree (`--cwd` is not a sandbox), and the adapter's own `--permission full` is trusted (D-023, OWNER_DECISIONS
 // §12.1); a caller-supplied bypass (`--permission off|full` in extraArgs, `--dangerously-*`) is still refused.
 import nodeFs from 'node:fs';
 import path from 'node:path';
@@ -72,7 +72,10 @@ const createCli = makeCliAdapter({
       args.push('--mode', 'lightweight');
     }
     if (o.resume_id) args.push('--session', o.resume_id);
-    return { args, session_id: null, trusted: [5, 6] };
+    // Trust exactly the adapter's own `--permission full` pair, located, never by position (D-023).
+    const at = args.indexOf('--permission');
+    if (at < 0 || args[at + 1] !== 'full' || args.indexOf('--permission', at + 1) >= 0) throw coded('E_INVALID', 'mcode launch mode is not exactly one --permission full');
+    return { args, session_id: null, trusted: [at, at + 1] };
   },
 });
 // mcode 0.6.3 runs on Node 22.19+/24/25/26 and refuses Node 23 (its `#!/usr/bin/env node` takes the first node on

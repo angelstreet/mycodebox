@@ -39,6 +39,7 @@ must match the actual configuration until they are migrated.
 - Owner's chosen default (2026-10-11): dashboard-created and resumed Claude/Codex sessions and the manager start with permission
   prompts skipped (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`) and folder trust pre-accepted.
   `AGENT_CMD_*` overrides win verbatim. V2 orchestration workers keep their own launch modes and refuse bypass flags;
-  the exception is MiniMax `mcode exec` workers, which run `--permission full` inside their isolated V2 worktree (D-023).
+  the exception is MiniMax `mcode exec` workers (developers and reviewers), which run `--permission full`, started in their V2
+  worktree (`--cwd` is not a sandbox: they can run any host command, the same threat model as the dashboard default; D-023).
 - The AI manager must never answer on the owner's behalf about deploys, merges to main, deletes, credentials, money or
   customers. The forbidden-topic filter always wins. Automatic answers are off by default.
