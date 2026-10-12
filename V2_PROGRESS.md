@@ -1,4 +1,4 @@
-STATUS: RUNNING — round 3: delivery (gates passed on 37004b9; PR description and push)
+STATUS: DELIVERED 5eed4ac https://github.com/angelstreet/mycodebox/pull/1 (round 3)
 
 # V2 progress
 
