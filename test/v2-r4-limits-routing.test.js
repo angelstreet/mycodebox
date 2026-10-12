@@ -281,6 +281,15 @@ test('escalation ladder: starts on the cheapest good-enough rung, climbs M3.1 ->
   assert.equal(r3.escalation.started_on_ladder, false);
 });
 
+test('round-4 measured latency order (SCORING.md): M3.1-Flash < M3 < Haiku; a speed task ranks M3.1-Flash above Haiku', () => {
+  const real = loadRegistry({ now });   // the shipped models.json, not the synthetic DOC
+  const lat = Object.fromEntries(JSON.parse(fs.readFileSync(new URL('../orchestration/models.json', import.meta.url), 'utf8')).models.map((e) => [e.model, e.latency_ms]));
+  assert.ok(lat['MiniMax-M3.1-Flash-Preview'] < lat['MiniMax-M3'] && lat['MiniMax-M3'] < lat['claude-haiku-4-5']);
+  const r = route(T({ priority: 'speed' }), { registry: real, now });
+  const score = (id) => r.candidates.find((c) => c.id === id).score;
+  assert.ok(score('minimax:MiniMax-M3.1-Flash-Preview') > score('claude:claude-haiku-4-5'));
+});
+
 test('escalation ladder never drops below a floor: high/critical risk, security work and pins keep theirs', () => {
   const hi = route(T({ risk_class: 'high' }), { registry: reg(), now, escalation: true });
   assert.equal(hi.escalation.eligible, false);
