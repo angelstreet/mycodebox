@@ -18,7 +18,7 @@ Base: `origin/v2/integration` 5a5741e. Owner spec: OWNER_DECISIONS §12.
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
 | R4-0 | §12 recorded, status line, stale "not wired / 503" owner action replaced | coordinator | DONE | 5a5741e |
-| R4-1..3 | run_limits policy + registry (M3.1-Flash, billing), faster no-progress stop, scorecard-fed routing + escalation ladder, mcode exec `--permission full` | Opus / Opus review | IN PROGRESS | wt r4-engine |
+| R4-1..3 | run_limits policy + registry (M3.1-Flash, billing), faster no-progress stop, scorecard-fed routing + escalation ladder, mcode exec `--permission full` | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) merge 50e40bf | 245569f+1053e4c+ec4582b; D-023..D-026; 1741/1741 both runtimes; two 150 s stalls alone take 300 s, so the <3 min stop comes from a feasibility review (independent reviewer, `impossible:true` on failing checks) after the first cheap-model stall |
 | R4-4a | Bench `--reps`, M3.1 spec, subscription cost basis, per-model table, time-to-stop | Sonnet / Opus review | INTEGRATED (Opus APPROVE, 3 rounds) merge ac97bbf | 24dbd17; 1728/1728 both runtimes; time-to-stop over expected-impossible runs only; unknown cost wins over mixed |
 | R4-4b | Real evaluation M3 vs M3.1-Flash vs Haiku, 3 reps, USD 10 cap, SCORING.md recommendation | coordinator | TODO | |
 | R4-5 | Gates, V2_VERIFICATION, PR round-4 section, DELIVERED | coordinator | TODO | |
