@@ -185,7 +185,7 @@ test('scorecard: subscription cost basis, tokens, wall time, reps, provider wait
   const md = markdownReport(mp, { store: dir });
   for (const h of ['## Per model (developer)', '## Per task', '## Per task and model', 'time to stop, impossible task']) assert.ok(md.includes(h), h);
   const row = md.split('\n').find((l) => l.startsWith(`| ${MM} |`));
-  assert.match(row, /subscription \(\+ \$0\.0200 per-token reviews\)/);
+  assert.match(row, /subscription \+ \$0\.0200 per-token/);
   assert.ok(row.includes('| subscription |'), row);
   assert.ok(!/\| \$0\.0000 \|/.test(row), 'a subscription model is never shown as $0 measured');
   assert.ok(md.includes('off-by-one | ' + MM));
