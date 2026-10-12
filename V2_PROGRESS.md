@@ -17,9 +17,9 @@ Base: `origin/v2/integration` c23ebe8. Owner spec: OWNER_DECISIONS §11.
 
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
-| R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | IN PROGRESS (wt r3-wire) | |
-| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver + coordinator | TODO (after R3-1) | |
-| R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | IN PROGRESS (wt r3-noprog) | |
+| R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | REVIEW (Fable) | 27aa36c: orchestration/v2-runtime.js + v2-integrate.js, child-process server tests; 1692/1692 both runtimes; D-021; approved merges are not executed by the server (task waits until main contains the SHA) |
+| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver + coordinator | IN PROGRESS: HTTP driver (wt r3-bench = r3-wire + r3-noprog) | |
+| R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | REVIEW (Opus) | 8df6828: run timeout counted as an attempt (was routed to provider backoff); bench agent timeout 3 min; 1693/1693 both runtimes |
 | R3-3b | Drop stale "main's git history" owner action | coordinator | DONE | history was rewritten |
 | R3-3c | Docs: enable / roll back V2 on the live install | coordinator | TODO | |
 | R3-4 | Gates on final SHA, V2_VERIFICATION, PR round-3 section, DELIVERED | coordinator | TODO | |
@@ -105,6 +105,7 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 | D-018 | Owner cancel always succeeds: `loop.cancel()` takes the controller lease and runs `recover()` first when the view shows `recovery_pending`, then transitions | store appends cancel over a torn tail | Appending without recovery would corrupt a torn line; recovery under the lease is the safe path and keeps T14 | yes |
 | D-019 | mcode TUI full-permission mode is its own config key `permissionMode: bypassPermissions`, documented in INSTALL, never written by code | write ~/.minimax/config.yaml from the server | mcode 0.6.5 TUI has no permission flag (only `mcode exec --permission full`); editing the user's CLI config is invasive | yes |
 | D-020 | Dashboard approve/deny/cancel go through the goal loop under the controller lease; no loop in the process → 503, another live controller → 409, nothing written | store owner lock; keep direct writes | Owner answers must never be lost or written behind the single writer's back (m3; D-016/D-017/D-018) | yes |
+| D-021 | V2 runs only in repositories listed in `GHOSTY_V2_REPOS` (realpath match), each with a valid `.ai/project.json` whose allowlists govern its tasks; worktrees under the required `GHOSTY_V2_WORK_ROOT` (no overlap with the checkout, state dir or listed repos); developer pins via `preferred_models` only narrow routing and pinned models never review | allowlist inside the server's own `.ai/project.json`; any repo with a policy file | Explicit, per-install list; the target repo's own policy governs; nothing outside it executes | yes |
 | D-006 | Leak scan = `scripts/leak-scan.js` (generic patterns) + private denylist outside the repo (`LEAK_SCAN_EXTRA`) | patterns in repo | Real identifiers must never be committed, including in the scanner | yes |
 
 ## OWNER-REVIEW / owner actions (collected for the PR)
