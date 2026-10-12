@@ -213,3 +213,44 @@ with (a)/(b), fix the defects the dry run exposes (repair loop), and re-run unti
 ### 7. Deliver round 2
 Push `v2/integration`, update the PR #1 description (round-2 section: what changed, scorecard and dry-run results, updated
 owner actions), keep it draft. Then set line 1 of V2_PROGRESS.md to `STATUS: DELIVERED <sha> <pr-url> (round 2)`.
+
+## 11. Round 3 (owner, 2026-10-12)
+
+Add as section 11 "Round 3" of `docs/tasks/v2/OWNER_DECISIONS.md`, then execute in order. First set line 1 of
+V2_PROGRESS.md to `STATUS: RUNNING — round 3: ...` (the watchdog stops on `STATUS: DELIVERED`). All earlier rules
+still apply: worktrees only, push `v2/*` only, draft PR, no merge, no deploy, no live service/state, leak scan before
+every push, token frugality (tests run directly with Bash; Sonnet default; Fable only for security-critical review).
+
+### 1. Wire the V2 engine into the server (behind `GHOSTY_V2=1`, off by default)
+- One process, one store handle shared by the HTTP routes and the goal loop (D-016/D-017). At startup take the
+  controller lease, run `recover()` under it, then start the loop. Clean shutdown releases the lease.
+- Tasks created from the dashboard/API actually execute: route (deterministic floors first) → adapter → isolated
+  worktree under a configured work root (env, e.g. `GHOSTY_V2_WORK_ROOT`) → deterministic checks → independent reviewer →
+  accepted / waiting / awaiting_approval. Repos limited to the allowlist in `.ai/project.json`.
+- Approve, deny and cancel from the dashboard work through the loop (no more 503 when V2 is on); proposal tasks from the
+  scorecard can be approved from the dashboard.
+- Integration controller: may push only `v2/*`-style task branches it owns; anything touching a protected branch, merge or
+  deploy stays `awaiting_approval` with an SHA-bound owner approval, exactly as the contract says. No merge/deploy happens
+  without that approval.
+- System operations: wire telemetry/incidents read-only plus request-only actions; nothing destructive.
+- The existing manager, its `routerShadow`, sessions board and every pre-V2 behaviour are unchanged when `GHOSTY_V2` is unset.
+- Fable reviews the wiring (security-critical). Add tests that boot the real server module in a child process on a
+  disposable port with temp state and a fake `tmux -L` socket (never import `server.js` into the test process itself).
+
+### 2. Benchmark against the wired server
+Start a disposable server instance (`GHOSTY_V2=1`, temp state dir, loopback port, private tmux socket, temp work root) and
+drive the benchmark suite **through the HTTP API** end to end with real runtimes (Claude Haiku and Sonnet, Codex, MiniMax,
+OpenCode), approvals answered through the API where a task asks. Compare the scorecard and tool score with the round-2
+dry run (same suite version), explain the differences. Owner-authorized real-provider spend for this round: **USD 20**,
+set as an explicit budget_policy and reported. Fix defects the run exposes and re-run the affected tasks.
+
+### 3. Loose ends
+- MiniMax on the impossible task should end `waiting`/no_progress before the time cap — fix if the cause is ours.
+- Remove the stale owner-action line saying the tailnet IP/host "stay in main's git history": history was rewritten.
+- Docs: how to enable V2 on the live install (env keys, work root, `.ai/project.json`), how to roll back (unset
+  `GHOSTY_V2`, restart), what changes for the owner. Put the enable steps in the PR's owner-action list. Do not enable it.
+
+### 4. Deliver round 3
+Gates on the final code SHA (both Node versions, reporter suite, acceptance matrix incl. T20, leak scan), update
+V2_VERIFICATION.md (clean, current), V2_PROGRESS.md and the PR description (round-3 section with wiring summary, benchmark
+comparison, spend, owner actions). Keep the PR draft. Then set line 1 to `STATUS: DELIVERED <sha> <pr-url> (round 3)`.
