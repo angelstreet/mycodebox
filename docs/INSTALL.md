@@ -165,16 +165,17 @@ the dashboard behaves exactly as before. Reference: [env keys](REFERENCE.md#conf
    ```
 
    Never set `GHOSTY_V2_TEST_FAKE_ADAPTER` on a live install: it is for tests only.
-4. Restart with `scripts/safe-restart.sh` (it refuses during a deploy). The log shows the V2 status line: controller
-   lease taken, recovery done, runtimes available. `GET /api/v2/ops/status` shows the same.
+4. Restart with `scripts/safe-restart.sh` (it refuses during a deploy). The service log shows `[v2] controller lease held;
+   recovered the store` and a `[v2] runtimes:` line (a `goal loop NOT started` line names what is missing).
+   `GET /api/v2/ops/status` shows the same state.
 
 **What changes for the owner.** The **V2 tasks** view (More menu) now runs tasks: a new task starts at once in a
 worktree under the work root, never in the repository's own checkout, and never on `main`. Each task's spend is shown
 (unknown stays unknown); set a `max_usd` cap per task to make spend a hard stop. Approve/deny answer exactly the request
 shown (its id and head SHA); merges to a protected branch, deploys, credentials and the other restricted classes always
 stop at `awaiting_approval`. The server never merges or deploys: an approved merge is done by the owner (for example the
-PR merge), and the task is accepted once `main` contains that SHA. Scoring proposals can be approved or denied from the
-scorecard. Sessions, the manager and its router shadow are unchanged. Old task worktrees under the work root are not
+PR merge), and the task is accepted once `main` contains that SHA. Scoring proposals appear as tasks waiting on the owner and
+are approved or denied in the same view. Sessions, the manager and its router shadow are unchanged. Old task worktrees under the work root are not
 deleted automatically.
 
 **Roll back.** Remove `GHOSTY_V2=1` (or set it to anything else) and restart with `scripts/safe-restart.sh`. The
