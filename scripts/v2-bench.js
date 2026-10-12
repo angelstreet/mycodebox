@@ -69,7 +69,7 @@ const LOCAL_BIN = path.join(os.homedir(), '.local', 'bin');
 const FREE_EST_USD = 0.02;
 // Round-4 short leash for the cheap models (OWNER_DECISIONS §12.1/§12.2): 2.5 min per run, 40 steps, no-progress after 2
 // stalled runs. Sent as the task's run_limits in the HTTP create body (selector = the profile's entry id); other profiles: none.
-export const CHEAP_LIMITS = Object.freeze({ timeout_ms: 150_000, max_steps: 40, stall_runs_to_no_progress: 2 });
+export const CHEAP_LIMITS = Object.freeze({ timeout_ms: 120_000, max_steps: 40, stall_runs_to_no_progress: 2 });
 export const PROFILES = {
   'claude:haiku': { runtime: 'claude', module: 'claude.js', model: 'claude-haiku-4-5', provider: 'anthropic', tier: 'light', efforts: ['low', 'medium'], effort: null, passModel: true, run_usd: 0.25, est_usd: 0.10, billing: 'per_token', run_limits: { ...CHEAP_LIMITS, effort: 'low' } },
   'claude:sonnet': { runtime: 'claude', module: 'claude.js', model: 'claude-sonnet-5-5', provider: 'anthropic', tier: 'standard', efforts: ['low', 'medium', 'high'], effort: null, passModel: true, run_usd: 1.00, est_usd: 0.40, billing: 'per_token' },

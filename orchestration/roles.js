@@ -104,15 +104,31 @@ export const EVIDENCE_NOTE = 'The exits above were recorded by the controller ru
 // JSON objects in the run's text/result events, last first.
 function* jsonAnswers(events = []) {
   const texts = events.filter((e) => typeof e?.text === 'string' && ['text', 'result'].includes(e.type)).map((e) => e.text);
-  for (const t of texts.reverse()) {
-    const lines = t.trim().split('\n').reverse();
-    for (const l of [t.trim(), ...lines]) {
-      if (!l.trim().startsWith('{')) continue;
-      let v;
-      try { v = JSON.parse(l.trim()); } catch { continue; }
-      if (v && typeof v === 'object' && !Array.isArray(v)) yield v;
+  for (const t of texts.reverse()) for (const v of jsonObjectsIn(t)) yield v;
+}
+
+// Top-level JSON objects in free text, last first: one-line, pretty-printed or fenced (```json), with prose or a trailing
+// tool block (mcode's <deliver-assets>…</deliver-assets>) around them. String-aware brace matching; unparseable spans skipped.
+export function jsonObjectsIn(text) {
+  const t = String(text).replace(/<deliver-assets>[\s\S]*?(?:<\/deliver-assets>|$)/g, '');
+  const out = [];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < t.length; j++) {
+      const ch = t[j];
+      if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+      if (ch === '"') inStr = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) { end = j; break; }
     }
+    if (end < 0) break;
+    try {
+      const v = JSON.parse(t.slice(i, end + 1));
+      if (v && typeof v === 'object' && !Array.isArray(v)) { out.push(v); i = end; }
+    } catch { /* not JSON: an inner brace may still start one */ }
   }
+  return out.reverse();
 }
 const findingsOf = (xs) => (Array.isArray(xs) ? xs : []).filter((f) => f && typeof f === 'object').map((f) => ({
   id: String(f.id ?? 'unspecified').slice(0, 64), severity: f.severity === 'minor' ? 'minor' : 'blocker', message: String(f.message ?? '').slice(0, 2000) }));
@@ -150,7 +166,7 @@ export function feasibilityPrompt({ task, sha, diff, failing = [], claim = null 
     `FAILING CHECKS (recorded by the controller on this SHA):\n${clip(JSON.stringify(failing, null, 1), 8000)}`,
     ...(claim ? [`THE DEVELOPER CLAIMS THE REQUIREMENTS ARE IMPOSSIBLE: ${clip(claim, 2000)}\nJudge the requirements yourself; the claim is not evidence.`] : []),
     `DIFF (base..candidate):\n${clip(diff, 12000)}`,
-    'ANSWER with exactly one JSON object on the last line. Requirements contradictory or impossible as stated: '
+    'ANSWER with exactly one JSON object on the last line (one line, no code fence). Requirements contradictory or impossible as stated: '
       + '{"verdict":"reject","impossible":true,"diagnosis":"<which requirements conflict and why>"}. Achievable (more work needed): '
       + '{"verdict":"reject","impossible":false,"findings":[{"id":"meets_goal","severity":"blocker","message":"<what is still missing>"}]}.',
   ].join('\n\n');

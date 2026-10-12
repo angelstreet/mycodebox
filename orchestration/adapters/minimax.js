@@ -24,7 +24,12 @@ function parse(o) {
       const usage = o.usage ? { input_tokens: input, output_tokens: out, usd: null, incomplete: o.usageIncomplete === true } : null;
       return { events: [{ type: 'result', ok: true, text: null }], usage, session_id: sid };
     }
-    case 'exec.completed': return { events: [{ type: 'result', ok: true, text: typeof o.result === 'string' ? o.result : null }], session_id: sid };
+    // 0.6.3: result is the final text; 0.6.5: result is { type:'exec.result', status, output: '<final text>', usage }.
+    case 'exec.completed': {
+      const r = o.result;
+      const text = typeof r === 'string' ? r : typeof r?.output === 'string' ? r.output : null;
+      return { events: [{ type: 'result', ok: r?.status == null || r.status === 'succeeded', text }], session_id: sid };
+    }
     case 'exec.failed': case 'turn.failed': case 'error': {
       // Provider errors (quota/rate limit included) feed the error taxonomy through error_text.
       const msg = String(o.error?.message ?? o.message ?? o.error ?? o.type);
@@ -32,7 +37,10 @@ function parse(o) {
     }
     case 'item.completed': {
       const it = o.item || {};
-      if (typeof it.text === 'string' && /message|text/i.test(it.type || '')) return { events: [{ type: 'text', text: it.text }], session_id: sid };
+      // 0.6.5: { type:'agent_message', content:'<text>' } (content may also be [{ type:'text', text }]); older: item.text.
+      const txt = typeof it.text === 'string' ? it.text : typeof it.content === 'string' ? it.content
+        : Array.isArray(it.content) ? it.content.map((c) => (typeof c === 'string' ? c : typeof c?.text === 'string' ? c.text : '')).join('') || null : null;
+      if (txt !== null && /message|text/i.test(it.type || '')) return { events: [{ type: 'text', text: txt }], session_id: sid };
       if (/tool|command|file/i.test(it.type || '')) return { events: [{ type: 'tool_use', name: it.type }], session_id: sid };
       return { events: [{ type: 'event', kind: `item.${it.type ?? 'unknown'}` }], session_id: sid };
     }

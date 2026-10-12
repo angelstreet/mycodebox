@@ -250,7 +250,7 @@ export function createGoalLoop({
     if (!v) throw coded('E_NOT_FOUND', `task ${id} not found`);
     if (v.store_error) return { id, v, broken: true };   // a partial log is not the history: never decide from it
     const events = await readEvents(id);
-    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, best_failing: null, tried: [], exclude: [], stalls: 0, claim: null,
+    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, best_failing: null, tried: [], exclude: [], stalls: 0, stall_run: null, claim: null,
       feedback: null, wait: null, approval: null, provider: null, worktree: null, flaky: [], interpretation: null, plan: null,
       verify_only: false, integration: null, integration_unknown: 0, review_unavailable: 0,
       review_fail: { signature: null, count: 0, changes: 0, excluded: [], strict: false } };
@@ -507,7 +507,10 @@ export function createGoalLoop({
     const stale = progress ? 0 : cp.stale + 1;
     const changes = progress ? 0 : cp.changes;
     const tried = progress ? [] : cp.tried;
-    const stalls = progress ? 0 : cp.stalls;
+    // The first measurement is not "new" evidence (best starts at 0): it never resets the stalled-run count.
+    const measured = cp.best > 0 || cp.best_failing != null;
+    const stalls = progress && measured ? 0 : cp.stalls;
+    const stalledRun = !!devStart && cp.stall_run === devStart.payload.run_id;
     const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, stalls, claim: null, feedback, provider: null, verify_only: false, review_unavailable: 0 };
     const evidence = [`signature ${signature}`, `same signature ${streak.count}x in a row`, `iterations without new passing evidence: ${stale} (limit ${stagnation})`,
       `strategy changes without progress: ${changes}`, `failing tests ${failing ?? 'n/a'} (best ${cp.best_failing ?? 'n/a'})${progress ? ': progress' : ''}`,
@@ -517,11 +520,11 @@ export function createGoalLoop({
     // stalled runs without new passing evidence, instead of the §4 strategy-change rounds. Not an attempt cap: a run
     // that makes progress resets it, and only runs killed by their own time limit count.
     const stallLimit = runLimit?.stall_runs_to_no_progress ?? null;
-    if (stall && !progress && stallLimit && stalls >= stallLimit) {
+    if (stalledRun && !(progress && measured) && stallLimit && stalls >= stallLimit) {
       const entry = devStart.payload.entry;
       let rung = null;
       try { const r = await routeFor(ctx, p, { exclude: cp.exclude }); rung = r.escalation?.eligible ? nextRung(r, entry, { tried: cp.exclude }) : null; } catch { rung = null; }
-      const diagnosis = `${stalls} developer run(s) on ${entry} stopped at the run time limit (${stallMs} ms) without new passing evidence (stall_runs_to_no_progress ${stallLimit} for ${entry}, class ${workOf(ctx)}); last failure ${signature}.`;
+      const diagnosis = `${stalls} stalled developer run(s) on ${entry} (stopped at the run time limit of ${stallMs} ms, changed nothing, or claimed the requirements impossible) without new passing evidence (stall_runs_to_no_progress ${stallLimit} for ${entry}, class ${workOf(ctx)}); last failure ${signature}.`;
       const next_action = `check whether the goal is achievable as stated; then resume${rung ? ` (the next rung is ${rung.id})` : ''}, pin a stronger model, split the task or raise its run_limits`;
       return decide(ctx, decision('no_progress', 'Stalled runs on this model: keep iterating?', [
         alt('suspend in waiting with a diagnosis', 'a cheap model that keeps running into its time limit is not converging; no further spend', 'goal not reached yet'),
@@ -934,7 +937,7 @@ export function createGoalLoop({
           alt('stop now', 'fast', 'a developer could give up on any hard task')],
         'check the run as usual; on failing checks ask an independent reviewer whether the requirements can be met', { evidence: [`run ${run_id}`, `claim: ${claim.diagnosis.slice(0, 300)}`],
           expected_effect: 'feasibility review if the required checks fail', rationale: 'OWNER_DECISIONS §12.2: stop fast on impossible requirements, but only on independent judgement and failing checks.' }),
-        { claim: { run_id, diagnosis: claim.diagnosis } });
+        { claim: { run_id, diagnosis: claim.diagnosis }, ...(limits.stall_runs_to_no_progress ? { stalls: ctx.cp.stalls + 1, stall_run: run_id } : {}) });
       }
       await store.recordEffect(ctx.id, { effect_id, phase: 'confirmed' });
       ctx = await load(ctx.id);
@@ -953,6 +956,8 @@ export function createGoalLoop({
     // no-progress rule (same signature, no new passing evidence) instead of a timed backoff (OWNER_DECISIONS §4).
     const stalled = failed?.payload.error?.class === 'timeout' && billedRun(ctx, run_id, 'timeout');
     if (failed && !stalled) return onRunError(ctx, failed.payload.error, p, run_id);
+    // One stall per run at most (D-024): a timeout, an impossibility claim or a run that changed nothing.
+    let counted = ctx.cp.stall_run === run_id;
     if (stalled) {
       await note(ctx, `stall-${run_id}`, decision('run_timeout', `Developer run ${run_id} hit the run timeout: what counts?`, [
         alt('check what the run left, as an attempt', 'a stall without new passing evidence counts toward the no-progress rule', 'partial work is checked'),
@@ -960,7 +965,8 @@ export function createGoalLoop({
       'check what the run left, as an attempt', { evidence: [`run ${run_id}: timeout after ${lastDevStart(ctx)?.payload.limits?.timeout_ms ?? runTimeoutMs} ms`, `entry ${s.entry}`, `stall signature ${stallSignature(s.entry)}`],
         expected_effect: 'checks run on the committed SHA; no new passing evidence counts as no progress',
         rationale: 'A billed run timeout is an attempt, not a provider outage (quota and unavailability still back off). It counts at once as a stall (D-024).', policy_ref: policyRef(p) }),
-      { stalls: ctx.cp.stalls + 1 });
+      counted ? {} : { stalls: ctx.cp.stalls + 1, stall_run: run_id });
+      counted = true;
     }
     // Commit what the developer produced so the evidence names an exact SHA.
     const lw = await ensureLease(ctx, 'repair');   // the run's files stay in the worktree for the next run
@@ -968,6 +974,16 @@ export function createGoalLoop({
     const bw = await branchGate(ctx, 'repair');
     if (bw) return bw;
     const head = await commitAll(ctx.id, wt.path, `v2task ${ctx.id}: ${run_id}`);
+    // Short leash (stall_runs_to_no_progress): a run that left the head where it was produced nothing to check: a stall.
+    const runLimits = lastDevStart(ctx)?.payload.run_id === run_id ? lastDevStart(ctx).payload.limits : null;
+    if (!counted && runLimits?.stall_runs_to_no_progress && head === (ctx.head ?? ctx.v.base_sha)) {
+      await note(ctx, `nochange-${run_id}`, decision('run_no_change', `Developer run ${run_id} changed nothing: what counts?`, [
+        alt('count it as a stalled run', 'the checks see the same SHA: no new evidence is possible', 'the model may have been investigating'),
+        alt('ignore it', 'no penalty', 'a cheap model can loop on no-op runs without a verdict')], 'count it as a stalled run', {
+        evidence: [`run ${run_id}`, `head unchanged ${short(head)}`, `entry ${s.entry}`, `stall_runs_to_no_progress ${runLimits.stall_runs_to_no_progress}`],
+        expected_effect: 'checks run on the same SHA; the stalled-run limit applies', rationale: 'Run limits (D-024): a run that changes nothing on a short leash is a stall.', policy_ref: policyRef(p) }),
+      { stalls: ctx.cp.stalls + 1, stall_run: run_id });
+    }
     const changed = (await g(wt.path, ['diff', '--name-only', `${ctx.v.base_sha}`, head])).split('\n').filter(Boolean);
     if (changed.length) {
       const r = allowed(p.policy, ctx.v, { class: 'edit', paths: changed }, grantsOf(ctx), actionKey({ class: 'edit', paths: changed }, `edit:${head}:`));
@@ -1075,9 +1091,9 @@ export function createGoalLoop({
     const feasDone = ctx.v.decisions.filter((d) => d.loop && d.kind === 'feasibility_review');
     if (feasDone.some((d) => d.evidence.includes(`sha ${head}`))) return null;
     const claimed = ctx.cp.claim?.run_id === dev.payload.run_id;
-    const stalled = !!lastDevTimeout(ctx) && !!dev.payload.limits?.stall_runs_to_no_progress && !feasDone.length;
+    const stalled = ctx.cp.stall_run === dev.payload.run_id && !!dev.payload.limits?.stall_runs_to_no_progress && !feasDone.length;
     if (!claimed && !stalled) return null;
-    const why = claimed ? `developer run ${dev.payload.run_id} claims the requirements are impossible` : `developer run ${dev.payload.run_id} stalled at its run time limit`;
+    const why = claimed ? `developer run ${dev.payload.run_id} claims the requirements are impossible` : `developer run ${dev.payload.run_id} stalled (time limit or no change)`;
     const devEntries = devEntriesOf(ctx);
     const skip = async (reason) => {
       await note(ctx, `feas-${short(head)}`, decision('feasibility_review', 'Ask an independent reviewer whether the requirements can be met?', [
@@ -1294,7 +1310,7 @@ export function createGoalLoop({
       if (!resumed && !changed) return result(ctx, null, `waiting (${w.reason}): ${w.next_action || 'until inputs change'}`, { idle: true });
       return decide(ctx, decision('resume', 'Inputs changed after a wait: resume?', [alt('resume with a replan', 'new inputs can change the outcome', 'more spend'), alt('stay waiting', 'no spend', 'ignores the new input')],
         'resume with a replan', { evidence: [resumed ? 'owner resumed' : 'project policy changed'], expected_effect: 'replan from scratch', rationale: 'Counters reset on new inputs (owner resume or policy change).' }),
-      { patch: { changes: 0, tried: [], stale: 0, stalls: 0, claim: null, streak: { signature: null, count: 0 }, exclude: [], ...(w.reason === 'lease_held' && resumed ? { lease_ack: true } : {}) },
+      { patch: { changes: 0, tried: [], stale: 0, stalls: 0, stall_run: null, claim: null, streak: { signature: null, count: 0 }, exclude: [], ...(w.reason === 'lease_held' && resumed ? { lease_ack: true } : {}) },
         to: w.resume_to || 'replan', reason: 'inputs changed' });
     }
     if (w.reason === 'infra' && admission?.isPaused?.()) {
