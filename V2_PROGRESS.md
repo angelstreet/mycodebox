@@ -7,9 +7,22 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 2 (OWNER_DECISIONS §10) delivered; see "Round 2" below. Next: owner review of PR #1. SHAs quoted before round 2 in this file, in
+Round 3 (OWNER_DECISIONS §11) in progress; see "Round 3" below. SHAs quoted before round 2 in this file, in
 V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
 scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
+
+## Round 3
+
+Base: `origin/v2/integration` c23ebe8. Owner spec: OWNER_DECISIONS §11.
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | IN PROGRESS (wt r3-wire) | |
+| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver + coordinator | TODO (after R3-1) | |
+| R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | IN PROGRESS (wt r3-noprog) | |
+| R3-3b | Drop stale "main's git history" owner action | coordinator | DONE | history was rewritten |
+| R3-3c | Docs: enable / roll back V2 on the live install | coordinator | TODO | |
+| R3-4 | Gates on final SHA, V2_VERIFICATION, PR round-3 section, DELIVERED | coordinator | TODO | |
 
 ## Round 2
 
