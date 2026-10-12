@@ -141,6 +141,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `GHOSTY_V2_CONCURRENCY` | `1` | V2 only: tasks stepped at the same time (1-8) |
 | `GHOSTY_V2_PATH_DIRS` | unset | V2 only: `:`-separated absolute directories put first on PATH for the runtime CLIs (e.g. where `opencode` lives). MiniMax also honours `MCODE_NODE_DIR` |
 | `GHOSTY_V2_CLAUDE_RUN_USD` | `1` | V2 only: `--max-budget-usd` of one Claude run, lowered to the task's remaining `max_usd` cap |
+| `GHOSTY_V2_RUN_TIMEOUT_MS` | goal loop default (30 min) | V2 only: wall clock of one agent run, integer ms; the HTTP benchmark driver sets it so stalled agents fit the no-progress rule |
 | `GHOSTY_V2_PUSH_REMOTE` | unset | V2 only: remote name (e.g. `origin`) the integration hook may push the task's own `v2task/<id>` branch to; unset = no push (recorded in the decision, not an error). Nothing else is ever pushed |
 | `GHOSTY_V2_REGISTRY` | `orchestration/models.json` | V2 only: absolute path of another model registry file |
 | `GHOSTY_V2_TEST_FAKE_ADAPTER` | unset | TEST ONLY (`test/v2-server-wiring.test.js`): a JSON file of fake-adapter scripts; the scripted fake becomes the only runtime. Never set it on a live install |
