@@ -73,7 +73,7 @@ export const PROFILES = {
   codex: { runtime: 'codex', module: 'codex.js', model: 'default', provider: 'openai', tier: 'standard', efforts: ['low'], effort: 'low', passModel: false, est_usd: 0.30 },
   minimax: { runtime: 'minimax', module: 'minimax.js', model: 'default', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: false, est_usd: 0, billing: 'subscription' },
   'minimax:m3': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: true, est_usd: 0, billing: 'subscription' },
-  'minimax:m3.1-flash': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3.1-Flash-Preview', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: true, est_usd: 0, billing: 'subscription' },
+  'minimax:m3.1-flash': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3.1-Flash-Preview', provider: 'minimax', tier: 'light', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'low', passModel: true, est_usd: 0, billing: 'subscription' },
   opencode: { runtime: 'opencode', module: 'opencode.js', model: 'opencode/big-pickle', provider: 'opencode', tier: 'standard', efforts: [], effort: null, passModel: true, est_usd: FREE_EST_USD, free: true, pathDirs: [LOCAL_BIN] },
 };
 export const DEFAULT_REVIEWERS = { 'claude:haiku': 'codex', 'claude:sonnet': 'codex', codex: 'claude:sonnet', minimax: 'claude:haiku', 'minimax:m3': 'claude:haiku', 'minimax:m3.1-flash': 'claude:haiku', opencode: 'claude:haiku' };

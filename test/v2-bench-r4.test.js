@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runBench, parseArgs, planRuns, profileFor, spendOfRecords, recordBilling, createSuiteLedger, sameModel, entryOf, DEFAULT_REVIEWERS, summarize } from '../scripts/v2-bench.js';
-import { spendOf } from '../scripts/v2-bench-http.js';
+import { spendOf, registryDoc } from '../scripts/v2-bench-http.js';
 import { buildScorecard, billingOf, validateManifest, toolScore, BENCH_SCHEMA } from '../orchestration/scorecard.js';
 import { createTaskStore } from '../orchestration/store.js';
 import { scorecardOf, markdownReport, readStoreLogs } from '../scripts/v2-score.js';
@@ -40,6 +40,10 @@ test('specs: minimax:m3 and minimax:m3.1-flash are distinct subscription models,
   assert.equal(m3.model, 'MiniMax-M3');
   assert.equal(fl.model, 'MiniMax-M3.1-Flash-Preview');
   for (const p of [m3, fl]) { assert.equal(p.runtime, 'minimax'); assert.equal(p.billing, 'subscription'); assert.equal(p.passModel, true); assert.equal(p.est_usd, 0); }
+  assert.deepEqual(fl.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(fl.effort, 'low');
+  assert.deepEqual([m3.efforts, m3.effort], [[], null]);
+  assert.deepEqual(registryDoc(new Map([[entryOf(fl), fl]])).models[0].efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(profileFor('claude:haiku').billing, 'per_token');
   assert.equal(sameModel(m3, fl), false);
   assert.equal(entryOf(fl), 'minimax:MiniMax-M3.1-Flash-Preview');
