@@ -183,16 +183,16 @@ async function main() {
         // keyboard focus order: Tab from the sheet through the controls, DOM order, visible focus ring
         await page.evaluate(() => document.querySelector('.sheet.tasks [data-tk-new]').focus());
         const order = [];
-        for (let i = 0; i < 12; i++) {
-          order.push(await page.evaluate(() => { const e = document.activeElement; const cs = getComputedStyle(e); return { tag: e.tagName, key: e.dataset.tkOpen || e.dataset.tkNew !== undefined && 'new' || e.dataset.tkRefresh !== undefined && 'refresh' || e.dataset.a || e.textContent.trim().slice(0, 20), inSheet: !!e.closest('.sheet.tasks'), ring: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0 }; }));
+        for (let i = 0; i < 14; i++) {
+          order.push(await page.evaluate(() => { const e = document.activeElement; const cs = getComputedStyle(e); return { tag: e.tagName, key: e.dataset.tkOpen || e.dataset.tkNew !== undefined && 'new' || e.dataset.tkRefresh !== undefined && 'refresh' || e.dataset.tkScore !== undefined && 'score' || e.dataset.a || e.textContent.trim().slice(0, 20), inSheet: !!e.closest('.sheet.tasks'), ring: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0 }; }));
           await page.keyboard.press('Tab');
         }
         const keys = order.map((o) => o.key);
         const domRows = rows.map((r) => r.id);
-        const expected = ['new', 'refresh', 't-owner' /* the approval queue comes first */, ...domRows, 'close'];
-        check(`${label}: Tab order is New, Refresh, the approval queue, rows in list order, then close`, JSON.stringify(keys.slice(0, expected.length)) === JSON.stringify(expected), keys.join(','));
+        const expected = ['new', 'refresh', 'score', 't-owner' /* the approval queue comes first */, ...domRows, 'close'];
+        check(`${label}: Tab order is New, Refresh, Scorecard, the approval queue, rows in list order, then close`, JSON.stringify(keys.slice(0, expected.length)) === JSON.stringify(expected), keys.join(','));
         check(`${label}: Tab is trapped in the sheet (after close it wraps back to New task)`, keys[expected.length] === 'new', keys[expected.length]);
-        check(`${label}: focused controls sit in the sheet and show a focus ring`, order.slice(1, 12).every((o) => o.inSheet && o.ring), JSON.stringify(order.slice(1, 12).filter((o) => !(o.inSheet && o.ring)).slice(0, 2)));   // [0] was focused by script, which is not :focus-visible
+        check(`${label}: focused controls sit in the sheet and show a focus ring`, order.slice(1, 14).every((o) => o.inSheet && o.ring), JSON.stringify(order.slice(1, 14).filter((o) => !(o.inSheet && o.ring)).slice(0, 2)));   // [0] was focused by script, which is not :focus-visible
 
         const queue = await page.$$eval('.sheet.tasks .tk-queue .tk-row', (els) => els.map((e) => e.dataset.tkOpen));
         const queueFirst = await page.evaluate(() => { const q = document.querySelector('.sheet.tasks .tk-queue'), r = document.querySelector('.sheet.tasks .tk-row:not([data-tk-queue])'); return !!q && !!r && !!(q.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING); });
