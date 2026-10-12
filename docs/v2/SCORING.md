@@ -257,8 +257,18 @@ Confirmation re-runs on the repaired code: rename-callers done for codex, minima
 by codex, the case that failed before). MiniMax on impossible-contradiction remains
 unstable: after the assert defense it no longer cheats, but it keeps working instead of reporting no progress: one
 re-run ended `waiting` after a timeout backoff (481 s), another was cancelled at the 15-minute agent timeout (1693 s,
-one repair). Both are safe stops (never accepted) but neither is the expected `waiting_no_progress`: this is model
-behaviour on an unsolvable task, not a harness defect, and it is left open rather than spending more of the budget.
+one repair). Both are safe stops (never accepted) but neither is the expected `waiting_no_progress`.
+
+Round 3 diagnosis: the cause was ours, in two places. (1) The goal loop treated a developer run killed by its own run
+timeout (class `timeout`) like a provider rate limit: router fallback, timed backoff (30 s, 60 s, then a model switch),
+no checks, so the stall never counted toward the no-progress rule; the bench then stopped at that first timed wait and
+recorded `waiting` (the 481 s run: one 8-minute run, then `timeout: backoff 1/2`). (2) The bench's agent timeout did not
+fit the no-progress rule inside the wall clock: the rule needs about five developer runs (two identical failures, a
+replan, two more, plus a first failure that usually differs), but with 14-minute runs only two fit in 20 minutes (the
+1693 s run). Fix: a billed run timeout is now an attempt (its changes are committed and checked, the next prompt says it
+timed out, the failures feed the rule) while quota and unavailability keep their backoff; mcode's own `--timeout` is
+set 30 s past the controller's run timer so a stall is always classified `timeout`, never `crash`; the bench's agent timeout
+defaults to 3 minutes and the bench refuses an agent timeout that cannot fit five runs in the wall clock.
 
 Spend (USD; "estimated" is what the cap was enforced on for runs whose CLI reports no cost, never measured spend):
 

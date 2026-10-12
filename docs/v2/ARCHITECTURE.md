@@ -232,7 +232,9 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    (replan, different model, harness change). New passing evidence = more required checks pass, or fewer failing tests
    inside them. `strategy_changes_without_progress` changes without progress -> `waiting` (`until_ms: null`,
    diagnosis, next action). Billed identical retries (developer runtime errors, reviewer runs without a usable verdict)
-   count the same way; only unbilled waits back off on a timer. One classifier for developer and reviewer runs:
+   count the same way; only unbilled waits back off on a timer. A developer run killed by the run timeout (class `timeout`, billed) is an attempt, not a
+   provider error: its changes are committed and checked like any run, the next prompt says it timed out, and the check
+   failures feed the rule (round 3); quota and unavailability keep their timed backoff. One classifier for developer and reviewer runs:
    billed = measured spend, an incomplete usage record, or a run that started and failed with unknown usage (unknown
    is not zero); unbilled = refused before work (`rate_limit`, `unavailable`, `auth`) or never started. Every review
    attempt has its own run id (`…-a<n>`), so each one is in the ledger and counts against a cap. A run that started
