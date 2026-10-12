@@ -214,8 +214,9 @@ const num = (v) => (v === null || v === undefined ? 'unknown' : String(v));
 const usdCell = (m) => {
   const meas = m.usd.measured, est = m.usd.estimated;
   const priced = `$${meas.toFixed(4)}${est > 0 ? ` (+ est. $${est.toFixed(4)})` : ''}`;
-  if (m.cost_basis === 'subscription') return meas > 0 ? `subscription (+ $${meas.toFixed(4)} per-token reviews)` : 'subscription';
-  return m.cost_basis === 'unknown' ? `unknown (measured $${meas.toFixed(4)})` : priced;
+  if (m.cost_basis === 'subscription') return meas > 0 || est > 0 ? `subscription + ${priced} per-token` : 'subscription';
+  if (m.cost_basis === 'mixed') return `${priced} + subscription`;
+  return m.cost_basis === 'unknown' ? `unknown (measured $${meas.toFixed(4)}${est > 0 ? `, est. $${est.toFixed(4)}` : ''})` : priced;
 };
 const mdTable = (head, rows) => [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`, ...rows.map((r) => `| ${r.join(' | ')} |`)].join('\n');
 function mdRows(list, label) {
@@ -235,11 +236,11 @@ export function renderMarkdown(sc) {
     for (const r of sc.not_run) { const k = `${r.runtime}:${r.model} ${r.outcome}`; by[k] = (by[k] || 0) + 1; }
     out.push('', '## Not run', '', ...Object.entries(by).map(([k, n]) => `- ${k}: ${n}`));
   }
-  const waits = sc.model_metrics.filter((m) => Object.keys(m.provider_waits.by_entry).length);
-  if (waits.length) out.push('', '## Provider waits (rate limit / quota)', '', ...waits.map((m) => `- ${m.key}: ${Object.entries(m.provider_waits.by_entry).map(([k, n]) => `${k} ${n}`).join(', ')}`));
+  const waits = sc.model_metrics.filter((m) => Object.keys(m.provider_waits.by_entry).length || m.provider_waits.unattributed);
+  if (waits.length) out.push('', '## Provider waits (rate limit / quota)', '', ...waits.map((m) => `- ${m.key}: ${[...Object.entries(m.provider_waits.by_entry).map(([k, n]) => `${k} ${n}`), ...(m.provider_waits.unattributed ? [`unattributed quota waits ${m.provider_waits.unattributed}`] : [])].join(', ')}`));
   out.push('', '## Notes', '', '- `subscription`: flat plan, no marginal USD (billing field on the usage record; runtime minimax when the field is absent). Never $0 measured.',
     '- USD sums per-token usage records (developer and reviewer) as reported by the provider; `est.` is the bench estimate for unpriced per-token records, not measured spend.',
-    '- Time to stop: wall time from task creation to `waiting` with reason no_progress.', ...sc.caveats.map((c) => `- ${c}`));
+    '- Time to stop: wall time from task creation to `waiting` with reason no_progress, over runs whose expected outcome is waiting_no_progress (the impossible task) only.', ...sc.caveats.map((c) => `- ${c}`));
   return `${out.join('\n')}\n`;
 }
 // Manifest file -> markdown, scoring the store the manifest points at (store_dir relative to the manifest, or `store`).

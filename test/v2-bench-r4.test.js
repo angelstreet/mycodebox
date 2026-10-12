@@ -140,7 +140,8 @@ test('scorecard: subscription cost basis, tokens, wall time, reps, provider wait
   await done(s, 'h2', HK, { usd: 0.05, rework: 2 });
   await stuck(s, 'mi1', MM, { waits: 2, quota: 1 });
   await stuck(s, 'hi1', HK, { usd: 0.02 });
-  const runs = [['m1', MM, 'off-by-one', 1], ['m2', MM, 'off-by-one', 2], ['h1', HK, 'off-by-one', 1], ['h2', HK, 'off-by-one', 2], ['mi1', MM, 'impossible-contradiction', 1], ['hi1', HK, 'impossible-contradiction', 1]]
+  await stuck(s, 'ms1', MM);   // a stalled run of a task that is expected to be done
+  const runs = [['m1', MM, 'off-by-one', 1], ['m2', MM, 'off-by-one', 2], ['h1', HK, 'off-by-one', 1], ['h2', HK, 'off-by-one', 2], ['mi1', MM, 'impossible-contradiction', 1], ['hi1', HK, 'impossible-contradiction', 1], ['ms1', MM, 'off-by-one', 3]]
     .map(([task_id, e, bench_task_id, rep]) => ({ task_id, bench_task_id, rep, task_class: 'x', expected_outcome: bench_task_id === 'off-by-one' ? 'done' : 'waiting_no_progress', runtime: e.split(':')[0], model: e.split(':').slice(1).join(':') }));
   const mf = manifestFor(runs);
   assert.equal(validateManifest(mf).ok, true);
@@ -149,23 +150,26 @@ test('scorecard: subscription cost basis, tokens, wall time, reps, provider wait
   const mm = sc.model_metrics.find((m) => m.key === MM), hk = sc.model_metrics.find((m) => m.key === HK);
   assert.equal(mm.cost_basis, 'subscription');
   assert.equal(hk.cost_basis, 'measured');
-  assert.deepEqual([mm.runs, mm.reps, mm.verified, mm.first_pass], [3, 2, 2, 1]);
+  assert.deepEqual([mm.runs, mm.reps, mm.verified, mm.first_pass], [4, 3, 2, 1]);
   assert.deepEqual([hk.runs, hk.verified, hk.first_pass], [3, 2, 1]);
-  assert.equal(mm.tokens.developer_input, 100 + 300 + 1000);
-  assert.equal(mm.tokens.developer_output, 20 + 40 + 200);
+  assert.equal(mm.tokens.developer_input, 100 + 300 + 1000 + 1000);
+  assert.equal(mm.tokens.developer_output, 20 + 40 + 200 + 200);
   assert.equal(mm.rework.rounds, 1);
   assert.equal(hk.rework.rounds, 2);
   assert.equal(mm.usd.measured, 0.02, 'only the per-token reviews of MiniMax tasks: two accepted runs x 0.01 (subscription adds nothing)');
   assert.ok(Math.abs(hk.usd.measured - (0.03 + 0.05 + 0.02 + 0.02)) < 1e-9);
   assert.equal(mm.provider_waits.total, 3);
-  assert.deepEqual(mm.provider_waits.by_entry, { [MM]: 3 });
+  assert.deepEqual(mm.provider_waits.by_entry, { [MM]: 2 }, 'rate-limit events name their entry');
+  assert.equal(mm.provider_waits.unattributed, 1, 'a quota wait without an entry is counted under the task, not the developer');
   assert.equal(hk.provider_waits.total, 0);
-  assert.equal(mm.time_to_stop_no_progress_ms.n, 1);
+  assert.equal(mm.time_to_stop_no_progress_ms.n, 1, 'only the impossible task counts, not the stalled off-by-one run');
+  assert.equal(mm.any_no_progress_stop_ms.n, 2);
   assert.ok(mm.time_to_stop_no_progress_ms.mean > 0);
   assert.equal(hk.time_to_stop_no_progress_ms.n, 1);
-  assert.ok(mm.wall_ms.n === 3 && mm.wall_ms.min <= mm.wall_ms.mean && mm.wall_ms.mean <= mm.wall_ms.max);
+  assert.ok(mm.wall_ms.n === 4 && mm.wall_ms.min <= mm.wall_ms.mean && mm.wall_ms.mean <= mm.wall_ms.max);
   const t = Object.fromEntries(sc.task_metrics.map((m) => [m.key, m]));
-  assert.equal(t['off-by-one'].runs, 4);
+  assert.equal(t['off-by-one'].runs, 5);
+  assert.equal(t['off-by-one'].cost_basis, 'mixed');
   assert.equal(t['impossible-contradiction'].time_to_stop_no_progress_ms.n, 2);
   assert.equal(t['impossible-contradiction'].verified, 0);
   assert.equal(sc.task_model_metrics.length, 4);
@@ -185,6 +189,8 @@ test('scorecard: subscription cost basis, tokens, wall time, reps, provider wait
   assert.ok(row.includes('| subscription |'), row);
   assert.ok(!/\| \$0\.0000 \|/.test(row), 'a subscription model is never shown as $0 measured');
   assert.ok(md.includes('off-by-one | ' + MM));
+  assert.match(md.split('\n').find((l) => l.startsWith('| off-by-one |')), /\+ subscription \|/, 'a mixed per-task row shows subscription');
+  assert.match(md, /unattributed quota waits 1/);
   assert.ok(md.includes(`| ${HK} |`));
   // the CLI prints the same
   const cli = spawnSync(process.execPath, ['scripts/v2-score.js', '--markdown', '--suite', mp, '--store', dir], { cwd: ROOT, encoding: 'utf8' });
@@ -215,4 +221,19 @@ test('billingOf: field wins, minimax falls back to subscription, a priced record
   assert.equal(billingOf({ runtime: 'claude', usd: 0.1 }), 'per_token');
   assert.equal(billingOf({ runtime: 'codex', usd: null }), 'unknown');
   assert.equal(billingOf({ runtime: 'claude', billing: 'bogus', usd: null }), 'unknown');
+});
+
+test('scorecard: a reviewer estimate stays visible next to a subscription developer', async () => {
+  const dir = path.join(TMP, 'store-c');
+  const s = storeIn(dir);
+  await done(s, 'e1', MM);
+  const mf = manifestFor([{ task_id: 'e1', bench_task_id: 'off-by-one', rep: 1, task_class: 'x', expected_outcome: 'done', runtime: 'minimax', model: 'MiniMax-M3', usd_estimated: 0.3, unknown_cost_records: 1 }]);
+  const { sc } = scorecardOf(dir, { manifest: mf });
+  assert.equal(sc.runs[0].cost_basis, 'subscription');
+  assert.equal(sc.runs[0].usd_estimated, 0.3);
+  const m = sc.model_metrics[0];
+  assert.equal(m.usd.estimated, 0.3);
+  const mp = path.join(TMP, 'm-c.json');
+  fs.writeFileSync(mp, JSON.stringify(mf));
+  assert.match(markdownReport(mp, { store: dir }), /subscription \+ \$0\.0100 \(\+ est\. \$0\.3000\) per-token/);
 });

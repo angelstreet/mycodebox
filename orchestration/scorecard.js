@@ -114,7 +114,12 @@ export function foldRun(events, { httpSuite = false } = {}) {
       if (p.to === 'accepted') f.completed_at = e.timestamp;
       if (REWORK_STATES.includes(p.to)) f.rework += 1;
       if (STOP_STATUSES.includes(p.to)) f.stopped_at = e.timestamp;
-      if (p.to === 'waiting' && /quota/i.test(String(p.reason ?? ''))) f.waits.quota += 1;   // a quota wait; the entry is the task's developer (runRecord)
+      // A quota wait carries no entry today (the gate may concern the developer or the reviewer): credited to an entry only when
+      // the event names one, else counted under the task (provider_waits.unattributed).
+      if (p.to === 'waiting' && /quota/i.test(String(p.reason ?? ''))) {
+        f.waits.quota += 1;
+        if (typeof p.entry === 'string') f.waits.by_entry[p.entry] = (f.waits.by_entry[p.entry] || 0) + 1; else f.waits.unattributed = (f.waits.unattributed || 0) + 1;
+      }
     } else if (e.kind === 'model.rate_limited') {
       f.waits.rate_limited += 1;
       if (typeof p.entry === 'string') f.waits.by_entry[p.entry] = (f.waits.by_entry[p.entry] || 0) + 1;
@@ -233,7 +238,6 @@ function runRecord(f, run, regression) {
   const stopMs = f.stopped_at ? Date.parse(f.stopped_at) - Date.parse(f.created_at) : null;
   const stop_ms = STOP_STATUSES.includes(f.status) && Number.isFinite(stopMs) && stopMs >= 0 ? stopMs : null;
   const waitsByEntry = { ...f.waits.by_entry };
-  if (f.waits.quota) waitsByEntry[devEntry] = (waitsByEntry[devEntry] || 0) + f.waits.quota;
   const cost_basis = costBasisOf(devRecords, run);
   const subOnlyUnknown = cost.usd === null && f.usage.some((u) => billingOf(u) === 'subscription') && perToken.every((u) => u.usd !== null && !u.incomplete);
   return {
@@ -245,9 +249,10 @@ function runRecord(f, run, regression) {
     cost_basis,
     // USD of the per-token records only (measured), and the bench's estimate for unpriced per-token records when the manifest has it.
     usd_measured: round4(sum(perToken.filter((u) => u.usd !== null && !u.incomplete).map((u) => u.usd))),
-    usd_estimated: cost_basis === 'subscription' ? 0 : round4(Number(run?.usd_estimated) || 0),
+    usd_estimated: round4(Number(run?.usd_estimated) || 0),   // kept for subscription developers too: a reviewer's unpriced run is still estimated
+    expected_outcome: run?.expected_outcome ?? null,
     tokens: { input: nums(f.usage, 'input_tokens'), output: nums(f.usage, 'output_tokens'), developer_input: nums(devRecords, 'input_tokens'), developer_output: nums(devRecords, 'output_tokens') },
-    provider_waits: { total: f.waits.rate_limited + f.waits.quota, rate_limited: f.waits.rate_limited, quota: f.waits.quota, by_entry: waitsByEntry },
+    provider_waits: { total: f.waits.rate_limited + f.waits.quota, rate_limited: f.waits.rate_limited, quota: f.waits.quota, unattributed: f.waits.unattributed || 0, by_entry: waitsByEntry },
     latency_ms: Number.isFinite(latency) && latency >= 0 ? latency : null,
     stop_ms,
     wall_ms: accepted ? (Number.isFinite(latency) && latency >= 0 ? latency : null) : stop_ms,
@@ -307,13 +312,16 @@ function aggregate(key, extra, runs, { defectsBy = null, facts = null } = {}) {
 // ---------- bench metrics (per model, per task, per task x model; repetitions pooled) ----------
 
 const stats = (xs) => (xs.length ? { n: xs.length, mean: Math.round(sum(xs) / xs.length), min: Math.min(...xs), max: Math.max(...xs) } : { n: 0, mean: null, min: null, max: null });
-const worstBasis = (bases) => (bases.includes('unknown') ? 'unknown' : bases.includes('estimated') ? 'estimated' : bases.includes('measured') ? 'measured' : bases.length ? 'subscription' : 'unknown');
+// One basis, or `mixed` when runs differ (e.g. measured and subscription): a per-task row never hides subscription spend.
+const worstBasis = (bases) => (bases.length === 0 ? 'unknown' : bases.length === 1 ? bases[0] : 'mixed');
 // Over ALL non-informational runs, not only settled ones: a run that stops in `waiting` (the impossible task) is a result here.
 function metricsOf(key, extra, rs) {
   const n = rs.length, verified = rs.filter((r) => r.verified).length, first = rs.filter((r) => r.first_pass).length;
   const bases = [...new Set(rs.map((r) => r.cost_basis))];
   const tokSum = (k) => (rs.some((r) => r.tokens[k] !== null) ? sum(rs.map((r) => r.tokens[k] ?? 0)) : null);
-  const stops = rs.filter((r) => r.status === 'waiting' && r.wait_reason === 'no_progress' && r.stop_ms !== null).map((r) => r.stop_ms);
+  const npStop = (r) => r.status === 'waiting' && r.wait_reason === 'no_progress' && r.stop_ms !== null;
+  const stops = rs.filter((r) => npStop(r) && r.expected_outcome === 'waiting_no_progress').map((r) => r.stop_ms);   // the impossible task only
+  const anyStops = rs.filter(npStop).map((r) => r.stop_ms);   // every no_progress stop, whatever the task expected
   const perRun = (k) => (n ? round4(sum(rs.map((r) => r[k])) / n) : null);
   const reps = new Set(rs.map((r) => r.rep).filter((x) => x != null));
   const byEntry = {};
@@ -326,8 +334,9 @@ function metricsOf(key, extra, rs) {
     // flagged by cost_basis, never shown as $0 measured. estimated is the bench's estimate for unpriced per-token records.
     usd: { measured: round4(sum(rs.map((r) => r.usd_measured))), estimated: round4(sum(rs.map((r) => r.usd_estimated))), per_run_mean: perRun('usd_measured') },
     cost_basis: worstBasis(bases), cost_bases: bases.sort(),
-    provider_waits: { total: sum(rs.map((r) => r.provider_waits.total)), by_entry: byEntry },
+    provider_waits: { total: sum(rs.map((r) => r.provider_waits.total)), unattributed: sum(rs.map((r) => r.provider_waits.unattributed)), by_entry: byEntry },
     time_to_stop_no_progress_ms: stats(stops),
+    any_no_progress_stop_ms: stats(anyStops),
     stopped_waiting: rs.filter((r) => r.status === 'waiting').length };
 }
 function metricGroups(runs, keyOf) {
