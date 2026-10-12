@@ -1,25 +1,27 @@
 # V2 verification
 
-**Status: round 2 delivered on `v2/integration`, draft PR #1. All local gates pass on the gated SHA. The V2 engine is not
-wired into `server.js` (by owner decision for this round); nothing here was deployed.**
+**Status: round 3 delivered on `v2/integration`, draft PR #1. The V2 engine is wired into `server.js` behind
+`GHOSTY_V2=1` (off by default). All local gates pass on the gated SHA. Nothing was deployed and V2 is not enabled on
+the live install.**
 
-Gated SHA: `ae9efa0` (`ae9efa0399c84c15e7be7dbc1db8e4372644aed6`), the last code change on the branch. The commits after it
-change documentation only (this file, `V2_PROGRESS.md`, `docs/v2/SCORING.md`, `docs/v2/ACCEPTANCE.md` and the generated
-`docs/v2/acceptance-results.json`); `git diff --stat ae9efa0..origin/v2/integration` lists them.
+Gated SHA: `37004b9` (`37004b9f2e393011567348422a9dba7f6fa8c32d`), the last code change on the branch. The commits after it change documentation only
+(`git diff --stat 37004b9..origin/v2/integration -- ':!*.md' ':!docs/'` is empty).
 
-## Gates on `ae9efa0`
+## Gates on `37004b9`
 
 | Gate | Command | Result |
 |---|---|---|
-| Unit and integration suite, Node 23.6.0 | `node --test --test-concurrency=4 test/*.test.js` in a clean detached worktree | **PASS** 1684/1684, exit 0 |
-| Same, Node 24.21.0 | same | **PASS** 1684/1684, exit 0 |
+| Unit and integration suite, Node 23.6.0 | `npm test` with a temporary `GHOSTY_STATE_DIR` | **PASS** 1716/1716, exit 0 |
+| Same, Node 24.21.0 | same | **PASS** 1716/1716, exit 0 |
 | Reporter plugin suite | `env -i PATH=… HOME LANG GHOSTY_STATE_DIR=$(mktemp -d) claude plugin test claude-plugin/ghosty-reporter` (Claude Code 2.1.296, mock tests) | **PASS** 25/25, exit 0 |
-| Acceptance matrix | `PLAYWRIGHT_CORE=<dir> node scripts/v2-acceptance.js` | **PASS** 54/54 rows (T01–T40, GL01–GL14), 1685/1685 tests, 134/134 test files; see [ACCEPTANCE.md](docs/v2/ACCEPTANCE.md) and [acceptance-results.json](docs/v2/acceptance-results.json) |
+| Acceptance matrix | `PLAYWRIGHT_CORE=<dir> node scripts/v2-acceptance.js` | **PASS** 54/54 rows (T01–T40, GL01–GL14), 1717/1717 tests, 138/138 test files (`dirty: true` in the results: only uncommitted documentation edits, this file, were in the tree); see [ACCEPTANCE.md](docs/v2/ACCEPTANCE.md) and [acceptance-results.json](docs/v2/acceptance-results.json) |
 | T20 browser check | `PLAYWRIGHT_CORE=<dir> node scripts/v2-ui-check.js` | **PASS** 39/39 (details below) |
-| Leak scan | `LEAK_SCAN_EXTRA=<private denylist> node scripts/leak-scan.js origin/main..HEAD`, plus a check that no commit tracks `node_modules` | **PASS**, clean on every commit pushed |
+| Leak scan | `LEAK_SCAN_EXTRA=<private denylist> node scripts/leak-scan.js origin/v2/integration..HEAD`, plus a whole-tree tailnet scan | **PASS**, clean on every commit pushed |
 
 Every suite ran with an environment limited to PATH, HOME and LANG and a fresh temporary `GHOSTY_STATE_DIR`; no test
-calls a real provider, a real remote, systemd or the live state directory.
+calls a real provider, a real remote, systemd or the live state directory. The wiring tests boot `server.js` in a
+child process on a disposable loopback port with temporary state and a private `tmux -L` socket
+(`test/v2-server-wiring.test.js`, `test/v2-r3-wire-verify.test.js`, `test/v2-bench-http.test.js`).
 
 ### T20 browser check
 
@@ -38,6 +40,18 @@ and state directory, and a loopback port. Covered at phone (390x844) and desktop
 
 Screenshots stay local.
 
+## Wiring (round 3)
+
+`GHOSTY_V2=1` starts one runtime in the server process (`orchestration/v2-runtime.js`): one store handle shared by the
+routes and the goal loop; controller lease, then `recover()` under it, then the scheduler; lease released on a clean
+shutdown. Execution: route, adapter, worktree under `GHOSTY_V2_WORK_ROOT`, checks, independent reviewer, then
+`accepted`, `waiting` or `awaiting_approval`. Repos limited to `GHOSTY_V2_REPOS` with their `.ai/project.json` (D-021).
+Approve, deny and cancel (and proposal approvals) go through the live controller. Integration pushes only
+`v2/task/<id>` (CAS, hooks off); merges and deploys stay SHA-bound approvals and are never executed by the server. System
+ops: read-only status, telemetry and incidents, plus request-only actions. With the flag unset nothing V2 loads and
+`/api/v2/*` answers 404. Claude runs are estimated at their `--max-budget-usd` bound (D-022). Enable and roll back:
+[INSTALL.md](docs/INSTALL.md#optional-v2-task-engine-opt-in-off-by-default).
+
 ## Live provider smoke (opt-in real calls)
 
 `scripts/v2-live-smoke.js`: disposable temporary repository, one trivial task, scripted fake reviewer. It proves each
@@ -52,14 +66,34 @@ adapter drives the real CLI end to end; it is not a quality benchmark.
 
 `mcode` 0.6.3 needs Node 24 first on PATH (`MCODE_NODE_DIR`); with Node 23.6 it crashes at start.
 
-## Bench dry run (real providers, USD 20 owner-authorized)
+## Benchmarks (real providers, USD 20 owner-authorized per round)
 
-Suite `mycodebox-v2-bench@1`: 10 tasks across five developers (claude haiku, claude sonnet, codex, minimax, opencode).
-Each developer is reviewed by a different model. Full run: 50 runs, 45 ended as expected, 4 not started on budget.
-Every settled model was 100% verified. Tool score: partial 78.1 (cost and latency unknown). Defects found by the run were fixed, reviewed
-and confirmed by re-runs. One finding stays open: MiniMax does not report no progress on the impossible task within
-the time cap. It is stopped safely (waiting or cancelled, never accepted). Spend: USD 5.15 measured plus 13.50 estimated, of the USD 20
-authorized. Results, defects and the spend ledger: [SCORING.md, Dry run](docs/v2/SCORING.md#dry-run-round-2-2026-10-12).
+Suite `mycodebox-v2-bench@1`: 10 tasks, five developers (claude haiku, claude sonnet, codex, minimax, opencode), each
+reviewed by a different model. Details, defects and spend ledgers: [SCORING.md](docs/v2/SCORING.md).
+
+| | Round 2, in-process dry run | Round 3, over the HTTP API of a wired server |
+|---|---|---|
+| Runs started / ended as expected | 46 / 45 (4 skipped on budget) | 50 / 49 |
+| Outcomes | 36 done, 6 awaiting_approval, 4 waiting_no_progress | 39 done, 6 awaiting_approval, 5 waiting_no_progress |
+| Verified, every model | 100% | 100% |
+| Tool score | partial 78.1 | partial 77.0 |
+| MiniMax, impossible task | no `waiting_no_progress` (backoff / cancel at cap) | `waiting_no_progress`, 728 s |
+| Spend, measured + estimated | 5.15 + 13.50 = 18.65 | 4.14 + 12.08 = 16.22 |
+
+Round 3's one unexpected run is claude haiku leaving a scratch file outside input-validation's path allowlist: the
+path gate held it at `awaiting_approval` (checks green). That is the intended policy stop, not an engine defect. The
+round-3 run used the driver at `217177c`, before its review fixes. It was rescored with the fixed scorer, which
+covers F1. F2, the server's Claude estimate, was not active in the run; a coordinator guard script held the
+round total under the cap.
+
+## Independent review of round 3
+
+| Item | Author | Reviewer | Verdict |
+|---|---|---|---|
+| Wiring: runtime, scheduler, lease and recover, integration, system ops, routes (merge `64b3f75`) | Opus | Fable, 2 rounds | APPROVE |
+| No progress on run timeouts; bench agent timeout (merge `0b56d12`) | Opus | Opus (separate context), 2 rounds | APPROVE |
+| HTTP bench driver, ledger `budget_auto`, server Claude estimate (merge `e0f7dd5`) | Sonnet | Opus, 3 rounds | APPROVE |
+| T20 positive control against a configured server (`37004b9`; the wiring made a create need the goal loop) | coordinator | Sonnet | APPROVE |
 
 ## Independent review of round 2
 
@@ -76,15 +110,15 @@ authorized. Results, defects and the spend ledger: [SCORING.md, Dry run](docs/v2
 
 ## Not covered
 
-- The V2 engine is not wired into `server.js`. Until it is, dashboard approve, deny and cancel answer 503 `E_NO_CONTROLLER`
-  (D-020), and proposal tasks cannot be approved from the dashboard.
-- No deployment, service restart, migration of the live state, or production health check. No remote CI.
+- No deployment, service restart, migration of the live state, or production health check. V2 was not enabled on the
+  live install (owner action, INSTALL). No remote CI.
 - No real phone; T20 is headless Chromium at phone and desktop sizes.
 - Cost is unknown for codex, minimax and opencode (no USD from the CLIs) and for models with `PLACEHOLDER` prices, so
   the tool score's cost component is unknown.
-- The dry run is small (7 or 8 runs per model): its per-model differences are anecdotal. The bench's test cases are
+- The benchmarks are small (7 or 8 runs per model): per-model differences are anecdotal. The bench's test cases are
   visible to the developer; the reviewer, not the harness, guards against hard-coded answers.
-- MiniMax on an unsolvable task runs to the time cap instead of reporting no progress (safe stop, open finding).
+- The server never merges or deploys; the merge path is covered up to the SHA-bound approval and the wait for `main` to
+  contain the SHA, against local bare remotes only.
 - Forbidden-topic matching leaves known low-severity gaps: rarer confusables (Armenian, small caps, Lisu), two splits
   in one window in the manager filter (the V2 policy catches it), prefix compounds such as "undeploy". Accepted false positives
   (safe direction) are listed in `V2_PROGRESS.md`.
@@ -117,3 +151,10 @@ no longer resolve. They are kept as labels only.
   - `508f0a0`: 1652;
   - `dacc48c`: 1674;
   - `2fde21c`: 1684, all tests passing on both runtimes. The acceptance run on `2fde21c` failed T20 only: the new Scorecard button changed the Tab order. That was fixed in `ae9efa0`.
+- Round 2 final gate on `ae9efa0`: 1684/1684 on both runtimes, reporter 25/25, acceptance 54/54 (1685 tests), T20 39/39.
+- Round 3 gates on current SHAs:
+  - `10e96d2`: 1701;
+  - after the wiring merge: 1709;
+  - `c12a0d7`: 1716, all passing on both runtimes;
+  - `e3be1f6`: 1716 on both runtimes, but the acceptance run failed T20 only (its same-origin control met a server without a goal loop), fixed in `37004b9`;
+  - the final gate is above.

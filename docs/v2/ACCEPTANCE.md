@@ -35,7 +35,7 @@ status functions. No test calls a real provider, a real remote, systemd or the l
 | BLOCKED | 0 |
 | MANUAL | 0 |
 
-Suite at `ae9efa0` on Node v23.6.0: 1685 tests (1684 unit tests plus the T20 browser check), 1685 pass, 0 fail, 0 todo, 0 skipped.
+Suite at `37004b9` on Node v23.6.0: 1717 tests (1716 unit tests plus the T20 browser check), 1717 pass, 0 fail, 0 todo, 0 skipped.
 
 ## Matrix
 

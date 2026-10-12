@@ -1,4 +1,4 @@
-STATUS: RUNNING — round 3: real benchmark over the HTTP API of a disposable wired server (USD 20 cap)
+STATUS: RUNNING — round 3: delivery (gates passed on 37004b9; PR description and push)
 
 # V2 progress
 
@@ -7,7 +7,7 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 3 (OWNER_DECISIONS §11) in progress; see "Round 3" below. SHAs quoted before round 2 in this file, in
+Round 3 (OWNER_DECISIONS §11) delivered; owner review of draft PR #1 (enable steps in its round-3 owner actions). SHAs quoted before round 2 in this file, in
 V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
 scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
 
@@ -18,11 +18,11 @@ Base: `origin/v2/integration` c23ebe8. Owner spec: OWNER_DECISIONS §11.
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
 | R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) merge 64b3f75 | 27aa36c+cf99337+56023ed: lease-fenced create (`ownerWrite`), branches `v2/task/<id>`, dead remote bounded, stop() bounded, repo hooks neutralized; orchestration/v2-runtime.js + v2-integrate.js, child-process server tests; 1692/1692 both runtimes; D-021; approved merges are not executed by the server (task waits until main contains the SHA) |
-| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver / Opus review + coordinator | RUNNING: real suite over HTTP (`--max-usd 19.5 --task-usd 1.5`) on driver 217177c; driver fixes INTEGRATED (Opus APPROVE, 3 rounds) merge e0f7dd5 | driver 94f078f+b96b27f+d902bf5+f292495: scorer counts suite-ledger confirmations over HTTP as budget_auto (F1), server claude run estimate = its --max-budget-usd bound (F2), child env allowlist, watcher; driver sanity run spent USD 0.09 known + 0.34 estimated (haiku, opencode, fix-failing-test: both done) |
+| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver / Opus review + coordinator | DONE; driver fixes INTEGRATED (Opus APPROVE, 3 rounds) merge e0f7dd5 | real run on driver 217177c, rescored with the fixed scorer: 50/50 started, 49 as expected (39 done, 6 awaiting_approval, 5 waiting_no_progress), all models 100% verified, partial 77.0 (round 2: 78.1, 45/50, 4 skipped); the one miss is a haiku stray file held by the path gate (policy stop, not a defect); MiniMax impossible ended waiting_no_progress in 728 s; spend 4.14 known + 12.08 estimated = 16.22 of 20 (incl. driver sanity 0.09 + 0.34); no re-run needed. docs/v2/SCORING.md "Real run over HTTP" |
 | R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge 0b56d12 | 8df6828+7cdca16: run timeout counted as an attempt (was routed to provider backoff); bench agent timeout 3 min; 1693/1693 both runtimes |
 | R3-3b | Drop stale "main's git history" owner action | coordinator | DONE | history was rewritten |
 | R3-3c | Docs: enable / roll back V2 on the live install | coordinator | DONE | INSTALL "Optional: V2 task engine"; README/USAGE updated |
-| R3-4 | Gates on final SHA, V2_VERIFICATION, PR round-3 section, DELIVERED | coordinator | TODO | |
+| R3-4 | Gates on final SHA, V2_VERIFICATION, PR round-3 section, DELIVERED | coordinator | DONE | gated 37004b9: 1716/1716 Node 23.6 and 24.21, reporter 25/25, acceptance 54/54 (1717 tests), T20 39/39, leak scan clean; first gate on e3be1f6 failed T20's positive control (create needs the loop since the wiring), fixed in 37004b9 (Sonnet APPROVE); PR #1 round-3 section; PR stays draft |
 
 ## Round 2
 
