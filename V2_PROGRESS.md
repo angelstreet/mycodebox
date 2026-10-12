@@ -111,8 +111,6 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 - Forbidden-topic floor accepts low-severity false positives (safe direction, an owner tap): "call the client method",
   "publish the event", "roll out", "I'll pass. Word", "Re start", "Bill ing", "pass/word", "we pass words". Tune only
   with a fresh review.
-- The branch scrubs a hard-coded tailnet IP and host name from `public/app.js` (pre-existing on `main`), but they stay in
-  `main`'s git history: rotate or accept; a history rewrite of `main` is owner-only.
 - Integration worktrees under the integration controller's work dir accumulate; clean them up manually.
 - The bench dry run spent USD 5.15 measured plus 13.50 estimated against the USD 20 authorization (see SCORING.md).
 
