@@ -7,7 +7,7 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 4 (OWNER_DECISIONS §12) in progress: R4-1..3 and R4-4a in worker worktrees, then the real evaluation. SHAs quoted before round 2 in this file, in
+Round 4 (OWNER_DECISIONS §12) delivered; owner review of draft PR #1 (round-4 section: limits, faster stop, routing, evaluation and recommendation, spend USD 4.83). SHAs quoted before round 2 in this file, in
 V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
 scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
 
@@ -22,7 +22,7 @@ Base: `origin/v2/integration` 5a5741e. Owner spec: OWNER_DECISIONS §12.
 | R4-4a | Bench `--reps`, M3.1 spec, subscription cost basis, per-model table, time-to-stop | Sonnet / Opus review | INTEGRATED (Opus APPROVE, 3 rounds) merge ac97bbf | 24dbd17; 1728/1728 both runtimes; time-to-stop over expected-impossible runs only; unknown cost wins over mixed |
 | R4-fix | Real-run defects: mcode 0.6.5 final text (item.content, result.output), verdict/feasibility parsed from the final text only (last JSON object), no-change and impossible-claim runs count as stalls under stall_runs_to_no_progress, cheap leash 120 s, failed exec status | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) | bbc9666+6a6bd5b; 1762/1762 both runtimes; sanity2 on bbc9666: 6/6 as expected, impossible stops in 38-55 s (M3 was 503 s) |
 | R4-4b | Real evaluation M3 vs M3.1-Flash vs Haiku, 3 reps, USD 10 cap, SCORING.md recommendation | coordinator | DONE | bench2 merge ab649c2 (Opus APPROVE); 2 sanity runs exposed the R4-fix defects; full run 90/90 as expected (72 done, 9 awaiting_approval, 9 waiting_no_progress in 29–57 s), all 24/24 verified first pass per model; M3.1-Flash fastest (34 s mean), M3 44 s, Haiku 68 s; fix: gate-stopped tasks cost basis `none` ($0 known) + Haiku latency_ms 20000, merge feb87cc (Sonnet APPROVE); spend USD 4.83 measured; SCORING.md "Round 4" |
-| R4-5 | Gates, V2_VERIFICATION, PR round-4 section, DELIVERED | coordinator | TODO | |
+| R4-5 | Gates, V2_VERIFICATION, PR round-4 section, DELIVERED | coordinator | DONE | gates on f3eb199 (code = merge feb87cc): 1764/1764 Node 23.6 and 24.21, reporter 25/25, acceptance 54/54 rows incl. T20 (1765 tests), leak scan clean; PR #1 round-4 section, still draft |
 
 ## Round 3
 

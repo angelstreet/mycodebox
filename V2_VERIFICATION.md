@@ -1,13 +1,28 @@
 # V2 verification
 
-**Status: round 3 delivered on `v2/integration`, draft PR #1. The V2 engine is wired into `server.js` behind
+**Status: round 4 delivered on `v2/integration`, draft PR #1. The V2 engine is wired into `server.js` behind
 `GHOSTY_V2=1` (off by default). All local gates pass on the gated SHA. Nothing was deployed and V2 is not enabled on
 the live install.**
 
-Gated SHA: `37004b9` (`37004b9f2e393011567348422a9dba7f6fa8c32d`), the last code change on the branch. The commits after it change documentation only
-(`git diff --stat 37004b9..origin/v2/integration -- ':!*.md' ':!docs/'` is empty).
+Gated SHA: `f3eb199`. The last code change is merge `feb87cc`; `f3eb199` adds documentation only. The commits after it
+change documentation and `docs/v2/acceptance-results.json` only.
 
-## Gates on `37004b9`
+## Gates on `f3eb199` (round 4)
+
+| Gate | Command | Result |
+|---|---|---|
+| Unit and integration suite, Node 23.6.0 | `node --test test/*.test.js` with a temporary `GHOSTY_STATE_DIR` | **PASS** 1764/1764, exit 0 |
+| Same, Node 24.21.0 | same | **PASS** 1764/1764, exit 0 |
+| Reporter plugin suite | `env -i PATH=… HOME LANG GHOSTY_STATE_DIR=$(mktemp -d) claude plugin test claude-plugin/ghosty-reporter` (Claude Code 2.1.296, mock tests) | **PASS** 25/25, exit 0 |
+| Acceptance matrix | `PLAYWRIGHT_CORE=<dir> node scripts/v2-acceptance.js` | **PASS** 54/54 rows (T01–T40, GL01–GL14, T20 included), 1765/1765 tests, 141/141 test files; [acceptance-results.json](docs/v2/acceptance-results.json) |
+| Leak scan | `LEAK_SCAN_EXTRA=<private denylist> node scripts/leak-scan.js origin/v2/integration..HEAD` | **PASS**, clean on every commit pushed |
+
+Round 4 adds run limits, the faster no-progress stop, scorecard-fed routing and the escalation ladder, and the M3 vs
+M3.1-Flash vs Haiku evaluation (90/90 runs as expected, USD 4.83 measured; [SCORING.md](docs/v2/SCORING.md) "Round 4").
+Reviews: R4-1..3 Fable APPROVE (2 rounds); R4-4a Opus APPROVE (3 rounds); bench2 Opus APPROVE; R4-fix Fable APPROVE
+(2 rounds); the `none` cost basis and Haiku latency fix Sonnet APPROVE.
+
+### Round 3 gates on `37004b9`
 
 | Gate | Command | Result |
 |---|---|---|
@@ -157,4 +172,5 @@ no longer resolve. They are kept as labels only.
   - after the wiring merge: 1709;
   - `c12a0d7`: 1716, all passing on both runtimes;
   - `e3be1f6`: 1716 on both runtimes, but the acceptance run failed T20 only (its same-origin control met a server without a goal loop), fixed in `37004b9`;
-  - the final gate is above.
+  - the round-3 final gate is above, under "Round 3 gates".
+- Round 4: 1741 at the R4-1..3 merge, 1728 at R4-4a, 1764 at `f3eb199` (final gate above).
