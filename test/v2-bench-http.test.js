@@ -123,3 +123,23 @@ test('server estimate: a claude run is estimated at min(run limit, cap left), us
   assert.deepEqual(claudeRunEstimate('claude:claude-haiku-4-5', 1, 0), { usd: 0.01 });
   assert.equal(claudeRunEstimate('codex:default', 1, 0.4), null);
 });
+
+test('http driver: --reps 2 runs every task twice, records carry rep, --report writes the markdown tables', async () => {
+  const out = path.join(TMP, 'out-reps');
+  const r = spawnSync(process.execPath, ['scripts/v2-bench.js', '--http', '--fake', '--reps', '2', '--report', '--tasks', 'fix-failing-test,off-by-one', '--out', out,
+    '--max-usd', '4', '--poll-ms', '100'], { cwd: ROOT, encoding: 'utf8', timeout: 120_000 });
+  assert.equal(r.status, 0, r.stderr.slice(-400));
+  const summary = JSON.parse(r.stdout);
+  assert.equal(summary.runs, 4);
+  assert.equal(summary.reps, 2);
+  const manifest = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.reps, 2);
+  assert.deepEqual(manifest.runs.map((x) => [x.bench_task_id, x.rep]), [['fix-failing-test', 1], ['off-by-one', 1], ['fix-failing-test', 2], ['off-by-one', 2]]);
+  assert.equal(new Set(manifest.runs.map((x) => x.task_id)).size, 4);
+  assert.ok(manifest.runs.every((x) => x.outcome === 'done' && x.cost_basis === 'measured'));
+  const md = fs.readFileSync(path.join(out, 'report.md'), 'utf8');
+  assert.equal(summary.report, path.join(out, 'report.md'));
+  assert.match(md, /## Per model/);
+  assert.match(md, /\| fake:fake-dev \| 4 \| 2 \| 4\/4 \(100%\)/);
+  assert.match(md, /\| fix-failing-test \| 2 \| 2 \|/);
+});

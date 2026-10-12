@@ -6,11 +6,20 @@
 //
 //   node scripts/v2-bench.js --runtimes claude:haiku,claude:sonnet,codex,minimax,opencode --tasks all|id,id \
 //     --out DIR --max-usd 20 [--reviewer-map dev=rev,...] [--task-usd N] [--run-timeout-min 20] [--agent-timeout-min 3]
-//     [--wait-up-to-sec 0] [--no-confirm-unknown] [--fake [--fake-behaviour solve|noop|hang]] [--keep]
+//     [--wait-up-to-sec 0] [--no-confirm-unknown] [--reps N] [--report] [--fake [--fake-behaviour solve|noop|hang]] [--keep]
+//
+// --reps N (default 1): every task x model pair runs N times (rep 1..N, rep-major so a reached cap leaves every model with
+// the same coverage); each record carries `rep`, the manifest `reps`. --report writes <out>/report.md (per model, per task,
+// per task x model; repetitions pooled; `v2-score.js --markdown` does the same from any manifest).
 //
 // Runtimes: claude:haiku, claude:sonnet, codex (CLI default model, low effort), minimax (CLI default; set MCODE_NODE_DIR
-// to a Node 24 bin dir when the default node is 23.x), opencode (opencode/big-pickle), opencode:<provider/model>.
-// Default reviewers: claude:* -> codex, codex -> claude:sonnet, minimax and opencode -> claude:haiku. Never the same model.
+// to a Node 24 bin dir when the default node is 23.x), minimax:m3 (MiniMax-M3), minimax:m3.1-flash
+// (MiniMax-M3.1-Flash-Preview; model names as in the registry), opencode (opencode/big-pickle), opencode:<provider/model>.
+// Default reviewers: claude:* -> codex, codex -> claude:sonnet, minimax, minimax:m3, minimax:m3.1-flash and opencode ->
+// claude:haiku. Never the same model. Round-4 pairs: m3 <- haiku, m3.1-flash <- haiku, haiku <- codex by default (codex
+// reports no USD, so each of its reviews is estimated against the cap; pass --reviewer-map claude:haiku=minimax:m3 to
+// review Haiku with a subscription model instead).
+// Billing: minimax profiles are `subscription` (flat plan): no USD, never an unknown-cost estimate, never a $0 measurement.
 //
 // Spend control. The suite budget_policy { mode:'cap', max_usd } is split into a per-task cap passed to every task (the
 // goal loop's own budget gate stops at it). A suite ledger refuses to start a run unless known spend + a conservative
@@ -59,13 +68,15 @@ const LOCAL_BIN = path.join(os.homedir(), '.local', 'bin');
 // A "free" model's cost is still unknown (opencode reports 0 for unpriced providers too): never estimate it as $0.
 const FREE_EST_USD = 0.02;
 export const PROFILES = {
-  'claude:haiku': { runtime: 'claude', module: 'claude.js', model: 'claude-haiku-4-5', provider: 'anthropic', tier: 'light', efforts: ['low', 'medium'], effort: null, passModel: true, run_usd: 0.25, est_usd: 0.10 },
-  'claude:sonnet': { runtime: 'claude', module: 'claude.js', model: 'claude-sonnet-5-5', provider: 'anthropic', tier: 'standard', efforts: ['low', 'medium', 'high'], effort: null, passModel: true, run_usd: 1.00, est_usd: 0.40 },
+  'claude:haiku': { runtime: 'claude', module: 'claude.js', model: 'claude-haiku-4-5', provider: 'anthropic', tier: 'light', efforts: ['low', 'medium'], effort: null, passModel: true, run_usd: 0.25, est_usd: 0.10, billing: 'per_token' },
+  'claude:sonnet': { runtime: 'claude', module: 'claude.js', model: 'claude-sonnet-5-5', provider: 'anthropic', tier: 'standard', efforts: ['low', 'medium', 'high'], effort: null, passModel: true, run_usd: 1.00, est_usd: 0.40, billing: 'per_token' },
   codex: { runtime: 'codex', module: 'codex.js', model: 'default', provider: 'openai', tier: 'standard', efforts: ['low'], effort: 'low', passModel: false, est_usd: 0.30 },
-  minimax: { runtime: 'minimax', module: 'minimax.js', model: 'default', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: false, est_usd: 0.10 },
+  minimax: { runtime: 'minimax', module: 'minimax.js', model: 'default', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: false, est_usd: 0, billing: 'subscription' },
+  'minimax:m3': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: true, est_usd: 0, billing: 'subscription' },
+  'minimax:m3.1-flash': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3.1-Flash-Preview', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: true, est_usd: 0, billing: 'subscription' },
   opencode: { runtime: 'opencode', module: 'opencode.js', model: 'opencode/big-pickle', provider: 'opencode', tier: 'standard', efforts: [], effort: null, passModel: true, est_usd: FREE_EST_USD, free: true, pathDirs: [LOCAL_BIN] },
 };
-export const DEFAULT_REVIEWERS = { 'claude:haiku': 'codex', 'claude:sonnet': 'codex', codex: 'claude:sonnet', minimax: 'claude:haiku', opencode: 'claude:haiku' };
+export const DEFAULT_REVIEWERS = { 'claude:haiku': 'codex', 'claude:sonnet': 'codex', codex: 'claude:sonnet', minimax: 'claude:haiku', 'minimax:m3': 'claude:haiku', 'minimax:m3.1-flash': 'claude:haiku', opencode: 'claude:haiku' };
 
 // -> profile for a runtime spec, or throws. `opencode:<provider/model>` selects any opencode model.
 export function profileFor(spec, { fake = false } = {}) {
@@ -113,6 +124,30 @@ export function minViableTaskUsd(pairs) {
   return best;
 }
 
+// ---------- spend of one task ----------
+// Billing of a usage record: its own `billing`; else runtime `minimax` is a flat subscription (usage written before the
+// field existed); else the planned profile's. A subscription record has no marginal USD: it is neither known spend, nor an
+// unknown-cost record (no estimate, no budget stop for it), nor a $0 measurement.
+export function recordBilling(u, profile = null) {
+  if (['per_token', 'subscription', 'unknown'].includes(u?.billing)) return u.billing;
+  if (u?.runtime === 'minimax') return 'subscription';
+  return profile?.billing ?? 'unknown';
+}
+// -> known USD, an estimate for every unpriced non-subscription record, and the cost basis of the run.
+export function spendOfRecords(records, estOf, profileOf = () => null) {
+  let known = 0, estimated = 0, unknown = 0, subscription = 0;
+  for (const u of records) {
+    const id = `${u.runtime}:${u.model}`;
+    if (recordBilling(u, profileOf(id)) === 'subscription') { subscription += 1; continue; }
+    if (typeof u.usd === 'number' && Number.isFinite(u.usd) && u.incomplete !== true) known += u.usd;
+    else { unknown += 1; estimated += estOf(id) ?? 0; }
+  }
+  const priced = records.length - subscription;
+  const cost_basis = records.length === 0 ? 'measured' : subscription === records.length ? 'subscription' : unknown > 0 ? (estimated > 0 ? 'estimated' : 'unknown') : 'measured';
+  return { known_usd: known, estimated_usd: estimated, unknown: unknown > 0, unknown_records: unknown, subscription_records: subscription,
+    usd: records.length === 0 ? 0 : priced === 0 ? null : unknown === 0 ? known : null, cost_basis };
+}
+
 // ---------- suite ledger ----------
 // Known spend is measured USD; estimated is the conservative estimate standing in for usage records without USD;
 // unknown_runs counts runs with at least one such record. The cap compares known + estimated.
@@ -144,7 +179,7 @@ export function createSuiteLedger({ max_usd }) {
 // ---------- CLI ----------
 export const DEFAULTS = Object.freeze({ runtimes: null, tasks: 'all', out: null, max_usd: 20, fake: false, reviewer_map: {}, task_usd: null, run_timeout_min: 20,
   agent_timeout_min: 3, confirm_unknown: true, fake_behaviour: 'solve', keep: false, wait_up_to_sec: 0,
-  http: false, concurrency: 1, poll_ms: 1000 });
+  http: false, concurrency: 1, poll_ms: 1000, reps: 1, report: false });
 export function parseArgs(argv) {
   const o = { ...DEFAULTS, reviewer_map: {} };
   const need = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
@@ -172,6 +207,8 @@ export function parseArgs(argv) {
     else if (a === '--http') o.http = true;
     else if (a === '--concurrency') o.concurrency = Number(need(i)), i++;
     else if (a === '--poll-ms') o.poll_ms = Number(need(i)), i++;
+    else if (a === '--reps') o.reps = Number(need(i)), i++;
+    else if (a === '--report') o.report = true;
     else throw new Error(`unknown argument ${a}`);
   }
   return validateOptions(o);
@@ -190,6 +227,7 @@ export function validateOptions(o) {
   if (o.task_usd !== null && !(o.task_usd > 0)) throw new Error('--task-usd must be a positive number');
   if (o.task_usd !== null && o.task_usd > o.max_usd) throw new Error('--task-usd cannot exceed --max-usd');
   if (!(Number.isInteger(o.concurrency) && o.concurrency >= 1 && o.concurrency <= 8)) throw new Error('--concurrency is an integer 1..8');
+  if (!(Number.isInteger(o.reps) && o.reps >= 1 && o.reps <= 20)) throw new Error('--reps is an integer 1..20');
   if (!(o.poll_ms >= 50)) throw new Error('--poll-ms must be 50 or more');
   if (!['solve', 'noop', 'hang'].includes(o.fake_behaviour)) throw new Error('--fake-behaviour is solve, noop or hang');
   return o;
@@ -245,7 +283,8 @@ export function planRuns(o) {
     }
     return { spec, revSpec, dev, rev };
   });
-  const planned = tasks.flatMap((t) => pairs.map((p) => ({ task: t, ...p })));
+  // Rep-major: a reached cap leaves every model with the same number of repetitions (the last rep is the partial one).
+  const planned = Array.from({ length: o.reps ?? 1 }, (_, i) => i + 1).flatMap((rep) => tasks.flatMap((t) => pairs.map((p) => ({ task: t, rep, ...p }))));
   // Floored so that the reservations of every planned run fit inside the suite cap.
   const taskUsd = o.task_usd ?? Math.floor((o.max_usd / Math.max(1, planned.length)) * 1e4) / 1e4;
   if (!(taskUsd > 0)) throw new Error(`per-task budget rounds to ${taskUsd} USD for ${planned.length} runs: raise --max-usd or pass --task-usd`);
@@ -275,7 +314,7 @@ export async function runBench(opts) {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-')));
   if (!path.relative(ROOT, tmp).startsWith('..')) throw new Error('refusing to run inside the repository');
   const manifest = { schema: MANIFEST_SCHEMA, suite_id: SUITE_ID, suite_version: SUITE_VERSION, started_at: new Date().toISOString(), finished_at: null,
-    mode: o.fake ? 'fake' : 'real', store_dir: 'store', runs: [], budget_policy: { mode: 'cap', max_usd: o.max_usd, per_task_usd: taskUsd },
+    mode: o.fake ? 'fake' : 'real', store_dir: 'store', reps: o.reps, runs: [], budget_policy: { mode: 'cap', max_usd: o.max_usd, per_task_usd: taskUsd },
     spend: { known_usd: 0, estimated_usd: 0, unknown_runs: 0 }, runtimes: {}, no_progress_policy: NO_PROGRESS };
   const manifestPath = path.join(outDir, 'manifest.json');
   const writeManifest = () => {
@@ -387,19 +426,11 @@ export async function runBench(opts) {
     const intake = createIntake({ store });
 
     // Spend of one task from its usage records: known USD, and an estimate for every record without USD.
-    function spendOf(v) {
-      let known = 0, estimated = 0, unknown = 0, allKnown = v.usage.length > 0;
-      for (const u of v.usage) {
-        const id = `${u.runtime}:${u.model}`;
-        if (typeof u.usd === 'number' && Number.isFinite(u.usd) && u.incomplete !== true) known += u.usd;
-        else { unknown += 1; allKnown = false; estimated += profiles.get(id)?.est_usd ?? 0; }
-      }
-      return { known_usd: known, estimated_usd: estimated, unknown: unknown > 0, unknown_records: unknown, usd: v.usage.length === 0 ? 0 : allKnown ? known : null };
-    }
+    const spendOf = (v) => spendOfRecords(v.usage, (id) => profiles.get(id)?.est_usd ?? 0, (id) => profiles.get(id));
 
     for (const r of runs) {
       const t0 = Date.now();
-      const rec = { task_id: null, bench_task_id: r.task.id, task_class: r.task.task_class, expected_outcome: r.task.expected_outcome,
+      const rec = { task_id: null, bench_task_id: r.task.id, rep: r.rep, task_class: r.task.task_class, expected_outcome: r.task.expected_outcome,
         runtime: r.dev.runtime, model: r.dev.model, reviewer_runtime: r.rev.runtime, reviewer_model: r.rev.model, runtime_spec: r.spec, reviewer_spec: r.revSpec,
         final_state: null, outcome: null, outcome_correct: false, usd: null, duration_ms: null, error: null,
         wait_reason: null, developer_runs: 0, reviewer_runs: 0, checks: [], usd_known: 0, usd_estimated: 0, unknown_cost_records: 0, budget_confirmations: 0,
@@ -412,7 +443,7 @@ export async function runBench(opts) {
       } else if (devAvail === false || revAvail === false) {
         rec.outcome = 'not_started'; rec.error = `runtime unavailable (probe): ${devAvail === false ? r.spec : r.revSpec}`; rec.usd = 0; rec.duration_ms = 0;
       } else {
-        log(`run ${r.task.id} x ${r.spec} (reviewer ${r.revSpec})`);
+        log(`run ${r.task.id} x ${r.spec} rep ${r.rep}/${o.reps} (reviewer ${r.revSpec})`);
         let timedOut = false;
         try {
           const { task } = await intake.createTask({ project_id: `bench-${r.task.id}`, title: `bench ${r.task.id}`, repository: r.repo, risk_class: 'low', runtime_capabilities: ['code'],
@@ -466,9 +497,9 @@ export async function runBench(opts) {
           const failedRuns = evs.filter((e) => e.kind === 'tool.failed').map((e) => e.payload.error?.class ?? 'unknown');
           if (failedRuns.length && !rec.error) rec.error = `run error class(es): ${[...new Set(failedRuns)].join(', ')}`;
           const sp = spendOf(v);
-          Object.assign(rec, { usd: sp.usd, usd_known: Math.round(sp.known_usd * 1e6) / 1e6, usd_estimated: Math.round(sp.estimated_usd * 1e6) / 1e6, unknown_cost_records: sp.unknown_records });
+          Object.assign(rec, { usd: sp.usd, usd_known: Math.round(sp.known_usd * 1e6) / 1e6, usd_estimated: Math.round(sp.estimated_usd * 1e6) / 1e6, unknown_cost_records: sp.unknown_records, subscription_records: sp.subscription_records, cost_basis: sp.cost_basis });
           ledger.record(sp);
-          for (const u of v.usage) if (typeof u.usd === 'number' && u.incomplete !== true) { const id = `${u.runtime}:${u.model}`; measured.set(id, [...(measured.get(id) || []), u.usd]); }
+          for (const u of v.usage) if (typeof u.usd === 'number' && u.incomplete !== true && recordBilling(u, profiles.get(`${u.runtime}:${u.model}`)) !== 'subscription') { const id = `${u.runtime}:${u.model}`; measured.set(id, [...(measured.get(id) || []), u.usd]); }
         } catch (e) {
           rec.outcome = timedOut ? 'timeout' : 'error';
           rec.error = String(e?.code || e?.message || e).slice(0, 200);
@@ -487,7 +518,7 @@ export async function runBench(opts) {
       rec.duration_ms ??= Date.now() - t0;
       manifest.runs.push(rec);
       writeManifest();
-      log(`  -> ${rec.outcome} (${rec.final_state}) usd ${rec.usd ?? 'unknown'} in ${Math.round(rec.duration_ms / 1000)} s`);
+      log(`  -> ${rec.outcome} (${rec.final_state}) usd ${rec.usd ?? rec.cost_basis ?? 'unknown'} in ${Math.round(rec.duration_ms / 1000)} s`);
     }
   } finally {
     manifest.finished_at = new Date().toISOString();
@@ -503,7 +534,16 @@ export function summarize(manifest) {
   const by = (k) => runs.reduce((m, r) => ({ ...m, [r[k]]: (m[r[k]] || 0) + 1 }), {});
   return { suite_id: manifest.suite_id, suite_version: manifest.suite_version, mode: manifest.mode, runs: runs.length, correct: runs.filter((r) => r.outcome_correct).length,
     outcomes: by('outcome'), spend: manifest.spend, cap_note: manifest.cap_note, budget_policy: manifest.budget_policy,
-    table: runs.map((r) => `${r.bench_task_id} | ${r.runtime}:${r.model} <- ${r.reviewer_runtime}:${r.reviewer_model} | ${r.outcome}${r.outcome_correct ? '' : ` (expected ${r.expected_outcome})`} | usd ${r.usd ?? 'unknown'} | ${Math.round(r.duration_ms / 1000)} s`) };
+    ...(manifest.reps > 1 ? { reps: manifest.reps } : {}),
+    table: runs.map((r) => `${r.bench_task_id}${r.rep ? ` #${r.rep}` : ''} | ${r.runtime}:${r.model} <- ${r.reviewer_runtime}:${r.reviewer_model} | ${r.outcome}${r.outcome_correct ? '' : ` (expected ${r.expected_outcome})`} | usd ${r.usd ?? (r.cost_basis === 'subscription' ? 'subscription' : 'unknown')} | ${Math.round(r.duration_ms / 1000)} s`) };
+}
+
+// --report: <out>/report.md from the manifest and the task store it points at (read-only scoring, scripts/v2-score.js).
+export async function writeReport(manifestPath) {
+  const { markdownReport } = await import('./v2-score.js');
+  const out = path.join(path.dirname(manifestPath), 'report.md');
+  fs.writeFileSync(out, markdownReport(manifestPath));
+  return out;
 }
 
 async function main() {
@@ -514,7 +554,8 @@ async function main() {
     return;
   }
   const { manifest, manifestPath } = await runBench({ ...o, log: (l) => process.stderr.write(`${l}\n`) });
-  process.stdout.write(`${JSON.stringify({ manifest: manifestPath, ...summarize(manifest) }, null, 1)}\n`);
+  const report = o.report ? await writeReport(manifestPath) : null;
+  process.stdout.write(`${JSON.stringify({ manifest: manifestPath, ...(report ? { report } : {}), ...summarize(manifest) }, null, 1)}\n`);
   process.exitCode = manifest.runs.every((r) => r.outcome_correct) ? 0 : 1;
 }
 
