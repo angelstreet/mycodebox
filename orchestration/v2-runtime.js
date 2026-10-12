@@ -19,6 +19,8 @@ import { createIntake, isInformational } from './intake.js';
 import { createV2Http } from './http.js';
 import { loadPolicy } from './policy.js';
 import { normalizeBudgetPolicy } from './budget.js';
+import { buildScorecard } from './scorecard.js';
+import { routeHistory, tokenTotals } from './route-history.js';
 
 export const MAX_CONCURRENCY = 8;
 const REMOTE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -168,9 +170,31 @@ export function pinnedRoute(realRoute) {
 // the loop's default estimate. Other runtimes: null = the default.
 export const claudeRunEstimate = (entry, runUsd, capLeft) => (String(entry).startsWith('claude:') ? { usd: Math.max(0.01, Math.min(runUsd, capLeft ?? Infinity)) } : null);
 
+// Router history from the task ledger this process already has (D-025): scorecard -> routeHistory, read-only, rebuilt
+// at most every ttlMs. A store that cannot be read gives the last good history (or none): routing never fails on it.
+export function historyProvider({ store, registry, ttlMs = 60_000, now = Date.now, log = () => {} }) {
+  let cached = null, at = -Infinity, pending = null;
+  async function build() {
+    const logs = [];
+    for (const t of await store.list()) if (!t.store_error) logs.push({ task_id: t.task_id, events: await store.events(t.task_id) });
+    return routeHistory(buildScorecard(logs), { tokens: tokenTotals(logs), registry });
+  }
+  return {
+    async get() {
+      if (cached && now() - at < ttlMs) return cached;
+      pending ??= build().then((h) => { cached = h; at = now(); return h; }, (e) => { log(`[v2] route history unavailable: ${e?.code || e?.message}`); at = now(); return cached || {}; })
+        .finally(() => { pending = null; });
+      return pending;
+    },
+  };
+}
+// Gives the router the history unless the caller passed its own.
+export const withHistory = (route, provider) => async (task, ro = {}) => route(task, ro.history ? ro : { ...ro, history: await provider.get() });
+
 const RUNTIMES = { claude: 'claude.js', codex: 'codex.js', minimax: 'minimax.js', opencode: 'opencode.js' };
-// The registry's codex/minimax names are not CLI model ids: those CLIs run their configured default model.
-const passModel = (runtime, model) => !!model && (runtime === 'claude' || (runtime === 'opencode' && model.includes('/')));
+// The registry's codex names are not CLI model ids: codex runs its configured default model. MiniMax registry names are
+// mcode models (the adapter qualifies them as minimax/<model>); "default" means mcode's own default.
+const passModel = (runtime, model) => !!model && (runtime === 'claude' || (runtime === 'minimax' && model !== 'default') || (runtime === 'opencode' && model.includes('/')));
 
 export async function createV2Runtime({ stateDir, env = process.env, repoRoot, log = (m) => console.log(m), safetyMs = 60_000, retryMs = 15_000 } = {}) {
   if (!stateDir || !repoRoot) throw new Error('v2 runtime: stateDir and repoRoot required');
@@ -264,7 +288,7 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
     const estimateRun = ({ task, entry }) => claudeRunEstimate(entry, cfg.claudeRunUsd, info.get(task?.task_id)?.capLeft);
     const loop = createGoalLoop({ store, registry, adapters, estimateRun, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
       worktreeRoot: roots[0], reviewRoot: roots[1], verifier: createVerifier({ tmpRoot: path.join(cfg.workRoot, 'vtmp'), artifactRoot: path.join(cfg.workRoot, 'artifacts') }),
-      leases, route: pinnedRoute(realRoute), allowFake, hostId: HOST_ID, integrate: createServerIntegrate({ git, pushRemote: cfg.pushRemote }),
+      leases, route: withHistory(pinnedRoute(realRoute), historyProvider({ store, registry, log })), allowFake, hostId: HOST_ID, integrate: createServerIntegrate({ git, pushRemote: cfg.pushRemote }),
       opsRequester: requester, incidents, ...(cfg.runTimeoutMs ? { runTimeoutMs: cfg.runTimeoutMs } : {}) });
     const listOpen = async () => (await store.list()).filter((t) => !TERMINAL.includes(t.status) && !t.store_error && !isInformational(t)).map((t) => t.task_id);
     const beforeStep = async (id) => { const t = await store.get(id); if (t) info.set(id, { goal: t.goal, capLeft: capLeft(t) }); };

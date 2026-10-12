@@ -16,9 +16,10 @@ import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { TERMINAL, failureSignature, ContractError, ownerAnswerOf, effectiveGrants } from './task-contract.js';
 import { checkAction as policyCheckAction, loadPolicy as realLoadPolicy, clarificationFor } from './policy.js';
-import { route as realRoute, fallbackPlan as realFallbackPlan } from './router.js';
+import { route as realRoute, fallbackPlan as realFallbackPlan, classifyWork, nextRung } from './router.js';
 import * as realBudget from './budget.js';
-import { developerPrompt } from './roles.js';
+import { developerPrompt, parseImpossibleClaim } from './roles.js';
+import { resolveRunLimits, engineLimits, runOptions } from './run-limits.js';
 import { isInformational } from './intake.js';
 import { defaultGit } from './worktrees.js';
 
@@ -249,7 +250,7 @@ export function createGoalLoop({
     if (!v) throw coded('E_NOT_FOUND', `task ${id} not found`);
     if (v.store_error) return { id, v, broken: true };   // a partial log is not the history: never decide from it
     const events = await readEvents(id);
-    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, best_failing: null, tried: [], exclude: [],
+    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, best_failing: null, tried: [], exclude: [], stalls: 0, claim: null,
       feedback: null, wait: null, approval: null, provider: null, worktree: null, flaky: [], interpretation: null, plan: null,
       verify_only: false, integration: null, integration_unknown: 0, review_unavailable: 0,
       review_fail: { signature: null, count: 0, changes: 0, excluded: [], strict: false } };
@@ -367,7 +368,21 @@ export function createGoalLoop({
     const check = (_p, t) => { const r = allowed(pol, t, { class: 'route' }, grants, key); return r.ok ? { allow: true, needs_approval: false, reason: 'policy allows' } : { allow: false, needs_approval: r.needs_approval, reason: r.reason }; };
     // D-014: an owner approval of this task's routing question (bound to task + base) waives the critical-risk floor.
     const floorGrants = grants.has(key) ? ['critical_risk'] : [];
-    return route(task, { registry: reg, policy: routerPolicy, checkAction: check, allowFake, exclude, now, realpath: (x) => fs.realpathSync(x), floorGrants, role });
+    // D-024: candidates whose run limits they cannot honour are floored out; D-026: the escalation ladder picks the
+    // developer's starting rung (reviewers rank by score).
+    return route(task, { registry: reg, policy: routerPolicy, checkAction: check, allowFake, exclude, now, realpath: (x) => fs.realpathSync(x), floorGrants, role,
+      limitsFor: (entry) => limitsOf(ctx, p, entry), escalation: role === 'developer' && pol.routing?.escalation !== false });
+  }
+  // Run limits for one entry on this task (D-024): task > project > registry > engine defaults.
+  const workOf = (ctx) => classifyWork(ctx.v).type;
+  function limitsOf(ctx, p, entry) {
+    return resolveRunLimits({ entry, workType: workOf(ctx), risk: ctx.v.risk_class, task: ctx.v.run_limits ?? null, project: p?.policy?.run_limits ?? null, engine: engineLimits(runTimeoutMs) });
+  }
+  // What the adapter gets, plus the limits it could not apply (recorded, never a crash).
+  function runLimitsFor(ctx, p, entry, adapter, role) {
+    const lim = entry ? limitsOf(ctx, p, entry) : { limits: engineLimits(runTimeoutMs), source: {}, error: null };
+    const opts = runOptions(lim.limits, { role, support: adapter?.limitSupport || {}, adapter: entry?.runtime || 'adapter' });
+    return { ...opts, stall_runs_to_no_progress: lim.limits.stall_runs_to_no_progress ?? null, source: lim.source, error: lim.error };
   }
   const routeKey = (ctx) => `route:${ctx.v.base_sha}`;
   const adapterFor = (entryId) => adapters[entryId] || adapters[entryId.split(':')[0]] || null;
@@ -378,7 +393,9 @@ export function createGoalLoop({
     const used = ctx.events.filter((e) => e.kind === 'usage.recorded');
     const entries = used.map((e) => {
       const s = started.get(e.payload.run_id);
-      return { attempt_id: e.payload.run_id, kind: s?.payload.role || 'unknown', usd: e.payload.usd, input_tokens: e.payload.input_tokens,
+      // D-025: a subscription run's marginal USD is ~0 for the owner's USD caps; its record keeps usd null + billing.
+      const usd = e.payload.usd ?? (e.payload.billing === 'subscription' ? 0 : null);
+      return { attempt_id: e.payload.run_id, kind: s?.payload.role || 'unknown', usd, input_tokens: e.payload.input_tokens,
         output_tokens: e.payload.output_tokens, duration_ms: s ? Date.parse(e.timestamp) - Date.parse(s.timestamp) : null, turns: 1 };
     });
     // X1/X2 (GL13): a run that started but has no usage record is unknown spend, never free.
@@ -396,11 +413,13 @@ export function createGoalLoop({
     const missing = ctx.events.filter((e) => e.kind === 'task.started' && !used.has(e.payload.run_id));
     for (const e of missing) {
       const entry = registry.get(e.payload.entry) || {};
-      await store.recordUsage(ctx.id, { runtime: entry.runtime ?? e.payload.runtime ?? null, provider: entry.provider ?? null, model: entry.model ?? e.payload.model ?? null,
+      await store.recordUsage(ctx.id, { runtime: entry.runtime ?? e.payload.runtime ?? null, provider: entry.provider ?? null, model: entry.model ?? e.payload.model ?? null, ...billingOf(entry),
         run_id: e.payload.run_id, input_tokens: null, output_tokens: null, usd: null, source: 'interrupted: no usage recorded before a controller restart' }, { event_id: `usage-${e.payload.run_id}` });
     }
     return missing.length > 0;
   }
+  // D-025: usage records say how the run is paid for (registry entry billing).
+  const billingOf = (entry) => (entry?.billing ? { billing: entry.billing } : {});
   // estimateRun may answer null (the default below), or an object whose present keys win; absent keys (e.g. a usd-only
   // answer) come from the default, so token/duration caps keep using the measured mean. An explicit null stays unknown.
   function estimate(ctx, entry, role, routeHint = null) {
@@ -413,7 +432,7 @@ export function createGoalLoop({
     const runs = ledger(ctx).entries.filter((e) => e.kind === role && ctx.events.some((s) => s.kind === 'task.started' && s.payload.run_id === e.attempt_id && s.payload.entry === entry));
     const mean = (k) => { const xs = runs.map((r) => r[k]).filter((x) => typeof x === 'number'); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
     // No run of this entry yet: the router's price-based estimate when it has one (#5), else unknown.
-    const usd = mean('usd') ?? routeHint?.candidates?.find((c) => c.id === entry)?.cost_est_usd
+    const usd = (registry.get(entry)?.billing === 'subscription' ? 0 : null) ?? mean('usd') ?? routeHint?.candidates?.find((c) => c.id === entry)?.cost_est_usd
       ?? (role === 'developer' && ctx.cp.strategy?.entry === entry ? ctx.cp.strategy.cost_est_usd : null) ?? null;
     return { usd, input_tokens: mean('input_tokens'), output_tokens: mean('output_tokens'), duration_ms: mean('duration_ms'), turns: 1 };
   }
@@ -434,12 +453,12 @@ export function createGoalLoop({
     if (onlyUnknown && nextRunAuthorized(ctx)) return null;
     const spendUnknown = reasons.some((x) => /spend unknown/.test(x));
     const evd = [`spent ${JSON.stringify(b.spent)}`, `unknown ${b.unknown_spend.join(',') || 'none'}`];
-    const emit = [{ event_id: `budget-${ctx.id}-${ctx.k}`, kind: 'budget.threshold', payload: { reason: b.reason, spent: b.spent, state_hint: b.state_hint } }];
+    const emit = [{ event_id: `budget-${ctx.id}-${ctx.k}`, kind: 'budget.threshold', payload: { reason: b.reason, spent: b.spent, state_hint: b.state_hint, entry, role } }];
     if (b.state_hint === 'waiting') {
       const delay = Math.min(MAX_BACKOFF_MS, b.backoff_ms ?? 60_000);
       return decide(ctx, decision('budget_wait', 'Start another run now?', [alt('wait for quota reset', 'no spend while exhausted', 'delay'), alt('start anyway', 'progress', 'provider refuses / overspends quota')],
         'wait for quota reset', { evidence: evd, expected_effect: `retry after ${delay} ms`, rationale: b.reason }), {
-        patch: { ...patch, wait: { reason: 'quota', until_ms: now() + delay, resume_to } }, to: 'waiting', reason: b.reason, emit });
+        patch: { ...patch, wait: { reason: 'quota', until_ms: now() + delay, resume_to, entry, role } }, to: 'waiting', reason: b.reason, emit });
     }
     const question = onlyUnknown
       ? (spendUnknown
@@ -452,7 +471,10 @@ export function createGoalLoop({
 
   // ---------- failure classification and the no-progress rule ----------
   const passingRequired = (ctx, results) => results.filter((r) => r.required && r.status === 'pass').length;
-  function chooseStrategy(ctx, sig, routeAlt) {
+  // rung: the next escalation-ladder rung (D-026) when the task climbs; it goes first (a cheap model failing repeatedly is
+  // the commonest no-progress cause), otherwise the evidence order below.
+  function chooseStrategy(ctx, sig, routeAlt, rung = null) {
+    if (rung) return 'escalate_model';
     const errorClass = sig.split(' :: ')[1] || '';
     const order = HARNESS_LIKE.test(errorClass) ? ['harness', 'replan', 'model'] : ['replan', 'model', 'harness'];
     for (const o of order) {
@@ -463,12 +485,19 @@ export function createGoalLoop({
     }
     return null;
   }
-  async function onFailure(ctx, { signature, feedback, passing, failing = null, then = 'repair', thenPatch = {}, reviewOnly = false, p }) {
+  const lastDevStart = (ctx) => ctx.events.findLast((e) => e.kind === 'task.started' && e.payload.role === 'developer') || null;
+  // The timeout signature of a stalled run (counted on its own, D-024); the §4 streak keeps the checks' signature so
+  // that stalls and failing no-op runs on the same checks still converge (round 3).
+  const stallSignature = (entry) => failureSignature({ test: `run_timeout:${entry ?? 'unknown'}`, errorClass: 'timeout' });
+  async function onFailure(ctx, { signature, feedback, passing, failing = null, then = 'repair', thenPatch = {}, reviewOnly = false, p, extraEvidence = [] }) {
     const np = ctx.v.no_progress_policy;
     const cp = ctx.cp;
     // The developer is told its last run was stopped at the time limit (the run's changes were still checked).
     const stall = lastDevTimeout(ctx);
-    if (stall && feedback) feedback = { ...feedback, run_timeout: { run_id: stall, timeout_ms: runTimeoutMs, note: 'Your previous run was stopped at the time limit; its changes were kept and checked. Work in smaller steps. If the goal cannot be met as stated, stop early and explain why.' } };
+    const devStart = lastDevStart(ctx);
+    const runLimit = devStart?.payload.limits ?? null;
+    const stallMs = runLimit?.timeout_ms ?? runTimeoutMs;
+    if (stall && feedback) feedback = { ...feedback, run_timeout: { run_id: stall, timeout_ms: stallMs, note: 'Your previous run was stopped at the time limit; its changes were kept and checked. Work in smaller steps. If the goal cannot be met as stated, stop early and explain why.' } };
     // D-012: new passing evidence = more required checks pass, or fewer tests fail inside the failing checks.
     const fewerFailing = failing != null && cp.best_failing != null && failing < cp.best_failing;
     const progress = passing > cp.best || fewerFailing;
@@ -478,10 +507,30 @@ export function createGoalLoop({
     const stale = progress ? 0 : cp.stale + 1;
     const changes = progress ? 0 : cp.changes;
     const tried = progress ? [] : cp.tried;
-    const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, feedback, provider: null, verify_only: false, review_unavailable: 0 };
+    const stalls = progress ? 0 : cp.stalls;
+    const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, stalls, claim: null, feedback, provider: null, verify_only: false, review_unavailable: 0 };
     const evidence = [`signature ${signature}`, `same signature ${streak.count}x in a row`, `iterations without new passing evidence: ${stale} (limit ${stagnation})`,
       `strategy changes without progress: ${changes}`, `failing tests ${failing ?? 'n/a'} (best ${cp.best_failing ?? 'n/a'})${progress ? ': progress' : ''}`,
-      ...(stall ? [`developer run ${stall} hit the run timeout (${runTimeoutMs} ms)`] : [])];
+      ...(stall ? [`developer run ${stall} hit the run timeout (${stallMs} ms): stall signature ${stallSignature(devStart?.payload.entry)}, stalled runs without progress ${stalls}`] : []),
+      ...extraEvidence];
+    // D-024: a model whose run limits set stall_runs_to_no_progress (cheap models on easy classes) stops after that many
+    // stalled runs without new passing evidence, instead of the §4 strategy-change rounds. Not an attempt cap: a run
+    // that makes progress resets it, and only runs killed by their own time limit count.
+    const stallLimit = runLimit?.stall_runs_to_no_progress ?? null;
+    if (stall && !progress && stallLimit && stalls >= stallLimit) {
+      const entry = devStart.payload.entry;
+      let rung = null;
+      try { const r = await routeFor(ctx, p, { exclude: cp.exclude }); rung = r.escalation?.eligible ? nextRung(r, entry, { tried: cp.exclude }) : null; } catch { rung = null; }
+      const diagnosis = `${stalls} developer run(s) on ${entry} stopped at the run time limit (${stallMs} ms) without new passing evidence (stall_runs_to_no_progress ${stallLimit} for ${entry}, class ${workOf(ctx)}); last failure ${signature}.`;
+      const next_action = `check whether the goal is achievable as stated; then resume${rung ? ` (the next rung is ${rung.id})` : ''}, pin a stronger model, split the task or raise its run_limits`;
+      return decide(ctx, decision('no_progress', 'Stalled runs on this model: keep iterating?', [
+        alt('suspend in waiting with a diagnosis', 'a cheap model that keeps running into its time limit is not converging; no further spend', 'goal not reached yet'),
+        alt('another run on the same model', 'might converge', `${stalls} stalled run(s) already produced no new passing evidence`),
+        alt(rung ? `escalate to ${rung.id}` : 'escalate', 'stronger model', 'stalls are not failing-check evidence that a stronger model helps; the owner decides on resume')],
+      'suspend in waiting with a diagnosis', { evidence, expected_effect: 'no further runs until inputs change or the owner resumes', rationale: `Run limits (D-024): ${diagnosis}`, policy_ref: policyRef(p) }),
+      { patch: { ...base, wait: { reason: 'no_progress', until_ms: null, resume_to: 'replan', diagnosis, next_action, policy_hash: policyRef(p) } }, to: 'waiting', reason: 'no_progress',
+        emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'no_progress', diagnosis, next_action } }] });
+    }
     const needChange = streak.count >= np.same_signature || stale >= stagnation;
     if (!needChange) {
       return decide(ctx, decision('repair', 'How to respond to this failure?', [
@@ -495,7 +544,13 @@ export function createGoalLoop({
     const routeAlt = await (async () => {
       try { const r = await routeFor(ctx, p, { exclude: [...cp.exclude, cp.strategy.entry] }); return r.choice ? r : null; } catch { return null; }
     })();
-    const pick = changes >= np.strategy_changes_without_progress ? null : chooseStrategy(ctx, signature, routeAlt);
+    // D-026: failing checks or a reviewer rejection climb the ladder (never off a pin, never below a floor: rungs are the
+    // router's floored candidates, and a pinned task's only candidates are its pins).
+    let rung = null;
+    if (changes < np.strategy_changes_without_progress && cp.strategy?.entry) {
+      try { const r = await routeFor(ctx, p, { exclude: cp.exclude }); rung = r.escalation?.eligible ? nextRung(r, cp.strategy.entry, { tried: cp.exclude }) : null; } catch { rung = null; }
+    }
+    const pick = changes >= np.strategy_changes_without_progress ? null : chooseStrategy(ctx, signature, routeAlt, rung);
     if (!pick) {
       const diagnosis = `${changes} strategy change(s) (${tried.join(', ') || 'none'}) produced no new passing evidence; last failure ${signature} seen ${streak.count}x.`;
       if (reviewOnly) {
@@ -513,18 +568,21 @@ export function createGoalLoop({
         emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'no_progress', diagnosis, next_action } }] });
     }
     const s = cp.strategy;
-    const nextStrategy = { ...s, ...(pick === 'replan' ? { plan_rev: s.plan_rev + 1 } : pick === 'harness' ? { harness: 'focused' } : {}) };
+    const nextStrategy = { ...s, ...(pick === 'replan' ? { plan_rev: s.plan_rev + 1 } : pick === 'harness' ? { harness: 'focused' } : pick === 'escalate_model' ? { escalate_to: rung.id } : {}) };
     const alts = {
+      ...(rung ? { escalate_model: alt(`escalate_model (${s.entry} -> ${rung.id})`, `next rung of the escalation ladder (tier ${rung.tier}, ${rung.billing}, est $${rung.cost_est_usd ?? 'unknown'})`, 'costs more per run') } : {}),
       replan: alt('replan', 'a new approach addresses a wrong plan', 'same model may repeat the same mistake'),
       model: alt(`different model${routeAlt ? ` (${routeAlt.choice})` : ''}`, routeAlt ? `router ranks ${routeAlt.choice} next (${routeAlt.rationale.at(-1)})` : 'n/a', routeAlt ? 'unknown fit for this failure' : 'no other feasible model inside the allowlists'),
       harness: alt('harness change (focused reproduction, full failing output)', 'helps when the failure is not understood or the evidence is incomplete', 'more context per run'),
     };
     return decide(ctx, decision('strategy_change', `Same failure ${streak.count}x (or ${stale} iterations without new evidence): which strategy change?`,
       [alts[pick], ...Object.entries(alts).filter(([k2]) => k2 !== pick).map(([, a]) => a), alt('blind retry', 'cheap', 'forbidden by the no-progress rule')],
-      pick, { evidence: [...evidence, `already tried: ${tried.join(', ') || 'none'}`], expected_effect: `next run uses ${pick}`,
-        rationale: `No-progress rule: forced strategy change #${changes + 1}. Chose ${pick} by evidence (error class ${signature.split(' :: ')[1]}; untried options in evidence order).`, policy_ref: policyRef(p) }),
+      pick, { evidence: [...evidence, `already tried: ${tried.join(', ') || 'none'}`, ...(rung ? [`escalation ${s.entry} -> ${rung.id}`] : [])], expected_effect: pick === 'escalate_model' ? `next run on ${rung.id}` : `next run uses ${pick}`,
+        rationale: pick === 'escalate_model'
+          ? `No-progress rule: forced strategy change #${changes + 1}. Escalation ladder (D-026): ${s.entry} failed ${streak.count}x; the next rung is ${rung.id}.`
+          : `No-progress rule: forced strategy change #${changes + 1}. Chose ${pick} by evidence (error class ${signature.split(' :: ')[1]}; untried options in evidence order).`, policy_ref: policyRef(p) }),
     { patch: { ...base, streak: { signature, count: 0 }, stale: 0, changes: changes + 1, tried: [...tried, pick], strategy: nextStrategy,
-      exclude: pick === 'model' ? [...cp.exclude, s.entry] : cp.exclude }, to: 'replan', reason: `strategy change: ${pick}` });
+      exclude: ['model', 'escalate_model'].includes(pick) ? [...cp.exclude, s.entry] : cp.exclude }, to: 'replan', reason: `strategy change: ${pick}` });
   }
 
   // Provider/runtime errors from a developer run (T12, GL06): router fallback taxonomy, bounded and recorded.
@@ -590,7 +648,7 @@ export function createGoalLoop({
       case 'backoff': case 'wait': {
         const delay = Math.min(MAX_BACKOFF_MS, plan.delay_ms ?? 60_000);
         return decide(ctx, d('backoff and retry the same runtime', `waiting ${delay} ms, then repair`), {
-          patch: { provider, wait: { reason: err.class, until_ms: now() + delay, resume_to: 'repair' } }, to: 'waiting', reason: `${err.class}: backoff ${delay} ms`, emit });
+          patch: { provider, wait: { reason: err.class, until_ms: now() + delay, resume_to: 'repair', entry: s.entry, role: 'developer' } }, to: 'waiting', reason: `${err.class}: backoff ${delay} ms`, emit });
       }
       case 'switch':
         return decide(ctx, d('switch to a compatible runtime', `next run on ${plan.next}`), {
@@ -761,14 +819,20 @@ export function createGoalLoop({
       }
       return askOwner(ctx, { kind: 'route', question: `Routing needs the owner: ${r.rationale.join(' ')}`, reason: r.rationale.join(' '), classes: ['route'], keys: [routeKey(ctx)] }, { resume_to: 'planned', policy_ref: policyRef(p) });
     }
-    const prev = ctx.cp.strategy || { harness: 'standard', plan_rev: 0, compact: false };
-    const strategy = { ...prev, entry: r.choice, effort: ctx.cp.interpretation?.effort ?? null,
-      cost_est_usd: r.candidates.find((c) => c.id === r.choice)?.cost_est_usd ?? null };   // W2b: the developer gate's first estimate
+    const { escalate_to: up = null, ...prev } = ctx.cp.strategy || { harness: 'standard', plan_rev: 0, compact: false };
+    // D-026: a recorded escalation names its rung; it is used while the router still has it among the floored candidates.
+    const climbed = up && r.candidates.some((c) => c.id === up) ? up : null;
+    const choice = climbed || r.choice;
+    const strategy = { ...prev, entry: choice, effort: ctx.cp.interpretation?.effort ?? null,
+      cost_est_usd: r.candidates.find((c) => c.id === choice)?.cost_est_usd ?? null };   // W2b: the developer gate's first estimate
     const alts = r.candidates.slice(0, 4).map((c) => alt(c.id, `score ${c.score}`, c.cost_est_usd == null ? 'cost unknown' : `est $${c.cost_est_usd}`));
+    if (climbed && !alts.some((a) => a.option === climbed)) alts.unshift(alt(climbed, 'next escalation rung', 'costs more per run'));
     if (alts.length < 2) alts.push(alt('wait for another compatible runtime', 'more choice', 'only one runtime passes the floors; waiting adds nothing'));
+    const why = climbed ? `Escalation ladder (D-026): the strategy change escalated to ${climbed}.${up !== r.choice ? ` (router's own pick: ${r.choice})` : ''}`
+      : up ? `Escalation to ${up} no longer passes the floors; router selection used: ${r.rationale.at(-1)}` : `Router selection used for this V2 task: ${r.rationale.at(-1)}`;
     return decide(ctx, decision('assign_developer', 'Which runtime/model runs the developer role?', alts,
-      r.choice, { evidence: [`router decision ${r.decision.decision_id}`], expected_effect: `developer runs on ${r.choice}`, rationale: `Router selection used for this V2 task: ${r.rationale.at(-1)}`,
-        confidence: r.confidence, policy_ref: policyRef(p) }), { patch: { strategy }, to: 'ready', reason: `assigned ${r.choice}` });
+      choice, { evidence: [`router decision ${r.decision.decision_id}`, ...(up ? [`escalate_to ${up}`] : [])], expected_effect: `developer runs on ${choice}`, rationale: why,
+        confidence: r.confidence, policy_ref: policyRef(p) }), { patch: { strategy }, to: 'ready', reason: `assigned ${choice}` });
   }
 
   // ready/repair -> executing: preflight before every start (cancel, admission, policy, budget, lease).
@@ -824,13 +888,20 @@ export function createGoalLoop({
       const adapter = adapterFor(s.entry);
       const entry = registry.get(s.entry);
       await store.recordEffect(ctx.id, { effect_id, idempotency_key: `devrun:${run_id}`, kind: 'developer_run', phase: 'attempted' });
-      await store.append(ctx.id, { event_id: `start-${run_id}`, kind: 'task.started', payload: { run_id, role: 'developer', entry: s.entry, runtime: entry?.runtime ?? null, model: entry?.model ?? null, effort: s.effort, strategy: s } });
+      // D-024: this run's limits (task > project > registry > engine), recorded with the start; the stall rule reads them back.
+      const lim = runLimitsFor(ctx, p, entry, adapter, 'developer');
+      const effort = s.effort ?? lim.effort;
+      const limits = { timeout_ms: lim.timeout_ms, max_steps: lim.max_steps, effort, context_mode: lim.context_mode, stall_runs_to_no_progress: lim.stall_runs_to_no_progress };
+      await store.append(ctx.id, { event_id: `start-${run_id}`, kind: 'task.started', payload: { run_id, role: 'developer', entry: s.entry, runtime: entry?.runtime ?? null, model: entry?.model ?? null, effort, strategy: s,
+        limits, limit_sources: lim.source, ...(lim.notes.length ? { limits_ignored: lim.notes } : {}) } });
       let run = null, error = null;
       try {
         if (!adapter) throw Object.assign(new Error(`no adapter for ${s.entry}`), { code: 'ENOENT' });
+        // The policy changed since routing and this entry can no longer honour it: not started, rerouted like an outage.
+        if (lim.error) throw Object.assign(new Error(lim.error), { code: 'ENOENT' });
         const summary = s.compact ? compactSummary(ctx) : null;
-        run = adapter.start({ task_id: ctx.id, run_id: run_id.replace(/[^\w.-]/g, '_'), cwd: wt.path, model: entry?.model, effort: s.effort, timeout_ms: runTimeoutMs, role: 'developer',
-          prompt: developerPrompt({ task: ctx.v, strategy: s, feedback: ctx.cp.feedback, summary, worktree: wt }) });
+        run = adapter.start({ task_id: ctx.id, run_id: run_id.replace(/[^\w.-]/g, '_'), cwd: wt.path, model: entry?.model, effort: effort ?? undefined, timeout_ms: lim.timeout_ms, role: 'developer',
+          ...(lim.max_steps ? { max_steps: lim.max_steps } : {}), prompt: developerPrompt({ task: ctx.v, strategy: s, feedback: ctx.cp.feedback, summary, worktree: wt }) });
         active.set(ctx.id, { adapter, run });
         const r = await run.done;
         error = r.error;
@@ -842,7 +913,7 @@ export function createGoalLoop({
         return result(ctx, 'cancelled', 'cancelled during run', { terminal: true, transitioned: false });
       }
       const u = run ? adapter.collectUsage(run) : { input_tokens: null, output_tokens: null, usd: null };
-      await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, run_id, ...u }, { event_id: `usage-${run_id}` });
+      await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, ...billingOf(entry), run_id, ...u }, { event_id: `usage-${run_id}` });
       if (error) await store.append(ctx.id, { event_id: `fail-${run_id}`, kind: 'tool.failed', payload: { run_id, error, ...(run ? {} : { not_started: true }) } });
       // Actions the agent asked for are checked against policy, never executed by the loop (GL09).
       const grants = grantsOf(ctx);
@@ -854,6 +925,16 @@ export function createGoalLoop({
         const action = { class: argv ? 'command' : 'request', argv, text: [a.text, a.class].filter(Boolean).map(String).join(' ') || undefined };
         const r = allowed(p.policy, ctx.v, action, grants, actionKey(action, `agent:${run_id}:`));
         if (!r.ok) await store.append(ctx.id, { event_id: `actreq-${run_id}-${n++}`, kind: 'approval.requested', payload: { run_id, action, reason: r.reason, classes: r.classes || [], key: r.key, prohibited: !r.needs_approval } });
+      }
+      // The developer's own impossibility claim (never proof): an independent feasibility review judges it on failing checks.
+      const claim = run ? parseImpossibleClaim(run.events) : null;
+      if (claim) {
+        await note(ctx, `claim-${run_id}`, decision('impossible_claim', `Developer run ${run_id} says the requirements are impossible: what counts?`, [
+          alt('check the run as usual; on failing checks ask an independent reviewer whether the requirements can be met', 'a model\'s claim is not evidence', 'one reviewer run'),
+          alt('stop now', 'fast', 'a developer could give up on any hard task')],
+        'check the run as usual; on failing checks ask an independent reviewer whether the requirements can be met', { evidence: [`run ${run_id}`, `claim: ${claim.diagnosis.slice(0, 300)}`],
+          expected_effect: 'feasibility review if the required checks fail', rationale: 'OWNER_DECISIONS §12.2: stop fast on impossible requirements, but only on independent judgement and failing checks.' }),
+        { claim: { run_id, diagnosis: claim.diagnosis } });
       }
       await store.recordEffect(ctx.id, { effect_id, phase: 'confirmed' });
       ctx = await load(ctx.id);
@@ -876,8 +957,10 @@ export function createGoalLoop({
       await note(ctx, `stall-${run_id}`, decision('run_timeout', `Developer run ${run_id} hit the run timeout: what counts?`, [
         alt('check what the run left, as an attempt', 'a stall without new passing evidence counts toward the no-progress rule', 'partial work is checked'),
         alt('back off and retry', 'transient errors clear', 'a run that used its whole time limit is not transient: the loop would spend the clock without a no-progress verdict')],
-      'check what the run left, as an attempt', { evidence: [`run ${run_id}: timeout after ${runTimeoutMs} ms`, `entry ${s.entry}`], expected_effect: 'checks run on the committed SHA; no new passing evidence counts as no progress',
-        rationale: 'A billed run timeout is an attempt, not a provider outage (quota and unavailability still back off).', policy_ref: policyRef(p) }));
+      'check what the run left, as an attempt', { evidence: [`run ${run_id}: timeout after ${lastDevStart(ctx)?.payload.limits?.timeout_ms ?? runTimeoutMs} ms`, `entry ${s.entry}`, `stall signature ${stallSignature(s.entry)}`],
+        expected_effect: 'checks run on the committed SHA; no new passing evidence counts as no progress',
+        rationale: 'A billed run timeout is an attempt, not a provider outage (quota and unavailability still back off). It counts at once as a stall (D-024).', policy_ref: policyRef(p) }),
+      { stalls: ctx.cp.stalls + 1 });
     }
     // Commit what the developer produced so the evidence names an exact SHA.
     const lw = await ensureLease(ctx, 'repair');   // the run's files stay in the worktree for the next run
@@ -953,13 +1036,97 @@ export function createGoalLoop({
       const f = failing[0];
       const first = f.failures[0] || {};
       const failingTests = failing.reduce((n, r) => n + Math.max(1, r.failures.length), 0);
-      return onFailure(ctx, { signature: failureSignature({ test: `${f.check_id}:${first.test ?? '?'}`, errorClass: first.error_class }), passing, failing: failingTests, p, feedback: feedbackOf('test_failure', failing) });
+      const signature = failureSignature({ test: `${f.check_id}:${first.test ?? '?'}`, errorClass: first.error_class });
+      // OWNER_DECISIONS §12.2: impossible requirements end fast, on an independent reviewer's judgement of failing checks.
+      const feas = await maybeFeasibility(ctx, p, failing);
+      if (feas?.stop) return feas.stop;
+      if (feas) ctx = await load(ctx.id);
+      if (feas?.impossible) {
+        const diagnosis = `independent reviewer ${feas.reviewer} judged the requirements contradictory or impossible: ${feas.diagnosis}`;
+        const next_action = 'fix the goal, the definition of done or the acceptance checks so they can all be met, then resume';
+        return decide(ctx, decision('no_progress', 'Requirements judged impossible: keep iterating?', [
+          alt('suspend in waiting with the reviewer\'s diagnosis', 'no run can satisfy contradictory requirements; no further spend', 'goal not reached'),
+          alt('another developer run', 'the reviewer may be wrong', 'the required checks still fail and an independent reviewer says they cannot all pass')],
+        'suspend in waiting with the reviewer\'s diagnosis', { evidence: [`sha ${ctx.head}`, `failing ${failing.map((r) => r.check_id).join(', ')}`, `feasibility reviewer ${feas.reviewer}: impossible`, ...feas.evidence],
+          expected_effect: 'no further runs until the requirements change or the owner resumes', rationale: `OWNER_DECISIONS §12.2: ${diagnosis}`, policy_ref: policyRef(p) }),
+        { patch: { claim: null, wait: { reason: 'no_progress', until_ms: null, resume_to: 'replan', diagnosis, next_action, policy_hash: policyRef(p) } }, to: 'waiting', reason: 'no_progress',
+          emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'no_progress', diagnosis, next_action } }] });
+      }
+      const fb = feedbackOf('test_failure', failing);
+      return onFailure(ctx, { signature, passing, failing: failingTests, p, extraEvidence: feas?.evidence || [],
+        feedback: feas?.findings?.length ? { ...fb, feasibility: { reviewer: feas.reviewer, findings: feas.findings } } : fb });
     }
     // Every required check passes on this exact SHA. A SHA once seen flaky is never accepted.
     if (ctx.cp.flaky.some((x) => x.endsWith(`@${head}`))) {
       return onFailure(ctx, { signature: failureSignature({ test: 'flaky-sha', errorClass: 'flaky' }), passing: passing - 1, p, feedback: { kind: 'flaky', sha: head, note: 'This SHA was flaky earlier; change the code to remove the nondeterminism.' } });
     }
     return review(ctx, p, results);
+  }
+
+  // ---------- feasibility review (OWNER_DECISIONS §12.2) ----------
+  // On failing required checks, once per head after a developer's impossibility claim, and once per task after the first
+  // stall of a run governed by stall_runs_to_no_progress (a cheap model on an easy class). The reviewer is independent
+  // of every developer, read-only, budget-checked; its "possible" answer only adds feedback. -> null | { stop } |
+  // { reviewer, impossible, diagnosis, findings, evidence[] }
+  async function maybeFeasibility(ctx, p, failing) {
+    const head = ctx.head;
+    const dev = lastDevStart(ctx);
+    if (!dev || !head) return null;
+    const feasDone = ctx.v.decisions.filter((d) => d.loop && d.kind === 'feasibility_review');
+    if (feasDone.some((d) => d.evidence.includes(`sha ${head}`))) return null;
+    const claimed = ctx.cp.claim?.run_id === dev.payload.run_id;
+    const stalled = !!lastDevTimeout(ctx) && !!dev.payload.limits?.stall_runs_to_no_progress && !feasDone.length;
+    if (!claimed && !stalled) return null;
+    const why = claimed ? `developer run ${dev.payload.run_id} claims the requirements are impossible` : `developer run ${dev.payload.run_id} stalled at its run time limit`;
+    const devEntries = devEntriesOf(ctx);
+    const skip = async (reason) => {
+      await note(ctx, `feas-${short(head)}`, decision('feasibility_review', 'Ask an independent reviewer whether the requirements can be met?', [
+        alt('skip', reason, 'the no-progress rule decides alone'), alt('review', 'stops impossible tasks fast', reason)], 'skip', {
+        evidence: [`sha ${head}`, why, reason], expected_effect: 'the failure is handled by the no-progress rule', rationale: `Feasibility review skipped: ${reason}` }), { claim: null });
+      return null;
+    };
+    let r = null;
+    try { r = await routeFor(ctx, p, { exclude: devEntries, role: 'reviewer' }); } catch { r = null; }
+    const choice = r?.choice;
+    if (!choice || r.requires_approval || devEntries.includes(choice)) return skip('no independent reviewer can be routed');
+    const b = budget.check({ ...ctx.v, budget_policy: effectiveBudgetPolicy(ctx) }, ledger(ctx), estimate(ctx, choice, 'reviewer', r), { quota: quota(choice) });
+    if (!b.allow) return skip(`budget: ${b.reason}`);
+    const adapter = adapterFor(choice);
+    if (!adapter) return skip(`no adapter for ${choice}`);
+    const entry = registry.get(choice);
+    const lim = runLimitsFor(ctx, p, entry, adapter, 'feasibility');
+    const runBase = `${ctx.id}.feasibility-${short(head)}-e${ctx.epoch}-${choice.replace(/[^\w.-]/g, '_')}`;
+    const run_id = `${runBase}-a${ctx.events.filter((e) => e.kind === 'task.started' && String(e.payload.run_id).startsWith(`${runBase}-a`)).length}`;
+    const dir = path.join(reviewRoot, `${ctx.id}-${short(head)}-e${ctx.epoch}-feasibility`);
+    const wt = ctx.cp.worktree;
+    let out;
+    try {
+      try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* not there */ }
+      await g(wt.path, ['worktree', 'add', '--detach', dir, head]);
+      const diff = await g(wt.path, ['diff', ctx.v.base_sha, head]);
+      await store.append(ctx.id, { event_id: `start-${run_id}`, kind: 'task.started', payload: { run_id, role: 'reviewer', review_role: 'feasibility', entry: choice, runtime: entry?.runtime ?? null, model: entry?.model ?? null,
+        limits: { timeout_ms: lim.timeout_ms, max_steps: lim.max_steps, effort: lim.effort, context_mode: lim.context_mode }, ...(lim.notes.length ? { limits_ignored: lim.notes } : {}) } });
+      out = await verifier.review({ adapter, entry, task: ctx.v, sha: head, cwd: fs.realpathSync(dir), diff, evidence: ctx.evidence, run_id: run_id.replace(/[^\w.-]/g, '_'),
+        timeout_ms: lim.timeout_ms, effort: lim.effort, max_steps: lim.max_steps, context_mode: lim.context_mode, role: 'feasibility', claim: claimed ? ctx.cp.claim.diagnosis : null,
+        failing: failing.map((x) => ({ check_id: x.check_id, status: x.status, exits: x.exits, failures: x.failures, output_tail: String(x.output_tail || '').slice(-1500) })),
+        onStart: (run) => active.set(ctx.id, { adapter, run }) });
+    } finally {
+      active.delete(ctx.id);
+      try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* best effort */ }
+    }
+    if (ctl.lost) return { stop: result(ctx, null, 'controller lease lost during the feasibility review: no writes', { idle: true }) };
+    if (await isCancelled(ctx.id)) return { stop: result(ctx, 'cancelled', 'cancelled during review', { terminal: true, transitioned: false }) };
+    const u = out.usage || {};
+    await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, ...billingOf(entry), run_id,
+      input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, usd: u.usd ?? null, ...(u.incomplete ? { incomplete: true } : {}) }, { event_id: `usage-${run_id}` });
+    const answer = out.verdict === 'unavailable' ? `unavailable (${out.error?.class || 'no verdict'})` : out.impossible ? 'impossible' : 'achievable';
+    const evidence = [`sha ${head}`, why, `reviewer ${choice}: ${answer}`, ...(out.diagnosis ? [`diagnosis: ${out.diagnosis.slice(0, 300)}`] : [])];
+    await note(ctx, `feas-${short(head)}`, decision('feasibility_review', 'Can the requirements be met as stated?', [
+      alt('requirements impossible: stop', 'no run can pass contradictory checks', 'the reviewer may be wrong; the owner can resume'),
+      alt('requirements achievable: keep iterating', 'normal no-progress rule', 'more runs')], out.impossible ? 'requirements impossible: stop' : 'requirements achievable: keep iterating', {
+      evidence, expected_effect: out.impossible ? 'waiting/no_progress with the diagnosis' : 'the failure goes through the no-progress rule', rationale: `Independent feasibility review on failing checks (${why}).` }), { claim: null });
+    if (out.verdict === 'unavailable') return { reviewer: choice, impossible: false, diagnosis: null, findings: [], evidence };
+    return { reviewer: choice, impossible: out.impossible === true, diagnosis: out.diagnosis, findings: out.findings || [], evidence };
   }
 
   // ---------- independent evaluation ----------
@@ -974,13 +1141,13 @@ export function createGoalLoop({
     to: 'waiting', reason: 'no independent evaluator' });
 
   // Unbilled transient unavailability (nothing ran, or the runtime reported itself unavailable): timed backoff.
-  function reviewBackoff(ctx, why, extraPatch = {}) {
+  function reviewBackoff(ctx, why, extraPatch = {}, entry = null) {
     const n = ctx.cp.review_unavailable + 1;
     const delay = Math.min(MAX_BACKOFF_MS, 60_000 * 2 ** (n - 1));
     return decide(ctx, decision('evaluator_unavailable', 'Independent evaluation unavailable: accept on tests alone?', [
       alt('wait and retry the evaluation', 'acceptance needs an independent verdict (GL04)', 'delay'), alt('accept on tests alone', 'fast', 'never: unavailable is not approval')],
     'wait and retry the evaluation', { evidence: [why], expected_effect: `re-evaluate in ${delay} ms without a developer run`, rationale: `Evaluator unavailable: ${why}` }),
-    { patch: { ...extraPatch, review_unavailable: n, verify_only: true, wait: { reason: 'evaluator_unavailable', until_ms: now() + delay, resume_to: 'ready' } }, to: 'waiting', reason: 'evaluator unavailable' });
+    { patch: { ...extraPatch, review_unavailable: n, verify_only: true, wait: { reason: 'evaluator_unavailable', until_ms: now() + delay, resume_to: 'ready', ...(entry ? { entry, role: 'reviewer' } : {}) } }, to: 'waiting', reason: 'evaluator unavailable' });
   }
 
   // #3: a billed review that produced no usable verdict is a failure signature under the no-progress rule: identical
@@ -1036,9 +1203,12 @@ export function createGoalLoop({
       try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* not there */ }
       await g(wt.path, ['worktree', 'add', '--detach', dir, head]);   // independent, read-only checkout of the exact SHA
       const diff = await g(wt.path, ['diff', ctx.v.base_sha, head]);
-      await store.append(ctx.id, { event_id: `start-${run_id}`, kind: 'task.started', payload: { run_id, role: 'reviewer', review_role: role, entry: choice, runtime: entry?.runtime ?? null, model: entry?.model ?? null } });
+      const lim = runLimitsFor(ctx, p, entry, adapter, role);   // D-024: reviewers run under their entry's limits too
+      await store.append(ctx.id, { event_id: `start-${run_id}`, kind: 'task.started', payload: { run_id, role: 'reviewer', review_role: role, entry: choice, runtime: entry?.runtime ?? null, model: entry?.model ?? null,
+        limits: { timeout_ms: lim.timeout_ms, max_steps: lim.max_steps, effort: lim.effort, context_mode: lim.context_mode }, ...(lim.notes.length ? { limits_ignored: lim.notes } : {}) } });
       out = await verifier.review({ adapter, entry, task: ctx.v, sha: head, cwd: fs.realpathSync(dir), diff, evidence: ctx.evidence.length ? ctx.evidence : (await load(ctx.id)).evidence,
-        run_id: run_id.replace(/[^\w.-]/g, '_'), timeout_ms: runTimeoutMs, role, strict: rf.strict, onStart: (run) => active.set(ctx.id, { adapter, run }) });
+        run_id: run_id.replace(/[^\w.-]/g, '_'), timeout_ms: lim.timeout_ms, effort: lim.effort, max_steps: lim.max_steps, context_mode: lim.context_mode,
+        role, strict: rf.strict, onStart: (run) => active.set(ctx.id, { adapter, run }) });
     } finally {
       active.delete(ctx.id);
       try { await g(wt.path, ['worktree', 'remove', '--force', dir]); } catch { /* best effort; the dir is outside the task worktree */ }
@@ -1046,15 +1216,23 @@ export function createGoalLoop({
     if (ctl.lost) return { stop: result(ctx, null, 'controller lease lost during the review: no writes', { idle: true }) };
     if (await isCancelled(ctx.id)) return { stop: result(ctx, 'cancelled', 'cancelled during review', { terminal: true, transitioned: false }) };
     const u = out.usage || {};
-    await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, run_id,
+    await store.recordUsage(ctx.id, { runtime: entry?.runtime ?? null, provider: entry?.provider ?? null, model: entry?.model ?? null, ...billingOf(entry), run_id,
       input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, usd: u.usd ?? null, ...(u.incomplete ? { incomplete: true } : {}) }, { event_id: `usage-${run_id}` });
     if (out.verdict === 'unavailable') {
       const billed = isBilled({ started: !!out.run, errorClass: out.error?.class, usage: out.usage });
-      if (!billed) return { stop: await reviewBackoff(ctx, `${role} ${choice}: ${out.error?.class || 'no verdict'}`) };
+      if (!billed) return { stop: await reviewBackoff(ctx, `${role} ${choice}: ${out.error?.class || 'no verdict'}`, {}, choice) };
       return { stop: await reviewerFailure(await load(ctx.id), p, choice, out, devEntries) };
     }
     const verdict = { sha: head, actor: { role, id: choice }, verdict: out.verdict, findings: out.findings };
     await store.recordVerdict(ctx.id, verdict, { event_id: `verdict-${run_id}` });
+    // An "impossible" claim on green checks is not believed (the checks pass): journaled, the verdict counts as usual.
+    if (out.impossible) {
+      await note(ctx, `impossible-ignored-${short(head)}-${role}`, decision('impossible_ignored', `Reviewer ${choice} calls the requirements impossible while every required check passes: stop?`, [
+        alt('ignore the claim; handle the verdict as usual', 'the deterministic checks pass on this SHA: the requirements were met as tested', 'the reviewer may see a real conflict'),
+        alt('stop as no_progress', 'fast', 'contradicted by passing evidence')], 'ignore the claim; handle the verdict as usual', {
+        evidence: [`sha ${head}`, `reviewer ${choice}`, `diagnosis: ${String(out.diagnosis).slice(0, 300)}`], expected_effect: 'the reject goes through the no-progress rule like any review finding',
+        rationale: 'OWNER_DECISIONS §12.2: an impossible verdict ends a task only while the deterministic checks still fail.' }));
+    }
     return { verdict };
   }
 
@@ -1116,7 +1294,7 @@ export function createGoalLoop({
       if (!resumed && !changed) return result(ctx, null, `waiting (${w.reason}): ${w.next_action || 'until inputs change'}`, { idle: true });
       return decide(ctx, decision('resume', 'Inputs changed after a wait: resume?', [alt('resume with a replan', 'new inputs can change the outcome', 'more spend'), alt('stay waiting', 'no spend', 'ignores the new input')],
         'resume with a replan', { evidence: [resumed ? 'owner resumed' : 'project policy changed'], expected_effect: 'replan from scratch', rationale: 'Counters reset on new inputs (owner resume or policy change).' }),
-      { patch: { changes: 0, tried: [], stale: 0, streak: { signature: null, count: 0 }, exclude: [], ...(w.reason === 'lease_held' && resumed ? { lease_ack: true } : {}) },
+      { patch: { changes: 0, tried: [], stale: 0, stalls: 0, claim: null, streak: { signature: null, count: 0 }, exclude: [], ...(w.reason === 'lease_held' && resumed ? { lease_ack: true } : {}) },
         to: w.resume_to || 'replan', reason: 'inputs changed' });
     }
     if (w.reason === 'infra' && admission?.isPaused?.()) {

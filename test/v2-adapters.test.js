@@ -86,13 +86,16 @@ test('T03 no adapter argv carries a permission/sandbox bypass flag; safe flags p
   const expect = {
     claude: ['-p', '--output-format', 'stream-json', '--permission-mode', 'acceptEdits', '--model', 'm1', '--effort', 'high'],
     codex: ['exec', '--json', '-s', 'workspace-write', '-C', '-m', 'm1', '-c', 'model_reasoning_effort="high"'],
-    minimax: ['exec', '--cwd', '--output-format', 'stream-json', '--permission', 'smart', '--model', 'm1', '--effort', 'high'],
+    minimax: ['exec', '--cwd', '--output-format', 'stream-json', '--permission', 'full', '--model', 'minimax/m1', '--effort', 'high'],
     opencode: ['run', '--format', 'json', '--model', 'm1'],
   };
   for (const name of Object.keys(CLIS)) {
     const { rec, run } = await runCli(name, 'ok', name === 'opencode' ? { model: 'm1' } : { model: 'm1', effort: 'high' });
     assert.equal(run.result.exit, 0, name);
-    assert.deepEqual(findBypass(rec.argv, [rec.argv.length - 1]), [], name);
+    // D-023: the minimax adapter's own `--permission full` (argv 5-6) is its V2 exec launch mode, trusted; nothing else is.
+    const own = name === 'minimax' ? [5, 6] : [];
+    if (name === 'minimax') assert.deepEqual(rec.argv.slice(5, 7), ['--permission', 'full']);
+    assert.deepEqual(findBypass(rec.argv, [...own, rec.argv.length - 1]), [], name);
     for (const f of expect[name]) assert.ok(rec.argv.includes(f), `${name} argv lacks ${f}: ${rec.argv}`);
     assert.equal(rec.argv.at(-1), 'hi');
   }

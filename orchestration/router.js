@@ -5,8 +5,9 @@ import { createHash } from 'node:crypto';
 import { forbiddenMatch } from '../stall.js';
 import { resolve, sep, isAbsolute } from 'node:path';
 import { checkEffort, priceStatus, TIERS } from './model-registry.js';
+import { WORK_TYPES } from './task-contract.js';
 
-export const WORK_TYPES = ['research', 'coding', 'debugging', 'ui', 'test', 'security', 'operations', 'docs', 'unknown'];
+export { WORK_TYPES };
 export const DEFAULT_WEIGHTS = Object.freeze({ quality: 0.5, cost: 0.2, latency: 0.1, reliability: 0.2 });
 const PRIORITY_WEIGHTS = {
   cost: { quality: 0.3, cost: 0.4, latency: 0.1, reliability: 0.2 },
@@ -22,6 +23,13 @@ const DEFAULT_ESTIMATE = { input_tokens: 30000, output_tokens: 8000 };
 const MIN_TIER_BY_RISK = { low: 'light', medium: 'light', high: 'standard', critical: 'strong' };
 const UNKNOWN_RISK_TIER = 'strong';   // unknown risk is treated as high-stakes: strongest tier only, and approval
 const MAX_FALLBACKS = 3;
+// D-025: a subscription (flat plan) costs ~0 at the margin. Its routing cost is the plan's share per token when the
+// registry knows the quota (quota.usd / quota.tokens), else this nominal USD per million tokens: known and near zero,
+// so it is never "unknown" (worst) and never a measured $0, and token-heavy runs still cost more than light ones.
+export const SUBSCRIPTION_NOMINAL_USD_PER_MTOK = 0.05;
+// D-026 escalation ladder: the cheapest rung whose (fit-adjusted) quality reaches this starts; failures climb.
+export const LADDER_MIN_QUALITY = 0.5;
+const BILLING_RANK = { subscription: 0, per_token: 1, unknown: 2 };
 const EPS = 1e-9;
 
 // ---------- hard floors ----------
@@ -158,7 +166,7 @@ function shapeFloor(task, policy, realpath) {
 const ctxNum = (c) => (typeof c === 'number' ? c : typeof c === 'string' && c.trim() !== '' ? Number(c) : NaN);
 
 function floors(task, entry, ctx) {
-  const { al, caps, effort, ctxTokens, minTier, exclude, allowFake, now, maxAgeDays } = ctx;
+  const { al, caps, effort, ctxTokens, minTier, exclude, allowFake, now, maxAgeDays, limitsFor } = ctx;
   void now; void maxAgeDays;
   if (exclude.includes(entry.id)) return 'excluded by caller (e.g. independent verifier must differ)';
   if (entry.test_only && !allowFake) return 'test-only runtime is not routable outside tests';
@@ -175,6 +183,12 @@ function floors(task, entry, ctx) {
     if (entry.context_tokens < ctxTokens) return `context ${entry.context_tokens} < required ${ctxTokens}`;
   }
   if (TIERS.indexOf(entry.tier) < TIERS.indexOf(minTier)) return `tier ${entry.tier} below the ${minTier} floor for risk_class ${JSON.stringify(task?.risk_class ?? null)}`;
+  // D-024: run limits this entry cannot honour (an effort it does not support) reject it; never translated.
+  if (limitsFor) {
+    let lim;
+    try { lim = limitsFor(entry); } catch (e) { return `run_limits: ${e.message}`; }
+    if (lim?.error) return lim.error;
+  }
   return null;
 }
 
@@ -184,18 +198,29 @@ function metrics(entry, hist, estimate, workType, ctx) {
   const h = typed && validHistory(typed) && typed.attempts >= MIN_HISTORY_ATTEMPTS ? typed : hist;
   const history_invalid = !!(h && !validHistory(h));   // corrupt counts are ignored, never trusted
   const meaningful = !!(h && !history_invalid && h.attempts >= MIN_HISTORY_ATTEMPTS);
-  const quality = meaningful ? (h.verified + 1) / (h.attempts + 2) : TIER_PRIOR[entry.tier];
+  // Rework costs time and tokens: a known first-pass rate scales the verified-rate quality by 0.85..1 (D-025).
+  const fp = meaningful && known(h.first_pass_rate) && h.first_pass_rate >= 0 && h.first_pass_rate <= 1 ? 0.85 + 0.15 * h.first_pass_rate : 1;
+  const quality = meaningful ? ((h.verified + 1) / (h.attempts + 2)) * fp : TIER_PRIOR[entry.tier];
   const reliability = meaningful && known(h.errors) ? (h.attempts - h.errors + 1) / (h.attempts + 2) : PRIOR_RELIABILITY;
   const latency = known(h?.latency_ms) && meaningful ? h.latency_ms : entry.latency_ms;
-  // cost per verified completion: observed spend when known, else price x estimate / quality. Stale/unknown price = unknown.
+  // Tokens fold into cost (D-025): a model's measured mean tokens per attempt replace the task estimate, so token-heavy
+  // models cost more on every billing basis.
+  const tok = meaningful && Number.isInteger(h.token_attempts) && h.token_attempts > 0 && known(h.input_tokens) && known(h.output_tokens)
+    ? { input_tokens: h.input_tokens / h.token_attempts, output_tokens: h.output_tokens / h.token_attempts, basis: 'history' } : { ...estimate, basis: 'estimate' };
+  const priced = (p) => ((tok.input_tokens * p.input + tok.output_tokens * p.output) / 1e6) / quality;
+  // cost per verified completion: observed spend when known, else price x tokens / quality. Stale/unknown price = unknown.
   let cost = null; let cost_basis = 'unknown';
+  if (entry.billing === 'subscription') {
+    const q = entry.quota;
+    const share = q && known(q.usd) && known(q.tokens) && q.tokens > 0 ? (q.usd / q.tokens) * 1e6 : null;
+    const per = share ?? SUBSCRIPTION_NOMINAL_USD_PER_MTOK;
+    cost = priced({ input: per, output: per }); cost_basis = share != null ? 'subscription_quota' : 'subscription_nominal';
+  }
   // a $0 history is not a verified $0 cost
-  if (meaningful && known(h.total_usd) && h.total_usd > 0 && h.verified > 0) { cost = h.total_usd / h.verified; cost_basis = 'history'; }
-  else if (priceStatus(entry, ctx) === 'fresh') {
-    cost = ((estimate.input_tokens * entry.price.input + estimate.output_tokens * entry.price.output) / 1e6) / quality;
-    cost_basis = 'price_estimate';
-  } else if (priceStatus(entry, ctx) === 'stale') cost_basis = 'stale_price';
-  return { quality, reliability, latency: known(latency) ? latency : null, cost, cost_basis, history: meaningful, history_invalid };
+  else if (meaningful && known(h.total_usd) && h.total_usd > 0 && h.verified > 0) { cost = h.total_usd / h.verified; cost_basis = 'history'; }
+  else if (priceStatus(entry, ctx) === 'fresh') { cost = priced(entry.price); cost_basis = 'price_estimate'; }
+  else if (priceStatus(entry, ctx) === 'stale') cost_basis = 'stale_price';
+  return { quality, reliability, latency: known(latency) ? latency : null, cost, cost_basis, tokens: tok, history: meaningful, history_invalid };
 }
 
 // Counts must be coherent: integers, 0 <= verified <= attempts, 0 <= errors <= attempts, total_usd (if given) >= 0.
@@ -206,6 +231,8 @@ function validHistory(h) {
   if (h.errors != null && (!int(h.errors) || h.errors > h.attempts)) return false;
   if (h.total_usd != null && !(known(h.total_usd) && h.total_usd >= 0)) return false;
   if (h.latency_ms != null && !(known(h.latency_ms) && h.latency_ms >= 0)) return false;
+  for (const k of ['input_tokens', 'output_tokens']) if (h[k] != null && !(known(h[k]) && h[k] >= 0)) return false;
+  if (h.token_attempts != null && !int(h.token_attempts)) return false;   // runs with known tokens (may exceed task attempts)
   return true;
 }
 
@@ -216,13 +243,14 @@ function norm(values, invert) {   // min-max over known values; unknown -> null
   return values.map((v) => (!known(v) ? null : hi - lo < EPS ? 1 : invert ? (hi - v) / (hi - lo) : (v - lo) / (hi - lo)));
 }
 
+// light models are penalised on complex work (conservative prior, only without history).
+const fitOf = (c, complexity) => (!c.history && c.tier === 'light' ? Math.max(0, 1 - complexity) * 0.2 + 0.8 : 1);
+
 function rank(cands, weights, complexity) {
   const costS = norm(cands.map((c) => c.cost_est_usd), true);
   const latS = norm(cands.map((c) => c.latency_ms), true);
   cands.forEach((c, i) => {
-    // light models are penalised on complex work (conservative prior, only without history).
-    const fit = !c.history && c.tier === 'light' ? Math.max(0, 1 - complexity) * 0.2 + 0.8 : 1;
-    const q = c.quality * fit;
+    const q = c.quality * fitOf(c, complexity);
     // unknown cost scores 0 (worst), unknown latency 0.5 (neutral): unknown is never the cheapest.
     c.score = round6(weights.quality * q + weights.cost * (costS[i] ?? 0) + weights.latency * (latS[i] ?? 0.5) + weights.reliability * c.reliability);
   });
@@ -232,8 +260,33 @@ function rank(cands, weights, complexity) {
 }
 
 // ---------- route ----------
+// ---------- escalation ladder (D-026) ----------
+// Rungs: tier (light < standard < strong), then billing (subscription < per_token < unknown), then estimated cost
+// (unknown last), then id. Only floored candidates are rungs, so the ladder can never go below a floor.
+const rungKey = (c) => [TIERS.indexOf(c.tier), BILLING_RANK[c.billing] ?? 2, known(c.cost_est_usd) ? c.cost_est_usd : Infinity];
+const cmpKey = (a, b) => { const x = rungKey(a), y = rungKey(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; return 0; };
+// Equal rungs: the better score first (e.g. the faster of two equally priced subscription models).
+const cmpRung = (a, b) => cmpKey(a, b) || (b.score - a.score) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+export const ladderOf = (result) => [...(result?.candidates || [])].sort(cmpRung);
+// Who may climb: not security work, not high/critical risk, not a quality/speed priority (those rank by score).
+export function escalationEligible(task, work = classifyWork(task)) {
+  const risk = normRisk(task?.risk_class);
+  if (work.type === 'security') return { eligible: false, reason: 'security work keeps its floors and ranking' };
+  if (!['low', 'medium'].includes(risk)) return { eligible: false, reason: `risk_class ${JSON.stringify(task?.risk_class ?? null)} keeps its floors` };
+  if (['quality', 'speed'].includes(task?.priority)) return { eligible: false, reason: `priority ${task.priority} ranks by score` };
+  return { eligible: true, reason: 'low/medium-risk non-security work: start on the cheapest good-enough rung' };
+}
+// Next rung strictly above `current` (higher tier, dearer billing or higher estimated cost; an equal rung is a sideways
+// step, not an escalation) among the floored candidates of `result`, never one in `tried`. -> candidate | null
+export function nextRung(result, current, { tried = [] } = {}) {
+  const lad = ladderOf(result);
+  const cur = lad.find((c) => c.id === current);
+  if (!cur) return null;
+  return lad.find((c) => c.id !== current && !tried.includes(c.id) && cmpKey(c, cur) > 0) || null;
+}
+
 export function route(task, { registry, policy = null, history = {}, weights = null, mode = 'shadow', checkAction = defaultCheckAction,
-  now = Date.now, exclude = [], allowFake = false, maxPriceAgeDays = 90, realpath = null, floorGrants = [] } = {}) {
+  now = Date.now, exclude = [], allowFake = false, maxPriceAgeDays = 90, realpath = null, floorGrants = [], limitsFor = null, escalation = false } = {}) {
   if (mode !== 'shadow') { const e = new Error(`router mode "${mode}" not supported: shadow only`); e.code = 'E_NOT_LIVE'; throw e; }
   if (!registry) throw new TypeError('route: registry required');
   const entries = registry.entries();
@@ -270,7 +323,7 @@ export function route(task, { registry, policy = null, history = {}, weights = n
 
   const caps = [...new Set([...(task.required_capabilities || []), ...(task.runtime_capabilities || [])])].sort();
   const minTier = MIN_TIER_BY_RISK[normRisk(task.risk_class)] || UNKNOWN_RISK_TIER;
-  const ctx = { al: allowlists(task, policy), caps, effort: task?.effort ?? null, ctxTokens: task.context_tokens_estimate != null ? ctxNum(task.context_tokens_estimate) : null, minTier, exclude, allowFake, ...priceCtx };
+  const ctx = { al: allowlists(task, policy), caps, effort: task?.effort ?? null, ctxTokens: task.context_tokens_estimate != null ? ctxNum(task.context_tokens_estimate) : null, minTier, exclude, allowFake, limitsFor, ...priceCtx };
   const feasible = [];
   for (const e of entries) {
     const why = floors(task, e, ctx);
@@ -287,11 +340,19 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   const w = { ...(weights || PRIORITY_WEIGHTS[task?.priority] || DEFAULT_WEIGHTS) };
   const cands = feasible.map((e) => {
     const m = metrics(e, history?.[e.id], estimate, work.type, priceCtx);
-    return { id: e.id, runtime: e.runtime, provider: e.provider, model: e.model, tier: e.tier, context_tokens: e.context_tokens,
+    return { id: e.id, runtime: e.runtime, provider: e.provider, model: e.model, tier: e.tier, billing: e.billing ?? 'unknown', context_tokens: e.context_tokens,
       availability: e.availability, quality: round6(m.quality), reliability: round6(m.reliability), latency_ms: m.latency,
-      cost_est_usd: m.cost == null ? null : round6(m.cost), cost_basis: m.cost_basis, history: m.history, history_invalid: m.history_invalid, score: 0 };
+      cost_est_usd: m.cost == null ? null : round6(m.cost), cost_basis: m.cost_basis, tokens_basis: m.tokens.basis, history: m.history, history_invalid: m.history_invalid, score: 0 };
   });
   rank(cands, w, work.complexity);
+  // D-026: an eligible task starts on the cheapest good-enough rung. Needs two known-cost candidates: "cheapest" is
+  // meaningless among unknown costs, and unknown is never the cheapest.
+  const elig = escalation ? escalationEligible(task, work) : { eligible: false, reason: 'escalation ladder off' };
+  let ladderStart = null;
+  if (elig.eligible && cands.filter((c) => known(c.cost_est_usd)).length >= 2) {
+    ladderStart = [...cands].sort(cmpRung).find((c) => known(c.cost_est_usd) && c.quality * fitOf(c, work.complexity) >= LADDER_MIN_QUALITY) || null;
+    if (ladderStart && ladderStart !== cands[0]) { cands.splice(cands.indexOf(ladderStart), 1); cands.unshift(ladderStart); }
+  }
   const choice = cands[0];
 
   // Rationale: say what drove it, and every conservative default used.
@@ -302,6 +363,9 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   if (badHist.length) rationale.push(`History for ${badHist.join(', ')} is inconsistent (counts out of range) and was ignored: priors used.`);
   const unk = cands.filter((c) => c.cost_est_usd == null);
   if (unk.length) rationale.push(`Unknown/stale cost for ${unk.map((c) => c.id).join(', ')}: ranked after known-cost candidates at equal quality, never treated as cheapest or $0.`);
+  const subs = cands.filter((c) => c.billing === 'subscription').map((c) => `${c.id} (${c.cost_basis})`);
+  if (subs.length) rationale.push(`Subscription billing for ${subs.join(', ')}: near-zero marginal cost from the quota share or the nominal ${SUBSCRIPTION_NOMINAL_USD_PER_MTOK} USD/Mtok (D-025), scaled by tokens.`);
+  if (ladderStart) rationale.push(`Escalation ladder (D-026): starts on the cheapest good-enough rung ${ladderStart.id} (tier ${ladderStart.tier}, ${ladderStart.billing}, est $${ladderStart.cost_est_usd}); failing checks or a reviewer rejection climb to the next rung.`);
   rationale.push(`Chose ${choice.id} (score ${choice.score}) with weights q=${w.quality} c=${w.cost} l=${w.latency} r=${w.reliability}.`);
 
   const fallback = cands.slice(1, 1 + MAX_FALLBACKS).map((c) => ({ id: c.id, provider: c.provider, context_tokens: c.context_tokens }));
@@ -314,9 +378,11 @@ export function route(task, { registry, policy = null, history = {}, weights = n
   if (choice.availability === 'unknown') confidence -= 0.1;
   if (choice.cost_est_usd == null) confidence -= 0.1;
   if (!second) confidence = Math.min(confidence, 0.5);
+  if (ladderStart && second && second.score > choice.score) confidence = Math.min(confidence, 0.6);
   confidence = round2(Math.max(0.05, confidence));
 
-  return finish(task, { choice: choice.id, candidates: cands, rejected, rationale, confidence, fallback, work, mode, auto_allowed: !requires_approval, requires_approval, state_hint: requires_approval ? 'awaiting_approval' : null, policyRef, now });
+  return finish(task, { choice: choice.id, candidates: cands, rejected, rationale, confidence, fallback, work, mode, auto_allowed: !requires_approval, requires_approval, state_hint: requires_approval ? 'awaiting_approval' : null, policyRef, now,
+    escalation: { eligible: elig.eligible, reason: elig.reason, ladder: elig.eligible ? ladderOf({ candidates: cands }).map((c) => c.id) : [], started_on_ladder: !!ladderStart } });
 }
 
 // A decision always shows what else was possible (store requires non-empty; §9 asks for real alternatives): a route
@@ -332,7 +398,8 @@ function withFloorAlternatives(alts) {
 }
 
 function finish(task, r) {
-  const { now, policyRef, ...out } = r;
+  const { now, policyRef, ...rest } = r;
+  const out = { escalation: { eligible: false, reason: 'no routable candidate', ladder: [], started_on_ladder: false }, ...rest };
   const chosen = out.choice ?? 'needs_owner';
   const evidence = [`work_type=${out.work.type}`, `rejected=${out.rejected.length}`, `candidates=${out.candidates.length}`];
   const id = createHash('sha256').update(JSON.stringify([task?.task_id ?? null, chosen, out.candidates.map((c) => [c.id, c.score]), out.rejected, out.mode])).digest('hex').slice(0, 16);

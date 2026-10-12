@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { priceFor } from '../usage/ingest.js';
+import { validateEntryRunLimits } from './run-limits.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REGISTRY_SCHEMA_VERSION = 1;
@@ -15,9 +16,14 @@ export const RUNTIME_EFFORTS = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['minimal', 'low', 'medium', 'high', 'xhigh'],
   opencode: ['low', 'medium', 'high'],
-  minimax: [],
+  minimax: ['low', 'medium', 'high', 'xhigh', 'max'],   // mcode exec --effort (per model: MiniMax-M3 has none)
   fake: ['low', 'medium', 'high', 'xhigh'],
 };
+// How a run is paid for (D-025). per_token: USD per token (price table); subscription: flat plan with a usage quota,
+// marginal USD ~0 (never recorded as a measured $0); unknown: neither is known.
+export const BILLING = ['per_token', 'subscription', 'unknown'];
+const DEFAULT_BILLING = { claude: 'per_token', codex: 'per_token', minimax: 'subscription', opencode: 'unknown', fake: 'per_token' };
+export const QUOTA_PERIODS = ['5h', 'day', 'week', 'month'];
 // Probe `features` keys that map onto registry capabilities.
 const FEATURE_CAPS = { vision: 'vision', resume: 'resume', cancel: 'cancel', json_output: 'json_output', native_subagents: 'native_subagents' };
 const DEFAULT_MAX_PRICE_AGE_DAYS = 90;
@@ -46,6 +52,12 @@ export function validateRegistryDoc(doc) {
     else for (const e of m.efforts) if (!RUNTIME_EFFORTS[m.runtime].includes(e)) err(`${p}.efforts`, `effort ${JSON.stringify(e)} is not supported by runtime ${m.runtime}`);
     if (m.context_tokens != null && !(Number.isInteger(m.context_tokens) && m.context_tokens > 0)) err(`${p}.context_tokens`, 'positive integer or null (unknown)');
     if (m.price != null && !(m.price && Number.isFinite(m.price.input) && Number.isFinite(m.price.output) && m.price.input >= 0 && m.price.output >= 0)) err(`${p}.price`, 'price must be {input,output} (non-negative) or null');
+    if (m.billing !== undefined && !BILLING.includes(m.billing)) err(`${p}.billing`, `billing must be one of ${BILLING.join('|')}`);
+    if (m.quota != null) for (const e of quotaErrors(m.quota)) err(`${p}.quota`, e);
+    if (m.run_limits !== undefined) {
+      const efforts = Array.isArray(m.efforts) ? m.efforts : [];
+      for (const e of validateEntryRunLimits(m.run_limits, { efforts })) err(`${p}.run_limits${e.path}`, e.message);
+    }
   });
   return { ok: !errors.length, errors };
 }
@@ -59,9 +71,22 @@ function resolvePrice(m, prices) {
   return ok(row) ? { price: { input: row.input, output: row.output }, price_as_of: row.as_of || prices.as_of || null } : { price: null, price_as_of: null };
 }
 
+// quota: { period, tokens, usd } of a subscription plan; null fields = unknown. -> [message]
+function quotaErrors(q) {
+  if (typeof q !== 'object' || Array.isArray(q)) return ['quota must be an object or null'];
+  const out = [];
+  for (const k of Object.keys(q)) if (!['period', 'tokens', 'usd'].includes(k)) out.push(`unknown quota field ${k}`);
+  if (q.period != null && !QUOTA_PERIODS.includes(q.period)) out.push(`quota.period must be one of ${QUOTA_PERIODS.join('|')}`);
+  if (q.tokens != null && !(Number.isInteger(q.tokens) && q.tokens > 0)) out.push('quota.tokens must be a positive integer or null');
+  if (q.usd != null && !(Number.isFinite(q.usd) && q.usd > 0)) out.push('quota.usd must be a positive number or null');
+  return out;
+}
+
 function build(doc, prices) {
   const entries = doc.models.map((m) => ({
     id: entryId(m), runtime: m.runtime, provider: m.provider, model: m.model, tier: m.tier,
+    billing: m.billing ?? DEFAULT_BILLING[m.runtime] ?? 'unknown', quota: m.quota ? { period: m.quota.period ?? null, tokens: m.quota.tokens ?? null, usd: m.quota.usd ?? null } : null,
+    run_limits: m.run_limits ? structuredClone(m.run_limits) : null,
     capabilities: [...m.capabilities], efforts: [...m.efforts],
     context_tokens: m.context_tokens ?? null, latency_ms: m.latency_ms ?? null,
     ...resolvePrice(m, prices), source: m.source || 'static', test_only: !!m.test_only, free: m.free === true,
@@ -74,7 +99,7 @@ function makeRegistry({ version, as_of, entries }) {
   const byId = new Map(entries.map((e) => [e.id, e]));
   return Object.freeze({
     version, as_of,
-    entries: () => entries.map((e) => ({ ...e, capabilities: [...e.capabilities], efforts: [...e.efforts] })),
+    entries: () => entries.map((e) => ({ ...e, capabilities: [...e.capabilities], efforts: [...e.efforts], quota: e.quota && { ...e.quota }, run_limits: e.run_limits && structuredClone(e.run_limits) })),
     get: (id) => byId.get(id) || null,
     // Probe merge: result of adapter.probeCapabilities() per runtime id. Returns a NEW registry.
     withProbes(probes = {}) {
