@@ -189,7 +189,7 @@ test('scorecard: subscription cost basis, tokens, wall time, reps, provider wait
   assert.ok(row.includes('| subscription |'), row);
   assert.ok(!/\| \$0\.0000 \|/.test(row), 'a subscription model is never shown as $0 measured');
   assert.ok(md.includes('off-by-one | ' + MM));
-  assert.match(md.split('\n').find((l) => l.startsWith('| off-by-one |')), /\+ subscription \|/, 'a mixed per-task row shows subscription');
+  assert.match(md.split('\n').find((l) => l.startsWith('| off-by-one |')), /bases: measured, subscription \|/, 'a mixed per-task row shows subscription');
   assert.match(md, /unattributed quota waits 1/);
   assert.ok(md.includes(`| ${HK} |`));
   // the CLI prints the same
