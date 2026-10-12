@@ -63,6 +63,13 @@ export function v2Config(env, { stateDir, repoRoot }) {
   const pathDirs = list(env.GHOSTY_V2_PATH_DIRS).filter((d) => path.isAbsolute(d) || (warnings.push(`GHOSTY_V2_PATH_DIRS: ${d} is not absolute: ignored`), false));
   const usd = env.GHOSTY_V2_CLAUDE_RUN_USD == null || env.GHOSTY_V2_CLAUDE_RUN_USD === '' ? 1 : Number(env.GHOSTY_V2_CLAUDE_RUN_USD);
   const claudeRunUsd = Number.isFinite(usd) && usd > 0 && usd <= 100 ? usd : (warnings.push('GHOSTY_V2_CLAUDE_RUN_USD must be in (0, 100]: using 1'), 1);
+  // Per-run wall clock of an agent run (the goal loop's default is 30 min). Set by the HTTP benchmark driver so a stalled
+  // agent is observed often enough for the no-progress rule; unset keeps the loop's own default.
+  let runTimeoutMs = null;
+  if (env.GHOSTY_V2_RUN_TIMEOUT_MS) {
+    const ms = Number(env.GHOSTY_V2_RUN_TIMEOUT_MS);
+    if (Number.isInteger(ms) && ms >= 1 && ms <= 86_400_000) runTimeoutMs = ms; else warnings.push('GHOSTY_V2_RUN_TIMEOUT_MS must be an integer 1..86400000: using the default');
+  }
   let pushRemote = null;
   if (env.GHOSTY_V2_PUSH_REMOTE) {
     if (REMOTE_RE.test(env.GHOSTY_V2_PUSH_REMOTE)) pushRemote = env.GHOSTY_V2_PUSH_REMOTE;
@@ -74,7 +81,7 @@ export function v2Config(env, { stateDir, repoRoot }) {
   if (env.GHOSTY_V2_TEST_FAKE_ADAPTER) {
     try { fakeScripts = JSON.parse(fs.readFileSync(env.GHOSTY_V2_TEST_FAKE_ADAPTER, 'utf8')); } catch (e) { errors.push(`GHOSTY_V2_TEST_FAKE_ADAPTER unreadable: ${e.code || e.message}`); }
   }
-  return { errors, warnings, workRoot, repos, concurrency, pathDirs, claudeRunUsd, pushRemote, registryFile, fakeScripts };
+  return { errors, warnings, workRoot, repos, concurrency, pathDirs, claudeRunUsd, runTimeoutMs, pushRemote, registryFile, fakeScripts };
 }
 
 // Steps open tasks with at most `concurrency` steps in flight, round robin (one step, then the task goes to the back).
@@ -156,6 +163,10 @@ export function pinnedRoute(realRoute) {
     return realRoute(task, { ...ro, exclude: [...new Set([...(ro.exclude || []), ...extra])] });
   };
 }
+
+// A claude run is estimated at its own --max-budget-usd bound (min(run limit, cap left), at least 0.01); usd only, the rest is
+// the loop's default estimate. Other runtimes: null = the default.
+export const claudeRunEstimate = (entry, runUsd, capLeft) => (String(entry).startsWith('claude:') ? { usd: Math.max(0.01, Math.min(runUsd, capLeft ?? Infinity)) } : null);
 
 const RUNTIMES = { claude: 'claude.js', codex: 'codex.js', minimax: 'minimax.js', opencode: 'opencode.js' };
 // The registry's codex/minimax names are not CLI model ids: those CLIs run their configured default model.
@@ -248,10 +259,13 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
     const { requester } = createSystemOps({ incidents, leases, telemetry, actions: {}, admission: createAdmissionController({}),
       deploys: { status: async () => ({ state: 'unknown' }) } });
     const git = createGitRunner({ env: { PATH: env.PATH, HOME: env.HOME, LANG: 'C', GIT_TERMINAL_PROMPT: '0' } });
-    const loop = createGoalLoop({ store, registry, adapters, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
+    // A claude run may spend up to its own --max-budget-usd (the same bound start() passes), so never estimate it lower:
+    // otherwise a task could overspend its cap by up to one run. Other runtimes: null = the loop's default (measured mean / registry figure).
+    const estimateRun = ({ task, entry }) => claudeRunEstimate(entry, cfg.claudeRunUsd, info.get(task?.task_id)?.capLeft);
+    const loop = createGoalLoop({ store, registry, adapters, estimateRun, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
       worktreeRoot: roots[0], reviewRoot: roots[1], verifier: createVerifier({ tmpRoot: path.join(cfg.workRoot, 'vtmp'), artifactRoot: path.join(cfg.workRoot, 'artifacts') }),
       leases, route: pinnedRoute(realRoute), allowFake, hostId: HOST_ID, integrate: createServerIntegrate({ git, pushRemote: cfg.pushRemote }),
-      opsRequester: requester, incidents });
+      opsRequester: requester, incidents, ...(cfg.runTimeoutMs ? { runTimeoutMs: cfg.runTimeoutMs } : {}) });
     const listOpen = async () => (await store.list()).filter((t) => !TERMINAL.includes(t.status) && !t.store_error && !isInformational(t)).map((t) => t.task_id);
     const beforeStep = async (id) => { const t = await store.get(id); if (t) info.set(id, { goal: t.goal, capLeft: capLeft(t) }); };
     const scheduler = createScheduler({ step: (id) => loop.step(id), listOpen, beforeStep, concurrency: cfg.concurrency, safetyMs, log });

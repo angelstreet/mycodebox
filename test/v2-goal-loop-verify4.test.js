@@ -330,3 +330,29 @@ test('Y7b X8: a bare confirmation of a reached cap is refused; a real raise cont
   const v = await env.view(task.task_id);
   assert.ok(v.usage_totals.usd <= 2 + 1e-9);
 });
+
+// ---- estimateRun contract: null defers to the default, a partial answer is merged with it ----
+test('estimateRun null: the default applies (unknown before any measured run: a cap stops for an estimate); usd-only answers add no stop', async () => {
+  const none = world({ dev: [PAID(0.3)], loopOpts: { estimateRun: () => null } });
+  const t1 = await none.submit({ budget_policy: { mode: 'cap', max_usd: 1 } });
+  assert.equal((await none.loop.run(t1.task_id)).state, 'awaiting_approval');
+  assert.match(asks(none, t1.task_id).at(-1).payload.question, /estimate unknown/);
+  // a claude-style usd-only estimate: no first-run unknown stop
+  const usdOnly = world({ dev: [PAID(0.3)], loopOpts: { estimateRun: () => ({ usd: 0.3 }) } });
+  const t2 = await usdOnly.submit({ budget_policy: { mode: 'cap', max_usd: 1 } });
+  assert.equal((await usdOnly.loop.run(t2.task_id)).state, 'accepted');
+});
+
+test('estimateRun usd-only with token caps: the first run needs a confirmation, later runs use the measured token mean (no stop per run)', async () => {
+  const env = world({ dev: [[BAD[0], { op: 'usage', input_tokens: 1000, output_tokens: 200, usd: 0.3 }], PAID(0.3)], loopOpts: { estimateRun: () => ({ usd: 0.3 }) } });
+  const task = await env.submit({ budget_policy: { mode: 'cap', max_usd: 5, max_input_tokens: 5000, max_output_tokens: 5000 } });
+  assert.equal((await env.loop.run(task.task_id)).state, 'awaiting_approval');
+  assert.match(asks(env, task.task_id).at(-1).payload.question, /estimate unknown/);
+  await env.loop.approve(task.task_id, { actor: OWNER, approval_ref: 'first-run' });
+  await env.loop.run(task.task_id);
+  // The repair run (same developer) was estimated from the measured token mean: it started without a second stop. Only the
+  // not-yet-measured reviewer may ask (default estimate: unknown).
+  assert.equal(env.devStarts(), 2);
+  const later = asks(env, task.task_id).slice(1);
+  assert.ok(later.every((a) => a.payload.role === 'reviewer' || /reviewer|review/i.test(JSON.stringify(a.payload))), JSON.stringify(later.map((a) => a.payload).slice(0, 2)).slice(0, 400));
+});

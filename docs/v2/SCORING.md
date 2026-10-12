@@ -282,3 +282,44 @@ Spend (USD; "estimated" is what the cap was enforced on for runs whose CLI repor
 | **Total** | **5.15** | **13.50** |
 
 Measured plus estimated: USD 18.65 of the USD 20 authorized. The estimates are upper bounds the cap used, not bills.
+
+## Running the suite over HTTP (round 3)
+
+`node scripts/v2-bench.js --http ...` (or `scripts/v2-bench-http.js` directly) runs the same suite (`mycodebox-v2-bench@1`,
+same fixtures, manifest schema `mycodebox.v2.bench-run/1`, suite ledger and stop rules) through the HTTP API of a
+disposable wired server instead of the in-process goal loop, so the scores are comparable with the round-2 dry run above.
+
+```
+node scripts/v2-bench.js --http --runtimes claude:haiku,claude:sonnet,codex,minimax,opencode --tasks all \
+  --out /path/outside/the/repo --max-usd 20 --task-usd 1.5 [--concurrency 1] [--poll-ms 1000]
+node scripts/v2-score.js --tool-score --suite OUT/manifest.json --store OUT/state/v2
+```
+
+What the driver does: starts one `node server.js` child (`GHOSTY_V2=1`, `GHOSTY_STATE_DIR=OUT/state`, `HOST=127.0.0.1`, a free
+port, TLS pointed at missing files, `TMUX_BIN` = a wrapper around `tmux -L <unique>`, a temp `GHOSTY_V2_WORK_ROOT`,
+`GHOSTY_V2_REPOS` = the per-run fixture repos, `GHOSTY_V2_REGISTRY` = a registry file with the same entries as the in-process
+harness, `GHOSTY_V2_RUN_TIMEOUT_MS` = `--agent-timeout-min`, `GHOSTY_V2_CLAUDE_RUN_USD` = the largest claude run bound capped at the
+per-task cap), then per run `POST /api/v2/tasks` (developer pinned with `preferred_models`, reviewer fixed by runtime/model
+allowlists naming exactly the planned pair, `budget_policy` cap, `no_progress_policy`, the fixture checks), polls
+`GET /api/v2/tasks/:id`, answers an unknown-cost budget stop with `POST .../approve` (pending `action_id` and `sha`) only while
+the suite ledger fits `--max-usd` (never a reached cap, never any other kind: the forbidden task ends `awaiting_approval`),
+and cancels with `POST .../cancel` at the wall clock. The server and the private tmux server are killed at the end, on error
+and on SIGINT/SIGTERM. `GHOSTY_V2_CONCURRENCY` (server) and the driver's run pool both follow `--concurrency` (default 1).
+
+Manifest additions: `driver: "http"`, `store_dir: "state/v2"`, per run `reviewer_planned`, `reviewer_actual`,
+`developer_actual` and `reviewer_as_planned` (read back from the task detail; a mismatch is also written to `error`).
+Differences from the in-process harness, to keep in mind when comparing: the server's goal loop has no `estimateRun`, so
+cost estimates come from the router's prices or stop as unknown (answered by the ledger); `checks` hold the latest
+evidence per check; `stop_note` comes from the last decision. `OUT/state` is the throwaway server state (it holds a
+generated reporter token and VAPID keys): keep it out of the repository. `--fake` uses the server's test-only scripted
+adapter and needs `--runtimes fake-dev` (test/v2-bench-http.test.js).
+
+HTTP driver notes (review fixes): a budget stop for unknown cost is approved with the reason `suite-ledger <committed>/<cap>`;
+`v2-score.js` counts such a grant (budget request, no cap raise) as `budget_auto`, not an owner intervention, only for a
+manifest with `driver: "http"`, so an existing run dir is re-scored in place with no rerun:
+`node scripts/v2-score.js --tool-score --suite OUT/manifest.json --store OUT/state/v2` (and `--scorecard ...`). The server
+estimates a claude run at its own `--max-budget-usd` bound (never lower), so a task cannot overspend its cap by a run. Claude
+runs share one `GHOSTY_V2_CLAUDE_RUN_USD` (the largest claude `run_usd`, at most the per-task cap; haiku is not held to 0.25 as in
+round 2). The child server gets only PATH, HOME, locale, proxy and provider auth variables, and a detached watcher kills it,
+its private tmux server and the temp dir if the driver dies (SIGKILL included). A task stuck in `unknown_external_effect`,
+with an unreadable log, or in `integrating`/`release_verifying` for 60 s is recorded as `not_yet_done`.

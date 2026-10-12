@@ -401,8 +401,14 @@ export function createGoalLoop({
     }
     return missing.length > 0;
   }
+  // estimateRun may answer null (the default below), or an object whose present keys win; absent keys (e.g. a usd-only
+  // answer) come from the default, so token/duration caps keep using the measured mean. An explicit null stays unknown.
   function estimate(ctx, entry, role, routeHint = null) {
-    if (estimateRun) return estimateRun({ task: ctx.v, entry, role, ledger: ledger(ctx) });
+    const d = defaultEstimate(ctx, entry, role, routeHint);
+    const r = estimateRun ? estimateRun({ task: ctx.v, entry, role, ledger: ledger(ctx) }) : null;
+    return r ? { ...d, ...r } : d;
+  }
+  function defaultEstimate(ctx, entry, role, routeHint) {
     // Measured performance first: the mean of this model's known spend on this task; otherwise unknown (never 0).
     const runs = ledger(ctx).entries.filter((e) => e.kind === role && ctx.events.some((s) => s.kind === 'task.started' && s.payload.run_id === e.attempt_id && s.payload.entry === entry));
     const mean = (k) => { const xs = runs.map((r) => r[k]).filter((x) => typeof x === 'number'); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
