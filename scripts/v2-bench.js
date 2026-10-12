@@ -5,8 +5,8 @@
 // INDEPENDENT reviewer of a different model. Spends real quota unless --fake.
 //
 //   node scripts/v2-bench.js --runtimes claude:haiku,claude:sonnet,codex,minimax,opencode --tasks all|id,id \
-//     --out DIR --max-usd 20 [--reviewer-map dev=rev,...] [--task-usd N] [--run-timeout-min 20] [--agent-timeout-min 8]
-//     [--wait-up-to-sec 0] [--no-confirm-unknown] [--fake [--fake-behaviour solve|noop]] [--keep]
+//     --out DIR --max-usd 20 [--reviewer-map dev=rev,...] [--task-usd N] [--run-timeout-min 20] [--agent-timeout-min 3]
+//     [--wait-up-to-sec 0] [--no-confirm-unknown] [--fake [--fake-behaviour solve|noop|hang]] [--keep]
 //
 // Runtimes: claude:haiku, claude:sonnet, codex (CLI default model, low effort), minimax (CLI default; set MCODE_NODE_DIR
 // to a Node 24 bin dir when the default node is 23.x), opencode (opencode/big-pickle), opencode:<provider/model>.
@@ -44,6 +44,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const MANIFEST_SCHEMA = 'mycodebox.v2.bench-run/1';
 // Bounded iterations per task: two identical failures force one strategy change, the next stall suspends (no_progress).
 export const NO_PROGRESS = Object.freeze({ same_signature: 2, strategy_changes_without_progress: 1 });
+// Developer runs the wall clock must fit for the no-progress rule to suspend a task that never progresses: 2 identical
+// failures, a replan, 2 more (NO_PROGRESS), plus one because the first failure often differs from the repeated one.
+export const STALLS_TO_NO_PROGRESS = NO_PROGRESS.same_signature * (NO_PROGRESS.strategy_changes_without_progress + 1) + 1;
 const BENCH_ACTOR = { role: 'owner', id: BENCH_LEDGER_ACTOR_ID };
 const STOP_STATES = ['accepted', 'failed_unrecoverable', 'cancelled'];
 
@@ -137,7 +140,7 @@ export function createSuiteLedger({ max_usd }) {
 
 // ---------- CLI ----------
 export const DEFAULTS = Object.freeze({ runtimes: null, tasks: 'all', out: null, max_usd: 20, fake: false, reviewer_map: {}, task_usd: null, run_timeout_min: 20,
-  agent_timeout_min: 8, confirm_unknown: true, fake_behaviour: 'solve', keep: false, wait_up_to_sec: 0 });
+  agent_timeout_min: 3, confirm_unknown: true, fake_behaviour: 'solve', keep: false, wait_up_to_sec: 0 });
 export function parseArgs(argv) {
   const o = { ...DEFAULTS, reviewer_map: {} };
   const need = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
@@ -171,10 +174,15 @@ export function validateOptions(o) {
   if (!o.runtimes?.length) o.runtimes = o.fake ? ['fake-dev'] : null;
   if (!o.runtimes) throw new Error('--runtimes is required (e.g. claude:haiku,codex,opencode)');
   for (const k of ['max_usd', 'run_timeout_min', 'agent_timeout_min']) if (!(o[k] > 0)) throw new Error(`--${k.replace(/_/g, '-')} must be a positive number`);
+  // A stalled agent must be observed often enough inside the wall clock for the no-progress rule to fire (round 3).
+  if (o.agent_timeout_min * STALLS_TO_NO_PROGRESS > o.run_timeout_min) {
+    throw new Error(`--agent-timeout-min ${o.agent_timeout_min} x ${STALLS_TO_NO_PROGRESS} stalled runs exceeds --run-timeout-min ${o.run_timeout_min}: `
+      + 'the no-progress rule could never fire before the wall clock; lower the agent timeout or raise the run timeout');
+  }
   if (!(o.wait_up_to_sec >= 0)) throw new Error('--wait-up-to-sec must be 0 or more');
   if (o.task_usd !== null && !(o.task_usd > 0)) throw new Error('--task-usd must be a positive number');
   if (o.task_usd !== null && o.task_usd > o.max_usd) throw new Error('--task-usd cannot exceed --max-usd');
-  if (!['solve', 'noop'].includes(o.fake_behaviour)) throw new Error('--fake-behaviour is solve or noop');
+  if (!['solve', 'noop', 'hang'].includes(o.fake_behaviour)) throw new Error('--fake-behaviour is solve, noop or hang');
   return o;
 }
 
@@ -211,7 +219,7 @@ export function classify(status, loop = {}) {
 }
 
 // ---------- the runner ----------
-// opts: parseArgs() output (programmatic callers may also pass fake_overrides: { [bench_task_id]: 'solve'|'noop' },
+// opts: parseArgs() output (programmatic callers may also pass fake_overrides: { [bench_task_id]: 'solve'|'noop'|'hang' },
 // fake_usd: number|null for the fake developer's reported USD, log: (line) => void).
 export async function runBench(opts) {
   const o = validateOptions({ ...DEFAULTS, ...opts });
@@ -296,6 +304,8 @@ export async function runBench(opts) {
     function fakeScript(binding, role) {
       if (role === 'reviewer') return [{ op: 'usage', input_tokens: 500, output_tokens: 50, usd: fakeUsd == null ? null : fakeUsd / 2 }, { op: 'emit', event: { type: 'result', text: JSON.stringify({ verdict: 'approve', findings: [] }) } }];
       const behaviour = o.fake_overrides?.[binding.bench_task.id] ?? o.fake_behaviour;
+      // hang: reports its usage, then works until the agent timeout kills it (a stalled agent).
+      if (behaviour === 'hang') return [{ op: 'usage', input_tokens: 1000, output_tokens: 200, usd: fakeUsd }, { op: 'hang' }];
       const files = behaviour === 'noop' ? noopFiles(binding.bench_task) : binding.bench_task.fake.solve;
       return [...Object.entries(files).map(([p, content]) => ({ op: 'write', path: p, content })), { op: 'usage', input_tokens: 1000, output_tokens: 200, usd: fakeUsd }];
     }

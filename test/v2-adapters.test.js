@@ -98,6 +98,11 @@ test('T03 no adapter argv carries a permission/sandbox bypass flag; safe flags p
   }
 });
 
+test('round 3: mcode gets its own --timeout 30 s past the controller run timer (a stall ends as class timeout)', async () => {
+  const { rec } = await runCli('minimax', 'ok', { timeout_ms: 5000 });
+  assert.equal(rec.argv[rec.argv.indexOf('--timeout') + 1], '35s');
+});
+
 test('T03 bypass guard throws on injected flags in every form; prompt text is not scanned', () => {
   for (const bad of [['--dangerously-skip-permissions'], ['--permission-mode', 'bypassPermissions'], ['--permission-mode=bypassPermissions'],
     ['-s', 'danger-full-access'], ['--dangerously-bypass-approvals-and-sandbox'], ['--permission', 'off'], ['-a', 'never'], ['--yolo'],
