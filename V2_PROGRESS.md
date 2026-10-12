@@ -1,4 +1,4 @@
-STATUS: RUNNING — round 3: wiring the V2 engine into the server (OWNER_DECISIONS §11)
+STATUS: RUNNING — round 3: real benchmark over the HTTP API of a disposable wired server (USD 20 cap)
 
 # V2 progress
 
@@ -18,10 +18,10 @@ Base: `origin/v2/integration` c23ebe8. Owner spec: OWNER_DECISIONS §11.
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
 | R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) merge 64b3f75 | 27aa36c+cf99337+56023ed: lease-fenced create (`ownerWrite`), branches `v2/task/<id>`, dead remote bounded, stop() bounded, repo hooks neutralized; orchestration/v2-runtime.js + v2-integrate.js, child-process server tests; 1692/1692 both runtimes; D-021; approved merges are not executed by the server (task waits until main contains the SHA) |
-| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver + coordinator | IN PROGRESS: HTTP driver (wt r3-bench = r3-wire + r3-noprog) | |
+| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver / Opus review + coordinator | RUNNING: real suite over HTTP (`--max-usd 19.5 --task-usd 1.5`), driver in review | driver 94f078f+b96b27f (merged 217177c); driver sanity run spent USD 0.09 known + 0.34 estimated (haiku, opencode, fix-failing-test: both done) |
 | R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge 0b56d12 | 8df6828+7cdca16: run timeout counted as an attempt (was routed to provider backoff); bench agent timeout 3 min; 1693/1693 both runtimes |
 | R3-3b | Drop stale "main's git history" owner action | coordinator | DONE | history was rewritten |
-| R3-3c | Docs: enable / roll back V2 on the live install | coordinator | TODO | |
+| R3-3c | Docs: enable / roll back V2 on the live install | coordinator | DONE | INSTALL "Optional: V2 task engine"; README/USAGE updated |
 | R3-4 | Gates on final SHA, V2_VERIFICATION, PR round-3 section, DELIVERED | coordinator | TODO | |
 
 ## Round 2
