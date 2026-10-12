@@ -5,6 +5,8 @@ import * as realFs from 'node:fs';
 import { join } from 'node:path';
 import { forbiddenMatch, FORBIDDEN_RE, textVariants, windowJoins, HOMOGLYPH } from '../stall.js';
 import { MANDATORY_APPROVAL, RISK_CLASSES } from './task-contract.js';
+import { validateRunLimits } from './run-limits.js';
+import { RUNTIME_EFFORTS } from './model-registry.js';
 
 export const POLICY_PATH = join('.ai', 'project.json');
 // Actions that cannot change anything; they skip task-text approval (a task about deploys may still be read).
@@ -31,6 +33,15 @@ export function validatePolicy(p) {
   for (const k of ['excluded_paths', 'protected_paths', 'prohibited_actions', 'protected_branches', 'denied_args']) if (p[k] !== undefined && !isStrArr(p[k])) err(k, 'array of strings');
   if (!isObj(p.approval_policy) || !isStrArr(p.approval_policy.requires)) err('approval_policy.requires', 'array of action classes');
   if (p.default_risk_class !== undefined && !RISK_CLASSES.includes(p.default_risk_class)) err('default_risk_class', RISK_CLASSES.join('|'));
+  // D-024: per runtime/model and task class run limits; D-026: routing.escalation (the escalation ladder, default on).
+  if (p.run_limits !== undefined) for (const e of validateRunLimits(p.run_limits, { runtimeEfforts: RUNTIME_EFFORTS })) err(e.path, e.message);
+  if (p.routing !== undefined) {
+    if (!isObj(p.routing)) err('routing', 'object');
+    else {
+      for (const k of Object.keys(p.routing)) if (k !== 'escalation') err(`routing.${k}`, 'unknown field');
+      if (p.routing.escalation !== undefined && typeof p.routing.escalation !== 'boolean') err('routing.escalation', 'boolean');
+    }
+  }
   return errors;
 }
 

@@ -23,7 +23,7 @@ const SHA_RE = /^[0-9a-f]{7,64}$/;
 const OWNER = 'owner';
 const CREATE_FIELDS = ['goal', 'title', 'repository', 'base_sha', 'project_id', 'scope', 'acceptance_checks', 'definition_of_done',
   'risk_class', 'priority', 'runtime_capabilities', 'prohibited_actions', 'runtime_allowlist', 'model_allowlist', 'budget_policy',
-  'template', 'idempotency_key', 'no_progress_policy', 'preferred_models', 'task_class', 'deliver'];
+  'template', 'idempotency_key', 'no_progress_policy', 'preferred_models', 'task_class', 'deliver', 'run_limits'];
 // "runtime:model" registry ids; a pin only narrows routing (orchestration/v2-runtime.js pinnedRoute).
 const ENTRY_RE = /^[a-z][a-z0-9_-]{0,31}:[\w./:@+-]{1,120}$/;
 const TEMPLATE_NAMES = ['goal', 'informational'];
@@ -197,7 +197,7 @@ function detail(t, events, children = []) {
       alternatives: Array.isArray(d.alternatives) ? d.alternatives.map((a) => a?.option ?? a) : [] })),
     usage: { input_tokens: usageValue(totals.input_tokens), output_tokens: usageValue(totals.output_tokens), usd: usageValue(totals.usd),
       unknown: totals.unknown, incomplete: totals.incomplete === true, records: t.usage.map((u) => ({ runtime: u.runtime, model: u.model, input_tokens: usageValue(u.input_tokens),
-        output_tokens: usageValue(u.output_tokens), usd: usageValue(u.usd), unknown: u.unknown, incomplete: u.incomplete === true, ts: u.ts ?? null })) },
+        output_tokens: usageValue(u.output_tokens), usd: usageValue(u.usd), unknown: u.unknown, incomplete: u.incomplete === true, billing: u.billing ?? null, ts: u.ts ?? null })) },
     runs: runsOf(t, events), roles: rolesOf(t, events), allowed_actions: allowedActions(t),
     parent_task_id: t.parent_task_id ?? null, children: children.map((c) => ({ task_id: c.task_id, state: c.status, outcome: c.outcome, goal: clip(c.goal, 120) })),
     leases: { resources: t.resources, effects: t.effects.map((e) => ({ effect_id: e.effect_id, kind: e.kind, phase: e.phase })) },
@@ -238,6 +238,8 @@ function checkCreate(b) {
   if (b.preferred_models !== undefined && !(Array.isArray(b.preferred_models) && b.preferred_models.length >= 1 && b.preferred_models.length <= 8
     && b.preferred_models.every((x) => typeof x === 'string' && ENTRY_RE.test(x)))) return 'preferred_models: 1-8 "runtime:model" ids (developer pins; they only narrow routing)';
   if (b.deliver !== undefined && typeof b.deliver !== 'boolean') return 'deliver: boolean';
+  // Validated in full by the task contract (D-024); here only the shape and size.
+  if (b.run_limits !== undefined && (b.run_limits === null || typeof b.run_limits !== 'object' || Array.isArray(b.run_limits) || JSON.stringify(b.run_limits).length > 8000)) return 'run_limits: object (see docs/v2/ROUTING.md), max 8000 bytes';
   if (b.deliver === true && b.template === 'informational') return 'deliver: not for informational tasks';
   return null;
 }

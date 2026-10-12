@@ -63,6 +63,8 @@ risk_class ('low'|'medium'|'high'|'critical'), runtime_capabilities[], privacy_p
 base_sha, approval_policy, created_by ({ kind: 'ui'|'api'|'schedule'|'agent', id }), status`.
 Defaults: `budget_policy = { mode: 'track' }`, `priority = 'balanced'`, `retry_strategy = 'evidence'`,
 `no_progress_policy = { same_signature: 3, strategy_changes_without_progress: 3 }`, allowlists = project policy.
+Optional `run_limits` (per-run timeout, steps, effort, context mode, stalled runs to no_progress; flat or
+`{ <selector>: { <class>: limits } }`, docs/v2/ROUTING.md "Run limits", D-024) overrides the project and registry limits.
 `approval_policy.requires` lists action classes that always need approval: at least
 `['merge_protected','push_shared','deploy','credentials','destructive','host_maintenance','money','customer']`; a task can
 add classes but never remove these.

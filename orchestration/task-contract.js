@@ -1,6 +1,8 @@
 // V2 task contract (docs/v2/ARCHITECTURE.md §1, §9): states, transitions, schema, defaults and the
 // invariants every other orchestration module builds on. Pure: no I/O, time and ids are injected.
 import { stripAnsi } from '../stall.js';
+import { validateRunLimits } from './run-limits.js';
+import { RUNTIME_EFFORTS } from './model-registry.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -31,6 +33,8 @@ export const TRANSITIONS = Object.freeze(Object.fromEntries(STATES.map((s) =>
 
 export const RISK_CLASSES = Object.freeze(['low', 'medium', 'high', 'critical']);
 export const PRIORITIES = Object.freeze(['cost', 'balanced', 'quality', 'speed']);
+// The router's work types (classifyWork); also the class keys of run_limits (orchestration/run-limits.js).
+export const WORK_TYPES = Object.freeze(['research', 'coding', 'debugging', 'ui', 'test', 'security', 'operations', 'docs', 'unknown']);
 export const CREATED_BY_KINDS = Object.freeze(['ui', 'api', 'schedule', 'agent']);
 // Action classes that always need owner approval; a task or policy may add classes, never remove these.
 export const MANDATORY_APPROVAL = Object.freeze(['merge_protected', 'push_shared', 'deploy', 'credentials', 'destructive',
@@ -76,7 +80,7 @@ const REQUIRED = ['task_id', 'project_id', 'goal', 'scope', 'prohibited_actions'
 const OPTIONAL = ['schema_version', 'title', 'repository', 'excluded_paths', 'runtime_allowlist', 'model_allowlist',
   'priority', 'budget_policy', ...BUDGET_CAPS, 'retry_strategy', 'no_progress_policy', 'deadline', 'preferred_models',
   'review_policy', 'schedule', 'worktree_id', 'branch', 'parent_task_id', 'handoff_refs', 'context_summary',
-  'allocations', 'created_at', 'updated_at', 'task_class'];
+  'allocations', 'created_at', 'updated_at', 'task_class', 'run_limits'];
 const KNOWN = new Set([...REQUIRED, ...OPTIONAL]);
 const SHA_RE = /^[0-9a-f]{7,64}$/;
 const TASK_CLASS_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -164,6 +168,8 @@ export function validateTask(spec) {
   // task_class: a short label for scoring (docs/v2/SCORING.md), never a permission.
   if (has('task_class') && spec.task_class !== null && !(typeof spec.task_class === 'string' && TASK_CLASS_RE.test(spec.task_class))) err('task_class', 'null or [a-z0-9][a-z0-9._-]{0,63}');
   for (const k of ['deadline', 'created_at', 'updated_at']) if (has(k) && spec[k] !== null && !isIso(spec[k])) err(k, 'ISO timestamp or null');
+  // Per-task run limits (D-024): flat limits or { <selector>: { <class>: limits } }; overrides project and registry.
+  if (has('run_limits') && spec.run_limits !== null) for (const e of validateRunLimits(spec.run_limits, { runtimeEfforts: RUNTIME_EFFORTS })) err(e.path, e.message);
   return { ok: errors.length === 0, errors };
 }
 
