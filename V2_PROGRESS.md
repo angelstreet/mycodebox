@@ -7,9 +7,21 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 3 (OWNER_DECISIONS §11) delivered; owner review of draft PR #1 (enable steps in its round-3 owner actions). SHAs quoted before round 2 in this file, in
+Round 4 (OWNER_DECISIONS §12) in progress: R4-1..3 and R4-4a in worker worktrees, then the real evaluation. SHAs quoted before round 2 in this file, in
 V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
 scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
+
+## Round 4
+
+Base: `origin/v2/integration` 5a5741e. Owner spec: OWNER_DECISIONS §12.
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R4-0 | §12 recorded, status line, stale "not wired / 503" owner action replaced | coordinator | DONE | 5a5741e |
+| R4-1..3 | run_limits policy + registry (M3.1-Flash, billing), faster no-progress stop, scorecard-fed routing + escalation ladder, mcode exec `--permission full` | Opus / Opus review | IN PROGRESS | wt r4-engine |
+| R4-4a | Bench `--reps`, M3.1 spec, subscription cost basis, per-model table, time-to-stop | Sonnet / Opus review | IN PROGRESS | wt r4-bench |
+| R4-4b | Real evaluation M3 vs M3.1-Flash vs Haiku, 3 reps, USD 10 cap, SCORING.md recommendation | coordinator | TODO | |
+| R4-5 | Gates, V2_VERIFICATION, PR round-4 section, DELIVERED | coordinator | TODO | |
 
 ## Round 3
 
