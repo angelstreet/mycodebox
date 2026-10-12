@@ -1,4 +1,4 @@
-STATUS: DELIVERED 5eed4ac https://github.com/angelstreet/mycodebox/pull/1 (round 3)
+STATUS: RUNNING — round 4: per-model limits, faster no-progress stop, cost/time/quality routing, MiniMax M3 vs M3.1-Flash vs Haiku evaluation
 
 # V2 progress
 
@@ -119,9 +119,10 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 - Before upgrading, set `ANDROID_APP_PACKAGE`, `ANDROID_APP_SHA256`, `LANGFUSE_PUBLIC_URL` and `PUBLIC_URL` in the service
   environment: assetlinks, the Langfuse link and the https hints now come from configuration, not the source.
 - Set `MCODE_NODE_DIR` in the service environment where `node` is 23.x (mcode 0.6.3 needs Node 24).
-- V2 execution is not wired into the server: when it is, the HTTP routes and the goal loop must share one store handle in
-  one process, and `recover()` must run under the controller lease at startup (D-016, D-017). Until then dashboard
-  approve, deny and cancel answer 503 (D-020) and proposal tasks cannot be approved from the dashboard.
+- V2 execution is wired into the server behind `GHOSTY_V2=1` (round 3, off by default): one process shares one store
+  handle with the goal loop and runs `recover()` under the controller lease at startup (D-016, D-017). With V2 on, dashboard
+  approve, deny and cancel and proposal approvals go through the loop; with it off they answer 503 (D-020). Enable steps:
+  INSTALL "Optional: V2 task engine".
 - `usage/prices.json` PLACEHOLDER rows (MiniMax-M3, gpt-6-luna, gpt-6-sol) need real prices; until then cost shows unknown.
 - Forbidden-topic floor accepts low-severity false positives (safe direction, an owner tap): "call the client method",
   "publish the event", "roll out", "I'll pass. Word", "Re start", "Bill ing", "pass/word", "we pass words". Tune only

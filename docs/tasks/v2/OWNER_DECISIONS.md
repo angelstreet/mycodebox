@@ -254,3 +254,55 @@ set as an explicit budget_policy and reported. Fix defects the run exposes and r
 Gates on the final code SHA (both Node versions, reporter suite, acceptance matrix incl. T20, leak scan), update
 V2_VERIFICATION.md (clean, current), V2_PROGRESS.md and the PR description (round-3 section with wiring summary, benchmark
 comparison, spend, owner actions). Keep the PR draft. Then set line 1 to `STATUS: DELIVERED <sha> <pr-url> (round 3)`.
+
+## 12. Round 4 (owner, 2026-10-12)
+
+Add as section 12 "Round 4" of `docs/tasks/v2/OWNER_DECISIONS.md`, then execute in order. First set line 1 of
+V2_PROGRESS.md to `STATUS: RUNNING — round 4: ...`. All earlier rules apply (worktrees, push `v2/*` only, draft PR,
+no merge/deploy/enable on live, leak scan, token frugality). Also fix the stale owner-action line in V2_PROGRESS.md that
+still says V2 is not wired / approvals answer 503.
+
+Owner problem: MiniMax took 728 s to stop on the impossible task (5 stalled runs x ~2.5 min each, MiniMax never gives up
+by itself). The owner wants token use, time and cost kept low per run, and wants the system to weigh token cost, time and
+quality — using Haiku instead of MiniMax (or the reverse) when that is the better trade.
+
+Owner facts: MiniMax is a **flat subscription** (fixed monthly plan with a usage quota): its marginal USD cost is ~0 —
+record it as `subscription` (not `unknown`, not `$0` measured), track its tokens and quota/rate-limit signals, and let
+the router treat quota exhaustion as `waiting`. Claude Haiku/Sonnet are pay-per-token. The M3.1 to evaluate is
+`MiniMax-M3.1-Flash-Preview` (already in `~/.minimax/config.yaml`).
+
+## 1. Per-model run limits (policy, not hard-coded)
+- In `.ai/project.json` (and the model registry), per runtime/model and per task class: run timeout, max steps, effort,
+  context mode. For `mcode exec` use `--timeout`, `--max-steps`, `--effort`, `--mode lightweight` where it helps, and
+  `--permission full` (exec supports it — correct D-019 / the owner-action note about config.yaml).
+- Defaults for cheap models on easy task classes: short leash (about 2–3 min per run, low effort, bounded steps);
+  documented and overridable per task.
+- Register `MiniMax-M3.1-Flash-Preview` (and keep M3) in the registry with capabilities and supported efforts.
+
+## 2. Stop faster when there is no progress
+Target: an impossible or stuck task on a cheap model ends `waiting` (no_progress) in **under 3 minutes**, not 12.
+- A run killed by its own timeout counts immediately as a stall with a timeout signature.
+- Cheap models: no-progress after 2 stalled runs (policy field), not 5; a reviewer verdict of "contradictory /
+  impossible requirements" ends the task as `waiting` with that diagnosis right away.
+- No arbitrary attempt cap on correctness work for capable models: this is the no-progress rule, per OWNER_DECISIONS §4.
+
+## 3. Routing that weighs tokens, time and quality
+- Per-task priority (cost / balanced / quality / speed) changes the weights. Feed them from the scorecard: first-pass rate,
+  verified rate, tokens, latency, and cost (USD for pay-per-token, quota share for subscriptions).
+- Escalation ladder: start with the cheapest model that is good enough for the task class (MiniMax M3.1-Flash or M3),
+  escalate to Haiku, then Sonnet, only on failing checks or reviewer rejection — the strategy change in the goal loop
+  can switch model. Record each choice and escalation in the decision journal.
+- Security-sensitive or high-risk task classes keep their current floors (stronger models, Fable review where required).
+
+## 4. Evaluate MiniMax M3 vs M3.1-Flash-Preview vs Claude Haiku
+Same benchmark suite (`mycodebox-v2-bench`), **3 repetitions** per task per model, developer = each of the three,
+reviewer = a different model as before. Through the HTTP API of a disposable wired server, with the new limits from §1–§2.
+Measure per task and per model: verified, first pass, rework, input/output tokens, wall time, USD (Haiku) / subscription
+(MiniMax), and time-to-stop on the impossible task. Owner-authorized real spend: **USD 10** total (Haiku and reviewers
+are the $ cost). Write the comparison to `docs/v2/SCORING.md` with a clear recommendation: which model for which task
+class and priority, and the router defaults you set from it. Fix defects the run exposes.
+
+## 5. Deliver round 4
+Gates on the final code SHA (both Node versions, reporter, acceptance incl. T20, leak scan), update V2_VERIFICATION.md,
+V2_PROGRESS.md and the PR description (round-4 section: limits, faster stop, routing, evaluation table and recommendation,
+spend). Keep the PR draft. Then set line 1 to `STATUS: DELIVERED <sha> <pr-url> (round 4)`.
