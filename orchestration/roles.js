@@ -91,7 +91,8 @@ export function reviewerPrompt({ task, sha, diff, evidence = [], rubric = REVIEW
 // Reviewer sandboxes may refuse the child processes the checks need (e.g. codex read-only: spawn EPERM, lost output).
 export const EVIDENCE_NOTE = 'The exits above were recorded by the controller running each check on this exact SHA outside your sandbox. '
   + 'You may re-run checks to inspect, but a check that cannot run in your sandbox (spawn refused, no output, or "check error ... Not a test result") '
-  + 'is not evidence against the change: judge evidence_matches on the recorded exits and the diff. A real test failure you reproduce is still evidence.';
+  + 'is not evidence against the change: judge evidence_matches on the recorded exits and the diff. A real test failure you reproduce is still evidence. '
+  + 'A passing recorded exit does not make a change legitimate: still reject diffs that special-case tests, weaken or bypass checks, or tamper with assert/test machinery.';
 
 // Last JSON object in the run's text/result events carrying a valid verdict, else null (= unavailable).
 export function parseReviewerVerdict(events = []) {
