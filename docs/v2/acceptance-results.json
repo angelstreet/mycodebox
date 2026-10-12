@@ -1,20 +1,20 @@
 {
  "schema": "mycodebox.v2.acceptance-results/1",
  "synthetic": true,
- "generated_at": "2026-10-11T18:34:37.829Z",
- "sha": "4303d43d12f7805a05996cc34094829168d421b3",
+ "generated_at": "2026-10-12T00:40:03.739Z",
+ "sha": "ae9efa0399c84c15e7be7dbc1db8e4372644aed6",
  "dirty": false,
  "node": "v23.6.0",
  "command": "node scripts/v2-acceptance.js",
- "duration_ms": 112144,
+ "duration_ms": 100119,
  "runner_exit": 0,
- "files": 129,
- "files_with_tests": 129,
+ "files": 134,
+ "files_with_tests": 134,
  "files_without_tests": [],
  "ui_check": true,
  "totals": {
-  "tests": 1606,
-  "pass": 1606,
+  "tests": 1685,
+  "pass": 1685,
   "fail": 0,
   "todo": 0,
   "todo_failing": 0,
@@ -94,7 +94,7 @@
      "outcome": "pass"
     },
     {
-     "name": "T03: no default agent, manager or resume command carries a permission or sandbox bypass",
+     "name": "T03: default claude/codex/manager/resume commands carry the owner-chosen bypass flags (2026-10-11); minimax and bash do not",
      "file": "test/v2-security-review.test.js",
      "outcome": "pass"
     },
@@ -129,7 +129,7 @@
      "outcome": "pass"
     },
     {
-     "name": "T03: no bypass flag survives anywhere in the server, scripts or modules (launch-config detects them, nothing else names them)",
+     "name": "T03: bypass flags are named only in launch-config (the default) and nowhere else in the server, scripts or modules",
      "file": "test/v2-security-review.test.js",
      "outcome": "pass"
     },
@@ -415,10 +415,15 @@
   {
    "id": "T15",
    "status": "PASS",
-   "reason": "1 test(s) passed",
+   "reason": "2 test(s) passed",
    "tests": [
     {
      "name": "T15 tests pass but the reviewer keeps disagreeing: evidence cannot settle it -> owner decides, never accepted",
+     "file": "test/v2-goal-loop.test.js",
+     "outcome": "pass"
+    },
+    {
+     "name": "T15 reviewer approves but the required tests are red: the store refuses accepted and the loop never accepts (evidence outranks the verdict)",
      "file": "test/v2-goal-loop.test.js",
      "outcome": "pass"
     }
@@ -427,7 +432,7 @@
   {
    "id": "T16",
    "status": "PASS",
-   "reason": "2 test(s) passed; 922 pre-V2 regression tests passed",
+   "reason": "2 test(s) passed; 864 pre-V2 regression tests passed",
    "tests": [
     {
      "name": "T16: server.js loads no V2 module at startup: none in its static import graph; any V2 import is dynamic and behind GHOSTY_V2",
@@ -441,8 +446,8 @@
     }
    ],
    "regression": {
-    "files": 71,
-    "tests": 922,
+    "files": 69,
+    "tests": 864,
     "failed": []
    }
   },
@@ -518,7 +523,7 @@
    "reason": "1 test(s) passed",
    "tests": [
     {
-     "name": "T20: browser check (scripts/v2-ui-check.js): 37/37 checks passed",
+     "name": "T20: browser check (scripts/v2-ui-check.js): 39/39 checks passed",
      "file": "scripts/v2-ui-check.js",
      "outcome": "pass"
     }

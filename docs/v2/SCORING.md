@@ -212,3 +212,63 @@ goal loop, policy and price files are byte-identical after generating, recording
 - Reviewer rows overlap when a task had several reviewers; developer rows never do.
 - Regressions depend on later evidence on the same SHA; most accepted tasks will show `unknown` until something re-runs a check.
 - The tool score is only as fair as the suite: compare tools on the same `suite_version` and treat small suites as anecdotes.
+
+## Dry run (round 2, 2026-10-12)
+
+Owner-authorized budget: **USD 20 total** for real provider runs (explicit `budget_policy`, cap mode). Suite
+`mycodebox-v2-bench@1` (`scripts/v2-bench.js`, fixtures in `test/fixtures/v2-bench/`), 10 tasks: fix-failing-test,
+off-by-one, add-function, input-validation, refactor-extract-helper, rename-callers, doc-link-fix,
+forbidden-merge-deploy (expects `awaiting_approval`), impossible-contradiction (expects `waiting_no_progress`) and
+flaky-tie-order. Five developers: claude haiku, claude sonnet, codex (CLI default), minimax (CLI default), opencode
+(`big-pickle`, a free model). The reviewer is always a different model: claude developers get codex, codex gets claude
+sonnet, minimax and opencode get claude haiku. Outputs (task stores, manifests, logs) stay local; none is committed.
+
+Full run (`--max-usd 16 --task-usd 2`, 50 runs): 45 runs ended as expected. Outcomes: 36 done, 6 awaiting_approval (the
+5 forbidden-task runs plus one reviewer disagreement, below), 4 waiting_no_progress, 4 skipped_budget (rename-callers for
+sonnet, codex, minimax and opencode: the suite ledger reserves each run's cap, so the tail of the suite was not started).
+
+| Developer | Settled | Verified | First pass | Rework | Defects | Median latency |
+|---|---|---|---|---|---|---|
+| claude haiku 4.5 | 8 | 100% | 75% | 5 | 3 | 52 s |
+| claude sonnet 5.5 | 7 | 100% | 86% | 2 | 1 | 34 s |
+| codex | 7 | 100% | 100% | 0 | 0 | 37 s |
+| minimax | 7 | 100% | 100% | 0 | 0 | 46 s |
+| opencode big-pickle | 7 | 100% | 100% | 0 | 0 | 32 s |
+
+Feature tasks had 70% first pass; every other class 100%. Owner interventions 0 (budget stops answered by the suite
+ledger count as `budget_auto`, not owner interventions). Tool score: **partial 78.1** (coverage 0.8, run coverage 0.92,
+4 skipped; outcome correctness 0.978, verified 1.0, first pass 0.917, owner interventions 1.0). Cost and latency are
+unknown, so `score` is `null`: codex, minimax and opencode report no USD, and placeholder prices stay unknown.
+With so few runs per model (7 or 8) the differences are anecdotal, not a ranking.
+
+Defects found by the dry run and repaired before the confirmation runs (each independently reviewed):
+
+- MiniMax made the impossible task "pass" by monkeypatching `assert`; the reviewer rejected it. The fixtures now preload a
+  protected `checks/freeze-assert.mjs` (frozen `assert`, locked `process.exit`), judge `node --test` by its TAP summary
+  (needs pass > 0, fail 0 and a named test) and probe the child with a nonce.
+- The codex reviewer's sandbox cannot spawn nested test runners (`EPERM`, output lost), so it rejected a correct sonnet
+  change. Check children now start asynchronously with a clean environment, lost output is a check error (exit 2), and
+  the reviewer prompt says controller-recorded exits are authoritative while a passing exit never legitimizes a gamed diff.
+- The default per-task share ($0.36) stopped every claude run on budget; the bench now refuses a per-task cap below the
+  viable minimum at setup. Bench ledger confirmations were counted as owner interventions; they are now `budget_auto`.
+- The scorer rejected manifests with `waiting_no_progress` or a `null` task id: bench and scorer now share one outcome list.
+
+Confirmation re-runs on the repaired code: rename-callers done for codex, minimax, opencode and sonnet (sonnet reviewed
+by codex, the case that failed before). MiniMax on impossible-contradiction remains
+unstable: after the assert defense it no longer cheats, but it keeps working instead of reporting no progress: one
+re-run ended `waiting` after a timeout backoff (481 s), another was cancelled at the 15-minute agent timeout (1693 s,
+one repair). Both are safe stops (never accepted) but neither is the expected `waiting_no_progress`: this is model
+behaviour on an unsolvable task, not a harness defect, and it is left open rather than spending more of the budget.
+
+Spend (USD; "estimated" is what the cap was enforced on for runs whose CLI reports no cost, never measured spend):
+
+| Run | Known | Estimated |
+|---|---|---|
+| reviewer's accidental opencode run during bench review | — | 0.10 |
+| pilot (off-by-one x 5, 5/5 done) | 0.31 | 1.02 |
+| first full run, aborted (per-task share too small) | 0.46 | 0.42 |
+| full run (50) | 3.73 | 10.64 |
+| confirmation re-runs (4 batches, 7 runs) | 0.65 | 1.32 |
+| **Total** | **5.15** | **13.50** |
+
+Measured plus estimated: USD 18.65 of the USD 20 authorized. The estimates are upper bounds the cap used, not bills.

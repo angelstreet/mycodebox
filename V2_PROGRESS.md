@@ -7,7 +7,7 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 2 (OWNER_DECISIONS §10) in progress; see "Round 2" below. SHAs quoted before round 2 in this file, in
+Round 2 (OWNER_DECISIONS §10) delivered; see "Round 2" below. Next: owner review of PR #1. SHAs quoted before round 2 in this file, in
 V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
 scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
 
@@ -17,13 +17,13 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
-| R2-1 | Clean V2_VERIFICATION.md, gates on final SHA | coordinator | todo | |
+| R2-1 | Clean V2_VERIFICATION.md, gates on final SHA | coordinator | DONE | Rewritten as one current document; gated SHA ae9efa0: 1684/1684 Node 23.6 and 24.21, reporter 25/25, acceptance 54/54 (1685 tests), T20 39/39, leak scan clean; later commits docs only |
 | R2-2 | Sessions never ask for permission (bypass + folder trust on every launch path) | Sonnet / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge 0967a6d | 4109590+bb883c5; mcode TUI has no permission flag: full mode = `permissionMode: bypassPermissions` in its config.yaml (D-019); 1614/1614 both runtimes at ae6a613 |
 | R2-3 | assetlinks / Langfuse / https hints from configuration | Sonnet / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge ae6a613 | b0c02bc squashed (a node_modules symlink slipped into a fix commit; squashed before any push); env ANDROID_APP_PACKAGE, ANDROID_APP_SHA256, LANGFUSE_PUBLIC_URL; PUBLIC_URL feeds hints |
 | R2-4 | m1 m2 m3 m4 m6, T15 red-tests half, T20 same-origin control | Sonnet / Opus (m3,m6 Fable) | INTEGRATED: m1 m2 m4 T15 T20 merge 42bce7a (Opus APPROVE, 2 rounds); m3 m6 merge dacc48c (Fable APPROVE, 3 rounds) | D-020; m6 shared textVariants/windowJoins in stall.js. Accepted false positives (safe direction): "roll out", "I'll pass. Word", "Re start", "Bill ing", "pass/word", "we pass words". Open low: rarer confusables (Armenian, small caps), two splits in one window (manager only; V2 catches), prefix compounds (undeploy) out of scope. Gate dacc48c 1674/1674 both runtimes |
 | R2-5 | OpenCode installed in user space, live smoke | coordinator + Sonnet | INTEGRATED (Opus APPROVE, 2 rounds) merge d29ecf5 | opencode-ai 1.18.32 under ~/.local/opencode (pinned >2 weeks old, free models); real format: sessionID, per-step tokens summed, incomplete flagged; resume via --session verified live; --auto refused by the adapter guard; live smoke accepted |
-| R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | scoring merge 117a976 (Opus, 3 rounds); bench merge 7db8c4e (Opus, 3 rounds); owner-intervention fix merge 508f0a0 (Opus); dry run in progress | Spend ledger (USD 20 authorized): reviewer's accidental opencode run est 0.10; pilot 5/5 known 0.31 + est 1.02; aborted full1 known 0.46 + est 0.42 (default per-task share 0.36 too small: every claude task budget_stop); full2 running with --max-usd 16 --task-usd 2 |
-| R2-7 | Push, PR #1 round-2 section, DELIVERED | coordinator | todo | |
+| R2-6 | Scorecard, tool score, approval-gated proposals, bench suite + dry run (USD 20 cap) | Opus / Sonnet | INTEGRATED: scoring 117a976 (Opus, 3 rounds); bench 7db8c4e (Opus, 3 rounds); owner-intervention fix 508f0a0 (Opus); bench2 4f942dc (Opus, 4 rounds); bench3 2fde21c (Opus); T20 tab order ae9efa0 (Sonnet review) | Dry run full2: 50 runs, 45 as expected, 4 skipped_budget, all models 100% verified, tool score partial 78.1; defects repaired (assert monkeypatch, exit cheats, reviewer sandbox EPERM, budget share, outcome list) and confirmed by re-runs. Results and spend: docs/v2/SCORING.md "Dry run" |
+| R2-7 | Push, PR #1 round-2 section, DELIVERED | coordinator | DONE | pushed to origin/v2/integration; PR #1 description has a round-2 section; PR stays draft |
 
 ## Plan (waves, max 3 concurrent developers)
 
@@ -98,22 +98,23 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 
 - Live unit sets `HOST=0.0.0.0` explicitly (read-only inspection). Upgrading keeps it (no access break) and now logs a
   warning; owner should switch to `127.0.0.1` + private Serve or a literal Tailscale IP.
-- Live install has no `AGENT_CMD_CLAUDE`/`AGENT_CMD_CODEX` overrides: after upgrade, new and resumed Claude/Codex
-  sessions use normal permission prompts and folder-trust prompts (intended safe default; owner-visible change).
-- Forbidden-topic floor (stall.js) was widened after review; Fable lists low-severity false positives (e.g. "call the client method", "publish the event") that now need an owner tap. Safe direction; tune only with a fresh review.
-- V2 execution is not wired into the server: when it is, the HTTP routes and the goal loop must share one store handle in one process, and `recover()` must run under the controller lease at startup (D-016, D-017).
+- Owner default since 2026-10-11: dashboard-created and resumed Claude/Codex sessions and the manager skip permission
+  prompts and pre-accept folder trust (`AGENT_CMD_*` overrides win). For MiniMax, set `permissionMode: bypassPermissions`
+  in `~/.minimax/config.yaml`: `mcode` has no flag for it (D-019).
+- Before upgrading, set `ANDROID_APP_PACKAGE`, `ANDROID_APP_SHA256`, `LANGFUSE_PUBLIC_URL` and `PUBLIC_URL` in the service
+  environment: assetlinks, the Langfuse link and the https hints now come from configuration, not the source.
+- Set `MCODE_NODE_DIR` in the service environment where `node` is 23.x (mcode 0.6.3 needs Node 24).
+- V2 execution is not wired into the server: when it is, the HTTP routes and the goal loop must share one store handle in
+  one process, and `recover()` must run under the controller lease at startup (D-016, D-017). Until then dashboard
+  approve, deny and cancel answer 503 (D-020) and proposal tasks cannot be approved from the dashboard.
 - `usage/prices.json` PLACEHOLDER rows (MiniMax-M3, gpt-6-luna, gpt-6-sol) need real prices; until then cost shows unknown.
+- Forbidden-topic floor accepts low-severity false positives (safe direction, an owner tap): "call the client method",
+  "publish the event", "roll out", "I'll pass. Word", "Re start", "Bill ing", "pass/word", "we pass words". Tune only
+  with a fresh review.
 - The branch scrubs a hard-coded tailnet IP and host name from `public/app.js` (pre-existing on `main`), but they stay in
   `main`'s git history: rotate or accept; a history rewrite of `main` is owner-only.
-- Set `MCODE_NODE_DIR` in the service environment where `node` is 23.x (mcode 0.6.3 needs Node 24).
-- OpenCode live smoke BLOCKED: runtime not installed.
 - Integration worktrees under the integration controller's work dir accumulate; clean them up manually.
-- Final-review follow-ups (minor, none release-critical): m1 acceptance T16 "pre-V2" set should pin to `origin/main`'s
-  test list; m2 runner should exit nonzero on a defect mapped to no row; m3 dashboard grants are a second store writer
-  (route through `loop.approve()` or add a store owner lock before wiring); m4 policy blocks without a request leave
-  a keyless approval dead end (should be `waiting` with a diagnosis); m6 split "mer ge into main" not classed (the
-  controller still derives `merge_protected` from the real target); T15 "reviewer approves, tests red" half and a T20
-  same-origin positive control are untested.
+- The bench dry run spent USD 5.15 measured plus 13.50 estimated against the USD 20 authorization (see SCORING.md).
 
 ---
 
