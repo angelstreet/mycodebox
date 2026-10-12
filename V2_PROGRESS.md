@@ -17,7 +17,7 @@ Base: `origin/v2/integration` c23ebe8. Owner spec: OWNER_DECISIONS §11.
 
 | Item | Scope | Owner (model) | State | Result |
 |---|---|---|---|---|
-| R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | REVIEW (Fable) | 27aa36c: orchestration/v2-runtime.js + v2-integrate.js, child-process server tests; 1692/1692 both runtimes; D-021; approved merges are not executed by the server (task waits until main contains the SHA) |
+| R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) merge 64b3f75 | 27aa36c+cf99337+56023ed: lease-fenced create (`ownerWrite`), branches `v2/task/<id>`, dead remote bounded, stop() bounded, repo hooks neutralized; orchestration/v2-runtime.js + v2-integrate.js, child-process server tests; 1692/1692 both runtimes; D-021; approved merges are not executed by the server (task waits until main contains the SHA) |
 | R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver + coordinator | IN PROGRESS: HTTP driver (wt r3-bench = r3-wire + r3-noprog) | |
 | R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge 0b56d12 | 8df6828+7cdca16: run timeout counted as an attempt (was routed to provider backoff); bench agent timeout 3 min; 1693/1693 both runtimes |
 | R3-3b | Drop stale "main's git history" owner action | coordinator | DONE | history was rewritten |
