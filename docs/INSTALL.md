@@ -138,6 +138,49 @@ Optional does not mean every background reader defaults off. The server starts p
 
 State defaults to `~/.local/state/ghosty` or the absolute `GHOSTY_STATE_DIR`. Back it up privately. Existing state can carry previously enabled manager actions; do not treat an upgrade as a fresh set of safe defaults.
 
+## Optional: V2 task engine (opt-in, off by default)
+
+V2 runs owner-created tasks in isolated git worktrees: route, developer run, deterministic checks, independent reviewer,
+then `accepted`, `waiting` or `awaiting_approval`. It is off unless `GHOSTY_V2=1`; with it unset nothing V2 is loaded and
+the dashboard behaves exactly as before. Reference: [env keys](REFERENCE.md#configuration), [V2 task API](REFERENCE.md#v2-task-api-opt-in).
+
+**Enable** (owner action; a restart through the normal update procedure below, never during a deploy):
+
+1. Pick a work root outside the checkout and the state dir, e.g. `/home/<user>/v2-work` (absolute path).
+2. List the repositories V2 may work in. Each needs a `.ai/project.json` policy (see this repository's own file for the
+   format); its allowlists govern every task in it. A repository without a valid policy is listed but its tasks stop at an
+   owner clarification.
+3. Add to the private environment file (`.env`, mode 0600):
+
+   ```ini
+   GHOSTY_V2=1
+   GHOSTY_V2_WORK_ROOT=/absolute/path/to/v2-work
+   GHOSTY_V2_REPOS=/absolute/path/to/repo-a:/absolute/path/to/repo-b
+   # Optional:
+   # GHOSTY_V2_PATH_DIRS=/home/<user>/.local/bin      (where opencode or other CLIs live)
+   # MCODE_NODE_DIR=/path/to/node-24/bin              (MiniMax needs Node 24)
+   # GHOSTY_V2_CONCURRENCY=1                          (tasks stepped at once, 1-8)
+   # GHOSTY_V2_CLAUDE_RUN_USD=1                       (cap of one Claude run, lowered to the task's remaining cap)
+   # GHOSTY_V2_PUSH_REMOTE=origin                     (unset = never push; set = only the task's own v2/task/<id> branch)
+   ```
+
+   Never set `GHOSTY_V2_TEST_FAKE_ADAPTER` on a live install: it is for tests only.
+4. Restart with `scripts/safe-restart.sh` (it refuses during a deploy). The log shows the V2 status line: controller
+   lease taken, recovery done, runtimes available. `GET /api/v2/ops/status` shows the same.
+
+**What changes for the owner.** The **V2 tasks** view (More menu) now runs tasks: a new task starts at once in a
+worktree under the work root, never in the repository's own checkout, and never on `main`. Each task's spend is shown
+(unknown stays unknown); set a `max_usd` cap per task to make spend a hard stop. Approve/deny answer exactly the request
+shown (its id and head SHA); merges to a protected branch, deploys, credentials and the other restricted classes always
+stop at `awaiting_approval`. The server never merges or deploys: an approved merge is done by the owner (for example the
+PR merge), and the task is accepted once `main` contains that SHA. Scoring proposals can be approved or denied from the
+scorecard. Sessions, the manager and its router shadow are unchanged. Old task worktrees under the work root are not
+deleted automatically.
+
+**Roll back.** Remove `GHOSTY_V2=1` (or set it to anything else) and restart with `scripts/safe-restart.sh`. The
+`/api/v2/*` routes answer 404 again and nothing V2 runs. Task state stays in `$GHOSTY_STATE_DIR/v2` and the work root
+(delete them by hand only if the tasks are no longer wanted); re-enabling recovers open tasks under the controller lease.
+
 ## Verify
 
 For the recommended loopback + Serve setup:

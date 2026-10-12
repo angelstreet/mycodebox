@@ -61,8 +61,8 @@ The **V2 tasks** item in the More menu is for the V2 task engine and works only 
   SHA is labelled and does not count), reviewer verdicts, decisions with their rationale, usage (a missing figure reads
   `unknown`, never 0), resources and effects, and the state history.
 - **New task.** Goal, optional repository path, optional acceptance command. It goes through the same intake as the API.
-  Creating a task **only records it**. Nothing runs until the goal loop is started, which is a separate explicit opt-in
-  (the server does not start it).
+  The goal loop picks it up at once: it runs in a worktree under `GHOSTY_V2_WORK_ROOT`, only in repositories listed in
+  `GHOSTY_V2_REPOS`, and stops at `accepted`, `waiting` or `needs owner` ([enable V2](INSTALL.md#optional-v2-task-engine-opt-in-off-by-default)).
 - **Approve or deny.** Shown only while a task waits on a request. The buttons answer that exact request (its id and the
   head SHA are sent with the click); the answer is recorded as the owner. They never approve anything else.
 - **Cancel.** Stops a task that is not finished; it cannot be resumed.
