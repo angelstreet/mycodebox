@@ -105,7 +105,7 @@ export function foldRun(events, { httpSuite = false } = {}) {
   const f = { task_id: created.task_id, task, status: task.status, created_at: created.timestamp, completed_at: null,
     info: task.review_policy?.mode === 'informational', head_sha: null, producers: new Map(), devs: new Map(), last_actor: null,
     usage: [], rework: 0, owner: { approvals_requested: 0, approvals_granted: 0, approvals_denied: 0, resumes: 0, budget_auto: 0 },
-    verdicts: [], evidence: [], wait_reason: null, stopped_at: null, waits: { quota: 0, rate_limited: 0, by_entry: {} } };
+    verdicts: [], evidence: [], wait_reason: null, stopped_at: null, runs_started: 0, waits: { quota: 0, rate_limited: 0, by_entry: {} } };
   for (const e of events) {
     const p = e.payload || {};
     if (['task.transitioned', 'task.completed', 'task.cancelled'].includes(e.kind) && typeof p.to === 'string') {
@@ -120,7 +120,8 @@ export function foldRun(events, { httpSuite = false } = {}) {
         f.waits.quota += 1;
         if (typeof p.entry === 'string') f.waits.by_entry[p.entry] = (f.waits.by_entry[p.entry] || 0) + 1; else f.waits.unattributed = (f.waits.unattributed || 0) + 1;
       }
-    } else if (e.kind === 'model.rate_limited') {
+    } else if (e.kind === 'task.started') f.runs_started += 1;
+    else if (e.kind === 'model.rate_limited') {
       f.waits.rate_limited += 1;
       if (typeof p.entry === 'string') f.waits.by_entry[p.entry] = (f.waits.by_entry[p.entry] || 0) + 1;
     } else if (e.kind === 'task.head_changed') {
@@ -205,6 +206,8 @@ export function regressionsOf(facts) {
 }
 
 function costOf(f) {
+  // No worker ever started (a task stopped at a policy gate): nothing was spent, a known $0, not an unknown.
+  if (!f.usage.length && !f.runs_started) return { usd: 0, reason: null };
   if (!f.usage.length) return { usd: null, reason: 'no usage record' };
   if (f.usage.some((u) => u.incomplete)) return { usd: null, reason: 'usage marked incomplete' };
   if (f.usage.some((u) => u.usd === null)) return { usd: null, reason: 'unpriced usage (usd unknown)' };
@@ -213,9 +216,9 @@ function costOf(f) {
 
 const sum = (xs) => xs.reduce((a, b) => a + b, 0);
 // Cost basis of the DEVELOPER entry's records in one run: subscription (flat plan, no marginal USD), measured (every
-// record priced), estimated (the bench estimated an unpriced per-token record) or unknown. Never $0 for a subscription.
-function costBasisOf(devRecords, run) {
-  if (!devRecords.length) return 'unknown';
+// record priced), estimated (the bench estimated an unpriced per-token record), unknown, or none (no worker ever ran: $0 known). Never $0 for a subscription.
+function costBasisOf(devRecords, run, f) {
+  if (!devRecords.length) return f && !f.usage.length && !f.runs_started ? 'none' : 'unknown';
   if (devRecords.every((u) => billingOf(u) === 'subscription')) return 'subscription';
   if (devRecords.every((u) => billingOf(u) !== 'subscription' && u.usd !== null && !u.incomplete)) return 'measured';
   return run?.unknown_cost_records > 0 && run?.usd_estimated > 0 ? 'estimated' : 'unknown';
@@ -238,7 +241,7 @@ function runRecord(f, run, regression) {
   const stopMs = f.stopped_at ? Date.parse(f.stopped_at) - Date.parse(f.created_at) : null;
   const stop_ms = STOP_STATUSES.includes(f.status) && Number.isFinite(stopMs) && stopMs >= 0 ? stopMs : null;
   const waitsByEntry = { ...f.waits.by_entry };
-  const cost_basis = costBasisOf(devRecords, run);
+  const cost_basis = costBasisOf(devRecords, run, f);
   const subOnlyUnknown = cost.usd === null && f.usage.some((u) => billingOf(u) === 'subscription') && perToken.every((u) => u.usd !== null && !u.incomplete);
   return {
     task_id: f.task_id, bench_task_id: run?.bench_task_id ?? null, rep: run?.rep ?? null, task_class: f.task.task_class ?? run?.task_class ?? 'unknown',
@@ -314,7 +317,10 @@ function aggregate(key, extra, runs, { defectsBy = null, facts = null } = {}) {
 const stats = (xs) => (xs.length ? { n: xs.length, mean: Math.round(sum(xs) / xs.length), min: Math.min(...xs), max: Math.max(...xs) } : { n: 0, mean: null, min: null, max: null });
 // Unknown wins; `mixed` only when subscription runs sit with measured/estimated ones (a per-task row never hides subscription
 // spend); else estimated beats measured.
-export function worstBasis(bases) {
+export function worstBasis(all) {
+  // 'none' (no worker ran, $0 known) never hides or mixes with a real basis.
+  const bases = all.filter((b) => b !== 'none');
+  if (all.length && !bases.length) return 'none';
   if (!bases.length || bases.includes('unknown')) return 'unknown';
   if (bases.includes('subscription') && bases.some((b) => b !== 'subscription')) return 'mixed';
   return bases.includes('estimated') ? 'estimated' : bases[0];

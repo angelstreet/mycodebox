@@ -253,3 +253,29 @@ test('cost basis of a group: unknown wins, mixed only for subscription next to m
   assert.match(usdCell(m('unknown', ['measured', 'unknown'])), /^unknown /);
   assert.doesNotMatch(usdCell(m('unknown', ['subscription', 'unknown'])), /^subscription/);
 });
+
+test('cost basis none: a task stopped at a policy gate before any worker ran is a known $0, and never hides a model group', async () => {
+  assert.equal(worstBasis(['none']), 'none');
+  assert.equal(worstBasis(['none', 'measured']), 'measured');
+  assert.equal(worstBasis(['none', 'subscription']), 'subscription');
+  assert.equal(worstBasis(['none', 'unknown']), 'unknown');
+  const dir = path.join(TMP, 'store-none');
+  const s = storeIn(dir);
+  await done(s, 'g0', HK, { usd: 0.04 });
+  await s.createTask(tspec('g1'));
+  await s.transition('g1', 'awaiting_approval');
+  await s.createTask(tspec('g2'));   // a run started but never recorded usage: still unknown
+  await s.append('g2', { event_id: 'st-g2', kind: 'task.started', payload: { run_id: 'g2-d' } });
+  const mf = manifestFor([
+    { task_id: 'g0', bench_task_id: 'off-by-one', rep: 1, task_class: 'x', expected_outcome: 'done', runtime: 'claude', model: 'claude-haiku-4-5' },
+    { task_id: 'g1', bench_task_id: 'forbidden', rep: 1, task_class: 'x', expected_outcome: 'awaiting_approval', runtime: 'claude', model: 'claude-haiku-4-5' },
+    { task_id: 'g2', bench_task_id: 'other', rep: 1, task_class: 'x', expected_outcome: 'done', runtime: 'claude', model: 'claude-haiku-4-5' }]);
+  const { sc } = scorecardOf(dir, { manifest: { ...mf, runs: mf.runs.slice(0, 2) } });
+  const g1 = sc.runs.find((r) => r.task_id === 'g1');
+  assert.equal(g1.cost_basis, 'none');
+  assert.equal(g1.cost_usd, 0);
+  assert.equal(sc.model_metrics.find((m) => m.runtime === 'claude').cost_basis, 'measured');
+  const { sc: sc2 } = scorecardOf(dir, { manifest: mf });
+  assert.equal(sc2.runs.find((r) => r.task_id === 'g2').cost_basis, 'unknown');
+  assert.equal(sc2.model_metrics.find((m) => m.runtime === 'claude').cost_basis, 'unknown');
+});
