@@ -56,7 +56,7 @@ async function setup(script, { queue: realQueue = null, handleWrap = (h) => h, t
       async effectState(key) { return effects.has(key) ? effects.get(key) : null; },
     }),
   });
-  const call = async (i = 0) => delivery.integrate(await store.get(ids[i]), { sha: SHA_A, worktree: { path: '/wt', branch: `v2task/${ids[i]}` }, idempotency_key: `integrate:${ids[i]}:${SHA_A}`, store: loopStore });
+  const call = async (i = 0) => delivery.integrate(await store.get(ids[i]), { sha: SHA_A, worktree: { path: '/wt', branch: `v2/task/${ids[i]}` }, idempotency_key: `integrate:${ids[i]}:${SHA_A}`, store: loopStore });
   return { store, ids, id: ids[0], delivery, call, calls, items, writes, effects, loopStore, ctl: () => ctl, setCi: (s) => { ci = s; } };
 }
 const itemOf = (items, id) => [...items.values()].find((x) => x.task_id === id);

@@ -1295,8 +1295,13 @@ export function createGoalLoop({
     });
   }
 
+  // Any other owner-initiated write of the process that runs this loop (task creation from the dashboard, an ops
+  // request): under the controller lease like approve/deny/cancel, and through the fenced store handle, so a
+  // displaced instance (its lease expired, another controller took over) writes nothing (E_CONTROLLER_HELD).
+  const ownerWrite = (fn) => asOwner(() => fn(store));
+
   return {
-    step, run, acquire, release,
+    step, run, acquire, release, ownerWrite,
     // Startup: replay the store (unconfirmed effects -> unknown_external_effect); steps resume from there (T18).
     async recover() {
       usage.busy += 1;   // a concurrent owner action's releaseIdle() must not drop the lease mid-recover

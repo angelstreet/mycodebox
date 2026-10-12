@@ -88,7 +88,7 @@ test('verify2: HEAD on another branch with commits blocks removal', async () => 
   sh(a.path, 'add', '.');
   sh(a.path, 'commit', '-q', '-m', 'w');
   await assert.rejects(s.wt.remove(a.path, { retain: false, owner: 'o' }), { code: 'E_UNMERGED' });
-  await assert.rejects(s.wt.remove(a.path, { retain: false, owner: 'o', merged_into: 'refs/heads/v2task/tb' }), { code: /^E_/ });
+  await assert.rejects(s.wt.remove(a.path, { retain: false, owner: 'o', merged_into: 'refs/heads/v2/task/tb' }), { code: /^E_/ });
   assert.ok(fs.existsSync(a.path));
 });
 
@@ -113,7 +113,7 @@ test('verify2: a task id can be reused after removal merged into a non-HEAD targ
   sh(z.path, 'add', '.');
   sh(z.path, 'commit', '-q', '-m', 'f');
   sh(s.dir, 'checkout', '-q', 'release');
-  sh(s.dir, 'merge', '-q', '--ff-only', 'v2task/tz');
+  sh(s.dir, 'merge', '-q', '--ff-only', 'v2/task/tz');
   sh(s.dir, 'checkout', '-q', 'main');
   assert.equal((await s.wt.remove(z.path, { retain: false, owner: 'o', merged_into: 'release' })).removed, true);
   await s.wt.create({ repo: s.dir, task_id: 'tz', base_sha: s.sha, owner: 'o' }).then(() => {}, (e) => assert.equal(e.code, 'E_EXISTS'));

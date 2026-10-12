@@ -100,8 +100,7 @@ const CREATE = (w, over = {}) => ({ goal: 'Create src/hello.txt containing hello
 // `POST /api/v2/tasks` is gated only by the process-local `state === 'running'` flag: intake.createTask writes to the
 // raw store handle without the lease fence. Expected: 409/503, nothing written. Observed: 201, the task is created
 // by a process that is not the controller.
-test('probe: task create on a displaced controller is written without the lease (second live controller holds it)', { timeout: 60_000,
-  todo: 'v2-runtime.js intake.createTask -> baseIntake.createTask writes through the unfenced store; only `state` is checked, not the lease' }, async () => {
+test('probe: task create on a displaced controller is refused, not written (second live controller holds the lease)', { timeout: 60_000 }, async () => {
   const w = world();
   const a = await boot(w);
   let b = null;
@@ -116,7 +115,7 @@ test('probe: task create on a displaced controller is written without the lease 
     fs.writeFileSync(path.join(leasesDir, rec), JSON.stringify(j));
     b = await boot(w);
     assert.equal(b.status.state, 'running', b.log());
-    // The displaced instance A still creates tasks: that is the defect.
+    // The displaced instance A must not create tasks (fixed: creates go through loop.ownerWrite under the lease).
     const r = await a.api('POST', '/api/v2/tasks', CREATE(w, { goal: 'written by a displaced controller [fake:hang]' }));
     const obs = [`create via A -> ${r.status} ${r.body?.code || ''}`];
     if (r.status === 201) {
@@ -206,30 +205,30 @@ test('probe: the integrate hook pushes exactly one refspec (own branch, full SHA
   const sha = 'a'.repeat(40);
   const task = { task_id: 'task-1', repository: '/repo' };
   // Wrong branch, short SHA, foreign branch name: refused before any git call.
-  for (const [s, wt] of [[sha, { branch: 'main' }], [sha, { branch: 'v2task/task-2' }], ['abc1234', { branch: 'v2task/task-1' }], [`${sha}; rm -rf /`, { branch: 'v2task/task-1' }]]) {
+  for (const [s, wt] of [[sha, { branch: 'main' }], [sha, { branch: 'v2/task/task-2' }], ['abc1234', { branch: 'v2/task/task-1' }], [`${sha}; rm -rf /`, { branch: 'v2/task/task-1' }]]) {
     const r = await integrate(task, { sha: s, worktree: wt, store });
     assert.deepEqual([r.next, r.block], ['awaiting_approval', 'policy'], JSON.stringify(r));
   }
   assert.equal(calls.length, 0, 'no git call for a refused handoff');
-  const r = await integrate(task, { sha, worktree: { branch: 'v2task/task-1' }, store });
+  const r = await integrate(task, { sha, worktree: { branch: 'v2/task/task-1' }, store });
   assert.equal(r.next, 'awaiting_approval');
   assert.deepEqual(r.keys, [`integration:merge:p:main:${sha}`]);
   assert.deepEqual(r.classes, ['merge_protected']);
   const pushes = calls.filter((a) => a[0] === 'push');
-  assert.deepEqual(pushes, [['push', '--porcelain', '--force-with-lease=refs/heads/v2task/task-1:', 'origin', `${sha}:refs/heads/v2task/task-1`]]);
+  assert.deepEqual(pushes, [['push', '--porcelain', '--force-with-lease=refs/heads/v2/task/task-1:', 'origin', `${sha}:refs/heads/v2/task/task-1`]]);
   assert.ok(!calls.some((a) => a.includes('--force') || a.some((x) => /refs\/heads\/main/.test(x) && a[0] === 'push')), 'never --force, never a push touching main');
   assert.equal(effects.filter((e) => e.kind === 'push_task_branch').at(-1).phase, 'confirmed');
   // Approved at the SHA: still no merge; the hook only reads whether main contains it.
   events.push({ kind: 'approval.granted', payload: { k: 1, grants: { request_kind: 'integration', keys: r.keys } } });
   const n0 = calls.length;
-  const r2 = await integrate(task, { sha, worktree: { branch: 'v2task/task-1' }, store });
+  const r2 = await integrate(task, { sha, worktree: { branch: 'v2/task/task-1' }, store });
   assert.equal(r2.next, 'waiting');
   assert.deepEqual(calls.slice(n0).map((a) => a[0]).filter((x) => !['remote', 'ls-remote'].includes(x)), ['merge-base'], 'no push, no merge after approval');
   // A grant of another kind or another SHA does not count.
   events.length = 0;
   events.push({ kind: 'approval.granted', payload: { k: 1, grants: { request_kind: 'proposal', keys: r.keys } } },
     { kind: 'approval.granted', payload: { k: 2, grants: { request_kind: 'integration', keys: [`integration:merge:p:main:${'b'.repeat(40)}`] } } });
-  assert.equal((await integrate(task, { sha, worktree: { branch: 'v2task/task-1' }, store })).next, 'awaiting_approval');
+  assert.equal((await integrate(task, { sha, worktree: { branch: 'v2/task/task-1' }, store })).next, 'awaiting_approval');
   assert.throws(() => createServerIntegrate({ git, pushRemote: '--mirror' }), /invalid remote name/);
 });
 

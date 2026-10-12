@@ -248,12 +248,12 @@ test('Z5 Y3b variant: a branch switch after acceptance-for-delivery but before t
   assert.ok(!v.effects.some((e) => e.kind === 'integration'), 'no handoff effect was even attempted');
   env.advance(24 * 3600_000);
   assert.equal((await env.loop.step(task.task_id)).transitioned, false, 'time does not restore a branch');
-  sh(wt, 'checkout', '-q', `v2task/${task.task_id}`);
+  sh(wt, 'checkout', '-q', `v2/task/${task.task_id}`);
   await env.loop.resume(task.task_id, { actor: OWNER });
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
   // once handed off, the confirmed handoff is retried by key with the verified SHA; the task branch tip is unchanged
   assert.deepEqual(calls, [v.head_sha, v.head_sha]);
-  assert.equal(sh(env.repo.dir, 'rev-parse', `v2task/${task.task_id}`), v.head_sha);
+  assert.equal(sh(env.repo.dir, 'rev-parse', `v2/task/${task.task_id}`), v.head_sha);
 });
 
 // ---- Y7 variant ---------------------------------------------------------------------------------------
