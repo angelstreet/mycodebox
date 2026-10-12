@@ -42,7 +42,7 @@ Inside one source the selector decides first (entry > runtime > `*`), then the c
 ```
 
 Defaults shipped in the registry (light models on easy classes): `docs`, `test` and `coding:low` on
-`minimax:MiniMax-M3`, `minimax:MiniMax-M3.1-Flash-Preview` and `claude:claude-haiku-4-5` get `timeout_ms` 150000,
+`minimax:MiniMax-M3`, `minimax:MiniMax-M3.1-Flash-Preview` and `claude:claude-haiku-4-5` get `timeout_ms` 120000,
 `max_steps` 40, `effort` low where the model has efforts (M3.1, Haiku; M3 has none) and `stall_runs_to_no_progress` 2.
 Every other model and class keeps today's behaviour.
 
@@ -54,14 +54,20 @@ run records its effective `limits` and `limit_sources` in `task.started`.
 
 Stops. A developer run killed by its own time limit counts at once as a stall (`run_timeout` decision, signature
 `run_timeout:<entry> :: timeout`; the §4 streak keeps the checks' signature so stalls and failing no-op runs still
-converge). When the run's limits set `stall_runs_to_no_progress` N, N stalled runs without new passing evidence end the
+converge). Under a `stall_runs_to_no_progress` limit, a run that leaves the head unchanged (`run_no_change`) or ends
+with an impossibility claim is a stall too (at most one per run), and the first measurement never resets the count:
+the base SHA is not measured, so checks that already pass on it look like "new passing evidence" at the first
+evaluation; only progress over an earlier measurement resets stalls. Verdicts, feasibility answers and claims are read
+only from the last JSON object of the run's final text; a placeholder diagnosis such as `<why>` is not a diagnosis.
+When the run's limits set `stall_runs_to_no_progress` N, N stalled runs without new passing evidence end the
 task in `waiting` reason `no_progress` (diagnosis names the entry, limit and next rung). Without it, the §4 rule applies.
-Time to stop is about N × `timeout_ms` plus checks (2 × 150 s on the defaults); the feasibility review below can stop
+Time to stop is about N × `timeout_ms` plus checks (2 × 120 s on the defaults); the feasibility review below can stop
 an impossible task after the first run.
 
 Feasibility review. On failing required checks, after a developer's impossibility claim (`{"impossible":true,
 "diagnosis"}` in its answer) and once per task after the first stall of a short-leash run, an independent reviewer
-(never a developer of the task, budget-checked) answers `{"verdict":"reject","impossible":true|false,"diagnosis",
+(never a developer of the task, budget-checked; answers are read as the last JSON object in the final text, one-line,
+pretty-printed or fenced) answers `{"verdict":"reject","impossible":true|false,"diagnosis",
 "findings"}`. `impossible:true` ends the task in `waiting/no_progress` with that diagnosis; `false` adds its findings to
 the developer's feedback. A normal review (green checks) may carry `impossible:true`: it is ignored and journaled
 (`impossible_ignored`). Quota or rate-limit text from mcode (stderr or a failed event, also when the run then sat until

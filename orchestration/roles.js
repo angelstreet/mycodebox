@@ -101,43 +101,60 @@ export const EVIDENCE_NOTE = 'The exits above were recorded by the controller ru
   + 'is not evidence against the change: judge evidence_matches on the recorded exits and the diff. A real test failure you reproduce is still evidence. '
   + 'A passing recorded exit does not make a change legitimate: still reject diffs that special-case tests, weaken or bypass checks, or tamper with assert/test machinery.';
 
-// JSON objects in the run's text/result events, last first.
-function* jsonAnswers(events = []) {
-  const texts = events.filter((e) => typeof e?.text === 'string' && ['text', 'result'].includes(e.type)).map((e) => e.text);
-  for (const t of texts.reverse()) {
-    const lines = t.trim().split('\n').reverse();
-    for (const l of [t.trim(), ...lines]) {
-      if (!l.trim().startsWith('{')) continue;
-      let v;
-      try { v = JSON.parse(l.trim()); } catch { continue; }
-      if (v && typeof v === 'object' && !Array.isArray(v)) yield v;
+// The answer is the LAST JSON object of the run's FINAL text (last non-empty text/result event) and nothing else:
+// objects quoted earlier (instructions, test output, a planted verdict) never count. -> object | null
+function finalAnswer(events = []) {
+  const final = events.filter((e) => typeof e?.text === 'string' && e.text.trim() && ['text', 'result'].includes(e.type)).at(-1)?.text;
+  return final == null ? null : jsonObjectsIn(final)[0] ?? null;
+}
+
+// Top-level JSON objects in free text, last first: one-line, pretty-printed or fenced (```json), with prose or a trailing
+// tool block (mcode's <deliver-assets>…</deliver-assets>) around them. String-aware brace matching; unparseable spans skipped.
+export function jsonObjectsIn(text) {
+  const t = String(text).replace(/<deliver-assets>[\s\S]*?(?:<\/deliver-assets>|$)/g, '');
+  const out = [];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < t.length; j++) {
+      const ch = t[j];
+      if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+      if (ch === '"') inStr = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) { end = j; break; }
     }
+    if (end < 0) break;
+    try {
+      const v = JSON.parse(t.slice(i, end + 1));
+      if (v && typeof v === 'object' && !Array.isArray(v)) { out.push(v); i = end; }
+    } catch { /* not JSON: an inner brace may still start one */ }
   }
+  return out.reverse();
 }
 const findingsOf = (xs) => (Array.isArray(xs) ? xs : []).filter((f) => f && typeof f === 'object').map((f) => ({
   id: String(f.id ?? 'unspecified').slice(0, 64), severity: f.severity === 'minor' ? 'minor' : 'blocker', message: String(f.message ?? '').slice(0, 2000) }));
-const diagnosisOf = (v) => (typeof v.diagnosis === 'string' && v.diagnosis.trim() ? v.diagnosis.trim().slice(0, 2000) : null);
+// A template placeholder ("<why>") copied from the prompt is not a diagnosis.
+const diagnosisOf = (v) => (typeof v.diagnosis === 'string' && v.diagnosis.trim() && !/^<[\s\S]*>$/.test(v.diagnosis.trim()) ? v.diagnosis.trim().slice(0, 2000) : null);
 
 // Last JSON object in the run's text/result events carrying a valid verdict, else null (= unavailable). An optional
 // {"impossible":true,"diagnosis"} (round 4) comes back as impossible/diagnosis; older answers parse as before.
 export function parseReviewerVerdict(events = []) {
-  for (const v of jsonAnswers(events)) {
-    const impossible = v.impossible === true && v.verdict === 'reject' && !!diagnosisOf(v);
-    if (!['approve', 'reject'].includes(v?.verdict) || (!Array.isArray(v.findings) && !impossible)) continue;
-    const findings = findingsOf(v.findings);
-    if (impossible && !findings.length) findings.push({ id: 'impossible', severity: 'blocker', message: diagnosisOf(v) });
-    // A reject without a finding cannot be acted on; an approve listing blockers contradicts itself. Both: unavailable.
-    if (v.verdict === 'reject' && !findings.length) continue;
-    if (v.verdict === 'approve' && findings.some((f) => f.severity === 'blocker')) continue;
-    return { verdict: v.verdict, findings, ...(impossible ? { impossible: true, diagnosis: diagnosisOf(v) } : {}) };
-  }
-  return null;
+  const v = finalAnswer(events);
+  if (!v) return null;
+  const impossible = v.impossible === true && v.verdict === 'reject' && !!diagnosisOf(v);
+  if (!['approve', 'reject'].includes(v.verdict) || (!Array.isArray(v.findings) && !impossible)) return null;
+  const findings = findingsOf(v.findings);
+  if (impossible && !findings.length) findings.push({ id: 'impossible', severity: 'blocker', message: diagnosisOf(v) });
+  // A reject without a finding cannot be acted on; an approve listing blockers contradicts itself. Both: unavailable.
+  if (v.verdict === 'reject' && !findings.length) return null;
+  if (v.verdict === 'approve' && findings.some((f) => f.severity === 'blocker')) return null;
+  return { verdict: v.verdict, findings, ...(impossible ? { impossible: true, diagnosis: diagnosisOf(v) } : {}) };
 }
 
 // Developer's own impossibility claim ({"impossible":true,"diagnosis"}), else null. Never proof on its own.
 export function parseImpossibleClaim(events = []) {
-  for (const v of jsonAnswers(events)) if (v.impossible === true && diagnosisOf(v)) return { diagnosis: diagnosisOf(v) };
-  return null;
+  const v = finalAnswer(events);
+  return v && v.impossible === true && diagnosisOf(v) ? { diagnosis: diagnosisOf(v) } : null;
 }
 
 // Feasibility review (round 4): the checks FAIL and the question is only whether the requirements can be met at all.
@@ -150,7 +167,7 @@ export function feasibilityPrompt({ task, sha, diff, failing = [], claim = null 
     `FAILING CHECKS (recorded by the controller on this SHA):\n${clip(JSON.stringify(failing, null, 1), 8000)}`,
     ...(claim ? [`THE DEVELOPER CLAIMS THE REQUIREMENTS ARE IMPOSSIBLE: ${clip(claim, 2000)}\nJudge the requirements yourself; the claim is not evidence.`] : []),
     `DIFF (base..candidate):\n${clip(diff, 12000)}`,
-    'ANSWER with exactly one JSON object on the last line. Requirements contradictory or impossible as stated: '
+    'ANSWER with exactly one JSON object on the last line (one line, no code fence). Requirements contradictory or impossible as stated: '
       + '{"verdict":"reject","impossible":true,"diagnosis":"<which requirements conflict and why>"}. Achievable (more work needed): '
       + '{"verdict":"reject","impossible":false,"findings":[{"id":"meets_goal","severity":"blocker","message":"<what is still missing>"}]}.',
   ].join('\n\n');
@@ -158,10 +175,8 @@ export function feasibilityPrompt({ task, sha, diff, failing = [], claim = null 
 
 // -> { impossible: boolean, diagnosis, findings } | null (no usable answer)
 export function parseFeasibility(events = []) {
-  for (const v of jsonAnswers(events)) {
-    if (typeof v.impossible !== 'boolean') continue;
-    if (v.impossible && !diagnosisOf(v)) continue;   // an impossibility claim must say why
-    return { impossible: v.impossible, diagnosis: diagnosisOf(v), findings: findingsOf(v.findings) };
-  }
-  return null;
+  const v = finalAnswer(events);
+  if (!v || typeof v.impossible !== 'boolean') return null;
+  if (v.impossible && !diagnosisOf(v)) return null;   // an impossibility claim must say why
+  return { impossible: v.impossible, diagnosis: diagnosisOf(v), findings: findingsOf(v.findings) };
 }

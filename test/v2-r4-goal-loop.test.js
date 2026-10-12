@@ -132,7 +132,7 @@ test('impossible task on a cheap model: 2 stalled 150 s runs -> waiting/no_progr
   const np = D(v, 'no_progress').at(-1);
   assert.equal(np.loop.patch.wait.reason, 'no_progress');
   assert.equal(np.loop.patch.wait.until_ms, null);
-  assert.match(np.loop.patch.wait.diagnosis, /2 developer run\(s\) on fake:cheap stopped at the run time limit \(150000 ms\)/);
+  assert.match(np.loop.patch.wait.diagnosis, /2 stalled developer run\(s\) on fake:cheap \(stopped at the run time limit of 150000 ms/);
   assert.match(np.loop.patch.wait.next_action, /next rung is fake:light2/);
   assert.equal(env.log.dev.length, 2, 'two stalled runs, not five');
   assert.equal(D(v, 'run_timeout').length, 2);
@@ -183,7 +183,8 @@ test('a reviewer judging the requirements achievable keeps the loop going, with 
 });
 
 test('an "impossible" verdict on green checks is ignored and journaled', async () => {
-  const env = world({ dev: { cheap: [GOOD] }, rev: [IMPOSSIBLE, APPROVE] });
+  // the second run really changes the code (an unchanged head would reuse the reject and count as a stall)
+  const env = world({ dev: { cheap: [GOOD, [{ op: 'write', path: 'src/math.js', content: 'export const add = (a, b) => b + a;\n' }, USAGE]] }, rev: [IMPOSSIBLE, APPROVE] });
   const task = await env.submit();
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
   const v = await env.store.get(task.task_id);
@@ -260,4 +261,44 @@ test('high-risk work never starts on, or escalates to, a model below its floor',
   assert.ok(entries.every((e) => !['fake:cheap', 'fake:light2'].includes(e)), entries.join(','));
   const v = await env.store.get(task.task_id);
   assert.ok(!D(v, 'strategy_change').some((d) => d.chosen === 'escalate_model'));
+});
+
+// ---------- round-4 sanity fixes (C): no-change runs and repeated claims are stalls; the first measurement keeps the count
+const NOOP = [USAGE];
+const CLAIM_ONLY = [USAGE, say({ impossible: true, diagnosis: 'add(2, 3) must equal both 5 and 6' })];
+const GARBLED = [{ op: 'emit', event: { type: 'result', text: 'I think it is fine.' } }];
+const TWO_CHECKS = [{ id: 'unit', command: ['node', '--test', 'test/math.test.js'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true },
+  { id: 'smoke', command: ['node', '-e', '0'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }];
+const POLICY2 = { allowlists: { commands: [['node', '--test'], ['node', '-e']], paths: ['src', 'test'], runtimes: null, models: null } };
+
+test('short leash: a timeout then a run that changed nothing -> waiting/no_progress after 2 runs, even when the first evaluation looks like progress', async () => {
+  const env = world({ dev: { cheap: [HANG, NOOP] }, rev: [ACHIEVABLE], testFile: TEST_IMPOSSIBLE, policy: POLICY2 });
+  const task = await env.submit({ acceptance_checks: TWO_CHECKS });
+  assert.equal((await env.loop.run(task.task_id)).state, 'waiting');
+  const v = await env.store.get(task.task_id);
+  assert.equal(env.log.dev.length, 2);
+  assert.equal(D(v, 'run_timeout').length, 1);
+  assert.equal(D(v, 'run_no_change').length, 1);
+  assert.match(D(v, 'no_progress').at(-1).loop.patch.wait.diagnosis, /^2 stalled developer run\(s\) on fake:cheap/);
+});
+
+test('short leash: repeated impossibility claims with no new evidence count as stalls (once per run), even when the reviewer answer is unusable', async () => {
+  const env = world({ dev: { cheap: [CLAIM_ONLY] }, rev: [GARBLED], testFile: TEST_IMPOSSIBLE });
+  const task = await env.submit();
+  assert.equal((await env.loop.run(task.task_id)).state, 'waiting');
+  const v = await env.store.get(task.task_id);
+  assert.equal(env.log.dev.length, 2, 'claim + no change in one run is one stall');
+  assert.equal(D(v, 'impossible_claim').length, 2);
+  assert.equal(D(v, 'run_no_change').length, 0, 'already counted by the claim');
+  assert.match(D(v, 'feasibility_review')[0].evidence.join(' '), /unavailable \(unparseable_verdict\)/);
+  assert.match(D(v, 'no_progress').at(-1).loop.patch.wait.diagnosis, /^2 stalled developer run\(s\)/);
+});
+
+test('without a stall limit, a run that changes nothing is not a stall (capable models keep the §4 rule)', async () => {
+  const env = world({ registry: [M('dev-a', 'strong'), M('rev', 'standard')], dev: { 'dev-a': [NOOP] }, testFile: TEST_IMPOSSIBLE });
+  const task = await env.submit({ no_progress_policy: { same_signature: 2, strategy_changes_without_progress: 1 } });
+  assert.equal((await env.loop.run(task.task_id)).state, 'waiting');
+  const v = await env.store.get(task.task_id);
+  assert.equal(D(v, 'run_no_change').length, 0);
+  assert.equal(env.log.dev.length, 4);
 });

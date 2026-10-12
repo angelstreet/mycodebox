@@ -148,7 +148,7 @@ test('run limits: profile defaults per entry, --run-limits override, wall-clock 
   const o = (extra = []) => parseArgs(['--http', '--runtimes', 'minimax:m3,minimax:m3.1-flash,claude:haiku', '--reviewer-map', 'claude:haiku=minimax:m3', '--tasks', 'off-by-one', '--max-usd', '5', '--task-usd', '0.25', ...extra]);
   const { planned } = planRuns(o());
   const by = Object.fromEntries(planned.map((p) => [p.spec, runLimitsFor(o(), p.dev, p.rev)]));
-  const base = { timeout_ms: 150000, max_steps: 40, stall_runs_to_no_progress: 2 };
+  const base = { timeout_ms: 120000, max_steps: 40, stall_runs_to_no_progress: 2 };
   assert.deepEqual(by['minimax:m3'], { 'minimax:MiniMax-M3': { '*': base }, 'claude:claude-haiku-4-5': { '*': { ...base, effort: 'low' } } });
   assert.deepEqual(by['minimax:m3.1-flash']['minimax:MiniMax-M3.1-Flash-Preview'], { '*': { ...base, effort: 'low' } });
   assert.equal(by['minimax:m3.1-flash']['minimax:MiniMax-M3'], undefined);

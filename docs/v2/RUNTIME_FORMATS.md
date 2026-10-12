@@ -40,7 +40,10 @@ class `rate_limit`.
 JSONL with `type` and envelope `runId, sessionId, turnId, sequence, schemaVersion, timestampMs`:
 `exec.started`, `session.started`, `turn.started`, `item.started|updated|completed` (`item`), `turn.completed`
 (`durationMs, model, usage{ inputTokens, outputTokens, cacheReadTokens, totalTokens }, usageIncomplete, usageSource`),
-`exec.completed` (`result`). No USD cost is reported: cost stays unknown unless priced. Honour `usageIncomplete`.
+`exec.completed` (`result`). The final text differs by version: 0.6.3 sends it as `item.text` and a string `result`;
+0.6.5 sends `item.completed` with `item.type: "agent_message"` and the text in `item.content` (string), and
+`exec.completed` with `result` an object `{ type: "exec.result", status: "succeeded", output: "<final text>", usage }`.
+The final text may end with a `<deliver-assets>…</deliver-assets>` block; verdict parsing ignores it. No USD cost is reported: cost stays unknown unless priced. Honour `usageIncomplete`.
 
 Runtime requirement (observed 2026-10-11 in the V2 live smoke): `mcode` 0.6.3 is a `#!/usr/bin/env node` script that
 supports Node 22.19+, 24, 25 or 26 and refuses Node 23.6 ("current version is 23.6.0", exit 1; the adapter then reports
