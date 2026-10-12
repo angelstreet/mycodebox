@@ -73,7 +73,7 @@ function roleAdapter({ wtRoot, reviewRoot, dev }) {
 
 let worlds = 0;
 // Injected clock: simulated time moves only through the loop's sleep (backoffs), so "no backoff" is observable.
-function world({ dev }) {
+function world({ dev, wrap = (st) => st }) {
   const w = ++worlds;
   const repo = mkRepo();
   const base = path.join(TMP, `w${w}`);
@@ -86,12 +86,12 @@ function world({ dev }) {
   const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(base, 'leases') }), now });
   const worktrees = createWorktrees({ root: wtRoot, repoAllowlist: [repo.dir], leases, git });
   const ad = roleAdapter({ wtRoot, reviewRoot, dev });
-  const store = createTaskStore({ dir: storeDir, ...clock() });
+  const store = wrap(createTaskStore({ dir: storeDir, ...clock() }));
   const loop = createGoalLoop({ store, registry: createRegistry(REGISTRY), adapters: { fake: ad }, worktrees, worktreeRoot: fs.realpathSync(wtRoot),
     verifier: createVerifier({ tmpRoot: path.join(base, 'vtmp'), artifactRoot: path.join(base, 'artifacts'), timeoutMs: 20_000 }), reviewRoot,
     leases, git, allowFake: true, now, sleep, runTimeoutMs: RUN_TIMEOUT_MS });
   const intake = createIntake({ store });
-  const env = { ad, store, loop, now };
+  const env = { ad, store, loop, now, wt: (id) => path.join(fs.realpathSync(wtRoot), id) };
   env.submit = async (over = {}) => (await intake.createTask({
     project_id: 'fixture-project', goal: 'Implement add(a, b) in src/math.js so that it returns the sum of both numbers',
     repository: repo.dir, risk_class: 'low', runtime_capabilities: ['code'], no_progress_policy: { ...BENCH_NP },
@@ -209,4 +209,48 @@ test('stall: cancel during a hanging run still cancels (no stall accounting afte
   const v = await env.store.get(task.task_id);
   assert.equal(v.status, 'cancelled');
   assert.equal(loopDecisions(v, 'no_progress').length, 0);
+});
+
+test('stall: a cancel landing after the timed-out run is confirmed writes no run_timeout decision (T14)', async () => {
+  let cancelAfterConfirm = null;
+  const afterCancel = [];   // writes the loop attempted after the cancel (the store would refuse them with E_CANCELLED)
+  let cancelled = false;
+  const wrap = (st) => ({ ...st, async recordDecision(id, d) { if (cancelled) afterCancel.push(d.kind); return st.recordDecision(id, d); }, async recordEffect(id, e) {
+    const r = await st.recordEffect(id, e);
+    // The owner's cancel lands between the run's confirmation and the next write of the step.
+    if (e.phase === 'confirmed' && String(e.effect_id).startsWith('devrun-') && cancelAfterConfirm === id) { await st.transition(id, 'cancelled', { reason: 'stop', actor: { role: 'owner', id: 'owner-1' } }); cancelled = true; }
+    return r;
+  } });
+  const env = world({ dev: [HANG], wrap });
+  const task = await env.submit();
+  cancelAfterConfirm = task.task_id;
+  const r = await env.loop.run(task.task_id);
+  assert.equal(r.state, 'cancelled');
+  const v = await env.store.get(task.task_id);
+  assert.equal(v.status, 'cancelled');
+  assert.equal(loopDecisions(v, 'run_timeout').length, 0, 'no decision written after the cancel');
+  assert.deepEqual(afterCancel, [], 'no decision write even attempted after the cancel');
+  assert.equal(loopDecisions(v, 'provider_fallback').length, 0);
+  const evs = env.events(task.task_id);
+  const at = evs.findIndex((e) => e.kind === 'task.cancelled' || (e.kind === 'task.transitioned' && e.payload.to === 'cancelled'));
+  assert.ok(at >= 0);
+  assert.ok(!evs.slice(at + 1).some((e) => ['decision.recorded', 'task.head_changed', 'task.transitioned'].includes(e.kind)), 'nothing but the effect outcome after cancel');
+});
+
+test('stall: the time-limit notice is given once per timed-out run, not on later failures without a new run', async () => {
+  const env = world({ dev: [HANG] });
+  const task = await env.submit();
+  assert.equal((await env.loop.run(task.task_id, { until: ['repair'] })).state, 'repair');
+  let v = await env.store.get(task.task_id);
+  assert.ok(loopDecisions(v, 'repair').at(-1).loop.patch.feedback.run_timeout, 'first failure after the stall carries the notice');
+  // A second failure on the same head without a new developer run (an out-of-band edit leaves the worktree dirty).
+  await env.store.transition(task.task_id, 'executing');
+  await env.store.transition(task.task_id, 'evaluating');
+  fs.appendFileSync(path.join(env.wt(task.task_id), 'src', 'math.js'), '// out-of-band edit\n');
+  await env.loop.step(task.task_id);
+  v = await env.store.get(task.task_id);
+  const last = loopDecisions(v).filter((d) => ['repair', 'strategy_change'].includes(d.kind)).at(-1);
+  assert.equal(last.loop.patch.feedback.kind, 'uncommitted_changes');
+  assert.equal(last.loop.patch.feedback.run_timeout, undefined, 'no repeated notice');
+  assert.equal(env.ad.log.dev.length, 1);
 });
