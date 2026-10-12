@@ -36,7 +36,7 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     const id = path.basename(real);
     const m = TASK_ID.test(id) ? readMeta(id) : null;
     if (!m || m.path !== real) return null;
-    if (m.task_id !== id || m.branch !== `v2task/${id}` || typeof m.repo !== 'string' || !allow.includes(m.repo)
+    if (m.task_id !== id || m.branch !== `v2/task/${id}` || typeof m.repo !== 'string' || !allow.includes(m.repo)
       || m.lease?.resource !== `worktree:${id}` || (m.lease?.task_id != null && m.lease.task_id !== id)) {
       throw coded('E_FOREIGN', 'worktree metadata is invalid');
     }
@@ -111,7 +111,7 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
 
   async function create({ repo, task_id, base_sha, branch, owner: who }) {
     if (typeof task_id !== 'string' || !TASK_ID.test(task_id)) throw coded('E_INVALID', 'task_id must match [A-Za-z0-9._-]{1,64}');
-    const want = `v2task/${task_id}`;
+    const want = `v2/task/${task_id}`;
     if (branch !== undefined && branch !== want) throw coded('E_INVALID', `branch must be ${want}`);
     if (typeof base_sha !== 'string' || !SHA.test(base_sha)) throw coded('E_INVALID', 'base_sha must be a full commit sha');
     let realRepo;
@@ -215,7 +215,7 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     if (!SHA.test(tip)) throw coded('E_UNMERGED', 'cannot resolve the task branch tip');
     let target = null;
     if (merged_into !== undefined) {
-      if (typeof merged_into !== 'string' || !REF.test(merged_into) || merged_into.startsWith('v2task/') || merged_into === m.branch) throw coded('E_INVALID', 'merged_into must be a target branch, not a task branch');
+      if (typeof merged_into !== 'string' || !REF.test(merged_into) || merged_into.startsWith('v2/task/') || merged_into === m.branch) throw coded('E_INVALID', 'merged_into must be a target branch, not a task branch');
       if (mergeTargets && !mergeTargets.includes(merged_into)) throw coded('E_INVALID', 'merged_into is not a configured target branch');
       target = merged_into;
     }

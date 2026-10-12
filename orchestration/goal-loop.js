@@ -531,10 +531,15 @@ export function createGoalLoop({
     if (!started) return false;
     return !UNBILLED_CLASSES.includes(errorClass);
   }
-  // run_id of the latest developer run when it ended at the run timeout, else null.
+  // run_id of the latest developer run when it ended at the run timeout and this is the first failure answered since
+  // (its run_timeout note is newer than any repair/strategy decision), else null: the notice is given once per stall.
+  const ANSWERED = ['repair', 'strategy_change', 'no_progress'];
   const lastDevTimeout = (ctx) => {
     const run_id = ctx.events.findLast((e) => e.kind === 'task.started' && e.payload.role === 'developer')?.payload.run_id;
-    return run_id && ctx.events.some((e) => e.kind === 'tool.failed' && e.payload.run_id === run_id && e.payload.error?.class === 'timeout') ? run_id : null;
+    if (!run_id || !ctx.events.some((e) => e.kind === 'tool.failed' && e.payload.run_id === run_id && e.payload.error?.class === 'timeout')) return null;
+    const ds = ctx.v.decisions.filter((d) => d.loop);
+    const at = ds.findLastIndex((d) => d.kind === 'run_timeout' && d.decision_id.endsWith(`-stall-${run_id}`));
+    return at >= 0 && !ds.slice(at + 1).some((d) => ANSWERED.includes(d.kind)) ? run_id : null;
   };
   const billedRun = (ctx, run_id, errorClass) => {
     const u = ctx.events.find((e) => e.kind === 'usage.recorded' && e.payload.run_id === run_id)?.payload;
@@ -848,6 +853,8 @@ export function createGoalLoop({
       ctx = await load(ctx.id);
     }
     const failed = ctx.events.find((e) => e.kind === 'tool.failed' && e.payload.run_id === run_id);
+    // T14: a replayed step after a confirmed run writes nothing (no decision, no commit) once the task is cancelled.
+    if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
     const reqs = ctx.events.filter((e) => e.kind === 'approval.requested' && e.payload.run_id === run_id);
     if (reqs.length) {
       return askOwner(ctx, { kind: 'agent_action', question: `The developer asked for restricted action(s): ${reqs.map((e) => `${e.payload.action.class}${e.payload.action.argv ? ` (${e.payload.action.argv.join(' ')})` : ''}`).join('; ')}. Not executed.`,
@@ -867,7 +874,6 @@ export function createGoalLoop({
         rationale: 'A billed run timeout is an attempt, not a provider outage (quota and unavailability still back off).', policy_ref: policyRef(p) }));
     }
     // Commit what the developer produced so the evidence names an exact SHA.
-    if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
     const lw = await ensureLease(ctx, 'repair');   // the run's files stay in the worktree for the next run
     if (lw) return lw;
     const bw = await branchGate(ctx, 'repair');
@@ -1315,8 +1321,13 @@ export function createGoalLoop({
     });
   }
 
+  // Any other owner-initiated write of the process that runs this loop (task creation from the dashboard, an ops
+  // request): under the controller lease like approve/deny/cancel, and through the fenced store handle, so a
+  // displaced instance (its lease expired, another controller took over) writes nothing (E_CONTROLLER_HELD).
+  const ownerWrite = (fn) => asOwner(() => fn(store));
+
   return {
-    step, run, acquire, release,
+    step, run, acquire, release, ownerWrite,
     // Startup: replay the store (unconfirmed effects -> unknown_external_effect); steps resume from there (T18).
     async recover() {
       usage.busy += 1;   // a concurrent owner action's releaseIdle() must not drop the lease mid-recover

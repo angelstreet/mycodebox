@@ -137,12 +137,12 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `GHOSTY_V2` | unset | `1` enables the V2 engine (`orchestration/v2-runtime.js`): routes `/api/v2/*`, store in `$GHOSTY_STATE_DIR/v2`, and the goal loop under the controller lease. Unset: those routes return 404 and nothing is imported or constructed |
 | `GHOSTY_V2_WORK_ROOT` | unset | V2 only, required for the loop: absolute directory for task worktrees, reviewer checkouts and check temp files. Created if missing; must not overlap the checkout or the state dir. Unset or invalid: no loop, V2 routes read-only (writes 503 `E_NO_CONTROLLER`) |
-| `GHOSTY_V2_REPOS` | unset | V2 only: `:`-separated absolute paths of the git repositories tasks may run in (D-021). Each needs a valid `.ai/project.json`, whose allowlists govern its tasks; any other repository is refused at creation (400 `E_INTAKE_REPO`) |
+| `GHOSTY_V2_REPOS` | unset | V2 only: `:`-separated absolute paths of the git repositories tasks may run in (D-021). Each needs a valid `.ai/project.json`, whose allowlists govern its tasks; any other repository is refused at creation (400 `E_INTAKE_REPO`). A listed repository whose policy is missing or invalid stays listed (logged at start): its tasks are created but never run; they stop at an owner clarification (T01) until the policy is fixed |
 | `GHOSTY_V2_CONCURRENCY` | `1` | V2 only: tasks stepped at the same time (1-8) |
 | `GHOSTY_V2_PATH_DIRS` | unset | V2 only: `:`-separated absolute directories put first on PATH for the runtime CLIs (e.g. where `opencode` lives). MiniMax also honours `MCODE_NODE_DIR` |
 | `GHOSTY_V2_CLAUDE_RUN_USD` | `1` | V2 only: `--max-budget-usd` of one Claude run, lowered to the task's remaining `max_usd` cap |
 | `GHOSTY_V2_RUN_TIMEOUT_MS` | goal loop default (30 min) | V2 only: wall clock of one agent run, integer ms; the HTTP benchmark driver sets it so stalled agents fit the no-progress rule |
-| `GHOSTY_V2_PUSH_REMOTE` | unset | V2 only: remote name (e.g. `origin`) the integration hook may push the task's own `v2task/<id>` branch to; unset = no push (recorded in the decision, not an error). Nothing else is ever pushed |
+| `GHOSTY_V2_PUSH_REMOTE` | unset | V2 only: remote name (e.g. `origin`) the integration hook may push the task's own `v2/task/<id>` branch to; unset = no push (recorded in the decision, not an error). Nothing else is ever pushed |
 | `GHOSTY_V2_REGISTRY` | `orchestration/models.json` | V2 only: absolute path of another model registry file |
 | `GHOSTY_V2_TEST_FAKE_ADAPTER` | unset | TEST ONLY (`test/v2-server-wiring.test.js`): a JSON file of fake-adapter scripts; the scripted fake becomes the only runtime. Never set it on a live install |
 
@@ -875,8 +875,9 @@ the answer is the outcome and applies nothing.
 | `POST /api/v2/ops/requests` | `{ action, type?, symptom? }` | 202: records an incident in `mitigation_requested` through System Operations' request-only handle. Nothing executes: no executor is wired |
 
 Delivery (`deliver: true`, `orchestration/v2-integrate.js`): after acceptance on the exact SHA the hook may push only the
-task's own branch `v2task/<id>` to `GHOSTY_V2_PUSH_REMOTE` (compare-and-swap, recorded as an effect, read back from the
-remote). The merge into `main` is an `integration` approval bound to `integration:merge:<project_id>:main:<sha>`
+task's own branch `v2/task/<id>` to `GHOSTY_V2_PUSH_REMOTE` (compare-and-swap, recorded as an effect, read back from the
+remote; repository hooks, fsmonitor and the `ext::` transport are disabled for these git calls; an unreachable remote
+is a note in the decision, nothing is recorded or retried by it). The merge into `main` is an `integration` approval bound to `integration:merge:<project_id>:main:<sha>`
 (`merge_protected` when `main` is a protected branch). Even approved, this server does not merge or deploy (no
 integration lane): the task waits until `main` contains the SHA, then it is accepted as integrated.
 

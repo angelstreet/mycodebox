@@ -208,12 +208,12 @@ test('Y3 X7 variant: a detached HEAD in the task worktree suspends dispatch; res
   assert.equal(env.devStarts(), 1, 'no run off the task branch');
   env.advance(24 * 3600_000);
   assert.equal((await env.loop.step(task.task_id)).transitioned, false, 'time does not fix a checkout');
-  sh(wt, 'checkout', '-q', `v2task/${task.task_id}`);
+  sh(wt, 'checkout', '-q', `v2/task/${task.task_id}`);
   await env.loop.resume(task.task_id, { actor: OWNER });
   assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
   const v = await env.view(task.task_id);
-  assert.equal(sh(env.repo.dir, 'rev-parse', `v2task/${task.task_id}`), v.head_sha);
-  assert.equal(sh(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), `v2task/${task.task_id}`);
+  assert.equal(sh(env.repo.dir, 'rev-parse', `v2/task/${task.task_id}`), v.head_sha);
+  assert.equal(sh(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), `v2/task/${task.task_id}`);
 });
 
 test('Y3b X7 variant: a branch switch between verification and acceptance is caught before accept, not after', async () => {

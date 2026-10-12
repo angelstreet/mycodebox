@@ -45,7 +45,7 @@ async function setup(script) {
     }),
   });
   const task = await store.get(t.task_id);
-  const call = () => delivery.integrate(task, { sha: SHA_A, worktree: { path: '/wt', branch: `v2task/${t.task_id}` }, idempotency_key: `integrate:${t.task_id}:${SHA_A}`, store: loopStore });
+  const call = () => delivery.integrate(task, { sha: SHA_A, worktree: { path: '/wt', branch: `v2/task/${t.task_id}` }, idempotency_key: `integrate:${t.task_id}:${SHA_A}`, store: loopStore });
   return { store, task, id: t.task_id, delivery, call, calls, items, writes, effects, loopStore, ctl: () => ctl };
 }
 const item = (items) => [...items.values()][0];
@@ -65,7 +65,7 @@ test('delivery: handoff facts come from the store and git; resubmitting is idemp
   assert.equal(r1.integration_sha, SHA_M);
   const h = w.calls.submit[0];
   assert.deepEqual(h.developer, { role: 'developer', id: 'dev-1' }, 'from the store record of who produced the head, not the task text');
-  assert.deepEqual([h.source_sha, h.source_branch, h.base_sha, h.source_repo, h.diff_scope], [SHA_A, `v2task/${w.id}`, w.task.base_sha, '/repo/dev', ['src/a.js', 'src/b.js']]);
+  assert.deepEqual([h.source_sha, h.source_branch, h.base_sha, h.source_repo, h.diff_scope], [SHA_A, `v2/task/${w.id}`, w.task.base_sha, '/repo/dev', ['src/a.js', 'src/b.js']]);
   // The controller's transition was a proposal: the task is still integrating; the loop applies it.
   assert.equal((await w.store.get(w.id)).status, 'integrating');
   assert.deepEqual(r1.proposals.map((p) => p.to), ['release_verifying']);

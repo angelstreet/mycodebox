@@ -145,7 +145,7 @@ Unsupported operations throw `E_UNSUPPORTED`, never no-op. Adapters never add pe
 ## 7. Worktrees — `orchestration/worktrees.js`
 
 `createWorktrees({ git, fs, root, repoAllowlist, leases })`: `create({ repo, task_id, base_sha, branch })` (takes
-`worktree:<task_id>` lease; branch `v2task/<task_id>`), `owner(path)`, `status(path) -> { dirty, untracked, head }`,
+`worktree:<task_id>` lease; branch `v2/task/<task_id>`), `owner(path)`, `status(path) -> { dirty, untracked, head }`,
 `remove(path, { retain })` refuses dirty/untracked/unmerged or foreign-owned trees. Paths must resolve inside `root`.
 
 ## 8. Routing, registry, budget — `orchestration/{model-registry,router,budget}.js`
@@ -235,7 +235,9 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    diagnosis, next action). Billed identical retries (developer runtime errors, reviewer runs without a usable verdict)
    count the same way; only unbilled waits back off on a timer. A developer run killed by the run timeout (class `timeout`, billed) is an attempt, not a
    provider error: its changes are committed and checked like any run, the next prompt says it timed out, and the check
-   failures feed the rule (round 3); quota and unavailability keep their timed backoff. One classifier for developer and reviewer runs:
+   failures feed the rule (round 3); quota and unavailability keep their timed backoff. A started developer timeout counts
+   as billed and goes through the no-progress rule, so the router's `timeout` fallback (backoff, then a runtime switch) no
+   longer applies to developer runs; a different model is tried through the rule's strategy change instead. One classifier for developer and reviewer runs:
    billed = measured spend, an incomplete usage record, or a run that started and failed with unknown usage (unknown
    is not zero); unbilled = refused before work (`rate_limit`, `unavailable`, `auth`) or never started. Every review
    attempt has its own run id (`…-a<n>`), so each one is in the ledger and counts against a cap. A run that started
@@ -269,7 +271,7 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    granted just before a crash (before the meta write) is adopted with the write-ahead id persisted before the acquire
    (`pending_lease` in the meta, `.v2-meta/<task_id>.intent.json` for create; D-015).
 9. Task branch: `worktrees.status()` also reports `branch` (`HEAD` when detached). Dispatch, commit, evaluation, the
-   pre-accept revalidation and the integration handoff require the worktree to be on `v2task/<task_id>`; otherwise the
+   pre-accept revalidation and the integration handoff require the worktree to be on `v2/task/<task_id>`; otherwise the
    task waits (`off_task_branch`, `until_ms: null`) until the owner restores the branch and resumes.
 10. Controller (D-016, D-017, D-018): `step()`/`run()` act only under the controller lease
    `service:<host_id>:goal-loop`; another live instance makes them return `{ transitioned: false, idle: true,
@@ -344,11 +346,14 @@ Recorded from `v2/r3-wire` (OWNER_DECISIONS §11.1); additive. Env keys: [REFERE
    status(), store, config }`. server.js forwards `/api/v2/*` to `http.handle`, calls `start()` once, and awaits
    `stop({ timeoutMs: 5000 })` on SIGINT/SIGTERM before closing.
 2. One process, one store handle (D-016/D-017): the same `createTaskStore` instance backs the HTTP routes, intake and
-   the goal loop. `start()` takes the controller lease with the loop's new `acquire({ watch: false })` (the lease and a
+   the goal loop. Every write the runtime makes outside a step (task creation, ops requests) goes through the loop's new
+   `ownerWrite(fn)`: under the controller lease like approve/deny/cancel, through the fenced store handle, so a
+   displaced instance gets 409 `E_CONTROLLER_HELD` and writes nothing. `start()` takes the controller lease with the loop's new `acquire({ watch: false })` (the lease and a
    heartbeat are then held between steps too, so an owner action never drops it), runs `recover()` under it, probes
    the adapters, then starts the scheduler. `stop()` stops scheduling, waits for in-flight steps for the remaining
    time, calls the loop's new `release()` (lease released at once; an in-flight step's next write fails the fence, so
    nothing is written behind the next controller's back) and cancels the runs still going (GL06 reconciles them).
+   The whole `stop()` is raced against `timeoutMs + 1.5 s`, so SIGTERM exits in bounded time.
 3. Another live controller (`E_HELD`, liveness as in goal-loop note 10, `watch: false`): this process runs no loop and
    every write route (create, cancel, approve, deny, ops requests) answers 503 `E_NO_CONTROLLER` without writing; reads
    work. A lease backend that cannot answer (`E_UNAVAILABLE`, e.g. a lock file left by a killed process until it is
@@ -370,7 +375,7 @@ Recorded from `v2/r3-wire` (OWNER_DECISIONS §11.1); additive. Env keys: [REFERE
 7. Developer pins: the loop passes `role` to the router; the runtime's route wrapper turns a task's `preferred_models`
    into exclusions only (developer routes see only the pinned entries; reviewer routes never see them).
 8. Delivery hook `orchestration/v2-integrate.js` (opt-in per task, `review_policy.deliver`): may push only the task's own
-   `v2task/<task_id>` branch at the verified SHA to `GHOSTY_V2_PUSH_REMOTE` (compare-and-swap, recorded as effect
+   `v2/task/<task_id>` branch at the verified SHA to `GHOSTY_V2_PUSH_REMOTE` (compare-and-swap, recorded as effect
    `push:task-branch:<task>:<sha>`, read back from the remote; an unknown outcome is reconciled from the remote, never
    re-pushed blindly). The merge into `main` is an `integration` request with key
    `integration:merge:<project_id>:main:<sha>` (`merge_protected` when `main` is protected), bound to the SHA. This

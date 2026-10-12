@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { createTaskStore } from '../orchestration/store.js';
 import { createIntake } from '../orchestration/intake.js';
 import { recordProposals } from '../orchestration/proposals.js';
+import { createServerIntegrate } from '../orchestration/v2-integrate.js';
+import { createGitRunner } from '../orchestration/integration-controller.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-wiring-')));
@@ -200,7 +202,7 @@ test('wiring: delivery pushes only the task-owned branch; the merge waits for an
     assert.deepEqual(p.keys, [`integration:merge:wiring-fixture:main:${t.head_sha}`]);
     assert.equal(p.sha, t.head_sha);
     const remote = (ref) => { try { return sh(w.base, '--git-dir', w.origin, 'rev-parse', `refs/heads/${ref}`); } catch { return null; } };
-    assert.equal(remote(`v2task/${id}`), t.head_sha, 'the owned task branch was pushed at the verified SHA');
+    assert.equal(remote(`v2/task/${id}`), t.head_sha, 'the owned task branch was pushed at the verified SHA');
     assert.equal(remote('main'), w.main, 'origin main untouched');
     const bad = await s.api('POST', `/api/v2/tasks/${id}/approve`, { action_id: p.action_id, sha: w.main });
     assert.deepEqual([bad.status, bad.body.code], [409, 'E_SHA_MISMATCH']);
@@ -310,4 +312,35 @@ test('wiring: GHOSTY_V2 unset -> /api/v2/* 404 and no v2 state; V2 on without a 
   } finally { await term(nowr); }
   const inside = await boot(w, { extra: { GHOSTY_V2_WORK_ROOT: path.join(w.state, 'wt') } });
   try { assert.match(inside.status.reason, /must not overlap the state dir/); } finally { await term(inside); }
+});
+
+test('integrate hook: an unreachable remote is a note (no effect recorded, bounded owner request); repo hooks never run on the push', { timeout: 30_000 }, async () => {
+  const w = world();
+  const git = createGitRunner({ env: GIT_ENV });
+  const POL = () => ({ ok: true, policy: { project_id: 'p', protected_branches: ['main'] } });
+  const effects = [];
+  const store = { append: async () => {}, get: async () => ({ effects }), events: async () => [],
+    recordEffect: async (_id, e) => { const cur = effects.find((x) => x.effect_id === e.effect_id); if (cur) Object.assign(cur, e); else effects.push({ ...e }); } };
+  const sha = w.main;
+  const id = 'task-hook-1';
+  sh(w.repo, 'branch', `v2/task/${id}`, sha);
+  // A developer run could plant hooks in the shared .git: the push must not run them.
+  const marker = path.join(w.base, 'hook-ran');
+  fs.writeFileSync(path.join(w.repo, '.git', 'hooks', 'pre-push'), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+  const integrate = createServerIntegrate({ git, pushRemote: 'origin', loadPolicy: POL });
+  const r = await integrate({ task_id: id, repository: w.repo }, { sha, worktree: { branch: `v2/task/${id}` }, store });
+  assert.equal(r.next, 'awaiting_approval');
+  assert.equal(sh(w.base, '--git-dir', w.origin, 'rev-parse', `refs/heads/v2/task/${id}`), sha, 'pushed');
+  assert.ok(!fs.existsSync(marker), 'the pre-push hook did not run');
+  // Dead remote: no throw, no attempted effect, the merge request still stands.
+  sh(w.repo, 'remote', 'set-url', 'origin', path.join(w.base, 'gone.git'));
+  const id2 = 'task-hook-2';
+  sh(w.repo, 'branch', `v2/task/${id2}`, sha);
+  const before = effects.length;
+  for (let i = 0; i < 3; i++) {
+    const r2 = await integrate({ task_id: id2, repository: w.repo }, { sha, worktree: { branch: `v2/task/${id2}` }, store });
+    assert.equal(r2.next, 'awaiting_approval');
+    assert.match(r2.reason, /unreadable/);
+  }
+  assert.equal(effects.length, before, 'no effect recorded for an unreachable remote');
 });

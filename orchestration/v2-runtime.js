@@ -173,7 +173,6 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
   const v2dir = path.join(stateDir, 'v2');
   const store = createTaskStore({ dir: v2dir });   // the one store handle of this process (D-017)
   const cfg = v2Config(env, { stateDir, repoRoot });
-  const baseIntake = createIntake({ store });
   const info = new Map();   // task_id -> { goal, capLeft }, refreshed before each step (adapter start() is synchronous)
   const activeRuns = new Set();
   let state = cfg.errors.length ? 'refused' : 'idle';
@@ -285,7 +284,8 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
       const informational = opts.template === 'informational';
       if (!informational && typeof input?.repository !== 'string') throw new ContractError('E_INTAKE_REPO', 'repository required: tasks run only in a repository listed in GHOSTY_V2_REPOS');
       if (input?.repository !== undefined && !allowed(input.repository)) throw new ContractError('E_INTAKE_REPO', 'repository is not on the V2 allowlist (GHOSTY_V2_REPOS)');
-      const r = await baseIntake.createTask(input, opts);
+      // Through the loop under the controller lease and its fenced store (one writer, D-016): never the raw handle.
+      const r = await (await controller()).ownerWrite((fenced) => createIntake({ store: fenced }).createTask(input, opts));
       wake(r.task.task_id);
       return r;
     },
@@ -305,9 +305,9 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
         for (const k of Object.keys(b)) if (!['action', 'type', 'symptom'].includes(k)) return send(400, { ok: false, code: 'E_INVALID', error: 'unknown field' });
         if (typeof b.action !== 'string' || !ACTION_RE.test(b.action)) return send(400, { ok: false, code: 'E_INVALID', error: 'action: [a-z][a-z0-9_.-]{0,99}' });
         if (b.symptom !== undefined && (typeof b.symptom !== 'string' || b.symptom.length > 500)) return send(400, { ok: false, code: 'E_INVALID', error: 'symptom: string, max 500' });
-        await controller();
-        // Request-only: an incident in mitigation_requested; nothing executes (no executor is wired).
-        const r = await engine.requester.request({ task_id: null, role: 'owner', op: { type: b.type, host_id: HOST_ID, action: b.action, symptom: b.symptom } });
+        // Request-only: an incident in mitigation_requested; nothing executes (no executor is wired). Written only
+        // while this process holds the controller lease.
+        const r = await (await controller()).ownerWrite(() => engine.requester.request({ task_id: null, role: 'owner', op: { type: b.type, host_id: HOST_ID, action: b.action, symptom: b.symptom } }));
         return send(202, { ok: true, executed: false, incident_id: r.incident_id, state: r.state, deduped: r.deduped });
       }
       if (method !== 'GET') return send(405, { ok: false, code: 'E_METHOD', error: 'method not allowed: read-only' });
@@ -317,6 +317,8 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
       return send(200, { ok: true, incidents: await engine.incidents.list({}) });
     } catch (e) {
       if (e instanceof ContractError && e.code === 'E_NO_CONTROLLER') return send(503, { ok: false, code: e.code, error: e.message });
+      if (e instanceof ContractError && e.code === 'E_CONTROLLER_HELD') return send(409, { ok: false, code: e.code, error: 'another goal-loop controller holds the lease: nothing was written' });
+      if (e instanceof ContractError && e.code === 'E_LEASE_UNAVAILABLE') return send(503, { ok: false, code: e.code, error: 'controller lease unavailable: nothing was written' });
       log(`[v2] ops route: ${e?.code || e?.message}`);
       return send(500, { ok: false, code: 'E_INTERNAL', error: 'internal error' });
     }
@@ -373,7 +375,15 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
   // Bounded: stop scheduling, give in-flight steps the time left, release the controller lease (an in-flight step can no
   // longer write), then cancel the runs still going. Idempotent.
   function stop({ timeoutMs = 5000 } = {}) {
-    stopP ??= (async () => {
+    // Hard bound: release() may queue behind the controller serial or the lease backend's lock wait.
+    if (stopP) return stopP;
+    let to;
+    const bound = new Promise((r) => { to = setTimeout(() => { log('[v2] stop timed out: exiting without a confirmed lease release (the next start takes over a dead pid)'); r({ released: false, timed_out: true }); }, timeoutMs + 1500); to.unref?.(); });
+    stopP = Promise.race([stopInner(timeoutMs).finally(() => clearTimeout(to)), bound]);
+    return stopP;
+  }
+  function stopInner(timeoutMs) {
+    return (async () => {
       clearTimeout(retryTimer);
       await startP.catch(() => null);
       const was = state;
@@ -386,7 +396,6 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
       log(`[v2] stopped: controller lease ${rel.released ? 'released' : 'not held'}${d.in_flight ? `, ${d.in_flight} step(s) interrupted (reconciled on the next start)` : ''}${runs.length ? `, ${runs.length} run(s) cancelled` : ''}`);
       return { released: rel.released, interrupted: d.in_flight, cancelled: runs.length };
     })();
-    return stopP;
   }
 
   async function handle(req) {

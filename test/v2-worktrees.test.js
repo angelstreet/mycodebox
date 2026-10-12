@@ -44,8 +44,8 @@ test('T05 two tasks get two disjoint worktrees on one repo, each on its own bran
   const b = await s.wt.create({ repo: s.dir, task_id: 'task-b', base_sha: s.sha, owner: 'dev-b' });
   assert.notEqual(a.path, b.path);
   assert.ok(!b.path.startsWith(a.path + path.sep) && !a.path.startsWith(b.path + path.sep));
-  assert.equal(sh(a.path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'v2task/task-a');
-  assert.equal(sh(b.path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'v2task/task-b');
+  assert.equal(sh(a.path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'v2/task/task-a');
+  assert.equal(sh(b.path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'v2/task/task-b');
   assert.equal(a.head, s.sha);
   fs.writeFileSync(path.join(a.path, 'only-a.txt'), 'x');
   assert.ok(!fs.existsSync(path.join(b.path, 'only-a.txt')));
@@ -72,7 +72,7 @@ test('T05 a second owner cannot claim or remove the first owner\'s worktree', as
 test('T05 dirty or untracked trees are never removed; retain is the default', async () => {
   const s = setup('r3');
   const a = await s.wt.create({ repo: s.dir, task_id: 'task-a', base_sha: s.sha, owner: 'o' });
-  assert.deepEqual(await s.wt.status(a.path), { branch: 'v2task/task-a', dirty: false, untracked: false, ignored: false, head: s.sha });
+  assert.deepEqual(await s.wt.status(a.path), { branch: 'v2/task/task-a', dirty: false, untracked: false, ignored: false, head: s.sha });
   fs.writeFileSync(path.join(a.path, 'a.txt'), 'changed\n');
   assert.equal((await s.wt.status(a.path)).dirty, true);
   await rejects(s.wt.remove(a.path, { retain: false, owner: 'o' }), 'E_DIRTY');
@@ -95,7 +95,7 @@ test('clean owned tree is removed with retain:false; lease released; branch dele
   assert.deepEqual(await s.wt.remove(a.path, { retain: false, owner: 'o' }), { removed: true, retained: false });
   assert.ok(!fs.existsSync(a.path));
   assert.ok(!(await isHeld(s, 'task-a')));
-  assert.equal(sh(s.dir, 'branch', '--list', 'v2task/task-a'), '');
+  assert.equal(sh(s.dir, 'branch', '--list', 'v2/task/task-a'), '');
   const again = await s.wt.create({ repo: s.dir, task_id: 'task-a', base_sha: s.sha, owner: 'o2' }); // reusable after removal
   assert.ok(fs.existsSync(again.path));
 });
@@ -108,7 +108,7 @@ test('unmerged commits block removal until merged into the target', async () => 
   sh(a.path, 'commit', '-q', '-m', 'feature');
   await rejects(s.wt.remove(a.path, { retain: false, owner: 'o' }), 'E_UNMERGED');
   await rejects(s.wt.remove(a.path, { retain: false, owner: 'o', merged_into: 'main' }), 'E_UNMERGED');
-  sh(s.dir, 'merge', '-q', '--ff-only', 'v2task/task-a');
+  sh(s.dir, 'merge', '-q', '--ff-only', 'v2/task/task-a');
   assert.equal((await s.wt.remove(a.path, { retain: false, owner: 'o', merged_into: 'main' })).removed, true);
 });
 

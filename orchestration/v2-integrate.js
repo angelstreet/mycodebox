@@ -1,6 +1,6 @@
 // Server integration hook (OWNER_DECISIONS §11.1, D-021). The goal loop calls it in `integrating` for a task that asked
 // for delivery (review_policy.deliver). What it may do on its own is exactly one thing: publish the task's OWN branch
-// (`v2task/<task_id>`, created by worktrees.js for this task) at the verified SHA to a configured remote, with a
+// (`v2/task/<task_id>`, created by worktrees.js for this task) at the verified SHA to a configured remote, with a
 // compare-and-swap push, and only that refspec. Everything that touches a shared branch -- the merge into the target --
 // is an owner decision bound to the exact SHA (integration:merge:<project>:<target>:<sha>, delivery.js approvalKey).
 // This server has no integration lane (no remote CI or deploy-state source for the integration controller), so even an
@@ -19,6 +19,13 @@ const short = (s) => String(s).slice(0, 12);
 export function createServerIntegrate({ git, pushRemote = null, target = 'main', retryMs = 10 * 60_000, loadPolicy = (repo) => realLoadPolicy(repo) } = {}) {
   if (typeof git !== 'function') throw new Error('server integrate: git required');
   if (pushRemote != null && !REMOTE_RE.test(pushRemote)) throw new Error('server integrate: invalid remote name');
+  // Developer runs can write the shared .git (worktrees share it): no repo hooks (pre-push...), no fsmonitor command,
+  // no ext:: transport on anything this hook runs. Other repo config (url, sshCommand) stays the owner's.
+  // Passed as GIT_CONFIG_* env (git >= 2.31): command-line scope, so it wins over repo config.
+  const SAFE = [['core.hooksPath', '/dev/null'], ['core.fsmonitor', 'false'], ['protocol.ext.allow', 'never']];
+  const SAFE_ENV = Object.fromEntries([['GIT_CONFIG_COUNT', String(SAFE.length)], ...SAFE.flatMap(([k, v], i) => [[`GIT_CONFIG_KEY_${i}`, k], [`GIT_CONFIG_VALUE_${i}`, v]])]);
+  const rawGit = git;
+  git = (args, o = {}) => rawGit(args, { ...o, env: { ...(o.env || {}), ...SAFE_ENV } });
 
   async function remoteSha(repo, ref) {
     const out = await git(['ls-remote', pushRemote, `refs/heads/${ref}`], { cwd: repo });
@@ -34,7 +41,8 @@ export function createServerIntegrate({ git, pushRemote = null, target = 'main',
   async function pushOwnBranch(task, sha, branch, store) {
     if (!pushRemote) return 'task branch not pushed: no push remote configured (GHOSTY_V2_PUSH_REMOTE)';
     const repo = task.repository;
-    const remotes = (await git(['remote'], { cwd: repo })).split('\n').map((s) => s.trim());
+    let remotes;
+    try { remotes = (await git(['remote'], { cwd: repo })).split('\n').map((s) => s.trim()); } catch (e) { return `task branch not pushed: git remote failed (${e?.code || 'error'})`; }
     if (!remotes.includes(pushRemote)) return `task branch not pushed: the repository has no remote ${pushRemote}`;
     const key = pushKey(task.task_id, sha);
     const ref = `refs/heads/${branch}`;
@@ -49,7 +57,9 @@ export function createServerIntegrate({ git, pushRemote = null, target = 'main',
     }
     effs = ((await store.get(task.task_id))?.effects || []).filter((e) => e.idempotency_key === key);
     const effect_id = `taskpush-${short(sha)}-${effs.length}`;
-    const expected = await remoteSha(repo, branch);
+    // An unreachable remote is a note, not an exception: nothing was attempted, the result stays a bounded owner request.
+    let expected;
+    try { expected = await remoteSha(repo, branch); } catch (e) { return `task branch not pushed: remote ${pushRemote} unreadable (${e?.code || 'error'})`; }
     await store.recordEffect(task.task_id, { effect_id, idempotency_key: key, kind: 'push_task_branch', phase: 'attempted' });
     let err = null;
     if (expected !== sha) {
@@ -67,7 +77,7 @@ export function createServerIntegrate({ git, pushRemote = null, target = 'main',
 
   async function integrate(task, { sha, worktree, store } = {}) {
     if (!store || typeof store.append !== 'function') return { next: 'awaiting_approval', block: 'policy', reason: 'integration hook called without the loop store handle' };
-    const branch = `v2task/${task.task_id}`;
+    const branch = `v2/task/${task.task_id}`;
     if (!SHA_RE.test(sha || '') || worktree?.branch !== branch || typeof task.repository !== 'string') {
       return { next: 'awaiting_approval', block: 'policy', reason: `integration refused: only the task's own branch ${branch} at a full SHA is handed off` };
     }
@@ -98,7 +108,7 @@ export function createServerIntegrate({ git, pushRemote = null, target = 'main',
     if (key.startsWith('push:task-branch:')) {
       const sha = key.split(':').at(-1);
       if (!pushRemote) return {};
-      try { return { applied: (await remoteSha(task.repository, `v2task/${task.task_id}`)) === sha }; } catch { return {}; }
+      try { return { applied: (await remoteSha(task.repository, `v2/task/${task.task_id}`)) === sha }; } catch { return {}; }
     }
     const open = ((await store.get(task.task_id))?.effects || []).filter((e) => e.kind === 'push_task_branch' && OPEN.includes(e.phase));
     return open.length ? {} : { applied: true };

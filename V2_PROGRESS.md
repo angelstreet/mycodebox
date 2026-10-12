@@ -7,9 +7,22 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 2 (OWNER_DECISIONS §10) delivered; see "Round 2" below. Next: owner review of PR #1. SHAs quoted before round 2 in this file, in
+Round 3 (OWNER_DECISIONS §11) in progress; see "Round 3" below. SHAs quoted before round 2 in this file, in
 V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
 scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
+
+## Round 3
+
+Base: `origin/v2/integration` c23ebe8. Owner spec: OWNER_DECISIONS §11.
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) merge 64b3f75 | 27aa36c+cf99337+56023ed: lease-fenced create (`ownerWrite`), branches `v2/task/<id>`, dead remote bounded, stop() bounded, repo hooks neutralized; orchestration/v2-runtime.js + v2-integrate.js, child-process server tests; 1692/1692 both runtimes; D-021; approved merges are not executed by the server (task waits until main contains the SHA) |
+| R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver + coordinator | IN PROGRESS: HTTP driver (wt r3-bench = r3-wire + r3-noprog) | |
+| R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge 0b56d12 | 8df6828+7cdca16: run timeout counted as an attempt (was routed to provider backoff); bench agent timeout 3 min; 1693/1693 both runtimes |
+| R3-3b | Drop stale "main's git history" owner action | coordinator | DONE | history was rewritten |
+| R3-3c | Docs: enable / roll back V2 on the live install | coordinator | TODO | |
+| R3-4 | Gates on final SHA, V2_VERIFICATION, PR round-3 section, DELIVERED | coordinator | TODO | |
 
 ## Round 2
 
@@ -92,6 +105,7 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 | D-018 | Owner cancel always succeeds: `loop.cancel()` takes the controller lease and runs `recover()` first when the view shows `recovery_pending`, then transitions | store appends cancel over a torn tail | Appending without recovery would corrupt a torn line; recovery under the lease is the safe path and keeps T14 | yes |
 | D-019 | mcode TUI full-permission mode is its own config key `permissionMode: bypassPermissions`, documented in INSTALL, never written by code | write ~/.minimax/config.yaml from the server | mcode 0.6.5 TUI has no permission flag (only `mcode exec --permission full`); editing the user's CLI config is invasive | yes |
 | D-020 | Dashboard approve/deny/cancel go through the goal loop under the controller lease; no loop in the process → 503, another live controller → 409, nothing written | store owner lock; keep direct writes | Owner answers must never be lost or written behind the single writer's back (m3; D-016/D-017/D-018) | yes |
+| D-021 | V2 runs only in repositories listed in `GHOSTY_V2_REPOS` (realpath match), each with a `.ai/project.json` whose allowlists govern its tasks (a missing or invalid policy keeps the repo listed but every task stops at a T01 clarification, `awaiting_approval`); worktrees under the required `GHOSTY_V2_WORK_ROOT` (no overlap with the checkout, state dir or listed repos); developer pins via `preferred_models` only narrow routing and pinned models never review | allowlist inside the server's own `.ai/project.json`; any repo with a policy file | Explicit, per-install list; the target repo's own policy governs; nothing outside it executes | yes |
 | D-006 | Leak scan = `scripts/leak-scan.js` (generic patterns) + private denylist outside the repo (`LEAK_SCAN_EXTRA`) | patterns in repo | Real identifiers must never be committed, including in the scanner | yes |
 
 ## OWNER-REVIEW / owner actions (collected for the PR)
@@ -111,8 +125,6 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 - Forbidden-topic floor accepts low-severity false positives (safe direction, an owner tap): "call the client method",
   "publish the event", "roll out", "I'll pass. Word", "Re start", "Bill ing", "pass/word", "we pass words". Tune only
   with a fresh review.
-- The branch scrubs a hard-coded tailnet IP and host name from `public/app.js` (pre-existing on `main`), but they stay in
-  `main`'s git history: rotate or accept; a history rewrite of `main` is owner-only.
 - Integration worktrees under the integration controller's work dir accumulate; clean them up manually.
 - The bench dry run spent USD 5.15 measured plus 13.50 estimated against the USD 20 authorization (see SCORING.md).
 
