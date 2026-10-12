@@ -1,4 +1,4 @@
-STATUS: RUNNING — round 2: §1–§7 of OWNER_DECISIONS §10 starting (pre-rewrite SHAs above are historical)
+STATUS: DELIVERED d913132 https://github.com/angelstreet/mycodebox/pull/1 (round 2)
 
 # V2 progress
 
