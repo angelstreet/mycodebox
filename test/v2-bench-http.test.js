@@ -115,3 +115,11 @@ test('http driver: options, fake needs the two scripted entries, real-mode regis
   assert.deepEqual([sp.known_usd, sp.estimated_usd, sp.unknown, sp.usd], [0.02, 0.3, true, null]);
   return assert.rejects(runBench({ http: true, fake: true, runtimes: ['other-dev'], out: path.join(TMP, 'x'), max_usd: 1 }), /fake-dev and fake-review/);
 });
+
+test('server estimate: a claude run is estimated at min(run limit, cap left), usd only; other runtimes defer to the default', async () => {
+  const { claudeRunEstimate } = await import('../orchestration/v2-runtime.js');
+  assert.deepEqual(claudeRunEstimate('claude:claude-sonnet-5-5', 1, 0.4), { usd: 0.4 });
+  assert.deepEqual(claudeRunEstimate('claude:claude-haiku-4-5', 1, null), { usd: 1 });
+  assert.deepEqual(claudeRunEstimate('claude:claude-haiku-4-5', 1, 0), { usd: 0.01 });
+  assert.equal(claudeRunEstimate('codex:default', 1, 0.4), null);
+});

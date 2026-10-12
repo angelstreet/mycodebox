@@ -164,6 +164,10 @@ export function pinnedRoute(realRoute) {
   };
 }
 
+// A claude run is estimated at its own --max-budget-usd bound (min(run limit, cap left), at least 0.01); usd only, the rest is
+// the loop's default estimate. Other runtimes: null = the default.
+export const claudeRunEstimate = (entry, runUsd, capLeft) => (String(entry).startsWith('claude:') ? { usd: Math.max(0.01, Math.min(runUsd, capLeft ?? Infinity)) } : null);
+
 const RUNTIMES = { claude: 'claude.js', codex: 'codex.js', minimax: 'minimax.js', opencode: 'opencode.js' };
 // The registry's codex/minimax names are not CLI model ids: those CLIs run their configured default model.
 const passModel = (runtime, model) => !!model && (runtime === 'claude' || (runtime === 'opencode' && model.includes('/')));
@@ -256,12 +260,8 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
       deploys: { status: async () => ({ state: 'unknown' }) } });
     const git = createGitRunner({ env: { PATH: env.PATH, HOME: env.HOME, LANG: 'C', GIT_TERMINAL_PROMPT: '0' } });
     // A claude run may spend up to its own --max-budget-usd (the same bound start() passes), so never estimate it lower:
-    // otherwise a task could overspend its cap by up to one run. Other runtimes: null = measured mean / registry figure.
-    const estimateRun = ({ task, entry }) => {
-      if (!String(entry).startsWith('claude:')) return null;
-      const left = info.get(task?.task_id)?.capLeft;
-      return { usd: Math.max(0.01, Math.min(cfg.claudeRunUsd, left ?? Infinity)), input_tokens: null, output_tokens: null, duration_ms: null, turns: 1 };
-    };
+    // otherwise a task could overspend its cap by up to one run. Other runtimes: null = the loop's default (measured mean / registry figure).
+    const estimateRun = ({ task, entry }) => claudeRunEstimate(entry, cfg.claudeRunUsd, info.get(task?.task_id)?.capLeft);
     const loop = createGoalLoop({ store, registry, adapters, estimateRun, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
       worktreeRoot: roots[0], reviewRoot: roots[1], verifier: createVerifier({ tmpRoot: path.join(cfg.workRoot, 'vtmp'), artifactRoot: path.join(cfg.workRoot, 'artifacts') }),
       leases, route: pinnedRoute(realRoute), allowFake, hostId: HOST_ID, integrate: createServerIntegrate({ git, pushRemote: cfg.pushRemote }),

@@ -60,11 +60,14 @@ export function realEnv(src) {
 
 // Dies with the driver: a detached watcher that, once the driver process is gone (SIGKILL, crash), kills the server, the
 // private tmux server and the temp dir. It leaves quietly when the server is already gone (normal stop). Not in server.js.
-const REAPER = `const [dp, sp, tmux, sock, sockFile, tmp] = process.argv.slice(1); const fs = require('fs'); const alive = (p) => { try { process.kill(Number(p), 0); return true; } catch { return false; } };
-const t = setInterval(() => { if (!alive(sp)) process.exit(0); if (alive(dp)) return; clearInterval(t);
-  try { process.kill(Number(sp), 'SIGTERM'); } catch {} setTimeout(() => { try { process.kill(Number(sp), 'SIGKILL'); } catch {}
+const REAPER = `const [dp, sp, tmux, sock, sockFile, tmp] = process.argv.slice(1); const fs = require('fs');
+const alive = (p) => { try { process.kill(Number(p), 0); return true; } catch { return false; } };
+const ours = () => { try { return fs.readFileSync('/proc/' + sp + '/cmdline', 'utf8').split('\\0').includes('server.js'); } catch { return false; } };   // pid not reused
+const t = setInterval(() => { if (!alive(sp) || !ours()) process.exit(0); if (alive(dp)) return; clearInterval(t);
+  try { process.kill(Number(sp), 'SIGTERM'); } catch {}
+  setTimeout(() => { if (alive(sp) && ours()) { try { process.kill(Number(sp), 'SIGKILL'); } catch {} }
     try { require('child_process').execFileSync(tmux, ['-L', sock, 'kill-server'], { stdio: 'ignore' }); } catch {}
-    try { fs.rmSync(sockFile, { force: true }); if (tmp && /v2-bench-http-/.test(tmp)) fs.rmSync(tmp, { recursive: true, force: true }); } catch {} process.exit(0); }, 3000); }, 500);`;
+    try { fs.rmSync(sockFile, { force: true }); if (tmp && /v2-bench-http-/.test(tmp)) fs.rmSync(tmp, { recursive: true, force: true }); } catch {} process.exit(0); }, 10000); }, 500);`;
 
 // The disposable server. Returns { base, api, stop, log }. `dir` holds the tmux wrapper and the fake HOME, `stateDir` the server's state (kept: it is the benchmark's task store).
 export async function startServer({ dir, keepDir = false, stateDir, workRoot, repos, registryFile, fake, fakeScripts, pathDirs = [], claudeRunUsd, runTimeoutMs, concurrency = 1, log = () => {} }) {
