@@ -222,7 +222,7 @@ test('X4 ack attack: the acknowledgement covers ONE fence; a later foreign holde
   assert.equal(lastWait(v).reason, 'lease_held');
   assert.equal(loopDecisions(v, 'lease_reacquired').length, 1, 'no silent second re-acquire');
   assert.equal(env.devStarts(), 2, 'the already-dispatched run ran; its commit was refused under the fence');
-  assert.equal(sh(env.repo.dir, 'rev-parse', `v2task/${task.task_id}`), (await env.view(task.task_id)).head_sha, 'nothing committed under the fence');
+  assert.equal(sh(env.repo.dir, 'rev-parse', `v2/task/${task.task_id}`), (await env.view(task.task_id)).head_sha, 'nothing committed under the fence');
 });
 
 test('X5 ack attack: a project-policy change resumes a lease_held wait but is NOT an owner acknowledgement of the fence', async () => {
@@ -287,9 +287,9 @@ test('X7 ack attack: a foreign holder that moved the worktree off its task branc
     await env.loop.resume(task.task_id, { actor: OWNER });
     const r = await env.loop.run(task.task_id);
     const v = await env.view(task.task_id);
-    const branchTip = sh(env.repo.dir, 'rev-parse', `v2task/${task.task_id}`);
+    const branchTip = sh(env.repo.dir, 'rev-parse', `v2/task/${task.task_id}`);
     const onBranch = sh(wt, 'rev-parse', '--abbrev-ref', 'HEAD');
-    assert.ok(r.state !== 'accepted' || (branchTip === v.head_sha && onBranch === `v2task/${task.task_id}`),
+    assert.ok(r.state !== 'accepted' || (branchTip === v.head_sha && onBranch === `v2/task/${task.task_id}`),
       `accepted ${v.head_sha?.slice(0, 12)} while the worktree is on ${onBranch} and v2task tip is ${branchTip.slice(0, 12)}`);
   });
 

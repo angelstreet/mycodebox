@@ -215,7 +215,7 @@ test('T07: attempted-but-unconfirmed effect across restart -> unknown_external_e
   const s = open(dir);
   const { task_id: id } = await s.createTask(spec());
   await toState(s, id, 'executing');
-  await s.recordEffect(id, { effect_id: 'fx1', idempotency_key: 'push:v2task/x', kind: 'git.push', phase: 'attempted' });
+  await s.recordEffect(id, { effect_id: 'fx1', idempotency_key: 'push:v2/task/x', kind: 'git.push', phase: 'attempted' });
   // simulated restart: a fresh store over the same dir
   const s2 = open(dir);
   const r = await s2.recover();
@@ -227,7 +227,7 @@ test('T07: attempted-but-unconfirmed effect across restart -> unknown_external_e
   assert.equal(t.effects[0].phase, 'possibly_applied');
   const lines = logOf(dir, id).length;
   // No blind repeat, no leaving the state before reconciliation.
-  await assert.rejects(s2.recordEffect(id, { effect_id: 'fx1-retry', idempotency_key: 'push:v2task/x', kind: 'git.push', phase: 'attempted' }), { code: 'E_EFFECT_UNRECONCILED' });
+  await assert.rejects(s2.recordEffect(id, { effect_id: 'fx1-retry', idempotency_key: 'push:v2/task/x', kind: 'git.push', phase: 'attempted' }), { code: 'E_EFFECT_UNRECONCILED' });
   await assert.rejects(s2.transition(id, 'executing'), { code: 'E_EFFECT_UNRECONCILED' });
   // A second restart neither duplicates events nor transitions.
   const s3 = open(dir);
@@ -238,7 +238,7 @@ test('T07: attempted-but-unconfirmed effect across restart -> unknown_external_e
   assert.equal((await s3.recordEffect(id, { effect_id: 'fx1', phase: 'confirmed' })).applied, true);
   assert.equal((await s3.recordEffect(id, { effect_id: 'fx1', phase: 'confirmed' })).applied, false);   // T06 for effects
   await s3.transition(id, 'executing');
-  await assert.rejects(s3.recordEffect(id, { effect_id: 'fx1-again', idempotency_key: 'push:v2task/x', kind: 'git.push', phase: 'attempted' }), { code: 'E_EFFECT_DUPLICATE' });
+  await assert.rejects(s3.recordEffect(id, { effect_id: 'fx1-again', idempotency_key: 'push:v2/task/x', kind: 'git.push', phase: 'attempted' }), { code: 'E_EFFECT_DUPLICATE' });
   t = await s3.get(id);
   assert.equal(t.effects.length, 1);
   assert.deepEqual(t.effects[0].history.map((h) => h.phase), ['attempted', 'possibly_applied', 'confirmed']);

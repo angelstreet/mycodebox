@@ -56,7 +56,8 @@
 //   GET|PUT /api/layout         → the session list's order / pins / groups ({order,pins,groups,groupNames,collapsed}); PUT merges the keys it carries
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
 //   GET  /api/v2/tasks, /api/v2/tasks/:id → V2 task board (orchestration/http.js); GHOSTY_V2=1 only, else 404 and nothing is built
-//   POST /api/v2/tasks          → create a task (recorded, never started); POST /api/v2/tasks/:id/cancel | approve | deny (owner actions)
+//   POST /api/v2/tasks          → create a task (run by the goal loop, orchestration/v2-runtime.js); POST /api/v2/tasks/:id/cancel | approve | deny
+//   GET  /api/v2/ops/status|telemetry|incidents (read-only); POST /api/v2/ops/requests (request only, nothing executes)
 //   GET  /*                     → static files in ./public
 
 import http from 'node:http';
@@ -1029,15 +1030,15 @@ async function readJsonBody(req) {
   });
 }
 
-// V2 task engine routes: opt-in (GHOSTY_V2=1). Off means nothing is imported or constructed: no store, no timers.
-// The goal loop is never started here; creating a task only records it.
+// V2 task engine: opt-in (GHOSTY_V2=1). Off means nothing is imported or constructed: no store, no timers, no lease.
+// On: orchestration/v2-runtime.js assembles the engine (one store handle for routes and goal loop) and starts the loop
+// under the controller lease; another live controller -> routes stay read-only here.
 const V2_ON = process.env.GHOSTY_V2 === '1';
-let v2Http = null;
+let v2 = null;
 if (V2_ON) {
-  const [{ createTaskStore }, { createIntake }, { createV2Http }] = await Promise.all([
-    import('./orchestration/store.js'), import('./orchestration/intake.js'), import('./orchestration/http.js')]);
-  const v2Store = createTaskStore({ dir: join(STATE_DIR, 'v2') });
-  v2Http = createV2Http({ store: v2Store, intake: createIntake({ store: v2Store }) });
+  const { createV2Runtime } = await import('./orchestration/v2-runtime.js');
+  v2 = await createV2Runtime({ stateDir: STATE_DIR, env: process.env, repoRoot: dirname(fileURLToPath(import.meta.url)) });
+  v2.start().catch((e) => console.error(`[v2] start failed: ${e?.code || e?.message}`));
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,8 +1346,8 @@ const server = http.createServer(async (req, res) => {
 
   // --- V2 task routes (behind the Origin + JSON content-type checks above) ---
   if (p.startsWith('/api/v2/')) {
-    if (!v2Http) return json(res, 404, { ok: false, error: 'V2 engine is off (set GHOSTY_V2=1)' });
-    const r = await v2Http.handle({ method: req.method, pathname: p, readBody: () => readJsonBody(req) });
+    if (!v2) return json(res, 404, { ok: false, error: 'V2 engine is off (set GHOSTY_V2=1)' });
+    const r = await v2.http.handle({ method: req.method, pathname: p, readBody: () => readJsonBody(req) });
     if (r) return json(res, r.status, r.body);
     return json(res, 404, { ok: false, error: 'not found' });
   }
@@ -1918,9 +1919,11 @@ if (existsSync(TLS_KEY) && existsSync(TLS_CERT)) {
 
 // Clean shutdown
 for (const s of ['SIGINT', 'SIGTERM']) {
-  process.on(s, () => {
+  process.on(s, async () => {
     console.log(`[ghosty] ${s}, shutting down`);
     wss.clients.forEach((c) => c.close());
+    // V2 on: stop scheduling and release the V2 controller lease first (bounded), so a restart takes over at once.
+    if (v2) await v2.stop({ timeoutMs: 5000 }).catch((e) => console.error(`[v2] stop: ${e?.code || e?.message}`));
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1500).unref();
   });

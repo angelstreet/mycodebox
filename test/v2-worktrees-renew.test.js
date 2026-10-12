@@ -125,7 +125,7 @@ test('D-015 a twin acquiring under the same owner and task (its own lease_id) is
 test('X7 status() reports the checked-out branch (HEAD when detached)', async () => {
   const s = setup();
   const c = await s.wt.create({ repo: s.repo, task_id: 'task-5', base_sha: s.sha, owner: 'goal-loop' });
-  assert.equal((await s.wt.status(c.path)).branch, 'v2task/task-5');
+  assert.equal((await s.wt.status(c.path)).branch, 'v2/task/task-5');
   sh(c.path, 'checkout', '-q', '--detach');
   assert.equal((await s.wt.status(c.path)).branch, 'HEAD');
 });

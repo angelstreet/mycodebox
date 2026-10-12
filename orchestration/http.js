@@ -15,6 +15,7 @@
 // another live controller holds the lease -> 409 E_CONTROLLER_HELD. Either way the request stays pending.
 import { ContractError, TERMINAL, outcomeOf, ownerAnswerOf } from './task-contract.js';
 import { buildScorecard } from './scorecard.js';
+import { TEMPLATES } from './intake.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
 export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -22,11 +23,13 @@ const SHA_RE = /^[0-9a-f]{7,64}$/;
 const OWNER = 'owner';
 const CREATE_FIELDS = ['goal', 'title', 'repository', 'base_sha', 'project_id', 'scope', 'acceptance_checks', 'definition_of_done',
   'risk_class', 'priority', 'runtime_capabilities', 'prohibited_actions', 'runtime_allowlist', 'model_allowlist', 'budget_policy',
-  'template', 'idempotency_key'];
+  'template', 'idempotency_key', 'no_progress_policy', 'preferred_models', 'task_class', 'deliver'];
+// "runtime:model" registry ids; a pin only narrows routing (orchestration/v2-runtime.js pinnedRoute).
+const ENTRY_RE = /^[a-z][a-z0-9_-]{0,31}:[\w./:@+-]{1,120}$/;
 const TEMPLATE_NAMES = ['goal', 'informational'];
 
 const NEXT = {
-  created: 'waiting for the goal loop to pick it up (the loop is an explicit opt-in and is not started by this page)',
+  created: 'waiting for the goal loop to pick it up',
   clarified: 'waiting for a plan', planned: 'waiting to be dispatched', ready: 'waiting to be dispatched to a developer',
   executing: 'a developer run is in progress', evaluating: 'running the acceptance checks and the independent review',
   repair: 'a repair attempt follows from the failed evidence', replan: 'a new plan follows from the failed evidence',
@@ -43,7 +46,8 @@ const clip = (s, n) => { const t = String(s ?? ''); return t.length > n ? `${t.s
 const STATUS_OF = { E_NOT_FOUND: 404, E_EXISTS: 409, E_TERMINAL: 409, E_CANCELLED: 409, E_ILLEGAL_TRANSITION: 409,
   E_STORE_FAILED: 503, E_EFFECT_UNRECONCILED: 409, E_ACCEPTANCE_UNMET: 409,
   // owner answers through the goal loop (D-020)
-  E_CONTROLLER_HELD: 409, E_CONTROLLER_LOST: 409, E_ALREADY_ANSWERED: 409, E_STALE_ACTION: 409, E_SHA_MISMATCH: 409, E_LEASE_UNAVAILABLE: 503 };
+  E_CONTROLLER_HELD: 409, E_CONTROLLER_LOST: 409, E_ALREADY_ANSWERED: 409, E_STALE_ACTION: 409, E_SHA_MISMATCH: 409, E_LEASE_UNAVAILABLE: 503,
+  E_NO_CONTROLLER: 503 };
 const NO_CONTROLLER = 'no goal loop runs in this process: owner decisions are recorded only by the controller (D-020); nothing was written';
 function mapError(e) {
   if (e instanceof ContractError) {
@@ -72,7 +76,9 @@ export function pendingApproval(task, events) {
   // Prefer the SHA the request was raised on; fall back to the task head.
   const sha = typeof req.sha === 'string' && SHA_RE.test(req.sha) ? req.sha : task.head_sha;
   return { action_id: `appr-${task.task_id}-${req.k}`, k: req.k, kind: req.kind ?? null, question: clip(req.question, 1000),
-    classes: Array.isArray(req.classes) ? req.classes : [], keys: Array.isArray(req.keys) ? req.keys : [], sha, resume_to: req.resume_to ?? null };
+    classes: Array.isArray(req.classes) ? req.classes : [], keys: Array.isArray(req.keys) ? req.keys : [], sha, resume_to: req.resume_to ?? null,
+    // budget stops: a reached cap is answered by deny/cancel (a bare approval cannot waive it); an unknown estimate by approve
+    cap_reached: typeof req.cap_reached === 'boolean' ? req.cap_reached : null, entry: typeof req.entry === 'string' ? req.entry : null };
 }
 
 // The owner already answered the current request: the loop has not applied it yet.
@@ -198,7 +204,17 @@ function detail(t, events, children = []) {
     incidents,
     history: t.history,
     pending_approval: pending,
+    wait: waitOf(t),
   };
+}
+
+// The goal loop's current wait (reason, until when, what resumes it); null unless the task is waiting.
+function waitOf(t) {
+  if (t.status !== 'waiting' || t.store_error) return null;
+  const w = loopMemory(t.decisions).wait;
+  if (!w) return null;
+  return { reason: w.reason ?? null, until_ms: Number.isFinite(w.until_ms) ? w.until_ms : null, resume_to: w.resume_to ?? null,
+    diagnosis: w.diagnosis ? clip(w.diagnosis, 500) : null, next_action: w.next_action ? clip(w.next_action, 500) : null };
 }
 
 // ---- body validation ------------------------------------------------------------------------------
@@ -219,6 +235,10 @@ function checkCreate(b) {
   if (b.idempotency_key !== undefined && !(typeof b.idempotency_key === 'string' && /^[\w.:-]{1,128}$/.test(b.idempotency_key))) return 'idempotency_key: 1-128 of [A-Za-z0-9_.:-]';
   if (b.acceptance_checks !== undefined && (!Array.isArray(b.acceptance_checks) || b.acceptance_checks.length > 50)) return 'acceptance_checks: array, max 50';
   if (b.definition_of_done !== undefined && (!Array.isArray(b.definition_of_done) || b.definition_of_done.length > 50)) return 'definition_of_done: array, max 50';
+  if (b.preferred_models !== undefined && !(Array.isArray(b.preferred_models) && b.preferred_models.length >= 1 && b.preferred_models.length <= 8
+    && b.preferred_models.every((x) => typeof x === 'string' && ENTRY_RE.test(x)))) return 'preferred_models: 1-8 "runtime:model" ids (developer pins; they only narrow routing)';
+  if (b.deliver !== undefined && typeof b.deliver !== 'boolean') return 'deliver: boolean';
+  if (b.deliver === true && b.template === 'informational') return 'deliver: not for informational tasks';
   return null;
 }
 
@@ -332,11 +352,13 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
         if (p.error) return p.error;
         const bad = checkCreate(p.body);
         if (bad) return err(400, 'E_INVALID', bad);
-        const { template, idempotency_key, ...input } = p.body;
+        const { template, idempotency_key, deliver, ...input } = p.body;
+        // Delivery is opt-in per task: the goal template's review policy plus deliver:true (integration stays owner-gated).
+        if (deliver === true) input.review_policy = { ...structuredClone(TEMPLATES.goal.review_policy), deliver: true };
         // The UI is the owner at the keyboard: actor 'owner'. Created is a record, not a start.
         const r = await intake.createTask(input, { source: 'ui', actor_id: OWNER, idempotencyKey: idempotency_key, template });
         return reply(201, { ok: true, task: summary(r.task), defaults_applied: r.defaults_applied, admission_paused: r.admission_paused,
-          note: 'recorded; execution needs the goal loop, which is an explicit opt-in' });
+          note: 'recorded; the goal loop of this server runs it' });
       }
       if (verb === 'cancel') {
         const p = parseBody(raw);

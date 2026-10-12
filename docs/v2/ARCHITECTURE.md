@@ -145,7 +145,7 @@ Unsupported operations throw `E_UNSUPPORTED`, never no-op. Adapters never add pe
 ## 7. Worktrees — `orchestration/worktrees.js`
 
 `createWorktrees({ git, fs, root, repoAllowlist, leases })`: `create({ repo, task_id, base_sha, branch })` (takes
-`worktree:<task_id>` lease; branch `v2task/<task_id>`), `owner(path)`, `status(path) -> { dirty, untracked, head }`,
+`worktree:<task_id>` lease; branch `v2/task/<task_id>`), `owner(path)`, `status(path) -> { dirty, untracked, head }`,
 `remove(path, { retain })` refuses dirty/untracked/unmerged or foreign-owned trees. Paths must resolve inside `root`.
 
 ## 8. Routing, registry, budget — `orchestration/{model-registry,router,budget}.js`
@@ -189,7 +189,8 @@ Read-mostly HTTP routes added to `server.js` behind the existing Origin check: `
 `GET /api/v2/tasks/:id` (state, outcome, goal, criteria, next action, decisions, evidence, usage, leases, incidents),
 `POST /api/v2/tasks` (create from UI; same contract as API/schedule/agent), `POST /api/v2/tasks/:id/cancel`,
 `POST /api/v2/tasks/:id/approve` (owner only, records actor). Route handlers live in `orchestration/http.js` (testable
-without the server). The UI adds an opt-in **Tasks** view; the session board is unchanged.
+without the server) and are assembled with the goal loop by `orchestration/v2-runtime.js` (see "Implementation notes
+(server wiring)"). The UI adds an opt-in **Tasks** view; the session board is unchanged.
 
 ## Implementation notes (task core)
 
@@ -270,7 +271,7 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    granted just before a crash (before the meta write) is adopted with the write-ahead id persisted before the acquire
    (`pending_lease` in the meta, `.v2-meta/<task_id>.intent.json` for create; D-015).
 9. Task branch: `worktrees.status()` also reports `branch` (`HEAD` when detached). Dispatch, commit, evaluation, the
-   pre-accept revalidation and the integration handoff require the worktree to be on `v2task/<task_id>`; otherwise the
+   pre-accept revalidation and the integration handoff require the worktree to be on `v2/task/<task_id>`; otherwise the
    task waits (`off_task_branch`, `until_ms: null`) until the owner restores the branch and resumes.
 10. Controller (D-016, D-017, D-018): `step()`/`run()` act only under the controller lease
    `service:<host_id>:goal-loop`; another live instance makes them return `{ transitioned: false, idle: true,
@@ -335,4 +336,53 @@ Recorded from `v2/11-e2e` (`orchestration/delivery.js`); additive to §10 and §
 6. Dashboard: the integration approval request also carries the SHA it is about (`sha`, the integration SHA, not the
    developer head), so `orchestration/http.js` shows that SHA, demands it on approve (`E_SHA_MISMATCH` otherwise) and
    records grants with the request's `keys` and `request_kind`, the same shape as `goal-loop approve()`.
+
+## Implementation notes (server wiring)
+
+Recorded from `v2/r3-wire` (OWNER_DECISIONS §11.1); additive. Env keys: [REFERENCE](../REFERENCE.md) (`GHOSTY_V2*`).
+
+1. `server.js` imports `orchestration/v2-runtime.js` only when `GHOSTY_V2=1` (unset: nothing imported, constructed or
+   scheduled). `createV2Runtime({ stateDir, env, repoRoot, log })` returns `{ http: { handle }, start(), stop({ timeoutMs }),
+   status(), store, config }`. server.js forwards `/api/v2/*` to `http.handle`, calls `start()` once, and awaits
+   `stop({ timeoutMs: 5000 })` on SIGINT/SIGTERM before closing.
+2. One process, one store handle (D-016/D-017): the same `createTaskStore` instance backs the HTTP routes, intake and
+   the goal loop. Every write the runtime makes outside a step (task creation, ops requests) goes through the loop's new
+   `ownerWrite(fn)`: under the controller lease like approve/deny/cancel, through the fenced store handle, so a
+   displaced instance gets 409 `E_CONTROLLER_HELD` and writes nothing. `start()` takes the controller lease with the loop's new `acquire({ watch: false })` (the lease and a
+   heartbeat are then held between steps too, so an owner action never drops it), runs `recover()` under it, probes
+   the adapters, then starts the scheduler. `stop()` stops scheduling, waits for in-flight steps for the remaining
+   time, calls the loop's new `release()` (lease released at once; an in-flight step's next write fails the fence, so
+   nothing is written behind the next controller's back) and cancels the runs still going (GL06 reconciles them).
+   The whole `stop()` is raced against `timeoutMs + 1.5 s`, so SIGTERM exits in bounded time.
+3. Another live controller (`E_HELD`, liveness as in goal-loop note 10, `watch: false`): this process runs no loop and
+   every write route (create, cancel, approve, deny, ops requests) answers 503 `E_NO_CONTROLLER` without writing; reads
+   work. A lease backend that cannot answer (`E_UNAVAILABLE`, e.g. a lock file left by a killed process until it is
+   stale and the dead holder's TTL ran out) is retried every 15 s. A dead controller (pid gone on this host) is taken
+   over through its write-ahead lease id.
+4. Scheduler: at most `GHOSTY_V2_CONCURRENCY` (default 1) steps in flight, round robin (one step, then the task goes to
+   the back). Woken by create, by an owner answer, at start, and by a timer for the earliest `until_ms` of a timed wait;
+   a slow safety tick (60 s) rescans open tasks (an idle step writes nothing). Informational tasks are never stepped.
+5. Repositories (D-021): `GHOSTY_V2_REPOS` lists absolute repository paths; creation names one of them (realpath
+   match) or is refused (400 `E_INTAKE_REPO`); the same list is the worktree allowlist; the loop re-reads the repo's
+   `.ai/project.json` before every run (missing/invalid -> T01 clarification). `GHOSTY_V2_WORK_ROOT` (required for the
+   loop) holds `wt/`, `review/`, `vtmp/` and `artifacts/` and must not overlap the checkout or the state dir.
+6. Runtimes: the registry (`orchestration/models.json` or `GHOSTY_V2_REGISTRY`) with the claude, codex, minimax and
+   opencode adapters (launch modes unchanged, no bypass flags), probed by the loop at every route (unavailable = not
+   routable). Model ids are passed to claude, and to opencode for `provider/model` ids; codex and minimax run their
+   CLI default model. A claude run gets `--max-budget-usd min(GHOSTY_V2_CLAUDE_RUN_USD, remaining max_usd)`.
+   `GHOSTY_V2_TEST_FAKE_ADAPTER` (tests only) makes the scripted fake the only runtime, with two fake entries so the
+   reviewer is a different model.
+7. Developer pins: the loop passes `role` to the router; the runtime's route wrapper turns a task's `preferred_models`
+   into exclusions only (developer routes see only the pinned entries; reviewer routes never see them).
+8. Delivery hook `orchestration/v2-integrate.js` (opt-in per task, `review_policy.deliver`): may push only the task's own
+   `v2/task/<task_id>` branch at the verified SHA to `GHOSTY_V2_PUSH_REMOTE` (compare-and-swap, recorded as effect
+   `push:task-branch:<task>:<sha>`, read back from the remote; an unknown outcome is reconciled from the remote, never
+   re-pushed blindly). The merge into `main` is an `integration` request with key
+   `integration:merge:<project_id>:main:<sha>` (`merge_protected` when `main` is protected), bound to the SHA. This
+   server has no integration lane (no remote CI or deploy-state source for `integration-controller.js`), so an approved
+   merge is not executed: the task waits (`reason: integration`, retry 10 min) until `main` contains the SHA, then
+   `release_verifying` -> `accepted`. Nothing merges, deploys or force-pushes a branch the task does not own.
+9. System operations: `GET /api/v2/ops/telemetry` and `/incidents` are read-only; `POST /api/v2/ops/requests` goes
+   through System Operations' request-only `requester` (incident `mitigation_requested`); no executor is configured
+   and the controller object is not kept. The loop gets the same `requester` for infrastructure incidents.
 

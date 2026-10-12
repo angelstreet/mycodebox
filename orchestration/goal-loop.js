@@ -351,7 +351,8 @@ export function createGoalLoop({
     }
     return out;
   }
-  async function routeFor(ctx, p, { exclude = ctx.cp.exclude } = {}) {
+  // role: 'developer' | 'reviewer' | 'security', passed to the router for wrappers that narrow per role (v2-runtime pins).
+  async function routeFor(ctx, p, { exclude = ctx.cp.exclude, role = 'developer' } = {}) {
     const pol = p.policy;
     const grants = grantsOf(ctx);
     const reg = registry.withProbes(await probes());
@@ -366,7 +367,7 @@ export function createGoalLoop({
     const check = (_p, t) => { const r = allowed(pol, t, { class: 'route' }, grants, key); return r.ok ? { allow: true, needs_approval: false, reason: 'policy allows' } : { allow: false, needs_approval: r.needs_approval, reason: r.reason }; };
     // D-014: an owner approval of this task's routing question (bound to task + base) waives the critical-risk floor.
     const floorGrants = grants.has(key) ? ['critical_risk'] : [];
-    return route(task, { registry: reg, policy: routerPolicy, checkAction: check, allowFake, exclude, now, realpath: (x) => fs.realpathSync(x), floorGrants });
+    return route(task, { registry: reg, policy: routerPolicy, checkAction: check, allowFake, exclude, now, realpath: (x) => fs.realpathSync(x), floorGrants, role });
   }
   const routeKey = (ctx) => `route:${ctx.v.base_sha}`;
   const adapterFor = (entryId) => adapters[entryId] || adapters[entryId.split(':')[0]] || null;
@@ -986,7 +987,7 @@ export function createGoalLoop({
     const evidence = [`signature ${signature}`, `same failure ${count}x`, `reviewer strategy changes ${rf.changes}`];
     if (count < np.same_signature) return reviewBackoff(ctx, `reviewer ${entry}: ${out.error?.class || 'no verdict'} (${count}x)`, { review_fail: { ...rf, signature, count } });
     let other = null;
-    try { const r = await routeFor(ctx, p, { exclude: [...devEntries, ...rf.excluded, entry] }); other = r.choice; } catch { other = null; }
+    try { const r = await routeFor(ctx, p, { exclude: [...devEntries, ...rf.excluded, entry], role: 'reviewer' }); other = r.choice; } catch { other = null; }
     const pick = rf.changes >= np.strategy_changes_without_progress ? null : other ? 'other_reviewer' : !rf.strict ? 'strict_format' : null;
     if (!pick) {
       return suspend(ctx, 'no_progress', { p, resume_to: 'ready', extraPatch: { verify_only: true, review_fail: { ...rf, signature, count } }, evidence,
@@ -1010,7 +1011,7 @@ export function createGoalLoop({
     const rf = ctx.cp.review_fail;
     let r = null;
     let choice = fixedEntry;
-    if (!choice) { r = await routeFor(ctx, p, { exclude: [...devEntries, ...rf.excluded] }); choice = r.choice; }
+    if (!choice) { r = await routeFor(ctx, p, { exclude: [...devEntries, ...rf.excluded], role }); choice = r.choice; }
     if (!choice || devEntries.includes(choice)) return { stop: await noReviewer(ctx, `no ${role} runtime independent of ${devEntries.join(', ')}${fixedEntry ? ` (policy names ${fixedEntry})` : ''}`) };
     const stop = await budgetGate(ctx, choice, 'reviewer', 'ready', { patch: { verify_only: true }, routeHint: r });   // #6
     if (stop) return { stop };
@@ -1294,8 +1295,39 @@ export function createGoalLoop({
     } finally { hb?.(); usage.busy -= 1; }
   }
 
+  // Long-lived controller (server wiring, orchestration/v2-runtime.js): the lease is held, with a heartbeat, between
+  // steps too, so an owner action's releaseIdle() never drops it while this instance is the scheduler.
+  let pinned = null;
+  async function acquire({ watch = false } = {}) {
+    if (pinned) return { ok: true };
+    usage.busy += 1;
+    const h = await hold({ takeover: true, reconcile: false, watch });
+    if (!h.ok) { usage.busy -= 1; return h; }
+    pinned = heartbeat();
+    return h;
+  }
+  // Clean shutdown: release the controller lease now, even with a step in flight. That step's next write fails the
+  // fence (E_CONTROLLER_LOST): nothing is written behind the next controller's back; an unconfirmed run is reconciled
+  // by whoever recovers next (GL06).
+  async function release() {
+    if (pinned) { pinned(); pinned = null; usage.busy -= 1; }
+    return ctlSerial(async () => {
+      if (!leases || !ctl.lease) return { released: false };
+      const l = ctl.lease;
+      ctl.lease = null; ctl.intent = null; ctl.recovered = false; ctl.lost = true;
+      const r = await leases.release(l).catch(() => null);
+      dropCtlIntent(ctlCfg.instance);
+      return { released: r?.ok === true };
+    });
+  }
+
+  // Any other owner-initiated write of the process that runs this loop (task creation from the dashboard, an ops
+  // request): under the controller lease like approve/deny/cancel, and through the fenced store handle, so a
+  // displaced instance (its lease expired, another controller took over) writes nothing (E_CONTROLLER_HELD).
+  const ownerWrite = (fn) => asOwner(() => fn(store));
+
   return {
-    step, run,
+    step, run, acquire, release, ownerWrite,
     // Startup: replay the store (unconfirmed effects -> unknown_external_effect); steps resume from there (T18).
     async recover() {
       usage.busy += 1;   // a concurrent owner action's releaseIdle() must not drop the lease mid-recover

@@ -61,7 +61,7 @@ test('verify: merged_into cannot be the task branch itself', async () => {
   const s = setup('selfmerge');
   const a = await s.wt.create({ repo: s.dir, task_id: 'td', base_sha: s.sha, owner: 'o' });
   commit(a.path, 'w.txt');
-  await assert.rejects(s.wt.remove(a.path, { retain: false, owner: 'o', merged_into: 'v2task/td' }), { code: /^E_/ });
+  await assert.rejects(s.wt.remove(a.path, { retain: false, owner: 'o', merged_into: 'v2/task/td' }), { code: /^E_/ });
 });
 
 test('verify: tampered metadata cannot redirect branch deletion or file unlink', async () => {

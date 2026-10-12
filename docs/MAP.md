@@ -15,7 +15,8 @@ phone/laptop on Tailscale
                                  -> stall + manager -> log / proposed reply / guarded action
 Claude reporter -> loopback + token -> reporter.js -> structured turn facts
 usage transcripts -> usage/ingest.js -> ledger + summary -> usage-view.js
-GHOSTY_V2=1: /api/v2/tasks -> orchestration/http.js -> intake + task store ($GHOSTY_STATE_DIR/v2); goal loop is a module, not started by the server
+GHOSTY_V2=1: /api/v2/* -> orchestration/v2-runtime.js -> http.js + intake + task store ($GHOSTY_STATE_DIR/v2)
+             + goal loop (controller lease, recover, scheduler) -> worktrees under GHOSTY_V2_WORK_ROOT
 ```
 
 The recommended endpoint is Tailscale Serve forwarding to loopback. Native TLS is an alternative; see [INSTALL](INSTALL.md).
@@ -39,7 +40,8 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | V2 router, registry, budget (shadow only) | `orchestration/router.js`, `model-registry.js`, `models.json`, `budget.js` | `test/v2-routing*.test.js`, `test/v2-budget.test.js` |
 | V2 runtime adapters, worktrees | `orchestration/adapters/`, `worktrees.js` | `test/v2-adapters*.test.js`, `test/v2-worktrees*.test.js` |
 | V2 leases, incidents, system operations | `orchestration/lease-authority.js`, `incidents.js`, `telemetry.js`, `system-ops.js` | `test/v2-lease-authority*.test.js`, `test/v2-system-ops*.test.js` |
-| V2 HTTP routes and Tasks view | `orchestration/http.js` (wired in `server.js` behind `GHOSTY_V2=1`), `public/tasks-view.js` | `test/v2-http.test.js`, `test/v2-tasks-view.test.js`; browser: `scripts/v2-ui-check.js` (dev only) |
+| V2 HTTP routes and Tasks view | `orchestration/http.js`, `public/tasks-view.js` | `test/v2-http.test.js`, `test/v2-tasks-view.test.js`; browser: `scripts/v2-ui-check.js` (dev only) |
+| V2 server wiring (engine assembly, scheduler, server integration hook) | `orchestration/v2-runtime.js` (imported by `server.js` only with `GHOSTY_V2=1`), `orchestration/v2-integrate.js` | `test/v2-server-wiring.test.js` (boots the real `server.js` as a child) |
 | V2 scoring report, scorecard, tool score, proposals | `scripts/v2-score.js`, `orchestration/scorecard.js`, `orchestration/proposals.js`, [SCORING](v2/SCORING.md) | `test/v2-score.test.js`, `test/v2-scorecard.test.js` |
 | V2 integration agent and delivery bridge | `orchestration/integration-controller.js`, `integration-queue.js`, `ci-gates.js`, `delivery.js` | `test/v2-integration*.test.js`, `test/v2-delivery*.test.js` |
 | V2 acceptance and live smoke (dev only) | `scripts/v2-acceptance.js`, `scripts/v2-live-smoke.js`, [ACCEPTANCE](v2/ACCEPTANCE.md) | `test/v2-acceptance-*.test.js`, shared fixture `test/fixtures/v2-world.js` |
@@ -53,7 +55,8 @@ Do not import `server.js` into a unit test: importing it starts listeners and ba
 
 | Location | Contents | Handling |
 |---|---|---|
-| `$GHOSTY_STATE_DIR/v2` | V2 task store: `tasks/<id>/events.jsonl` (source of truth), derived `snapshot.json`, `index.json` | Created only when `GHOSTY_V2=1` and a task is touched; separate from V1 state; removing it reverts V2 (see [migration](v2/MIGRATION.md)) |
+| `$GHOSTY_STATE_DIR/v2` | V2 task store: `tasks/<id>/events.jsonl` (source of truth), derived `snapshot.json`, `index.json`; `leases/` (controller and worktree leases), `controller.*.intent.json`, `incidents/` | Created only when `GHOSTY_V2=1`; separate from V1 state; removing it reverts V2 (see [migration](v2/MIGRATION.md)) |
+| `$GHOSTY_V2_WORK_ROOT` | V2 task worktrees (`wt/<task_id>`), reviewer checkouts, check temp files and artifacts | Outside the checkout, the state dir and every allowlisted repo; disposable once tasks are closed |
 | `$GHOSTY_STATE_DIR` (default `~/.local/state/ghosty`) | Manager switches, `layout.json`, session metadata, budgets, logs, reporter token, push keys, deploy records and usage summaries | Private; back up securely; use a fresh temp directory for tests |
 | `~/.ghosty/uploads/` | Attached images | Private; outside GHOSTY_STATE_DIR; include separately in backup/removal decisions |
 | `.env` or a private service environment file | Local settings and optional credentials | Not automatically loaded by Node; mode 0600; never commit |
