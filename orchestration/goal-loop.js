@@ -460,6 +460,9 @@ export function createGoalLoop({
   async function onFailure(ctx, { signature, feedback, passing, failing = null, then = 'repair', thenPatch = {}, reviewOnly = false, p }) {
     const np = ctx.v.no_progress_policy;
     const cp = ctx.cp;
+    // The developer is told its last run was stopped at the time limit (the run's changes were still checked).
+    const stall = lastDevTimeout(ctx);
+    if (stall && feedback) feedback = { ...feedback, run_timeout: { run_id: stall, timeout_ms: runTimeoutMs, note: 'Your previous run was stopped at the time limit; its changes were kept and checked. Work in smaller steps. If the goal cannot be met as stated, stop early and explain why.' } };
     // D-012: new passing evidence = more required checks pass, or fewer tests fail inside the failing checks.
     const fewerFailing = failing != null && cp.best_failing != null && failing < cp.best_failing;
     const progress = passing > cp.best || fewerFailing;
@@ -471,7 +474,8 @@ export function createGoalLoop({
     const tried = progress ? [] : cp.tried;
     const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, feedback, provider: null, verify_only: false, review_unavailable: 0 };
     const evidence = [`signature ${signature}`, `same signature ${streak.count}x in a row`, `iterations without new passing evidence: ${stale} (limit ${stagnation})`,
-      `strategy changes without progress: ${changes}`, `failing tests ${failing ?? 'n/a'} (best ${cp.best_failing ?? 'n/a'})${progress ? ': progress' : ''}`];
+      `strategy changes without progress: ${changes}`, `failing tests ${failing ?? 'n/a'} (best ${cp.best_failing ?? 'n/a'})${progress ? ': progress' : ''}`,
+      ...(stall ? [`developer run ${stall} hit the run timeout (${runTimeoutMs} ms)`] : [])];
     const needChange = streak.count >= np.same_signature || stale >= stagnation;
     if (!needChange) {
       return decide(ctx, decision('repair', 'How to respond to this failure?', [
@@ -527,6 +531,11 @@ export function createGoalLoop({
     if (!started) return false;
     return !UNBILLED_CLASSES.includes(errorClass);
   }
+  // run_id of the latest developer run when it ended at the run timeout, else null.
+  const lastDevTimeout = (ctx) => {
+    const run_id = ctx.events.findLast((e) => e.kind === 'task.started' && e.payload.role === 'developer')?.payload.run_id;
+    return run_id && ctx.events.some((e) => e.kind === 'tool.failed' && e.payload.run_id === run_id && e.payload.error?.class === 'timeout') ? run_id : null;
+  };
   const billedRun = (ctx, run_id, errorClass) => {
     const u = ctx.events.find((e) => e.kind === 'usage.recorded' && e.payload.run_id === run_id)?.payload;
     const started = ctx.events.some((e) => e.kind === 'action.confirmed' && e.payload.effect_id === `devrun-${run_id}`) && !ctx.events.some((e) => e.kind === 'tool.failed' && e.payload.run_id === run_id && e.payload.not_started);
@@ -845,7 +854,18 @@ export function createGoalLoop({
         reason: reqs.map((e) => e.payload.reason).join('; '), classes: [...new Set(reqs.flatMap((e) => e.payload.classes))], keys: reqs.map((e) => e.payload.key),
         actions: reqs.map((e) => e.payload.action) }, { resume_to: 'repair', kind: 'agent_action', policy_ref: policyRef(p), extra: { actions: reqs.map((e) => e.payload.action) } });
     }
-    if (failed) return onRunError(ctx, failed.payload.error, p, run_id);
+    // A run that used up its own clock (our run timer, class `timeout`) was billed work that produced no verdict, not a
+    // transient provider error: its changes are committed and checked like any other run, so repeated stalls feed the
+    // no-progress rule (same signature, no new passing evidence) instead of a timed backoff (OWNER_DECISIONS §4).
+    const stalled = failed?.payload.error?.class === 'timeout' && billedRun(ctx, run_id, 'timeout');
+    if (failed && !stalled) return onRunError(ctx, failed.payload.error, p, run_id);
+    if (stalled) {
+      await note(ctx, `stall-${run_id}`, decision('run_timeout', `Developer run ${run_id} hit the run timeout: what counts?`, [
+        alt('check what the run left, as an attempt', 'a stall without new passing evidence counts toward the no-progress rule', 'partial work is checked'),
+        alt('back off and retry', 'transient errors clear', 'a run that used its whole time limit is not transient: the loop would spend the clock without a no-progress verdict')],
+      'check what the run left, as an attempt', { evidence: [`run ${run_id}: timeout after ${runTimeoutMs} ms`, `entry ${s.entry}`], expected_effect: 'checks run on the committed SHA; no new passing evidence counts as no progress',
+        rationale: 'A billed run timeout is an attempt, not a provider outage (quota and unavailability still back off).', policy_ref: policyRef(p) }));
+    }
     // Commit what the developer produced so the evidence names an exact SHA.
     if (await isCancelled(ctx.id)) return result(ctx, 'cancelled', 'cancelled', { terminal: true, transitioned: false });
     const lw = await ensureLease(ctx, 'repair');   // the run's files stay in the worktree for the next run

@@ -48,7 +48,9 @@ const createCli = makeCliAdapter({
     const args = ['exec', '--cwd', o.cwd, '--output-format', 'stream-json', '--permission', 'smart'];
     if (o.model) args.push('--model', o.model);
     if (o.effort) args.push('--effort', o.effort);
-    if (o.timeout_ms) args.push('--timeout', `${Math.max(1, Math.ceil(o.timeout_ms / 1000))}s`);
+    // 30 s past the controller's run timer, so a stall ends as our `timeout` (an attempt under the no-progress rule),
+    // not as an mcode exit the taxonomy reads as a crash.
+    if (o.timeout_ms) args.push('--timeout', `${Math.max(1, Math.ceil(o.timeout_ms / 1000)) + 30}s`);
     if (o.resume_id) args.push('--session', o.resume_id);
     return { args, session_id: null };
   },

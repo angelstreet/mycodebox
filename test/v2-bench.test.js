@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA, profileFor, sameModel, refuseOutDir, minViableTaskUsd, notRunOutcome } from '../scripts/v2-bench.js';
+import { runBench, createSuiteLedger, parseArgs, selectTasks, classify, MANIFEST_SCHEMA, profileFor, sameModel, refuseOutDir, minViableTaskUsd, notRunOutcome, DEFAULTS, STALLS_TO_NO_PROGRESS } from '../scripts/v2-bench.js';
 import { TASKS, SUITE_ID, SUITE_VERSION, EXPECTED_OUTCOMES, policyFor, noopFiles } from './fixtures/v2-bench/tasks.js';
 import { checkAction, validatePolicy } from '../orchestration/policy.js';
 import { parseOpencodeEvent } from '../orchestration/adapters/opencode.js';
@@ -148,6 +148,29 @@ test('fake run: forbidden -> awaiting_approval (nothing runs), impossible -> wai
   assert.equal(r['off-by-one'].outcome, 'done');
   assert.equal(r['off-by-one'].reviewer_runs, 1);
   for (const x of manifest.runs) assert.equal(x.main_unchanged, true);
+});
+
+test('round 3: a hanging developer on the impossible task ends waiting/no_progress inside the wall clock', async () => {
+  // 30 ms agent timeout: each stalled run is killed by the run timer, checked, and counted toward the no-progress rule.
+  const { manifest } = await runBench({ fake: true, runtimes: ['fake-dev'], out: outDir(), tasks: 'impossible-contradiction',
+    fake_behaviour: 'hang', agent_timeout_min: 0.0005, run_timeout_min: 2, max_usd: 1, task_usd: 0.5 });
+  const [r] = manifest.runs;
+  assert.equal(r.outcome, 'waiting_no_progress');
+  assert.equal(r.outcome_correct, true);
+  assert.equal(r.wait_reason, 'no_progress');
+  assert.ok(r.developer_runs >= 4 && r.developer_runs <= STALLS_TO_NO_PROGRESS, `bounded stalls (${r.developer_runs})`);
+  assert.equal(r.reviewer_runs, 0);
+  assert.match(r.error, /timeout/);
+  assert.equal(r.main_unchanged, true);
+});
+
+test('round 3: the agent timeout must let the no-progress rule fire before the wall clock', () => {
+  assert.equal(STALLS_TO_NO_PROGRESS, 5);
+  assert.ok(DEFAULTS.agent_timeout_min * STALLS_TO_NO_PROGRESS <= DEFAULTS.run_timeout_min, 'defaults fit');
+  assert.throws(() => parseArgs(['--runtimes', 'minimax', '--agent-timeout-min', '15']), /no-progress rule could never fire/);
+  assert.throws(() => parseArgs(['--runtimes', 'minimax', '--agent-timeout-min', '8', '--run-timeout-min', '20']), /exceeds --run-timeout-min 20/);
+  assert.equal(parseArgs(['--runtimes', 'minimax', '--agent-timeout-min', '15', '--run-timeout-min', '75']).agent_timeout_min, 15);
+  assert.equal(parseArgs(['--runtimes', 'codex', '--fake-behaviour', 'hang']).fake_behaviour, 'hang');
 });
 
 test('fake run: flaky task is accepted only with the root cause fixed (seeded check proves it)', async () => {
