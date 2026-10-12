@@ -55,7 +55,10 @@ run records its effective `limits` and `limit_sources` in `task.started`.
 Stops. A developer run killed by its own time limit counts at once as a stall (`run_timeout` decision, signature
 `run_timeout:<entry> :: timeout`; the §4 streak keeps the checks' signature so stalls and failing no-op runs still
 converge). Under a `stall_runs_to_no_progress` limit, a run that leaves the head unchanged (`run_no_change`) or ends
-with an impossibility claim is a stall too (at most one per run), and the first measurement never resets the count.
+with an impossibility claim is a stall too (at most one per run), and the first measurement never resets the count:
+the base SHA is not measured, so checks that already pass on it look like "new passing evidence" at the first
+evaluation; only progress over an earlier measurement resets stalls. Verdicts, feasibility answers and claims are read
+only from the last JSON object of the run's final text; a placeholder diagnosis such as `<why>` is not a diagnosis.
 When the run's limits set `stall_runs_to_no_progress` N, N stalled runs without new passing evidence end the
 task in `waiting` reason `no_progress` (diagnosis names the entry, limit and next rung). Without it, the §4 rule applies.
 Time to stop is about N × `timeout_ms` plus checks (2 × 120 s on the defaults); the feasibility review below can stop

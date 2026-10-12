@@ -250,6 +250,7 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
     noteStderr(text) { if (!run.cancelled) c.stderr = (c.stderr + text).slice(-65536); },
     noteError(text) { if (text && c.errorTexts.length < 20) c.errorTexts.push(String(text).slice(0, 2000)); },
     noteHint(h) { if (Number.isFinite(h)) c.retryHint = h; },
+    noteFailed() { c.reportedFailed = true; },
     addUsage(u, mode = usageMode) {
       if (!u) return;
       if (u.incomplete) run.usage_incomplete = true;
@@ -278,6 +279,8 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
       else if (spawn_error) error = normalizeError({ code: spawn_error.code, syscall: spawn_error.syscall, message: spawn_error.message });
       // An error *event* alongside exit 0 (e.g. a transient reconnect notice) is not a failed run; the event stays visible.
       else if ((exit !== 0 && exit !== null) || signal) error = normalizeError({ exit, signal, stderr: `${c.stderr}\n${errText}`, retry_after_ms: c.retryHint }, now());
+      // The CLI reported the run failed in its stream but exited 0: still a failed run (class from the message, else crash).
+      else if (c.reportedFailed) error = normalizeError({ exit: 1, stderr: `${c.stderr}\n${errText}`, retry_after_ms: c.retryHint }, now());
       const result = { exit, signal, timed_out: run.timed_out, cancelled: run.cancelled, error };
       run.events.push({ seq: c.seq++, at: now(), run_id, type: 'exit', ...result });
       c.finished = true;
@@ -368,6 +371,7 @@ export function spawnRun({ spawnFn = nodeSpawn, bin, argv, skip = [], cwd, allow
     core.addUsage(r.usage);
     core.noteError(r.error_text);
     core.noteHint(r.retry_after_ms);
+    if (r.run_failed) core.noteFailed();
     for (const ev of r.events) core.push(ev);
   });
   child.stdout?.setEncoding('utf8');

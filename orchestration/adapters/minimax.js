@@ -28,7 +28,12 @@ function parse(o) {
     case 'exec.completed': {
       const r = o.result;
       const text = typeof r === 'string' ? r : typeof r?.output === 'string' ? r.output : null;
-      return { events: [{ type: 'result', ok: r?.status == null || r.status === 'succeeded', text }], session_id: sid };
+      if (r?.status != null && r.status !== 'succeeded') {
+        // A reported failure is a failed run even on exit 0 (run_failed), classified from its message.
+        const msg = `mcode exec ${String(r.status)}${r.error?.message ? `: ${r.error.message}` : typeof r.error === 'string' ? `: ${r.error}` : ''}`;
+        return { events: [{ type: 'result', ok: false, text }, { type: 'error', text: msg }], error_text: msg, run_failed: true, session_id: sid };
+      }
+      return { events: [{ type: 'result', ok: true, text }], session_id: sid };
     }
     case 'exec.failed': case 'turn.failed': case 'error': {
       // Provider errors (quota/rate limit included) feed the error taxonomy through error_text.
@@ -40,7 +45,8 @@ function parse(o) {
       // 0.6.5: { type:'agent_message', content:'<text>' } (content may also be [{ type:'text', text }]); older: item.text.
       const txt = typeof it.text === 'string' ? it.text : typeof it.content === 'string' ? it.content
         : Array.isArray(it.content) ? it.content.map((c) => (typeof c === 'string' ? c : typeof c?.text === 'string' ? c.text : '')).join('') || null : null;
-      if (txt !== null && /message|text/i.test(it.type || '')) return { events: [{ type: 'text', text: txt }], session_id: sid };
+      // Only the agent's own text: a user_message echo is never the answer.
+      if (txt !== null && /^(?:agent_message|assistant(?:_message)?|text|message)$/i.test(it.type || '')) return { events: [{ type: 'text', text: txt }], session_id: sid };
       if (/tool|command|file/i.test(it.type || '')) return { events: [{ type: 'tool_use', name: it.type }], session_id: sid };
       return { events: [{ type: 'event', kind: `item.${it.type ?? 'unknown'}` }], session_id: sid };
     }
