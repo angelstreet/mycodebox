@@ -130,9 +130,36 @@ async function offCheck() {
   } finally { child.kill('SIGTERM'); }
 }
 
+// Positive control for the origin guard: since round 3 a create needs the running goal loop, so this uses a second server
+// with the engine configured (temp work root, one fixture repo, the test-only fake adapter: no real runtime can run) and
+// fresh state, keeping the seeded tasks above away from any loop. A broken route would fail here instead of "passing" the 403.
+async function controlCheck() {
+  const port = await freePort();
+  const st = join(work, 'state-ctl'), wr = join(work, 'v2-work-ctl'), ctlRepo = join(work, 'control-repo'), scripts = join(work, 'fake-scripts.json');
+  mkdirSync(st, { recursive: true }); mkdirSync(ctlRepo);
+  writeFileSync(scripts, '{}');
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
+  for (const a of [['init', '-q'], ['commit', '-q', '--allow-empty', '-m', 'init']]) execFileSync('git', a, { cwd: ctlRepo, env: gitEnv, stdio: 'ignore' });
+  const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', GHOSTY_V2: '1', HOST: '127.0.0.1', PORT: String(port), GHOSTY_STATE_DIR: st,
+    GHOSTY_V2_WORK_ROOT: wr, GHOSTY_V2_REPOS: ctlRepo, GHOSTY_V2_TEST_FAKE_ADAPTER: scripts,
+    TMUX_BIN: wrapper, TLS_KEY: join(work, 'none.pem'), TLS_CERT: join(work, 'none.pem') };
+  const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: 'ignore' });
+  try {
+    const base = `http://127.0.0.1:${port}`;
+    for (let i = 0; i < 100; i++) { try { if ((await fetch(`${base}/api/v2/ops/status`)).ok) break; } catch { /* not up yet */ } await new Promise((r) => setTimeout(r, 100)); }
+    for (let i = 0; i < 100; i++) { const s = await (await fetch(`${base}/api/v2/ops/status`)).json().catch(() => ({})); if (JSON.stringify(s).includes('"running"')) break; await new Promise((r) => setTimeout(r, 100)); }
+    const body = JSON.stringify({ goal: 'Same-origin control task', project_id: 'ui-control', risk_class: 'low', runtime_capabilities: ['code'], repository: ctlRepo, idempotency_key: 'ui-control-1', acceptance_checks: [{ id: 'unit', command: ['npm', 'test'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] });
+    const bad = await fetch(`${base}/api/v2/tasks`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body });
+    const good = await fetch(`${base}/api/v2/tasks`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body });
+    check('same-origin POST /api/v2/tasks to the same route succeeds (positive control)', bad.status === 403 && good.status === 201, `status ${bad.status}/${good.status} ${good.status >= 400 ? (await good.clone().text()).slice(0, 200) : ''}`);
+    check('accepted same-origin request recorded exactly one task', (await (await fetch(`${base}/api/v2/tasks`)).json()).tasks.length === 1);
+  } finally { child.kill('SIGTERM'); }
+}
+
 async function main() {
   await seed();
   await offCheck();
+  await controlCheck();
   const port = await freePort();
   const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', GHOSTY_V2: '1', HOST: '127.0.0.1', PORT: String(port), GHOSTY_STATE_DIR: stateDir,
     TMUX_BIN: wrapper, TLS_KEY: join(work, 'none.pem'), TLS_CERT: join(work, 'none.pem') };
@@ -228,13 +255,6 @@ async function main() {
       check('cross-origin POST /api/v2/tasks is refused (403)', bad.status === 403, `status ${bad.status}`);
       const tasksAfter = await (await fetch(`${base}/api/v2/tasks`)).json();
       check('refused request recorded nothing', tasksAfter.tasks.length === 7);
-      // Positive control: the same request from the server's own origin must succeed, else a broken route "passes" the 403 check above.
-      const ctlRepo = join(work, 'control-repo'); mkdirSync(ctlRepo);
-      const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
-      for (const a of [['init', '-q'], ['commit', '-q', '--allow-empty', '-m', 'init']]) execFileSync('git', a, { cwd: ctlRepo, env: gitEnv, stdio: 'ignore' });
-      const good = await fetch(`${base}/api/v2/tasks`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ goal: 'Same-origin control task', project_id: 'ui-control', risk_class: 'low', runtime_capabilities: ['code'], repository: ctlRepo, idempotency_key: 'ui-control-1', acceptance_checks: [{ id: 'unit', command: ['npm', 'test'], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] }) });
-      check('same-origin POST /api/v2/tasks to the same route succeeds (positive control)', good.status === 201, `status ${good.status} ${good.status >= 400 ? (await good.clone().text()).slice(0, 200) : ""}`);
-      check('accepted same-origin request recorded exactly one task', (await (await fetch(`${base}/api/v2/tasks`)).json()).tasks.length === 8);
     } finally { await browser.close(); }
   } finally {
     server.kill('SIGTERM');
