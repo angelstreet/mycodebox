@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { runBench, parseArgs } from '../scripts/v2-bench.js';
+import { runBench, parseArgs, planRuns, runLimitsFor, checkRunLimitsFit } from '../scripts/v2-bench.js';
 import { spendOf, registryDoc, realEnv } from '../scripts/v2-bench-http.js';
 import { validateManifest } from '../orchestration/scorecard.js';
 import { profileFor, entryOf } from '../scripts/v2-bench.js';
@@ -142,4 +142,50 @@ test('http driver: --reps 2 runs every task twice, records carry rep, --report w
   assert.match(md, /## Per model/);
   assert.match(md, /\| fake:fake-dev \| 4 \| 2 \| 4\/4 \(100%\)/);
   assert.match(md, /\| fix-failing-test \| 2 \| 2 \|/);
+});
+
+test('run limits: profile defaults per entry, --run-limits override, wall-clock coherence, registry rows carry billing', () => {
+  const o = (extra = []) => parseArgs(['--http', '--runtimes', 'minimax:m3,minimax:m3.1-flash,claude:haiku', '--reviewer-map', 'claude:haiku=minimax:m3', '--tasks', 'off-by-one', '--max-usd', '5', '--task-usd', '0.25', ...extra]);
+  const { planned } = planRuns(o());
+  const by = Object.fromEntries(planned.map((p) => [p.spec, runLimitsFor(o(), p.dev, p.rev)]));
+  const base = { timeout_ms: 150000, max_steps: 40, stall_runs_to_no_progress: 2 };
+  assert.deepEqual(by['minimax:m3'], { 'minimax:MiniMax-M3': { '*': base }, 'claude:claude-haiku-4-5': { '*': { ...base, effort: 'low' } } });
+  assert.deepEqual(by['minimax:m3.1-flash']['minimax:MiniMax-M3.1-Flash-Preview'], { '*': { ...base, effort: 'low' } });
+  assert.equal(by['minimax:m3.1-flash']['minimax:MiniMax-M3'], undefined);
+  assert.deepEqual(by['claude:haiku']['claude:claude-haiku-4-5'], { '*': { ...base, effort: 'low' } });
+  assert.equal(by['claude:haiku']['minimax:MiniMax-M3']['*'].effort, undefined, 'the m3 reviewer never inherits an effort');
+  // other profiles: none; override wins and is sent as given
+  const cx = planRuns(parseArgs(['--runtimes', 'codex', '--tasks', 'off-by-one', '--max-usd', '5', '--task-usd', '1'])).planned[0];
+  assert.equal(runLimitsFor({ run_limits: null }, cx.dev, { ...cx.rev, run_limits: undefined }), null);
+  const ov = o(['--run-limits', '{"timeout_ms":60000,"max_steps":5}']);
+  assert.deepEqual(runLimitsFor(ov, planned[0].dev, planned[0].rev), { timeout_ms: 60000, max_steps: 5 });
+  assert.throws(() => parseArgs(['--runtimes', 'codex', '--run-limits', '[1]']), /JSON object/);
+  assert.throws(() => parseArgs(['--runtimes', 'codex', '--run-limits', 'x']), /JSON/);
+  // coherence: 2 stalls x 2.5 min fit the default 20 min wall clock; a longer leash or more stalls does not
+  checkRunLimitsFit(o(), planned);
+  assert.throws(() => checkRunLimitsFit(o(['--run-limits', '{"timeout_ms":600000,"stall_runs_to_no_progress":3}']), planned), /3 stalled runs x 10 min exceeds --run-timeout-min 20/);
+  assert.throws(() => checkRunLimitsFit(o(['--run-limits', '{"timeout_ms":600000}']), planned), /5 stalled runs x 10 min/);
+  // registry rows carry billing
+  const rows = registryDoc(new Map(planned.flatMap((p) => [p.dev, p.rev]).map((p) => [entryOf(p), p]))).models;
+  assert.equal(rows.find((r) => r.model === 'MiniMax-M3').billing, 'subscription');
+  assert.equal(rows.find((r) => r.model === 'MiniMax-M3.1-Flash-Preview').billing, 'subscription');
+  assert.equal(rows.find((r) => r.model === 'claude-haiku-4-5').billing, 'per_token');
+  assert.equal(registryDoc(new Map([['codex:default', cx.dev]])).models[0].billing, 'unknown');
+});
+
+test('http driver (fake): the create body carries run_limits, the manifest and each record record them', async () => {
+  const out = path.join(TMP, 'out-limits');
+  const limits = { timeout_ms: 90000, max_steps: 12, stall_runs_to_no_progress: 2 };   // no effort: the fake entries list none, and an unsupported effort is never translated
+  const { manifest } = await runBench({ http: true, fake: true, out, tasks: 'fix-failing-test', max_usd: 2, task_usd: 1, run_limits: limits, run_timeout_min: 10, poll_ms: 100 });
+  assert.deepEqual(manifest.run_limits, limits);
+  const [rec] = manifest.runs;
+  assert.equal(rec.outcome, 'done');
+  assert.deepEqual(rec.run_limits, limits);
+  // the server stored them on the task (what the create body carried)
+  const log = fs.readFileSync(path.join(out, 'state', 'v2', 'tasks', rec.task_id, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(log.find((e) => e.kind === 'task.created').payload.task.run_limits, limits);
+  // without any limits nothing is sent
+  const { manifest: m2 } = await runBench({ http: true, fake: true, out: path.join(TMP, 'out-nolimits'), tasks: 'fix-failing-test', max_usd: 2, task_usd: 1, poll_ms: 100 });
+  assert.equal(m2.runs[0].run_limits, null);
+  assert.equal(m2.run_limits, null);
 });

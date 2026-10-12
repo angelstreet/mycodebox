@@ -28,7 +28,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SUITE_ID, SUITE_VERSION, policyFor, noopFiles } from '../test/fixtures/v2-bench/tasks.js';
-import { parseArgs, planRuns, spendOfRecords, recordBilling, writeReport, createSuiteLedger, refuseOutDir, notRunOutcome, classify, summarize, entryOf, MANIFEST_SCHEMA, NO_PROGRESS, DEFAULTS, validateOptions } from './v2-bench.js';
+import { parseArgs, planRuns, runLimitsFor, checkRunLimitsFit, spendOfRecords, recordBilling, writeReport, createSuiteLedger, refuseOutDir, notRunOutcome, classify, summarize, entryOf, MANIFEST_SCHEMA, NO_PROGRESS, DEFAULTS, validateOptions } from './v2-bench.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STOP_STATES = ['accepted', 'failed_unrecoverable', 'cancelled'];
@@ -134,13 +134,14 @@ export async function startServer({ dir, keepDir = false, stateDir, workRoot, re
 // Real-mode registry: the harness's profile entries, so an entry id is the same in both drivers.
 export function registryDoc(profiles) {
   return { version: 1, as_of: '2026-10-12', models: [...profiles.values()].map((p) => ({ runtime: p.runtime, provider: p.provider, model: p.model, tier: p.tier,
-    capabilities: ['text', 'code', 'tools', 'json_output'], efforts: p.efforts, context_tokens: 200000, latency_ms: 10000, ...(p.free ? { free: true } : {}) })) };
+    capabilities: ['text', 'code', 'tools', 'json_output'], billing: p.billing ?? 'unknown', efforts: p.efforts, context_tokens: 200000, latency_ms: 10000, ...(p.free ? { free: true } : {}) })) };
 }
 
 export async function runBenchHttp(opts) {
   const o = validateOptions({ ...DEFAULTS, ...opts, http: true });
   const { tasks, pairs, planned, taskUsd } = planRuns(o);
   if (o.fake && pairs.some((p) => p.spec !== 'fake-dev' || p.revSpec !== 'fake-review')) throw new Error('--http --fake: the server\'s scripted fake adapter has the two entries fake-dev and fake-review only');
+  checkRunLimitsFit(o, planned);
   const ledger = createSuiteLedger({ max_usd: o.max_usd });
   const log = o.log || (() => {});
   const outDir = path.resolve(o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-out-')));
@@ -150,7 +151,8 @@ export async function runBenchHttp(opts) {
   if (!path.relative(ROOT, tmp).startsWith('..')) throw new Error('refusing to run inside the repository');
   const stateDir = path.join(outDir, 'state');
   const manifestPath = path.join(outDir, 'manifest.json');
-  const manifest = { schema: MANIFEST_SCHEMA, suite_id: SUITE_ID, suite_version: SUITE_VERSION, driver: 'http', reps: o.reps, started_at: new Date().toISOString(), finished_at: null,
+  const manifest = { schema: MANIFEST_SCHEMA, suite_id: SUITE_ID, suite_version: SUITE_VERSION, driver: 'http', reps: o.reps, run_limits: o.run_limits ?? null,
+    run_limits_by_entry: Object.fromEntries([...new Map(pairs.flatMap((p) => [p.dev, p.rev]).map((p) => [entryOf(p), p.run_limits]))].filter(([, v]) => v)), started_at: new Date().toISOString(), finished_at: null,
     mode: o.fake ? 'fake' : 'real', store_dir: 'state/v2', runs: [], budget_policy: { mode: 'cap', max_usd: o.max_usd, per_task_usd: taskUsd },
     spend: { known_usd: 0, estimated_usd: 0, unknown_runs: 0 }, runtimes: {}, no_progress_policy: NO_PROGRESS, concurrency: o.concurrency, server: null };
   const writeManifest = () => {
@@ -224,7 +226,8 @@ export async function runBenchHttp(opts) {
     async function runOne(r) {
       const t0 = Date.now();
       const devId = entryOf(r.dev), revId = entryOf(r.rev);
-      const rec = { task_id: null, bench_task_id: r.task.id, rep: r.rep, task_class: r.task.task_class, expected_outcome: r.task.expected_outcome,
+      const runLimits = runLimitsFor(o, r.dev, r.rev);
+      const rec = { task_id: null, bench_task_id: r.task.id, rep: r.rep, run_limits: runLimits, task_class: r.task.task_class, expected_outcome: r.task.expected_outcome,
         runtime: r.dev.runtime, model: r.dev.model, reviewer_runtime: r.rev.runtime, reviewer_model: r.rev.model, runtime_spec: r.spec, reviewer_spec: r.revSpec,
         driver: 'http', reviewer_planned: revId, reviewer_as_planned: null,
         final_state: null, outcome: null, outcome_correct: false, usd: null, duration_ms: null, error: null,
@@ -245,7 +248,7 @@ export async function runBenchHttp(opts) {
           const goal = o.fake ? `${r.task.goal}\n[fake:${r.task.id}]` : r.task.goal;
           const body = { goal, title: `bench ${r.task.id}`, project_id: `bench-${r.task.id}`, repository: r.repo, risk_class: 'low', runtime_capabilities: ['code'],
             preferred_models: [devId], runtime_allowlist: [...new Set([r.dev.runtime, r.rev.runtime])], model_allowlist: [...new Set([r.dev.model, r.rev.model])],
-            budget_policy: { mode: 'cap', max_usd: taskUsd }, no_progress_policy: { ...NO_PROGRESS }, task_class: r.task.task_class,
+            budget_policy: { mode: 'cap', max_usd: taskUsd }, no_progress_policy: { ...NO_PROGRESS }, task_class: r.task.task_class, ...(runLimits ? { run_limits: runLimits } : {}),
             acceptance_checks: r.task.checks.map((c) => ({ id: c.id, command: c.command, expect: { exit: 0 }, evidence_type: 'exit_code', required: true })) };
           const c = await server.api('POST', '/api/v2/tasks', body);
           if (c.status !== 201) { const e = new Error(`create -> ${c.status} ${c.body?.code || ''}`); e.code = `create_${c.status}_${c.body?.code || ''}`; throw e; }
