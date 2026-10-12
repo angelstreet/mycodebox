@@ -19,7 +19,7 @@ Base: `origin/v2/integration` c23ebe8. Owner spec: OWNER_DECISIONS §11.
 |---|---|---|---|---|
 | R3-1 | Wire the V2 engine into the server behind `GHOSTY_V2=1` (lease, recover, scheduler, execution, approvals, integration, system ops) | Opus / Fable review | REVIEW (Fable) | 27aa36c: orchestration/v2-runtime.js + v2-integrate.js, child-process server tests; 1692/1692 both runtimes; D-021; approved merges are not executed by the server (task waits until main contains the SHA) |
 | R3-2 | Benchmark through the HTTP API of a disposable wired server (USD 20 cap), compare with round 2 | Sonnet driver + coordinator | IN PROGRESS: HTTP driver (wt r3-bench = r3-wire + r3-noprog) | |
-| R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | REVIEW (Opus) | 8df6828: run timeout counted as an attempt (was routed to provider backoff); bench agent timeout 3 min; 1693/1693 both runtimes |
+| R3-3a | MiniMax impossible task ends `waiting`/no_progress before the time cap | Opus / Opus review | INTEGRATED (Opus APPROVE, 2 rounds) merge 0b56d12 | 8df6828+7cdca16: run timeout counted as an attempt (was routed to provider backoff); bench agent timeout 3 min; 1693/1693 both runtimes |
 | R3-3b | Drop stale "main's git history" owner action | coordinator | DONE | history was rewritten |
 | R3-3c | Docs: enable / roll back V2 on the live install | coordinator | TODO | |
 | R3-4 | Gates on final SHA, V2_VERIFICATION, PR round-3 section, DELIVERED | coordinator | TODO | |
