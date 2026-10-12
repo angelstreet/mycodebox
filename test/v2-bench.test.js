@@ -11,6 +11,8 @@ import { TASKS, SUITE_ID, SUITE_VERSION, EXPECTED_OUTCOMES, policyFor, noopFiles
 import { checkAction, validatePolicy } from '../orchestration/policy.js';
 import { parseOpencodeEvent } from '../orchestration/adapters/opencode.js';
 import { validateManifest, toolScore } from '../orchestration/scorecard.js';
+import { reviewerPrompt, EVIDENCE_NOTE, REVIEW_RUBRIC } from '../orchestration/roles.js';
+import { createVerifier } from '../orchestration/verifier.js';
 import { scorecardOf, scoreStore } from '../scripts/v2-score.js';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-test-')));
@@ -419,4 +421,35 @@ test('check children: inherited NODE_TEST_CONTEXT/NODE_OPTIONS are stripped; no 
   assert.deepEqual([refused.ok, refused.checkError], [false, true]);
   assert.match(refused.why, /could not start a node child process \(EPERM\)/);
   assert.equal(judge(tap(['# Subtest: totals', 'not ok 1 - totals', '1..1', '# pass 0', '# fail 1']), 'test/cart.test.js').checkError, false, 'a real failure is a test result');
+});
+
+test('reviewer prompt: recorded exits come from the controller; sandbox check errors are not evidence against the change', () => {
+  const task = { task_id: 't1', goal: 'fix range()', scope: 'repo', definition_of_done: ['unit passes'], acceptance_checks: [{ id: 'unit', command: ['node', 'x'], expect: { exit: 0 }, required: true }],
+    prohibited_actions: [], approval_policy: { requires: [] }, excluded_paths: [] };
+  const evidence = [{ check_id: 'unit', exit: 0, command: ['node', 'x'] }];
+  const sections = reviewerPrompt({ task, sha: 'abc123', diff: 'diff --git a b', evidence }).split('\n\n');
+  const at = sections.indexOf(EVIDENCE_NOTE);
+  assert.ok(at > 0, 'the paragraph is present');
+  assert.match(sections[at - 1], /^EVIDENCE ON THIS SHA:\n- unit: exit 0 \(node x\)$/);
+  assert.match(sections[at + 1], /^RUBRIC:\n/);
+  assert.match(EVIDENCE_NOTE, /outside your sandbox/);
+  assert.match(EVIDENCE_NOTE, /"check error \.\.\. Not a test result"\) is not evidence against the change/);
+  assert.match(EVIDENCE_NOTE, /A real test failure you reproduce is still evidence/);
+  // Nothing else changed: the rubric and its items are as before, and only one section was added.
+  assert.deepEqual(REVIEW_RUBRIC.map((r) => r.id), ['meets_goal', 'no_test_gaming', 'in_scope', 'evidence_matches', 'safe']);
+  for (const r of REVIEW_RUBRIC) assert.ok(sections[at + 1].includes(`${r.id}: ${r.text}`));
+  assert.deepEqual(sections.filter((x) => x !== EVIDENCE_NOTE).map((x) => x.split('\n')[0].split(':')[0]).slice(-5), ['CANDIDATE SHA', 'EVIDENCE ON THIS SHA', 'RUBRIC', 'DIFF (base..candidate)', 'ANSWER with exactly one JSON object on the last line']);
+});
+
+test('verifier: a check error (exit 2) is a failing check, never a pass', async () => {
+  const dir = path.join(TMP, `vf-${n++}`);
+  fs.mkdirSync(dir, { recursive: true });
+  const v = createVerifier({ tmpRoot: dir, timeoutMs: 10_000 });
+  const evidence = [];
+  const store = { recordEvidence: async (_id, e) => { evidence.push(e); } };
+  const task = { task_id: 't-exit2', acceptance_checks: [{ id: 'unit', command: [process.execPath, '-e', 'process.exitCode = 2'], expect: { exit: 0 }, required: true }] };
+  const { results } = await v.runChecks({ store, task, cwd: dir, sha: 'f'.repeat(40), epoch: 1, actor: { role: 'tester', id: 'verifier:deterministic' } });
+  assert.equal(results[0].status, 'fail');
+  assert.deepEqual(results[0].exits, [2, 2], 'rerun once on the same SHA, still failing');
+  assert.deepEqual(evidence.map((e) => e.exit), [2, 2]);
 });
