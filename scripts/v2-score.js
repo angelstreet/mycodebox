@@ -6,6 +6,8 @@
 //   node scripts/v2-score.js [--store DIR] [--since ISO] [--json]
 //   node scripts/v2-score.js --scorecard [--suite MANIFEST] [--store DIR] [--since ISO] [--json]
 //   node scripts/v2-score.js --tool-score --suite MANIFEST [--store DIR]           (JSON)
+//   node scripts/v2-score.js --markdown --suite MANIFEST [--store DIR]            (round-4 tables: per model, task, task x model;
+//                                                                                  the store defaults to the manifest's store_dir)
 //   node scripts/v2-score.js --compare A.json B.json                              (two tool scores, same suite version only)
 //   node scripts/v2-score.js --propose [--history FILE] [--store DIR] [--write-proposals --base-sha SHA [--project ID]]
 //
@@ -15,7 +17,7 @@
 // Default store: $GHOSTY_STATE_DIR/v2 (or ~/.local/state/ghosty/v2). No self-modification: the output is data; the router
 // only sees it if a human passes `router_history` to route({ history }).
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultStoreDir } from '../orchestration/store.js';
 import { RUNTIME_EFFORTS, loadRegistry } from '../orchestration/model-registry.js';
@@ -205,8 +207,51 @@ export function renderScorecard(sc) {
     ...(sc.caveats.length ? ['', 'caveats:', ...sc.caveats.map((c) => `  - ${c}`)] : [])].join('\n');
 }
 
+// ---------- markdown report (round 4): per model, per task, per task x model; repetitions pooled ----------
+const secs = (ms) => (ms === null || ms === undefined ? 'n/a' : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${(ms / 60_000).toFixed(1)} min`);
+const rangeOf = (st) => (st.n ? `${secs(st.mean)} (${secs(st.min)} to ${secs(st.max)})` : 'n/a');
+const num = (v) => (v === null || v === undefined ? 'unknown' : String(v));
+export const usdCell = (m) => {
+  const meas = m.usd.measured, est = m.usd.estimated;
+  const priced = `$${meas.toFixed(4)}${est > 0 ? ` (+ est. $${est.toFixed(4)})` : ''}`;
+  if (m.cost_basis === 'subscription') return meas > 0 || est > 0 ? `subscription + ${priced} per-token` : 'subscription';
+  if (m.cost_basis === 'mixed') return `${priced}, bases: ${(m.cost_bases || []).join(', ')}`;
+  return m.cost_basis === 'unknown' ? `unknown (measured $${meas.toFixed(4)}${est > 0 ? `, est. $${est.toFixed(4)}` : ''})` : priced;
+};
+const mdTable = (head, rows) => [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`, ...rows.map((r) => `| ${r.join(' | ')} |`)].join('\n');
+function mdRows(list, label) {
+  return list.map((m) => [label(m), String(m.runs), m.reps ? String(m.reps) : '-', `${m.verified}/${m.runs} (${pct(m.verified_rate)})`, `${m.first_pass}/${m.runs} (${pct(m.first_pass_rate)})`,
+    num(m.rework.mean_per_run), `${num(m.tokens.developer_input)} / ${num(m.tokens.developer_output)}`, rangeOf(m.wall_ms), usdCell(m), m.cost_basis, String(m.provider_waits.total), rangeOf(m.time_to_stop_no_progress_ms)]);
+}
+const MD_HEAD = ['', 'runs', 'reps', 'verified', 'first pass', 'rework rounds (mean)', 'tokens in / out (developer)', 'wall time mean (min to max)', 'USD', 'cost basis', 'provider waits', 'time to stop, impossible task'];
+export function renderMarkdown(sc) {
+  const t = sc.tasks;
+  const out = ['# V2 benchmark report', '',
+    `Suite ${sc.suite ? `${sc.suite.suite_id}@${sc.suite.suite_version}` : '(no manifest)'}: ${t.total} task(s) in the store, ${t.settled} settled, ${t.accepted} accepted, ${t.failed} failed, ${t.cancelled} cancelled, ${t.open} open${t.not_run ? `, ${t.not_run} never started` : ''}. Repetitions are pooled; wall time is creation to acceptance, or to the stop (waiting, approval, failure) for runs that did not finish.`, '',
+    '## Per model (developer)', '', mdTable(['model', ...MD_HEAD.slice(1)], mdRows(sc.model_metrics, (m) => m.key)), '',
+    '## Per task', '', mdTable(['task', ...MD_HEAD.slice(1)], mdRows(sc.task_metrics, (m) => m.key)), '',
+    '## Per task and model', '', mdTable(['task | model', ...MD_HEAD.slice(1)], mdRows(sc.task_model_metrics, (m) => m.key))];
+  if (sc.not_run?.length) {
+    const by = {};
+    for (const r of sc.not_run) { const k = `${r.runtime}:${r.model} ${r.outcome}`; by[k] = (by[k] || 0) + 1; }
+    out.push('', '## Not run', '', ...Object.entries(by).map(([k, n]) => `- ${k}: ${n}`));
+  }
+  const waits = sc.model_metrics.filter((m) => Object.keys(m.provider_waits.by_entry).length || m.provider_waits.unattributed);
+  if (waits.length) out.push('', '## Provider waits (rate limit / quota)', '', ...waits.map((m) => `- ${m.key}: ${[...Object.entries(m.provider_waits.by_entry).map(([k, n]) => `${k} ${n}`), ...(m.provider_waits.unattributed ? [`unattributed quota waits ${m.provider_waits.unattributed}`] : [])].join(', ')}`));
+  out.push('', '## Notes', '', '- `subscription`: flat plan, no marginal USD (billing field on the usage record; runtime minimax when the field is absent). Never $0 measured.',
+    '- USD sums per-token usage records (developer and reviewer) as reported by the provider; `est.` is the bench estimate for unpriced per-token records, not measured spend.',
+    '- Time to stop: wall time from task creation to `waiting` with reason no_progress, over runs whose expected outcome is waiting_no_progress (the impossible task) only.', ...sc.caveats.map((c) => `- ${c}`));
+  return `${out.join('\n')}\n`;
+}
+// Manifest file -> markdown, scoring the store the manifest points at (store_dir relative to the manifest, or `store`).
+export function markdownReport(manifestPath, { store = null } = {}) {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const dir = store ?? join(dirname(manifestPath), manifest.store_dir || 'store');
+  return renderMarkdown(scorecardOf(dir, { manifest }).sc);
+}
+
 const readJson = (f) => JSON.parse(readFileSync(f, 'utf8'));
-const USAGE = 'usage: v2-score.js [--store DIR] [--since ISO] [--json] | --scorecard [--suite F] | --tool-score --suite F | --compare A B | --propose [--history F] [--write-proposals --store DIR --base-sha SHA [--project ID]]';
+const USAGE = 'usage: v2-score.js [--store DIR] [--since ISO] [--json] | --scorecard [--suite F] | --tool-score --suite F | --markdown --suite F [--store DIR] | --compare A B | --propose [--history F] [--write-proposals --store DIR --base-sha SHA [--project ID]]';
 
 async function main(argv) {
   const a = { store: defaultStoreDir(), storeGiven: false, json: false, since: null, mode: 'report', suite: null, history: null, write: false, baseSha: null, project: 'mycodebox', compare: null };
@@ -217,6 +262,7 @@ async function main(argv) {
     else if (x === '--since' && next) a.since = argv[++i];
     else if (x === '--scorecard') a.mode = 'scorecard';
     else if (x === '--tool-score') a.mode = 'tool-score';
+    else if (x === '--markdown') a.mode = 'markdown';
     else if (x === '--propose') a.mode = 'propose';
     else if (x === '--compare' && next && argv[i + 2]) { a.mode = 'compare'; a.compare = [argv[++i], argv[++i]]; }
     else if (x === '--suite' && next) a.suite = argv[++i];
@@ -236,6 +282,10 @@ async function main(argv) {
     catch (e) { console.error(`refused: ${e.message}`); return 3; }
   }
   const manifest = a.suite ? readJson(a.suite) : null;
+  if (a.mode === 'markdown') {
+    if (!a.suite) { console.error('--markdown needs --suite MANIFEST'); return 2; }
+    try { process.stdout.write(markdownReport(a.suite, { store: a.storeGiven ? a.store : null })); return 0; } catch (e) { console.error(e.message); return 2; }
+  }
   if (a.mode === 'tool-score' && !manifest) { console.error('--tool-score needs --suite MANIFEST'); return 2; }
   if (a.write && (a.mode !== 'propose' || !a.storeGiven || !a.baseSha)) { console.error('--write-proposals needs --propose, an explicit --store DIR and --base-sha SHA'); return 2; }
   let sc, logs;

@@ -28,7 +28,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SUITE_ID, SUITE_VERSION, policyFor, noopFiles } from '../test/fixtures/v2-bench/tasks.js';
-import { parseArgs, planRuns, createSuiteLedger, refuseOutDir, notRunOutcome, classify, summarize, entryOf, MANIFEST_SCHEMA, NO_PROGRESS, DEFAULTS, validateOptions } from './v2-bench.js';
+import { parseArgs, planRuns, spendOfRecords, recordBilling, writeReport, createSuiteLedger, refuseOutDir, notRunOutcome, classify, summarize, entryOf, MANIFEST_SCHEMA, NO_PROGRESS, DEFAULTS, validateOptions } from './v2-bench.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STOP_STATES = ['accepted', 'failed_unrecoverable', 'cancelled'];
@@ -39,14 +39,7 @@ const round6 = (x) => Math.round(x * 1e6) / 1e6;
 const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.on('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
 
 // Spend of one task from its detail usage records: known USD, and an estimate for every record without USD.
-export function spendOf(records, estOf) {
-  let known = 0, estimated = 0, unknown = 0, allKnown = records.length > 0;
-  for (const u of records) {
-    if (typeof u.usd === 'number' && Number.isFinite(u.usd) && u.incomplete !== true) known += u.usd;
-    else { unknown += 1; allKnown = false; estimated += estOf(`${u.runtime}:${u.model}`) ?? 0; }
-  }
-  return { known_usd: known, estimated_usd: estimated, unknown: unknown > 0, unknown_records: unknown, usd: records.length === 0 ? 0 : allKnown ? known : null };
-}
+export function spendOf(records, estOf, profileOf = () => null) { return spendOfRecords(records, estOf, profileOf); }
 
 // Real runs need the owner's CLI logins, not the whole service environment: PATH, HOME, locale, proxies and the provider
 // auth/config variables only (no NTFY_*, USAGE_SUMMARY, JEV_*, PUBLIC_URL, AGENT_CMD_*, GHOSTY_*; those are set or dropped here).
@@ -157,7 +150,7 @@ export async function runBenchHttp(opts) {
   if (!path.relative(ROOT, tmp).startsWith('..')) throw new Error('refusing to run inside the repository');
   const stateDir = path.join(outDir, 'state');
   const manifestPath = path.join(outDir, 'manifest.json');
-  const manifest = { schema: MANIFEST_SCHEMA, suite_id: SUITE_ID, suite_version: SUITE_VERSION, driver: 'http', started_at: new Date().toISOString(), finished_at: null,
+  const manifest = { schema: MANIFEST_SCHEMA, suite_id: SUITE_ID, suite_version: SUITE_VERSION, driver: 'http', reps: o.reps, started_at: new Date().toISOString(), finished_at: null,
     mode: o.fake ? 'fake' : 'real', store_dir: 'state/v2', runs: [], budget_policy: { mode: 'cap', max_usd: o.max_usd, per_task_usd: taskUsd },
     spend: { known_usd: 0, estimated_usd: 0, unknown_runs: 0 }, runtimes: {}, no_progress_policy: NO_PROGRESS, concurrency: o.concurrency, server: null };
   const writeManifest = () => {
@@ -231,7 +224,7 @@ export async function runBenchHttp(opts) {
     async function runOne(r) {
       const t0 = Date.now();
       const devId = entryOf(r.dev), revId = entryOf(r.rev);
-      const rec = { task_id: null, bench_task_id: r.task.id, task_class: r.task.task_class, expected_outcome: r.task.expected_outcome,
+      const rec = { task_id: null, bench_task_id: r.task.id, rep: r.rep, task_class: r.task.task_class, expected_outcome: r.task.expected_outcome,
         runtime: r.dev.runtime, model: r.dev.model, reviewer_runtime: r.rev.runtime, reviewer_model: r.rev.model, runtime_spec: r.spec, reviewer_spec: r.revSpec,
         driver: 'http', reviewer_planned: revId, reviewer_as_planned: null,
         final_state: null, outcome: null, outcome_correct: false, usd: null, duration_ms: null, error: null,
@@ -245,7 +238,7 @@ export async function runBenchHttp(opts) {
         rec.outcome = 'not_started'; rec.error = `runtime unavailable (server probe): ${devAvail === false ? r.spec : r.revSpec}`; rec.usd = 0; rec.duration_ms = 0;
       } else {
         inflight += 1;
-        log(`run ${r.task.id} x ${r.spec} (reviewer ${r.revSpec})`);
+        log(`run ${r.task.id} x ${r.spec} rep ${r.rep}/${o.reps} (reviewer ${r.revSpec})`);
         let timedOut = false;
         const get = async () => { const x = await server.api('GET', `/api/v2/tasks/${rec.task_id}`); if (x.status !== 200 || !x.body?.task) throw new Error(`GET task -> ${x.status}`); return x.body.task; };
         try {
@@ -273,7 +266,7 @@ export async function runBenchHttp(opts) {
               if (!p) { await sleep(Math.min(o.poll_ms, 250)); continue; }   // answered; the loop moves on shortly
               // Only a stop that exists because a cost is unknown, never a reached cap or any other owner question.
               if (o.confirm_unknown && p.kind === 'budget' && p.cap_reached === false) {
-                const sp = spendOf(t.usage.records, estUsd);
+                const sp = spendOf(t.usage.records, estUsd, (id) => profiles.get(id));
                 const ok = ledger.allows(sp.known_usd + sp.estimated_usd + (estUsd(p.entry) ?? 0) + taskUsd * Math.max(0, inflight - 1));   // the other runs in flight keep their reservations
                 if (ok.ok) {
                   const a = await server.api('POST', `/api/v2/tasks/${rec.task_id}/approve`, { action_id: p.action_id, ...(p.sha ? { sha: p.sha } : {}), reason: `suite-ledger ${ok.committed}/${o.max_usd}` });
@@ -315,17 +308,17 @@ export async function runBenchHttp(opts) {
           const actualDev = seen(dr);
           rec.developer_actual = actualDev;
           if (actualDev.some((x) => x !== devId) || (actualRev.length && !rec.reviewer_as_planned)) rec.error = `${rec.error ? `${rec.error}; ` : ''}server used developer ${actualDev.join(',') || 'none'} / reviewer ${actualRev.join(',') || 'none'}, planned ${devId} / ${revId}`.slice(0, 300);
-          const sp = spendOf(t.usage.records, estUsd);
-          Object.assign(rec, { usd: sp.usd, usd_known: round6(sp.known_usd), usd_estimated: round6(sp.estimated_usd), unknown_cost_records: sp.unknown_records });
+          const sp = spendOf(t.usage.records, estUsd, (id) => profiles.get(id));
+          Object.assign(rec, { usd: sp.usd, usd_known: round6(sp.known_usd), usd_estimated: round6(sp.estimated_usd), unknown_cost_records: sp.unknown_records, subscription_records: sp.subscription_records, cost_basis: sp.cost_basis });
           ledger.record(sp);
-          for (const u of t.usage.records) if (typeof u.usd === 'number' && u.incomplete !== true) { const id = `${u.runtime}:${u.model}`; measured.set(id, [...(measured.get(id) || []), u.usd]); }
+          for (const u of t.usage.records) if (typeof u.usd === 'number' && u.incomplete !== true && recordBilling(u, profiles.get(`${u.runtime}:${u.model}`)) !== 'subscription') { const id = `${u.runtime}:${u.model}`; measured.set(id, [...(measured.get(id) || []), u.usd]); }
         } catch (e) {
           rec.outcome = timedOut ? 'timeout' : 'error';
           rec.error = String(e?.code || e?.message || e).slice(0, 200);
           if (rec.task_id) {
             try {
               const x = await server.api('GET', `/api/v2/tasks/${rec.task_id}`); const t = x.body?.task;
-              if (t) { rec.final_state = t.state; const sp = spendOf(t.usage.records, estUsd); rec.usd = sp.usd; ledger.record(sp); }
+              if (t) { rec.final_state = t.state; const sp = spendOf(t.usage.records, estUsd, (id) => profiles.get(id)); rec.usd = sp.usd; rec.cost_basis = sp.cost_basis; ledger.record(sp); }
             } catch { /* recorded as error */ }
           }
         } finally { inflight -= 1; }
@@ -349,7 +342,7 @@ export async function runBenchHttp(opts) {
         results[i] = rec;
         manifest.runs = results.filter(Boolean);
         writeManifest();
-        log(`  -> ${rec.bench_task_id}: ${rec.outcome} (${rec.final_state}) usd ${rec.usd ?? 'unknown'} in ${Math.round(rec.duration_ms / 1000)} s`);
+        log(`  -> ${rec.bench_task_id} #${rec.rep}: ${rec.outcome} (${rec.final_state}) usd ${rec.usd ?? (rec.cost_basis === 'subscription' ? 'subscription' : 'unknown')} in ${Math.round(rec.duration_ms / 1000)} s`);
       }
     }));
   } finally {
@@ -371,7 +364,8 @@ async function main() {
     return;
   }
   const { manifest, manifestPath } = await runBenchHttp({ ...o, log: (l) => process.stderr.write(`${l}\n`) });
-  process.stdout.write(`${JSON.stringify({ manifest: manifestPath, ...summarize(manifest) }, null, 1)}\n`);
+  const report = o.report ? await writeReport(manifestPath) : null;
+  process.stdout.write(`${JSON.stringify({ manifest: manifestPath, ...(report ? { report } : {}), ...summarize(manifest) }, null, 1)}\n`);
   process.exitCode = manifest.runs.every((r) => r.outcome_correct) ? 0 : 1;
 }
 

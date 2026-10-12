@@ -28,6 +28,17 @@ const EXPECTED_REASON = { waiting_no_progress: 'no_progress' };
 const matchesExpected = (r, expected) => !!r && r.status === EXPECTED_STATE[expected] && (!EXPECTED_REASON[expected] || r.wait_reason === EXPECTED_REASON[expected]);
 const notRun = (m) => m.task_id == null && NOT_RUN_OUTCOMES.includes(m.outcome);
 const REWORK_STATES = ['repair', 'replan'];
+// States a run can stop in without being accepted: the time to reach them is the time-to-stop.
+const STOP_STATUSES = ['waiting', 'awaiting_approval', 'failed_unrecoverable', 'cancelled'];
+export const BILLINGS = Object.freeze(['per_token', 'subscription', 'unknown']);
+export const COST_BASES = Object.freeze(['measured', 'estimated', 'subscription', 'unknown']);
+// A usage record's billing: its own `billing` field; else (usage written before the field existed) the runtime `minimax`
+// is a flat subscription; else per_token when the provider reported a USD figure; else unknown.
+export function billingOf(u) {
+  if (BILLINGS.includes(u?.billing)) return u.billing;
+  if (u?.runtime === 'minimax') return 'subscription';
+  return Number.isFinite(u?.usd) ? 'per_token' : 'unknown';
+}
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const TASK_CLASS_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const OWNER_MESSAGES_UNKNOWN = 'no V2 event records owner chat messages; only approval requests, answers and resume grants are counted';
@@ -61,6 +72,7 @@ export function validateManifest(m) {
       else if (seen.has(r.task_id)) err(`${p}.task_id`, 'duplicate'); else seen.add(r.task_id);
       if (!EXPECTED_OUTCOMES.includes(r.expected_outcome)) err(`${p}.expected_outcome`, `one of ${EXPECTED_OUTCOMES.join(', ')}`);
       if (r.task_class != null && !(typeof r.task_class === 'string' && TASK_CLASS_RE.test(r.task_class))) err(`${p}.task_class`, 'null or [a-z0-9][a-z0-9._-]{0,63} (as in the task contract)');
+      if (r.rep != null && !(Number.isInteger(r.rep) && r.rep >= 1)) err(`${p}.rep`, 'null or an integer >= 1 (repetition number)');
       for (const k of ['bench_task_id', 'runtime', 'model', 'reviewer_runtime', 'reviewer_model']) {
         if (r[k] != null && typeof r[k] !== 'string') err(`${p}.${k}`, 'string or null');
       }
@@ -93,7 +105,7 @@ export function foldRun(events, { httpSuite = false } = {}) {
   const f = { task_id: created.task_id, task, status: task.status, created_at: created.timestamp, completed_at: null,
     info: task.review_policy?.mode === 'informational', head_sha: null, producers: new Map(), devs: new Map(), last_actor: null,
     usage: [], rework: 0, owner: { approvals_requested: 0, approvals_granted: 0, approvals_denied: 0, resumes: 0, budget_auto: 0 },
-    verdicts: [], evidence: [], wait_reason: null };
+    verdicts: [], evidence: [], wait_reason: null, stopped_at: null, waits: { quota: 0, rate_limited: 0, by_entry: {} } };
   for (const e of events) {
     const p = e.payload || {};
     if (['task.transitioned', 'task.completed', 'task.cancelled'].includes(e.kind) && typeof p.to === 'string') {
@@ -101,13 +113,25 @@ export function foldRun(events, { httpSuite = false } = {}) {
       if (p.to !== 'waiting') f.wait_reason = null;   // a block reason describes the current wait only
       if (p.to === 'accepted') f.completed_at = e.timestamp;
       if (REWORK_STATES.includes(p.to)) f.rework += 1;
+      if (STOP_STATUSES.includes(p.to)) f.stopped_at = e.timestamp;
+      // A quota wait carries no entry today (the gate may concern the developer or the reviewer): credited to an entry only when
+      // the event names one, else counted under the task (provider_waits.unattributed).
+      if (p.to === 'waiting' && /quota/i.test(String(p.reason ?? ''))) {
+        f.waits.quota += 1;
+        if (typeof p.entry === 'string') f.waits.by_entry[p.entry] = (f.waits.by_entry[p.entry] || 0) + 1; else f.waits.unattributed = (f.waits.unattributed || 0) + 1;
+      }
+    } else if (e.kind === 'model.rate_limited') {
+      f.waits.rate_limited += 1;
+      if (typeof p.entry === 'string') f.waits.by_entry[p.entry] = (f.waits.by_entry[p.entry] || 0) + 1;
     } else if (e.kind === 'task.head_changed') {
       f.head_sha = p.sha;
       const id = actorId(p.actor);
       if (id) { const s = f.devs.get(p.sha) || f.devs.set(p.sha, new Set()).get(p.sha); s.add(id); }
       if (isRegistryId(id)) { f.producers.set(p.sha, id); f.last_actor = id; }
     } else if (e.kind === 'usage.recorded') {
-      f.usage.push({ runtime: p.runtime ?? null, model: p.model ?? null, incomplete: p.incomplete === true, usd: Number.isFinite(p.usd) && p.incomplete !== true ? p.usd : null });
+      f.usage.push({ runtime: p.runtime ?? null, model: p.model ?? null, incomplete: p.incomplete === true, usd: Number.isFinite(p.usd) && p.incomplete !== true ? p.usd : null,
+        input_tokens: Number.isFinite(p.input_tokens) ? p.input_tokens : null, output_tokens: Number.isFinite(p.output_tokens) ? p.output_tokens : null,
+        billing: BILLINGS.includes(p.billing) ? p.billing : null });
     } else if (e.kind === 'approval.requested') f.owner.approvals_requested += 1;
     else if (e.kind === 'approval.granted') { if (p.kind === 'resume') f.owner.resumes += 1; else f.owner.approvals_granted += 1; }
     else if (e.kind === 'approval.denied') f.owner.approvals_denied += 1;
@@ -187,6 +211,16 @@ function costOf(f) {
   return { usd: f.usage.reduce((s, u) => s + u.usd, 0), reason: null };
 }
 
+const sum = (xs) => xs.reduce((a, b) => a + b, 0);
+// Cost basis of the DEVELOPER entry's records in one run: subscription (flat plan, no marginal USD), measured (every
+// record priced), estimated (the bench estimated an unpriced per-token record) or unknown. Never $0 for a subscription.
+function costBasisOf(devRecords, run) {
+  if (!devRecords.length) return 'unknown';
+  if (devRecords.every((u) => billingOf(u) === 'subscription')) return 'subscription';
+  if (devRecords.every((u) => billingOf(u) !== 'subscription' && u.usd !== null && !u.incomplete)) return 'measured';
+  return run?.unknown_cost_records > 0 && run?.usd_estimated > 0 ? 'estimated' : 'unknown';
+}
+
 function runRecord(f, run, regression) {
   // Settled = terminal. A cancelled (non-informational) task counts as settled and not verified: cancelling work the tool
   // could not finish must not raise its rates. The group's `cancelled` count shows how many.
@@ -195,13 +229,33 @@ function runRecord(f, run, regression) {
   const cost = costOf(f);
   const latency = accepted && f.completed_at ? Date.parse(f.completed_at) - Date.parse(f.created_at) : null;
   const d = defectsOf(f);
+  const developer = developerOf(f, run);
+  const devEntry = `${developer.runtime}:${developer.model}`;
+  // The developer's own records (a CLI default model resolves to a concrete name in usage: match the runtime then).
+  const devRecords = f.usage.filter((u) => `${u.runtime}:${u.model}` === devEntry || (u.runtime === developer.runtime && developer.model === 'default'));
+  const nums = (rs, k) => (rs.some((u) => u[k] !== null) ? sum(rs.map((u) => u[k] ?? 0)) : null);
+  const perToken = f.usage.filter((u) => billingOf(u) !== 'subscription');
+  const stopMs = f.stopped_at ? Date.parse(f.stopped_at) - Date.parse(f.created_at) : null;
+  const stop_ms = STOP_STATUSES.includes(f.status) && Number.isFinite(stopMs) && stopMs >= 0 ? stopMs : null;
+  const waitsByEntry = { ...f.waits.by_entry };
+  const cost_basis = costBasisOf(devRecords, run);
+  const subOnlyUnknown = cost.usd === null && f.usage.some((u) => billingOf(u) === 'subscription') && perToken.every((u) => u.usd !== null && !u.incomplete);
   return {
-    task_id: f.task_id, bench_task_id: run?.bench_task_id ?? null, task_class: f.task.task_class ?? run?.task_class ?? 'unknown',
+    task_id: f.task_id, bench_task_id: run?.bench_task_id ?? null, rep: run?.rep ?? null, task_class: f.task.task_class ?? run?.task_class ?? 'unknown',
     status: f.status, outcome: STATES.includes(f.status) ? outcomeOf(f.status) : 'unknown', settled, verified: accepted,
     first_pass: accepted && f.rework === 0, informational: f.info,
-    developer: developerOf(f, run), reviewers: reviewersOf(f, run),
-    cost_usd: cost.usd, cost_unknown_reason: cost.reason,
+    developer, reviewers: reviewersOf(f, run),
+    cost_usd: cost.usd, cost_unknown_reason: subOnlyUnknown ? 'subscription usage (no marginal USD)' : cost.reason,
+    cost_basis,
+    // USD of the per-token records only (measured), and the bench's estimate for unpriced per-token records when the manifest has it.
+    usd_measured: round4(sum(perToken.filter((u) => u.usd !== null && !u.incomplete).map((u) => u.usd))),
+    usd_estimated: round4(Number(run?.usd_estimated) || 0),   // kept for subscription developers too: a reviewer's unpriced run is still estimated
+    expected_outcome: run?.expected_outcome ?? null,
+    tokens: { input: nums(f.usage, 'input_tokens'), output: nums(f.usage, 'output_tokens'), developer_input: nums(devRecords, 'input_tokens'), developer_output: nums(devRecords, 'output_tokens') },
+    provider_waits: { total: f.waits.rate_limited + f.waits.quota, rate_limited: f.waits.rate_limited, quota: f.waits.quota, unattributed: f.waits.unattributed || 0, by_entry: waitsByEntry },
     latency_ms: Number.isFinite(latency) && latency >= 0 ? latency : null,
+    stop_ms,
+    wall_ms: accepted ? (Number.isFinite(latency) && latency >= 0 ? latency : null) : stop_ms,
     rework_rounds: f.rework,
     owner: { ...f.owner, messages: null, interventions: f.owner.approvals_requested + f.owner.resumes },
     reviewer_defects: { caught: d.length, findings: d.reduce((s, v) => s + v.findings, 0) },
@@ -255,6 +309,47 @@ function aggregate(key, extra, runs, { defectsBy = null, facts = null } = {}) {
   };
 }
 
+// ---------- bench metrics (per model, per task, per task x model; repetitions pooled) ----------
+
+const stats = (xs) => (xs.length ? { n: xs.length, mean: Math.round(sum(xs) / xs.length), min: Math.min(...xs), max: Math.max(...xs) } : { n: 0, mean: null, min: null, max: null });
+// Unknown wins; `mixed` only when subscription runs sit with measured/estimated ones (a per-task row never hides subscription
+// spend); else estimated beats measured.
+export function worstBasis(bases) {
+  if (!bases.length || bases.includes('unknown')) return 'unknown';
+  if (bases.includes('subscription') && bases.some((b) => b !== 'subscription')) return 'mixed';
+  return bases.includes('estimated') ? 'estimated' : bases[0];
+}
+// Over ALL non-informational runs, not only settled ones: a run that stops in `waiting` (the impossible task) is a result here.
+function metricsOf(key, extra, rs) {
+  const n = rs.length, verified = rs.filter((r) => r.verified).length, first = rs.filter((r) => r.first_pass).length;
+  const bases = [...new Set(rs.map((r) => r.cost_basis))];
+  const tokSum = (k) => (rs.some((r) => r.tokens[k] !== null) ? sum(rs.map((r) => r.tokens[k] ?? 0)) : null);
+  const npStop = (r) => r.status === 'waiting' && r.wait_reason === 'no_progress' && r.stop_ms !== null;
+  const stops = rs.filter((r) => npStop(r) && r.expected_outcome === 'waiting_no_progress').map((r) => r.stop_ms);   // the impossible task only
+  const anyStops = rs.filter(npStop).map((r) => r.stop_ms);   // every no_progress stop, whatever the task expected
+  const perRun = (k) => (n ? round4(sum(rs.map((r) => r[k])) / n) : null);
+  const reps = new Set(rs.map((r) => r.rep).filter((x) => x != null));
+  const byEntry = {};
+  for (const r of rs) for (const [k, v] of Object.entries(r.provider_waits.by_entry)) byEntry[k] = (byEntry[k] || 0) + v;
+  return { key, ...extra, runs: n, reps: reps.size || null, verified, verified_rate: n ? verified / n : null, first_pass: first, first_pass_rate: n ? first / n : null,
+    rework: { rounds: sum(rs.map((r) => r.rework_rounds)), mean_per_run: n ? round4(sum(rs.map((r) => r.rework_rounds)) / n) : null },
+    tokens: { input: tokSum('input'), output: tokSum('output'), developer_input: tokSum('developer_input'), developer_output: tokSum('developer_output') },
+    wall_ms: stats(rs.map((r) => r.wall_ms).filter((x) => x !== null)),
+    // usd: per-token spend of the runs' records (developer and reviewer); a subscription model's own records add nothing and are
+    // flagged by cost_basis, never shown as $0 measured. estimated is the bench's estimate for unpriced per-token records.
+    usd: { measured: round4(sum(rs.map((r) => r.usd_measured))), estimated: round4(sum(rs.map((r) => r.usd_estimated))), per_run_mean: perRun('usd_measured') },
+    cost_basis: worstBasis(bases), cost_bases: bases.sort(),
+    provider_waits: { total: sum(rs.map((r) => r.provider_waits.total)), unattributed: sum(rs.map((r) => r.provider_waits.unattributed)), by_entry: byEntry },
+    time_to_stop_no_progress_ms: stats(stops),
+    any_no_progress_stop_ms: stats(anyStops),
+    stopped_waiting: rs.filter((r) => r.status === 'waiting').length };
+}
+function metricGroups(runs, keyOf) {
+  const m = new Map();
+  for (const r of runs) { const [key, extra] = keyOf(r); (m.get(key) || m.set(key, { extra, rs: [] }).get(key)).rs.push(r); }
+  return [...m].map(([key, { extra, rs }]) => metricsOf(key, extra, rs)).sort((a, b) => a.key.localeCompare(b.key));
+}
+
 const order = (a, b) => b.settled - a.settled || a.key.localeCompare(b.key);
 function groupBy(runs, keyOf, opts) {
   const m = new Map();
@@ -300,6 +395,10 @@ export function buildScorecard(logs, { manifest = null, unreadable = [], since =
     by_runtime: groupBy(settled, (r) => [[r.developer.runtime, { runtime: r.developer.runtime }]]),
     by_role,
     by_task_class: groupBy(settled, (r) => [[r.task_class, { task_class: r.task_class }]]),
+    // Round-4 metrics (all non-informational runs, repetitions pooled; see docs/v2/SCORING.md).
+    model_metrics: metricGroups(runs, (r) => [dev(r), { runtime: r.developer.runtime, model: r.developer.model }]),
+    task_metrics: metricGroups(runs, (r) => [r.bench_task_id ?? `class:${r.task_class}`, { bench_task_id: r.bench_task_id, task_class: r.task_class }]),
+    task_model_metrics: metricGroups(runs, (r) => [`${r.bench_task_id ?? `class:${r.task_class}`} | ${dev(r)}`, { bench_task_id: r.bench_task_id, task_class: r.task_class, runtime: r.developer.runtime, model: r.developer.model }]),
     caveats,
   };
   const groups = [...sc.by_model, ...sc.by_runtime, ...sc.by_role, ...sc.by_task_class];
@@ -307,6 +406,7 @@ export function buildScorecard(logs, { manifest = null, unreadable = [], since =
   if (groups.some((g) => g.cost.spend_unknown_tasks)) caveats.push('some settled tasks have unknown cost; their groups show cost per verified completion as unknown, never $0');
   if (sc.by_model.some((g) => g.runtime === 'unknown')) caveats.push('some tasks have no registry developer, usage or manifest entry: grouped under runtime "unknown"');
   if (settled.some((r) => r.regression?.status === 'unknown')) caveats.push('regressions are unknown for accepted tasks whose SHA was never re-checked later; reopening is not recordable');
+  if (runs.some((r) => r.cost_basis === 'subscription')) caveats.push('subscription models (billing subscription, or runtime minimax when the usage record has no billing field) have no marginal USD: cost basis "subscription", never $0 measured; cost per verified completion stays unknown for tasks that include their usage');
   caveats.push('owner chat messages are not recorded as V2 events: owner interventions count approval requests and resume grants only');
   if (counts.cancelled) caveats.push(`${counts.cancelled} cancelled task(s) count as settled and not verified in every rate (unlike the plain report, which leaves them out)`);
   caveats.push('latency is wall time from creation to acceptance and includes time waiting for the owner or for quota');
