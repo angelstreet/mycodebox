@@ -8,9 +8,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runBench, parseArgs, planRuns, profileFor, spendOfRecords, recordBilling, createSuiteLedger, sameModel, entryOf, DEFAULT_REVIEWERS, summarize } from '../scripts/v2-bench.js';
 import { spendOf, registryDoc } from '../scripts/v2-bench-http.js';
-import { buildScorecard, billingOf, validateManifest, toolScore, BENCH_SCHEMA } from '../orchestration/scorecard.js';
+import { buildScorecard, billingOf, worstBasis, validateManifest, toolScore, BENCH_SCHEMA } from '../orchestration/scorecard.js';
 import { createTaskStore } from '../orchestration/store.js';
-import { scorecardOf, markdownReport, readStoreLogs } from '../scripts/v2-score.js';
+import { scorecardOf, markdownReport, usdCell, readStoreLogs } from '../scripts/v2-score.js';
 import { spec, SHA_A } from './fixtures/v2-task.js';
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-r4-test-')));
@@ -236,4 +236,20 @@ test('scorecard: a reviewer estimate stays visible next to a subscription develo
   const mp = path.join(TMP, 'm-c.json');
   fs.writeFileSync(mp, JSON.stringify(mf));
   assert.match(markdownReport(mp, { store: dir }), /subscription \+ \$0\.0100 \(\+ est\. \$0\.3000\) per-token/);
+});
+
+test('cost basis of a group: unknown wins, mixed only for subscription next to measured/estimated', () => {
+  assert.equal(worstBasis(['measured', 'unknown']), 'unknown');
+  assert.equal(worstBasis(['subscription', 'unknown']), 'unknown');
+  assert.equal(worstBasis(['measured', 'subscription', 'unknown']), 'unknown');
+  assert.equal(worstBasis(['measured', 'subscription']), 'mixed');
+  assert.equal(worstBasis(['estimated', 'subscription']), 'mixed');
+  assert.equal(worstBasis(['measured', 'estimated']), 'estimated');
+  assert.equal(worstBasis(['subscription']), 'subscription');
+  assert.equal(worstBasis(['measured']), 'measured');
+  assert.equal(worstBasis([]), 'unknown');
+  const m = (cost_basis, cost_bases) => ({ cost_basis, cost_bases, usd: { measured: 0.05, estimated: 0.1 } });
+  assert.match(usdCell(m('mixed', ['measured', 'subscription'])), /^\$0\.0500 \(\+ est\. \$0\.1000\), bases: measured, subscription$/);
+  assert.match(usdCell(m('unknown', ['measured', 'unknown'])), /^unknown /);
+  assert.doesNotMatch(usdCell(m('unknown', ['subscription', 'unknown'])), /^subscription/);
 });

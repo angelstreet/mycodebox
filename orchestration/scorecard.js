@@ -312,8 +312,13 @@ function aggregate(key, extra, runs, { defectsBy = null, facts = null } = {}) {
 // ---------- bench metrics (per model, per task, per task x model; repetitions pooled) ----------
 
 const stats = (xs) => (xs.length ? { n: xs.length, mean: Math.round(sum(xs) / xs.length), min: Math.min(...xs), max: Math.max(...xs) } : { n: 0, mean: null, min: null, max: null });
-// One basis, or `mixed` when runs differ (e.g. measured and subscription): a per-task row never hides subscription spend.
-const worstBasis = (bases) => (bases.length === 0 ? 'unknown' : bases.length === 1 ? bases[0] : 'mixed');
+// Unknown wins; `mixed` only when subscription runs sit with measured/estimated ones (a per-task row never hides subscription
+// spend); else estimated beats measured.
+export function worstBasis(bases) {
+  if (!bases.length || bases.includes('unknown')) return 'unknown';
+  if (bases.includes('subscription') && bases.some((b) => b !== 'subscription')) return 'mixed';
+  return bases.includes('estimated') ? 'estimated' : bases[0];
+}
 // Over ALL non-informational runs, not only settled ones: a run that stops in `waiting` (the impossible task) is a result here.
 function metricsOf(key, extra, rs) {
   const n = rs.length, verified = rs.filter((r) => r.verified).length, first = rs.filter((r) => r.first_pass).length;

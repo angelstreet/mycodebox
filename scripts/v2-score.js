@@ -211,11 +211,11 @@ export function renderScorecard(sc) {
 const secs = (ms) => (ms === null || ms === undefined ? 'n/a' : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${(ms / 60_000).toFixed(1)} min`);
 const rangeOf = (st) => (st.n ? `${secs(st.mean)} (${secs(st.min)} to ${secs(st.max)})` : 'n/a');
 const num = (v) => (v === null || v === undefined ? 'unknown' : String(v));
-const usdCell = (m) => {
+export const usdCell = (m) => {
   const meas = m.usd.measured, est = m.usd.estimated;
   const priced = `$${meas.toFixed(4)}${est > 0 ? ` (+ est. $${est.toFixed(4)})` : ''}`;
   if (m.cost_basis === 'subscription') return meas > 0 || est > 0 ? `subscription + ${priced} per-token` : 'subscription';
-  if (m.cost_basis === 'mixed') return `${priced} + subscription`;
+  if (m.cost_basis === 'mixed') return `${priced}, bases: ${(m.cost_bases || []).join(', ')}`;
   return m.cost_basis === 'unknown' ? `unknown (measured $${meas.toFixed(4)}${est > 0 ? `, est. $${est.toFixed(4)}` : ''})` : priced;
 };
 const mdTable = (head, rows) => [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`, ...rows.map((r) => `| ${r.join(' | ')} |`)].join('\n');
