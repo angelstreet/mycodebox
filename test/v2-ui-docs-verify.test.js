@@ -195,13 +195,13 @@ test('waiting, needs owner and unknown never collapse; only outcome done gets th
 // V2 off by default: static check of server.js
 // ---------------------------------------------------------------------------------------------------------------
 
-test('server.js: V2 is gated on GHOSTY_V2 === "1", imports lazily, never imports the goal loop, adds no listener', () => {
+test('server.js: V2 is gated on GHOSTY_V2 === "1", imports lazily, reaches the goal loop only through v2-runtime.js, adds no listener', () => {
   const src = readFileSync(join(ROOT, 'server.js'), 'utf8');
   assert.match(src, /const V2_ON = process\.env\.GHOSTY_V2 === '1';/);
   const block = src.slice(src.indexOf('const V2_ON'), src.indexOf('const V2_ON') + 600);
-  assert.match(block, /if \(V2_ON\) \{[^]*import\('\.\/orchestration\/store\.js'\)/);
-  assert.doesNotMatch(src, /^import .*orchestration\/(store|intake|http|goal-loop)\.js/m, 'no static import');
-  assert.doesNotMatch(src, /goal-loop/, 'the server never wires the goal loop');
+  assert.match(block, /if \(V2_ON\) \{[^]*import\('\.\/orchestration\/v2-runtime\.js'\)/);
+  assert.doesNotMatch(src, /^import .*orchestration\//m, 'no static import');
+  assert.doesNotMatch(src, /goal-loop/, 'the loop is assembled in orchestration/v2-runtime.js, not in server.js');
   const v2Route = src.indexOf("p.startsWith('/api/v2/')");
   assert.ok(src.indexOf('!originOk(req)') < v2Route && src.indexOf('content-type must be application/json') < v2Route, 'after Origin + JSON checks');
   assert.equal((src.match(/\.listen\(/g) || []).length, 2, 'still only the HTTP and TLS listeners');
