@@ -67,13 +67,16 @@ const STOP_STATES = ['accepted', 'failed_unrecoverable', 'cancelled'];
 const LOCAL_BIN = path.join(os.homedir(), '.local', 'bin');
 // A "free" model's cost is still unknown (opencode reports 0 for unpriced providers too): never estimate it as $0.
 const FREE_EST_USD = 0.02;
+// Round-4 short leash for the cheap models (OWNER_DECISIONS §12.1/§12.2): 2.5 min per run, 40 steps, no-progress after 2
+// stalled runs. Sent as the task's run_limits in the HTTP create body (selector = the profile's entry id); other profiles: none.
+export const CHEAP_LIMITS = Object.freeze({ timeout_ms: 150_000, max_steps: 40, stall_runs_to_no_progress: 2 });
 export const PROFILES = {
-  'claude:haiku': { runtime: 'claude', module: 'claude.js', model: 'claude-haiku-4-5', provider: 'anthropic', tier: 'light', efforts: ['low', 'medium'], effort: null, passModel: true, run_usd: 0.25, est_usd: 0.10, billing: 'per_token' },
+  'claude:haiku': { runtime: 'claude', module: 'claude.js', model: 'claude-haiku-4-5', provider: 'anthropic', tier: 'light', efforts: ['low', 'medium'], effort: null, passModel: true, run_usd: 0.25, est_usd: 0.10, billing: 'per_token', run_limits: { ...CHEAP_LIMITS, effort: 'low' } },
   'claude:sonnet': { runtime: 'claude', module: 'claude.js', model: 'claude-sonnet-5-5', provider: 'anthropic', tier: 'standard', efforts: ['low', 'medium', 'high'], effort: null, passModel: true, run_usd: 1.00, est_usd: 0.40, billing: 'per_token' },
   codex: { runtime: 'codex', module: 'codex.js', model: 'default', provider: 'openai', tier: 'standard', efforts: ['low'], effort: 'low', passModel: false, est_usd: 0.30 },
   minimax: { runtime: 'minimax', module: 'minimax.js', model: 'default', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: false, est_usd: 0, billing: 'subscription' },
-  'minimax:m3': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: true, est_usd: 0, billing: 'subscription' },
-  'minimax:m3.1-flash': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3.1-Flash-Preview', provider: 'minimax', tier: 'light', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'low', passModel: true, est_usd: 0, billing: 'subscription' },
+  'minimax:m3': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3', provider: 'minimax', tier: 'light', efforts: [], effort: null, passModel: true, est_usd: 0, billing: 'subscription', run_limits: { ...CHEAP_LIMITS } },
+  'minimax:m3.1-flash': { runtime: 'minimax', module: 'minimax.js', model: 'MiniMax-M3.1-Flash-Preview', provider: 'minimax', tier: 'light', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], effort: 'low', passModel: true, est_usd: 0, billing: 'subscription', run_limits: { ...CHEAP_LIMITS, effort: 'low' } },
   opencode: { runtime: 'opencode', module: 'opencode.js', model: 'opencode/big-pickle', provider: 'opencode', tier: 'standard', efforts: [], effort: null, passModel: true, est_usd: FREE_EST_USD, free: true, pathDirs: [LOCAL_BIN] },
 };
 export const DEFAULT_REVIEWERS = { 'claude:haiku': 'codex', 'claude:sonnet': 'codex', codex: 'claude:sonnet', minimax: 'claude:haiku', 'minimax:m3': 'claude:haiku', 'minimax:m3.1-flash': 'claude:haiku', opencode: 'claude:haiku' };
@@ -179,7 +182,7 @@ export function createSuiteLedger({ max_usd }) {
 // ---------- CLI ----------
 export const DEFAULTS = Object.freeze({ runtimes: null, tasks: 'all', out: null, max_usd: 20, fake: false, reviewer_map: {}, task_usd: null, run_timeout_min: 20,
   agent_timeout_min: 3, confirm_unknown: true, fake_behaviour: 'solve', keep: false, wait_up_to_sec: 0,
-  http: false, concurrency: 1, poll_ms: 1000, reps: 1, report: false });
+  http: false, concurrency: 1, poll_ms: 1000, reps: 1, report: false, run_limits: null });
 export function parseArgs(argv) {
   const o = { ...DEFAULTS, reviewer_map: {} };
   const need = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
@@ -209,6 +212,7 @@ export function parseArgs(argv) {
     else if (a === '--poll-ms') o.poll_ms = Number(need(i)), i++;
     else if (a === '--reps') o.reps = Number(need(i)), i++;
     else if (a === '--report') o.report = true;
+    else if (a === '--run-limits') { try { o.run_limits = JSON.parse(need(i)); } catch { throw new Error('--run-limits expects a JSON object, e.g. \'{"timeout_ms":150000,"max_steps":40}\''); } i++; }
     else throw new Error(`unknown argument ${a}`);
   }
   return validateOptions(o);
@@ -219,7 +223,8 @@ export function validateOptions(o) {
   if (!o.runtimes) throw new Error('--runtimes is required (e.g. claude:haiku,codex,opencode)');
   for (const k of ['max_usd', 'run_timeout_min', 'agent_timeout_min']) if (!(o[k] > 0)) throw new Error(`--${k.replace(/_/g, '-')} must be a positive number`);
   // A stalled agent must be observed often enough inside the wall clock for the no-progress rule to fire (round 3).
-  if (o.agent_timeout_min * STALLS_TO_NO_PROGRESS > o.run_timeout_min) {
+  // (an explicit --run-limits over HTTP replaces the agent timeout and the stall count: checkRunLimitsFit judges those)
+  if (!(o.http && o.run_limits) && o.agent_timeout_min * STALLS_TO_NO_PROGRESS > o.run_timeout_min) {
     throw new Error(`--agent-timeout-min ${o.agent_timeout_min} x ${STALLS_TO_NO_PROGRESS} stalled runs exceeds --run-timeout-min ${o.run_timeout_min}: `
       + 'the no-progress rule could never fire before the wall clock; lower the agent timeout or raise the run timeout');
   }
@@ -228,6 +233,7 @@ export function validateOptions(o) {
   if (o.task_usd !== null && o.task_usd > o.max_usd) throw new Error('--task-usd cannot exceed --max-usd');
   if (!(Number.isInteger(o.concurrency) && o.concurrency >= 1 && o.concurrency <= 8)) throw new Error('--concurrency is an integer 1..8');
   if (!(Number.isInteger(o.reps) && o.reps >= 1 && o.reps <= 20)) throw new Error('--reps is an integer 1..20');
+  if (o.run_limits != null && (typeof o.run_limits !== 'object' || Array.isArray(o.run_limits))) throw new Error('--run-limits must be a JSON object');
   if (!(o.poll_ms >= 50)) throw new Error('--poll-ms must be 50 or more');
   if (!['solve', 'noop', 'hang'].includes(o.fake_behaviour)) throw new Error('--fake-behaviour is solve, noop or hang');
   return o;
@@ -262,6 +268,30 @@ export function classify(status, loop = {}) {
     case 'failed_unrecoverable': return 'failed';
     case 'cancelled': return 'cancelled';
     default: return 'not_yet_done';
+  }
+}
+
+// The run_limits sent for one planned run: the CLI override (all runs) else the profiles' defaults keyed by entry id
+// ({ <entry id>: { '*': limits } }, so a reviewer on another model never inherits the developer's effort), else none.
+const RUN_LIMIT_KEYS = ['timeout_ms', 'max_steps', 'effort', 'context_mode', 'stall_runs_to_no_progress'];
+export function runLimitsFor(o, dev, rev) {
+  if (o.run_limits) return structuredClone(o.run_limits);
+  const m = {};
+  for (const p of [dev, rev]) if (p.run_limits) m[entryOf(p)] = { '*': { ...p.run_limits } };
+  return Object.keys(m).length ? m : null;
+}
+// The wall clock must fit the no-progress rule under the limits actually sent: stall runs (the limit's, else the bench's
+// own rule) x the run timeout (the limit's, else --agent-timeout-min) <= --run-timeout-min.
+export function checkRunLimitsFit(o, planned) {
+  for (const r of planned) {
+    const rl = runLimitsFor(o, r.dev, r.rev);
+    const flat = rl && Object.keys(rl).every((k) => RUN_LIMIT_KEYS.includes(k));
+    const lim = !rl ? null : flat ? rl : (rl[entryOf(r.dev)] ?? rl[r.dev.runtime] ?? rl['*'])?.['*'] ?? null;
+    const timeoutMin = lim?.timeout_ms ? lim.timeout_ms / 60_000 : o.agent_timeout_min;
+    const stalls = lim?.stall_runs_to_no_progress ?? STALLS_TO_NO_PROGRESS;
+    if (timeoutMin * stalls > o.run_timeout_min) {
+      throw new Error(`run limits for ${r.spec}: ${stalls} stalled runs x ${timeoutMin} min exceeds --run-timeout-min ${o.run_timeout_min}: the no-progress rule could never fire before the wall clock`);
+    }
   }
 }
 
