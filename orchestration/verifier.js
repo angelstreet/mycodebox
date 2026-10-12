@@ -8,7 +8,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { reviewerPrompt, parseReviewerVerdict } from './roles.js';
+import { reviewerPrompt, parseReviewerVerdict, feasibilityPrompt, parseFeasibility } from './roles.js';
 
 const MAX_OUT = 256 * 1024;
 const ENV_KEYS = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'HOME', 'TMPDIR'];
@@ -122,13 +122,16 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
     return { cancelled: false, results };
   }
 
-  // -> { verdict: 'approve'|'reject'|'unavailable', findings[], usage, error, run }
-  // role: 'reviewer' | 'security'; strict: demand the bare JSON verdict (after unparseable answers).
-  async function review({ adapter, entry, task, sha, cwd, diff, evidence, run_id, timeout_ms, role = 'reviewer', strict = false, onStart = () => {} }) {
+  // -> { verdict: 'approve'|'reject'|'unavailable', findings[], impossible?, diagnosis?, usage, error, run }
+  // role: 'reviewer' | 'security' | 'feasibility' (failing checks: only "are the requirements achievable?"); strict: demand
+  // the bare JSON verdict (after unparseable answers). limits: run options from run_limits (effort, max_steps, context_mode).
+  async function review({ adapter, entry, task, sha, cwd, diff, evidence, run_id, timeout_ms, role = 'reviewer', strict = false, onStart = () => {},
+    effort = null, max_steps = null, context_mode = null, failing = [], claim = null }) {
     let run;
+    const prompt = role === 'feasibility' ? feasibilityPrompt({ task, sha, diff, failing, claim }) : reviewerPrompt({ task, sha, diff, evidence, role, strict });
     try {
-      run = adapter.start({ task_id: task.task_id, run_id, cwd, model: entry.model, effort: null, timeout_ms, role: 'reviewer', review_role: role,
-        prompt: reviewerPrompt({ task, sha, diff, evidence, role, strict }) });
+      run = adapter.start({ task_id: task.task_id, run_id, cwd, model: entry.model, effort, timeout_ms, role: 'reviewer', review_role: role, prompt,
+        ...(max_steps ? { max_steps } : {}), ...(context_mode ? { context_mode } : {}) });
     } catch (e) {
       return { verdict: 'unavailable', findings: [], usage: null, error: { class: e.code === 'E_UNSUPPORTED' ? 'unavailable' : 'crash', message: e.message }, run: null };
     }
@@ -137,6 +140,11 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
     const usage = adapter.collectUsage(run);
     if (result.cancelled) return { verdict: 'unavailable', findings: [], usage, error: { class: 'cancelled' }, run };
     if (result.error) return { verdict: 'unavailable', findings: [], usage, error: result.error, run };
+    if (role === 'feasibility') {
+      const f = parseFeasibility(run.events);
+      if (!f) return { verdict: 'unavailable', findings: [], usage, error: { class: 'unparseable_verdict' }, run };
+      return { verdict: 'reject', findings: f.findings, impossible: f.impossible, diagnosis: f.diagnosis, usage, error: null, run };
+    }
     const v = parseReviewerVerdict(run.events);
     if (!v) return { verdict: 'unavailable', findings: [], usage, error: { class: 'unparseable_verdict' }, run };
     return { ...v, usage, error: null, run };

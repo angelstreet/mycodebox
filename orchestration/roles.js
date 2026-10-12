@@ -67,8 +67,14 @@ export function developerPrompt({ task, strategy = {}, feedback = null, summary 
   if (strategy.harness === 'focused') parts.push('HARNESS: focused. First reproduce the failing check with the smallest test, then fix the cause. Full failing output is included below.');
   if (strategy.compact && summary) parts.push(`CONTEXT SUMMARY (fresh run, earlier context compacted):\n${clip(summary, 4000)}`);
   if (feedback) parts.push(`STRUCTURED FEEDBACK FROM THE LAST ITERATION (fix the cause, not the symptom):\n${clip(JSON.stringify(feedback, null, 1), strategy.harness === 'focused' ? 16000 : 6000)}`);
+  parts.push(IMPOSSIBLE_NOTE);
   return parts.join('\n\n');
 }
+
+// A developer that finds the requirements contradictory says so instead of spending its whole run (OWNER_DECISIONS §12.2).
+// The claim is never proof: an independent reviewer judges it on failing checks (goal loop feasibility review).
+export const IMPOSSIBLE_NOTE = 'IF THE REQUIREMENTS ARE CONTRADICTORY OR IMPOSSIBLE: stop early. Do not weaken or special-case the checks. '
+  + 'End your answer with one JSON line {"impossible":true,"diagnosis":"<which requirements conflict and why>"}.';
 
 // The reviewer answers with one JSON object; anything else is treated as "evaluator unavailable", never as approval.
 export function reviewerPrompt({ task, sha, diff, evidence = [], rubric = REVIEW_RUBRIC, role = 'reviewer', strict = false }) {
@@ -83,7 +89,8 @@ export function reviewerPrompt({ task, sha, diff, evidence = [], rubric = REVIEW
     EVIDENCE_NOTE,
     `RUBRIC:\n${list(rubric.map((r) => `${r.id}: ${r.text}`))}`,
     `DIFF (base..candidate):\n${clip(diff, 20000)}`,
-    'ANSWER with exactly one JSON object on the last line: {"verdict":"approve"|"reject","findings":[{"id":"<rubric id>","severity":"blocker"|"minor","message":"..."}]}',
+    'ANSWER with exactly one JSON object on the last line: {"verdict":"approve"|"reject","findings":[{"id":"<rubric id>","severity":"blocker"|"minor","message":"..."}]}\n'
+      + 'If the requirements themselves are contradictory or impossible to meet, answer {"verdict":"reject","impossible":true,"diagnosis":"<why>","findings":[...]}.',
     ...(strict ? ['STRICT FORMAT: earlier answers had no parseable verdict. Output ONLY that JSON object, nothing else. A reject needs at least one finding.'] : []),
   ].join('\n\n');
 }
@@ -94,24 +101,67 @@ export const EVIDENCE_NOTE = 'The exits above were recorded by the controller ru
   + 'is not evidence against the change: judge evidence_matches on the recorded exits and the diff. A real test failure you reproduce is still evidence. '
   + 'A passing recorded exit does not make a change legitimate: still reject diffs that special-case tests, weaken or bypass checks, or tamper with assert/test machinery.';
 
-// Last JSON object in the run's text/result events carrying a valid verdict, else null (= unavailable).
-export function parseReviewerVerdict(events = []) {
+// JSON objects in the run's text/result events, last first.
+function* jsonAnswers(events = []) {
   const texts = events.filter((e) => typeof e?.text === 'string' && ['text', 'result'].includes(e.type)).map((e) => e.text);
   for (const t of texts.reverse()) {
     const lines = t.trim().split('\n').reverse();
     for (const l of [t.trim(), ...lines]) {
       if (!l.trim().startsWith('{')) continue;
-      try {
-        const v = JSON.parse(l.trim());
-        if (!['approve', 'reject'].includes(v?.verdict) || !Array.isArray(v.findings)) continue;
-        const findings = v.findings.filter((f) => f && typeof f === 'object').map((f) => ({
-          id: String(f.id ?? 'unspecified').slice(0, 64), severity: f.severity === 'minor' ? 'minor' : 'blocker', message: String(f.message ?? '').slice(0, 2000) }));
-        // A reject without a finding cannot be acted on; an approve listing blockers contradicts itself. Both: unavailable.
-        if (v.verdict === 'reject' && !findings.length) continue;
-        if (v.verdict === 'approve' && findings.some((f) => f.severity === 'blocker')) continue;
-        return { verdict: v.verdict, findings };
-      } catch { /* not JSON, keep looking */ }
+      let v;
+      try { v = JSON.parse(l.trim()); } catch { continue; }
+      if (v && typeof v === 'object' && !Array.isArray(v)) yield v;
     }
+  }
+}
+const findingsOf = (xs) => (Array.isArray(xs) ? xs : []).filter((f) => f && typeof f === 'object').map((f) => ({
+  id: String(f.id ?? 'unspecified').slice(0, 64), severity: f.severity === 'minor' ? 'minor' : 'blocker', message: String(f.message ?? '').slice(0, 2000) }));
+const diagnosisOf = (v) => (typeof v.diagnosis === 'string' && v.diagnosis.trim() ? v.diagnosis.trim().slice(0, 2000) : null);
+
+// Last JSON object in the run's text/result events carrying a valid verdict, else null (= unavailable). An optional
+// {"impossible":true,"diagnosis"} (round 4) comes back as impossible/diagnosis; older answers parse as before.
+export function parseReviewerVerdict(events = []) {
+  for (const v of jsonAnswers(events)) {
+    const impossible = v.impossible === true && v.verdict === 'reject' && !!diagnosisOf(v);
+    if (!['approve', 'reject'].includes(v?.verdict) || (!Array.isArray(v.findings) && !impossible)) continue;
+    const findings = findingsOf(v.findings);
+    if (impossible && !findings.length) findings.push({ id: 'impossible', severity: 'blocker', message: diagnosisOf(v) });
+    // A reject without a finding cannot be acted on; an approve listing blockers contradicts itself. Both: unavailable.
+    if (v.verdict === 'reject' && !findings.length) continue;
+    if (v.verdict === 'approve' && findings.some((f) => f.severity === 'blocker')) continue;
+    return { verdict: v.verdict, findings, ...(impossible ? { impossible: true, diagnosis: diagnosisOf(v) } : {}) };
+  }
+  return null;
+}
+
+// Developer's own impossibility claim ({"impossible":true,"diagnosis"}), else null. Never proof on its own.
+export function parseImpossibleClaim(events = []) {
+  for (const v of jsonAnswers(events)) if (v.impossible === true && diagnosisOf(v)) return { diagnosis: diagnosisOf(v) };
+  return null;
+}
+
+// Feasibility review (round 4): the checks FAIL and the question is only whether the requirements can be met at all.
+export function feasibilityPrompt({ task, sha, diff, failing = [], claim = null }) {
+  return [
+    'ROLE: independent feasibility reviewer. You did not write this change. The required checks FAIL on this SHA.',
+    'Question: can the goal, the definition of done and the acceptance checks all be met together, as stated? You may not edit files.',
+    contractBlock(task),
+    `CANDIDATE SHA: ${sha}`,
+    `FAILING CHECKS (recorded by the controller on this SHA):\n${clip(JSON.stringify(failing, null, 1), 8000)}`,
+    ...(claim ? [`THE DEVELOPER CLAIMS THE REQUIREMENTS ARE IMPOSSIBLE: ${clip(claim, 2000)}\nJudge the requirements yourself; the claim is not evidence.`] : []),
+    `DIFF (base..candidate):\n${clip(diff, 12000)}`,
+    'ANSWER with exactly one JSON object on the last line. Requirements contradictory or impossible as stated: '
+      + '{"verdict":"reject","impossible":true,"diagnosis":"<which requirements conflict and why>"}. Achievable (more work needed): '
+      + '{"verdict":"reject","impossible":false,"findings":[{"id":"meets_goal","severity":"blocker","message":"<what is still missing>"}]}.',
+  ].join('\n\n');
+}
+
+// -> { impossible: boolean, diagnosis, findings } | null (no usable answer)
+export function parseFeasibility(events = []) {
+  for (const v of jsonAnswers(events)) {
+    if (typeof v.impossible !== 'boolean') continue;
+    if (v.impossible && !diagnosisOf(v)) continue;   // an impossibility claim must say why
+    return { impossible: v.impossible, diagnosis: diagnosisOf(v), findings: findingsOf(v.findings) };
   }
   return null;
 }

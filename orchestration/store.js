@@ -24,7 +24,9 @@ const UNRESOLVED = ['attempted', 'possibly_applied'];
 // it would hide external state, which is worse than the write.
 const AFTER_TERMINAL_OK = new Set(['action.confirmed', 'action.unknown', 'action.failed']);
 const USAGE_NUM = ['input_tokens', 'output_tokens', 'usd'];
-const USAGE_KEYS = new Set([...USAGE_NUM, 'runtime', 'provider', 'model', 'unknown', 'run_id', 'attempt_id', 'ts', 'source', 'incomplete']);
+const USAGE_KEYS = new Set([...USAGE_NUM, 'runtime', 'provider', 'model', 'unknown', 'run_id', 'attempt_id', 'ts', 'source', 'incomplete', 'billing']);
+// D-025: how the run is paid for; a subscription run keeps usd null (marginal ~0, not a measured $0).
+const USAGE_BILLING = ['per_token', 'subscription', 'unknown'];
 
 export const defaultStoreDir = (env = process.env) =>
   join(env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty'), 'v2');
@@ -88,6 +90,10 @@ export function normalizeUsage(u = {}) {
   if (u.ts !== undefined) out.ts = u.ts;
   if (u.attempt_id !== undefined) out.attempt_id = u.attempt_id;
   if (u.source !== undefined) out.source = u.source;
+  if (u.billing !== undefined) {
+    if (!USAGE_BILLING.includes(u.billing)) fail('E_INVALID', `usage: billing must be one of ${USAGE_BILLING.join('|')}`);
+    out.billing = u.billing;
+  }
   // The runtime said its counts are partial (e.g. MiniMax usageIncomplete): totals must not look complete.
   if (u.incomplete !== undefined) {
     if (typeof u.incomplete !== 'boolean') fail('E_INVALID', 'usage: incomplete must be a boolean');

@@ -173,7 +173,7 @@ test('T12: rate limit/timeout -> backoff first, then compatible fallback, never 
   assert.ok(['claude', 'codex'].includes(sw.next.split(':')[0]));
   for (const f of r.fallback) assert.ok(['claude', 'codex'].includes(f.id.split(':')[0]));
   // single-runtime allowlist: nothing to switch to -> waiting, never an outside runtime
-  const one = R(task({ runtime_allowlist: ['minimax'] }));
+  const one = R(task({ runtime_allowlist: ['minimax'], model_allowlist: ['MiniMax-M3'] }));
   const w = fallbackPlan(one, { error_class: 'rate_limit', attempt: 5 });
   assert.equal(w.action, 'wait'); assert.equal(w.next, null); assert.equal(w.state_hint, 'waiting');
 });
@@ -196,14 +196,14 @@ test('fallback taxonomy: context overflow, unavailable, permission/auth/deploy',
 test('T22: unknown/placeholder/stale pricing is never $0 and never ranked cheapest', () => {
   const r = R(task());
   const unknown = r.candidates.filter((c) => c.cost_est_usd == null);
-  assert.ok(unknown.length >= 3);
+  assert.ok(unknown.length >= 2);
   for (const c of r.candidates) assert.notEqual(c.cost_est_usd, 0);
   assert.ok(unknown.every((c) => c.cost_basis === 'unknown'));
   assert.match(r.rationale.join(' '), /never treated as cheapest or \$0/);
   // equal quality (same tier): the known-cost entry must beat the unknown-cost one
   const doc = { version: 1, models: [
     { runtime: 'claude', provider: 'a', model: 'claude-sonnet-5-5', tier: 'standard', capabilities: ['code'], efforts: [], context_tokens: 1000, latency_ms: 10 },
-    { runtime: 'minimax', provider: 'b', model: 'MiniMax-M3', tier: 'standard', capabilities: ['code'], efforts: [], context_tokens: 1000, latency_ms: 10 },
+    { runtime: 'minimax', provider: 'b', model: 'MiniMax-M3', tier: 'standard', capabilities: ['code'], efforts: [], context_tokens: 1000, latency_ms: 10, billing: 'per_token' },   // a priced, not subscription, entry
   ] };
   const prices = { as_of: '2026-10-03', models: { 'claude-sonnet-5-5': { input: 2, output: 10, as_of: '2026-10-03', source: 'x' }, 'MiniMax-M3': { input: 0, output: 0, source: 'PLACEHOLDER x' } } };
   const eq = route(task(), { registry: createRegistry(doc, { prices }), now });
@@ -239,7 +239,9 @@ test('ranking: history (verified rate, cost per verified completion) beats prior
 
 test('weights/priority are configurable', () => {
   const cheap = R(task(), { weights: { quality: 0, cost: 1, latency: 0, reliability: 0 } });
-  assert.equal(cheap.choice, 'claude:claude-haiku-4-5');                          // known cheapest, unknown costs last
+  // known cheapest: a subscription model (near-zero marginal cost, D-025); unknown costs last
+  assert.ok(['minimax:MiniMax-M3', 'minimax:MiniMax-M3.1-Flash-Preview'].includes(cheap.choice));
+  assert.equal(R(task({ runtime_allowlist: ['claude', 'codex'] }), { weights: { quality: 0, cost: 1, latency: 0, reliability: 0 } }).choice, 'claude:claude-haiku-4-5');
   assert.ok(cheap.candidates.slice(-3).every((c) => c.cost_est_usd == null || c.cost_est_usd > 0));
   const q = R(task({ priority: 'quality' }));
   assert.ok(['claude:claude-opus-5-5', 'codex:gpt-6-astra'].includes(q.choice));
@@ -315,7 +317,7 @@ test('F5/F13: unknown error class -> approval; quota exhausted -> wait', () => {
 });
 
 test('F10: free is only known when explicitly flagged', () => {
-  const m = (o) => ({ runtime: 'minimax', provider: 'm', model: 'MiniMax-M3', tier: 'standard', capabilities: ['code'], efforts: [], context_tokens: 1000, price: { input: 0, output: 0 }, price_as_of: '2026-10-10', ...o });
+  const m = (o) => ({ runtime: 'minimax', provider: 'm', model: 'MiniMax-M3', tier: 'standard', capabilities: ['code'], efforts: [], context_tokens: 1000, price: { input: 0, output: 0 }, price_as_of: '2026-10-10', billing: 'per_token', ...o });
   assert.equal(route(task(), { registry: createRegistry({ version: 1, models: [m({ free: true })] }), now }).candidates[0].cost_est_usd, 0);
   assert.equal(route(task(), { registry: createRegistry({ version: 1, models: [m()] }), now }).candidates[0].cost_est_usd, null);
   assert.equal(validateRegistryDoc({ version: 1, models: [m({ price: { input: -1, output: 1 } })] }).ok, false);

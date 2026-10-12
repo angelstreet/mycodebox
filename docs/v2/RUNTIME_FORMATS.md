@@ -26,7 +26,16 @@ JSONL with `type`: `thread.started` (`thread_id`), `turn.started`, `item.*` (`it
 - Without a prompt on argv, or with stdin open, it prints "Reading additional input from stdin…": spawn with stdin
   closed (`'ignore'`).
 
-## MiniMax Code 0.6.3 — `mcode exec --cwd <dir> --output-format stream-json --permission smart`
+## MiniMax Code 0.6.3 / 0.6.5 — `mcode exec --cwd <dir> --output-format stream-json --permission full`
+
+V2 exec workers (developers and reviewers) run `--permission full`, started in their worktree; `--cwd` is not a sandbox (D-023). Run flags the adapter passes from the
+run limits (D-024): `--model minimax/<model>` (mcode refuses a bare model name: "--model must use provider/model"),
+`--effort <low|medium|high|xhigh|max>` (MiniMax-M3.1-Flash-Preview; MiniMax-M3 has no effort levels), `--timeout`
+(controller timer + 30 s), `--max-steps N`, and `--mode lightweight` (0.6.5 only; no tool schemas, cannot join a
+`--session`) for text-only reviewer runs. When `MCODE_NODE_DIR` is set, the `mcode` in that directory is preferred
+(the Node 24 install carries 0.6.5; `~/.local/bin/mcode` may be 0.6.3). Failed provider calls arrive as
+`turn.failed`/`exec.failed` events (`error.message`) or on stderr; 429, rate-limit and plan/usage-limit texts are
+class `rate_limit`.
 
 JSONL with `type` and envelope `runId, sessionId, turnId, sequence, schemaVersion, timestampMs`:
 `exec.started`, `session.started`, `turn.started`, `item.started|updated|completed` (`item`), `turn.completed`

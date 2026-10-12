@@ -14,7 +14,8 @@ export function coded(code, msg) {
 export const unsupported = (adapter, op) => coded('E_UNSUPPORTED', `${adapter}: ${op} is not supported`);
 
 // ---- permission / sandbox bypass guard -------------------------------------------------------
-// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config hasBypass (V2 workers never get the dashboard's bypass default).
+// Element-wise on argv (never on the prompt, which is free text). Aligned with launch-config hasBypass (V2 workers never get the dashboard's bypass
+// default; the one adapter-owned exception is mcode exec `--permission full`, D-023, passed as trusted argv indices).
 const BYPASS_SINGLE = /^--(?:allow-)?dangerously-[\w-]+$|^--yolo$|^--auto$|^--bypass-[\w-]+$/;   // --auto: opencode auto-approve
 const BYPASS_PAIRS = [
   [/^--permission-mode$/, /^bypassPermissions$/],
@@ -166,6 +167,10 @@ export function genericParse(o) {
 
 // ---- error taxonomy ---------------------------------------------------------------------------
 const RETRYABLE = { rate_limit: true, timeout: true };
+// Provider rate limits and quota/plan exhaustion (one class: the loop backs off, never counts it as a stall). The last
+// alternatives are subscription-plan wordings (MiniMax: "usage limit exceeded", plan/quota exhausted, error 1002/2056).
+const RATE_LIMIT_RE = /rate[ _-]?limit|\bHTTP[ /]*429\b|\b429 too many requests|status(?: code)?[:= ]+429|\berror[: ]+429\b|too many requests|overloaded(?:_error)?\b|(?:usage|quota|credit)s? (?:limit|exceeded|exhausted)|exceeded your (?:current )?quota|hit your usage limit|insufficient_quota|rate_limit_error|usage limit (?:reached|exceeded|hit)|(?:plan|subscription|package) (?:quota|limit|usage)\b.{0,20}\b(?:reached|exceeded|exhausted|used up)|\b(?:status_code|error code|code)["']?[:= ]+["']?(?:1002|2056)\b/i;
+export const isRateLimitText = (text) => RATE_LIMIT_RE.test(String(text || ''));
 
 export function parseRetryAfterMs(text, nowMs = null) {
   const m = /(?:retry[-_ ]?after|try again in|retry in|resets? in)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)?\b/i.exec(text || '');
@@ -197,7 +202,7 @@ export function normalizeError(input, nowMs = null) {
   let retry_after_ms = null;
   if (i.timed_out) cls = 'timeout';
   else if (i.code === 'ENOENT' || i.exit === 127 || (i.code === 'EACCES' && /^spawn/.test(i.syscall || '')) || /command not found|not installed|executable file not found/i.test(text)) cls = 'unavailable';
-  else if (/rate[ _-]?limit|\bHTTP[ /]*429\b|\b429 too many requests|status(?: code)?[:= ]+429|\berror[: ]+429\b|too many requests|overloaded(?:_error)?\b|(?:usage|quota|credit)s? (?:limit|exceeded|exhausted)|exceeded your (?:current )?quota|hit your usage limit|insufficient_quota|rate_limit_error/i.test(text)) { cls = 'rate_limit'; retry_after_ms = parseRetryAfterMs(text, nowMs) ?? (Number.isFinite(i.retry_after_ms) ? i.retry_after_ms : null); }
+  else if (RATE_LIMIT_RE.test(text)) { cls = 'rate_limit'; retry_after_ms = parseRetryAfterMs(text, nowMs) ?? (Number.isFinite(i.retry_after_ms) ? i.retry_after_ms : null); }
   else if (/context (?:length|window)|too long|token limit|maximum context|context_length_exceeded|exceeds? the (?:maximum|context)/i.test(text)) cls = 'context_overflow';
   else if (/\bHTTP[ /]*401\b|\b401 unauthori[sz]ed|status(?: code)?[:= ]+401|unauthori[sz]ed|not logged in|please (?:log ?in|run .{0,20}login)|authentication (?:failed|error|required)|invalid (?:api[ _-]?key|x-api-key)|invalid_api_key|\bauthentication_error|\bProviderAuthError\b/i.test(text)) cls = 'auth';
   else if (/permission denied|approval (?:required|denied)|requires approval|operation not permitted|\beacces\b|status(?: code)?[:= ]+403|HTTP[ /]*403/i.test(text)) cls = 'permission';
@@ -265,7 +270,10 @@ export function createRunCore({ adapter, task_id, run_id, cwd, artifact_dir, fs 
       c.kill('final'); // always sweep the process group: a background child must not edit the tree after done
       const errText = c.errorTexts.join('\n');
       let error = null;
-      if (run.timed_out) error = normalizeError({ timed_out: true });
+      // A run that hit a provider rate limit / quota and then sat until our timer is a quota wait, not a stall. Only parsed
+      // error events and the last 2 KiB of stderr count: older child output ("overloaded function") must not hide a stall.
+      const recent = `${c.stderr.slice(-2048)}\n${errText}`;
+      if (run.timed_out) error = isRateLimitText(recent) ? { ...normalizeError({ stderr: recent, retry_after_ms: c.retryHint }, now()), timed_out: true } : normalizeError({ timed_out: true });
       else if (run.cancelled) error = null;
       else if (spawn_error) error = normalizeError({ code: spawn_error.code, syscall: spawn_error.syscall, message: spawn_error.message });
       // An error *event* alongside exit 0 (e.g. a transient reconnect notice) is not a failed run; the event stays visible.
@@ -419,6 +427,8 @@ export function makeCliAdapter(spec) {
     function begin(o, resumeId) {
       if (!o || typeof o.prompt !== 'string' || !o.prompt) throw coded('E_INVALID', 'prompt required');
       for (const k of ['model', 'effort', 'session_id']) if (o[k] != null && (typeof o[k] !== 'string' || !SAFE_VAL.test(o[k]))) throw coded('E_INVALID', `${k} has an unsafe value`);
+      if (o.max_steps != null && !(Number.isInteger(o.max_steps) && o.max_steps > 0)) throw coded('E_INVALID', 'max_steps must be a positive integer');
+      if (o.context_mode != null && !['standard', 'lightweight'].includes(o.context_mode)) throw coded('E_INVALID', 'context_mode must be standard|lightweight');
       if (o.effort != null) {
         if (spec.noEffort) throw unsupported(spec.id, 'effort');
         if (spec.efforts && !spec.efforts.includes(o.effort)) throw coded('E_INVALID', `effort must be one of ${spec.efforts.join(',')}`);
@@ -428,8 +438,11 @@ export function makeCliAdapter(spec) {
       const head = spec.head({ ...o, cwd: realCwd, resume_id: resumeId || null, session_id: o.session_id || (spec.ownSessionId && !resumeId ? randomUUID() : null) });
       const dash = o.prompt.startsWith('-') ? ['--'] : [];
       const argv = [...head.args, ...extraArgs, ...dash, o.prompt];
+      // head.trusted: indices of the adapter's OWN launch-mode flags (D-023: mcode exec --permission full). Caller
+      // extraArgs are never trusted, so an injected bypass flag is still refused.
+      const trusted = (head.trusted || []).filter((i) => Number.isInteger(i) && i >= 0 && i < head.args.length);
       return spawnRun({
-        spawnFn: spawn, bin: binPath, argv, skip: [argv.length - 1], cwd: realCwd, allowedRoots, fs, now,
+        spawnFn: spawn, bin: binPath, argv, skip: [...trusted, argv.length - 1], cwd: realCwd, allowedRoots, fs, now,
         env: buildEnv(env, spec.envAllow, o.env), parse: spec.parse, usageMode: spec.usageMode, killGraceMs, exitGraceMs,
         meta: {
           adapter: spec.id, task_id: o.task_id ?? null, run_id, artifact_dir: o.artifact_dir || (artifactDir ? path.join(artifactDir, String(run_id)) : null),
@@ -441,6 +454,8 @@ export function makeCliAdapter(spec) {
     return {
       id: spec.id,
       provider_ids: spec.provider_ids,
+      // Which run limits this CLI can apply itself (D-024); the run timeout is always the controller's timer.
+      limitSupport: { max_steps: false, context_mode: false, effort: !spec.noEffort, ...(spec.limitSupport || {}) },
       async probeCapabilities() {
         const p = await probeVersion({ spawnFn: spawn, bin: binPath, env: buildEnv(env, spec.envAllow), timeoutMs: probeTimeoutMs });
         return { available: p.available, version: p.version, models: null, efforts: spec.efforts ?? null, features: { ...spec.features } };
