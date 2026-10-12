@@ -19,6 +19,9 @@
 // authorization, so the bench confirms such a stop only while the suite ledger (with the estimate) stays under the cap
 // (--no-confirm-unknown records it as budget_stop instead). A reached cap is never raised. Unknown stays unknown.
 //
+// --http [--concurrency N] [--poll-ms 1000]: the same suite driven through the HTTP API of a disposable wired server
+// (scripts/v2-bench-http.js; GHOSTY_V2=1 child on a loopback port, temp state dir and work root, private tmux socket).
+//
 // Each run stops at the first state that needs time, quota or the owner (recorded), or at its wall clock. Output: the
 // task store (DIR/store) and DIR/manifest.json (schema mycodebox.v2.bench-run/1, consumed by
 // `scripts/v2-score.js --tool-score --suite`). No model output is printed or kept in the manifest.
@@ -140,7 +143,8 @@ export function createSuiteLedger({ max_usd }) {
 
 // ---------- CLI ----------
 export const DEFAULTS = Object.freeze({ runtimes: null, tasks: 'all', out: null, max_usd: 20, fake: false, reviewer_map: {}, task_usd: null, run_timeout_min: 20,
-  agent_timeout_min: 3, confirm_unknown: true, fake_behaviour: 'solve', keep: false, wait_up_to_sec: 0 });
+  agent_timeout_min: 3, confirm_unknown: true, fake_behaviour: 'solve', keep: false, wait_up_to_sec: 0,
+  http: false, concurrency: 1, poll_ms: 1000 });
 export function parseArgs(argv) {
   const o = { ...DEFAULTS, reviewer_map: {} };
   const need = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
@@ -165,6 +169,9 @@ export function parseArgs(argv) {
     else if (a === '--fake-behaviour') o.fake_behaviour = need(i), i++;
     else if (a === '--no-confirm-unknown') o.confirm_unknown = false;
     else if (a === '--keep') o.keep = true;
+    else if (a === '--http') o.http = true;
+    else if (a === '--concurrency') o.concurrency = Number(need(i)), i++;
+    else if (a === '--poll-ms') o.poll_ms = Number(need(i)), i++;
     else throw new Error(`unknown argument ${a}`);
   }
   return validateOptions(o);
@@ -182,6 +189,8 @@ export function validateOptions(o) {
   if (!(o.wait_up_to_sec >= 0)) throw new Error('--wait-up-to-sec must be 0 or more');
   if (o.task_usd !== null && !(o.task_usd > 0)) throw new Error('--task-usd must be a positive number');
   if (o.task_usd !== null && o.task_usd > o.max_usd) throw new Error('--task-usd cannot exceed --max-usd');
+  if (!(Number.isInteger(o.concurrency) && o.concurrency >= 1 && o.concurrency <= 8)) throw new Error('--concurrency is an integer 1..8');
+  if (!(o.poll_ms >= 50)) throw new Error('--poll-ms must be 50 or more');
   if (!['solve', 'noop', 'hang'].includes(o.fake_behaviour)) throw new Error('--fake-behaviour is solve, noop or hang');
   return o;
 }
@@ -219,10 +228,9 @@ export function classify(status, loop = {}) {
 }
 
 // ---------- the runner ----------
-// opts: parseArgs() output (programmatic callers may also pass fake_overrides: { [bench_task_id]: 'solve'|'noop'|'hang' },
-// fake_usd: number|null for the fake developer's reported USD, log: (line) => void).
-export async function runBench(opts) {
-  const o = validateOptions({ ...DEFAULTS, ...opts });
+// Tasks x runtimes -> the planned runs, the developer/reviewer pairs and the per-task cap (shared with the HTTP driver).
+// Refuses unusable plans at setup: unknown reviewer, same-model reviewer, a per-task share below one developer run + review.
+export function planRuns(o) {
   const tasks = selectTasks(o.tasks);
   for (const t of tasks) if (!EXPECTED_OUTCOMES.includes(t.expected_outcome)) throw new Error(`bench task ${t.id}: expected_outcome ${t.expected_outcome} is not one of ${EXPECTED_OUTCOMES.join(', ')}`);
   const devSpecs = o.runtimes;
@@ -238,7 +246,6 @@ export async function runBench(opts) {
     return { spec, revSpec, dev, rev };
   });
   const planned = tasks.flatMap((t) => pairs.map((p) => ({ task: t, ...p })));
-  const ledger = createSuiteLedger({ max_usd: o.max_usd });
   // Floored so that the reservations of every planned run fit inside the suite cap.
   const taskUsd = o.task_usd ?? Math.floor((o.max_usd / Math.max(1, planned.length)) * 1e4) / 1e4;
   if (!(taskUsd > 0)) throw new Error(`per-task budget rounds to ${taskUsd} USD for ${planned.length} runs: raise --max-usd or pass --task-usd`);
@@ -249,6 +256,17 @@ export async function runBench(opts) {
       + `(${viable.pair}: one developer run + one review): pass --task-usd ${viable.usd} or more (later runs are skipped once the suite cap is reached), `
       + 'raise --max-usd, or run fewer tasks/runtimes');
   }
+  return { tasks, pairs, planned, taskUsd };
+}
+
+
+// opts: parseArgs() output (programmatic callers may also pass fake_overrides: { [bench_task_id]: 'solve'|'noop'|'hang' },
+// fake_usd: number|null for the fake developer's reported USD, log: (line) => void).
+export async function runBench(opts) {
+  const o = validateOptions({ ...DEFAULTS, ...opts });
+  if (o.http) return (await import('./v2-bench-http.js')).runBenchHttp(o);
+  const { tasks, pairs, planned, taskUsd } = planRuns(o);
+  const ledger = createSuiteLedger({ max_usd: o.max_usd });
   const log = o.log || (() => {});
 
   const outDir = path.resolve(o.out || fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-out-')));
