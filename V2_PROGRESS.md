@@ -21,7 +21,7 @@ Base: `origin/v2/integration` 5a5741e. Owner spec: OWNER_DECISIONS §12.
 | R4-1..3 | run_limits policy + registry (M3.1-Flash, billing), faster no-progress stop, scorecard-fed routing + escalation ladder, mcode exec `--permission full` | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) merge 50e40bf | 245569f+1053e4c+ec4582b; D-023..D-026; 1741/1741 both runtimes; two 150 s stalls alone take 300 s, so the <3 min stop comes from a feasibility review (independent reviewer, `impossible:true` on failing checks) after the first cheap-model stall |
 | R4-4a | Bench `--reps`, M3.1 spec, subscription cost basis, per-model table, time-to-stop | Sonnet / Opus review | INTEGRATED (Opus APPROVE, 3 rounds) merge ac97bbf | 24dbd17; 1728/1728 both runtimes; time-to-stop over expected-impossible runs only; unknown cost wins over mixed |
 | R4-fix | Real-run defects: mcode 0.6.5 final text (item.content, result.output), verdict/feasibility parsed from the final text only (last JSON object), no-change and impossible-claim runs count as stalls under stall_runs_to_no_progress, cheap leash 120 s, failed exec status | Opus / Fable review | INTEGRATED (Fable APPROVE, 2 rounds) | bbc9666+6a6bd5b; 1762/1762 both runtimes; sanity2 on bbc9666: 6/6 as expected, impossible stops in 38-55 s (M3 was 503 s) |
-| R4-4b | Real evaluation M3 vs M3.1-Flash vs Haiku, 3 reps, USD 10 cap, SCORING.md recommendation | coordinator | IN PROGRESS | bench2 merge ab649c2 (Opus APPROVE); sanity run (6 runs, ~USD 0.43) exposed: mcode 0.6.5 final text in item.content/result.output (MiniMax reviewer verdicts unparseable), feasibility verdict unparseable, no-change runs not counted as stalls (M3 impossible 503 s) -> fix package v2/r4-fix (Opus) |
+| R4-4b | Real evaluation M3 vs M3.1-Flash vs Haiku, 3 reps, USD 10 cap, SCORING.md recommendation | coordinator | DONE | bench2 merge ab649c2 (Opus APPROVE); 2 sanity runs exposed the R4-fix defects; full run 90/90 as expected (72 done, 9 awaiting_approval, 9 waiting_no_progress in 29–57 s), all 24/24 verified first pass per model; M3.1-Flash fastest (34 s mean), M3 44 s, Haiku 68 s; fix: gate-stopped tasks cost basis `none` ($0 known) + Haiku latency_ms 20000, merge feb87cc (Sonnet APPROVE); spend USD 4.83 measured; SCORING.md "Round 4" |
 | R4-5 | Gates, V2_VERIFICATION, PR round-4 section, DELIVERED | coordinator | TODO | |
 
 ## Round 3
@@ -131,8 +131,9 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 - Live unit sets `HOST=0.0.0.0` explicitly (read-only inspection). Upgrading keeps it (no access break) and now logs a
   warning; owner should switch to `127.0.0.1` + private Serve or a literal Tailscale IP.
 - Owner default since 2026-10-11: dashboard-created and resumed Claude/Codex sessions and the manager skip permission
-  prompts and pre-accept folder trust (`AGENT_CMD_*` overrides win). For MiniMax, set `permissionMode: bypassPermissions`
-  in `~/.minimax/config.yaml`: `mcode` has no flag for it (D-019).
+  prompts and pre-accept folder trust (`AGENT_CMD_*` overrides win). For the MiniMax TUI, set `permissionMode: bypassPermissions`
+  in `~/.minimax/config.yaml`: the `mcode` TUI has no flag for it (D-019). V2 `mcode exec` workers and reviewers need
+  nothing: they run `--permission full` (D-023).
 - Before upgrading, set `ANDROID_APP_PACKAGE`, `ANDROID_APP_SHA256`, `LANGFUSE_PUBLIC_URL` and `PUBLIC_URL` in the service
   environment: assetlinks, the Langfuse link and the https hints now come from configuration, not the source.
 - Set `MCODE_NODE_DIR` in the service environment where `node` is 23.x (mcode 0.6.3 needs Node 24).
@@ -140,7 +141,8 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
   handle with the goal loop and runs `recover()` under the controller lease at startup (D-016, D-017). With V2 on, dashboard
   approve, deny and cancel and proposal approvals go through the loop; with it off they answer 503 (D-020). Enable steps:
   INSTALL "Optional: V2 task engine".
-- `usage/prices.json` PLACEHOLDER rows (MiniMax-M3, gpt-6-luna, gpt-6-sol) need real prices; until then cost shows unknown.
+- `usage/prices.json` PLACEHOLDER rows (gpt-6-luna, gpt-6-sol) need real prices; until then cost shows unknown. The MiniMax-M3
+  row no longer matters for V2: MiniMax is billed `subscription` in the registry (D-025), so V2 never prices it per token.
 - Forbidden-topic floor accepts low-severity false positives (safe direction, an owner tap): "call the client method",
   "publish the event", "roll out", "I'll pass. Word", "Re start", "Bill ing", "pass/word", "we pass words". Tune only
   with a fresh review.

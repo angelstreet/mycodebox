@@ -382,3 +382,88 @@ Spend for round 3 (USD; "estimated" is what the cap was enforced on, not measure
 | **Total** | **4.14** | **12.08** |
 
 Measured plus estimated: USD 16.22 of the USD 20 authorized. No defect required a re-run, so no re-run was made.
+
+## Round 4: MiniMax M3 vs M3.1-Flash-Preview vs Claude Haiku (2026-10-12)
+
+Owner brief (OWNER_DECISIONS §12): 3 repetitions, through the HTTP API of a disposable wired server, USD 10 total.
+MiniMax is a flat subscription (`billing: subscription`: no marginal USD, never a measured $0); Haiku is per token.
+Command, from the integration checkout at `3860d4f`:
+
+```sh
+node scripts/v2-bench.js --http --runtimes minimax:m3,minimax:m3.1-flash,claude:haiku --tasks all --reps 3 \
+  --max-usd 9.2 --task-usd 0.25 --reviewer-map claude:haiku=minimax:m3 --concurrency 3 --report --out <dir>
+```
+
+Pairs: each MiniMax developer is reviewed by Haiku, and Haiku is reviewed by M3, so the reviewer is never the author's
+model. Every developer ran with the light-model short leash (`run_limits`: 120 s, 40 steps, effort low where supported,
+2 stalls to `no_progress`), and so did Haiku when it reviewed. No run hit the 120 s timeout.
+
+Result: **90/90 runs ended as expected.** Outcomes: 72 done, 9 awaiting_approval (the forbidden merge/deploy task,
+stopped at the policy gate before any worker ran), 9 waiting_no_progress (the impossible task). No provider quota wait,
+no rate limit, no error.
+
+| Developer | Verified (8 done tasks x 3) | First pass | Rework | Wall time, done tasks (mean) | Dev tokens in / out per run | Developer cost | Impossible task: time to stop (mean, max) |
+|---|---|---|---|---|---|---|---|
+| MiniMax M3.1-Flash-Preview | 24/24 | 24/24 | 0 | 34 s | 42k / 0.6k | subscription | 30 s, 30 s |
+| MiniMax M3 | 24/24 | 24/24 | 0 | 44 s | 37k / 1.7k | subscription | 46 s, 57 s |
+| Claude Haiku 4.5 | 24/24 | 24/24 | 0 | 68 s | 333k / 3.7k | USD 2.42 measured (~USD 0.10 per verified task) | 47 s, 57 s |
+
+Wall time is task creation to acceptance and includes the review. The reviewer differs by pair: Haiku reviewed MiniMax,
+and M3 reviewed Haiku. Haiku as a reviewer cost about USD 0.033 per review (USD 1.78 over 54 reviews and feasibility
+reviews). The per-task and per-task-and-model tables are in the run's `report.md` (`v2-score.js --markdown`).
+
+Findings:
+
+- **On this suite, the three models tie on quality.** All 8 feature, fix, refactor, docs and test tasks were verified
+  first time, 3 times each. The suite is small and easy, so it ranks speed and cost, not ability: harder work still goes
+  to the standard and strong tiers by risk and by the escalation ladder.
+- **M3.1-Flash is the fastest and the leanest.** It was about 25% faster than M3 and about 2x faster than Haiku, with
+  2.7x fewer output tokens than M3. Haiku reads about 8x more input tokens, mostly cached context, and is the only one
+  with a marginal cost.
+- **Faster stop: met with margin.** The goal was an impossible task on a cheap model reaching `waiting/no_progress` in
+  under 3 minutes. Every run stopped in 29–57 s, against 481–1693 s in rounds 2 and 3. Each stop came from the feasibility
+  review after the developer's first run, which ended with an impossibility claim or no change. Exactly 2 worker runs
+  were used each time. Two 120 s stalls alone would take about 240 s, so the leash is the backstop and the feasibility
+  review gives the speed.
+- **Policy gates cost nothing.** The scorecard used to show the 9 gate-stopped tasks as unknown cost, which made every
+  model's cost unknown. They now have cost basis `none`, a known USD 0 because no worker ran. A run that started without
+  recording usage stays unknown.
+
+Recommendation (routing defaults; floors unchanged):
+
+| Task class and priority | First choice | Then | Why |
+|---|---|---|---|
+| non-security work at low or medium risk; priority balanced or cost | MiniMax M3.1-Flash-Preview (ladder start) | M3 (sideways, on provider error or quota), then Haiku, Sonnet, Opus | equal quality here, fastest, no marginal USD |
+| the same, priority speed | ranked by score, no ladder | | among light models M3.1-Flash ranks first (latency default below) |
+| the same, priority quality | ranked by score, no ladder | | not separated by this suite; tier priors favour standard and strong |
+| high or critical risk, security work, pinned tasks | unchanged floors (standard or strong, or the pin) | | the ladder never goes below a floor or off a pin |
+| reviewer of a MiniMax developer | Haiku | | independent model and provider, about USD 0.03 per review |
+| reviewer of a Haiku developer | M3 | | independent, subscription |
+
+Router defaults set from this run:
+
+- The escalation ladder (D-026) is on by default, in the order M3.1-Flash → M3 → Haiku → Sonnet → Opus. That is the
+  registry's order (light before standard, subscription before per token, then score), and the data confirms it.
+- `models.json`: Haiku `latency_ms` went from 8000 to 20000, so a speed-priority task ranks the measured order
+  (M3.1-Flash < M3 < Haiku) instead of preferring Haiku.
+- The run_limits defaults are kept: 120 s, 40 steps, effort low, and 2 stalls for light models on docs, test and
+  coding:low. The longest verified task took 1.9 min including its review, so the leash did not cut any good run.
+- Once the server's own store holds 5 or more attempts per model, route history from the scorecard replaces the tier
+  priors with measured quality, reliability, latency and cost.
+
+Caveats: 3 repetitions of 10 tasks. `MiniMax-M3.1-Flash-Preview` is a preview model that may change or be withdrawn, and
+the router then falls back to M3. The MiniMax subscription quota was not reached, so quota waits are tested only with stub
+CLIs.
+
+Spend for round 4 (USD, measured from provider usage records; MiniMax is subscription):
+
+| Run | Measured |
+|---|---|
+| sanity run 1 (6 runs, before the fixes) | 0.34 |
+| sanity run 2 (6 runs, after the fixes) | 0.29 |
+| full evaluation (90 runs) | 4.20 |
+| **Total** | **4.83** of the USD 10 authorized |
+
+The two sanity runs exposed defects that were fixed before the full run: mcode 0.6.5 final-text parsing, verdict and
+feasibility JSON, stall counting for no-change runs, and the 120 s leash (V2_PROGRESS R4-fix). The full run then
+exposed one more, the `none` cost basis above, which was fixed by rescoring. No re-run was needed.
