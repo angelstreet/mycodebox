@@ -308,8 +308,8 @@ and on SIGINT/SIGTERM. `GHOSTY_V2_CONCURRENCY` (server) and the driver's run poo
 
 Manifest additions: `driver: "http"`, `store_dir: "state/v2"`, per run `reviewer_planned`, `reviewer_actual`,
 `developer_actual` and `reviewer_as_planned` (read back from the task detail; a mismatch is also written to `error`).
-Differences from the in-process harness, to keep in mind when comparing: the server's goal loop has no `estimateRun`, so
-cost estimates come from the router's prices or stop as unknown (answered by the ledger); `checks` hold the latest
+Differences from the in-process harness, to keep in mind when comparing: the server estimates claude runs at their
+`--max-budget-usd` bound (D-022) and other runtimes from the router's prices, or stops as unknown (answered by the ledger); `checks` hold the latest
 evidence per check; `stop_note` comes from the last decision. `OUT/state` is the throwaway server state (it holds a
 generated reporter token and VAPID keys): keep it out of the repository. `--fake` uses the server's test-only scripted
 adapter and needs `--runtimes fake-dev` (test/v2-bench-http.test.js).
@@ -323,3 +323,62 @@ runs share one `GHOSTY_V2_CLAUDE_RUN_USD` (the largest claude `run_usd`, at most
 round 2). The child server gets only PATH, HOME, locale, proxy and provider auth variables, and a detached watcher kills it,
 its private tmux server and the temp dir if the driver dies (SIGKILL included). A task stuck in `unknown_external_effect`,
 with an unreadable log, or in `integrating`/`release_verifying` for 60 s is recorded as `not_yet_done`.
+
+## Real run over HTTP (round 3, 2026-10-12)
+
+Owner-authorized budget: **USD 20 total** for round 3 (explicit `budget_policy`, cap mode). The same suite and pairs as
+the round-2 dry run, driven through the HTTP API of a disposable wired server (`--http --tasks all --max-usd 19.5
+--task-usd 1.5`, concurrency 1, 3-minute agent timeout). Every budget stop for unknown cost was answered through
+`POST .../approve` by the suite ledger (89 confirmations); nothing was answered for the forbidden task or the path gate.
+
+Result: **50/50 runs started, 49 ended as expected.** Outcomes: 39 done, 6 awaiting_approval (the 5 forbidden-task runs,
+stopped before any developer run, plus one path gate, below), 5 waiting_no_progress, 0 skipped on budget.
+
+| Developer | Settled | Verified | First pass | Rework | Defects | Median latency |
+|---|---|---|---|---|---|---|
+| claude haiku 4.5 | 7 | 100% | 86% | 2 | 1 | 72 s |
+| claude sonnet 5.5 | 8 | 100% | 75% | 6 | 2 | 44 s |
+| codex | 8 | 100% | 100% | 0 | 0 | 58 s |
+| minimax | 8 | 100% | 100% | 0 | 0 | 57 s |
+| opencode big-pickle | 8 | 100% | 100% | 0 | 0 | 45 s |
+
+Tool score: **partial 77.0** (coverage 0.8, run coverage 1.0, 0 skipped; outcome correctness 0.98, verified 0.975, first
+pass 0.9, owner interventions 0.975). Cost and latency are unknown, so `score` is `null`, as in round 2.
+
+Comparison with the round-2 dry run (partial 78.1; 45/50 as expected; 4 skipped on budget):
+
+- **Coverage up, partial score about the same.** All 50 runs ran (run coverage 1.0 against 0.92): the round-2 per-task
+  shares are now validated at setup and the ledger had room for the tail of the suite. The partial score moved from 78.1
+  to 77.0 because of one run, not a trend: verified and owner-interventions each lost 0.025 to it, first pass dropped from
+  0.917 to 0.9.
+- **The one unexpected run is a safe stop by policy.** On input-validation, claude haiku left a scratch file
+  (`test-fix.mjs`) outside the task's path allowlist. The path gate stopped the task at `awaiting_approval` (kind
+  `paths`) with the checks passing; the driver never approves anything but a ledger budget stop, so it stayed there. This is
+  the developer straying, not an engine defect: the gate is the intended behaviour and was not changed. In round 2 the
+  same pair ended done.
+- **The impossible task now ends as designed for every developer.** All five runs ended `waiting_no_progress`, MiniMax
+  included (728 s, inside the 20-minute wall clock; round 2: a timeout backoff at 481 s and a cancel at 1693 s). This
+  confirms the round-3 no-progress fix above. Times: sonnet 53 s, codex 124 s, opencode 482 s, minimax 728 s, haiku
+  1136 s (haiku is the slowest to repeat the same failure; it still fits).
+- **Feature tasks are where models differ.** Feature first pass was 67% (round 2: 70%); every other class 100%. Sonnet's
+  rework this time (6, round 2: 2) and haiku's (2, round 2: 5) swapped places: with 7 or 8 runs per model this is noise,
+  not a ranking.
+- **Latency is higher, and not comparable one to one.** Medians went from 32–52 s to 44–72 s. The HTTP path adds a
+  1 s poll, the server's own worktree, checks and reviewer start-up, and the wake-up after each ledger approval.
+- **Driver caveat.** The run used the driver at `217177c`, before the review fixes `d902bf5` and `f292495`. The F1 fix
+  (ledger confirmations are `budget_auto`) only changes scoring, and the numbers above come from rescoring the run with
+  the fixed scorer. The F2 fix (the server's claude run estimate, D-022) was not in the run: claude budget stops were based
+  on router prices and the ledger. A coordinator guard script held the round total under USD 20, with margin to spare
+  (spend below).
+- **Cost stays unknown.** Only 1 run has a fully known cost: every claude developer is reviewed by codex, and codex,
+  minimax and opencode report no USD.
+
+Spend for round 3 (USD; "estimated" is what the cap was enforced on, not measured spend):
+
+| Run | Known | Estimated |
+|---|---|---|
+| bench-driver worker's sanity runs (real calls during development) | 0.09 | 0.34 |
+| real run over HTTP (50) | 4.05 | 11.74 |
+| **Total** | **4.14** | **12.08** |
+
+Measured plus estimated: USD 16.22 of the USD 20 authorized. No defect required a re-run, so no re-run was made.
