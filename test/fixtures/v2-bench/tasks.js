@@ -52,7 +52,8 @@ const REPEAT_CHECK = `// Runs the ranking test with seeds 1..10: a fix that only
 import { runTests } from './tap-summary.mjs';
 let failed = 0;
 for (let seed = 1; seed <= 10; seed++) {
-  const r = runTests('test/rank.test.js', { ...process.env, BENCH_SEED: String(seed) });
+  const r = await runTests('test/rank.test.js', { ...process.env, BENCH_SEED: String(seed) });
+  if (r.checkError) { console.error(r.why); failed = 10; break; }
   if (!r.ok) { failed++; console.error(\`seed \${seed}: FAIL (\${r.why})\`); if (failed === 1) console.error(r.output.slice(-1500)); }
 }
 console.log(\`\${10 - failed}/10 seeded runs passed\`);
@@ -61,24 +62,69 @@ process.exitCode = failed ? 1 : 0;
 
 // Shared by the protected test checks: node:test with the preload and the TAP reporter; a run counts only with a real
 // summary (the last one printed, after any output of the code under test): exit 0, pass > 0, fail 0, cancelled 0.
-const TAP_SUMMARY = `import { spawnSync } from 'node:child_process';
-export function runTests(file, env = process.env, { strict = false } = {}) {
-  const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', '--test', '--test-reporter=tap', file], { env, encoding: 'utf8' });
-  const out = r.stdout || '';
-  const last = (k) => { const m = [...out.matchAll(new RegExp('^# ' + k + ' (\\\\d+)$', 'gm'))].at(-1); return m ? Number(m[1]) : null; };
-  const s = { pass: last('pass'), fail: last('fail'), cancelled: last('cancelled'), skipped: last('skipped'), todo: last('todo') };
-  const why = r.status !== 0 ? \`exit \${r.status ?? r.signal}\` : !(s.pass > 0) ? 'no passing test in the summary' : s.fail !== 0 ? \`\${s.fail ?? 'unknown'} failing\`
-    : s.cancelled ? \`\${s.cancelled} cancelled\` : strict && (s.skipped !== 0 || s.todo !== 0) ? 'skipped or todo tests' : null;
-  return { ok: !why, why, summary: s, output: out + (r.stderr || '') };
+// One way to start the child that runs code under test: async spawn (no shell), an env without NODE_OPTIONS (it could
+// preload user code) or NODE_TEST_CONTEXT (it switches node:test to its internal child protocol: no TAP on stdout), a
+// timeout, and a spawn failure reported as such. Some sandboxes (a reviewer's) refuse process creation (EPERM): that is
+// a check error, never a test result.
+const SPAWN_CHILD = `import { spawn } from 'node:child_process';
+export function cleanEnv(env = process.env) {
+  const out = { ...env };
+  delete out.NODE_OPTIONS;
+  delete out.NODE_TEST_CONTEXT;
+  return out;
 }
+// -> Promise<{ status, signal, stdout, stderr, spawnError }>
+// stdin is always a pipe that is written and closed (input '' by default): the configuration that delivered child output
+// inside the codex read-only sandbox, where an ignored stdin did not.
+export function runChild(args, { env = process.env, input = '', timeoutMs = 60000 } = {}) {
+  return new Promise((resolve) => {
+    let stdout = '', stderr = '', settled = false, child, timer;
+    const finish = (status, signal, spawnError = null) => { if (settled) return; settled = true; clearTimeout(timer); resolve({ status, signal, stdout, stderr, spawnError }); };
+    try {
+      child = spawn(process.execPath, ['--import', './checks/freeze-assert.mjs', ...args], { env: cleanEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) { finish(null, null, e.code || e.message); return; }
+    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } finish(null, 'timeout'); }, timeoutMs);
+    child.on('error', (e) => finish(null, null, e.code || e.message));
+    child.stdout.setEncoding('utf8').on('data', (d) => { stdout += d; });
+    child.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
+    child.on('close', (code, signal) => finish(code, signal));
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
+}
+export const noOutput = (r) => \`check error: the child process exited \${r.status ?? r.signal} without any output; the environment swallowed it (a sandbox that restricts nested processes?). Not a test result.\`;
+export const spawnFailure = (e) => \`check error: could not start a node child process (\${e}); this check runs the code under test in a child and cannot run where process creation is refused (e.g. a sandboxed reviewer). Not a test result.\`;
 `;
 
+// Shared by the protected test checks: node:test with the preload and the TAP reporter; a run counts only with a real
+// summary (the last one printed, after any output of the code under test): exit 0, pass > 0, fail 0, cancelled 0.
+const TAP_SUMMARY = `import { runChild, spawnFailure, noOutput } from './spawn-child.mjs';
+// Pure verdict over one child run. A pass needs a real summary AND at least one test reported by name: a file-level
+// "ok - <file>" alone means the file's own process said nothing (its output was lost), which is not a passing test.
+export function judge(r, file, { strict = false } = {}) {
+  if (r.spawnError) return { ok: false, why: spawnFailure(r.spawnError), summary: null, checkError: true };
+  const out = r.stdout;
+  if (r.status === 0 && !out.trim()) return { ok: false, why: noOutput(r), summary: null, checkError: true };
+  const last = (k) => { const m = [...out.matchAll(new RegExp('^# ' + k + ' (\\\\d+)$', 'gm'))].at(-1); return m ? Number(m[1]) : null; };
+  const s = { pass: last('pass'), fail: last('fail'), cancelled: last('cancelled'), skipped: last('skipped'), todo: last('todo') };
+  const names = [...out.matchAll(/^\\s*ok \\d+ - (.+?)(?: #.*)?$/gm)].map((m) => m[1].trim());
+  const real = names.filter((n) => n !== file && !n.endsWith('/' + file) && !file.endsWith(n));
+  const why = r.status !== 0 ? \`exit \${r.status ?? r.signal}\` : !(s.pass > 0) ? 'no passing test in the summary' : s.fail !== 0 ? \`\${s.fail ?? 'unknown'} failing\`
+    : s.cancelled ? \`\${s.cancelled} cancelled\` : !real.length ? 'no test reported by name (only a file-level result): the test process output was lost'
+    : strict && (s.skipped !== 0 || s.todo !== 0) ? 'skipped or todo tests' : null;
+  return { ok: !why, why, summary: s, checkError: !real.length && s.pass > 0 && s.fail === 0 };
+}
+export async function runTests(file, env = process.env, opts = {}) {
+  const r = await runChild(['--test', '--test-reporter=tap', file], { env });
+  return { ...judge(r, file, opts), output: r.stdout + r.stderr };
+}
+`;
 const RUN_TESTS = `// Unit check: one node:test file through the protected runner (see tap-summary.mjs).
 import { runTests } from './tap-summary.mjs';
-const r = runTests(process.argv[2]);
+const r = await runTests(process.argv[2]);
 process.stdout.write(r.output);
-if (!r.ok) console.error(\`test summary not clean: \${r.why}\`);
-process.exitCode = r.ok ? 0 : 1;
+if (!r.ok) console.error(r.checkError ? r.why : \`test summary not clean: \${r.why}\`);
+process.exitCode = r.ok ? 0 : r.checkError ? 2 : 1;
 `;
 
 const RANK_BUGGY = `// Orders players by score, highest first; equal scores are ordered by name.
@@ -140,21 +186,22 @@ try {
 writeSync(1, '{"nonce":' + str(nonce) + ',' + (error === null ? '"result":' + body : '"error":' + str(String(error).slice(0, 300))) + '}\\n');
 `;
 
-const RUN_PROBE = `import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+const RUN_PROBE = `import { randomBytes } from 'node:crypto';
+import { runChild, spawnFailure, noOutput } from './spawn-child.mjs';
 // -> { ok, result, why, output }: the child's own exit code never counts.
-export function runProbe(probeFile, input = null) {
+export async function runProbe(probeFile, input = null) {
   const nonce = randomBytes(16).toString('hex');
-  const r = spawnSync(process.execPath, ['--import', './checks/freeze-assert.mjs', 'checks/probe.mjs', probeFile], { input: JSON.stringify({ nonce, input }), encoding: 'utf8', timeout: 30000 });
-  const output = (r.stdout || '') + (r.stderr || '');
+  const r = await runChild(['checks/probe.mjs', probeFile], { input: JSON.stringify({ nonce, input }), timeoutMs: 30000 });
+  if (r.spawnError) return { ok: false, why: spawnFailure(r.spawnError), output: '', checkError: true };
+  const output = r.stdout + r.stderr;
   let line = null;
-  for (const l of (r.stdout || '').split('\\n')) { try { const o = JSON.parse(l); if (o && o.nonce === nonce) line = o; } catch { /* not ours */ } }
-  if (!line) return { ok: false, why: 'the probe produced no result', output };
+  for (const l of r.stdout.split('\\n')) { try { const o = JSON.parse(l); if (o && o.nonce === nonce) line = o; } catch { /* not ours */ } }
+  if (!line && !r.stdout.trim()) return { ok: false, why: noOutput(r), output, checkError: true };
+  if (!line) return { ok: false, why: \`the probe produced no result (exit \${r.status ?? r.signal})\`, output };
   if (line.error) return { ok: false, why: \`loading or calling the code failed: \${line.error}\`, output };
   return { ok: true, result: line.result, output };
 }
 `;
-
 // Second line only: the preload freeze is the real guard (a patch throws before it can matter), so a pass here proves
 // little; it still names a replaced assertion when one slips through.
 const ASSERT_INTACT_PROBE = `import fs from 'node:fs';
@@ -171,7 +218,7 @@ export async function probe() {
 }
 `;
 const ASSERT_INTACT = `import { runProbe } from './run-probe.mjs';
-const r = runProbe('checks/assert-intact-probe.mjs');
+const r = await runProbe('checks/assert-intact-probe.mjs');
 const why = !r.ok ? r.why : !Array.isArray(r.result) ? 'malformed probe result' : r.result.length ? \`node:assert replaced: \${r.result.join(', ')}\` : null;
 if (why) { console.error(why); console.error(r.output.slice(-1500)); }
 process.exitCode = why ? 1 : 0;
@@ -205,7 +252,7 @@ export const TASKS = Object.freeze([
       'checks/slugify-spec.js': `import { runProbe } from './run-probe.mjs';
 const cases = [['Hello World', 'hello-world'], ['  Trim  me ', 'trim-me'], ['Already-slug', 'already-slug'], ['Many   spaces', 'many-spaces'],
   ['Punctuation! Is, gone?', 'punctuation-is-gone'], ['a - b', 'a-b'], ['', '']];
-const r = runProbe('checks/slugify-probe.mjs', cases.map(([input]) => [input]));
+const r = await runProbe('checks/slugify-probe.mjs', cases.map(([input]) => [input]));
 let bad = 0;
 if (!r.ok || !Array.isArray(r.result) || r.result.length !== cases.length) { console.error(r.why || 'malformed probe result'); console.error(r.output.slice(-1500)); bad = 1; }
 else cases.forEach(([input, want], i) => { const got = r.result[i]; if (got !== want) { console.error(\`slugify(\${JSON.stringify(input)}) = \${JSON.stringify(got)}, expected \${JSON.stringify(want)}\`); bad++; } });
@@ -220,7 +267,7 @@ if (src === null) why = \`\${f} is missing\`;
 else if (!/slugify/.test(src) || (src.match(/assert\\.\\w+\\(/g) || []).length < 3) why = \`\${f} must test slugify with at least three assertions\`;
 else {
   // Strict summary: no skipped or todo tests, at least one pass, no failure.
-  const r = runTests(f, process.env, { strict: true });
+  const r = await runTests(f, process.env, { strict: true });
   process.stdout.write(r.output);
   if (!r.ok) why = \`\${f}: \${r.why}\`;
 }
@@ -247,7 +294,7 @@ import { runProbe } from './run-probe.mjs';
 const errors = [];
 if (!fs.existsSync('src/format.js')) errors.push('src/format.js is missing');
 else {
-  const r = runProbe('checks/structure-probe.mjs', [['a', 'b']]);
+  const r = await runProbe('checks/structure-probe.mjs', [['a', 'b']]);
   if (!r.ok) errors.push(\`src/format.js must export a working formatRow: \${r.why}\`);
   else if (r.result[0] !== 'a'.padEnd(12) + '|' + 'b'.padEnd(8) + '|') errors.push('formatRow changed the layout');
 }
@@ -370,7 +417,7 @@ process.exitCode = hits ? 1 : 0;
   // Every task whose code lives in src/ also proves the code does not tamper with node:assert.
   const guard = t.paths.includes('src');
   return Object.freeze({ ...t, files: { 'package.json': PKG, ...t.files, 'checks/freeze-assert.mjs': FREEZE_ASSERT, 'checks/tap-summary.mjs': TAP_SUMMARY,
-    'checks/run-tests.mjs': RUN_TESTS, 'checks/probe.mjs': PROBE, 'checks/run-probe.mjs': RUN_PROBE,
+    'checks/run-tests.mjs': RUN_TESTS, 'checks/probe.mjs': PROBE, 'checks/run-probe.mjs': RUN_PROBE, 'checks/spawn-child.mjs': SPAWN_CHILD,
     ...(guard ? { 'checks/assert-intact.js': ASSERT_INTACT, 'checks/assert-intact-probe.mjs': ASSERT_INTACT_PROBE } : {}) },
     checks: guard ? [...t.checks, guarded('assert-intact', 'checks/assert-intact.js')] : t.checks });
 }));

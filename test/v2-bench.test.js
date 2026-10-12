@@ -19,10 +19,10 @@ let n = 0;
 const outDir = () => path.join(TMP, `out-${n++}`);
 
 // Writes a fixture (optionally with overlay files) to a plain directory and runs its acceptance checks.
-function runChecks(task, overlay = {}) {
+function runChecks(task, overlay = {}, env = {}) {
   const dir = path.join(TMP, `fx-${n++}`);
   for (const [f, c] of Object.entries({ ...task.files, ...overlay })) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), c); }
-  return task.checks.map((c) => spawnSync(process.execPath, c.command.slice(1), { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH } }).status);
+  return task.checks.map((c) => spawnSync(process.execPath, c.command.slice(1), { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, ...env } }).status);
 }
 
 test('suite: 8-12 synthetic tasks with classes, expected outcomes and valid policies', () => {
@@ -108,7 +108,9 @@ test('fixtures: exiting early with 0 from the code under test fails every check 
   for (const t of TASKS) {
     for (const c of t.checks.filter((x) => !['links', 'old-name'].includes(x.id))) assert.deepEqual(c.command.slice(1, 3), ['--import', './checks/freeze-assert.mjs'], `${t.id} ${c.id}`);
     for (const [f, c] of Object.entries(t.files)) if (f.startsWith('checks/')) assert.doesNotMatch(c, /process\.exit\(/, `${t.id} ${f}: report through process.exitCode`);
-    for (const [f, c] of Object.entries(t.files)) if (f.startsWith('checks/') && c.includes("'--test'")) assert.match(c, /'--import', '\.\/checks\/freeze-assert\.mjs', '--test'/, `${t.id} ${f}`);
+    // Children are started in one place only, always with the preload.
+    assert.match(t.files['checks/spawn-child.mjs'], /spawn\(process\.execPath, \['--import', '\.\/checks\/freeze-assert\.mjs', \.\.\.args\]/);
+    for (const [f, c] of Object.entries(t.files)) if (f.startsWith('checks/') && f !== 'checks/spawn-child.mjs') assert.doesNotMatch(c, /\bspawn(Sync)?\(|execFile|\bfork\(/, `${t.id} ${f}: start children through spawn-child.mjs`);
   }
 });
 
@@ -392,4 +394,29 @@ test('fixtures: single-script checks judge raw results in a parent; an exit hook
   // A swallowed patch attempt changes nothing: assert-intact passes (it proves little) and the unit check still fails.
   const swallowed = runChecks(imp, { 'src/parity.js': `${hook}try { a.equal = () => {}; } catch {}\nexport const isEven = () => true;\n` });
   assert.deepEqual([swallowed[0] !== 0, swallowed[intact]], [true, 0]);
+});
+
+test('check children: inherited NODE_TEST_CONTEXT/NODE_OPTIONS are stripped; no output or a file-level-only pass is a check error', async () => {
+  const t = TASKS.find((x) => x.id === 'rename-callers');
+  // node:test inside a test run sets NODE_TEST_CONTEXT, which turns a child's TAP into the internal protocol.
+  assert.deepEqual(runChecks(t, t.fake.solve, { NODE_TEST_CONTEXT: 'child-v8' }), t.checks.map(() => 0));
+  const dir = path.join(TMP, `fx-${n++}`);
+  fs.mkdirSync(path.join(dir, 'checks'), { recursive: true });
+  for (const f of ['tap-summary.mjs', 'spawn-child.mjs']) fs.writeFileSync(path.join(dir, 'checks', f), t.files[`checks/${f}`]);
+  const { judge } = await import(path.join(dir, 'checks', 'tap-summary.mjs'));
+  const { cleanEnv } = await import(path.join(dir, 'checks', 'spawn-child.mjs'));
+  assert.deepEqual(Object.keys(cleanEnv({ PATH: '/x', NODE_OPTIONS: '--require ./evil.cjs', NODE_TEST_CONTEXT: 'child-v8' })), ['PATH']);
+  const tap = (lines) => ({ status: 0, signal: null, stdout: lines.join('\n') + '\n', stderr: '', spawnError: null });
+  const summary = ['1..1', '# tests 1', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'];
+  assert.equal(judge(tap(['TAP version 13', '# Subtest: totals', 'ok 1 - totals', ...summary]), 'test/cart.test.js').ok, true);
+  const hollow = judge(tap(['TAP version 13', 'ok 1 - test/cart.test.js', ...summary]), 'test/cart.test.js');
+  assert.deepEqual([hollow.ok, hollow.checkError], [false, true]);
+  assert.match(hollow.why, /only a file-level result/);
+  const empty = judge({ status: 0, signal: null, stdout: '', stderr: '', spawnError: null }, 'test/cart.test.js');
+  assert.deepEqual([empty.ok, empty.checkError], [false, true]);
+  assert.match(empty.why, /check error: .*without any output.*Not a test result/);
+  const refused = judge({ status: null, signal: null, stdout: '', stderr: '', spawnError: 'EPERM' }, 'test/cart.test.js');
+  assert.deepEqual([refused.ok, refused.checkError], [false, true]);
+  assert.match(refused.why, /could not start a node child process \(EPERM\)/);
+  assert.equal(judge(tap(['# Subtest: totals', 'not ok 1 - totals', '1..1', '# pass 0', '# fail 1']), 'test/cart.test.js').checkError, false, 'a real failure is a test result');
 });
