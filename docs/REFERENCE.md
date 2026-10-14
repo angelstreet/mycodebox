@@ -550,7 +550,8 @@ deletions of data, credentials and secrets, money, customers, `systemctl` / `pm2
 reboots, database migrations and migration tools (`alembic`, `prisma migrate`, ...), database resets, force-push and
 history rewrites (`-f`, `--force-with-lease`, `--mirror`, `--delete`, `+ref`, `:ref`, pushes to prod/staging/live), tag
 pushes and publishing a package. Round 8 added the sudo, unit-file, reboot and migration-tool words to `FORBIDDEN_RE`
-too, which only makes every other caller stricter.
+too, which only makes every other caller stricter: a button or a voice answer whose text says "graceful shutdown" or
+`user.service.ts` now asks for a confirm too.
 
 For a finished turn without a live menu, the manager evaluates every decidable topic present (merge, then push, then
 deploy), answers the passing ones in one reply and escalates the rest with what was already answered:
@@ -577,7 +578,7 @@ and to the feed. The interactive manager runs the same checks with
 (continue, menu, AI reply, info, merge, push, deploy), newest first, with a one-line why, the evidence and a revert:
 `GET /api/manager/decided?hours=24|since=<iso>&limit=100` -> `{ items: [{ id, at, session, kind, what, why, evidence,
 revert: { label, text }, url }], summary: { count, byKind, text } }`. `POST /api/manager/decided/:id/revert` sends the
-revert text for a merge, push or deploy to the session (`by: owner`; 409 when the session is not stopped or has a draft);
+revert text for a merge, push or deploy to the session, once per item, through the guarded send path as the caller's actor (`by`, default `owner`); 409 when the session has not finished its turn, shows a menu, has a draft, or the item was already reverted;
 other kinds return a correction draft instead. The dashboard view is in the More menu (`/?decided=1`, Revert needs a
 second tap, Correct opens the session with the draft). Once a day at `decidedDigestHour` (18, in `pushTimezone`) a
 digest-tier push "Decided for you today: N" carries the summary; voice mode speaks the same summary.
