@@ -23,11 +23,13 @@ test('F1: routine continue questions in everyday wording still auto-answer (no f
   for (const q of ['Shall I continue with phase 2?', 'Should I continue and update the README?', 'Shall I continue and bump the version in package.json?',
     'Shall I continue and add the live-reload hook?', 'Should I continue and fix the failing test?', 'Shall I continue with the fee calculation?',
     'Shall I continue and restart the test run?', 'Shall I continue and release the mutex in the worker?', 'Should I continue and promote the constant to a module-level export?',
-    'Shall I continue and drop the unused import?', 'Shall I continue and rebase the helper onto the new base class?', 'Shall I continue and ship the fix in this branch?']) {
+    'Shall I continue and tidy the unused import?', 'Shall I continue and rebase the helper onto the new base class?', 'Shall I continue and ship the fix in this branch?']) {
     const s = classify(q);
     assert.equal(s.forbidden, null, q);
     assert.deepEqual(wouldSend(s).send, { text: 'Yes, continue.' }, q);
   }
+  // round 8 (intended, more conservative): a plain "drop" is a destructive verb now
+  assert.ok(classify('Shall I continue and drop the unused import?').forbidden);
   // narrative context counts too: a sentence before the question that names a forbidden topic still blocks (unchanged behaviour)
   assert.ok(classify('Shall I continue with the tests?', 'The staging rollout finished earlier today.').forbidden);
   assert.equal(classify('Shall I continue?', 'I restarted the dev server and it works.').forbidden, null);

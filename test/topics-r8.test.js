@@ -110,3 +110,22 @@ test('R8-r4: "run / queue / retry the deploy <noun>" is a noun: no topic, the st
     const t = topicSplit(x); assert.ok(t.deploy, x); assert.equal(t.hard, null, x);
   }
 });
+
+test('R8-r4 (Fable N5): past tenses and more verbs of the delete / credential / money groups are forbidden and hard', () => {
+  for (const x of ['The old backups will be deleted first.', 'The cache was removed.', 'dropped the column', 'Tables are being dropped', 'wiped the volume', 'truncated the log', 'it overwritten the file', 'purged the queue', 'pruned the images', 'we rotated the keys', 'the token was revoked', 'The invoice was paid.']) {
+    assert.ok(forbiddenMatch(x), `forbidden: ${x}`);
+    assert.ok(topicSplit(`merge, push and deploy; ${x}`).hard, `hard: ${x}`);
+  }
+  assert.ok(topicSplit('Should the old data be deleted and feat be merged into main?').hard, 'the deletion is hard while the merge is a topic');
+  assert.ok(topicSplit('Should the old data be deleted and feat be merged into main?').merge);
+});
+
+test('R8-r4 (Fable N5): a stop that mentions a past-tense deletion or payment is never auto-continued', async () => {
+  const { classifyStall, wouldSend } = await import('../stall.js');
+  const RULE = '─'.repeat(40);
+  const run = (body) => { const plain = [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE]; const s = classifyStall({ plain, raw: plain, state: 'done' }); return { s, w: wouldSend(s) }; };
+  for (const body of ['Shall I continue? The old backups will be deleted first.', 'The invoice was paid; continue?']) {
+    const { s, w } = run(body);
+    assert.ok(s.forbidden, body); assert.equal(w.send, null, body);
+  }
+});

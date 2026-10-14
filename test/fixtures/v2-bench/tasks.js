@@ -243,7 +243,7 @@ export const TASKS = Object.freeze([
   },
   {
     id: 'add-function', task_class: 'feature', expected_outcome: 'done',
-    goal: 'Add an exported function slugify(text) to src/text.js: lowercase the text, trim it, drop every character that is not a letter, a digit, a space or a hyphen, then join the words with single hyphens (runs of spaces or hyphens become one hyphen, no hyphen at either end). Add node:test unit tests for it in test/slugify.test.js with at least three assertions.',
+    goal: 'Add an exported function slugify(text) to src/text.js: lowercase the text, trim it, discard every character that is not a letter, a digit, a space or a hyphen, then join the words with single hyphens (runs of spaces or hyphens become one hyphen, no hyphen at either end). Add node:test unit tests for it in test/slugify.test.js with at least three assertions.',
     paths: ['src', 'test'],
     files: {
       'src/text.js': "export const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');\n",

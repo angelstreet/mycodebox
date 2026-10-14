@@ -207,12 +207,12 @@ const FORBIDDEN_PARTS = [
   GIT_PUSH,
   HARD_GIT,
   // destructive data operations
-  String.raw`\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm\b|\bprune\b|\btruncate\b|\bwipe\b|\bwiping\b|\boverwrit(?:e|ing)\b`,
+  String.raw`\bdelet(?:e|ed|ing|ion)\b|\bremov(?:e|ed|ing)\b|\bdrop(?:ped|ping)?\b|\brm\b|\bprun(?:e|ed|ing)\b|\btruncat(?:e|ed|ing)\b|\bwip(?:e|ed|ing)\b|\boverwrit(?:e|ten|ing)\b|\bpurg(?:e|ed|ing)\b`,
   String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b|\bmigrat(?:e|ion)`,
   // credentials and secrets
-  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevok(?:e|ing)\b|\brotat(?:e|ing)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b`,
+  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevok(?:e|ed|ing)\b|\brotat(?:e|ed|ing)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b`,
   // money and customers
-  String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+  String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
   // host administration and schema tools (round 8: strictly more conservative for every caller)
   String.raw`sudoers|/etc/sudo|visudo`,
   String.raw`\bunit file|/etc/systemd|systemctl (?:enable|disable|daemon-reload|mask)|\.service\b`,
