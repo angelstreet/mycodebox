@@ -44,7 +44,7 @@ must match the actual configuration until they are migrated.
 - The AI manager must never answer on the owner's behalf about deploys, deletes, credentials, money or customers. The
   forbidden-topic filter always wins for those. Merges are an evaluated manager decision (owner, 2026-10-14): the
   manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the
-  session reports its tests green on that branch (or the change is docs/test-only), the diff touches no secrets,
+  session reports its tests green on that branch (or the change is docs-only; test code needs the green report), the diff touches no secrets,
   migrations, sudoers or units, and Jev (or the manager's own reasoning when Jev is unavailable) rates it safe at or
   above `mergeMinConfidence`; otherwise it escalates with the reason. Every merge decision is journaled
   (`merge-decisions.jsonl`) and shown in the owner's feed. A merge+deploy question is split: merge decided, deploy

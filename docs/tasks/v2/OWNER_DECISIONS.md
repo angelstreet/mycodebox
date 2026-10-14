@@ -338,4 +338,6 @@ forbidden topic, including the path it could have looked up.
   saying what it already answered.
 
 Implementation: `merge-policy.js`, `info-lookup.js`, the `topicSplit` floor in `stall.js`, router point `merge`, and
-`scripts/merge-eval.js` for the interactive manager; see [REFERENCE](../../REFERENCE.md#merge-decisions-and-mixed-questions-owner-2026-10-14).
+`scripts/merge-eval.js` for the interactive manager. After the Fable review the implementation is stricter than the
+quote in two places: "docs/test-only" means docs-only (test code needs a green report like any code), and CI, deploy and
+infra files count as sensitive; see [REFERENCE](../../REFERENCE.md#merge-decisions-and-mixed-questions-owner-2026-10-14).
