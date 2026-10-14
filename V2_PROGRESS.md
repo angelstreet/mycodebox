@@ -1,4 +1,4 @@
-STATUS: DELIVERED c11fb97 https://github.com/angelstreet/mycodebox/pull/7 (round 7)
+STATUS: DELIVERING 185d982 (round 8)
 
 # V2 progress
 
@@ -7,9 +7,21 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 7 (the manager decides merges, `.v2/round7.md`) delivered on `v2/r7-merge-policy`: owner review of the PR.
-Round 6b is merged (PR #6, main 36114e5); this branch is rebased on it. SHAs quoted before round 2 in this file are
-pre-rewrite SHAs (history rewritten 2026-10-11).
+Round 8 (autonomy by default, voice goal, `.v2/round8.md`) delivered on `v2/r8-autonomy-voice`: owner review of the PR.
+Then round 10 (central lease service), then round 9 without its item 6 (owner order, 2026-10-14). SHAs quoted before
+round 2 in this file are pre-rewrite SHAs (history rewritten 2026-10-11).
+
+## Round 8
+
+Base: `origin/main` 44bf60d (round 7 merged), merged up to 6801705. Spec: `.v2/round8.md`. Owner decision: OWNER_DECISIONS §15.
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R8-1 | `docs/GOALS.md` (G1, G2, existing goals with status), README + index links, OWNER_DECISIONS §15, AGENTS / CONTRACT / INSTALL / REFERENCE floors | coordinator | DONE | 5f86eb1 era docs, 5477a67, 8e9a8f8, 313cdb7 |
+| R8-2 | G1: topic split {merge, push, deploy, hard}, push / deploy evaluations (`decide-policy.js`), menu_recommended default + `autonomyVersion` migration, `manager-decisions.jsonl`, Decided for you (`decided.js`, view, revert, daily digest), `merge-eval.js --kind` | Sonnet / Opus + Fable review | DONE (4 review rounds; Fable APPROVE) | d01c807, 9cc92ab, e5f8a69, 11942d4, 61da88f, 7a60af6, 38aae6c |
+| R8-3 | G2: voice audit + `docs/VOICE.md`, `voice.js` queue / answer / digest, voice mode page (Media Session, Wake Lock), notification actions | Sonnet / Opus review | DONE | 5904a8c, 391c28d |
+| R8-4 | mm-manager manual (ops repo) | coordinator | DONE, local branch `mm-r8-autonomy` (not pushed) | 7ebfabd9a |
+| R8-5 | Gates, PR, DELIVERED | coordinator | DONE | 185d982: 2027/2027 Node 23.6, Node 24.21 2027/2027 on rerun (one unidentified intermittent failure in the first run), acceptance 54/54, browser 67/67, leak scan clean |
 
 ## Round 7
 
