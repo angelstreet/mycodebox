@@ -23,11 +23,11 @@ Goal: hear what needs you, answer by voice, keep the fleet moving without lookin
    ("two", "option 2", "the second one"), "recommended", yes and no, "wait", "skip", "next", "repeat", "stop", "what happened" and
    "confirm" / "cancel". "One or two" is not understood and nothing is sent. The item is re-read first; if the stop changed or went away the
    answer is refused (409). A session with a draft in its input box is never typed into. The answer is sent as actor `owner-voice` and logged as
-   an owner choice, like a popup tap. A ledger ask is sent to the manager session as `Answer: <Qid> <n>`.
+   an owner choice, like a popup tap. A ledger ask is sent to the manager session as `Answer: <Qid> <n>` and confirmed aloud as "Sent option 1 for Q12 to the manager (<session>)"; a ledger question about a sensitive topic needs "confirm" whatever the option says.
 3. **Confirm for sensitive topics**: an option that touches deploy, push, delete, credentials, money or customers is not sent until you say
    "confirm". Say "cancel" to drop it. This is the spoken twin of the double tap.
 4. **Spoken digest** (`GET /api/voice/digest?minutes=60`, or say "what happened"): open items, sessions that finished a turn, sessions started
-   or ended, what was decided for you (the manager's decided endpoint when present, else a count of answers typed for you), deploys finished or
+   or ended, "Decided for you" (the manager's `decidedView`, read in-process; if that fails, a count of answers typed for you), deploys finished or
    failed, quota above 80 percent. At most 900 characters, plain sentences.
 5. **Voice mode page** (More menu > Voice mode, or `/?voice=1`): big Start/Stop, Next, Repeat, Digest and Answer buttons, a mic level bar,
    speed 1x / 1.25x / 1.5x and an auto-listen switch (both remembered on the phone). The loop reads an item, listens until you stop talking
@@ -38,8 +38,9 @@ Goal: hear what needs you, answer by voice, keep the fleet moving without lookin
    The screen stays on while the loop runs (Screen Wake Lock, taken again when the page comes back to the front).
 7. **Notification buttons** (screen off): a needs-you push for a stop with a recommended option that is not sensitive gets "Do recommended"
    and "Wait" (when the stop has a wait answer), plus "Speak it" which opens the voice page. Android shows only two buttons on many devices;
-   "Wait" is dropped first. A sensitive option is never answered from a notification: it opens the app. Notifications that are batched into
-   a digest only keep their buttons when the digest holds a single stop.
+   "Wait" is dropped first. A sensitive option is never answered from a notification: it opens the app. "Needs you" alerts are digest-tier unless they are P0, so the buttons appear only when a digest holds exactly one stop;
+   interrupt-tier pushes always have them. An id in a button covers the stop id and a hash of the question and options, so a tap on an
+   old notification never answers a newer stop (409 "stop changed").
 
 ## Using it
 

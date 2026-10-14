@@ -2,7 +2,7 @@
 // the digest, and the notification actions. No tmux, no network, no live state.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { voiceQueue, spokenScript, matchSpokenAnswer, needsConfirm, createVoice, digestText, feedActions, plainSpeech, normalizeSpeech, VOICE_BY } from '../voice.js';
+import { voiceQueue, spokenScript, matchSpokenAnswer, needsConfirm, createVoice, decidedFor, digestText, feedActions, plainSpeech, normalizeSpeech, VOICE_BY } from '../voice.js';
 import { createAlerts, tierConfig, createPush } from '../push.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,12 +16,13 @@ const yesnoStop = () => ({ state: 'done', lastActivitySec: 30, stall: { id: 'st2
 const queueOf = (status, extra = {}) => voiceQueue({ status, managerSessions: ['manager'], ...extra });
 const item = (s = menuStop()) => queueOf({ alpha: s })[0];
 const yn = () => queueOf({ beta: yesnoStop() })[0];
+const ID = { a: item().id, b: yn().id };
 
 test('voiceQueue: stops that need the owner, with buttons-derived answers', () => {
   const q = queueOf({ alpha: menuStop(), beta: yesnoStop() });
   assert.equal(q.length, 2);
   const a = q.find((i) => i.session === 'alpha');
-  assert.equal(a.id, 'stop:alpha:st1');
+  assert.match(a.id, /^stop:alpha:st1:[0-9a-f]{8}$/);
   assert.deepEqual(a.options.map((o) => [o.n, o.recommended, o.answer]), [[1, false, { key: '1' }], [2, true, { key: '2' }], [3, false, { key: '3' }]]);
   const b = q.find((i) => i.session === 'beta');
   assert.deepEqual(b.options.map((o) => o.answer), [{ text: 'yes' }, { text: 'no' }]);
@@ -41,7 +42,7 @@ test('voiceQueue: P0 first, then oldest; ledger asks are items with the manager 
   const status = { newer: menuStop({ lastActivitySec: 5, stall: { ...menuStop().stall, id: 'n' } }), older: menuStop({ lastActivitySec: 500, stall: { ...menuStop().stall, id: 'o' } }), urgent: menuStop({ lastActivitySec: 1, stall: { ...menuStop().stall, id: 'u' } }) };
   const q = queueOf(status, { priority: (s) => (s === 'urgent' ? 'P0' : 'P2'), ownerAsks: [{ id: 'Q12', session: 'alpha', question: 'Pick a colour', options: ['red', 'blue'], recommendation: '2', at: '2026-01-14T10:00:00Z' }] });
   assert.equal(q[0].session, 'urgent');
-  assert.deepEqual(q.slice(1).map((i) => i.id), ['ask:Q12', 'stop:older:o', 'stop:newer:n']);   // the ledger ask dates from earlier today
+  assert.deepEqual(q.slice(1).map((i) => i.id.split(':').slice(0, 2).join(':')), ['ask:Q12', 'stop:older', 'stop:newer']);   // the ledger ask is the oldest
   const ask = q.find((i) => i.kind === 'ask');
   assert.deepEqual(ask.options[1].answer, { text: 'Answer: Q12 2', to: 'manager' });
   assert.equal(ask.options[1].recommended, true);
@@ -132,7 +133,7 @@ const post = (v, body) => v.route({ method: 'POST', path: '/api/voice/answer', r
 
 test('answer: a spoken number sends the menu key as owner-voice and logs the choice', async () => {
   const { v, sent, chosen } = rig({ status: { alpha: menuStop() } });
-  const r = await post(v, { id: 'stop:alpha:st1', transcript: 'Option two.' });
+  const r = await post(v, { id: ID.a, transcript: 'Option two.' });
   assert.equal(r.status, 200);
   assert.equal(r.body.status, 'sent');
   assert.equal(r.body.say, 'Sent Rewrite it with a state machine to alpha.');
@@ -143,7 +144,7 @@ test('answer: a spoken number sends the menu key as owner-voice and logs the cho
 
 test('answer: a yes-no stop sends the text', async () => {
   const { v, sent } = rig({ status: { beta: yesnoStop() } });
-  const r = await post(v, { id: 'stop:beta:st2', transcript: 'Yes.' });
+  const r = await post(v, { id: ID.b, transcript: 'Yes.' });
   assert.equal(r.body.status, 'sent');
   assert.deepEqual(sent[0].answer, { text: 'yes' });
 });
@@ -152,17 +153,18 @@ test('answer: a sensitive option asks for "confirm" first; confirm sends, cancel
   const status = { alpha: menuStop({ stall: { id: 'f', case: 'menu_recommended', question: 'What now?', options: [
     { n: 1, text: 'Deploy to production', recommended: false, forbidden: 'deploy' }, { n: 2, text: 'Keep working', recommended: true, forbidden: null }] } }) };
   const { v, sent } = rig({ status });
-  const r1 = await post(v, { id: 'stop:alpha:f', transcript: 'one' });
+  const FID = queueOf(status)[0].id;
+  const r1 = await post(v, { id: FID, transcript: 'one' });
   assert.equal(r1.body.status, 'confirm');
   assert.match(r1.body.say, /^You chose Deploy to production for alpha\. That touches .+\. Say confirm to send, or cancel\.$/);
   assert.equal(sent.length, 0);
-  const r2 = await post(v, { id: 'stop:alpha:f', transcript: 'Confirm.', pending: r1.body.option });
+  const r2 = await post(v, { id: FID, transcript: 'Confirm.', pending: r1.body.option });
   assert.equal(r2.body.status, 'sent');
   assert.deepEqual(sent.map((s) => s.answer), [{ key: '1' }]);
-  const r3 = await post(v, { id: 'stop:alpha:f', transcript: 'cancel', pending: 1 });
+  const r3 = await post(v, { id: FID, transcript: 'cancel', pending: 1 });
   assert.equal(r3.body.intent, 'cancel');
   assert.equal(sent.length, 1);
-  const r4 = await post(v, { id: 'stop:alpha:f', transcript: 'confirm' });   // nothing pending
+  const r4 = await post(v, { id: FID, transcript: 'confirm' });   // nothing pending
   assert.match(r4.body.say, /nothing to confirm/i);
   assert.equal(sent.length, 1);
 });
@@ -171,24 +173,25 @@ test('answer: a notification never answers a sensitive option; it opens the app'
   const status = { alpha: menuStop({ stall: { id: 'f', case: 'menu_recommended', question: 'What now?', options: [
     { n: 1, text: 'Deploy to production', recommended: true, forbidden: 'deploy' }, { n: 2, text: 'Keep working', recommended: false, forbidden: null }] } }) };
   const { v, sent } = rig({ status });
-  const r = await post(v, { id: 'stop:alpha:f', option: 'recommended', via: 'notification' });
+  const FID = queueOf(status)[0].id;
+  const r = await post(v, { id: FID, option: 'recommended', via: 'notification' });
   assert.equal(r.body.status, 'open');
   assert.equal(sent.length, 0);
 });
 
 test('answer: notification actions "recommended" and a safe option are sent', async () => {
   const { v, sent } = rig({ status: { alpha: menuStop() } });
-  const r = await post(v, { id: 'stop:alpha:st1', option: 'recommended', via: 'notification' });
+  const r = await post(v, { id: ID.a, option: 'recommended', via: 'notification' });
   assert.equal(r.body.status, 'sent');
   assert.deepEqual(sent[0].answer, { key: '2' });
-  const none = await post(v, { id: 'stop:alpha:st1', option: 'wait', via: 'notification' });   // no wait option on a live menu
+  const none = await post(v, { id: ID.a, option: 'wait', via: 'notification' });   // no wait option on a live menu
   assert.equal(none.body.status, 'again');
   assert.equal(sent.length, 1);
 });
 
 test('answer: nothing understood -> "again" with the short options, nothing sent', async () => {
   const { v, sent } = rig({ status: { alpha: menuStop() } });
-  const r = await post(v, { id: 'stop:alpha:st1', transcript: 'banana split' });
+  const r = await post(v, { id: ID.a, transcript: 'banana split' });
   assert.equal(r.body.status, 'again');
   assert.match(r.body.say, /^Sorry, I did not get that\. Option 1: Keep the old parser\. Option 2:/);
   assert.equal(sent.length, 0);
@@ -197,7 +200,7 @@ test('answer: nothing understood -> "again" with the short options, nothing sent
 test('answer: intents come back as intents (skip, repeat, wait, stop, digest)', async () => {
   const { v, sent } = rig({ status: { alpha: menuStop() } });
   for (const [said, intent] of [['skip', 'skip'], ['repeat', 'repeat'], ['wait', 'wait'], ['stop', 'stop'], ['what happened', 'digest'], ['next', 'next']]) {
-    const r = await post(v, { id: 'stop:alpha:st1', transcript: said });
+    const r = await post(v, { id: ID.a, transcript: said });
     assert.equal(r.body.status, 'intent', said); assert.equal(r.body.intent, intent, said);
   }
   assert.equal(sent.length, 0);
@@ -206,17 +209,17 @@ test('answer: intents come back as intents (skip, repeat, wait, stop, digest)', 
 test('answer: a stale item (the stop changed or went away) is a 409 and nothing is sent', async () => {
   const { v, sent, st } = rig({ status: { alpha: menuStop() } });
   st.status = { alpha: menuStop({ stall: { ...menuStop().stall, id: 'st-NEW' } }) };   // a new stop on the same session
-  const r = await post(v, { id: 'stop:alpha:st1', transcript: 'two' });
+  const r = await post(v, { id: ID.a, transcript: 'two' });
   assert.equal(r.status, 409); assert.equal(r.body.status, 'stale');
   st.status = {};
-  assert.equal((await post(v, { id: 'stop:alpha:st-NEW', transcript: 'two' })).status, 409);
+  assert.equal((await post(v, { id: 'stop:alpha:st-NEW:00000000', transcript: 'two' })).status, 409);
   assert.equal(sent.length, 0);
 });
 
 test('answer: a draft in the input box is never overwritten', async () => {
   const base = menuStop();
   const { v, sent } = rig({ status: { alpha: { ...base, stall: { ...base.stall, draft: true } } } });
-  const r = await post(v, { id: 'stop:alpha:st1', transcript: 'two' });
+  const r = await post(v, { id: ID.a, transcript: 'two' });
   assert.equal(r.status, 409); assert.equal(r.body.status, 'draft');
   assert.match(r.body.say, /draft/);
   assert.equal(sent.length, 0);
@@ -227,7 +230,7 @@ test('answer: a ledger ask goes to the manager session as "Answer: Q12 2"', asyn
   const r = await post(v, { id: 'ask:Q12', transcript: 'recommended' });
   assert.equal(r.body.status, 'sent');
   assert.deepEqual(sent, [{ session: 'manager', answer: { text: 'Answer: Q12 2' }, by: 'owner-voice' }]);
-  assert.equal(r.body.say, 'Sent blue to alpha.');
+  assert.equal(r.body.say, 'Sent option 2 for Q12 to the manager (manager).');
   assert.equal(chosen[0].id, 'Q12');
 });
 
@@ -235,7 +238,7 @@ test('answer: bad request and a failing send', async () => {
   const { v } = rig({ status: { alpha: menuStop() } });
   assert.equal((await post(v, {})).status, 400);
   const bad = createVoice({ status: async () => ({ alpha: menuStop() }), ownerAsks: async () => [], managerSessions: () => [], send: async () => { throw Object.assign(new Error('not an agent pane'), { status: 409 }); }, digestSources: async () => ({}) });
-  const r = await post(bad, { id: 'stop:alpha:st1', transcript: '2' });
+  const r = await post(bad, { id: ID.a, transcript: '2' });
   assert.equal(r.status, 409); assert.equal(r.body.status, 'error');
   assert.equal((await v.route({ method: 'GET', path: '/api/voice/nope', readBody: async () => ({}) })).status, 404);
   assert.equal(await v.route({ method: 'GET', path: '/api/other', readBody: async () => ({}) }), null);
@@ -329,4 +332,60 @@ test('push feed items carry voiceId and actions only when given (interrupt tier 
   clock.t += 31 * 60000;
   a.digestTick();
   assert.equal(sent.at(-1).voiceId, 'stop:s3:y');
+});
+
+// ---- round 8 review fixes ----
+test('stale ids: the id carries a hash of the question and option texts; a stop with new content under the old stop id is refused', async () => {
+  const old = menuStop();
+  const fresh = menuStop({ stall: { ...old.stall, question: 'A different question entirely?', options: [{ n: 1, text: 'Ship it', recommended: true, forbidden: null }, { n: 2, text: 'Hold', recommended: false, forbidden: null }] } });
+  const oldId = queueOf({ alpha: old })[0].id, newId = queueOf({ alpha: fresh })[0].id;
+  assert.notEqual(oldId, newId, 'same stop id, different content');
+  assert.equal(oldId.split(':')[2], newId.split(':')[2]);
+  const { v, sent } = rig({ status: { alpha: fresh } });   // the pane changed; stallOf still hands out the old id
+  const r = await post(v, { id: oldId, option: 'recommended', via: 'notification' });
+  assert.equal(r.status, 409); assert.equal(r.body.status, 'stale'); assert.equal(r.body.error, 'stop changed');
+  assert.match(r.body.say, /changed/);
+  assert.equal(sent.length, 0);
+  assert.equal((await post(v, { id: newId, option: 'recommended' })).body.status, 'sent');
+});
+test('stale ids: the id is independent of waiting vs done state (derived buttons differ, raw content does not)', () => {
+  const a = menuStop(), b = menuStop({ state: 'done' });
+  assert.equal(queueOf({ alpha: { ...a, stall: { ...a.stall, escalated: true } } })[0].id, queueOf({ alpha: { ...b, stall: { ...b.stall, escalated: true } } })[0].id);
+});
+test('stale ids: a stop without a stop id is not in the queue and cannot be answered', async () => {
+  const noId = menuStop({ stall: { ...menuStop().stall, id: null } });
+  assert.equal(queueOf({ alpha: noId }).length, 0);
+  const { v, sent } = rig({ status: { alpha: noId } });
+  assert.equal((await post(v, { id: 'stop:alpha::00000000', transcript: 'two' })).status, 409);
+  assert.equal(sent.length, 0);
+});
+
+test('ledger asks: a question about a sensitive topic needs "confirm" whatever the option says; the sent line names the manager', async () => {
+  const asks = [{ id: 'Q12', session: 'alpha', question: 'Merge the branch to main now?', options: ['Yes, go', 'Not yet'], recommendation: '1' }];
+  const q = voiceQueue({ status: {}, ownerAsks: asks, managerSessions: ['boss'] })[0];
+  assert.equal(needsConfirm(q.options[0], q), true);
+  assert.equal(needsConfirm({ label: 'Not yet', answer: { text: 'x' } }, q), true, 'by the question, not the option text');
+  assert.equal(needsConfirm({ label: 'Not yet', answer: { text: 'x' } }, { kind: 'ask', question: 'Pick a colour' }), false);
+  const { v, sent } = rig({ status: {}, asks, managers: ['boss'] });
+  const r1 = await post(v, { id: 'ask:Q12', transcript: 'one' });
+  assert.equal(r1.body.status, 'confirm'); assert.equal(sent.length, 0);
+  assert.match(r1.body.say, /That touches \w+/);
+  const r2 = await post(v, { id: 'ask:Q12', transcript: 'confirm', pending: r1.body.option });
+  assert.equal(r2.body.say, 'Sent option 1 for Q12 to the manager (boss).');
+  assert.deepEqual(sent, [{ session: 'boss', answer: { text: 'Answer: Q12 1' }, by: 'owner-voice' }]);
+});
+test('ledger asks: a key rotation question also needs confirm', () => {
+  const q = voiceQueue({ status: {}, ownerAsks: [{ id: 'Q3', session: 'a', question: 'Rotate the API key today?', options: ['yes', 'no'] }], managerSessions: ['m'] })[0];
+  assert.equal(needsConfirm(q.options[1], q), true);
+});
+
+test('digest: decided-for-you is read in-process through decidedView({hours, since, limit, now}); a throwing view gives null', async () => {
+  const calls = [];
+  const got = await decidedFor(async (a) => { calls.push(a); return { items: [], summary: { count: 1, byKind: {}, text: 'one' } }; }, { since: NOW - 90 * 60000, minutes: 90, now: NOW });
+  assert.deepEqual(calls, [{ hours: 2, since: new Date(NOW - 90 * 60000).toISOString(), limit: 100, now: NOW }]);
+  assert.equal(got.summary.text, 'one');
+  assert.equal(await decidedFor(async () => { throw new Error('boom'); }, { since: NOW, minutes: 60, now: NOW }), null);
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /decidedSummary|fetch\(`http:\/\/\$\{h\}/);   // no HTTP self-fetch
+  assert.match(src, /voiceDecidedFor\(decidedView,/);
 });

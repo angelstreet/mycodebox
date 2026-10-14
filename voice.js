@@ -38,7 +38,9 @@ const sentence = (s) => { const t = String(s || '').trim(); return !t ? '' : /[.
 
 // --- the queue ---------------------------------------------------------------------------------------------------
 const WAIT_ID = /^wait$/;
-const stopHash = (q) => createHash('sha1').update(String(q || '')).digest('hex').slice(0, 8);
+// The id of a stop = its stop id + a hash of what the owner would hear (question text and option texts). stallOf() can hand out the previous
+// stop's id with the new stop's content for a moment after the pane changes; with the content in the id, an old notification's tap no longer matches.
+const stopHash = (stall) => createHash('sha1').update(JSON.stringify([String(stall.question || ''), (stall.options || []).map((o) => String(o.text || ''))])).digest('hex').slice(0, 8);
 
 // Options of a stop, from the same derivation the buttons use: a live menu -> { key: 'N' }, yes/no and lettered -> { text }.
 export function stopOptions({ state, stall, triage }) {
@@ -87,10 +89,11 @@ export function stopItem(session, st, { mgrs = new Set(), isPaused = () => false
   if (!needsOwner(st)) return null;
   if (!(stall.escalated || st.state === 'waiting' || stall.case === 'owner_decision')) return null;
   const { kind, options } = stopOptions({ state: st.state, stall, triage: st.triage });
-  const stallId = stall.id || stopHash(stall.question);
+  if (!stall.id) return null;   // no stop id: nothing to validate a later answer against
+  const stallId = stall.id;
   const question = plainSpeech(stall.question || stall.excerpt || '');
   const item = {
-    id: `stop:${session}:${stallId}`, kind: 'stop', session, question, questionKind: kind, options,
+    id: `stop:${session}:${stallId}:${stopHash(stall)}`, kind: 'stop', session, question, questionKind: kind, options,
     ...(stall.draft ? { draft: true } : {}),
     ...(stall.forbidden ? { topic: String(stall.forbidden) } : {}),
     stallId, at: now - Math.max(0, Number(st.lastActivitySec) || 0) * 1000, p0: isP0(priority(session), `${stall.question || ''}`) ? 1 : 0,
@@ -105,13 +108,14 @@ export function askItem(a, { target = 'manager', priority = () => null } = {}) {
   const opts = (Array.isArray(a.options) ? a.options : []).map((o) => (typeof o === 'string' ? o : o?.label || o?.text || ''));
   const rec = String(a.recommendation ?? '').trim();
   const recN = /^\d+$/.test(rec) ? Number(rec) : (rec ? (opts.findIndex((o) => o && rec.toLowerCase().includes(o.toLowerCase())) + 1 || (opts.findIndex((o) => o && o.toLowerCase().includes(rec.toLowerCase())) + 1) || (/^[A-Za-z]$/.test(rec) ? rec.toUpperCase().charCodeAt(0) - 64 : 0)) : 0);
+  const qTopic = forbiddenMatch(plainSpeech(a.question));   // a question about a merge or a key rotation needs a "confirm" whatever the option says
   const options = opts.map((o, i) => {
     const label = plainSpeech(o);
-    return { n: i + 1, id: String(i + 1), label: trimTo(label, 80), recommended: recN === i + 1, confirm: !!forbiddenMatch(label), answer: { text: `Answer: ${a.id} ${i + 1}`, to: target } };
+    return { n: i + 1, id: String(i + 1), label: trimTo(label, 80), recommended: recN === i + 1, confirm: !!qTopic || !!forbiddenMatch(label), answer: { text: `Answer: ${a.id} ${i + 1}`, to: target } };
   }).filter((o) => o.label);
   const item = {
     id: `ask:${a.id}`, kind: 'ask', session: a.session || target, question: plainSpeech(a.question), questionKind: 'menu', options,
-    askId: a.id, at: Date.parse(a.at) || 0, p0: isP0(priority(a.session), `${a.question}`) ? 1 : 0,
+    askId: a.id, ...(qTopic ? { topic: String(qTopic) } : {}), at: Date.parse(a.at) || 0, p0: isP0(priority(a.session), `${a.question}`) ? 1 : 0,
   };
   item.script = spokenScript(item);
   return item;
@@ -213,12 +217,13 @@ export function matchSpokenAnswer(transcript, item) {
 }
 
 // A spoken answer touching a sensitive topic (deploy, push, delete, secrets, money, customer, ...) needs a spoken "confirm".
-export function needsConfirm(option) {
+export function needsConfirm(option, item = null) {
   if (!option) return false;
+  if (item && item.kind === 'ask' && forbiddenMatch(item.question || '')) return true;
   return !!option.confirm || !!forbiddenMatch(`${option.label || ''} ${option.answer?.text || ''}`);
 }
 export const topicOf = (option, item) => {
-  const m = forbiddenMatch(`${option?.label || ''} ${option?.answer?.text || ''}`) || item?.topic || null;
+  const m = forbiddenMatch(`${option?.label || ''} ${option?.answer?.text || ''}`) || item?.topic || (item?.kind === 'ask' ? forbiddenMatch(item.question || '') : null) || null;
   return typeof m === 'string' ? m : 'a sensitive topic';
 };
 
@@ -291,6 +296,12 @@ export function digestText({ now = Date.now(), minutes = 60, queue = [], history
   return { text, parts: kept };
 }
 
+// The decided-for-you view, in-process (manager.js decidedView). null when the call throws: the digest then counts the answers itself.
+export async function decidedFor(view, { since, minutes, now = Date.now() }) {
+  try { return await view({ hours: Math.max(1, Math.ceil(minutes / 60)), since: new Date(since).toISOString(), limit: 100, now }); }
+  catch { return null; }
+}
+
 // --- the router -------------------------------------------------------------------------------------------------------
 // deps: status() async -> status map, ownerAsks() async -> ledger asks, managerSessions() -> names, isPaused(name), priority(name),
 //   send({ session, answer, by }) async (the guarded send; answer = { key } | { text }), logChoice(rec) async (manager.js logOwnerChoice),
@@ -315,7 +326,11 @@ export function createVoice(deps) {
     if (!id) return err(400, { error: 'id required' });
     const items = await queue();
     const item = items.find((i) => i.id === id);
-    if (!item) return err(409, { status: 'stale', say: 'That one is already handled.', error: 'item is no longer open' });
+    if (!item) {
+      const m = /^stop:(.+?):[^:]+:[0-9a-f]{8}$/.exec(id);
+      const changed = m && items.some((i) => i.kind === 'stop' && i.session === m[1]);
+      return err(409, { status: 'stale', say: changed ? 'That stop changed. I did not send anything.' : 'That one is already handled.', error: changed ? 'stop changed' : 'item is no longer open' });
+    }
     const via = body.via === 'notification' ? 'notification' : 'voice';
     if (item.draft) return err(409, { status: 'draft', say: `${item.session} has a draft in its input box. I did not send anything.`, error: 'draft in the input box' });
 
@@ -346,7 +361,7 @@ export function createVoice(deps) {
     }
 
     // 2) a sensitive topic needs a spoken confirm; a notification never confirms
-    if (needsConfirm(option) && !confirmed) {
+    if (needsConfirm(option, item) && !confirmed) {
       if (via === 'notification') return ok({ status: 'open', url: '/?voice=1', say: 'That needs a confirmation. Open the app.' });
       return ok({ status: 'confirm', option: option.n, label: option.label,
         say: `You chose ${option.label} for ${item.session}. That touches ${topicOf(option, item)}. Say confirm to send, or cancel.` });
@@ -357,7 +372,7 @@ export function createVoice(deps) {
     try { await deps.send({ session: target, answer: option.answer.to ? { text: option.answer.text } : option.answer, by: VOICE_BY }); }
     catch (e) { return err(e.status || 500, { status: 'error', say: `I could not send that to ${item.session}. ${String(e.message || '').slice(0, 80)}`, error: e.message }); }
     try { await deps.logChoice?.({ id: item.stallId || item.askId, session: item.session, kind: item.kind === 'ask' ? 'ledger' : item.questionKind, owner: String(option.id).slice(0, 80) }); } catch { /* logging never blocks the answer */ }
-    return ok({ status: 'sent', option: option.n, label: option.label, say: `Sent ${option.label} to ${item.session}.` });
+    return ok({ status: 'sent', option: option.n, label: option.label, say: item.kind === 'ask' ? `Sent option ${option.n} for ${item.askId} to the manager (${target}).` : `Sent ${option.label} to ${item.session}.` });
   }
 
   async function digest(minutes) {

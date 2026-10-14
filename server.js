@@ -113,7 +113,7 @@ import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
-import { createVoice, feedActions, stopItem as voiceStopItem } from './voice.js';
+import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -1898,14 +1898,6 @@ async function readTailLines(file, bytes = 2_000_000) {
     } finally { await fh.close(); }
   } catch { return []; }
 }
-// G1's GET /api/manager/decided (decided-for-you, last N hours) when this server has it; null -> the digest builds its own line.
-async function decidedSummary(hours) {
-  try {
-    const h = /^[0:.]+$/.test(HOST) ? '127.0.0.1' : HOST;   // a wildcard bind is reached over loopback
-    const r = await fetch(`http://${h}:${PORT}/api/manager/decided?hours=${hours}`, { signal: AbortSignal.timeout(2000) });
-    return r.ok ? await r.json() : null;
-  } catch { return null; }
-}
 const voice = createVoice({
   status: async () => ((latest && Date.now() - latest.at < 1500) ? latest : await poll()).status,
   ownerAsks: () => readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')),
@@ -1920,11 +1912,11 @@ const voice = createVoice({
     return out;
   },
   logChoice: logOwnerChoice,
-  digestSources: async ({ since, minutes }) => {
+  digestSources: async ({ since, minutes }) => {   // decided-for-you is read in-process (manager.js decidedView), never over HTTP
     const [stalls, hist, decided] = await Promise.all([
       readTailLines(LOG_FILE),
       historyView.list({ limit: 200 }).catch(() => ({ sessions: [] })),
-      decidedSummary(Math.max(1, Math.ceil(minutes / 60))),
+      voiceDecidedFor(decidedView, { since, minutes, now: Date.now() }),
     ]);
     return { stalls, history: hist.sessions || [], decided, deploys: deployRunner.snapshot().deploys || [], quota: quota.get() };
   },
