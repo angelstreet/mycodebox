@@ -42,3 +42,12 @@ test('classifyStall carries topics for the same text it checks for forbidden', a
   assert.equal(s.topics.hard, 'deploy');
   assert.ok(s.forbidden);
 });
+
+test('B2: force-push and history rewrites stay hard when a merge is in the text', () => {
+  for (const x of ['git push --force', 'push -f', 'git push --force-with-lease', 'push origin +main', 'git push origin :old-branch', 'push origin HEAD:production',
+    'rewrite history', 'amend the last commit on main then push', 'run filter-branch', 'run git filter-repo', 'push to prod', 'push to production', 'push to staging', 'push to live', 'git push origin feat']) {
+    assert.ok(topicSplit(`merge feat and ${x}`).hard, x);
+    assert.ok(hardMatch(x, { mergePresent: true }), x);
+  }
+  for (const x of ['push main', 'git push', 'git push origin main', 'git push origin master and then stop', 'push to main']) assert.equal(topicSplit(`merge feat, then ${x}?`).hard, null, x);
+});

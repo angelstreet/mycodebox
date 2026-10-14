@@ -13,11 +13,14 @@ const { makeRepo } = await import('./helpers-git.js');
 
 const typed = [], owner = [], notices = [];
 let jevReply = { skipped: 'not configured' };
+let policyNow = { action: 'allow', reason: 'ok' };
+const heldMap = new Map();
 await m.initManager({
   managerSessions: () => ['mgr'],
   onOwnerNeeded: (session, stall, reason) => owner.push({ session, reason }),
   sendKey: async () => {}, sendKeys: async (session, text) => { typed.push({ session, text }); },
   onMergeDecision: (session, rec) => notices.push({ session, rec }),
+  policy: () => policyNow, heldStore: { get: (n) => heldMap.get(n) || null, set: (n, h) => heldMap.set(n, h) },
   mergeJev: async () => jevReply,
 });
 const cfg = (o = {}) => m.setManagerConfig({ aiTriage: 'off', routerShadow: false, wakeShadow: false, autoSend: true, delayMs: 30, ...o });
@@ -32,10 +35,10 @@ const stalls = () => lines(join(dir, 'stalls.jsonl'));
 const GREEN = 'Tests: 1826/1826 pass on feat.';
 
 // Drives one stop: the session works, then stops with `body`, and the manager gets two ticks past the settle time.
-async function stop(name, cwd, body, { settle = 400 } = {}) {
-  const t = (state, p, now) => m.observe({ name, state, agent: 'claude', plain: p, raw: p, changed: true, realWork: state === 'working', project: 'p', cwd, now });
+async function stop(name, cwd, body, { settle = 400, state = 'done' } = {}) {
+  const t = (st, p, now) => m.observe({ name, state: st, agent: 'claude', plain: p, raw: p, changed: true, realWork: state === 'working', project: 'p', cwd, now });
   const p = pane(body);
-  t('working', ['busy'], 0); t('done', p, 1000); t('done', p, 2500);
+  t('working', ['busy'], 0); t(state, p, 1000); t(state, p, 2500);
   if (settle > 100) await until(() => stalls().some((r) => r.session === name && ['answer', 'escalated', 'answer_cancelled'].includes(r.type)), 8000);   // the stop's outcome is logged
   else await until(() => stalls().some((r) => r.session === name && r.type === 'stall'), 8000);
 }
@@ -45,7 +48,7 @@ test('1. merge question, tests green, clean merge: the manager answers "merge", 
   await stop('s1', repo, `${GREEN}\n\nShould I merge feat into main?`);
   assert.equal(typed.length, 1, JSON.stringify({ typed, owner, stalls: stalls().map((s) => s.type) }));
   assert.equal(typed[0].session, 's1');
-  assert.match(typed[0].text, /Merge: yes - the manager evaluated feat -> main/);
+  assert.match(typed[0].text, /Merge: yes - the manager evaluated proj feat -> main/);
   assert.match(typed[0].text, /Merge it now\.$/);
   assert.doesNotMatch(typed[0].text, /rest of your question/);
   const j = lines(join(dir, 'merge-decisions.jsonl'));
@@ -58,6 +61,8 @@ test('1. merge question, tests green, clean merge: the manager answers "merge", 
   const ans = log.find((r) => r.type === 'answer' && r.session === 's1');
   assert.equal(ans.source, 'manager_decision');
   assert.ok(!owner.some((o) => o.session === 's1'), 'nothing left for the owner');
+  assert.equal(ans.merge_decision_id, j[0].decision_id);   // m1: the send outcome points at the journal record
+  assert.match(String(notices[0].rec.decision_id), /^merge-/);
 });
 
 test('2. red tests escalate with the reason; unknown tests escalate with "no green test report"', async () => {
@@ -89,7 +94,7 @@ test('4. merge + deploy: the merge is answered, the deploy goes to the owner, th
   await until(() => typed.length > n);
   assert.equal(typed.length, n + 1, JSON.stringify({ owner: owner.slice(o), st: stalls().slice(-3) }));
   const t = typed.at(-1).text;
-  assert.match(t, /Merge: yes - the manager evaluated task90-open -> main/);
+  assert.match(t, /Merge: yes - the manager evaluated proj task90-open -> main/);
   assert.match(t, /The rest of your question went to the owner: wait for their answer on it\.$/);
   assert.doesNotMatch(t, /deploy/i);
   const e = owner.slice(o).find((x) => x.session === 's6');
@@ -184,7 +189,7 @@ test('fire-time gates: turned off, or a raised confidence floor, during the coun
 
 test('fire-time gate: a manager_decision reply is re-checked against the hard floor (source)', () => {
   const src = readFileSync(new URL('../manager.js', import.meta.url), 'utf8');
-  assert.match(src, /hardMatch\(auto\.answer\?\.text \|\| '', \{ mergePresent: true \}\)/);
+  assert.match(src, /hardMatch\(auto\.answer\?\.text \|\| '', \{ mergePresent: !!auto\.merge \}\)/);
   assert.match(src, /decisionBlock\(name, auto\.confidence/);
 });
 
@@ -197,4 +202,56 @@ test('config validation', async () => {
   const c = await m.setManagerConfig({ mergeMinConfidence: 0.9, mergeConventionFiles: ['VERSION.txt', 'CHANGELOG.md'], infoRoots: ['/data/fake'], infoAnswers: false });
   assert.equal(c.mergeMinConfidence, 0.9); assert.deepEqual(c.infoRoots, ['/data/fake']); assert.equal(c.infoAnswers, false); assert.equal(c.mergeDecisions, true);
   await m.setManagerConfig({ mergeMinConfidence: 0.85, mergeConventionFiles: ['VERSION.txt'], infoRoots: [], infoAnswers: true });
+});
+
+test('B1: a live select menu or a numbered option list is never answered with free text', async () => {
+  const n = typed.length;
+  const menu = 'Merge feat?\n ❯ 1. Yes, merge and deploy\n   2. Merge only\n   3. Hold\n Enter to select · ↑/↓ to navigate · Esc to cancel';
+  await m.setManagerConfig({ aiTriage: 'off' });
+  const t = (name, state, body) => { const p = pane(body); m.observe({ name, state, agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: makeRepo(), now: 0 }); m.observe({ name, state, agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: makeRepo(), now: 1200 }); m.observe({ name, state, agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: makeRepo(), now: 2500 }); };
+  m.observe({ name: 'menu1', state: 'working', agent: 'claude', plain: ['busy'], raw: ['busy'], changed: true, realWork: true, cwd: makeRepo(), now: 0 });
+  t('menu1', 'waiting', menu);
+  await until(() => stalls().some((r) => r.session === 'menu1' && r.type === 'stall'), 8000);
+  await wait(300);
+  await stop('menu2', makeRepo(), `${GREEN}\n\nShould I merge feat into main?\n1. Merge and deploy\n2. Merge only\n3. Hold`);
+  assert.equal(typed.length, n);
+  assert.ok(!stalls().some((r) => r.type === 'merge_decision' && ['menu1', 'menu2'].includes(r.session)), 'no merge evaluation for a menu');
+});
+
+test('M9: a part that carries a choice but was filtered out keeps the stop open', async () => {
+  const n = typed.length, o = owner.length;
+  const repo = makeRepo({ files: { 'docs/H.md': 'Alpha cache path: /data/fake/alpha-cache\n' } });
+  await stop('m9a', repo, 'Send the alpha cache path? Rebuild or reuse the cache (both are fine).');
+  await until(() => typed.length > n);
+  assert.equal(typed.length, n + 1);
+  assert.match(typed.at(-1).text, /\/data\/fake\/alpha-cache/);
+  assert.match(typed.at(-1).text, /rest of your question/);
+  assert.ok(owner.slice(o).some((x) => x.session === 'm9a'), 'the choice was escalated');
+  const n2 = typed.length;
+  await stop('m9b', repo, 'Send the alpha cache path; then option A (rebuild) or option B (reuse cache)?');
+  await until(() => typed.length > n2);
+  assert.match(typed.at(-1).text, /alpha-cache/);
+  assert.ok(owner.slice(o).some((x) => x.session === 'm9b'));
+});
+
+test('M11: a held manager reply is released by the quota recovery through decisionBlock', async () => {
+  const n = typed.length, o = owner.length;
+  policyNow = { action: 'hold', reason: 'quota' };
+  await stop('h1', makeRepo(), `${GREEN}\n\nShould I merge feat into main?`);
+  await stop('h2', makeRepo(), `${GREEN}\n\nShould I merge feat into main?`);
+  await wait(200);
+  assert.equal(typed.length, n, 'held, not typed');
+  policyNow = { action: 'allow', reason: 'ok' };
+  await m.setManagerConfig({ mergeMinConfidence: 0.95 });   // h2 and h1 now fall below the merge floor
+  m.reevaluateHolds();
+  await wait(200);
+  assert.equal(typed.length, n);
+  assert.ok(owner.slice(o).some((x) => x.session === 'h1' && /held reply not sent/.test(x.reason)));
+  await m.setManagerConfig({ mergeMinConfidence: 0.85 });
+  policyNow = { action: 'hold', reason: 'quota' };
+  await stop('h3', makeRepo(), `${GREEN}\n\nShould I merge feat into main?`);
+  policyNow = { action: 'allow', reason: 'ok' };
+  m.reevaluateHolds();
+  await until(() => typed.some((x) => x.session === 'h3'));
+  assert.ok(typed.some((x) => x.session === 'h3' && /^Merge: yes/.test(x.text)), 'released and sent');
 });

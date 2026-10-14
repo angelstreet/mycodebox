@@ -26,7 +26,7 @@ const views = {
         row('AI reviewer', 'Suggest only · no AI-generated reply is sent',badge('Suggest','blue'))+
         row('Deploy runner', 'Off · queued requests need approval',badge('Off'))+
         row('Quota policy', 'On · P2 can be held at the next stop',badge('On','green')))}
-      ${card('Never automatic', 'These decisions always stay with the owner.', '<div class="pill-line">'+['Deploys','Merge to main','Deletes','Credentials','Money','Customers'].map(x=>badge(x)).join('')+'</div>')}
+      ${card('Never automatic', 'These decisions always stay with the owner.', '<div class="pill-line">'+['Deploys','Merges that fail the merge check','Deletes','Credentials','Money','Customers'].map(x=>badge(x)).join('')+'</div>')}
       ${card('Today at a glance', 'Useful totals; detailed reports live in Usage.', row('Answered / cancelled / escalated','Routine-stop outcomes today','<strong>5 / 1 / 2</strong>')+row('Reviewer calls','Within the daily cap','<strong>58 / 300</strong>')+row('Reviewer cost','Measured API usage','<strong>$0.26 / $1.00</strong>'))}
     </div></div>${example}`,
   review: () => `${head('Review stops','Rate the stops that matter. The full agent answer and the proposed manager action stay together.', '<button class="btn" disabled>Keyboard shortcuts</button>')}

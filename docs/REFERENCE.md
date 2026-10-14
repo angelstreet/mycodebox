@@ -495,37 +495,37 @@ A hold is stored in `sessions.json` as `held:{by:'manager',reason,at}`, separate
 
 "If there is no reason not to merge, you should." A merge is no longer a hard forbidden topic: `stall.js` splits the
 floor (`topicSplit(text)` -> `{ merge, hard }`). `forbiddenMatch` / `FORBIDDEN_RE` still match a merge, so every path
-other than the merge evaluation stays fail-closed. Push-to-main and `git push` count as the landing of a merge only when
-the same text asks for a merge; force-push, hard reset and rebase onto main stay hard.
+other than the merge evaluation stays fail-closed. A plain push to main/master (or with no explicit refspec) counts as the landing of a merge only when
+the same text asks for a merge; force-push, `--force` / `-f`, `+refspec`, delete pushes, pushes to other refs or to prod / staging / live, history rewrites, hard reset and rebase onto main stay hard.
 
 For a stop that asks about a merge, the manager runs `evaluateMerge` (`merge-policy.js`) in the session's checkout,
-read-only (`git merge-tree`, `git diff`, no fetch, no checkout). It answers "merge" only when all hold:
+without fetch, checkout or any ref, index or work-tree change (`git merge-tree --write-tree` writes loose objects only; async git with timeouts). It answers "merge" only when all hold:
 
 | Check | Escalation reason when it fails |
 |---|---|
 | The branch exists and is not already merged | `branch not found` / `already merged` |
 | `git merge-tree` is clean, or conflicts only in `mergeConventionFiles` (default `VERSION.txt`, max+1 by convention) | `conflicts outside convention: <files>` |
-| The closing text reports tests green ("1826/1826 pass", "all green"), with no failure; or every changed file is docs/tests | `tests reported red: ...` / `no green test report on the branch` |
-| No changed path or added line touches secrets or credentials, migrations / `*.sql`, sudoers, systemd units | `touches a secret/credential path: ...`, ... |
-| The repo is not in `mergeOptOut` | `repo opted out` |
+| The closing text reports tests green ("1826/1826 pass", "all green"), with no failure; or every changed file is documentation (`.md`, LICENSE / CHANGELOG-style files, non-code files under `docs/`; test code and generic `.txt` need a green report) | `tests reported red: ...` / `no green test report on the branch` |
+| No changed path or added line touches secrets or credentials, migrations / `*.sql`, sudoers, systemd units, CI / deploy / infra files (workflows, Dockerfile, `*.tf`, deploy scripts), no new binary file, and the diff could be scanned (`diff too large or unreadable to scan` otherwise) | `touches a secret/credential path: ...`, ... |
+| The repo is not in `mergeOptOut` (matched against the checkout directory name, the main repo directory behind a worktree and the origin remote's repo name, or the full path) | `repo opted out` |
 | Jev (router point `merge`) picks `merge` at or above `mergeMinConfidence` (default 0.85); without Jev, the manager's reasoning: 0.9 with a test count or docs-only, 0.8 for a green word alone | `Jev rates it escalate (0.62)` / `confidence 0.80 below 0.85` |
 
 Every evaluation, merge or escalate, is appended to `<state>/merge-decisions.jsonl` (V2 decision-record shape: rationale,
 evidence, `jev_decision_id` or `reasoning`, branch and target SHAs, rollback `git revert -m 1 <merge commit>`), logged as
-`{type:'merge_decision'}` in `stalls.jsonl`, and recorded as an owner feed notice ("Merge decided: <session>" or "Merge
-escalated: <session>"). `GET /api/manager/merge-decisions?limit=50` returns the newest records.
+`{type:'merge_decision'}` in `stalls.jsonl`, and recorded as an owner feed notice ("Merge approved (reply pending): <session>" or "Merge
+escalated: <session>"; the later `answer` / `answer_cancelled` record carries `merge_decision_id`). `GET /api/manager/merge-decisions?limit=50` returns the newest records.
 
 The reply ("Merge: yes - the manager evaluated <branch> -> <target>: ... Merge it now.") goes through the usual countdown
 and cancel pill with source `manager_decision`; it needs `autoSend` and `mergeDecisions` on (not `autoCases`), and the fire-time
 gate re-checks draft, pause, hourly cap, pane and that the reply itself names no hard topic.
 
-**Mixed questions.** `info-lookup.js` splits a stop into parts. An information part ("send the path of X") is looked up in the
+**Mixed questions.** Only a finished turn without menu options is handled this way; a live menu (the keys would select the highlighted option) goes to the owner. `info-lookup.js` splits a stop into parts. An information part ("send the path of X") is looked up in the
 session's repository docs and the `infoRoots` directories (handovers, task docs, state files); a single, unambiguous hit is
 answered with its source. A question mixing merge and deploy is split: the merge is decided, the deploy escalated. What
 remains goes to the owner with a reason that says what was already answered ("deploy question - needs you (merge answered
 by the manager; path answered)").
 
-Config (`POST /api/manager`): `mergeDecisions` (default true), `mergeMinConfidence` (0.85), `mergeOptOut` (repo names or
+Config (`POST /api/manager`): `mergeDecisions` (default true), `mergeMinConfidence` (0.85), `mergeOptOut` (repo names - checkout, main repo or origin remote name - or
 paths), `mergeConventionFiles` (`["VERSION.txt"]`), `infoAnswers` (true), `infoRoots` (absolute paths).
 
 The interactive manager uses the same evaluation from its shell:

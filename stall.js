@@ -218,9 +218,18 @@ export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
 // The merge topic alone, and the floor without it: a merge is decided by the manager's merge evaluation (merge-policy.js);
 // the push that lands it is part of the merge (excluded from hardMatch only when a merge is present).
 export const MERGE_RE = /\bmerg(?:e|es|ed|ing)\b/i;
-const HARD_PARTS = FORBIDDEN_PARTS.filter((p) => p !== MERGE_MAIN);
+// History rewrites and pushes that are not the plain landing of a merge stay hard whatever else the text says.
+const HARD_EXTRA = [
+  String.raw`\bpush(?:ed|es|ing)?\b[^.\n]*(?:--force\b|--force-with-lease|--mirror|--delete\b|\s-f\b|\s\+\S|:\S)`,   // push --force, push -f, push origin +main, push origin :old, push origin HEAD:production
+  String.raw`\bpush(?:ed|es|ing)?\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])`,
+  String.raw`\brewrit(?:e|es|ing|ten)\b[^.\n]{0,20}\bhistory\b|\bamend(?:ed|ing|s)?\b[^.\n]{0,40}\b(?:commit|main|master)\b|\bfilter-(?:branch|repo)\b`,
+];
+// `git push <remote> <refspec>` where the refspec is not main/master: not the landing of a merge.
+const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
+const HARD_PARTS = [...FORBIDDEN_PARTS.filter((p) => p !== MERGE_MAIN), ...HARD_EXTRA];
 const HARD_RE = new RegExp(HARD_PARTS.join('|'), 'i');
 const HARD_MERGE_RE = new RegExp(HARD_PARTS.filter((p) => p !== PUSH_MAIN && p !== GIT_PUSH).join('|'), 'i');
+const PUSH_OTHER_RE = new RegExp(PUSH_OTHER_REF, 'i');   // read on the text and its spelling variants, not on window joins (a joined word would look like another ref)
 
 let forbiddenExtra = null;
 // Extra forbidden words that must not live in a public repo (customer names, ...): GHOSTY_FORBIDDEN_EXTRA.
@@ -281,7 +290,7 @@ export function normalizeSplits(text) {
 // A space splitting ANY forbidden keyword ("merge into ma in", "go li ve", ".e nv"): two or three adjacent tokens of
 // one line joined, read in their surrounding words (same line only: the [^.\n] windows of FORBIDDEN_RE are kept).
 // Only joins that contain a keyword stem are tried, and each window is a few tokens: linear in the input.
-const KEYWORD_STEM_RE = /deploy|update_core|roll|systemctl|pm2|restart|servi|server|daemon|ghosty|ship|releas|promot|prod|staging|live|publish|push|tag|terraform|apply|destroy|kill|upgrad|alter|modify|main|master|merg|rebas|git|force|reset|hard|delet|remov|rm|prun|truncat|wip|overwrit|drop|table|database|db|schema|migrat|env|credential|password|passphrase|secret|token|bearer|api|key|ssh|private|revok|rotat|cert|money|pay|purchas|buy|billing|invoice|credit|card|charg|customer|refund|transfer|fund|mail|message|contact|call|reply|client/i;
+const KEYWORD_STEM_RE = /amend|histor|filter|rewrit|deploy|update_core|roll|systemctl|pm2|restart|servi|server|daemon|ghosty|ship|releas|promot|prod|staging|live|publish|push|tag|terraform|apply|destroy|kill|upgrad|alter|modify|main|master|merg|rebas|git|force|reset|hard|delet|remov|rm|prun|truncat|wip|overwrit|drop|table|database|db|schema|migrat|env|credential|password|passphrase|secret|token|bearer|api|key|ssh|private|revok|rotat|cert|money|pay|purchas|buy|billing|invoice|credit|card|charg|customer|refund|transfer|fund|mail|message|contact|call|reply|client/i;
 export function* windowJoins(text) {
   for (const line of baseForm(text).split(/\r?\n|\r/)) {
     const t = line.split(/[ \t]+/).filter(Boolean);
@@ -321,7 +330,13 @@ function matchWith(re, text, extra = null) {
 export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenExtra);
 export const mergeMatch = (text) => matchWith(MERGE_RE, text);
 // The floor without the merge topic. The push that lands a merge is excluded only when `mergePresent`.
-export const hardMatch = (text, { mergePresent = false } = {}) => matchWith(mergePresent ? HARD_MERGE_RE : HARD_RE, text, forbiddenExtra);
+export function hardMatch(text, { mergePresent = false } = {}) {
+  if (!mergePresent) return matchWith(HARD_RE, text, forbiddenExtra);
+  const hit = matchWith(HARD_MERGE_RE, text, forbiddenExtra);
+  if (hit) return hit;
+  for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_OTHER_RE); if (k) return k[0]; }
+  return null;
+}
 export function topicSplit(text) {
   const merge = mergeMatch(text);
   return { merge, hard: hardMatch(text, { mergePresent: !!merge }) };

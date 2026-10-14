@@ -1,10 +1,11 @@
 // Merge policy (round 7): the manager decides a session's "merge <branch>?" question itself when nothing argues
-// against it (OWNER_DECISIONS §14). Facts come from read-only git (no fetch, no checkout, no write to refs or the
-// work tree); the floor lists reasons to escalate; Jev (or the manager's own reasoning) rates what is left.
+// against it (OWNER_DECISIONS §14). Facts come from git without fetch, checkout, or any ref, index or work-tree change
+// (merge-tree --write-tree writes loose objects only); the floor lists reasons to escalate; Jev (or the manager's own reasoning) rates what is left.
 // Deploy, deletions, credentials, money and customers stay hard floors (stall.js hardMatch): a merge+deploy question
 // is split, the merge decided here, the deploy escalated.
-import { execFileSync } from 'node:child_process';
-import { basename } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { basename, dirname, resolve } from 'node:path';
 import { buildRequest } from './router.js';
 import { hardMatch } from './stall.js';
 
@@ -33,122 +34,174 @@ export function parseMergeAsk(text) {
 }
 
 // ---- test evidence in the session's closing text ----
-const sentenceOf = (text, idx) => {
-  const dot = text.lastIndexOf('. ', idx);
-  const s = Math.max(text.lastIndexOf('\n', idx) + 1, dot < 0 ? 0 : dot + 2);
-  let e = text.slice(idx).search(/\n|\. /);
-  e = e < 0 ? text.length : idx + e;
-  return text.slice(s, e).replace(/\s+/g, ' ').trim().slice(0, 160);
-};
-export function testEvidence(text) {
+// Clause by clause: a count or "N/M" only counts next to the word test(s) / pass, "tests not run" anywhere makes it unknown,
+// a negation applies to its own match only, red wins. A question never reports a result (except a failure it mentions).
+const clausesOf = (t) => t.split(/(?<=[.!?;])\s+|\n+/).map((c) => c.trim()).filter(Boolean);
+const NOT_RUN = /\buntested\b|\bno (?:unit |automated |real )?tests?\b|\b(?:not|never|n'?t|yet to)\s+(?:yet\s+|been\s+)?(?:run|ran|tested|executed)\b|\b(?:tests?|suite|specs?)\b[^.?;]*\b(?:not run|weren'?t run|were not run|skipped|not executed)\b/i;
+const PASS_COND = /\bnot all\b[^.?;]*\bpass|\b(?:once|when|if|before|until|unless|after|whether)\b[^.?;]*\bpass|\b(?:will|should|would|to|must|can|could|might)\s+pass\b|\bpass(?:es)?\s+(?:on|through|over)\s+(?:the\s+)?(?:deploy|merge|call|this|that|it)\b/i;
+const sentence = (c) => c.slice(0, 160);
+export function testEvidence(text, { branch = null } = {}) {
   const t = String(text || '');
-  // red: a nonzero failure count, "failing", "red", "broken", "FAIL". "0 failed" / "no failures" is fine.
-  const failRe = /(?:(\d+)\s*(?:tests?\s+)?)?\b(fail(?:s|ed|ing|ures?)?)\b/gi;
-  let m;
-  while ((m = failRe.exec(t))) {
-    const n = m[1] != null ? Number(m[1]) : null;
-    const before = t.slice(Math.max(0, m.index - 12), m.index);
-    if (n === 0 || /\b(?:no|zero|without|0)\s*$/i.test(before)) continue;
-    if (/\bfail(?:s|ed|ing|ures?)?$/i.test(m[2]) && /\b(?:fail-?safe|failover)\b/i.test(t.slice(m.index, m.index + 12))) continue;
-    return { state: 'red', explicit: n != null, quote: sentenceOf(t, m.index) };
+  const cls = clausesOf(t);
+  // red: a nonzero failure count, "failing", "red", "broken", "FAIL"; "0 failed" / "no failures" / "not red" only for its own match
+  for (const c of cls) {
+    const failRe = /(?:(\d+)\s*(?:tests?\s+)?)?\b(fail(?:s|ed|ing|ures?)?)\b/gi;
+    let m;
+    while ((m = failRe.exec(c))) {
+      const n = m[1] != null ? Number(m[1]) : null;
+      if (n === 0 || /\b(?:no|zero|without|0)\s*$/i.test(c.slice(Math.max(0, m.index - 12), m.index))) continue;
+      if (/^(?:fail-?safe|failover)/i.test(c.slice(m.index))) continue;
+      return { state: 'red', explicit: n != null, quote: sentence(c) };
+    }
+    const wre = /\bred\b|\bbroken\b|\bFAIL\b/g;
+    while ((m = wre.exec(c))) {
+      if (/\b(?:not|no|isn'?t|never|n'?t)\s+(?:be\s+|been\s+)?$/i.test(c.slice(Math.max(0, m.index - 14), m.index))) continue;
+      return { state: 'red', explicit: false, quote: sentence(c) };
+    }
   }
-  const red = /\bred\b|\bbroken\b|\bFAIL\b/.exec(t);
-  if (red && !/\b(?:not|no|isn'?t|never)\s+(?:red|broken)\b/i.test(t)) return { state: 'red', explicit: false, quote: sentenceOf(t, red.index) };
-  // "N/M" with tests/pass nearby: fewer passed than ran is red.
-  const frac = /\b(\d+)\s*\/\s*(\d+)\b/.exec(t);
-  if (frac && /\btests?\b|\bpass/i.test(t) && Number(frac[2]) >= 1) {
-    if (Number(frac[1]) < Number(frac[2])) return { state: 'red', explicit: true, quote: sentenceOf(t, frac.index) };
-    return { state: 'green', explicit: true, quote: sentenceOf(t, frac.index) };
+  const nr = cls.find((c) => NOT_RUN.test(c));
+  if (nr) return { state: 'unknown', explicit: false, quote: sentence(nr) };
+  const refOk = (c, idx) => {   // "pass on <ref>": only the evaluated branch counts
+    const m = /^\s+on\s+(\S+)/i.exec(c.slice(idx));
+    if (!m) return true;
+    const ref = m[1].replace(/[.,;:)?!]+$/, '');
+    return branch ? ref === branch : !/^(?:main|master|develop|origin|trunk)\b/i.test(ref);
+  };
+  for (const c of cls) {
+    if (/\?\s*$/.test(c) || PASS_COND.test(c)) continue;
+    const ctx = /\btests?\b|\bsuite\b|\bspecs?\b|\bpass/i.test(c);
+    const frac = ctx && /\b(\d+)\s*\/\s*(\d+)\b/.exec(c);
+    if (frac && Number(frac[2]) >= 1) {
+      if (Number(frac[1]) < Number(frac[2])) return { state: 'red', explicit: true, quote: sentence(c) };
+      return { state: 'green', explicit: true, quote: sentence(c) };
+    }
+    const cnt = /\b(\d+)\s+(?:(?:unit\s+|integration\s+)?tests?\s+)?(?:passed|passing|pass)\b(?=\s*(?:$|[,.;:)(]|\b(?:in|on|at|with|for)\b))/i.exec(c);
+    if (cnt && Number(cnt[1]) > 0 && refOk(c, cnt.index + cnt[0].length)) return { state: 'green', explicit: true, quote: sentence(c) };
+    const word = /\ball\s+(?:tests?\s+)?(?:green|pass(?:ed|ing)?)\b|\ball green\b|\btests?\s+(?:are\s+|is\s+|all\s+)?(?:green|pass(?:ed|es|ing)?)\b|\bCI\s+(?:is\s+)?green\b|\bgreen\s+(?:tests?|suite|CI)\b|\b(?:npm|yarn|pnpm)\s+test\s+(?:is\s+)?(?:green|passes|passed)\b/i.exec(c);
+    if (word && refOk(c, word.index + word[0].length)) return { state: 'green', explicit: false, quote: sentence(c) };
+    const onRef = /\bpass(?:es|ed)?\s+on\s+(\S+)/i.exec(c);
+    if (onRef && branch && onRef[1].replace(/[.,;:)?!]+$/, '') === branch) return { state: 'green', explicit: false, quote: sentence(c) };
   }
-  const counted = /\b(\d+)\s+(?:tests?\s+)?(?:passed|passing|pass)\b/i.exec(t);
-  if (counted && Number(counted[1]) > 0) return { state: 'green', explicit: true, quote: sentenceOf(t, counted.index) };
-  const word = /\ball\s+(?:tests?\s+)?(?:green|pass(?:ed|ing)?)\b|\ball green\b|\btests?\s+(?:are\s+|is\s+|all\s+)?(?:green|pass(?:ed|es|ing)?)\b|\bCI\s+(?:is\s+)?green\b|\bpass(?:es)?\s+on\s+\S+|\bgreen\s+(?:tests?|suite|CI)\b|\b(?:npm|yarn|pnpm)\s+test\s+(?:is\s+)?(?:green|passes|passed)\b/i.exec(t);
-  if (word) return { state: 'green', explicit: false, quote: sentenceOf(t, word.index) };
   return { state: 'unknown', explicit: false, quote: '' };
 }
 
-// ---- read-only git facts ----
+// ---- git facts (async, bounded: the server's event loop must not wait on a slow repo) ----
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' };
-function git(cwd, args, { max = 4 * 1024 * 1024, okCodes = [0] } = {}) {
+const execFileP = promisify(execFile);
+export async function git(cwd, args, { max = 4 * 1024 * 1024, okCodes = [0] } = {}) {
   try {
-    return { code: 0, out: execFileSync('git', ['-c', 'core.fsmonitor=false', '-C', cwd, ...args], { encoding: 'utf8', timeout: 15000, maxBuffer: max, env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] }) };
+    const r = await execFileP('git', ['-c', 'core.fsmonitor=false', '-C', cwd, ...args], { encoding: 'utf8', timeout: 15000, maxBuffer: max, env: GIT_ENV });
+    return { code: 0, out: r.stdout };
   } catch (e) {
-    const code = typeof e.status === 'number' ? e.status : -1;
-    if (okCodes.includes(code) || e.code === 'ENOBUFS') return { code, out: String(e.stdout || ''), err: String(e.stderr || ''), truncated: e.code === 'ENOBUFS' };
-    return { code, out: String(e.stdout || ''), err: String(e.stderr || e.message || '').trim().split('\n')[0] };
+    const truncated = e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || e.code === 'ENOBUFS';
+    const code = typeof e.code === 'number' ? e.code : -1;
+    if (truncated) return { code, out: String(e.stdout || ''), err: 'output too large', truncated: true };
+    if (okCodes.includes(code)) return { code, out: String(e.stdout || ''), err: String(e.stderr || '') };
+    return { code, out: String(e.stdout || ''), err: String(e.stderr || e.message || '').trim().split('\n')[0], timedOut: !!e.killed };
   }
 }
 // The repo toplevel of a working directory, or null.
-export function repoToplevel(cwd) {
+export async function repoToplevel(cwd) {
   if (!cwd) return null;
-  const r = git(cwd, ['rev-parse', '--show-toplevel']);
+  const r = await git(cwd, ['rev-parse', '--show-toplevel']);
   return r.code === 0 ? r.out.trim() : null;
 }
-const DOCS_RE = /\.md$|\.txt$|^docs\/|(^|\/)tests?\/|__tests__|\.test\.|\.spec\./;
+// Docs-only: markdown, a few well-known text files, and non-code files under docs/. Test code and generic .txt are code-like.
+const CODE_EXT = /\.(?:m?[jt]sx?|cjs|py|sh|bash|rb|go|rs|java|c|cc|cpp|h|json|ya?ml|toml|sql|service|timer|socket|html?|css|php|pl)$/i;
+const DOC_NAMES = /(^|\/)(?:LICENSE|CHANGELOG|NOTICE|AUTHORS|CONTRIBUTING|CODEOWNERS)(?:\.(?:md|txt))?$/;
+export const isDocFile = (f) => /\.(?:md|markdown)$/i.test(f) || DOC_NAMES.test(f) || (/^docs\//.test(f) && !CODE_EXT.test(f));
+const DOC_IMAGE = /^docs\/.*\.(?:png|jpe?g|gif|svg)$/i;
 const isConvention = (f, conv) => conv.some((c) => f === c || basename(f) === c);
 const SENSITIVE_CONTENT = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key'], [/AKIA[0-9A-Z]{16}/, 'cloud access key'], [/ghp_[A-Za-z0-9]{30,}/, 'git host token'],
   [/xox[baprs]-[A-Za-z0-9-]{10,}/, 'chat token'], [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/, 'api key'],
 ];
+export const SECRET_PATTERNS = SENSITIVE_CONTENT.map(([re]) => re);
 export function sensitivePath(f) {
   const segs = f.split('/'), base = segs[segs.length - 1], lower = f.toLowerCase();
-  if (/^\.env/.test(base)) return 'secret';
-  if (/\.pem$|\.key$/i.test(base) || /^id_rsa/.test(base)) return 'secret';
+  if (/^\.env/.test(base) || /^(?:\.netrc|\.npmrc|\.pypirc|authorized_keys)$/.test(base)) return 'secret';
+  if (/\.(?:pem|key|p12|pfx|jks)$/i.test(base) || /^id_(?:rsa|ed25519|ecdsa|dsa)/.test(base)) return 'secret';
   if (segs.some((s) => /secret|credential|password/i.test(s))) return 'secret';
   if (/(^|\/)migrations\//.test(lower) || /\.sql$/.test(lower)) return 'migration';
   if (/sudoers/.test(lower)) return 'sudoers';
   if (/\.(service|timer|socket)$/.test(lower) || /(^|\/)systemd\//.test(lower)) return 'systemd';
+  if (/^\.github\/workflows\//.test(lower) || /(^|\/)(?:\.gitlab-ci\.yml|jenkinsfile)$/.test(lower) || /^\.circleci\//.test(lower)
+    || /^dockerfile|^docker-compose/.test(base.toLowerCase()) || /\.tf$/.test(lower) || /(^|\/)(?:terraform|ansible|helm|k8s|kubernetes)\//.test(lower)) return 'deploy';
+  if (!/\.(?:md|markdown)$/i.test(f) && segs.some((s) => /deploy|update_core|safe-restart|restart/i.test(s))) return 'deploy';
   return null;
 }
 
-export function gitFacts({ cwd, branch, target, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
-  const fail = (error) => ({ ok: false, error, repo: null, repoName: null, branch: branch || null, target: target || null, branchSha: null, targetSha: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [] });
+// Repo names the opt-out list is matched against: the toplevel dir (a worktree's own name), the main repo dir behind a
+// worktree, and the origin remote's repo name.
+async function repoNames(repo) {
+  const names = new Set([basename(repo)]);
+  const cd = await git(repo, ['rev-parse', '--git-common-dir']);
+  if (cd.code === 0 && cd.out.trim()) { const c = resolve(repo, cd.out.trim()); names.add(basename(basename(c) === '.git' ? dirname(c) : c).replace(/\.git$/, '')); }
+  const ro = await git(repo, ['remote', 'get-url', 'origin']);
+  if (ro.code === 0) { const n = ro.out.trim().replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop(); if (n) names.add(n); }
+  names.delete('');
+  return [...names];
+}
+
+export async function gitFacts({ cwd, branch, target, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
+  const fail = (error) => ({ ok: false, error, repo: null, repoName: null, repoNames: [], branch: branch || null, target: target || null, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] });
   if (!cwd) return fail('no working directory');
-  const top = git(cwd, ['rev-parse', '--show-toplevel']);
+  const top = await git(cwd, ['rev-parse', '--show-toplevel']);
   if (top.code !== 0) return fail('not a git repository');
   const repo = top.out.trim();
   const repoName = basename(repo);
-  const resolves = (ref) => git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).code === 0;
-  // branch: the named one when it exists, else the session's current branch
+  const names = await repoNames(repo);
+  const resolves = async (ref) => (await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).code === 0;
+  // branch: the named one; the session's current branch only when none was named
   let bName = null, bRef = null;
   if (branch) {
-    if (resolves(`refs/heads/${branch}`)) { bName = branch; bRef = `refs/heads/${branch}`; }
-    else if (resolves(`refs/remotes/origin/${branch}`)) { bName = branch; bRef = `refs/remotes/origin/${branch}`; }
-  }
-  if (!bRef) {
-    const cur = git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (await resolves(`refs/heads/${branch}`)) { bName = branch; bRef = `refs/heads/${branch}`; }
+    else if (await resolves(`refs/remotes/origin/${branch}`)) { bName = branch; bRef = `refs/remotes/origin/${branch}`; }
+  } else {
+    const cur = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
     const c = cur.code === 0 ? cur.out.trim() : '';
     if (c && c !== 'HEAD') { bName = c; bRef = `refs/heads/${c}`; }
   }
-  // target: named, else origin/HEAD's branch, else main; prefer origin/<target>
+  // target: named, else origin/HEAD's branch, else main; origin/<target> preferred, the local one checked too when it differs
   let tName = target || null;
   if (!tName) {
-    const h = git(repo, ['symbolic-ref', '--short', '--quiet', 'refs/remotes/origin/HEAD']);
+    const h = await git(repo, ['symbolic-ref', '--short', '--quiet', 'refs/remotes/origin/HEAD']);
     tName = h.code === 0 && h.out.trim() ? h.out.trim().replace(/^origin\//, '') : 'main';
   }
-  const tRef = resolves(`refs/remotes/origin/${tName}`) ? `refs/remotes/origin/${tName}` : resolves(`refs/heads/${tName}`) ? `refs/heads/${tName}` : null;
-  const base = { ok: true, repo, repoName, branch: bName, target: tName, branchSha: null, targetSha: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [] };
-  if (!bRef) return { ...base, ok: false, error: 'branch not found' };
+  const oRef = (await resolves(`refs/remotes/origin/${tName}`)) ? `refs/remotes/origin/${tName}` : null;
+  const lRef = (await resolves(`refs/heads/${tName}`)) ? `refs/heads/${tName}` : null;
+  const tRef = oRef || lRef;
+  const base = { ok: true, repo, repoName, repoNames: names, branch: bName, target: tName, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] };
+  if (!bRef || bName === tName) return { ...base, ok: false, error: 'branch not found' };
   if (!tRef) return { ...base, ok: false, error: `target ${tName} not found` };
-  if (bRef === tRef || bName === tName) return { ...base, ok: false, error: 'branch not found' };
-  const sha = (r) => git(repo, ['rev-parse', r]).out.trim();
-  const out = { ...base, branchSha: sha(bRef), targetSha: sha(tRef) };
-  out.alreadyMerged = git(repo, ['merge-base', '--is-ancestor', bRef, tRef], { okCodes: [0, 1] }).code === 0;
-  const mt = git(repo, ['merge-tree', '--write-tree', '--name-only', '--no-messages', tRef, bRef], { okCodes: [0, 1] });
-  if (mt.code !== 0 && mt.code !== 1) return { ...out, ok: false, error: `merge-tree failed: ${mt.err || 'unknown'}` };
-  if (mt.code === 1) out.conflicts = [...new Set(mt.out.split('\n').slice(1).map((l) => l.trim()).filter(Boolean))];
+  const sha = async (r) => (await git(repo, ['rev-parse', r])).out.trim();
+  const out = { ...base, branchSha: await sha(bRef), targetSha: await sha(tRef) };
+  const lSha = lRef ? await sha(lRef) : null;
+  out.targetShaLocal = lSha && lSha !== out.targetSha ? lSha : null;
+  out.alreadyMerged = (await git(repo, ['merge-base', '--is-ancestor', bRef, tRef], { okCodes: [0, 1] })).code === 0;
+  // conflicts against every target ref that exists (origin and a differing local one): both must merge
+  const conflicts = new Set();
+  for (const t of [tRef, ...(out.targetShaLocal ? [lRef] : [])]) {
+    const mt = await git(repo, ['merge-tree', '--write-tree', '--name-only', '--no-messages', t, bRef], { okCodes: [0, 1] });
+    if (mt.code !== 0 && mt.code !== 1) return { ...out, ok: false, error: `merge-tree failed: ${mt.err || 'unknown'}` };
+    if (mt.code === 1) for (const l of mt.out.split('\n').slice(1)) if (l.trim()) conflicts.add(l.trim());
+  }
+  out.conflicts = [...conflicts];
   out.conventionOnly = out.conflicts.length > 0 && out.conflicts.every((f) => isConvention(f, conventionFiles));
-  const names = git(repo, ['diff', '--name-only', '-z', `${tRef}...${bRef}`]);
-  if (names.code !== 0) return { ...out, ok: false, error: `git diff failed: ${names.err || 'unknown'}` };
-  out.files = names.out.split('\0').filter(Boolean);
+  const names2 = await git(repo, ['diff', '--name-only', '-z', `${tRef}...${bRef}`]);
+  if (names2.code !== 0) return { ...out, ok: false, error: `git diff failed: ${names2.err || 'unknown'}` };
+  out.files = names2.out.split('\0').filter(Boolean);
   const real = out.files.filter((f) => !isConvention(f, conventionFiles));
-  out.docsOnly = real.length > 0 ? real.every((f) => DOCS_RE.test(f)) : out.files.length > 0;
+  out.docsOnly = real.length > 0 ? real.every(isDocFile) : out.files.length > 0;
   for (const f of out.files) { const why = sensitivePath(f); if (why) out.sensitive.push({ file: f, why }); }
-  // added lines only, capped at 2 MB
-  const diff = git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', `${tRef}...${bRef}`], { max: 2 * 1024 * 1024 });
+  // added lines only, capped at 2 MB; an unreadable, timed-out or truncated scan fails closed (mergeFloor)
+  const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', `${tRef}...${bRef}`], { max: 2 * 1024 * 1024 });
+  if (diff.code !== 0 || diff.truncated || diff.timedOut) out.scanError = diff.truncated ? 'larger than 2 MB' : diff.err || 'unreadable';
   let file = null;
   for (const line of diff.out.split('\n')) {
     if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); continue; }
+    const bin = /^Binary files (.*) and (.*) differ$/.exec(line);
+    if (bin) { if (bin[1] === '/dev/null') { const nf = bin[2].replace(/^b\//, ''); if (!DOC_IMAGE.test(nf)) out.binary.push(nf); } continue; }
     if (!line.startsWith('+')) continue;
     for (const [re, label] of SENSITIVE_CONTENT) {
       if (re.test(line) && !out.sensitive.some((s) => s.file === file && s.why === 'secret-content')) out.sensitive.push({ file, why: 'secret-content', what: label });
@@ -157,13 +210,14 @@ export function gitFacts({ cwd, branch, target, conventionFiles = MERGE_DEFAULTS
   return out;
 }
 
-const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', 'secret-content': 'secret-looking content' };
+const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', deploy: 'a CI/deploy/infra path', 'secret-content': 'secret-looking content' };
 // Reasons to escalate; empty = the manager may proceed.
 export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
   if (!facts) return ['not a git repository or git error'];
   const reasons = [];
   const out = (optOut || []).map(String);
-  if (facts.repo && out.some((o) => o === facts.repoName || o === facts.repo)) return [`repo ${facts.repoName} is opted out of manager merge decisions`];
+  const names = facts.repoNames?.length ? facts.repoNames : facts.repoName ? [facts.repoName] : [];
+  if (facts.repo && out.some((o) => o === facts.repo || names.includes(o))) return [`repo ${facts.repoName} is opted out of manager merge decisions`];
   if (!facts.ok) return [facts.error === 'branch not found' ? 'branch not found' : /^not a git/.test(facts.error) ? 'not a git repository' : `git error: ${facts.error}`];
   if (facts.alreadyMerged) return [`${facts.branch} is already merged into ${facts.target}`];
   const outside = (facts.conflicts || []).filter((f) => !isConvention(f, conventionFiles));
@@ -171,6 +225,8 @@ export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEF
   if (ev?.state === 'red') reasons.push(`tests reported red: ${ev.quote}`);
   else if (ev?.state !== 'green' && !facts.docsOnly) reasons.push('no green test report on the branch');
   for (const s of facts.sensitive || []) reasons.push(`touches ${SENS_TEXT[s.why] || 'a sensitive path'}: ${s.file}`);
+  if (facts.scanError) reasons.push('diff too large or unreadable to scan');
+  for (const f of facts.binary || []) reasons.push(`adds a binary file: ${f}`);
   return reasons;
 }
 
@@ -191,12 +247,13 @@ function summarize(facts, ev) {
 
 // -> { verdict: 'merge'|'escalate', reasons, rationale, facts, tests, decision }. `jev` is injected: async (body) =>
 // reply | { skipped } | { error }. Jev is asked only when the floor passed.
-export async function evaluateMerge({ cwd, text, session = null, config = {}, jev = null, branch = null, target = null, tests: testsGiven = null } = {}) {
+export async function evaluateMerge({ cwd, text, session = null, config = {}, jev = null, branch = null, target = null, tests: testsGiven = null, evidenceText = null } = {}) {
   const cfg = { ...MERGE_DEFAULTS, ...config };
   const parsed = parseMergeAsk(text);
   const ask = { branch: branch || parsed.branch, target: target || parsed.target };   // explicit names (the CLI) win over the text
-  const facts = gitFacts({ cwd, branch: ask.branch, target: ask.target, conventionFiles: cfg.mergeConventionFiles });
-  const tests = testsGiven || testEvidence(text);   // given: the caller (merge-eval.js --tests) vouches for it
+  const facts = await gitFacts({ cwd, branch: ask.branch, target: ask.target, conventionFiles: cfg.mergeConventionFiles });
+  // test evidence comes from the session's closing text (a question reports nothing); a given value is vouched for by the caller (merge-eval.js --tests)
+  const tests = testsGiven || testEvidence(evidenceText ?? text, { branch: facts.branch });
   const question = `Merge ${facts.branch || ask.branch || 'the branch'} into ${facts.target || ask.target || 'the target'}?`;
   const reasons = mergeFloor(facts, tests, { optOut: cfg.mergeOptOut, conventionFiles: cfg.mergeConventionFiles });
   const done = (verdict, why, decision) => ({ verdict, reasons: verdict === 'merge' ? [] : why, rationale: verdict === 'merge' ? summarize(facts, tests) : why.join('; '), question, facts, tests, decision });
@@ -230,7 +287,7 @@ export function journalRecord(ev, { id, session = null, at = new Date() } = {}) 
     f.ok ? (f.conflicts?.length ? `merge-tree conflicts: ${f.conflicts.join(', ')}` : 'merge-tree clean') : `git: ${f.error || 'no facts'}`,
     `tests: ${ev.tests?.quote || ev.tests?.state || 'unknown'}`,
     `files: ${f.files?.length ?? 0}${f.docsOnly ? ' (docs-only)' : ''}`,
-    `branch ${f.branch}@${short(f.branchSha)} -> ${f.target}@${short(f.targetSha)}`,
+    `branch ${f.branch}@${short(f.branchSha)} -> ${f.target}@${short(f.targetSha)}${f.targetShaLocal ? ` (local ${f.target}@${short(f.targetShaLocal)})` : ''}`,
   ];
   if (f.sensitive?.length) evidence.push(`sensitive: ${f.sensitive.map((s) => s.file).join(', ')}`);
   const merged = ev.verdict === 'merge';
@@ -251,7 +308,7 @@ export function journalRecord(ev, { id, session = null, at = new Date() } = {}) 
     reversible: true,
     rollback: 'git revert -m 1 <merge commit> on the target branch',
     session, repo: f.repoName || null, branch: f.branch || null, target: f.target || null,
-    branch_sha: f.branchSha || null, target_sha: f.targetSha || null,
+    branch_sha: f.branchSha || null, target_sha: f.targetSha || null, target_sha_local: f.targetShaLocal || null,
     jev_decision_id: d.source === 'jev' ? (d.decision_id || 'jev') : 'reasoning',
     ...(ev.reasons?.length ? { reasons: ev.reasons } : {}),
   };
@@ -265,19 +322,19 @@ export function composeReply({ info = [], merge = null, remaining = false } = {}
   const label = (p) => String(p || '').replace(/^\s*(?:\(?[a-z0-9]\)|\d+[.)])\s*/i, '').replace(/[\s,;:.?]+$/, '').replace(/^(?:and|plus)\s+/i, '').replace(/^./, (c) => c.toUpperCase()).slice(0, 80);
   info.forEach((i, n) => {
     const line = `${label(i.part)}: ${i.answer}${i.source ? ` (from ${i.source})` : ''}`;
-    if (hardMatch(line, { mergePresent: true })) return;
+    if (hardMatch(line, { mergePresent: !!merge })) return;   // the merge landing is exempt only in a reply that carries a merge verdict
     lines.push(line); keptInfo.push(n);
   });
   let mergeUsed = false;
   if (merge) {
-    const full = `Merge: yes - the manager evaluated ${merge.branch} -> ${merge.target}: ${merge.rationale}. Merge it now.`;
-    const bare = `Merge: yes - the manager evaluated ${merge.branch} -> ${merge.target}. Merge it now.`;
+    const full = `Merge: yes - the manager evaluated ${merge.repo ? merge.repo + ' ' : ''}${merge.branch} -> ${merge.target}: ${merge.rationale}. Merge it now.`;
+    const bare = `Merge: yes - the manager evaluated ${merge.repo ? merge.repo + ' ' : ''}${merge.branch} -> ${merge.target}. Merge it now.`;
     const line = !hardMatch(full, { mergePresent: true }) ? full : !hardMatch(bare, { mergePresent: true }) ? bare : null;
     if (line) { lines.push(line); mergeUsed = true; }
   }
   if (!lines.length) return null;
   if (remaining) lines.push('The rest of your question went to the owner: wait for their answer on it.');
   const text = lines.join(' ');
-  if (hardMatch(text, { mergePresent: true })) return null;
+  if (hardMatch(text, { mergePresent: mergeUsed })) return null;
   return { text, info: keptInfo, merge: mergeUsed };
 }

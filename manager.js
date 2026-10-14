@@ -309,7 +309,7 @@ export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {
   const a = w.auto;
   clearTimeout(a.timer);
   w.auto = null;
-  if (!quiet) logLater({ type: 'answer_cancelled', id: a.id, session: name, case: a.case, answer: a.answer, reason });
+  if (!quiet) logLater({ type: 'answer_cancelled', id: a.id, session: name, case: a.case, answer: a.answer, reason, ...(a.merge ? { merge_decision_id: `merge-${a.id}` } : {}) });
   return true;
 }
 
@@ -355,7 +355,10 @@ export function reevaluateHolds() {
     endHold(name, 'manager', `quota recovered: ${pol.reason}`, true);
     const stopped = w.last && (w.last.state === 'waiting' || w.last.state === 'done');
     if (!p || !stopped || w.hash !== p.hash || !sessionOn(name)) continue;
-    if (p.source === 'ai' ? aiBlock(name, p.case, p.confidence) : autoBlock(name, { case: p.case }, p.confidence)) continue;
+    if (p.source === 'manager_decision') {
+      const why = decisionBlock(name, p.confidence, { merge: !!p.merge });
+      if (why) { if (!p.escalated) escalate(name, w.last.state, w.stall || { case: p.case }, p.id, `${why} (held reply not sent)`); continue; }
+    } else if (p.source === 'ai' ? aiBlock(name, p.case, p.confidence) : autoBlock(name, { case: p.case }, p.confidence)) continue;
     schedule(name, w, p);
   }
 }
@@ -375,7 +378,7 @@ async function fire(name, auto) {
   const md = auto.source === 'manager_decision';   // the manager's own merge / information answer: gated by decisionBlock, not by autoCases
   const ai = auto.source === 'ai';   // the AI reviewer's proposal, auto mode: same gates, plus its own switch and a re-check of the reply itself
   const forb = (w.stall?.forbidden || w.cls?.forbidden) || (ai ? forbiddenMatch(auto.answer?.text || '') : null);
-  const ws = md ? (hardMatch(auto.answer?.text || '', { mergePresent: true }) ? { send: null, why: `forbidden: ${hardMatch(auto.answer?.text || '', { mergePresent: true })}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'manager_decision' })
+  const ws = md ? (hardMatch(auto.answer?.text || '', { mergePresent: !!auto.merge }) ? { send: null, why: `forbidden: ${hardMatch(auto.answer?.text || '', { mergePresent: !!auto.merge })}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'manager_decision' })
     : ai ? (forb ? { send: null, why: `forbidden: ${forb}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'ai' })
     : w.stall && w.cls ? wouldSend({ ...w.stall, draft: w.cls.draft, forbidden: w.stall.forbidden || w.cls.forbidden }) : { send: null, why: 'owner' };
   const mdBlock = md ? decisionBlock(name, auto.confidence, { merge: !!auto.merge }) : null;
@@ -393,7 +396,7 @@ async function fire(name, auto) {
   else if (last.lastSendAt && w.pending && last.lastSendAt > w.pending.at) reason = 'owner sent something';
   else if (w.cls?.draft) reason = 'draft in the input box';
   else if (!ws.send) { reason = ws.why; esc = true; }
-  else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence }, pol); reason = `held: ${pol.reason}`; }
+  else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence, merge: auto.merge, escalated: auto.escalated, remaining: auto.remaining }, pol); reason = `held: ${pol.reason}`; }
   else if (!send.key || !send.keys) reason = 'no send function';
   else if (hourCount(name) >= config.maxPerSessionPerHour) { reason = 'hourly cap reached'; esc = true; }
   if (md && reason && !auto.escalated && !/^(?:session moved on|pane changed|owner sent|session paused|manager disabled)/.test(reason)) esc = true;   // nothing else tells the owner this stop is still open
@@ -408,12 +411,12 @@ async function fire(name, auto) {
     if (a.key != null) await send.key(name, String(a.key));
     else await send.keys(name, a.text, true);
   } catch (e) {
-    logLater({ type: 'answer_cancelled', id: auto.id, session: name, case: auto.case, answer: a, reason: `send failed: ${e.message}` });
+    logLater({ type: 'answer_cancelled', id: auto.id, session: name, case: auto.case, answer: a, reason: `send failed: ${e.message}`, ...(auto.merge ? { merge_decision_id: `merge-${auto.id}` } : {}) });
     return;
   }
   sentLog.set(name, [...(sentLog.get(name) || []), Date.now()]);
   if (w.pending && w.pending.id === auto.id) w.pending.auto = true;
-  logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence });
+  logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence, ...(auto.merge ? { merge_decision_id: `merge-${auto.id}` } : {}) });
 }
 
 // Owner label on a logged stall ("this stop bothered me"). Appended; the newest label of an id wins.
@@ -783,23 +786,29 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   const out = { handled: false, mergeWhy: null };
   const name = s.name;
   if (isManagerSession(name) || !toOwnerCase(final) || CASES_NOT_PARTIAL.includes(final.case) || stall.draft) return out;
+  // Only a finished turn: free text typed into a live menu (waiting) would select the highlighted option, and any menu option means the
+  // owner picks from it. Those stops go the existing way (a forbidden topic goes to the owner).
+  if (s.state !== 'done' || (final.options?.length || 0) >= 1 || (stall.options?.length || 0) >= 1) return out;
   if (!config.infoAnswers && !(config.mergeDecisions && final.topics?.merge)) return out;
   if (decisionBlock(name, 1)) return out;   // auto-answer off, paused, capped: nothing is typed, the owner gets the whole stop as before
-  const parts = splitAsk(final.question || '').filter((p) => p.kind !== 'other' || isAsk(p.text));   // a statement that rode along is not part of the ask
+  const all = splitAsk(final.question || '');
+  const parts = all.filter((p) => p.kind !== 'other' || isAsk(p.text));   // a statement that rode along is not part of the ask
+  // ...unless it carries a question or a choice ("A or B"): that is open too
+  const hiddenAsk = all.filter((p) => !parts.includes(p) && /\?|\bor\b/i.test(p.text));
   if (!parts.length) return out;
-  const roots = [repoToplevel(s.cwd), ...(config.infoRoots || [])].filter(Boolean);
+  const roots = [await repoToplevel(s.cwd), ...(config.infoRoots || [])].filter(Boolean);
   const info = [];
   if (config.infoAnswers && roots.length) {
     for (const p of parts) {
       if (p.kind !== 'info') continue;
-      let hit = null; try { hit = lookupInfo(p, { roots }); } catch { hit = null; }
+      let hit = null; try { hit = await lookupInfo(p, { roots }); } catch { hit = null; }
       if (hit) info.push({ part: p.text, ...hit });
     }
   }
   let ev = null, record = null;
   const mergeParts = parts.filter((p) => p.kind !== 'info' && mergeMatch(p.text));
   if (config.mergeDecisions && final.topics?.merge && mergeParts.length && s.cwd) {
-    ev = await evaluateMerge({ cwd: s.cwd, text: `${final.question || ''}\n${stall.closing || stall.excerpt || ''}`, session: name, config, jev: (b) => mergeJev(b) });
+    ev = await evaluateMerge({ cwd: s.cwd, text: `${final.question || ''}\n${stall.closing || stall.excerpt || ''}`, evidenceText: stall.closing || stall.excerpt || '', session: name, config, jev: (b) => mergeJev(b) });
     if (w.hash !== h) return out;   // the pane moved on while Jev was thinking
     record = journalRecord(ev, { id, session: name, at: new Date(s.now) });
     try { await appendFile(MERGE_FILE, JSON.stringify(record) + '\n'); } catch (e) { console.error('[manager] merge journal', e.message); }
@@ -810,17 +819,17 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   }
   const mergeOk = ev?.verdict === 'merge';
   const hard = final.topics?.hard || null;
-  const mergeArg = mergeOk ? { branch: ev.facts.branch, target: ev.facts.target, rationale: ev.rationale } : null;
+  const mergeArg = mergeOk ? { repo: ev.facts.repoName, branch: ev.facts.branch, target: ev.facts.target, rationale: ev.rationale } : null;
   let reply = composeReply({ info, merge: mergeArg, remaining: true });
   if (!reply) return out;
   // what the reply really carries (a line the hard floor dropped is not answered)
   const answeredInfo = reply.info.map((n) => info[n]);
   const stillOpen = parts.filter((p) => !answeredInfo.some((i) => i.part === p.text) && !(reply.merge && mergeCovered(p)));
-  const open = !!hard || stillOpen.length > 0 || (!!ev && !reply.merge);
+  const open = !!hard || stillOpen.length > 0 || hiddenAsk.length > 0 || (!!ev && !reply.merge);
   if (!open) reply = composeReply({ info, merge: mergeArg, remaining: false });   // same kept lines, without the pointer to the owner
   const confidence = reply.merge ? ev.decision.confidence : 1;
   if (decisionBlock(name, confidence, { merge: reply.merge })) return out;
-  const pending = { id, hash: h, answer: { text: reply.text }, case: final.case, source: 'manager_decision', confidence, merge: reply.merge, escalated: open };
+  const pending = { id, hash: h, answer: { text: reply.text }, case: final.case, source: 'manager_decision', confidence, merge: reply.merge, escalated: open, remaining: open };
   const pol = policyOf(name, s.agent);
   shadowRoute({ id, session: name, agent: s.agent, final, stall, escalated: open });
   if (pol.action === 'hold') { applyHold(name, w, pending, pol); }
@@ -829,7 +838,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
     const left = [];
     if (hard) left.push(`${hard} question`);
     if (ev && !reply.merge) left.push(out.mergeWhy || 'merge not answered');
-    for (const p of stillOpen) if (!mergeParts.includes(p) || reply.merge) left.push(`"${p.text.slice(0, 60)}"`);
+    for (const p of [...stillOpen, ...hiddenAsk]) if (!mergeParts.includes(p) || !reply.merge) left.push(`"${p.text.slice(0, 60)}"`);
     const done = [reply.merge ? 'merge answered by the manager' : null, answeredInfo.length ? `${answeredInfo.length === 1 ? 'information' : 'information x' + answeredInfo.length} answered` : null].filter(Boolean);
     escalate(name, s.state, final, id, `${[...new Set(left)].join(', ') || 'the rest'} - needs you (${done.join('; ')})`);
   }

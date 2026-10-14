@@ -36,9 +36,9 @@ test('testEvidence: red wins, unknown otherwise', () => {
 });
 
 // ---- gitFacts ----
-test('gitFacts: clean branch', () => {
+test('gitFacts: clean branch', async () => {
   const repo = makeRepo();
-  const f = gitFacts({ cwd: repo, branch: 'feat' });
+  const f = await gitFacts({ cwd: repo, branch: 'feat' });
   assert.equal(f.ok, true);
   assert.equal(f.branch, 'feat'); assert.equal(f.target, 'main');
   assert.equal(f.repoName, 'proj');
@@ -46,41 +46,42 @@ test('gitFacts: clean branch', () => {
   assert.equal(f.alreadyMerged, false); assert.equal(f.docsOnly, false);
   assert.match(f.branchSha, /^[0-9a-f]{40}$/);
 });
-test('gitFacts: the current branch when none is named; not a repo; unknown branch on main', () => {
+test('gitFacts: the current branch when none is named; not a repo; unknown branch on main', async () => {
   const repo = makeRepo();
-  assert.equal(gitFacts({ cwd: repo, branch: 'nope' }).branch, 'feat');
-  assert.equal(gitFacts({ cwd: '/nonexistent-dir-xyz' }).ok, false);
+  assert.equal((await gitFacts({ cwd: repo, branch: 'nope' })).ok, false);   // a named branch that does not resolve is not replaced by the current one
+  assert.equal((await gitFacts({ cwd: repo })).branch, 'feat');
+  assert.equal((await gitFacts({ cwd: '/nonexistent-dir-xyz' })).ok, false);
   git(repo, 'checkout', '-q', 'main');
-  const f = gitFacts({ cwd: repo, branch: 'nope' });
+  const f = await gitFacts({ cwd: repo, branch: 'nope' });
   assert.equal(f.ok, false); assert.equal(f.error, 'branch not found');
 });
-test('gitFacts: conflicts, convention-only conflicts, already merged', () => {
+test('gitFacts: conflicts, convention-only conflicts, already merged', async () => {
   const real = makeRepo({ files: { 'src.js': 'export const a = 1;\n' }, mainFiles: { 'src.js': 'export const a = 2;\n' } });
-  const a = gitFacts({ cwd: real, branch: 'feat' });
+  const a = await gitFacts({ cwd: real, branch: 'feat' });
   assert.deepEqual(a.conflicts, ['src.js']); assert.equal(a.conventionOnly, false);
   const ver = makeRepo({ files: { 'VERSION.txt': '2\n', 'x.js': '1\n' }, mainFiles: { 'VERSION.txt': '3\n' } });
-  const b = gitFacts({ cwd: ver, branch: 'feat' });
+  const b = await gitFacts({ cwd: ver, branch: 'feat' });
   assert.deepEqual(b.conflicts, ['VERSION.txt']); assert.equal(b.conventionOnly, true);
   git(ver, 'checkout', '-q', 'main');
   git(ver, 'merge', '-q', '-X', 'ours', 'feat', '-m', 'merge');
-  assert.equal(gitFacts({ cwd: ver, branch: 'feat' }).alreadyMerged, true);
+  assert.equal((await gitFacts({ cwd: ver, branch: 'feat' })).alreadyMerged, true);
 });
-test('gitFacts: docs-only, sensitive paths and content', () => {
-  const docs = makeRepo({ files: { 'docs/a.md': 'x\n', 'test/a.test.js': 'y\n', 'VERSION.txt': '2\n' } });
-  assert.equal(gitFacts({ cwd: docs, branch: 'feat' }).docsOnly, true);
+test('gitFacts: docs-only, sensitive paths and content', async () => {
+  const docs = makeRepo({ files: { 'docs/a.md': 'x\n', 'README.md': 'y\n', 'VERSION.txt': '2\n' } });
+  assert.equal((await gitFacts({ cwd: docs, branch: 'feat' })).docsOnly, true);
   for (const [file, why] of [['.env', 'secret'], ['.env.local', 'secret'], ['config/server.pem', 'secret'], ['my-secrets/a.txt', 'secret'], ['db/migrations/001.up', 'migration'], ['x/y.sql', 'migration'], ['etc/sudoers.d/x', 'sudoers'], ['deploy/app.service', 'systemd'], ['systemd/x', 'systemd']]) {
-    const f = gitFacts({ cwd: makeRepo({ files: { [file]: 'a\n' } }), branch: 'feat' });
+    const f = await gitFacts({ cwd: makeRepo({ files: { [file]: 'a\n' } }), branch: 'feat' });
     assert.ok(f.sensitive.some((s) => s.why === why && s.file === file), `${file} -> ${why}: ${JSON.stringify(f.sensitive)}`);
   }
   const fake = 'AKIA' + 'A'.repeat(16);
-  const c = gitFacts({ cwd: makeRepo({ files: { 'src.js': `const k = "${fake}";\n` } }), branch: 'feat' });
+  const c = await gitFacts({ cwd: makeRepo({ files: { 'src.js': `const k = "${fake}";\n` } }), branch: 'feat' });
   assert.ok(c.sensitive.some((s) => s.why === 'secret-content'));
 });
 
 // ---- floor ----
-test('mergeFloor: reasons', () => {
+test('mergeFloor: reasons', async () => {
   const repo = makeRepo();
-  const facts = gitFacts({ cwd: repo, branch: 'feat' });
+  const facts = await gitFacts({ cwd: repo, branch: 'feat' });
   const green = testEvidence(GREEN);
   assert.deepEqual(mergeFloor(facts, green, {}), []);
   assert.match(mergeFloor(facts, testEvidence('2 failed'), {})[0], /^tests reported red: .*2 failed/);
@@ -184,9 +185,9 @@ test('evaluateMerge: a word-only green report is below the default confidence wi
 
 // ---- composeReply ----
 test('composeReply: merge, information and the pointer to the owner', () => {
-  const r = composeReply({ info: [{ part: 'send the SRF 1 buffer path', answer: '/data/fake/srf1-buffer', source: 'docs/HANDOVER.md:3' }], merge: { branch: 'task90-open', target: 'main', rationale: 'merges cleanly, tests green' }, remaining: true });
+  const r = composeReply({ info: [{ part: 'send the SRF 1 buffer path', answer: '/data/fake/srf1-buffer', source: 'docs/HANDOVER.md:3' }], merge: { repo: 'proj', branch: 'task90-open', target: 'main', rationale: 'merges cleanly, tests green' }, remaining: true });
   assert.match(r.text, /Send the SRF 1 buffer path: \/data\/fake\/srf1-buffer \(from docs\/HANDOVER\.md:3\)/);
-  assert.match(r.text, /Merge: yes - the manager evaluated task90-open -> main: merges cleanly, tests green\. Merge it now\./);
+  assert.match(r.text, /Merge: yes - the manager evaluated proj task90-open -> main: merges cleanly, tests green\. Merge it now\./);
   assert.match(r.text, /The rest of your question went to the owner: wait for their answer on it\.$/);
   assert.equal(hardMatch(r.text, { mergePresent: true }), null);
   assert.equal(composeReply({ info: [], merge: null, remaining: true }), null);
@@ -201,4 +202,75 @@ test('composeReply: a line that trips the hard floor is dropped, never reworded'
 
 test('defaults are exported', () => {
   assert.deepEqual(MERGE_DEFAULTS, { mergeDecisions: true, mergeMinConfidence: 0.85, mergeOptOut: [], mergeConventionFiles: ['VERSION.txt'], infoAnswers: true, infoRoots: [] });
+});
+
+// ---- round 7 review fixes ----
+test('M2: testEvidence does not green on non-test text; red and negation are local', () => {
+  for (const t of ['Step 1/1 complete. I did not run the tests yet.', 'Round 2/2 done. Tests were not run.', 'Fixed 3/3 review comments; tests not run.', 'Progress 4/4 steps done; tests not run yet.',
+    'not all tests pass', 'I have not run the tests. 12 passed lint checks', 'once the tests pass', 'I will pass on the deploy', 'tests pass on main, branch untested', 'All green: eslint only (no unit tests exist)', 'Did the tests pass?']) {
+    assert.notEqual(testEvidence(t, { branch: 'feat' }).state, 'green', t);
+  }
+  assert.equal(testEvidence('Tests: 3 broken. CI is not red though.').state, 'red');
+  assert.equal(testEvidence('tests pass on main', { branch: 'feat' }).state, 'unknown');
+  assert.equal(testEvidence('tests pass on feat.', { branch: 'feat' }).state, 'green');
+  assert.equal(testEvidence('Should I merge? All green.').state, 'green');
+  assert.equal(testEvidence('All green, ok to merge?').state, 'unknown');
+});
+test('M3: docs-only is documentation, not generic .txt or test code', async () => {
+  for (const [files, docs] of [[{ 'requirements.txt': 'a\n' }, false], [{ 'CMakeLists.txt': 'a\n' }, false], [{ 'test/a.test.js': 'a\n' }, false], [{ 'docs/run.sh': 'a\n' }, false],
+    [{ 'README.md': 'a\n', 'docs/x.txt': 'a\n' }, true], [{ 'LICENSE': 'a\n' }, true]]) {
+    assert.equal((await gitFacts({ cwd: makeRepo({ files }), branch: 'feat' })).docsOnly, docs, JSON.stringify(files));
+  }
+  const r = await ev(makeRepo({ files: { 'test/a.test.js': 'a\n' } }), 'merge feat. Updated tests.');
+  assert.equal(r.verdict, 'escalate');
+});
+test('M4: a named branch that does not resolve is not replaced by the current branch', async () => {
+  const r = await ev(makeRepo(), `merge no-such-branch. ${GREEN}`);
+  assert.equal(r.verdict, 'escalate'); assert.deepEqual(r.reasons, ['branch not found']);
+});
+test('M5: opt-out matches a worktree\'s main repo name and the origin remote name', async () => {
+  const repo = makeRepo({ name: 'orig-name' });
+  git(repo, 'remote', 'add', 'origin', 'https://example.invalid/owner/remote-name.git');
+  const wt = repo + '-wt';
+  git(repo, 'worktree', 'add', '-q', '-b', 'wt-branch', wt);
+  commit(wt, { 'w.js': '1\n' });
+  const f = await gitFacts({ cwd: wt, branch: 'wt-branch' });
+  assert.equal(f.repoName, 'orig-name-wt');
+  assert.ok(f.repoNames.includes('orig-name') && f.repoNames.includes('remote-name'), JSON.stringify(f.repoNames));
+  for (const name of ['orig-name', 'remote-name', 'orig-name-wt']) {
+    assert.match(mergeFloor(f, testEvidence(GREEN), { optOut: [name] })[0], /opted out/, name);
+  }
+  assert.deepEqual(mergeFloor(f, testEvidence(GREEN), { optOut: ['other'] }), []);
+});
+test('M6: an unscannable diff and a new binary file fail closed', async () => {
+  const big = await gitFacts({ cwd: makeRepo({ files: { 'big.js': 'ab\n'.repeat(1300000) } }), branch: 'feat' });
+  assert.ok(big.scanError);
+  assert.ok(mergeFloor(big, testEvidence(GREEN), {}).includes('diff too large or unreadable to scan'));
+  const bin = await gitFacts({ cwd: makeRepo({ files: { 'x/data.bin': 'a\0b\0c', 'docs/shot.png': 'a\0b' } }), branch: 'feat' });
+  assert.deepEqual(bin.binary, ['x/data.bin']);
+  assert.match(mergeFloor(bin, testEvidence(GREEN), {}).join(), /adds a binary file: x\/data\.bin/);
+});
+test('M7: CI / deploy / infra and more secret file names are sensitive', async () => {
+  const { sensitivePath } = await import('../merge-policy.js');
+  for (const f of ['.github/workflows/ci.yml', '.gitlab-ci.yml', 'Jenkinsfile', '.circleci/config.yml', 'scripts/deploy.sh', 'scripts/safe-restart.sh', 'Dockerfile', 'docker-compose.yml', 'infra/main.tf', 'terraform/a.json', 'ansible/site.yml', 'k8s/app.yaml', 'helm/values.yaml', 'update_core.sh']) assert.equal(sensitivePath(f), 'deploy', f);
+  for (const f of ['id_ed25519', 'keys/id_ecdsa', 'a.p12', 'a.pfx', 'a.jks', '.netrc', '.npmrc', '.pypirc', 'authorized_keys']) assert.equal(sensitivePath(f), 'secret', f);
+  assert.equal(sensitivePath('docs/deploy-notes.md'), null);
+  assert.equal(sensitivePath('src/app.js'), null);
+});
+test('M10: git facts are async', () => {
+  assert.ok(gitFacts({ cwd: '/nonexistent-dir-xyz' }) instanceof Promise);
+});
+test('m3: the local target is checked too when it differs from origin/<target>; the reply names the repo', async () => {
+  const repo = makeRepo({ files: { 'src.js': 'export const a = 1;\n' }, mainFiles: { 'src.js': 'export const a = 2;\n' } });
+  git(repo, 'update-ref', 'refs/remotes/origin/main', git(repo, 'rev-parse', 'main~1').trim());   // origin/main is the base: clean against it
+  const f = await gitFacts({ cwd: repo, branch: 'feat' });
+  assert.deepEqual(f.conflicts, ['src.js']);   // the local main conflicts
+  assert.match(f.targetShaLocal, /^[0-9a-f]{40}$/); assert.notEqual(f.targetShaLocal, f.targetSha);
+  const rec = journalRecord(await ev(repo, `merge feat. ${GREEN}`), { id: 'z', session: 's' });
+  assert.equal(rec.target_sha_local, f.targetShaLocal);
+  assert.ok(rec.evidence.some((e) => /\(local main@[0-9a-f]{12}\)/.test(e)));
+});
+test('M1: an information-only reply is checked without the merge exemption', () => {
+  assert.equal(composeReply({ info: [{ part: 'send the push main script path', answer: 'docs/push-main.md', source: 'a.md:1' }], merge: null }), null);
+  assert.ok(composeReply({ info: [{ part: 'send the push main script path', answer: 'docs/push-main.md', source: 'a.md:1' }], merge: { branch: 'b', target: 't', rationale: 'ok' } }));
 });

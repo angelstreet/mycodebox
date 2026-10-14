@@ -1963,7 +1963,7 @@ server.listen(PORT, HOST, async () => {
     onHandoff: async (session, text, at) => { await handoffs.fromStop(session, text, at); },
     // a merge the manager decided or escalated: a notice in the owner's feed (no push)
     onMergeDecision: (session, r) => push.record({
-      title: `${r.chosen === 'merge' ? 'Merge decided' : 'Merge escalated'}: ${session}`,
+      title: `${r.chosen === 'merge' ? 'Merge approved (reply pending)' : 'Merge escalated'}: ${session}`,
       body: `${r.branch} -> ${r.target}: ${r.chosen === 'merge' ? r.rationale : (r.reasons || []).join('; ') || r.rationale}${r.chosen === 'merge' ? ` Revert: git revert -m 1 <merge sha>` : ''}`,
       url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision',
     }),
