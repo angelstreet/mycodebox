@@ -2,7 +2,8 @@
 // V2 check wrapper (round 5): run a command only when the change touches paths outside the given patterns.
 //   node scripts/run-if-changed.js --except '*.md' --except 'docs/**' -- npm test
 // Changed paths are taken against V2_BASE_SHA (set by the V2 verifier). Without it, or when the list cannot be read,
-// the command always runs: a missing base never skips a check. Exit: the command's exit, 0 when skipped.
+// the command always runs: a missing base never skips a check. Renames list both paths (--no-renames): moving code to
+// a *.md path still runs the command. Exit: the command's exit, 0 when skipped.
 import { execFileSync, spawnSync } from 'node:child_process';
 
 // Glob subset: `**` any path, `*` within one segment, `?` one char. A pattern without `/` matches the basename.
@@ -34,7 +35,7 @@ function main() {
   let changed = null;
   const base = process.env.V2_BASE_SHA;
   if (base) {
-    try { changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n').filter(Boolean); } catch { changed = null; }
+    try { changed = execFileSync('git', ['diff', '--name-only', '--no-renames', base, 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n').filter(Boolean); } catch { changed = null; }
   }
   const d = decide(changed, except);
   if (!d.run) {

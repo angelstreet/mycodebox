@@ -2,6 +2,8 @@
 // V2 docs check (round 5): the acceptance check for docs-class tasks. Checks the Markdown files the change touches
 // (vs V2_BASE_SHA, which the V2 verifier sets; all tracked *.md without it, or with --all): relative links resolve to
 // a file in the repo, code fences are closed, no merge-conflict markers. Exit 0 = pass, 1 = findings, 2 = cannot run.
+// Not checked here: reference-style and HTML links, links inside inline code, #fragments (test/v2-docs-links.test.js
+// checks fragments repo-wide).
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';

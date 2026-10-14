@@ -467,3 +467,11 @@ Spend for round 4 (USD, measured from provider usage records; MiniMax is subscri
 The two sanity runs exposed defects that were fixed before the full run: mcode 0.6.5 final-text parsing, verdict and
 feasibility JSON, stall counting for no-change runs, and the 120 s leash (V2_PROGRESS R4-fix). The full run then
 exposed one more, the `none` cost basis above, which was fixed by rescoring. No re-run was needed.
+
+## Round 5 note: work type from task_class (2026-10-14)
+
+From round 5 a task's declared `task_class` that names a work type (`docs`, `test`, `coding`, `ui`, `research`,
+`debugging`) sets the router's work type, unless the keywords say `security` or `operations`
+(`orchestration/router.js` `classifyWork`). Before, keywords alone decided, so a docs task whose definition of done
+named its checks ("project-tests passes") was classified `test`. Scorecards grouped by work type from round 4 and
+round 5 are therefore not directly comparable for tasks that declare a class.

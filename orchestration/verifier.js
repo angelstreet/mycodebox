@@ -111,7 +111,8 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
       }
       const ok = runs.map((r) => passes(check, r.exit, r.artifactOk));
       let status;
-      if (runs.some((r) => r.exit === null)) status = 'unavailable';
+      // A real failing exit on this SHA outranks a rerun that produced none (timeout, spawn failure): a failure.
+      if (runs.some((r) => r.exit === null)) status = runs.some((r, i) => r.exit !== null && !ok[i]) ? 'fail' : 'unavailable';
       else if (ok.every(Boolean)) status = 'pass';
       else if (ok.some(Boolean)) status = 'flaky';
       else status = 'fail';

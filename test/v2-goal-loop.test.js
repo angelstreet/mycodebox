@@ -293,7 +293,8 @@ test('GL04 unknown check result and missing artifacts never pass; unavailable ev
   assert.equal(ra.state, 'waiting');
   const va = await a.view(ta.task_id);
   assert.ok(va.evidence.every((e) => e.exit === null));
-  assert.equal(loopDecisions(va).at(-1).loop.patch.wait.reason, 'evidence_unavailable');
+  // round 5: a check stopped at its time limit has no result, never a code failure: it waits for the owner/policy
+  assert.equal(loopDecisions(va).at(-1).loop.patch.wait.reason, 'check_timeout');
   assert.ok(!states(va).includes('accepted'));
 
   // (b) declared artifact missing although the command exits 0 -> not passing, structured feedback

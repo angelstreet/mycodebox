@@ -529,7 +529,7 @@ export function createGoalLoop({
     const stalls = progress && measured ? 0 : cp.stalls + (settle ? 1 : 0);
     const stall_run = settle ? cp.stall_pending : cp.stall_run;
     const stalledRun = !!devStart && stall_run === devStart.payload.run_id;
-    const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, stalls, stall_run, stall_pending: null, claim: null, feedback, provider: null, verify_only: false, review_unavailable: 0 };
+    const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, stalls, stall_run, stall_pending: settleStall ? null : cp.stall_pending, claim: null, feedback, provider: null, verify_only: false, review_unavailable: 0 };
     const evidence = [`signature ${signature}`, `same signature ${streak.count}x in a row`, `iterations without new passing evidence: ${stale} (limit ${stagnation})`,
       `strategy changes without progress: ${changes}`, `failing tests ${failing ?? 'n/a'} (best ${cp.best_failing ?? 'n/a'})${progress ? ': progress' : ''}`,
       ...(stall ? [`developer run ${stall} hit the run timeout (${stallMs} ms): stall signature ${stallSignature(devStart?.payload.entry)}, stalled runs without progress ${stalls}`] : []),
@@ -1081,7 +1081,7 @@ export function createGoalLoop({
       'suspend; verify the same SHA again when the limit changes or the owner resumes', {
         evidence: [`sha ${head}`, ...timedOut.map((r) => `${r.check_id}: no exit code (${r.error})`)], expected_effect: 'no runs until the check limit changes or the owner resumes; then checks only',
         rationale: 'Round 5: an evidence timeout must never look like a code failure.', policy_ref: policyRef(p) }),
-      { patch: { verify_only: true, stall_pending: null, wait: { reason: 'check_timeout', until_ms: null, resume_to: 'ready', diagnosis, next_action, policy_hash: policyRef(p) } }, to: 'waiting', reason: 'check_timeout',
+      { patch: { verify_only: true, wait: { reason: 'check_timeout', until_ms: null, resume_to: 'ready', diagnosis, next_action, policy_hash: policyRef(p) } }, to: 'waiting', reason: 'check_timeout',
         emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'check_timeout', diagnosis, next_action } }] });
     }
     if (unavailable.length) {

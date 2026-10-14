@@ -283,3 +283,25 @@ test('check time limits are validated (task checks and project policy)', () => {
   const bad = validatePolicy({ ...POLICY, checks: { timeout_ms: 1.5, by_task_class: { Docs: [], docs: [{ ...SLOW_CHECK, required: false }] }, extra: 1 } }).map((e) => e.path);
   for (const p of ['checks.timeout_ms', 'checks.by_task_class.Docs', 'checks.by_task_class.docs', 'checks.extra']) assert.ok(bad.includes(p), p);
 });
+
+test('run-if-changed: moving code to a *.md path still runs the command (renames list both paths)', () => {
+  const repo = mkRepo(POLICY);
+  fs.mkdirSync(path.join(repo, 'scripts'));
+  fs.copyFileSync(path.join(ROOT, 'scripts', 'run-if-changed.js'), path.join(repo, 'scripts', 'run-if-changed.js'));
+  fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ type: 'module' }));
+  sh(repo, 'add', '.'); sh(repo, 'commit', '-qm', 'scripts');
+  const baseSha = sh(repo, 'rev-parse', 'HEAD');
+  sh(repo, 'mv', 'src/a.js', 'a.md'); sh(repo, 'commit', '-qm', 'move');
+  const out = execFileSync('node', ['scripts/run-if-changed.js', '--except', '*.md', '--', 'node', '-e', '0'], { cwd: repo, encoding: 'utf8', env: { ...GIT_ENV, V2_BASE_SHA: baseSha } });
+  assert.match(out, /running node -e 0: 1 changed path\(s\) outside \*\.md/);
+});
+
+test('router: a declared task_class sets the work type, never below security or operations keywords', async () => {
+  const { classifyWork } = await import('../orchestration/router.js');
+  const dod = ['project-tests passes on the candidate SHA'];
+  assert.equal(classifyWork({ goal: 'add one sentence to docs/USAGE.md', definition_of_done: dod }).type, 'test');
+  assert.equal(classifyWork({ goal: 'add one sentence to docs/USAGE.md', definition_of_done: dod, task_class: 'docs' }).type, 'docs');
+  assert.equal(classifyWork({ goal: 'fix the auth bypass in the sandbox', task_class: 'docs' }).type, 'security');
+  assert.equal(classifyWork({ goal: 'restart the service after the disk fills', task_class: 'docs' }).type, 'operations');
+  assert.equal(classifyWork({ goal: 'add one sentence', task_class: 'coding:low' }).type, 'coding');
+});

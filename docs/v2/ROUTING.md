@@ -56,12 +56,14 @@ Stops. A developer run killed by its own time limit that left the head unchanged
 (`run_timeout` decision, signature `run_timeout:<entry> :: timeout`; the §4 streak keeps the checks' signature so stalls
 and failing no-op runs still converge). Round 5: a timed-out run that committed a change is evaluated on that commit
 (`run_timeout` chosen `evaluate the committed change`); it becomes a stall only if its required checks then fail without
-progress (`stall_pending`, settled by the failure handler; a reviewer rejection of passing checks does not settle it).
+progress (`stall_pending`, settled by the failure handler and kept across a `check_timeout` or `evidence_unavailable`
+wait; a reviewer rejection of passing checks does not settle it on purpose: the review-failure streak bounds that loop).
 Under a `stall_runs_to_no_progress` limit, a run that leaves the head unchanged (`run_no_change`) or ends with an
 impossibility claim is a stall too (at most one per run), except that a no-change run on a head that still holds a
 change with no exit code on a required check, or one whose checks all pass and no reviewer rejected, goes to evaluation
 first (`run_no_change` chosen `evaluate the head`, same pending rule). A declared `task_class` that names a work type
-(`docs`, `test`, `coding`, ...) sets the work type for run limits and routing; keywords decide only without one. And the first measurement never resets the count:
+(`docs`, `test`, `coding`, ...) sets the work type for run limits and routing, except over `security` or `operations`
+keywords; keywords decide alone without one. And the first measurement never resets the count:
 the base SHA is not measured, so checks that already pass on it look like "new passing evidence" at the first
 evaluation; only progress over an earlier measurement resets stalls. Verdicts, feasibility answers and claims are read
 only from the last JSON object of the run's final text; a placeholder diagnosis such as `<why>` is not a diagnosis.
