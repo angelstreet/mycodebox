@@ -42,8 +42,8 @@ Inside one source the selector decides first (entry > runtime > `*`), then the c
 ```
 
 Defaults shipped in the registry (light models on easy classes): `docs`, `test` and `coding:low` on
-`minimax:MiniMax-M3`, `minimax:MiniMax-M3.1-Flash-Preview` and `claude:claude-haiku-4-5` get `timeout_ms` 120000,
-`max_steps` 40, `effort` low where the model has efforts (M3.1, Haiku; M3 has none) and `stall_runs_to_no_progress` 2.
+`minimax:MiniMax-M3` and `claude:claude-haiku-4-5` get `timeout_ms` 120000,
+`max_steps` 40, `effort` low where the model has efforts (Haiku; M3 has none) and `stall_runs_to_no_progress` 2.
 Every other model and class keeps today's behaviour.
 
 Rules: an effort the entry does not support rejects that candidate at routing (never translated). Limits a CLI cannot
@@ -106,7 +106,12 @@ true): rungs are the router's floored candidates ordered by tier, then billing (
 cost. The developer starts on the cheapest rung whose fit-adjusted quality is at least 0.5 (only when two candidates
 have a known cost). A forced strategy change (failing checks or reviewer rejection, §4 thresholds) picks
 `escalate_model`: the next strictly higher rung (an equally priced sibling is not an escalation), e.g. MiniMax
-M3.1-Flash → Haiku → Sonnet. Each choice is a `route` + `assign_developer` decision and each climb a `strategy_change`
+M3 → Haiku → Sonnet. Each choice is a `route` + `assign_developer` decision and each climb a `strategy_change`
 decision with `escalation <from> -> <to>` evidence. Floors hold: rungs are floored candidates (allowlists,
 MIN_TIER_BY_RISK, probes), high/critical risk and security work are not eligible and keep their ranking and reviewers,
 reviewers are never routed by the ladder, and a pinned task (`preferred_models`) never leaves its pins.
+
+
+**Owner decision 2026-10-14:** MiniMax-M3.1-Flash-Preview is removed from the registry and never routed (quality judged
+too low on live use); MiniMax-M3 is the only MiniMax model. The ladder starts at M3. `scripts/v2-bench.js` keeps its
+`minimax:m3.1-flash` spec for explicit re-evaluation only.

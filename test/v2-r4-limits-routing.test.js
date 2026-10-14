@@ -85,19 +85,17 @@ test('run options: lightweight only for text-only roles on fresh runs; unsupport
 });
 
 // ---------- registry ----------
-test('registry: MiniMax-M3.1-Flash-Preview with efforts, M3 without; billing defaults; quota validated', () => {
+test('registry: owner decision 2026-10-14 - MiniMax-M3 only (M3.1-Flash-Preview not routable); billing defaults; quota validated', () => {
   const reg = loadRegistry();
-  const m31 = reg.get('minimax:MiniMax-M3.1-Flash-Preview');
   const m3 = reg.get('minimax:MiniMax-M3');
-  assert.equal(m31.tier, 'light');
-  assert.deepEqual(m31.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.ok(!reg.get('minimax:MiniMax-M3.1-Flash-Preview'), 'owner: M3.1-Flash is not used');
+  assert.equal(m3.tier, 'light');
   assert.deepEqual(m3.efforts, []);
   assert.equal(checkEffort(m3, 'low').ok, false);
-  assert.equal(checkEffort(m31, 'low').ok, true);
-  for (const e of [m3, m31]) { assert.equal(e.billing, 'subscription'); assert.equal(e.quota, null); }
+  assert.equal(m3.billing, 'subscription'); assert.equal(m3.quota, null);
   assert.equal(reg.get('claude:claude-haiku-4-5').billing, 'per_token');
   assert.equal(reg.get('claude:claude-haiku-4-5').run_limits.docs.effort, 'low');
-  assert.equal(m31.run_limits['coding:low'].stall_runs_to_no_progress, 2);
+  assert.equal(m3.run_limits['coding:low'].stall_runs_to_no_progress, 2);
   const base = { runtime: 'minimax', provider: 'minimax', model: 'X', tier: 'light', capabilities: ['code'], efforts: [] };
   assert.equal(validateRegistryDoc({ version: 1, models: [{ ...base, billing: 'free' }] }).ok, false);
   assert.equal(validateRegistryDoc({ version: 1, models: [{ ...base, quota: { period: 'month', tokens: 1e9, usd: 20 } }] }).ok, true);
@@ -281,13 +279,15 @@ test('escalation ladder: starts on the cheapest good-enough rung, climbs M3.1 ->
   assert.equal(r3.escalation.started_on_ladder, false);
 });
 
-test('round-4 measured latency order (SCORING.md): M3.1-Flash < M3 < Haiku; a speed task ranks M3.1-Flash above Haiku', () => {
+test('latency order without M3.1 (owner 2026-10-14): M3 < Haiku; a speed task ranks M3 above Haiku', () => {
   const real = loadRegistry({ now });   // the shipped models.json, not the synthetic DOC
   const lat = Object.fromEntries(JSON.parse(fs.readFileSync(new URL('../orchestration/models.json', import.meta.url), 'utf8')).models.map((e) => [e.model, e.latency_ms]));
-  assert.ok(lat['MiniMax-M3.1-Flash-Preview'] < lat['MiniMax-M3'] && lat['MiniMax-M3'] < lat['claude-haiku-4-5']);
+  assert.equal(lat['MiniMax-M3.1-Flash-Preview'], undefined);
+  assert.ok(lat['MiniMax-M3'] < lat['claude-haiku-4-5']);
   const r = route(T({ priority: 'speed' }), { registry: real, now });
   const score = (id) => r.candidates.find((c) => c.id === id).score;
-  assert.ok(score('minimax:MiniMax-M3.1-Flash-Preview') > score('claude:claude-haiku-4-5'));
+  assert.ok(!r.candidates.some((c) => c.id === 'minimax:MiniMax-M3.1-Flash-Preview'));
+  assert.ok(score('minimax:MiniMax-M3') > score('claude:claude-haiku-4-5'));
 });
 
 test('escalation ladder never drops below a floor: high/critical risk, security work and pins keep theirs', () => {
