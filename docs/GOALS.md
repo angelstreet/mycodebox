@@ -15,7 +15,8 @@ the linked pages and tests, never in this file alone.
 Sessions do not stop for routine confirmations. Merge, push, deploy and "the recommended option" are decided by the
 manager with an evaluation and recorded; the owner corrects afterwards. Waiting for the owner is the exception, reserved
 for the remaining hard floors: deletions of data, credentials and secrets, money, customers, sudoers and units on hosts,
-production database migrations (plus force-push / history rewrites, tag pushes and publishing).
+production database migrations (plus force-push / history rewrites, tag pushes and publishing; the full list is in
+[REFERENCE](REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)).
 
 | Part | Status |
 |---|---|

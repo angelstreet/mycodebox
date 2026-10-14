@@ -45,7 +45,7 @@ must match the actual configuration until they are migrated.
   recommended option itself after an evaluation, records each decision and shows it to the owner, who corrects afterwards.
   It must never answer on the owner's behalf about deletions of data, credentials and secrets, money, customers, sudoers
   or units on hosts, production database migrations, force-push or history rewrites, pushing tags or publishing a
-  package: the hard floor always wins for
+  package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
   those. Merges are an evaluated manager decision (owner, 2026-10-14): the
   manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the
   session reports its tests green on that branch (or the change is docs-only; test code needs the green report), the diff touches no secrets,

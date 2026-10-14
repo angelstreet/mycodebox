@@ -546,7 +546,8 @@ prints one JSON line `{verdict, reasons, rationale, ...}`.
 OWNER_DECISIONS §15 ("yes merge, yes push, yes deploy, yes do the recommended one ... the correction can come at the
 end"). `topicSplit(text)` returns `{ merge, push, deploy, hard }`. A push or deploy counts only when the session asks to do
 it ("should I deploy ...", "push the branch?"), not when it names a feature ("the deploy queue page"). The hard floor:
-deletions of data, credentials and secrets, money, customers, `systemctl` / `pm2` / `sudo` / sudoers / unit files /
+deletions of data (every verb form: deletes, deleted, removal, drops, wiped, erased, destroyed, ...), credentials and
+secrets (revoked, rotated keys), money (pays, paid), customers, `systemctl` / `pm2` / `sudo` / sudoers / unit files /
 reboots, database migrations and migration tools (`alembic`, `prisma migrate`, ...), database resets, force-push and
 history rewrites (`-f`, `--force-with-lease`, `--mirror`, `--delete`, `+ref`, `:ref`, pushes to prod/staging/live), tag
 pushes and publishing a package. Round 8 added the sudo, unit-file, reboot and migration-tool words to `FORBIDDEN_RE`
