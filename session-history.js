@@ -6,8 +6,9 @@
 //   { schema_version: 1, kind: 'session.ended', name, ts, reason: 'killed'|'exited'|'vanished' }
 // Names are reused: an instance is a started record plus the next ended record for the same name.
 // One appendFile call writes one complete line; a torn or invalid line (crash mid-write) is skipped on read.
-import { promises as fsp, readFileSync, statSync, mkdirSync } from 'node:fs';
+import { promises as fsp, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { homedir } from 'node:os';
 
 export const SCHEMA_VERSION = 1;
 export const KINDS = ['session.started', 'session.ended'];
@@ -17,11 +18,11 @@ export const NAME_RE = /^[A-Za-z0-9_.-]{1,120}$/;
 export const PROMPT_TEXT_MAX = 200;
 
 // Prompt text is stored only as a short sanitized excerpt: no ANSI/control chars, whitespace collapsed, <= 200 chars.
-// A value that looks like a path (absolute or ./ ~/ and no newline) is kept as a path reference instead.
+// A value is kept as a path reference only when it has no whitespace and exists on this host (so "/review ..." is text).
 export function sanitizePromptRef(v) {
   if (v == null) return null;
   const s = String(v);
-  if (/^(?:\/|~\/|\.\.?\/)[^\n\r]*$/.test(s) && s.length <= 1024 && !/[\x00-\x1f\x7f]/.test(s)) return s;
+  if (/^(?:\/|~\/|\.\.?\/)\S*$/.test(s) && s.length <= 1024 && !/[\x00-\x1f\x7f]/.test(s) && existsSync(s.startsWith('~/') ? homedir() + s.slice(1) : s)) return s;
   const t = s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b[@-_]/g, '').replace(/[\x00-\x1f\x7f-\x9f]+/g, ' ').replace(/\s+/g, ' ').trim();
   return t ? t.slice(0, PROMPT_TEXT_MAX) : null;
 }
@@ -43,6 +44,7 @@ export function validateRecord(r, now = Date.now()) {
   if (!STARTED_BY.includes(r.started_by)) throw new TypeError(`unknown started_by: ${r.started_by}`);
   const out = { schema_version: SCHEMA_VERSION, kind: r.kind, name: r.name, provider: strOrNull(r.provider, 40), model: strOrNull(r.model, 120),
     cwd: strOrNull(r.cwd), started_by: r.started_by, prompt_ref: sanitizePromptRef(r.prompt_ref), handover_ref: strOrNull(r.handover_ref), ts };
+  if (Number.isFinite(Number(r.tmux_created)) && Number(r.tmux_created) > 0) out.tmux_created = Number(r.tmux_created);   // tmux #{session_created}: tells a reused name from the same session
   const rc = strOrNull(r.remote_control_url, 300);
   if (rc && /^https:\/\/[^\s]+$/.test(rc)) out.remote_control_url = rc;
   return out;
@@ -50,29 +52,32 @@ export function validateRecord(r, now = Date.now()) {
 
 // Fold ordered records into session instances. A second start while one is open ends the old one at that ts
 // ('superseded') -- except an 'unknown' instance (the tick saw the tmux session first), which the real start enriches in place.
-export function fold(records) {
+export function createFolder() {
   const out = [];
   const open = new Map();
-  for (const r of records) {
+  function feed(r) {
     if (r.kind === 'session.started') {
       const cur = open.get(r.name);
       if (cur && cur.started_by === 'unknown' && r.started_by !== 'unknown') {
         Object.assign(cur, { provider: r.provider ?? cur.provider, model: r.model ?? cur.model, cwd: r.cwd ?? cur.cwd, started_by: r.started_by,
-          prompt_ref: r.prompt_ref, handover_ref: r.handover_ref, remote_control_url: r.remote_control_url ?? cur.remote_control_url ?? null, start: Math.min(cur.start, r.ts) });
-        continue;
+          prompt_ref: r.prompt_ref, handover_ref: r.handover_ref, remote_control_url: r.remote_control_url ?? cur.remote_control_url ?? null,
+          tmux_created: cur.tmux_created ?? r.tmux_created ?? null, start: Math.min(cur.start, r.ts) });
+        return;
       }
       if (cur) { cur.end = r.ts; cur.end_reason = 'superseded'; }
       const inst = { name: r.name, provider: r.provider ?? null, model: r.model ?? null, cwd: r.cwd ?? null, started_by: r.started_by,
-        prompt_ref: r.prompt_ref ?? null, handover_ref: r.handover_ref ?? null, remote_control_url: r.remote_control_url ?? null, start: r.ts, end: null, end_reason: null };
+        prompt_ref: r.prompt_ref ?? null, handover_ref: r.handover_ref ?? null, remote_control_url: r.remote_control_url ?? null, tmux_created: r.tmux_created ?? null,
+        start: r.ts, end: null, end_reason: null };
       open.set(r.name, inst); out.push(inst);
     } else if (r.kind === 'session.ended') {
       const cur = open.get(r.name);
-      if (!cur) continue;
+      if (!cur) return;
       cur.end = Math.max(r.ts, cur.start); cur.end_reason = r.reason; open.delete(r.name);
     }
   }
-  return out;
+  return { feed, instances: out, open };
 }
+export function fold(records) { const f = createFolder(); for (const r of records) f.feed(r); return f.instances; }
 
 export function parseLines(text) {
   const recs = [];
@@ -83,54 +88,68 @@ export function parseLines(text) {
   return recs;
 }
 
-export function createSessionHistory({ file, now = Date.now, missTicks = 2 } = {}) {
+export function createSessionHistory({ file, now = Date.now, missMs = 2000 } = {}) {
   if (!file) throw new Error('session-history: file required');
-  let cache = { sig: null, instances: [] };
-  const sig = () => { try { const s = statSync(file); return `${s.size}:${s.mtimeMs}`; } catch { return 'none'; } };
-  function instances() {   // cached by size+mtime; the file is only re-folded after an append
-    const s = sig();
-    if (s !== cache.sig) {
-      let text = ''; try { text = readFileSync(file, 'utf8'); } catch { /* no file yet */ }
-      cache = { sig: s, instances: fold(parseLines(text)) };
-    }
-    return cache.instances;
-  }
-  async function append(rec) {
+  // Folded state lives in memory: read once at boot, then updated by each append (this process is the only writer),
+  // so a request or a tick never re-reads the file.
+  const folder = createFolder();
+  try { for (const r of parseLines(readFileSync(file, 'utf8'))) folder.feed(r); } catch { /* no file yet */ }
+  let queue = Promise.resolve();
+  const instances = () => folder.instances;
+  function append(rec) {   // validated now, written in call order: one write, one complete line
     const r = validateRecord(rec, now());
-    mkdirSync(dirname(file), { recursive: true });
-    await fsp.appendFile(file, JSON.stringify(r) + '\n', { mode: 0o600 });   // one write, one complete line
-    return r;
+    const p = queue.then(async () => {
+      mkdirSync(dirname(file), { recursive: true });
+      await fsp.appendFile(file, JSON.stringify(r) + '\n', { mode: 0o600 });
+      folder.feed(r);
+      return r;
+    });
+    queue = p.catch(() => {});
+    return p;
   }
-  const openOf = (name) => { const l = instances(); for (let i = l.length - 1; i >= 0; i--) if (l[i].name === name) return l[i].end == null ? l[i] : null; return null; };
-  const openNames = () => new Set(instances().filter((i) => i.end == null).map((i) => i.name));
-  const covers = (i, ts) => ts >= i.start && (i.end == null || ts <= i.end);
+  const openOf = (name) => folder.open.get(name) || null;
+  const openNames = () => new Set(folder.open.keys());
+  const covers = (i, ts) => ts >= i.start && (i.end == null || ts < i.end);
   // The instance of `name` running at ts (latest start wins on overlap).
   function instanceAt(name, ts) {
-    const l = instances(); let best = null;
-    for (const i of l) if (i.name === name && covers(i, ts) && (!best || i.start >= best.start)) best = i;
+    let best = null;
+    for (const i of folder.instances) if (i.name === name && covers(i, ts) && (!best || i.start >= best.start)) best = i;
     return best;
   }
   // The instance running at ts in a working directory; null when none or ambiguous.
   function byCwd(cwd, ts) {
-    const m = instances().filter((i) => i.cwd === cwd && covers(i, ts));
+    const m = folder.instances.filter((i) => i.cwd === cwd && covers(i, ts));
     return m.length === 1 ? m[0] : null;
   }
 
-  // Tick helper: live = Map(name -> {provider, model, cwd}) of tmux sessions. Starts unseen ones as 'unknown' (ts = first seen),
-  // ends open ones missing for `missTicks` consecutive ticks as 'vanished' (one empty tmux answer must not end everything).
-  // `skip` = names being created right now (the creator writes their real start record).
-  const missing = new Map();
-  async function sync(live, { skip = new Set(), ended = new Map() } = {}) {
-    const open = new Set(instances().filter((i) => i.end == null && i.started_by !== 'v2').map((i) => i.name));   // v2 runs are not tmux sessions
+  // Tick helper: live = Map(name -> {provider, model, cwd, created}) of tmux sessions. Starts unseen ones as 'unknown'
+  // (ts = first seen), starts a new instance when a name was reused (tmux session_created differs), and ends open ones
+  // missing for >= missMs of wall clock as 'vanished'. One call at a time: an overlapping call returns the running one.
+  // The caller must not call this after a failed tmux listing (an empty list is only trusted when tmux said "no server").
+  const missingSince = new Map();
+  let running = null;
+  function sync(live, opts = {}) {
+    if (running) return running;
+    running = doSync(live, opts).finally(() => { running = null; });
+    return running;
+  }
+  async function doSync(live, { skip = new Set() } = {}) {
+    const t = now();
     for (const [name, meta] of live) {
-      missing.delete(name);
-      if (open.has(name) || skip.has(name) || !NAME_RE.test(name)) continue;
-      await append({ kind: 'session.started', name, provider: meta?.provider ?? null, model: meta?.model ?? null, cwd: meta?.cwd ?? null, started_by: 'unknown', prompt_ref: null, handover_ref: null });
+      missingSince.delete(name);
+      if (skip.has(name) || !NAME_RE.test(name)) continue;
+      const cur = folder.open.get(name);
+      if (cur && cur.started_by === 'v2') continue;
+      if (cur && cur.tmux_created != null && meta?.created != null && cur.tmux_created !== meta.created) {
+        await append({ kind: 'session.ended', name, reason: 'vanished' });   // same name, different tmux session
+      } else if (cur) continue;
+      await append({ kind: 'session.started', name, provider: meta?.provider ?? null, model: meta?.model ?? null, cwd: meta?.cwd ?? null, started_by: 'unknown',
+        prompt_ref: null, handover_ref: null, tmux_created: meta?.created ?? null });
     }
-    for (const name of open) {
-      if (live.has(name)) continue;
-      const n = (missing.get(name) || 0) + 1;
-      if (n >= missTicks) { missing.delete(name); await append({ kind: 'session.ended', name, reason: ended.get(name) || 'vanished' }); } else missing.set(name, n);
+    for (const [name, cur] of [...folder.open]) {
+      if (live.has(name) || cur.started_by === 'v2') continue;   // v2 runs are not tmux sessions
+      const since = missingSince.get(name) ?? missingSince.set(name, t).get(name);
+      if (t - since >= missMs) { missingSince.delete(name); await append({ kind: 'session.ended', name, reason: 'vanished' }); }
     }
   }
   return { append, instances, openOf, openNames, instanceAt, byCwd, sync, file };

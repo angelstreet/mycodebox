@@ -131,24 +131,28 @@ const TMUX = process.env.TMUX_BIN || 'tmux';
 const CONCURRENCY = 6;
 const WORKING_HOLD_MS = 4000;
 
+let listOk = true;   // false after a tmux error other than "no server running" (an empty list is then not trusted)
 async function listSessions() {
-  const fmt = '#{session_name}|#{session_attached}|#{session_activity}|#{session_windows}';
+  const fmt = '#{session_name}|#{session_attached}|#{session_activity}|#{session_windows}|#{session_created}';
   let raw = '';
   try {
     ({ stdout: raw } = await exec(TMUX, ['list-sessions', '-F', fmt]));
   } catch (err) {
-    if (!/no server running/.test(err.stderr || '')) {
+    listOk = /no server running/.test(err.stderr || '');
+    if (!listOk) {
       console.error('[listSessions] failed:', err.code || err.message, 'stderr=', err.stderr || '');
     }
     return [];
   }
+  listOk = true;
   const now = Math.floor(Date.now() / 1000);
   const sessions = raw.trim().split('\n').filter(Boolean).map((line) => {
-    const [name, attached, activity, windows] = line.split('|');
+    const [name, attached, activity, windows, created] = line.split('|');
     return {
       name,
       attached: Number(attached) > 0,
       windows: Number(windows) || 1,
+      created: Number(created) || null,
       lastActivitySec: Math.max(0, now - Number(activity)),
     };
   });
@@ -642,7 +646,7 @@ const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTF
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
-const history = createSessionHistory({ file: join(STATE_DIR, 'session-history.jsonl') });   // start/end log of sessions; open instances are rebuilt from the file at boot
+const history = createSessionHistory({ file: join(STATE_DIR, 'session-history.jsonl'), missMs: 2 * Number(process.env.TICK_MS || 1000) });   // start/end log of sessions; open instances are rebuilt from the file at boot
 const historyView = createHistoryView({ history, ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });
 const historyStarting = new Set();   // names being created right now: the tick must not record them as 'unknown'
 const historyLog = (rec) => history.append(rec).catch((e) => console.error('[history]', e.message));   // history never breaks a session action
@@ -890,8 +894,11 @@ async function pollOnce() {
   reporter.prune(new Set(Object.keys(status)));
   turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
-  history.sync(new Map(Object.entries(status).map(([k, v]) => [k, { provider: v.agent ?? null, model: v.model ?? null, cwd: v.cwd ?? null }])), { skip: historyStarting })
-    .catch((e) => console.error('[history] sync', e.message));
+  if (listOk) {   // never judge sessions gone from a failed tmux listing
+    const createdOf = new Map(sessions.map((x) => [x.name, x.created]));
+    history.sync(new Map(Object.entries(status).map(([k, v]) => [k, { provider: v.agent ?? null, model: v.model ?? null, cwd: v.cwd ?? null, created: createdOf.get(k) ?? null }])), { skip: historyStarting })
+      .catch((e) => console.error('[history] sync', e.message));
+  }
   const claudeIdx = await claudeIndex.get();
   for (const [k, v] of Object.entries(status)) {
     if (v.agent !== 'claude') continue;
@@ -1054,6 +1061,7 @@ if (V2_ON) {
     onRun: (r) => historyLog(r.event === 'start'
       ? { kind: 'session.started', name: r.name, provider: r.provider, model: r.model, cwd: r.cwd, started_by: 'v2', prompt_ref: null, handover_ref: null }
       : { kind: 'session.ended', name: r.name, reason: 'exited' }) });
+  for (const i of history.instances()) if (i.end == null && i.started_by === 'v2') await historyLog({ kind: 'session.ended', name: i.name, reason: 'exited' });   // runs of a previous process are over
   v2.start().catch((e) => console.error(`[v2] start failed: ${e?.code || e?.message}`));
 }
 
@@ -1087,6 +1095,10 @@ async function sessionExists(name) {
   try { await exec(TMUX, ['has-session', '-t', `=${name}`]); return true; } catch { return false; }
 }
 
+async function tmuxCreated(name) {   // tmux #{session_created} (seconds), or null: tells a reused name from the same session
+  try { const { stdout } = await exec(TMUX, ['display-message', '-p', '-t', `=${name}:`, '#{session_created}']); return Number(stdout.trim()) || null; } catch { return null; }
+}
+
 async function createSession({ name, agent, cwd, priority, model, prompt, handover }) {
   if (priority !== undefined && !isPriority(priority)) throw httpError(400, 'priority must be P0, P1 or P2');
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
@@ -1097,9 +1109,9 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
   if (await sessionExists(real)) throw httpError(409, 'session already exists');
   historyStarting.add(real);
   try {
+  try {
     await exec(TMUX, ['new-session', '-d', '-s', real, '-c', dir, '-x', '120', '-y', '40']);
   } catch (err) {
-    historyStarting.delete(real);
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
   try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
@@ -1108,12 +1120,12 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
-  await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: prompt ?? null, handover_ref: handover ?? null });
-  historyStarting.delete(real);
+  await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
   sessionMeta.reset(real);
   sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
   if (priority) sessionMeta.set(real, { priority });
   latest = null;
+  } finally { historyStarting.delete(real); }
   return { ok: true, name: real, agent, cwd: dir, priority: sessionMeta.priority(real) };
 }
 
@@ -1350,7 +1362,7 @@ function originOk(req) {
   try { return new URL(o).host === req.headers.host; } catch { return false; }
 }
 
-const server = http.createServer(async (req, res) => {
+async function handleHttp(req, res) {
   // Tight CORS — bound to Tailscale only anyway, but be explicit.
   res.setHeader('referrer-policy', 'no-referrer');
 
@@ -1464,19 +1476,22 @@ const server = http.createServer(async (req, res) => {
   // --- session history (session-history.js): cbsession reports its start here (loopback + reporter token); the rest is read-only ---
   if (req.method === 'POST' && p === '/api/history/started') {
     if (!isLoopback(req.socket.remoteAddress)) return json(res, 403, { ok: false, error: 'loopback only' });
+    // A reverse proxy (Tailscale Serve) connects from 127.0.0.1 too: a proxied request is not a local caller.
+    if (['x-forwarded-for', 'forwarded', 'tailscale-user-login'].some((h) => req.headers[h] !== undefined)) return json(res, 403, { ok: false, error: 'proxied requests refused' });
     if (!reporter.tokenOk(req.headers[TOKEN_HEADER])) return json(res, 401, { ok: false, error: 'bad token' });
     try {
-      const b = await readJsonBody(req);
-      const r = await history.append({ ...b, kind: 'session.started', started_by: 'cbsession' });
+      const { ts: _ts, tmux_created: _tc, ...b } = await readJsonBody(req);   // server time and tmux facts only, never the client's
+      const r = await history.append({ ...b, kind: 'session.started', started_by: 'cbsession', tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
       return json(res, 200, { ok: true, record: r });
     } catch (err) { return json(res, err instanceof SyntaxError || err instanceof TypeError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/history') {
-    try { return json(res, 200, historyView.list(Object.fromEntries(url.searchParams))); }
+    try { return json(res, 200, await historyView.list(Object.fromEntries(url.searchParams))); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p.startsWith('/api/history/')) {
-    const row = historyView.detail(decodeURIComponent(p.slice('/api/history/'.length)), url.searchParams.get('start'));
+    let name; try { name = decodeURIComponent(p.slice('/api/history/'.length)); } catch { return json(res, 400, { ok: false, error: 'bad URL encoding' }); }
+    const row = await historyView.detail(name, url.searchParams.get('start'));
     return row ? json(res, 200, { ok: true, session: row }) : json(res, 404, { ok: false, error: 'no such session in history' });
   }
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
@@ -1815,6 +1830,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   res.writeHead(405); res.end('method not allowed');
+}
+// A handler that throws (a malformed %-escape in a path, a bug) must answer, never crash the process.
+const server = http.createServer((req, res) => {
+  handleHttp(req, res).catch((err) => {
+    console.error('[http]', req.method, String(req.url).slice(0, 80), err?.message);
+    if (!res.headersSent) { try { json(res, err instanceof URIError ? 400 : 500, { ok: false, error: err instanceof URIError ? 'bad URL encoding' : 'internal error' }); } catch { /* socket gone */ } }
+    else res.end();
+  });
 });
 
 // ---------------------------------------------------------------------------

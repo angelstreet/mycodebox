@@ -387,10 +387,28 @@ test('session history: dashboard create/kill, unknown tick start, v2 runs, cbses
     assert.equal((await s.api('GET', '/api/history?status=nope')).status, 400);
     assert.equal((await s.api('GET', '/api/history/hist-dash')).body.session.name, 'hist-dash');
     assert.equal((await s.api('GET', '/api/history/none')).status, 404);
+    // Malformed percent-escapes answer 400 and the process stays up.
+    assert.equal((await fetch(`http://127.0.0.1:${s.port}/api/history/%E0%A4%A`)).status, 400);
+    assert.equal((await fetch(`http://127.0.0.1:${s.port}/api/reply/%E0%A4%A`)).status, 400);
+    assert.equal((await s.api('GET', '/api/history?limit=1')).status, 200);
+    // Proxied requests and client timestamps: refused / ignored.
+    assert.equal((await post({ 'x-ghosty-reporter-token': token, 'x-forwarded-for': '203.0.113.9' }, { ...body, name: 'cb-two' })).status, 403);
+    assert.equal((await post({ 'x-ghosty-reporter-token': token }, { ...body, name: 'cb-three', ts: 1 })).status, 200);
+    assert.ok(recs().find((r) => r.name === 'cb-three').ts > 1e12, 'server time, not the client ts');
     // Restart: open instances are rebuilt from the file, no duplicate 'unknown' start.
     const before = recs().filter((r) => r.name === 'wiring-fixture').length;
     await term(s);
     const s2 = await boot(w);
     try { await sleep(2500); assert.equal(recs().filter((r) => r.name === 'wiring-fixture').length, before); } finally { await term(s2); }
   } finally { try { s.child.kill('SIGKILL'); } catch { /* gone */ } }
+});
+
+test('session history: v2 instances left open by a previous process are ended at v2 start', { timeout: 60_000 }, async () => {
+  const w = world();
+  fs.writeFileSync(path.join(w.state, 'session-history.jsonl'), JSON.stringify({ schema_version: 1, kind: 'session.started', name: 'old.run1', provider: 'fake', model: null, cwd: '/x', started_by: 'v2', prompt_ref: null, handover_ref: null, ts: 1000 }) + '\n');
+  const s = await boot(w);
+  try {
+    const h = (await s.api('GET', '/api/history/old.run1')).body.session;
+    assert.deepEqual([h.started_by, h.end > 0], ['v2', true]);
+  } finally { await term(s); }
 });

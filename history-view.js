@@ -1,44 +1,55 @@
 // GET /api/history: one row per session instance (session-history.js) joined with the usage ledger.
 // Join: a ledger row belongs to an instance when its `label` equals the session name (V2 runs: its `cwd` equals the
-// run's worktree) and its ts is inside [start, end]. The ledger is parsed once and cached by size+mtime (no day cap).
+// run's worktree) and its ts is inside [start, end) (end exclusive, so a superseded end is not double counted). The
+// ledger is read incrementally (no day cap).
 // active_ms = sum of the gaps between consecutive turns of the instance, each gap capped at ACTIVE_GAP_CAP_MS (5 min),
 // so idle waiting does not count. Unknown stays null: no turns -> tokens/cost null; any unpriced turn -> cost null.
-import { readFileSync, statSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 
 export const ACTIVE_GAP_CAP_MS = 5 * 60000;
 const SUBSCRIPTION = new Set(['minimax', 'mcode']);   // flat-rate plans: per-token cost is not meaningful
 const day = (ts) => new Date(ts).toISOString().slice(0, 10);
 const r6 = (x) => Math.round(x * 1e6) / 1e6;
 
+// Incremental: the ledger is append-only, so only bytes past the last complete line are read (async). A shrunk file or a
+// new inode (the tailer compacts it) means a full reread.
 export function createLedgerIndex(file) {
-  let sig = null, rows = [], byLabel = new Map(), byCwd = new Map();
-  return function get() {
-    let s; try { const st = statSync(file); s = `${st.size}:${st.mtimeMs}`; } catch { s = 'none'; }
-    if (s !== sig) {
-      rows = []; byLabel = new Map(); byCwd = new Map();
-      let text = ''; try { text = readFileSync(file, 'utf8'); } catch { /* no ledger yet */ }
-      for (const line of text.split('\n')) {
-        if (!line) continue;
-        let r; try { r = JSON.parse(line); } catch { continue; }
-        if (!r || !r.usage || !Number.isFinite(r.ts)) continue;
-        const u = r.usage;
-        const row = { ts: r.ts, agent: r.agent || null, model: r.model || null, input: u.input || 0, output: u.output || 0, cache_read: u.cache_read || 0,
-          cache_write: (u.cache_write_5m || 0) + (u.cache_write_1h || 0), cost: r.cost && Number.isFinite(r.cost.total) ? r.cost.total : null };
-        rows.push(row);
-        if (r.label) (byLabel.get(r.label) || byLabel.set(r.label, []).get(r.label)).push(row);
-        if (r.cwd) (byCwd.get(r.cwd) || byCwd.set(r.cwd, []).get(r.cwd)).push(row);
-      }
-      for (const m of [byLabel, byCwd]) for (const l of m.values()) l.sort((a, b) => a.ts - b.ts);
-      sig = s;
+  let ino = null, offset = 0, byLabel = new Map(), byCwd = new Map(), busy = null;
+  const add = (m, k, row, touched) => { let l = m.get(k); if (!l) m.set(k, l = []); l.push(row); touched.add(l); };
+  async function refresh() {
+    let st; try { st = await fsp.stat(file); } catch { byLabel = new Map(); byCwd = new Map(); ino = null; offset = 0; return; }
+    if (st.ino !== ino || st.size < offset) { byLabel = new Map(); byCwd = new Map(); offset = 0; ino = st.ino; }
+    if (st.size === offset) return;
+    const fh = await fsp.open(file, 'r');
+    let text;
+    try { const buf = Buffer.alloc(st.size - offset); const { bytesRead } = await fh.read(buf, 0, buf.length, offset); text = buf.subarray(0, bytesRead); } finally { await fh.close(); }
+    const nl = text.lastIndexOf(10);
+    if (nl < 0) return;   // no complete line yet
+    offset += nl + 1;
+    const touched = new Set();
+    for (const line of text.subarray(0, nl).toString('utf8').split('\n')) {
+      if (!line) continue;
+      let r; try { r = JSON.parse(line); } catch { continue; }
+      if (!r || !r.usage || !Number.isFinite(r.ts)) continue;
+      const u = r.usage;
+      const row = { ts: r.ts, agent: r.agent || null, model: r.model || null, input: u.input || 0, output: u.output || 0, cache_read: u.cache_read || 0,
+        cache_write: (u.cache_write_5m || 0) + (u.cache_write_1h || 0), cost: r.cost && Number.isFinite(r.cost.total) ? r.cost.total : null };
+      if (r.label) add(byLabel, r.label, row, touched);
+      if (r.cwd) add(byCwd, r.cwd, row, touched);
     }
-    return { rows, byLabel, byCwd };
+    for (const l of touched) l.sort((a, b) => a.ts - b.ts);
+  }
+  return async function get() {
+    busy = (busy || Promise.resolve()).then(refresh);
+    const mine = busy; await mine; if (busy === mine) busy = null;
+    return { byLabel, byCwd };
   };
 }
 
 export function summarize(inst, led, nowMs) {
   const end = inst.end ?? Infinity;
   const pool = inst.started_by === 'v2' ? (inst.cwd ? led.byCwd.get(inst.cwd) : null) : led.byLabel.get(inst.name);
-  const mine = (pool || []).filter((r) => r.ts >= inst.start && r.ts <= end);
+  const mine = (pool || []).filter((r) => r.ts >= inst.start && r.ts < end);
   const tokens = mine.length ? mine.reduce((t, r) => ({ input: t.input + r.input, output: t.output + r.output, cache_read: t.cache_read + r.cache_read, cache_write: t.cache_write + r.cache_write }),
     { input: 0, output: 0, cache_read: 0, cache_write: 0 }) : null;
   let active = 0;
@@ -67,22 +78,22 @@ const tsParam = (v) => { if (v == null || v === '') return null; const n = /^\d+
 
 export function createHistoryView({ history, ledgerFile, now = Date.now }) {
   const ledger = createLedgerIndex(ledgerFile);
-  function list(q = {}) {
+  async function list(q = {}) {
     const from = tsParam(q.from), to = tsParam(q.to);
     if (Number.isNaN(from) || Number.isNaN(to)) throw Object.assign(new Error('from/to must be ms or ISO date'), { status: 400 });
     if (q.status && !['running', 'ended'].includes(q.status)) throw Object.assign(new Error('status must be running|ended'), { status: 400 });
     const limit = Math.min(200, Math.max(1, Number.parseInt(q.limit, 10) || 50)), offset = Math.max(0, Number.parseInt(q.offset, 10) || 0);
-    const led = ledger(), t = now();
+    const led = await ledger(), t = now();
     const all = history.instances().map((i) => summarize(i, led, t));
     const rows = all.filter((r) => (!q.provider || r.provider === q.provider) && (!q.model || r.model === q.model) && (!q.started_by || r.started_by === q.started_by)
       && (from == null || r.start >= from) && (to == null || r.start <= to) && (!q.status || (q.status === 'running') === (r.end == null)))
       .sort((a, b) => b.start - a.start);
     return { ok: true, total: rows.length, offset, limit, sessions: rows.slice(offset, offset + limit) };
   }
-  function detail(name, start) {
+  async function detail(name, start) {
     const l = history.instances().filter((i) => i.name === name);
     const inst = start != null && start !== '' ? l.find((i) => i.start === Number(start)) : l[l.length - 1];
-    return inst ? summarize(inst, ledger(), now()) : null;
+    return inst ? summarize(inst, await ledger(), now()) : null;
   }
   return { list, detail };
 }

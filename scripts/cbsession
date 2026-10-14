@@ -43,11 +43,11 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 
 q() { printf '%q' "$1"; }
 case $PROV in
-  claude)   CMD="$HOME/.local/bin/claude --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
-  codex)    CMD="$HOME/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
+  claude)   CMD="$(q "$HOME")/.local/bin/claude --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
+  codex)    CMD="$(q "$HOME")/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   minimax)  M=${MODEL:-MiniMax-M3.1-Flash-Preview}; [[ $M == */* ]] || M="minimax/$M"
-            CMD="PATH=${MCODE_NODE_DIR:-$HOME/.local/node-v24.21.0-linux-x64/bin}:\$PATH mcode -m $(q "$M") \"\$(cat $(q "$P"))\"";;
-  opencode) CMD="$HOME/.local/bin/opencode${MODEL:+ -m $(q "$MODEL")} --prompt \"\$(cat $(q "$P"))\" $(q "$DIR")";;
+            CMD="PATH=$(q "${MCODE_NODE_DIR:-$HOME/.local/node-v24.21.0-linux-x64/bin}"):\$PATH mcode -m $(q "$M") \"\$(cat $(q "$P"))\"";;
+  opencode) CMD="$(q "$HOME")/.local/bin/opencode${MODEL:+ -m $(q "$MODEL")} --prompt \"\$(cat $(q "$P"))\" $(q "$DIR")";;
   *) echo "cbsession: -p must be claude|codex|minimax|opencode" >&2; exit 2;;
 esac
 printf '#!/usr/bin/env bash\ncd %s\n%s\n' "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
@@ -78,8 +78,9 @@ echo "prompt: $P"
     BODY=$(NAME=$NAME PROV=$PROV MODEL=$MODEL DIR=$DIR P=$P HANDOVER=$HANDOVER URL=$URL node -e '
       const e = process.env, o = { name: e.NAME, provider: e.PROV, model: e.MODEL || null, cwd: e.DIR, prompt_ref: e.P, handover_ref: e.HANDOVER || null };
       if (e.URL) o.remote_control_url = e.URL; process.stdout.write(JSON.stringify(o));' 2>/dev/null) || BODY=
-    [ -n "$BODY" ] && curl -fsS -m 5 -o /dev/null -X POST -H 'content-type: application/json' -H "x-ghosty-reporter-token: $(tr -d '\n' < "$TOKF")" \
+    [ -n "$BODY" ] && curl -fsS -m 5 -o /dev/null -X POST -H 'content-type: application/json' --config - \
       --data "$BODY" "http://127.0.0.1:${GHOSTY_PORT:-${PORT:-7777}}/api/history/started" 2>/dev/null \
+      < <(printf 'header = "x-ghosty-reporter-token: %s"\n' "$(tr -d '\n' < "$TOKF")") \
       || echo "cbsession: warning: could not record the start in the session history (recorded as 'unknown' by the dashboard)" >&2
   else echo "cbsession: warning: session history not reported (no reporter token, curl or node)" >&2; fi
 } || true

@@ -29,8 +29,8 @@ await st('u', T0);
 await st('run1', T0 - M, { started_by: 'v2', provider: 'claude', cwd: '/wt/run1' });
 const view = createHistoryView({ history: h, ledgerFile: ledger, now: () => T0 + 2 * 24 * 3600e3 });
 
-test('list: newest first, one row per instance, join by label and window', () => {
-  const r = view.list();
+test('list: newest first, one row per instance, join by label and window', async () => {
+  const r = await view.list();
   assert.equal(r.total, 5);
   assert.equal(r.sessions[0].name, 'a'); assert.equal(r.sessions[0].started_by, 'cbsession');
   const first = r.sessions.find((s) => s.name === 'a' && s.start === T0);
@@ -43,30 +43,43 @@ test('list: newest first, one row per instance, join by label and window', () =>
   assert.equal(r.sessions.find((s) => s.name === 'a' && s.end == null).turns, 1);
 });
 
-test('unknown stays null; subscription providers report billing, not cost; v2 joins by cwd', () => {
-  const by = (n) => view.list().sessions.find((s) => s.name === n);
+test('unknown stays null; subscription providers report billing, not cost; v2 joins by cwd', async () => {
+  const all = (await view.list()).sessions;
+  const by = (n) => all.find((s) => s.name === n);
   assert.equal(by('mm').billing, 'subscription'); assert.equal(by('mm').cost_usd, null); assert.equal(by('mm').turns, 2);
   assert.equal(by('u').cost_usd, null); assert.equal(by('u').turns, 1);
   assert.equal(by('run1').turns, 1);
-  const none = createHistoryView({ history: h, ledgerFile: path.join(dir, 'missing.jsonl') }).list().sessions[0];
+  const none = (await createHistoryView({ history: h, ledgerFile: path.join(dir, 'missing.jsonl') }).list()).sessions[0];
   assert.deepEqual([none.tokens, none.cost_usd, none.active_ms], [null, null, null]);
 });
 
-test('filters, pagination and validation', () => {
-  assert.equal(view.list({ status: 'running' }).total, 4);
-  assert.equal(view.list({ status: 'ended' }).total, 1);
-  assert.equal(view.list({ provider: 'minimax' }).total, 1);
-  assert.equal(view.list({ started_by: 'v2' }).sessions[0].name, 'run1');
-  assert.equal(view.list({ from: new Date(T0 + 3600e3).toISOString() }).total, 1);
-  const p = view.list({ limit: '2', offset: '1' }); assert.equal(p.sessions.length, 2); assert.equal(p.limit, 2);
-  assert.equal(view.list({ limit: '9999' }).limit, 200);
-  assert.throws(() => view.list({ status: 'x' }), /status/);
-  assert.throws(() => view.list({ from: 'nope' }), /from/);
+test('filters, pagination and validation', async () => {
+  assert.equal((await view.list({ status: 'running' })).total, 4);
+  assert.equal((await view.list({ status: 'ended' })).total, 1);
+  assert.equal((await view.list({ provider: 'minimax' })).total, 1);
+  assert.equal((await view.list({ started_by: 'v2' })).sessions[0].name, 'run1');
+  assert.equal((await view.list({ from: new Date(T0 + 3600e3).toISOString() })).total, 1);
+  const p = await view.list({ limit: '2', offset: '1' }); assert.equal(p.sessions.length, 2); assert.equal(p.limit, 2);
+  assert.equal((await view.list({ limit: '9999' })).limit, 200);
+  await assert.rejects(view.list({ status: 'x' }), /status/);
+  await assert.rejects(view.list({ from: 'nope' }), /from/);
 });
 
-test('detail by name and start; ledger cache refreshes when the file grows', () => {
-  assert.equal(view.detail('a', String(T0)).turns, 3);
-  assert.equal(view.detail('nope'), null);
+test('detail by name and start; ledger index reads only appended bytes and rereads after truncation', async () => {
+  assert.equal((await view.detail('a', String(T0))).turns, 3);
+  assert.equal(await view.detail('nope'), null);
   fs.appendFileSync(ledger, '\n' + JSON.stringify(row('u', T0 + 3 * M)) + '\n');
-  assert.equal(view.detail('u').turns, 2);
+  assert.equal((await view.detail('u')).turns, 2);
+  fs.writeFileSync(ledger, JSON.stringify(row('u', T0 + M)) + '\n');   // compaction: smaller file
+  assert.equal((await view.detail('u')).turns, 1);
+});
+
+test('window end is exclusive: a turn at a superseded end counts for the new instance only', async () => {
+  const f = path.join(dir, 'h2.jsonl'), l = path.join(dir, 'l2.jsonl');
+  fs.writeFileSync(l, JSON.stringify(row('z', T0 + 5 * M)) + '\n');
+  const h2 = createSessionHistory({ file: f });
+  await h2.append({ kind: 'session.started', name: 'z', provider: 'claude', cwd: '/w/z', started_by: 'dashboard', prompt_ref: null, handover_ref: null, ts: T0 });
+  await h2.append({ kind: 'session.started', name: 'z', provider: 'claude', cwd: '/w/z', started_by: 'cbsession', prompt_ref: null, handover_ref: null, ts: T0 + 5 * M });
+  const rows = (await createHistoryView({ history: h2, ledgerFile: l }).list()).sessions;
+  assert.deepEqual(rows.map((r) => r.turns).sort(), [0, 1]);
 });
