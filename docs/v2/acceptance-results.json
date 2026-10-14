@@ -1,20 +1,20 @@
 {
  "schema": "mycodebox.v2.acceptance-results/1",
  "synthetic": true,
- "generated_at": "2026-10-14T13:54:48.742Z",
- "sha": "795b1cfd69d26d5fd56949f1241c0c3b3b2dec25",
+ "generated_at": "2026-10-14T17:45:03.836Z",
+ "sha": "c11fb97d15394adbe9c6eee27adc0bcba011fa0c",
  "dirty": false,
  "node": "v23.6.0",
  "command": "node scripts/v2-acceptance.js",
- "duration_ms": 143015,
+ "duration_ms": 135959,
  "runner_exit": 0,
- "files": 149,
- "files_with_tests": 149,
+ "files": 153,
+ "files_with_tests": 153,
  "files_without_tests": [],
  "ui_check": true,
  "totals": {
-  "tests": 1827,
-  "pass": 1827,
+  "tests": 1893,
+  "pass": 1893,
   "fail": 0,
   "todo": 0,
   "todo_failing": 0,
@@ -432,7 +432,7 @@
   {
    "id": "T16",
    "status": "PASS",
-   "reason": "2 test(s) passed; 864 pre-V2 regression tests passed",
+   "reason": "2 test(s) passed; 865 pre-V2 regression tests passed",
    "tests": [
     {
      "name": "T16: server.js loads no V2 module at startup: none in its static import graph; any V2 import is dynamic and behind GHOSTY_V2",
@@ -447,7 +447,7 @@
    ],
    "regression": {
     "files": 69,
-    "tests": 864,
+    "tests": 865,
     "failed": []
    }
   },

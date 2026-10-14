@@ -73,6 +73,7 @@ const EXAMPLES = {
   reviewer: { work: { touches: ['app'], repo_public: false, size: 'small' } },
   retry: { reject: { round: 1, reason: 'tests failed' } },
   model: { work: { touches: ['app'], repo_public: false, size: 'small' } },
+  merge: { repo: 'demo', branch: 'feature/x', target: 'main', conflicts: [], tests: 'green', docs_only: false, files: 3, floor_reasons: [] },
   stop: { session: 's1', agent: 'claude', case: 'menu_recommended', priority: 'P1', forbidden_topic: false, closing_text: 'I recommend option B (smaller scope, can be reverted).', proposed_reply: 'Pick B.', recommended: true, reversible: true, delegated: true },
 };
 function help() {

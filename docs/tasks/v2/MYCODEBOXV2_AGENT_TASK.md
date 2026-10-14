@@ -14,7 +14,7 @@ Use a fresh **Git worktree per independent task** and a named implementation age
 ### Explicit existing product invariants
 - Preserve the private Tailscale access boundary. Current source `HOST=0.0.0.0` is **not** safe; fix it in an independently reviewed security phase with regression tests. Do not use Funnel/public tunnels.
 - Never bypass CLI permission/sandbox policy; source UI Claude/Codex launch defaults are documented as unsafe. Audit **create, resume, park, wake, manager, scripts**, not just the launch UI.
-- Never auto-answer about deployments, merges, deletions, credentials, money, customers or other forbidden topics; preserve countdown cancellation, actor attribution, manual approvals and hard floors.
+- Never auto-answer about deployments, merges, deletions, credentials, money, customers or other forbidden topics (a merge is now an evaluated manager decision, not a blanket floor: OWNER_DECISIONS §14; deploys and every other topic stay hard); preserve countdown cancellation, actor attribution, manual approvals and hard floors.
 - Never infer that an unreachable restart API means no deploy is active. Fail closed, and do not restart during deployment.
 - Existing `$GHOSTY_STATE_DIR`, reporter API (loopback + token), tmux targeting, origin checks, WebSocket behavior, deployment recovery, saved state, and UI compatibility are migration invariants.
 - `server.js` import starts listeners/polling: do not import it into unit tests. Use fake adapters and temporary state. `GHOSTY_STATE_DIR="$(mktemp -d)" npm test` is the baseline suite. Reporter plugin has its own separate tests.
