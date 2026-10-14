@@ -51,3 +51,8 @@ test('B2: force-push and history rewrites stay hard when a merge is in the text'
   }
   for (const x of ['push main', 'git push', 'git push origin main', 'git push origin master and then stop', 'push to main']) assert.equal(topicSplit(`merge feat, then ${x}?`).hard, null, x);
 });
+
+test('R2-5: git push -u origin main is the landing, -u origin feature is not', () => {
+  for (const x of ['git push -u origin main', 'git push --set-upstream origin main']) assert.equal(topicSplit(`merge feat, then ${x}?`).hard, null, x);
+  for (const x of ['git push -u origin feature', 'git push --set-upstream origin feature']) assert.ok(topicSplit(`merge feat, then ${x}?`).hard, x);
+});

@@ -1961,6 +1961,7 @@ server.listen(PORT, HOST, async () => {
       priority: 'default', ntfyTags: kind === 'hold' ? 'pause_button' : 'arrow_forward', url: `/?s=${encodeURIComponent(n)}`, tag: `ghosty-hold-${n}`,
     }, 0),
     onHandoff: async (session, text, at) => { await handoffs.fromStop(session, text, at); },
+    onMergeCancelled: (session, r) => push.record({ title: `Merge reply not sent: ${session}`, body: String(r.reason).slice(0, 300), url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision' }),
     // a merge the manager decided or escalated: a notice in the owner's feed (no push)
     onMergeDecision: (session, r) => push.record({
       title: `${r.chosen === 'merge' ? 'Merge approved (reply pending)' : 'Merge escalated'}: ${session}`,

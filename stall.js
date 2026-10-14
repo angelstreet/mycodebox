@@ -225,7 +225,7 @@ const HARD_EXTRA = [
   String.raw`\brewrit(?:e|es|ing|ten)\b[^.\n]{0,20}\bhistory\b|\bamend(?:ed|ing|s)?\b[^.\n]{0,40}\b(?:commit|main|master)\b|\bfilter-(?:branch|repo)\b`,
 ];
 // `git push <remote> <refspec>` where the refspec is not main/master: not the landing of a merge.
-const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
+const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+(?!-)\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
 const HARD_PARTS = [...FORBIDDEN_PARTS.filter((p) => p !== MERGE_MAIN), ...HARD_EXTRA];
 const HARD_RE = new RegExp(HARD_PARTS.join('|'), 'i');
 const HARD_MERGE_RE = new RegExp(HARD_PARTS.filter((p) => p !== PUSH_MAIN && p !== GIT_PUSH).join('|'), 'i');

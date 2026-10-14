@@ -63,3 +63,10 @@ test('M8: json files in a plain directory and untracked docs are not read', asyn
   writeFileSync(join(repo, 'new.md'), 'Epsilon cache path: /data/fake/epsilon\n');   // untracked
   assert.equal(await lookupInfo('what is the epsilon cache path', { roots: [repo] }), null);
 });
+
+test('R2-4: a host name is not a repo directory', async () => {
+  const repo = makeRepo({ files: { 'docs/A.md': 'Hook path: hooks.example/T000/B000/XXXX\nDash path: box.tail1234.ts.net/dash\nReal dir path: docs/real-dir\n' } });
+  assert.equal(await lookupInfo('send the hook path', { roots: [repo] }), null);
+  assert.equal(await lookupInfo('send the dash path', { roots: [repo] }), null);
+  assert.equal((await lookupInfo('send the real dir path', { roots: [repo] })).answer, 'docs/real-dir');
+});

@@ -115,6 +115,7 @@ export async function lookupInfo(part, { roots = [] } = {}) {
             if (/[:/\w@.=?#-]/.test(hit.text[mt.index - 1] || '') && !/^~/.test(mt[0]) && mt.index > 0 && hit.text[mt.index - 1] !== '(' ) continue;   // the tail of a URL or address, not a path of its own
             if (/[?=#@]/.test(hit.text[mt.index + mt[0].length] || '')) continue;   // a query, assignment or anchor follows
             const tok = trimTok(mt[0]);
+            if (!/^[~/]/.test(tok) && /^[\w-]+(?:\.[\w-]+)+$/.test(tok.split('/')[0]) && !existsSync(join(root, tok))) continue;   // a host name, not a directory of the repo
             if (NOT_PATH.test(tok) || !/[a-z]/i.test(tok) || /^(?:and|or|yes|no)\/(?:or|no|yes)$/i.test(tok)) continue;
             if (!found.has(tok)) found.set(tok, `${hit.file}:${hit.line}`);
           }

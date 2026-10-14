@@ -37,7 +37,7 @@ export function parseMergeAsk(text) {
 // Clause by clause: a count or "N/M" only counts next to the word test(s) / pass, "tests not run" anywhere makes it unknown,
 // a negation applies to its own match only, red wins. A question never reports a result (except a failure it mentions).
 const clausesOf = (t) => t.split(/(?<=[.!?;])\s+|\n+/).map((c) => c.trim()).filter(Boolean);
-const NOT_RUN = /\buntested\b|\bno (?:unit |automated |real )?tests?\b|\b(?:not|never|n'?t|yet to)\s+(?:yet\s+|been\s+)?(?:run|ran|tested|executed)\b|\b(?:tests?|suite|specs?)\b[^.?;]*\b(?:not run|weren'?t run|were not run|skipped|not executed)\b/i;
+const NOT_RUN = /\buntested\b|\bno (?:unit |automated |real )?tests?\b|\b(?:not|never|n'?t|yet to)\s+(?:yet\s+|been\s+)?(?:run|ran|tested|executed)\b|\b(?:tests?|suite|specs?)\b[^.?;]*\b(?:not run|weren'?t run|were not run|skipped|not executed)\b|\b(?:previous|earlier|prior|old)\s+commit\b|\bbefore my (?:last )?change/i;
 const PASS_COND = /\bnot all\b[^.?;]*\bpass|\b(?:once|when|if|before|until|unless|after|whether)\b[^.?;]*\bpass|\b(?:will|should|would|to|must|can|could|might)\s+pass\b|\bpass(?:es)?\s+(?:on|through|over)\s+(?:the\s+)?(?:deploy|merge|call|this|that|it)\b/i;
 const sentence = (c) => c.slice(0, 160);
 export function testEvidence(text, { branch = null } = {}) {
@@ -50,6 +50,7 @@ export function testEvidence(text, { branch = null } = {}) {
     while ((m = failRe.exec(c))) {
       const n = m[1] != null ? Number(m[1]) : null;
       if (n === 0 || /\b(?:no|zero|without|0)\s*$/i.test(c.slice(Math.max(0, m.index - 12), m.index))) continue;
+      if (/^\s*[:=]?\s*0\b/.test(c.slice(m.index + m[0].length))) continue;   // "fail 0" (Node's runner summary)
       if (/^(?:fail-?safe|failover)/i.test(c.slice(m.index))) continue;
       return { state: 'red', explicit: n != null, quote: sentence(c) };
     }
@@ -62,7 +63,7 @@ export function testEvidence(text, { branch = null } = {}) {
   const nr = cls.find((c) => NOT_RUN.test(c));
   if (nr) return { state: 'unknown', explicit: false, quote: sentence(nr) };
   const refOk = (c, idx) => {   // "pass on <ref>": only the evaluated branch counts
-    const m = /^\s+on\s+(\S+)/i.exec(c.slice(idx));
+    const m = /^\s+on\s+(\S+)/i.exec(c.slice(idx)) || /\b(?:pass(?:es|ed|ing)?|green)\s+on\s+(\S+)/i.exec(c);
     if (!m) return true;
     const ref = m[1].replace(/[.,;:)?!]+$/, '');
     return branch ? ref === branch : !/^(?:main|master|develop|origin|trunk)\b/i.test(ref);
@@ -73,8 +74,11 @@ export function testEvidence(text, { branch = null } = {}) {
     const frac = ctx && /\b(\d+)\s*\/\s*(\d+)\b/.exec(c);
     if (frac && Number(frac[2]) >= 1) {
       if (Number(frac[1]) < Number(frac[2])) return { state: 'red', explicit: true, quote: sentence(c) };
+      if (!refOk(c, frac.index + frac[0].length)) continue;
       return { state: 'green', explicit: true, quote: sentence(c) };
     }
+    const sum = /\bpass(?:ed|ing)?\s*[:=]?\s*(\d+)\b/i.exec(c);   // Node's runner summary: "pass 12" with "fail 0" somewhere
+    if (sum && Number(sum[1]) > 0 && /\bfail(?:ed|ures?)?\s*[:=]?\s*0\b/i.test(t) && refOk(c, sum.index + sum[0].length)) return { state: 'green', explicit: true, quote: sentence(c) };
     const cnt = /\b(\d+)\s+(?:(?:unit\s+|integration\s+)?tests?\s+)?(?:passed|passing|pass)\b(?=\s*(?:$|[,.;:)(]|\b(?:in|on|at|with|for)\b))/i.exec(c);
     if (cnt && Number(cnt[1]) > 0 && refOk(c, cnt.index + cnt[0].length)) return { state: 'green', explicit: true, quote: sentence(c) };
     const word = /\ball\s+(?:tests?\s+)?(?:green|pass(?:ed|ing)?)\b|\ball green\b|\btests?\s+(?:are\s+|is\s+|all\s+)?(?:green|pass(?:ed|es|ing)?)\b|\bCI\s+(?:is\s+)?green\b|\bgreen\s+(?:tests?|suite|CI)\b|\b(?:npm|yarn|pnpm)\s+test\s+(?:is\s+)?(?:green|passes|passed)\b/i.exec(c);
@@ -107,7 +111,7 @@ export async function repoToplevel(cwd) {
   return r.code === 0 ? r.out.trim() : null;
 }
 // Docs-only: markdown, a few well-known text files, and non-code files under docs/. Test code and generic .txt are code-like.
-const CODE_EXT = /\.(?:m?[jt]sx?|cjs|py|sh|bash|rb|go|rs|java|c|cc|cpp|h|json|ya?ml|toml|sql|service|timer|socket|html?|css|php|pl)$/i;
+const CODE_EXT = /\.(?:m?[jt]sx?|cjs|py|sh|bash|ps1|psm1|bat|cmd|rb|go|rs|java|c|cc|cpp|h|json|ya?ml|toml|sql|service|timer|socket|html?|css|php|pl)$|(?:^|\/)(?:GNU)?makefile$/i;
 const DOC_NAMES = /(^|\/)(?:LICENSE|CHANGELOG|NOTICE|AUTHORS|CONTRIBUTING|CODEOWNERS)(?:\.(?:md|txt))?$/;
 export const isDocFile = (f) => /\.(?:md|markdown)$/i.test(f) || DOC_NAMES.test(f) || (/^docs\//.test(f) && !CODE_EXT.test(f));
 const DOC_IMAGE = /^docs\/.*\.(?:png|jpe?g|gif|svg)$/i;

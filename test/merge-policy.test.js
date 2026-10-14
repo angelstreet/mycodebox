@@ -274,3 +274,22 @@ test('M1: an information-only reply is checked without the merge exemption', () 
   assert.equal(composeReply({ info: [{ part: 'send the push main script path', answer: 'docs/push-main.md', source: 'a.md:1' }], merge: null }), null);
   assert.ok(composeReply({ info: [{ part: 'send the push main script path', answer: 'docs/push-main.md', source: 'a.md:1' }], merge: { branch: 'b', target: 't', rationale: 'ok' } }));
 });
+
+// ---- round 7 second review ----
+test('R2-1: a fraction on another ref or a previous commit is not a report on the branch', () => {
+  for (const t of ['Tests: 1826/1826 pass on main.', '1826/1826 tests pass on main', 'npm test: 12/12 pass (on the previous commit, before my last change)']) {
+    assert.equal(testEvidence(t, { branch: 'feat' }).state, 'unknown', t);
+  }
+  assert.equal(testEvidence('1826/1826 pass on feat.', { branch: 'feat' }).state, 'green');
+});
+test('R2-3: Node runner summary is an explicit green', () => {
+  const ok = testEvidence('ℹ tests 12\nℹ suites 0\nℹ pass 12\nℹ fail 0\nℹ cancelled 0');
+  assert.deepEqual([ok.state, ok.explicit], ['green', true]);
+  assert.equal(testEvidence('ℹ tests 12\nℹ pass 10\nℹ fail 2').state, 'red');
+  assert.equal(testEvidence('ℹ pass 12').state, 'unknown');   // without a "fail 0" it is not a full report
+});
+test('R2-6: scripts under docs/ are not docs', async () => {
+  const { isDocFile } = await import('../merge-policy.js');
+  for (const f of ['docs/x.ps1', 'docs/x.psm1', 'docs/x.bat', 'docs/x.cmd', 'docs/Makefile']) assert.equal(isDocFile(f), false, f);
+  assert.equal(isDocFile('docs/guide.txt'), true);
+});

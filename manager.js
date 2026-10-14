@@ -87,6 +87,7 @@ let send = { key: null, keys: null };   // injected by server.js: the one tmux c
 let isPaused = () => false;             // injected by server.js: the owner's pause hold (session-meta.js)
 let policyOf = () => ({ action: 'allow', reason: 'no policy' });   // injected: (session, agent) -> { action, reason } (public/policy.js + quota)
 let held = { get: () => null, set: () => {} };                      // injected: the manager's own hold, kept apart from the owner's pause
+let onMergeCancelled = () => {};                                    // injected: (session, { id, reason, merge_decision_id }) -> owner feed notice
 let onMergeDecision = () => {};                                     // injected: (session, journal record) -> owner feed notice
 let mergeJev = (body) => jevPost(body);                             // the merge evaluation's Jev call (tests inject a fake)
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
@@ -97,7 +98,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, mergeJev: mergeJevFn } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { const b = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); budget = { day: b.day || '', calls: b.calls || 0, cost: b.cost || 0 }; } catch {}
@@ -119,6 +120,7 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (heldStore) held = heldStore;
   if (onHold) notifyHold = onHold;
   if (mergeHook) onMergeDecision = mergeHook;
+  if (cancelHook) onMergeCancelled = cancelHook;
   if (mergeJevFn) mergeJev = mergeJevFn;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
@@ -309,6 +311,7 @@ export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {
   const a = w.auto;
   clearTimeout(a.timer);
   w.auto = null;
+  if (!quiet && a.merge) { try { onMergeCancelled(name, { id: a.id, reason, merge_decision_id: `merge-${a.id}` }); } catch {} }
   if (!quiet) logLater({ type: 'answer_cancelled', id: a.id, session: name, case: a.case, answer: a.answer, reason, ...(a.merge ? { merge_decision_id: `merge-${a.id}` } : {}) });
   return true;
 }
@@ -411,6 +414,7 @@ async function fire(name, auto) {
     if (a.key != null) await send.key(name, String(a.key));
     else await send.keys(name, a.text, true);
   } catch (e) {
+    if (auto.merge) { try { onMergeCancelled(name, { id: auto.id, reason: `send failed: ${e.message}`, merge_decision_id: `merge-${auto.id}` }); } catch {} }
     logLater({ type: 'answer_cancelled', id: auto.id, session: name, case: auto.case, answer: a, reason: `send failed: ${e.message}`, ...(auto.merge ? { merge_decision_id: `merge-${auto.id}` } : {}) });
     return;
   }
@@ -805,6 +809,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
       if (hit) info.push({ part: p.text, ...hit });
     }
   }
+  if (w.hash !== h) return out;   // a slow lookup must not supersede a newer stop's pending answer
   let ev = null, record = null;
   const mergeParts = parts.filter((p) => p.kind !== 'info' && mergeMatch(p.text));
   if (config.mergeDecisions && final.topics?.merge && mergeParts.length && s.cwd) {

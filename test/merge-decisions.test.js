@@ -11,7 +11,7 @@ const m = await import('../manager.js');
 const { validateDecision } = await import('../orchestration/task-contract.js');
 const { makeRepo } = await import('./helpers-git.js');
 
-const typed = [], owner = [], notices = [];
+const typed = [], owner = [], notices = [], cancelled = [];
 let jevReply = { skipped: 'not configured' };
 let policyNow = { action: 'allow', reason: 'ok' };
 const heldMap = new Map();
@@ -20,6 +20,7 @@ await m.initManager({
   onOwnerNeeded: (session, stall, reason) => owner.push({ session, reason }),
   sendKey: async () => {}, sendKeys: async (session, text) => { typed.push({ session, text }); },
   onMergeDecision: (session, rec) => notices.push({ session, rec }),
+  onMergeCancelled: (session, r) => cancelled.push({ session, r }),
   policy: () => policyNow, heldStore: { get: (n) => heldMap.get(n) || null, set: (n, h) => heldMap.set(n, h) },
   mergeJev: async () => jevReply,
 });
@@ -181,9 +182,10 @@ test('fire-time gates: turned off, or a raised confidence floor, during the coun
   await m.setManagerConfig({ mergeMinConfidence: 0.95 });
   await wait(1700);
   assert.equal(typed.length, n);
-  const cancelled = stalls().filter((r) => r.type === 'answer_cancelled');
-  assert.match(cancelled.find((r) => r.session === 'f1').reason, /auto-answer turned off/);
-  assert.match(cancelled.find((r) => r.session === 'f2').reason, /merge confidence 0\.90 below 0\.95/);
+  const cancelledRecs = stalls().filter((r) => r.type === 'answer_cancelled');
+  assert.ok(cancelled.some((x) => x.session === 'f1' && /auto-answer turned off/.test(x.r.reason) && /^merge-/.test(x.r.merge_decision_id)), 'feed hook for a cancelled merge reply');   // R2-7
+  assert.match(cancelledRecs.find((r) => r.session === 'f1').reason, /auto-answer turned off/);
+  assert.match(cancelledRecs.find((r) => r.session === 'f2').reason, /merge confidence 0\.90 below 0\.95/);
   await cfg({ delayMs: 30, mergeMinConfidence: 0.85 });
 });
 
@@ -254,4 +256,9 @@ test('M11: a held manager reply is released by the quota recovery through decisi
   m.reevaluateHolds();
   await until(() => typed.some((x) => x.session === 'h3'));
   assert.ok(typed.some((x) => x.session === 'h3' && /^Merge: yes/.test(x.text)), 'released and sent');
+});
+
+test('R2-2: partialDecision rechecks the stop after the information lookups', () => {
+  const src = readFileSync(new URL('../manager.js', import.meta.url), 'utf8');
+  assert.match(src, /lookupInfo\(p, \{ roots \}\)[\s\S]*?if \(w\.hash !== h\) return out;[\s\S]*?let ev = null, record = null;/);
 });
