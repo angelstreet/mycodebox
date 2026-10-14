@@ -287,6 +287,8 @@ test('R2-3: Node runner summary is an explicit green', () => {
   assert.deepEqual([ok.state, ok.explicit], ['green', true]);
   assert.equal(testEvidence('ℹ tests 12\nℹ pass 10\nℹ fail 2').state, 'red');
   assert.equal(testEvidence('ℹ pass 12').state, 'unknown');   // without a "fail 0" it is not a full report
+  assert.equal(testEvidence('Tests: 6 failed: 0 retried, 1820 passed').state, 'red');   // a count before "failed" wins over the 0 after it
+  assert.equal(testEvidence('6 failed = 0.3%; 1820 passed').state, 'red');
 });
 test('R2-6: scripts under docs/ are not docs', async () => {
   const { isDocFile } = await import('../merge-policy.js');

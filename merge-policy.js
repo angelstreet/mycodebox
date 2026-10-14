@@ -50,7 +50,7 @@ export function testEvidence(text, { branch = null } = {}) {
     while ((m = failRe.exec(c))) {
       const n = m[1] != null ? Number(m[1]) : null;
       if (n === 0 || /\b(?:no|zero|without|0)\s*$/i.test(c.slice(Math.max(0, m.index - 12), m.index))) continue;
-      if (/^\s*[:=]?\s*0\b/.test(c.slice(m.index + m[0].length))) continue;   // "fail 0" (Node's runner summary)
+      if (n == null && /^\s*[:=]?\s*0(?![.\d])/.test(c.slice(m.index + m[0].length))) continue;   // "fail 0" (Node's runner summary); "6 failed: 0 retried" stays red
       if (/^(?:fail-?safe|failover)/i.test(c.slice(m.index))) continue;
       return { state: 'red', explicit: n != null, quote: sentence(c) };
     }
