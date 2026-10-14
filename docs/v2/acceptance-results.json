@@ -1,20 +1,20 @@
 {
  "schema": "mycodebox.v2.acceptance-results/1",
  "synthetic": true,
- "generated_at": "2026-10-14T12:11:19.979Z",
- "sha": "f8c1e4cdb6642a39ff167dcfd24fabab42637b7b",
+ "generated_at": "2026-10-14T12:50:46.358Z",
+ "sha": "5ec0b1c0a29a8eef1996fdd3d875232e36a22a0e",
  "dirty": false,
  "node": "v23.6.0",
  "command": "node scripts/v2-acceptance.js",
- "duration_ms": 109623,
+ "duration_ms": 157636,
  "runner_exit": 0,
- "files": 142,
- "files_with_tests": 142,
+ "files": 148,
+ "files_with_tests": 148,
  "files_without_tests": [],
  "ui_check": true,
  "totals": {
-  "tests": 1775,
-  "pass": 1775,
+  "tests": 1818,
+  "pass": 1818,
   "fail": 0,
   "todo": 0,
   "todo_failing": 0,
@@ -523,7 +523,7 @@
    "reason": "1 test(s) passed",
    "tests": [
     {
-     "name": "T20: browser check (scripts/v2-ui-check.js): 39/39 checks passed",
+     "name": "T20: browser check (scripts/v2-ui-check.js): 67/67 checks passed",
      "file": "scripts/v2-ui-check.js",
      "outcome": "pass"
     }

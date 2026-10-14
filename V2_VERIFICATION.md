@@ -1,11 +1,26 @@
 # V2 verification
 
-**Status: round 5 (first live defect fix) on `v2/r5-livefix`, PR to `main`. V2 is merged and live as a pilot
-(`GHOSTY_V2=1`). All local gates pass on the gated SHA. Nothing was deployed or restarted.**
+**Status: round 6 (session history on the dashboard) on `v2/r6-history`, PR to `main`. V2 is merged and live as a pilot.
+All local gates pass on the gated SHA. Nothing was deployed or restarted.**
 
-Gated SHA: `f8c1e4c`.
+Gated SHA: `5ec0b1c` (round 6 `74aa871` merged with `main` after rounds 5 and PR #3).
 
-## Gates on `f8c1e4c` (round 5)
+## Gates on `5ec0b1c` (round 6 + main)
+
+| Gate | Command | Result |
+|---|---|---|
+| Unit and integration suite, Node 23.6.0 | `env -i PATH HOME LANG GHOSTY_STATE_DIR=$(mktemp -d) npm test` | **PASS** 1817/1817, exit 0 |
+| Same, Node 24.21.0 | same | **PASS** 1817/1817, exit 0 |
+| Acceptance matrix | `PLAYWRIGHT_CORE=<dir> node scripts/v2-acceptance.js` | **PASS** 54/54 rows (T20 included), 1818/1818 tests, 148/148 test files |
+| Browser check (T20 + History view, synthetic data) | `PLAYWRIGHT_CORE=<dir> node scripts/v2-ui-check.js <outDir>` | **PASS** 67/67 on `74aa871`, no console errors (the merge changes no UI file); screenshots not committed |
+| Leak scan | `LEAK_SCAN_EXTRA=<private denylist> node scripts/leak-scan.js origin/main..HEAD` | **PASS** after review: 2 denylist hits are the skill name `codebox-sessions` (docs/USAGE.md) and a test asserting the host name is absent (test/cbsession.test.js) |
+
+Round 6 adds `session-history.jsonl` (start/end records from the dashboard, the tick loop, V2 runs and `scripts/cbsession`),
+`GET /api/history` joined with the usage ledger, the History view, MiniMax model attribution, OpenCode usage ingestion
+and history-based labels. Reviews: Opus REQUEST_CHANGES on the record/API (12 findings, fixed `bc17789`), Opus
+REQUEST_CHANGES on UI + attribution + merge (5 findings, fixed `74aa871`), Opus APPROVE on the final delta.
+
+### Round 5 gates on `f8c1e4c`
 
 | Gate | Command | Result |
 |---|---|---|
