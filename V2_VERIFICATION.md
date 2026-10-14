@@ -1,13 +1,28 @@
 # V2 verification
 
-**Status: round 4 delivered on `v2/integration`, draft PR #1. The V2 engine is wired into `server.js` behind
-`GHOSTY_V2=1` (off by default). All local gates pass on the gated SHA. Nothing was deployed and V2 is not enabled on
-the live install.**
+**Status: round 5 (first live defect fix) on `v2/r5-livefix`, PR to `main`. V2 is merged and live as a pilot
+(`GHOSTY_V2=1`). All local gates pass on the gated SHA. Nothing was deployed or restarted.**
 
-Gated SHA: `f3eb199`. The last code change is merge `feb87cc`; `f3eb199` adds documentation only. The commits after it
-change documentation and `docs/v2/acceptance-results.json` only.
+Gated SHA: `f8c1e4c`.
 
-## Gates on `f3eb199` (round 4)
+## Gates on `f8c1e4c` (round 5)
+
+| Gate | Command | Result |
+|---|---|---|
+| Unit and integration suite, Node 23.6.0 | `env -i PATH HOME LANG GHOSTY_STATE_DIR=$(mktemp -d) npm test` | **PASS** 1774/1774, exit 0 |
+| Same, Node 24.21.0 | same | **PASS** 1774/1774, exit 0 |
+| Acceptance matrix | `PLAYWRIGHT_CORE=<dir> node scripts/v2-acceptance.js` | **PASS** 54/54 rows (T01–T40, GL01–GL14, T20 included), 1775/1775 tests, 142/142 test files; [acceptance-results.json](docs/v2/acceptance-results.json) |
+| Reporter plugin suite | `claude plugin test claude-plugin/ghosty-reporter` | not rerun: `claude-plugin/` is untouched by round 5 (last PASS 25/25 on `f3eb199`) |
+| Leak scan | `LEAK_SCAN_EXTRA=<private denylist> node scripts/leak-scan.js origin/main..HEAD` | **PASS**, clean |
+
+Round 5 fixes the live smoke defect (a docs task ended `waiting/no_progress`): per-class checks from `.ai/project.json`
+(`checks.by_task_class.docs`), a check time limit sized to the real suite (`checks.timeout_ms` 600 s; `npm test`
+measured 136 s on the host, the old limit was 120 s), a `check_timeout` wait instead of a code failure, timed-out runs
+that committed are evaluated on their commit, and a no-change run on an unmeasured or passing head goes to evaluation.
+`test/v2-r5-livefix.test.js` replays the live sequence with fake runtimes (7 of its 8 original tests fail on the old
+code). Review: Opus APPROVE (2 rounds; findings fixed in `2db1d3d` and `f8c1e4c`).
+
+### Round 4 gates on `f3eb199`
 
 | Gate | Command | Result |
 |---|---|---|
