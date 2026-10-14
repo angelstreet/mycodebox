@@ -33,7 +33,7 @@ That works far better than one agent at a time, and it creates problems a single
 | **Visibility.** Who did what, what is deployed, where each task stands | Answers live in 15 scrollbacks. "Was my fix deployed? Which version? Who restarted the server?" has no answer. |
 | **Shared platform.** One test platform, exclusive devices | A deploy restarts services under another agent's test run. Two agents drive the same set-top box. An agent waits for a deploy nobody runs, or deploys over someone else's run. |
 | **Phone only.** The owner is often away | Decisions must be one tap from the phone, with no extra app. |
-| **Safety.** Agents act fast | Nothing may answer a question about a deploy, a merge to main, a delete, credentials, money or a customer on the owner's behalf. Every automatic action must be visible, logged and switchable off. |
+| **Safety.** Agents act fast | Nothing may answer a question about a deploy, a delete, credentials, money or a customer on the owner's behalf. A merge is answered only after an evaluation (clean merge, green tests, no sensitive files, Jev or the manager's reasoning) that is journaled and shown to the owner. Every automatic action must be visible, logged and switchable off. |
 
 ### How Ghosty answers them
 
@@ -52,7 +52,7 @@ Ghosty is the eyes and hands. The **manager** is the judgement on top, in layers
 one up and each passing only what it cannot settle:
 
 ```
- owner (phone)            decisions only: merges, product calls, anything risky
+ owner (phone)            decisions only: product calls, deploys, anything risky (merges: evaluated, vetoable)
    ▲  escalations, batched, one tap each
  manager agent            one AI session following MANAGER.md: priorities vs quota, deploys,
    ▲                      delegation, escalation, daily report. Writes no code.
@@ -74,8 +74,8 @@ What the manager does:
 - **Reports**: a daily summary of what shipped, what is blocked, stops and answers, quota, cost, deploys.
 
 Its limits are fixed: it acts only through actions the owner could take from this dashboard, every action is
-logged with `by`, every capability has a switch, and it never answers anything touching deploys, merges, deletes,
-credentials, money or customers.
+logged with `by`, every capability has a switch, and it never answers anything touching deploys, deletes,
+credentials, money or customers. Merges are its call after an evaluation (see "Merge decisions" below).
 
 Historical goals and a platform-specific operating manual were tracked externally in:
 TASK-44 (`docs/tasks/TASK-44-ai-manager.md` and `TASK-44-MANAGER.md` in the platform repo). Those documents are not included here and are not prerequisites for a core install.
@@ -441,9 +441,10 @@ dimmed.
 
 **Sending is off by default.** Turn it on (`autoSend`) and only the cases in `autoCases` are typed
 (`continue` and `stopped_short` -> "Yes, continue."; `ask_status` -> the status question; `menu_recommended` -> the option's number in a live menu, or "Yes,
-go with your recommendation." after a finished turn). A forbidden topic (deploy, push/merge to
+go with your recommendation." after a finished turn). A forbidden topic (deploy, push to
 main, delete/remove, migration, `.env`, credentials, money, customer) or an unsent draft in the
-input box always means "ask the owner", whatever Jev says. The manager never starts, kills or
+input box always means "ask the owner", whatever Jev says. A merge goes through the merge evaluation
+below instead. The manager never starts, kills or
 renames sessions.
 
 An answer is not typed at once: it is shown on the card / board row as a pill
@@ -489,6 +490,47 @@ would auto-answer (all safety gates above already passed), the policy decides `a
 - Plans: claude -> Claude Max, codex -> Codex, minimax -> MiniMax.
 
 A hold is stored in `sessions.json` as `held:{by:'manager',reason,at}`, separate from the owner's `paused`,
+
+### Merge decisions and mixed questions (owner, 2026-10-14)
+
+"If there is no reason not to merge, you should." A merge is no longer a hard forbidden topic: `stall.js` splits the
+floor (`topicSplit(text)` -> `{ merge, hard }`). `forbiddenMatch` / `FORBIDDEN_RE` still match a merge, so every path
+other than the merge evaluation stays fail-closed. Push-to-main and `git push` count as the landing of a merge only when
+the same text asks for a merge; force-push, hard reset and rebase onto main stay hard.
+
+For a stop that asks about a merge, the manager runs `evaluateMerge` (`merge-policy.js`) in the session's checkout,
+read-only (`git merge-tree`, `git diff`, no fetch, no checkout). It answers "merge" only when all hold:
+
+| Check | Escalation reason when it fails |
+|---|---|
+| The branch exists and is not already merged | `branch not found` / `already merged` |
+| `git merge-tree` is clean, or conflicts only in `mergeConventionFiles` (default `VERSION.txt`, max+1 by convention) | `conflicts outside convention: <files>` |
+| The closing text reports tests green ("1826/1826 pass", "all green"), with no failure; or every changed file is docs/tests | `tests reported red: ...` / `no green test report on the branch` |
+| No changed path or added line touches secrets or credentials, migrations / `*.sql`, sudoers, systemd units | `touches a secret/credential path: ...`, ... |
+| The repo is not in `mergeOptOut` | `repo opted out` |
+| Jev (router point `merge`) picks `merge` at or above `mergeMinConfidence` (default 0.85); without Jev, the manager's reasoning: 0.9 with a test count or docs-only, 0.8 for a green word alone | `Jev rates it escalate (0.62)` / `confidence 0.80 below 0.85` |
+
+Every evaluation, merge or escalate, is appended to `<state>/merge-decisions.jsonl` (V2 decision-record shape: rationale,
+evidence, `jev_decision_id` or `reasoning`, branch and target SHAs, rollback `git revert -m 1 <merge commit>`), logged as
+`{type:'merge_decision'}` in `stalls.jsonl`, and recorded as an owner feed notice ("Merge decided: <session>" or "Merge
+escalated: <session>"). `GET /api/manager/merge-decisions?limit=50` returns the newest records.
+
+The reply ("Merge: yes - the manager evaluated <branch> -> <target>: ... Merge it now.") goes through the usual countdown
+and cancel pill with source `manager_decision`; it needs `autoSend` and `mergeDecisions` on (not `autoCases`), and the fire-time
+gate re-checks draft, pause, hourly cap, pane and that the reply itself names no hard topic.
+
+**Mixed questions.** `info-lookup.js` splits a stop into parts. An information part ("send the path of X") is looked up in the
+session's repository docs and the `infoRoots` directories (handovers, task docs, state files); a single, unambiguous hit is
+answered with its source. A question mixing merge and deploy is split: the merge is decided, the deploy escalated. What
+remains goes to the owner with a reason that says what was already answered ("deploy question - needs you (merge answered
+by the manager; path answered)").
+
+Config (`POST /api/manager`): `mergeDecisions` (default true), `mergeMinConfidence` (0.85), `mergeOptOut` (repo names or
+paths), `mergeConventionFiles` (`["VERSION.txt"]`), `infoAnswers` (true), `infoRoots` (absolute paths).
+
+The interactive manager uses the same evaluation from its shell:
+`node scripts/merge-eval.js --repo <checkout> --branch <b> [--target main] --text "<closing text>" --session <s> --journal`
+prints one JSON line `{verdict, reasons, rationale, ...}`.
 
 ### Scorecard
 

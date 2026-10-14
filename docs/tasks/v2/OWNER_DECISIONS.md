@@ -314,3 +314,28 @@ The owner judged MiniMax-M3.1-Flash-Preview not good enough in live use. It is r
 so the router never picks it; MiniMax-M3 is the only MiniMax model and the escalation ladder is M3 → Haiku → Sonnet → Opus.
 Session launchers default MiniMax sessions to M3. The benchmark keeps an explicit `minimax:m3.1-flash` spec for a future
 re-evaluation; the round-4 numbers in `docs/v2/SCORING.md` stay as recorded.
+
+
+## 14. The manager decides merges (2026-10-14)
+
+Owner: "This is the type of question I want to avoid: if there is no reason not to merge, you should. If you are the
+manager, evaluate and do it, either using Jev or your reasoning."
+
+Trigger: a worker session asked "merge task90-open and deploy once the host frees? [1 buffer + merge, 2 merge only,
+3 hold]" together with a request for a file path. The manager escalated all of it to the owner because "merge" was a
+forbidden topic, including the path it could have looked up.
+
+- Merge leaves the hard forbidden-topic floor and becomes an evaluated, recorded, vetoable manager decision: the
+  manager answers "merge" when the branch merges cleanly (or conflicts only in convention files such as `VERSION.txt`),
+  the session reports its tests green on that branch (or the change is docs/test-only), the diff touches no secrets,
+  credentials, production-data migrations, sudoers or units, and Jev (or the manager's own reasoning when Jev is
+  unavailable) rates it safe at or above the configured threshold. Otherwise it escalates with the specific reason.
+- Every merge decision is journaled (rationale, evidence, Jev decision id or "reasoning", SHA) and appears in the
+  owner's feed as a notice, so the owner can see and revert. Per-repo opt-out in the manager config.
+- Unchanged floors: deploy, deletions, credentials, money and customers always go to the owner. A question mixing merge
+  and deploy is split: the manager decides the merge and escalates only the deploy.
+- Mixed questions: the manager answers the information part when it can find it and escalates only what remains,
+  saying what it already answered.
+
+Implementation: `merge-policy.js`, `info-lookup.js`, the `topicSplit` floor in `stall.js`, router point `merge`, and
+`scripts/merge-eval.js` for the interactive manager; see [REFERENCE](../../REFERENCE.md#merge-decisions-and-mixed-questions-owner-2026-10-14).

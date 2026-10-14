@@ -41,5 +41,11 @@ must match the actual configuration until they are migrated.
   `AGENT_CMD_*` overrides win verbatim. V2 orchestration workers keep their own launch modes and refuse bypass flags;
   the exception is MiniMax `mcode exec` workers (developers and reviewers), which run `--permission full`, started in their V2
   worktree (`--cwd` is not a sandbox: they can run any host command, the same threat model as the dashboard default; D-023).
-- The AI manager must never answer on the owner's behalf about deploys, merges to main, deletes, credentials, money or
-  customers. The forbidden-topic filter always wins. Automatic answers are off by default.
+- The AI manager must never answer on the owner's behalf about deploys, deletes, credentials, money or customers. The
+  forbidden-topic filter always wins for those. Merges are an evaluated manager decision (owner, 2026-10-14): the
+  manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the
+  session reports its tests green on that branch (or the change is docs/test-only), the diff touches no secrets,
+  migrations, sudoers or units, and Jev (or the manager's own reasoning when Jev is unavailable) rates it safe at or
+  above `mergeMinConfidence`; otherwise it escalates with the reason. Every merge decision is journaled
+  (`merge-decisions.jsonl`) and shown in the owner's feed. A merge+deploy question is split: merge decided, deploy
+  escalated. Automatic answers are off by default.
