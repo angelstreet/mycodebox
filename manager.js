@@ -316,7 +316,10 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
-  if (state === 'done' && final.case !== 'done') notify(name, aiLine ? { ...final, aiLine } : final, reason);
+  if (state === 'done' && final.case !== 'done') notify(name, aiLine ? { ...final, aiLine } : final, reason, state);
+  // a live menu was already announced as "waiting" before it settled (no stop id yet, so no buttons): once settled and escalated, the "asks" alert
+  // carries the stop id, the voice item and the notification actions. The alert's own debounce keeps it to one extra per stop.
+  else if (state === 'waiting' && (final.options?.length || 0) >= 1) notify(name, aiLine ? { ...final, aiLine } : final, reason, state);
 }
 
 // ---- AI reviewer (phase 9) ----
@@ -849,8 +852,16 @@ const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'erro
 const IRREVERSIBLE_RE = /\b(?:delet(?:e|ing)|drop|wip(?:e|ing)|publish(?:ed|ing)?|pay(?:ment|ing)?|send(?:ing)?\s+(?:an?\s+|the\s+)?e-?mails?|rm\s+-rf?)\b/i;
 const menuUnsafe = (text, kinds = {}) => hardMatch(String(text || ''), { mergePresent: 'merge' in kinds, pushPresent: 'push' in kinds, deployPresent: 'deploy' in kinds }) || (IRREVERSIBLE_RE.exec(String(text || '')) || [])[0] || null;
 const OPTION_LINE_RE = /^\s*(?:[❯›>]\s*)?\d+[.)]\s+/;
-// The question around a menu: the closing lines that are not options, plus the parsed question. Options other than the recommended one are left out on purpose.
-const stemOf = (final, stall) => [...String(stall.excerpt || '').split('\n').filter((l) => !OPTION_LINE_RE.test(l)).slice(-10), final.question || ''].join('\n');
+// The WHOLE closing text around a menu (the reporter's turn text when the stop was classified from it, else the pane's closing lines), minus the
+// option run that holds the recommended option, plus the parsed question. The other options of that run are left out on purpose; numbered
+// lines elsewhere (a plan's steps) stay in. No line window: a hard sentence far above the menu still counts.
+const stemOf = (final, stall, rec) => {
+  const lines = String(stall.fullText || stall.closing || stall.excerpt || '').split('\n');
+  const at = rec ? lines.findIndex((l) => OPTION_LINE_RE.test(l) && l.includes(String(rec.text).slice(0, 40))) : -1;
+  let from = at, to = at;
+  if (at >= 0) { while (from > 0 && OPTION_LINE_RE.test(lines[from - 1])) from--; while (to < lines.length - 1 && OPTION_LINE_RE.test(lines[to + 1])) to++; }
+  return [...(at >= 0 ? [...lines.slice(0, from), ...lines.slice(to + 1)] : lines), final.question || ''].join('\n');
+};
 
 const appendJournal = async (record) => { try { await appendFile(DECISIONS_FILE, JSON.stringify(record) + '\n'); } catch (e) { console.error('[manager] journal', e.message); } };
 
@@ -1003,21 +1014,22 @@ async function menuDecision({ s, w, id, h, final, stall }) {
   if (isManagerSession(name) || final.case !== 'menu_recommended' || !final.options?.length || stall.draft) return null;
   const rec = final.options.find((o) => o.recommended);
   if (!rec) return null;
-  const combined = `${stemOf(final, stall)}\n${rec.text}`;
+  const stem = stemOf(final, stall, rec);
+  const combined = `${stem}\n${rec.text}`;
   const topics = topicSplit(combined);
   const present = DECISION_KINDS.filter((k) => topics[k]);
   const irreversible = (IRREVERSIBLE_RE.exec(combined) || [])[0] || null;
   if (!final.forbidden && !present.length && !topics.hard && !irreversible) return null;   // nothing in the way: the existing auto-answer path
   if (autoBlockFor(name, final)) return null;       // nothing would be typed anyway: the owner gets the stop as before
   const hardLeft = hardMatch(combined, { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy });
-  const bad = hardLeft || irreversible;
+  const bad = hardLeft || irreversible || (final.forbidden && !present.length ? forbiddenMatch(combined) : null);   // belt: a forbidden stop that no decided topic explains and that is not just another option's text
   if (bad) return { ok: false, why: `the question or the recommended option is a ${bad} question - needs you` };
   if (!present.length) return { ok: true, recText: combined, kinds: {}, menu: menuInfo(final, rec) };
   const wanted = s.cwd ? topicsWanted(topics) : { merge: false, push: false, deploy: false };
   const off = present.filter((k) => !wanted[k]);
   if (off.length) return { ok: false, why: `the recommended option is a ${off.join('/')} question - ${off.join('/')} decisions are off or not possible here` };
   const evidenceText = stall.closing || stall.excerpt || '';
-  const dec = await decideTopics({ s, id, h, w, text: `${rec.text}\n${stemOf(final, stall)}`, askText: combined, evidenceText, topics, wanted });
+  const dec = await decideTopics({ s, id, h, w, text: `${rec.text}\n${stem}`, askText: combined, evidenceText, topics, wanted });
   if (dec.stale || w.hash !== h) return { stale: true };
   const whys = DECISION_KINDS.map((k) => dec.why[k]).filter(Boolean);
   if (whys.length) return { ok: false, why: whys.join('; ') };
@@ -1112,6 +1124,7 @@ export function observe(s) {
   if (s.changed || !w.cls || w.clsKey !== key) {
     w.cls = classifyStall({ plain: useReport ? turn.text.split('\n') : s.plain, raw: s.raw, state: s.state, fromReport: useReport });
     w.cls.textSource = useReport ? 'reporter' : 'pane';
+    if (useReport) w.cls.fullText = turn.text;   // the whole reported turn: the menu decision reads every line of it
     if (bgWait) Object.assign(w.cls, { case: 'background_wait', answer: null, autoCase: undefined, forbidden: null, no_status: false, source: 'rule', backgroundWork: turn.backgroundWork });
     w.clsKey = key;
   }
@@ -1213,9 +1226,9 @@ export function stallOf(name) {
   if (!w || !w.stall) return null;
   const st = w.stall;
   return { case: st.case, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
-    id: w.pending?.id || null,
+    id: w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null,   // the previous stop's id never rides on a new stop's content
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
-    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending?.id), draft: !!(w.cls?.draft), jev: st.jev || null };
+    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), draft: !!(w.cls?.draft), jev: st.jev || null };
 }
 
 // The AI reviewer's view for the UI: { id, state: pending|done|skipped|error, ai?, skipped?, error?, ... } for the current stop, or null.

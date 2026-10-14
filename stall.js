@@ -241,7 +241,7 @@ const RESTART_HARD = String.raw`\brestart\b[^.\n]{0,30}\b(?:unit|ghosty)\b`;
 const PUSH_TAGS = String.raw`\bpush(?:ed|es|ing)?\b[^.\n]{0,30}\btags?\b`;   // pushing a tag publishes: hard
 export const DEPLOY_RE = new RegExp([DEPLOY_WORDS, DEPLOY_SHIP].join('|'), 'i');
 // A push mention: the present tense or a "pushed to main"; whether it is hard is decided by HARD_PUSH_RE.
-export const PUSH_RE = /\bpush(?:ing)?\b|\bpushed\b[^.\n]{0,30}\bmain\b/i;
+export const PUSH_RE = /\bpush(?:ing)?\b|\bpushed\b(?:[^.\n]{0,30}\bmain\b)?/i;
 const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON), HARD_GIT, PUSH_TAGS].join('|'), 'i');
 const colonHit = (text) => { for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_COLON_RE); if (k) return k[0]; } return null; };
 const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false } = {}) => {
@@ -355,7 +355,8 @@ function matchWith(re, text, extra = null) {
 }
 
 export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenExtra);
-export const mergeMatch = (text) => matchWith(MERGE_RE, text);
+// Like a deploy or a push, a merge counts as a topic only when the text asks to perform it ("Should I merge ..."), not for a noun ("the merge policy page").
+export const mergeMatch = (text) => requested(text, MERGE_RE);
 // The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any
 // plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent } (a bare boolean = mergePresent).
 export function hardMatch(text, opts = {}) {
@@ -369,10 +370,15 @@ const SERVICE_CTL_RE = new RegExp(FORBIDDEN_PARTS[1], 'i');
 // A deploy or a push counts as a topic only when the agent asks to perform it ("Should I deploy ...", "Deploy X to Y?", "ready to deploy"),
 // not when the word is a noun or a modifier ("the deploy queue page", "push notifications"). Text that mentions the word without
 // asking stays in the hard floor, so it is escalated, never answered.
-const REQ_BEFORE_RE = /\b(?:should|shall|can|could|may|would|will|do|did)\s+(?:i|we)\b|\bwant me to\b|\b(?:ready|ok(?:ay)?|fine|safe|time|going|about|needs?|plans?|planned|propos(?:e|ed|ing)) to\b|\bgo ahead\b|\blet me\b|\bi(?:'ll|'d| will| can| could| would| plan| propose| recommend| suggest)\b|\bwe(?:'ll| will| can| could| should| need)\b|\bnext(?: step)?\s*[:,-]|\bthen\b|\bplease\b/i;
+const REQ_BEFORE_RE = /\b(?:should|shall|can|could|may|would|will|do|did)\s+(?:i|we)\b|\bwant me to\b|\b(?:ready|ok(?:ay)?|fine|safe|time|going|about|needs?|plans?|planned|propos(?:e|ed|ing)) to\b|\bgo ahead\b|\blet me\b|\bi(?:'ll|'d| will| can| could| would| plan| propose| recommend| suggest)\b|\bwe(?:'ll| will| can| could| should| need)\b|\bnext(?: step)?\s*[:,-]|\bthen\b|\bplease\b|\b(?:whether|how|when|where) to\b|\b(?:ok(?:ay)?|fine|alright|good)\s+if\s+(?:i|we)\b|\bwant(?:s)? (?:me|us) to\b/i;
+// "request / queue / kick off / start / trigger / run / retry / want a deploy" and the passive "should this be deployed", "want it pushed"
+const ACTION_DET_RE = /\b(?:request|queue|kick off|kick|start|trigger|run|re-?run|retry|schedule|perform|do|want|need|order)\s+(?:(?:off|up)\s+)?(?:a|an|the|another|that|this|one)\s+$/i;
+const PASSIVE_BEFORE_RE = /\b(?:be|get|getting|been)\s+$/i;
+const PASSIVE_ASK_RE = /\b(?:should|shall|can|could|may|might|must|would|ready|need(?:s)? to|ok(?:ay)? to|want(?:s)?|time to)\b/i;
+const WANT_IT_RE = /\bwant(?:s)?\s+(?:it|this|that|them|these|those)\s+$/i;
 const IMPERATIVE_BEFORE_RE = /^\s*(?:[(\[]?\w{1,2}[)\]:.]\s*|\d+[.)]\s*|[-*]\s*)?(?:(?:and|then|also|please|now|first|just|run|execute|try|bash|sh|npm|node)\s+)*(?:git\s+)?$/i;
 const DET_BEFORE_RE = /\b(?:the|a|an|this|that|our|your|my|each|every|last|next|new|failed|failing|pending|recent|same|its|their|another|any|no|per|of|every)\s+$/i;
-const NOUN_AFTER_RE = /^(?:\s+(?:queue|queues|page|pages|button|buttons|log|logs|script|scripts|user|users|key|keys|notifications?|notifs?|status|ledger|runner|view|panel|config|configuration|history|tab|list|step|steps|flow|pipeline|hooks?|events?|messages?|endpoint|api|token|time|date|rules?|plan|process|window|badge|banner|card|sheet|screen|name|names|ids?|state|feature|support|mode|policy|command|commands)\b|(?:ed|ment|ments|er|ers)\b)/i;
+const NOUN_AFTER_RE = /^(?:\s+(?:queue|queues|page|pages|button|buttons|log|logs|script|scripts|user|users|key|keys|notifications?|notifs?|status|ledger|runner|view|panel|config|configuration|history|tab|list|step|steps|flow|pipeline|hooks?|events?|messages?|endpoint|api|token|time|date|rules?|plan|process|window|badge|banner|card|sheet|screen|name|names|ids?|state|feature|support|mode|policy|command|commands)\b|(?:ment|ments|er|ers)\b)/i;
 const COMPOUND_AFTER_RE = /^[-_/.]\w/;   // deploy-runner, deploy.sh, push/notify (update_core.sh is the command itself)
 const CONJUNCT_BEFORE_RE = /(?:,|;|\band|\bthen|\bplus)\s+(?:(?:also|then|now|just)\s+)*$/i;
 const ABOUT_THING_RE = /^\s*(?:\W*\w{0,2}[)\]:.]\s*)?(?:should|shall|can|could|may|would|will|do|does|did|is|are|was|were|what|why|how|which|when|where)\s+(?:the|a|an|this|that|these|those|our|your|my|its|their|\w+'s)\b/i;
@@ -383,7 +389,16 @@ function requestHit(text, re) {
     let m;
     while ((m = g.exec(sent))) {
       if (!m[0]) { g.lastIndex++; continue; }
-      const before = sent.slice(0, m.index), after = sent.slice(m.index + m[0].length);
+      const before = sent.slice(0, m.index);
+      let after = sent.slice(m.index + m[0].length), hit = m[0];
+      // "deploy" + "ed" and "pushed" are passive only after "be / get" in a question or a wish ("should this be deployed", "want it pushed")
+      const past = /^ed\b/i.test(after) || /ed$/i.test(m[0]);
+      if (past) {
+        if (/^ed\b/i.test(after)) after = after.slice(2);
+        if ((PASSIVE_BEFORE_RE.test(before) && PASSIVE_ASK_RE.test(before)) || WANT_IT_RE.test(before)) return hit;
+        continue;
+      }
+      if (ACTION_DET_RE.test(before) && !NOUN_AFTER_RE.test(after)) return hit;   // "request a deploy of main to env-a", "queue the deploy"
       if (DET_BEFORE_RE.test(before) || NOUN_AFTER_RE.test(after) || (COMPOUND_AFTER_RE.test(after) && !/^update_core/i.test(m[0]))) continue;
       if (IMPERATIVE_BEFORE_RE.test(before) || REQ_BEFORE_RE.test(before)) return m[0];
       // "merge X and deploy once the host frees?": a conjunct of an imperative chain, unless the sentence is a question about a thing ("Should the page also ...")

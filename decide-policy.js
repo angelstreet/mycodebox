@@ -29,7 +29,7 @@ export function parsePushAsk(text) {
     if (!branches.includes(branch)) branches.push(branch);
     if (!first) { const dest = m[2] ? clean(m[2]).replace(/^origin\//, '') : null; first = { branch, dest: dest && !SKIP.has(dest.toLowerCase()) ? dest : null }; }
   }
-  const rm = /\bpush(?:ing)?\b(?:\s+-{1,2}[\w-]+)*(?:\s+(?:it|this|that|the branch|to))?\s+(?:to\s+)?(upstream|fork|mirror|backup|github|gitlab)\b/i.exec(t);
+  const rm = /\bpush(?:ing)?\b(?:\s+-{1,2}[\w-]+)*(?:\s+(?:it|this|that|the branch|to))?\s+(?:to\s+)?(upstream|fork|mirror|backup|github|gitlab)\b/i.exec(t) || /\bpush(?:ing)?\b[^.!?\n]{0,60}?\b(?:to|onto)\s+(?:the\s+)?(upstream|fork|mirror|backup|github|gitlab)\b/i.exec(t);
   const remote = rm ? rm[1].toLowerCase() : null;
   if (first) return { ...first, branches, unparsed: null, remote };
   // "push to main", "push it to origin/main": only filler words between push and "to" ("push and deploy to env-a" names no destination)
@@ -213,18 +213,22 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   if (!cfg.deployRunner) return esc('deploy runner off: a deploy needs your approval tap');
   const names = [...(envs || [])].map(String);
   const t = String(text || '');
+  // the sentence(s) that ask for the deploy: environment and target words are read there only
+  const deployClause = (() => { const c = t.split(/(?<=[.!?])\s+|\n+/).filter((x) => /\b(?:re-?deploy|deploy|roll ?out|ship|release|promote|update_core)/i.test(x)); return c.length ? c.join(' ') : t; })();
   if (!facts.env) {
-    const named = names.filter((n) => new RegExp(String.raw`(?<![\w-])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\w-])`, 'i').test(t)).sort((a, b) => b.length - a.length);
+    const named = names.filter((n) => new RegExp(String.raw`(?<![\w-])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\w-])`, 'i').test(deployClause)).sort((a, b) => b.length - a.length);
     if (named.length > 1) return esc(`which environment? the text names ${named.join(' and ')}`);
     facts.env = named[0] || (names.length === 1 ? names[0] : null);
   }
-  // a target the registry does not know ("production", "staging", "live") is not the one configured environment
-  const unknownTarget = [...t.matchAll(/\b(prod(?:uction)?|staging|stage|live|dev|qa|uat|preprod|sandbox)\b/gi)].map((x) => x[1]).find((w) => !names.some((n) => n.toLowerCase() === w.toLowerCase()));
+  // a target the registry does not know ("production", "staging", "live") is not the one configured environment; read only in the clause(s)
+  // that name the deploy, where the environment goes ("to production", "deploy live"), not in the rest of the closing text
+  const unknownTarget = (() => {
+    const W = String.raw`prod(?:uction)?|staging|stage|live|dev|qa|uat|preprod|sandbox|backend|cluster|k8s|kubernetes|aws|gcp|azure|vercel|heroku|netlify|region`;
+    const re = new RegExp(String.raw`\b(?:to|onto|on|in|at|for|into)\s+(?:the\s+)?(${W})\b(?![-/])|\b(?:re-?deploy|deploy|ship|release|promote|roll ?out)\w*\s+(?:it\s+|this\s+)?(${W})\b(?![-/])`, 'gi');
+    for (const x of deployClause.matchAll(re)) { const w = x[1] || x[2]; if (!names.some((n) => n.toLowerCase() === w.toLowerCase())) return w; }
+    return null;
+  })();
   if (unknownTarget) return esc(`"${unknownTarget}" is not a configured environment (${names.join(', ') || 'none'}): which environment?`);
-  if (!scopeGiven && !hint.scope) {
-    const odd = /\b(?:re-?deploy|deploy|restart|roll ?out|ship|release)\w*\s+(?:the\s+)?(backend|api|workers?|database|db|cache|services?|app|site|website|proxy|nginx|redis|queue|runner|gateway|daemon|cron|container|image)\b/i.exec(t);
-    if (odd) return esc(`"${odd[1]}" is not a deploy scope: say full, frontend, server or host`);
-  }
   if (!facts.env) return esc(names.length ? 'which environment?' : 'no deploy environments are configured');
   if (names.length && !names.includes(facts.env)) return esc(`unknown environment ${facts.env}`);
   if (!['full', 'frontend', 'server', 'host'].includes(facts.scope)) return esc(`unknown scope ${facts.scope}`);

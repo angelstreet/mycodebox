@@ -22,7 +22,7 @@ let leases = { ok: true, leases: [], waiters: [] };
 const fresh = m.managerConfig();   // before any config call: the defaults of a fresh install
 await m.initManager({
   managerSessions: () => ['mgr'],
-  onOwnerNeeded: (session, stall, reason) => owner.push({ session, reason }),
+  onOwnerNeeded: (session, stall, reason, state) => owner.push({ session, reason, stall, state }),
   sendKey: async (session, key) => { typedKeys.push({ session, key }); }, sendKeys: async (session, text) => { typed.push({ session, text }); },
   onMergeDecision: (session, rec) => notices.push({ session, rec }),
   policy: () => ({ action: 'allow', reason: 'ok' }), heldStore: { get: () => null, set: () => {} },
@@ -332,4 +332,69 @@ test('R8-9/16: the revert path is guarded and the digest day is marked after the
   assert.doesNotMatch(srv, /alert\(`decided:digest/);
   const mgr = readFileSync(new URL('../manager.js', import.meta.url), 'utf8');
   assert.match(mgr, /v = await decidedView\([\s\S]*?writeFile\(DIGEST_FILE/);
+});
+
+// ---- round 8, third fix round ----
+test('R8-r3-1 BLOCKER: a hard sentence far above the menu (beyond any pane window) still escalates the pick', async () => {
+  const filler = (n) => Array.from({ length: n }, (_, i) => `Step ${i + 1} of the routine checks completed fine.`).join('\n');
+  const cases = [
+    ['wd1', 'Plan: I will drop the customers table in prod, then re-seed.\nChecked the schema.\nRan the linter.\nRan the unit tests.\nUpdated the notes.\nShould I go ahead?\n1. Yes (recommended)\n2. No', 'done'],
+    ['wd2', 'Plan: I will drop the customers table in prod, then re-seed.\nChecked the schema.\nRan the linter.\nRan the unit tests.\nUpdated the notes.\nShould I go ahead?\n ❯ 1. Yes (recommended)\n   2. No\n' + MENU_TAIL, 'waiting'],
+    ['wd3', `Plan: rm -rf the data directory on the host, then re-seed.\n${filler(11)}\nProceed with the plan?\n ❯ 1. Proceed as planned (Recommended)\n   2. Stop\n${MENU_TAIL}`, 'waiting'],
+    ['wd4', `Plan: rm -rf the data directory on the host, then re-seed.\n${filler(11)}\nProceed with the plan?\n1. Proceed as planned (Recommended)\n2. Stop`, 'done'],
+  ];
+  const k0 = typedKeys.length, t0 = typed.length;
+  for (const [name, body, state] of cases) {
+    await stop(name, makeRepo(), body, { state });
+    await wait(150);
+    assert.ok(!typedKeys.some((x) => x.session === name) && !typed.some((x) => x.session === name), `${name}: nothing typed`);
+    assert.ok(esc(name) || owner.some((o) => o.session === name), `${name}: escalated`);
+  }
+  assert.equal(typedKeys.length, k0); assert.equal(typed.length, t0);
+});
+
+test('R8-r3-1: the reporter\'s whole turn text is read, not the 90 closing lines of it', async () => {
+  const body = ['Plan: I will drop the customers table in prod, then re-seed.', ...Array.from({ length: 140 }, (_, i) => `Routine step ${i} finished.`), 'Should I go ahead?', '1. Yes (recommended)', '2. No'].join('\n');
+  const rep = { turnForStop: () => ({ text: body, at: 1, reason: 'end_turn', backgroundWork: 0 }), promptSince: () => null };
+  const t = (st, now) => m.observe({ name: 'wd5', state: st, agent: 'claude', plain: pane(body), raw: pane(body), changed: true, realWork: st === 'working', project: 'p', cwd: makeRepo(), now, rep });
+  t('working', 0); t('done', 1000); t('done', 2500);
+  await until(() => stalls().some((r) => r.session === 'wd5' && ['answer', 'escalated', 'answer_cancelled'].includes(r.type)));
+  await wait(150);
+  assert.ok(!typed.some((x) => x.session === 'wd5') && !typedKeys.some((x) => x.session === 'wd5'));
+  assert.ok(esc('wd5'));
+});
+
+test('R8-r3-2: a settled, escalated live menu raises the asks alert with the stop id; the voice item and its buttons answer it, a stale id gets 409', async () => {
+  await cfg({ autoSend: false });
+  const { stopItem, feedActions, createVoice } = await import('../voice.js');
+  const body = 'How should I proceed?\n ❯ 1. Keep going (Recommended)\n   2. Stop and report\n' + MENU_TAIL;
+  await stop('lv1', makeRepo(), body, { state: 'waiting' });
+  const alert = owner.find((o) => o.session === 'lv1');
+  assert.ok(alert, 'asks alert for a live menu');
+  assert.equal(alert.state, 'waiting');
+  const stOf = () => ({ state: 'waiting', stall: m.stallOf('lv1'), triage: m.triageOf('lv1'), auto: m.autoOf('lv1'), lastActivitySec: 0 });
+  assert.ok(stOf().stall.id, 'the stop has its id once settled');
+  const item = stopItem('lv1', stOf());
+  assert.ok(item, 'a voice item'); assert.deepEqual(feedActions(item), [{ action: 'recommended', title: 'Do recommended' }]);
+  const sent = [];
+  const voice = createVoice({ status: async () => ({ lv1: stOf() }), ownerAsks: async () => [], managerSessions: () => ['mgr'], send: async (x) => { sent.push(x); }, logChoice: async () => {}, digestSources: async () => ({}) });
+  const stale = await voice.answer({ id: item.id.replace(/:[0-9a-f]{8}$/, ':deadbeef'), option: 1, via: 'notification' });
+  assert.equal(stale.status, 409);
+  const ok = await voice.answer({ id: item.id, option: item.options.find((o) => o.recommended).n, via: 'notification' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.deepEqual(sent, [{ session: 'lv1', answer: { key: '1' }, by: 'owner-voice' }]);
+  await cfg({ autoSend: true });
+});
+
+test('R8-r3-2: stallOf never hands the previous stop\'s id to a new stop\'s content', async () => {
+  const p1 = pane('First question?\n1. A (Recommended)\n2. B');
+  const t = (p, now, st = 'done') => m.observe({ name: 'sid1', state: st, agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: makeRepo(), now });
+  m.observe({ name: 'sid1', state: 'working', agent: 'claude', plain: ['busy'], raw: ['busy'], changed: true, realWork: true, project: 'p', cwd: makeRepo(), now: 0 });
+  t(p1, 1000); t(p1, 2500);
+  await until(() => m.stallOf('sid1')?.id);
+  const first = m.stallOf('sid1').id;
+  assert.ok(first);
+  const p2 = pane('A different second question about something else entirely?\n1. X\n2. Y');
+  t(p2, 3000);   // the pane changed; the new stop is not settled yet
+  assert.equal(m.stallOf('sid1').id, null);
 });

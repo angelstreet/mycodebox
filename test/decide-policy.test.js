@@ -245,8 +245,13 @@ test('R8-12: a target that is not a configured environment, or not a scope, esca
     const ev = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\n${t}`, ...one }));
     assert.equal(ev.verdict, 'escalate', t); assert.match(ev.reasons[0], /is not a configured environment/, t);
   }
-  const backend = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nShall I deploy the backend to env-a?` }));
-  assert.match(backend.reasons[0], /"backend" is not a deploy scope/);
+  // R8-r3-4: app / api / site are no scope (default full); only an unknown target where the environment goes escalates
+  for (const w of ['app', 'api', 'site', 'backend']) {
+    const ok = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nShall I deploy the ${w} to env-a?` }));
+    assert.equal(ok.verdict, 'deploy', w); assert.equal(ok.facts.scope, 'full', w);
+  }
+  const where = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nShall I deploy it to the backend?` }));
+  assert.match(where.reasons[0], /"backend" is not a configured environment/);
   assert.equal((await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nDeploy the frontend to env-a?` }))).facts.scope, 'frontend');
 });
 
@@ -262,4 +267,22 @@ test('R8-14/15: the typed rationale says "no blocking lease" and never echoes th
 test('R8-17: deploy honours mergeOptOut like push', async () => {
   const repo = makeRepo();
   assert.match((await evaluateDeploy(dargs(repo, { ref: 'feat', config: { ...dcfg, mergeOptOut: ['proj'] } }))).reasons[0], /opted out/);
+});
+
+test('R8-r3-4: environment and target words are read only in the clause that names the deploy', async () => {
+  const repo = makeRepo();
+  const ok = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nDeploy it to env-a? The live view looks fine.` }));
+  assert.equal(ok.verdict, 'deploy', JSON.stringify(ok.reasons));
+  const other = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nThe staging page was checked by env-b earlier. Deploy it to env-a?` }));
+  assert.equal(other.verdict, 'deploy'); assert.equal(other.facts.env, 'env-a', 'env-b outside the deploy clause is not a second target');
+  const live = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nDeploy it live?` }));
+  assert.match(live.reasons[0], /"live" is not a configured environment/);
+});
+
+test('R8-r3-5: push <ref> to <other remote> escalates', async () => {
+  const repo = withOrigin(); more(repo);
+  for (const t of ['Push feat to upstream?', 'Shall I push feat to the fork?', 'push to upstream']) {
+    const ev = await evaluatePush({ cwd: repo, text: `${GREEN}\n\n${t}` });
+    assert.equal(ev.verdict, 'escalate', t); assert.match(ev.reasons[0], /push to another remote/, t);
+  }
 });

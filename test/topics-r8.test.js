@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { topicSplit, hardMatch, forbiddenMatch, FORBIDDEN_RE, pushMatch, deployMatch } from '../stall.js';
+import { topicSplit, hardMatch, forbiddenMatch, FORBIDDEN_RE, pushMatch, deployMatch, mergeMatch } from '../stall.js';
 
 test('push topic: a plain push of a branch, push to main, push a tag', () => {
   for (const x of ['push feat?', 'git push origin feat', 'push to main', 'git push -u origin feature', 'merge X into main and push main']) {
@@ -83,4 +83,21 @@ test('R8-6b: sudoers, unit files, reboot, schema tools and database resets are h
     assert.ok(forbiddenMatch(x), `forbidden: ${x}`);
     assert.ok(topicSplit(`Shall I merge, push and deploy and ${x}?`).hard, `hard even with all topics decided: ${x}`);
   }
+});
+
+test('R8-r3-3: request-form gaps are topics; noun forms stay non-topics', () => {
+  for (const x of ['Should I request a deploy of main to env-a?', 'Shall I queue the deploy?', 'Should I kick off a deploy to env-a?', 'Please trigger the deploy', 'Want me to run the deploy?', 'Should I retry the deploy?',
+    'Should this be deployed to env-a?', 'Do you want it deployed?', 'Do you want a deploy to env-a?', 'Is it ok if I push?', 'Should this be pushed?', 'Do you want it pushed?']) {
+    const t = topicSplit(x); assert.ok(t.deploy || t.push, x); assert.equal(t.hard, null, x);
+  }
+  for (const x of ['Should the deploy queue page show the env-a name?', 'Should I show the deployed version?', 'I deployed the fix. Should I continue?', 'Should the push notification page list it?', 'Is it deployed? Should I check?']) {
+    const t = topicSplit(x); assert.equal(t.deploy, null, x); assert.equal(t.push, null, x);
+  }
+});
+
+test('R8-r3-3: merges follow the same request-form rule', () => {
+  assert.equal(topicSplit('Should the merge policy page also list the conflicting files?').merge, null);
+  assert.equal(topicSplit('Should the merge queue show the branch?').merge, null);
+  for (const x of ['Should I merge feat into main?', 'Shall we merge it?', 'say whether to merge task90-open?', 'Should this be merged?', 'merge feat, then push']) assert.ok(topicSplit(x).merge, x);
+  assert.equal(mergeMatch('emerge'), null);
 });

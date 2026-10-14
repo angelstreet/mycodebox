@@ -681,14 +681,14 @@ const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: proce
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
 // The voice item of a session's open stop right now (voice.js), or null. Reads the manager's live view, not `latest` (notifySession runs mid-poll).
-function voiceItemOf(session, kind) {
+function voiceItemOf(session, kind, stateHint = null) {
   try {
-    const state = latest?.status?.[session]?.state ?? (kind === 'waiting' ? 'waiting' : 'done');
+    const state = stateHint ?? latest?.status?.[session]?.state ?? (kind === 'waiting' ? 'waiting' : 'done');
     return voiceStopItem(session, { state, stall: stallOf(session), triage: triageOf(session), auto: autoOf(session), lastActivitySec: 0 }, { mgrs: new Set(loadManagerSessions()), isPaused: (n) => sessionMeta.isPaused(n) });
   } catch { return null; }
 }
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
-function notifySession(session, kind, body, meta) {
+function notifySession(session, kind, body, meta, stateHint = null) {
   if ((kind === 'waiting' || kind === 'asks') && loadManagerSessions().includes(session)) return;   // the manager's own session never pushes the owner
   const waiting = kind === 'waiting' || kind === 'asks';
   // The agent's STATUS verdict + what the turn took (elapsed, tokens) + its own info, first in the body so every cut keeps it.
@@ -696,7 +696,7 @@ function notifySession(session, kind, body, meta) {
   const turn = lt && meta?.status ? { ...lt, status: meta.status, info: meta.info ?? lt.info } : lt;
   const line = turn ? statusMeterLine(turn) : null;
   if (line) body = [line, body && !/^\s*[*_`]*STATUS:/i.test(String(body)) ? body : null].filter(Boolean).join('\n');   // a body that is the STATUS line itself is replaced by the metered one
-  const vi = waiting ? voiceItemOf(session, kind) : null;   // a stop the owner can answer by voice / from the notification buttons
+  const vi = waiting ? voiceItemOf(session, kind, stateHint) : null;   // a stop the owner can answer by voice / from the notification buttons
   alert(`${session}:${kind}`, {
     ...(vi ? { voiceId: vi.id, actions: feedActions(vi) || undefined } : {}),
     title: kind === 'asks' ? `${session} asks you` : waiting ? `${session} needs you` : `${session} is done`,
@@ -2031,7 +2031,7 @@ server.listen(PORT, HOST, async () => {
   await initManager({
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
-    onOwnerNeeded: (session, stall, reason) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }),
+    onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
