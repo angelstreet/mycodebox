@@ -40,11 +40,11 @@ test('minimax: model from the launch (prefix stripped), default only when unknow
   const { dir, cfg, stateDir } = await setup();
   cfg.minimaxDb = join(dir, 'mm.sqlite');
   minimaxDb(cfg.minimaxDb, [['s1', NOW - 60000, 10, 5, 100, 0], ['s2', NOW - 50000, 10, 5, 100, 0]]);
-  await fs.writeFile(join(stateDir, 'session-history.jsonl'), started('mm-a', 'minimax', 'minimax/MiniMax-M3.1-Flash-Preview', '/work/mm-one', NOW - 3600000));
+  await fs.writeFile(join(stateDir, 'session-history.jsonl'), started('mm-a', 'minimax', 'minimax/MiniMax-M3', '/work/mm-one', NOW - 3600000));
   const ing = createIngester(cfg, hooks); await ing.init(false);
   assert.equal(await ing.tick(), 2);
   const [a, b] = await ledger(cfg);
-  assert.deepEqual([a.model, a.model_source, a.label], ['MiniMax-M3.1-Flash-Preview', 'launch', 'mm-a']);
+  assert.deepEqual([a.model, a.model_source, a.label], ['MiniMax-M3', 'launch', 'mm-a']);
   assert.deepEqual([b.model, b.model_source], ['MiniMax-M3', 'default']);
   assert.equal(normalizeMinimaxModel('minimax/X'), 'X');
 });
@@ -133,8 +133,8 @@ test('history written AFTER the ingester was created is still used (read-only mo
   minimaxDb(cfg.minimaxDb, [['s1', NOW - 60000, 10, 5, 100, 0]]);
   const ing = createIngester(cfg, hooks); await ing.init(false);   // no history file yet
   await new Promise((r) => setTimeout(r, 650));
-  await fs.writeFile(join(stateDir, 'session-history.jsonl'), started('late-mm', 'minimax', 'minimax/MiniMax-M3.1-Flash-Preview', '/work/mm-one', NOW - 3600000));
+  await fs.writeFile(join(stateDir, 'session-history.jsonl'), started('late-mm', 'minimax', 'minimax/MiniMax-M3', '/work/mm-one', NOW - 3600000));
   assert.equal(await ing.tick(), 1);
   const [a] = await ledger(cfg);
-  assert.deepEqual([a.model, a.model_source, a.label], ['MiniMax-M3.1-Flash-Preview', 'launch', 'late-mm']);
+  assert.deepEqual([a.model, a.model_source, a.label], ['MiniMax-M3', 'launch', 'late-mm']);
 });

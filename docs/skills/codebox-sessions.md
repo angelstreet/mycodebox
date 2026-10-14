@@ -15,7 +15,7 @@ cbsession -n NAME -d DIR [-p claude|codex|minimax|opencode] [-m MODEL] (-H HANDO
 | `-n` | session name (`A-Z a-z 0-9 _ -`, max 40); also the Remote Control name |
 | `-d` | working directory (an existing checkout) |
 | `-p` | provider, default `claude` |
-| `-m` | model: Claude `haiku`/`sonnet`/`opus`/`fable`/id; MiniMax `MiniMax-M3.1-Flash-Preview` (default) or `MiniMax-M3`; Codex model; OpenCode `provider/model` |
+| `-m` | model: Claude `haiku`/`sonnet`/`opus`/`fable`/id; MiniMax `MiniMax-M3` (default and only MiniMax model); Codex model; OpenCode `provider/model` |
 | `-H` | handover file: the session reads it, summarises state and open items, proposes the next step, then waits |
 | `-f` / `-t` | prompt file (verbatim) / prompt text (with `-H` it adds an instruction) |
 | `-x` | dry run: write the prompt and launch files, print them, start nothing |

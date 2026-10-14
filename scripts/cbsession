@@ -7,7 +7,7 @@
 #   -n  tmux session name (A-Z a-z 0-9 _ -, max 40); also the Remote Control name
 #   -d  working directory on this host (repo checkout)
 #   -p  provider (default claude)
-#   -m  model: claude haiku|sonnet|opus|fable|<id>; codex <model>; minimax MiniMax-M3.1-Flash-Preview|MiniMax-M3;
+#   -m  model: claude haiku|sonnet|opus|fable|<id>; codex <model>; minimax MiniMax-M3 (default; the only MiniMax model, owner decision 2026-10-14);
 #       opencode <provider/model>
 #   -H  handover file: the session reads it, summarises state and open items, proposes the next step, then waits
 #   -f  prompt file, used verbatim;  -t  prompt text
@@ -45,7 +45,7 @@ q() { printf '%q' "$1"; }
 case $PROV in
   claude)   CMD="$(q "$HOME")/.local/bin/claude --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   codex)    CMD="$(q "$HOME")/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
-  minimax)  M=${MODEL:-MiniMax-M3.1-Flash-Preview}; [[ $M == */* ]] || M="minimax/$M"
+  minimax)  M=${MODEL:-MiniMax-M3}; [[ $M == */* ]] || M="minimax/$M"
             CMD="PATH=$(q "${MCODE_NODE_DIR:-$HOME/.local/node-v24.21.0-linux-x64/bin}"):\$PATH mcode -m $(q "$M") \"\$(cat $(q "$P"))\"";;
   opencode) CMD="$(q "$HOME")/.local/bin/opencode${MODEL:+ -m $(q "$MODEL")} --prompt \"\$(cat $(q "$P"))\" $(q "$DIR")";;
   *) echo "cbsession: -p must be claude|codex|minimax|opencode" >&2; exit 2;;

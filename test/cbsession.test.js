@@ -23,7 +23,7 @@ test('dry run per provider writes the launch file and starts nothing', () => {
   r = run('-x', '-n', 'cb-codex', '-d', work, '-p', 'codex', '-m', 'gpt-x', '-t', 'x');
   assert.match(launch('cb-codex'), /codex --dangerously-bypass-approvals-and-sandbox -m gpt-x/);
   r = run('-x', '-n', 'cb-mm', '-d', work, '-p', 'minimax', '-t', 'x');
-  assert.match(launch('cb-mm'), /PATH=\/opt\/fake-node\/bin:\$PATH mcode -m minimax\/MiniMax-M3\.1-Flash-Preview/);
+  assert.match(launch('cb-mm'), /PATH=\/opt\/fake-node\/bin:\$PATH mcode -m minimax\/MiniMax-M3 /);
   r = run('-x', '-n', 'cb-oc', '-d', work, '-p', 'opencode', '-m', 'p/m', '-t', 'x');
   assert.match(launch('cb-oc'), /opencode -m p\/m --prompt/);
   r = run('-x', '-n', 'cb-h', '-d', work, '-H', path.join(home, 'handover.md'));
