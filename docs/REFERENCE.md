@@ -773,7 +773,7 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
   back to the session-history name (cwd+ts, provider match) before the cwd folder name. Without
   `session-history.jsonl` nothing changes.
 - **State**: `~/.local/state/ghosty/usage-offsets.json` (byte offsets), `usage-ledger.jsonl` (one compact
-  record per turn), `usage-summary.json` (rewritten every minute: totals per session / project / agent / model /
+  record per turn; compacted by id at tailer start, rows older than `BACKFILL_DAYS` kept since round 6b), `usage-summary.json` (rewritten every minute: totals per session / project / agent / model /
   day for the last 14 days, plus `outliers` = sessions whose cost per active hour today is over 3x their
   project's median; rule in `buildSummary()`), a `today` block (totals / agent / project / model for the UTC day)
   and per session `today`, `days`, `activeHours` for the usage view.
@@ -795,6 +795,11 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
   (cached by size+mtime), no day cap. `active_ms` = sum of gaps between consecutive turns, each gap capped at 5 minutes.
   Unknown stays `null`: no turns -> `tokens`, `active_ms`, `cost_usd` null; any unpriced turn -> `cost_usd` null;
   subscription providers (MiniMax) -> `billing:'subscription'`, cost null.
+  Round 6b, derived at read time (the history file is never rewritten): a first-seen instance (`started_by:'unknown'`)
+  starts at its label's earliest ledger turn after the previous instance of that name (`start_source:'ledger'`,
+  `recorded_start` = when it was first seen; the detail route accepts either start), and a label's turns before any
+  history instance of it form one ended row (`source:'ledger'`, `started_by:'unknown'`, start/end = first/last turn,
+  provider = most frequent agent). Turns of V2 runs (joined by cwd) never form label rows.
 - **Rerun the backfill**: `node usage/ingest.js --backfill` (forgets offsets, re-reads the last `BACKFILL_DAYS`
   days; Langfuse upserts by id, no duplicates). `--once` does a single pass.
 

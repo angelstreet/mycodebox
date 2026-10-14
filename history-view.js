@@ -4,6 +4,10 @@
 // ledger is read incrementally (no day cap).
 // active_ms = sum of the gaps between consecutive turns of the instance, each gap capped at ACTIVE_GAP_CAP_MS (5 min),
 // so idle waiting does not count. Unknown stays null: no turns -> tokens/cost null; any unpriced turn -> cost null.
+// Round 6b: history began with PR #4, the ledger long before. A first-seen instance (started_by unknown) starts at its
+// label's earliest ledger turn after the previous instance of that name (start_source 'ledger'), and turns of a label
+// before any history instance of it become one ended row (source 'ledger', start/end = first/last turn), so the view
+// covers the whole ledger. Derived at read time: the history file is never rewritten.
 import { promises as fsp } from 'node:fs';
 
 export const ACTIVE_GAP_CAP_MS = 5 * 60000;
@@ -60,8 +64,39 @@ export function createLedgerIndex(file) {
   };
 }
 
+// Ledger-joined instances: history instances with the round-6b backfill, plus ledger-only rows. -> instances[]
+// (win_end: exclusive join end when it differs from the displayed end; source/start_source mark derived values)
+export function withLedger(instances, led) {
+  const byName = new Map();
+  for (const i of instances) if (i.started_by !== 'v2') (byName.get(i.name) || byName.set(i.name, []).get(i.name)).push(i);
+  const out = instances.map((i) => ({ ...i }));
+  const idx = new Map(instances.map((i, k) => [i, k]));
+  // V2 runs join by cwd: their turns never become ledger-only rows under a label.
+  const v2 = new Map();
+  for (const i of instances) if (i.started_by === 'v2' && i.cwd) (v2.get(i.cwd) || v2.set(i.cwd, []).get(i.cwd)).push(i);
+  const inV2 = (r) => !!r.cwd && !!v2.get(r.cwd)?.some((i) => r.ts >= i.start && r.ts < (i.end ?? Infinity));
+  for (const [label, rows] of led.byLabel) {
+    const own = (byName.get(label) || []).slice().sort((a, b) => a.start - b.start);
+    // Backfill each first-seen instance down to the earliest turn after the previous instance of the name.
+    own.forEach((inst, k) => {
+      if (inst.started_by !== 'unknown') return;
+      const prevEnd = k > 0 ? (own[k - 1].end ?? Infinity) : -Infinity;
+      const first = rows.find((r) => r.ts >= prevEnd && r.ts < inst.start && !inV2(r));
+      if (first) Object.assign(out[idx.get(inst)], { start: first.ts, start_source: 'ledger', recorded_start: inst.start });
+    });
+    const firstStart = own.length ? Math.min(...own.map((i) => out[idx.get(i)].start)) : Infinity;
+    const before = rows.filter((r) => r.ts < firstStart && !inV2(r));
+    if (!before.length) continue;
+    const agents = new Map(); for (const r of before) if (r.agent) agents.set(r.agent, (agents.get(r.agent) || 0) + 1);
+    const provider = [...agents.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    out.push({ name: label, provider, model: null, started_by: 'unknown', cwd: before.at(-1).cwd, prompt_ref: null, handover_ref: null,
+      remote_control_url: null, start: before[0].ts, end: before.at(-1).ts, win_end: before.at(-1).ts + 1, end_reason: null, source: 'ledger' });
+  }
+  return out;
+}
+
 export function summarize(inst, led, nowMs) {
-  const end = inst.end ?? Infinity;
+  const end = inst.win_end ?? inst.end ?? Infinity;
   const pool = inst.started_by === 'v2' ? (inst.cwd ? led.byCwd.get(inst.cwd) : null) : led.byLabel.get(inst.name);
   const mine = (pool || []).filter((r) => r.ts >= inst.start && r.ts < end);
   const tokens = mine.length ? mine.reduce((t, r) => ({ input: t.input + r.input, output: t.output + r.output, cache_read: t.cache_read + r.cache_read, cache_write: t.cache_write + r.cache_write }),
@@ -82,6 +117,7 @@ export function summarize(inst, led, nowMs) {
   return {
     name: inst.name, provider: inst.provider, model: inst.model ?? seen, started_by: inst.started_by, cwd: inst.cwd, prompt_ref: inst.prompt_ref,
     handover_ref: inst.handover_ref, remote_control_url: inst.remote_control_url, start: inst.start, end: inst.end,
+    ...(inst.source ? { source: inst.source } : {}), ...(inst.start_source ? { start_source: inst.start_source, recorded_start: inst.recorded_start } : {}),
     elapsed_ms: Math.max(0, (inst.end ?? nowMs) - inst.start), active_ms: mine.length ? active : null, turns: mine.length, tokens,
     billing: sub ? 'subscription' : 'metered', cost_usd: cost,
     days: [...days.values()].map((d) => ({ day: d.day, turns: d.turns, tokens: d.tokens, cost_usd: sub || d.unpriced ? null : r6(d.cost_usd) })),
@@ -98,16 +134,17 @@ export function createHistoryView({ history, ledgerFile, now = Date.now }) {
     if (q.status && !['running', 'ended'].includes(q.status)) throw Object.assign(new Error('status must be running|ended'), { status: 400 });
     const limit = Math.min(200, Math.max(1, Number.parseInt(q.limit, 10) || 50)), offset = Math.max(0, Number.parseInt(q.offset, 10) || 0);
     const led = await ledger(), t = now();
-    const all = history.instances().map((i) => summarize(i, led, t));
+    const all = withLedger(history.instances(), led).map((i) => summarize(i, led, t));
     const rows = all.filter((r) => (!q.provider || r.provider === q.provider) && (!q.model || r.model === q.model) && (!q.started_by || r.started_by === q.started_by)
       && (from == null || r.start >= from) && (to == null || r.start <= to) && (!q.status || (q.status === 'running') === (r.end == null)))
       .sort((a, b) => b.start - a.start);
     return { ok: true, total: rows.length, offset, limit, sessions: rows.slice(offset, offset + limit) };
   }
   async function detail(name, start) {
-    const l = history.instances().filter((i) => i.name === name);
-    const inst = start != null && start !== '' ? l.find((i) => i.start === Number(start)) : l[l.length - 1];
-    return inst ? summarize(inst, await ledger(), now()) : null;
+    const led = await ledger();
+    const l = withLedger(history.instances(), led).filter((i) => i.name === name).sort((a, b) => a.start - b.start);
+    const inst = start != null && start !== '' ? l.find((i) => i.start === Number(start) || i.recorded_start === Number(start)) : l[l.length - 1];
+    return inst ? summarize(inst, led, now()) : null;
   }
   return { list, detail };
 }
