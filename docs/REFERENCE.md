@@ -505,7 +505,7 @@ A hold is stored in `sessions.json` as `held:{by:'manager',reason,at}`, separate
 "If there is no reason not to merge, you should." A merge is no longer a hard forbidden topic: `stall.js` splits the
 floor (`topicSplit(text)` -> `{ merge, hard }`). `forbiddenMatch` / `FORBIDDEN_RE` still match a merge, so every path
 other than the merge evaluation stays fail-closed. A plain push to main/master (or with no explicit refspec) counts as the landing of a merge only when
-the same text asks for a merge; force-push, `--force` / `-f`, `+refspec`, delete pushes, pushes to other refs or to prod / staging / live, history rewrites, hard reset and rebase onto main stay hard.
+the same text asks for a merge; force-push, `--force` / `-f`, `+refspec`, delete pushes, tag pushes, pushes to prod / staging / live, history rewrites, hard reset and rebase onto main stay hard. A push decision (round 8) only pushes a branch to its own `origin/<branch>`; main moves only through a decided merge.
 
 For a stop that asks about a merge, the manager runs `evaluateMerge` (`merge-policy.js`) in the session's checkout,
 without fetch, checkout or any ref, index or work-tree change (`git merge-tree --write-tree` writes loose objects only; async git with timeouts). It answers "merge" only when all hold:
@@ -544,10 +544,13 @@ prints one JSON line `{verdict, reasons, rationale, ...}`.
 ### Autonomy by default: push, deploy and recommended options (owner, 2026-10-14)
 
 OWNER_DECISIONS §15 ("yes merge, yes push, yes deploy, yes do the recommended one ... the correction can come at the
-end"). `topicSplit(text)` returns `{ merge, push, deploy, hard }`; `FORBIDDEN_RE` / `forbiddenMatch` are unchanged for
-every other caller. The hard floor: deletions of data, credentials and secrets, money, customers, `systemctl` / `pm2` /
-sudoers / unit files, production database migrations, force-push and history rewrites (`-f`, `--force-with-lease`,
-`--mirror`, `--delete`, `+ref`, `:ref`, pushes to prod/staging/live), publishing a package.
+end"). `topicSplit(text)` returns `{ merge, push, deploy, hard }`. A push or deploy counts only when the session asks to do
+it ("should I deploy ...", "push the branch?"), not when it names a feature ("the deploy queue page"). The hard floor:
+deletions of data, credentials and secrets, money, customers, `systemctl` / `pm2` / `sudo` / sudoers / unit files /
+reboots, database migrations and migration tools (`alembic`, `prisma migrate`, ...), database resets, force-push and
+history rewrites (`-f`, `--force-with-lease`, `--mirror`, `--delete`, `+ref`, `:ref`, pushes to prod/staging/live), tag
+pushes and publishing a package. Round 8 added the sudo, unit-file, reboot and migration-tool words to `FORBIDDEN_RE`
+too, which only makes every other caller stricter.
 
 For a finished turn without a live menu, the manager evaluates every decidable topic present (merge, then push, then
 deploy), answers the passing ones in one reply and escalates the rest with what was already answered:
@@ -555,13 +558,14 @@ deploy), answers the passing ones in one reply and escalates the rest with what 
 | Kind | Answered when | Module |
 |---|---|---|
 | merge | round 7 rules (above) | `merge-policy.js` |
-| push | the push fast-forwards `origin/<dest>`; tests green on the branch or docs-only; nothing sensitive (scan fail-closed); not opted out (`pushOptOut`, plus `mergeOptOut`); Jev point `push` or reasoning at `pushMinConfidence` (0.85) | `decide-policy.js` `evaluatePush` |
-| deploy | through the deploy queue with `deployRunner` on; the environment named (or the only one); no other agent's lease blocks the scope; tests green on the ref, or on the session's branch already merged into it; no database migration between the last deployed commit and the ref; not in `deployOptOut`; Jev point `deploy` or reasoning at `deployMinConfidence` (0.85). The reply carries a one-line rollback (a deploy of the previous ref) | `decide-policy.js` `evaluateDeploy` |
-| recommended option | `menu_recommended` is on by default: the recommended option's own text has no hard topic; a merge/push/deploy option is evaluated first (a live menu gets only its key) | `manager.js` |
+| push | one branch, pushed to its own `origin/<branch>` (a push onto main or another ref escalates: main moves through a decided merge) and fast-forwarding it; local commits on the target are scanned too after a merge; tests green on the branch or docs-only; nothing sensitive (scan fail-closed); not opted out (`pushOptOut`, plus `mergeOptOut`); Jev point `push` or reasoning at `pushMinConfidence` (0.85) | `decide-policy.js` `evaluatePush` |
+| deploy | asked for explicitly; through the deploy queue with `deployRunner` on; exactly one configured environment named (or the only one, and no unknown target such as "production" named); no blocking lease on the scope; tests green on the ref (an unnamed report only when the session's HEAD is the ref), or on the session's branch already merged into it; no database migration between the last deployed commit and the ref (no deployed commit known: escalate); not in `deployOptOut`; Jev point `deploy` or reasoning at `deployMinConfidence` (0.85). The reply carries a one-line rollback (a deploy of the previously deployed commit, or "previous release unknown") | `decide-policy.js` `evaluateDeploy` |
+| recommended option | `menu_recommended` is on by default: neither the question nor the recommended option has a hard topic (a generic "Yes" / "Proceed" inherits the question's topic; only the other options may mention anything); a merge/push/deploy option is evaluated first (a live menu gets only its key) | `manager.js` |
 
 Defaults: `autoSend: true`, `autoCases: ['continue', 'menu_recommended']`, `mergeDecisions` / `pushDecisions` /
-`deployDecisions` true. A saved `manager.json` is migrated once (`autonomyVersion: 1`: `menu_recommended` added, push and
-deploy decisions on unless set); later owner changes are kept. `deployRunner` stays off by default, and with it off a
+`deployDecisions` true. A saved `manager.json` is migrated once (`autonomyVersion: 1`: `menu_recommended` added even where the
+owner had chosen `continue` only, push and deploy decisions on unless set, a saved `autoSend: false` kept; one feed notice
+says so); later owner changes are kept. An unreadable `manager.json` keeps auto-answer off for that run. `deployRunner` stays off by default, and with it off a
 deploy escalates ("deploy runner off").
 
 Every decision goes to `<state>/manager-decisions.jsonl` (`kind` merge|push|deploy|menu; round-7

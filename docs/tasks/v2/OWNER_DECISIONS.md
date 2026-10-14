@@ -360,11 +360,13 @@ I need a better ability to hear and engage by voice. My goal: I go to the gym or
   no production data migration; the notice carries a one-line rollback. "Do the recommended option" (`menu_recommended`)
   is on by default when the recommended option is not on a hard floor.
 - **This replaces the earlier "automatic answering defaults off" invariant**: a fresh install starts with `autoSend` on
-  and `autoCases` `continue` + `menu_recommended`; a saved config gets `menu_recommended`, push and deploy decisions once
-  (`autonomyVersion` 1) and keeps every later owner change. Every capability keeps its switch.
+  and `autoCases` `continue` + `menu_recommended`; a saved config gets `menu_recommended` (also where the owner had chosen
+  `continue` only), push and deploy decisions once (`autonomyVersion` 1, with one feed notice) and keeps a saved
+  `autoSend: false` and every later owner change. Every capability keeps its switch.
 - **Remaining hard floors (owner only):** deletions of data; credentials and secrets; money; customers; sudoers and
   units on hosts (`systemctl`, `pm2`, unit files); production database migrations. Force-push and history rewrites,
-  pushes to other refs or to prod/staging/live outside the deploy queue, and publishing a package stay hard as well.
+  pushes to prod/staging/live outside the deploy queue, tag pushes and publishing a package stay hard as well; a push
+  decision only pushes a branch to its own remote branch (main moves through a decided merge).
   A mixed question is split: the decidable parts are answered, the hard part escalated with what was already answered.
 - **Correct at the end:** a "Decided for you" list (dashboard, `GET /api/manager/decided`) and a daily digest of every
   answer the manager gave on the owner's behalf, with one-tap revert (merge, push, deploy rollback) or a prefilled
