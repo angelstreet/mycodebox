@@ -52,7 +52,7 @@ test('1. merge question, tests green, clean merge: the manager answers "merge", 
   assert.match(typed[0].text, /Merge: yes - the manager evaluated proj feat -> main/);
   assert.match(typed[0].text, /Merge it now\.$/);
   assert.doesNotMatch(typed[0].text, /rest of your question/);
-  const j = lines(join(dir, 'merge-decisions.jsonl'));
+  const j = lines(join(dir, 'manager-decisions.jsonl'));
   assert.equal(j.length, 1);
   assert.deepEqual(validateDecision(j[0]).errors, []);
   assert.equal(j[0].chosen, 'merge'); assert.equal(j[0].session, 's1'); assert.equal(j[0].repo, 'proj');
@@ -74,7 +74,7 @@ test('2. red tests escalate with the reason; unknown tests escalate with "no gre
   const mine = owner.slice(o);
   assert.match(mine.find((x) => x.session === 's2').reason, /merge not decided: tests reported red: .*2 failed/);
   assert.match(mine.find((x) => x.session === 's3').reason, /merge not decided: no green test report on the branch/);
-  const recs = lines(join(dir, 'merge-decisions.jsonl'));
+  const recs = lines(join(dir, 'manager-decisions.jsonl'));
   assert.equal(recs.filter((r) => r.chosen === 'escalate').length, 2);
   assert.ok(notices.filter((x) => x.rec.chosen === 'escalate').length === 2);
 });
@@ -100,7 +100,7 @@ test('4. merge + deploy: the merge is answered, the deploy goes to the owner, th
   assert.doesNotMatch(t, /deploy/i);
   const e = owner.slice(o).find((x) => x.session === 's6');
   assert.ok(e, 'escalated');
-  assert.match(e.reason, /deploy question/); assert.match(e.reason, /merge answered by the manager/);
+  assert.match(e.reason, /deploy not decided: deploy runner off/); assert.match(e.reason, /merge answered by the manager/);   // round 8: the deploy is evaluated, and escalated by its floor
 });
 
 test('5. a mixed ask: the information is answered from the docs, with its source', async () => {
@@ -143,7 +143,7 @@ test('Jev: escalate or low confidence escalates; a confident merge goes through'
   jevReply = { success: true, decision_id: 'jv-3', answers: { choice: { choice: 'merge', confidence: 0.95 } } };
   await stop('j3', makeRepo(), `${GREEN}\n\nShould I merge feat into main?`);
   assert.equal(typed.length, n + 1);
-  assert.equal(lines(join(dir, 'merge-decisions.jsonl')).find((r) => r.session === 'j3').jev_decision_id, 'jv-3');
+  assert.equal(lines(join(dir, 'manager-decisions.jsonl')).find((r) => r.session === 'j3').jev_decision_id, 'jv-3');
   jevReply = { skipped: 'not configured' };
 });
 
@@ -191,8 +191,8 @@ test('fire-time gates: turned off, or a raised confidence floor, during the coun
 
 test('fire-time gate: a manager_decision reply is re-checked against the hard floor (source)', () => {
   const src = readFileSync(new URL('../manager.js', import.meta.url), 'utf8');
-  assert.match(src, /hardMatch\(auto\.answer\?\.text \|\| '', \{ mergePresent: !!auto\.merge \}\)/);
-  assert.match(src, /decisionBlock\(name, auto\.confidence/);
+  assert.match(src, /hardMatch\(auto\.answer\?\.text \|\| '', hardOpts\)/);
+  assert.match(src, /decisionBlock\(name, kinds\)/);
 });
 
 test('config validation', async () => {
@@ -260,5 +260,5 @@ test('M11: a held manager reply is released by the quota recovery through decisi
 
 test('R2-2: partialDecision rechecks the stop after the information lookups', () => {
   const src = readFileSync(new URL('../manager.js', import.meta.url), 'utf8');
-  assert.match(src, /lookupInfo\(p, \{ roots \}\)[\s\S]*?if \(w\.hash !== h\) return out;[\s\S]*?let ev = null, record = null;/);
+  assert.match(src, /lookupInfo\(p, \{ roots \}\)[\s\S]*?if \(w\.hash !== h\) return out;[\s\S]*?const wanted = s\.cwd \? topicsWanted/);
 });

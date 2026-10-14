@@ -2379,3 +2379,18 @@ body:not(.res-hidden) .fgrp{ display:none; }
   .hs-refs{ gap:0; flex-direction:row; flex-wrap:wrap; column-gap:16px; }
   .hs-row .hs-ref .hs-k{ display:inline; }
 }
+
+/* ----- Decided for you (public/decided-view.js) ----- */
+.dv-sum{ margin:2px 0 8px; font-size:12.5px; color:var(--ink-2); display:flex; gap:6px; align-items:flex-start; }
+.dv-hour{ margin-top:12px; }
+.dv-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.dv-item{ background:var(--bg-3); border:1px solid var(--line-2); border-left:4px solid var(--idle); border-radius:10px; padding:9px 11px; font-size:12.5px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+.dv-merge, .dv-push, .dv-deploy{ border-left-color:var(--accent); }
+.dv-top{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dv-time{ color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.dv-sess{ display:inline-flex; align-items:center; gap:2px; color:var(--ink); font-weight:600; text-decoration:none; }
+.dv-what{ overflow-wrap:anywhere; } .dv-why{ color:var(--ink-2); overflow-wrap:anywhere; }
+.dv-ev{ margin:2px 0 0; padding-left:16px; color:var(--ink-3); font-size:11.5px; }
+.dv-foot{ display:flex; justify-content:flex-end; }
+.dv-act.armed{ outline:2px solid var(--accent); }
+.hs-filters .sbtn.on{ border-color:var(--accent); }

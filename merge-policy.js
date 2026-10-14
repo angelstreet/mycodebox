@@ -115,7 +115,7 @@ const CODE_EXT = /\.(?:m?[jt]sx?|cjs|py|sh|bash|ps1|psm1|bat|cmd|rb|go|rs|java|c
 const DOC_NAMES = /(^|\/)(?:LICENSE|CHANGELOG|NOTICE|AUTHORS|CONTRIBUTING|CODEOWNERS)(?:\.(?:md|txt))?$/;
 export const isDocFile = (f) => /\.(?:md|markdown)$/i.test(f) || DOC_NAMES.test(f) || (/^docs\//.test(f) && !CODE_EXT.test(f));
 const DOC_IMAGE = /^docs\/.*\.(?:png|jpe?g|gif|svg)$/i;
-const isConvention = (f, conv) => conv.some((c) => f === c || basename(f) === c);
+export const isConvention = (f, conv) => conv.some((c) => f === c || basename(f) === c);
 const SENSITIVE_CONTENT = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key'], [/AKIA[0-9A-Z]{16}/, 'cloud access key'], [/ghp_[A-Za-z0-9]{30,}/, 'git host token'],
   [/xox[baprs]-[A-Za-z0-9-]{10,}/, 'chat token'], [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/, 'api key'],
@@ -137,7 +137,7 @@ export function sensitivePath(f) {
 
 // Repo names the opt-out list is matched against: the toplevel dir (a worktree's own name), the main repo dir behind a
 // worktree, and the origin remote's repo name.
-async function repoNames(repo) {
+export async function repoNames(repo) {
   const names = new Set([basename(repo)]);
   const cd = await git(repo, ['rev-parse', '--git-common-dir']);
   if (cd.code === 0 && cd.out.trim()) { const c = resolve(repo, cd.out.trim()); names.add(basename(basename(c) === '.git' ? dirname(c) : c).replace(/\.git$/, '')); }
@@ -145,6 +145,32 @@ async function repoNames(repo) {
   if (ro.code === 0) { const n = ro.out.trim().replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop(); if (n) names.add(n); }
   names.delete('');
   return [...names];
+}
+
+// Files, docs-only, sensitive paths / content and binaries of a diff spec ("a...b"). -> { error } | { facts }. A scan that cannot
+// read the whole diff sets scanError (fails closed in the floors).
+export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles) {
+  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] };
+  const names2 = await git(repo, ['diff', '--name-only', '-z', spec]);
+  if (names2.code !== 0) return { error: `git diff failed: ${names2.err || 'unknown'}` };
+  out.files = names2.out.split('\0').filter(Boolean);
+  const real = out.files.filter((f) => !isConvention(f, conventionFiles));
+  out.docsOnly = real.length > 0 ? real.every(isDocFile) : out.files.length > 0;
+  for (const f of out.files) { const why = sensitivePath(f); if (why) out.sensitive.push({ file: f, why }); }
+  // added lines only, capped at 2 MB; an unreadable, timed-out or truncated scan fails closed (mergeFloor)
+  const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec], { max: 2 * 1024 * 1024 });
+  if (diff.code !== 0 || diff.truncated || diff.timedOut) out.scanError = diff.truncated ? 'larger than 2 MB' : diff.err || 'unreadable';
+  let file = null;
+  for (const line of diff.out.split('\n')) {
+    if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); continue; }
+    const bin = /^Binary files (.*) and (.*) differ$/.exec(line);
+    if (bin) { if (bin[1] === '/dev/null') { const nf = bin[2].replace(/^b\//, ''); if (!DOC_IMAGE.test(nf)) out.binary.push(nf); } continue; }
+    if (!line.startsWith('+')) continue;
+    for (const [re, label] of SENSITIVE_CONTENT) {
+      if (re.test(line) && !out.sensitive.some((s) => s.file === file && s.why === 'secret-content')) out.sensitive.push({ file, why: 'secret-content', what: label });
+    }
+  }
+  return { facts: out };
 }
 
 export async function gitFacts({ cwd, branch, target, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
@@ -192,29 +218,13 @@ export async function gitFacts({ cwd, branch, target, conventionFiles = MERGE_DE
   }
   out.conflicts = [...conflicts];
   out.conventionOnly = out.conflicts.length > 0 && out.conflicts.every((f) => isConvention(f, conventionFiles));
-  const names2 = await git(repo, ['diff', '--name-only', '-z', `${tRef}...${bRef}`]);
-  if (names2.code !== 0) return { ...out, ok: false, error: `git diff failed: ${names2.err || 'unknown'}` };
-  out.files = names2.out.split('\0').filter(Boolean);
-  const real = out.files.filter((f) => !isConvention(f, conventionFiles));
-  out.docsOnly = real.length > 0 ? real.every(isDocFile) : out.files.length > 0;
-  for (const f of out.files) { const why = sensitivePath(f); if (why) out.sensitive.push({ file: f, why }); }
-  // added lines only, capped at 2 MB; an unreadable, timed-out or truncated scan fails closed (mergeFloor)
-  const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', `${tRef}...${bRef}`], { max: 2 * 1024 * 1024 });
-  if (diff.code !== 0 || diff.truncated || diff.timedOut) out.scanError = diff.truncated ? 'larger than 2 MB' : diff.err || 'unreadable';
-  let file = null;
-  for (const line of diff.out.split('\n')) {
-    if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); continue; }
-    const bin = /^Binary files (.*) and (.*) differ$/.exec(line);
-    if (bin) { if (bin[1] === '/dev/null') { const nf = bin[2].replace(/^b\//, ''); if (!DOC_IMAGE.test(nf)) out.binary.push(nf); } continue; }
-    if (!line.startsWith('+')) continue;
-    for (const [re, label] of SENSITIVE_CONTENT) {
-      if (re.test(line) && !out.sensitive.some((s) => s.file === file && s.why === 'secret-content')) out.sensitive.push({ file, why: 'secret-content', what: label });
-    }
-  }
+  const sc = await scanRange(repo, `${tRef}...${bRef}`, conventionFiles);
+  if (sc.error) return { ...out, ok: false, error: sc.error };
+  Object.assign(out, sc.facts);
   return out;
 }
 
-const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', deploy: 'a CI/deploy/infra path', 'secret-content': 'secret-looking content' };
+export const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', deploy: 'a CI/deploy/infra path', 'secret-content': 'secret-looking content' };
 // Reasons to escalate; empty = the manager may proceed.
 export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
   if (!facts) return ['not a git repository or git error'];
@@ -240,7 +250,7 @@ export function reasoningDecision(facts, ev) {
   return { source: 'reasoning', choice: 'merge', confidence: strong ? 0.9 : 0.8 };
 }
 
-const short = (sha) => String(sha || '').slice(0, 12);
+export const short = (sha) => String(sha || '').slice(0, 12);
 function summarize(facts, ev) {
   const bits = [];
   bits.push(facts.conflicts?.length ? `merges with convention-file conflicts only (${facts.conflicts.join(', ')})` : 'merges cleanly');
@@ -283,7 +293,7 @@ export async function evaluateMerge({ cwd, text, session = null, config = {}, je
   return done('merge', [], decision);
 }
 
-// A record for <state>/merge-decisions.jsonl, shaped like a V2 decision (orchestration/task-contract.js validateDecision).
+// A record for <state>/manager-decisions.jsonl (round 7: merge-decisions.jsonl), shaped like a V2 decision (orchestration/task-contract.js validateDecision).
 export function journalRecord(ev, { id, session = null, at = new Date() } = {}) {
   const f = ev.facts || {}, d = ev.decision || {};
   const ts = at instanceof Date ? at.toISOString() : typeof at === 'number' ? new Date(at).toISOString() : String(at);
@@ -318,27 +328,42 @@ export function journalRecord(ev, { id, session = null, at = new Date() } = {}) 
   };
 }
 
-// One reply for the session: the information answers, the merge answer and (when anything remains) a pointer to the owner.
-// info = [{ part, answer, source }], merge = { branch, target, rationale } | null. -> { text, info: [kept indexes], merge: bool } | null.
-// Every line must pass the hard floor (merge present); a line that would trip it is dropped, never reworded.
-export function composeReply({ info = [], merge = null, remaining = false } = {}) {
+// One reply for the session: the information answers, the merge / push / deploy answers and (when anything remains) a pointer to the owner.
+// info = [{ part, answer, source }], merge = { repo, branch, target, rationale } | null, push = { repo, branch, dest, rationale } | null,
+// deploy = { env, scope, ref, sha, rationale, rollback } | null. -> { text, info: [kept indexes], merge, push, deploy: bool } | null.
+// Every line must pass the hard floor with only the decided topics exempt; a line that would trip it is dropped, never reworded.
+export function composeReply({ info = [], merge = null, push = null, deploy = null, remaining = false } = {}) {
   const lines = [], keptInfo = [];
   const label = (p) => String(p || '').replace(/^\s*(?:\(?[a-z0-9]\)|\d+[.)])\s*/i, '').replace(/[\s,;:.?]+$/, '').replace(/^(?:and|plus)\s+/i, '').replace(/^./, (c) => c.toUpperCase()).slice(0, 80);
+  const present = { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy };
   info.forEach((i, n) => {
     const line = `${label(i.part)}: ${i.answer}${i.source ? ` (from ${i.source})` : ''}`;
-    if (hardMatch(line, { mergePresent: !!merge })) return;   // the merge landing is exempt only in a reply that carries a merge verdict
+    if (hardMatch(line, present)) return;   // a landing is exempt only in a reply that carries its verdict
     lines.push(line); keptInfo.push(n);
   });
-  let mergeUsed = false;
+  const used = { merge: false, push: false, deploy: false };
+  // a topic line: the full one, else the bare one; checked with only the topics used so far (plus itself) exempt
+  const add = (kind, full, bare) => {
+    const ok = (l) => !hardMatch(l, { mergePresent: used.merge || kind === 'merge', pushPresent: used.push || kind === 'push', deployPresent: used.deploy || kind === 'deploy' });
+    const line = ok(full) ? full : ok(bare) ? bare : null;
+    if (line) { lines.push(line); used[kind] = true; }
+  };
   if (merge) {
-    const full = `Merge: yes - the manager evaluated ${merge.repo ? merge.repo + ' ' : ''}${merge.branch} -> ${merge.target}: ${merge.rationale}. Merge it now.`;
-    const bare = `Merge: yes - the manager evaluated ${merge.repo ? merge.repo + ' ' : ''}${merge.branch} -> ${merge.target}. Merge it now.`;
-    const line = !hardMatch(full, { mergePresent: true }) ? full : !hardMatch(bare, { mergePresent: true }) ? bare : null;
-    if (line) { lines.push(line); mergeUsed = true; }
+    const r = merge.repo ? merge.repo + ' ' : '';
+    add('merge', `Merge: yes - the manager evaluated ${r}${merge.branch} -> ${merge.target}: ${merge.rationale}. Merge it now.`, `Merge: yes - the manager evaluated ${r}${merge.branch} -> ${merge.target}. Merge it now.`);
+  }
+  if (push) {
+    const r = push.repo ? push.repo + ' ' : '';
+    add('push', `Push: yes - ${r}${push.branch} -> origin/${push.dest}: ${push.rationale}. Push it now.`, `Push: yes - ${r}${push.branch} -> origin/${push.dest}. Push it now.`);
+  }
+  if (deploy) {
+    const head = `Deploy: yes - ${deploy.env} ${deploy.scope} ${deploy.ref}@${String(deploy.sha || '').slice(0, 12)}`;
+    const tail = `Request it through the deploy queue; the runner starts it when nothing blocks. ${deploy.rollback || 'Rollback: request a deploy of the previous release.'}`;
+    add('deploy', `${head}: ${deploy.rationale}. ${tail}`, `${head}. ${tail}`);
   }
   if (!lines.length) return null;
   if (remaining) lines.push('The rest of your question went to the owner: wait for their answer on it.');
   const text = lines.join(' ');
-  if (hardMatch(text, { mergePresent: mergeUsed })) return null;
-  return { text, info: keptInfo, merge: mergeUsed };
+  if (hardMatch(text, { mergePresent: used.merge, pushPresent: used.push, deployPresent: used.deploy })) return null;
+  return { text, info: keptInfo, merge: used.merge, push: used.push, deploy: used.deploy };
 }

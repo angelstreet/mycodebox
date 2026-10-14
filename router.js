@@ -269,7 +269,36 @@ const merge = {
   ruleDefault() { return 'merge'; },
 };
 
-export const POINTS = { wake, builder, reviewer, retry, stop, model, merge };
+// ---- push / deploy (round 8, OWNER_DECISIONS §15) ----
+// Same shape as merge: the floor (decide-policy.js) arrives as facts.floor_reasons and forces escalate.
+const push = {
+  usage: 'text.decision.manager',
+  options: {
+    push: 'the commits fast-forward the remote branch, tests are reported green or it is docs/test-only, and the diff touches no secrets, migrations, sudoers or units: pushing is safe and reversible with a revert',
+    escalate: 'a reason not to push: a force push, red or missing tests, a risky or sensitive change, or anything unclear',
+  },
+  instructions: 'Is it safe for the manager to tell this session to push the branch to origin, or should the owner decide?',
+  floor(facts) {
+    const r = asArray(facts?.floor_reasons);
+    return { allowed: ['push', 'escalate'], forced: r.length ? 'escalate' : null, reasons: r.length ? r.map(String) : [] };
+  },
+  ruleDefault() { return 'push'; },
+};
+const deploy = {
+  usage: 'text.decision.manager',
+  options: {
+    deploy: 'the environment is free of other agents\' leases, tests are green on the ref, no database migration is in the deployed range: requesting the deploy through the queue is safe and rolls back with a deploy of the previous ref',
+    escalate: 'a reason not to deploy: a lease held by another agent, red or unknown tests, a database migration, an unknown environment, or anything unclear',
+  },
+  instructions: 'Is it safe for the manager to tell this session to request this deploy through the deploy queue, or should the owner decide?',
+  floor(facts) {
+    const r = asArray(facts?.floor_reasons);
+    return { allowed: ['deploy', 'escalate'], forced: r.length ? 'escalate' : null, reasons: r.length ? r.map(String) : [] };
+  },
+  ruleDefault() { return 'deploy'; },
+};
+
+export const POINTS = { wake, builder, reviewer, retry, stop, model, merge, push, deploy };
 export const SUGGEST_ONLY = new Set(['model']);
 export { STOP_FLOOR_TOPICS, STOP_V1 };
 

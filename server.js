@@ -30,7 +30,9 @@
 //   GET  /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset= → Jev decisions, newest first (the server's log, else the manager's own; /?decisions=1)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
-//   GET  /api/manager/merge-decisions?limit=50 → newest merge-decisions.jsonl lines first: every merge the manager decided or escalated (merge-policy.js, OWNER_DECISIONS §14)
+//   GET  /api/manager/merge-decisions?limit=50 → newest journal lines first, kind merge only (alias; the journal is manager-decisions.jsonl + the round-7 merge-decisions.jsonl)
+//   GET  /api/manager/decided?hours=24|since=<iso>&limit=100 → { items, summary }: everything the manager answered for the owner (decided.js, OWNER_DECISIONS §15)
+//   POST /api/manager/decided/:id/revert {by?} → merge/push/deploy: sends the revert text to the session (409 unless it is stopped with no draft); other kinds: { draft }
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
@@ -92,7 +94,8 @@ import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, MERGE_FILE, jevBreaker } from './manager.js';
+import { revertPlan } from './decided.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -1763,9 +1766,31 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/manager/merge-decisions') {
     const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 50));
-    let lines = [];
-    try { lines = (await readFile(MERGE_FILE, 'utf8')).trim().split('\n').filter(Boolean); } catch {}
-    return json(res, 200, { decisions: lines.slice(-limit).reverse().map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) });
+    return json(res, 200, { decisions: (await readJournal()).filter((r) => r.kind === 'merge').slice(-limit).reverse() });
+  }
+  if (req.method === 'GET' && p === '/api/manager/decided') {
+    const q = url.searchParams;
+    try { return json(res, 200, await decidedView({ hours: q.get('hours') || 24, since: q.get('since') || null, limit: q.get('limit') || 100 })); }
+    catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  const rv = req.method === 'POST' && /^\/api\/manager\/decided\/([^/]+)\/revert$/.exec(p);
+  if (rv) {
+    try {
+      const id = decodeURIComponent(rv[1]);
+      const b = await readJsonBody(req);
+      const by = actorOf(b || {});
+      const item = await decidedItem(id);
+      const exists = item ? await sessionExists(item.session) : false;
+      const st = exists && ['merge', 'push', 'deploy'].includes(item.kind) ? (await poll()).status?.[item.session] : null;
+      const plan = revertPlan(item, { exists, state: st?.state ?? null, draft: !!st?.stall?.draft });
+      if (plan.error) throw httpError(plan.status, plan.error);
+      if (plan.draft) return json(res, 200, { ok: true, draft: plan.draft, label: plan.label, session: item.session });
+      await assertAgentPane(item.session, plan.by);
+      await sendKeys(item.session, plan.send, true);
+      logSend(item.session, plan.by, { keys: plan.send });
+      await logRevert({ id, session: item.session, by });
+      return json(res, 200, { ok: true, sent: true, session: item.session, text: plan.send });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager/events') {   // tail of manager-events.jsonl (newest last); a freshly-started manager agent catches up
     const q = url.searchParams;
@@ -1963,11 +1988,18 @@ server.listen(PORT, HOST, async () => {
     onHandoff: async (session, text, at) => { await handoffs.fromStop(session, text, at); },
     onMergeCancelled: (session, r) => push.record({ title: `Merge reply not sent: ${session}`, body: String(r.reason).slice(0, 300), url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision' }),
     // a merge the manager decided or escalated: a notice in the owner's feed (no push)
-    onMergeDecision: (session, r) => push.record({
-      title: `${r.chosen === 'merge' ? 'Merge approved (reply pending)' : 'Merge escalated'}: ${session}`,
-      body: `${r.branch} -> ${r.target}: ${r.chosen === 'merge' ? r.rationale : (r.reasons || []).join('; ') || r.rationale}${r.chosen === 'merge' ? ` Revert: git revert -m 1 <merge sha>` : ''}`,
-      url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision',
-    }),
+    onMergeDecision: (session, r) => {
+      const kind = r.kind === 'push' || r.kind === 'deploy' ? r.kind : 'merge', yes = r.chosen === kind, Kind = kind[0].toUpperCase() + kind.slice(1);
+      const what = kind === 'merge' ? `${r.branch} -> ${r.target}` : kind === 'push' ? `${r.branch} -> origin/${r.dest}` : `${r.ref} -> ${r.env} (${r.scope})`;
+      const undo = kind === 'merge' ? 'Revert: git revert -m 1 <merge sha>' : kind === 'push' ? 'Revert: git revert the pushed commits' : String(r.rollback || '');
+      push.record({ title: `${Kind} ${yes ? 'approved (reply pending)' : 'escalated'}: ${session}`, body: `${what}: ${yes ? r.rationale : (r.reasons || []).join('; ') || r.rationale}${yes && undo ? ` ${undo}` : ''}`,
+        url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision' });
+    },
+    decideContext: () => { const snap = deployRunner.snapshot(); return { deploys: snap, leases: leaseStore.peek(), envs: snap.envs || [] }; },
+    onDigest: ({ day, count, text }) => {
+      push.record({ title: `Decided for you today: ${count}`, body: text, url: '/?decided=1', tag: 'decided-digest' });
+      alert(`decided:digest:${day}`, { title: `Decided for you today: ${count}`, body: text, url: '/?decided=1', tag: 'ghosty-decided', tier: 'digest', ntfyTags: 'white_check_mark' }, 0);
+    },
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.
@@ -1976,6 +2008,7 @@ server.listen(PORT, HOST, async () => {
   leaseTick();
   setInterval(leaseTick, 15000);
   setInterval(digestTick, 60000);   // digest tier: one push per 30 min while the owner is awake
+  setInterval(() => decidedDigestTick().catch((e) => console.error('[decided-digest]', e.message)), 60000).unref?.();   // "Decided for you today", once a day
   healthTick();
   setInterval(healthTick, HEALTH_MS);
   const usageTick = () => usage.get().catch(() => {});   // one small file read per 30 s keeps the status field cheap

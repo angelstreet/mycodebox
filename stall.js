@@ -218,17 +218,40 @@ export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
 // The merge topic alone, and the floor without it: a merge is decided by the manager's merge evaluation (merge-policy.js);
 // the push that lands it is part of the merge (excluded from hardMatch only when a merge is present).
 export const MERGE_RE = /\bmerg(?:e|es|ed|ing)\b/i;
+const PUSH_COLON = String.raw`\bpush(?:ed|es|ing)?\b[^.\n]*:\S`;
+const PUSH_COLON_RE = new RegExp(PUSH_COLON, 'i');
 // History rewrites and pushes that are not the plain landing of a merge stay hard whatever else the text says.
 const HARD_EXTRA = [
-  String.raw`\bpush(?:ed|es|ing)?\b[^.\n]*(?:--force\b|--force-with-lease|--mirror|--delete\b|\s-f\b|\s\+\S|:\S)`,   // push --force, push -f, push origin +main, push origin :old, push origin HEAD:production
+  String.raw`\bpush(?:ed|es|ing)?\b[^.\n]*(?:--force\b|--force-with-lease|--mirror|--delete\b|\s-f\b|\s\+\S)`,   // push --force, push -f, push origin +main
+  PUSH_COLON,   // push origin :old, push origin HEAD:production (read on the text and its spellings, not on joined words: "Push:yes" is not a refspec)
   String.raw`\bpush(?:ed|es|ing)?\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])`,
   String.raw`\brewrit(?:e|es|ing|ten)\b[^.\n]{0,20}\bhistory\b|\bamend(?:ed|ing|s)?\b[^.\n]{0,40}\b(?:commit|main|master)\b|\bfilter-(?:branch|repo)\b`,
 ];
+// Topic split (round 8): merge, push and deploy are decided by the manager (OWNER_DECISIONS §15); the rest stays hard.
+// Deploy topic parts come from FORBIDDEN_PARTS (deploy words, ship/release/promote to prod, go live) plus a restart of a service-like thing.
+const DEPLOY_WORDS = FORBIDDEN_PARTS[0], DEPLOY_SHIP = FORBIDDEN_PARTS[3], RESTART_ANY = FORBIDDEN_PARTS[2];
+const RESTART_DEPLOY = String.raw`\brestart\b[^.\n]{0,30}\b(?:service|server|host|daemon|ghosty|frontend|backend)\b`;
+const RESTART_UNIT = String.raw`\brestart\b[^.\n]{0,30}\bunit\b`;
+const PUBLISH_TAGS = FORBIDDEN_PARTS[4];
+const PUBLISH_ONLY = String.raw`\bpublish(?:ed|ing)?\b|\bterraform\b[^.\n]{0,20}\b(?:apply|destroy)\b|\bapply\b[^.\n]{0,20}\bterraform\b`;
+export const DEPLOY_RE = new RegExp([DEPLOY_WORDS, DEPLOY_SHIP, RESTART_DEPLOY].join('|'), 'i');
+// A push mention: the present tense or a "pushed to main"; whether it is hard is decided by HARD_PUSH_RE.
+export const PUSH_RE = /\bpush(?:ing)?\b|\bpushed\b[^.\n]{0,30}\bmain\b/i;
+const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON), HARD_GIT].join('|'), 'i');
+const colonHit = (text) => { for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_COLON_RE); if (k) return k[0]; } return null; };
+const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false } = {}) => {
+  const drop = new Set([MERGE_MAIN]);
+  if (mergePresent || pushPresent) { drop.add(PUSH_MAIN); drop.add(GIT_PUSH); }
+  if (deployPresent) { drop.add(DEPLOY_WORDS); drop.add(DEPLOY_SHIP); drop.add(RESTART_ANY); }
+  let parts = [...FORBIDDEN_PARTS.filter((p) => !drop.has(p)), ...HARD_EXTRA.filter((p) => p !== PUSH_COLON)];
+  if (pushPresent) parts = parts.map((p) => (p === PUBLISH_TAGS ? PUBLISH_ONLY : p));   // push --tags / push a tag is a push
+  if (deployPresent) parts.push(RESTART_UNIT);
+  return parts;
+};
+const HARD_RES = new Map();
+const hardRe = (o) => { const k = `${+!!o.mergePresent}${+!!o.pushPresent}${+!!o.deployPresent}`; if (!HARD_RES.has(k)) HARD_RES.set(k, new RegExp(hardParts(o).join('|'), 'i')); return HARD_RES.get(k); };
 // `git push <remote> <refspec>` where the refspec is not main/master: not the landing of a merge.
 const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+(?!-)\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
-const HARD_PARTS = [...FORBIDDEN_PARTS.filter((p) => p !== MERGE_MAIN), ...HARD_EXTRA];
-const HARD_RE = new RegExp(HARD_PARTS.join('|'), 'i');
-const HARD_MERGE_RE = new RegExp(HARD_PARTS.filter((p) => p !== PUSH_MAIN && p !== GIT_PUSH).join('|'), 'i');
 const PUSH_OTHER_RE = new RegExp(PUSH_OTHER_REF, 'i');   // read on the text and its spelling variants, not on window joins (a joined word would look like another ref)
 
 let forbiddenExtra = null;
@@ -329,17 +352,23 @@ function matchWith(re, text, extra = null) {
 
 export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenExtra);
 export const mergeMatch = (text) => matchWith(MERGE_RE, text);
-// The floor without the merge topic. The push that lands a merge is excluded only when `mergePresent`.
-export function hardMatch(text, { mergePresent = false } = {}) {
-  if (!mergePresent) return matchWith(HARD_RE, text, forbiddenExtra);
-  const hit = matchWith(HARD_MERGE_RE, text, forbiddenExtra);
+// The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any
+// plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent } (a bare boolean = mergePresent).
+export function hardMatch(text, opts = {}) {
+  const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
+  const hit = matchWith(hardRe(o), text, forbiddenExtra) || colonHit(text);
   if (hit) return hit;
-  for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_OTHER_RE); if (k) return k[0]; }
+  if (o.mergePresent && !o.pushPresent) for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_OTHER_RE); if (k) return k[0]; }
   return null;
 }
+const SERVICE_CTL_RE = new RegExp(FORBIDDEN_PARTS[1], 'i');
+// systemctl / pm2 commands stay hard: no deploy topic beside them.
+export const deployMatch = (text) => (matchWith(SERVICE_CTL_RE, text) ? null : matchWith(DEPLOY_RE, text));
+// A plain push (not a force, a rewrite, a delete or a push to prod/staging/live: those stay hard).
+export const pushMatch = (text) => (matchWith(HARD_PUSH_RE, text) || colonHit(text) ? null : matchWith(PUSH_RE, text));
 export function topicSplit(text) {
-  const merge = mergeMatch(text);
-  return { merge, hard: hardMatch(text, { mergePresent: !!merge }) };
+  const merge = mergeMatch(text), push = pushMatch(text), deploy = deployMatch(text);
+  return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };
 }
 
 export function menuOptions(lines) {
@@ -477,7 +506,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
 export const ASK_STATUS_TEXT = 'Before stopping: what is done, what is left?';
 
 // {scope?, ref?} when the closing text names them (--host / --server / --frontend, a branch).
-function deployHint(text) {
+export function deployHint(text) {
   const hint = {};
   const flag = /--(host|server|frontend)\b/i.exec(text) || /\b(host|server|frontend)\s+(?:deploy|restart)/i.exec(text) || /\b(?:deploy|restart)\s+(?:the |every )?(host|server|frontend)\b/i.exec(text);
   if (flag) hint.scope = flag[1].toLowerCase();
