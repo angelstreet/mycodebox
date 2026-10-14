@@ -214,7 +214,7 @@ async function main() {
         const sw = await page.evaluate(async () => { try { const r = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]); return { active: !!r.active, scope: r.scope }; } catch (e) { return { error: e.message }; } });
         check(`${label}: service worker registers and activates`, sw.active, JSON.stringify(sw));
         const cached = await page.evaluate(async () => { const names = await caches.keys(); const c = await caches.open(names.find((n) => n.startsWith('ghosty-shell-')) || names[0]); return { names, has: !!(await c.match('/tasks-view.js')) }; });
-        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes('ghosty-shell-v144'), JSON.stringify(cached.names));
+        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes('ghosty-shell-v146'), JSON.stringify(cached.names));
 
         await page.click('#moreBtn');
         await page.click('#tasksBtn');

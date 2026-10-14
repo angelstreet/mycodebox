@@ -12,6 +12,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Find implementation code | [Repository map](MAP.md) | Components, data flow, state and test locations |
 | Work as an agent | [AGENTS.md](../AGENTS.md), then [agent contract](CONTRACT.md) | Safety invariants, workflow and completion evidence |
 | Look up settings and behavior | [Technical reference](REFERENCE.md) | Environment settings, feature APIs and implementation details |
+| Work hands-free (phone, car, gym) | [Voice](VOICE.md) | Voice mode page, spoken digest, notification buttons, headset controls and platform limits |
 | Configure native HTTPS | [Certificates](../certs/README.md) | Certificate files, trust and renewal |
 | Try or upgrade to V2 (opt-in task engine) | [README roadmap](../README.md#current-capabilities--v2-roadmap), [Migration](v2/MIGRATION.md), [Scoring](v2/SCORING.md) | What is shipped vs planned, upgrade and rollback notes, per-model scoring report |
 | Understand the V2 design | [V2 architecture](v2/ARCHITECTURE.md), [verification](../V2_VERIFICATION.md) | Frozen interfaces and recorded test evidence |

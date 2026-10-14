@@ -185,6 +185,15 @@ Langfuse 3.x observations; validate compatibility against your installed version
   `LANGFUSE_URL`) and `LANGFUSE_PROJECT` (default `codebox-usage`).
 
 
+## Voice mode (hands-free)
+
+`voice.js` serves `GET /api/voice/queue`, `POST /api/voice/answer` and `GET /api/voice/digest`; see [VOICE.md](VOICE.md) for the flow, the
+spoken-answer rules and the limits. A voice answer is sent through the guarded send as actor `owner-voice` (an agent pane is required, like the
+manager's own sends), after re-reading the open item; a sensitive option needs a spoken or tapped confirm and is never answered from a notification.
+Push feed items for a needs-you stop carry optional `voiceId` and `actions` (`[{action:'recommended'|'wait', title}]`, only for a recommended option
+that is not forbidden). The page loads `public/voice-view.js` on demand (More menu or `/?voice=1`). The digest consumes `GET /api/manager/decided`
+when this server has it and otherwise counts the manager's `answer` records itself.
+
 ## Web Push (phone notifications, no extra app)
 
 The bell button subscribes the browser / installed Android app (TWA) to Web Push. Alerts - a session

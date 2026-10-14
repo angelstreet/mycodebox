@@ -3589,6 +3589,14 @@ async function openDecidedView() {
   });
 }
 $('#decidedBtn').onclick = openDecidedView;
+// ----- Voice mode (⋮ menu, or /?voice=1 from the notification's "Speak it"): voice-view.js is loaded when first opened -----
+async function openVoiceMode() {
+  try {
+    const m = await import('/voice-view.js');
+    m.openVoice({ onClose: () => { if (new URLSearchParams(location.search).get('voice')) history.replaceState(null, '', '/'); } });
+  } catch (e) { toast(`voice mode unavailable: ${e.message}`); }
+}
+$('#voiceBtn').onclick = openVoiceMode;
 
 // ----- generic bottom sheet -----
 let sheetEl = null;
@@ -4879,6 +4887,7 @@ if ('serviceWorker' in navigator) {
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
   if (new URLSearchParams(location.search).get('decided')) openDecidedView();
+  if (new URLSearchParams(location.search).get('voice')) openVoiceMode();
   const openPlat = ['platforms', 'deploys'].some((k) => new URLSearchParams(location.search).get(k));
   const view = new URLSearchParams(location.search).get('view');
   if (['card', 'grid', 'list'].includes(view)) state.mode = view;

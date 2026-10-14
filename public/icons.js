@@ -5,7 +5,7 @@
 //   - in index.html:  <i data-icon="menu" data-size="20"></i>   (hydrated at start by hydrateIcons())
 // Catalogue: menu, chevron-left/right/up/down, plus, x, check, check-check, filter, more, bot, bar-chart, bell, download,
 // expand, pencil, pause, play, timer, zap, alert, lock, unlock, git-branch, git-fork, arrow-up-to-line, arrow-down-to-line,
-// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, refresh, archive, clipboard, search, tasks, help.
+// thumbs-up, thumbs-down, square, list, trending-up, trending-down, pin, folder-plus, layers, note, server, review, decisions, history, multi, send, mic, headphones, skip-forward, rotate-ccw, refresh, archive, clipboard, search, tasks, help.
 const S = (inner) => ({ s: inner });          // stroked
 const F = (inner) => ({ f: inner });          // filled
 export const ICONS = {
@@ -63,6 +63,9 @@ export const ICONS = {
   'trending-down': S('<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>'),
   tasks: S('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><polyline points="9 13 11 15 15 11"/>'),
   help: S('<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12" y2="17.01"/>'),
+  headphones: S('<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>'),
+  'skip-forward': S('<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>'),
+  'rotate-ccw': S('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>'),
   clipboard: S('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>'),
 };
 
