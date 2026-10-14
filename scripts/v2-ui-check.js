@@ -81,6 +81,27 @@ async function seed() {
   return store;
 }
 
+
+// ---- seed: synthetic session history + usage ledger for the History view --------------------------------------
+function seedHistory() {
+  const NOW = Date.now(), H = 3600000;
+  const hist = [], led = [];
+  const start = (name, ts, o = {}) => hist.push({ schema_version: 1, kind: 'session.started', name, provider: 'claude', model: 'synthetic-model', cwd: '/synthetic/work', started_by: 'dashboard', prompt_ref: null, handover_ref: null, ts, ...o });
+  const end = (name, ts) => hist.push({ schema_version: 1, kind: 'session.ended', name, ts, reason: 'killed' });
+  const turns = (label, t0, n, o = {}) => { for (let i = 0; i < n; i++) led.push({ ts: t0 + (i + 1) * 120000, label, agent: o.agent || 'claude', model: o.model || 'synthetic-model', usage: { input: 1200, output: 300, cache_read: 4000, cache_write_5m: 500, cache_write_1h: 0 }, cost: o.cost === null ? null : { total: 0.05 } }); };
+  for (let i = 0; i < 55; i++) {   // 55 ended runs: more than one page
+    const t0 = NOW - (60 + i * 5) * H, name = `synthetic-run-${String(i).padStart(2, '0')}`;
+    start(name, t0, { started_by: i % 5 === 0 ? 'v2' : i % 3 === 0 ? 'cbsession' : 'dashboard', prompt_ref: i % 2 ? '/synthetic/prompts/task.md' : 'Synthetic: summarise the synthetic repo', handover_ref: i % 7 === 0 ? '/synthetic/handover.md' : null });
+    turns(name, t0, 1 + (i % 4)); end(name, t0 + 2 * H);
+  }
+  start('synthetic-minimax', NOW - 30 * H, { provider: 'minimax', model: 'synthetic-mm' }); turns('synthetic-minimax', NOW - 30 * H, 3, { agent: 'minimax', model: 'synthetic-mm', cost: null }); end('synthetic-minimax', NOW - 28 * H);
+  start('synthetic-unpriced', NOW - 20 * H, { provider: 'codex', model: 'synthetic-cx' }); turns('synthetic-unpriced', NOW - 20 * H, 2, { agent: 'codex', model: 'synthetic-cx', cost: null }); end('synthetic-unpriced', NOW - 19 * H);
+  start('synthetic-demo', NOW - 5 * H, { prompt_ref: '/synthetic/prompts/demo.md' }); turns('synthetic-demo', NOW - 5 * H, 4);   // running: has a card
+  start('synthetic-running-nocard', NOW - 2 * H, { started_by: 'cbsession' });   // running in the log, no tmux session: detail sheet
+  writeFileSync(join(stateDir, 'session-history.jsonl'), hist.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  writeFileSync(join(stateDir, 'usage-ledger.jsonl'), led.map((r) => JSON.stringify(r)).join('\n') + '\n');
+}
+
 // ---- helpers ------------------------------------------------------------------------------------------------
 function headlessShell(pw) {
   let want = null;
@@ -158,6 +179,7 @@ async function controlCheck() {
 
 async function main() {
   await seed();
+  seedHistory();
   await offCheck();
   await controlCheck();
   const port = await freePort();
@@ -192,7 +214,7 @@ async function main() {
         const sw = await page.evaluate(async () => { try { const r = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]); return { active: !!r.active, scope: r.scope }; } catch (e) { return { error: e.message }; } });
         check(`${label}: service worker registers and activates`, sw.active, JSON.stringify(sw));
         const cached = await page.evaluate(async () => { const names = await caches.keys(); const c = await caches.open(names.find((n) => n.startsWith('ghosty-shell-')) || names[0]); return { names, has: !!(await c.match('/tasks-view.js')) }; });
-        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes('ghosty-shell-v143'), JSON.stringify(cached.names));
+        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes('ghosty-shell-v144'), JSON.stringify(cached.names));
 
         await page.click('#moreBtn');
         await page.click('#tasksBtn');
@@ -247,6 +269,48 @@ async function main() {
         check(`${label}: accepted detail shows evidence SHA, unknown cost, the not-integrated label, runs/roles/allowed actions, no approve button`, /sha b2c3d4e5f607/.test(dtxt) && /cost unknown/.test(dtxt) && /not integrated/i.test(dtxt) && /runs/i.test(dtxt) && /Roles/i.test(dtxt) && /Allowed actions/i.test(dtxt) && !(await page.$('.sheet.tasks [data-tk-approve]')));
         await page.keyboard.press('Escape');
         check(`${label}: Escape closes the view`, await page.waitForSelector('.sheet.tasks', { state: 'detached', timeout: 3000 }).then(() => true, () => false));
+        // ---- History view: rows, filter, detail sheet, both colour schemes ----
+        for (const scheme of ['dark', 'light']) {
+          const tag = `${label}-${scheme}`;
+          await page.emulateMedia({ colorScheme: scheme });
+          await page.click('#moreBtn'); await page.click('#historyBtn');
+          await page.waitForSelector('.sheet.history .hs-row', { timeout: 8000 });
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: join(out, `${tag}-history-list.png`) });
+          const n0 = (await page.$$('.sheet.history .hs-row')).length;
+          check(`${tag}: History lists one page of rows (50) with a load-more`, n0 === 50 && !!(await page.$('.sheet.history [data-hs-more]')), `rows ${n0}`);
+          const txt = await page.innerText('.sheet.history');
+          check(`${tag}: subscription and unknown costs are labelled, no $0 for unknown`, /subscription/.test(txt) && /unknown/.test(txt));
+          check(`${tag}: no horizontal overflow in the History sheet`, await page.evaluate(() => { const b = document.querySelector('.sheet.history'); return b.scrollWidth <= b.clientWidth + 1; }));
+          await page.click('.sheet.history [data-hs-more]');
+          await page.waitForFunction(() => document.querySelectorAll('.sheet.history .hs-row').length > 50, null, { timeout: 5000 });
+          check(`${tag}: load more appends the remaining rows`, (await page.$$('.sheet.history .hs-row')).length === 59);
+          await page.selectOption('.sheet.history [data-hs-f="provider"]', 'minimax');
+          await page.waitForFunction(() => document.querySelectorAll('.sheet.history .hs-row').length === 1, null, { timeout: 5000 });
+          await page.waitForTimeout(200);
+          await page.screenshot({ path: join(out, `${tag}-history-filtered.png`) });
+          check(`${tag}: provider filter narrows to the one minimax row, shown as subscription`, /synthetic-minimax/.test(await page.innerText('.sheet.history .hs-row')) && /subscription/.test(await page.innerText('.sheet.history .hs-row')));
+          await page.click('.sheet.history [data-hs-clear]');
+          await page.selectOption('.sheet.history [data-hs-f="status"]', 'running');
+          await page.waitForFunction(() => document.querySelectorAll('.sheet.history .hs-row').length === 1, null, { timeout: 5000 });   // the nocard run was ended by the server's sync (no tmux session)
+          await page.selectOption('.sheet.history [data-hs-f="status"]', 'ended');
+          await page.fill('.sheet.history [data-hs-f="from"]', '2000-01-01'); await page.fill('.sheet.history [data-hs-f="to"]', '2999-01-01');
+          await page.waitForFunction(() => /synthetic-running-nocard/.test(document.querySelector('.sheet.history .hs-out').textContent), null, { timeout: 5000 });
+          await page.click('.sheet.history .hs-row:has-text("synthetic-running-nocard")');
+          await page.waitForSelector('.sheet.history .hs-detail');
+          await page.waitForTimeout(200);
+          await page.screenshot({ path: join(out, `${tag}-history-detail.png`) });
+          const dt = await page.innerText('.sheet.history');
+          check(`${tag}: an ended row opens the detail sheet`, /synthetic-running-nocard/.test(dt) && /cbsession/.test(dt) && /usage per day/i.test(dt));
+          await page.click('.sheet.history [data-hs-back]');
+          await page.selectOption('.sheet.history [data-hs-f="status"]', 'running');
+          await page.waitForFunction(() => document.querySelectorAll('.sheet.history .hs-row').length === 1, null, { timeout: 5000 });
+          await page.click('.sheet.history .hs-row:has-text("synthetic-demo")');
+          check(`${tag}: a running row with a card closes the sheet and focuses that card`, await page.waitForSelector('.sheet.history', { state: 'detached', timeout: 3000 }).then(() => true, () => false)
+            && await page.evaluate(() => /synthetic-demo/.test(document.getElementById('appTitle')?.textContent + ' ' + (document.querySelector('.cell.active, .cell.focus, [data-session].active')?.dataset.session || '') + ' ' + localStorage.getItem('ghosty.active'))));
+          await page.screenshot({ path: join(out, `${tag}-history-focused-card.png`) });
+        }
+        await page.emulateMedia({ colorScheme: null });
         check(`${label}: no page errors`, errors.length === 0, errors.slice(0, 2).join('; '));
         await ctx.close();
       }
