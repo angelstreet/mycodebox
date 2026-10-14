@@ -9,15 +9,16 @@
 #   -p  provider (default claude)
 #   -m  model: claude haiku|sonnet|opus|fable|<id>; codex <model>; minimax MiniMax-M3 (default; the only MiniMax model, owner decision 2026-10-14);
 #       opencode <provider/model>
-#   -H  handover file: the session reads it, summarises state and open items, proposes the next step, then waits
+#   -H  handover file: the session reads it, summarises state and open items, then does the work (owner autonomy rule)
+#   -W  with -H: review only — summarise, propose the next step, then wait for the owner
 #   -f  prompt file, used verbatim;  -t  prompt text
 #   -x  dry run: print the launch command, start nothing
 # Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
 set -euo pipefail
-NAME= DIR= PROV=claude MODEL= HANDOVER= PFILE= TEXT= DRY=0
-while getopts "n:d:p:m:H:f:t:xh" o; do case $o in
+NAME= DIR= PROV=claude MODEL= HANDOVER= PFILE= TEXT= DRY=0 WAIT=0
+while getopts "n:d:p:m:H:f:t:xWh" o; do case $o in
   n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; *) sed -n 2,17p "$0"; exit 2;; esac; done
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,17p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
@@ -30,12 +31,19 @@ if [ -n "$HANDOVER" ]; then
   cat > "$P" <<EOF
 You are picking up work in a fresh session on this host. Working directory: $DIR.
 1. Read the handover: $HANDOVER, then the files it links as needed.
-2. Reply with a short summary of the current state, the open items in priority order, and a concrete plan for the most
-   important next step (files to change, how to test it cheaply).
-3. Owner limits: do not run anything on shared hosts or devices, do not deploy, push or merge, do not touch secrets,
-   and make a git worktree before changing code in a shared checkout. Ask the owner before any of those.
-Stop after step 2 and wait for the owner.
+2. Write a short summary of the current state and the open items in priority order.
+3. Then do the work, most important item first, and keep going until it is done or truly blocked. Owner rule
+   (2026-10-14): never stop to ask to start a plan you wrote, pick your recommended option, merge your own tested work,
+   push, deploy by the normal procedure on a free lease (busy lease: wait and retry), or rerun a test; do it and report
+   it. Corrections come at the end. Make a git worktree before changing code in a shared checkout, and claim a lease
+   before using a shared host or device; hold it only while you actively control it, never while you wait.
+   Run long jobs (runs, suites, builds, deploys) as harness-tracked background commands so you are woken when they
+   end; waiting on your own job is not "blocked".
+4. Ask the owner only for: deleting data, credentials or secrets, money, customers, sudoers or system units on hosts,
+   production database migrations, or a physical action only the owner can do.
+End every turn with one STATUS line: done / needs-owner (only for step 4) / blocked.
 EOF
+  [ "$WAIT" = 1 ] && printf '\nReview only (owner asked): after step 2, propose the next step and stop; do not start step 3.\n' >> "$P"
   [ -n "$TEXT" ] && printf '\nExtra instruction from the owner: %s\n' "$TEXT" >> "$P"
 elif [ -n "$PFILE" ]; then cp "$PFILE" "$P"
 elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"

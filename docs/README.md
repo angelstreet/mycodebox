@@ -15,6 +15,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Work hands-free (phone, car, gym) | [Voice](VOICE.md) | Voice mode page, spoken digest, notification buttons, headset controls and platform limits |
 | Configure native HTTPS | [Certificates](../certs/README.md) | Certificate files, trust and renewal |
 | Try or upgrade to V2 (opt-in task engine) | [README roadmap](../README.md#current-capabilities--v2-roadmap), [Migration](v2/MIGRATION.md), [Scoring](v2/SCORING.md) | What is shipped vs planned, upgrade and rollback notes, per-model scoring report |
+- [Harness review 2026-10-14](v2/reviews/HARNESS-REVIEW-2026-10-14.md): where the owner was stopped, how long sessions waited, ranked fixes (input to V2 rounds 8 and 9).
 | Understand the V2 design | [V2 architecture](v2/ARCHITECTURE.md), [verification](../V2_VERIFICATION.md) | Frozen interfaces and recorded test evidence |
 | Resume development | [Handover](../HANDOVER.md) | Verification checklist and known limitations |
 
