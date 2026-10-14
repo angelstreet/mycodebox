@@ -6,7 +6,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 
 | Task | Read | What it owns |
 |---|---|---|
-| Understand the product | [README](../README.md) | Overview and quick start |
+| Understand the product | [README](../README.md), [goals](GOALS.md) | Overview and quick start; what the product is for and what is shipped |
 | Install or configure a machine | [Installation](INSTALL.md) | Prerequisites, Tailscale, service, verification, updates and removal |
 | Use the dashboard | [Usage](USAGE.md) | First session, sending replies, pause, notifications and troubleshooting |
 | Find implementation code | [Repository map](MAP.md) | Components, data flow, state and test locations |

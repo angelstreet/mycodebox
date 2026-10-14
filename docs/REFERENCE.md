@@ -541,6 +541,43 @@ The interactive manager uses the same evaluation from its shell:
 `node scripts/merge-eval.js --repo <checkout> --branch <b> [--target main] --text "<closing text>" --session <s> --journal`
 prints one JSON line `{verdict, reasons, rationale, ...}`.
 
+### Autonomy by default: push, deploy and recommended options (owner, 2026-10-14)
+
+OWNER_DECISIONS §15 ("yes merge, yes push, yes deploy, yes do the recommended one ... the correction can come at the
+end"). `topicSplit(text)` returns `{ merge, push, deploy, hard }`; `FORBIDDEN_RE` / `forbiddenMatch` are unchanged for
+every other caller. The hard floor: deletions of data, credentials and secrets, money, customers, `systemctl` / `pm2` /
+sudoers / unit files, production database migrations, force-push and history rewrites (`-f`, `--force-with-lease`,
+`--mirror`, `--delete`, `+ref`, `:ref`, pushes to prod/staging/live), publishing a package.
+
+For a finished turn without a live menu, the manager evaluates every decidable topic present (merge, then push, then
+deploy), answers the passing ones in one reply and escalates the rest with what was already answered:
+
+| Kind | Answered when | Module |
+|---|---|---|
+| merge | round 7 rules (above) | `merge-policy.js` |
+| push | the push fast-forwards `origin/<dest>`; tests green on the branch or docs-only; nothing sensitive (scan fail-closed); not opted out (`pushOptOut`, plus `mergeOptOut`); Jev point `push` or reasoning at `pushMinConfidence` (0.85) | `decide-policy.js` `evaluatePush` |
+| deploy | through the deploy queue with `deployRunner` on; the environment named (or the only one); no other agent's lease blocks the scope; tests green on the ref, or on the session's branch already merged into it; no database migration between the last deployed commit and the ref; not in `deployOptOut`; Jev point `deploy` or reasoning at `deployMinConfidence` (0.85). The reply carries a one-line rollback (a deploy of the previous ref) | `decide-policy.js` `evaluateDeploy` |
+| recommended option | `menu_recommended` is on by default: the recommended option's own text has no hard topic; a merge/push/deploy option is evaluated first (a live menu gets only its key) | `manager.js` |
+
+Defaults: `autoSend: true`, `autoCases: ['continue', 'menu_recommended']`, `mergeDecisions` / `pushDecisions` /
+`deployDecisions` true. A saved `manager.json` is migrated once (`autonomyVersion: 1`: `menu_recommended` added, push and
+deploy decisions on unless set); later owner changes are kept. `deployRunner` stays off by default, and with it off a
+deploy escalates ("deploy runner off").
+
+Every decision goes to `<state>/manager-decisions.jsonl` (`kind` merge|push|deploy|menu; round-7
+`merge-decisions.jsonl` is still read; `GET /api/manager/merge-decisions` is the merge-only alias), to `stalls.jsonl`,
+and to the feed. The interactive manager runs the same checks with
+`node scripts/merge-eval.js --kind merge|push|deploy [--env <e>] [--scope <s>] [--ref <r>] --journal`.
+
+**Decided for you.** `decided.js` turns the log into one list of everything the manager typed on the owner's behalf
+(continue, menu, AI reply, info, merge, push, deploy), newest first, with a one-line why, the evidence and a revert:
+`GET /api/manager/decided?hours=24|since=<iso>&limit=100` -> `{ items: [{ id, at, session, kind, what, why, evidence,
+revert: { label, text }, url }], summary: { count, byKind, text } }`. `POST /api/manager/decided/:id/revert` sends the
+revert text for a merge, push or deploy to the session (`by: owner`; 409 when the session is not stopped or has a draft);
+other kinds return a correction draft instead. The dashboard view is in the More menu (`/?decided=1`, Revert needs a
+second tap, Correct opens the session with the draft). Once a day at `decidedDigestHour` (18, in `pushTimezone`) a
+digest-tier push "Decided for you today: N" carries the summary; voice mode speaks the same summary.
+
 ### Scorecard
 
 The Usage view's Overview (`public/usage.js` → `managerBlockHtml`) shows a **Manager** block at the
