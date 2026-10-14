@@ -367,7 +367,7 @@ process.exitCode = errors.length ? 1 : 0;
   },
   {
     id: 'off-by-one', task_class: 'bugfix', expected_outcome: 'done',
-    goal: 'range(start, end) in src/range.js must include both ends, but it drops the last number. Fix the off-by-one so test/range.test.js passes.',
+    goal: 'range(start, end) in src/range.js must include both ends, but it leaves out the last number. Fix the off-by-one so test/range.test.js passes.',
     paths: ['src'],
     files: {
       'src/range.js': '// The integers from start to end, both included: range(1, 3) -> [1, 2, 3].\nexport function range(start, end) {\n  const out = [];\n  for (let i = start; i < end; i++) out.push(i);\n  return out;\n}\n',

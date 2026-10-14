@@ -147,7 +147,7 @@ async function answerFromNotification(voiceId, action) {
     const j = await r.json().catch(() => ({}));
     ok = r.ok && j.status === 'sent';
     say = j.say || (r.ok ? '' : 'Could not answer. Open the app.');
-  } catch { say = 'Could not reach codebox. Open the app.'; }
+  } catch { say = 'Could not reach the dashboard. Open the app.'; }
   if (say) {
     try { await self.registration.showNotification(ok ? 'Answered' : 'Not answered', { body: say, tag: `ghosty-voice-${voiceId}`, icon: '/icon-192.png', badge: '/icon-192.png', data: { url: ok ? '/' : '/?voice=1' } }); } catch {}
   }

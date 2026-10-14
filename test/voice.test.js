@@ -59,7 +59,7 @@ test('spokenScript: the documented wording, options in order, at most 6, trimmed
 });
 
 test('plainSpeech: no markdown, urls or path noise', () => {
-  assert.equal(plainSpeech('Edit `/home/x/src/foo.js` **now**, see https://example.test/a?b=1 and yes/no'), 'Edit foo.js now, see a link and yes/no');
+  assert.equal(plainSpeech('Edit `/srv/x/src/foo.js` **now**, see https://example.test/a?b=1 and yes/no'), 'Edit foo.js now, see a link and yes/no');
   assert.equal(normalizeSpeech('  Option 2!! '), 'option 2');
 });
 
