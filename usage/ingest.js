@@ -371,12 +371,23 @@ export function createIngester(cfg, hooks = {}) {
     const since = cfg.now() - cfg.backfillDays * DAY_MS;
     let text = ''; try { text = await fs.readFile(cfg.ledgerFile, 'utf8'); } catch {}
     // later lines for the same id are updates (a message's output_tokens grows while it streams): last one wins
-    if (!forceBackfill) for (const l of text.split('\n')) { try { const r = JSON.parse(l); if (r.ts >= since) remember(r.agent === 'manager' && !r.trace ? { ...r, trace: traceIdOf('manager', r.session) } : r); } catch {} }
+    // Round 6b: rows older than the window are kept (deduped by id, last wins), never dropped: the ledger is the only
+    // record of past sessions for the History view (session-history.jsonl only began with round 6).
+    const older = new Map();
+    if (!forceBackfill) for (const l of text.split('\n')) {
+      try {
+        const r = JSON.parse(l);
+        if (r.ts >= since) remember(r.agent === 'manager' && !r.trace ? { ...r, trace: traceIdOf('manager', r.session) } : r);
+        else if (r && r.id && Number.isFinite(r.ts)) { older.delete(r.id); older.set(r.id, r); }
+      } catch {}
+    }
     // Compaction write: only when byId has something. An empty byId (forceBackfill on a fresh deploy, or every
     // record outside the window after a long downtime) would otherwise wipe whatever's on disk — and the source
     // files have often been rotated by then, so the wipe is irreversible.
-    const compacted = [...byId.values()].map((r) => JSON.stringify(r) + '\n').join('');
-    if (compacted) await fs.writeFile(cfg.ledgerFile, compacted);
+    for (const id of byId.keys()) older.delete(id);   // a row at the window edge is written once
+    const compacted = byId.size ? [...older.values(), ...byId.values()].map((r) => JSON.stringify(r) + '\n').join('') : '';
+    // Temp file + rename: the ledger holds history whose source logs may be rotated, so a crash mid-write must not truncate it.
+    if (compacted) await atomicWrite(cfg.ledgerFile, compacted);
   }
 
   function remember(r) {

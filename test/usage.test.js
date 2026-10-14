@@ -420,15 +420,15 @@ test('init preserves the ledger when byId would be empty (forceBackfill or all-o
   const ing2 = createIngester(cfg, hooks);
   await ing2.init(false);
   assert.equal(await fs.readFile(cfg.ledgerFile, 'utf8'), beforeOow, 'ledger preserved when every row is outside the window');
-  // happy path: a ledger with at least one in-window row still gets compacted (the existing behaviour).
+  // happy path: a ledger with at least one in-window row is compacted (deduped), and since round 6b out-of-window
+  // rows are kept: the ledger is the History view's record of past sessions.
   const mixRows = old('claude:in-1', 1) + '\n' + old('claude:oow-3', 30) + '\n';
   await fs.writeFile(cfg.ledgerFile, mixRows);
   const ing3 = createIngester(cfg, hooks);
   await ing3.init(false);
   const after = (await fs.readFile(cfg.ledgerFile, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  assert.equal(after.length, 1, 'compaction still drops out-of-window rows when at least one in-window row exists');
-  assert.equal(after[0].id, 'claude:in-1');
-  // the in-window row is loaded into byId and surfaces in the summary
+  assert.deepEqual(after.map((r) => r.id).sort(), ['claude:in-1', 'claude:oow-3'], 'compaction keeps out-of-window rows (round 6b)');
+  // only the in-window row is loaded into byId and surfaces in the summary
   const s = await ing3.summary();
   assert.equal(s.total.turns, 1);
 });
