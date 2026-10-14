@@ -73,6 +73,33 @@ export function outcomeOf(state) {
 
 // ---- schema ---------------------------------------------------------------------------------------
 
+// Acceptance check bounds: a check's own time limit (round 5), a positive integer up to 2 h.
+export const CHECK_TIMEOUT_MS = Object.freeze({ min: 1, max: 2 * 3600_000 });
+
+// One validator for task checks and the project policy's per-class checks (.ai/project.json checks.by_task_class).
+// -> [{ path, message }]
+export function checkListErrors(a, prefix) {
+  const out = [];
+  const err = (path, message) => out.push({ path, message });
+  const ids = new Set();
+  a.forEach((c, i) => {
+    const p = `${prefix}[${i}]`;
+    if (!isObj(c)) return err(p, 'object');
+    if (!isStr(c.id)) err(`${p}.id`, 'non-empty string');
+    else if (ids.has(c.id)) err(`${p}.id`, 'duplicate check id'); else ids.add(c.id);
+    if (!(isStrArr(c.command) && c.command.length)) err(`${p}.command`, 'argv array of strings');
+    if (!isObj(c.expect) || !Number.isInteger(c.expect.exit)) err(`${p}.expect.exit`, 'integer');
+    if (!isStr(c.evidence_type)) err(`${p}.evidence_type`, 'non-empty string');
+    if (typeof c.required !== 'boolean') err(`${p}.required`, 'boolean');
+    if (c.timeout_ms !== undefined && !(Number.isInteger(c.timeout_ms) && c.timeout_ms >= CHECK_TIMEOUT_MS.min && c.timeout_ms <= CHECK_TIMEOUT_MS.max)) {
+      err(`${p}.timeout_ms`, `integer ${CHECK_TIMEOUT_MS.min}..${CHECK_TIMEOUT_MS.max}`);
+    }
+  });
+  // Without a required check, "done" could only rest on a model's say-so.
+  if (!a.some((c) => c?.required === true)) err(prefix, 'at least one required check');
+  return out;
+}
+
 const REQUIRED = ['task_id', 'project_id', 'goal', 'scope', 'prohibited_actions', 'definition_of_done', 'acceptance_checks',
   'risk_class', 'runtime_capabilities', 'privacy_policy', 'resources', 'dependencies', 'base_sha', 'approval_policy',
   'created_by', 'status'];
@@ -83,7 +110,7 @@ const OPTIONAL = ['schema_version', 'title', 'repository', 'excluded_paths', 'ru
   'allocations', 'created_at', 'updated_at', 'task_class', 'run_limits'];
 const KNOWN = new Set([...REQUIRED, ...OPTIONAL]);
 const SHA_RE = /^[0-9a-f]{7,64}$/;
-const TASK_CLASS_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+export const TASK_CLASS_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string' && v.trim() !== '';
@@ -110,18 +137,7 @@ export function validateTask(spec) {
     if (!Array.isArray(a)) err('acceptance_checks', 'array');
     else {
       const ids = new Set();
-      a.forEach((c, i) => {
-        const p = `acceptance_checks[${i}]`;
-        if (!isObj(c)) return err(p, 'object');
-        if (!isStr(c.id)) err(`${p}.id`, 'non-empty string');
-        else if (ids.has(c.id)) err(`${p}.id`, 'duplicate check id'); else ids.add(c.id);
-        if (!(isStrArr(c.command) && c.command.length)) err(`${p}.command`, 'argv array of strings');
-        if (!isObj(c.expect) || !Number.isInteger(c.expect.exit)) err(`${p}.expect.exit`, 'integer');
-        if (!isStr(c.evidence_type)) err(`${p}.evidence_type`, 'non-empty string');
-        if (typeof c.required !== 'boolean') err(`${p}.required`, 'boolean');
-      });
-      // Without a required check, "done" could only rest on a model's say-so.
-      if (!a.some((c) => c?.required === true)) err('acceptance_checks', 'at least one required check');
+      for (const e of checkListErrors(a, 'acceptance_checks')) err(e.path, e.message);
     }
   }
   if (has('risk_class') && !RISK_CLASSES.includes(spec.risk_class)) err('risk_class', `one of ${RISK_CLASSES.join(', ')}`);

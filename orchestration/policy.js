@@ -4,7 +4,7 @@
 import * as realFs from 'node:fs';
 import { join } from 'node:path';
 import { forbiddenMatch, FORBIDDEN_RE, textVariants, windowJoins, HOMOGLYPH } from '../stall.js';
-import { MANDATORY_APPROVAL, RISK_CLASSES } from './task-contract.js';
+import { MANDATORY_APPROVAL, RISK_CLASSES, CHECK_TIMEOUT_MS, TASK_CLASS_RE, checkListErrors } from './task-contract.js';
 import { validateRunLimits } from './run-limits.js';
 import { RUNTIME_EFFORTS } from './model-registry.js';
 
@@ -40,6 +40,25 @@ export function validatePolicy(p) {
     else {
       for (const k of Object.keys(p.routing)) if (k !== 'escalation') err(`routing.${k}`, 'unknown field');
       if (p.routing.escalation !== undefined && typeof p.routing.escalation !== 'boolean') err('routing.escalation', 'boolean');
+    }
+  }
+  // Round 5: acceptance checks per task class (intake default) and the check time limit (fits the real suite).
+  if (p.checks !== undefined) {
+    const c = p.checks;
+    if (!isObj(c)) err('checks', 'object');
+    else {
+      for (const k of Object.keys(c)) if (!['timeout_ms', 'by_task_class'].includes(k)) err(`checks.${k}`, 'unknown field');
+      if (c.timeout_ms !== undefined && !(Number.isInteger(c.timeout_ms) && c.timeout_ms >= CHECK_TIMEOUT_MS.min && c.timeout_ms <= CHECK_TIMEOUT_MS.max)) {
+        err('checks.timeout_ms', `integer ${CHECK_TIMEOUT_MS.min}..${CHECK_TIMEOUT_MS.max}`);
+      }
+      if (c.by_task_class !== undefined) {
+        if (!isObj(c.by_task_class)) err('checks.by_task_class', 'object: task class -> checks');
+        else for (const [cls, list] of Object.entries(c.by_task_class)) {
+          if (!TASK_CLASS_RE.test(cls)) err(`checks.by_task_class.${cls}`, 'task class [a-z0-9][a-z0-9._-]{0,63}');
+          else if (!Array.isArray(list) || !list.length) err(`checks.by_task_class.${cls}`, 'non-empty array of checks');
+          else for (const e of checkListErrors(list, `checks.by_task_class.${cls}`)) err(e.path, e.message);
+        }
+      }
     }
   }
   return errors;

@@ -1,4 +1,4 @@
-STATUS: DELIVERED 3a1cf19 https://github.com/angelstreet/mycodebox/pull/1 (round 4)
+STATUS: DELIVERED f8c1e4c https://github.com/angelstreet/mycodebox/pull/2 (round 5)
 
 # V2 progress
 
@@ -7,9 +7,19 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 4 (OWNER_DECISIONS §12) delivered; owner review of draft PR #1 (round-4 section: limits, faster stop, routing, evaluation and recommendation, spend USD 4.83). SHAs quoted before round 2 in this file, in
-V2_VERIFICATION.md history and in docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11 to
-scrub the tailnet identifiers); they no longer resolve. Round-2 entries quote current SHAs.
+Round 5 (live defect fix, `.v2/round5.md`) delivered on `v2/r5-livefix`: owner review of the PR. Next: round 6
+(session history on the dashboard). SHAs quoted before round 2 in this file, in V2_VERIFICATION.md history and in
+docs/v2/* are **pre-rewrite SHAs** (GitHub history was rewritten on 2026-10-11); they no longer resolve.
+
+## Round 5
+
+Base: `origin/main` dff3120. Spec: the live smoke task `waiting/no_progress` (run 1 committed then hit its 120 s leash,
+`npm test` ran out of the 120 s check limit, run 2 changed nothing).
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R5-1 | Docs checks per task class (`checks.by_task_class`, `scripts/docs-check.js`, `scripts/run-if-changed.js`), check limit `checks.timeout_ms` 600 s (suite measured 136 s), `check_timeout` wait, evaluate committed timeouts, no-change run on unmeasured/passing head -> evaluation, declared `task_class` sets the work type | coordinator / Opus review | DONE (Opus APPROVE, 2 rounds) | 1557dfb + 2db1d3d + f8c1e4c; regression replay `test/v2-r5-livefix.test.js` |
+| R5-2 | Gates, V2_VERIFICATION, PR, DELIVERED | coordinator | DONE | 1774/1774 Node 23.6 and 24.21, acceptance 54/54 (1775 tests, T20), leak scan clean |
 
 ## Round 4
 

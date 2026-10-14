@@ -52,10 +52,15 @@ export function buildTaskSpec(input, { source, actor_id, template = 'goal', poli
   for (const [k, v] of Object.entries(tpl)) {
     if (spec[k] === undefined) { spec[k] = structuredClone(v); applied.push(k); }
   }
-  // Checks default to the project's own test command: measurable and owner-configured, never invented.
+  // Checks default to the project's own checks for the task class (checks.by_task_class, round 5: a docs task runs a
+  // docs check, not the whole suite), else its test command: measurable and owner-configured, never invented.
   if (spec.acceptance_checks === undefined) {
-    if (!policy?.test_command) fail('E_INTAKE_NEEDS_CHECKS', 'acceptance_checks missing and the project policy has no test_command to default to');
-    spec.acceptance_checks = [{ id: 'project-tests', command: [...policy.test_command], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }];
+    const byClass = typeof spec.task_class === 'string' ? policy?.checks?.by_task_class?.[spec.task_class] : null;
+    if (Array.isArray(byClass) && byClass.length) spec.acceptance_checks = structuredClone(byClass);
+    else {
+      if (!policy?.test_command) fail('E_INTAKE_NEEDS_CHECKS', 'acceptance_checks missing and the project policy has no test_command to default to');
+      spec.acceptance_checks = [{ id: 'project-tests', command: [...policy.test_command], expect: { exit: 0 }, evidence_type: 'exit_code', required: true }];
+    }
     applied.push('acceptance_checks');
   }
   if (spec.definition_of_done === undefined) {

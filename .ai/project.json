@@ -5,6 +5,16 @@
   "default_branch": "main",
   "protected_branches": ["main"],
   "test_command": ["npm", "test"],
+  "checks": {
+    "timeout_ms": 600000,
+    "by_task_class": {
+      "docs": [
+        { "id": "docs-check", "command": ["node", "scripts/docs-check.js"], "expect": { "exit": 0 }, "evidence_type": "exit_code", "required": true },
+        { "id": "docs-links", "command": ["node", "--test", "test/v2-docs-links.test.js"], "expect": { "exit": 0 }, "evidence_type": "exit_code", "required": true },
+        { "id": "project-tests-if-code", "command": ["node", "scripts/run-if-changed.js", "--except", "*.md", "--", "npm", "test"], "expect": { "exit": 0 }, "evidence_type": "exit_code", "required": true }
+      ]
+    }
+  },
   "default_risk_class": "medium",
   "privacy_policy": "public-repo: no credentials, real hosts, IPs, e-mails or captured session output in tracked files",
   "allowlists": {

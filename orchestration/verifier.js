@@ -34,7 +34,9 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
 
   // -> { exit: integer|null, duration_ms, output, error }
   // register(kill|null): lets the caller stop a running check on cancel (T14); cleared when the check ends.
-  function runCheck(check, { cwd, register = () => {} }) {
+  // limitMs: the project's check time limit (.ai/project.json checks.timeout_ms) when the check sets none.
+  // baseSha: exported as V2_BASE_SHA so a check can scope itself to what the change touches (scripts/docs-check.js).
+  function runCheck(check, { cwd, register = () => {}, limitMs = null, baseSha = null }) {
     return new Promise((resolve) => {
       const stateDir = fs.mkdtempSync(path.join(tmpRoot, 'v2-check-state-'));
       const t0 = now();
@@ -52,12 +54,12 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
       let child;
       try {
         child = spawn(check.command[0], check.command.slice(1), { cwd, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
-          env: { ...baseEnv, GHOSTY_STATE_DIR: stateDir, CI: '1', NO_COLOR: '1' } });
+          env: { ...baseEnv, GHOSTY_STATE_DIR: stateDir, CI: '1', NO_COLOR: '1', ...(baseSha ? { V2_BASE_SHA: baseSha } : {}) } });
       } catch (e) { finish(null, `spawn failed: ${e.code || e.message}`); return; }
       const timer = setTimeout(() => {
         timedOut = true;
         try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
-      }, check.timeout_ms || timeoutMs);
+      }, check.timeout_ms || limitMs || timeoutMs);
       register(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } } });
       const take = (d) => { if (out.length < MAX_OUT) out += String(d).slice(0, MAX_OUT - out.length); };
       child.stdout?.on('data', take);
@@ -82,20 +84,24 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
 
   const passes = (check, exit, artifactOk) => exit !== null && exit === check.expect.exit && artifactOk;
 
-  // existing: evidence already recorded for this SHA in the current head epoch (reused, never rerun: crash-safe).
-  // -> results[{ check_id, required, status: pass|fail|flaky|unavailable, exits[], failures[], output_tail, evidence_ids[] }]
-  async function runChecks({ store, task, cwd, sha, epoch, existing = [], actor, isCancelled = async () => false, register = () => {} }) {
+  // existing: evidence already recorded for this SHA in the current head epoch (reused, never rerun: crash-safe). A
+  // prior run without an exit code (timeout, spawn failure) is no result: it is rerun, under a new evidence index.
+  // -> results[{ check_id, required, status: pass|fail|flaky|unavailable, exits[], failures[], output_tail, error, timed_out }]
+  async function runChecks({ store, task, cwd, sha, epoch, existing = [], actor, isCancelled = async () => false, register = () => {}, timeoutMs: limitMs = null }) {
     const results = [];
+    const baseSha = typeof task.base_sha === 'string' ? task.base_sha : null;
     for (const check of task.acceptance_checks) {
       const prior = existing.filter((e) => e.check_id === check.id);
       // A declared artifact is recorded as its path when present, null when missing: reuse can tell the difference.
-      const runs = prior.map((e, i) => ({ exit: e.exit, artifactOk: !check.artifact || e.artifact !== null, output: readLog(task.task_id, sha, check.id, i), reused: true }));
+      const runs = prior.map((e, i) => ({ exit: e.exit, artifactOk: !check.artifact || e.artifact !== null, output: readLog(task.task_id, sha, check.id, i), reused: true }))
+        .filter((r) => r.exit !== null);
+      let next = prior.length;   // evidence index: never reuse an event id
       const want = () => (runs.length === 0 ? 1 : runs.length === 1 && !passes(check, runs[0].exit, runs[0].artifactOk) && runs[0].exit !== null ? 1 : 0);
       while (want()) {
         // Cancellation is checked before every spawn: no check runs after cancel (T14).
         if (await isCancelled()) return { cancelled: true, results };
-        const i = runs.length;
-        const r = await runCheck(check, { cwd, register });
+        const i = next++;
+        const r = await runCheck(check, { cwd, register, limitMs, baseSha });
         if (await isCancelled()) return { cancelled: true, results };   // a killed check is not evidence
         const artifactOk = !check.artifact || fs.existsSync(path.join(cwd, check.artifact));
         const log = saveArtifact(task.task_id, sha, check.id, i, r.output + (r.error ? `\n[runner] ${r.error}\n` : ''));
@@ -105,7 +111,8 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
       }
       const ok = runs.map((r) => passes(check, r.exit, r.artifactOk));
       let status;
-      if (runs.some((r) => r.exit === null)) status = 'unavailable';
+      // A real failing exit on this SHA outranks a rerun that produced none (timeout, spawn failure): a failure.
+      if (runs.some((r) => r.exit === null)) status = runs.some((r, i) => r.exit !== null && !ok[i]) ? 'fail' : 'unavailable';
       else if (ok.every(Boolean)) status = 'pass';
       else if (ok.some(Boolean)) status = 'flaky';
       else status = 'fail';
@@ -114,10 +121,15 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
       if (status === 'fail' || status === 'flaky') {
         failures = !last.artifactOk && last.exit === check.expect.exit
           ? [{ test: `${check.id}:${check.artifact}`, error_class: 'missing_artifact', message: `declared artifact ${check.artifact} was not produced` }]
-          : parseFailures(runs.find((r, i) => !ok[i] && r.output)?.output ?? last.output, last.exit);
+          : (() => {
+            // The first real failing exit names the failure; a rerun without an exit code (timeout) must not.
+            const f = runs.find((r, i) => r.exit !== null && !ok[i]) ?? last;
+            return parseFailures(f.output || runs.find((r, i) => !ok[i] && r.output)?.output || last.output, f.exit);
+          })();
       }
       results.push({ check_id: check.id, required: check.required, status, exits: runs.map((r) => r.exit), failures,
-        output_tail: String(runs.find((r, i) => !ok[i])?.output || '').slice(-3000), error: runs.find((r) => r.error)?.error ?? null });
+        output_tail: String(runs.find((r, i) => !ok[i])?.output || '').slice(-3000), error: runs.find((r) => r.error)?.error ?? null,
+        timed_out: runs.some((r) => r.error === 'timeout') });
     }
     return { cancelled: false, results };
   }

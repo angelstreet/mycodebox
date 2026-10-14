@@ -250,7 +250,7 @@ export function createGoalLoop({
     if (!v) throw coded('E_NOT_FOUND', `task ${id} not found`);
     if (v.store_error) return { id, v, broken: true };   // a partial log is not the history: never decide from it
     const events = await readEvents(id);
-    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, best_failing: null, tried: [], exclude: [], stalls: 0, stall_run: null, claim: null,
+    const cp = { strategy: null, streak: { signature: null, count: 0 }, stale: 0, changes: 0, best: 0, best_failing: null, tried: [], exclude: [], stalls: 0, stall_run: null, stall_pending: null, claim: null,
       feedback: null, wait: null, approval: null, provider: null, worktree: null, flaky: [], interpretation: null, plan: null,
       verify_only: false, integration: null, integration_unknown: 0, review_unavailable: 0,
       review_fail: { signature: null, count: 0, changes: 0, excluded: [], strict: false } };
@@ -471,6 +471,19 @@ export function createGoalLoop({
 
   // ---------- failure classification and the no-progress rule ----------
   const passingRequired = (ctx, results) => results.filter((r) => r.required && r.status === 'pass').length;
+  // Round 5: what the recorded evidence says about the current head: 'unevaluated' (a required check has no exit code on
+  // it yet), 'pass' (every required check passed every run, never flaky, and no reviewer rejected it) or 'fail'.
+  function headState(ctx) {
+    if (ctx.verdicts.some((x) => x.verdict === 'reject')) return 'fail';
+    if (ctx.cp.flaky.some((x) => x.endsWith(`@${ctx.head}`))) return 'fail';
+    let state = 'pass';
+    for (const c of ctx.v.acceptance_checks.filter((x) => x.required)) {
+      const ev = ctx.evidence.filter((e) => e.check_id === c.id && e.exit !== null);
+      if (!ev.length) return 'unevaluated';
+      if (!ev.every((e) => e.exit === c.expect.exit)) state = 'fail';
+    }
+    return state;
+  }
   // rung: the next escalation-ladder rung (D-026) when the task climbs; it goes first (a cheap model failing repeatedly is
   // the commonest no-progress cause), otherwise the evidence order below.
   function chooseStrategy(ctx, sig, routeAlt, rung = null) {
@@ -489,7 +502,7 @@ export function createGoalLoop({
   // The timeout signature of a stalled run (counted on its own, D-024); the §4 streak keeps the checks' signature so
   // that stalls and failing no-op runs on the same checks still converge (round 3).
   const stallSignature = (entry) => failureSignature({ test: `run_timeout:${entry ?? 'unknown'}`, errorClass: 'timeout' });
-  async function onFailure(ctx, { signature, feedback, passing, failing = null, then = 'repair', thenPatch = {}, reviewOnly = false, p, extraEvidence = [] }) {
+  async function onFailure(ctx, { signature, feedback, passing, failing = null, then = 'repair', thenPatch = {}, reviewOnly = false, p, extraEvidence = [], settleStall = true }) {
     const np = ctx.v.no_progress_policy;
     const cp = ctx.cp;
     // The developer is told its last run was stopped at the time limit (the run's changes were still checked).
@@ -509,9 +522,14 @@ export function createGoalLoop({
     const tried = progress ? [] : cp.tried;
     // The first measurement is not "new" evidence (best starts at 0): it never resets the stalled-run count.
     const measured = cp.best > 0 || cp.best_failing != null;
-    const stalls = progress && measured ? 0 : cp.stalls;
-    const stalledRun = !!devStart && cp.stall_run === devStart.payload.run_id;
-    const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, stalls, claim: null, feedback, provider: null, verify_only: false, review_unavailable: 0 };
+    // Round 5: a run sent to evaluation instead of a stall (timed out after committing, or no change on an unmeasured
+    // head) counts as one now if its required checks fail without new passing evidence; a reviewer rejection of
+    // passing checks does not make it one.
+    const settle = !!devStart && cp.stall_pending === devStart.payload.run_id && cp.stall_run !== cp.stall_pending && settleStall && !reviewOnly && !(progress && measured);
+    const stalls = progress && measured ? 0 : cp.stalls + (settle ? 1 : 0);
+    const stall_run = settle ? cp.stall_pending : cp.stall_run;
+    const stalledRun = !!devStart && stall_run === devStart.payload.run_id;
+    const base = { streak, stale, best: Math.max(cp.best, passing), best_failing: bestFailing, changes, tried, stalls, stall_run, stall_pending: settleStall ? null : cp.stall_pending, claim: null, feedback, provider: null, verify_only: false, review_unavailable: 0 };
     const evidence = [`signature ${signature}`, `same signature ${streak.count}x in a row`, `iterations without new passing evidence: ${stale} (limit ${stagnation})`,
       `strategy changes without progress: ${changes}`, `failing tests ${failing ?? 'n/a'} (best ${cp.best_failing ?? 'n/a'})${progress ? ': progress' : ''}`,
       ...(stall ? [`developer run ${stall} hit the run timeout (${stallMs} ms): stall signature ${stallSignature(devStart?.payload.entry)}, stalled runs without progress ${stalls}`] : []),
@@ -957,32 +975,47 @@ export function createGoalLoop({
     const stalled = failed?.payload.error?.class === 'timeout' && billedRun(ctx, run_id, 'timeout');
     if (failed && !stalled) return onRunError(ctx, failed.payload.error, p, run_id);
     // One stall per run at most (D-024): a timeout, an impossibility claim or a run that changed nothing.
-    let counted = ctx.cp.stall_run === run_id;
-    if (stalled) {
-      await note(ctx, `stall-${run_id}`, decision('run_timeout', `Developer run ${run_id} hit the run timeout: what counts?`, [
-        alt('check what the run left, as an attempt', 'a stall without new passing evidence counts toward the no-progress rule', 'partial work is checked'),
-        alt('back off and retry', 'transient errors clear', 'a run that used its whole time limit is not transient: the loop would spend the clock without a no-progress verdict')],
-      'check what the run left, as an attempt', { evidence: [`run ${run_id}: timeout after ${lastDevStart(ctx)?.payload.limits?.timeout_ms ?? runTimeoutMs} ms`, `entry ${s.entry}`, `stall signature ${stallSignature(s.entry)}`],
-        expected_effect: 'checks run on the committed SHA; no new passing evidence counts as no progress',
-        rationale: 'A billed run timeout is an attempt, not a provider outage (quota and unavailability still back off). It counts at once as a stall (D-024).', policy_ref: policyRef(p) }),
-      counted ? {} : { stalls: ctx.cp.stalls + 1, stall_run: run_id });
-      counted = true;
-    }
+    const counted = ctx.cp.stall_run === run_id;
     // Commit what the developer produced so the evidence names an exact SHA.
     const lw = await ensureLease(ctx, 'repair');   // the run's files stay in the worktree for the next run
     if (lw) return lw;
     const bw = await branchGate(ctx, 'repair');
     if (bw) return bw;
+    const prev = ctx.head ?? ctx.v.base_sha;
     const head = await commitAll(ctx.id, wt.path, `v2task ${ctx.id}: ${run_id}`);
-    // Short leash (stall_runs_to_no_progress): a run that left the head where it was produced nothing to check: a stall.
     const runLimits = lastDevStart(ctx)?.payload.run_id === run_id ? lastDevStart(ctx).payload.limits : null;
-    if (!counted && runLimits?.stall_runs_to_no_progress && head === (ctx.head ?? ctx.v.base_sha)) {
-      await note(ctx, `nochange-${run_id}`, decision('run_no_change', `Developer run ${run_id} changed nothing: what counts?`, [
+    // Round 5: a run that committed a change, or that left a head holding a change no check has measured yet or one
+    // that passes, goes to evaluation on that commit. It becomes a stall only if the checks then fail without progress
+    // (stall_pending, settled in onFailure); the clock alone is not a verdict.
+    const unchanged = head === prev;
+    const pending = unchanged && head !== ctx.v.base_sha ? headState(ctx) : null;
+    const evaluate = !unchanged || pending === 'unevaluated' || pending === 'pass';
+    const why = unchanged ? `head ${short(head)} unchanged, ${pending ? `its checks: ${pending}` : 'still the base'}` : `committed ${short(head)}`;
+    if (stalled) {
+      await note(ctx, `stall-${run_id}`, decision('run_timeout', `Developer run ${run_id} hit the run timeout: what counts?`, evaluate ? [
+        alt('evaluate the committed change', 'the run left work the checks have not judged: the checks decide, not the clock', 'a change cut off mid-way may fail; then it counts as a stall'),
+        alt('count it as a stalled run now', 'fast stop for a cheap model that keeps hitting its limit', 'treats committed, possibly finished work as a failure')] : [
+        alt('check what the run left, as an attempt', 'a stall without new passing evidence counts toward the no-progress rule', 'partial work is checked'),
+        alt('back off and retry', 'transient errors clear', 'a run that used its whole time limit is not transient: the loop would spend the clock without a no-progress verdict')],
+      evaluate ? 'evaluate the committed change' : 'check what the run left, as an attempt', {
+        evidence: [`run ${run_id}: timeout after ${lastDevStart(ctx)?.payload.limits?.timeout_ms ?? runTimeoutMs} ms`, `entry ${s.entry}`, why, `stall signature ${stallSignature(s.entry)}`],
+        expected_effect: evaluate ? 'checks run on the head; failing them without progress counts the stall' : 'checks run on the committed SHA; no new passing evidence counts as no progress',
+        rationale: evaluate ? 'A run that times out after committing is evaluated on its commit, not treated as a failed run (round 5).'
+          : 'A billed run timeout is an attempt, not a provider outage (quota and unavailability still back off). It counts at once as a stall (D-024).', policy_ref: policyRef(p) }),
+      counted ? {} : evaluate ? { stall_pending: run_id } : { stalls: ctx.cp.stalls + 1, stall_run: run_id });
+    } else if (!counted && runLimits?.stall_runs_to_no_progress && unchanged) {
+      // Short leash (stall_runs_to_no_progress): a run that left the head where it was produced nothing to check: a stall,
+      // unless the head still holds an unmeasured or passing change (round 5: evaluate it first).
+      await note(ctx, `nochange-${run_id}`, decision('run_no_change', `Developer run ${run_id} changed nothing: what counts?`, evaluate ? [
+        alt('evaluate the head', 'the head holds a change the checks have not judged, or one that passes: the work may be done', 'one more check run'),
+        alt('count it as a stalled run', 'cheap models can loop on no-op runs', 'stops a task whose work is already done (round 5 live defect)')] : [
         alt('count it as a stalled run', 'the checks see the same SHA: no new evidence is possible', 'the model may have been investigating'),
-        alt('ignore it', 'no penalty', 'a cheap model can loop on no-op runs without a verdict')], 'count it as a stalled run', {
-        evidence: [`run ${run_id}`, `head unchanged ${short(head)}`, `entry ${s.entry}`, `stall_runs_to_no_progress ${runLimits.stall_runs_to_no_progress}`],
-        expected_effect: 'checks run on the same SHA; the stalled-run limit applies', rationale: 'Run limits (D-024): a run that changes nothing on a short leash is a stall.', policy_ref: policyRef(p) }),
-      { stalls: ctx.cp.stalls + 1, stall_run: run_id });
+        alt('ignore it', 'no penalty', 'a cheap model can loop on no-op runs without a verdict')], evaluate ? 'evaluate the head' : 'count it as a stalled run', {
+        evidence: [`run ${run_id}`, why, `entry ${s.entry}`, `stall_runs_to_no_progress ${runLimits.stall_runs_to_no_progress}`],
+        expected_effect: evaluate ? 'checks run on the head; failing them without progress counts the stall' : 'checks run on the same SHA; the stalled-run limit applies',
+        rationale: evaluate ? 'A no-change run on a head with an unmeasured or passing change goes to evaluation, not to a stall (round 5).'
+          : 'Run limits (D-024): a run that changes nothing on a short leash is a stall.', policy_ref: policyRef(p) }),
+      evaluate ? { stall_pending: run_id } : { stalls: ctx.cp.stalls + 1, stall_run: run_id });
     }
     const changed = (await g(wt.path, ['diff', '--name-only', `${ctx.v.base_sha}`, head])).split('\n').filter(Boolean);
     if (changed.length) {
@@ -1022,7 +1055,8 @@ export function createGoalLoop({
       return onFailure(ctx, { signature: failureSignature({ test: 'worktree', errorClass: 'uncommitted_changes' }), passing: 0, p,
         feedback: { kind: 'uncommitted_changes', note: 'Tracked files changed outside a recorded run; the controller will commit your next run.' } });
     }
-    const vr = await verifier.runChecks({ store, task: ctx.v, cwd: wt.path, sha: head, epoch: ctx.epoch, existing: ctx.evidence, actor: VERIFIER_ACTOR, isCancelled: () => halted(ctx.id),
+    const checkLimit = p.ok ? p.policy.checks?.timeout_ms ?? null : null;   // round 5: fits the real suite (.ai/project.json)
+    const vr = await verifier.runChecks({ store, task: ctx.v, cwd: wt.path, sha: head, epoch: ctx.epoch, existing: ctx.evidence, actor: VERIFIER_ACTOR, isCancelled: () => halted(ctx.id), timeoutMs: checkLimit,
       register: (kill) => (kill ? active.set(ctx.id, { kill }) : active.delete(ctx.id)) });   // T14: cancel kills a running check
     if (vr.cancelled) return result(ctx, 'cancelled', 'cancelled during verification', { terminal: true, transitioned: false });
     const after = await headOf(wt.path);
@@ -1032,10 +1066,28 @@ export function createGoalLoop({
     const req = results.filter((r) => r.required);
     const feedbackOf = (kind, rs) => ({ kind, sha: head, checks: rs.map((r) => ({ check_id: r.check_id, status: r.status, exits: r.exits, failures: r.failures, output_tail: r.output_tail, error: r.error })) });
     const unavailable = req.filter((r) => r.status === 'unavailable');
+    const timedOut = unavailable.filter((r) => r.timed_out);
+    if (timedOut.length) {
+      // Round 5: a check stopped at its time limit measured nothing about the change. Never a code failure, a developer
+      // run or a stall: suspend, and verify the same SHA again once the limit (policy) changes or the owner resumes.
+      const limitOf = (id) => ctx.v.acceptance_checks.find((c) => c.id === id)?.timeout_ms ?? checkLimit;
+      const ids = timedOut.map((r) => `${r.check_id} (${limitOf(r.check_id) ? `${limitOf(r.check_id)} ms` : 'verifier default'})`).join(', ');
+      const diagnosis = `check(s) ${ids} ran out of time on ${short(head)}: no result, which is not a failure of the change`;
+      const next_action = 'raise checks.timeout_ms in .ai/project.json (or the task check\'s timeout_ms), or look for a hanging test; then resume: the same SHA is verified again, no developer run';
+      return decide(ctx, decision('check_timeout', 'A required check ran out of time: what now?', [
+        alt('suspend; verify the same SHA again when the limit changes or the owner resumes', 'a timeout says nothing about the change; no developer run or stall is spent on it', 'waits for the owner or a policy change'),
+        alt('send it back to the developer', 'the change might hang a test', 'treats missing evidence as a code failure (live defect 2026-10-14)'),
+        alt('retry at once with the same limit', 'load may have been transient', 'likely runs out of time again')],
+      'suspend; verify the same SHA again when the limit changes or the owner resumes', {
+        evidence: [`sha ${head}`, ...timedOut.map((r) => `${r.check_id}: no exit code (${r.error})`)], expected_effect: 'no runs until the check limit changes or the owner resumes; then checks only',
+        rationale: 'Round 5: an evidence timeout must never look like a code failure.', policy_ref: policyRef(p) }),
+      { patch: { verify_only: true, wait: { reason: 'check_timeout', until_ms: null, resume_to: 'ready', diagnosis, next_action, policy_hash: policyRef(p) } }, to: 'waiting', reason: 'check_timeout',
+        emit: [{ event_id: `blocked-${ctx.id}-${ctx.k}`, kind: 'task.blocked', payload: { reason: 'check_timeout', diagnosis, next_action } }] });
+    }
     if (unavailable.length) {
       // GL04: unknown result is not passing; wait (backoff) then let the developer address the harness.
       const f = unavailable[0];
-      return onFailure(ctx, { signature: failureSignature({ test: f.check_id, errorClass: 'unknown_exit' }), passing, p, feedback: feedbackOf('evidence_unavailable', unavailable),
+      return onFailure(ctx, { signature: failureSignature({ test: f.check_id, errorClass: 'unknown_exit' }), passing, p, feedback: feedbackOf('evidence_unavailable', unavailable), settleStall: false,
         then: 'waiting', thenPatch: { wait: { reason: 'evidence_unavailable', until_ms: now() + 60_000, resume_to: 'repair', diagnosis: `check ${f.check_id} produced no exit code (${f.error})` } } });
     }
     const flaky = req.filter((r) => r.status === 'flaky');

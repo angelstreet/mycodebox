@@ -85,11 +85,18 @@ const CLASSIFIERS = [   // order = precedence
   ['research', /\b(research|investigate|compare|survey|explore|analy[sz]e|audit|evaluate|find out)\b/i],
   ['coding', /\b(implement|add|build|create|refactor|write|feature|function|module|endpoint|api|code)\b/i],
 ];
+const HIGH_STAKES = ['security', 'operations'];
 export function classifyWork(task) {
   const text = taskText(task);
   const signals = [];
   let type = 'unknown';
   for (const [t, re] of CLASSIFIERS) { const m = text.match(re); if (m) { type = t; signals.push(`"${m[0]}" -> ${t}`); break; } }
+  // Round 5: a declared task_class naming a work type wins over keywords (a docs task whose definition of done names
+  // its checks, "...-tests passes", is still docs work and gets the docs run limits), but never over security or
+  // operations keywords: task_class is a label, not a way to lower the routing class.
+  if (typeof task?.task_class === 'string' && task.task_class !== type && !HIGH_STAKES.includes(type) && CLASSIFIERS.some(([t]) => t === task.task_class)) {
+    type = task.task_class; signals.push(`task_class ${type}`);
+  }
   const scope = task?.scope;
   const files = Array.isArray(scope) ? scope.length : Array.isArray(scope?.paths) ? scope.paths.length : Array.isArray(scope?.files) ? scope.files.length : null;
   const deps = Array.isArray(task?.dependencies) ? task.dependencies.length : 0;
