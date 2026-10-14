@@ -196,7 +196,7 @@ const RUNTIMES = { claude: 'claude.js', codex: 'codex.js', minimax: 'minimax.js'
 // mcode models (the adapter qualifies them as minimax/<model>); "default" means mcode's own default.
 const passModel = (runtime, model) => !!model && (runtime === 'claude' || (runtime === 'minimax' && model !== 'default') || (runtime === 'opencode' && model.includes('/')));
 
-export async function createV2Runtime({ stateDir, env = process.env, repoRoot, log = (m) => console.log(m), safetyMs = 60_000, retryMs = 15_000 } = {}) {
+export async function createV2Runtime({ stateDir, env = process.env, repoRoot, log = (m) => console.log(m), safetyMs = 60_000, retryMs = 15_000, onRun = null } = {}) {   // onRun: optional history hook ({event:'start'|'end', name, provider, model, cwd, role}); a failure there never touches a run
   if (!stateDir || !repoRoot) throw new Error('v2 runtime: stateDir and repoRoot required');
   const v2dir = path.join(stateDir, 'v2');
   const store = createTaskStore({ dir: v2dir });   // the one store handle of this process (D-017)
@@ -221,10 +221,12 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
     for (const d of [wtRoot, reviewRoot, path.join(cfg.workRoot, 'vtmp')]) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
     const roots = [fs.realpathSync(wtRoot), fs.realpathSync(reviewRoot)];
     const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(v2dir, 'leases') }) });
-    const track = (adapter, run) => {
+    const track = (adapter, run, o = {}, runtime = null) => {
       const rec = { adapter, run };
       activeRuns.add(rec);
-      Promise.resolve(run?.done).finally(() => activeRuns.delete(rec));
+      const note = (event) => { try { Promise.resolve(onRun?.({ event, name: String(run?.run_id || o.run_id || ''), provider: runtime, model: o.model ?? null, cwd: o.cwd ?? null, role: o.role ?? null })).catch(() => {}); } catch { /* optional */ } };
+      if (onRun && (run?.run_id || o.run_id)) note('start');
+      Promise.resolve(run?.done).finally(() => { activeRuns.delete(rec); if (onRun && (run?.run_id || o.run_id)) note('end'); });
       return run;
     };
     const adapters = {};
@@ -247,7 +249,7 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
         }
         return sc.developer || [];
       };
-      adapters.fake = { ...fake, start: (o) => track(fake, fake.start({ ...o, effort: undefined, script: scriptOf(o) })),
+      adapters.fake = { ...fake, start: (o) => track(fake, fake.start({ ...o, effort: undefined, script: scriptOf(o) }), o, 'fake'),
         probeCapabilities: async () => ({ ...(await fake.probeCapabilities()), models: ['fake-dev', 'fake-review'] }) };
       const fe = { provider: 'fake', tier: 'standard', capabilities: ['text', 'code', 'tools', 'json_output'], efforts: [], context_tokens: 100000, latency_ms: 1, test_only: true };
       registry = reg.createRegistry({ version: 1, as_of: '2026-10-12', models: [{ runtime: 'fake', model: 'fake-dev', ...fe }, { runtime: 'fake', model: 'fake-review', ...fe }] });
@@ -268,8 +270,8 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
             const usd = Math.max(0.01, Math.min(cfg.claudeRunUsd, left ?? Infinity));
             a = createAdapter({ ...base, extraArgs: ['--max-budget-usd', usd.toFixed(2)] });
           }
-          try { return track(a, a.start(x)); } catch (e) {
-            if (x.effort != null && e?.code === 'E_UNSUPPORTED') return track(a, a.start({ ...x, effort: undefined }));
+          try { return track(a, a.start(x), x, rt); } catch (e) {
+            if (x.effort != null && e?.code === 'E_UNSUPPORTED') return track(a, a.start({ ...x, effort: undefined }), x, rt);
             throw e;
           }
         };

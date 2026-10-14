@@ -15,6 +15,12 @@ tmux new-session -s demo
 Open the URL configured in INSTALL from a device connected to your tailnet. Sessions appear after the next poll (normally about a second).
 The new-session button can also launch an installed agent; configure `AGENT_CMD_*` first as described in INSTALL.
 
+## Starting sessions from a shell
+
+`scripts/cbsession` starts a tmux agent session (Claude with Remote Control, Codex, MiniMax, OpenCode) with a handover or
+prompt. Keep `~/.local/bin/cbsession` as a symlink to it (`ln -sf <checkout>/scripts/cbsession ~/.local/bin/cbsession`);
+see [docs/skills/codebox-sessions.md](skills/codebox-sessions.md). Past sessions: `GET /api/history` ([REFERENCE](REFERENCE.md)).
+
 ## Read and reply
 
 1. Select a session on the board. Check its name and working directory before sending.

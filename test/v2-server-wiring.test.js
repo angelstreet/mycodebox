@@ -344,3 +344,53 @@ test('integrate hook: an unreachable remote is a note (no effect recorded, bound
   }
   assert.equal(effects.length, before, 'no effect recorded for an unreachable remote');
 });
+
+test('session history: dashboard create/kill, unknown tick start, v2 runs, cbsession endpoint (loopback + token), GET /api/history', { timeout: 60_000 }, async () => {
+  const w = world();
+  const s = await boot(w);
+  const histFile = path.join(w.state, 'session-history.jsonl');
+  const recs = () => (fs.existsSync(histFile) ? fs.readFileSync(histFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  try {
+    // The tick records the fixture tmux session first seen as 'unknown'.
+    await until(() => recs().some((r) => r.name === 'wiring-fixture' && r.started_by === 'unknown'), 15_000, () => s.log());
+    // Dashboard create (agent bash = no command) and kill.
+    const c = await s.api('POST', '/api/sessions', { name: 'hist-dash', agent: 'bash', cwd: path.join(w.base, 'home') });
+    assert.equal(c.status, 200, JSON.stringify(c.body));
+    const st = recs().find((r) => r.name === 'hist-dash');
+    assert.deepEqual([st.kind, st.started_by, st.provider, st.cwd, st.schema_version], ['session.started', 'dashboard', 'bash', fs.realpathSync(path.join(w.base, 'home')), 1]);
+    await sleep(2500);   // ticks must not add an 'unknown' start for it
+    assert.equal(recs().filter((r) => r.name === 'hist-dash' && r.kind === 'session.started').length, 1);
+    assert.equal((await s.api('DELETE', '/api/sessions/hist-dash?confirm=hist-dash')).status, 200);
+    assert.equal(recs().find((r) => r.name === 'hist-dash' && r.kind === 'session.ended').reason, 'killed');
+    // cbsession endpoint: token required.
+    const post = (headers, body) => fetch(`http://127.0.0.1:${s.port}/api/history/started`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    const body = { name: 'cb-one', provider: 'claude', model: 'haiku', cwd: '/w/x', prompt_ref: '/h/cb-one.prompt.md', handover_ref: null, remote_control_url: 'https://claude.ai/code/session_abc' };
+    assert.equal((await post({}, body)).status, 401);
+    assert.equal((await post({ 'x-ghosty-reporter-token': 'wrong' }, body)).status, 401);
+    const token = fs.readFileSync(path.join(w.state, 'reporter.token'), 'utf8').trim();
+    assert.equal((await post({ 'x-ghosty-reporter-token': token }, { ...body, name: 'bad name' })).status, 400);
+    assert.equal((await post({ 'x-ghosty-reporter-token': token }, body)).status, 200);
+    assert.equal(recs().find((r) => r.name === 'cb-one').started_by, 'cbsession');
+    // V2 runs: one started/ended pair per developer and reviewer run, named by run id.
+    const id = await create(s, w);
+    await inState(s, id, ['accepted', 'failed_unrecoverable'], 30_000);
+    await until(() => recs().filter((r) => r.kind === 'session.ended' && r.name.startsWith(id)).length >= 2, 10_000, () => JSON.stringify(recs()));
+    const v2s = recs().filter((r) => r.started_by === 'v2');
+    assert.ok(v2s.length >= 2 && v2s.every((r) => r.name.startsWith(id) && r.provider === 'fake'));
+    // API: rows for all of it.
+    const h = (await s.api('GET', '/api/history?limit=200')).body;
+    assert.ok(h.ok && h.total >= 5);
+    const dash = h.sessions.find((x) => x.name === 'hist-dash');
+    assert.equal(dash.started_by, 'dashboard'); assert.ok(dash.end > 0); assert.equal(dash.tokens, null); assert.equal(dash.cost_usd, null);
+    assert.equal(h.sessions.find((x) => x.name === 'cb-one').remote_control_url, 'https://claude.ai/code/session_abc');
+    assert.equal((await s.api('GET', '/api/history?started_by=v2')).body.sessions.every((x) => x.started_by === 'v2'), true);
+    assert.equal((await s.api('GET', '/api/history?status=nope')).status, 400);
+    assert.equal((await s.api('GET', '/api/history/hist-dash')).body.session.name, 'hist-dash');
+    assert.equal((await s.api('GET', '/api/history/none')).status, 404);
+    // Restart: open instances are rebuilt from the file, no duplicate 'unknown' start.
+    const before = recs().filter((r) => r.name === 'wiring-fixture').length;
+    await term(s);
+    const s2 = await boot(w);
+    try { await sleep(2500); assert.equal(recs().filter((r) => r.name === 'wiring-fixture').length, before); } finally { await term(s2); }
+  } finally { try { s.child.kill('SIGKILL'); } catch { /* gone */ } }
+});

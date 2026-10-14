@@ -81,6 +81,8 @@ import { trustFolder } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
+import { createSessionHistory } from './session-history.js';
+import { createHistoryView } from './history-view.js';
 import { createQuota } from './quota.js';
 import { createCredits } from './credits.js';
 import { createUsage, usageFile } from './usage-view.js';
@@ -640,6 +642,10 @@ const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTF
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
+const history = createSessionHistory({ file: join(STATE_DIR, 'session-history.jsonl') });   // start/end log of sessions; open instances are rebuilt from the file at boot
+const historyView = createHistoryView({ history, ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });
+const historyStarting = new Set();   // names being created right now: the tick must not record them as 'unknown'
+const historyLog = (rec) => history.append(rec).catch((e) => console.error('[history]', e.message));   // history never breaks a session action
 const layoutStore = createLayoutStore({ file: join(STATE_DIR, 'layout.json') });   // order / pins / groups of the session list
 const turnMeter = createTurnMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });   // elapsed + tokens of a finished turn, shown with its STATUS line (turn-meter.js)
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
@@ -884,6 +890,8 @@ async function pollOnce() {
   reporter.prune(new Set(Object.keys(status)));
   turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
+  history.sync(new Map(Object.entries(status).map(([k, v]) => [k, { provider: v.agent ?? null, model: v.model ?? null, cwd: v.cwd ?? null }])), { skip: historyStarting })
+    .catch((e) => console.error('[history] sync', e.message));
   const claudeIdx = await claudeIndex.get();
   for (const [k, v] of Object.entries(status)) {
     if (v.agent !== 'claude') continue;
@@ -1042,7 +1050,10 @@ const V2_ON = process.env.GHOSTY_V2 === '1';
 let v2 = null;
 if (V2_ON) {
   const { createV2Runtime } = await import('./orchestration/v2-runtime.js');
-  v2 = await createV2Runtime({ stateDir: STATE_DIR, env: process.env, repoRoot: dirname(fileURLToPath(import.meta.url)) });
+  v2 = await createV2Runtime({ stateDir: STATE_DIR, env: process.env, repoRoot: dirname(fileURLToPath(import.meta.url)),
+    onRun: (r) => historyLog(r.event === 'start'
+      ? { kind: 'session.started', name: r.name, provider: r.provider, model: r.model, cwd: r.cwd, started_by: 'v2', prompt_ref: null, handover_ref: null }
+      : { kind: 'session.ended', name: r.name, reason: 'exited' }) });
   v2.start().catch((e) => console.error(`[v2] start failed: ${e?.code || e?.message}`));
 }
 
@@ -1076,7 +1087,7 @@ async function sessionExists(name) {
   try { await exec(TMUX, ['has-session', '-t', `=${name}`]); return true; } catch { return false; }
 }
 
-async function createSession({ name, agent, cwd, priority }) {
+async function createSession({ name, agent, cwd, priority, model, prompt, handover }) {
   if (priority !== undefined && !isPriority(priority)) throw httpError(400, 'priority must be P0, P1 or P2');
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
   if (!Object.hasOwn(AGENT_CMDS, agent)) throw httpError(400, 'agent must be claude|codex|minimax|bash');
@@ -1084,9 +1095,11 @@ async function createSession({ name, agent, cwd, priority }) {
   // tmux silently rewrites '.' and ':' in session names to '_'.
   const real = name.replace(/[.:]/g, '_');
   if (await sessionExists(real)) throw httpError(409, 'session already exists');
+  historyStarting.add(real);
   try {
     await exec(TMUX, ['new-session', '-d', '-s', real, '-c', dir, '-x', '120', '-y', '40']);
   } catch (err) {
+    historyStarting.delete(real);
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
   try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
@@ -1095,6 +1108,8 @@ async function createSession({ name, agent, cwd, priority }) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
+  await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: prompt ?? null, handover_ref: handover ?? null });
+  historyStarting.delete(real);
   sessionMeta.reset(real);
   sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
   if (priority) sessionMeta.set(real, { priority });
@@ -1106,6 +1121,7 @@ async function killSession(name, confirm) {
   if (confirm !== name) throw httpError(400, 'confirm must equal the session name');
   if (!(await sessionExists(name))) throw httpError(404, 'no such session');
   await exec(TMUX, ['kill-session', '-t', `=${name}`]);
+  if (history.openOf(name)) await historyLog({ kind: 'session.ended', name, reason: 'killed' });
   lastSendAt.delete(name);
   managerForget(name);
   sessionMeta.reset(name);
@@ -1444,6 +1460,24 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': statSync(out).size, 'cache-control': 'public, max-age=86400' });
     createReadStream(out).on('error', () => { try { res.end(); } catch {} }).pipe(res);
     return;
+  }
+  // --- session history (session-history.js): cbsession reports its start here (loopback + reporter token); the rest is read-only ---
+  if (req.method === 'POST' && p === '/api/history/started') {
+    if (!isLoopback(req.socket.remoteAddress)) return json(res, 403, { ok: false, error: 'loopback only' });
+    if (!reporter.tokenOk(req.headers[TOKEN_HEADER])) return json(res, 401, { ok: false, error: 'bad token' });
+    try {
+      const b = await readJsonBody(req);
+      const r = await history.append({ ...b, kind: 'session.started', started_by: 'cbsession' });
+      return json(res, 200, { ok: true, record: r });
+    } catch (err) { return json(res, err instanceof SyntaxError || err instanceof TypeError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/history') {
+    try { return json(res, 200, historyView.list(Object.fromEntries(url.searchParams))); }
+    catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p.startsWith('/api/history/')) {
+    const row = historyView.detail(decodeURIComponent(p.slice('/api/history/'.length)), url.searchParams.get('start'));
+    return row ? json(res, 200, { ok: true, session: row }) : json(res, 404, { ok: false, error: 'no such session in history' });
   }
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
     try {

@@ -771,6 +771,24 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
   day for the last 14 days, plus `outliers` = sessions whose cost per active hour today is over 3x their
   project's median; rule in `buildSummary()`), a `today` block (totals / agent / project / model for the UTC day)
   and per session `today`, `days`, `activeHours` for the usage view.
+- **Session history** (`session-history.js`, `history-view.js`): `$GHOSTY_STATE_DIR/session-history.jsonl`, append-only,
+  one JSON object per line, `schema_version: 1`; a torn or invalid last line is skipped on read.
+  `{kind:'session.started', name, provider, model|null, cwd, started_by:'dashboard'|'cbsession'|'v2'|'manager'|'unknown',
+  prompt_ref, handover_ref, remote_control_url?, ts}` and `{kind:'session.ended', name, ts, reason:'killed'|'exited'|'vanished'}`.
+  `prompt_ref` is a file path or at most 200 sanitized characters of prompt text. A session instance is a start plus the
+  next end for the same name (names are reused). Writers: dashboard create/kill, the tick (a live tmux session with no
+  open instance becomes `unknown`, ts = first seen; one gone for 2 consecutive ticks ends as `vanished`; rebuilt from the
+  file at boot), V2 developer/reviewer runs (name = run id, `v2`, ended `exited`), and `scripts/cbsession`
+  via `POST /api/history/started` (loopback + `x-ghosty-reporter-token`; an `unknown` instance is enriched in place).
+  `GET /api/history?offset=&limit=&provider=&model=&started_by=&from=&to=&status=running|ended` (newest first, limit
+  default 50, max 200; from/to filter the start time, ms or ISO) returns `{ok,total,offset,limit,sessions:[{name, provider,
+  model, started_by, cwd, prompt_ref, handover_ref, remote_control_url, start, end (null = running), elapsed_ms, active_ms,
+  turns, tokens:{input,output,cache_read,cache_write}, billing:'metered'|'subscription', cost_usd, days:[{day,turns,tokens,cost_usd}]}]}`;
+  `GET /api/history/:name?start=<ms>` is one row (latest instance by default). Join with `usage-ledger.jsonl`: ledger
+  `label` = session name (V2 runs: ledger `cwd` = the run worktree) and ts inside [start, end]; the whole ledger is read
+  (cached by size+mtime), no day cap. `active_ms` = sum of gaps between consecutive turns, each gap capped at 5 minutes.
+  Unknown stays `null`: no turns -> `tokens`, `active_ms`, `cost_usd` null; any unpriced turn -> `cost_usd` null;
+  subscription providers (MiniMax) -> `billing:'subscription'`, cost null.
 - **Rerun the backfill**: `node usage/ingest.js --backfill` (forgets offsets, re-reads the last `BACKFILL_DAYS`
   days; Langfuse upserts by id, no duplicates). `--once` does a single pass.
 
