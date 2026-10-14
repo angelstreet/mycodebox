@@ -1,4 +1,4 @@
-STATUS: DELIVERED d26f962 https://github.com/angelstreet/mycodebox/pull/4 (round 6)
+STATUS: DELIVERED 795b1cf https://github.com/angelstreet/mycodebox/pull/6 (round 6b)
 
 # V2 progress
 
