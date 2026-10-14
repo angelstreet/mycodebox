@@ -306,3 +306,11 @@ class and priority, and the router defaults you set from it. Fix defects the run
 Gates on the final code SHA (both Node versions, reporter, acceptance incl. T20, leak scan), update V2_VERIFICATION.md,
 V2_PROGRESS.md and the PR description (round-4 section: limits, faster stop, routing, evaluation table and recommendation,
 spend). Keep the PR draft. Then set line 1 to `STATUS: DELIVERED <sha> <pr-url> (round 4)`.
+
+
+## 13. MiniMax M3 only (2026-10-14)
+
+The owner judged MiniMax-M3.1-Flash-Preview not good enough in live use. It is removed from `orchestration/models.json`,
+so the router never picks it; MiniMax-M3 is the only MiniMax model and the escalation ladder is M3 → Haiku → Sonnet → Opus.
+Session launchers default MiniMax sessions to M3. The benchmark keeps an explicit `minimax:m3.1-flash` spec for a future
+re-evaluation; the round-4 numbers in `docs/v2/SCORING.md` stay as recorded.
