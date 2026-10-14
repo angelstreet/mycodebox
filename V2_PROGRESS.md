@@ -1,4 +1,4 @@
-STATUS: DELIVERING 185d982 (round 8)
+STATUS: DELIVERED 185d982 https://github.com/angelstreet/mycodebox/pull/11 (round 8)
 
 # V2 progress
 
