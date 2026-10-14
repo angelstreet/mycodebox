@@ -398,3 +398,18 @@ test('R8-r3-2: stallOf never hands the previous stop\'s id to a new stop\'s cont
   t(p2, 3000);   // the pane changed; the new stop is not settled yet
   assert.equal(m.stallOf('sid1').id, null);
 });
+
+test('R8-r4: "Should I run the deploy tests?" is not a deploy request: nothing is typed, the owner gets it (runner on, ledger known, tests green)', async () => {
+  const repo = withOrigin();
+  snapshot = { ...snapshot, deployed: { 'env-a': { server: { ref: 'main', commit: git(repo, 'rev-list', '--max-parents=0', 'HEAD').trim() } } } };
+  git(repo, 'checkout', '-q', 'main');
+  const t0 = typed.length;
+  for (const [i, q] of ['Should I run the deploy tests?', 'Should I queue the deploy job page refactor?', 'Should I retry the deploy check?'].entries()) {
+    await stop(`nd${i}`, repo, `Tests: 1826/1826 pass on main.\n\n${q}`);
+    await wait(150);
+    assert.ok(!typed.some((x) => x.session === `nd${i}`), q);
+    assert.ok(!stalls().some((r) => r.type === 'deploy_decision' && r.session === `nd${i}`), `${q}: no deploy evaluation`);
+    assert.ok(esc(`nd${i}`) || owner.some((o) => o.session === `nd${i}`), `${q}: escalated`);
+  }
+  assert.equal(typed.length, t0);
+});

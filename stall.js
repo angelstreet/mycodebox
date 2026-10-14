@@ -372,7 +372,9 @@ const SERVICE_CTL_RE = new RegExp(FORBIDDEN_PARTS[1], 'i');
 // asking stays in the hard floor, so it is escalated, never answered.
 const REQ_BEFORE_RE = /\b(?:should|shall|can|could|may|would|will|do|did)\s+(?:i|we)\b|\bwant me to\b|\b(?:ready|ok(?:ay)?|fine|safe|time|going|about|needs?|plans?|planned|propos(?:e|ed|ing)) to\b|\bgo ahead\b|\blet me\b|\bi(?:'ll|'d| will| can| could| would| plan| propose| recommend| suggest)\b|\bwe(?:'ll| will| can| could| should| need)\b|\bnext(?: step)?\s*[:,-]|\bthen\b|\bplease\b|\b(?:whether|how|when|where) to\b|\b(?:ok(?:ay)?|fine|alright|good)\s+if\s+(?:i|we)\b|\bwant(?:s)? (?:me|us) to\b/i;
 // "request / queue / kick off / start / trigger / run / retry / want a deploy" and the passive "should this be deployed", "want it pushed"
-const ACTION_DET_RE = /\b(?:request|queue|kick off|kick|start|trigger|run|re-?run|retry|schedule|perform|do|want|need|order)\s+(?:(?:off|up)\s+)?(?:a|an|the|another|that|this|one)\s+$/i;
+const ACTION_DET_RE = /\b(?:request|queue|kick off|kick|start|trigger|run|re-?run|retry|schedule|perform|do|want|need|order)\s+(?:(?:off|up)\s+)?(?:a|an|the|another|that|this|one)\s+(?:(?:failed|failing|latest|last|previous|pending|same|quick|full|fresh|new|frontend|server|host)\s+)*$/i;
+// after "run / queue / retry ... the deploy" only these may follow: the end of the clause, "it", "now" / "again", "of / to / for / on <x>" (anything else makes "deploy" a noun: "the deploy tests", "the deploy job")
+const ACTION_AFTER_OK_RE = /^\s*(?:$|[?.!,;)]|(?:it|this|that|now|again|please)\b|(?:of|to|for|on|onto)\s+\S|(?:and|then)\b)/i;
 const PASSIVE_BEFORE_RE = /\b(?:be|get|getting|been)\s+$/i;
 const PASSIVE_ASK_RE = /\b(?:should|shall|can|could|may|might|must|would|ready|need(?:s)? to|ok(?:ay)? to|want(?:s)?|time to)\b/i;
 const WANT_IT_RE = /\bwant(?:s)?\s+(?:it|this|that|them|these|those)\s+$/i;
@@ -398,7 +400,7 @@ function requestHit(text, re) {
         if ((PASSIVE_BEFORE_RE.test(before) && PASSIVE_ASK_RE.test(before)) || WANT_IT_RE.test(before)) return hit;
         continue;
       }
-      if (ACTION_DET_RE.test(before) && !NOUN_AFTER_RE.test(after)) return hit;   // "request a deploy of main to env-a", "queue the deploy"
+      if (ACTION_DET_RE.test(before) && ACTION_AFTER_OK_RE.test(after)) return hit;   // "request a deploy of main to env-a", "queue the deploy"
       if (DET_BEFORE_RE.test(before) || NOUN_AFTER_RE.test(after) || (COMPOUND_AFTER_RE.test(after) && !/^update_core/i.test(m[0]))) continue;
       if (IMPERATIVE_BEFORE_RE.test(before) || REQ_BEFORE_RE.test(before)) return m[0];
       // "merge X and deploy once the host frees?": a conjunct of an imperative chain, unless the sentence is a question about a thing ("Should the page also ...")

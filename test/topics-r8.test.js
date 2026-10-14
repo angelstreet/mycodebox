@@ -101,3 +101,12 @@ test('R8-r3-3: merges follow the same request-form rule', () => {
   for (const x of ['Should I merge feat into main?', 'Shall we merge it?', 'say whether to merge task90-open?', 'Should this be merged?', 'merge feat, then push']) assert.ok(topicSplit(x).merge, x);
   assert.equal(mergeMatch('emerge'), null);
 });
+
+test('R8-r4: "run / queue / retry the deploy <noun>" is a noun: no topic, the stall stays hard', () => {
+  for (const x of ['Should I run the deploy tests?', 'Should I queue the deploy job page refactor?', 'Should I retry the deploy check?', 'Should I start the deploy script?']) {
+    const t = topicSplit(x); assert.equal(t.deploy, null, x); assert.ok(t.hard, `${x}: hard`);
+  }
+  for (const x of ['Should I retry the failed deploy to env-a?', 'Should I run the deploy?', 'Should I queue the deploy now?', 'Should I retry the deploy again?', 'Should I request a deploy of main to env-a?', 'Should I run the deploy for env-a?']) {
+    const t = topicSplit(x); assert.ok(t.deploy, x); assert.equal(t.hard, null, x);
+  }
+});

@@ -839,7 +839,15 @@ const topicCovered = (part, ok, evs = {}, envs = []) => {
   const mine = DECISION_KINDS.filter((k) => t[k]);
   if (!mine.length || !mine.every((k) => ok[k])) return false;
   if (hardMatch(part.text, { mergePresent: !!ok.merge, pushPresent: !!ok.push, deployPresent: !!ok.deploy })) return false;
-  if (t.push && evs.push) { const pa = parsePushAsk(part.text); if (pa.branches.some((b) => b !== evs.push.facts.branch) || pa.unparsed) return false; }
+  const word = (w) => new RegExp(String.raw`(?<![\w-])${String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\w-])`, 'i');
+  const bare = (verb) => new RegExp(String.raw`\b${verb}(?:\s+(?:it|this|that|now|again))*\s*(?:[?.!,;)]|$|\b(?:and|then)\b)`, 'i').test(part.text);
+  // a part is covered only if it names what was evaluated (the branch, the environment or the ref) or is a bare "push (it)?" / "deploy (it, now)?"
+  if (t.push && evs.push) {
+    const pa = parsePushAsk(part.text);
+    if (pa.branches.some((b) => b !== evs.push.facts.branch) || pa.unparsed) return false;
+    if (!word(evs.push.facts.branch).test(part.text) && !bare('push')) return false;
+  }
+  if (t.deploy && evs.deploy && !envs.some((n) => n === evs.deploy.facts.env && word(n).test(part.text)) && !word(evs.deploy.facts.ref).test(part.text) && !bare('deploy')) return false;
   if (t.deploy && evs.deploy) {
     const named = envs.filter((n) => new RegExp(String.raw`(?<![\w-])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\w-])`, 'i').test(part.text));
     if (named.some((n) => n !== evs.deploy.facts.env)) return false;
