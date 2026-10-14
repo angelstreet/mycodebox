@@ -121,7 +121,11 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
       if (status === 'fail' || status === 'flaky') {
         failures = !last.artifactOk && last.exit === check.expect.exit
           ? [{ test: `${check.id}:${check.artifact}`, error_class: 'missing_artifact', message: `declared artifact ${check.artifact} was not produced` }]
-          : parseFailures(runs.find((r, i) => !ok[i] && r.output)?.output ?? last.output, last.exit);
+          : (() => {
+            // The first real failing exit names the failure; a rerun without an exit code (timeout) must not.
+            const f = runs.find((r, i) => r.exit !== null && !ok[i]) ?? last;
+            return parseFailures(f.output || runs.find((r, i) => !ok[i] && r.output)?.output || last.output, f.exit);
+          })();
       }
       results.push({ check_id: check.id, required: check.required, status, exits: runs.map((r) => r.exit), failures,
         output_tail: String(runs.find((r, i) => !ok[i])?.output || '').slice(-3000), error: runs.find((r) => r.error)?.error ?? null,
