@@ -81,7 +81,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
-import { createPush, createAlerts, tierConfig } from './push.js';
+import { createPush, createAlerts, tierConfig, isQuietHours } from './push.js';
 import { launchConfig, launchWarnings } from './launch-config.js';
 import { trustFolder } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
@@ -98,7 +98,7 @@ import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -1799,12 +1799,12 @@ async function handleHttp(req, res) {
       const item = await decidedItem(id);
       const exists = item ? await sessionExists(item.session) : false;
       const st = exists && ['merge', 'push', 'deploy'].includes(item.kind) ? (await poll()).status?.[item.session] : null;
-      const plan = revertPlan(item, { exists, state: st?.state ?? null, draft: !!st?.stall?.draft });
+      const plan = revertPlan(item, { exists, state: st?.state ?? null, draft: !!st?.stall?.draft, menu: (st?.stall?.options?.length || 0) > 0, reverted: item ? (await revertedIds()).has(id) : false });
       if (plan.error) throw httpError(plan.status, plan.error);
       if (plan.draft) return json(res, 200, { ok: true, draft: plan.draft, label: plan.label, session: item.session });
-      await assertAgentPane(item.session, plan.by);
+      await assertAgentPane(item.session, by);   // the same guarded send path as every other owner send
       await sendKeys(item.session, plan.send, true);
-      logSend(item.session, plan.by, { keys: plan.send });
+      logSend(item.session, by, { keys: plan.send });
       await logRevert({ id, session: item.session, by });
       return json(res, 200, { ok: true, sent: true, session: item.session, text: plan.send });
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
@@ -2060,10 +2060,12 @@ server.listen(PORT, HOST, async () => {
         url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision' });
     },
     decideContext: () => { const snap = deployRunner.snapshot(); return { deploys: snap, leases: leaseStore.peek(), envs: snap.envs || [] }; },
-    onDigest: ({ day, count, text }) => {
-      push.record({ title: `Decided for you today: ${count}`, body: text, url: '/?decided=1', tag: 'decided-digest' });
-      alert(`decided:digest:${day}`, { title: `Decided for you today: ${count}`, body: text, url: '/?decided=1', tag: 'ghosty-decided', tier: 'digest', ntfyTags: 'white_check_mark' }, 0);
+    // one feed item per day: pushed (notify = record + wake) while the owner is awake, only recorded in quiet hours
+    onDigest: ({ count, text }) => {
+      const item = { title: `Decided for you today: ${count}`, body: text, url: '/?decided=1', tag: 'decided-digest' };
+      if (isQuietHours(Date.now(), pushTierConfig())) push.record(item); else push.notify(item).catch((e) => console.error('[decided-digest] push', e.message));
     },
+    onNotice: (body) => push.record({ title: 'Autonomy on', body, url: '/', tag: 'autonomy' }),
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.

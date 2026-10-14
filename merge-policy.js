@@ -254,7 +254,7 @@ export const short = (sha) => String(sha || '').slice(0, 12);
 function summarize(facts, ev) {
   const bits = [];
   bits.push(facts.conflicts?.length ? `merges with convention-file conflicts only (${facts.conflicts.join(', ')})` : 'merges cleanly');
-  bits.push(ev.state === 'green' ? `tests green${ev.quote ? ` (${ev.quote.slice(0, 80)})` : ''}` : facts.docsOnly ? 'docs/test-only change' : `tests ${ev.state}`);
+  bits.push(ev.state === 'green' ? 'tests green' : facts.docsOnly ? 'docs/test-only change' : `tests ${ev.state}`);
   bits.push(`${facts.files.length} file${facts.files.length === 1 ? '' : 's'}${facts.docsOnly ? ' (docs-only)' : ''}`);
   return bits.join(', ');
 }

@@ -213,6 +213,12 @@ const FORBIDDEN_PARTS = [
   String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevok(?:e|ing)\b|\brotat(?:e|ing)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b`,
   // money and customers
   String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+  // host administration and schema tools (round 8: strictly more conservative for every caller)
+  String.raw`sudoers|/etc/sudo|visudo`,
+  String.raw`\bunit file|/etc/systemd|systemctl (?:enable|disable|daemon-reload|mask)|\.service\b`,
+  String.raw`\breboot\b|\bshutdown\b|\bsudo\b`,
+  String.raw`alembic|upgrade head|prisma migrate|db:migrate|flyway|liquibase|knex migrate`,
+  String.raw`\breset\b[^.\n]{0,20}\b(?:database|db|schema)\b|\bre-?create\b[^.\n]{0,20}\bschema\b`,
 ];
 export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
 // The merge topic alone, and the floor without it: a merge is decided by the manager's merge evaluation (merge-policy.js);
@@ -230,22 +236,20 @@ const HARD_EXTRA = [
 // Topic split (round 8): merge, push and deploy are decided by the manager (OWNER_DECISIONS §15); the rest stays hard.
 // Deploy topic parts come from FORBIDDEN_PARTS (deploy words, ship/release/promote to prod, go live) plus a restart of a service-like thing.
 const DEPLOY_WORDS = FORBIDDEN_PARTS[0], DEPLOY_SHIP = FORBIDDEN_PARTS[3], RESTART_ANY = FORBIDDEN_PARTS[2];
-const RESTART_DEPLOY = String.raw`\brestart\b[^.\n]{0,30}\b(?:service|server|host|daemon|ghosty|frontend|backend)\b`;
-const RESTART_UNIT = String.raw`\brestart\b[^.\n]{0,30}\bunit\b`;
-const PUBLISH_TAGS = FORBIDDEN_PARTS[4];
-const PUBLISH_ONLY = String.raw`\bpublish(?:ed|ing)?\b|\bterraform\b[^.\n]{0,20}\b(?:apply|destroy)\b|\bapply\b[^.\n]{0,20}\bterraform\b`;
-export const DEPLOY_RE = new RegExp([DEPLOY_WORDS, DEPLOY_SHIP, RESTART_DEPLOY].join('|'), 'i');
+// A restart of a service is not a deploy by itself: with a deploy word it rides along, never the ghosty service or a unit.
+const RESTART_HARD = String.raw`\brestart\b[^.\n]{0,30}\b(?:unit|ghosty)\b`;
+const PUSH_TAGS = String.raw`\bpush(?:ed|es|ing)?\b[^.\n]{0,30}\btags?\b`;   // pushing a tag publishes: hard
+export const DEPLOY_RE = new RegExp([DEPLOY_WORDS, DEPLOY_SHIP].join('|'), 'i');
 // A push mention: the present tense or a "pushed to main"; whether it is hard is decided by HARD_PUSH_RE.
 export const PUSH_RE = /\bpush(?:ing)?\b|\bpushed\b[^.\n]{0,30}\bmain\b/i;
-const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON), HARD_GIT].join('|'), 'i');
+const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON), HARD_GIT, PUSH_TAGS].join('|'), 'i');
 const colonHit = (text) => { for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_COLON_RE); if (k) return k[0]; } return null; };
 const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false } = {}) => {
   const drop = new Set([MERGE_MAIN]);
   if (mergePresent || pushPresent) { drop.add(PUSH_MAIN); drop.add(GIT_PUSH); }
   if (deployPresent) { drop.add(DEPLOY_WORDS); drop.add(DEPLOY_SHIP); drop.add(RESTART_ANY); }
   let parts = [...FORBIDDEN_PARTS.filter((p) => !drop.has(p)), ...HARD_EXTRA.filter((p) => p !== PUSH_COLON)];
-  if (pushPresent) parts = parts.map((p) => (p === PUBLISH_TAGS ? PUBLISH_ONLY : p));   // push --tags / push a tag is a push
-  if (deployPresent) parts.push(RESTART_UNIT);
+  if (deployPresent) parts.push(RESTART_HARD);
   return parts;
 };
 const HARD_RES = new Map();
@@ -362,10 +366,37 @@ export function hardMatch(text, opts = {}) {
   return null;
 }
 const SERVICE_CTL_RE = new RegExp(FORBIDDEN_PARTS[1], 'i');
+// A deploy or a push counts as a topic only when the agent asks to perform it ("Should I deploy ...", "Deploy X to Y?", "ready to deploy"),
+// not when the word is a noun or a modifier ("the deploy queue page", "push notifications"). Text that mentions the word without
+// asking stays in the hard floor, so it is escalated, never answered.
+const REQ_BEFORE_RE = /\b(?:should|shall|can|could|may|would|will|do|did)\s+(?:i|we)\b|\bwant me to\b|\b(?:ready|ok(?:ay)?|fine|safe|time|going|about|needs?|plans?|planned|propos(?:e|ed|ing)) to\b|\bgo ahead\b|\blet me\b|\bi(?:'ll|'d| will| can| could| would| plan| propose| recommend| suggest)\b|\bwe(?:'ll| will| can| could| should| need)\b|\bnext(?: step)?\s*[:,-]|\bthen\b|\bplease\b/i;
+const IMPERATIVE_BEFORE_RE = /^\s*(?:[(\[]?\w{1,2}[)\]:.]\s*|\d+[.)]\s*|[-*]\s*)?(?:(?:and|then|also|please|now|first|just|run|execute|try|bash|sh|npm|node)\s+)*(?:git\s+)?$/i;
+const DET_BEFORE_RE = /\b(?:the|a|an|this|that|our|your|my|each|every|last|next|new|failed|failing|pending|recent|same|its|their|another|any|no|per|of|every)\s+$/i;
+const NOUN_AFTER_RE = /^(?:\s+(?:queue|queues|page|pages|button|buttons|log|logs|script|scripts|user|users|key|keys|notifications?|notifs?|status|ledger|runner|view|panel|config|configuration|history|tab|list|step|steps|flow|pipeline|hooks?|events?|messages?|endpoint|api|token|time|date|rules?|plan|process|window|badge|banner|card|sheet|screen|name|names|ids?|state|feature|support|mode|policy|command|commands)\b|(?:ed|ment|ments|er|ers)\b)/i;
+const COMPOUND_AFTER_RE = /^[-_/.]\w/;   // deploy-runner, deploy.sh, push/notify (update_core.sh is the command itself)
+const CONJUNCT_BEFORE_RE = /(?:,|;|\band|\bthen|\bplus)\s+(?:(?:also|then|now|just)\s+)*$/i;
+const ABOUT_THING_RE = /^\s*(?:\W*\w{0,2}[)\]:.]\s*)?(?:should|shall|can|could|may|would|will|do|does|did|is|are|was|were|what|why|how|which|when|where)\s+(?:the|a|an|this|that|these|those|our|your|my|its|their|\w+'s)\b/i;
+function requestHit(text, re) {
+  const g = new RegExp(re.source, 'ig');
+  for (const sent of String(text).split(/(?<=[.!?])\s+|\n+/)) {
+    g.lastIndex = 0;
+    let m;
+    while ((m = g.exec(sent))) {
+      if (!m[0]) { g.lastIndex++; continue; }
+      const before = sent.slice(0, m.index), after = sent.slice(m.index + m[0].length);
+      if (DET_BEFORE_RE.test(before) || NOUN_AFTER_RE.test(after) || (COMPOUND_AFTER_RE.test(after) && !/^update_core/i.test(m[0]))) continue;
+      if (IMPERATIVE_BEFORE_RE.test(before) || REQ_BEFORE_RE.test(before)) return m[0];
+      // "merge X and deploy once the host frees?": a conjunct of an imperative chain, unless the sentence is a question about a thing ("Should the page also ...")
+      if (CONJUNCT_BEFORE_RE.test(before) && !ABOUT_THING_RE.test(sent)) return m[0];
+    }
+  }
+  return null;
+}
+const requested = (text, re) => { for (const v of [String(text), ...textVariants(text)]) { const k = requestHit(v, re); if (k) return k; } return null; };
 // systemctl / pm2 commands stay hard: no deploy topic beside them.
-export const deployMatch = (text) => (matchWith(SERVICE_CTL_RE, text) ? null : matchWith(DEPLOY_RE, text));
+export const deployMatch = (text) => (matchWith(SERVICE_CTL_RE, text) ? null : requested(text, DEPLOY_RE));
 // A plain push (not a force, a rewrite, a delete or a push to prod/staging/live: those stay hard).
-export const pushMatch = (text) => (matchWith(HARD_PUSH_RE, text) || colonHit(text) ? null : matchWith(PUSH_RE, text));
+export const pushMatch = (text) => (matchWith(HARD_PUSH_RE, text) || colonHit(text) ? null : requested(text, PUSH_RE));
 export function topicSplit(text) {
   const merge = mergeMatch(text), push = pushMatch(text), deploy = deployMatch(text);
   return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };

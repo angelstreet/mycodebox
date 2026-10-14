@@ -65,7 +65,7 @@ test('--kind deploy via the registry: free env -> deploy with a rollback; a leas
   const ok = await run(args, { env: { GHOSTY_STATE_DIR: dir, DEPLOY_REGISTRY: reg } });
   assert.equal(ok.json.verdict, 'deploy', JSON.stringify(ok.json));
   assert.equal(ok.json.env, 'env-a'); assert.equal(ok.json.scope, 'full'); assert.equal(ok.json.ref, 'feat');
-  assert.equal(ok.json.rollback, `Rollback: request a deploy of main@${prev.slice(0, 12)} to env-a (full).`);
+  assert.equal(ok.json.rollback, `Rollback: request a deploy of ${prev.slice(0, 12)} to env-a (full).`);
   assert.equal(JSON.parse(readFileSync(join(dir, 'manager-decisions.jsonl'), 'utf8').trim()).kind, 'deploy');
   const leased = await run(args.slice(0, -1), { env: { GHOSTY_STATE_DIR: dir, DEPLOY_REGISTRY: fakeRegistry({ leases: [{ id: 'l1', env: 'env-a', resource: '*', agent: 'codebox:other' }] }) } });
   assert.equal(leased.json.verdict, 'escalate'); assert.deepEqual(leased.json.reasons, ['env-a leased by codebox:other (*)']);
@@ -75,11 +75,12 @@ test('--kind deploy via the registry: free env -> deploy with a rollback; a leas
 
 test('--kind deploy falls back to the read-only HTTP API; with neither reachable it escalates "deploy queue state unavailable"', async () => {
   const repo = makeRepo(), dir = stateDir();
+  const base = git(repo, 'rev-list', '--max-parents=0', 'HEAD').trim();
   const seen = [];
   const srv = http.createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);
     res.setHeader('content-type', 'application/json');
-    if (req.url === '/api/deploys') res.end(JSON.stringify({ ok: true, deploys: [], deployed: {}, envs: ['env-a', 'env-b'] }));
+    if (req.url === '/api/deploys') res.end(JSON.stringify({ ok: true, deploys: [], deployed: { 'env-a': { server: { ref: 'main', commit: base } } }, envs: ['env-a', 'env-b'] }));
     else if (req.url === '/api/leases') res.end(JSON.stringify({ ok: true, leases: [], waiters: [] }));
     else { res.statusCode = 404; res.end('{}'); }
   });

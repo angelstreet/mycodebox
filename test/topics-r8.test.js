@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { topicSplit, hardMatch, forbiddenMatch, FORBIDDEN_RE, pushMatch, deployMatch } from '../stall.js';
 
 test('push topic: a plain push of a branch, push to main, push a tag', () => {
-  for (const x of ['push feat?', 'git push origin feat', 'push to main', 'git push -u origin feature', 'push --tags', 'push the tag v1.2.0', 'merge X into main and push main']) {
+  for (const x of ['push feat?', 'git push origin feat', 'push to main', 'git push -u origin feature', 'merge X into main and push main']) {
     const t = topicSplit(x);
     assert.ok(t.push, x); assert.equal(t.hard, null, x);
   }
@@ -11,7 +11,7 @@ test('push topic: a plain push of a branch, push to main, push a tag', () => {
 
 test('push stays hard: force, lease, mirror, delete, +ref, :ref, prod / staging / live, rewrite, amend, filter', () => {
   for (const x of ['git push --force', 'push -f origin feat', 'git push --force-with-lease', 'git push --mirror', 'git push origin --delete old', 'push origin +main', 'git push origin :old-branch',
-    'push origin HEAD:production', 'push to prod', 'push to production', 'push to staging', 'push to live', 'rewrite history', 'amend the last commit on main then push', 'run filter-branch', 'git filter-repo']) {
+    'push origin HEAD:production', 'push --tags', 'Push the tag v1.2 to origin?', 'push the tag v1.2.0', 'push to prod', 'push to production', 'push to staging', 'push to live', 'rewrite history', 'amend the last commit on main then push', 'run filter-branch', 'git filter-repo']) {
     const t = topicSplit(x);
     assert.equal(t.push, null, `${x}: no push topic`);
     assert.ok(t.hard, `${x}: hard`);
@@ -20,7 +20,7 @@ test('push stays hard: force, lease, mirror, delete, +ref, :ref, prod / staging 
 });
 
 test('deploy topic: deploy words, ship / release / promote to prod, go live, restart the service', () => {
-  for (const x of ['deploy to env-a', 'redeploy it', 'run update_core.sh', 'rollout the frontend', 'roll out to staging', 'ship it to production', 'release to prod', 'promote to live', 'go live', 'restart the ghosty service', 'restart the server', 'restart the frontend', 'restart the backend', 'restart the host', 'restart the daemon']) {
+  for (const x of ['deploy to env-a', 'redeploy it', 'run update_core.sh', 'rollout the frontend', 'roll out to staging', 'ship it to production', 'release to prod', 'promote to live', 'go live']) {
     const t = topicSplit(x);
     assert.ok(t.deploy, x); assert.equal(t.hard, null, x);
   }
@@ -54,4 +54,33 @@ test('round-7 signatures keep working: hardMatch(text, { mergePresent }) and the
   assert.ok(forbiddenMatch('deploy it'));
   assert.ok(FORBIDDEN_RE.test('git push now') && FORBIDDEN_RE.test('restart the ghosty service') && FORBIDDEN_RE.test('push --tags'));
   assert.equal(pushMatch('push to prod'), null); assert.equal(deployMatch('systemctl restart x'), null);
+});
+
+// ---- round 8 review fixes ----
+test('R8-2: a noun mention is not a request: only an ask to perform it is a deploy / push topic', () => {
+  const noun = topicSplit('Should the deploy queue page also show the env-a name?');
+  assert.equal(noun.deploy, null); assert.ok(noun.hard, 'a deploy word that is not an ask stays in the hard floor');
+  const notif = topicSplit('Should I add push notifications to the app?');
+  assert.equal(notif.push, null);
+  for (const x of ['Should I deploy main to env-a?', 'Shall I push the branch?', 'Want me to deploy it?', 'ready to deploy', 'Deploy X to env-a?', 'Push it?', 'merge X and deploy once the host frees?', 'Can I push feat now?']) {
+    const t = topicSplit(x); assert.ok(t.deploy || t.push, x); assert.equal(t.hard, null, x);
+  }
+  assert.equal(topicSplit('Should I show deploy status on the page?').deploy, null);
+  assert.equal(topicSplit('Should I update the deploy script?').deploy, null);
+});
+
+test('R8-6a: a bare restart of a service is hard, not a deploy topic; the ghosty service is never a deploy target', () => {
+  for (const x of ['Shall I restart the ghosty service?', 'Shall I restart the server?', 'restart the daemon', 'restart the host']) {
+    assert.equal(topicSplit(x).deploy, null, x); assert.ok(topicSplit(x).hard, x);
+  }
+  assert.ok(topicSplit('Shall I deploy it and restart the ghosty service?').hard, 'ghosty stays hard beside a deploy');
+  assert.equal(topicSplit('Shall I deploy it and restart the server?').hard, null, 'a restart rides along with a deploy word');
+});
+
+test('R8-6b: sudoers, unit files, reboot, schema tools and database resets are hard everywhere (FORBIDDEN_RE grew)', () => {
+  for (const x of ['add the deploy user to sudoers', 'edit /etc/sudoers.d/deploy', 'run visudo', 'Deploy it and reboot the host', 'sudo apt update', 'shutdown the box', 'run alembic upgrade head', 'prisma migrate deploy', 'rails db:migrate', 'run flyway', 'reset the database', 're-create the schema',
+    'The unit file is written at /etc/systemd/system/x.service', 'systemctl enable x', 'systemctl daemon-reload']) {
+    assert.ok(forbiddenMatch(x), `forbidden: ${x}`);
+    assert.ok(topicSplit(`Shall I merge, push and deploy and ${x}?`).hard, `hard even with all topics decided: ${x}`);
+  }
 });

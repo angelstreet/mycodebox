@@ -14,22 +14,39 @@ const REF_TOKEN = String.raw`[\w][\w./@+-]*`;
 const clean = (t) => String(t || '').replace(/^[`'"(\[]+|[`'"),.;:?!\]]+$/g, '');
 const SKIP = new Set(['it', 'this', 'that', 'them', 'these', 'those', 'the', 'a', 'an', 'my', 'our', 'your', 'its', 'branch', 'pr', 'work', 'changes', 'change', 'commit', 'commits', 'everything', 'all', 'now', 'and', 'then', 'to', 'too', 'again', 'after', 'before', 'once', 'when', 'if', 'whether', 'or', 'so', 'first', 'next', 'later', 'up', 'out', 'back', 'yes', 'no', 'origin', 'remote', 'upstream', 'with', 'for', 'on', 'in', 'of', 'at', 'as', 'forward', 'through', 'tags', 'tag', 'safely', 'please', 'there', 'here', 'from', 'only', 'just', 'also', 'both', 'main-line']);
 
-// "push [-u] [origin] <branch> [to [origin/]<dest>]" -> { branch, dest } (null when not named).
+// "push [-u] [origin] <branch> [to [origin/]<dest>]" -> { branch, dest, branches, unparsed, remote }.
+// branch / dest: the first named (null when not named); branches: every distinct branch the text names; unparsed: a ref-like word after
+// "push" that no branch rule took ("push the tag v1.2", "push the release candidate"); remote: another remote than origin.
 export function parsePushAsk(text) {
   const t = String(text || '');
   const tok = String.raw`(${REF_TOKEN}|[\`'"]${REF_TOKEN}[\`'"])`;
   const re = new RegExp(String.raw`\bpush(?:ing)?\b\s+(?:-{1,2}[\w-]+\s+)*(?:origin\s+)?${tok}(?:\s+to\s+(?:the\s+)?(?:origin\/)?${tok})?`, 'ig');
-  let m;
+  let m, first = null;
+  const branches = [];
   while ((m = re.exec(t))) {
     const branch = clean(m[1]).replace(/^origin\//, '');
     if (!branch || SKIP.has(branch.toLowerCase())) continue;
-    const dest = m[2] ? clean(m[2]).replace(/^origin\//, '') : null;
-    return { branch, dest: dest && !SKIP.has(dest.toLowerCase()) ? dest : null };
+    if (!branches.includes(branch)) branches.push(branch);
+    if (!first) { const dest = m[2] ? clean(m[2]).replace(/^origin\//, '') : null; first = { branch, dest: dest && !SKIP.has(dest.toLowerCase()) ? dest : null }; }
   }
+  const rm = /\bpush(?:ing)?\b(?:\s+-{1,2}[\w-]+)*(?:\s+(?:it|this|that|the branch|to))?\s+(?:to\s+)?(upstream|fork|mirror|backup|github|gitlab)\b/i.exec(t);
+  const remote = rm ? rm[1].toLowerCase() : null;
+  if (first) return { ...first, branches, unparsed: null, remote };
   // "push to main", "push it to origin/main": only filler words between push and "to" ("push and deploy to env-a" names no destination)
   const only = new RegExp(String.raw`\bpush(?:ing)?(?:\s+(?:it|this|that|them|these|the|branch|changes|work|commits?|origin|up|now))*\s+to\s+(?:the\s+)?(?:origin\/)?${tok}`, 'i').exec(t);
   const dest = only ? clean(only[1]).replace(/^origin\//, '') : null;
-  return { branch: null, dest: dest && !SKIP.has(dest.toLowerCase()) ? dest : null };
+  // a word after push that the branch rules skipped but that names something ("push the release candidate"): the fallback must not stand
+  let unparsed = null;
+  const pm = /\bpush(?:ing)?\b([^!?\n]*)/i.exec(t);
+  if (pm) {
+    for (const raw of pm[1].trim().split(/\s+/)) {
+      const w = clean(raw);
+      if (/^(?:to|and|then|before|after|once|when|if|so|or|but|while|because)$/i.test(w)) break;
+      if (!w || w.startsWith('-') || SKIP.has(w.toLowerCase())) { if (/[.;]$/.test(raw)) break; continue; }
+      unparsed = w; break;
+    }
+  }
+  return { branch: null, dest: dest && !SKIP.has(dest.toLowerCase()) ? dest : null, branches, unparsed, remote };
 }
 
 const resolves = async (repo, ref) => (await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).code === 0;
@@ -67,6 +84,7 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
   const cfg = { ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...config };
   const parsed = parsePushAsk(text);
   let bName = branch || parsed.branch, dName = dest || parsed.dest;
+  const namedBranches = branch ? [branch] : parsed.branches;
   const facts = { ok: false, repo: null, repoName: null, branch: bName, dest: dName, branchSha: null, remoteSha: null, ahead: 0, files: [], docsOnly: false, sensitive: [], binary: [], scanError: null, afterMerge: !!afterMerge };
   const done = (verdict, why, decision, tests, extra = {}) => ({ verdict, reasons: verdict === 'push' ? [] : why, rationale: verdict === 'push' ? extra.rationale : why.join('; '),
     question: `Push ${facts.branch || bName || 'the branch'} to origin/${facts.dest || dName || facts.branch || 'its branch'}?`, facts, tests: tests || { state: 'unknown', explicit: false, quote: '' }, decision });
@@ -76,6 +94,9 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
   if (!repo) return esc('not a git repository');
   const names = await repoNames(repo);
   facts.repo = repo; facts.repoName = basename(repo);
+  if (parsed.remote) return esc(`push to another remote (${parsed.remote}): only origin is decided`);
+  if (namedBranches.length > 1) return esc(`which branch? the text names ${namedBranches.join(' and ')}`);
+  if (!afterMerge && !bName && parsed.unparsed) return esc(`the text names ${parsed.unparsed}, which is not a branch I can resolve: which ref?`);
   if (optedOut([...(cfg.pushOptOut || []), ...(cfg.mergeOptOut || [])], repo, names)) return esc(`repo ${facts.repoName} is opted out of manager push decisions`);
   // a push that only lands a merge approved in the same reply: the target branch, after the merge
   if (afterMerge && !bName) { bName = afterMerge.target; dName = dName || afterMerge.target; facts.branch = bName; facts.dest = dName; }
@@ -86,6 +107,7 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
     bName = c; facts.branch = c;
   }
   dName = dName || bName; facts.dest = dName;
+  if (dName !== bName) return esc(`push to another ref (${bName} -> origin/${dName}): use the merge evaluation`);
   const bRef = `refs/heads/${bName}`;
   if (!(await resolves(repo, bRef))) return esc(`branch ${bName} not found`);
   facts.branchSha = await shaOf(repo, bRef);
@@ -112,13 +134,22 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
   }
   facts.ok = true;
   if (afterMerge) {
-    // the merge evaluation already covered the branch (tests, sensitive paths); only origin/<target> must be an ancestor of the merged result
+    // the merge evaluation covered the branch; what local <target> carries beyond origin/<target> is scanned here, fail closed
+    if (!hasRemote) return esc(`origin/${dName} not found: nothing to compare the merged push with`);
     facts.ahead = Math.max(facts.ahead, 1);
     const tests = afterMerge.tests || { state: 'unknown', explicit: false, quote: '' };
+    const sc0 = await scanRange(repo, spec, cfg.mergeConventionFiles);
+    if (sc0.error) return esc(`git error: ${sc0.error}`, tests);
+    Object.assign(facts, sc0.facts);
+    const rs = [];
+    for (const x of facts.sensitive) rs.push(`local ${bName} carries ${SENS_TEXT[x.why] || 'a sensitive path'}: ${x.file}`);
+    if (facts.scanError) rs.push(`local ${bName}: diff too large or unreadable to scan`);
+    for (const f of facts.binary) rs.push(`local ${bName} adds a binary file: ${f}`);
+    if (rs.length) return esc(rs, tests);
     const r = await rate('push', 'push', { jev, jevFacts: { session, repo: facts.repoName, branch: bName, dest: dName, ahead: facts.ahead, after_merge: true, floor_reasons: [] }, session, min: cfg.pushMinConfidence, reasoning: afterMerge.decision?.confidence >= cfg.pushMinConfidence ? 0.9 : 0.8 });
     if (r.escalate) return done('escalate', [r.escalate], r.decision, tests);
     facts.docsOnly = !!afterMerge.facts?.docsOnly;
-    return done('push', [], r.decision, tests, { rationale: `lands the merge of ${afterMerge.branch} approved in this reply; ${hasRemote ? `fast-forward of origin/${dName}` : 'new remote branch'}` });
+    return done('push', [], r.decision, tests, { rationale: `lands the merge of ${afterMerge.branch} approved in this reply; fast-forward of origin/${dName}` });
   }
   if (facts.ahead === 0) return esc('nothing to push');
   const sc = await scanRange(repo, spec, cfg.mergeConventionFiles);
@@ -136,7 +167,7 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
   const r = await rate('push', 'push', { jev, jevFacts: { session, repo: facts.repoName, branch: bName, dest: dName, ahead: facts.ahead, tests: tests.state, tests_quote: tests.quote, docs_only: facts.docsOnly, files: facts.files.length, floor_reasons: [] }, session, min: cfg.pushMinConfidence, reasoning: strong ? 0.9 : 0.8 });
   if (r.escalate) return done('escalate', [r.escalate], r.decision, tests);
   const bits = [`${facts.ahead} commit${facts.ahead === 1 ? '' : 's'} ${hasRemote ? `fast-forward origin/${dName}` : `to the new origin/${dName}`}`,
-    tests.state === 'green' ? `tests green${tests.quote ? ` (${tests.quote.slice(0, 80)})` : ''}` : 'docs/test-only change', `${facts.files.length} file${facts.files.length === 1 ? '' : 's'}${facts.docsOnly ? ' (docs-only)' : ''}`];
+    tests.state === 'green' ? 'tests green' : 'docs/test-only change', `${facts.files.length} file${facts.files.length === 1 ? '' : 's'}${facts.docsOnly ? ' (docs-only)' : ''}`];
   return done('push', [], r.decision, tests, { rationale: bits.join(', ') });
 }
 
@@ -166,9 +197,9 @@ export function lastDeployed(deploys, env, scope) {
   return (TARGETS[scope] || TARGETS.full).map((t) => ({ target: t, ...(per[t] || {}) })).filter((x) => x.commit || x.ref);
 }
 export const rollbackText = (env, scope, last) => {
-  const p = last?.[0];
-  const prev = p ? (p.commit ? `${p.ref ? p.ref + '@' : ''}${String(p.commit).slice(0, 12)}` : p.ref) : null;
-  return `Rollback: request a deploy of ${prev || 'the previous release'} to ${env} (${scope}).`;
+  const p = last?.find((x) => x.commit);
+  return p ? `Rollback: request a deploy of ${String(p.commit).slice(0, 12)} to ${env} (${scope}).`
+    : `Rollback: the previous release is unknown for ${env} (${scope}): ask the owner before deploying anything else.`;
 };
 
 // -> { verdict: 'deploy'|'escalate', reasons, rationale, question, facts, tests, decision, rollback }
@@ -184,7 +215,15 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   const t = String(text || '');
   if (!facts.env) {
     const named = names.filter((n) => new RegExp(String.raw`(?<![\w-])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\w-])`, 'i').test(t)).sort((a, b) => b.length - a.length);
+    if (named.length > 1) return esc(`which environment? the text names ${named.join(' and ')}`);
     facts.env = named[0] || (names.length === 1 ? names[0] : null);
+  }
+  // a target the registry does not know ("production", "staging", "live") is not the one configured environment
+  const unknownTarget = [...t.matchAll(/\b(prod(?:uction)?|staging|stage|live|dev|qa|uat|preprod|sandbox)\b/gi)].map((x) => x[1]).find((w) => !names.some((n) => n.toLowerCase() === w.toLowerCase()));
+  if (unknownTarget) return esc(`"${unknownTarget}" is not a configured environment (${names.join(', ') || 'none'}): which environment?`);
+  if (!scopeGiven && !hint.scope) {
+    const odd = /\b(?:re-?deploy|deploy|restart|roll ?out|ship|release)\w*\s+(?:the\s+)?(backend|api|workers?|database|db|cache|services?|app|site|website|proxy|nginx|redis|queue|runner|gateway|daemon|cron|container|image)\b/i.exec(t);
+    if (odd) return esc(`"${odd[1]}" is not a deploy scope: say full, frontend, server or host`);
   }
   if (!facts.env) return esc(names.length ? 'which environment?' : 'no deploy environments are configured');
   if (names.length && !names.includes(facts.env)) return esc(`unknown environment ${facts.env}`);
@@ -196,7 +235,7 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   if (!repo) return esc('not a git repository');
   facts.repo = repo; facts.repoName = basename(repo);
   const rnames = await repoNames(repo);
-  if (optedOut(cfg.deployOptOut, repo, rnames)) return esc(`repo ${facts.repoName} is opted out of manager deploy decisions`);
+  if (optedOut([...(cfg.deployOptOut || []), ...(cfg.mergeOptOut || [])], repo, rnames)) return esc(`repo ${facts.repoName} is opted out of manager deploy decisions`);
   // session branch and the ref to deploy
   let sBranch = branchGiven || afterMerge?.branch || null;
   if (!sBranch) { const cur = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']); const c = cur.code === 0 ? cur.out.trim() : ''; if (c && c !== 'HEAD') sBranch = c; }
@@ -212,10 +251,14 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   const hostsM = /--hosts\s+([\w.,-]+)/.exec(t);
   const blockers = leaseBlockers(leases.leases, { env: facts.env, scope: facts.scope, hosts: hostsM ? hostsM[1].split(',') : [], session });
   if (blockers.length) return esc(blockers.map((b) => `${facts.env} leased by ${b.agent} (${b.resource})`));
-  // tests: green on the ref, or green on the session's branch and that branch is in the ref (or merged by this very reply)
+  // tests: green on the ref (a report that names another ref, or no ref, counts only when the session's HEAD is that ref), or green on the
+  // session's branch and that branch is in the ref (or merged by this very reply)
   const ev = evidenceText ?? text;
+  const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const head = (await git(repo, ['rev-parse', 'HEAD'])).out.trim();
   let tests = testsGiven || testEvidence(ev, { branch: ref });
-  if (tests.state === 'green') facts.evidence = `tests green on ${ref}`;
+  const namesRef = tests.state === 'green' && new RegExp(String.raw`\bon\s+(?:origin/)?${escRe(ref)}\b`, 'i').test(tests.quote || '');
+  if (tests.state === 'green' && (testsGiven || namesRef || head === facts.sha)) facts.evidence = `tests green on ${ref}`;
   else if (tests.state !== 'red' && sBranch) {
     const bt = testsGiven || testEvidence(ev, { branch: sBranch });
     if (bt.state === 'green') {
@@ -238,9 +281,10 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
     for (const f of d.out.split('\0').filter(Boolean)) changed.add(f);
     ranged = true;
   }
-  if (!ranged || afterMerge) {
-    if (!sBranch) return esc('cannot tell what would be deployed (no deployed commit known, no session branch)', tests);
-    const spec = afterMerge ? `${refGit}...refs/heads/${sBranch}` : `${refGit}...refs/heads/${sBranch}`;
+  if (!ranged && !afterMerge) return esc('no deployed commit known: cannot bound the migration check', tests);
+  if (afterMerge) {
+    if (!sBranch) return esc('cannot tell what would be deployed (no session branch)', tests);
+    const spec = `${refGit}...refs/heads/${sBranch}`;
     const d = await git(repo, ['diff', '--name-only', '-z', spec]);
     if (d.code !== 0) return esc(`cannot list the changed files (${d.err || 'git diff failed'})`, tests);
     for (const f of d.out.split('\0').filter(Boolean)) changed.add(f);
@@ -251,7 +295,7 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   const strong = tests.explicit;
   const r = await rate('deploy', 'deploy', { jev, jevFacts: { session, repo: facts.repoName, env: facts.env, scope: facts.scope, ref, tests: tests.state, tests_quote: tests.quote, files: changed.size, leases_blocking: 0, floor_reasons: [] }, session, min: cfg.deployMinConfidence, reasoning: strong ? 0.9 : 0.8 });
   if (r.escalate) return done('escalate', [r.escalate], r.decision, tests);
-  return done('deploy', [], r.decision, tests, { rationale: `${facts.evidence}; no other agent's lease on ${facts.env}; no database change in ${changed.size} file${changed.size === 1 ? '' : 's'}` });
+  return done('deploy', [], r.decision, tests, { rationale: `${facts.evidence}; no blocking lease on ${facts.env}; no database change in ${changed.size} file${changed.size === 1 ? '' : 's'}` });
 }
 
 // A record for <state>/manager-decisions.jsonl shaped like a V2 decision (orchestration/task-contract.js validateDecision); push and deploy.
@@ -284,5 +328,27 @@ export function decisionRecord(kind, ev, { id, session = null, at = new Date() }
     ...(isPush ? { dest: f.dest || null, branch_sha: f.branchSha || null, remote_sha: f.remoteSha || null } : { env: f.env || null, scope: f.scope || null, ref: f.ref || null, sha: f.sha || null }),
     jev_decision_id: d.source === 'jev' ? (d.decision_id || 'jev') : 'reasoning',
     ...(ev.reasons?.length ? { reasons: ev.reasons } : {}),
+  };
+}
+
+// A record for a menu pick the manager sent on the owner's behalf (kind "menu"): the agent's own recommended option, taken when neither the
+// question nor that option is a hard topic (or its merge / push / deploy topics passed their evaluation, journaled separately).
+export function menuRecord({ id, session = null, at = new Date(), question = '', option = '', key = null, options = 0, answer = null } = {}) {
+  const ts = at instanceof Date ? at.toISOString() : typeof at === 'number' ? new Date(at).toISOString() : String(at);
+  const sent = answer?.text != null ? answer.text : `option ${answer?.key ?? key}`;
+  return {
+    decision_id: `menu-${id}`, task_id: `manager:${session || 'unknown'}`, kind: 'menu', ts,
+    question: question || 'Which option should I take?',
+    chosen: String(key ?? 'recommended'),
+    alternatives: [
+      { option: 'take the recommended option', pros: ['the session is not blocked on the owner', 'the agent itself recommended it'], cons: ['a wrong call is only noticed afterwards'] },
+      { option: 'escalate', pros: ['the owner picks'], cons: ['the session waits for the owner'] },
+    ],
+    expected_effect: `The session carries on with "${option}" without asking the owner.`,
+    rationale: `The agent marked "${option}" as its recommendation and neither the question nor that option is a hard topic.`,
+    evidence: [`question: ${question || 'unknown'}`, `recommended option ${key ?? '?'}: ${option}`, `${options} options`, `sent: ${sent}`],
+    actor: { role: 'manager', runtime: null, model: null },
+    confidence: 1, policy_ref: 'OWNER_DECISIONS §15', reversible: true, rollback: 'send the session a correction naming the option you wanted',
+    session, option, key: key ?? null,
   };
 }

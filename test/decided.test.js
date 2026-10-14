@@ -78,9 +78,12 @@ test('decidedSummary: counts, kinds and a deterministic paragraph', () => {
 
 test('revertPlan: sends with by owner for merge / push / deploy when stopped; 409 otherwise; drafts for the rest', () => {
   const by = Object.fromEntries(decidedItems({ recs, journal }).map((i) => [i.id, i]));
-  const ok = revertPlan(by['a3:merge'], { exists: true, state: 'done', draft: false });
-  assert.deepEqual(ok, { status: 200, send: by['a3:merge'].revert.text, by: 'owner' });
-  assert.equal(revertPlan(by['a3:push'], { exists: true, state: 'waiting' }).send, by['a3:push'].revert.text);
+  const ok = revertPlan(by['a3:merge'], { exists: true, state: 'done', draft: false });   // the server sends it as the real actor (default owner)
+  assert.deepEqual(ok, { status: 200, send: by['a3:merge'].revert.text });
+  assert.equal(revertPlan(by['a3:push'], { exists: true, state: 'done' }).send, by['a3:push'].revert.text);
+  assert.equal(revertPlan(by['a3:push'], { exists: true, state: 'waiting' }).status, 409, 'a waiting prompt is not a finished turn');
+  assert.match(revertPlan(by['a3:push'], { exists: true, state: 'done', menu: true }).error, /menu/);
+  assert.deepEqual(revertPlan(by['a3:push'], { exists: true, state: 'done', reverted: true }), { status: 409, error: 'already reverted' });
   assert.deepEqual(revertPlan(by['a3:deploy'], { exists: false }), { status: 409, error: 'the session no longer exists' });
   assert.equal(revertPlan(by['a3:deploy'], { exists: true, state: 'working' }).status, 409);
   assert.equal(revertPlan(by['a3:deploy'], { exists: true, state: 'done', draft: true }).status, 409);
@@ -98,4 +101,12 @@ test('decided-view: grouped by hour, revert asks a second tap, correct is a draf
   assert.ok(dv.SENDS.includes('deploy') && !dv.SENDS.includes('continue'));
   assert.match(dv.viewHtml({ items: [], summary: {} }), /Nothing was decided/);
   assert.match(dv.itemHtml({ ...items[0], what: '<b>x</b>' }), /&lt;b&gt;x&lt;\/b&gt;/);   // escaped
+});
+
+test('R8-10: an answer that follows its id\'s last cancellation (held, then sent) stays; one that came before it is gone', () => {
+  const r = [
+    stall('h1', 's'), { type: 'answer_cancelled', id: 'h1', session: 's', reason: 'held: quota', at: iso(1) }, ans('h1', 2, 's', { text: 'Yes, continue.' }),
+    ans('h2', 3, 's', { text: 'Yes, continue.' }), { type: 'answer_cancelled', id: 'h2', session: 's', reason: 'pane changed', at: iso(4) },
+  ];
+  assert.deepEqual(decidedItems({ recs: r, journal: [] }).map((i) => i.id), ['h1']);
 });

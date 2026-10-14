@@ -24,7 +24,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint } from './stall.js';
 import { MERGE_DEFAULTS, evaluateMerge, journalRecord, composeReply, repoToplevel } from './merge-policy.js';
-import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, parsePushAsk } from './decide-policy.js';
+import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, menuRecord, parsePushAsk } from './decide-policy.js';
 import { decidedItems, decidedSummary, failedCount } from './decided.js';
 import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
@@ -105,7 +105,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -118,8 +118,13 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
       if (saved.deployDecisions === undefined) config.deployDecisions = true;
       config.autonomyVersion = 1;
       try { await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2)); } catch (e) { console.error('[manager] migrate', e.message); }
+      // one feed notice, once: the owner learns what switched on and where the switches are
+      try { onNotice?.('Autonomy on (round 8): auto-answer, recommended option, merge/push/deploy decisions; switches in the manager sheet'); } catch (e) { console.error('[manager] notice', e.message); }
     }
-  } catch {}
+  } catch (e) {
+    // no file = a fresh install (the defaults). A file that cannot be read or parsed fails closed: nothing is auto-answered in this run.
+    if (e?.code !== 'ENOENT') { config.autoSend = false; console.error(`[manager] manager.json unreadable (${e.message}): auto-answer is off for this run`); }
+  }
   try { const b = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); budget = { day: b.day || '', calls: b.calls || 0, cost: b.cost || 0 }; } catch {}
   try { lastStops = JSON.parse(await readFile(LAST_STOPS_FILE, 'utf8')) || {}; } catch { lastStops = {}; }
   await aiBudget.load();
@@ -424,9 +429,9 @@ async function fire(name, auto) {
   const hardOpts = { mergePresent: 'merge' in kinds, pushPresent: 'push' in kinds, deployPresent: 'deploy' in kinds };
   const ws = md ? (hardMatch(auto.answer?.text || '', hardOpts) ? { send: null, why: `forbidden: ${hardMatch(auto.answer?.text || '', hardOpts)}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'manager_decision' })
     : ai ? (forb ? { send: null, why: `forbidden: ${forb}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'ai' })
-    : auto.override ? (menuUnsafe(auto.recText) ? { send: null, why: `forbidden: ${menuUnsafe(auto.recText)}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: auto.case })   // a menu whose recommended option was decided by the manager (menuDecision)
+    : auto.override ? (menuUnsafe(auto.recText, kinds) ? { send: null, why: `forbidden: ${menuUnsafe(auto.recText, kinds)}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: auto.case })   // a menu whose recommended option was decided by the manager (menuDecision)
     : w.stall && w.cls ? wouldSend({ ...w.stall, draft: w.cls.draft, forbidden: w.stall.forbidden || w.cls.forbidden }) : { send: null, why: 'owner' };
-  const mdBlock = md ? decisionBlock(name, kinds) : null;
+  const mdBlock = md || auto.override ? decisionBlock(name, kinds) : null;   // a decided menu pick is gated by the same switches and confidence floors
   let reason = null, esc = false;
   if (isPaused(name)) reason = 'session paused by owner';
   else if (!config.autoSend) reason = 'auto-answer turned off';
@@ -441,7 +446,7 @@ async function fire(name, auto) {
   else if (last.lastSendAt && w.pending && last.lastSendAt > w.pending.at) reason = 'owner sent something';
   else if (w.cls?.draft) reason = 'draft in the input box';
   else if (!ws.send) { reason = ws.why; esc = true; }
-  else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence, kinds: auto.kinds, override: auto.override, recText: auto.recText, escalated: auto.escalated, remaining: auto.remaining }, pol); reason = `held: ${pol.reason}`; }
+  else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence, kinds: auto.kinds, override: auto.override, recText: auto.recText, menu: auto.menu, escalated: auto.escalated, remaining: auto.remaining }, pol); reason = `held: ${pol.reason}`; }
   else if (!send.key || !send.keys) reason = 'no send function';
   else if (hourCount(name) >= config.maxPerSessionPerHour) { reason = 'hourly cap reached'; esc = true; }
   if (md && reason && !auto.escalated && !/^(?:session moved on|pane changed|owner sent|session paused|manager disabled)/.test(reason)) esc = true;   // nothing else tells the owner this stop is still open
@@ -464,7 +469,8 @@ async function fire(name, auto) {
   sentLog.set(name, [...(sentLog.get(name) || []), Date.now()]);
   if (w.pending && w.pending.id === auto.id) w.pending.auto = true;
   logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence, ...(kindIds(auto).merge ? { merge_decision_id: kindIds(auto).merge } : {}),
-    ...(Object.keys(kinds).length ? { decision_ids: Object.values(kindIds(auto)), decided: Object.keys(kinds) } : {}) });
+    ...(Object.keys(kinds).length || auto.menu ? { decision_ids: [...Object.values(kindIds(auto)), ...(auto.menu ? [`menu-${auto.id}`] : [])], ...(Object.keys(kinds).length ? { decided: Object.keys(kinds) } : {}) } : {}) });
+  if (auto.menu) await appendJournal(menuRecord({ id: auto.id, session: name, at: new Date(), answer: a, ...auto.menu }));
 }
 
 // Owner label on a logged stall ("this stop bothered me"). Appended; the newest label of an id wins.
@@ -823,22 +829,34 @@ async function jevPost(body) {
   } catch (e) { jevBreaker.failure(e.message); return { error: e.message }; }
 }
 
-// Parts of the ask that are already covered by the decisions the reply carries: a part about only decided topics, with no hard topic of its own.
-const topicCovered = (part, ok) => {
+// Parts of the ask that are already covered by the decisions the reply carries: a part about only decided topics, with no hard topic of
+// its own, and whose branch / environment is the one that was evaluated (a part naming another one stays open).
+const topicCovered = (part, ok, evs = {}, envs = []) => {
   const t = topicSplit(part.text);
   const mine = DECISION_KINDS.filter((k) => t[k]);
-  return mine.length > 0 && mine.every((k) => ok[k]) && !hardMatch(part.text, { mergePresent: !!ok.merge, pushPresent: !!ok.push, deployPresent: !!ok.deploy });
+  if (!mine.length || !mine.every((k) => ok[k])) return false;
+  if (hardMatch(part.text, { mergePresent: !!ok.merge, pushPresent: !!ok.push, deployPresent: !!ok.deploy })) return false;
+  if (t.push && evs.push) { const pa = parsePushAsk(part.text); if (pa.branches.some((b) => b !== evs.push.facts.branch) || pa.unparsed) return false; }
+  if (t.deploy && evs.deploy) {
+    const named = envs.filter((n) => new RegExp(String.raw`(?<![\w-])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\w-])`, 'i').test(part.text));
+    if (named.some((n) => n !== evs.deploy.facts.env)) return false;
+  }
+  return true;
 };
 const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'error', 'background_wait'];
-// A recommended option that is irreversible-looking is hard whatever the topic split says.
-const IRREVERSIBLE_RE = /\b(?:delet(?:e|ing)|drop|wip(?:e|ing)|publish(?:ed|ing)?|pay(?:ment|ing)?|send(?:ing)?\s+(?:an?\s+|the\s+)?e-?mails?)\b/i;
-const menuUnsafe = (text) => { const t = topicSplit(String(text || '')); return t.hard || (IRREVERSIBLE_RE.exec(String(text || '')) || [])[0] || null; };
+// A recommended option that is irreversible-looking is hard whatever the topic split says. `kinds`: the merge / push / deploy topics the
+// manager decided, exempt from the hard floor.
+const IRREVERSIBLE_RE = /\b(?:delet(?:e|ing)|drop|wip(?:e|ing)|publish(?:ed|ing)?|pay(?:ment|ing)?|send(?:ing)?\s+(?:an?\s+|the\s+)?e-?mails?|rm\s+-rf?)\b/i;
+const menuUnsafe = (text, kinds = {}) => hardMatch(String(text || ''), { mergePresent: 'merge' in kinds, pushPresent: 'push' in kinds, deployPresent: 'deploy' in kinds }) || (IRREVERSIBLE_RE.exec(String(text || '')) || [])[0] || null;
+const OPTION_LINE_RE = /^\s*(?:[❯›>]\s*)?\d+[.)]\s+/;
+// The question around a menu: the closing lines that are not options, plus the parsed question. Options other than the recommended one are left out on purpose.
+const stemOf = (final, stall) => [...String(stall.excerpt || '').split('\n').filter((l) => !OPTION_LINE_RE.test(l)).slice(-10), final.question || ''].join('\n');
 
 const appendJournal = async (record) => { try { await appendFile(DECISIONS_FILE, JSON.stringify(record) + '\n'); } catch (e) { console.error('[manager] journal', e.message); } };
 
 // Evaluate the merge / push / deploy topics present in `text` (in that order), journal each evaluation, tell the feed.
 // -> { evs: { merge?, push?, deploy? }, ok: { merge: bool, ... }, why: { kind: reason }, kinds: { kind: confidence } for the passing ones }
-async function decideTopics({ s, id, h, w, text, evidenceText, topics, wanted }) {
+async function decideTopics({ s, id, h, w, text, askText = text, evidenceText, topics, wanted }) {
   const name = s.name;
   const out = { evs: {}, ok: {}, why: {}, kinds: {}, stale: false };
   const ctxNow = () => { try { return decideContext() || {}; } catch { return {}; } };
@@ -866,27 +884,27 @@ async function decideTopics({ s, id, h, w, text, evidenceText, topics, wanted })
   }
   if (wanted.push) {
     const mergeEv = out.evs.merge;
-    const pa = parsePushAsk(text);
+    const pa = parsePushAsk(askText);
     let ev;
     if (mergeEv && !out.ok.merge && !pa.branch) {
       ev = { verdict: 'escalate', reasons: ['the push lands a merge that was not decided'], rationale: 'the push lands a merge that was not decided', question: 'Push?', facts: { ok: false, repoName: mergeEv.facts.repoName, branch: mergeEv.facts.branch, dest: mergeEv.facts.target, files: [] }, tests: mergeEv.tests, decision: { source: 'floor', choice: 'escalate', confidence: 1, decision_id: null } };
     } else {
       const after = out.ok.merge && (!pa.branch || pa.branch === mergeEv.facts.target) ? { branch: mergeEv.facts.branch, target: mergeEv.facts.target, tests: mergeEv.tests, decision: mergeEv.decision, facts: mergeEv.facts } : null;
-      ev = await evaluatePush({ cwd: s.cwd, text, evidenceText, session: name, config, jev: jevFn, afterMerge: after });
+      ev = await evaluatePush({ cwd: s.cwd, text: askText, evidenceText, session: name, config, jev: jevFn, afterMerge: after });
     }
     if (stale()) return out;
     await record('push', ev);
   }
   if (wanted.deploy) {
     const mergeEv = out.evs.merge;
-    const hint = deployHint(text);
+    const hint = deployHint(askText);
     let ev;
     if (mergeEv && !out.ok.merge && !hint.ref) {
       ev = { verdict: 'escalate', reasons: ['the deploy ships a merge that was not decided'], rationale: 'the deploy ships a merge that was not decided', question: 'Deploy?', facts: { ok: false, repoName: mergeEv.facts.repoName, env: null, scope: hint.scope || 'full', ref: null, previous: [] }, tests: mergeEv.tests, decision: { source: 'floor', choice: 'escalate', confidence: 1, decision_id: null } };
     } else {
       const c = ctxNow();
       const after = out.ok.merge && (!hint.ref || hint.ref === mergeEv.facts.target) ? { branch: mergeEv.facts.branch, target: mergeEv.facts.target } : null;
-      ev = await evaluateDeploy({ session: name, text, cwd: s.cwd, config, deploys: c.deploys || null, leases: c.leases || null, envs: c.envs || [], jev: jevFn, evidenceText, afterMerge: after });
+      ev = await evaluateDeploy({ session: name, text: askText, cwd: s.cwd, config, deploys: c.deploys || null, leases: c.leases || null, envs: c.envs || [], jev: jevFn, evidenceText, afterMerge: after });
     }
     if (stale()) return out;
     await record('deploy', ev);
@@ -937,7 +955,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   const evidenceText = stall.closing || stall.excerpt || '';
   let dec = { evs: {}, ok: {}, why: {}, kinds: {}, stale: false };
   if (wanted.merge || wanted.push || wanted.deploy) {
-    dec = await decideTopics({ s, id, h, w, text: `${final.question || ''}\n${evidenceText}`, evidenceText, topics: final.topics, wanted });
+    dec = await decideTopics({ s, id, h, w, text: `${final.question || ''}\n${evidenceText}`, askText: final.question || '', evidenceText, topics: final.topics, wanted });
     if (dec.stale || w.hash !== h) return out;   // the pane moved on while Jev was thinking
     const whys = DECISION_KINDS.map((k) => dec.why[k]).filter(Boolean);
     if (whys.length) out.mergeWhy = whys.join('; ');
@@ -951,7 +969,8 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   // what the reply really carries (a line the hard floor dropped is not answered)
   const answered = { merge: reply.merge, push: reply.push, deploy: reply.deploy };
   const answeredInfo = reply.info.map((n) => info[n]);
-  const stillOpen = parts.filter((p) => !answeredInfo.some((i) => i.part === p.text) && !topicCovered(p, answered));
+  const envNames = (() => { try { return decideContext()?.envs || []; } catch { return []; } })();
+  const stillOpen = parts.filter((p) => !answeredInfo.some((i) => i.part === p.text) && !topicCovered(p, answered, dec.evs, envNames));
   const decidedNotAnswered = DECISION_KINDS.some((k) => k in dec.evs && !answered[k]);
   const open = !!hard || stillOpen.length > 0 || hiddenAsk.length > 0 || decidedNotAnswered || offTopics.length > 0;
   if (!open) reply = composeReply({ info, ...args, remaining: false });   // same kept lines, without the pointer to the owner
@@ -967,7 +986,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
     if (hard) left.push(`${hard} question`);
     for (const k of DECISION_KINDS) if (k in dec.evs && !answered[k]) left.push(dec.why[k] || `${k} not answered`);
     for (const k of offTopics) left.push(`${k} question (${k} decisions are off or not possible here)`);
-    const coveredByAnswer = (p) => topicCovered(p, answered);
+    const coveredByAnswer = (p) => topicCovered(p, answered, dec.evs, envNames);
     for (const p of [...stillOpen, ...hiddenAsk]) if (!coveredByAnswer(p)) left.push(`"${p.text.slice(0, 60)}"`);
     const done = [...DECISION_KINDS.filter((k) => answered[k]).map((k) => `${k} answered by the manager`), answeredInfo.length ? `${answeredInfo.length === 1 ? 'information' : 'information x' + answeredInfo.length} answered` : null].filter(Boolean);
     escalate(name, s.state, final, id, `${[...new Set(left)].join(', ') || 'the rest'} - needs you (${done.join('; ')})`);
@@ -975,30 +994,38 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   return { handled: true };
 }
 
-// A menu whose recommended option the manager may take (round 8, OWNER_DECISIONS §15): the option's own text decides, not the whole question.
+// A menu whose recommended option the manager may take (round 8, OWNER_DECISIONS §15). The hard floor is read over the question stem plus the
+// recommended option (a generic "Yes" / "Proceed" inherits the question's topic); only the topics the manager actually decides are exempt,
+// and anything left over is escalated. Options other than the recommended one may carry any topic.
 // -> null (the usual flow), { ok: true, recText, kinds } (take it: the stall is no longer "forbidden") or { ok: false, why } (escalate with the reason).
 async function menuDecision({ s, w, id, h, final, stall }) {
   const name = s.name;
   if (isManagerSession(name) || final.case !== 'menu_recommended' || !final.options?.length || stall.draft) return null;
   const rec = final.options.find((o) => o.recommended);
   if (!rec) return null;
-  const recTopics = topicSplit(rec.text);
-  const hasTopic = DECISION_KINDS.some((k) => recTopics[k]);
-  if (!final.forbidden && !hasTopic) return null;   // nothing in the way: the existing auto-answer path
+  const combined = `${stemOf(final, stall)}\n${rec.text}`;
+  const topics = topicSplit(combined);
+  const present = DECISION_KINDS.filter((k) => topics[k]);
+  const irreversible = (IRREVERSIBLE_RE.exec(combined) || [])[0] || null;
+  if (!final.forbidden && !present.length && !topics.hard && !irreversible) return null;   // nothing in the way: the existing auto-answer path
   if (autoBlockFor(name, final)) return null;       // nothing would be typed anyway: the owner gets the stop as before
-  const bad = menuUnsafe(rec.text);
-  if (bad) return { ok: false, why: `recommended option is a ${bad} question - needs you` };
-  if (!hasTopic) return { ok: true, recText: rec.text, kinds: {} };
-  const wanted = s.cwd ? topicsWanted(recTopics) : { merge: false, push: false, deploy: false };
-  const off = DECISION_KINDS.filter((k) => recTopics[k] && !wanted[k]);
-  if (off.length) return { ok: false, why: `recommended option is a ${off.join('/')} question - ${off.join('/')} decisions are off or not possible here` };
+  const hardLeft = hardMatch(combined, { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy });
+  const bad = hardLeft || irreversible;
+  if (bad) return { ok: false, why: `the question or the recommended option is a ${bad} question - needs you` };
+  if (!present.length) return { ok: true, recText: combined, kinds: {}, menu: menuInfo(final, rec) };
+  const wanted = s.cwd ? topicsWanted(topics) : { merge: false, push: false, deploy: false };
+  const off = present.filter((k) => !wanted[k]);
+  if (off.length) return { ok: false, why: `the recommended option is a ${off.join('/')} question - ${off.join('/')} decisions are off or not possible here` };
   const evidenceText = stall.closing || stall.excerpt || '';
-  const dec = await decideTopics({ s, id, h, w, text: `${rec.text}\n${final.question || ''}`, evidenceText, topics: recTopics, wanted });
+  const dec = await decideTopics({ s, id, h, w, text: `${rec.text}\n${stemOf(final, stall)}`, askText: combined, evidenceText, topics, wanted });
   if (dec.stale || w.hash !== h) return { stale: true };
   const whys = DECISION_KINDS.map((k) => dec.why[k]).filter(Boolean);
   if (whys.length) return { ok: false, why: whys.join('; ') };
-  return { ok: true, recText: rec.text, kinds: dec.kinds, evs: dec.evs };
+  return { ok: true, recText: combined, kinds: dec.kinds, evs: dec.evs, menu: menuInfo(final, rec) };
 }
+const menuInfo = (final, rec) => ({ question: String(final.question || '').slice(0, 200), option: rec.text.slice(0, 200), key: rec.n, options: final.options.length });
+// the recommended option of a menu_recommended stop, for the decision journal ("menu" kind)
+const menuPick = (final) => { const rec = final.case === 'menu_recommended' && final.options?.find((o) => o.recommended); return rec ? menuInfo(final, rec) : null; };
 const autoBlockFor = (name, final) => autoBlock(name, { case: 'menu_recommended', autoCase: final.autoCase }, 1);
 
 // Index of the pane line where the stop's closing text ends (the text is compared without whitespace, so
@@ -1143,7 +1170,7 @@ export function observe(s) {
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;
     shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' });   // shadow: fire and forget, never awaited
     if (ws.send && !block) {   // the existing auto-answer handles this one
-      const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence, ...(menu?.ok ? { override: true, recText: menu.recText, kinds: menu.kinds } : {}) };
+      const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence, ...(menu?.ok ? { override: true, recText: menu.recText, kinds: menu.kinds } : {}), ...(menuPick(final) ? { menu: menuPick(final) } : {}) };
       const pol = policyOf(s.name, s.agent);
       if (pol.action === 'hold') { applyHold(s.name, w, pending, pol); return; }
       if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false);
@@ -1256,9 +1283,12 @@ export async function decidedDigestTick({ now = Date.now() } = {}) {
   if (hour < (Number.isInteger(config.decidedDigestHour) ? config.decidedDigestHour : 18)) return false;
   let last = null; try { last = JSON.parse(await readFile(DIGEST_FILE, 'utf8')).day; } catch {}
   if (last === day) return false;
+  let v;
+  try { v = await decidedView({ hours: 24, limit: 1, now }); } catch (e) { console.error('[manager] digest view', e.message); return false; }   // the day is only marked once the view was read: a failure retries next minute
   try { await writeFile(DIGEST_FILE, JSON.stringify({ day })); } catch (e) { console.error('[manager] digest state', e.message); return false; }
-  const v = await decidedView({ hours: 24, limit: 1, now });
   if (!v.summary.count) return false;
   try { onDigest({ day, count: v.summary.count, text: v.summary.text }); } catch (e) { console.error('[manager] onDigest', e.message); }
   return true;
 }
+// Ids of decided items the owner already reverted (a second revert of the same item is refused).
+export async function revertedIds() { return new Set((await readRecs()).filter((r) => r.type === 'revert' && r.id).map((r) => r.id)); }

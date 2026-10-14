@@ -91,7 +91,7 @@ test('mixed: "merge, push and deploy to env-a?" all pass -> one reply with three
   await until(() => typed.some((x) => x.session === 'mx1'));
   const t = typed.find((x) => x.session === 'mx1').text;
   assert.match(t, /^Merge: yes - .*Merge it now\. Push: yes - proj main -> origin\/main: .*Push it now\. Deploy: yes - env-a full main@[0-9a-f]{12}: .*Request it through the deploy queue/);
-  assert.match(t, /Rollback: request a deploy of the previous release to env-a \(full\)\.$/);
+  assert.match(t, /Rollback: the previous release is unknown for env-a \(full\): ask the owner before deploying anything else\.$/);
   assert.ok(!owner.some((o) => o.session === 'mx1'), 'nothing left for the owner');
   const j = journal().filter((r) => r.session === 'mx1');
   assert.deepEqual(j.map((r) => r.kind).sort(), ['deploy', 'merge', 'push']);
@@ -170,6 +170,7 @@ test('menu: a recommended option that touches a deploy is evaluated first (pass 
   assert.match(esc('mn5').reason, /deploy not decided/);
   // feat merged into main: green on feat counts; the live menu is answered by the key only
   const ok = withOrigin();
+  snapshot = { ...snapshot, deployed: { 'env-a': { server: { ref: 'main', commit: git(ok, 'rev-list', '--max-parents=0', 'HEAD').trim() } } } };   // the migration check needs a deployed commit
   git(ok, 'checkout', '-q', 'main'); git(ok, 'merge', '-q', '--no-ff', '-m', 'merge feat', 'feat'); git(ok, 'push', '-q', 'origin', 'main'); git(ok, 'checkout', '-q', 'feat');
   await stop('mn6', ok, `${GREEN}\n\nWhat next?\n ❯ 1. Deploy main to env-a (Recommended)\n   2. Wait\n${MENU_TAIL}`, { state: 'waiting' });
   await until(() => typedKeys.some((x) => x.session === 'mn6'));
@@ -179,6 +180,7 @@ test('menu: a recommended option that touches a deploy is evaluated first (pass 
   assert.deepEqual(validateDecision(rec).errors, []);
   // the same recommendation on a finished turn: free text, with the journal record
   const fin = withOrigin();
+  snapshot = { ...snapshot, deployed: { 'env-a': { server: { ref: 'main', commit: git(fin, 'rev-list', '--max-parents=0', 'HEAD').trim() } } } };
   git(fin, 'checkout', '-q', 'main'); git(fin, 'merge', '-q', '--no-ff', '-m', 'merge feat', 'feat'); git(fin, 'push', '-q', 'origin', 'main'); git(fin, 'checkout', '-q', 'feat');
   await stop('mn8', fin, `${GREEN}\n\nWhat next?\n1. Deploy main to env-a (Recommended)\n2. Wait\n\nShould I go with option 1?`);
   await until(() => typed.some((x) => x.session === 'mn8'));
@@ -236,4 +238,98 @@ test('decidedView: { items, summary } newest first; hours / since / limit', asyn
   await assert.rejects(m.decidedView({ since: 'nope' }), /since/);
   const item = await m.decidedItem(v.items.find((i) => i.kind === 'merge').id);
   assert.equal(item.kind, 'merge');
+});
+
+// ---- round 8 review fixes ----
+test('R8-1 BLOCKER: a hard topic in the question stem or in the recommended option is never answered, whatever the generic option says', async () => {
+  const cases = [
+    ['bl1', 'Drop the production customer table now?\n ❯ 1. Yes (Recommended)\n   2. No\n' + MENU_TAIL, 'waiting'],
+    ['bl2', 'Drop the production table users_old now?\n ❯ 1. Yes, go ahead (Recommended)\n   2. No\n' + MENU_TAIL, 'waiting'],
+    ['bl3', 'Should I delete the production customer database now?\n1. Yes (recommended)\n2. No', 'done'],
+    ['bl4', 'I can rotate the API key and update .env on the host.\n1. Do it now (Recommended)\n2. Skip it\n\nShall I go with option 1?', 'done'],
+    ['bl5', 'Plan: rm -rf the data directory, then rebuild.\n1. Proceed as planned (Recommended)\n2. Stop\n\nShall I go with option 1?', 'done'],
+    ['bl6', 'Send the e-mail to the customer now?\n1. Send it (Recommended)\n2. Hold', 'done'],
+    ['bl7', 'Pay the invoice with the card on file?\n1. Yes (Recommended)\n2. No', 'done'],
+  ];
+  const keys0 = typedKeys.length, text0 = typed.length;
+  for (const [name, body, state] of cases) {
+    await stop(name, makeRepo(), body, { state });
+    await wait(150);
+    assert.ok(!typedKeys.some((x) => x.session === name), `${name}: no key`);
+    assert.ok(!typed.some((x) => x.session === name), `${name}: no free text`);
+    assert.ok(esc(name) || owner.some((o) => o.session === name), `${name}: escalated`);
+  }
+  assert.equal(typedKeys.length, keys0); assert.equal(typed.length, text0);
+});
+
+test('R8-1: a generic recommended option inherits the question\'s topic: a decided deploy question is evaluated, not waved through', async () => {
+  const repo = withOrigin();   // feat not merged, no deployed commit: the deploy evaluation escalates, and nothing is typed
+  const n = typedKeys.length;
+  await stop('bl8', repo, `${GREEN}\n\nShall I deploy feat to env-a?\n ❯ 1. Yes (Recommended)\n   2. No\n${MENU_TAIL}`, { state: 'waiting' });
+  await until(() => journal().some((r) => r.session === 'bl8' && r.kind === 'deploy'));
+  assert.equal(typedKeys.length, n);
+  assert.match(esc('bl8').reason, /deploy not decided/);
+});
+
+test('R8-2: a noun mention is not a request (no Deploy reply, no push evaluation)', async () => {
+  const n = typed.length;
+  await stop('nn1', withOrigin(), 'Should the deploy queue page also show the env-a name?');
+  await stop('nn2', withOrigin(), 'Should I add push notifications to the settings page?');
+  await wait(150);
+  assert.equal(typed.length, n);
+  assert.ok(!stalls().some((r) => /_decision$/.test(r.type) && ['nn1', 'nn2'].includes(r.session)), 'neither was evaluated as a deploy or a push');
+});
+
+test('R8-11: a decided menu pick is re-checked at fire time against the switches', async () => {
+  await cfg({ delayMs: 1500 });
+  const ok = withOrigin();
+  snapshot = { ...snapshot, deployed: { 'env-a': { server: { ref: 'main', commit: git(ok, 'rev-list', '--max-parents=0', 'HEAD').trim() } } } };
+  git(ok, 'checkout', '-q', 'main'); git(ok, 'merge', '-q', '--no-ff', '-m', 'merge feat', 'feat'); git(ok, 'push', '-q', 'origin', 'main'); git(ok, 'checkout', '-q', 'feat');
+  const n = typedKeys.length;
+  m.observe({ name: 'fz1', state: 'working', agent: 'claude', plain: ['busy'], raw: ['busy'], changed: true, realWork: true, project: 'p', cwd: ok, now: 0 });
+  const p = `${GREEN}\n\nWhat next?\n ❯ 1. Deploy main to env-a (Recommended)\n   2. Wait\n${MENU_TAIL}`.split('\n');
+  m.observe({ name: 'fz1', state: 'waiting', agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: ok, now: 1000 });
+  m.observe({ name: 'fz1', state: 'waiting', agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: ok, now: 2500 });
+  await until(() => m.autoOf('fz1'));
+  assert.ok(m.autoOf('fz1'), 'the pick is pending');
+  await m.setManagerConfig({ deployDecisions: false });
+  await wait(1700);
+  assert.equal(typedKeys.length, n);
+  assert.match(stalls().find((r) => r.type === 'answer_cancelled' && r.session === 'fz1').reason, /deploy decisions are off/);
+  await cfg({ delayMs: 30, deployDecisions: true });
+});
+
+test('R8-18: a menu pick is journaled with kind "menu" and shows in Decided for you with its reason', async () => {
+  const rec = journal().find((r) => r.session === 'mn1' && r.kind === 'menu');
+  assert.ok(rec, 'menu record');
+  assert.deepEqual(validateDecision(rec).errors, []);
+  assert.equal(rec.decision_id.startsWith('menu-'), true); assert.equal(rec.key, 2);
+  const item = decidedItems({ recs: stalls(), journal: journal() }).find((i) => i.session === 'mn1');
+  assert.equal(item.kind, 'menu'); assert.match(item.what, /took the recommended option 2/); assert.match(item.why, /marked .* as its recommendation/);
+});
+
+test('R8-17: an unreadable manager.json fails closed (auto-answer off for the run); the migration records one notice', () => {
+  const run = (saved, raw) => {
+    const d = mkdtempSync(join(tmpdir(), 'ghosty-mig2-'));
+    if (raw != null) writeFileSync(join(d, 'manager.json'), raw); else if (saved) writeFileSync(join(d, 'manager.json'), JSON.stringify(saved));
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(new URL('../manager.js', import.meta.url).href)}); const n = []; await m.initManager({ onNotice: (t) => n.push(t) }); console.log(JSON.stringify({ autoSend: m.managerConfig().autoSend, n }));`],
+      { env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C', GHOSTY_STATE_DIR: d }, encoding: 'utf8' });
+    return JSON.parse(out.trim().split('\n').pop());
+  };
+  assert.equal(run(null, '{ not json').autoSend, false, 'unreadable file: fail closed');
+  assert.deepEqual(run(null, null), { autoSend: true, n: [] }, 'fresh install: defaults, no notice');
+  const mig = run({ autoSend: true, autoCases: ['continue'] });
+  assert.equal(mig.n.length, 1); assert.equal(mig.n[0], 'Autonomy on (round 8): auto-answer, recommended option, merge/push/deploy decisions; switches in the manager sheet');
+  assert.equal(run({ autoSend: true, autonomyVersion: 1 }).n.length, 0, 'once');
+});
+
+test('R8-9/16: the revert path is guarded and the digest day is marked after the view is read (source wiring)', () => {
+  const srv = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(srv, /revertedIds\(\)\)\.has\(id\)/);
+  assert.match(srv, /await assertAgentPane\(item\.session, by\)/);
+  assert.match(srv, /logSend\(item\.session, by, \{ keys: plan\.send \}\)/);
+  assert.match(srv, /onDigest: \(\{ count, text \}\) => \{[\s\S]*?push\.record\(item\); else push\.notify\(item\)/);
+  assert.doesNotMatch(srv, /alert\(`decided:digest/);
+  const mgr = readFileSync(new URL('../manager.js', import.meta.url), 'utf8');
+  assert.match(mgr, /v = await decidedView\([\s\S]*?writeFile\(DIGEST_FILE/);
 });

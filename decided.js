@@ -25,16 +25,19 @@ export function revertOf(kind, j, answerText) {
   if (kind === 'deploy') return { label: 'Roll back', text: j?.rollback || 'Rollback: request a deploy of the previous release.' };
   return { label: 'Correct', text: correctionDraft(answerText) };
 }
-// What POST /api/manager/decided/:id/revert does for an item, given the session's facts { exists, state, draft }:
-// { status: 200, draft, label } (a draft for the owner to edit: nothing is sent), { status: 200, send: text, by: 'owner' } or { status: 404|409, error }.
-export function revertPlan(item, { exists = false, state = null, draft = false } = {}) {
+// What POST /api/manager/decided/:id/revert does for an item, given the session's facts { exists, state, draft, menu, reverted }:
+// { status: 200, draft, label } (a draft for the owner to edit: nothing is sent), { status: 200, send: text } or { status: 404|409, error }.
+// A revert is typed into a session that finished its turn (done), with no live menu and no draft, and once per item.
+export function revertPlan(item, { exists = false, state = null, draft = false, menu = false, reverted = false } = {}) {
   if (!item) return { status: 404, error: 'unknown decided item' };
   if (!item.revert) return { status: 409, error: 'nothing to revert' };
   if (!DECISION_KINDS.includes(item.kind)) return { status: 200, draft: item.revert.text, label: item.revert.label };
+  if (reverted) return { status: 409, error: 'already reverted' };
   if (!exists) return { status: 409, error: 'the session no longer exists' };
-  if (!['waiting', 'done'].includes(state)) return { status: 409, error: 'the session is not stopped' };
+  if (state !== 'done') return { status: 409, error: 'the session is not stopped with a finished turn' };
+  if (menu) return { status: 409, error: 'the session shows a menu: free text would pick an option' };
   if (draft) return { status: 409, error: 'the session has an unsent draft in its input box' };
-  return { status: 200, send: item.revert.text, by: 'owner' };
+  return { status: 200, send: item.revert.text };
 }
 export const isRevertable = (item) => !!item && DECISION_KINDS.includes(item.kind) && !!item.revert;
 export const revertTextOf = (item) => (isRevertable(item) ? item.revert.text : null);
@@ -60,16 +63,16 @@ const whyOf = (kind, j, stall, rec) => {
 // recs: stalls.jsonl records; journal: manager-decisions.jsonl (+ legacy merge-decisions.jsonl) records.
 export function decidedItems({ recs = [], journal = [], since = null, until = null } = {}) {
   const lo = ms(since), hi = ms(until);
-  const stalls = new Map(), cancelled = new Set();
-  for (const r of recs) {
+  const stalls = new Map(), lastCancel = new Map();
+  recs.forEach((r, i) => {
     if (r?.type === 'stall' && r.id) stalls.set(r.id, r);
-    else if (r?.type === 'answer_cancelled' && r.id) cancelled.add(r.id);
-  }
+    else if (r?.type === 'answer_cancelled' && r.id) lastCancel.set(r.id, i);   // an answer counts unless it came before the id's last cancellation (held, then sent, counts)
+  });
   const jById = new Map();
   for (const j of journal) if (j?.decision_id) jById.set(j.decision_id, j);
   const items = [];
-  for (const r of recs) {
-    if (r?.type !== 'answer' || !r.id || cancelled.has(r.id)) continue;
+  for (const [idx, r] of recs.entries()) {
+    if (r?.type !== 'answer' || !r.id || (lastCancel.has(r.id) && lastCancel.get(r.id) > idx)) continue;
     const at = ms(r.at);
     if (at == null || (lo != null && at < lo) || (hi != null && at > hi)) continue;
     const stall = stalls.get(r.id);
@@ -86,8 +89,10 @@ export function decidedItems({ recs = [], journal = [], since = null, until = nu
       continue;
     }
     const kind = r.source === 'ai' ? 'ai_reply' : r.source === 'manager_decision' ? 'info' : r.answer?.key != null || r.case === 'menu_recommended' ? 'menu' : 'continue';
-    items.push(mk(r.id, kind, whatOf(kind, r.session, null, answerText), whyOf(kind, null, stall, r),
-      stall?.excerpt ? [`stop: ${quote(stall.question || stall.excerpt)}`] : [], revertOf(kind, null, answerText)));
+    const mj = kind === 'menu' ? jById.get(`menu-${r.id}`) : null;   // the menu pick's own decision record
+    items.push(mk(r.id, kind, mj ? `took the recommended option ${mj.key ?? ''} ("${quote(mj.option)}") for ${r.session || 'the session'}`.replace('option  (', 'option (') : whatOf(kind, r.session, null, answerText),
+      mj ? mj.rationale : whyOf(kind, null, stall, r),
+      mj ? mj.evidence.map(String) : stall?.excerpt ? [`stop: ${quote(stall.question || stall.excerpt)}`] : [], revertOf(kind, null, answerText)));
   }
   return items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : -1));
 }
