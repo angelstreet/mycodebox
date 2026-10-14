@@ -766,11 +766,35 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
   upsert). A Claude message is logged as several lines with the same `message.id` and a growing
   `output_tokens`; the largest wins. `usage/prices.json` holds USD per million tokens per model-id prefix
   with `source` and `as_of`; a model without a price gets no cost (never guessed).
+- **Attribution** (ledger fields): MiniMax rows carry `model_source` = `launch` (model of the session-history
+  instance in that cwd at that ts, `minimax/` prefix stripped) or `default` (`MINIMAX_DEFAULT_MODEL`). OpenCode rows
+  (`agent: 'opencode'`, id `opencode:<message id>`, model `<providerID>/<modelID>`, reasoning tokens added to output)
+  have `cost_source: 'provider'` only when the provider is metered and `cost > 0`, else `cost: null`. `label` falls
+  back to the session-history name (cwd+ts, provider match) before the cwd folder name. Without
+  `session-history.jsonl` nothing changes.
 - **State**: `~/.local/state/ghosty/usage-offsets.json` (byte offsets), `usage-ledger.jsonl` (one compact
   record per turn), `usage-summary.json` (rewritten every minute: totals per session / project / agent / model /
   day for the last 14 days, plus `outliers` = sessions whose cost per active hour today is over 3x their
   project's median; rule in `buildSummary()`), a `today` block (totals / agent / project / model for the UTC day)
   and per session `today`, `days`, `activeHours` for the usage view.
+- **Session history** (`session-history.js`, `history-view.js`): `$GHOSTY_STATE_DIR/session-history.jsonl`, append-only,
+  one JSON object per line, `schema_version: 1`; a torn or invalid last line is skipped on read.
+  `{kind:'session.started', name, provider, model|null, cwd, started_by:'dashboard'|'cbsession'|'v2'|'manager'|'unknown',
+  prompt_ref, handover_ref, remote_control_url?, ts}` and `{kind:'session.ended', name, ts, reason:'killed'|'exited'|'vanished'}`.
+  `prompt_ref` is a file path or at most 200 sanitized characters of prompt text. A session instance is a start plus the
+  next end for the same name (names are reused). Writers: dashboard create/kill, the tick (a live tmux session with no
+  open instance becomes `unknown`, ts = first seen; one gone for 2 consecutive ticks ends as `vanished`; rebuilt from the
+  file at boot), V2 developer/reviewer runs (name = run id, `v2`, ended `exited`), and `scripts/cbsession`
+  via `POST /api/history/started` (loopback + `x-ghosty-reporter-token`; an `unknown` instance is enriched in place).
+  `GET /api/history?offset=&limit=&provider=&model=&started_by=&from=&to=&status=running|ended` (newest first, limit
+  default 50, max 200; from/to filter the start time, ms or ISO) returns `{ok,total,offset,limit,sessions:[{name, provider,
+  model, started_by, cwd, prompt_ref, handover_ref, remote_control_url, start, end (null = running), elapsed_ms, active_ms,
+  turns, tokens:{input,output,cache_read,cache_write}, billing:'metered'|'subscription', cost_usd, days:[{day,turns,tokens,cost_usd}]}]}`;
+  `GET /api/history/:name?start=<ms>` is one row (latest instance by default). Join with `usage-ledger.jsonl`: ledger
+  `label` = session name (V2 runs: ledger `cwd` = the run worktree) and ts inside [start, end]; the whole ledger is read
+  (cached by size+mtime), no day cap. `active_ms` = sum of gaps between consecutive turns, each gap capped at 5 minutes.
+  Unknown stays `null`: no turns -> `tokens`, `active_ms`, `cost_usd` null; any unpriced turn -> `cost_usd` null;
+  subscription providers (MiniMax) -> `billing:'subscription'`, cost null.
 - **Rerun the backfill**: `node usage/ingest.js --backfill` (forgets offsets, re-reads the last `BACKFILL_DAYS`
   days; Langfuse upserts by id, no duplicates). `--once` does a single pass.
 
@@ -782,7 +806,9 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
 | `USAGE_PACE_MS` | `1500` | pause between ingestion requests (100 events each) |
 | `USAGE_POLL_MS` / `USAGE_SUMMARY_MS` | `15000` / `60000` | tail cadence / summary cadence |
 | `CLAUDE_PROJECTS_DIR` / `CODEX_SESSIONS_DIR` / `MINIMAX_DB` | under `$HOME` | source locations |
-| `MINIMAX_DEFAULT_MODEL` | `MiniMax-M3` | model name assumed for MiniMax rows |
+| `MINIMAX_DEFAULT_MODEL` | `MiniMax-M3` | MiniMax model used only when session-history knows no launch for that cwd/ts |
+| `OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode sqlite; only the `message` table is read (read-only, scalar columns via `json_extract`, never text) |
+| `OPENCODE_METERED_PROVIDERS` | `openrouter,anthropic,openai,google,xai` | providers whose OpenCode `cost` is recorded; others stay unknown (null) |
 | `USAGE_PRICES` | `usage/prices.json` | price table |
 
 The `session:` tag is the tmux session name (matched from the pane's current path to the transcript's

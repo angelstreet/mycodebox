@@ -21,6 +21,7 @@ import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
+import * as hv from '/history-view.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -3489,6 +3490,53 @@ function openTasks() {
   });
 }
 $('#tasksBtn').onclick = openTasks;
+
+// ----- History view (⋮ menu): GET /api/history, newest first, filters, load more, detail sheet -----
+function openSessionHistory() {
+  openSheet('History', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('history');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    const v = { f: { provider: '', model: '', started_by: '', status: '', from: '', to: '' }, rows: [], total: 0, err: null, loading: true, seen: { provider: new Set(), model: new Set() }, detail: null };
+    body.innerHTML = '<div class="hs-fwrap"></div><div class="hs-out"></div>';
+    const fwrap = body.querySelector('.hs-fwrap'), out = body.querySelector('.hs-out');
+    const paintFilters = () => { fwrap.innerHTML = hv.filtersHtml(v.f, { provider: v.seen.provider, model: v.seen.model }); };
+    const paint = () => {
+      if (v.detail) { out.innerHTML = '<div class="tk-bar"><button class="sbtn" data-hs-back>Back to list</button></div>' + hv.detailHtml(v.detail); return; }
+      out.innerHTML = v.err ? `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>` : v.loading && !v.rows.length ? '<div class="sheet-empty">loading…</div>' : hv.listHtml(v.rows, v.total);
+    };
+    let seq = 0;   // a response from an earlier filter / load-more is dropped
+    const load = async (more) => {
+      const my = ++seq;
+      v.loading = true; v.err = null;
+      try {
+        const r = await fetch(`/api/history?${hv.buildQuery(v.f, more ? v.rows.length : 0)}`);
+        const j = await r.json().catch(() => ({}));
+        if (my !== seq) return;
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        const key = (x) => `${x.name}|${x.start}`, have = new Set(more ? v.rows.map(key) : []);
+        v.rows = more ? v.rows.concat(j.sessions.filter((x) => !have.has(key(x)))) : j.sessions; v.total = j.total;
+        for (const s of j.sessions) { if (s.provider) v.seen.provider.add(s.provider); if (s.model) v.seen.model.add(s.model); }
+        paintFilters();
+      } catch (e) { if (my !== seq) return; v.err = `history unavailable: ${e.message}`; }
+      v.loading = false; paint();
+    };
+    body.addEventListener('change', (e) => { const k = e.target.dataset?.hsF; if (!k) return; v.f[k] = e.target.value; v.detail = null; load(false); });
+    body.addEventListener('click', (e) => {
+      if (e.target.closest('[data-hs-clear]')) { v.f = { provider: '', model: '', started_by: '', status: '', from: '', to: '' }; v.detail = null; paintFilters(); load(false); return; }
+      if (e.target.closest('[data-hs-more]')) { load(true); return; }
+      if (e.target.closest('[data-hs-back]')) { v.detail = null; paint(); return; }
+      const row = e.target.closest('[data-hs-i]');
+      if (!row) return;
+      const r = v.rows[+row.dataset.hsI];
+      if (r && r.end == null && state.sessions.some((s) => s.name === r.name)) { close(); openCard(r.name); return; }   // running with a card: jump to it
+      if (r) { v.detail = r; paint(); body.scrollTop = 0; }
+    });
+    paintFilters(); paint(); load(false);
+  });
+}
+$('#historyBtn').onclick = openSessionHistory;
 
 // ----- generic bottom sheet -----
 let sheetEl = null;

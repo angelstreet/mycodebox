@@ -15,6 +15,12 @@ tmux new-session -s demo
 Open the URL configured in INSTALL from a device connected to your tailnet. Sessions appear after the next poll (normally about a second).
 The new-session button can also launch an installed agent; configure `AGENT_CMD_*` first as described in INSTALL.
 
+## Starting sessions from a shell
+
+`scripts/cbsession` starts a tmux agent session (Claude with Remote Control, Codex, MiniMax, OpenCode) with a handover or
+prompt. Keep `~/.local/bin/cbsession` as a symlink to it (`ln -sf <checkout>/scripts/cbsession ~/.local/bin/cbsession`);
+see [docs/skills/codebox-sessions.md](skills/codebox-sessions.md). Past sessions: `GET /api/history` ([REFERENCE](REFERENCE.md)).
+
 ## Read and reply
 
 1. Select a session on the board. Check its name and working directory before sending.
@@ -48,6 +54,26 @@ to inspect the runner. AI Auto sends only when the reviewer is configured, autom
 AI reply type is selected. Suggestions alone do not send anything.
 Platforms, leases and deploys require the external platform integration; an empty panel is not an installation failure.
 See [REFERENCE](REFERENCE.md) for each feature's settings and API.
+
+## Session history
+
+Open **More (the three dots) > History**. It lists every agent session the server has recorded, newest first, one row per
+run (a reused name is a new row). Phone: compact cards. Desktop: a table. **Load more** fetches the next 50.
+
+| Column | Meaning |
+| --- | --- |
+| session, model | Session name and provider / model (the model seen in the ledger when none was recorded at start). |
+| by | Who started it: `dashboard`, `cbsession`, `v2`, `manager` or `unknown`. |
+| start, end | Local time. `running` while the session is still alive. |
+| elapsed | End (or now) minus start. |
+| active | Sum of the gaps between consecutive turns, each gap capped at 5 minutes, so idle waiting does not count. `—` when no turn was recorded. |
+| turns, tokens | Turns found in the usage ledger for this run; input / output / cache tokens. `—` when none. |
+| cost | API-equivalent USD, not an invoice. `subscription` for flat-rate providers (MiniMax); `unknown` when any turn could not be priced. Never shown as $0. |
+| prompt / handover | The path, or the short sanitized text, recorded at start. It is not a link. |
+
+Filters: provider, model, started by, running or ended, and a start-date range (from / to, your local days). Tap a row:
+a running session that has a card on the dashboard opens that card; any other row opens a detail sheet with all fields and
+the usage per day.
 
 ## V2 task board (opt-in)
 

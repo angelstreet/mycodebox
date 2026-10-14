@@ -16,6 +16,7 @@ import { traceIdOf, genIdOf, postBatch as postBatchRaw } from './lf-common.js';
 import { createEvalSync } from './lfeval.js';
 import { createJudge } from './judge.js';
 import { parseManagerLine } from './manager-parse.js';
+import { createSessionHistory } from '../session-history.js';
 import { buildScorecard, langfuseScoreEvents, scorecardTraceId, foldRuns } from '../scorecard.js';
 
 const exec = promisify(execFile);
@@ -34,6 +35,9 @@ export function defaults(env = process.env) {
     codexDir: env.CODEX_SESSIONS_DIR || join(home, '.codex/sessions'),
     minimaxDb: env.MINIMAX_DB || join(home, '.minimax/v2/sqlite/runtime-state.sqlite'),
     minimaxModel: env.MINIMAX_DEFAULT_MODEL || 'MiniMax-M3',   // the runtime table stores no model; this is its configured default
+    opencodeDb: env.OPENCODE_DB || join(home, '.local/share/opencode/opencode.db'),
+    // providers whose OpenCode `cost` is real money; for any other (subscription, free, local) cost stays unknown, never 0
+    opencodeMetered: (env.OPENCODE_METERED_PROVIDERS ?? 'openrouter,anthropic,openai,google,xai').split(',').map((x) => x.trim()).filter(Boolean),
     stateDir,
     offsetsFile: join(stateDir, 'usage-offsets.json'),
     ledgerFile: join(stateDir, 'usage-ledger.jsonl'),
@@ -86,6 +90,26 @@ export function costOf(price, u) {
 // ---------------------------------------------------------------------------
 // Source parsers (pure)
 // ---------------------------------------------------------------------------
+
+// OpenCode's db also holds account/credential tables with tokens: the ONLY statement ever run against it is this one,
+// on the `message` table, with scalar columns extracted in SQL so message text/parts are never loaded.
+export const OPENCODE_SQL = `SELECT id, session_id, time_created,
+  json_extract(data,'$.path.cwd') AS cwd, json_extract(data,'$.providerID') AS provider, json_extract(data,'$.modelID') AS model,
+  json_extract(data,'$.cost') AS cost, json_extract(data,'$.tokens.input') AS t_in, json_extract(data,'$.tokens.output') AS t_out,
+  json_extract(data,'$.tokens.reasoning') AS t_reason, json_extract(data,'$.tokens.cache.read') AS t_cread, json_extract(data,'$.tokens.cache.write') AS t_cwrite,
+  json_extract(data,'$.time.completed') AS completed
+  FROM message WHERE json_extract(data,'$.role') = 'assistant' AND (time_created > ? OR (time_created = ? AND id > ?))
+  ORDER BY time_created, id LIMIT 5000`;
+
+const LAUNCH_PROVIDER = { claude: 'claude', codex: 'codex', minimax: 'minimax', opencode: 'opencode' };
+export const normalizeMinimaxModel = (m) => (typeof m === 'string' && m.trim() ? m.trim().replace(/^minimax\//i, '') : null);
+// The session-history instance that ran in cwd at ts for this agent (null when absent, ambiguous or another provider).
+export function launchOf(history, agent, cwd, ts) {
+  if (!history || !cwd) return null;
+  let i = null; try { i = history.byCwd(cwd, ts); } catch { return null; }
+  const want = LAUNCH_PROVIDER[agent];
+  return i && (i.provider == null || i.provider === want || (agent === 'minimax' && i.provider === 'mcode')) ? i : null;
+}
 
 const n = (x) => (Number.isFinite(x) ? x : 0);
 
@@ -324,10 +348,17 @@ function* completeLines(buf, base) {
   }
 }
 
+// MiniMax's table has no model column: take the launch's model when session-history knows it, else the configured default.
+function minimaxModel(row, cfg, history, cwd) {
+  const m = row.model || normalizeMinimaxModel(launchOf(history, 'minimax', cwd, row.ts)?.model);
+  return m ? { model: m, model_source: row.model ? 'row' : 'launch' } : { model: cfg.minimaxModel, model_source: 'default' };
+}
+
 export function createIngester(cfg, hooks = {}) {
   const projectOf = hooks.projectOf || gitProject;
   const panesOf = hooks.tmuxPanes || tmuxPanes;
   let prices = null;
+  const history = hooks.history || createSessionHistory({ file: cfg.historyFile || join(cfg.stateDir, 'session-history.jsonl'), readOnly: true });   // the dashboard process writes it: re-read as it grows   // absent file = empty history
   let state = null;            // { files:{path:offset}, minimaxLastId, cwdProject, traceLabel }
   const byId = new Map();      // committed records within the window, by record id
   const traces = new Map();    // trace -> { first, models:Set, days:Set }
@@ -442,7 +473,7 @@ export function createIngester(cfg, hooks = {}) {
           const rid = root(row.session_id);
           push({
             id: `minimax:${row.id}`, agent: 'minimax', session: rid, cwd: (sess.get(rid) || sess.get(row.session_id) || {}).workspace_dir || null,
-            ts: row.ts, model: row.model || cfg.minimaxModel,
+            ts: row.ts, ...minimaxModel(row, cfg, history, (sess.get(rid) || sess.get(row.session_id) || {}).workspace_dir || null),
             usage: { input: row.input_tokens, output: row.output_tokens, cache_read: row.cache_read_tokens, cache_write_5m: row.cache_write_tokens, cache_write_1h: 0 },
             subagent: rid !== row.session_id,
           });
@@ -450,7 +481,31 @@ export function createIngester(cfg, hooks = {}) {
       } finally { db.close(); }
     } catch (e) { if (e.code !== 'ENOENT') console.error('[usage] minimax:', e.message); }
 
-    return { fresh: [...pending.values()], nextFiles, minimaxLastId };
+    // OpenCode: sqlite `message` table only (OPENCODE_SQL), cursor = (time_created, id)
+    let opencodeCursor = state.opencodeCursor || null;
+    try {
+      await fs.access(cfg.opencodeDb);
+      const { DatabaseSync } = await import('node:sqlite');
+      const db = new DatabaseSync(cfg.opencodeDb, { readOnly: true });
+      try {
+        let cur = opencodeCursor || { t: since, id: '' };
+        for (const row of db.prepare(OPENCODE_SQL).all(cur.t, cur.t, cur.id)) {
+          if (row.completed == null && cfg.now() - row.time_created < 3600000) break;   // still streaming: revisit next pass (cursor stays before it)
+          cur = { t: row.time_created, id: row.id };
+          if (row.t_in == null && row.t_out == null) continue;
+          const model = `${row.provider || 'unknown'}/${row.model || 'unknown'}`;
+          const metered = cfg.opencodeMetered.includes(row.provider);
+          push({
+            id: `opencode:${row.id}`, agent: 'opencode', session: row.session_id, cwd: row.cwd || null, ts: row.time_created, model,
+            usage: { input: n(row.t_in), output: n(row.t_out) + n(row.t_reason), cache_read: n(row.t_cread), cache_write_5m: n(row.t_cwrite), cache_write_1h: 0 },
+            subagent: false, providerCost: metered && row.cost > 0 ? row.cost : null,
+          });
+        }
+        opencodeCursor = cur;
+      } finally { db.close(); }
+    } catch (e) { if (e.code !== 'ENOENT') console.error('[usage] opencode:', e.message); }
+
+    return { fresh: [...pending.values()], nextFiles, minimaxLastId, opencodeCursor };
   }
 
   async function enrich(fresh, nextState) {
@@ -461,6 +516,8 @@ export function createIngester(cfg, hooks = {}) {
       r.project = (r.cwd && projects[r.cwd]) || (r.cwd ? basename(r.cwd) : null);
       r.trace = traceIdOf(r.agent, r.session);
       r.cost = costOf(priceFor(prices, r.model), r.usage);
+      if (r.providerCost != null) { r.cost = { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: r.providerCost }; r.cost_source = 'provider'; }
+      delete r.providerCost;
     }
     // tmux session names: only for traces with a live record; closest pane activity wins when several share a cwd
     const newest = new Map();
@@ -474,6 +531,8 @@ export function createIngester(cfg, hooks = {}) {
         const c = panes.filter((p) => p.cwd === r.cwd);
         if (c.length) { c.sort((a, b) => Math.abs(a.activity - r.ts) - Math.abs(b.activity - r.ts)); nextState.traceLabel[trace] = { label: c[0].name, tmux: true }; continue; }
       }
+      const inst = launchOf(history, r.agent, r.cwd, r.ts);   // the session's own name once its tmux session is gone
+      if (inst) { nextState.traceLabel[trace] = { label: inst.name, tmux: false }; continue; }
       if (!nextState.traceLabel[trace]) nextState.traceLabel[trace] = { label: r.cwd ? basename(r.cwd) : r.session.slice(0, 8), tmux: false };
     }
     for (const r of [...fresh, ...byId.values()]) { const l = nextState.traceLabel[r.trace]; if (l) r.label = l.label; }
@@ -516,8 +575,8 @@ export function createIngester(cfg, hooks = {}) {
 
   async function tick() {
     if (!state) await init(false);
-    const { fresh, nextFiles, minimaxLastId } = await collect();
-    const nextState = { ...state, files: nextFiles, minimaxLastId, cwdProject: { ...state.cwdProject }, traceLabel: { ...state.traceLabel } };
+    const { fresh, nextFiles, minimaxLastId, opencodeCursor } = await collect();
+    const nextState = { ...state, files: nextFiles, minimaxLastId, opencodeCursor, cwdProject: { ...state.cwdProject }, traceLabel: { ...state.traceLabel } };
     fresh.sort((a, b) => a.ts - b.ts);
     await enrich(fresh, nextState);
     await send(fresh);

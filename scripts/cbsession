@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# cbsession — start an AI agent session in tmux on this host (shows on the mycodebox dashboard).
+# Claude sessions always get Remote Control, so they also appear in the Claude app / claude.ai.
+#
+#   cbsession -n NAME -d DIR [-p claude|codex|minimax|opencode] [-m MODEL] (-H HANDOVER | -f PROMPT_FILE | -t "TEXT")
+#
+#   -n  tmux session name (A-Z a-z 0-9 _ -, max 40); also the Remote Control name
+#   -d  working directory on this host (repo checkout)
+#   -p  provider (default claude)
+#   -m  model: claude haiku|sonnet|opus|fable|<id>; codex <model>; minimax MiniMax-M3 (default; the only MiniMax model, owner decision 2026-10-14);
+#       opencode <provider/model>
+#   -H  handover file: the session reads it, summarises state and open items, proposes the next step, then waits
+#   -f  prompt file, used verbatim;  -t  prompt text
+#   -x  dry run: print the launch command, start nothing
+# Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
+set -euo pipefail
+NAME= DIR= PROV=claude MODEL= HANDOVER= PFILE= TEXT= DRY=0
+while getopts "n:d:p:m:H:f:t:xh" o; do case $o in
+  n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; H) HANDOVER=$OPTARG;;
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; *) sed -n 2,17p "$0"; exit 2;; esac; done
+[[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
+[ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
+DIR=$(cd "$DIR" && pwd)
+tmux has-session -t "=$NAME" 2>/dev/null && { echo "cbsession: tmux session '$NAME' already exists" >&2; exit 1; }
+
+H="$HOME/handovers"; mkdir -p "$H"; P="$H/$NAME.prompt.md"; L="$H/$NAME.launch.sh"
+if [ -n "$HANDOVER" ]; then
+  [ -f "$HANDOVER" ] || { echo "cbsession: handover $HANDOVER not found on this host (scp it to ~/handovers/ first)" >&2; exit 2; }
+  HANDOVER=$(cd "$(dirname "$HANDOVER")" && pwd)/$(basename "$HANDOVER")
+  cat > "$P" <<EOF
+You are picking up work in a fresh session on this host. Working directory: $DIR.
+1. Read the handover: $HANDOVER, then the files it links as needed.
+2. Reply with a short summary of the current state, the open items in priority order, and a concrete plan for the most
+   important next step (files to change, how to test it cheaply).
+3. Owner limits: do not run anything on shared hosts or devices, do not deploy, push or merge, do not touch secrets,
+   and make a git worktree before changing code in a shared checkout. Ask the owner before any of those.
+Stop after step 2 and wait for the owner.
+EOF
+  [ -n "$TEXT" ] && printf '\nExtra instruction from the owner: %s\n' "$TEXT" >> "$P"
+elif [ -n "$PFILE" ]; then cp "$PFILE" "$P"
+elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"
+else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; fi
+
+q() { printf '%q' "$1"; }
+case $PROV in
+  claude)   CMD="$(q "$HOME")/.local/bin/claude --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
+  codex)    CMD="$(q "$HOME")/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
+  minimax)  M=${MODEL:-MiniMax-M3}; [[ $M == */* ]] || M="minimax/$M"
+            CMD="PATH=$(q "${MCODE_NODE_DIR:-$HOME/.local/node-v24.21.0-linux-x64/bin}"):\$PATH mcode -m $(q "$M") \"\$(cat $(q "$P"))\"";;
+  opencode) CMD="$(q "$HOME")/.local/bin/opencode${MODEL:+ -m $(q "$MODEL")} --prompt \"\$(cat $(q "$P"))\" $(q "$DIR")";;
+  *) echo "cbsession: -p must be claude|codex|minimax|opencode" >&2; exit 2;;
+esac
+printf '#!/usr/bin/env bash\ncd %s\n%s\n' "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
+if [ "$DRY" = 1 ]; then echo "prompt: $P"; echo "launch: $L"; cat "$L"; exit 0; fi
+
+tmux new-session -d -s "$NAME" -c "$DIR" -x 160 -y 45 "bash $(q "$L"); exec bash -l"
+# Claude: accept the folder-trust dialog if it appears (the selected option differs by version), then wait for Remote Control.
+for i in $(seq 1 30); do
+  sleep 2; S=$(tmux capture-pane -p -t "=$NAME:" 2>/dev/null || true)
+  if grep -q "trust this folder" <<<"$S"; then
+    grep -E "^\s*❯.*Yes" <<<"$S" >/dev/null || tmux send-keys -t "=$NAME:" Down
+    sleep 1; tmux send-keys -t "=$NAME:" Enter; continue
+  fi
+  [ "$PROV" != claude ] && [ "$i" -ge 5 ] && break
+  grep -q "remote-control is active" <<<"$S" && break
+done
+S=$(tmux capture-pane -p -t "=$NAME:" 2>/dev/null || true)
+URL=$(grep -o "https://claude.ai/code/session_[A-Za-z0-9]*" <<<"$S" | tail -1 || true)
+echo "started: $NAME ($PROV${MODEL:+ $MODEL}) in $DIR"
+[ "$PROV" = claude ] && { [ -n "$URL" ] && echo "remote control: $URL" || echo "remote control: not confirmed yet — check: tmux capture-pane -p -t $NAME"; }
+echo "prompt: $P"
+
+# Report the start to the dashboard's session history (loopback + reporter token). Best effort: a failure only warns,
+# the tick loop records the session as 'unknown' anyway.
+{
+  TOKF="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}/reporter.token"
+  if [ -r "$TOKF" ] && command -v curl >/dev/null && command -v node >/dev/null; then
+    BODY=$(NAME=$NAME PROV=$PROV MODEL=$MODEL DIR=$DIR P=$P HANDOVER=$HANDOVER URL=$URL node -e '
+      const e = process.env, o = { name: e.NAME, provider: e.PROV, model: e.MODEL || null, cwd: e.DIR, prompt_ref: e.P, handover_ref: e.HANDOVER || null };
+      if (e.URL) o.remote_control_url = e.URL; process.stdout.write(JSON.stringify(o));' 2>/dev/null) || BODY=
+    [ -n "$BODY" ] && curl -fsS -m 5 -o /dev/null -X POST -H 'content-type: application/json' --config - \
+      --data "$BODY" "http://127.0.0.1:${GHOSTY_PORT:-${PORT:-7777}}/api/history/started" 2>/dev/null \
+      < <(printf 'header = "x-ghosty-reporter-token: %s"\n' "$(tr -d '\n' < "$TOKF")") \
+      || echo "cbsession: warning: could not record the start in the session history (recorded as 'unknown' by the dashboard)" >&2
+  else echo "cbsession: warning: session history not reported (no reporter token, curl or node)" >&2; fi
+} || true
