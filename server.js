@@ -29,6 +29,9 @@
 //   GET  /api/jev-ai            → the "Jev & AI" usage tab: manager Jev + AI reviewer per day (local logs), the product's Jev uses (server summary, when it has it)
 //   GET  /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset= → Jev decisions, newest first (the server's log, else the manager's own; /?decisions=1)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
+//   GET  /api/voice/queue       → {items}: open needs-you stops + ledger asks, P0 first then oldest, each with a spoken `script` and options (voice.js)
+//   POST /api/voice/answer      → {id, transcript?|option?, confirm?, pending?, via?}: map a spoken answer to an option of the still-open item and send it as by 'owner-voice'
+//   GET  /api/voice/digest?minutes=60 → {text, parts}: deterministic spoken summary (<= 900 chars) of what happened
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/manager/merge-decisions?limit=50 → newest merge-decisions.jsonl lines first: every merge the manager decided or escalated (merge-policy.js, OWNER_DECISIONS §14)
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
@@ -65,7 +68,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
-import { readFile, writeFile, stat, readdir, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, mkdir, open as openFile } from 'node:fs/promises';
 import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
@@ -107,6 +110,7 @@ import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
+import { createVoice, feedActions, stopItem as voiceStopItem } from './voice.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
@@ -673,6 +677,13 @@ const leaseWatch = createLeaseWatch({
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
+// The voice item of a session's open stop right now (voice.js), or null. Reads the manager's live view, not `latest` (notifySession runs mid-poll).
+function voiceItemOf(session, kind) {
+  try {
+    const state = latest?.status?.[session]?.state ?? (kind === 'waiting' ? 'waiting' : 'done');
+    return voiceStopItem(session, { state, stall: stallOf(session), triage: triageOf(session), auto: autoOf(session), lastActivitySec: 0 }, { mgrs: new Set(loadManagerSessions()), isPaused: (n) => sessionMeta.isPaused(n) });
+  } catch { return null; }
+}
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
 function notifySession(session, kind, body, meta) {
   if ((kind === 'waiting' || kind === 'asks') && loadManagerSessions().includes(session)) return;   // the manager's own session never pushes the owner
@@ -682,7 +693,9 @@ function notifySession(session, kind, body, meta) {
   const turn = lt && meta?.status ? { ...lt, status: meta.status, info: meta.info ?? lt.info } : lt;
   const line = turn ? statusMeterLine(turn) : null;
   if (line) body = [line, body && !/^\s*[*_`]*STATUS:/i.test(String(body)) ? body : null].filter(Boolean).join('\n');   // a body that is the STATUS line itself is replaced by the metered one
+  const vi = waiting ? voiceItemOf(session, kind) : null;   // a stop the owner can answer by voice / from the notification buttons
   alert(`${session}:${kind}`, {
+    ...(vi ? { voiceId: vi.id, actions: feedActions(vi) || undefined } : {}),
     title: kind === 'asks' ? `${session} asks you` : waiting ? `${session} needs you` : `${session} is done`,
     priority: waiting ? 'high' : 'default',
     ntfyTags: waiting ? 'warning' : 'white_check_mark',
@@ -1520,6 +1533,10 @@ async function handleHttp(req, res) {
     res.end(JSON.stringify({ sessions: r.sessions, status, links: LINKS }));
     return;
   }
+  if (p.startsWith('/api/voice/')) {
+    const r = await voice.route({ method: req.method, path: p, query: url.searchParams, readBody: () => readJsonBody(req) });
+    if (r) return json(res, r.status, r.body);
+  }
   if (req.method === 'GET' && p === '/api/owner-asks') {   // the manager's open questions for the owner (NEEDS YOU strip)
     return json(res, 200, { asks: await readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')) });
   }
@@ -1841,6 +1858,53 @@ async function handleHttp(req, res) {
   res.writeHead(405); res.end('method not allowed');
 }
 // A handler that throws (a malformed %-escape in a path, a bug) must answer, never crash the process.
+// Hands-free loop (voice.js): the queue / answer / digest router. Sends go through the guarded send (agent panes only) as 'owner-voice'.
+async function readTailLines(file, bytes = 2_000_000) {
+  try {
+    const fh = await openFile(file, 'r');
+    try {
+      const { size } = await fh.stat();
+      const start = Math.max(0, size - bytes);
+      const buf = Buffer.alloc(size - start);
+      await fh.read(buf, 0, buf.length, start);
+      const lines = buf.toString('utf8').split('\n');
+      if (start > 0) lines.shift();   // a cut first line
+      return lines.flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } });
+    } finally { await fh.close(); }
+  } catch { return []; }
+}
+// G1's GET /api/manager/decided (decided-for-you, last N hours) when this server has it; null -> the digest builds its own line.
+async function decidedSummary(hours) {
+  try {
+    const h = /^[0:.]+$/.test(HOST) ? '127.0.0.1' : HOST;   // a wildcard bind is reached over loopback
+    const r = await fetch(`http://${h}:${PORT}/api/manager/decided?hours=${hours}`, { signal: AbortSignal.timeout(2000) });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
+const voice = createVoice({
+  status: async () => ((latest && Date.now() - latest.at < 1500) ? latest : await poll()).status,
+  ownerAsks: () => readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')),
+  managerSessions: loadManagerSessions,
+  isPaused: (n) => sessionMeta.isPaused(n),
+  priority: (n) => sessionMeta.priority(n),
+  send: async ({ session, answer, by }) => {
+    if (!(await sessionExists(session))) throw httpError(404, 'no such session');
+    await assertAgentPane(session, by);
+    const out = answer.key != null ? await sendKey(session, String(answer.key)) : await sendKeys(session, answer.text || '', true);
+    logSend(session, by, answer.key != null ? { key: answer.key } : { keys: answer.text });
+    return out;
+  },
+  logChoice: logOwnerChoice,
+  digestSources: async ({ since, minutes }) => {
+    const [stalls, hist, decided] = await Promise.all([
+      readTailLines(LOG_FILE),
+      historyView.list({ limit: 200 }).catch(() => ({ sessions: [] })),
+      decidedSummary(Math.max(1, Math.ceil(minutes / 60))),
+    ]);
+    return { stalls, history: hist.sessions || [], decided, deploys: deployRunner.snapshot().deploys || [], quota: quota.get() };
+  },
+});
+
 const server = http.createServer((req, res) => {
   handleHttp(req, res).catch((err) => {
     console.error('[http]', req.method, String(req.url).slice(0, 80), err?.message);
