@@ -22,6 +22,8 @@
       ["npm", "test"],
       ["node", "--test"],
       ["node", "--check"],
+      ["node", "scripts/docs-check.js"],
+      ["node", "scripts/run-if-changed.js"],
       ["git", "status"],
       ["git", "diff"],
       ["git", "log"],
