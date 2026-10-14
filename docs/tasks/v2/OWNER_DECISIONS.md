@@ -341,3 +341,7 @@ Implementation: `merge-policy.js`, `info-lookup.js`, the `topicSplit` floor in `
 `scripts/merge-eval.js` for the interactive manager. After the Fable review the implementation is stricter than the
 quote in two places: "docs/test-only" means docs-only (test code needs a green report like any code), and CI, deploy and
 infra files count as sensitive; see [REFERENCE](../../REFERENCE.md#merge-decisions-and-mixed-questions-owner-2026-10-14).
+
+## Evidence: harness review 2026-10-14
+
+The owner-interaction review behind rounds 8 (autonomy by default, voice) and 9 (harness fixes): [docs/v2/reviews/HARNESS-REVIEW-2026-10-14.md](../../v2/reviews/HARNESS-REVIEW-2026-10-14.md) (sanitised; the full private report is kept at `$GHOSTY_STATE_DIR/reviews/2026-10-14-harness-review.md` on the dashboard host).
