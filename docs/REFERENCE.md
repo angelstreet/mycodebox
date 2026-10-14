@@ -766,6 +766,12 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
   upsert). A Claude message is logged as several lines with the same `message.id` and a growing
   `output_tokens`; the largest wins. `usage/prices.json` holds USD per million tokens per model-id prefix
   with `source` and `as_of`; a model without a price gets no cost (never guessed).
+- **Attribution** (ledger fields): MiniMax rows carry `model_source` = `launch` (model of the session-history
+  instance in that cwd at that ts, `minimax/` prefix stripped) or `default` (`MINIMAX_DEFAULT_MODEL`). OpenCode rows
+  (`agent: 'opencode'`, id `opencode:<message id>`, model `<providerID>/<modelID>`, reasoning tokens added to output)
+  have `cost_source: 'provider'` only when the provider is metered and `cost > 0`, else `cost: null`. `label` falls
+  back to the session-history name (cwd+ts, provider match) before the cwd folder name. Without
+  `session-history.jsonl` nothing changes.
 - **State**: `~/.local/state/ghosty/usage-offsets.json` (byte offsets), `usage-ledger.jsonl` (one compact
   record per turn), `usage-summary.json` (rewritten every minute: totals per session / project / agent / model /
   day for the last 14 days, plus `outliers` = sessions whose cost per active hour today is over 3x their
@@ -800,7 +806,9 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
 | `USAGE_PACE_MS` | `1500` | pause between ingestion requests (100 events each) |
 | `USAGE_POLL_MS` / `USAGE_SUMMARY_MS` | `15000` / `60000` | tail cadence / summary cadence |
 | `CLAUDE_PROJECTS_DIR` / `CODEX_SESSIONS_DIR` / `MINIMAX_DB` | under `$HOME` | source locations |
-| `MINIMAX_DEFAULT_MODEL` | `MiniMax-M3` | model name assumed for MiniMax rows |
+| `MINIMAX_DEFAULT_MODEL` | `MiniMax-M3` | MiniMax model used only when session-history knows no launch for that cwd/ts |
+| `OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode sqlite; only the `message` table is read (read-only, scalar columns via `json_extract`, never text) |
+| `OPENCODE_METERED_PROVIDERS` | `openrouter,anthropic,openai,google,xai` | providers whose OpenCode `cost` is recorded; others stay unknown (null) |
 | `USAGE_PRICES` | `usage/prices.json` | price table |
 
 The `session:` tag is the tmux session name (matched from the pane's current path to the transcript's

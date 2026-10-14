@@ -36,7 +36,7 @@ async function fixture(lf) {
   const dir = await fs.mkdtemp(join(tmpdir(), 'usage-test-'));
   const cfg = {
     ...defaults({}), langfuseUrl: lf.url, publicKey: 'pk', secretKey: 'sk',
-    claudeDir: join(dir, 'claude'), codexDir: join(dir, 'codex'), minimaxDb: join(dir, 'none.sqlite'),
+    claudeDir: join(dir, 'claude'), codexDir: join(dir, 'codex'), minimaxDb: join(dir, 'none.sqlite'), opencodeDb: join(dir, 'none-oc.sqlite'),
     stateDir: join(dir, 'state'), now: () => NOW, paceMs: 0,
   };
   Object.assign(cfg, { offsetsFile: join(cfg.stateDir, 'usage-offsets.json'), ledgerFile: join(cfg.stateDir, 'usage-ledger.jsonl'), summaryFile: join(cfg.stateDir, 'usage-summary.json'), stallsFile: join(cfg.stateDir, 'stalls.jsonl'), evalStateFile: join(cfg.stateDir, 'lfeval-state.json') });
