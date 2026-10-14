@@ -1,6 +1,7 @@
 # Documentation index
 
-mycodebox is the product name; `ghosty-sessions` is the package, service and conventional checkout name.
+mycodebox is the product and repository name. The package, systemd service and existing checkout paths still use
+the legacy name `ghosty-sessions`; keep operational commands consistent with those identifiers until migrated.
 Start here to choose the right guide. Examples use placeholders; replace them locally, never with private values in commits.
 
 | Task | Read | What it owns |
