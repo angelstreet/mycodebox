@@ -363,5 +363,169 @@
     "label": "empty facts: ruleDefault escalate (conservative default)",
     "facts": {},
     "expect": "escalate"
+  },
+  {
+    "point": "merge",
+    "label": "green tests, clean merge",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": []
+    },
+    "expect": "merge"
+  },
+  {
+    "point": "merge",
+    "label": "docs-only change",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "unknown",
+      "docs_only": true,
+      "files": 2,
+      "floor_reasons": []
+    },
+    "expect": "merge"
+  },
+  {
+    "point": "merge",
+    "label": "version file conflict only",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [
+        "VERSION.txt"
+      ],
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": []
+    },
+    "expect": "merge"
+  },
+  {
+    "point": "merge",
+    "label": "tests explicitly counted",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "green (1826/1826 pass)",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": []
+    },
+    "expect": "merge"
+  },
+  {
+    "point": "merge",
+    "label": "small test-only change",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "green",
+      "docs_only": true,
+      "files": 1,
+      "floor_reasons": []
+    },
+    "expect": "merge"
+  },
+  {
+    "point": "merge",
+    "label": "red tests",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "red",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "tests reported red: 2 failed"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "merge",
+    "label": "no test report",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "unknown",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "no green test report on the branch"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "merge",
+    "label": "real conflict",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [
+        "a.js"
+      ],
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "conflicts outside convention: a.js"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "merge",
+    "label": "touches a migration",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "touches a migration: db/migrations/x.sql"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "merge",
+    "label": "repo opted out",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "target": "main",
+      "conflicts": [],
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "repo demo is opted out of manager merge decisions"
+      ]
+    },
+    "expect": "escalate"
   }
 ]

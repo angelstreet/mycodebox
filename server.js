@@ -30,6 +30,7 @@
 //   GET  /api/decisions?usage=&ok=&has_outcome=&min_conf=&limit=&offset= → Jev decisions, newest first (the server's log, else the manager's own; /?decisions=1)
 //   GET  /api/manager/review?limit → unlabelled stops, newest first, + counts (the swipe page, /?review=1)
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
+//   GET  /api/manager/merge-decisions?limit=50 → newest merge-decisions.jsonl lines first: every merge the manager decided or escalated (merge-policy.js, OWNER_DECISIONS §14)
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
@@ -91,7 +92,7 @@ import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, MERGE_FILE, jevBreaker } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -857,7 +858,7 @@ async function pollOnce() {
 
     if (!offline) {
       observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state, realWork: spinning,
-        project: meta.project ?? null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now,
+        project: meta.project ?? null, cwd: meta.cwd || null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now,
         rep: agent === 'claude' && reporter.liveOf(s.name) ? { turnForStop: (since) => reporter.turnForStop(s.name, since), promptSince: (since) => reporter.promptSince(s.name, since) } : null });
       t.prevObserved = state;
     }
@@ -1760,6 +1761,12 @@ async function handleHttp(req, res) {
     try { lines = (await readFile(LOG_FILE, 'utf8')).trim().split('\n').filter(Boolean); } catch {}
     return json(res, 200, { entries: lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) });
   }
+  if (req.method === 'GET' && p === '/api/manager/merge-decisions') {
+    const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+    let lines = [];
+    try { lines = (await readFile(MERGE_FILE, 'utf8')).trim().split('\n').filter(Boolean); } catch {}
+    return json(res, 200, { decisions: lines.slice(-limit).reverse().map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) });
+  }
   if (req.method === 'GET' && p === '/api/manager/events') {   // tail of manager-events.jsonl (newest last); a freshly-started manager agent catches up
     const q = url.searchParams;
     const since = q.get('since') || '';
@@ -1954,6 +1961,12 @@ server.listen(PORT, HOST, async () => {
       priority: 'default', ntfyTags: kind === 'hold' ? 'pause_button' : 'arrow_forward', url: `/?s=${encodeURIComponent(n)}`, tag: `ghosty-hold-${n}`,
     }, 0),
     onHandoff: async (session, text, at) => { await handoffs.fromStop(session, text, at); },
+    // a merge the manager decided or escalated: a notice in the owner's feed (no push)
+    onMergeDecision: (session, r) => push.record({
+      title: `${r.chosen === 'merge' ? 'Merge decided' : 'Merge escalated'}: ${session}`,
+      body: `${r.branch} -> ${r.target}: ${r.chosen === 'merge' ? r.rationale : (r.reasons || []).join('; ') || r.rationale}${r.chosen === 'merge' ? ` Revert: git revert -m 1 <merge sha>` : ''}`,
+      url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision',
+    }),
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.

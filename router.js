@@ -252,7 +252,24 @@ const model = {
   ruleDefault() { return 'keep'; },
 };
 
-export const POINTS = { wake, builder, reviewer, retry, stop, model };
+// ---- merge ----
+// Should the manager tell a session to merge a branch? The merge-policy floor (merge-policy.js: conflicts, red or
+// missing tests, sensitive paths, opt-out) arrives as facts.floor_reasons and forces escalate.
+const merge = {
+  usage: 'text.decision.manager',
+  options: {
+    merge: 'the branch merges cleanly or only in convention files, tests are reported green or it is docs/test-only, and the diff touches no secrets, migrations, sudoers or units: merging is safe and reversible',
+    escalate: 'a reason not to merge: red or missing tests, a real conflict, a risky or sensitive change, or anything unclear',
+  },
+  instructions: 'Is it safe for the manager to tell this session to merge the branch, or should the owner decide?',
+  floor(facts) {
+    const r = asArray(facts?.floor_reasons);
+    return { allowed: ['merge', 'escalate'], forced: r.length ? 'escalate' : null, reasons: r.length ? r.map(String) : [] };
+  },
+  ruleDefault() { return 'merge'; },
+};
+
+export const POINTS = { wake, builder, reviewer, retry, stop, model, merge };
 export const SUGGEST_ONLY = new Set(['model']);
 export { STOP_FLOOR_TOPICS, STOP_V1 };
 

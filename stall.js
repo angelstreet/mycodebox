@@ -186,6 +186,11 @@ const NEXT_STEP = /\bnext(?::| is| step| phase| I'?d| I will| I'll)|\bI'?ll (?:n
 
 // Topics the AI manager and the rule path must never answer (AGENTS.md: the forbidden-topic filter always wins).
 // One alternative per line so a paraphrase can be added without untangling a wall of regex; matched case-insensitively.
+const PUSH_MAIN = String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b`;
+const MERGE_MAIN = String.raw`\bmerge\b[^.\n]{0,30}\bmain\b`;
+const REBASE_MAIN = String.raw`\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`;
+const GIT_PUSH = String.raw`\bgit push\b`;
+const HARD_GIT = String.raw`force[- ]?push|reset --hard|\bhard[- ]?reset\b`;
 const FORBIDDEN_PARTS = [
   // deploys and service control
   String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
@@ -195,9 +200,12 @@ const FORBIDDEN_PARTS = [
   String.raw`\b(?:ship|release(?! (?:the |a |its |my )?locks?\b)|roll ?out|promote)\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])|\bgo(?:ing)? live\b(?![-/])`,
   String.raw`\bpublish(?:ed|ing)?\b|\bpush(?:ed|ing)?\b[^.\n]{0,30}\btags?\b|\bterraform\b[^.\n]{0,20}\b(?:apply|destroy)\b|\bapply\b[^.\n]{0,20}\bterraform\b`,
   String.raw`\bkill\b[^.\n]{0,30}\bprod(?:uction)?\b|\b(?:upgrade|alter|modify)\b[^.\n]{0,20}\b(?:live|prod(?:uction)?)\b(?![-/])`,
-  // git history and main
-  String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`,
-  String.raw`\bgit push\b|force[- ]?push|reset --hard|\bhard[- ]?reset\b`,
+  // git history and main (named groups: the merge topic is split out for the manager's merge evaluation, see hardMatch)
+  PUSH_MAIN,
+  MERGE_MAIN,
+  REBASE_MAIN,
+  GIT_PUSH,
+  HARD_GIT,
   // destructive data operations
   String.raw`\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm\b|\bprune\b|\btruncate\b|\bwipe\b|\bwiping\b|\boverwrit(?:e|ing)\b`,
   String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b|\bmigrat(?:e|ion)`,
@@ -207,6 +215,12 @@ const FORBIDDEN_PARTS = [
   String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
 ];
 export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
+// The merge topic alone, and the floor without it: a merge is decided by the manager's merge evaluation (merge-policy.js);
+// the push that lands it is part of the merge (excluded from hardMatch only when a merge is present).
+export const MERGE_RE = /\bmerg(?:e|es|ed|ing)\b/i;
+const HARD_PARTS = FORBIDDEN_PARTS.filter((p) => p !== MERGE_MAIN);
+const HARD_RE = new RegExp(HARD_PARTS.join('|'), 'i');
+const HARD_MERGE_RE = new RegExp(HARD_PARTS.filter((p) => p !== PUSH_MAIN && p !== GIT_PUSH).join('|'), 'i');
 
 let forbiddenExtra = null;
 // Extra forbidden words that must not live in a public repo (customer names, ...): GHOSTY_FORBIDDEN_EXTRA.
@@ -292,8 +306,9 @@ export function textVariants(text) {
   return [...new Set([nfkc, base, spaced, joined, leetI, leetL, digitless, normalizeSplits(text), normalizeSplits(leetI), normalizeSplits(leetL)])];
 }
 
-export function forbiddenMatch(text) {
-  const match = (t) => t.match(FORBIDDEN_RE) || (forbiddenExtra && t.match(forbiddenExtra));
+// First match of `re` (or the extra pattern) in the text or any disguised spelling of it; null when none.
+function matchWith(re, text, extra = null) {
+  const match = (t) => t.match(re) || (extra && t.match(extra));
   const raw = String(text);
   const m = match(raw);
   if (m) return m[0];
@@ -301,6 +316,15 @@ export function forbiddenMatch(text) {
   for (const v of textVariants(raw)) { if (v === raw) continue; const k = match(v); if (k) return k[0]; }
   for (const w of windowJoins(raw)) { const k = match(w); if (k) return k[0]; }
   return null;
+}
+
+export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenExtra);
+export const mergeMatch = (text) => matchWith(MERGE_RE, text);
+// The floor without the merge topic. The push that lands a merge is excluded only when `mergePresent`.
+export const hardMatch = (text, { mergePresent = false } = {}) => matchWith(mergePresent ? HARD_MERGE_RE : HARD_RE, text, forbiddenExtra);
+export function topicSplit(text) {
+  const merge = mergeMatch(text);
+  return { merge, hard: hardMatch(text, { mergePresent: !!merge }) };
 }
 
 export function menuOptions(lines) {
@@ -458,7 +482,9 @@ function actionOf(m, text) {
 }
 
 function finish(out) {
-  out.forbidden = forbiddenMatch(out.forbiddenText ?? out.question ?? '');
+  const text = out.forbiddenText ?? out.question ?? '';
+  out.forbidden = forbiddenMatch(text);
+  out.topics = topicSplit(text);
   delete out.forbiddenText;
   return out;
 }

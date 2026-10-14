@@ -22,7 +22,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
-import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch } from './stall.js';
+import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch } from './stall.js';
+import { MERGE_DEFAULTS, evaluateMerge, journalRecord, composeReply, repoToplevel } from './merge-policy.js';
+import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
 import { actorOf } from './api-extras.js';
 import { jevAgreesOwner } from './public/ask-model.js';
 import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, reviewerUrl } from './triage.js';
@@ -42,6 +44,7 @@ const BUDGET_FILE = join(STATE_DIR, 'jev-budget.json');
 const LAST_STOPS_FILE = join(STATE_DIR, 'last-stops.json');   // session -> keys of the last 5 stops logged (survives a restart)
 const AI_BUDGET_FILE = join(STATE_DIR, 'ai-budget.json');
 const OUTCOME_QUEUE_FILE = join(STATE_DIR, 'decision-outcomes.json');
+export const MERGE_FILE = join(STATE_DIR, 'merge-decisions.jsonl');   // one journal record per merge decision (merge or escalate)
 
 const SETTLE_MS = Number(process.env.STALL_SETTLE_MS || 5000);       // pane unchanged this long = a stall
 const JEV_URL = process.env.JEV_URL || '';                            // VPT server POST /server/ai/decide
@@ -64,7 +67,7 @@ setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
 let config = { enabled: true, autoSend: false, routerShadow: true, wakeShadow: true, autoCases: [], minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
   jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
-  ...POLICY_DEFAULTS };
+  ...MERGE_DEFAULTS, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
 export const jevBreaker = createJevBreaker({ file: BUDGET_FILE });   // 3 errors in a row: rules only, one probe per 10 min (jev-breaker.js)
 const saveBudget = () => { try { jevBreaker.saveCounters(budget); } catch {} };
@@ -84,6 +87,8 @@ let send = { key: null, keys: null };   // injected by server.js: the one tmux c
 let isPaused = () => false;             // injected by server.js: the owner's pause hold (session-meta.js)
 let policyOf = () => ({ action: 'allow', reason: 'no policy' });   // injected: (session, agent) -> { action, reason } (public/policy.js + quota)
 let held = { get: () => null, set: () => {} };                      // injected: the manager's own hold, kept apart from the owner's pause
+let onMergeDecision = () => {};                                     // injected: (session, journal record) -> owner feed notice
+let mergeJev = (body) => jevPost(body);                             // the merge evaluation's Jev call (tests inject a fake)
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -92,7 +97,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {} } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, mergeJev: mergeJevFn } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try { config = { ...config, ...JSON.parse(await readFile(CONFIG_FILE, 'utf8')) }; } catch {}
   try { const b = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); budget = { day: b.day || '', calls: b.calls || 0, cost: b.cost || 0 }; } catch {}
@@ -113,6 +118,8 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (policy) policyOf = policy;
   if (heldStore) held = heldStore;
   if (onHold) notifyHold = onHold;
+  if (mergeHook) onMergeDecision = mergeHook;
+  if (mergeJevFn) mergeJev = mergeJevFn;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
 
@@ -139,7 +146,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow } = b;
+  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -157,6 +164,21 @@ export async function setManagerConfig(b = {}) {
   if (aiAutoCases !== undefined) {
     if (!Array.isArray(aiAutoCases) || aiAutoCases.some((c) => !CASES.includes(c) || AI_NEVER_CASES.includes(c))) throw bad(`aiAutoCases must be a list of: ${CASES.filter((c) => !AI_NEVER_CASES.includes(c)).join(', ')}`);
     config.aiAutoCases = [...new Set(aiAutoCases)];
+  }
+  if (typeof mergeDecisions === 'boolean') config.mergeDecisions = mergeDecisions;
+  if (typeof infoAnswers === 'boolean') config.infoAnswers = infoAnswers;
+  if (mergeMinConfidence !== undefined) config.mergeMinConfidence = num(mergeMinConfidence, 0, 1, 'mergeMinConfidence');
+  if (mergeOptOut !== undefined) {
+    if (!Array.isArray(mergeOptOut) || mergeOptOut.length > 50 || mergeOptOut.some((x) => typeof x !== 'string' || !x.trim())) throw bad('mergeOptOut must be a list of up to 50 non-empty strings');
+    config.mergeOptOut = [...new Set(mergeOptOut.map((x) => x.trim()))];
+  }
+  if (mergeConventionFiles !== undefined) {
+    if (!Array.isArray(mergeConventionFiles) || mergeConventionFiles.length > 50 || mergeConventionFiles.some((x) => typeof x !== 'string' || !x.trim())) throw bad('mergeConventionFiles must be a list of file names');
+    config.mergeConventionFiles = [...new Set(mergeConventionFiles.map((x) => x.trim()))];
+  }
+  if (infoRoots !== undefined) {
+    if (!Array.isArray(infoRoots) || infoRoots.length > 20 || infoRoots.some((x) => typeof x !== 'string' || !x.startsWith('/'))) throw bad('infoRoots must be a list of absolute paths');
+    config.infoRoots = [...new Set(infoRoots)];
   }
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
   if (typeof deployRunner === 'boolean') config.deployRunner = deployRunner;
@@ -212,6 +234,18 @@ function autoBlock(name, final, confidence) {
   if (!config.autoCases.includes(key)) return `${key} is not an auto-answer case`;
   if (confidence < config.minConfidence) return `confidence ${confidence.toFixed(2)} below ${config.minConfidence}`;
   if (hourCount(name) >= config.maxPerSessionPerHour) return `hourly cap reached (${config.maxPerSessionPerHour})`;
+  return null;
+}
+
+// The manager's own decision (a merge it decided, an information answer): not an auto-answer case, but the same switches
+// (autoSend, pause, cap, draft) plus, for a merge, its own switch and confidence floor. Checked at schedule and again in fire().
+function decisionBlock(name, confidence, { merge = false } = {}) {
+  if (isPaused(name)) return 'session paused by owner';
+  if (!config.autoSend) return 'auto-answer is off';
+  if (hourCount(name) >= config.maxPerSessionPerHour) return `hourly cap reached (${config.maxPerSessionPerHour})`;
+  if (watch.get(name)?.cls?.draft) return 'owner has a draft in the input box';
+  if (merge && !config.mergeDecisions) return 'merge decisions are off';
+  if (merge && confidence < config.mergeMinConfidence) return `merge confidence ${confidence.toFixed(2)} below ${config.mergeMinConfidence}`;
   return null;
 }
 
@@ -338,18 +372,22 @@ async function fire(name, auto) {
   const w = watch.get(name);
   if (!w || w.auto !== auto) return;
   const last = w.last;
+  const md = auto.source === 'manager_decision';   // the manager's own merge / information answer: gated by decisionBlock, not by autoCases
   const ai = auto.source === 'ai';   // the AI reviewer's proposal, auto mode: same gates, plus its own switch and a re-check of the reply itself
   const forb = (w.stall?.forbidden || w.cls?.forbidden) || (ai ? forbiddenMatch(auto.answer?.text || '') : null);
-  const ws = ai ? (forb ? { send: null, why: `forbidden: ${forb}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'ai' })
+  const ws = md ? (hardMatch(auto.answer?.text || '', { mergePresent: true }) ? { send: null, why: `forbidden: ${hardMatch(auto.answer?.text || '', { mergePresent: true })}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'manager_decision' })
+    : ai ? (forb ? { send: null, why: `forbidden: ${forb}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'ai' })
     : w.stall && w.cls ? wouldSend({ ...w.stall, draft: w.cls.draft, forbidden: w.stall.forbidden || w.cls.forbidden }) : { send: null, why: 'owner' };
+  const mdBlock = md ? decisionBlock(name, auto.confidence, { merge: !!auto.merge }) : null;
   let reason = null, esc = false;
   if (isPaused(name)) reason = 'session paused by owner';
   else if (!config.autoSend) reason = 'auto-answer turned off';
   else if (!sessionOn(name)) reason = 'manager disabled for this session';
+  else if (mdBlock) { reason = mdBlock; esc = mdBlock.startsWith('hourly'); }
   else if (ai && config.aiTriage !== 'auto') reason = 'AI auto-answer turned off';
   else if (ai && !config.aiAutoCases.includes(auto.case)) reason = `${auto.case} no longer an AI auto-answer case`;
-  else if (!ai && !config.autoCases.includes(auto.case)) reason = `${auto.case} no longer an auto-answer case`;
-  else if (auto.confidence < (ai ? config.aiMinConfidence : config.minConfidence)) reason = `confidence ${auto.confidence.toFixed(2)} below ${ai ? config.aiMinConfidence : config.minConfidence}`;
+  else if (!ai && !md && !config.autoCases.includes(auto.case)) reason = `${auto.case} no longer an auto-answer case`;
+  else if (!md && auto.confidence < (ai ? config.aiMinConfidence : config.minConfidence)) reason = `confidence ${auto.confidence.toFixed(2)} below ${ai ? config.aiMinConfidence : config.minConfidence}`;
   else if (!last || (last.state !== 'waiting' && last.state !== 'done')) reason = 'session moved on';
   else if (w.hash !== auto.hash) reason = 'pane changed';
   else if (last.lastSendAt && w.pending && last.lastSendAt > w.pending.at) reason = 'owner sent something';
@@ -358,6 +396,7 @@ async function fire(name, auto) {
   else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence }, pol); reason = `held: ${pol.reason}`; }
   else if (!send.key || !send.keys) reason = 'no send function';
   else if (hourCount(name) >= config.maxPerSessionPerHour) { reason = 'hourly cap reached'; esc = true; }
+  if (md && reason && !auto.escalated && !/^(?:session moved on|pane changed|owner sent|session paused|manager disabled)/.test(reason)) esc = true;   // nothing else tells the owner this stop is still open
   if (reason) {
     cancelAuto(name, reason);
     if (esc) escalate(name, last?.state, w.stall || { case: auto.case }, auto.id, reason.startsWith('forbidden') ? humanWhy(w.stall || {}, ws) : reason);
@@ -712,6 +751,91 @@ export async function wakeOutcomeTick({ now = Date.now() } = {}) {
   return due.length;
 }
 
+// ---- merge decisions and information answers (round 7, OWNER_DECISIONS §14) ----
+// The merge evaluation's Jev call: the router's `merge` point, same guards as the other Jev callers. -> reply | { skipped } | { error }.
+async function jevPost(body) {
+  if (!JEV_URL || !JEV_API_KEY) return { skipped: 'not configured' };
+  if (jevSwitch.off()) return { skipped: DISABLED };
+  if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
+  if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
+  if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
+  if (!jevBreaker.allow()) return { skipped: 'Jev down (3 errors in a row), rules decide' };
+  body = { ...body, usage: await jevUsageNow(), ...(decisions.configured ? { team_id: VPT_TEAM_ID } : {}) };
+  try {
+    const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) });
+    const j = await r.json();
+    if (jevSwitch.seen(j)) return { skipped: DISABLED };
+    budget.calls += 1; budget.cost += Number(j.cost || 0); saveBudget();
+    if (!j.success) { const error = String(j.error || `http ${r.status}`).slice(0, 200); jevBreaker.failure(error); return { error }; }
+    jevBreaker.success();
+    return j;
+  } catch (e) { jevBreaker.failure(e.message); return { error: e.message }; }
+}
+
+// Parts of the ask that are already covered by the merge answer: a part about the merge with no hard topic of its own.
+const mergeCovered = (part) => !!mergeMatch(part.text) && !hardMatch(part.text, { mergePresent: true });
+const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'error', 'background_wait'];
+
+// An owner-bound stop that asks for information and / or a merge: answer what the manager can (the information when it is
+// in the docs, the merge when merge-policy.js says so), one reply, and escalate only the rest. -> null (not handled: the
+// usual flow goes on, `mergeWhy` set when a merge was evaluated and escalated) or { handled: true }.
+async function partialDecision({ s, w, id, h, final, stall }) {
+  const out = { handled: false, mergeWhy: null };
+  const name = s.name;
+  if (isManagerSession(name) || !toOwnerCase(final) || CASES_NOT_PARTIAL.includes(final.case) || stall.draft) return out;
+  if (!config.infoAnswers && !(config.mergeDecisions && final.topics?.merge)) return out;
+  if (decisionBlock(name, 1)) return out;   // auto-answer off, paused, capped: nothing is typed, the owner gets the whole stop as before
+  const parts = splitAsk(final.question || '').filter((p) => p.kind !== 'other' || isAsk(p.text));   // a statement that rode along is not part of the ask
+  if (!parts.length) return out;
+  const roots = [repoToplevel(s.cwd), ...(config.infoRoots || [])].filter(Boolean);
+  const info = [];
+  if (config.infoAnswers && roots.length) {
+    for (const p of parts) {
+      if (p.kind !== 'info') continue;
+      let hit = null; try { hit = lookupInfo(p, { roots }); } catch { hit = null; }
+      if (hit) info.push({ part: p.text, ...hit });
+    }
+  }
+  let ev = null, record = null;
+  const mergeParts = parts.filter((p) => p.kind !== 'info' && mergeMatch(p.text));
+  if (config.mergeDecisions && final.topics?.merge && mergeParts.length && s.cwd) {
+    ev = await evaluateMerge({ cwd: s.cwd, text: `${final.question || ''}\n${stall.closing || stall.excerpt || ''}`, session: name, config, jev: (b) => mergeJev(b) });
+    if (w.hash !== h) return out;   // the pane moved on while Jev was thinking
+    record = journalRecord(ev, { id, session: name, at: new Date(s.now) });
+    try { await appendFile(MERGE_FILE, JSON.stringify(record) + '\n'); } catch (e) { console.error('[manager] merge journal', e.message); }
+    logLater({ type: 'merge_decision', id, session: name, verdict: ev.verdict, reasons: ev.reasons, repo: ev.facts.repoName || null, branch: ev.facts.branch || null, target: ev.facts.target || null,
+      branch_sha: ev.facts.branchSha || null, confidence: ev.decision.confidence, source: ev.decision.source });
+    try { onMergeDecision(name, record); } catch (e) { console.error('[manager] onMergeDecision', e.message); }
+    if (ev.verdict !== 'merge') out.mergeWhy = `merge not decided: ${ev.reasons.join('; ')}`;
+  }
+  const mergeOk = ev?.verdict === 'merge';
+  const hard = final.topics?.hard || null;
+  const mergeArg = mergeOk ? { branch: ev.facts.branch, target: ev.facts.target, rationale: ev.rationale } : null;
+  let reply = composeReply({ info, merge: mergeArg, remaining: true });
+  if (!reply) return out;
+  // what the reply really carries (a line the hard floor dropped is not answered)
+  const answeredInfo = reply.info.map((n) => info[n]);
+  const stillOpen = parts.filter((p) => !answeredInfo.some((i) => i.part === p.text) && !(reply.merge && mergeCovered(p)));
+  const open = !!hard || stillOpen.length > 0 || (!!ev && !reply.merge);
+  if (!open) reply = composeReply({ info, merge: mergeArg, remaining: false });   // same kept lines, without the pointer to the owner
+  const confidence = reply.merge ? ev.decision.confidence : 1;
+  if (decisionBlock(name, confidence, { merge: reply.merge })) return out;
+  const pending = { id, hash: h, answer: { text: reply.text }, case: final.case, source: 'manager_decision', confidence, merge: reply.merge, escalated: open };
+  const pol = policyOf(name, s.agent);
+  shadowRoute({ id, session: name, agent: s.agent, final, stall, escalated: open });
+  if (pol.action === 'hold') { applyHold(name, w, pending, pol); }
+  else { if (holdOf(name)) endHold(name, 'manager', `quota ok: ${pol.reason}`, false); schedule(name, w, pending); }
+  if (open) {
+    const left = [];
+    if (hard) left.push(`${hard} question`);
+    if (ev && !reply.merge) left.push(out.mergeWhy || 'merge not answered');
+    for (const p of stillOpen) if (!mergeParts.includes(p) || reply.merge) left.push(`"${p.text.slice(0, 60)}"`);
+    const done = [reply.merge ? 'merge answered by the manager' : null, answeredInfo.length ? `${answeredInfo.length === 1 ? 'information' : 'information x' + answeredInfo.length} answered` : null].filter(Boolean);
+    escalate(name, s.state, final, id, `${[...new Set(left)].join(', ') || 'the rest'} - needs you (${done.join('; ')})`);
+  }
+  return { handled: true };
+}
+
 // Index of the pane line where the stop's closing text ends (the text is compared without whitespace, so
 // a re-wrapped pane still matches), or -1 when it is not on screen.
 function closingLine(plain, key) {
@@ -841,6 +965,9 @@ export function observe(s) {
       ...(final.handoff ? { handoff: final.handoff } : {}),
     });
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
+    const partial = await partialDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] partial decision', e.message); return { handled: false }; });
+    if (partial.handled) return;
+    if (w.hash !== h) return;
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;
     shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' });   // shadow: fire and forget, never awaited
     if (ws.send && !block) {   // the existing auto-answer handles this one
@@ -851,7 +978,8 @@ export function observe(s) {
       schedule(s.name, w, pending);
       return;
     }
-    const why = ws.send ? block : humanWhy(final, ws);
+    const baseWhy = ws.send ? block : humanWhy(final, ws);
+    const why = partial.mergeWhy ? (final.topics?.hard ? `${baseWhy} (${partial.mergeWhy})` : partial.mergeWhy) : baseWhy;
     // To the owner. With AI triage on, the reviewer reads the stop first (rules and Jev already did) so the push carries its proposal.
     let tri = null;
     if (config.aiTriage !== 'off' && toOwnerCase(final)) {

@@ -66,7 +66,7 @@ async function withTempDir(fn) {
 test('jev-ask: --help prints usage with one example per point and exits 0', async () => {
   const { code, stdout } = await runCli(['--help']);
   assert.equal(code, 0);
-  for (const p of ['wake', 'builder', 'reviewer', 'retry', 'stop', 'model']) {
+  for (const p of ['wake', 'builder', 'reviewer', 'retry', 'stop', 'model', 'merge']) {
     assert.match(stdout, new RegExp(p), `help should mention point "${p}"`);
   }
   assert.match(stdout, /usage:/);
@@ -285,4 +285,18 @@ test('jev-ask: falls back to the .env file when env vars are missing', async () 
     const log = (await readFile(join(stateDir, 'manager-asks.jsonl'), 'utf8')).trim().split('\n');
     assert.equal(log.length, 1);
   } finally { await mock.close(); await rm(stateDir, { recursive: true, force: true }); }
+});
+
+test('jev-ask: merge point forces escalate when the floor reasons are present, merges otherwise', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    const a = await runCli(['merge', '--facts', JSON.stringify({ branch: 'b', floor_reasons: ['no green test report on the branch'] })], { env });
+    assert.equal(a.code, 0, a.stderr);
+    assert.equal(JSON.parse(a.stdout).pick, 'escalate');
+    assert.equal(JSON.parse(a.stdout).source, 'forced');
+    const b = await runCli(['merge', '--facts', JSON.stringify({ branch: 'b', floor_reasons: [] })], { env });
+    assert.equal(JSON.parse(b.stdout).pick, 'merge');
+    assert.equal(JSON.parse(b.stdout).source, 'rule');
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
 });
