@@ -23,6 +23,7 @@
 Roll back V2: set `GHOSTY_V2=0` in `.env`, then `scripts/safe-restart.sh`.
 
 ## Open
+0. Owner-interaction review of 2026-10-14 (what to automate next, measured waits): [HARNESS-REVIEW-2026-10-14](../../v2/reviews/HARNESS-REVIEW-2026-10-14.md); rounds 8 and 9 act on it.
 1. **Live smoke task failed (defect, fix in progress):** a docs task in the pilot repo ended `waiting/no_progress`. The
    developer made the edit, but the project check (full `npm test`, about 1.8k tests) exceeded the evidence time limit
    (`unknown_exit`), and the second run, which correctly changed nothing, counted as a stall. Fix: docs-class checks
