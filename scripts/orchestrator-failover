@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# orchestrator-failover — keeps the orchestrator role alive when Claude runs out of quota.
+# Every POLL seconds: if Claude is limited (5 h or weekly quota >= LIMIT_PCT, or the orchestrator pane shows a usage-limit
+# message), start or wake the MiniMax M3 standby `mm-manager` with the same brief; when Claude is back under
+# BACK_PCT, ask the standby for a handback note and tell the Claude orchestrator to read it. Both agents log to LOG.
+set -u
+POLL=${POLL:-300}; LIMIT_PCT=${LIMIT_PCT:-97}; BACK_PCT=${BACK_PCT:-90}
+RL="$HOME/.local/state/ghosty/claude-rate-limits.json"
+BRIEF="$HOME/handovers/orchestrator.brief.md"
+LOG="$HOME/handovers/notes/orchestrator-log.md"
+STATE="$HOME/handovers/notes/.failover-state"   # "claude" or "minimax"
+mkdir -p "$(dirname "$LOG")"; [ -f "$STATE" ] || echo claude > "$STATE"
+note() { echo "- $(date -u '+%F %H:%M') failover: $*" >> "$LOG"; echo "$(date -u '+%F %H:%M') $*"; }
+say() { tmux send-keys -t "=$1:0" -l "$2"; sleep 1; tmux send-keys -t "=$1:0" C-m; }
+
+quota() {  # prints "<5h%> <week%> <reset epoch>" or "? ? ?"
+  python3 - "$RL" <<'EOF' 2>/dev/null || echo "? ? ?"
+import json,sys
+d=json.load(open(sys.argv[1]))["rate_limits"]
+f,w=d.get("five_hour",{}),d.get("seven_day",{})
+r=max(f.get("resets_at",0) if f.get("used_percentage",0)>=97 else 0, w.get("resets_at",0) if w.get("used_percentage",0)>=97 else 0)
+print(int(f.get("used_percentage",0)), int(w.get("used_percentage",0)), r)
+EOF
+}
+
+note "watcher started (poll ${POLL}s, limit ${LIMIT_PCT}%, back ${BACK_PCT}%)"
+while true; do
+  read -r H W RESET <<<"$(quota)"
+  pane_limited=0
+  tmux capture-pane -p -t "=orchestrator:0" 2>/dev/null | tail -15 | grep -q -i -E "usage limit|limit reached|out of (extra )?usage|rate.?limited" && pane_limited=1
+  limited=0
+  [ "$pane_limited" = 1 ] && limited=1
+  [ "$H" != "?" ] && { [ "$H" -ge "$LIMIT_PCT" ] || [ "$W" -ge "$LIMIT_PCT" ]; } && limited=1
+  back=0
+  [ "$H" != "?" ] && [ "$H" -lt "$BACK_PCT" ] && [ "$W" -lt "$BACK_PCT" ] && [ "$pane_limited" = 0 ] && back=1
+  cur=$(cat "$STATE")
+  if [ "$limited" = 1 ] && [ "$cur" = claude ]; then
+    resets=$([ "${RESET:-0}" -gt 0 ] 2>/dev/null && date -u -d "@$RESET" '+%F %H:%M UTC' || echo unknown)
+    msg="STANDBY MODE: the Claude orchestrator is out of quota (5h ${H}%, week ${W}%, resets ${resets}). You are now the standby orchestrator: run the loop in ~/handovers/orchestrator.brief.md now and keep running it every 30 minutes. Append every action (merge, restart, answer, session started) as one line to ${LOG}. When you are told Claude is back, write a handback summary to that log and stop."
+    if ! tmux has-session -t "=mm-manager" 2>/dev/null; then
+      "$HOME/bin/ensure-mm-manager-tmux.sh" >/dev/null 2>&1; sleep 20
+      tmux load-buffer -b mmbrief "$HOME/.local/state/ghosty/briefs/mm-manager.txt"; tmux paste-buffer -b mmbrief -t mm-manager -d; sleep 2; tmux send-keys -t mm-manager C-m; sleep 60
+    fi
+    say mm-manager "$msg"
+    echo minimax > "$STATE"; note "Claude limited (5h ${H}%, week ${W}%, pane ${pane_limited}) -> mm-manager standby active"
+  elif [ "$back" = 1 ] && [ "$cur" = minimax ]; then
+    tmux has-session -t "=mm-manager" 2>/dev/null && say mm-manager "Claude is back. Write a handback summary to ${LOG} (what you merged, restarted, answered, started, and anything pending), then return to your manager role."
+    sleep 120
+    say orchestrator "mm-manager (MiniMax M3) ran your loop while you were out of quota. Read the last entries of ${LOG}, then continue your loop from there."
+    echo claude > "$STATE"; note "Claude back (5h ${H}%, week ${W}%) -> handback to the Claude orchestrator"
+  fi
+  sleep "$POLL"
+done
