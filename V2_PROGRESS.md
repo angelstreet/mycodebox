@@ -7,8 +7,18 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 6 (session history on the dashboard, `.v2/round6.md`) delivered on `v2/r6-history`: owner review of the PR.
-Rounds 5 (PR #2, #3) and the MiniMax M3-only decision (PR #5) are merged; this branch is rebased on them. SHAs quoted before round 2 in this file are pre-rewrite SHAs (history rewritten 2026-10-11).
+Round 6b (History view backfill from the ledger, `.v2/round6b.md`) delivered on `v2/r6b-history-ledger`: owner
+review of the PR. Round 6 is merged and live (PR #4, main 602d2f3). SHAs quoted before round 2 in this file are
+pre-rewrite SHAs (history rewritten 2026-10-11).
+
+## Round 6b
+
+Base: `origin/main` 602d2f3. Spec: live defect, pre-restart sessions showed 0 turns in History.
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R6b-1 | Backfill first-seen sessions from the ledger, ledger-only rows for uncovered turns, V2 turns counted once, cached join; ledger compaction keeps old rows (atomic) | coordinator / Opus review | DONE (APPROVE after 1 change round) | bcce613 + e350cc3 + 795b1cf |
+| R6b-2 | Gates, PR, DELIVERED | coordinator | DONE | 1826/1826 Node 23.6 and 24.21, acceptance 54/54 (T20 67/67), leak scan clean |
 
 ## Round 6
 

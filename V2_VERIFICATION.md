@@ -1,11 +1,27 @@
 # V2 verification
 
-**Status: round 6 (session history on the dashboard) on `v2/r6-history`, PR to `main`. V2 is merged and live as a pilot.
-All local gates pass on the gated SHA. Nothing was deployed or restarted.**
+**Status: round 6b (History view: ledger backfill, live defect) on `v2/r6b-history-ledger`, PR to `main`. Round 6 is
+merged and live (main 602d2f3). All local gates pass on the gated SHA. Nothing was deployed or restarted.**
 
-Gated SHA: `d26f962` (round 6 rebased on `main` 1529069, after PR #2, #3 and #5 MiniMax M3 only).
+Gated SHA: `795b1cf`.
 
-## Gates on `d26f962` (round 6 rebased on main)
+## Gates on `795b1cf` (round 6b)
+
+| Gate | Command | Result |
+|---|---|---|
+| Unit and integration suite, Node 23.6.0 | `env -i PATH HOME LANG GHOSTY_STATE_DIR=$(mktemp -d) npm test` | **PASS** 1826/1826, exit 0 |
+| Same, Node 24.21.0 | same | **PASS** 1826/1826, exit 0 |
+| Acceptance matrix | `PLAYWRIGHT_CORE=<dir> node scripts/v2-acceptance.js` | **PASS** 54/54 rows (T20 browser check incl. the History view, 67/67), 1827/1827 tests, 149/149 test files |
+| Leak scan | `LEAK_SCAN_EXTRA=<private denylist> node scripts/leak-scan.js origin/main..HEAD` | **PASS**, clean |
+
+Round 6b: first-seen sessions start at their label's earliest ledger turn (after the previous instance of the name and
+the tmux creation time); every ledger turn no instance covers is an ended row (split on 6 h gaps); V2 runs own their
+worktree's and their own name's turns; the tailer's start-up compaction keeps rows older than `BACKFILL_DAYS` (it
+dropped them) and rewrites atomically. Checked against a copy of the live files: 541 rows, `mycodebox-v2` from
+2026-10-11 with 3,933 turns; first list 248 ms, cached 55 ms. Review: Opus REQUEST_CHANGES (7 findings, fixed
+`e350cc3`), APPROVE on `e350cc3` and on `795b1cf`.
+
+### Round 6 gates on `d26f962`
 
 | Gate | Command | Result |
 |---|---|---|
