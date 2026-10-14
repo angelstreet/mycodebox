@@ -34,3 +34,13 @@ Roll back V2: set `GHOSTY_V2=0` in `.env`, then `scripts/safe-restart.sh`.
 5. Older worktrees and clones on codebox still carry the pre-rewrite git history (history rewritten 2026-10-11 to drop
    tailnet identifiers): rebase onto the new `origin/main` before pushing from them.
 6. MiniMax TUI sessions: `permissionMode: bypassPermissions` in `~/.minimax/config.yaml` if prompts must be off.
+
+## Operating roles on the dashboard host (2026-10-14 evening)
+| tmux session | Model | Role |
+|---|---|---|
+| `orchestrator` (window 0) | Claude Sonnet, Remote Control | Runs the delivery loop: merges the coordinator's PRs, tests on both Node versions, safe restart, answers sessions under the owner's rules, starts sessions with `cbsession`. Brief: `~/handovers/orchestrator.brief.md` (outside the repo). |
+| `orchestrator:failover` | script | `scripts/orchestrator-failover`: every 5 min reads the Claude quota (`$GHOSTY_STATE_DIR/claude-rate-limits.json`) and the orchestrator pane; at 97 % (5 h or weekly) or a usage-limit message it wakes `mm-manager` in standby mode; under 90 % it hands back. Both log actions to `~/handovers/notes/orchestrator-log.md`. |
+| `mycodebox-v2` (window `coordinator`) | Claude Opus | Builds V2 rounds (8 → 10 → 9), Fable reviews, delivers PRs; does not merge or restart. |
+| `mm-manager` | MiniMax M3 | Fleet manager. Since 2026-10-14 it answers routine owner questions itself (start, merge, push, deploy on a free lease, recommended option, rerun) and escalates only hard floors; standby orchestrator when Claude is out of quota. Brief: `$GHOSTY_STATE_DIR/briefs/mm-manager.txt`. |
+
+Owner rules behind these roles: `docs/tasks/v2/OWNER_DECISIONS.md` and the harness review in `docs/v2/reviews/`.
