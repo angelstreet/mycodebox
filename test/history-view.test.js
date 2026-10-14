@@ -83,3 +83,25 @@ test('window end is exclusive: a turn at a superseded end counts for the new ins
   const rows = (await createHistoryView({ history: h2, ledgerFile: l }).list()).sessions;
   assert.deepEqual(rows.map((r) => r.turns).sort(), [0, 1]);
 });
+
+test('ledger index: dedupes by id (last wins), survives a transient read error, rereads after an in-place rewrite', async () => {
+  const l = path.join(dir, 'l3.jsonl'), f = path.join(dir, 'h3.jsonl');
+  const h3 = createSessionHistory({ file: f });
+  await h3.append({ kind: 'session.started', name: 'q', provider: 'claude', cwd: '/w/q', started_by: 'dashboard', prompt_ref: null, handover_ref: null, ts: T0 });
+  const small = row('q', T0 + M); const big = { ...small, usage: { ...small.usage, output: 500 } };
+  fs.writeFileSync(l, JSON.stringify(small) + '\n' + JSON.stringify(row('q', T0 + 2 * M)) + '\n');
+  const v3 = createHistoryView({ history: h3, ledgerFile: l });
+  assert.equal((await v3.detail('q')).turns, 2);
+  fs.appendFileSync(l, JSON.stringify(big) + '\n');   // same id, larger record
+  const d = await v3.detail('q');
+  assert.deepEqual([d.turns, d.tokens.output], [2, 505]);
+  // transient error: ledger path replaced by a directory for one call, then restored
+  const hold = l + '.hold'; fs.renameSync(l, hold); fs.mkdirSync(l);
+  await assert.rejects(v3.detail('q'));
+  fs.rmdirSync(l); fs.renameSync(hold, l);
+  assert.equal((await v3.detail('q')).turns, 2, 'the chain recovered');
+  // in-place rewrite (same inode, not smaller): compaction with different content
+  const fd = fs.openSync(l, 'r+'); const txt = JSON.stringify(row('q', T0 + 3 * M, { id: 'other-1' })) + '\n' + JSON.stringify(row('q', T0 + 4 * M, { id: 'other-2' })) + '\n' + JSON.stringify(row('q', T0 + 5 * M, { id: 'other-3' })) + '\n';
+  fs.ftruncateSync(fd, 0); fs.writeSync(fd, txt, 0); fs.closeSync(fd);
+  assert.equal((await v3.detail('q')).turns, 3);
+});

@@ -11,37 +11,51 @@ const SUBSCRIPTION = new Set(['minimax', 'mcode']);   // flat-rate plans: per-to
 const day = (ts) => new Date(ts).toISOString().slice(0, 10);
 const r6 = (x) => Math.round(x * 1e6) / 1e6;
 
-// Incremental: the ledger is append-only, so only bytes past the last complete line are read (async). A shrunk file or a
-// new inode (the tailer compacts it) means a full reread.
+// Incremental: the ledger is append-only, so only bytes past the last complete line are read (async). A shrunk file, a new
+// inode or a changed first 128 bytes (the tailer compacts it in place) means a full reread. Rows are deduped by id, last
+// wins (the tailer re-appends a larger record under an existing id); the per-label/cwd lists are rebuilt when that happens.
 export function createLedgerIndex(file) {
-  let ino = null, offset = 0, byLabel = new Map(), byCwd = new Map(), busy = null;
-  const add = (m, k, row, touched) => { let l = m.get(k); if (!l) m.set(k, l = []); l.push(row); touched.add(l); };
-  async function refresh() {
-    let st; try { st = await fsp.stat(file); } catch { byLabel = new Map(); byCwd = new Map(); ino = null; offset = 0; return; }
-    if (st.ino !== ino || st.size < offset) { byLabel = new Map(); byCwd = new Map(); offset = 0; ino = st.ino; }
-    if (st.size === offset) return;
-    const fh = await fsp.open(file, 'r');
-    let text;
-    try { const buf = Buffer.alloc(st.size - offset); const { bytesRead } = await fh.read(buf, 0, buf.length, offset); text = buf.subarray(0, bytesRead); } finally { await fh.close(); }
-    const nl = text.lastIndexOf(10);
-    if (nl < 0) return;   // no complete line yet
-    offset += nl + 1;
-    const touched = new Set();
-    for (const line of text.subarray(0, nl).toString('utf8').split('\n')) {
-      if (!line) continue;
-      let r; try { r = JSON.parse(line); } catch { continue; }
-      if (!r || !r.usage || !Number.isFinite(r.ts)) continue;
-      const u = r.usage;
-      const row = { ts: r.ts, agent: r.agent || null, model: r.model || null, input: u.input || 0, output: u.output || 0, cache_read: u.cache_read || 0,
-        cache_write: (u.cache_write_5m || 0) + (u.cache_write_1h || 0), cost: r.cost && Number.isFinite(r.cost.total) ? r.cost.total : null };
-      if (r.label) add(byLabel, r.label, row, touched);
-      if (r.cwd) add(byCwd, r.cwd, row, touched);
+  let ino = null, offset = 0, head = '', rows = new Map(), byLabel = new Map(), byCwd = new Map(), busy = Promise.resolve();
+  const reset = () => { rows = new Map(); byLabel = new Map(); byCwd = new Map(); offset = 0; head = ''; };
+  const index = () => {
+    byLabel = new Map(); byCwd = new Map();
+    for (const row of rows.values()) {
+      if (row.label) (byLabel.get(row.label) || byLabel.set(row.label, []).get(row.label)).push(row);
+      if (row.cwd) (byCwd.get(row.cwd) || byCwd.set(row.cwd, []).get(row.cwd)).push(row);
     }
-    for (const l of touched) l.sort((a, b) => a.ts - b.ts);
+    for (const m of [byLabel, byCwd]) for (const l of m.values()) l.sort((a, b) => a.ts - b.ts);
+  };
+  async function refresh() {
+    let st; try { st = await fsp.stat(file); } catch { reset(); ino = null; index(); return; }
+    const fh = await fsp.open(file, 'r');
+    try {
+      if (st.ino !== ino || st.size < offset) { reset(); ino = st.ino; }
+      else if (offset > 0) {
+        const hb = Buffer.alloc(Math.min(128, offset)); await fh.read(hb, 0, hb.length, 0);
+        if (hb.toString('latin1') !== head.slice(0, hb.length)) reset();
+      }
+      if (st.size === offset) return;
+      const buf = Buffer.alloc(st.size - offset); const { bytesRead } = await fh.read(buf, 0, buf.length, offset);
+      const text = buf.subarray(0, bytesRead);
+      const nl = text.lastIndexOf(10);
+      if (nl < 0) return;   // no complete line yet
+      if (offset === 0) head = text.toString('latin1', 0, Math.min(128, nl + 1));
+      offset += nl + 1;
+      for (const line of text.subarray(0, nl).toString('utf8').split('\n')) {
+        if (!line) continue;
+        let r; try { r = JSON.parse(line); } catch { continue; }
+        if (!r || !r.usage || !Number.isFinite(r.ts)) continue;
+        const u = r.usage;
+        rows.set(r.id ?? `${r.ts}:${rows.size}`, { ts: r.ts, label: r.label || null, cwd: r.cwd || null, agent: r.agent || null, model: r.model || null, input: u.input || 0, output: u.output || 0,
+          cache_read: u.cache_read || 0, cache_write: (u.cache_write_5m || 0) + (u.cache_write_1h || 0), cost: r.cost && Number.isFinite(r.cost.total) ? r.cost.total : null });
+      }
+      index();
+    } finally { await fh.close(); }
   }
   return async function get() {
-    busy = (busy || Promise.resolve()).then(refresh);
-    const mine = busy; await mine; if (busy === mine) busy = null;
+    const run = busy.then(refresh);
+    busy = run.catch(() => {});   // one failed refresh must not poison later calls
+    await run;
     return { byLabel, byCwd };
   };
 }

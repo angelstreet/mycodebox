@@ -3506,16 +3506,20 @@ function openSessionHistory() {
       if (v.detail) { out.innerHTML = '<div class="tk-bar"><button class="sbtn" data-hs-back>Back to list</button></div>' + hv.detailHtml(v.detail); return; }
       out.innerHTML = v.err ? `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>` : v.loading && !v.rows.length ? '<div class="sheet-empty">loading…</div>' : hv.listHtml(v.rows, v.total);
     };
+    let seq = 0;   // a response from an earlier filter / load-more is dropped
     const load = async (more) => {
+      const my = ++seq;
       v.loading = true; v.err = null;
       try {
         const r = await fetch(`/api/history?${hv.buildQuery(v.f, more ? v.rows.length : 0)}`);
         const j = await r.json().catch(() => ({}));
+        if (my !== seq) return;
         if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-        v.rows = more ? v.rows.concat(j.sessions) : j.sessions; v.total = j.total;
+        const key = (x) => `${x.name}|${x.start}`, have = new Set(more ? v.rows.map(key) : []);
+        v.rows = more ? v.rows.concat(j.sessions.filter((x) => !have.has(key(x)))) : j.sessions; v.total = j.total;
         for (const s of j.sessions) { if (s.provider) v.seen.provider.add(s.provider); if (s.model) v.seen.model.add(s.model); }
         paintFilters();
-      } catch (e) { v.err = `history unavailable: ${e.message}`; }
+      } catch (e) { if (my !== seq) return; v.err = `history unavailable: ${e.message}`; }
       v.loading = false; paint();
     };
     body.addEventListener('change', (e) => { const k = e.target.dataset?.hsF; if (!k) return; v.f[k] = e.target.value; v.detail = null; load(false); });

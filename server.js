@@ -1061,6 +1061,8 @@ if (V2_ON) {
     onRun: (r) => historyLog(r.event === 'start'
       ? { kind: 'session.started', name: r.name, provider: r.provider, model: r.model, cwd: r.cwd, started_by: 'v2', prompt_ref: null, handover_ref: null }
       : { kind: 'session.ended', name: r.name, reason: 'exited' }) });
+  // The runtime cancels its workers on a graceful stop (v2-runtime stop()), so open v2 instances here belong to a previous process
+  // that is gone (a hard crash may orphan a worker, which is then no longer tracked). The real end time is unknown: boot time is used.
   for (const i of history.instances()) if (i.end == null && i.started_by === 'v2') await historyLog({ kind: 'session.ended', name: i.name, reason: 'exited' });   // runs of a previous process are over
   v2.start().catch((e) => console.error(`[v2] start failed: ${e?.code || e?.message}`));
 }

@@ -6,7 +6,7 @@
 //   { schema_version: 1, kind: 'session.ended', name, ts, reason: 'killed'|'exited'|'vanished' }
 // Names are reused: an instance is a started record plus the next ended record for the same name.
 // One appendFile call writes one complete line; a torn or invalid line (crash mid-write) is skipped on read.
-import { promises as fsp, readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { promises as fsp, readFileSync, mkdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -88,36 +88,56 @@ export function parseLines(text) {
   return recs;
 }
 
-export function createSessionHistory({ file, now = Date.now, missMs = 2000 } = {}) {
+export function createSessionHistory({ file, now = Date.now, missMs = 2000, readOnly = false, refreshMs = 500 } = {}) {
   if (!file) throw new Error('session-history: file required');
-  // Folded state lives in memory: read once at boot, then updated by each append (this process is the only writer),
-  // so a request or a tick never re-reads the file.
-  const folder = createFolder();
-  try { for (const r of parseLines(readFileSync(file, 'utf8'))) folder.feed(r); } catch { /* no file yet */ }
+  // Folded state lives in memory: read once at boot, then updated by each append (the server is the only writer, so it
+  // never re-reads). readOnly = another process writes the file (the usage tailer): the file is re-checked at most every
+  // refreshMs and only the bytes past the last complete line are read; a shrunk file or new inode is read in full.
+  let folder = createFolder(), offset = 0, ino = null, checkedAt = 0;
+  function load() {
+    let st; try { st = statSync(file); } catch { if (ino !== null) { folder = createFolder(); offset = 0; ino = null; } return; }
+    if (st.ino !== ino || st.size < offset) { folder = createFolder(); offset = 0; ino = st.ino; }
+    if (st.size === offset) return;
+    const fd = openSync(file, 'r');
+    try {
+      const buf = Buffer.alloc(st.size - offset); const n = readSync(fd, buf, 0, buf.length, offset);
+      const nl = buf.subarray(0, n).lastIndexOf(10);
+      if (nl < 0) return;
+      for (const r of parseLines(buf.toString('utf8', 0, nl))) folder.feed(r);
+      offset += nl + 1;
+    } finally { closeSync(fd); }
+  }
+  try { load(); } catch { /* unreadable: empty history */ }
+  const fresh = () => { if (!readOnly) return; const t = Date.now(); if (t - checkedAt < refreshMs) return; checkedAt = t; try { load(); } catch { /* keep the last good state */ } };
   let queue = Promise.resolve();
-  const instances = () => folder.instances;
-  function append(rec) {   // validated now, written in call order: one write, one complete line
+  const instances = () => { fresh(); return folder.instances; };
+  function append(rec) {
+    if (readOnly) throw new Error('session-history: read-only');
+    // validated now, written in call order: one write, one complete line
     const r = validateRecord(rec, now());
     const p = queue.then(async () => {
       mkdirSync(dirname(file), { recursive: true });
-      await fsp.appendFile(file, JSON.stringify(r) + '\n', { mode: 0o600 });
-      folder.feed(r);
+      const line = JSON.stringify(r) + '\n';
+      await fsp.appendFile(file, line, { mode: 0o600 });
+      folder.feed(r); offset += Buffer.byteLength(line);
       return r;
     });
     queue = p.catch(() => {});
     return p;
   }
-  const openOf = (name) => folder.open.get(name) || null;
-  const openNames = () => new Set(folder.open.keys());
+  const openOf = (name) => { fresh(); return folder.open.get(name) || null; };
+  const openNames = () => { fresh(); return new Set(folder.open.keys()); };
   const covers = (i, ts) => ts >= i.start && (i.end == null || ts < i.end);
   // The instance of `name` running at ts (latest start wins on overlap).
   function instanceAt(name, ts) {
+    fresh();
     let best = null;
     for (const i of folder.instances) if (i.name === name && covers(i, ts) && (!best || i.start >= best.start)) best = i;
     return best;
   }
   // The instance running at ts in a working directory; null when none or ambiguous.
   function byCwd(cwd, ts) {
+    fresh();
     const m = folder.instances.filter((i) => i.cwd === cwd && covers(i, ts));
     return m.length === 1 ? m[0] : null;
   }

@@ -106,3 +106,18 @@ test('tmux_created is validated and kept', () => {
   assert.equal(validateRecord(start('a', 1, { tmux_created: 123 })).tmux_created, 123);
   assert.equal('tmux_created' in validateRecord(start('a', 1, { tmux_created: 'x' })), false);
 });
+
+test('readOnly mode follows appends and rewrites made by another process; it refuses to append', async () => {
+  const f = tmp();
+  const w = createSessionHistory({ file: f });
+  const r = createSessionHistory({ file: f, readOnly: true, refreshMs: 0 });
+  assert.equal(r.instances().length, 0);
+  await w.append(start('a', 1000)); await w.append(start('b', 2000, { cwd: '/w/b' }));
+  assert.deepEqual(r.instances().map((i) => i.name), ['a', 'b']);
+  assert.equal(r.byCwd('/w/b', 3000).name, 'b');
+  await w.append(end('b', 2500));
+  assert.equal(r.byCwd('/w/b', 3000), null);
+  fs.writeFileSync(f, JSON.stringify({ schema_version: 1, ...start('c', 9) }) + '\n');   // replaced (smaller) file
+  assert.deepEqual(r.instances().map((i) => i.name), ['c']);
+  assert.throws(() => r.append(start('x', 1)), /read-only/);
+});

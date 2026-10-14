@@ -126,3 +126,15 @@ test('label: short-lived session keeps its own name from session-history (claude
   await ing.tick();
   assert.equal((await ledger(cfg))[0].label, 'quick-fix');
 });
+
+test('history written AFTER the ingester was created is still used (read-only mode refreshes from the file)', async () => {
+  const { dir, cfg, stateDir } = await setup();
+  cfg.minimaxDb = join(dir, 'mm.sqlite');
+  minimaxDb(cfg.minimaxDb, [['s1', NOW - 60000, 10, 5, 100, 0]]);
+  const ing = createIngester(cfg, hooks); await ing.init(false);   // no history file yet
+  await new Promise((r) => setTimeout(r, 650));
+  await fs.writeFile(join(stateDir, 'session-history.jsonl'), started('late-mm', 'minimax', 'minimax/MiniMax-M3.1-Flash-Preview', '/work/mm-one', NOW - 3600000));
+  assert.equal(await ing.tick(), 1);
+  const [a] = await ledger(cfg);
+  assert.deepEqual([a.model, a.model_source, a.label], ['MiniMax-M3.1-Flash-Preview', 'launch', 'late-mm']);
+});

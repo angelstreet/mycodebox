@@ -358,7 +358,7 @@ export function createIngester(cfg, hooks = {}) {
   const projectOf = hooks.projectOf || gitProject;
   const panesOf = hooks.tmuxPanes || tmuxPanes;
   let prices = null;
-  const history = hooks.history || createSessionHistory({ file: cfg.historyFile || join(cfg.stateDir, 'session-history.jsonl') });   // absent file = empty history
+  const history = hooks.history || createSessionHistory({ file: cfg.historyFile || join(cfg.stateDir, 'session-history.jsonl'), readOnly: true });   // the dashboard process writes it: re-read as it grows   // absent file = empty history
   let state = null;            // { files:{path:offset}, minimaxLastId, cwdProject, traceLabel }
   const byId = new Map();      // committed records within the window, by record id
   const traces = new Map();    // trace -> { first, models:Set, days:Set }
