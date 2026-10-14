@@ -129,3 +129,12 @@ test('review: the joined list is cached but follows history and ledger changes',
   const c = await w.view.list({ limit: 200 });
   assert.ok(c.sessions.some((s) => s.name === 'brand-new' && s.source === 'ledger'));
 });
+
+test('review: a V2 run also owns the turns labelled with its own name (no phantom ledger row)', async () => {
+  const w = world();
+  w.add(row('task-y.run2', T0 + 5 * D + M, { cwd: null })); w.add(row('task-y.run2', T0 + 5 * D + 2 * M, { cwd: '/wt/run-y' }));
+  await start(w.h, 'task-y.run2', T0 + 5 * D, { started_by: 'v2', cwd: '/wt/run-y' });
+  await w.h.append({ kind: 'session.ended', name: 'task-y.run2', ts: T0 + 5 * D + 10 * M, reason: 'exited' });
+  const rows = (await w.view.list({ limit: 200 })).sessions.filter((s) => s.name === 'task-y.run2');
+  assert.deepEqual(rows.map((s) => [s.started_by, s.turns, s.source ?? null]), [['v2', 2, null]], 'both turns once, by label and by cwd');
+});

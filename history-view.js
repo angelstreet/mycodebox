@@ -1,6 +1,6 @@
 // GET /api/history: one row per session instance (session-history.js) joined with the usage ledger.
-// Join: a ledger row belongs to an instance when its `label` equals the session name (V2 runs: its `cwd` equals the
-// run's worktree) and its ts is inside [start, end) (end exclusive, so a superseded end is not double counted). The
+// Join: a ledger row belongs to an instance when its `label` equals the session name (V2 runs: also when its `cwd`
+// equals the run's worktree) and its ts is inside [start, end) (end exclusive, so a superseded end is not double counted). The
 // ledger is read incrementally (no day cap).
 // active_ms = sum of the gaps between consecutive turns of the instance, each gap capped at ACTIVE_GAP_CAP_MS (5 min),
 // so idle waiting does not count. Unknown stays null: no turns -> tokens/cost null; any unpriced turn -> cost null.
@@ -79,10 +79,9 @@ export function withLedger(instances, led) {
   for (const i of instances) if (i.started_by !== 'v2') (byName.get(i.name) || byName.set(i.name, []).get(i.name)).push(i);
   const out = instances.map((i) => ({ ...i }));
   const idx = new Map(instances.map((i, k) => [i, k]));
-  const v2 = new Map();
-  for (const i of instances) if (i.started_by === 'v2' && i.cwd) (v2.get(i.cwd) || v2.set(i.cwd, []).get(i.cwd)).push(i);
+  // A V2 run owns the turns in its worktree (cwd) and the turns labelled with its own name, inside its window.
   const v2rows = new Set();
-  for (const [cwd, runs] of v2) for (const r of led.byCwd.get(cwd) || []) if (runs.some((i) => r.ts >= i.start && r.ts < (i.end ?? Infinity))) v2rows.add(r);
+  for (const i of instances) if (i.started_by === 'v2') for (const r of v2Pool(i, led)) if (r.ts >= i.start && r.ts < (i.end ?? Infinity)) v2rows.add(r);
   for (const [label, all] of led.byLabel) {
     const rows = all.filter((r) => !v2rows.has(r));
     if (!rows.length) continue;
@@ -118,6 +117,14 @@ export function withLedger(instances, led) {
   return { instances: out, v2rows };
 }
 
+// A V2 run's candidate turns: its worktree's (by cwd) and its own name's (by label), ts-sorted, each row once.
+function v2Pool(inst, led) {
+  const a = inst.cwd ? led.byCwd.get(inst.cwd) || [] : [], b = led.byLabel.get(inst.name) || [];
+  if (!b.length) return a;
+  if (!a.length) return b;
+  return [...new Set([...a, ...b])].sort((x, y) => x.ts - y.ts);
+}
+
 // First index in a ts-sorted list with ts >= t.
 function lowerBound(list, t) {
   let lo = 0, hi = list.length;
@@ -128,7 +135,7 @@ function lowerBound(list, t) {
 export function summarize(inst, led, nowMs, v2rows = null) {
   const end = inst.win_end ?? inst.end ?? Infinity;
   const isV2 = inst.started_by === 'v2';
-  const pool = (isV2 ? (inst.cwd ? led.byCwd.get(inst.cwd) : null) : led.byLabel.get(inst.name)) || [];
+  const pool = isV2 ? v2Pool(inst, led) : led.byLabel.get(inst.name) || [];
   const mine = [];
   for (let k = lowerBound(pool, inst.start); k < pool.length && pool[k].ts < end; k++) if (isV2 || !v2rows?.has(pool[k])) mine.push(pool[k]);
   const tokens = mine.length ? mine.reduce((t, r) => ({ input: t.input + r.input, output: t.output + r.output, cache_read: t.cache_read + r.cache_read, cache_write: t.cache_write + r.cache_write }),

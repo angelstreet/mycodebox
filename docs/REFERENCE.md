@@ -800,7 +800,7 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
   created (`start_source:'ledger'`, `recorded_start` = when it was first seen; the detail route accepts either start),
   and every turn of a label that no instance covers forms ended rows (`source:'ledger'`, `started_by:'unknown'`,
   start/end = first/last turn, provider = most frequent agent), split on 6 h idle gaps and at instance starts. Turns
-  of V2 runs (joined by cwd) are counted only in the run. The joined list is cached per ledger generation and history
+  of V2 runs (joined by cwd, or by the run's own name as label) are counted only in the run. The joined list is cached per ledger generation and history
   state. The tailer rewrites the ledger at start through a temp file + rename.
 - **Rerun the backfill**: `node usage/ingest.js --backfill` (forgets offsets, re-reads the last `BACKFILL_DAYS`
   days; Langfuse upserts by id, no duplicates). `--once` does a single pass.
