@@ -1,4 +1,4 @@
-STATUS: DELIVERED 795b1cf https://github.com/angelstreet/mycodebox/pull/6 (round 6b)
+STATUS: DELIVERED c11fb97 https://github.com/angelstreet/mycodebox/pull/7 (round 7)
 
 # V2 progress
 
@@ -7,9 +7,20 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 6b (History view backfill from the ledger, `.v2/round6b.md`) delivered on `v2/r6b-history-ledger`: owner
-review of the PR. Round 6 is merged and live (PR #4, main 602d2f3). SHAs quoted before round 2 in this file are
+Round 7 (the manager decides merges, `.v2/round7.md`) delivered on `v2/r7-merge-policy`: owner review of the PR.
+Round 6b is merged (PR #6, main 36114e5); this branch is rebased on it. SHAs quoted before round 2 in this file are
 pre-rewrite SHAs (history rewritten 2026-10-11).
+
+## Round 7
+
+Base: `origin/main` 36114e5 (rebased from 602d2f3). Spec: `.v2/round7.md`. Owner decision: OWNER_DECISIONS §14.
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R7-1 | `stall.js` topicSplit / hardMatch (merge leaves the hard floor; FORBIDDEN_RE unchanged), `merge-policy.js` evaluation + journal, `info-lookup.js`, router point `merge`, `manager.js` `manager_decision` source, feed notices, `GET /api/manager/merge-decisions`, `scripts/merge-eval.js` | Sonnet / Opus + Fable review | DONE (3 review rounds; Fable APPROVE) | 9ea2a57, 22fc2c1, 9ce3003, c11fb97 |
+| R7-2 | CONTRACT, AGENTS, REFERENCE, OWNER_DECISIONS §14, V2 task doc | coordinator | DONE | b651b96, 66acdad (+ 9ce3003) |
+| R7-3 | mm-manager manual (ops repo TASK-44-MANAGER.md, TASK-44-ai-manager.md) | coordinator | DONE, local branch `mm-r7-merge-policy` (not pushed) | e78be1b17, 1c442e547 |
+| R7-4 | Gates, PR, DELIVERED | coordinator | DONE | c11fb97: 1892/1892 Node 23.6 and 24.21, acceptance 54/54, leak scan clean |
 
 ## Round 6b
 
