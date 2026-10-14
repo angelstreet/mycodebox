@@ -345,3 +345,32 @@ infra files count as sensitive; see [REFERENCE](../../REFERENCE.md#merge-decisio
 ## Evidence: harness review 2026-10-14
 
 The owner-interaction review behind rounds 8 (autonomy by default, voice) and 9 (harness fixes): [docs/v2/reviews/HARNESS-REVIEW-2026-10-14.md](../../v2/reviews/HARNESS-REVIEW-2026-10-14.md) (sanitised; the full private report is kept at `$GHOSTY_STATE_DIR/reviews/2026-10-14-harness-review.md` on the dashboard host).
+
+## 15. Autonomy by default and hands-free voice (2026-10-14)
+
+Owner: "The most difficult and constraining for me right now is to follow tasks and always answer the same questions:
+yes merge, yes push, yes deploy, yes do the recommended one. Very rarely I correct, and almost always the correction can
+come at the end, because when waiting for me we stop developing. Another issue: I need to be behind my laptop or phone.
+I need a better ability to hear and engage by voice. My goal: I go to the gym or drive and can still work."
+
+- **G1 autonomy by default** ([GOALS](../../GOALS.md)): push and deploy questions are decided by the manager like merges
+  (§14): evaluated, journaled in `manager-decisions.jsonl`, shown as a feed notice, vetoable. A deploy is answered only
+  when it goes through the repo's normal procedure (the deploy queue, run by the deploy runner), the target platform is
+  free in the lease registry (or held by the asking session), tests are green on the deployed ref, and the change carries
+  no production data migration; the notice carries a one-line rollback. "Do the recommended option" (`menu_recommended`)
+  is on by default when the recommended option is not on a hard floor.
+- **This replaces the earlier "automatic answering defaults off" invariant**: a fresh install starts with `autoSend` on
+  and `autoCases` `continue` + `menu_recommended`; a saved config gets `menu_recommended` (also where the owner had chosen
+  `continue` only), push and deploy decisions once (`autonomyVersion` 1, with one feed notice) and keeps a saved
+  `autoSend: false` and every later owner change. Every capability keeps its switch.
+- **Remaining hard floors (owner only):** deletions of data; credentials and secrets; money; customers; sudoers and
+  units on hosts (`systemctl`, `pm2`, unit files); production database migrations. Force-push and history rewrites,
+  pushes to prod/staging/live outside the deploy queue, tag pushes and publishing a package stay hard as well; a push
+  decision only pushes a branch to its own remote branch (main moves through a decided merge).
+  A mixed question is split: the decidable parts are answered, the hard part escalated with what was already answered.
+- **Correct at the end:** a "Decided for you" list (dashboard, `GET /api/manager/decided`) and a daily digest of every
+  answer the manager gave on the owner's behalf, with one-tap revert (merge, push, deploy rollback) or a prefilled
+  correction, and the same summary spoken in voice mode.
+- **G2 hands-free:** voice mode reads each open question with its options, takes a spoken answer mapped to an option
+  (a sensitive option needs a spoken "confirm"), speaks a digest of the last hour, and works with headset / car buttons.
+  Platform limits are documented in [VOICE](../../VOICE.md); phone checks are MANUAL.

@@ -2379,3 +2379,47 @@ body:not(.res-hidden) .fgrp{ display:none; }
   .hs-refs{ gap:0; flex-direction:row; flex-wrap:wrap; column-gap:16px; }
   .hs-row .hs-ref .hs-k{ display:inline; }
 }
+
+/* ----- Decided for you (public/decided-view.js) ----- */
+.dv-sum{ margin:2px 0 8px; font-size:12.5px; color:var(--ink-2); display:flex; gap:6px; align-items:flex-start; }
+.dv-hour{ margin-top:12px; }
+.dv-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.dv-item{ background:var(--bg-3); border:1px solid var(--line-2); border-left:4px solid var(--idle); border-radius:10px; padding:9px 11px; font-size:12.5px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+.dv-merge, .dv-push, .dv-deploy{ border-left-color:var(--accent); }
+.dv-top{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dv-time{ color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.dv-sess{ display:inline-flex; align-items:center; gap:2px; color:var(--ink); font-weight:600; text-decoration:none; }
+.dv-what{ overflow-wrap:anywhere; } .dv-why{ color:var(--ink-2); overflow-wrap:anywhere; }
+.dv-ev{ margin:2px 0 0; padding-left:16px; color:var(--ink-3); font-size:11.5px; }
+.dv-foot{ display:flex; justify-content:flex-end; }
+.dv-act.armed{ outline:2px solid var(--accent); }
+.hs-filters .sbtn.on{ border-color:var(--accent); }
+/* ------------ Voice mode (round 8): big controls readable at arm's length ------------ */
+.vv{ position:fixed; inset:0; z-index:200; background:var(--bg); color:var(--ink); display:flex; flex-direction:column; gap:14px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); overflow-y:auto; }
+.vv-top{ display:flex; align-items:center; justify-content:space-between; }
+.vv-title{ display:flex; align-items:center; gap:10px; font-size:22px; font-weight:700; }
+.vv-x{ width:52px; height:52px; display:grid; place-items:center; background:var(--bg-3); color:var(--ink); border:1px solid var(--frame); border-radius:14px; }
+.vv-state{ font-size:30px; font-weight:800; text-align:center; letter-spacing:.01em; }
+.vv[data-state="listening"] .vv-state{ color:var(--working); }
+.vv[data-state="speaking"] .vv-state, .vv[data-state="item"] .vv-state{ color:var(--accent); }
+.vv[data-state="offline"] .vv-state{ color:var(--waiting); }
+.vv-meter{ height:14px; background:var(--bg-3); border-radius:7px; overflow:hidden; border:1px solid var(--line-2); }
+.vv-meter i{ display:block; height:100%; width:0; background:var(--working); transition:width .05s linear; }
+.vv-item{ flex:1 1 auto; min-height:120px; background:var(--bg-2); border:1px solid var(--line-2); border-radius:14px; padding:14px; }
+.vv-sess{ font-size:15px; color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
+.vv-q{ font-size:22px; line-height:1.35; margin:8px 0 12px; overflow-wrap:anywhere; }
+.vv-empty{ font-size:24px; color:var(--ink-2); text-align:center; padding:24px 0; }
+.vv-opts{ display:flex; flex-direction:column; gap:8px; }
+.vv-opt{ min-height:52px; text-align:left; font-size:20px; padding:10px 14px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:12px; overflow-wrap:anywhere; }
+.vv-opt.rec{ border-color:var(--accent); }
+.vv-opt i{ font-style:normal; font-size:14px; color:var(--accent); margin-left:6px; }
+.vv-go{ display:flex; align-items:center; justify-content:center; gap:14px; min-height:96px; font-size:34px; font-weight:800; background:var(--accent); color:#1a1206; border:0; border-radius:20px; }
+.vv-go.on{ background:var(--waiting); color:#fff; }
+.vv-row{ display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
+.vv-btn{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; min-height:76px; font-size:16px; font-weight:700; background:var(--bg-3); color:var(--ink); border:1px solid var(--frame); border-radius:14px; }
+.vv-set{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; font-size:17px; color:var(--ink-2); }
+.vv-rate{ min-width:64px; min-height:48px; font-size:17px; font-weight:700; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:12px; }
+.vv-rate.on{ background:var(--accent); color:#1a1206; border-color:transparent; }
+.vv-auto{ display:flex; align-items:center; gap:10px; margin-left:auto; }
+.vv-auto input{ width:26px; height:26px; }
+.vv-hint{ min-height:22px; font-size:16px; color:var(--ink-2); text-align:center; }

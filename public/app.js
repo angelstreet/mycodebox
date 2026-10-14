@@ -3538,6 +3538,66 @@ function openSessionHistory() {
 }
 $('#historyBtn').onclick = openSessionHistory;
 
+// ----- Decided for you (⋮ menu, /?decided=1): GET /api/manager/decided; public/decided-view.js is loaded on first use -----
+async function openDecidedView() {
+  let dv;
+  try { dv = await import('/decided-view.js'); } catch { toast('decided view unavailable', 2500); return; }
+  openSheet('Decided for you', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('history');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    const v = { hours: 24, data: null, armed: null, err: null };
+    let timer = null;
+    const paint = () => {
+      body.innerHTML = dv.hoursHtml(v.hours) + (v.err ? `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>` : v.data ? dv.viewHtml(v.data, v.armed) : '<div class="sheet-empty">loading…</div>');
+    };
+    const load = async () => {
+      try {
+        const r = await fetch(`/api/manager/decided?hours=${v.hours}&limit=200`);
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        v.data = j; v.err = null;
+      } catch (e) { v.err = `decided list unavailable: ${e.message}`; }
+      paint();
+    };
+    body.addEventListener('click', async (e) => {
+      const h = e.target.closest('[data-dv-hours]');
+      if (h) { v.hours = Number(h.dataset.dvHours); v.data = null; v.armed = null; paint(); load(); return; }
+      const open = e.target.closest('[data-dv-open]');
+      if (open) { e.preventDefault(); close(); openCard(open.dataset.dvOpen); return; }
+      const act = e.target.closest('[data-dv-act]');
+      if (!act) return;
+      const it = v.data?.items.find((x) => x.id === act.dataset.dvAct);
+      if (!it) return;
+      if (!dv.SENDS.includes(it.kind)) {   // Correct: the draft goes into the session's input, nothing is sent
+        close(); openCard(it.session);
+        setTimeout(() => { els.sendInput.value = it.revert.text; autoGrow(); els.sendInput.focus(); }, 150);
+        return;
+      }
+      if (v.armed !== it.id) { v.armed = it.id; clearTimeout(timer); timer = setTimeout(() => { v.armed = null; if (body.isConnected) paint(); }, 4000); paint(); return; }
+      v.armed = null; clearTimeout(timer);
+      try {
+        const r = await fetch(`/api/manager/decided/${encodeURIComponent(it.id)}/revert`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ by: 'owner' }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        toast(`${it.revert.label} sent to ${it.session}`, 3000);
+      } catch (er) { toast(`not sent: ${er.message}`, 4000); }
+      paint();
+    });
+    paint(); load();
+  });
+}
+$('#decidedBtn').onclick = openDecidedView;
+// ----- Voice mode (⋮ menu, or /?voice=1 from the notification's "Speak it"): voice-view.js is loaded when first opened -----
+async function openVoiceMode() {
+  try {
+    const m = await import('/voice-view.js');
+    m.openVoice({ onClose: () => { if (new URLSearchParams(location.search).get('voice')) history.replaceState(null, '', '/'); } });
+  } catch (e) { toast(`voice mode unavailable: ${e.message}`); }
+}
+$('#voiceBtn').onclick = openVoiceMode;
+
 // ----- generic bottom sheet -----
 let sheetEl = null;
 function closeSheet() {
@@ -4826,6 +4886,8 @@ if ('serviceWorker' in navigator) {
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
+  if (new URLSearchParams(location.search).get('decided')) openDecidedView();
+  if (new URLSearchParams(location.search).get('voice')) openVoiceMode();
   const openPlat = ['platforms', 'deploys'].some((k) => new URLSearchParams(location.search).get(k));
   const view = new URLSearchParams(location.search).get('view');
   if (['card', 'grid', 'list'].includes(view)) state.mode = view;

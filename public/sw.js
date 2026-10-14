@@ -1,7 +1,7 @@
 // Ghosty Sessions — service worker
 // Cache the shell so the PWA launches offline (and reloads fast over Tailscale).
 
-const SHELL_CACHE = 'ghosty-shell-v144';
+const SHELL_CACHE = 'ghosty-shell-v146';
 const SHELL_FILES = [
   '/',
   '/index.html',
@@ -15,6 +15,8 @@ const SHELL_FILES = [
   '/icons.js',
   '/tasks-view.js',
   '/history-view.js',
+  '/decided-view.js',
+  '/voice-view.js',
   '/tip.js',
   '/buttons.js',
   '/deployed.js',
@@ -99,6 +101,16 @@ async function writeCursor(id) {
   try { await (await caches.open(CURSOR_CACHE)).put(CURSOR_URL, new Response(String(id))); } catch {}
 }
 
+// Buttons of a needs-you notification: the server's actions (Do recommended / Wait, only for a safe recommended option) plus
+// "Speak it" (opens the voice page). Android shows at most Notification.maxActions (often 2): Wait is dropped first.
+function notificationActions(it) {
+  if (!it.voiceId) return [];
+  const list = [...(Array.isArray(it.actions) ? it.actions : []).filter((a) => a && a.action && a.title), { action: 'speak', title: 'Speak it' }];
+  const max = typeof Notification !== 'undefined' && Number.isInteger(Notification.maxActions) ? Notification.maxActions : list.length;
+  while (list.length > max) { const i = list.findIndex((a) => a.action === 'wait'); list.splice(i >= 0 ? i : list.length - 2, 1); }
+  return list;
+}
+
 async function showFeed() {
   let items = [];
   try {
@@ -115,19 +127,39 @@ async function showFeed() {
   await writeCursor(items[items.length - 1].id);
   for (const it of items.slice(-5)) {
     const high = it.priority === 'high' || it.priority === 'urgent';
+    const actions = notificationActions(it);
     await self.registration.showNotification(it.title, {
       body: it.body, tag: it.tag || `ghosty-${it.id}`, renotify: true, icon: '/icon-192.png', badge: '/icon-192.png',
-      requireInteraction: high, data: { url: it.url || '/' },
+      requireInteraction: high, data: { url: it.url || '/', voiceId: it.voiceId || null },
+      ...(actions.length ? { actions } : {}),
     });
   }
 }
 
 self.addEventListener('push', (e) => { e.waitUntil(showFeed()); });
 
+// A button on a "needs you" notification answers it without opening the app (POST /api/voice/answer re-validates the stop on the server;
+// an option touching a sensitive topic is never answered from here, the app opens instead). "Speak it" opens the voice page.
+async function answerFromNotification(voiceId, action) {
+  let say = '', ok = false;
+  try {
+    const r = await fetch('/api/voice/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: voiceId, option: action, via: 'notification' }) });
+    const j = await r.json().catch(() => ({}));
+    ok = r.ok && j.status === 'sent';
+    say = j.say || (r.ok ? '' : 'Could not answer. Open the app.');
+  } catch { say = 'Could not reach the dashboard. Open the app.'; }
+  if (say) {
+    try { await self.registration.showNotification(ok ? 'Answered' : 'Not answered', { body: say, tag: `ghosty-voice-${voiceId}`, icon: '/icon-192.png', badge: '/icon-192.png', data: { url: ok ? '/' : '/?voice=1' } }); } catch {}
+  }
+  return ok;
+}
+
 // Tap on a notification -> focus an open window and navigate it to the deep link, or open one.
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const target = new URL(e.notification.data?.url || '/', self.location.origin);
+  const data = e.notification.data || {};
+  if ((e.action === 'recommended' || e.action === 'wait') && data.voiceId) { e.waitUntil(answerFromNotification(data.voiceId, e.action)); return; }
+  const target = new URL(e.action === 'speak' ? '/?voice=1' : data.url || '/', self.location.origin);
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (list) => {
       for (const c of list) {

@@ -116,7 +116,9 @@ How one V2 task is meant to run:
 | `/api/v2/tasks` routes and the **V2 tasks** view | In code and tests; browser-checked on synthetic data | Needs `GHOSTY_V2=1`. See [V2 task board](docs/USAGE.md#v2-task-board-opt-in). |
 | Scoring report (`scripts/v2-score.js`) | In code and tests | Read-only. Feeding it to the router is manual. See [scoring](docs/v2/SCORING.md). |
 | End-to-end acceptance T01 to T40, GL01 to GL14 | 54 of 54 rows PASS (`scripts/v2-acceptance.js`) | Deterministic E2E on fake runtimes and real git; see [acceptance matrix](docs/v2/ACCEPTANCE.md). One live smoke per installed runtime (OpenCode not installed). |
-| Live routing for the manager, server-side merge/deploy | **Planned** | Not available. The V2 loop routes its own tasks; the manager's router stays shadow. |
+| Manager decisions for merge, push, deploy and the recommended option | Shipped (rounds 7, 8) | The manager answers them after an evaluation, records each one and shows it under "Decided for you"; the session does the work, the deploy runner runs deploys. See [goals](docs/GOALS.md). |
+| Voice mode (spoken needs-you queue, spoken answers, spoken digest) | In code and tests; phone checks manual | See [voice](docs/VOICE.md). |
+| Live routing for the manager | **Planned** | Not available. The V2 loop routes its own tasks; the manager's router stays shadow. |
 | Tasks view gaps | **Deferred** | No graphical task graph (parent and children are listed), no per-run logs or live streaming, no editing of a task after creation, no retry-history timeline beyond the state history and runs list. |
 
 ### Safety model
@@ -193,7 +195,7 @@ on your machine and are never part of the repository.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md).
+Start at the [documentation index](docs/README.md). What the product is for, and which goals are shipped: [goals](docs/GOALS.md).
 
 - [Installation and configuration](docs/INSTALL.md): Tailscale, HTTPS, service, updates and verification
 - [Usage](docs/USAGE.md): first session, replies, phone features and troubleshooting

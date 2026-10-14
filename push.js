@@ -90,8 +90,9 @@ export function createPush({ stateDir, fetchImpl = fetch, log = console } = {}) 
     return subs.length !== n;
   }
 
-  function record({ title, body = '', url = '/', tag = '', priority = 'default' }) {
-    const item = { id: nextId++, at: Date.now(), title, body: String(body).slice(0, 500), url, tag, priority };
+  // voiceId / actions (round 8): a needs-you stop the owner can answer by voice or from the notification buttons (voice.js); only set when present.
+  function record({ title, body = '', url = '/', tag = '', priority = 'default', voiceId, actions }) {
+    const item = { id: nextId++, at: Date.now(), title, body: String(body).slice(0, 500), url, tag, priority, ...(voiceId ? { voiceId: String(voiceId) } : {}), ...(Array.isArray(actions) && actions.length ? { actions } : {}) };
     feed.push(item);
     if (feed.length > FEED_MAX) feed = feed.slice(-FEED_MAX);
     saveJson(feedFile, feed);
@@ -203,8 +204,8 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
   const saveDigest = () => { if (digestFile) { try { writeFileSync(digestFile, JSON.stringify({ pending, lastDigestAt })); } catch (e) { log.error('[digest] save', e.message); } } };
   const cfg = () => (tiering?.config ? tiering.config() : TIER_DEFAULTS);
 
-  function deliver({ title, text, url, tag, priority, ntfyTags }) {
-    if (push) push.notify({ title, body: text, url, tag, priority }).catch((e) => log.error('[push]', e.message));
+  function deliver({ title, text, url, tag, priority, ntfyTags, voiceId, actions }) {
+    if (push) push.notify({ title, body: text, url, tag, priority, ...(voiceId ? { voiceId, ...(actions ? { actions } : {}) } : {}) }).catch((e) => log.error('[push]', e.message));
     if (ntfyTopic) {
       const headers = { Title: ascii(title), Priority: priority };
       if (ntfyTags) headers.Tags = ntfyTags;
@@ -216,7 +217,7 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
     }
   }
 
-  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '', tier, pct, meta, blockedBy = null, turn = null } = {}, debounceMs = defaultDebounceMs) {
+  function alert(key, { title, body = '', url = '/', tag = '', priority = 'default', ntfyTags = '', tier, pct, meta, blockedBy = null, turn = null, voiceId, actions } = {}, debounceMs = defaultDebounceMs) {
     if (tiering) {
       const head = String(key).split(':')[0];
       if ((tiering.managerSessions?.() || []).includes(head)) return false;   // the manager's own session never pushes the owner
@@ -226,10 +227,10 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
     last.set(key, t);
     const text = String(body || title).slice(0, 500);
     const which = tiering ? defaultTier(key, { tier, priority, title, body, pct }, cfg()) : 'interrupt';
-    if (which === 'interrupt') deliver({ title, text, url, tag, priority, ntfyTags });
+    if (which === 'interrupt') deliver({ title, text, url, tag, priority, ntfyTags, voiceId, actions });
     else {
       pending = pending.filter((p) => p.key !== key);
-      pending.push({ key, at: t, title, body: text, url, ...(meta || {}) });
+      pending.push({ key, at: t, title, body: text, url, ...(meta || {}), ...(voiceId ? { voiceId, ...(actions ? { actions } : {}) } : {}) });
       saveDigest();
     }
     if (onFired) {
@@ -247,7 +248,9 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
     const items = pending;
     pending = []; lastDigestAt = t; saveDigest();
     const n = items.length;
-    deliver({ title: `${n} item${n === 1 ? '' : 's'} for you`, text: items.map(digestLine).join('\n'), url: '/', tag: 'ghosty-digest', priority: 'default', ntfyTags: 'inbox_tray' });
+    // a digest of exactly one voice-answerable stop keeps its buttons
+    const one = n === 1 && items[0].voiceId ? { voiceId: items[0].voiceId, actions: items[0].actions } : {};
+    deliver({ title: `${n} item${n === 1 ? '' : 's'} for you`, text: items.map(digestLine).join('\n'), url: '/', tag: 'ghosty-digest', priority: 'default', ntfyTags: 'inbox_tray', ...one });
     return true;
   }
   return { alert, resetDebounce: (key) => last.delete(key), digestTick, pendingDigest: () => pending.slice() };

@@ -41,11 +41,16 @@ must match the actual configuration until they are migrated.
   `AGENT_CMD_*` overrides win verbatim. V2 orchestration workers keep their own launch modes and refuse bypass flags;
   the exception is MiniMax `mcode exec` workers (developers and reviewers), which run `--permission full`, started in their V2
   worktree (`--cwd` is not a sandbox: they can run any host command, the same threat model as the dashboard default; D-023).
-- The AI manager must never answer on the owner's behalf about deploys, deletes, credentials, money or customers. The
-  forbidden-topic filter always wins for those. Merges are an evaluated manager decision (owner, 2026-10-14): the
+- Autonomy by default (owner, 2026-10-14, OWNER_DECISIONS §15): the AI manager decides merges, pushes, deploys and the
+  recommended option itself after an evaluation, records each decision and shows it to the owner, who corrects afterwards.
+  It must never answer on the owner's behalf about deletions of data, credentials and secrets, money, customers, sudoers
+  or units on hosts, production database migrations, force-push or history rewrites, pushing tags or publishing a
+  package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
+  those. Merges are an evaluated manager decision (owner, 2026-10-14): the
   manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the
   session reports its tests green on that branch (or the change is docs-only; test code needs the green report), the diff touches no secrets,
   migrations, sudoers or units, and Jev (or the manager's own reasoning when Jev is unavailable) rates it safe at or
   above `mergeMinConfidence`; otherwise it escalates with the reason. Every merge decision is journaled
   (`merge-decisions.jsonl`) and shown in the owner's feed. A merge+deploy question is split: merge decided, deploy
-  escalated. Automatic answers are off by default.
+  escalated. Pushes and deploys follow the same pattern (a deploy only through the deploy queue, leases free, tests green,
+  no migration, with a rollback line). Automatic answering is on by default since round 8; every capability has a switch.

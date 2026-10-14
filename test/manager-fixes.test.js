@@ -30,9 +30,9 @@ const tick = mk(m);
 test('defaults: aiAutoCases is empty (the owner picks), like autoCases; owner_decision is never a default', () => {
   const c = m.managerConfig();
   assert.deepEqual(c.aiAutoCases, []);
-  assert.deepEqual(c.autoCases, []);
+  assert.deepEqual(c.autoCases, ['continue', 'menu_recommended']);   // round 8 (OWNER_DECISIONS §15): autonomy by default
   assert.ok(!c.aiAutoCases.includes('owner_decision'));
-  assert.equal(c.autoSend, false);
+  assert.equal(c.autoSend, true);
   assert.equal(c.aiTriage, 'simulate');
   assert.ok(c.validAiCases.includes('continue'));
   for (const c0 of ['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait']) assert.ok(!c.validAiCases.includes(c0));

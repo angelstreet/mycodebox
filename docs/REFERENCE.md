@@ -185,6 +185,15 @@ Langfuse 3.x observations; validate compatibility against your installed version
   `LANGFUSE_URL`) and `LANGFUSE_PROJECT` (default `codebox-usage`).
 
 
+## Voice mode (hands-free)
+
+`voice.js` serves `GET /api/voice/queue`, `POST /api/voice/answer` and `GET /api/voice/digest`; see [VOICE.md](VOICE.md) for the flow, the
+spoken-answer rules and the limits. A voice answer is sent through the guarded send as actor `owner-voice` (an agent pane is required, like the
+manager's own sends), after re-reading the open item; a sensitive option needs a spoken or tapped confirm and is never answered from a notification.
+Push feed items for a needs-you stop carry optional `voiceId` and `actions` (`[{action:'recommended'|'wait', title}]`, only for a recommended option
+that is not forbidden). The page loads `public/voice-view.js` on demand (More menu or `/?voice=1`). The digest consumes `GET /api/manager/decided`
+when this server has it and otherwise counts the manager's `answer` records itself.
+
 ## Web Push (phone notifications, no extra app)
 
 The bell button subscribes the browser / installed Android app (TWA) to Web Push. Alerts - a session
@@ -496,7 +505,7 @@ A hold is stored in `sessions.json` as `held:{by:'manager',reason,at}`, separate
 "If there is no reason not to merge, you should." A merge is no longer a hard forbidden topic: `stall.js` splits the
 floor (`topicSplit(text)` -> `{ merge, hard }`). `forbiddenMatch` / `FORBIDDEN_RE` still match a merge, so every path
 other than the merge evaluation stays fail-closed. A plain push to main/master (or with no explicit refspec) counts as the landing of a merge only when
-the same text asks for a merge; force-push, `--force` / `-f`, `+refspec`, delete pushes, pushes to other refs or to prod / staging / live, history rewrites, hard reset and rebase onto main stay hard.
+the same text asks for a merge; force-push, `--force` / `-f`, `+refspec`, delete pushes, tag pushes, pushes to prod / staging / live, history rewrites, hard reset and rebase onto main stay hard. A push decision (round 8) only pushes a branch to its own `origin/<branch>`; main moves only through a decided merge.
 
 For a stop that asks about a merge, the manager runs `evaluateMerge` (`merge-policy.js`) in the session's checkout,
 without fetch, checkout or any ref, index or work-tree change (`git merge-tree --write-tree` writes loose objects only; async git with timeouts). It answers "merge" only when all hold:
@@ -531,6 +540,49 @@ paths), `mergeConventionFiles` (`["VERSION.txt"]`), `infoAnswers` (true), `infoR
 The interactive manager uses the same evaluation from its shell:
 `node scripts/merge-eval.js --repo <checkout> --branch <b> [--target main] --text "<closing text>" --session <s> --journal`
 prints one JSON line `{verdict, reasons, rationale, ...}`.
+
+### Autonomy by default: push, deploy and recommended options (owner, 2026-10-14)
+
+OWNER_DECISIONS §15 ("yes merge, yes push, yes deploy, yes do the recommended one ... the correction can come at the
+end"). `topicSplit(text)` returns `{ merge, push, deploy, hard }`. A push or deploy counts only when the session asks to do
+it ("should I deploy ...", "push the branch?"), not when it names a feature ("the deploy queue page"). The hard floor:
+deletions of data (every verb form: deletes, deleted, removal, drops, wiped, erased, destroyed, ...), credentials and
+secrets (revoked, rotated keys), money (pays, paid), customers, `systemctl` / `pm2` / `sudo` / sudoers / unit files /
+reboots, database migrations and migration tools (`alembic`, `prisma migrate`, ...), database resets, force-push and
+history rewrites (`-f`, `--force-with-lease`, `--mirror`, `--delete`, `+ref`, `:ref`, pushes to prod/staging/live), tag
+pushes and publishing a package. Round 8 added the sudo, unit-file, reboot and migration-tool words to `FORBIDDEN_RE`
+too, which only makes every other caller stricter: a button or a voice answer whose text says "graceful shutdown" or
+`user.service.ts` now asks for a confirm too.
+
+For a finished turn without a live menu, the manager evaluates every decidable topic present (merge, then push, then
+deploy), answers the passing ones in one reply and escalates the rest with what was already answered:
+
+| Kind | Answered when | Module |
+|---|---|---|
+| merge | round 7 rules (above) | `merge-policy.js` |
+| push | one branch, pushed to its own `origin/<branch>` (a push onto main or another ref escalates: main moves through a decided merge) and fast-forwarding it; local commits on the target are scanned too after a merge; tests green on the branch or docs-only; nothing sensitive (scan fail-closed); not opted out (`pushOptOut`, plus `mergeOptOut`); Jev point `push` or reasoning at `pushMinConfidence` (0.85) | `decide-policy.js` `evaluatePush` |
+| deploy | asked for explicitly; through the deploy queue with `deployRunner` on; exactly one configured environment named (or the only one, and no unknown target such as "production" named); no blocking lease on the scope; tests green on the ref (an unnamed report only when the session's HEAD is the ref), or on the session's branch already merged into it; no database migration between the last deployed commit and the ref (no deployed commit known: escalate); not in `deployOptOut`; Jev point `deploy` or reasoning at `deployMinConfidence` (0.85). The reply carries a one-line rollback (a deploy of the previously deployed commit, or "previous release unknown") | `decide-policy.js` `evaluateDeploy` |
+| recommended option | `menu_recommended` is on by default: neither the question nor the recommended option has a hard topic (a generic "Yes" / "Proceed" inherits the question's topic; only the other options may mention anything); a merge/push/deploy option is evaluated first (a live menu gets only its key) | `manager.js` |
+
+Defaults: `autoSend: true`, `autoCases: ['continue', 'menu_recommended']`, `mergeDecisions` / `pushDecisions` /
+`deployDecisions` true. A saved `manager.json` is migrated once (`autonomyVersion: 1`: `menu_recommended` added even where the
+owner had chosen `continue` only, push and deploy decisions on unless set, a saved `autoSend: false` kept; one feed notice
+says so); later owner changes are kept. An unreadable `manager.json` keeps auto-answer off for that run. `deployRunner` stays off by default, and with it off a
+deploy escalates ("deploy runner off").
+
+Every decision goes to `<state>/manager-decisions.jsonl` (`kind` merge|push|deploy|menu; round-7
+`merge-decisions.jsonl` is still read; `GET /api/manager/merge-decisions` is the merge-only alias), to `stalls.jsonl`,
+and to the feed. The interactive manager runs the same checks with
+`node scripts/merge-eval.js --kind merge|push|deploy [--env <e>] [--scope <s>] [--ref <r>] --journal`.
+
+**Decided for you.** `decided.js` turns the log into one list of everything the manager typed on the owner's behalf
+(continue, menu, AI reply, info, merge, push, deploy), newest first, with a one-line why, the evidence and a revert:
+`GET /api/manager/decided?hours=24|since=<iso>&limit=100` -> `{ items: [{ id, at, session, kind, what, why, evidence,
+revert: { label, text }, url }], summary: { count, byKind, text } }`. `POST /api/manager/decided/:id/revert` sends the
+revert text for a merge, push or deploy to the session, once per item, through the guarded send path as the caller's actor (`by`, default `owner`); 409 when the session has not finished its turn, shows a menu, has a draft, or the item was already reverted;
+other kinds return a correction draft instead. The dashboard view is in the More menu (`/?decided=1`, Revert needs a
+second tap, Correct opens the session with the draft). Once a day at `decidedDigestHour` (18, in `pushTimezone`) a
+digest-tier push "Decided for you today: N" carries the summary; voice mode speaks the same summary.
 
 ### Scorecard
 

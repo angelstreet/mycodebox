@@ -2,214 +2,498 @@
   {
     "point": "wake",
     "label": "quiet evening: no escalation, no criticals",
-    "facts": { "event": { "kind": "stall" }, "disk_pct": 42, "quota": { "claude": 30, "codex": 25 } },
+    "facts": {
+      "event": {
+        "kind": "stall"
+      },
+      "disk_pct": 42,
+      "quota": {
+        "claude": 30,
+        "codex": 25
+      }
+    },
     "expect": "rules_handle"
   },
   {
     "point": "wake",
     "label": "P0 blocked at 3am",
-    "facts": { "event": { "kind": "stall", "p0_blocked": true }, "disk_pct": 30, "quota": { "claude": 40 } },
+    "facts": {
+      "event": {
+        "kind": "stall",
+        "p0_blocked": true
+      },
+      "disk_pct": 30,
+      "quota": {
+        "claude": 40
+      }
+    },
     "expect": "wake_opus"
   },
   {
     "point": "wake",
     "label": "deploy failed on the staging host",
-    "facts": { "event": { "kind": "deploy" }, "deploy": { "state": "failed", "host": "ci-runner-7" }, "disk_pct": 50, "quota": { "claude": 35 } },
+    "facts": {
+      "event": {
+        "kind": "deploy"
+      },
+      "deploy": {
+        "state": "failed",
+        "host": "ci-runner-7"
+      },
+      "disk_pct": 50,
+      "quota": {
+        "claude": 35
+      }
+    },
     "expect": "wake_opus"
   },
   {
     "point": "wake",
     "label": "disk at 97 percent",
-    "facts": { "event": { "kind": "stall" }, "disk_pct": 97, "quota": { "claude": 40 } },
+    "facts": {
+      "event": {
+        "kind": "stall"
+      },
+      "disk_pct": 97,
+      "quota": {
+        "claude": 40
+      }
+    },
     "expect": "wake_cheap"
   },
   {
     "point": "wake",
     "label": "codex plan quota at 96 percent",
-    "facts": { "event": { "kind": "stall" }, "disk_pct": 40, "quota": { "codex": 96 } },
+    "facts": {
+      "event": {
+        "kind": "stall"
+      },
+      "disk_pct": 40,
+      "quota": {
+        "codex": 96
+      }
+    },
     "expect": "wake_cheap"
   },
   {
     "point": "wake",
     "label": "escalated owner decision, no criticals",
-    "facts": { "event": { "kind": "stall", "escalated": true }, "disk_pct": 50, "quota": { "claude": 30 } },
+    "facts": {
+      "event": {
+        "kind": "stall",
+        "escalated": true
+      },
+      "disk_pct": 50,
+      "quota": {
+        "claude": 30
+      }
+    },
     "expect": "wake_opus"
   },
   {
     "point": "wake",
     "label": "forbidden topic + p0 blocked",
-    "facts": { "event": { "kind": "stall", "p0_blocked": true, "forbidden_topic": true }, "disk_pct": 30, "quota": { "claude": 30 } },
+    "facts": {
+      "event": {
+        "kind": "stall",
+        "p0_blocked": true,
+        "forbidden_topic": true
+      },
+      "disk_pct": 30,
+      "quota": {
+        "claude": 30
+      }
+    },
     "expect": "wake_opus"
   },
   {
     "point": "wake",
     "label": "forbidden topic, nothing critical",
-    "facts": { "event": { "kind": "stall", "forbidden_topic": true }, "disk_pct": 50, "quota": { "claude": 30 } },
+    "facts": {
+      "event": {
+        "kind": "stall",
+        "forbidden_topic": true
+      },
+      "disk_pct": 50,
+      "quota": {
+        "claude": 30
+      }
+    },
     "expect": "wake_cheap"
   },
   {
     "point": "wake",
     "label": "p0 blocked + escalated + high quota",
-    "facts": { "event": { "kind": "stall", "p0_blocked": true, "escalated": true }, "disk_pct": 60, "quota": { "claude": 98 } },
+    "facts": {
+      "event": {
+        "kind": "stall",
+        "p0_blocked": true,
+        "escalated": true
+      },
+      "disk_pct": 60,
+      "quota": {
+        "claude": 98
+      }
+    },
     "expect": "wake_opus"
   },
   {
     "point": "wake",
     "label": "ignore: stalled but nothing flagged",
-    "facts": { "event": { "kind": "stall" }, "disk_pct": 20, "quota": { "claude": 10, "codex": 10 } },
+    "facts": {
+      "event": {
+        "kind": "stall"
+      },
+      "disk_pct": 20,
+      "quota": {
+        "claude": 10,
+        "codex": 10
+      }
+    },
     "expect": "rules_handle"
   },
-
   {
     "point": "builder",
     "label": "tiny app fix, tests, private repo",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "files_est": 2, "lines_est": 80, "has_tests": true } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "repo_public": false,
+        "size": "small",
+        "files_est": 2,
+        "lines_est": 80,
+        "has_tests": true
+      }
+    },
     "expect": "minimax"
   },
   {
     "point": "builder",
     "label": "touches infra: only sonnet+opus",
-    "facts": { "work": { "touches": ["app", "infra"], "repo_public": false, "size": "medium" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app",
+          "infra"
+        ],
+        "repo_public": false,
+        "size": "medium"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "builder",
     "label": "touches secrets: only sonnet+opus",
-    "facts": { "work": { "touches": ["secrets"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "secrets"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "builder",
     "label": "migration on a private repo: only sonnet+opus",
-    "facts": { "work": { "touches": ["migrations"], "repo_public": false, "size": "medium" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "migrations"
+        ],
+        "repo_public": false,
+        "size": "medium"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "builder",
     "label": "public repo security: only sonnet+opus",
-    "facts": { "work": { "touches": ["security"], "repo_public": true, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "security"
+        ],
+        "repo_public": true,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "builder",
     "label": "P0 product decision: forced opus",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "p0_product_decision": true } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "repo_public": false,
+        "size": "small",
+        "p0_product_decision": true
+      }
+    },
     "expect": "opus"
   },
   {
     "point": "builder",
     "label": "P0 product decision + touches deploy: still forced opus",
-    "facts": { "work": { "touches": ["deploy", "infra"], "repo_public": false, "size": "large", "p0_product_decision": true } },
+    "facts": {
+      "work": {
+        "touches": [
+          "deploy",
+          "infra"
+        ],
+        "repo_public": false,
+        "size": "large",
+        "p0_product_decision": true
+      }
+    },
     "expect": "opus"
   },
   {
     "point": "builder",
     "label": "small app change but UI wiring: sonnet",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small", "files_est": 2, "lines_est": 80, "ui_wiring": true } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "repo_public": false,
+        "size": "small",
+        "files_est": 2,
+        "lines_est": 80,
+        "ui_wiring": true
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "builder",
     "label": "touches deploy: only sonnet+opus, default sonnet",
-    "facts": { "work": { "touches": ["deploy"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "deploy"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "builder",
     "label": "app change across many files: sonnet",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "medium", "files_est": 9, "lines_est": 150 } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "repo_public": false,
+        "size": "medium",
+        "files_est": 9,
+        "lines_est": 150
+      }
+    },
     "expect": "sonnet"
   },
-
   {
     "point": "reviewer",
     "label": "tiny private fix: sonnet default",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "public repo: must have a real reviewer",
-    "facts": { "work": { "touches": ["app"], "repo_public": true, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "repo_public": true,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "private repo + auth touch: must have a real reviewer",
-    "facts": { "work": { "touches": ["auth"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "auth"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "private repo, no auth, trivial: none allowed but sonnet is the rule default",
-    "facts": { "work": { "touches": ["docs"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "docs"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "public repo + infra touch: sonnet still the rule default",
-    "facts": { "work": { "touches": ["infra"], "repo_public": true, "size": "medium" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "infra"
+        ],
+        "repo_public": true,
+        "size": "medium"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "private repo + security touch (not auth): sonnet default",
-    "facts": { "work": { "touches": ["security"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "security"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "public repo + auth: sonnet default",
-    "facts": { "work": { "touches": ["auth", "app"], "repo_public": true, "size": "medium" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "auth",
+          "app"
+        ],
+        "repo_public": true,
+        "size": "medium"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "private repo, no touches at all: sonnet default",
-    "facts": { "work": { "touches": [], "repo_public": false } },
+    "facts": {
+      "work": {
+        "touches": [],
+        "repo_public": false
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "private repo + tests-only: sonnet default",
-    "facts": { "work": { "touches": ["tests"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "tests"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
   {
     "point": "reviewer",
     "label": "private repo + migrations: sonnet default",
-    "facts": { "work": { "touches": ["migrations"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "migrations"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "sonnet"
   },
-
   {
     "point": "retry",
     "label": "first rejection: step up one is the rule default",
-    "facts": { "reject": { "round": 1, "reason": "tests failed" } },
+    "facts": {
+      "reject": {
+        "round": 1,
+        "reason": "tests failed"
+      }
+    },
     "expect": "step_up_one"
   },
   {
     "point": "retry",
     "label": "second rejection: retry_same_with_notes off the table",
-    "facts": { "reject": { "round": 2, "reason": "tests failed again" } },
+    "facts": {
+      "reject": {
+        "round": 2,
+        "reason": "tests failed again"
+      }
+    },
     "expect": "step_up_one"
   },
   {
     "point": "retry",
     "label": "fifth rejection: only owner / step_up_one left",
-    "facts": { "reject": { "round": 5, "reason": "still failing" } },
+    "facts": {
+      "reject": {
+        "round": 5,
+        "reason": "still failing"
+      }
+    },
     "expect": "step_up_one"
   },
   {
     "point": "retry",
     "label": "second rejection on a deploy: same shape, same rule default",
-    "facts": { "reject": { "round": 2, "reason": "deploy rolled back" } },
+    "facts": {
+      "reject": {
+        "round": 2,
+        "reason": "deploy rolled back"
+      }
+    },
     "expect": "step_up_one"
   },
   {
     "point": "retry",
     "label": "round 0 (initial pick, not a rejection): all three allowed",
-    "facts": { "reject": { "round": 0 } },
+    "facts": {
+      "reject": {
+        "round": 0
+      }
+    },
     "expect": "step_up_one"
   },
   {
@@ -221,68 +505,130 @@
   {
     "point": "retry",
     "label": "round 3 retry: still no retry_same_with_notes",
-    "facts": { "reject": { "round": 3, "reason": "lint" } },
+    "facts": {
+      "reject": {
+        "round": 3,
+        "reason": "lint"
+      }
+    },
     "expect": "step_up_one"
   },
   {
     "point": "retry",
     "label": "round 2 with extra context: still step_up_one",
-    "facts": { "reject": { "round": 2, "reason": "typecheck", "last_builder": "minimax" } },
+    "facts": {
+      "reject": {
+        "round": 2,
+        "reason": "typecheck",
+        "last_builder": "minimax"
+      }
+    },
     "expect": "step_up_one"
   },
   {
     "point": "retry",
     "label": "round 2 with forbidden topic: still step_up_one",
-    "facts": { "reject": { "round": 2, "reason": "touched secrets", "forbidden_topic": true } },
+    "facts": {
+      "reject": {
+        "round": 2,
+        "reason": "touched secrets",
+        "forbidden_topic": true
+      }
+    },
     "expect": "step_up_one"
   },
   {
     "point": "retry",
     "label": "round 1 with notes: retry_same_with_notes still allowed by floor",
-    "facts": { "reject": { "round": 1, "reason": "minor" } },
+    "facts": {
+      "reject": {
+        "round": 1,
+        "reason": "minor"
+      }
+    },
     "expect": "step_up_one"
   },
-
   {
     "point": "model",
     "label": "default: keep current model",
-    "facts": { "work": { "touches": ["app"], "repo_public": false, "size": "small" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "repo_public": false,
+        "size": "small"
+      }
+    },
     "expect": "keep"
   },
   {
     "point": "model",
     "label": "P0 product decision: still keep (model is suggestion only)",
-    "facts": { "work": { "touches": ["app"], "p0_product_decision": true } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app"
+        ],
+        "p0_product_decision": true
+      }
+    },
     "expect": "keep"
   },
   {
     "point": "model",
     "label": "touches infra: still keep",
-    "facts": { "work": { "touches": ["infra", "deploy"] } },
+    "facts": {
+      "work": {
+        "touches": [
+          "infra",
+          "deploy"
+        ]
+      }
+    },
     "expect": "keep"
   },
   {
     "point": "model",
     "label": "public repo security: still keep",
-    "facts": { "work": { "touches": ["security"], "repo_public": true } },
+    "facts": {
+      "work": {
+        "touches": [
+          "security"
+        ],
+        "repo_public": true
+      }
+    },
     "expect": "keep"
   },
   {
     "point": "model",
     "label": "quota critical: still keep (suggestion only)",
-    "facts": { "quota": { "claude": 96 } },
+    "facts": {
+      "quota": {
+        "claude": 96
+      }
+    },
     "expect": "keep"
   },
   {
     "point": "model",
     "label": "forbidden topic: still keep",
-    "facts": { "event": { "forbidden_topic": true } },
+    "facts": {
+      "event": {
+        "forbidden_topic": true
+      }
+    },
     "expect": "keep"
   },
   {
     "point": "model",
     "label": "escalated: still keep",
-    "facts": { "event": { "escalated": true } },
+    "facts": {
+      "event": {
+        "escalated": true
+      }
+    },
     "expect": "keep"
   },
   {
@@ -294,68 +640,133 @@
   {
     "point": "model",
     "label": "large change in a public repo: still keep",
-    "facts": { "work": { "touches": ["app", "auth"], "repo_public": true, "size": "large" } },
+    "facts": {
+      "work": {
+        "touches": [
+          "app",
+          "auth"
+        ],
+        "repo_public": true,
+        "size": "large"
+      }
+    },
     "expect": "keep"
   },
   {
     "point": "model",
     "label": "second rejection: still keep",
-    "facts": { "reject": { "round": 2 } },
+    "facts": {
+      "reject": {
+        "round": 2
+      }
+    },
     "expect": "keep"
   },
-
   {
     "point": "stop",
     "label": "case=continue: ruleDefault answers it (safe planned step)",
-    "facts": { "session": "s1", "agent": "claude", "case": "continue", "closing_text": "Done. Next I will run the tests.", "proposed_reply": "Yes, continue." },
+    "facts": {
+      "session": "s1",
+      "agent": "claude",
+      "case": "continue",
+      "closing_text": "Done. Next I will run the tests.",
+      "proposed_reply": "Yes, continue."
+    },
     "expect": "answer"
   },
   {
     "point": "stop",
     "label": "case=menu_recommended: conservative escalate",
-    "facts": { "session": "s1", "agent": "codex", "case": "menu_recommended", "closing_text": "1. rerun the deploy  2. cancel. Recommended: 1.", "proposed_reply": "Yes, go with your recommendation." },
+    "facts": {
+      "session": "s1",
+      "agent": "codex",
+      "case": "menu_recommended",
+      "closing_text": "1. rerun the deploy  2. cancel. Recommended: 1.",
+      "proposed_reply": "Yes, go with your recommendation."
+    },
     "expect": "escalate"
   },
   {
     "point": "stop",
     "label": "case=done: conservative escalate",
-    "facts": { "session": "s1", "agent": "minimax", "case": "done", "closing_text": "All tests pass. Stopping here.", "proposed_reply": "" },
+    "facts": {
+      "session": "s1",
+      "agent": "minimax",
+      "case": "done",
+      "closing_text": "All tests pass. Stopping here.",
+      "proposed_reply": ""
+    },
     "expect": "escalate"
   },
   {
     "point": "stop",
     "label": "case=stopped_short: conservative escalate (rule says continue, but manager defers)",
-    "facts": { "session": "s1", "agent": "claude", "case": "stopped_short", "closing_text": "Next I'll add the failing tests." },
+    "facts": {
+      "session": "s1",
+      "agent": "claude",
+      "case": "stopped_short",
+      "closing_text": "Next I'll add the failing tests."
+    },
     "expect": "escalate"
   },
   {
     "point": "stop",
     "label": "case=owner_decision: floor allowed, ruleDefault escalate",
-    "facts": { "session": "s1", "agent": "claude", "case": "owner_decision", "closing_text": "Which endpoint should I migrate first?", "proposed_reply": "Migrate /v1 first." },
+    "facts": {
+      "session": "s1",
+      "agent": "claude",
+      "case": "owner_decision",
+      "closing_text": "Which endpoint should I migrate first?",
+      "proposed_reply": "Migrate /v1 first."
+    },
     "expect": "escalate"
   },
   {
     "point": "stop",
     "label": "case=permission: FORCED escalate regardless of rule",
-    "facts": { "session": "s1", "agent": "claude", "case": "permission", "closing_text": "Allow this tool? [y/n]", "proposed_reply": "y" },
+    "facts": {
+      "session": "s1",
+      "agent": "claude",
+      "case": "permission",
+      "closing_text": "Allow this tool? [y/n]",
+      "proposed_reply": "y"
+    },
     "expect": "escalate"
   },
   {
     "point": "stop",
     "label": "case=owner_action: FORCED escalate",
-    "facts": { "session": "s1", "agent": "codex", "case": "owner_action", "closing_text": "Please reload the page and tell me what you see.", "proposed_reply": "" },
+    "facts": {
+      "session": "s1",
+      "agent": "codex",
+      "case": "owner_action",
+      "closing_text": "Please reload the page and tell me what you see.",
+      "proposed_reply": ""
+    },
     "expect": "escalate"
   },
   {
     "point": "stop",
     "label": "case=waiting_deploy: FORCED escalate",
-    "facts": { "session": "s1", "agent": "minimax", "case": "waiting_deploy", "closing_text": "Waiting for the deploy to finish.", "proposed_reply": "" },
+    "facts": {
+      "session": "s1",
+      "agent": "minimax",
+      "case": "waiting_deploy",
+      "closing_text": "Waiting for the deploy to finish.",
+      "proposed_reply": ""
+    },
     "expect": "escalate"
   },
   {
     "point": "stop",
     "label": "forbidden_topic on continue: FORCED escalate (forbidden wins over rule)",
-    "facts": { "session": "s1", "agent": "claude", "case": "continue", "forbidden_topic": true, "closing_text": "Proceeding with the production reset." },
+    "facts": {
+      "session": "s1",
+      "agent": "claude",
+      "case": "continue",
+      "forbidden_topic": true,
+      "closing_text": "Proceeding with the production reset."
+    },
     "expect": "escalate"
   },
   {
@@ -524,6 +935,321 @@
       "files": 3,
       "floor_reasons": [
         "repo demo is opted out of manager merge decisions"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "push",
+    "label": "green tests, fast-forward",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": []
+    },
+    "expect": "push"
+  },
+  {
+    "point": "push",
+    "label": "docs-only change",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "unknown",
+      "docs_only": true,
+      "files": 3,
+      "floor_reasons": []
+    },
+    "expect": "push"
+  },
+  {
+    "point": "push",
+    "label": "one small commit",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 1,
+      "tests": "green",
+      "docs_only": false,
+      "files": 1,
+      "floor_reasons": []
+    },
+    "expect": "push"
+  },
+  {
+    "point": "push",
+    "label": "push to main, green",
+    "facts": {
+      "repo": "demo",
+      "branch": "main",
+      "dest": "main",
+      "ahead": 2,
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": []
+    },
+    "expect": "push"
+  },
+  {
+    "point": "push",
+    "label": "many files, green",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "green",
+      "docs_only": false,
+      "files": 40,
+      "floor_reasons": []
+    },
+    "expect": "push"
+  },
+  {
+    "point": "push",
+    "label": "tests unknown, code change",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "unknown",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": []
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "push",
+    "label": "red tests",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "red",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "tests reported red"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "push",
+    "label": "needs a force push",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "not a fast-forward"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "push",
+    "label": "touches a secret path",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [
+        "touches a secret/credential path"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "push",
+    "label": "after an approved merge",
+    "facts": {
+      "repo": "demo",
+      "branch": "feature/x",
+      "dest": "feature/x",
+      "ahead": 2,
+      "tests": "green",
+      "docs_only": false,
+      "files": 3,
+      "floor_reasons": [],
+      "after_merge": true
+    },
+    "expect": "push"
+  },
+  {
+    "point": "deploy",
+    "label": "free env, green on main",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "main",
+      "tests": "green",
+      "files": 4,
+      "leases_blocking": 0,
+      "floor_reasons": []
+    },
+    "expect": "deploy"
+  },
+  {
+    "point": "deploy",
+    "label": "frontend only",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "frontend",
+      "ref": "main",
+      "tests": "green",
+      "files": 2,
+      "leases_blocking": 0,
+      "floor_reasons": []
+    },
+    "expect": "deploy"
+  },
+  {
+    "point": "deploy",
+    "label": "server scope",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "server",
+      "ref": "main",
+      "tests": "green",
+      "files": 4,
+      "leases_blocking": 0,
+      "floor_reasons": []
+    },
+    "expect": "deploy"
+  },
+  {
+    "point": "deploy",
+    "label": "green on a merged branch",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "feature/x",
+      "tests": "green",
+      "files": 4,
+      "leases_blocking": 0,
+      "floor_reasons": []
+    },
+    "expect": "deploy"
+  },
+  {
+    "point": "deploy",
+    "label": "quiet env, docs files only",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "main",
+      "tests": "green",
+      "files": 1,
+      "leases_blocking": 0,
+      "floor_reasons": []
+    },
+    "expect": "deploy"
+  },
+  {
+    "point": "deploy",
+    "label": "leased by another agent",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "main",
+      "tests": "green",
+      "files": 4,
+      "leases_blocking": 1,
+      "floor_reasons": [
+        "env-a leased by agent-x"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "deploy",
+    "label": "migration in range",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "main",
+      "tests": "green",
+      "files": 4,
+      "leases_blocking": 0,
+      "floor_reasons": [
+        "contains a database migration"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "deploy",
+    "label": "unknown tests",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "main",
+      "tests": "unknown",
+      "files": 4,
+      "leases_blocking": 0,
+      "floor_reasons": []
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "deploy",
+    "label": "red tests",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "main",
+      "tests": "red",
+      "files": 4,
+      "leases_blocking": 0,
+      "floor_reasons": [
+        "tests reported red"
+      ]
+    },
+    "expect": "escalate"
+  },
+  {
+    "point": "deploy",
+    "label": "runner off",
+    "facts": {
+      "repo": "demo",
+      "env": "env-a",
+      "scope": "full",
+      "ref": "main",
+      "tests": "green",
+      "files": 4,
+      "leases_blocking": 0,
+      "floor_reasons": [
+        "deploy runner off"
       ]
     },
     "expect": "escalate"
