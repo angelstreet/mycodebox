@@ -1,4 +1,4 @@
-STATUS: DELIVERED 5ec0b1c https://github.com/angelstreet/mycodebox/pull/4 (round 6)
+STATUS: DELIVERED d26f962 https://github.com/angelstreet/mycodebox/pull/4 (round 6)
 
 # V2 progress
 
@@ -8,7 +8,7 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 ## Next action
 
 Round 6 (session history on the dashboard, `.v2/round6.md`) delivered on `v2/r6-history`: owner review of the PR.
-Round 5 is merged (PR #2, PR #3). SHAs quoted before round 2 in this file are pre-rewrite SHAs (history rewritten 2026-10-11).
+Rounds 5 (PR #2, #3) and the MiniMax M3-only decision (PR #5) are merged; this branch is rebased on them. SHAs quoted before round 2 in this file are pre-rewrite SHAs (history rewritten 2026-10-11).
 
 ## Round 6
 
@@ -19,7 +19,7 @@ Base: `origin/main` dff3120. Spec: `.v2/round6.md`.
 | R6-1 | `session-history.js` record + writers (dashboard, tick loop, V2 runs, loopback `POST /api/history/started`), `scripts/cbsession`, `GET /api/history` | Sonnet / Opus review | DONE (2 review rounds) | 69ade91 + bc17789 + 74aa871 |
 | R6-2 | History view (More menu, filters, load more, detail sheet), sw v144, browser check | Sonnet / Opus review | DONE | fd18b41 (+ stale-response fix in 74aa871) |
 | R6-3 | MiniMax launch model, OpenCode ingest (`message` table only), labels from history | Sonnet / Opus review | DONE | 70280f5 (+ read-only follower in 74aa871) |
-| R6-4 | Gates, PR, DELIVERED | coordinator | DONE | merged with main (5ec0b1c): 1817/1817 Node 23.6 and 24.21, acceptance 54/54, browser 67/67, leak scan reviewed |
+| R6-4 | Gates, PR, DELIVERED | coordinator | DONE | rebased on main 1529069 (d26f962; MiniMax M3 only, no M3.1 default): 1817/1817 Node 23.6 and 24.21, acceptance 54/54, browser 67/67, leak scan reviewed |
 
 ## Round 5
 
