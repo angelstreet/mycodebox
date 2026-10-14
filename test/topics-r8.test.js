@@ -140,3 +140,15 @@ test('R8 final review: passive rotation and erase / destroy / nuke are forbidden
     assert.ok(st.forbidden, body); assert.equal(w.send, null, body);
   }
 });
+
+test('R8 final Fable: present-tense and noun forms of the hard verbs are forbidden, never auto-continued', async () => {
+  const { classifyStall, wouldSend } = await import('../stall.js');
+  const RULE = '─'.repeat(40);
+  const run = (body) => { const plain = [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE]; const st = classifyStall({ plain, raw: plain, state: 'done' }); return { st, w: wouldSend(st) }; };
+  for (const body of ['Shall I continue? The script deletes the old backups first.', 'Shall I continue? The cleanup step removes the data directory.',
+    'Shall I continue? The job drops the users table nightly.', 'Shall I continue? Removal of the old backups comes first.',
+    'Shall I continue? It wipes the volume.', 'Shall I continue? The hook revokes the old token.', 'Shall I continue? It pays the open bill.']) {
+    const { st, w } = run(body);
+    assert.ok(st.forbidden, body); assert.equal(w.send, null, body);
+  }
+});

@@ -857,7 +857,7 @@ const topicCovered = (part, ok, evs = {}, envs = []) => {
 const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'error', 'background_wait'];
 // A recommended option that is irreversible-looking is hard whatever the topic split says. `kinds`: the merge / push / deploy topics the
 // manager decided, exempt from the hard floor.
-const IRREVERSIBLE_RE = /\b(?:delet(?:e|ing)|drop|wip(?:e|ing)|publish(?:ed|ing)?|pay(?:ment|ing)?|send(?:ing)?\s+(?:an?\s+|the\s+)?e-?mails?|rm\s+-rf?)\b/i;
+const IRREVERSIBLE_RE = /\b(?:delet(?:e|es|ed|ing|ion)|drop(?:s|ped|ping)?|wip(?:e|es|ed|ing)|publish(?:es|ed|ing)?|pay(?:s|ment|ing)?|send(?:ing)?\s+(?:an?\s+|the\s+)?e-?mails?|rm\s+-rf?)\b/i;
 const menuUnsafe = (text, kinds = {}) => hardMatch(String(text || ''), { mergePresent: 'merge' in kinds, pushPresent: 'push' in kinds, deployPresent: 'deploy' in kinds }) || (IRREVERSIBLE_RE.exec(String(text || '')) || [])[0] || null;
 const OPTION_LINE_RE = /^\s*(?:[❯›>]\s*)?\d+[.)]\s+/;
 // The WHOLE closing text around a menu (the reporter's turn text when the stop was classified from it, else the pane's closing lines), minus the
@@ -1199,7 +1199,8 @@ export function observe(s) {
       return;
     }
     const baseWhy = ws.send ? block : humanWhy(final, ws);
-    const why = partial.mergeWhy ? (final.topics?.hard ? `${baseWhy} (${partial.mergeWhy})` : partial.mergeWhy) : baseWhy;
+    const hardWhy = final.topics?.hard && !String(baseWhy).includes(final.topics.hard) ? ` [hard: ${final.topics.hard}]` : '';   // name the hard hit even when the first forbidden word was a decidable one
+    const why = (partial.mergeWhy ? (final.topics?.hard ? `${baseWhy} (${partial.mergeWhy})` : partial.mergeWhy) : baseWhy) + hardWhy;
     // To the owner. With AI triage on, the reviewer reads the stop first (rules and Jev already did) so the push carries its proposal.
     let tri = null;
     if (config.aiTriage !== 'off' && toOwnerCase(final)) {
