@@ -107,6 +107,17 @@ the start of every run; snapshot stored on the task. `loadPolicy(repoDir, { fs }
 reason }`: forbidden topics (reuse the manager's forbidden-topic matcher) and `approval_policy` always win over model
 output and task text (T02).
 
+Checks (round 5, optional): `checks.timeout_ms` is the time limit of every acceptance check that sets no `timeout_ms`
+of its own (read at each evaluation; size it to the real suite: mycodebox's `npm test` takes about 136 s on the live host,
+the limit is 600 s). `checks.by_task_class.<class>` is the list of checks intake gives a task of that `task_class`
+that names none (else `project-tests` = `test_command`). mycodebox's `docs` class runs `scripts/docs-check.js`
+(links, code fences, conflict markers in the Markdown the change touches, against `V2_BASE_SHA`, which the verifier
+sets to the task's base), the docs-links test, and `npm test` through `scripts/run-if-changed.js --except '*.md'`
+(skipped, exit 0 and logged, when only Markdown changed). A required check that runs out of its time limit has no
+result: the task waits (`check_timeout`, `until_ms` null, `verify_only`) with a diagnosis, never a repair run or a
+stall; a policy change or an owner resume verifies the same SHA again, and runs without an exit code are rerun
+under a new evidence index, never reused.
+
 ## 5. Leases — `orchestration/lease-authority.js`
 
 `createLeaseAuthority({ backend, now, randomId })`, backends: `fileBackend({ dir, fs })` (atomic via `O_EXCL` lock file +

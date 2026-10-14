@@ -89,7 +89,10 @@ export function classifyWork(task) {
   const text = taskText(task);
   const signals = [];
   let type = 'unknown';
-  for (const [t, re] of CLASSIFIERS) { const m = text.match(re); if (m) { type = t; signals.push(`"${m[0]}" -> ${t}`); break; } }
+  // Round 5: a declared task_class naming a work type wins over keywords (a docs task whose definition of done names
+  // its checks, "...-tests passes", is still docs work and gets the docs run limits).
+  if (typeof task?.task_class === 'string' && CLASSIFIERS.some(([t]) => t === task.task_class)) { type = task.task_class; signals.push(`task_class ${type}`); }
+  else for (const [t, re] of CLASSIFIERS) { const m = text.match(re); if (m) { type = t; signals.push(`"${m[0]}" -> ${t}`); break; } }
   const scope = task?.scope;
   const files = Array.isArray(scope) ? scope.length : Array.isArray(scope?.paths) ? scope.paths.length : Array.isArray(scope?.files) ? scope.files.length : null;
   const deps = Array.isArray(task?.dependencies) ? task.dependencies.length : 0;
