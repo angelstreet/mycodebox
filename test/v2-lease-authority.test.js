@@ -509,7 +509,9 @@ test('F6: a lock whose owner is a live process on this host is never broken; loc
   // a dead pid on this host is breakable
   await writeFile(lp, JSON.stringify({ nonce: 'dead', pid: 2 ** 22 + 12345, host: hostname() }));
   await utimes(lp, old, old);
-  assert.ok((await auth.acquire(R, opts('b'))).ok);
+  // a longer lock wait here: under a loaded full suite, breaking the lock and acquiring can exceed 150 ms
+  const auth2 = createLeaseAuthority({ backend: fileBackend({ dir, lockWaitMs: 5000, staleLockMs: 10 }), now: c });
+  assert.ok((await auth2.acquire(R, opts('b'))).ok);
 });
 
 test('backend dir is created 0700 and a history marker guards lost records', async () => {
