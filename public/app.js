@@ -20,6 +20,7 @@ import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';
+import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -61,6 +62,8 @@ const els = {
   filterBar:   $('#filterBar'),
 };
 
+// Name the configured https origin in the "not a secure context" toasts, else the generic wording.
+const httpsHint = () => state.links?.publicUrl || 'the HTTPS (Tailscale Serve) address';
 const state = {
   manualClosed: true,                  // the Notes fold starts collapsed
   hiddenClosed: true,                  // the Hidden fold starts collapsed
@@ -823,6 +826,7 @@ async function fetchInitial() {
     state.sessions = data.sessions || [];
     state.status   = data.status   || {};
     state.statusAt = Date.now();
+    state.links = data.links || {};   // configured langfuse / https PUBLIC_URL (server env), either may be null
     sortSessions();
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
     for (const s of state.sessions) state.prevState[s.name] = stateOf(s.name);
@@ -3049,7 +3053,6 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 }
 
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
-const LANGFUSE_URL = 'http://<tailscale-ip>:3100';   // tailnet
 const SUBSCRIPTION = { manager: 'pay per call (Jev, AI reviewer)', claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
 const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: no list price for this model">&mdash;</span>' : escapeHtml(fmtUsd(c)) + unit);
 const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
@@ -3260,7 +3263,7 @@ function openUsage() {
   openSheet('Usage · API-equivalent', ({ body, foot, close }) => {
     body.closest('.sheet').classList.add('usage');
     foot.classList.remove('hidden');
-    foot.innerHTML = `<a class="sbtn lf" href="${LANGFUSE_URL}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a><span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
+    foot.innerHTML = `${state.links?.langfuse ? `<a class="sbtn lf" href="${escapeHtml(state.links.langfuse)}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a>` : ''}<span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
     const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', dim: 'model', range: 7, selDay: null, view: lsGet('ghosty.usageView', 'overview') };
     let tab = 'today', data = null;
@@ -3389,6 +3392,90 @@ function openDecisions() {
   });
 }
 
+
+// ----- V2 Tasks view (⋮ menu; the server answers 404 unless GHOSTY_V2=1) -----
+function openTasks() {
+  openSheet('V2 tasks', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('tasks');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    const v = { page: 'list', id: null, tasks: null, approvals: [], task: null, err: null, last: '' };
+    const api = async (path, opt) => {
+      const r = await fetch(path, opt && { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(opt) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(j.error || `HTTP ${r.status}`), { status: r.status });
+      return j;
+    };
+    const bar = () => (v.page === 'list'
+      ? '<div class="tk-bar"><button class="sbtn primary" data-tk-new>New task</button><button class="sbtn" data-tk-refresh>Refresh</button><button class="sbtn" data-tk-score>Scorecard</button></div>'
+      : '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>');
+    const paint = () => {
+      let h;
+      if (v.err) h = `<div class="sheet-empty" role="alert">${escapeHtml(v.err)}</div>`;
+      else if (v.page === 'new') h = '<div class="tk-bar"><button class="sbtn" data-tk-back>Back to list</button></div>' + newFormHtml();
+      else if (v.page === 'detail') h = v.task ? bar() + detailHtml(v.task) : '<div class="sheet-empty">loading…</div>';
+      else if (v.page === 'score') h = bar() + scorecardHtml(v.score);
+      else h = v.tasks ? bar() + listHtml(v.tasks, v.approvals) : '<div class="sheet-empty">loading…</div>';
+      if (h === v.last) return;
+      const keep = document.activeElement?.closest?.('.tasks') ? document.activeElement.getAttribute('data-tk-open') : null;
+      v.last = h; body.innerHTML = h;
+      if (keep) body.querySelector(`[data-tk-open="${CSS.escape(keep)}"]`)?.focus();
+    };
+    const load = async () => {
+      try {
+        if (v.page === 'detail') v.task = (await api(`/api/v2/tasks/${encodeURIComponent(v.id)}`)).task;
+        else if (v.page === 'score') v.score = (await api('/api/v2/scorecard')).scorecard;
+        else if (v.page === 'list') { const j = await api('/api/v2/tasks'); v.tasks = j.tasks; v.approvals = j.approvals || []; }
+        v.err = null;
+      } catch (e) { v.err = e.status === 404 && v.page === 'list' ? 'The V2 engine is off. Start the server with GHOSTY_V2=1 to use tasks.' : `tasks unavailable: ${e.message}`; }
+      paint();
+    };
+    const go = (page, id = null) => { v.page = page; v.id = id; v.err = null; v.task = null; paint(); load().then(() => (body.querySelector('button, textarea')?.focus())); };
+    // modal semantics: Tab cycles inside the sheet (controls in the body and the foot), Escape is handled globally
+    const sheet = body.closest('.sheet');
+    sheet.addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab') return;
+      const f = [...sheet.querySelectorAll('button:not([disabled]), summary, textarea, input, a[href]')].filter((x) => x.offsetParent);
+      if (!f.length) return;
+      const first = f[0], last = f.at(-1);
+      if (e.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    body.onclick = async (e) => {
+      const t = e.target.closest('button');
+      if (!t) return;
+      if (t.dataset.tkOpen) return go('detail', t.dataset.tkOpen);
+      if ('tkNew' in t.dataset) return go('new');
+      if ('tkScore' in t.dataset) { v.score = null; return go('score'); }
+      if ('tkBack' in t.dataset || 'tkCancelNew' in t.dataset) return go('list');
+      if ('tkRefresh' in t.dataset) return load();
+      const act = async (fn) => { t.disabled = true; try { await fn(); } catch (er) { toast(er.message, 3500); } await load(); };
+      if ('tkCancel' in t.dataset) { if (confirm('Cancel this task? Running work is stopped and the task cannot be resumed.')) act(() => api(`/api/v2/tasks/${encodeURIComponent(t.dataset.id)}/cancel`, {})); return; }
+      for (const [flag, verb] of [['tkApprove', 'approve'], ['tkDeny', 'deny']]) {
+        if (flag in t.dataset) {
+          const sha = t.dataset.sha;
+          act(() => api(`/api/v2/tasks/${encodeURIComponent(v.id)}/${verb}`, { action_id: t.dataset.aid, ...(sha ? { sha } : {}) }));
+          return;
+        }
+      }
+    };
+    body.onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target, errEl = f.querySelector('[data-tk-err]');
+      const goal = f.goal.value.trim(), repository = f.repository.value.trim();
+      const argv = f.check.value.split('\n').map((x) => x.trim()).filter(Boolean);
+      const spec = { goal, ...(repository ? { repository } : {}),
+        ...(argv.length ? { acceptance_checks: [{ id: 'check-1', command: argv, expect: { exit: 0 }, evidence_type: 'exit_code', required: true }] } : {}),
+        idempotency_key: `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` };
+      try { const j = await api('/api/v2/tasks', spec); toast('task recorded (not started)', 2500); v.page = 'detail'; v.id = j.task.task_id; v.err = null; v.task = null; paint(); load(); }
+      catch (er) { errEl.textContent = er.message; }
+    };
+    const timer = setInterval(() => { if (!body.isConnected) clearInterval(timer); else if (v.page !== 'new') load(); }, 5000);
+    paint(); load().then(() => body.querySelector('button')?.focus());
+  });
+}
+$('#tasksBtn').onclick = openTasks;
 
 // ----- generic bottom sheet -----
 let sheetEl = null;
@@ -4208,7 +4295,7 @@ async function toggleNotify() {
         referrer: document.referrer, ua: navigator.userAgent, origin: location.origin,
         push: pushSupported(), sw: !!navigator.serviceWorker?.controller,
       }) }).catch(() => {});
-      toast(!window.isSecureContext ? 'needs the https://<tailnet-host>:7443 address'
+      toast(!window.isSecureContext ? `needs ${httpsHint()}`
         : Notification.permission === 'denied' ? 'notifications are off for this app - Android: App info > Notifications > allow, then tap the bell again'
         : 'permission not given - tap the bell again', 5000);
       return;
@@ -4355,7 +4442,7 @@ function voiceUi() {
 }
 async function voiceStart() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    toast(!window.isSecureContext ? 'the mic needs the https://<tailnet-host>:7443 address' : 'no microphone support in this browser', 4000);
+    toast(!window.isSecureContext ? `the mic needs ${httpsHint()}` : 'no microphone support in this browser', 4000);
     return;
   }
   try { voice.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }

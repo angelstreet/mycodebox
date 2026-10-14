@@ -86,7 +86,7 @@ Use source defaults and the current installation's saved settings to determine w
 Follow [INSTALL](INSTALL.md) for Tailscale setup, access policy, HTTPS and service operation.
 The recommended mode is private Tailscale Serve forwarding to `HOST=127.0.0.1` on port 7777.
 Direct access binds to a literal Tailscale IP and optionally serves native TLS on 7443.
-The source default `0.0.0.0` listens on every IPv4 interface; no host firewall protection is implied by this repository.
+The source default `127.0.0.1` listens on loopback; explicit listener overrides must preserve private access.
 PWA, push and microphone features need trusted HTTPS; clicking through a self-signed warning is not a reliable substitute.
 
 ## Run the service
@@ -111,14 +111,16 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | var | default | meaning |
 |---|---|---|
 | `PORT`        | `7777` | listen port |
-| `HOST`        | `0.0.0.0` | listen address; explicitly use `127.0.0.1` behind private Serve, or a literal Tailscale IP; not an interface name |
+| `HOST`        | `127.0.0.1` | listen address; explicitly use `127.0.0.1` behind private Serve, or a literal Tailscale IP; not an interface name |
 | `TICK_MS`     | `1000`  | pane capture cadence |
 | `PANE_LINES`  | `1000`  | scrollback lines captured for a session with an open card (a WebSocket viewer); the unit sets 2000 |
 | `PANE_LINES_BG` | `300` | scrollback lines for every other session (state, reply and manager only need the tail) |
 | `NTFY_TOPIC`  | unset   | enable optional ntfy push (Web Push is always on): a session starts waiting (high), a disk reaches the critical level (urgent, repeated every 6 h). Keep it secret — anyone with the topic name can read it |
 | `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
 | `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
-| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`) |
+| `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`). An https value is also named in the UI's "needs the HTTPS address" hints |
+| `LANGFUSE_PUBLIC_URL` | unset | browser-reachable Langfuse URL for the usage sheet's Langfuse button and the manager panel links. The usage button falls back to `LANGFUSE_URL` only when that is not a loopback address; with neither, the button is hidden. The manager panel falls back to `LANGFUSE_URL` as is |
+| `ANDROID_APP_PACKAGE` / `ANDROID_APP_SHA256` | unset | serve `/.well-known/assetlinks.json` for the Android app: package name and signing-cert SHA-256 fingerprint(s) (`XX:..` 32 hex pairs, comma-separated). Both or neither; invalid values log a startup warning and nothing is served. Alternative: put a ready file at `$GHOSTY_STATE_DIR/assetlinks.json`. Read at startup; restart to apply. Unconfigured: 404 |
 | `HEALTH_MS`   | `5000`  | host health sample cadence (CPU, load, RAM, disk) |
 | `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
 | `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
@@ -129,10 +131,20 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
 | `GHOSTY_FORBIDDEN_EXTRA` | unset | extra regex of never-auto-answer words (customer names etc. — keep them out of the public repo) |
 | `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
-| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | source UI launch defaults; override with normal installed commands in INSTALL. Other launch paths must be reviewed separately |
+| `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | create/resume launch commands (owner's default 2026-10-11: prompts skipped, folder trust pre-accepted via `trust.js`); Claude also configures manager-fresh; an override wins verbatim, even empty. Only a non-loopback `HOST` warns |
 | `TLS_KEY` / `TLS_CERT` | `certs/key.pem` / `certs/cert.pem` under checkout | native TLS starts only when both exist; same HOST as HTTP |
 | `TLS_PORT` | `7443` (`443` if PORT=443) | native HTTPS port; HTTP remains enabled |
 | `TMUX_BIN` | `tmux` | tmux executable |
+| `GHOSTY_V2` | unset | `1` enables the V2 engine (`orchestration/v2-runtime.js`): routes `/api/v2/*`, store in `$GHOSTY_STATE_DIR/v2`, and the goal loop under the controller lease. Unset: those routes return 404 and nothing is imported or constructed |
+| `GHOSTY_V2_WORK_ROOT` | unset | V2 only, required for the loop: absolute directory for task worktrees, reviewer checkouts and check temp files. Created if missing; must not overlap the checkout or the state dir. Unset or invalid: no loop, V2 routes read-only (writes 503 `E_NO_CONTROLLER`) |
+| `GHOSTY_V2_REPOS` | unset | V2 only: `:`-separated absolute paths of the git repositories tasks may run in (D-021). Each needs a valid `.ai/project.json`, whose allowlists govern its tasks; any other repository is refused at creation (400 `E_INTAKE_REPO`). A listed repository whose policy is missing or invalid stays listed (logged at start): its tasks are created but never run; they stop at an owner clarification (T01) until the policy is fixed |
+| `GHOSTY_V2_CONCURRENCY` | `1` | V2 only: tasks stepped at the same time (1-8) |
+| `GHOSTY_V2_PATH_DIRS` | unset | V2 only: `:`-separated absolute directories put first on PATH for the runtime CLIs (e.g. where `opencode` lives). MiniMax also honours `MCODE_NODE_DIR` |
+| `GHOSTY_V2_CLAUDE_RUN_USD` | `1` | V2 only: `--max-budget-usd` of one Claude run, lowered to the task's remaining `max_usd` cap |
+| `GHOSTY_V2_RUN_TIMEOUT_MS` | goal loop default (30 min) | V2 only: wall clock of one agent run, integer ms; the HTTP benchmark driver sets it so stalled agents fit the no-progress rule |
+| `GHOSTY_V2_PUSH_REMOTE` | unset | V2 only: remote name (e.g. `origin`) the integration hook may push the task's own `v2/task/<id>` branch to; unset = no push (recorded in the decision, not an error). Nothing else is ever pushed |
+| `GHOSTY_V2_REGISTRY` | `orchestration/models.json` | V2 only: absolute path of another model registry file |
+| `GHOSTY_V2_TEST_FAKE_ADAPTER` | unset | TEST ONLY (`test/v2-server-wiring.test.js`): a JSON file of fake-adapter scripts; the scripted fake becomes the only runtime. Never set it on a live install |
 
 ### Langfuse evaluation (TASK-44 phase 12)
 
@@ -829,6 +841,48 @@ in / out / cache r / cache w (`12.3M`). A session row opens that session's card;
   per-session `today` / `days` need the tailer that writes the `today` block: after updating, restart `ghosty-usage`.
 - Helpers (pure, unit-tested): `public/usage.js`; server side `usage-view.js`; tests `test/usageview.test.js`.
 
+## V2 task API (opt-in)
+
+Enabled only with `GHOSTY_V2=1`. Handlers are in `orchestration/http.js` (tested without the server), assembled with the
+goal loop by `orchestration/v2-runtime.js`; `server.js` runs them after its Origin check and the JSON content-type check
+for non-GET requests. Store: `$GHOSTY_STATE_DIR/v2`. Writes (create, cancel, approve, deny, ops requests) are accepted
+only while this process holds the goal-loop controller lease; otherwise 503 `E_NO_CONTROLLER` and nothing is written
+(another live server, or `GHOSTY_V2_WORK_ROOT` unset). Reads always work.
+All bodies are JSON objects, max 64 KB, with unknown fields rejected. Task ids match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
+Errors are `{ ok:false, error, code }` (400 invalid, 404 not found, 409 conflict or terminal, 413 too large, 503 store failed or no controller).
+
+| Route | Body | Result |
+|---|---|---|
+| `GET /api/v2/tasks` | none | `{ tasks:[{ task_id, title, goal (200 chars), state, outcome, next_action, updated_at, created_at, project_id, risk_class, source, parent_task_id, delivery{ requested, integrated, label }, store_error }], approvals:[pending requests across all tasks] }`, newest first. `store_error` is a coarse text; the detail is in the server log |
+| `GET /api/v2/tasks/:id` | none | the summary plus goal, scope, `definition_of_done`, `base_sha`, `head_sha`, `acceptance_checks[{ id, command, required, status, latest_evidence{ sha, exit, duration_ms, artifact, actor, ts, on_head } }]`, `verdicts`, `decisions` (rationale, evidence, alternatives), `usage` (`null` = unknown; `incomplete: true` = partial counts; per-record too), `runs` (role, runtime, model, effort, start/end, outcome, usage), `roles`, `allowed_actions` (approval classes, prohibited actions, policy allowlists once a run read the policy), `parent_task_id` and `children`, `delivery`, `leases{ resources, effects }`, `incidents`, `history`, `pending_approval` (`action_id`, `kind`, `question`, `classes`, `keys`, `sha`, `cap_reached` and `entry` for budget stops), `wait` (`reason`, `until_ms`, `resume_to`, `diagnosis`, `next_action`; null unless waiting) |
+| `POST /api/v2/tasks` | `goal` (required) and optional `title, repository (absolute path), base_sha, project_id, scope, acceptance_checks, definition_of_done, risk_class, priority, runtime_capabilities, prohibited_actions, runtime_allowlist, model_allowlist, budget_policy, no_progress_policy, preferred_models, task_class, deliver, template (goal or informational), idempotency_key`. `repository` must be on `GHOSTY_V2_REPOS` (informational tasks may omit it). `preferred_models` (1-8 `runtime:model` ids) pins the developer: it only narrows routing, and pinned models never review the task. `deliver: true` asks for integration (owner-gated, below) | 201 with the summary and `defaults_applied`. Goes through `orchestration/intake.js` with source `ui` and actor `owner`; the same key returns the same task. The scheduler picks it up at once |
+| `POST /api/v2/tasks/:id/cancel` | `{ reason? }` | cancels a non-terminal task as `owner` |
+| `POST /api/v2/tasks/:id/approve` | `{ action_id, sha?, reason? }` | records `approval.granted` for the pending request only. `action_id` must equal `pending_approval.action_id`; `sha` is required when the task has a head SHA and must equal it. Covers exactly that request's action classes. 409 `E_NO_PENDING_APPROVAL`, `E_STALE_ACTION` or `E_SHA_MISMATCH` otherwise |
+| `POST /api/v2/tasks/:id/deny` | same | records `approval.denied` |
+| `GET /api/v2/scorecard` | none | read-only scorecard (`by_model`, `by_runtime`, `by_role`, `by_task_class`, `caveats`, `runs_count`; per-run rows omitted), see [Scoring](v2/SCORING.md). Any other method is 405. Writes nothing |
+
+`outcome` is `done` only for state `accepted`; otherwise `not_yet_done`, `waiting`, `needs_owner`, `unrecoverable` or
+`cancelled`, and `unknown` when the task log cannot be replayed. Approve, deny and cancel are written by the goal loop
+under its controller lease (D-020) and wake the task. Budget stops: `cap_reached: false` (unknown estimate) is answered
+by approve (one run), `cap_reached: true` by deny or cancel. Proposal tasks (informational) are answered the same way;
+the answer is the outcome and applies nothing.
+
+| Route | Body | Result |
+|---|---|---|
+| `GET /api/v2/ops/status` | none | engine state (`running`, `refused` with the reason, `stopped`), repository count, concurrency, runtime probes, scheduler queue |
+| `GET /api/v2/ops/telemetry` | none | host telemetry assessment (`orchestration/telemetry.js`, freshness-checked) |
+| `GET /api/v2/ops/incidents` | none | incidents (`orchestration/incidents.js`) |
+| `POST /api/v2/ops/requests` | `{ action, type?, symptom? }` | 202: records an incident in `mitigation_requested` through System Operations' request-only handle. Nothing executes: no executor is wired |
+
+Delivery (`deliver: true`, `orchestration/v2-integrate.js`): after acceptance on the exact SHA the hook may push only the
+task's own branch `v2/task/<id>` to `GHOSTY_V2_PUSH_REMOTE` (compare-and-swap, recorded as an effect, read back from the
+remote; repository hooks, fsmonitor and the `ext::` transport are disabled for these git calls; an unreachable remote
+is a note in the decision, nothing is recorded or retried by it). The merge into `main` is an `integration` approval bound to `integration:merge:<project_id>:main:<sha>`
+(`merge_protected` when `main` is a protected branch). Even approved, this server does not merge or deploy (no
+integration lane): the task waits until `main` contains the SHA, then it is accepted as integrated.
+
+The full scoring report, tool score and proposals are a script: [`scripts/v2-score.js`](v2/SCORING.md); only the scorecard has a read-only route.
+
 ## Architecture
 
 ```
@@ -865,7 +919,7 @@ See the maintained [repository map](MAP.md) for components, tests and persistent
 ## Adding xterm sessions automatically
 
 Every tmux session visible to the server's Unix user/socket appears in the dashboard. See [Usage](USAGE.md#first-session)
-for creating a session without bypassing agent permissions. UI launch commands are configured above.
+for creating a session. UI launch commands are configured above.
 
 ## Security
 

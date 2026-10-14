@@ -184,7 +184,29 @@ const OWNER_ACTION_RE = /(?:^|[,;:.]\s+(?:so\s+)?|\bplease\s+|\byou (?:need to|c
 const STATUS_RE = /\b(?:done|finished|complete[d]?|tested|verified|passed|passing|green|failing|failed|left|remaining|to do|todo|next|blocked|pending|not (?:yet )?(?:tested|deployed|done|run)|untested|still needs?|status)\b|\b\d+\s+(?:passed|failed|tests?)\b/i;
 const NEXT_STEP = /\bnext(?::| is| step| phase| I'?d| I will| I'll)|\bI'?ll (?:now|next|then)\b|\bthen I(?:'ll| will)\b|\bstill to do\b|\bremaining\b/i;
 
-export const FORBIDDEN_RE = /\bdeploy|update_core|\brollout\b|systemctl (?:restart|stop|start)|pm2 (?:restart|stop|delete)|\brestart (?:the )?(?:service|server|unit|host)|\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\bgit push\b|force[- ]?push|reset --hard|\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm -r|\bdrop (?:table|database|schema)|\bprune\b|\btruncate\b|\bmigrat(?:e|ion)|\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcustomer/i;
+// Topics the AI manager and the rule path must never answer (AGENTS.md: the forbidden-topic filter always wins).
+// One alternative per line so a paraphrase can be added without untangling a wall of regex; matched case-insensitively.
+const FORBIDDEN_PARTS = [
+  // deploys and service control
+  String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
+  String.raw`systemctl (?:restart|stop|start)|pm2 (?:restart|stop|delete)`,
+  String.raw`\brestart\b[^.\n]{0,30}\b(?:service|server|unit|host|daemon|ghosty)\b`,   // "restart the ghosty service"
+  // "live"/"staging"/"main" followed by - or / is a word part or a path ("live-reload", "staging/", "feature/main-menu").
+  String.raw`\b(?:ship|release(?! (?:the |a |its |my )?locks?\b)|roll ?out|promote)\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])|\bgo(?:ing)? live\b(?![-/])`,
+  String.raw`\bpublish(?:ed|ing)?\b|\bpush(?:ed|ing)?\b[^.\n]{0,30}\btags?\b|\bterraform\b[^.\n]{0,20}\b(?:apply|destroy)\b|\bapply\b[^.\n]{0,20}\bterraform\b`,
+  String.raw`\bkill\b[^.\n]{0,30}\bprod(?:uction)?\b|\b(?:upgrade|alter|modify)\b[^.\n]{0,20}\b(?:live|prod(?:uction)?)\b(?![-/])`,
+  // git history and main
+  String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b|\bmerge\b[^.\n]{0,30}\bmain\b|\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`,
+  String.raw`\bgit push\b|force[- ]?push|reset --hard|\bhard[- ]?reset\b`,
+  // destructive data operations
+  String.raw`\bdelet(?:e|ing|ion)\b|\bremov(?:e|ing)\b|\brm\b|\bprune\b|\btruncate\b|\bwipe\b|\bwiping\b|\boverwrit(?:e|ing)\b`,
+  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b|\bmigrat(?:e|ion)`,
+  // credentials and secrets
+  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevok(?:e|ing)\b|\brotat(?:e|ing)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b`,
+  // money and customers
+  String.raw`\bmoney\b|\bpay(?:ment|ing)?\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+];
+export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
 
 let forbiddenExtra = null;
 // Extra forbidden words that must not live in a public repo (customer names, ...): GHOSTY_FORBIDDEN_EXTRA.
@@ -192,9 +214,93 @@ export function setForbiddenExtra(pattern) {
   forbiddenExtra = pattern ? new RegExp(pattern, 'i') : null;
 }
 
+// ---- spelling variants (shared with orchestration/policy.js) -----------------------------------------------------
+// Spellings an author might use to slip a restricted topic past a plain regex. Every variant is matched in addition
+// to the raw text: a variant can only add a match (fail closed), never remove one.
+export const HOMOGLYPH = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ⅼ: 'l', ı: 'i' };
+// Cyrillic/Greek letters that look Latin (lower-cased before lookup). Store identities keep the narrower HOMOGLYPH.
+const CONFUSABLE = { ...HOMOGLYPH, к: 'k', м: 'm', н: 'h', т: 't', в: 'b', ԛ: 'q', ԝ: 'w', ɡ: 'g',
+  α: 'a', β: 'b', ε: 'e', η: 'n', ι: 'i', κ: 'k', ν: 'v', ο: 'o', ρ: 'p', τ: 't', υ: 'u', χ: 'x', γ: 'y', ω: 'w' };
+const LEET = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', '@': 'a', $: 's' };
+// Protected verbs and nouns a split spelling may hide ("mer ge", "pass word", "cust omer"). Rejoined only when the
+// whole joined token is one of these, so "the mer chant" or "a de bug log" stay as written.
+const SPLIT_WORD_RE = new RegExp(`^(?:${[
+  '(?:re)?deploy(?:s|ed|ing|ment)?', 'merg(?:e|es|ed|ing)', 'rebas(?:e|es|ed|ing)', 'push(?:es|ed|ing)?', 'publish(?:es|ed|ing)?',
+  'ship(?:s|ped|ping)?', 'rollout', 'promot(?:e|es|ed|ing)', 'delet(?:e|es|ed|ing|ion)', 'remov(?:e|es|ed|ing)', 'wip(?:e|es|ed|ing)',
+  'prun(?:e|es|ed|ing)', 'truncat(?:e|es|ed|ing)', 'overwrit(?:e|es|ing)', 'migrat(?:e|es|ed|ing|ion)', 'revok(?:e|es|ed|ing)',
+  'rotat(?:e|es|ed|ing)', 'restart(?:s|ed|ing)?', 'refund(?:s|ed|ing)?', 'purchas(?:e|es|ed|ing)', 'payment', 'billing',
+  'password', 'passwd', 'passphrase', 'secrets?', 'credentials?', 'customers?', 'invoices?', 'apikeys?', 'tokens?', 'prod', 'production',
+].join('|')})$`, 'i');
+// Any 1-3 non-alphanumerics (space, tab, newline, punctuation, fillers) may split a protected word: the rejoin is
+// gated on the joined token being protected, so the separator class need not be.
+const SPLIT_SEP_RE = /^[^A-Za-z0-9]{1,3}$/;
+const MAX_FRAGMENTS = 8;   // "d e p l o y m e n t" is 10; anything longer is not a split word (and keeps this linear)
+// Invisible letters (Hangul fillers, halfwidth filler, braille blank) that are neither marks nor format characters.
+const FILLERS = /[\u115F\u1160\u3164\uFFA0\u2800]/g;
+
+// Base form: compatibility-decomposed, combining marks, format characters (zero-width, soft hyphen, word joiner) and
+// fillers removed, other whitespace (Ogham space, ...) as a plain space, confusable letters mapped to Latin.
+export function baseForm(text) {
+  return String(text ?? '').normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '').replace(FILLERS, '').replace(/[^\S\n\r]/g, ' ')
+    .replace(/[^\x00-\x7F]/g, (c) => CONFUSABLE[c.toLowerCase()] ?? c);
+}
+
+// Letter runs split by 1-3 non-alphanumerics (including a line break) rejoined only when the joined token is a
+// protected word; whitespace runs collapsed. "mer ge into main" -> "merge into main", "dep\nloy" -> "deploy".
+export function normalizeSplits(text) {
+  const parts = baseForm(text).replace(/[ \t]+/g, ' ').match(/[A-Za-z]+|[^A-Za-z]+/g) || [];
+  const out = [];
+  for (let i = 0; i < parts.length;) {
+    let end = i, joined = null;
+    if (/^[A-Za-z]/.test(parts[i])) {
+      let w = parts[i];
+      for (let j = i + 2, n = 2; j < parts.length && n <= MAX_FRAGMENTS && SPLIT_SEP_RE.test(parts[j - 1]); j += 2, n += 1) {
+        w += parts[j];
+        if (SPLIT_WORD_RE.test(w)) { joined = w; end = j; }
+      }
+    }
+    if (joined) { out.push(joined); i = end + 1; } else { out.push(parts[i]); i += 1; }
+  }
+  return out.join('');
+}
+
+// A space splitting ANY forbidden keyword ("merge into ma in", "go li ve", ".e nv"): two or three adjacent tokens of
+// one line joined, read in their surrounding words (same line only: the [^.\n] windows of FORBIDDEN_RE are kept).
+// Only joins that contain a keyword stem are tried, and each window is a few tokens: linear in the input.
+const KEYWORD_STEM_RE = /deploy|update_core|roll|systemctl|pm2|restart|servi|server|daemon|ghosty|ship|releas|promot|prod|staging|live|publish|push|tag|terraform|apply|destroy|kill|upgrad|alter|modify|main|master|merg|rebas|git|force|reset|hard|delet|remov|rm|prun|truncat|wip|overwrit|drop|table|database|db|schema|migrat|env|credential|password|passphrase|secret|token|bearer|api|key|ssh|private|revok|rotat|cert|money|pay|purchas|buy|billing|invoice|credit|card|charg|customer|refund|transfer|fund|mail|message|contact|call|reply|client/i;
+export function* windowJoins(text) {
+  for (const line of baseForm(text).split(/\r?\n|\r/)) {
+    const t = line.split(/[ \t]+/).filter(Boolean);
+    for (let i = 0; i < t.length - 1; i++) {
+      for (let n = 2; n <= 3 && i + n <= t.length; n++) {
+        const joined = t.slice(i, i + n).join('');
+        if (joined.length > 40 || !KEYWORD_STEM_RE.test(joined)) continue;
+        yield [...t.slice(Math.max(0, i - 8), i), joined, ...t.slice(i + n, i + n + 10)].join(' ');
+      }
+    }
+  }
+}
+
+export function textVariants(text) {
+  const nfkc = String(text ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/[^\x00-\x7F]/g, (c) => CONFUSABLE[c.toLowerCase()] ?? c);
+  const base = baseForm(text);
+  const spaced = base.replace(/\b(?:[A-Za-z0-9][^A-Za-z0-9\n\r]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[^A-Za-z0-9]/g, ''));   // d e p l o y, d,e,p,l,o,y
+  const joined = spaced.replace(/([A-Za-z])[^A-Za-z0-9\s]+(?=[A-Za-z])/g, '$1');                                                     // de-ploy, de(ploy
+  const leetI = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                                       // d3pl0y
+  const leetL = joined.replace(/[013457@$]/g, (c) => (c === '1' ? 'l' : LEET[c]));                                                   // dep1oy
+  const digitless = joined.replace(/([A-Za-z])[0-9]+(?=[A-Za-z])/g, '$1');                                                          // de2ploy
+  return [...new Set([nfkc, base, spaced, joined, leetI, leetL, digitless, normalizeSplits(text), normalizeSplits(leetI), normalizeSplits(leetL)])];
+}
+
 export function forbiddenMatch(text) {
-  const m = String(text).match(FORBIDDEN_RE) || (forbiddenExtra && String(text).match(forbiddenExtra));
-  return m ? m[0] : null;
+  const match = (t) => t.match(FORBIDDEN_RE) || (forbiddenExtra && t.match(forbiddenExtra));
+  const raw = String(text);
+  const m = match(raw);
+  if (m) return m[0];
+  // The forbidden-topic filter always wins: a disguised spelling is still the topic.
+  for (const v of textVariants(raw)) { if (v === raw) continue; const k = match(v); if (k) return k[0]; }
+  for (const w of windowJoins(raw)) { const k = match(w); if (k) return k[0]; }
+  return null;
 }
 
 export function menuOptions(lines) {

@@ -55,13 +55,16 @@
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
 //   GET|PUT /api/layout         → the session list's order / pins / groups ({order,pins,groups,groupNames,collapsed}); PUT merges the keys it carries
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
+//   GET  /api/v2/tasks, /api/v2/tasks/:id → V2 task board (orchestration/http.js); GHOSTY_V2=1 only, else 404 and nothing is built
+//   POST /api/v2/tasks          → create a task (run by the goal loop, orchestration/v2-runtime.js); POST /api/v2/tasks/:id/cancel | approve | deny
+//   GET  /api/v2/ops/status|telemetry|incidents (read-only); POST /api/v2/ops/requests (request only, nothing executes)
 //   GET  /*                     → static files in ./public
 
 import http from 'node:http';
 import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
-import { readFile, writeFile, stat, readdir, realpath, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, mkdir } from 'node:fs/promises';
 import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
@@ -73,7 +76,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
 import { createPush, createAlerts, tierConfig } from './push.js';
+import { launchConfig, launchWarnings } from './launch-config.js';
 import { trustFolder } from './trust.js';
+import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { createQuota } from './quota.js';
@@ -83,6 +88,7 @@ import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
+import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner } from './deploy-runner.js';
@@ -101,7 +107,9 @@ import { readOpenAsks } from './owner-asks.js';
 
 const exec = promisify(execFile);
 const PORT = Number(process.env.PORT || 7777);
-const HOST = process.env.HOST || '0.0.0.0';
+const launch = launchConfig();
+const HOST = launch.host;
+for (const warning of launchWarnings()) console.warn(`[launch] ${warning}`);
 const TICK_MS = Number(process.env.TICK_MS || 1000);
 const PANE_LINES = Number(process.env.PANE_LINES || 1000);            // depth for a session someone has open
 const PANE_LINES_BG = Number(process.env.PANE_LINES_BG || 300);         // depth for the rest (state only needs the tail)
@@ -585,6 +593,11 @@ const NTFY_DONE = process.env.NTFY_DONE === '1';   // also alert when a turn fin
 const NTFY_DEBOUNCE_MS = 60000;
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const push = createPush({ stateDir: STATE_DIR });
+const LINKS = publicLinks();   // langfuse / https PUBLIC_URL for the UI, from env only
+let assetlinks = null;         // /.well-known/assetlinks.json body from ANDROID_APP_* env or $STATE_DIR/assetlinks.json
+loadAssetlinks(process.env, STATE_DIR).then((a) => {
+  if (a?.error) console.warn(`[assetlinks] not served: ${a.error}`); else assetlinks = a;
+}).catch(() => {});
 // manager.json key `managerSessions` (default ['manager']) — same source the scorecard reads.
 const MANAGER_SESSIONS_DEFAULT = ['manager'];
 const managerConfigFile = join(STATE_DIR, 'manager.json');
@@ -1017,18 +1030,24 @@ async function readJsonBody(req) {
   });
 }
 
+// V2 task engine: opt-in (GHOSTY_V2=1). Off means nothing is imported or constructed: no store, no timers, no lease.
+// On: orchestration/v2-runtime.js assembles the engine (one store handle for routes and goal loop) and starts the loop
+// under the controller lease; another live controller -> routes stay read-only here.
+const V2_ON = process.env.GHOSTY_V2 === '1';
+let v2 = null;
+if (V2_ON) {
+  const { createV2Runtime } = await import('./orchestration/v2-runtime.js');
+  v2 = await createV2Runtime({ stateDir: STATE_DIR, env: process.env, repoRoot: dirname(fileURLToPath(import.meta.url)) });
+  v2.start().catch((e) => console.error(`[v2] start failed: ${e?.code || e?.message}`));
+}
+
 // ---------------------------------------------------------------------------
 // Session lifecycle + directory picker
 // ---------------------------------------------------------------------------
 
 const HOME = homedir();
 const NAME_RE = /^[A-Za-z0-9_.-]{1,40}$/;
-const AGENT_CMDS = {
-  claude:  process.env.AGENT_CMD_CLAUDE  ?? 'claude --dangerously-skip-permissions',
-  codex:   process.env.AGENT_CMD_CODEX   ?? 'codex --dangerously-bypass-approvals-and-sandbox',
-  minimax: process.env.AGENT_CMD_MINIMAX ?? 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode',
-  bash:    process.env.AGENT_CMD_BASH    ?? '',
-};
+const AGENT_CMDS = launch.commands;
 const RESIZE_ALLOW = process.env.GHOSTY_RESIZE_ALLOW ? new RegExp(process.env.GHOSTY_RESIZE_ALLOW) : null;
 
 // Resize a DETACHED session's window to cols x rows so the agent re-renders
@@ -1056,13 +1075,7 @@ async function createSession({ name, agent, cwd, priority }) {
   if (priority !== undefined && !isPriority(priority)) throw httpError(400, 'priority must be P0, P1 or P2');
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
   if (!Object.hasOwn(AGENT_CMDS, agent)) throw httpError(400, 'agent must be claude|codex|minimax|bash');
-  let dir;
-  try {
-    dir = await realpath(cwd || HOME);
-    if (!(await stat(dir)).isDirectory()) throw new Error();
-  } catch { throw httpError(400, 'cwd must be an existing directory'); }
-  const home = await realpath(HOME);
-  if (dir !== home && !dir.startsWith(home + sep)) throw httpError(400, 'cwd must be under $HOME');
+  const dir = await sessionDirectory(cwd || HOME, HOME);
   // tmux silently rewrites '.' and ':' in session names to '_'.
   const real = name.replace(/[.:]/g, '_');
   if (await sessionExists(real)) throw httpError(409, 'session already exists');
@@ -1155,6 +1168,7 @@ async function resumeSession(name) {
   const trustAgent = isMinimax ? 'minimax' : 'claude';
   const out = await parking.resume(name, {
     base,
+    validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
     start: async (n, r, cmd) => {
       try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, '-l', '--', cmd]);
@@ -1330,6 +1344,14 @@ const server = http.createServer(async (req, res) => {
     return json(res, 415, { ok: false, error: 'content-type must be application/json' });
   }
 
+  // --- V2 task routes (behind the Origin + JSON content-type checks above) ---
+  if (p.startsWith('/api/v2/')) {
+    if (!v2) return json(res, 404, { ok: false, error: 'V2 engine is off (set GHOSTY_V2=1)' });
+    const r = await v2.http.handle({ method: req.method, pathname: p, readBody: () => readJsonBody(req) });
+    if (r) return json(res, r.status, r.body);
+    return json(res, 404, { ok: false, error: 'not found' });
+  }
+
   // --- reporter intake: loopback peers only, shared token (reporter.token, 0600) ---
   // Cross-session peer messages (peer.send, peer.recv) are recorded as {type:'peer'} in stalls.jsonl via
   // logEvent; the per-session facts are untouched. The response keeps the previous {ok,...} shape for
@@ -1438,7 +1460,7 @@ const server = http.createServer(async (req, res) => {
       for (const [k, v] of Object.entries(r.status)) status[k] = { ...v, reply: track.get(k)?.reply ?? null };
     }
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ sessions: r.sessions, status }));
+    res.end(JSON.stringify({ sessions: r.sessions, status, links: LINKS }));
     return;
   }
   if (req.method === 'GET' && p === '/api/owner-asks') {   // the manager's open questions for the owner (NEEDS YOU strip)
@@ -1723,6 +1745,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --- static ---
+  if (req.method === 'GET' && p === '/.well-known/assetlinks.json') {
+    if (!assetlinks) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
+    res.end(assetlinks.json);
+    return;
+  }
   if (req.method === 'GET') {
     await serveStatic(req, res, p);
     return;
@@ -1891,9 +1919,11 @@ if (existsSync(TLS_KEY) && existsSync(TLS_CERT)) {
 
 // Clean shutdown
 for (const s of ['SIGINT', 'SIGTERM']) {
-  process.on(s, () => {
+  process.on(s, async () => {
     console.log(`[ghosty] ${s}, shutting down`);
     wss.clients.forEach((c) => c.close());
+    // V2 on: stop scheduling and release the V2 controller lease first (bounded), so a restart takes over at once.
+    if (v2) await v2.stop({ timeoutMs: 5000 }).catch((e) => console.error(`[v2] stop: ${e?.code || e?.message}`));
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1500).unref();
   });

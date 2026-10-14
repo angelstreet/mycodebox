@@ -1,6 +1,10 @@
 # AGENTS.md
 
-Guidance for AI coding agents working in, or installing, this repo (mycodebox, repo name `ghosty-sessions`).
+Guidance for AI coding agents working in, or installing, the `mycodebox` repository.
+
+Use `mycodebox` for the product and repository name in instructions, documentation and visuals.
+Legacy technical identifiers such as the `ghosty-sessions` package, systemd service and existing checkout paths
+must match the actual configuration until they are migrated.
 
 - **Start here:** [documentation index](docs/README.md). Read the [agent contract](docs/CONTRACT.md) before changes or installation.
 - **Install/configure:** [docs/INSTALL.md](docs/INSTALL.md) is the canonical runbook, including Tailscale access and verification.
@@ -24,15 +28,18 @@ Guidance for AI coding agents working in, or installing, this repo (mycodebox, r
 - Tests must not touch live state: point `GHOSTY_STATE_DIR` at a temp directory, and never write the live
   `layout.json`.
 - The service is `ghosty-sessions` (systemd). Restart it with `scripts/safe-restart.sh`, never during a deploy.
-  First verify its `GHOSTY_URL` responds: the script currently treats an unreachable API as no running deploy.
+  The guard requires a fresh successful deploy snapshot and refuses unknown or active deployment state.
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.
 
 ## Safety rules of the product
 
 - The server has no login; Tailscale policy is the only user-access gate. Do not expose it publicly.
-  Explicitly configure `HOST`: the source defaults to `0.0.0.0`, which is not tailnet-only. Follow INSTALL.
-- Configure `AGENT_CMD_CLAUDE` / `AGENT_CMD_CODEX` for normal CLI permission checks on installation;
-  the source UI launch defaults bypass them. Review other launch paths separately.
+  The source defaults to loopback (`127.0.0.1`); follow INSTALL for private Tailscale access.
+- Owner's chosen default (2026-10-11): dashboard-created and resumed Claude/Codex sessions and the manager start with permission
+  prompts skipped (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`) and folder trust pre-accepted.
+  `AGENT_CMD_*` overrides win verbatim. V2 orchestration workers keep their own launch modes and refuse bypass flags;
+  the exception is MiniMax `mcode exec` workers (developers and reviewers), which run `--permission full`, started in their V2
+  worktree (`--cwd` is not a sandbox: they can run any host command, the same threat model as the dashboard default; D-023).
 - The AI manager must never answer on the owner's behalf about deploys, merges to main, deletes, credentials, money or
   customers. The forbidden-topic filter always wins. Automatic answers are off by default.

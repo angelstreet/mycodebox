@@ -5,6 +5,7 @@
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const CLAUDE_FILE = () => process.env.CLAUDE_JSON_FILE || join(homedir(), '.claude.json');
 const CODEX_FILE = () => process.env.CODEX_CONFIG_FILE || join(homedir(), '.codex', 'config.toml');
@@ -22,18 +23,22 @@ export async function trustClaude(dir, file = CLAUDE_FILE()) {
     ...(cur || {}), hasTrustDialogAccepted: true,
   };
   const st = await fs.stat(file);
-  const tmp = `${file}.ghosty-${process.pid}.tmp`;
+  const tmp = `${file}.ghosty-${process.pid}-${randomUUID()}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(cfg, null, 2), { mode: st.mode & 0o777 });
   await fs.rename(tmp, file);
   return true;
 }
 
 export async function trustCodex(dir, file = CODEX_FILE()) {
+  if (typeof dir !== 'string' || /[\x00-\x1f\x7f]/.test(dir)) return false;   // would break (or inject into) the TOML table header
   let txt = '';
-  try { txt = await fs.readFile(file, 'utf8'); } catch { await fs.mkdir(dirname(file), { recursive: true }); }
+  let mode = 0o600;
+  try { txt = await fs.readFile(file, 'utf8'); mode = (await fs.stat(file)).mode & 0o777; } catch { await fs.mkdir(dirname(file), { recursive: true }); }
   const header = `[projects."${dir.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
   if (txt.includes(header)) return false;
-  await fs.writeFile(file, `${txt}${txt && !txt.endsWith('\n') ? '\n' : ''}\n${header}\ntrust_level = "trusted"\n`);
+  const tmp = `${file}.ghosty-${process.pid}-${randomUUID()}.tmp`;
+  await fs.writeFile(tmp, `${txt}${txt && !txt.endsWith('\n') ? '\n' : ''}\n${header}\ntrust_level = "trusted"\n`, { mode });
+  await fs.rename(tmp, file);
   return true;
 }
 

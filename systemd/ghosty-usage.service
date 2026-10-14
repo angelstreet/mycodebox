@@ -1,19 +1,21 @@
+# EXAMPLE: copy to /etc/systemd/system/ and replace every <user> and /home/<user>/ghosty-sessions with your own
+# user and checkout path (see docs/INSTALL.md). Not installable as is.
 [Unit]
 Description=Ghosty usage tailer — Claude/Codex/MiniMax token usage into local Langfuse
-Documentation=file:///home/jndoye/ghosty-sessions/README.md
+Documentation=file:///home/<user>/ghosty-sessions/README.md
 After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=jndoye
-WorkingDirectory=/home/jndoye/ghosty-sessions
-ExecStart=/usr/bin/env node /home/jndoye/ghosty-sessions/usage/ingest.js
+User=<user>
+WorkingDirectory=/home/<user>/ghosty-sessions
+ExecStart=/usr/bin/env node /home/<user>/ghosty-sessions/usage/ingest.js
 Restart=on-failure
 RestartSec=5
 # Secrets (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY) live outside the repo; paths only here.
-EnvironmentFile=-/home/jndoye/ghosty-sessions/.env
-EnvironmentFile=-/home/jndoye/.config/ghosty/usage.env
+EnvironmentFile=-/home/<user>/ghosty-sessions/.env
+EnvironmentFile=-/home/<user>/.config/ghosty/usage.env
 NoNewPrivileges=true
 
 [Install]

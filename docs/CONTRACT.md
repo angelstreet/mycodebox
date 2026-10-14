@@ -13,12 +13,14 @@ Read [AGENTS.md](../AGENTS.md) first. This contract applies to repository change
 ## Invariants
 
 - The server has no login. Bind explicitly to loopback behind private Tailscale Serve, or to a Tailscale IP for direct access. Never publish it with Funnel, public tunnels or public reverse proxies.
-- `0.0.0.0` is the current source default, not a security boundary. Tailnet grants/ACLs must restrict who can reach the endpoint; allowed users can act as the owner.
+- `127.0.0.1` is the source default. Explicit listener overrides are not a security boundary. Tailnet grants/ACLs must restrict who can reach the endpoint; allowed users can act as the owner.
 - The forbidden-topic filter wins over all manager decisions. Never auto-answer deploys, merges to main, deletes, credentials, money or customer questions. Preserve countdown cancellation, draft checks and actor attribution.
 - Automatic answering and deploy execution default off. Existing saved state can enable them. Never relax defaults or permission checks to make a test pass.
+- Owner's chosen default (2026-10-11): dashboard sessions, resumes and the manager start with permission prompts skipped and folder trust pre-accepted; `AGENT_CMD_*` overrides win verbatim. The forbidden-topic filter, manager hard floors and protected-action gates (merge/push/deploy/credentials) are unchanged. V2 orchestration workers keep their own launch modes and the adapters still refuse caller-supplied bypass flags; the one exception is MiniMax `mcode exec` workers (developers and reviewers), which run with `--permission full`, started in their V2 worktree; `--cwd` is not a sandbox, so they can run any host command, the same threat model as the dashboard default (D-023).
 - Reporter/alert writes require both the reporter token and loopback access. Keep tokens private even behind a local proxy.
 - Preserve exact tmux targeting, input validation and Origin checks. Proxies must support WebSocket upgrades and preserve the browser-facing Host.
 - No credentials, real infrastructure identifiers or captured session output in tracked files, commits, issues or PRs. Use obvious synthetic fixtures.
+- V2 is opt-in: `GHOSTY_V2=1` enables `/api/v2/*`; without it the routes answer 404 and nothing is constructed (no store, no timers, no polling). The server never starts the goal loop; creating a task only records it. Only an `accepted` task (passing required checks on the exact SHA plus an independent approve) is shown as done. Owner approvals must name the pending request (`action_id`, and the head SHA when set); never add a blanket approve. Unknown usage and prices stay unknown, never 0.
 - Use `public/icons.js` for icons, ES modules and the existing dependency set. Explain any new dependency.
 
 ## Validation and delivery
@@ -29,5 +31,5 @@ Read [AGENTS.md](../AGENTS.md) first. This contract applies to repository change
 - For docs, verify local links, commands, source defaults and consistency across the index, install guide and reference.
 - Stage only intended files. Read `git diff --staged` after staging and before every commit, checking for private data. Do not use blanket staging in a shared checkout.
 - Keep code review/merge/push within the user's authorization. Historical handover notes are not standing permission to push to main.
-- Restart only through `scripts/safe-restart.sh`, outside an active deploy. First verify its configured `GHOSTY_URL` responds: its current unreachable-API behavior fails open. See [updates](INSTALL.md#update-and-uninstall).
+- Restart only through `scripts/safe-restart.sh`, outside an active deploy. The guard requires a fresh successful snapshot at its configured `GHOSTY_URL`; unknown or active deployment state blocks restart. See [updates](INSTALL.md#update-and-uninstall).
 - Report what changed, checks and results, limitations, and any actions still needed. Never claim a phone flow, live deployment or optional integration was tested unless it was.

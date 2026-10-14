@@ -49,6 +49,26 @@ AI reply type is selected. Suggestions alone do not send anything.
 Platforms, leases and deploys require the external platform integration; an empty panel is not an installation failure.
 See [REFERENCE](REFERENCE.md) for each feature's settings and API.
 
+## V2 task board (opt-in)
+
+The **V2 tasks** item in the More menu is for the V2 task engine and works only when the server was started with
+`GHOSTY_V2=1`; otherwise it says the engine is off. Nothing else about the board changes.
+
+- **List.** One row per task with a state badge, the goal, the next action and when it last changed. A task is shown as
+  `done (accepted)` only when it was accepted with passing checks and an independent review. `waiting`, `needs owner`
+  and `unknown` are separate badges: `unknown` means the log could not be read or an external effect is unconfirmed.
+- **Detail.** Definition of done, each acceptance check with its latest evidence and commit SHA (evidence for an older
+  SHA is labelled and does not count), reviewer verdicts, decisions with their rationale, usage (a missing figure reads
+  `unknown`, never 0), resources and effects, and the state history.
+- **New task.** Goal, optional repository path, optional acceptance command. It goes through the same intake as the API.
+  The goal loop picks it up at once: it runs in a worktree under `GHOSTY_V2_WORK_ROOT`, only in repositories listed in
+  `GHOSTY_V2_REPOS`, and stops at `accepted`, `waiting` or `needs owner` ([enable V2](INSTALL.md#optional-v2-task-engine-opt-in-off-by-default)).
+- **Approve or deny.** Shown only while a task waits on a request. The buttons answer that exact request (its id and the
+  head SHA are sent with the click); the answer is recorded as the owner. They never approve anything else.
+- **Cancel.** Stops a task that is not finished; it cannot be resumed.
+
+The view polls every few seconds while it is open and does nothing otherwise. Routes and fields: [REFERENCE](REFERENCE.md#v2-task-api-opt-in).
+
 ## Troubleshooting
 
 | Symptom | Check |

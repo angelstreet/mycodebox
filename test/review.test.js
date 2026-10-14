@@ -21,7 +21,7 @@ test('review deck: unlabelled only, newest first, outcome + jev + counts', async
   write([
     stall('a1', 50), stall('a2', 40, { jev: { choice: 'continue', confidence: 0.9 }, deployHint: { scope: '--server' } }), stall('a3', 30), stall('a4', 20),
     { type: 'outcome', id: 'a2', session: 'sess-a2', at: iso(39), kind: 'continue', via: 'ghosty', reply: 'Yes, continue.' },
-    { type: 'label', id: 'a3', label: 'legit', at: iso(10) },
+    { type: 'label', id: 'a3', label: 'legit', at: iso(0) }, // now: 10 min ago is yesterday just after midnight
     { type: 'answer', id: 'a4', session: 'sess-a4' },
   ]);
   const d = await m.reviewDeck(50);

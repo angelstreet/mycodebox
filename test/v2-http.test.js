@@ -1,0 +1,260 @@
+// V2 HTTP handlers (orchestration/http.js) driven directly, no server. T20 server-side half, GL01 (UI intake), GL09
+// (approval is explicit and never blanket), T22 (unknown usage stays null).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createTaskStore } from '../orchestration/store.js';
+import { createIntake } from '../orchestration/intake.js';
+import { createV2Http } from '../orchestration/http.js';
+import { createGoalLoop } from '../orchestration/goal-loop.js';
+import { createRegistry } from '../orchestration/model-registry.js';
+import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+// D-020: approve/deny are recorded by the goal loop; the smallest loop the factory accepts (never steps here).
+const REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
+  capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };
+const loopOver = (store) => createGoalLoop({ store, registry: createRegistry(REGISTRY), adapters: {}, worktrees: {},
+  worktreeRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), verifier: {}, reviewRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), allowFake: true });
+
+const DEV = { role: 'developer', id: 'dev-1' };
+const POLICY = { ok: true, policy: { project_id: 'fixture-project', test_command: ['npm', 'test'] } };
+
+function setup() {
+  const store = createTaskStore({ dir: mkdtempSync(join(tmpdir(), 'v2-http-')), ...clock() });
+  const intake = createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A });
+  const api = createV2Http({ store, intake, loop: loopOver(store) });
+  const call = (method, pathname, body) => api.handle({ method, pathname, readBody: async () => body });
+  return { store, api, call };
+}
+const decision = (id, over = {}) => ({
+  decision_id: `d-${id}`, kind: 'policy_gate', question: 'Can it proceed?', alternatives: [{ option: 'ask the owner', pros: ['safe'], cons: ['slow'] }],
+  chosen: 'ask the owner', evidence: ['policy blocks deploy'], expected_effect: 'awaiting_approval', rationale: 'mandatory owner decision',
+  actor: { role: 'manager', runtime: null, model: null }, reversible: true, rollback: 'cancel the task', ...over });
+async function askOwner(store, id, over = {}) {
+  const k = (await store.get(id)).history.length;
+  const req = { k, kind: 'policy_gate', question: 'Deploy to staging?', classes: ['deploy'], resume_to: 'ready', ...over };
+  await store.recordDecision(id, decision(id, { loop: { k, patch: { approval: req } } }));
+  await store.transition(id, 'awaiting_approval', { reason: req.question, actor: 'goal-loop' });
+  return req;
+}
+
+test('non-V2 paths fall through (null), unknown methods are 405, bad ids 400', async () => {
+  const { call } = setup();
+  assert.equal(await call('GET', '/api/sessions'), null);
+  assert.equal(await call('GET', '/api/v2/other'), null);
+  assert.equal((await call('DELETE', '/api/v2/tasks/x')).status, 405);
+  assert.equal((await call('GET', '/api/v2/tasks/..%2fetc')).status, 400);
+  assert.equal((await call('GET', '/api/v2/tasks/..')).status, 400);
+  assert.equal((await call('GET', '/api/v2/tasks/nope')).status, 404);
+});
+
+test('list: state, outcome, goal summary, next action; only accepted is done', async () => {
+  const { store, call } = setup();
+  const a = await store.createTask(spec());
+  const b = await store.createTask(spec({ goal: 'x'.repeat(500) }));
+  await store.transition(b.task_id, 'waiting', { reason: 'quota' });
+  const r = await call('GET', '/api/v2/tasks');
+  assert.equal(r.status, 200);
+  const byId = Object.fromEntries(r.body.tasks.map((t) => [t.task_id, t]));
+  assert.deepEqual([byId[a.task_id].state, byId[a.task_id].outcome], ['created', 'not_yet_done']);
+  assert.deepEqual([byId[b.task_id].state, byId[b.task_id].outcome], ['waiting', 'waiting']);
+  assert.ok(byId[b.task_id].goal.length <= 200);
+  assert.match(byId[a.task_id].next_action, /goal loop/);
+  assert.ok(r.body.tasks.every((t) => t.outcome !== 'done'));
+});
+
+test('detail: checks with latest evidence and SHA, stale evidence is not passing, usage null stays null (T22)', async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  await store.setHead(id, SHA_A, { actor: DEV });
+  await store.recordEvidence(id, { check_id: 'unit', sha: SHA_A, command: ['npm', 'test'], exit: 0, duration_ms: 1200, actor: { role: 'tester', id: 't1' } });
+  await store.setHead(id, SHA_B, { actor: DEV });   // a new head: the old evidence no longer counts
+  await store.recordVerdict(id, { sha: SHA_B, actor: { role: 'verifier', id: 'rev-1' }, verdict: 'reject', findings: ['missing test'] });
+  await store.recordUsage(id, { runtime: 'claude', model: 'm1', input_tokens: 10, output_tokens: null, usd: null, run_id: 'r1' });
+  await store.recordDecision(id, decision(id));
+  const t = (await call('GET', `/api/v2/tasks/${id}`)).body.task;
+  const unit = t.acceptance_checks.find((c) => c.id === 'unit');
+  assert.equal(unit.latest_evidence.sha, SHA_A);
+  assert.equal(unit.latest_evidence.on_head, false);
+  assert.equal(unit.status, 'stale_sha');
+  assert.equal(t.acceptance_checks.find((c) => c.id === 'lint').status, 'no_evidence');
+  assert.equal(t.head_sha, SHA_B);
+  assert.deepEqual(t.verdicts.map((v) => [v.verdict, v.current]), [['reject', true]]);
+  assert.equal(t.usage.usd, null);
+  assert.equal(t.usage.output_tokens, null);
+  assert.equal(t.usage.records[0].usd, null);
+  assert.ok(t.usage.unknown.includes('usd'));
+  assert.equal(t.decisions[0].rationale, 'mandatory owner decision');
+  assert.equal(t.outcome, 'not_yet_done');
+  assert.equal(JSON.stringify(t).includes('"loop"'), false, 'loop memory is internal');
+  // passing on the current head
+  await store.recordEvidence(id, { check_id: 'unit', sha: SHA_B, command: ['npm', 'test'], exit: 0, actor: { role: 'tester', id: 't1' } });
+  const u2 = (await call('GET', `/api/v2/tasks/${id}`)).body.task.acceptance_checks.find((c) => c.id === 'unit');
+  assert.equal(u2.status, 'passing_on_head');
+});
+
+test('create: UI source goes through intake, same contract; strict body; idempotent', async () => {
+  const { store, call } = setup();
+  const r = await call('POST', '/api/v2/tasks', { goal: 'Fix the synthetic bug', repository: '/srv/fake-repo', idempotency_key: 'k-1' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const t = await store.get(r.body.task.task_id);
+  assert.deepEqual(t.created_by, { kind: 'ui', id: 'owner' });
+  assert.equal(t.status, 'created');
+  assert.ok(t.acceptance_checks.some((c) => c.required), 'goal contract: default required check');
+  assert.ok(r.body.defaults_applied.includes('acceptance_checks'));
+  const again = await call('POST', '/api/v2/tasks', { goal: 'Fix the synthetic bug', repository: '/srv/fake-repo', idempotency_key: 'k-1' });
+  assert.equal(again.body.task.task_id, t.task_id);
+  assert.equal((await store.list()).length, 1);
+  for (const bad of [{}, { goal: '' }, { goal: 'g', status: 'accepted' }, { goal: 'g', created_by: { kind: 'api', id: 'x' } },
+    { goal: 'g', repository: 'relative' }, { goal: 'g', task_id: '../x' }, { goal: 'g', base_sha: 'zz' }, { goal: 'g', template: 'nope' }, [], 'str']) {
+    assert.equal((await call('POST', '/api/v2/tasks', bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await call('POST', '/api/v2/tasks', { goal: 'g'.repeat(100), repository: '/x', acceptance_checks: Array(60).fill({}) })).status, 400);
+  assert.equal((await call('POST', '/api/v2/tasks', { goal: 'x'.repeat(70000), repository: '/x' })).status, 413);
+  assert.equal((await store.list()).length, 1, 'nothing recorded by rejected requests');
+});
+
+test('create without repository policy and checks is refused with E_INTAKE_NEEDS_CHECKS', async () => {
+  const store = createTaskStore({ dir: mkdtempSync(join(tmpdir(), 'v2-http-')), ...clock() });
+  const api = createV2Http({ store, intake: createIntake({ store, loadPolicy: () => ({ ok: false }), resolveSha: () => SHA_A }) });
+  const r = await api.handle({ method: 'POST', pathname: '/api/v2/tasks', readBody: async () => ({ goal: 'g', repository: '/x' }) });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, 'E_INTAKE_NEEDS_CHECKS');
+});
+
+test('readBody failures: bad JSON 400, too large 413', async () => {
+  const { api } = setup();
+  const h = (e) => api.handle({ method: 'POST', pathname: '/api/v2/tasks', readBody: async () => { throw e; } });
+  assert.equal((await h(new SyntaxError('x'))).status, 400);
+  assert.equal((await h(Object.assign(new Error('big'), { status: 413 }))).status, 413);
+});
+
+test('cancel: recorded as owner, terminal tasks refuse', async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  assert.equal((await call('POST', `/api/v2/tasks/${id}/cancel`, { reason: 5 })).status, 400);
+  assert.equal((await call('POST', `/api/v2/tasks/${id}/cancel`, { x: 1 })).status, 400);
+  const r = await call('POST', `/api/v2/tasks/${id}/cancel`, { reason: 'no longer needed' });
+  assert.deepEqual([r.status, r.body.state, r.body.outcome], [200, 'cancelled', 'cancelled']);
+  assert.equal((await store.get(id)).history.at(-1).actor, 'owner');
+  assert.equal((await call('POST', `/api/v2/tasks/${id}/cancel`, {})).status, 409);
+  assert.equal((await call('POST', '/api/v2/tasks/missing/cancel', {})).status, 404);
+});
+
+test('approve: needs the explicit pending action_id and sha; records owner + action + sha; no blanket approve', async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  assert.equal((await call('POST', `/api/v2/tasks/${id}/approve`, { action_id: 'x' })).body.code, 'E_NO_PENDING_APPROVAL');
+  await store.setHead(id, SHA_A, { actor: DEV });
+  const req = await askOwner(store, id);
+  const view = (await call('GET', `/api/v2/tasks/${id}`)).body.task;
+  assert.equal(view.outcome, 'needs_owner');
+  const p = view.pending_approval;
+  assert.equal(p.action_id, `appr-${id}-${req.k}`);
+  assert.deepEqual(p.classes, ['deploy']);
+  assert.match(view.next_action, /Deploy to staging/);
+
+  for (const body of [{}, { approve: true }, { action_id: 'all' }, { action_id: p.action_id }, { action_id: p.action_id, sha: SHA_B },
+    { action_id: p.action_id, sha: SHA_A, extra: 1 }]) {
+    const r = await call('POST', `/api/v2/tasks/${id}/approve`, body);
+    assert.ok(r.status === 400 || r.status === 409, `${JSON.stringify(body)} -> ${r.status}`);
+  }
+  assert.equal((await store.events(id)).filter((e) => e.kind === 'approval.granted').length, 0, 'nothing recorded by rejected attempts');
+
+  const ok = await call('POST', `/api/v2/tasks/${id}/approve`, { action_id: p.action_id, sha: SHA_A, reason: 'ok for staging' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const ev = (await store.events(id)).find((e) => e.kind === 'approval.granted');
+  assert.equal(ev.payload.actor, 'owner');
+  assert.equal(ev.payload.action_id, p.action_id);
+  assert.equal(ev.payload.sha, SHA_A);
+  assert.deepEqual(ev.payload.grants, { classes: ['deploy'], keys: p.keys, request_kind: p.kind }, 'covers exactly the requested classes and action keys (same shape as goal-loop approve())');
+  assert.equal(ev.event_id, `appr-${id}-${req.k}`, 'same event id as the goal loop approve()');
+  assert.equal((await store.get(id)).status, 'awaiting_approval', 'recording is not executing: the loop moves the task');
+  assert.equal((await call('POST', `/api/v2/tasks/${id}/deny`, { action_id: p.action_id, sha: SHA_A })).body.code, 'E_NO_PENDING_APPROVAL', 'answered once');
+  assert.equal((await call('GET', `/api/v2/tasks/${id}`)).body.task.pending_approval, null);
+});
+
+test('deny records the denial; concurrent approve+deny: exactly one wins', async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  const req = await askOwner(store, id);
+  const aid = `appr-${id}-${req.k}`;
+  const [a, d] = await Promise.all([call('POST', `/api/v2/tasks/${id}/approve`, { action_id: aid }), call('POST', `/api/v2/tasks/${id}/deny`, { action_id: aid, reason: 'no' })]);
+  assert.deepEqual([a.status, d.status].sort(), [200, 409]);
+  const kinds = (await store.events(id)).filter((e) => e.kind.startsWith('approval.') && e.kind !== 'approval.requested').map((e) => e.kind);
+  assert.equal(kinds.length, 1);
+});
+
+test('a really corrupted log reads as unknown with a coarse error; the detail goes to the server log only', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'v2-http-'));
+  const s1 = createTaskStore({ dir, ...clock() });
+  const { task_id: id } = await s1.createTask(spec());
+  await s1.transition(id, 'clarified');
+  const log = join(dir, 'tasks', id, 'events.jsonl');
+  const lines = readFileSync(log, 'utf8').split('\n'); lines.splice(1, 0, '{broken'); writeFileSync(log, lines.join('\n'));
+  const store = createTaskStore({ dir, ...clock() });
+  const logged = [];
+  const api = createV2Http({ store, intake: createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A }), log: (m) => logged.push(m) });
+  const row = (await api.handle({ method: 'GET', pathname: '/api/v2/tasks' })).body.tasks[0];
+  assert.deepEqual([row.outcome, row.store_error], ['unknown', 'task log unreadable; see server log']);
+  assert.ok(logged.some((m) => m.includes('corrupt log')), 'detail is logged server-side');
+  const dr = await api.handle({ method: 'GET', pathname: `/api/v2/tasks/${id}` }); const d = dr.body.task;
+  assert.equal(d.outcome, 'unknown');
+  assert.equal(JSON.stringify(d).includes(dir), false);
+});
+
+test('detail: runs, roles, allowed actions and task graph come from the log', async () => {
+  const { store, call } = setup();
+  const { task_id: id } = await store.createTask(spec({ prohibited_actions: ['write_live_state'] }));
+  const child = await store.createTask(spec({ task_id: 'child-1', parent_task_id: id, prohibited_actions: ['write_live_state'] }));
+  await store.append(id, { event_id: 'start-r1', kind: 'task.started', payload: { run_id: 'r1', role: 'developer', entry: 'claude:m1', runtime: 'claude', model: 'm1', effort: 'high' } });
+  await store.recordEffect(id, { effect_id: 'devrun-r1', idempotency_key: 'k', kind: 'developer_run', phase: 'attempted' });
+  await store.recordEffect(id, { effect_id: 'devrun-r1', phase: 'confirmed' });
+  await store.recordUsage(id, { runtime: 'claude', model: 'm1', input_tokens: 7, output_tokens: null, usd: null, run_id: 'r1' }, { event_id: 'usage-r1' });
+  await store.setHead(id, SHA_A, { actor: { role: 'developer', id: 'claude:m1' } });
+  await store.recordVerdict(id, { sha: SHA_A, actor: { role: 'reviewer', id: 'codex:rev' }, verdict: 'approve', findings: [] }, { event_id: 'verdict-r2' });
+  await store.recordUsage(id, { runtime: 'codex', model: 'rev', input_tokens: 3, output_tokens: 1, usd: 0.01, run_id: 'r2' }, { event_id: 'usage-r2' });
+  await store.snapshotPolicy(id, { prohibited_actions: ['push_force'], allowlists: { commands: [['npm', 'test']], paths: ['src/'] }, protected_branches: ['main'] }, { run_id: 'r1' });
+  const t = (await call('GET', `/api/v2/tasks/${id}`)).body.task;
+  const r1 = t.runs.find((r) => r.run_id === 'r1');
+  assert.deepEqual([r1.role, r1.runtime, r1.model, r1.effort, r1.outcome], ['developer', 'claude', 'm1', 'high', 'finished']);
+  assert.deepEqual([r1.usage.input_tokens, r1.usage.output_tokens, r1.usage.usd], [7, null, null]);
+  assert.equal(t.runs.find((r) => r.run_id === 'r2').role, 'reviewer');
+  assert.deepEqual(t.roles, { developers: ['claude:m1'], reviewers: ['codex:rev'] });
+  assert.ok(t.allowed_actions.approval_required.includes('deploy'));
+  assert.deepEqual(t.allowed_actions.prohibited_actions.sort(), ['push_force', 'write_live_state']);
+  assert.deepEqual(t.allowed_actions.allowed_commands, ['npm test']);
+  assert.deepEqual(t.children.map((c) => c.task_id), [child.task_id]);
+  const c = (await call('GET', '/api/v2/tasks/child-1')).body.task;
+  assert.equal(c.parent_task_id, id);
+});
+
+test('list carries a cross-task approval queue; delivery is exposed; the request SHA wins over the head', async () => {
+  const { store, call } = setup();
+  const a = await store.createTask(spec()); const b = await store.createTask(spec());
+  await store.setHead(a.task_id, SHA_B, { actor: DEV });
+  await askOwner(store, a.task_id, { sha: SHA_A });
+  await askOwner(store, b.task_id);
+  const r = (await call('GET', '/api/v2/tasks')).body;
+  assert.deepEqual(r.approvals.map((x) => x.task_id).sort(), [a.task_id, b.task_id].sort());
+  assert.equal(r.approvals.find((x) => x.task_id === a.task_id).sha, SHA_A, 'the SHA the request was raised on');
+  assert.equal(r.tasks.find((x) => x.task_id === a.task_id).delivery.integrated, false);
+  const aid = r.approvals.find((x) => x.task_id === a.task_id).action_id;
+  assert.equal((await call('POST', `/api/v2/tasks/${a.task_id}/approve`, { action_id: aid, sha: SHA_B })).status, 409);
+  assert.equal((await call('POST', `/api/v2/tasks/${a.task_id}/approve`, { action_id: aid, sha: SHA_A })).status, 200);
+  assert.deepEqual((await call('GET', '/api/v2/tasks')).body.approvals.map((x) => x.task_id), [b.task_id]);
+});
+
+test('delivery: requested by deliver flag or integration resource; integrated only when accepted through release verification', async () => {
+  const { store, call } = setup();
+  const x = await store.createTask(spec({ review_policy: { deliver: true } }));
+  const y = await store.createTask(spec({ resources: ['repo:fake:integration'] }));
+  const d = async (id) => (await call('GET', `/api/v2/tasks/${id}`)).body.task.delivery;
+  assert.equal((await d(x.task_id)).requested, true);
+  assert.equal((await d(y.task_id)).requested, true);
+  for (const st of ['clarified', 'planned', 'ready', 'executing', 'evaluating', 'integrating']) await store.transition(x.task_id, st);
+  // entering integration is not being integrated: only accepted-from-release_verifying counts
+  assert.equal((await d(x.task_id)).integrated, false);
+  assert.equal((await d(x.task_id)).label, 'integration requested, not yet integrated');
+});

@@ -54,6 +54,8 @@ test('cost: opus 5.5 with 5m and 1h cache writes', () => {
   assert.equal(costOf(priceFor(prices, 'some-unknown-model'), { input: 1, output: 1, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 }), null);
   assert.equal(priceFor(prices, 'claude-opus-5-5').input, 4);   // longest prefix wins over claude-opus-5
   assert.equal(priceFor(prices, 'claude-opus-5').input, 5);
+  const ph = { models: { 'x-1': { input: 0, output: 0, cache_write: 0, cache_read: 0, source: 'PLACEHOLDER 2026-10-10: owner to set' } } };
+  assert.equal(priceFor(ph, 'x-1'), null);   // placeholder zeros are unknown, not $0
 });
 
 test('claude transcript: dedupes message.id, ignores partial last line, upserts on replay', async () => {

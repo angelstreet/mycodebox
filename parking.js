@@ -12,6 +12,7 @@
 
 import { readdir, readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { isPriority } from './public/prio.js';
 
 export const SESSION_CAP = 10;
 const DIR_TTL_MS = 5000;
@@ -108,8 +109,11 @@ export function lastActivityOf({ info, reporterAt }) {
 
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-// Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude) + the model and remote-control the old process had + --resume.
+// Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude, which carries the bypass flag by default; recorded args never add one) + the model and remote-control the old process had + --resume.
 export function resumeCommand({ base, args, name, sessionId }) {
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) {
+    throw Object.assign(new Error('invalid resume session id'), { status: 400 });
+  }
   const parts = [base];
   const model = /--model[= ]([A-Za-z0-9._\[\]-]+)/.exec(args || '');
   if (model && !/--model\b/.test(base)) parts.push('--model', model[1]);
@@ -181,7 +185,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
   const err = (status, message, reasons) => Object.assign(new Error(message), { status, reasons });
   return {
     async list() { await load(); return Object.values(data.parked).sort((a, b) => b.parkedAt - a.parkedAt); },
-    async get(name) { await load(); return data.parked[name] || null; },
+    async get(name) { await load(); return Object.hasOwn(data.parked, name) ? data.parked[name] : null; },
     // facts = { claude: {pid, info, args}|null, minimax: {pid, cwd, args}|null, state, attached, reporterWaiting, backgroundWork, busy[], leases[]|null, rssMb, priority }
     // Exactly one of facts.claude / facts.minimax is set; either way, the same idle / busy / lease checks apply. Returns the list of reasons
     // the session may not be parked (empty = ok).
@@ -256,15 +260,19 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
     },
     // Recreates the tmux session in the recorded folder and starts the agent. Claude: resumeCommand(base, rec.args, rec.claudeName, rec.sessionId).
     // MiniMax: `${base} -c` (reuses AGENT_CMDS.minimax + ' -c' to continue the latest session in the recorded cwd).
-    async resume(name, { base, start }) {
+    async resume(name, { base, start, validate = async () => {} }) {
       await load();
-      const rec = data.parked[name];
+      if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,40}$/.test(name)) throw err(400, 'invalid session name');
+      const rec = Object.hasOwn(data.parked, name) ? data.parked[name] : undefined;
       if (!rec) throw err(404, 'not parked');
+      // The saved priority is applied after the agent starts: a tampered value must fail before any tmux session exists.
+      if (rec.priority !== undefined && rec.priority !== null && !isPriority(rec.priority)) throw err(400, 'invalid saved priority');
+      await validate(rec);
       if (await tmux.exists(name)) throw err(409, 'a tmux session with that name already exists');
-      await tmux.create(name, rec.cwd);
       let cmd;
       if (rec.agent === 'minimax') cmd = `${base} -c`;
       else cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId });
+      await tmux.create(name, rec.cwd);
       await start(name, rec, cmd);
       delete data.parked[name];
       await save();

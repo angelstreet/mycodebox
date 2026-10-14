@@ -55,7 +55,6 @@ test('Codex never uses a report', async () => {
 });
 
 test('a stop with background work in flight is background_wait: logged, never escalated or answered', async () => {
-  const before = pushes.length;
   const p = pane('Started the build.\nShall I continue once it is done?');
   const r = rep(turn({ text: 'Started the build in the background.\nShall I continue once it is done?', at: 500, backgroundWork: 1 }));
   tick('r4', 'working', ['busy'], 0, { rep: r });
@@ -65,7 +64,8 @@ test('a stop with background work in flight is background_wait: logged, never es
   assert.equal(s.backgroundWork, 1);
   assert.equal(s.wouldSend, null);
   await settle(300);
-  assert.equal(pushes.length, before, 'no owner push');
+  // Count r4's pushes only: a late push for an earlier session (r1-r3 stops) can land here under load.
+  assert.equal(pushes.filter(([s]) => s === 'r4').length, 0, 'no owner push');
   assert.ok(!records().some((x) => x.type === 'escalated' && x.session === 'r4'));
   assert.ok(m.CASES.includes('background_wait'));
 });

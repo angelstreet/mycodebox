@@ -120,7 +120,7 @@ builtin_table() {
 | owner_decision | never guess; escalate with a one-line proposed reply |
 | waiting_deploy | never answer; check leases and escalate the deploy request / blocking lease |
 | owner_action | escalate, batched, with `stall.action` |
-| permission | escalate (sessions run --dangerously-skip-permissions; never press 1) |
+| permission | escalate (never approve a permission prompt on the owner's behalf) |
 | error | GET /api/quota: plan's 5h window full -> wait for resetsAt; API error -> re-check 10 min, escalate after 30 min |
 | done, no question | nothing (no_status on P0/P1 may justify the ask_status question) |
 | background_wait | nothing; re-check 15 min; > 60 min treat as done |
@@ -291,6 +291,7 @@ ONLY if Jev's source is "rule" (Jev was unsure) AND the event is NOT forced by a
 
   claude -p "<question with the facts>" --model sonnet --output-format json --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task"
 
+(This is a headless, tool-restricted read-only call, not a dashboard session launch: the owner's skip-permissions default does not apply to it.)
 (Keep exactly this order and the comma-separated, quoted tool list: --disallowedTools is variadic and would
 swallow the question otherwise.)
 

@@ -1,10 +1,15 @@
+# EXAMPLE: copy to /etc/systemd/system/ and replace every <user> and /home/<user>/ghosty-sessions with your own
+# user and checkout path (see docs/INSTALL.md). Not installable as is.
 [Unit]
 Description=Ghosty: restart the AI manager agent in a fresh Claude session (short context = cheap wakes)
 After=ghosty-sessions.service
 
 [Service]
 Type=oneshot
-User=jndoye
-Environment=HOME=/home/jndoye
-ExecStart=/home/jndoye/ghosty-sessions/scripts/manager-fresh.sh
+User=<user>
+Environment=HOME=/home/<user>
+# Same private settings as the dashboard unit: without this AGENT_CMD_CLAUDE is ignored here.
+# Default relaunch skips permission prompts (owner decision 2026-10-11, see launch-config.js); AGENT_CMD_CLAUDE wins verbatim.
+EnvironmentFile=-/home/<user>/ghosty-sessions/.env
+ExecStart=/home/<user>/ghosty-sessions/scripts/manager-fresh.sh
 TimeoutStartSec=75min

@@ -26,7 +26,7 @@ test('token file is created 0600, kept on restart, and checked in constant time'
 
 test('only loopback peers', () => {
   for (const a of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) assert.ok(isLoopback(a), a);
-  for (const a of ['<tailscale-ip>', '10.0.0.5', '::ffff:10.0.0.5', '', undefined]) assert.ok(!isLoopback(a), String(a));
+  for (const a of ['192.0.2.7', '198.51.100.5', '::ffff:198.51.100.5', '', undefined]) assert.ok(!isLoopback(a), String(a));
 });
 
 test('events keep the latest facts per session; texts are exact and capped', () => {

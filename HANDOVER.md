@@ -22,11 +22,11 @@ This is a portable development handover, not a record of a particular machine's 
 
 ## Known limitations to check before operations
 
-- The source listener defaults to all interfaces. INSTALL explicitly configures loopback + private Serve.
-- Default Claude/Codex UI launch commands bypass permissions; INSTALL overrides them. Parking/resume and scripts have their own launch paths to review.
-- The safe-restart script treats an unreachable API as no active deploy. Verify API reachability and deployment state before invoking it.
+- The source listener defaults to loopback. INSTALL configures private Serve; inspect existing HOST overrides.
+- Claude/Codex create/resume and manager restart use normal permission defaults. Existing CLI configuration and explicit command overrides can still bypass checks.
+- The safe-restart guard refuses unreachable, stale or unknown deployment state and checks again before restart. Its snapshot checks do not provide an atomic deployment lease.
 - Status derived from terminal text is heuristic and can misclassify quoted prompts or unfamiliar CLI versions.
 - Some platform adapters retain deployment-specific defaults. A generic install does not guarantee those integrations work; lease binding can act when its registry is reachable.
 - UI feature availability depends on browser support, trusted HTTPS and permission state. Self-signed-warning acceptance is not a reliable PWA installation procedure.
 
-Do not translate these documentation fixes into claims that runtime defaults were changed or that an existing installation is secured. Inspect and validate the actual deployment separately when asked.
+Changed source defaults do not prove an existing installation is secured. Inspect and validate the actual deployment separately when asked.
