@@ -71,10 +71,10 @@ test('ledger-only sessions appear as ended rows; a known start keeps its history
   await w.h.append({ kind: 'session.ended', name: 'task-x.run1', ts: T0 + 70 * M, reason: 'exited' });
   const { sessions, total } = await w.view.list({ limit: 200 });
   const by = (n) => sessions.filter((s) => s.name === n);
-  const gone = by('gone');
-  assert.equal(gone.length, 1);
-  assert.deepEqual([gone[0].start, gone[0].end, gone[0].turns, gone[0].started_by, gone[0].source, gone[0].provider],
-    [T0 + 5 * M, T0 + D + M, 3, 'unknown', 'ledger', 'claude'], 'start/end = first/last turn, last turn included');
+  // turns more than 6 h apart are separate sessions; start/end = first/last turn, last turn included
+  const gone = by('gone').sort((a, b) => a.start - b.start);
+  assert.deepEqual(gone.map((g) => [g.start, g.end, g.turns, g.started_by, g.source, g.provider]),
+    [[T0 + 5 * M, T0 + 9 * M, 2, 'unknown', 'ledger', 'claude'], [T0 + D + M, T0 + D + M, 1, 'unknown', 'ledger', 'claude']]);
   const mm = by('gone-mm')[0];
   assert.deepEqual([mm.provider, mm.model, mm.billing, mm.cost_usd], ['minimax', 'MiniMax-M3', 'subscription', null]);
   // a dashboard start is not backfilled; its older turns are a separate ended row
@@ -84,7 +84,7 @@ test('ledger-only sessions appear as ended rows; a known start keeps its history
   assert.equal(by('worker').length, 0);
   assert.equal(by('task-x.run1')[0].turns, 1);
   assert.equal(total, sessions.length);
-  assert.deepEqual((await w.view.list({ status: 'ended' })).sessions.map((s) => s.name).sort(), ['gone', 'gone-mm', 'reborn', 'task-x.run1']);
+  assert.deepEqual((await w.view.list({ status: 'ended' })).sessions.map((s) => s.name).sort(), ['gone', 'gone', 'gone-mm', 'reborn', 'task-x.run1']);
 });
 
 test('a first-seen instance after an earlier instance of the same name backfills only past that instance\'s end', async () => {
@@ -96,4 +96,36 @@ test('a first-seen instance after an earlier instance of the same name backfills
   // turns before the first instance: ledger row; [30m, 60m): dashboard instance; after 60m: the first-seen one
   assert.deepEqual(rows.map((s) => [s.source ?? s.start_source ?? 'history', s.turns]), [['ledger', 15], ['history', 15], ['ledger', 12]]);
   assert.equal(rows[2].start, T0 + 60 * M);
+});
+
+test('review: a reused name never backfills before its tmux session was created; older turns stay ledger rows', async () => {
+  const w = world();
+  await start(w.h, 'live', RESTART, { tmux_created: Math.floor((T0 + D - 30 * M) / 1000) });   // tmux session born on day 2
+  const rows = (await w.view.list()).sessions.filter((s) => s.name === 'live').sort((a, b) => a.start - b.start);
+  assert.deepEqual(rows.map((s) => [s.source ?? s.start_source, s.start, s.turns]), [['ledger', T0, 40], ['ledger', T0 + D, 2]]);
+  assert.equal(rows[1].end, null, 'the running one');
+});
+
+test('review: a V2 run\'s turns are counted once (by cwd), never again in a label row or a backfilled instance', async () => {
+  const w = world();
+  w.add(row('live', T0 + 45 * M, { cwd: '/wt/run9' }));   // the worker row carries a label that matches a session
+  await start(w.h, 'task-x.run1', T0 + 40 * M, { started_by: 'v2', cwd: '/wt/run9' });
+  await w.h.append({ kind: 'session.ended', name: 'task-x.run1', ts: T0 + 70 * M, reason: 'exited' });
+  await start(w.h, 'live', RESTART);
+  const { sessions } = await w.view.list({ limit: 200 });
+  assert.equal(sessions.find((s) => s.name === 'task-x.run1').turns, 2);
+  assert.equal(sessions.find((s) => s.name === 'live').turns, 42, 'the worker row inside the backfilled window is not counted');
+});
+
+test('review: the joined list is cached but follows history and ledger changes', async () => {
+  const w = world();
+  await start(w.h, 'live', RESTART);
+  const a = await w.view.list({ limit: 200 });
+  assert.ok(a.sessions.some((s) => s.name === 'gone' && s.source === 'ledger'));
+  await start(w.h, 'gone', RESTART + M, { started_by: 'dashboard' });   // history changes: a new instance of the name
+  const b = await w.view.list({ limit: 200 });
+  assert.equal(b.total, a.total + 1);
+  w.add(row('brand-new', RESTART + 2 * M));                               // ledger changes: a new label
+  const c = await w.view.list({ limit: 200 });
+  assert.ok(c.sessions.some((s) => s.name === 'brand-new' && s.source === 'ledger'));
 });

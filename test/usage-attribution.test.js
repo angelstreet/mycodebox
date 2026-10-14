@@ -146,11 +146,15 @@ test('init compaction keeps ledger rows older than the backfill window, deduped 
   const u = { input: 1, output: 1, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 };
   const old = (id, out, days) => ({ id, agent: 'claude', session: 's-old', label: 'old-session', cwd: '/w/old', ts: NOW - days * 86400000, model: 'm', usage: { ...u, output: out }, cost: null, trace: 't-old' });
   const recent = { ...old('recent', 1, 1), label: 'new-session', session: 's-new', trace: 't-new' };
-  await fs.writeFile(cfg.ledgerFile, [old('o1', 1, 30), old('o2', 2, 20), old('o1', 5, 30), recent].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  // an id seen both outside and inside the window (a turn on the edge) is written once
+  await fs.writeFile(cfg.ledgerFile, [old('o1', 1, 30), old('o2', 2, 20), old('o1', 5, 30), old('recent', 1, 20), recent].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const ino = (await fs.stat(cfg.ledgerFile)).ino;
   const ing = createIngester(cfg, hooks);
   await ing.init(false);
   const rows = await ledger(cfg);
   assert.deepEqual(rows.map((r) => r.id).sort(), ['o1', 'o2', 'recent']);
+  assert.notEqual((await fs.stat(cfg.ledgerFile)).ino, ino, 'rewritten through a temp file + rename');
+  assert.deepEqual((await fs.readdir(join(cfg.ledgerFile, '..'))).filter((f) => f.endsWith('.tmp')), []);
   assert.equal(rows.find((r) => r.id === 'o1').usage.output, 5, 'last line for an id wins');
   assert.ok(!ing.ledger.has('o1'), 'old rows are kept on disk, not loaded into the live window');
 });

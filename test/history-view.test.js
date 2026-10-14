@@ -13,7 +13,7 @@ const row = (label, ts, over = {}) => ({ id: `c:${label}:${ts}`, agent: 'claude'
 const ledger = path.join(dir, 'usage-ledger.jsonl');
 fs.writeFileSync(ledger, [
   row('a', T0 + 1 * M), row('a', T0 + 3 * M), row('a', T0 + 20 * M),               // gaps 2m, 17m -> capped 5m: active 7m
-  row('a', T0 + 90 * M),                                                            // after a ended: belongs to nobody
+  row('a', T0 + 90 * M),                                                            // after a ended: a ledger-only row (round 6b)
   row('a', T0 + 24 * 3600e3 + 130 * M),                                             // second instance of a (next day)
   row('mm', T0 + 2 * M, { agent: 'minimax', cost: null }), row('mm', T0 + 4 * M, { agent: 'minimax', cost: null }),
   row('u', T0 + 2 * M, { cost: null }),
@@ -31,7 +31,7 @@ const view = createHistoryView({ history: h, ledgerFile: ledger, now: () => T0 +
 
 test('list: newest first, one row per instance, join by label and window', async () => {
   const r = await view.list();
-  assert.equal(r.total, 5);
+  assert.equal(r.total, 6);   // 5 instances + the ledger-only row of a's turn after it ended (round 6b)
   assert.equal(r.sessions[0].name, 'a'); assert.equal(r.sessions[0].started_by, 'cbsession');
   const first = r.sessions.find((s) => s.name === 'a' && s.start === T0);
   assert.equal(first.turns, 3);
@@ -55,10 +55,10 @@ test('unknown stays null; subscription providers report billing, not cost; v2 jo
 
 test('filters, pagination and validation', async () => {
   assert.equal((await view.list({ status: 'running' })).total, 4);
-  assert.equal((await view.list({ status: 'ended' })).total, 1);
+  assert.equal((await view.list({ status: 'ended' })).total, 2);
   assert.equal((await view.list({ provider: 'minimax' })).total, 1);
   assert.equal((await view.list({ started_by: 'v2' })).sessions[0].name, 'run1');
-  assert.equal((await view.list({ from: new Date(T0 + 3600e3).toISOString() })).total, 1);
+  assert.equal((await view.list({ from: new Date(T0 + 3600e3).toISOString() })).total, 2);
   const p = await view.list({ limit: '2', offset: '1' }); assert.equal(p.sessions.length, 2); assert.equal(p.limit, 2);
   assert.equal((await view.list({ limit: '9999' })).limit, 200);
   await assert.rejects(view.list({ status: 'x' }), /status/);

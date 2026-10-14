@@ -384,8 +384,10 @@ export function createIngester(cfg, hooks = {}) {
     // Compaction write: only when byId has something. An empty byId (forceBackfill on a fresh deploy, or every
     // record outside the window after a long downtime) would otherwise wipe whatever's on disk — and the source
     // files have often been rotated by then, so the wipe is irreversible.
+    for (const id of byId.keys()) older.delete(id);   // a row at the window edge is written once
     const compacted = byId.size ? [...older.values(), ...byId.values()].map((r) => JSON.stringify(r) + '\n').join('') : '';
-    if (compacted) await fs.writeFile(cfg.ledgerFile, compacted);
+    // Temp file + rename: the ledger holds history whose source logs may be rotated, so a crash mid-write must not truncate it.
+    if (compacted) await atomicWrite(cfg.ledgerFile, compacted);
   }
 
   function remember(r) {
