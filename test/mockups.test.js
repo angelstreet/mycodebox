@@ -35,7 +35,7 @@ test('POST /api/mockups logic: loopback + token, a feed record with kind mockup,
   const mk = createMockups({ file: join(dir, 'mockups.jsonl'), push, tokenOk: (x) => x === 'tok', now: () => t, windowMin: () => 10, send: async (s, text, by) => { sent.push({ s, text, by }); } });
   const H = { [TOKEN_HEADER]: 'tok' };
   const body = { session: 'ui-worker', title: 'Settings page', url: '/mockups/settings.html' };
-  assert.equal((await mk.post({ remoteAddress: '10.9.9.9', headers: H, body })).status, 403);
+  assert.equal((await mk.post({ remoteAddress: '203.0.113.9', headers: H, body })).status, 403);
   assert.equal((await mk.post({ remoteAddress: '127.0.0.1', headers: {}, body })).status, 401);
   for (const bad of [{ ...body, url: 'javascript:x' }, { ...body, title: '' }, { ...body, session: '../x' }]) assert.equal((await mk.post({ remoteAddress: '127.0.0.1', headers: H, body: bad })).status, 400);
   const ok = await mk.post({ remoteAddress: '127.0.0.1', headers: H, body });
