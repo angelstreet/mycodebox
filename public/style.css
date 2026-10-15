@@ -2423,3 +2423,12 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .vv-auto{ display:flex; align-items:center; gap:10px; margin-left:auto; }
 .vv-auto input{ width:26px; height:26px; }
 .vv-hint{ min-height:22px; font-size:16px; color:var(--ink-2); text-align:center; }
+
+/* Leases view (leases-view.js) */
+.lv-env{ margin-bottom:14px; } .lv-h{ display:flex; align-items:center; gap:6px; margin:10px 0 6px; font-size:13px; }
+.lv-row{ display:flex; flex-wrap:wrap; gap:3px 12px; background:var(--bg-3); border:1px solid var(--line-2); border-left:4px solid var(--working); border-radius:10px; padding:9px 11px; margin-bottom:6px; font-size:12px; min-width:0; }
+.lv-row.pin, .lv-row.observe{ border-left-color:var(--idle); } .lv-row.ticket{ border-left-color:var(--waiting); } .lv-row.idle{ border-left-color:var(--waiting); }
+.lv-c{ min-width:0; overflow-wrap:anywhere; } .lv-k{ color:var(--ink-2, var(--idle)); font-size:10px; text-transform:uppercase; letter-spacing:.05em; }
+.lv-res{ flex:1 1 100%; display:flex; align-items:center; gap:8px; } .lv-amber, .lv-over{ color:var(--waiting); }
+.lv-badge{ font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; border:1px solid currentColor; border-radius:999px; padding:0 8px; white-space:nowrap; }
+.lv-acts{ flex:1 1 100%; display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; } .lv-auth{ margin-bottom:8px; }

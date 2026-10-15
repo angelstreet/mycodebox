@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto';
 import { deriveButtons, needsOwner } from './public/buttons.js';
 import { forbiddenMatch } from './stall.js';
+import { summarize as leaseSummary } from './lease-source.js';
 
 export const VOICE_BY = 'owner-voice';
 const MAX_READ_OPTIONS = 6;
@@ -143,6 +144,7 @@ export const normalizeSpeech = (t) => String(t ?? '').toLowerCase().replace(/[â€
 
 const INTENTS = [
   ['digest', /^(?:what (?:has )?happened|what happened(?: (?:in|over) the last (?:hour|\w+ minutes))?|what s? ?(?:has )?been happening|digest|the digest|summary|summarize|summarise|give me (?:a |the )?(?:digest|summary|update)|catch me up|update me|status|status report|any news)$/],
+  ['leases', /^(?:(?:the |any |my )?leases|lease status|(?:what|which) leases(?: are (?:held|taken|there))?|are there (?:any )?leases(?: held)?|who holds(?: (?:it|the lease|the leases|them|anything))?|who has the lease|who holds what|what s leased|what is leased|lease report)$/],
   ['repeat', /^(?:repeat(?: that| it| please| again)?|say (?:that |it )?again|again|read (?:that |it )?again|come again|pardon(?: me)?|sorry what|what was that|one more time|say it once more)$/],
   ['skip', /^(?:skip(?: it| this| this one)?|not now|later|pass|leave it|skip for now)$/],
   ['next', /^(?:next|next one|next item|next question|the next one|move on|go to the next(?: one)?)$/],
@@ -253,7 +255,21 @@ const list = (names, max = 3) => { const u = [...new Set(names)]; const s = u.sl
 
 // Pure. Sources: queue (open items), history (rows of /api/history), stalls (stalls.jsonl records), decided (G1 endpoint body or null),
 // deploys (deploy-runner snapshot().deploys), quota (quota.get()). -> { text (<= 900 chars), parts }.
-export function digestText({ now = Date.now(), minutes = 60, queue = [], history = [], stalls = [], decided = null, deploys = [], quota = null } = {}) {
+// One spoken sentence from lease-source summarize(): counts, the head of the queue with its ETA, idle holds.
+export function leaseSpeech(sum) {
+  if (!sum?.ok) return 'I cannot read the leases right now.';
+  if (!sum.held && !sum.queued) return sum.pins ? `No leases are held; ${plural(sum.pins, 'pin')}.` : 'No leases are held and nobody is waiting.';
+  const bits = [`${plural(sum.held, 'lease')} held${sum.pins ? `, ${plural(sum.pins, 'pin')}` : ''}`];
+  if (sum.queued) {
+    const h = sum.head;
+    const eta = h?.etaMin == null ? '' : h.etaMin < 1 ? ', ETA under a minute' : `, ETA ${plural(h.etaMin, 'minute')}`;
+    bits.push(h ? `the ${plainSpeech(h.resource === '*' ? h.env || 'env' : h.resource)} queue has ${h.count} waiting${eta}${sum.queued > h.count ? `, ${sum.queued - h.count} more elsewhere` : ''}` : `${sum.queued} waiting`);
+  }
+  bits.push(sum.idle ? `${plural(sum.idle, 'lease')} ${sum.idle === 1 ? 'looks' : 'look'} idle` : 'no lease is idle');
+  return `${bits.join('; ')}.`;
+}
+
+export function digestText({ now = Date.now(), minutes = 60, queue = [], history = [], stalls = [], decided = null, deploys = [], quota = null, leases = null } = {}) {
   const since = now - minutes * 60000;
   const inWin = (t) => { const v = typeof t === 'number' ? t : Date.parse(t); return Number.isFinite(v) && v >= since && v <= now + 60000; };
   const parts = [];
@@ -281,6 +297,8 @@ export function digestText({ now = Date.now(), minutes = 60, queue = [], history
   const bad = fin.filter((d) => d.state === 'failed'), ok = fin.filter((d) => d.state === 'done');
   if (bad.length) parts.push(`${plural(bad.length, 'deploy')} failed${bad.length ? `: ${list(bad.map((d) => d.env || d.id))}` : ''}.`);
   if (ok.length) parts.push(`${plural(ok.length, 'deploy')} finished${ok.length ? `: ${list(ok.map((d) => d.env || d.id))}` : ''}.`);
+
+  if (leases?.ok && (leases.held || leases.queued)) parts.push(leaseSpeech(leases));
 
   const hot = [];
   for (const p of quota?.plans || []) for (const w of p.windows || []) if (!w.expired && Number.isFinite(w.usedPercent) && w.usedPercent >= 80) hot.push(`${p.plan} ${w.name} quota is at ${Math.round(w.usedPercent)} percent`);
@@ -348,7 +366,7 @@ export function createVoice(deps) {
           if (!pend) return ok({ status: 'intent', intent: 'confirm', say: 'There is nothing to confirm.' });
           option = pend; confirmed = true;
         } else {
-          const say = { skip: 'Skipping.', next: 'Next.', repeat: '', stop: 'Stopping.', digest: '', wait: `Okay, I will leave ${item.session} for you.` }[m.intent] ?? '';
+          const say = m.intent === 'leases' ? await leaseSentence() : { skip: 'Skipping.', next: 'Next.', repeat: '', stop: 'Stopping.', digest: '', wait: `Okay, I will leave ${item.session} for you.` }[m.intent] ?? '';
           return ok({ status: 'intent', intent: m.intent, say });
         }
       } else if (m.type === 'choice') {
@@ -375,11 +393,19 @@ export function createVoice(deps) {
     return ok({ status: 'sent', option: option.n, label: option.label, say: item.kind === 'ask' ? `Sent option ${option.n} for ${item.askId} to the manager (${target}).` : `Sent ${option.label} to ${item.session}.` });
   }
 
+  // the lease sentence from the lease source (deps.leaseView: async -> lease-source view); unreadable = said so, never "none"
+  async function leaseSentence() {
+    if (!deps.leaseView) return 'Leases are not connected.';
+    let v = null; try { v = await deps.leaseView(); } catch { v = null; }
+    return leaseSpeech(leaseSummary(v, now()));
+  }
   async function digest(minutes) {
     const m = Math.min(24 * 60, Math.max(5, Math.round(Number(minutes)) || 60));
     const t = now();
     const src = await deps.digestSources({ since: t - m * 60000, minutes: m });
-    return digestText({ now: t, minutes: m, queue: await queue(), ...src });
+    let leases = null;
+    if (deps.leaseView) { try { leases = leaseSummary(await deps.leaseView(), t); } catch { leases = null; } }
+    return digestText({ now: t, minutes: m, queue: await queue(), leases, ...src });
   }
 
   // -> { status, body } | null (not a voice route)
