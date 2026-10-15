@@ -30,12 +30,13 @@ const HELPER_RE = /^(?:\S*\/)?(?:bash|zsh|sh|fish|dash|sleep|ps|tmux|cat|tail|he
 export const jobPids = (pid, table) => descendants(pid, table).filter((c) => !HELPER_RE.test(String(table.args?.get(c) || '').trim()));
 
 const COMPLETION_RE = /\b(?:done|finished|complete[d]?|all (?:tests )?passed|exit(?:ed)?(?: code)? \d+|exit status \d+|Traceback \(most recent|error summary|\d+ passed|saved to)\b/i;
+const GENERIC_WORDS = new Set(['waiting', 'blocked', 'final', 'run', 'runs', 'job', 'jobs', 'process', 'finish', 'finishes', 'finished', 'complete', 'completes', 'completed', 'running', 'progress', 'until', 'tests', 'test', 'build', 'task', 'script', 'with', 'that', 'this', 'from', 'then', 'before', 'after', 'done', 'still', 'status', 'ends', 'end']);
 const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 
 // deps: { now, procRoot, table: () => ps table, agentPid: (session) => pid|null, deployState: (id) => { state, finished }|null,
 //         stillWaiting: (session, stopAt) => bool, send: (session, text) => Promise, record: (event) => Promise, log: (rec) => void }
 export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', table = async () => ({ children: new Map(), args: new Map() }), agentPid = async () => null,
-  deployState = () => null, stillWaiting = () => true, canSend = () => true, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
+  deployState = () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
   const watched = new Map();   // session -> { job, stopAt, since, ... }
   // a zombie is finished: /proc/<pid>/stat is "pid (comm) S ...", the state follows the last ")"
   const alive = (pid) => {
@@ -80,7 +81,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
         body: job.detached ? `its job runs detached (nohup / setsid / disown / &), so the manager cannot tell when it ends: ${job.text}` : job.unseen ? `the pid named in its STATUS is not running on this host, so the manager cannot tell when the job ends: ${job.text}` : `STATUS names no pid, log or run id and the agent has no child process: ${job.text}`, url: `/?s=${encodeURIComponent(session)}`, priority: 'default' }).catch(() => {});
     }
     log({ type: 'own_job_watch', session, job: job.kind || 'unknown', label: job.label, detached: !!job.detached });
-    return { kind: job.kind, label: job.label, detached: !!job.detached };
+    return { kind: job.kind, label: job.label, detached: !!job.detached, unseen: !!job.unseen, pid: job.pids?.[0] ?? null };
   }
   const forget = (session) => { watched.delete(session); };
   const jobOf = (session) => watched.get(session)?.job || null;
@@ -142,10 +143,18 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     return s.state === 'unknown' ? null : `${s.summary}${s.state === 'ended' ? ` (at ${hhmm(s.at || now())})` : ''}.`;
   }
   // does the agent of `session` have a live child process (a job of its own) right now?
-  async function hasLiveChild(session) {
+  // A words-only STATUS ("waiting on the final score_matrix run") is the session's own job only when a child process of the agent either has a specific word
+  // of the STATUS line (or the run id) in its command line, or started after the turn began (`turnStart`, ms). Any other child is someone else's.
+  async function hasLiveChild(session, { text = '', turnStart = null } = {}) {
     const ap = await agentPid(session);
     if (!ap) return false;
-    return jobPids(ap, await table()).length > 0;
+    const tb = await table();
+    const kids = jobPids(ap, tb);
+    if (!kids.length) return false;
+    const words = [...new Set(String(text).toLowerCase().match(/[a-z0-9_][a-z0-9_.-]{3,}/g) || [])].filter((w) => !GENERIC_WORDS.has(w));
+    if (kids.some((p) => { const a = String(tb.args.get(p) || '').toLowerCase(); return words.some((w) => a.includes(w)); })) return true;
+    if (turnStart) { const at = await startedAt(kids); if (kids.some((p) => at.get(p) > turnStart)) return true; }
+    return false;
   }
   return { watch, forget, tick, jobOf, progressOf, hasLiveChild, _watched: watched };
 }

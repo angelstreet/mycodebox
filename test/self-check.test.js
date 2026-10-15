@@ -182,3 +182,9 @@ test('review: a new ask supersedes only asks older than this stop, and never aga
   const p = await supersedeOlder(ledger, 'sc10', 'x', { before: t0 });
   assert.deepEqual(p, ['LATE']);
 });
+
+test('review round 3: a local pid that is not running here escalates to the owner with the reason', async () => {
+  await m.initManager({ ownJobs: { progressOf: async () => null, hasLiveChild: async () => false, watch: async () => ({ kind: 'pid', label: 'job (pid 4242)', unseen: true, pid: 4242 }), forget: () => {} } });
+  const r = await stop('sc11', makeRepo(), 'Started the export on host-b.\nSTATUS: waiting: pid 4242 on host-b to finish');
+  assert.ok(r.esc); assert.match(r.esc.reason, /pid 4242 is not running on this host/); assert.equal(r.esc.case, 'owner_decision');
+});

@@ -55,7 +55,7 @@ test('isPastNarrative: finished work only, plain spelling, destructive verbs onl
 
 const plainOf = (body) => body.split('\n');
 test('continue path: narrative no longer blocks, a stated plan still does', () => {
-  const ok = classifyStall({ plain: plainOf('I removed the debug log earlier and the old script overwrote the cache yesterday.\nShall I continue?'), state: 'done' });
+  const ok = classifyStall({ plain: plainOf('I removed the debug log earlier. The old script overwrote the cache yesterday.\nShall I continue?'), state: 'done' });
   assert.equal(ok.case, 'continue'); assert.equal(ok.forbidden, null);
   for (const body of ['Shall I continue? The old backups will be deleted first.', 'Plan: rm -rf build; then rebuild.\nProceed as planned? Shall I continue?', 'Shall I continue? The cleanup step removes the data directory.']) {
     const c = classifyStall({ plain: plainOf(body), state: 'done' });
@@ -105,7 +105,7 @@ const MENU_TAIL = ' Enter to select · ↑/↓ to navigate · Esc to cancel';
 const GREEN = 'Tests: 1826/1826 pass on feat.';
 
 test('review examples: description narrative is answered, the approved option naming migrations is escalated', async () => {
-  const a = await stop('r1', makeRepo(), 'The skill differs from the installed copy.\nWhat next?\n ❯ 1. Sync the skill (recommended)\n      Copies the skill and overwrites its older SKILL.md.\n   2. Leave it\n' + MENU_TAIL, 'waiting');
+  const a = await stop('r1', makeRepo(), 'The skill differs from the installed copy.\nWhat next?\n ❯ 1. Sync the skill (recommended)\n      Copies the skill; overwrites its older SKILL.md in the target.\n   2. Leave it\n' + MENU_TAIL, 'waiting');
   assert.deepEqual(a.keys, ['1']); assert.equal(a.esc, undefined);
   const b = await stop('r2', makeRepo(), 'What next?\n ❯ 1. Apply database migrations from the page (recommended)\n   2. Leave it\n' + MENU_TAIL, 'waiting');
   assert.deepEqual(b.keys, []); assert.ok(b.esc);

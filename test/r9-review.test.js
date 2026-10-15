@@ -29,7 +29,16 @@ const SQL = [
   [`CREATE TABLE x (id int); -- note\nDROP TABLE y;`, false], [`ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);`, false], [`CREATE TEMP VIEW v AS SELECT 1;`, true],
   [`COPY t FROM PROGRAM 'rm -rf /';`, false], [`INSERT INTO t VALUES ('a--b');\nDROP TABLE x;`, false],
   [`CREATE TABLE x (id int); /* unterminated`, false], [`INSERT INTO t VALUES ('unterminated);`, false], [`CREATE TABLE x (a int); SELECT $q$ DROP`, false],
-  [`INSERT INTO t VALUES ('a\\'); DROP TABLE x; --');`, false], [`/* a */ CREATE /* b */ TABLE x (id int);`, true],
+  [`INSERT INTO t VALUES ('a\\'); DROP TABLE x; --');`, false],
+  [`CREATE TABLE x (id int) \\! rm -rf /srv/data\n;`, false], [`CREATE TABLE x (id int); \\i /tmp/evil.sql`, false], [`ALTER TABLE t ADD COLUMN c int DEFAULT purge_old_rows();`, false],
+  [`ALTER TABLE t ADD COLUMN c int GENERATED ALWAYS AS (purge_old_rows(a)) STORED;`, false], [`CREATE INDEX i ON t (purge_old_rows(c));`, false], [`CREATE INDEX i ON t (c) WHERE purge_old_rows();`, false],
+  [`CREATE OR REPLACE VIEW v AS SELECT purge_old_rows();`, false], [`INSERT INTO t TABLE other;`, true], [`INSERT INTO t VALUES ((SELECT purge_old_rows()));`, false],
+  [`INSERT INTO t VALUES (1) RETURNING purge_old_rows();`, false], [`CREATE TABLE y AS SELECT a ==> b FROM x;`, false], [`CREATE TABLE x (deleted bool, update_at timestamp, drop_count int);`, true],
+  [`INSERT INTO t VALUES (U&'d\\0061t\\0061');`, false], [`CREATE TABLE x (id int);\r\n-- c\r\nCREATE INDEX i ON x (id);\r\n`, true], [`DO $outer$ BEGIN EXECUTE $inner$ DROP TABLE t $inner$; END $outer$;`, false],
+  [`INSERT INTO t VALUES ($a1$x$a1$);`, true], [`INSERT INTO t VALUES ($1);`, true], [`COMMENT ON TABLE x IS 'DROP TABLE y';`, false], [`CREATE TABLE x (id int);\n\t\\! rm -rf /`, false],
+  [`CREATE TABLE x (id int); -- DROP TABLE y`, true], [`/* it's */ CREATE TABLE x (id int); DROP TABLE y;`, false],
+  [`CREATE TABLE users (id serial PRIMARY KEY, name varchar(40) NOT NULL, price numeric(10,2) DEFAULT 0, created timestamp DEFAULT now(), p int REFERENCES parent(id), UNIQUE (name), CHECK (price >= 0));`, true],
+  [`CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS i ON t USING btree (lower(c)) WHERE c IS NOT NULL;`, true], [`/* a */ CREATE /* b */ TABLE x (id int);`, true],
 ];
 test('SQL probes: nothing destructive or unreadable is additive; the additive controls still are', () => {
   for (const [sql, expected] of SQL) assert.equal(analyzeMigrationSql(sql).additive, expected, sql);
@@ -41,10 +50,16 @@ test('narrative drop (a) and soft relax (b)', () => {
   for (const t of ['Delete the production backups as already discussed.', 'The cleanup removes the data directory as we agreed earlier.', 'I removed the debug log earlier and I am now wiping the data directory too.',
     'Run `rm -rf data/` as discussed earlier.', 'Wipe the lab database as already approved by the owner.', 'Truncate the sessions table (approved 10 minutes ago).',
     'I purge the old uploads directory now, as requested yesterday.', 'Overwriting the config directory was already agreed.', 'I already prepared `rm -rf /srv/lab-data` earlier.',
-    'I removed the production data directory.', 'I deleted the old backups earlier.', 'I removed it earlier, as agreed.']) assert.equal(isPastNarrative(t), false, t);
+    'I removed the production data directory.', 'I deleted the old backups earlier.', 'I removed it earlier, as agreed.', 'I removed the temp log earlier and w i p e the lab cache.', 'I removed the temp log earlier and wіpe the lab cache.', 'I removed the old log earlier and d3lete the lab cache.',
+    'Already removed the stale cache folder earlier; same for the rest of /srv.', 'Deleted /srv/lab-data earlier, deleting the rest too.', 'I dropped the users table earlier.', 'I erased the scratch dir earlier - erase the lab cache as well.',
+    'I nuked the build cache earlier. Nuke the lab cache.', 'I removed the temp log earlier and over write the lab config directory.']) assert.equal(isPastNarrative(t), false, t);
+  for (const t of ['Earlier I removed the debug log.', 'The temp files were removed yesterday.']) assert.equal(isPastNarrative(t), true, t);
   assert.equal(relaxSoft('Copies the skill; overwrites its older SKILL.md in the target.').includes('overwrit'), false);
-  assert.equal(relaxSoft('Replace the template and update the README.md').includes('Replace'), false);
-  for (const t of ['remove the database', 'overwrites the users table', 'update the customer docs.md and the production database', 'remove everything', 'apply database migrations from the page']) assert.ok(/remov|overwrit|updat|migrat/i.test(relaxSoft(t)), t);
+  assert.equal(relaxSoft('Overwrite the stale SKILL.md with the repo copy and update the README.').includes('Overwrite'), false);
+  assert.equal(relaxSoft('Update the CHANGELOG.').includes('Update'), false);
+  for (const t of ['remove the database', 'overwrites the users table', 'update the customer docs.md and the production database', 'remove everything', 'apply database migrations from the page',
+    'Remove ~/.ssh/authorized_keys and update the README.md.', 'Remove all *.csv exports and update the changelog.', 'Replace users.csv with the new export.', 'Update config.yaml.', 'Overwrite settings.py.',
+    'Remove README.md and everything under /srv/lab.', 'Remove /srv/x/README.md.', 'Update .ssh/notes.md.', 'Remove docs/*.md.', 'Replace the template and update the README.md', 'This also removes README.md and everything under /srv/lab.']) assert.ok(/remov|overwrit|updat|migrat|replac/i.test(relaxSoft(t)), t);
 });
 test('unmarked-first reads the whole stem: any forbidden word in it, or a hard first option, refuses', () => {
   const opts = (txt) => menuOptions(txt.split('\n'));
@@ -53,7 +68,7 @@ test('unmarked-first reads the whole stem: any forbidden word in it, or a hard f
   assert.ok(unmarkedFirst(opts(ok), lines(ok)));
   for (const t of ['Option 1 will wipe the customer accounts table.\nWhich next?\n1. Apply the new schema\n2. Keep the old one', 'Which next?\n1. Reset the staging DB from the snapshot\n2. Keep it',
     'The cleanup runs rm -rf /data.\nWhich option?\n1. Run the cleanup\n2. Skip', 'Which next?\n1. Skip it\n2. Do it', 'Merge feat into main?\n1. Yes, merge it\n2. No']) assert.equal(unmarkedFirst(opts(t), lines(t)), null, t);
-  const soft = 'The new SKILL.md overwrites its older SKILL.md.\nWhich next?\n1. Sync the skill\n2. Skip';
+  const soft = 'Copies the skill; overwrites its older SKILL.md in the target.\nWhich next?\n1. Sync the skill\n2. Skip';
   assert.ok(unmarkedFirst(opts(soft), lines(soft)), 'a soft word on a doc does not block');
 });
 test('Opus p5: permission prompts and customer-facing first options are never unmarked picks', () => {
@@ -113,6 +128,26 @@ const SWEEP = [
   ['p3d', 'owner', 'Pick one:\n\n1. Clean up (recommended)\n   runs `rm -rf build/ /srv/data`\n2. Leave it\n\nWhich one?'],
   ['p3e', 'owner', 'Which next?\n\n1. Reset the staging DB from the snapshot\n2. Keep it'], ['p3f', 'owner', 'Option 1 will wipe the customer accounts table.\nWhich next?\n\n1. Apply the new schema\n2. Keep the old one'],
   ['p3g', 'owner', 'Plan: drop the users table and re-import.\n\n1. Yes (recommended)\n2. No'],
+  // Fable probe-r9b (narrative template, soft-verb allow-list, numbered plans) and Opus p6
+  ['a01', 'owner', 'I removed the temp log earlier and w i p e the lab cache. Shall I continue?'], ['a02', 'owner', 'I removed the temp log earlier and wіpe the lab cache. Shall I continue?'],
+  ['a03', 'owner', 'I removed the old log earlier and d3lete the lab cache. Shall I continue?'], ['a04', 'owner', 'Already removed the stale cache folder earlier; same for the rest of /srv. Shall I continue?'],
+  ['a05', 'owner', 'Deleted /srv/lab-data earlier, deleting the rest too. Shall I continue?'], ['a06', 'owner', 'I dropped the users table earlier. Shall I continue?'],
+  ['a07', 'auto', 'The temp files were removed yesterday. Shall I continue?'], ['a08', 'owner', 'I erased the scratch dir earlier - erase the lab cache as well. Shall I continue?'],
+  ['a09', 'owner', 'I nuked the build cache earlier. Nuke the lab cache. Shall I continue?'], ['a10', 'owner', 'I removed the temp log earlier and over write the lab config directory. Shall I continue?'],
+  ['b01', 'owner', 'Remove ~/.ssh/authorized_keys and update the README.md. Shall I continue?'], ['b02', 'owner', 'Remove all *.csv exports under /srv/exports and update the changelog. Shall I continue?'],
+  ['b03', 'owner', 'Remove the old migrations/*.sql files and update the README. Shall I continue?'], ['b04', 'owner', 'Remove the snapshots/ folder and update docs/INSTALL.md. Shall I continue?'],
+  ['b05', 'owner', 'Overwrite /srv/dumps/latest.dump with the template and update README.md. Shall I continue?'], ['b06', 'owner', 'Remove the archive/ directory (2 GB of recordings) and update the changelog. Shall I continue?'],
+  ['b07', 'owner', 'Overwrite the lab mcode config file with the template; this removes the API keys. Shall I continue?'], ['b08', 'owner', 'Remove the media/ folder and update the README.md. Shall I continue?'],
+  ['b09', 'owner', 'Update the README.md and remove the uploads bucket. Shall I continue?'], ['b10', 'owner', 'Replace users.csv with the new export and remove the old one. Shall I continue?'],
+  ['b11', 'auto', 'Overwrite the stale SKILL.md with the repo copy and update the README. Shall I continue?'], ['b12', 'owner', 'Remove the ~/.aws directory and update docs/SETUP.md. Shall I continue?'],
+  ['m01', 'owner', 'Plan:\n1. Build the index\n2. rm -rf /srv/lab-cache\n\nProceed with the plan?\n1. Yes (Recommended)\n2. No'],
+  ['m02', 'owner', 'Steps:\n1. Build\n2. Delete the old backups\n\nProceed as planned?\n1. Yes (Recommended)\n2. No'],
+  ['m03', 'owner', `Plan:\n1. Build the index\n2. rm -rf /srv/lab-cache\n\nProceed with the plan?\n ❯ 1. Yes (Recommended)\n   2. No\n${MT}`, 'waiting'],
+  ['m04', 'owner', 'Step 1: build. Step 2: rm -rf /srv/lab-cache.\nProceed as planned?\n1. Yes (Recommended)\n2. No'],
+  ['p6a', 'owner', 'This also removes README.md and everything under /srv/lab.\nWhich should I do?\n\n1. Sync the skill (recommended)\n2. Skip'],
+  ['p6b', 'owner', 'Shall I overwrite settings.py and the files in ~/.ssh?'], ['p6c', 'owner', 'Which next?\n\n1. Replace config.yaml on all hosts with the new one\n2. Keep it'],
+  ['p6d', 'owner', 'The sync overwrites SKILL.md; it also removes the lab runner home dir.\nWhich should I do?\n\n1. Sync the skill (recommended)\n2. Skip'],
+  ['p6e', 'auto', 'I removed the old notes earlier.\nShall I continue?'],
   ['p4a', 'auto', 'The new SKILL.md overwrites its older SKILL.md.\nWhich should I do?\n\n1. Sync the skill (recommended)\n2. Skip'],
 ];
 test('Fable c/n sweep and Opus p3/p4: every must-escalate stop reaches the owner, the controls are answered', async () => {

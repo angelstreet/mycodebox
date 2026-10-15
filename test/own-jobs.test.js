@@ -139,9 +139,14 @@ test('review: never-seen pid is unseeable (flagged, never woken); seen-then-gone
   let calls = 0; const j = createOwnJobs({ procRoot: h2.proc, stillWaiting: () => ++calls < 2, send: async () => { throw new Error('must not send'); }, canSend: () => true });
   h2.live(601); await j.watch('late2', { text: 'pid 601', stopAt: 's' }); h2.die(601);
   assert.deepEqual(await j.tick(), []);
-  // hasLiveChild: helpers do not count
-  const h3 = harness({ table: async () => ({ children: new Map([[10, [11, 12]]]), args: new Map([[11, 'sleep 5'], [12, 'python3 score.py']]) }) });
-  assert.equal(await h3.jobs.hasLiveChild('x'), true);
+  // hasLiveChild: helpers do not count; a child counts when its command line holds a specific word of the STATUS, or it started after the turn began
+  const tb = { children: new Map([[10, [11, 12]]]), args: new Map([[11, 'sleep 5'], [12, 'python3 score_matrix.py']]) };
+  const h3 = harness({ table: async () => tb });
+  assert.equal(await h3.jobs.hasLiveChild('x', { text: 'waiting on the final score_matrix run' }), true);
+  assert.equal(await h3.jobs.hasLiveChild('x', { text: 'waiting for the CI run to finish' }), false, 'someone else\'s child process');
+  const h5 = harness({ table: async () => tb, startedAt: async () => new Map([[12, 2_000_000]]) });
+  assert.equal(await h5.jobs.hasLiveChild('x', { text: 'waiting for the CI run', turnStart: 1_000_000 }), true, 'started after the turn began');
+  assert.equal(await h5.jobs.hasLiveChild('x', { text: 'waiting for the CI run', turnStart: 3_000_000 }), false, 'older than the turn');
   const h4 = harness({ table: async () => ({ children: new Map([[10, [11]]]), args: new Map([[11, 'sleep 5']]) }) });
-  assert.equal(await h4.jobs.hasLiveChild('x'), false);
+  assert.equal(await h4.jobs.hasLiveChild('x', { text: 'sleep 5' }), false);
 });

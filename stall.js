@@ -452,45 +452,66 @@ const DESTRUCTIVE_PART = /delet\(\?:e|migrat\(\?:e/;
 const DESTRUCTIVE_WORDS = new RegExp(FORBIDDEN_PARTS.find((p) => /delet\(\?:e/.test(p)), 'gi');
 const NONDESTRUCTIVE_RE = new RegExp([...FORBIDDEN_PARTS.filter((p) => !DESTRUCTIVE_PART.test(p)), ...HARD_EXTRA].join('|'), 'i');
 const HARD_PAST = /^(?:remov|delet|dropp|wip|truncat|purg|destroy|eras|nuk|prun)ed$|^overwr(?:ote|itten)$/i;
-const PAST_TIME_RE = /\b(?:earlier|yesterday|already|previously|ago|so far|just now|this morning|last (?:night|week|time|run|session|turn))\b/i;
-// present, imperative-leaning, future or conditional wording: the sentence is a plan, not a report
-const PLANNED_RE = /\b(?:will|won'?t|would|going to|about to|shall|should|could|can|may|might|must|now|currently|next|then|first|runs?|running|executes?|applies|plans?|planned|steps?|if|unless|when|once|before|after that|tonight|today|tomorrow|am|is|are)\b|'ll\b/i;
-const APPROVAL_RE = /\bas (?:we |already |previously |i )?(?:discussed|agreed|approved|requested|planned|confirmed|decided|promised)\b|\balready (?:agreed|approved|discussed|requested|decided)\b|\b(?:was|were|been|is) (?:agreed|approved|requested|authori[sz]ed)\b|\bapproved\b[^.\n]{0,40}\bago\b|\bwith your (?:approval|ok|go-ahead)\b|\bper your\b|\bapproved by\b/i;
-const OBJ_FILE = /[\w./-]+\.(?:md|txt|json|ya?ml|js|ts|py|sh|toml|html|css|csv)\b|\b(?:skill|readme|docs?|documentation|templates?|config file|changelog)\b/i;
-const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|volumes?|buckets?|backups?|prod(?:uction)?|customers?|user data|rows?|records?|uploads?|secrets?|keys?|tokens?|passwords?|credentials?)\b|\.env\b/i;
-export function isPastNarrative(sentence) {
-  const t = String(sentence || '').trim();
-  if (!t || /\?["')\]]*\s*$/.test(t) || !PAST_TIME_RE.test(t) || PLANNED_RE.test(t) || APPROVAL_RE.test(t) || OBJ_DATA.test(t)) return false;
-  if (commandsIn(t).length || /\b(?:rm|mv|dd)\b/i.test(t) || /\bmigrat/i.test(t)) return false;
-  if (matchWith(NONDESTRUCTIVE_RE, t, forbiddenExtra)) return false;
+// ALLOW-LIST templates (round 9 third review round): anything that does not match one exactly stays in the floor text.
+// (a) narrative: ONE clause, "<subject> <past destructive verb> <object, at most 6 words> <time marker>", active, passive, or with the time marker first.
+const PAST_VERB = String.raw`(?:removed|overwrote|overwritten|deleted|dropped|wiped|truncated|purged|destroyed|erased|nuked|pruned)`;
+const TIME_MARK = String.raw`(?:earlier|yesterday|already|before|last \w+|\d+ \w+ ago)`;
+const OBJ_WORDS = String.raw`[\w][\w./-]*(?: [\w][\w./-]*){0,5}`;
+const NARR_ACTIVE = new RegExp(String.raw`^(?:(?:i|we|it|they|the \w+(?: \w+)?) )?(?:(?:already|have|had) )?(${PAST_VERB}) (${OBJ_WORDS}) ${TIME_MARK}\.?$`, 'i');
+const NARR_FIRST = new RegExp(String.raw`^(?:earlier|yesterday|previously) (?:(?:i|we|it|they|the \w+(?: \w+)?) )?(?:(?:already|have|had) )?(${PAST_VERB}) (${OBJ_WORDS})\.?$`, 'i');
+const NARR_PASSIVE = new RegExp(String.raw`^(?:the )?(${OBJ_WORDS}) (?:was|were|had been|has been|have been) (?:already )?(${PAST_VERB}) ${TIME_MARK}\.?$`, 'i');
+const NARR_BANNED = /[,;:—–]|\b(?:and|then|also|plus|same|as well|too|for the rest|rest of|everything|all)\b/i;
+const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|data|volumes?|buckets?|backups?|prod(?:uction)?|customers?|user data|rows?|records?|uploads?|secrets?|keys?|tokens?|passwords?|credentials?|accounts?|users?|sessions?|recordings?)\b|\.env\b/i;
+const narrativeShape = (t) => {
+  const m = NARR_ACTIVE.exec(t) || NARR_FIRST.exec(t) || NARR_PASSIVE.exec(t);
+  if (!m) return false;
+  const obj = NARR_PASSIVE.exec(t) && !NARR_ACTIVE.exec(t) && !NARR_FIRST.exec(t) ? m[1] : m[2];
+  // the object is relative to the session repo (no absolute, home, parent or dot-directory path) and names no data
+  if (OBJ_DATA.test(obj) || obj.split(' ').some((w) => /^(?:\/|~|\.\.|\.[\w-])/.test(w) || w.includes('*'))) return false;
+  return true;
+};
+// every spelling (textVariants, windowJoins) may hold only past-tense destructive words and nothing else forbidden
+const pastOnly = (v) => {
+  if (matchWith(NONDESTRUCTIVE_RE, v, forbiddenExtra)) return false;
   DESTRUCTIVE_WORDS.lastIndex = 0;
-  for (const m of t.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0])) return false;
-  const hit = forbiddenMatch(t);
-  return !hit || FORBIDDEN_RE.test(t);   // a hit that shows only in a disguised spelling is not narrative
+  for (const m of v.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0])) return false;
+  return !/\bmigrat/i.test(v);
+};
+export function isPastNarrative(sentence) {
+  const t = String(sentence || '').trim().replace(/\s+/g, ' ');
+  if (!t || /\?["')\]]*$/.test(t) || NARR_BANNED.test(t) || commandsIn(t).length || /\b(?:rm|mv|dd)\b/i.test(t)) return false;
+  if (!narrativeShape(t)) return false;
+  for (const v of [t, ...textVariants(t), ...windowJoins(t)]) if (!pastOnly(v)) return false;
+  return true;
 }
 const sentencesOf = (text) => String(text || '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
 export const withoutNarrative = (text) => String(text || '').split('\n').map((l) => (OPTION_LINE.test(l) ? l : sentencesOf(l).filter((x) => !isPastNarrative(x)).join(' '))).filter((l) => l.trim()).join('\n');
-// (b): a soft word is neutral when the clause around it names an ordinary file or doc and no data.
-const SOFT_RE = /\b(?:remov(?:e|es|ed|ing|al)|overwrit(?:e|es|ten|ing)|overwrote|replac(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|migrations?)\b/gi;
+// (b) soft verbs: a clause is relaxed only when it is exactly "<remove|overwrite|replace|update> (the|its) (older|stale|old)* <doc>" where <doc> is ONE path or name
+// ending in .md / .txt / .rst, or README / SKILL / CHANGELOG / LICENSE / NOTICE, relative, no glob, not under a dot-directory. A clause joined by "and" is relaxed only
+// when every part is such a clause. Everything else (.csv .json .yaml .sh .py .js .ts, a second object, another path) keeps its verb in the floor text.
+const DOC_NAME = String.raw`(?:(?:[\w-]+/)*[\w][\w.-]*\.(?:md|txt|rst)|(?:(?:[\w-]+/)*)(?:README|SKILL|CHANGELOG|LICENSE|NOTICE))`;
+const SOFT_CLAUSE = new RegExp(String.raw`^(?:(?:it|this|which|(?:the |this )?(?:new |latest |updated )*${DOC_NAME}) )?(?:remove|removes|overwrite|overwrites|replace|replaces|update|updates) (?:(?:the|its|their) )?(?:(?:older|stale|old|previous|existing) )*(${DOC_NAME})(?: in the (?:target|destination|repo|checkout|copy)| with the (?:repo|template|new|latest) (?:copy|version))?\.?$`, 'i');
+const SOFT_VERB = /\b(?:remove|removes|overwrite|overwrites|replace|replaces|update|updates)\b/i;
+const docOk = (p) => !/(^|\/)\.[\w-]*/.test(p) && !p.includes('*') && !p.startsWith('/') && !p.startsWith('~') && !p.includes('..');
+const softOk = (part) => { const m = SOFT_CLAUSE.exec(part.trim().replace(/\s+/g, ' ')); return !!m && docOk(m[1]); };
 export function relaxSoft(text) {
-  return String(text || '').split('\n').map((line) => {
-    return line.split(/(?<=[.;!?])\s+|;/).map((clause) => (OBJ_FILE.test(clause) && !OBJ_DATA.test(clause) && !commandsIn(clause).length ? clause.replace(SOFT_RE, 'change') : clause)).join(' ');
-  }).join('\n');
+  return String(text || '').split('\n').map((line) => line.split(/(?<=[.;!?])\s+|;/).map((clause) => {
+    const parts = clause.trim().replace(/[?.]+$/, '').split(/ and /i);
+    if (!SOFT_VERB.test(clause) || !parts.every((p) => softOk(p))) return clause;
+    return clause.replace(/\b(?:remove|removes|overwrite|overwrites|replace|replaces|update|updates)\b/gi, 'change');
+  }).join(' ')).join('\n');
 }
 const floorText = (t) => relaxSoft(withoutNarrative(t));
-// The menu's lines without the other options (and their indented descriptions); the kept option, plan steps and everything else stay.
-function menuStem(lines, options, keepN) {
-  const others = (options || []).filter((o) => o.n !== keepN && o.text);
-  const out = [];
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    if (OPTION_LINE.test(l) && others.some((o) => l.includes(String(o.text).slice(0, 40)))) {
-      while (i + 1 < lines.length && !OPTION_LINE.test(lines[i + 1]) && /^\s{2,}\S/.test(lines[i + 1])) i++;
-      continue;
-    }
-    out.push(l);
-  }
-  return out;
+// The menu's option run that holds the kept option, minus the kept option itself, is left out (round 8's stemOf); numbered lines elsewhere (a plan's steps) stay.
+function menuStem(lines, keepText) {
+  const key = String(keepText || '').slice(0, 40);
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (key && OPTION_LINE.test(lines[i]) && lines[i].includes(key)) { at = i; break; }
+  if (at < 0) return lines.slice();
+  let from = at, to = at;
+  while (from > 0 && OPTION_LINE.test(lines[from - 1])) from--;
+  while (to < lines.length - 1 && OPTION_LINE.test(lines[to + 1])) to++;
+  return [...lines.slice(0, from), lines[at], ...lines.slice(to + 1)];
 }
 
 // stall: { options?, question?, fullText? | closing? | excerpt?, approvalText? } -> { text, commands, source }
@@ -502,7 +523,7 @@ export function approvedAction(stall) {
     const body = floorText(String(stall.approvalText ?? stall.question ?? ''));
     return { text: body, commands: commandsIn(body), source: 'question' };
   }
-  const text = floorText([...menuStem(all, stall.options, rec.n), rec.text, stall.question || ''].join('\n'));
+  const text = floorText([...menuStem(all, rec.text), rec.text, stall.question || ''].join('\n'));
   return { text, commands: commandsIn(text), source: isGenericOption(rec.text) ? 'option+question' : 'option' };
 }
 
@@ -523,8 +544,8 @@ export function unmarkedFirst(opts, lines = []) {
   const first = opts[0];
   if (OUT_OPTION_RE.test(first.text)) return null;
   // the stem around the menu (every line but the other options) and option 1 must hold no forbidden word at all, once (b) is applied: no narrative is dropped here
-  const text = relaxSoft([...menuStem(lines, opts, 1), first.text].join('\n'));
-  if (forbiddenMatch(text) || topicSplit(text).hard) return null;
+  const text = relaxSoft([...menuStem(lines, first.text), first.text].join('\n'));
+  if (forbiddenMatch(text) || topicSplit(text).hard || SOFT_VERB.test(text)) return null;   // a soft verb that the template did not relax is a change we cannot read: not a default pick
   return first;
 }
 

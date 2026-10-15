@@ -197,9 +197,24 @@ export const MIGRATION_RE = /(^|\/)migrations\/|\.sql$/i;
 // One pass over the text, so a comment marker inside a literal cannot hide a statement and a quote inside a comment cannot open a literal:
 // '...' with '' escapes, "..." identifiers, $tag$...$tag$ bodies, -- and nested /* */ comments are blanked; E'...' strings, any backslash inside a
 // literal, a psql meta-command (a line starting with a backslash: \!, \i, \copy) and unbalanced quotes, tags or comments are refused.
-// Inherent limit (documented): a function CALLED by an allowed statement can still do anything. INSERT ... SELECT is refused, and a function call in an
-// INSERT or CREATE TABLE ... AS must be on a short allowlist; a view's body is read lazily and is not checked for what it calls later.
-const SAFE_FN = new Set(['values', 'conflict', 'now', 'current_timestamp', 'current_date', 'gen_random_uuid', 'uuid_generate_v4', 'coalesce', 'lower', 'upper', 'count', 'sum', 'min', 'max', 'avg', 'nextval', 'cast', 'array', 'row', 'any', 'in', 'exists', 'on']);
+// Inherent limit (documented): a function CALLED by an allowed statement can still do anything. INSERT ... SELECT is refused, and a function call anywhere in a
+// kept statement (DEFAULT, GENERATED, index expressions, WHERE, view bodies, CTAS) must be on the SAFE_FN allowlist; custom operators are refused too. What an
+// allowlisted function does when the data changes later is not checked.
+const SAFE_FN = new Set(['_', 'values', 'conflict', 'now', 'current_timestamp', 'current_date', 'gen_random_uuid', 'uuid_generate_v4', 'coalesce', 'nullif', 'greatest', 'least', 'lower', 'upper', 'length', 'trim', 'concat', 'substr', 'substring', 'left', 'right',
+  'abs', 'round', 'floor', 'ceil', 'count', 'sum', 'min', 'max', 'avg', 'string_agg', 'array_agg', 'to_char', 'date_trunc', 'extract', 'nextval', 'cast', 'array', 'row', 'any', 'all', 'in', 'exists', 'on', 'over', 'filter', 'with', 'where', 'and', 'or', 'not', 'as', 'default',
+  'check', 'key', 'unique', 'include', 'select', 'from', 'join', 'case', 'when', 'then', 'else', 'end', 'using', 'varchar', 'char', 'character', 'numeric', 'decimal', 'timestamp', 'timestamptz', 'time', 'timetz', 'interval', 'bit', 'varbit', 'float', 'constraint', 'generated', 'always', 'stored', 'by']);
+const MASKS = [
+  [/\b(TABLE|INTO|REFERENCES|VIEW|ONLY)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?:""|[\w.]+)/gi, '$1 _'],
+  [/\bINDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?:""|[\w.]+)?\s*ON\s+(?:ONLY\s+)?(?:""|[\w.]+)(?:\s+USING\s+\w+)?/gi, 'INDEX _'],
+];
+const OPS_OK = new Set(['<=', '>=', '<>', '!=', '||', '->', '->>', '#>', '#>>', '@>', '<@', '&&', '>>', '<<', '=>']);
+function suspicious(stmt) {
+  let m = stmt; for (const [re, to] of MASKS) m = m.replace(re, to);
+  const fn = [...m.matchAll(/\b([A-Za-z_][\w.]*)\s*\(/g)].map((x) => x[1].toLowerCase()).find((f) => !SAFE_FN.has(f));
+  if (fn) return `function call ${fn}()`;
+  const op = [...stmt.matchAll(/[+\-*\/<>=~!@#%^&|?]{2,}/g)].map((x) => x[0]).find((o) => !OPS_OK.has(o));
+  return op ? `operator ${op}` : null;
+}
 function blank(src) {
   const n = src.length;
   let out = '', i = 0;
@@ -213,6 +228,7 @@ function blank(src) {
       i = j; out += ' '; continue;
     }
     if ((c === 'E' || c === 'e') && d === "'" && !/[\w$]/.test(src[i - 1] || ' ')) return { why: 'an E\'...\' escape string' };
+    if ((c === 'U' || c === 'u') && d === '&' && (src[i + 2] === "'" || src[i + 2] === '"') && !/[\w$]/.test(src[i - 1] || ' ')) return { why: 'a unicode escape string' };
     if (c === "'" || c === '"') {
       let j = i + 1, closed = false;
       while (j < n) {
@@ -232,6 +248,7 @@ function blank(src) {
         out += "''"; i = e + m[0].length; continue;
       }
     }
+    if (c === '\\') return { why: 'a backslash outside a literal (psql meta-command)' };
     out += c; i++;
   }
   return { text: out };
@@ -244,22 +261,17 @@ export function analyzeMigrationSql(sql) {
   if (b.why) return { additive: false, why: b.why };
   const stmts = b.text.split(';').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
   if (!stmts.length) return { additive: false, why: 'no statements' };
-  const calls = (t) => [...t.matchAll(/\b([A-Za-z_][\w.]*)\s*\(/g)].map((m) => m[1].toLowerCase()).filter((f) => !SAFE_FN.has(f));
   for (const raw of stmts) {
     const s = raw.replace(/\bON\s+(?:UPDATE|DELETE)\s+(?:CASCADE|RESTRICT|NO ACTION|SET (?:NULL|DEFAULT))/gi, ' ');
     const bad = /\b(?:DROP|DELETE|TRUNCATE|RENAME|UPDATE|GRANT|REVOKE|COPY|VACUUM|REINDEX|CLUSTER)\b/i.exec(s);
     if (bad) return { additive: false, why: `${bad[0].toUpperCase()} in "${raw.slice(0, 60)}"` };
+    const sus = suspicious(s);   // every kept statement: a function call off the allowlist (DEFAULT, GENERATED, index expressions, WHERE, view bodies) or a custom operator
+    if (sus) return { additive: false, why: `${sus} in "${raw.slice(0, 60)}"` };
     if (/^INSERT\s+INTO\b/i.test(s)) {
       if (/\bSELECT\b/i.test(s)) return { additive: false, why: `INSERT ... SELECT in "${raw.slice(0, 60)}"` };
-      const fns = calls(s.replace(/^INSERT\s+INTO\s+\S+\s*(?:\([^)]*\))?/i, ''));
-      if (fns.length) return { additive: false, why: `function call ${fns[0]}() in "${raw.slice(0, 60)}"` };
       continue;
     }
-    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s)) {
-      const ctas = s.search(/\bAS\s+(?:SELECT|WITH|TABLE|VALUES)\b/i);   // CREATE TABLE ... AS runs its query now
-      if (ctas >= 0) { const bf = calls(s.slice(ctas)); if (bf.length) return { additive: false, why: `function call ${bf[0]}() in "${raw.slice(0, 60)}"` }; }
-      continue;
-    }
+    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s)) continue;
     if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s)) continue;
     const alter = /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\S+\s+(.*)$/i.exec(s);
     if (alter) {

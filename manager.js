@@ -1393,10 +1393,12 @@ export function observe(s) {
     // a session that waits on a job of its own is woken when the job ends (own-jobs.js); a deploy it queued is followed the same way
     // a blocked STATUS that names a job in words only: it is the session's own when the agent has a live child process at the stop
     if (ownJobs?.hasLiveChild && final.jobNoun && final.case === 'owner_decision' && !isRemoteSession(s.name) && !isManagerSession(s.name)) {
-      try { if (await ownJobs.hasLiveChild(s.name)) final = { ...final, case: 'own_job_wait', answer: null, autoCase: undefined, ownJob: {} }; } catch (e) { console.error('[manager] live child', e.message); }
+      try { if (await ownJobs.hasLiveChild(s.name, { text: String(final.question || ''), turnStart: s.rep?.turnStart?.() ?? null })) final = { ...final, case: 'own_job_wait', answer: null, autoCase: undefined, ownJob: {} }; } catch (e) { console.error('[manager] live child', e.message); }
     }
     if (ownJobs && !isManagerSession(s.name) && !isRemoteSession(s.name) && (final.case === 'own_job_wait' || (final.case === 'waiting_deploy' && final.deployHint?.id && /^waiting$/i.test(final.status || '')))) {
-      try { const r = await ownJobs.watch(s.name, { text: final.case === 'waiting_deploy' ? `deploy ${final.deployHint.id}` : String(final.question || ''), cwd: s.cwd || null, stopAt: id, paneText: stall.excerpt || '' }); logLater({ type: 'own_job', id, session: s.name, job: r.kind || 'unknown', label: r.label || null, detached: !!r.detached }); } catch (e) { console.error('[manager] own job', e.message); }
+      try { const r = await ownJobs.watch(s.name, { text: final.case === 'waiting_deploy' ? `deploy ${final.deployHint.id}` : String(final.question || ''), cwd: s.cwd || null, stopAt: id, paneText: stall.excerpt || '' }); logLater({ type: 'own_job', id, session: s.name, job: r.kind || 'unknown', label: r.label || null, detached: !!r.detached });
+        // a pid that is not running on this host cannot be watched: the owner hears about it instead of the session waiting for ever
+        if (r.unseen && final.case === 'own_job_wait') { final = { ...final, case: 'owner_decision' }; escalate(s.name, s.state, final, id, `pid ${r.pid} is not running on this host`); return; } } catch (e) { console.error('[manager] own job', e.message); }
     }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
     const partial = await partialDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] partial decision', e.message); return { handled: false }; });
