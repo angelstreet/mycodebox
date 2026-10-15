@@ -567,7 +567,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // ticket's earliest possible grant (its blockers' ETA).
   function canPass(req, tk, t) {
     if ((tk.passed || 0) >= cfg.passMax || t - tk.created > cfg.strictAgeMs) return false;
-    return t + holdMs(req) <= etaOf(tk, []);
+    return t + holdMs(req) < etaOf(tk, []);          // strictly before: an equal estimate does not jump the queue
   }
   async function claim(a) {
     const v = validateClaim(a); if (!v.ok) return v;
