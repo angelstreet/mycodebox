@@ -431,11 +431,20 @@ export function menuOptions(lines) {
 // The agent's own last-line verdict (AGENTS.md "End every turn with a STATUS line"):
 //   STATUS: done | needs-owner: <question> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
 // Looked for in the last 3 closing lines only. Returns { kind, text } or null (Codex/MiniMax panes, turns without the line).
-const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(done|needs-owner|blocked|handoff|waiting)\b[*_`]*\s*:?\s*(.*)$/i;
+const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(done|needs-owner|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
+// Verdicts agents write instead of "done" ("STATUS: acknowledged.", "STATUS: shipped"): a finished turn, never a question.
+// Read as plain text they fell to the heuristics: "I will ask before any force-push" became stopped_short (2026-10-15).
+const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', 'complete', 'completed', 'finished']);
+// MiniMax (mcode) prints its todo panel under the reply: "✓ ...", "○ ...", "… +17 more · 18/20 done · 1 pending · Ctrl+T expand".
+const TODO_PANEL_END_RE = /\b\d+\/\d+ done\b[^\n]*(?:pending|Ctrl\+T)|^\s*…\s*\+\d+ more\b/;
 export function statusLine(lines) {
-  for (const l of lines.slice(-3).reverse()) {
+  const panel = lines.slice(-4).some((l) => TODO_PANEL_END_RE.test(l));   // the STATUS line sits above the panel (and its "◐ Tasks · 1 agent active" line)
+  for (const l of lines.slice(panel ? -14 : -3).reverse()) {
     const m = STATUS_LINE_RE.exec(l);
-    if (m) return { kind: m[1].toLowerCase(), text: stripSeparator(m[2].replace(/[*_`]+\s*$/, '').trim()) };
+    if (!m) continue;
+    const k = m[1].toLowerCase(), text = stripSeparator(m[2].replace(/[*_`]+\s*$/, '').trim());
+    if (DONE_ALIASES.has(k) && /\?/.test(text.replace(/https?:\S+/g, ''))) return null;   // "STATUS: ok — should I ...?" still asks: the heuristics decide
+    return { kind: DONE_ALIASES.has(k) ? 'done' : k, text };
   }
   return null;
 }

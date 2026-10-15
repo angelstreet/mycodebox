@@ -109,7 +109,8 @@ export function lastActivityOf({ info, reporterAt }) {
 
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-// Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude, which carries the bypass flag by default; recorded args never add one) + the model and remote-control the old process had + --resume.
+// Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude, which carries the bypass flag by default; recorded args never add one) + the model the old process had + --resume.
+// Remote Control always comes back under the session name (owner, 2026-10-15: every session has it), unless the base command already sets it.
 export function resumeCommand({ base, args, name, sessionId }) {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) {
     throw Object.assign(new Error('invalid resume session id'), { status: 400 });
@@ -117,7 +118,7 @@ export function resumeCommand({ base, args, name, sessionId }) {
   const parts = [base];
   const model = /--model[= ]([A-Za-z0-9._\[\]-]+)/.exec(args || '');
   if (model && !/--model\b/.test(base)) parts.push('--model', model[1]);
-  if (/--remote-control\b/.test(args || '') && name) parts.push('--remote-control', shq(name), '-n', shq(name));
+  if (name && !/--remote-control\b/.test(base)) parts.push('--remote-control', shq(name), '-n', shq(name));
   parts.push('--resume', sessionId);
   return parts.join(' ');
 }

@@ -33,7 +33,10 @@ test('resumeCommand reuses the launch command, model and remote-control, then --
   const base = 'claude --dangerously-skip-permissions';
   assert.equal(resumeCommand({ base, args: 'claude --dangerously-skip-permissions --model opus --remote-control X -n X', name: 'TASK 1', sessionId: 'abc' }),
     "claude --dangerously-skip-permissions --model opus --remote-control 'TASK 1' -n 'TASK 1' --resume abc");
-  assert.equal(resumeCommand({ base, args: 'claude --dangerously-skip-permissions', name: 'n', sessionId: 'abc' }), 'claude --dangerously-skip-permissions --resume abc');
+  assert.equal(resumeCommand({ base, args: 'claude --dangerously-skip-permissions', name: 'n', sessionId: 'abc' }), "claude --dangerously-skip-permissions --remote-control 'n' -n 'n' --resume abc");
+  // a name-less record (old entries) and a base that already sets Remote Control add nothing
+  assert.equal(resumeCommand({ base, args: 'claude', sessionId: 'abc' }), 'claude --dangerously-skip-permissions --resume abc');
+  assert.equal(resumeCommand({ base: 'claude --remote-control', args: 'claude', name: 'n', sessionId: 'abc' }), 'claude --remote-control --resume abc');
 });
 
 test('leasesOfSession matches by session or Claude name, ignores others', () => {

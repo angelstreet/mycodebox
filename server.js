@@ -40,6 +40,7 @@
 //   GET  /api/leases/view       → the Leases view data: authority (legacy|central), leases (mode, holder, ttl, idle, heartbeat), tickets, deploys, shadow
 //   POST /api/leases/owner/release | /owner/mode  {id[, mode:'pin']} → owner force-release / downgrade (central only; legacy: 409); logged with the owner's identity
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
+//   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
 //   POST /api/handoffs          → {resource, from, to, due?} create a new hand-off row
 //   POST /api/handoffs/<id>/done → mark a hand-off done (body {by?})
@@ -81,6 +82,7 @@ import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
+import { createCiWatch } from './ci-watch.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -729,6 +731,26 @@ function onStopStatus(session, status, text = '') {
   const ev = idleHoldEvent({ session, status, rows });
   if (ev) managerEvents.record(ev).catch((err) => console.error('[lease] flag', err.message));
 }
+// CI watch (ci-watch.js): main red -> a fixer session (scripts/cbsession), nudged while idle, owner asked when stuck.
+// manager.json key `ciWatch`: "live" (default) | "dry" | "off". Needs <stateDir>/ci-watch.json, else it stays idle.
+const ciWatch = createCiWatch({
+  stateDir: STATE_DIR,
+  run: async (cmd, args) => (await exec(cmd, args, { maxBuffer: 32 * 1024 * 1024, timeout: 120000 })).stdout,
+  sessionState: async (name) => {
+    const exists = await sessionExists(name);
+    const live = exists ? await liveAgentOf(name) : null;
+    // Claude reports turns through the plugin; MiniMax only shows on screen, so the dashboard's own state counts too.
+    return { exists, alive: !!live, working: !!(live && (reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working')) };
+  },
+  startSession: async ({ name, cwd, provider, model, promptFile }) => {
+    if (await sessionExists(name)) await exec(TMUX, ['kill-session', '-t', `=${name}`]);   // only reached with no live agent in it
+    await exec(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'cbsession'), ['-n', name, '-d', cwd, '-p', provider, ...(model ? ['-m', model] : []), '-f', promptFile], { timeout: 180000 });
+  },
+  sendToSession: (name, text) => sendKeys(name, text),
+  record: (e) => managerEvents.record(e),
+  alert,
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).ciWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
@@ -1187,7 +1209,9 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
   try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
-  const cmd = AGENT_CMDS[agent];
+  // Claude always gets Remote Control under the session name (owner, 2026-10-15), unless an AGENT_CMD_CLAUDE override sets it.
+  const cmd = agent === 'claude' && AGENT_CMDS.claude && !/--remote-control\b/.test(AGENT_CMDS.claude)
+    ? `${AGENT_CMDS.claude} --remote-control '${real}' -n '${real}'` : AGENT_CMDS[agent];
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
@@ -1885,6 +1909,7 @@ async function handleHttp(req, res) {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
+  if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
   if (req.method === 'GET' && p === '/api/handoffs') {
     const q = url.searchParams;
@@ -2163,6 +2188,7 @@ server.listen(PORT, HOST, async () => {
   deployRunner.start();
   await handoffs.load();
   leaseWatch.start();
+  ciWatch.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:
