@@ -81,7 +81,7 @@ import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
-import { machinesOf, holdingsOf, deployWaitOf, agentSession } from './public/platforms.js';
+import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -672,7 +672,8 @@ const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USA
 const leaseAuthority = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')).leaseAuthority === 'central' ? 'central' : 'legacy'; } catch { return 'legacy'; } })();
 // Liveness for the service: true / false for a codebox tmux session, undefined (never releases anything) when unknown: a failed tmux listing,
 // no poll yet, or an agent that is not a codebox session. A re-created name is handled by the session tracker (sessionGone, immediate).
-const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, resolve: (s) => agentSession(s, Object.keys(latest?.status || {}), MACHINES) });
+const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, resolve: (s) => agentSession(s, Object.keys(latest?.status || {}), MACHINES),
+  maybe: (s) => agentSessionCandidates(s, Object.keys(latest?.status || {}), MACHINES).length > 0 });
 // The central lease service (round 10) is always constructed: lease clients in shadow mode report to it even while the
 // dashboard reads the legacy registry. `leaseAuthority` only decides which one the dashboard, the deploy runner and the
 // manager trust. Unknown liveness (undefined) never releases anything.

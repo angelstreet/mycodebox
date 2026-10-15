@@ -249,3 +249,21 @@ test('pins overridden by a deploy are listed in that deploy\'s log (item 5)', as
   assert.equal(await r.note('../etc', 'x'), false);
   assert.match(await r.logTail('abc123'), /^# pin overridden: env-a\/host:host-1 pinned by mac:x \(lease LP\)$/);
 });
+
+test('liveness: a holder seen alive whose name became ambiguous is unknown, not gone (final review R2)', async () => {
+  const { agentSessionCandidates, agentSession } = await import('../public/platforms.js');
+  let names = ['feature-abcdefgh-2'];
+  const resolve = (s) => agentSession(s, names, []);
+  const lv = createLiveness({ resolve, maybe: (s) => agentSessionCandidates(s, names, []).length > 0 });
+  assert.equal(lv.isAlive('codebox:feature-abcdefgh'), true);
+  names = ['feature-abcdefgh-2', 'feature-abcdefgh-3'];   // the prefix now matches two sessions
+  assert.equal(lv.isAlive('codebox:feature-abcdefgh'), undefined);
+  names = ['other-session'];
+  assert.equal(lv.isAlive('codebox:feature-abcdefgh'), false);   // nothing could be the holder any more
+});
+
+test('client: release <id> sends the holder agent; shadow mode skips deploy requests (final review R1, R4)', () => {
+  const src = readFileSync(new URL('../scripts/vpt-lease', import.meta.url), 'utf8');
+  assert.match(src, /agent = a\.agent or os\.environ\.get\("VPT_LEASE_AGENT"\)/);
+  assert.match(src, /SHADOW_SKIP_DEPLOY = \("request", "approve", "start", "finish", "cancel"\)/);
+});

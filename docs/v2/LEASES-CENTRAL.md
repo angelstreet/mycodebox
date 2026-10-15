@@ -63,7 +63,9 @@ server process:
   internal client name no token can match; imported leases answer to their agent string or an owner.
   The dashboard itself calls the service in-process. Behind Tailscale Serve every request arrives from loopback, so the
   address allowlist gates nothing in that setup: the bearer token is the real gate (Serve is private, never Funnel).
-  Owner actions from the dashboard record the real caller (`Tailscale-User-Login` when present, else `loopback`).
+  Owner actions from the dashboard record the real caller (`Tailscale-User-Login` on a request that came through Serve,
+  else `loopback`; "came through Serve" is the presence of the proxy's forwarding headers, the server's existing
+  convention, so a local caller could fake the login, but the record always names the token's client too).
 - **Client.** `vpt-lease` becomes a thin client (`scripts/vpt-lease`, Python 3 standard library only, so it runs on the
   registry host and the device hosts unchanged): the same subcommands, arguments, output lines and exit codes, plus the
   new options below. Scripts and skills keep working.
@@ -298,7 +300,7 @@ Where the build is more specific than the design above:
   the registry; the shadow report classes it `by-design`.
 - **Identity.** Releasing, renewing, narrowing or downgrading by id needs the holder's client (the token's name); the
   agent must match only when the caller sends one, so a legacy `release <id>` keeps working. Imported leases have no
-  client: any authenticated client may release them, as on the registry today. "Not the holder" is `E_AUTH` (403).
+  client: they answer to their holder's agent string (the client sends it with `release <id>`) or an owner. "Not the holder" is `E_AUTH` (403).
 - **Heartbeats.** Leases have no heartbeat requirement unless they declare `heartbeat_s`; `vpt-lease run` declares 300 s.
 - **Import.** Rows that conflict with a live exclusive lease are skipped and reported (the import exits 1); TTLs are
   capped like a claim's. `--ttl` above 8 h is accepted with a warning, up to 24 h (the registry had no maximum).

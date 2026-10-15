@@ -281,13 +281,15 @@ export function noteAllowed(st) {
 // Liveness for the service (sessions.isAlive / sessions.trackable). `resolve(session)` maps a holder string (`codebox:<x>`) to a live tmux session
 // with the tolerant matcher the rest of the dashboard uses, or null. true = resolves now; false ONLY for a holder this process has seen alive and
 // no longer sees; undefined (never releases anything) for everything else: a never-seen name, a cron script with no session, a failed listing.
-export function createLiveness({ resolve, ready = () => true } = {}) {
+// `maybe(session)`: some session could still be the holder (an ambiguous name): then the answer is "unknown", never "gone".
+export function createLiveness({ resolve, ready = () => true, maybe = () => false } = {}) {
   const seen = new Set();
   return {
     isAlive(session) {
       if (!ready()) return undefined;
       if (resolve(session)) { if (seen.size > 2000) seen.clear(); seen.add(session); return true; }
-      return seen.has(session) ? false : undefined;
+      if (!seen.has(session)) return undefined;
+      return maybe(session) ? undefined : false;
     },
     trackable: (session) => !!ready() && !!resolve(session),
   };

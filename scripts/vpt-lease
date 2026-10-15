@@ -527,6 +527,9 @@ def cmd_release(a):
     body = {"by": a.by or a.agent or "holder", "reason": a.reason}
     if a.lease_id:
         body["id"] = a.lease_id
+        agent = a.agent or os.environ.get("VPT_LEASE_AGENT")
+        if agent:
+            body["agent"] = agent   # an imported (legacy) lease answers to its holder's agent
     else:
         body["agent"] = a.agent
     r = api("POST", "/release", body)
@@ -1187,7 +1190,7 @@ def map_save(m):
     os.replace(tmp, MAP_FILE)
 
 
-SHADOW_SKIP_DEPLOY = ("approve", "start", "finish", "cancel")
+SHADOW_SKIP_DEPLOY = ("request", "approve", "start", "finish", "cancel")   # the shadow store cannot follow deploys it never starts: a queued shadow deploy would block shadow claims for hours
 
 
 def shadow_call(argv, legacy):
