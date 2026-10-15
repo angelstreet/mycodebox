@@ -1,4 +1,4 @@
-STATUS: DELIVERING dc54698 (round 10)
+STATUS: DELIVERED dc54698 https://github.com/angelstreet/mycodebox/pull/13 (round 10)
 
 # V2 progress
 
