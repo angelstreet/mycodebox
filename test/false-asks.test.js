@@ -84,13 +84,13 @@ test('5. a long closing paragraph is cut at a sentence boundary, never mid-word'
 });
 
 test('real asks still escalate: numbered owner decision menu', () => {
-  const s = classify('Two ways to do this:\n1. Keep the old table and add a column\n2. Replace the table with a view\nWhich do you want?', 'waiting');
+  const s = classify('Two ways to do this:\n1. Drop the old table and add a column\n2. Replace the table with a view\nWhich do you want?', 'waiting');
   assert.equal(s.case, 'owner_decision');
   assert.equal(wouldSend(s).send, null);
 });
 
 test('real asks still escalate: "Should I ...? 1. ... 2. ..."', () => {
-  const s = classify('Should I split the file?\n1. Yes, split it now\n2. No, leave it as one file', 'waiting');
+  const s = classify('Should I split the file?\n1. No, leave it as one file\n2. Yes, split it now', 'waiting');
   assert.equal(s.case, 'owner_decision');
   assert.equal(wouldSend(s).send, null);
 });
@@ -104,11 +104,12 @@ test('real asks still escalate: a real deploy wait', () => {
 });
 
 test('a finished turn ending on a question + numbered options is a question, options parsed', () => {
-  const s = classify('Should I split the file?\n1. Yes, split it now\n2. No, leave it as one file');
+  const s = classify('Should I split the file?\n1. No, leave it as one file\n2. Yes, split it now');
   assert.equal(s.case, 'owner_decision');
   assert.equal(s.question, 'Should I split the file?');
   assert.equal(wouldSend(s).send, null);
   assert.deepEqual(s.options.map((o) => o.n), [1, 2]);
+  assert.equal(classify('Should I split the file?\n1. Yes, split it now\n2. No, leave it as one file').source, 'unmarked-first');   // round 9: a safe first option is taken
 });
 
 test('"Do you want me to" + options, one marked Recommended -> menu_recommended', () => {
@@ -122,7 +123,7 @@ test('a plain numbered status list with no question stays done', () => {
 });
 
 test('options before the question still ask', () => {
-  const s = classify('1. Keep the table\n2. Replace it\nWhich do you want?');
+  const s = classify('1. Skip the table\n2. Replace it\nWhich do you want?');
   assert.equal(s.case, 'owner_decision');
 });
 

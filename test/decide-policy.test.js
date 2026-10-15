@@ -286,3 +286,45 @@ test('R8-r3-5: push <ref> to <other remote> escalates', async () => {
     assert.equal(ev.verdict, 'escalate', t); assert.match(ev.reasons[0], /push to another remote/, t);
   }
 });
+
+// ---- round 9 item 4: lab vs customer database -----------------------------------------------------------------------
+const mig = (sql, extra = {}) => makeRepo({ files: { 'supabase/migrations/002_add.sql': sql, 'src.js': 'export const a = 1;\n', ...extra } });
+const migArgs = (repo, o = {}) => dargs(repo, { ref: 'feat', deploys: SNAP({ deployed: { 'env-a': { server: { ref: 'main', commit: git(repo, 'rev-parse', 'main').trim() } } } }), ...o });
+const ADD = 'CREATE TABLE notes (id int primary key, body text, owner_id int REFERENCES users(id) ON DELETE CASCADE);\nCREATE INDEX notes_owner ON notes (owner_id);\nALTER TABLE users ADD COLUMN IF NOT EXISTS nickname text;\nCREATE OR REPLACE VIEW v_notes AS SELECT * FROM notes;\nINSERT INTO settings (k, v) VALUES (\'a\', \'b\') ON CONFLICT DO NOTHING; -- seed\n';
+
+test('analyzeMigrationSql: additive statements only', async () => {
+  const { analyzeMigrationSql } = await import('../decide-policy.js');
+  assert.deepEqual(analyzeMigrationSql(ADD), { additive: true, why: null });
+  for (const bad of ['DROP TABLE t;', 'delete from t;', 'TRUNCATE t;', 'ALTER TABLE t DROP COLUMN c;', 'ALTER TABLE t RENAME TO u;', 'ALTER TABLE t ALTER COLUMN c TYPE bigint;', 'ALTER TABLE t ADD COLUMN c int, DROP COLUMN d;',
+    'UPDATE t SET a = 1;', 'INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET a = 2;', 'CREATE TABLE t (a int); DROP INDEX i;', 'select 1;', 'do $$ begin end $$;', '', '-- only a comment']) {
+    assert.equal(analyzeMigrationSql(bad).additive, false, bad);
+  }
+  assert.equal(analyzeMigrationSql("INSERT INTO t VALUES ('please DROP TABLE x;');").additive, true);   // inside a literal
+});
+
+test('deploy: an additive migration on a lab env is a deploy step and the reply names the files; customer env, destructive and edited migrations escalate', async () => {
+  const repo = mig(ADD);
+  const lab = await evaluateDeploy(migArgs(repo, { config: { ...dcfg, labEnvs: ['env-a'] } }));
+  assert.equal(lab.verdict, 'deploy', JSON.stringify(lab.reasons));
+  assert.deepEqual(lab.facts.migrations, ['supabase/migrations/002_add.sql']);
+  assert.match(lab.rationale, /additive migration on the lab database env-a applied by the deploy queue: supabase\/migrations\/002_add\.sql/);
+  const proc = await evaluateDeploy(migArgs(repo, { config: { ...dcfg, labEnvs: ['env-a'], migrationProcedure: { proj: 'scripts/migrate-lab.sh' } } }));
+  assert.match(proc.rationale, /applied by scripts\/migrate-lab\.sh/);
+  // not a lab env (default labEnvs is empty): customer databases stay with the owner
+  for (const config of [dcfg, { ...dcfg, labEnvs: ['env-b'] }, { ...dcfg, labEnvs: [] }]) {
+    const cust = await evaluateDeploy(migArgs(repo, { config }));
+    assert.equal(cust.verdict, 'escalate'); assert.match(cust.reasons[0], /^contains a database migration: supabase\/migrations\/002_add\.sql/);
+  }
+  const bad = await evaluateDeploy(migArgs(mig('CREATE TABLE t (a int);\nDROP TABLE old;\n'), { config: { ...dcfg, labEnvs: ['env-a'] } }));
+  assert.equal(bad.verdict, 'escalate'); assert.match(bad.reasons[0], /DROP in "DROP TABLE old"/);
+  // an edit of a migration that is already in the deployed range base, a non-sql migration and a deletion are not additive
+  const base = makeRepo({ base: { 'src.js': 'x\n', 'VERSION.txt': '1\n', 'db/migrations/001.sql': 'CREATE TABLE a (i int);\n' }, files: { 'db/migrations/001.sql': 'CREATE TABLE a (i int);\nCREATE TABLE b (i int);\n' } });
+  const edit = await evaluateDeploy(migArgs(base, { config: { ...dcfg, labEnvs: ['env-a'] } }));
+  assert.equal(edit.verdict, 'escalate'); assert.match(edit.reasons[0], /edits a migration that already exists/);
+  const py = await evaluateDeploy(migArgs(makeRepo({ files: { 'app/migrations/0002_add.py': 'x = 1\n' } }), { config: { ...dcfg, labEnvs: ['env-a'] } }));
+  assert.equal(py.verdict, 'escalate'); assert.match(py.reasons[0], /not a \.sql file/);
+  const del = makeRepo({ base: { 'src.js': 'x\n', 'VERSION.txt': '1\n', 'db/migrations/001.sql': 'CREATE TABLE a (i int);\n' }, files: { 'src.js': 'y\n' } });
+  git(del, 'rm', '-q', 'db/migrations/001.sql'); git(del, 'commit', '-q', '-m', 'drop migration');
+  const gone = await evaluateDeploy(migArgs(del, { config: { ...dcfg, labEnvs: ['env-a'] } }));
+  assert.equal(gone.verdict, 'escalate'); assert.match(gone.reasons[0], /deleted or unreadable/);
+});

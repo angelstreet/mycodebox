@@ -335,16 +335,16 @@ export function journalRecord(ev, { id, session = null, at = new Date() } = {}) 
 export function composeReply({ info = [], merge = null, push = null, deploy = null, remaining = false } = {}) {
   const lines = [], keptInfo = [];
   const label = (p) => String(p || '').replace(/^\s*(?:\(?[a-z0-9]\)|\d+[.)])\s*/i, '').replace(/[\s,;:.?]+$/, '').replace(/^(?:and|plus)\s+/i, '').replace(/^./, (c) => c.toUpperCase()).slice(0, 80);
-  const present = { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy };
+  const present = { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy, migrationsOk: !!deploy?.migrations?.length };   // additive lab migrations read by the deploy evaluation: the noun "migration" is covered
   info.forEach((i, n) => {
     const line = `${i.label || label(i.part)}: ${i.answer}${i.source ? ` (from ${i.source})` : ''}`;
-    if (hardMatch(line, present)) return;   // a landing is exempt only in a reply that carries its verdict
+    if (hardMatch(line, { ...present, migrationsOk: false })) return;   // a landing is exempt only in a reply that carries its verdict
     lines.push(line); keptInfo.push(n);
   });
   const used = { merge: false, push: false, deploy: false };
   // a topic line: the full one, else the bare one; checked with only the topics used so far (plus itself) exempt
   const add = (kind, full, bare) => {
-    const ok = (l) => !hardMatch(l, { mergePresent: used.merge || kind === 'merge', pushPresent: used.push || kind === 'push', deployPresent: used.deploy || kind === 'deploy' });
+    const ok = (l) => !hardMatch(l, { mergePresent: used.merge || kind === 'merge', pushPresent: used.push || kind === 'push', deployPresent: used.deploy || kind === 'deploy', migrationsOk: present.migrationsOk });
     const line = ok(full) ? full : ok(bare) ? bare : null;
     if (line) { lines.push(line); used[kind] = true; }
   };
@@ -364,6 +364,6 @@ export function composeReply({ info = [], merge = null, push = null, deploy = nu
   if (!lines.length) return null;
   if (remaining) lines.push('The rest of your question went to the owner: wait for their answer on it.');
   const text = lines.join(' ');
-  if (hardMatch(text, { mergePresent: used.merge, pushPresent: used.push, deployPresent: used.deploy })) return null;
+  if (hardMatch(text, { mergePresent: used.merge, pushPresent: used.push, deployPresent: used.deploy, migrationsOk: present.migrationsOk && used.deploy })) return null;
   return { text, info: keptInfo, merge: used.merge, push: used.push, deploy: used.deploy };
 }

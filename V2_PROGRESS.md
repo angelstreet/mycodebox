@@ -1,4 +1,4 @@
-STATUS: DELIVERED d0323ea https://github.com/angelstreet/mycodebox/pull/13 (round 10)
+STATUS: DELIVERED 966c59c (round 9)
 
 # V2 progress
 
@@ -7,9 +7,25 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 10 (one central lease service, `.v2/round10.md`) delivered on `v2/r10-leases`: owner review of the PR, then the
-owner-side cut-over (design §10). Next: round 9 without its item 6 (folded into round 10). SHAs quoted before round 2 in
-this file are pre-rewrite SHAs (history rewritten 2026-10-11).
+Round 9 (harness review actions, `.v2/round9.md`) delivered on `v2/r9-harness`. Round 10 is merged (PR #13).
+
+## Round 9
+
+Base: `origin/main` after round 10 (3cb6ea1, up to 304403f). Spec: `.v2/round9.md`; item 6 was done in round 10.
+Owner decision: OWNER_DECISIONS §17.
+
+| Item | Scope | Owner (model) | State |
+|---|---|---|---|
+| 1 | Mac Stop hook + token intake + long-poll answer channel (`remote-stops.js`, `scripts/mac-stop-hook.sh`, `docs/MAC-HOOK.md`) | Sonnet / Opus + Fable | DONE |
+| 2, 3 | Approved-action floor (allow-list narrative and soft-verb relax), unmarked-first menus, product-visible picks first | Sonnet / Opus + Fable | DONE (3 review rounds) |
+| 4 | Lab vs customer DB: additive SQL in `labEnvs` (empty by default) as a deploy step | Sonnet / Fable | DONE |
+| 5 | Self-checks (version, progress, file exists), one open ask per session | Sonnet / Opus | DONE |
+| 7 | Mockup-first | Sonnet / Opus | DONE |
+| 8 | Hardware ready window | Sonnet / Opus | DONE |
+| 9 | Owner round-trip ledger | Sonnet / Opus | DONE |
+| 10 | MiniMax M3 fallback for AI triage (never for merge/push/deploy; needs mcode with lightweight mode) | Sonnet / Opus + Fable | DONE |
+| 11 | Wake sessions when their own job ends | Sonnet / Opus | DONE |
+| Gates | 2309/2310 Node 23.6 on 966c59c (the failing V2 bench driver test is untouched by this round and passes alone, 8/8); leak scan clean | coordinator | DONE |
 
 ## Round 10
 

@@ -91,8 +91,9 @@ export function createPush({ stateDir, fetchImpl = fetch, log = console } = {}) 
   }
 
   // voiceId / actions (round 8): a needs-you stop the owner can answer by voice or from the notification buttons (voice.js); only set when present.
-  function record({ title, body = '', url = '/', tag = '', priority = 'default', voiceId, actions }) {
-    const item = { id: nextId++, at: Date.now(), title, body: String(body).slice(0, 500), url, tag, priority, ...(voiceId ? { voiceId: String(voiceId) } : {}), ...(Array.isArray(actions) && actions.length ? { actions } : {}) };
+  function record({ title, body = '', url = '/', tag = '', priority = 'default', voiceId, actions, kind, mockupId, deadlineAt }) {
+    const item = { id: nextId++, at: Date.now(), title, body: String(body).slice(0, 500), url, tag, priority, ...(voiceId ? { voiceId: String(voiceId) } : {}), ...(Array.isArray(actions) && actions.length ? { actions } : {}),
+      ...(kind === 'mockup' ? { kind, ...(mockupId ? { mockupId: String(mockupId) } : {}), ...(Number.isFinite(deadlineAt) ? { deadlineAt } : {}) } : {}) };   // a mockup for the owner to object to (mockups.js)
     feed.push(item);
     if (feed.length > FEED_MAX) feed = feed.slice(-FEED_MAX);
     saveJson(feedFile, feed);

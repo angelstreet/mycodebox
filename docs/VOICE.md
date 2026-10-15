@@ -48,6 +48,8 @@ Goal: hear what needs you, answer by voice, keep the fleet moving without lookin
 (browsers allow audio and the mic only after a tap), mount the phone, leave the screen on, use the headset's play/pause (start/stop), next
 (skip) and previous (repeat). Say "what happened" for the digest.
 
+**At a device (round 9):** say "ready for 30 minutes on the pixel" (or just "ready for 30 minutes" for the session being read) while a stop is open. Until the window ends, sessions that ask you to pair, press, plug or power-cycle that device are told to retry it themselves (stop after 2 failures); the third ask comes to you. `POST /api/ready` does the same by tap.
+
 **At the gym:** same, with the phone in your pocket and a headset. If you lock the screen the loop pauses (see limits); the notification buttons
 still work: "Do recommended", "Wait", or "Speak it" when you pick the phone up.
 

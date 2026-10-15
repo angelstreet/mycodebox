@@ -12,6 +12,7 @@
 //   stopped_short     the agent announced its next step and stopped, no question, no blocker
 //   waiting_deploy    waiting for leases / a deploy / the owner's go-ahead to deploy (never auto-answered)
 //   owner_action      the agent asks the owner for a small manual thing (reload, plug, press)
+//   own_job_wait      STATUS blocked|waiting on a job of the session's own (pid, log, run id): woken when it ends, never a needs-you
 // Any finished turn also carries `no_status` (closing text gives no done / tested / left / next / blocked
 // information); that is a flag, not a case, with an `ask_status` would-answer candidate.
 //
@@ -19,6 +20,8 @@
 // menu, or "Yes, go with your recommendation." after a finished turn; everything else -> owner.
 // A forbidden topic (deploy, push to main, delete, .env, money, customer, credential, ...) or an
 // unsent draft in the input box always means owner, whatever the rules or Jev said.
+
+import { waitsOnOwnJob, jobRefs, hasRef } from './job-refs.js';
 
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
@@ -191,6 +194,7 @@ const MERGE_MAIN = String.raw`\bmerge\b[^.\n]{0,30}\bmain\b`;
 const REBASE_MAIN = String.raw`\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`;
 const GIT_PUSH = String.raw`\bgit push\b`;
 const HARD_GIT = String.raw`force[- ]?push|reset --hard|\bhard[- ]?reset\b`;
+const MIGRATE = String.raw`\bmigrat(?:e|ion)`;
 const FORBIDDEN_PARTS = [
   // deploys and service control
   String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
@@ -208,7 +212,8 @@ const FORBIDDEN_PARTS = [
   HARD_GIT,
   // destructive data operations
   String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
-  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b|\bmigrat(?:e|ion)`,
+  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
+  MIGRATE,
   // credentials and secrets
   String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`,
   // money and customers
@@ -244,16 +249,18 @@ export const DEPLOY_RE = new RegExp([DEPLOY_WORDS, DEPLOY_SHIP].join('|'), 'i');
 export const PUSH_RE = /\bpush(?:ing)?\b|\bpushed\b(?:[^.\n]{0,30}\bmain\b)?/i;
 const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON), HARD_GIT, PUSH_TAGS].join('|'), 'i');
 const colonHit = (text) => { for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_COLON_RE); if (k) return k[0]; } return null; };
-const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false } = {}) => {
+const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false, migrationsOk = false } = {}) => {
   const drop = new Set([MERGE_MAIN]);
+  if (migrationsOk) drop.add(MIGRATE);   // the deploy evaluation read the migration files (additive, lab env): the noun is covered, "migrate" the verb is not (below)
   if (mergePresent || pushPresent) { drop.add(PUSH_MAIN); drop.add(GIT_PUSH); }
   if (deployPresent) { drop.add(DEPLOY_WORDS); drop.add(DEPLOY_SHIP); drop.add(RESTART_ANY); }
   let parts = [...FORBIDDEN_PARTS.filter((p) => !drop.has(p)), ...HARD_EXTRA.filter((p) => p !== PUSH_COLON)];
   if (deployPresent) parts.push(RESTART_HARD);
+  if (migrationsOk) parts.push(String.raw`\bmigrat(?:e|es|ed|ing)\b`);
   return parts;
 };
 const HARD_RES = new Map();
-const hardRe = (o) => { const k = `${+!!o.mergePresent}${+!!o.pushPresent}${+!!o.deployPresent}`; if (!HARD_RES.has(k)) HARD_RES.set(k, new RegExp(hardParts(o).join('|'), 'i')); return HARD_RES.get(k); };
+const hardRe = (o) => { const k = `${+!!o.mergePresent}${+!!o.pushPresent}${+!!o.deployPresent}${+!!o.migrationsOk}`; if (!HARD_RES.has(k)) HARD_RES.set(k, new RegExp(hardParts(o).join('|'), 'i')); return HARD_RES.get(k); };
 // `git push <remote> <refspec>` where the refspec is not main/master: not the landing of a merge.
 const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+(?!-)\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
 const PUSH_OTHER_RE = new RegExp(PUSH_OTHER_REF, 'i');   // read on the text and its spelling variants, not on window joins (a joined word would look like another ref)
@@ -358,7 +365,7 @@ export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenE
 // Like a deploy or a push, a merge counts as a topic only when the text asks to perform it ("Should I merge ..."), not for a noun ("the merge policy page").
 export const mergeMatch = (text) => requested(text, MERGE_RE);
 // The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any
-// plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent } (a bare boolean = mergePresent).
+// plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent, migrationsOk } (a bare boolean = mergePresent); migrationsOk: the noun "migration" is covered by a deploy evaluation of additive lab migrations.
 export function hardMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
   const hit = matchWith(hardRe(o), text, forbiddenExtra) || colonHit(text);
@@ -419,6 +426,107 @@ export function topicSplit(text) {
   return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };
 }
 
+// ---- the approved action (round 9, item 2, redesigned after review) ---------------------------------------------------
+// The floor text of a yes / continue / recommended-option answer is the option (or the "Shall I X?" question) + the commands it runs + the question
+// line + the WHOLE stem around it (the other options of the menu and their descriptions are left out, as in round 8). How specific the option is never
+// removes the stem. FORBIDDEN_RE is unchanged. Only two things are dropped or relaxed:
+//   (a) a narrative sentence: the destructive verb in it is itself past tense ("removed", "overwrote", "was deleted"), no present / imperative / future /
+//       conditional wording, no command, no approval phrase ("as agreed", "approved ... ago"), no data object, a time marker, a plain spelling;
+//   (b) the soft words remove / overwrite / replace / update and the noun "migration" when their clause's object is an ordinary file or doc
+//       (SKILL.md, a README, a template, a config file) and names no data (database, table, backups, production, customer, .env, secrets ...).
+// The hard verbs (delete, drop, wipe, truncate, purge, destroy, erase, nuke, prune, rm) always block, except as a past-tense narrative under (a).
+const OPTION_LINE = /^\s*(?:[❯›>]\s*)?\d+[.)]\s+/;
+const GENERIC_FILLER = /\b(?:yes|yep|yeah|ok|okay|sure|proceed|continue|go|ahead|do|it|that|this|the|plan|planned|as|with|please|recommend(?:ed|ation)?|approve|accept|confirm|apply|run|start|now|all|and|then|sounds?|good|great|agreed|option|my|your|lets?|let's|take|choose|pick|take)\b/gi;
+const isGenericOption = (t) => {
+  const bare = String(t || '').replace(/\(\s*recommended\s*\)/ig, ' ');
+  if (!bare.replace(GENERIC_FILLER, ' ').split(/[\W_\d]+/).some((w) => w.length > 2)) return true;   // a bare label ("A", "Option 2") is generic too
+  return bare.trim().split(/\s+/).length <= 3 && /\b(?:it|that|this|them|these|those)\b/i.test(bare);   // "Send it", "Apply that": a pronoun for the question's action
+};
+const COMMAND_RES = [/`([^`\n]{2,})`/g, /^\s*\$\s+(\S.*)$/gm];
+export function commandsIn(text) {
+  const out = [];
+  for (const re of COMMAND_RES) { re.lastIndex = 0; let m; while ((m = re.exec(String(text || '')))) out.push(m[1].trim()); }
+  return [...new Set(out)];
+}
+const DESTRUCTIVE_PART = /delet\(\?:e|migrat\(\?:e/;
+const DESTRUCTIVE_WORDS = new RegExp(FORBIDDEN_PARTS.find((p) => /delet\(\?:e/.test(p)), 'gi');
+const NONDESTRUCTIVE_RE = new RegExp([...FORBIDDEN_PARTS.filter((p) => !DESTRUCTIVE_PART.test(p)), ...HARD_EXTRA].join('|'), 'i');
+const HARD_PAST = /^(?:remov|delet|dropp|wip|truncat|purg|destroy|eras|nuk|prun)ed$|^overwr(?:ote|itten)$/i;
+// ALLOW-LIST templates (round 9 third review round): anything that does not match one exactly stays in the floor text.
+// (a) narrative: ONE clause, "<subject> <past destructive verb> <object, at most 6 words> <time marker>", active, passive, or with the time marker first.
+const PAST_VERB = String.raw`(?:removed|overwrote|overwritten|deleted|dropped|wiped|truncated|purged|destroyed|erased|nuked|pruned)`;
+const TIME_MARK = String.raw`(?:earlier|yesterday|already|before|last \w+|\d+ \w+ ago)`;
+const OBJ_WORDS = String.raw`[\w][\w./-]*(?: [\w][\w./-]*){0,5}`;
+const NARR_ACTIVE = new RegExp(String.raw`^(?:(?:i|we|it|they|the \w+(?: \w+)?) )?(?:(?:already|have|had) )?(${PAST_VERB}) (${OBJ_WORDS}) ${TIME_MARK}\.?$`, 'i');
+const NARR_FIRST = new RegExp(String.raw`^(?:earlier|yesterday|previously) (?:(?:i|we|it|they|the \w+(?: \w+)?) )?(?:(?:already|have|had) )?(${PAST_VERB}) (${OBJ_WORDS})\.?$`, 'i');
+const NARR_PASSIVE = new RegExp(String.raw`^(?:the )?(${OBJ_WORDS}) (?:was|were|had been|has been|have been) (?:already )?(${PAST_VERB}) ${TIME_MARK}\.?$`, 'i');
+const NARR_BANNED = /[,;:—–]|\b(?:and|then|also|plus|same|as well|too|for the rest|rest of|everything|all)\b/i;
+const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|data|volumes?|buckets?|backups?|prod(?:uction)?|customers?|user data|rows?|records?|uploads?|secrets?|keys?|tokens?|passwords?|credentials?|accounts?|users?|sessions?|recordings?)\b|\.env\b/i;
+const narrativeShape = (t) => {
+  const m = NARR_ACTIVE.exec(t) || NARR_FIRST.exec(t) || NARR_PASSIVE.exec(t);
+  if (!m) return false;
+  const obj = NARR_PASSIVE.exec(t) && !NARR_ACTIVE.exec(t) && !NARR_FIRST.exec(t) ? m[1] : m[2];
+  // the object is relative to the session repo (no absolute, home, parent or dot-directory path) and names no data
+  if (OBJ_DATA.test(obj) || obj.split(' ').some((w) => /^(?:\/|~|\.\.|\.[\w-])/.test(w) || w.includes('*'))) return false;
+  return true;
+};
+// every spelling (textVariants, windowJoins) may hold only past-tense destructive words and nothing else forbidden
+const pastOnly = (v) => {
+  if (matchWith(NONDESTRUCTIVE_RE, v, forbiddenExtra)) return false;
+  DESTRUCTIVE_WORDS.lastIndex = 0;
+  for (const m of v.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0])) return false;
+  return !/\bmigrat/i.test(v);
+};
+export function isPastNarrative(sentence) {
+  const t = String(sentence || '').trim().replace(/\s+/g, ' ');
+  if (!t || /\?["')\]]*$/.test(t) || NARR_BANNED.test(t) || commandsIn(t).length || /\b(?:rm|mv|dd)\b/i.test(t)) return false;
+  if (!narrativeShape(t)) return false;
+  for (const v of [t, ...textVariants(t), ...windowJoins(t)]) if (!pastOnly(v)) return false;
+  return true;
+}
+const sentencesOf = (text) => String(text || '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+export const withoutNarrative = (text) => String(text || '').split('\n').map((l) => (OPTION_LINE.test(l) ? l : sentencesOf(l).filter((x) => !isPastNarrative(x)).join(' '))).filter((l) => l.trim()).join('\n');
+// (b) soft verbs: a clause is relaxed only when it is exactly "<remove|overwrite|replace|update> (the|its) (older|stale|old)* <doc>" where <doc> is ONE path or name
+// ending in .md / .txt / .rst, or README / SKILL / CHANGELOG / LICENSE / NOTICE, relative, no glob, not under a dot-directory. A clause joined by "and" is relaxed only
+// when every part is such a clause. Everything else (.csv .json .yaml .sh .py .js .ts, a second object, another path) keeps its verb in the floor text.
+const DOC_NAME = String.raw`(?:(?:[\w-]+/)*[\w][\w.-]*\.(?:md|txt|rst)|(?:(?:[\w-]+/)*)(?:README|SKILL|CHANGELOG|LICENSE|NOTICE))`;
+const SOFT_CLAUSE = new RegExp(String.raw`^(?:(?:it|this|which|(?:the |this )?(?:new |latest |updated )*${DOC_NAME}) )?(?:remove|removes|overwrite|overwrites|replace|replaces|update|updates) (?:(?:the|its|their) )?(?:(?:older|stale|old|previous|existing) )*(${DOC_NAME})(?: in the (?:target|destination|repo|checkout|copy)| with the (?:repo|template|new|latest) (?:copy|version))?\.?$`, 'i');
+const SOFT_VERB = /\b(?:remove|removes|overwrite|overwrites|replace|replaces|update|updates)\b/i;
+const docOk = (p) => !/(^|\/)\.[\w-]*/.test(p) && !p.includes('*') && !p.startsWith('/') && !p.startsWith('~') && !p.includes('..');
+const softOk = (part) => { const m = SOFT_CLAUSE.exec(part.trim().replace(/\s+/g, ' ')); return !!m && docOk(m[1]); };
+export function relaxSoft(text) {
+  return String(text || '').split('\n').map((line) => line.split(/(?<=[.;!?])\s+|;/).map((clause) => {
+    const parts = clause.trim().replace(/[?.]+$/, '').split(/ and /i);
+    if (!SOFT_VERB.test(clause) || !parts.every((p) => softOk(p))) return clause;
+    return clause.replace(/\b(?:remove|removes|overwrite|overwrites|replace|replaces|update|updates)\b/gi, 'change');
+  }).join(' ')).join('\n');
+}
+const floorText = (t) => relaxSoft(withoutNarrative(t));
+// The menu's option run that holds the kept option, minus the kept option itself, is left out (round 8's stemOf); numbered lines elsewhere (a plan's steps) stay.
+function menuStem(lines, keepText) {
+  const key = String(keepText || '').slice(0, 40);
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (key && OPTION_LINE.test(lines[i]) && lines[i].includes(key)) { at = i; break; }
+  if (at < 0) return lines.slice();
+  let from = at, to = at;
+  while (from > 0 && OPTION_LINE.test(lines[from - 1])) from--;
+  while (to < lines.length - 1 && OPTION_LINE.test(lines[to + 1])) to++;
+  return [...lines.slice(0, from), lines[at], ...lines.slice(to + 1)];
+}
+
+// stall: { options?, question?, fullText? | closing? | excerpt?, approvalText? } -> { text, commands, source }
+//   source: 'option' | 'option+question' (a generic option inherits the question) | 'question' (a yes / continue answer)
+export function approvedAction(stall) {
+  const all = String(stall.fullText || stall.closing || stall.excerpt || '').split('\n');
+  const rec = stall.options?.find((o) => o.recommended) || stall.rec || null;
+  if (!rec) {
+    const body = floorText(String(stall.approvalText ?? stall.question ?? ''));
+    return { text: body, commands: commandsIn(body), source: 'question' };
+  }
+  const text = floorText([...menuStem(all, rec.text), rec.text, stall.question || ''].join('\n'));
+  return { text, commands: commandsIn(text), source: isGenericOption(rec.text) ? 'option+question' : 'option' };
+}
+
 export function menuOptions(lines) {
   const opts = [];
   for (const l of lines) {
@@ -426,6 +534,19 @@ export function menuOptions(lines) {
     if (m) opts.push({ n: Number(m[1]), text: m[2].trim() });
   }
   return opts;
+}
+
+// Unmarked menus (round 9, item 3): no "(recommended)" tag, but option 1 is a safe, reversible default. Only a clean 1..N list counts, and option 1
+// must not be a way out ("skip", "cancel", "do nothing") nor carry a hard topic or a merge / push / deploy.
+const OUT_OPTION_RE = /^\W*(?:skip|cancel|abort|stop|quit|exit|do nothing|nothing|leave (?:it|them|this)|no\b|none\b|not now|later|wait\b|don'?t|dismiss|decline|keep (?:it )?as is|ignore|something else|other\b|type something|chat about)/i;
+export function unmarkedFirst(opts, lines = []) {
+  if (!opts || opts.length < 2 || opts.some((o, i) => o.n !== i + 1) || opts.some((o) => RECOMMENDED_RE.test(o.text))) return null;
+  const first = opts[0];
+  if (OUT_OPTION_RE.test(first.text)) return null;
+  // the stem around the menu (every line but the other options) and option 1 must hold no forbidden word at all, once (b) is applied: no narrative is dropped here
+  const text = relaxSoft([...menuStem(lines, first.text), first.text].join('\n'));
+  if (forbiddenMatch(text) || topicSplit(text).hard || SOFT_VERB.test(text)) return null;   // a soft verb that the template did not relax is a change we cannot read: not a default pick
+  return first;
 }
 
 // The agent's own last-line verdict (AGENTS.md "End every turn with a STATUS line"):
@@ -480,9 +601,10 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     const rec = opts.find((o) => RECOMMENDED_RE.test(o.text));
     if (PERMISSION_RE.test(block.join('\n'))) out.case = 'permission';
     else if (rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2)) { out.case = 'menu_recommended'; out.answer = { key: String(rec.n) }; }
+    else if (!rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2) && unmarkedFirst(opts, block)) { out.case = 'menu_recommended'; out.answer = { key: String(opts[0].n) }; out.source = 'unmarked-first'; }
     else out.case = 'owner_decision';
     out.forbiddenText = block.join('\n');
-    if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text), forbidden: forbiddenMatch(o.text) }));
+    if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text) || (out.source === 'unmarked-first' && o.n === opts[0].n), ...(out.source === 'unmarked-first' && o.n === opts[0].n ? { unmarked: true } : {}), forbidden: forbiddenMatch(o.text) }));
     return finish(out);
   }
 
@@ -497,7 +619,10 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     out.no_status = false;
     out.forbiddenText = close.slice(-6).join('\n');
     if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
-    else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; }
+    // a job of the session's own, named by a concrete pid / log / run id: the manager wakes it when the job ends (own-jobs.js); never a needs-you.
+    // Without a concrete reference the old case stands ("waiting for the CI run" may be someone else's); `jobNoun` lets the manager upgrade it when the agent has a live child process.
+    else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind) && hasRef(jobRefs(st.text))) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text); out.answer = null; out.autoCase = undefined; }
+    else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; if (waitsOnOwnJob(st.text, st.kind)) out.jobNoun = true; }
     else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; }
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
     else out.case = 'done';
@@ -542,6 +667,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     out.action = actionOf(act, tailText);
   } else if (asks) {
     if (opts.length >= 2 && rec) { out.case = 'menu_recommended'; out.answer = { text: 'Yes, go with your recommendation.' }; }
+    else if (opts.length >= 2 && unmarkedFirst(opts, close) && !wait) { out.case = 'menu_recommended'; out.answer = { text: `Go with option ${opts[0].n}.` }; out.source = 'unmarked-first'; }
     else if (opts.length >= 2 || DECISION_Q.test(last)) out.case = 'owner_decision';
     else if (CONTINUE_Q.test(last)) { out.case = 'continue'; out.answer = { text: 'Yes, continue.' }; }
     else { out.case = 'owner_decision'; out.source = 'ambiguous'; }
@@ -553,7 +679,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   } else out.case = 'done';
   // no_status: a closing text that never says what is done / tested / left / next / blocked. A question,
   // a deploy wait and an owner action each state their own next step, so they are not flagged.
-  if (asks && opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text), forbidden: forbiddenMatch(o.text) }));
+  if (asks && opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text) || (out.source === 'unmarked-first' && o.n === opts[0].n), ...(out.source === 'unmarked-first' && o.n === opts[0].n ? { unmarked: true } : {}), forbidden: forbiddenMatch(o.text) }));
   if (fyi) out.fyi = fyi;
   out.no_status = !asks && !fyi && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
   if (out.no_status && out.case === 'done') { out.answer = { text: ASK_STATUS_TEXT }; out.autoCase = 'ask_status'; }
@@ -583,9 +709,12 @@ function actionOf(m, text) {
 }
 
 function finish(out) {
-  const text = out.forbiddenText ?? out.question ?? '';
+  let text = out.forbiddenText ?? out.question ?? '';
+  // A yes / continue answer approves the question and its plan, not finished-work narrative around it (round 9, item 2).
+  if (out.case === 'continue' && out.forbiddenText != null) { const a = approvedAction({ case: out.case, approvalText: out.forbiddenText }); text = [a.text, ...a.commands].join('\n'); }
   out.forbidden = forbiddenMatch(text);
   out.topics = topicSplit(text);
+  Object.defineProperty(out, 'topicsText', { value: text, enumerable: false, writable: true });   // what the topics were read over (the manager re-reads it when a decided deploy covers a topic)
   delete out.forbiddenText;
   return out;
 }
@@ -601,7 +730,7 @@ export function applyJev(stall, choice) {
 
 // The final gate: what would actually be typed. Forbidden topics, drafts and owner cases never are.
 export function wouldSend(stall) {
-  if (!stall.answer) return { send: null, why: { done: 'finished', waiting_deploy: 'deploy waiting', owner_action: 'owner action', background_wait: 'background work still running' }[stall.case] || 'owner' };
+  if (!stall.answer) return { send: null, why: { done: 'finished', waiting_deploy: 'deploy waiting', owner_action: 'owner action', background_wait: 'background work still running', own_job_wait: 'waiting on its own job' }[stall.case] || 'owner' };
   if (stall.forbidden) return { send: null, why: `forbidden: ${stall.forbidden}` };
   if (stall.draft) return { send: null, why: 'owner has a draft in the input box' };
   return { send: stall.answer, why: stall.autoCase || stall.case };

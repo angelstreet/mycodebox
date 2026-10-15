@@ -38,9 +38,26 @@ test('owner decision: "X, or leave it?"', () => {
   assert.equal(wouldSend(s).send, null);
 });
 
-test('owner decision: numbered options, none recommended', () => {
+test('owner decision: numbered options, none recommended, option 1 is a way out or a hard topic', () => {
+  for (const first of ['Skip it and move on.', 'Delete the old streams.', 'Cancel the run.']) {
+    const s = classify(claude(`Three ways forward:\n1. ${first}\n2. Use live streams in the browser.\n3. Use the operator box.\nWhich one?`));
+    assert.equal(s.case, 'owner_decision', first);
+    assert.equal(wouldSend(s).send, null);
+  }
+});
+test('unmarked menu (round 9): a safe first option is the recommendation (source unmarked-first)', () => {
   const s = classify(claude('Three ways forward:\n1. Check the network theory.\n2. Use live streams in the browser.\n3. Use the operator box.\nWhich one?'));
-  assert.equal(s.case, 'owner_decision');
+  assert.equal(s.case, 'menu_recommended'); assert.equal(s.source, 'unmarked-first');
+  assert.deepEqual(wouldSend(s).send, { text: 'Go with option 1.' });
+  assert.deepEqual(s.options.map((o) => o.recommended), [true, false, false]);
+  const live = classify('Which approach?\n ❯ 1. Check the network theory\n   2. Use live streams\n Enter to select · ↑/↓ to navigate · Esc to cancel'.split('\n'), 'waiting');
+  assert.equal(live.case, 'menu_recommended'); assert.deepEqual(wouldSend(live).send, { key: '1' });
+});
+test('unmarked menu: only a clean 1..N list counts, a marked one keeps its marker', () => {
+  const gap = classify(claude('Ways forward:\n2. Check it.\n3. Use live streams.\nWhich one?'));
+  assert.equal(gap.case, 'owner_decision');
+  const marked = classify(claude('Two ways:\n1. Rebuild it\n2. Cache the tree (recommended)\nWhich one?'));
+  assert.equal(marked.options.find((o) => o.recommended).n, 2);
 });
 
 test('menu with a recommended option after a finished turn', () => {

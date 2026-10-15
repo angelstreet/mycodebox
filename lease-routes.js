@@ -53,10 +53,10 @@ export function addrAllowed(addr, cidrs) {
 export function readClients(file) {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')).map((c) => ({ ...c, exemptAgents: Array.isArray(c.exemptAgents) ? c.exemptAgents.filter((x) => typeof x === 'string') : [], owner: c.owner === true })) : [];
+    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')).map((c) => ({ ...c, exemptAgents: Array.isArray(c.exemptAgents) ? c.exemptAgents.filter((x) => typeof x === 'string') : [], owner: c.owner === true, remote: c.remote === true })) : [];
   } catch { return []; }
 }
-function clientOf(clients, token) {
+export function clientOf(clients, token) {
   const h = Buffer.from(hashToken(token), 'hex');
   let hit = null;
   for (const c of clients) {                                  // no early exit: the time does not depend on which entry matches
@@ -78,7 +78,7 @@ export function callerIdentity({ login, viaServe, remoteAddress, client }) {
 }
 export const exemptFor = (client, agent) => typeof agent === 'string' && (client.exemptAgents || []).some((p) => (p.endsWith('*') ? agent.startsWith(p.slice(0, -1)) : p === agent));
 
-function readBody(req) {
+export function readBody(req, max = MAX_BODY) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -86,7 +86,7 @@ function readBody(req) {
     req.on('data', (c) => {
       if (dead) return;
       size += c.length;
-      if (size > MAX_BODY) { dead = true; chunks.length = 0; reject(Object.assign(new Error('body too large'), { status: 413 })); return; }
+      if (size > max) { dead = true; chunks.length = 0; reject(Object.assign(new Error('body too large'), { status: 413 })); return; }
       chunks.push(c);
     });
     req.on('end', () => {

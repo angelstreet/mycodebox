@@ -1136,3 +1136,47 @@ lease to `host` when the holder had no finished turn for 30 min (never releases 
 `by:"TASK58-C1"` in `lease-actions.jsonl`. `manager.json` `leaseBind`: `"dry"` (log only) or `"off"`; default live. `GET /api/leases/watch` shows
 each holder (live / ended / remote / unknown / system) and the planned action. The reporter plugin releases a session's leases on SessionEnd
 (not on /clear or resume). Daily report: `lease-stats.js` (deploy request -> start p95, minutes held back by a lease, unknown holders).
+
+## Round 9: other machines, ledgers, credit fallback, ready window
+
+- **The approved action** (`stall.js` `approvedAction`, `isPastNarrative`): for a recommended option or a "continue", the hard floor reads the
+  option being approved and the commands it runs (or the plan a generic "Yes" / "Proceed" approves), not unrelated narrative. A sentence that reports
+  finished work (past tense with a time marker, no plan or future wording, plainly spelled) no longer blocks a routine answer; a hard action in the
+  approved option, its command or its plan still escalates. `FORBIDDEN_RE` is unchanged.
+- **Unmarked menus**: a clean 1..N menu without a recommendation marker whose option 1 is safe (no hard topic, not merge / push / deploy, not
+  skip / cancel / stop) is answered as if option 1 were recommended (`source: unmarked-first`). `decided.js productVisible()` sorts picks that name
+  something users see (page, button, theme, wording, default, ...) first in the Decided-for-you list and summary.
+- **Lab database** (`decide-policy.js` `analyzeMigrationSql`, `additiveMigrations`): a deploy whose range contains migrations is decided only when the
+  env is in `labEnvs` (manager config, default `[]`) and every migration is a newly added `.sql` file of additive statements; the reply names the files
+  and the procedure (`migrationProcedure[repo]`, else the deploy queue). OWNER_DECISIONS §17.
+- **Self-checks** (`self-check.js`, `selfChecks` switch, default on): before escalating, the manager answers "what version is deployed on X?" from the
+  deploy ledger, "is the run finished?" from the session's own job, and "does <path> exist?" (stat only, inside the repo or `infoRoots`, no symlink
+  escapes, secret-looking paths refused). **One open ask per session**: a new escalation supersedes the session's older open asks in the owner-asks
+  ledger; the NEEDS YOU strip shows the newest only.
+- **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
+  `kind: mockup` with a link and a deadline; a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
+  "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."
+- **Waiting on its own job** (`job-refs.js`, `own-jobs.js`): a STATUS `blocked` / `waiting` that names a pid, a log file, a run id or a deploy id is
+  case `own_job_wait`, never shown as needs-you; the job is watched (deploy state, `/proc/<pid>` or the pane's process tree, a log file's mtime)
+  and when it ends the session gets "your <job> finished at <time>, continue". A detached job (`nohup`, `setsid`, `disown`, `&`) is flagged in the feed.
+- **Remote stops** (`remote-stops.js`, `scripts/mac-stop-hook.sh`, install in [MAC-HOOK](MAC-HOOK.md)): `POST /api/remote/v1/stops` and
+  `GET /api/remote/v1/stops/<id>/answer?wait=<s>`, same address allowlist and bearer-token store as the lease API, but the token's client needs
+  `remote: true` (`node scripts/lease-token.js add <name> --remote`). A stop enters `manager.js observe()` as the session `mac:<session name>`
+  (`s.remote`: no settle wait, no restart dedupe, a fake reporter turn carries the text); the manager reports back through one marked block
+  (`setRemoteHooks`: settled, cancelled, escalated, noAnswer, maxDelayMs). `<state>/remote.json`: `{ "waitS": 45, "checkouts": { "<project>": "/abs/path" } }`
+  (hook wait 1..120 s; local checkouts for merge / push / deploy evaluations). Dashboard rows come from `remote.statusRows()` in `pollOnce`.
+- **Owner round-trip ledger** (`roundtrips.js`): `<state>/owner-roundtrips.jsonl`, one record when a stop that reached the owner (or was answered for
+  them) resolves: `{ id, session, machine, at, answered_at, wait_s, class, by, via, resolution }`. `GET /api/manager/roundtrips?hours=24` returns
+  `{ summary: { median_s, mean_s, byClass, text }, records }`; the decided digest appends "Owner waits today: median 8 min, ... over 12 stops".
+  Nothing in this repository wrote the file before (its writer was out of tree and stopped on 2026-10-09).
+- **MiniMax credit fallback** (`minimax-fallback.js`): with no OpenRouter credit (402 cool-down or cached balance 0) or the Jev breaker open, AI triage
+  and the ambiguous-stop Jev choice (`jev()`) use headless `mcode exec` (MiniMax M3; `--permission smart`, `--mode lightweight` when the installed mcode has it,
+  empty temp `--cwd`, `--max-steps 1`, one process at a time (`fallback busy`), detached process group killed after 20 s, a tool call in the output is an error, only
+  `MCODE_`/`MINIMAX_` environment). Merge / push / deploy evaluations (`jevPost()`) never use it: without Jev they keep the round-7 reasoning path. `manager.json`: `aiFallback` `"minimax"` (default) | `"off"`,
+  `aiFallbackDailyCalls` (default 300). Every call writes `{type:'fallback', source:'minimax-fallback', cost:0}` to `stalls.jsonl`; triage and Jev records
+  carry `source: 'minimax-fallback'`. `MCODE_BIN` / `MCODE_NODE_DIR` pick the binary.
+- **Ready window** (`ready-window.js`): `POST /api/ready { device | host | session, minutes }` (1..240; no name = any session; `{ clear: <id>|"all" }`),
+  `GET /api/ready`; voice "ready for 30 minutes [on <device>]". State `<state>/ready-windows.json`. While a window covers a session, a stop that asks
+  for a hardware step (pair, press, plug, power-cycle; `owner_action` / `owner_decision`, no forbidden or hard topic) is answered "The owner is at the
+  device until HH:MM: retry the step yourself; stop after 2 failures." through the normal manager gates; the third ask in the window escalates.
+  The decided-for-you view lists these as kind `ready`. A chip "ready HH:MM" shows beside the priority badge.

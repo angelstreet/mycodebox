@@ -34,6 +34,8 @@
 //   GET  /api/voice/digest?minutes=60 → {text, parts}: deterministic spoken summary (<= 900 chars) of what happened
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/manager/merge-decisions?limit=50 → newest journal lines first, kind merge only (alias; the journal is manager-decisions.jsonl + the round-7 merge-decisions.jsonl)
+//   GET|POST /api/ready  → {device|host|session, minutes} open a hardware ready window ("ready for N minutes"); {clear: id|'all'} closes (ready-window.js)
+//   GET  /api/manager/roundtrips?hours=24 → { summary, records } owner waits per class (owner-roundtrips.jsonl, roundtrips.js)
 //   GET  /api/manager/decided?hours=24|since=<iso>&limit=100 → { items, summary }: everything the manager answered for the owner (decided.js, OWNER_DECISIONS §15)
 //   POST /api/manager/decided/:id/revert {by?} → merge/push/deploy: sends the revert text to the session (409 unless it is stopped with no draft); other kinds: { draft }
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
@@ -82,6 +84,9 @@ import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
+import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
+import * as managerApi from './manager.js';
+import { createReadyStore } from './ready-window.js';
 import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
@@ -111,7 +116,7 @@ import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds, stillStopped, canType, countSent, roundtripsView, noteAnswerer } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -126,6 +131,8 @@ import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
+import { createOwnJobs } from './own-jobs.js';
+import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
 const exec = promisify(execFile);
@@ -683,6 +690,10 @@ const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTF
   } });
 
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
+const mockups = createMockups({
+  file: join(STATE_DIR, 'mockups.jsonl'), push, tokenOk: (t) => reporter.tokenOk(t), windowMin: () => managerConfig().mockupWindowMin,
+  send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); noteAnswerer(session, by, 'mockup'); },   // the same guarded send as every other owner send
+});
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const history = createSessionHistory({ file: join(STATE_DIR, 'session-history.jsonl'), missMs: 2 * Number(process.env.TICK_MS || 1000) });   // start/end log of sessions; open instances are rebuilt from the file at boot
@@ -1027,7 +1038,7 @@ async function pollOnce() {
     if (!offline) {
       observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state, realWork: spinning,
         project: meta.project ?? null, cwd: meta.cwd || null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now,
-        rep: agent === 'claude' && reporter.liveOf(s.name) ? { turnForStop: (since) => reporter.turnForStop(s.name, since), promptSince: (since) => reporter.promptSince(s.name, since) } : null });
+        rep: agent === 'claude' && reporter.liveOf(s.name) ? { turnStart: () => reporter.activityOf(s.name)?.promptAt || null, turnForStop: (since) => reporter.turnForStop(s.name, since), promptSince: (since) => reporter.promptSince(s.name, since) } : null });
       t.prevObserved = state;
     }
 
@@ -1059,7 +1070,7 @@ async function pollOnce() {
   for (const k of [...track.keys()]) if (!status[k]) track.delete(k);
   for (const k of [...metaCache.keys()]) if (!status[k]) metaCache.delete(k);
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
-  pruneManager(new Set(Object.keys(status)));
+  pruneManager(new Set([...Object.keys(status), ...remote.names()]));   // Mac sessions (mac:<name>) have no tmux pane: they are not pruned with the tmux list
   reporter.prune(new Set(Object.keys(status)));
   turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
@@ -1079,6 +1090,8 @@ async function pollOnce() {
     v.claudeSessionId = c ? c.info.sessionId : null;
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
   }
+  Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)
+  for (const [k, v] of Object.entries(status)) { const rw = readyStore.chipFor(k, `${v.stall?.question || ''}\n${v.stall?.excerpt || ''}`); v.ready = rw && (rw.scope === 'session' || v.stall) ? rw : null; }   // round 9 item 8: the window covering this session, for the chip
   for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
   return { sessions, status, changedSessions };
 }
@@ -1426,6 +1439,7 @@ async function setSessionMeta(session, body) {
 
 // Who typed: every send is logged with its actor (the owner's UI sends no `by`, the manager agent sends 'manager-agent').
 function logSend(session, by, payload) {
+  noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
   logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
 }
 
@@ -1543,6 +1557,7 @@ async function handleHttp(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
 
+  if (p.startsWith(REMOTE_API) && await remote.handle(req, res)) return;   // bearer-token API for the Mac Stop hook; own address and auth checks
   if (p.startsWith(LEASE_API) && await leaseRoutes.handle(req, res)) return;   // bearer-token API for lease clients; own address and auth checks
 
   if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
@@ -1673,6 +1688,20 @@ async function handleHttp(req, res) {
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
     try {
       const r = await alertApi.handle({ remoteAddress: req.socket.remoteAddress, headers: req.headers, readBody: () => readJsonBody(req) });
+      return json(res, r.status, r.body);
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/mockups') {   // a session posts a mockup to the owner's feed (loopback + reporter token)
+    try {
+      const r = await mockups.post({ remoteAddress: req.socket.remoteAddress, headers: req.headers, body: await readJsonBody(req) });
+      return json(res, r.status, r.body);
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  const mo = req.method === 'POST' ? /^\/api\/mockups\/([\w-]{1,40})\/object$/.exec(p) : null;
+  if (mo) {   // the owner's "object" tap on a mockup in the feed: the session is told to wait for the owner's notes
+    try {
+      const b = await readJsonBody(req);
+      const r = await mockups.object(mo[1], { by: actorOf(b || {}) });
       return json(res, r.status, r.body);
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
@@ -1962,6 +1991,18 @@ async function handleHttp(req, res) {
     try { return json(res, 200, await decidedView({ hours: q.get('hours') || 24, since: q.get('since') || null, limit: q.get('limit') || 100 })); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
+  if (p === '/api/ready' && req.method === 'GET') return json(res, 200, { ok: true, windows: readyStore.list() });
+  if (p === '/api/ready' && req.method === 'POST') {   // {device|host|session, minutes}: "ready for N minutes" (tap); no name = any session. {clear: <id>|'all'} closes windows
+    try {
+      const body = await readJsonBody(req);
+      if (body.clear) return json(res, 200, { ok: true, cleared: readyStore.clear(String(body.clear)) });
+      return json(res, 200, { ok: true, window: readyStore.set({ device: body.device, host: body.host, session: body.session, minutes: body.minutes, by: actorOf(body) }) });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/manager/roundtrips') {   // owner wait ledger (owner-roundtrips.jsonl): { hours, summary: { median_s, mean_s, byClass, text }, records }
+    try { return json(res, 200, await roundtripsView({ hours: url.searchParams.get('hours') || 24 })); }
+    catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
   const rv = req.method === 'POST' && /^\/api\/manager\/decided\/([^/]+)\/revert$/.exec(p);
   if (rv) {
     try {
@@ -2073,6 +2114,7 @@ async function readTailLines(file, bytes = 2_000_000) {
     } finally { await fh.close(); }
   } catch { return []; }
 }
+const readyStore = createReadyStore({ file: join(STATE_DIR, 'ready-windows.json') });   // round 9 item 8: "ready for N minutes" windows
 const voice = createVoice({
   status: async () => ((latest && Date.now() - latest.at < 1500) ? latest : await poll()).status,
   ownerAsks: () => readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')),
@@ -2087,6 +2129,7 @@ const voice = createVoice({
     return out;
   },
   logChoice: logOwnerChoice,
+  setReady: async ({ minutes, device, session, by }) => readyStore.set({ minutes, device, session, by }),   // voice: "ready for 30 minutes [on <device>]"
   leaseView: () => leaseSource.view(false),
   digestSources: async ({ since, minutes }) => {   // decided-for-you is read in-process (manager.js decidedView), never over HTTP
     const [stalls, hist, decided] = await Promise.all([
@@ -2100,6 +2143,9 @@ const voice = createVoice({
 
 const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_DIR, 'leases'),
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // same proxy test as requestIdentity: only a Serve-proxied request may name a tailnet login
+
+const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR,
+  viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
 
 const server = http.createServer((req, res) => {
   handleHttp(req, res).catch((err) => {
@@ -2214,9 +2260,23 @@ server.listen(PORT, HOST, async () => {
   // typed send with assertAgentPane first. A bash / sleep shell with old MiniMax JSON in
   // its scrollback would otherwise be mistaken for an agent (see agentFromText) — this
   // wrapper only consults the live process tree.
-  const guardSendKey = async (session, key) => { await assertAgentPane(session, 'manager'); return sendKey(session, key); };
-  const guardSendKeys = async (session, keys, enter) => { await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
+  const guardSendKey = async (session, key, stopId) => { if (remote.owns(session)) return remote.deliverKey(session, key, stopId); await assertAgentPane(session, 'manager'); return sendKey(session, key); };   // a mac: session is answered through the hook's long-poll
+  const guardSendKeys = async (session, keys, enter, stopId) => { if (stopId === undefined) noteAnswerer(session, 'own-job'); /* the manager's answers pass their stop id; a send without one is a harness wake (own-jobs): the manager, not the owner */ if (remote.owns(session)) return remote.deliver(session, keys, stopId); await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
+  // Sessions waiting on a job of their own (STATUS blocked / waiting on a pid, log, run id or deploy id) are woken when it ends. The send goes through
+  // the same guarded sendKeys: it pastes the text, waits, then sends Enter as a second tmux call.
+  const ownJobs = createOwnJobs({
+    table: processTable,
+    agentPid: async (name) => { const p = (await listPanes()).get(name); return p?.pid ? agentPidFromTree(p.pid, await processTable()) : null; },
+    startedAt: async (pids) => { const m = new Map(); try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const x = l.trim().split(/\s+/); if (x.length === 2) m.set(Number(x[0]), Date.now() - Number(x[1]) * 1000); } } catch {} return m; },
+    deployState: (id) => { const d = (deployRunner.snapshot().deploys || []).find((x) => String(x.id) === String(id)); return d ? { state: d.state, finished: d.finished ? d.finished * (d.finished < 1e12 ? 1000 : 1) : null } : null; },
+    stillWaiting: stillStopped, canSend: canType,
+    send: async (name, text) => { await guardSendKeys(name, text, true); countSent(name); },   // a wake counts in the session's hourly cap
+    record: (e) => managerEvents.record(e),
+    log: (r) => logEvent(r),
+  });
+  setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
+    ownJobs,
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
     onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),
@@ -2246,6 +2306,7 @@ server.listen(PORT, HOST, async () => {
       if (isQuietHours(Date.now(), pushTierConfig())) push.record(item); else push.notify(item).catch((e) => console.error('[decided-digest] push', e.message));
     },
     onNotice: (body) => push.record({ title: 'Autonomy on', body, url: '/', tag: 'autonomy' }),
+    readyStore,   // ready windows: the manager answers a hardware-step ask while one covers the session
     leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
     onStatus: onStopStatus,
   });

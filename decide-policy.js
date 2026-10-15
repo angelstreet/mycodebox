@@ -8,7 +8,7 @@ import { buildRequest } from './router.js';
 import { deployHint } from './stall.js';
 import { git, repoNames, repoToplevel, scanRange, testEvidence, SENS_TEXT, short, sensitivePath, MERGE_DEFAULTS } from './merge-policy.js';
 
-export const DECIDE_DEFAULTS = { pushDecisions: true, deployDecisions: true, pushMinConfidence: 0.85, deployMinConfidence: 0.85, pushOptOut: [], deployOptOut: [] };
+export const DECIDE_DEFAULTS = { labEnvs: [], migrationProcedure: {}, pushDecisions: true, deployDecisions: true, pushMinConfidence: 0.85, deployMinConfidence: 0.85, pushOptOut: [], deployOptOut: [] };
 
 const REF_TOKEN = String.raw`[\w][\w./@+-]*`;
 const clean = (t) => String(t || '').replace(/^[`'"(\[]+|[`'"),.;:?!\]]+$/g, '');
@@ -191,6 +191,118 @@ function leaseBlockers(leases, { env, scope, hosts = [], session }) {
 const TARGETS = { full: ['frontend', 'server', 'host'], frontend: ['frontend'], server: ['server'], host: ['host'] };
 export const MIGRATION_RE = /(^|\/)migrations\/|\.sql$/i;
 
+// Additive SQL only (round 9, item 4): CREATE TABLE / INDEX / VIEW (OR REPLACE), ALTER TABLE ... ADD [COLUMN], INSERT. Anything else (DROP, DELETE,
+// TRUNCATE, RENAME, ALTER ... DROP / TYPE / ALTER COLUMN, UPDATE, a statement this does not recognise) is destructive or unknown: not additive.
+// -> { additive: boolean, why: string|null }.
+// One pass over the text, so a comment marker inside a literal cannot hide a statement and a quote inside a comment cannot open a literal:
+// '...' with '' escapes, "..." identifiers, $tag$...$tag$ bodies, -- and nested /* */ comments are blanked; E'...' strings, any backslash inside a
+// literal, a psql meta-command (a line starting with a backslash: \!, \i, \copy) and unbalanced quotes, tags or comments are refused.
+// Inherent limit (documented): a function CALLED by an allowed statement can still do anything. INSERT ... SELECT is refused, and a function call anywhere in a
+// kept statement (DEFAULT, GENERATED, index expressions, WHERE, view bodies, CTAS) must be on the SAFE_FN allowlist; custom operators are refused too. What an
+// allowlisted function does when the data changes later is not checked.
+const SAFE_FN = new Set(['_', 'values', 'conflict', 'now', 'current_timestamp', 'current_date', 'gen_random_uuid', 'uuid_generate_v4', 'coalesce', 'nullif', 'greatest', 'least', 'lower', 'upper', 'length', 'trim', 'concat', 'substr', 'substring', 'left', 'right',
+  'abs', 'round', 'floor', 'ceil', 'count', 'sum', 'min', 'max', 'avg', 'string_agg', 'array_agg', 'to_char', 'date_trunc', 'extract', 'nextval', 'cast', 'array', 'row', 'any', 'all', 'in', 'exists', 'on', 'over', 'filter', 'with', 'where', 'and', 'or', 'not', 'as', 'default',
+  'check', 'key', 'unique', 'include', 'select', 'from', 'join', 'case', 'when', 'then', 'else', 'end', 'using', 'varchar', 'char', 'character', 'numeric', 'decimal', 'timestamp', 'timestamptz', 'time', 'timetz', 'interval', 'bit', 'varbit', 'float', 'constraint', 'generated', 'always', 'stored', 'by']);
+const MASKS = [
+  [/\b(TABLE|INTO|REFERENCES|VIEW|ONLY)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?:""|[\w.]+)/gi, '$1 _'],
+  [/\bINDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?:""|[\w.]+)?\s*ON\s+(?:ONLY\s+)?(?:""|[\w.]+)(?:\s+USING\s+\w+)?/gi, 'INDEX _'],
+];
+const OPS_OK = new Set(['<=', '>=', '<>', '!=', '||', '->', '->>', '#>', '#>>', '@>', '<@', '&&', '>>', '<<', '=>']);
+function suspicious(stmt) {
+  let m = stmt; for (const [re, to] of MASKS) m = m.replace(re, to);
+  const fn = [...m.matchAll(/\b([A-Za-z_][\w.]*)\s*\(/g)].map((x) => x[1].toLowerCase()).find((f) => !SAFE_FN.has(f));
+  if (fn) return `function call ${fn}()`;
+  const op = [...stmt.matchAll(/[+\-*\/<>=~!@#%^&|?]{2,}/g)].map((x) => x[0]).find((o) => !OPS_OK.has(o));
+  return op ? `operator ${op}` : null;
+}
+function blank(src) {
+  const n = src.length;
+  let out = '', i = 0;
+  while (i < n) {
+    const c = src[i], d = src[i + 1];
+    if (c === '-' && d === '-') { const e = src.indexOf('\n', i); if (e < 0) { i = n; } else { i = e; } out += ' '; continue; }
+    if (c === '/' && d === '*') {
+      let depth = 1, j = i + 2;
+      while (j < n && depth) { if (src[j] === '/' && src[j + 1] === '*') { depth++; j += 2; } else if (src[j] === '*' && src[j + 1] === '/') { depth--; j += 2; } else j++; }
+      if (depth) return { why: 'unterminated block comment' };
+      i = j; out += ' '; continue;
+    }
+    if ((c === 'E' || c === 'e') && d === "'" && !/[\w$]/.test(src[i - 1] || ' ')) return { why: 'an E\'...\' escape string' };
+    if ((c === 'U' || c === 'u') && d === '&' && (src[i + 2] === "'" || src[i + 2] === '"') && !/[\w$]/.test(src[i - 1] || ' ')) return { why: 'a unicode escape string' };
+    if (c === "'" || c === '"') {
+      let j = i + 1, closed = false;
+      while (j < n) {
+        if (src[j] === '\\') return { why: 'a backslash inside a literal' };
+        if (src[j] === c) { if (src[j + 1] === c) { j += 2; continue; } closed = true; break; }
+        j++;
+      }
+      if (!closed) return { why: 'unbalanced quote' };
+      out += c + c; i = j + 1; continue;
+    }
+    if (c === '$' && !/[\w$]/.test(src[i - 1] || ' ')) {
+      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 80));
+      if (m) {
+        const e = src.indexOf(m[0], i + m[0].length);
+        if (e < 0) return { why: 'unbalanced dollar quote' };
+        if (src.slice(i + m[0].length, e).includes('\\')) return { why: 'a backslash inside a literal' };
+        out += "''"; i = e + m[0].length; continue;
+      }
+    }
+    if (c === '\\') return { why: 'a backslash outside a literal (psql meta-command)' };
+    out += c; i++;
+  }
+  return { text: out };
+}
+export function analyzeMigrationSql(sql) {
+  const src = String(sql ?? '');
+  if (!src.trim()) return { additive: false, why: 'empty migration' };
+  if (/^[ \t]*\\/m.test(src)) return { additive: false, why: 'a psql meta-command (backslash line)' };
+  const b = blank(src);
+  if (b.why) return { additive: false, why: b.why };
+  const stmts = b.text.split(';').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (!stmts.length) return { additive: false, why: 'no statements' };
+  for (const raw of stmts) {
+    const s = raw.replace(/\bON\s+(?:UPDATE|DELETE)\s+(?:CASCADE|RESTRICT|NO ACTION|SET (?:NULL|DEFAULT))/gi, ' ');
+    const bad = /\b(?:DROP|DELETE|TRUNCATE|RENAME|UPDATE|GRANT|REVOKE|COPY|VACUUM|REINDEX|CLUSTER)\b/i.exec(s);
+    if (bad) return { additive: false, why: `${bad[0].toUpperCase()} in "${raw.slice(0, 60)}"` };
+    const sus = suspicious(s);   // every kept statement: a function call off the allowlist (DEFAULT, GENERATED, index expressions, WHERE, view bodies) or a custom operator
+    if (sus) return { additive: false, why: `${sus} in "${raw.slice(0, 60)}"` };
+    if (/^INSERT\s+INTO\b/i.test(s)) {
+      if (/\bSELECT\b/i.test(s)) return { additive: false, why: `INSERT ... SELECT in "${raw.slice(0, 60)}"` };
+      continue;
+    }
+    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s)) continue;
+    if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s)) continue;
+    const alter = /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\S+\s+(.*)$/i.exec(s);
+    if (alter) {
+      const clauses = alter[1].split(/,\s*(?=ADD\b|ALTER\b|DROP\b|RENAME\b|SET\b|OWNER\b)/i);
+      if (clauses.every((c) => /^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?\S/i.test(c.trim()) && !/^ADD\s+(?:CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK)\b/i.test(c.trim()))) continue;
+      return { additive: false, why: `ALTER TABLE that is not only ADD COLUMN in "${raw.slice(0, 60)}"` };
+    }
+    return { additive: false, why: `unrecognised statement "${raw.slice(0, 60)}"` };
+  }
+  return { additive: true, why: null };
+}
+
+// Lab-database migrations (round 9, item 4): every migration in `files` must be an ADDED .sql file (not an edit or deletion of an applied one) whose
+// statements are all additive. `revs`: refs that may hold the file; `bases`: refs the file must not exist in. -> { ok, why, files }
+export async function additiveMigrations(repo, files, { revs, bases }) {
+  for (const f of files) {
+    if (!/\.sql$/i.test(f)) return { ok: false, why: `${f} is not a .sql file (cannot be read as additive)` };
+    let content = null;
+    for (const rev of revs) {
+      const r = await git(repo, ['show', `${rev}:${f}`], { max: 512 * 1024 });
+      if (r.code === 0) { content = r.out; break; }
+      if (r.truncated) return { ok: false, why: `${f} is larger than 512 KB` };
+    }
+    if (content == null) return { ok: false, why: `${f} is deleted or unreadable` };
+    for (const b of bases) if ((await git(repo, ['cat-file', '-e', `${b}:${f}`], { okCodes: [0, 1, 128] })).code === 0) return { ok: false, why: `${f} edits a migration that already exists` };
+    const a = analyzeMigrationSql(content);
+    if (!a.additive) return { ok: false, why: `${f}: ${a.why}` };
+  }
+  return { ok: true, why: null, files };
+}
+
 // The latest deployed commit/ref per relevant target of `env` from the "deployed now" ledger.
 export function lastDeployed(deploys, env, scope) {
   const per = deploys?.deployed?.[env] || {};
@@ -278,8 +390,10 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   // no database migration in what would go out: since the last deployed commit, else the session branch against its merge base
   const changed = new Set();
   let ranged = false;
+  const baseCommits = [];   // the deployed commits that resolve: what a migration file must NOT exist in to count as new
   for (const p of facts.previous) {
     if (!p.commit || !(await resolves(repo, p.commit))) continue;
+    baseCommits.push(p.commit);
     const d = await git(repo, ['diff', '--name-only', '-z', `${p.commit}..${refGit}`]);
     if (d.code !== 0) return esc(`cannot list the changed files (${d.err || 'git diff failed'})`, tests);
     for (const f of d.out.split('\0').filter(Boolean)) changed.add(f);
@@ -294,12 +408,25 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
     for (const f of d.out.split('\0').filter(Boolean)) changed.add(f);
   }
   const mig = [...changed].filter((f) => MIGRATION_RE.test(f) || sensitivePath(f) === 'migration');
-  if (mig.length) return esc(`contains a database migration: ${mig.slice(0, 3).join(', ')}`, tests);
+  let migNote = '';
+  if (mig.length) {
+    // An additive migration on a lab database, applied by the documented procedure, is a deploy step; customer databases, destructive
+    // migrations and deletions stay with the owner (OWNER_DECISIONS: lab vs customer DB).
+    const blocked = `contains a database migration: ${mig.slice(0, 3).join(', ')}`;
+    if (!(cfg.labEnvs || []).includes(facts.env)) return esc(blocked, tests);
+    const bases = [...baseCommits, ...(afterMerge ? [refGit] : [])];
+    if (!bases.length) return esc(`${blocked} (not applied by the manager: cannot tell new from edited migrations)`, tests);
+    const revs = [refGit, ...(sBranch ? [`refs/heads/${sBranch}`] : [])];
+    const am = await additiveMigrations(repo, mig, { revs, bases });
+    if (!am.ok) return esc(`${blocked} (not applied by the manager: ${am.why})`, tests);
+    facts.migrations = mig; facts.migrationProcedure = String(cfg.migrationProcedure?.[facts.repoName] || 'the deploy queue');
+    migNote = `; additive migration${mig.length === 1 ? '' : 's'} on the lab database ${facts.env} applied by ${facts.migrationProcedure}: ${mig.slice(0, 5).join(', ')}${mig.length > 5 ? ` and ${mig.length - 5} more` : ''}`;
+  }
   facts.files = changed.size; facts.ok = true;
   const strong = tests.explicit;
   const r = await rate('deploy', 'deploy', { jev, jevFacts: { session, repo: facts.repoName, env: facts.env, scope: facts.scope, ref, tests: tests.state, tests_quote: tests.quote, files: changed.size, leases_blocking: 0, floor_reasons: [] }, session, min: cfg.deployMinConfidence, reasoning: strong ? 0.9 : 0.8 });
   if (r.escalate) return done('escalate', [r.escalate], r.decision, tests);
-  return done('deploy', [], r.decision, tests, { rationale: `${facts.evidence}; no blocking lease on ${facts.env}; no database change in ${changed.size} file${changed.size === 1 ? '' : 's'}` });
+  return done('deploy', [], r.decision, tests, { rationale: `${facts.evidence}; no blocking lease on ${facts.env}; ${migNote ? migNote.slice(2) : `no database change in ${changed.size} file${changed.size === 1 ? '' : 's'}`}` });
 }
 
 // A record for <state>/manager-decisions.jsonl shaped like a V2 decision (orchestration/task-contract.js validateDecision); push and deploy.
@@ -337,7 +464,7 @@ export function decisionRecord(kind, ev, { id, session = null, at = new Date() }
 
 // A record for a menu pick the manager sent on the owner's behalf (kind "menu"): the agent's own recommended option, taken when neither the
 // question nor that option is a hard topic (or its merge / push / deploy topics passed their evaluation, journaled separately).
-export function menuRecord({ id, session = null, at = new Date(), question = '', option = '', key = null, options = 0, answer = null } = {}) {
+export function menuRecord({ id, session = null, at = new Date(), question = '', option = '', key = null, options = 0, answer = null, unmarked = false } = {}) {
   const ts = at instanceof Date ? at.toISOString() : typeof at === 'number' ? new Date(at).toISOString() : String(at);
   const sent = answer?.text != null ? answer.text : `option ${answer?.key ?? key}`;
   return {
@@ -349,10 +476,11 @@ export function menuRecord({ id, session = null, at = new Date(), question = '',
       { option: 'escalate', pros: ['the owner picks'], cons: ['the session waits for the owner'] },
     ],
     expected_effect: `The session carries on with "${option}" without asking the owner.`,
-    rationale: `The agent marked "${option}" as its recommendation and neither the question nor that option is a hard topic.`,
-    evidence: [`question: ${question || 'unknown'}`, `recommended option ${key ?? '?'}: ${option}`, `${options} options`, `sent: ${sent}`],
+    rationale: unmarked ? `The agent marked no option as recommended; "${option}" is option 1, and neither the question nor that option is a hard topic or a way out (skip / cancel), so the manager took it as the safe, reversible default.`
+      : `The agent marked "${option}" as its recommendation and neither the question nor that option is a hard topic.`,
+    evidence: [`question: ${question || 'unknown'}`, `${unmarked ? 'unmarked first option' : 'recommended option'} ${key ?? '?'}: ${option}`, `${options} options`, `sent: ${sent}`],
     actor: { role: 'manager', runtime: null, model: null },
     confidence: 1, policy_ref: 'OWNER_DECISIONS §15', reversible: true, rollback: 'send the session a correction naming the option you wanted',
-    session, option, key: key ?? null,
+    session, option, key: key ?? null, ...(unmarked ? { unmarked: true } : {}),
   };
 }

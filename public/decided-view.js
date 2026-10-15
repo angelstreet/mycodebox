@@ -6,7 +6,7 @@ import { icon } from './icons.js';
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const p2 = (n) => String(n).padStart(2, '0');
 export const SENDS = ['merge', 'push', 'deploy'];   // kinds whose button sends the revert text (after a second tap)
-export const KIND_LABEL = { merge: 'merge', push: 'push', deploy: 'deploy', menu: 'menu pick', continue: 'continue', ai_reply: 'AI reply', info: 'information' };
+export const KIND_LABEL = { merge: 'merge', push: 'push', deploy: 'deploy', menu: 'menu pick', continue: 'continue', ai_reply: 'AI reply', info: 'information', ready: 'hardware retry' };
 
 // local "2026-10-14 09:00" bucket of an ISO time
 export function hourKey(at) {

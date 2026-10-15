@@ -201,7 +201,12 @@ const filterStateOf = (n) => (pausedOf(n) ? 'paused' : displayStateOf(n, state.s
 const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held || null);   // the manager's quota hold
 // Pill text for the owner's pause or the manager's hold, '' when neither.
 const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? 'held: quota' : '');
-const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${escapeHtml(n)}" aria-label="Priority ${prioOf(n)}, tap to change" title="Priority ${prioOf(n)}">${prioOf(n)}</button>`;
+// round 9: a ready window ("ready for N minutes", item 8) and the Remote Control link of a Mac session (item 1) ride next to the priority badge
+const readyChipHtml = (n) => {
+  const st = state.status[n] || {}, r = st.ready, rc = st.remote?.remoteControlUrl;
+  return `${r ? `<span class="rdychip" title="${escapeHtml(`Ready window${r.target ? ` for ${r.target}` : ''}: sessions retry hardware steps without asking until ${r.until_hhmm}`)}">ready ${escapeHtml(r.until_hhmm)}</span>` : ''}${rc && /^https:\/\//.test(rc) ? `<a class="rdychip" href="${escapeHtml(rc)}" target="_blank" rel="noopener" title="Open this session in Remote Control">RC</a>` : ''}`;
+};
+const prioBadgeHtml = (n) => `<button class="prio ${prioOf(n)}" data-prio="${escapeHtml(n)}" aria-label="Priority ${prioOf(n)}, tap to change" title="Priority ${prioOf(n)}">${prioOf(n)}</button>${readyChipHtml(n)}`;
 // Visual state: a session blocked on a deploy shows purple ('deploy'); a live needs-you prompt always wins.
 // Pure helper lives in /state.js so the top-bar summary and the status filter can reuse it.
 const vstateOf = (name) => displayStateOf(name, state.status);
@@ -2948,7 +2953,7 @@ function openManager() {
       const unreviewed = (log.entries || []).filter((r) => r.type === 'stall' && !labels.has(r.id)).length;
       const aiReady = cfg.aiTriage === 'auto' && cfg.autoSend && cfg.ai && (cfg.aiAutoCases || []).length > 0;
       const reviewerState = cfg.aiTriage === 'off' ? 'Off' : aiReady ? 'Can send' : cfg.aiTriage === 'auto' ? 'Suggestions only' : 'Suggestions';
-      const aiChoices = cfg.validAiCases || (cfg.cases || []).filter((c) => !['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait'].includes(c));
+      const aiChoices = cfg.validAiCases || (cfg.cases || []).filter((c) => !['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait', 'own_job_wait'].includes(c));
       const section = (key, heading, detail, content) => `<details class="mgr-section" data-manager-section="${key}" ${sectionsOpen.has(key) ? 'open' : ''}><summary><span>${heading}<small>${detail}</small></span></summary><div class="mgr-section-body">${content}</div></details>`;
       const scroll = body.scrollTop;
       body.innerHTML = `
