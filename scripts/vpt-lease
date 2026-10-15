@@ -14,7 +14,12 @@ Env: VPT_LEASE_URL (service base URL), VPT_LEASE_TOKEN_FILE (default ~/.config/v
      VPT_LEASE_AGENT (default agent for deploy wait), VPT_LEASE_TEST_FAST=1 (short intervals, for tests).
 
 New: claim --wait | --ticket, --mode exclusive|observe|pin, --expect MIN; ticket ID [--wait] [--cancel];
-     heartbeat ID [--active]; mode ID pin|observe; run <claim args> -- <command...>.
+     heartbeat ID [--active]; mode ID pin|observe; validate ID --agent A; run <claim args> -- <command...>.
+
+Exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 UNAVAILABLE (service unreachable: never "free"),
+6 `run` only: the lease was lost during the run (the command itself finished with 0).
+`validate ID --agent A` (central only): 0 when the lease is held, exclusive and A's; 3 otherwise (the reason is printed);
+5 when the service is unavailable. Call it right before each protected step (a restart, a deploy step).
 """
 import argparse, contextlib, io, json, os, shlex, signal, socket, subprocess, sys, threading, time, uuid
 import urllib.error, urllib.parse, urllib.request
@@ -699,6 +704,33 @@ def cmd_heartbeat(a):
     return 0
 
 
+def cmd_validate(a):
+    agent = a.agent or os.environ.get("VPT_LEASE_AGENT", "")
+    if not agent:
+        eprint("vpt-lease validate: --agent (or $VPT_LEASE_AGENT) is required")
+        return 1
+    r = api("GET", "/leases/" + urllib.parse.quote(a.lease_id))
+    if not r.get("ok"):
+        if r.get("code") == "E_NOT_FOUND":
+            print("not valid: lease %s is unknown, released or expired" % a.lease_id)
+            return BUSY
+        return fail(r)
+    l = r.get("lease") or {}
+    state = l.get("state") or r.get("state") or "held"
+    why = []
+    if state != "held":
+        why.append("state is %s, not held" % state)
+    if (l.get("mode") or "exclusive") != "exclusive":
+        why.append("mode is %s, not exclusive" % l["mode"])
+    if l.get("agent") != agent:
+        why.append("held by %s, not %s" % (l.get("agent"), agent))
+    if why:
+        print("not valid: lease %s: %s" % (a.lease_id, "; ".join(why)))
+        return BUSY
+    print("valid")
+    return 0
+
+
 def cmd_mode(a):
     r = api("POST", "/mode", {"id": a.lease_id, "mode": a.new_mode})
     if not r.get("ok"):
@@ -1034,6 +1066,9 @@ def build_parser():
     t.add_argument("--wait", action="store_true"); t.add_argument("--cancel", action="store_true")
     hb = sub.add_parser("heartbeat"); hb.add_argument("lease_id"); hb.add_argument("--active", action="store_true")
     md = sub.add_parser("mode"); md.add_argument("lease_id"); md.add_argument("new_mode", choices=("pin", "observe"))
+    _vh = "exit 0 if the lease is held, exclusive and yours; 3 otherwise (the reason is printed); 5 unavailable"
+    vd = sub.add_parser("validate", help=_vh, description=_vh)
+    vd.add_argument("lease_id"); vd.add_argument("--agent", default="")
     dp = sub.add_parser("deploy"); dsub = dp.add_subparsers(dest="dcmd", required=True)
     q = dsub.add_parser("request"); q.add_argument("env"); q.add_argument("--scope", required=True, choices=SCOPES)
     q.add_argument("--ref", required=True); q.add_argument("--agent", required=True); q.add_argument("--purpose", default="")
@@ -1066,7 +1101,7 @@ def dispatch(a, command=None):
         return cmd_run(a, command)
     return {"claim": cmd_claim, "release": cmd_release, "renew": cmd_renew, "narrow": cmd_narrow, "list": cmd_list,
             "check": cmd_check, "events": cmd_events, "ticket": cmd_ticket, "heartbeat": cmd_heartbeat,
-            "mode": cmd_mode}[a.cmd](a)
+            "mode": cmd_mode, "validate": cmd_validate}[a.cmd](a)
 
 
 def run_central(a, command=None):
@@ -1129,7 +1164,7 @@ def shadow_call(argv, legacy):
         a = build_parser().parse_args(strip_new_flags(argv))
     except SystemExit:
         return
-    if a.cmd in ("ticket", "heartbeat", "mode", "run"):
+    if a.cmd in ("ticket", "heartbeat", "mode", "validate", "run"):
         return
     if a.cmd == "deploy" and a.dcmd == "wait":
         return
@@ -1185,7 +1220,7 @@ def main(argv=None):
         i = argv.index("--")
         argv, command = argv[:i], argv[i + 1:]
     if mode == "legacy" and argv[:1] != ["run"]:
-        if argv[:1] in (["ticket"], ["heartbeat"], ["mode"]):
+        if argv[:1] in (["ticket"], ["heartbeat"], ["mode"], ["validate"]):
             eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % argv[0])
             return 1
         stripped = strip_new_flags(argv)
@@ -1197,6 +1232,9 @@ def main(argv=None):
         except (OSError, IndexError) as e:
             eprint("vpt-lease: cannot run the legacy CLI %r: %s" % (CFG.legacy, e))
             return 1
+    if mode == "shadow" and argv[:1] in (["ticket"], ["heartbeat"], ["mode"], ["validate"]):
+        eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % argv[0])
+        return 1
     if mode == "shadow" and argv[:1] != ["run"]:
         data = None
         if argv[:2] == ["deploy", "wait"]:     # long-running, read-only: plain passthrough
@@ -1216,7 +1254,7 @@ def main(argv=None):
     if a.cmd == "run" and command is None:
         eprint("vpt-lease run: expected `-- <command...>` after the claim arguments")
         return 2
-    if mode != "central" and a.cmd in ("ticket", "heartbeat", "mode"):
+    if mode != "central" and a.cmd in ("ticket", "heartbeat", "mode", "validate"):
         eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % a.cmd)
         return 1
     if mode == "central" or a.cmd == "run":

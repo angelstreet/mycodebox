@@ -53,3 +53,8 @@ or `mac:<name>`.
 | 3 | busy | claim again with `--wait` (or `run`); do not poll |
 | 4 | a deploy is pending on the resource | `vpt-lease deploy wait --env <env>`, then claim again |
 | 5 | UNAVAILABLE: the lease service cannot be reached | treat as busy, never as free; retry with `--wait` |
+| 6 | `run` only: the lease was lost during the run (fenced, gone or downgraded); the command itself exited 0 | treat the result as not protected; claim again and redo the protected step |
+
+`vpt-lease validate <id> --agent <agent>` (central mode only; refused with exit 1 in legacy and shadow modes): exit 0 when
+the lease is held, exclusive and yours; 3 when not (the reason is printed); 5 when the service is unavailable. Run it
+right before each protected step, such as a restart, and stop on anything but 0.

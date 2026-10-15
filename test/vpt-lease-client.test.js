@@ -552,3 +552,46 @@ test('shadow: a hung service costs at most the shadow timeout and never changes 
   assert.deepEqual([r.code, r.out], [0, 'legacy check env-a\n']);
   assert.ok(Date.now() - t0 < 6000);
 });
+
+test('validate: 0 when held, exclusive and yours; 3 with the reason otherwise; 5 unavailable; 1 without an agent', async () => {
+  setup(() => ({ ok: true, lease: lease({ id: 'V1', state: 'held' }) }));
+  let r = await run(['validate', 'V1', '--agent', 'codebox:x']);
+  assert.deepEqual([r.code, r.out], [0, 'valid\n']);
+  assert.equal(calls[0].method, 'GET'); assert.equal(calls[0].path, '/leases/V1');
+  r = await run(['validate', 'V1'], { env: { VPT_LEASE_AGENT: 'codebox:x' } });
+  assert.equal(r.code, 0);
+  r = await run(['validate', 'V1', '--agent', 'someone-else']);
+  assert.equal(r.code, 3); assert.match(r.out, /held by codebox:x, not someone-else/);
+  setup(() => ({ ok: true, lease: lease({ id: 'V1', mode: 'pin' }) }));
+  r = await run(['validate', 'V1', '--agent', 'codebox:x']);
+  assert.equal(r.code, 3); assert.match(r.out, /mode is pin, not exclusive/);
+  setup(() => ({ ok: true, lease: lease({ id: 'V1', state: 'released' }) }));
+  r = await run(['validate', 'V1', '--agent', 'codebox:x']);
+  assert.equal(r.code, 3); assert.match(r.out, /state is released, not held/);
+  setup(() => ({ ok: false, status: 404, code: 'E_NOT_FOUND', error: 'x' }));
+  r = await run(['validate', 'V1', '--agent', 'codebox:x']);
+  assert.equal(r.code, 3); assert.match(r.out, /unknown, released or expired/);
+  setup(() => ({ ok: false, status: 503, code: 'E_UNAVAILABLE', error: 'down' }));
+  assert.equal((await run(['validate', 'V1', '--agent', 'codebox:x'])).code, 5);
+  assert.equal((await run(['validate', 'V1', '--agent', 'a'], { url: await deadUrl() })).code, 5);
+  r = await run(['validate', 'V1']);
+  assert.equal(r.code, 1);
+});
+
+test('validate is refused with exit 1 in legacy and shadow modes, without any request', async () => {
+  setup(() => ({ ok: true }));
+  for (const env of [{ VPT_LEASE_MODE: 'legacy', VPT_LEASE_LEGACY: legacyCli }, shadowEnv()]) {
+    const r = await run(['validate', 'V1', '--agent', 'a'], { env });
+    assert.equal(r.code, 1); assert.match(r.err, /needs VPT_LEASE_MODE=central/); assert.equal(r.out, '');
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('help text and LEASE-RULES document exit 6 and the validate exit codes', async () => {
+  const src = fs.readFileSync(CLIENT, 'utf8');
+  assert.match(src, /6 `run` only: the lease was lost/); assert.match(src, /validate ID --agent A.*0 when the lease is held/s);
+  const rules = fs.readFileSync(path.join(path.dirname(CLIENT), '..', 'docs', 'LEASE-RULES.md'), 'utf8');
+  assert.match(rules, /\| 6 \|/); assert.match(rules, /vpt-lease validate <id> --agent <agent>/);
+  const h = await run(['validate', '--help']);
+  assert.match(h.out, /exit 0 if the lease is held, exclusive and yours/);
+});
