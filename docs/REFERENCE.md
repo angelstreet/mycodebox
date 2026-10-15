@@ -535,7 +535,7 @@ remains goes to the owner with a reason that says what was already answered ("de
 by the manager; path answered)").
 
 Config (`POST /api/manager`): `mergeDecisions` (default true), `mergeMinConfidence` (0.85), `mergeOptOut` (repo names - checkout, main repo or origin remote name - or
-paths), `mergeConventionFiles` (`["VERSION.txt"]`), `infoAnswers` (true), `infoRoots` (absolute paths).
+paths), `mergeConventionFiles` (`["VERSION.txt"]`), `infoAnswers` (true), `infoRoots` (absolute paths), `leaseAnswers` (true: a stop that asks about a lease is answered from the lease source with the fixed template, never escalated as a lease question; only a pure lease part is answered, a deploy, restart or hard topic anywhere in the stop still goes to the owner or the deploy decision).
 
 The interactive manager uses the same evaluation from its shell:
 `node scripts/merge-eval.js --repo <checkout> --branch <b> [--target main] --text "<closing text>" --session <s> --journal`
