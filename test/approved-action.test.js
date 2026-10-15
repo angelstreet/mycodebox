@@ -163,7 +163,7 @@ test('unmarked menu: option 1 is taken (key), journaled as unmarked; a hard or w
   const items = decidedItems({ recs: stalls(), journal: lines(join(dir, 'manager-decisions.jsonl')) });
   const it = items.find((i) => i.session === 'u1');
   assert.equal(it.productVisible, true); assert.match(it.what, /unmarked first option/);
-  for (const [n, first] of [['u2', 'Skip the migration step'], ['u3', 'Delete the old backups'], ['u4', 'Apply database migrations']]) {
+  for (const [n, first] of [['u2', 'Skip the migration step'], ['u3', 'Delete the old backups'], ['u4', 'Apply database migrations'], ['u6', 'Merge feat and deploy it']]) {
     const r = await stop(n, makeRepo(), `Which one?\n ❯ 1. ${first}\n   2. Use the wide layout\n` + MENU_TAIL, 'waiting');
     assert.deepEqual(r.keys, [], n); assert.ok(r.esc, n);
   }

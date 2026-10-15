@@ -499,12 +499,14 @@ export function menuOptions(lines) {
 }
 
 // Unmarked menus (round 9, item 3): no "(recommended)" tag, but option 1 is a safe, reversible default. Only a clean 1..N list counts, and option 1
-// must not be a way out ("skip", "cancel", "do nothing") nor carry a hard topic. A merge / push / deploy in it is still evaluated by the manager.
+// must not be a way out ("skip", "cancel", "do nothing") nor carry a hard topic or a merge / push / deploy.
 const OUT_OPTION_RE = /^\W*(?:skip|cancel|abort|stop|quit|exit|do nothing|nothing|leave (?:it|them|this)|no\b|none\b|not now|later|wait\b|don'?t|dismiss|decline|keep (?:it )?as is|ignore|something else|other\b|type something|chat about)/i;
 export function unmarkedFirst(opts) {
   if (!opts || opts.length < 2 || opts.some((o, i) => o.n !== i + 1) || opts.some((o) => RECOMMENDED_RE.test(o.text))) return null;
   const first = opts[0];
-  if (OUT_OPTION_RE.test(first.text) || topicSplit([first.text, ...commandsIn(first.text)].join('\n')).hard) return null;
+  if (OUT_OPTION_RE.test(first.text)) return null;
+  const t = topicSplit([first.text, ...commandsIn(first.text)].join('\n'));
+  if (t.hard || t.merge || t.push || t.deploy) return null;   // a merge / push / deploy is not taken as a default pick: it needs its own evaluation, i.e. the agent's marker
   return first;
 }
 
