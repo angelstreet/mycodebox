@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
+import { validateStop } from '../remote-stops.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const HOOK = path.join(ROOT, 'scripts', 'mac-stop-hook.sh');
@@ -52,6 +53,8 @@ const run = (args, { home, input }, env = {}) => new Promise((resolve) => {
   let out = '', err = '';
   p.stdout.on('data', (c) => { out += c; }); p.stderr.on('data', (c) => { err += c; });
   p.on('close', (code) => resolve({ code, out, err }));
+  // the kill switches exit before reading stdin: under load the write then fails with EPIPE, which is not a test failure (this was the 1-in-3 flake)
+  p.stdin.on('error', () => {});
   p.stdin.end(input);
 });
 
@@ -145,4 +148,19 @@ test('the kill switches: MYCODEBOX_HOOK=off and the "disabled" file', { skip }, 
     assert.equal((await run([], s)).out, '');
     assert.equal(f.seen.posts.length, 0);
   } finally { await f.close(); }
+});
+
+test('dry-run output with awkward names ("[TASK72] fix", _proj, non-ASCII) is accepted by the intake and slugged', { skip }, async () => {
+  const s = setup({ url: 'http://127.0.0.1:1' });
+  const cwd = path.join(s.home, '_proj \u00e9t\u00e9 \u4e2d\u6587');
+  fs.mkdirSync(cwd);
+  const tp = path.join(s.home, 't.jsonl');
+  fs.writeFileSync(tp, fs.readFileSync(FIXTURE, 'utf8').replace('cache-work', '[TASK72] fix'));
+  const input = JSON.stringify({ session_id: 'sid-awkward-1111', transcript_path: tp, cwd, stop_hook_active: false });
+  const r = await run(['--dry-run'], { home: s.home, input }, { MYCODEBOX_CONFIG_DIR: path.join(s.home, '.config', 'mycodebox') });
+  const payload = JSON.parse(r.out.trim().split('\n')[0]);
+  const v = validateStop(payload);
+  assert.ok(v.ok, v.error);
+  assert.equal(v.v.project, '_proj-ete');
+  assert.equal(v.v.session_name, 'TASK72-fix');
 });

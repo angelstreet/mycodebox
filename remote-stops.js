@@ -19,7 +19,12 @@ export const HARD_WAIT_S = 120;
 const SESSION_TTL_MS = 12 * 3600e3;
 const STOP_TTL_MS = 3600e3;
 const RATE_PER_MIN = 30;
-const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._@:+-]{0,79}$/;
+// Names are slugged, never rejected: "[TASK72] fix", "_proj" and non-ASCII titles arrive as they are typed on the Mac.
+export const slugName = (s, fallback) => String(s ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 80) || fallback;
+const GRACE_MS = 4000;          // a hook that polled and got "pending" is back within about a second; later than this it is gone
+const POLL_WAIT_MS = 2500;      // an answer ready between two polls waits this long for the hook to come back
+const MARGIN_MS = 5000;         // the countdown ends this long before the hook's deadline
+export const HOOK_LOST = 'the Mac hook stopped waiting before the answer';
 const clean = (s) => String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
 const slug = (s) => String(s).trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'session';
 const tms = (v) => { const t = Date.parse(v); return Number.isFinite(t) ? t : null; };
@@ -39,7 +44,9 @@ export function validateStop(b, now = Date.now()) {
     if (v instanceof Error) return { ok: false, error: v.message };
     if (v !== undefined) out[k] = v;
   }
-  for (const k of ['machine', 'project', 'session_name']) if (out[k] && !NAME_RE.test(out[k])) return { ok: false, error: `${k} has characters that are not allowed` };
+  out.machine = slugName(out.machine, 'unknown-machine');
+  if (out.project) out.project = slugName(out.project, 'unknown');
+  if (out.session_name) { out.session_name = slugName(out.session_name, ''); if (!out.session_name) delete out.session_name; }
   if (typeof b.text !== 'string' || !b.text.trim()) return { ok: false, error: 'text is required' };
   out.text = clean(b.text).slice(-MAX_TEXT);
   if (out.remote_control_url && !/^https:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$/.test(out.remote_control_url)) delete out.remote_control_url;
@@ -65,7 +72,7 @@ export function stopText(v) {
 }
 
 // manager: { observe, sessionOn, setRemoteHooks, cancelAuto, forget, stallOf, triageOf, autoOf, REMOTE_PREFIX }
-export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now } = {}) {
+export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   const configFile = join(stateDir, 'remote.json');   // { waitS, checkouts: { "<project>": "/abs/path/of/the/local/checkout" } }
@@ -87,53 +94,77 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
 
   const sessions = new Map();   // name -> { name, machine, project, sessionId, client, lastSeen, open: stop|null, last: stop|null, lastSendAt, lastSendText, rcUrl }
   const stops = new Map();      // id -> stop (kept an hour)
+  const byMid = new Map();      // the manager's pending id -> stop: every hook call is tied to its stop by this id
   const rate = new Map();       // client -> [ms]
 
   // ---- stop lifecycle ----
   const resolve = (stop, state, extra = {}) => {
     if (!stop || stop.state !== 'pending') return false;
     Object.assign(stop, { state, resolvedAt: now(), ...extra });
+    clearTimeout(stop.grace);
     for (const w of stop.waiters) w();
     stop.waiters.clear();
     return true;
   };
   const answerOf = (stop) => (stop.state === 'answered' ? { ok: true, state: 'answered', answer: stop.answer } : { ok: true, state: stop.state, ...(stop.reason ? { reason: stop.reason } : {}) });
-  const waitFor = (stop, ms) => new Promise((res) => {
-    if (stop.state !== 'pending' || ms <= 0) return res();
+  // wait for the stop to resolve, `ms` to pass, or `signal.aborted` (the poll's connection closed)
+  const waitFor = (stop, ms, signal) => new Promise((res) => {
+    if (stop.state !== 'pending' || ms <= 0 || signal?.aborted) return res();
     const done = () => { clearTimeout(t); stop.waiters.delete(done); res(); };
     const t = setTimeout(done, ms);
     stop.waiters.add(done);
+    signal?.addEventListener('abort', done, { once: true });
   });
+  // The hook is gone while an answer may still be pending: the stop is resolved without an answer and the manager escalates it to the owner.
+  // Escalates only when the manager holds an answer for this stop (or `force`): a stop it is still deciding reaches the owner through schedule().
+  const lost = (stop, reason = HOOK_LOST, force = false) => {
+    if (!stop || stop.state !== 'pending') return;
+    stop.hookGone = true;
+    resolve(stop, 'none', { reason });
+    if (force || manager.autoOf(stop.name)?.id === stop.managerId) manager.hookLost(stop.name, stop.managerId, reason);
+  };
+  // a hook that is not polling must come back soon; nothing pending longer than graceMs without an open poll means it is gone
+  const armGrace = (stop) => { clearTimeout(stop.grace); if (stop.state === 'pending') { stop.grace = setTimeout(() => { if (!stop.openPolls) lost(stop); }, graceMs); stop.grace.unref?.(); } };
 
+  const stopOf = (mid) => (mid ? byMid.get(mid) || null : null);
   manager.setRemoteHooks({
     // observe's decision step finished: nothing scheduled = no answer is coming (escalated to the owner, or nothing to answer)
-    settled: (name, _mid, hasAuto) => { const st = sessions.get(name)?.open; if (st && !hasAuto) resolve(st, 'none', { reason: st.needsOwner ? 'escalated to the owner' : 'no answer needed' }); },
-    cancelled: (name, reason) => { const st = sessions.get(name)?.open; if (st) resolve(st, 'none', { reason: String(reason || 'cancelled').slice(0, 200) }); },
-    escalated: (name, _mid, reason) => { const st = sessions.get(name)?.open; if (st) { st.needsOwner = true; st.why = String(reason || '').slice(0, 300); } },
+    settled: (_name, mid, hasAuto) => { const st = stopOf(mid); if (st && !hasAuto) resolve(st, 'none', { reason: st.needsOwner ? 'escalated to the owner' : 'no answer needed' }); },
+    cancelled: (_name, reason, mid) => { const st = stopOf(mid); if (st) resolve(st, 'none', { reason: String(reason || 'cancelled').slice(0, 200) }); },
+    escalated: (_name, mid, reason) => { const st = stopOf(mid); if (st) { st.needsOwner = true; st.why = String(reason || '').slice(0, 300); } },
     noAnswer: (name) => !!sessions.get(name)?.open?.noAnswer,
-    maxDelayMs: () => Math.max(0, config().waitS - 3) * 1000,   // the countdown ends before the hook stops waiting
+    // ms the countdown may run, counted from now: until the hook's deadline minus a margin; <= 0 = no time left (or the hook is gone)
+    maxDelayMs: (_name, mid) => { const st = stopOf(mid); if (!st) return null; return st.hookGone ? 0 : st.deadline - now() - MARGIN_MS; },
   });
 
   // The manager's send path for a `mac:` session lands here (server.js guardSendKeys / guardSendKey): the answer rides the hook's long-poll.
-  function deliver(name, text) {
-    const s = sessions.get(name), st = s?.open;
-    if (!st || st.state !== 'pending') throw new Error('the Stop hook is no longer waiting for an answer');
+  // Delivered only to a hook that is polling; between two polls it waits a moment, and a hook that is gone makes the stop an owner stop.
+  async function deliver(name, text, mid = null) {
+    const s = sessions.get(name);
+    const st = mid ? stopOf(mid) : s?.open;
+    if (!s || !st || st.name !== name || st.state !== 'pending') throw new Error('the Stop hook is no longer waiting for an answer');
+    for (const end = now() + pollWaitMs; st.state === 'pending' && !st.openPolls && now() < end;) await waitFor(st, end - now());   // a poll opening wakes this
+    if (st.state !== 'pending') throw new Error('the Stop hook is no longer waiting for an answer');
+    if (!st.openPolls) { lost(st, HOOK_LOST, true); throw new Error(HOOK_LOST); }
     s.lastSendAt = now(); s.lastSendText = String(text).slice(0, 300);
     resolve(st, 'answered', { answer: String(text).slice(0, 2000) });
     return { ok: true };
   }
-  const deliverKey = (name, key) => deliver(name, `Go with option ${String(key).slice(0, 8)}.`);
+  const deliverKey = (name, key, mid = null) => deliver(name, `Go with option ${String(key).slice(0, 8)}.`, mid);
 
   function ingest(v, client) {
     const t = now();
-    let name = `${manager.REMOTE_PREFIX}${slug(v.session_name || `${v.project}-${v.session_id.slice(0, 6)}`)}`;
+    // the title plus a fragment of the session id: two Mac sessions with the same title never share a row
+    let name = `${manager.REMOTE_PREFIX}${slug(v.session_name || v.project)}-${slug(v.session_id.slice(0, 6))}`;
     const prev0 = sessions.get(name);
     if (prev0 && prev0.machine !== v.machine) name = `${name}@${slug(v.machine)}`;   // two machines using the same session name stay apart
     let s = sessions.get(name);
     const first = !s;
     if (!s) { s = { name, machine: v.machine, project: v.project, sessionId: v.session_id, client: client.name, open: null, last: null, lastSendAt: null, lastSendText: null }; sessions.set(name, s); }
     Object.assign(s, { project: v.project, lastSeen: t, client: client.name, rcUrl: v.remote_control_url || null, cwd: v.cwd || null });
-    const cwd = checkoutOf(v.project) || undefined;   // merge / push / deploy evaluations need a local checkout; without one those topics escalate
+    // Only the deploy topic is evaluated for a Mac session (it reads origin); merge and push escalate in manager.js (remote block). A project without a
+    // configured local checkout gets a path that does not exist, so every evaluation finds no repository and escalates.
+    const cwd = checkoutOf(v.project) || join(stateDir, 'remote-no-checkout');
     const base = { name, agent: 'claude', project: v.project, cwd, now: t, remote: true, machine: v.machine };
 
     if (s.open) resolve(s.open, 'none', { reason: 'superseded by a newer stop' });
@@ -143,16 +174,20 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
       const answeredAt = v.prompt_at && v.prompt_at >= prevAt ? v.prompt_at : t;
       manager.observe({ ...base, state: 'working', plain: [], raw: [], changed: true, realWork: true, lastSendAt: Math.max(s.lastSendAt || 0, v.prompt_at && v.prompt_at > prevAt ? v.prompt_at : 0) || null, lastSendText: s.lastSendText, answeredAt, rep: null });
     }
+    const prevMid = manager.pendingIdOf(name);
     const id = randomUUID();
     const text = stopText(v);
-    const stop = { id, name, client: client.name, at: v.at, postedAt: t, text, state: 'pending', answer: null, reason: null, waiters: new Set(), needsOwner: false, noAnswer: v.stop_hook_active, deadline: t + config().waitS * 1000, statusLine: v.status_line || null };
+    const stop = { id, name, client: client.name, at: v.at, postedAt: t, text, state: 'pending', answer: null, reason: null, waiters: new Set(), openPolls: 0, grace: null, hookGone: false, managerId: null, needsOwner: false, noAnswer: v.stop_hook_active, deadline: t + config().waitS * 1000, statusLine: v.status_line || null };
     stops.set(id, stop);
-    for (const [k, o] of stops) { if (t - o.postedAt > STOP_TTL_MS) stops.delete(k); else break; }
+    for (const [k, o] of stops) { if (t - o.postedAt > STOP_TTL_MS) { stops.delete(k); if (o.managerId) byMid.delete(o.managerId); } else break; }
     s.open = stop; s.last = stop;
+    armGrace(stop);
     if (!manager.sessionOn(name)) { resolve(stop, 'none', { reason: 'manager disabled for this session' }); }
     const lines = text.split('\n');
     const turn = { text, at: t, reason: 'end_turn', backgroundWork: 0 };
     manager.observe({ ...base, state: 'done', plain: lines, raw: [], changed: true, realWork: false, lastSendAt: s.lastSendAt, lastSendText: s.lastSendText, rep: { turnForStop: () => turn, promptSince: () => null } });
+    const mid = manager.pendingIdOf(name);   // the manager's id for this stop, set synchronously by observe
+    if (mid && mid !== prevMid) { stop.managerId = mid; byMid.set(mid, stop); }
     if (stop.noAnswer && stop.state === 'pending') stop.why = 'stop_hook_active: never answered automatically';
     return { id, name, answerable: !stop.noAnswer, wait_max_s: config().waitS };
   }
@@ -219,11 +254,16 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
       if (stop.state === 'pending') {
         const asked = Number(url.searchParams.get('wait'));
         const want = Number.isFinite(asked) && asked > 0 ? Math.min(asked, HARD_WAIT_S) * 1000 : 0;
-        await waitFor(stop, Math.min(want, Math.max(0, stop.deadline - now())));
-        if (stop.state === 'pending' && now() >= stop.deadline - 50) {
-          resolve(stop, 'none', { reason: 'the hook stopped waiting' });
-          manager.cancelAuto(stop.name, 'Stop hook stopped waiting');   // an answer nobody can receive is never typed
-        }
+        // an open poll is the hook waiting; if its connection closes first, the hook stopped waiting
+        const ac = new AbortController();
+        res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+        stop.openPolls += 1; clearTimeout(stop.grace);
+        for (const w of [...stop.waiters]) w();   // wakes an answer that was waiting for the hook to come back
+        try { await waitFor(stop, Math.min(want, Math.max(0, stop.deadline - now())), ac.signal); }
+        finally { stop.openPolls -= 1; }
+        if (ac.signal.aborted) { lost(stop); return true; }
+        if (stop.state === 'pending' && now() >= stop.deadline - 50) lost(stop);   // the deadline passed with a pending answer: the owner gets it
+        else armGrace(stop);
       }
       send(res, 200, answerOf(stop));
       return true;

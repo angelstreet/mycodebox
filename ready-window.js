@@ -52,14 +52,21 @@ export function createReadyStore({ file, now = Date.now, timezone = null } = {})
     },
     // a chip for the session row: the window and (when named) its target
     chipFor(session, text) { const w = this.match({ session, text }); return w ? this.view(w) : null; },
-    // Count one ask (by stop id) of a session in a window -> { n, answer: n <= MAX_ANSWERS }
-    noteAsk(w, session, stopId) {
+    // Which ask this stop would be in the window (nothing recorded) -> { n, answer: n <= MAX_ANSWERS }. An ask counts only after commitAsk,
+    // which the manager calls once the answer passed its gates (autoSend, pause, cap, draft).
+    peekAsk(w, session, stopId) {
       const rec = wins.find((x) => x.id === w.id);
       if (!rec) return { n: MAX_ANSWERS + 1, answer: false };
+      const ids = rec.asks[session]?.ids || [];
+      const at = ids.indexOf(stopId);
+      const n = at >= 0 ? at + 1 : ids.length + 1;
+      return { n, answer: n <= MAX_ANSWERS };
+    },
+    commitAsk(w, session, stopId) {
+      const rec = wins.find((x) => x.id === w.id);
+      if (!rec) return;
       const a = (rec.asks[session] ||= { ids: [] });
       if (!a.ids.includes(stopId)) { a.ids.push(stopId); save(); }
-      const n = a.ids.indexOf(stopId) + 1;
-      return { n, answer: n <= MAX_ANSWERS };
     },
   };
 }
