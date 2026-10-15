@@ -42,6 +42,9 @@ import { createJevBreaker } from './jev-breaker.js';
 import { createJevSwitch, isDisabledReply, DISABLED } from './jev-switch.js';
 import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
 import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
+import { isHardwareAsk, readyReply } from './ready-window.js';
+import { createFallbackDecider, FALLBACK_MODES, FALLBACK_SOURCE } from './minimax-fallback.js';
+import { createRoundtrips, roundtripRecord, summarizeRoundtrips, FILE_NAME as ROUNDTRIPS_FILE } from './roundtrips.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -75,7 +78,7 @@ setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
 let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true, selfChecks: true, mockupFirst: true, mockupWindowMin: WINDOW_DEFAULT_MIN,
-  jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
+  jevUsage: 'auto', aiFallback: 'minimax', aiFallbackDailyCalls: 300, aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
 export const jevBreaker = createJevBreaker({ file: BUDGET_FILE });   // 3 errors in a row: rules only, one probe per 10 min (jev-breaker.js)
@@ -85,6 +88,7 @@ let lastStops = {};
 let lastStopsWrite = Promise.resolve();
 const saveLastStops = () => { lastStopsWrite = lastStopsWrite.then(() => writeFile(LAST_STOPS_FILE, JSON.stringify(lastStops))).catch(() => {}); };
 const aiBudget = createBudget(AI_BUDGET_FILE);
+const fallbackBudget = createBudget(join(STATE_DIR, 'ai-fallback-budget.json'));   // calls per day through the MiniMax fallback (cost is always 0)
 const triages = new Map();   // stop id -> triage result (one reviewer call per stop)
 let creditsPeek = () => null;   // injected by server.js: the cached OpenRouter credit ({ ok, balance }) or null
 let triageContext = () => ({});   // injected by server.js: (session) -> { priority, quota, leases, deploys }
@@ -101,6 +105,7 @@ let onMergeDecision = () => {};                                     // injected:
 let mergeJev = (body) => jevPost(body);                             // the merge evaluation's Jev call (tests inject a fake)
 let decideContext = () => ({ deploys: null, leases: null, envs: [] });    // injected: () => { deploys: runner snapshot, leases: lease store value, envs: [env names] }
 let onDigest = () => {};                                            // injected: ({ day, count, text }) -> feed item + push (digest tier)
+let readyWindows = null;                                            // injected: ready-window.js store (round 9 item 8). Unset = no ready windows
 let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
 let ownJobs = null;                                                 // injected: own-jobs.js watcher { watch, forget, progressOf } (round 9, item 11). Unset = jobs are not watched
 let ownerAsksFile = join(STATE_DIR, 'manager-owner-asks.jsonl');    // the owner-asks ledger: a new ask of a session supersedes its older open ones (round 9, item 5)
@@ -113,7 +118,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, ownJobs: ownJobsDep, ownerAsksFile: asksFile } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, ownJobs: ownJobsDep, ownerAsksFile: asksFile, readyStore } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -136,6 +141,8 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   try { const b = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); budget = { day: b.day || '', calls: b.calls || 0, cost: b.cost || 0 }; } catch {}
   try { lastStops = JSON.parse(await readFile(LAST_STOPS_FILE, 'utf8')) || {}; } catch { lastStops = {}; }
   await aiBudget.load();
+  await fallbackBudget.load();
+  if (!FALLBACK_MODES.includes(config.aiFallback)) config.aiFallback = 'minimax';
   config.autoCases = (config.autoCases || []).filter((c) => AUTO_CASES.includes(c));
   config.aiAutoCases = (config.aiAutoCases || []).filter((c) => CASES.includes(c) && !AI_NEVER_CASES.includes(c));
   if (!AI_MODES.includes(config.aiTriage)) config.aiTriage = 'simulate';
@@ -157,6 +164,7 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (decideCtx) decideContext = decideCtx;
   if (digestHook) onDigest = digestHook;
   if (leaseView) leaseViewOf = leaseView;
+  if (readyStore) readyWindows = readyStore;
   if (onStatus) statusHook = onStatus;
   if (ownJobsDep) ownJobs = ownJobsDep;
   if (asksFile) ownerAsksFile = asksFile;
@@ -176,7 +184,7 @@ export function langfuseLinks(env = process.env) {
 
 export function managerConfig() {
   return { ...config, langfuse: langfuseLinks(), validCases: AUTO_CASES, validAiCases: CASES.filter((c) => !AI_NEVER_CASES.includes(c)), cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...jevBreaker.state(), ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
-    ai: !!(AI_URL && JEV_API_KEY), aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
+    ai: !!(AI_URL && JEV_API_KEY), aiFallbackModes: FALLBACK_MODES, aiFallbackBudget: { ...fallbackBudget.snapshot(), dailyCalls: config.aiFallbackDailyCalls }, aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
 }
 
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
@@ -186,7 +194,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure } = b;
+  const { aiFallback, aiFallbackDailyCalls, jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -197,6 +205,8 @@ export async function setManagerConfig(b = {}) {
   if (delayMs !== undefined) config.delayMs = Math.round(num(delayMs, 0, 600000, 'delayMs'));
   if (maxPerSessionPerHour !== undefined) config.maxPerSessionPerHour = Math.round(num(maxPerSessionPerHour, 0, 100, 'maxPerSessionPerHour'));
   if (jevUsage !== undefined) { if (!/^(auto|text\.decision(\.[a-z0-9_]+)*)$/.test(String(jevUsage))) throw bad('jevUsage must be "auto" or a text.decision usage key'); config.jevUsage = jevUsage; }
+  if (aiFallback !== undefined) { if (!FALLBACK_MODES.includes(aiFallback)) throw bad(`aiFallback must be one of: ${FALLBACK_MODES.join(', ')}`); config.aiFallback = aiFallback; }
+  if (aiFallbackDailyCalls !== undefined) config.aiFallbackDailyCalls = Math.round(num(aiFallbackDailyCalls, 0, 10000, 'aiFallbackDailyCalls'));
   if (aiTriage !== undefined) { if (!AI_MODES.includes(aiTriage)) throw bad(`aiTriage must be one of: ${AI_MODES.join(', ')}`); config.aiTriage = aiTriage; }
   if (aiMinConfidence !== undefined) config.aiMinConfidence = num(aiMinConfidence, 0, 1, 'aiMinConfidence');
   if (aiDailyUsd !== undefined) config.aiDailyUsd = num(aiDailyUsd, 0, 100, 'aiDailyUsd');
@@ -258,7 +268,7 @@ export async function setManagerConfig(b = {}) {
   return managerConfig();
 }
 
-const sessionOn = (name) => config.enabled && !config.disabledSessions.includes(name);
+export const sessionOn = (name) => config.enabled && !config.disabledSessions.includes(name);
 
 async function log(rec) {
   try { await appendFile(LOG_FILE, JSON.stringify(rec) + '\n'); } catch (e) { console.error('[manager] log', e.message); }
@@ -330,6 +340,36 @@ function aiBlock(name, kase, confidence) {
   return null;
 }
 
+// ---- remote stops hook point (round 9 item 1; remote-stops.js; one block, keep it together) ----
+// Stops posted by other machines (the Mac Stop hook) enter observe() as sessions named `mac:<name>` (s.remote = true: they arrive settled, no
+// tmux). The remote layer needs to know when the manager is DONE with a stop (settled), answered it (send -> deliver), dropped the countdown
+// (cancelled) or escalated it; none of this changes what the manager decides.
+export const REMOTE_PREFIX = 'mac:';
+export const isRemoteSession = (name) => String(name).startsWith(REMOTE_PREFIX);
+let remoteHooks = { settled() {}, cancelled() {}, escalated() {}, noAnswer: () => false, maxDelayMs: () => null };
+export function setRemoteHooks(h = {}) { remoteHooks = { ...remoteHooks, ...h }; }
+const hookSafe = (fn, ...a) => { try { fn(...a); } catch (e) { console.error('[manager] remote hook', e.message); } };
+
+// ---- ready window (round 9 item 8; keep this block together) ----
+// "ready for N minutes" (voice / tap, ready-window.js): while a window covers the session, a stop that asks the owner for a hardware step on the
+// device (pair, press, plug, power-cycle) is answered "retry the step yourself; stop after 2 failures". The third ask in the window goes to the owner.
+// Same gates as every manager decision (autoSend, pause, hourly cap, draft, hard floor on the reply). -> true when it scheduled an answer or escalated.
+function readyDecision({ s, w, id, h, final, stall }) {
+  if (!readyWindows || isManagerSession(s.name) || stall.draft) return false;
+  if (!isHardwareAsk({ kase: final.case, action: final.action, question: final.question, excerpt: stall.excerpt })) return false;
+  const win = readyWindows.match({ session: s.name, text: `${final.action || ''}\n${final.question || ''}\n${stall.excerpt || ''}` });
+  if (!win) return false;
+  const { n, answer } = readyWindows.noteAsk(win, s.name, id);
+  if (!answer) { escalate(s.name, s.state, final, id, `ready window: ask number ${n} in the window (the step already failed twice) - needs you`); return true; }
+  if (decisionBlock(s.name)) return false;
+  const reply = readyReply(readyWindows.view(win));
+  const pending = { id, hash: h, answer: { text: reply }, case: final.case, source: 'manager_decision', confidence: 1, kinds: {}, ready: { until: win.until, target: win.target || null, n } };
+  const pol = policyOf(s.name, s.agent);
+  if (pol.action === 'hold') applyHold(s.name, w, pending, pol);
+  else { if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false); schedule(s.name, w, pending); }
+  return true;
+}
+
 // A stall that is not auto-answered goes to the owner. A waiting session was already pushed by
 // ghosty's own 'waiting' alert, so only a finished turn that asks something is pushed here.
 // manager.json managerSessions (default ["manager"]): the manager agent's own session is never escalated or pushed (TASK-44-MANAGER.md section 0).
@@ -338,6 +378,7 @@ export const isManagerSession = (name) => { try { return (managerSessionsOf() ||
 const escalatedStops = new Set();   // stop ids the rules escalated to the owner (the wake shadow's `escalated` fact)
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
+  if (isRemoteSession(name)) hookSafe(remoteHooks.escalated, name, id, reason, final);
   escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
   // one open ask per session: this one supersedes the session's older open asks in the owner-asks ledger (round 9, item 5)
@@ -348,6 +389,28 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   // carries the stop id, the voice item and the notification actions. The alert's own debounce keeps it to one extra per stop.
   else if (state === 'waiting' && (final.options?.length || 0) >= 1) notify(name, aiLine ? { ...final, aiLine } : final, reason, state);
 }
+
+// ---- owner round-trip ledger (round 9 item 9, roundtrips.js) ----
+// One record in owner-roundtrips.jsonl when a stop that reached the owner (or was answered for them) resolves: the owner replied or the
+// manager answered (outcome), a newer stop superseded it, or the session was removed. Local tmux and remote (Mac hook) sessions alike.
+const roundtrips = createRoundtrips({ file: join(STATE_DIR, ROUNDTRIPS_FILE) });
+const answerers = new Map();   // session -> { by, via, at }: who sent the owner's last text (server.js logSend -> noteAnswerer)
+export function noteAnswerer(name, by) { if (by === 'owner' || by === 'owner-voice') answerers.set(name, { by, via: by === 'owner-voice' ? 'voice' : 'dashboard', at: Date.now() }); }
+function settleRoundtrip(name, p, resolution, answeredAt, machine = 'local') {
+  if (!p || p.settled || !p.id) return;
+  p.settled = true;
+  const reached = escalatedStops.has(p.id) || p.auto === true;
+  const a = answerers.get(name), answeredByOwner = resolution === 'answered' && !p.auto;
+  const ownerSent = a && a.at >= p.at - 1000;
+  const by = p.auto ? (p.remote ? 'remote-hook' : 'manager') : answeredByOwner && ownerSent ? a.by : 'owner';
+  const via = p.auto ? (p.remote ? 'hook' : 'tmux') : answeredByOwner ? (ownerSent ? a.via : p.remote ? 'mac' : 'pane') : 'none';
+  roundtrips.record(roundtripRecord({ id: p.id, session: name, machine: p.machine || machine, at: p.at, answeredAt, cls: p.cls, by, via, resolution, reachedOwner: reached })).catch(() => {});
+}
+export const roundtripsView = async ({ hours = 24, now = Date.now() } = {}) => {
+  const h = Math.max(1, Math.min(24 * 90, Number(hours) || 24));
+  const recs = await roundtrips.read({ sinceMs: now - h * 3600e3 });
+  return { hours: h, summary: summarizeRoundtrips(recs, { hours: h }), records: recs.slice(-500) };
+};
 
 // ---- AI reviewer (phase 9) ----
 // Stops that go to the owner: everything except background work and a plain finished turn without a question.
@@ -363,7 +426,8 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
   const rec = { type: 'triage', id, session: name, at: new Date().toISOString(), case: final.case, mode: config.aiTriage };
   const finish = async (extra, logIt = true) => { Object.assign(rec, extra); triages.set(id, rec); if (triages.size > 300) triages.delete(triages.keys().next().value); if (logIt) await log(rec); return rec; };
   if (!AI_URL || !JEV_API_KEY) return finish({ skipped: 'not configured' }, false);
-  if (aiBudget.over(config.aiDailyUsd, config.aiDailyCalls)) return finish({ skipped: 'AI daily budget reached' });
+  const viaFallback = fallbackOn() && (creditsOut() || jevBreaker.isOpen());   // OpenRouter has no credit / Jev is down: MiniMax M3 reads the stop instead
+  if (!viaFallback && aiBudget.over(config.aiDailyUsd, config.aiDailyCalls)) return finish({ skipped: 'AI daily budget reached' });
   const ctx = (() => { try { return triageContext(name, final) || {}; } catch { return {}; } })();
   const deployish = final.case === 'waiting_deploy' || !!final.deployHint || /deploy/i.test(final.forbidden || '');   // lease + deploy-queue state only matters here
   const flags = [final.forbidden ? `forbidden topic: "${final.forbidden}"` : null, stall.draft ? 'the owner has an unsent draft in the input box' : null,
@@ -371,10 +435,21 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
   const facts = { session: name, agent, project, priority: ctx.priority, state, case: final.case, source: final.source, flags,
     jev: jevOut?.choice ? jevOut : null, quota: ctx.quota, ...(deployish ? { leases: ctx.leases, deploys: ctx.deploys } : {}), options: (() => { try { return reviewerOptions({ state, stall: { question: final.question || stall.question, excerpt: stall.excerpt, options: stall.options || final.options || null } }); } catch { return []; } })(), text: stall.excerpt || final.question || '' };
   const prompt = await reviewerPrompt.get();
-  const r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, system: prompt.text, fetchFn: reviewerFetch });
-  aiBudget.add(r.cost || 0);
+  let r, fb = null;
+  if (viaFallback) {
+    fb = 'credits or Jev down';
+    r = await fallbackRun('triage', name, (d) => d.reviewer({ facts, system: prompt.text }), fb);
+    if (r.gated) return finish({ skipped: r.error });
+  } else {
+    r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, system: prompt.text, fetchFn: reviewerFetch });
+    aiBudget.add(r.cost || 0);
+    if (r.error && jevErrorKind(r.error) === 'credits') {   // the reviewer found out first: same cool-down as Jev, and this stop still gets read
+      creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS;
+      if (fallbackOn()) { const f = await fallbackRun('triage', name, (d) => d.reviewer({ facts, system: prompt.text }), 'OpenRouter answered 402'); if (!f.gated) { r = f; fb = 'OpenRouter answered 402'; } }
+    }
+  }
   // what the eval sync and the Langfuse generation show: the prompt version used and the facts' flags (no closing text)
-  const ctxInfo = { ...(prompt.version != null ? { prompt: { name: prompt.name, version: prompt.version } } : {}), src: final.source, flags };
+  const ctxInfo = { ...(fb ? { source: FALLBACK_SOURCE, fallback: fb } : {}), ...(prompt.version != null ? { prompt: { name: prompt.name, version: prompt.version } } : {}), src: final.source, flags };
   return finish(r.ai ? { ...ctxInfo, ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model, tin: r.tin, tout: r.tout } : { ...ctxInfo, error: r.error, cost: r.cost || 0, ms: r.ms });
 }
 
@@ -384,6 +459,7 @@ export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {
   const a = w.auto;
   clearTimeout(a.timer);
   w.auto = null;
+  if (isRemoteSession(name) && !(quiet && reason === 'superseded')) hookSafe(remoteHooks.cancelled, name, reason, a.id);
   const ids = kindIds(a), decided = Object.values(ids);
   if (!quiet && decided.length) { try { onMergeCancelled(name, { id: a.id, reason, ...(ids.merge ? { merge_decision_id: ids.merge } : {}), decision_ids: decided }); } catch {} }
   if (!quiet) logLater({ type: 'answer_cancelled', id: a.id, session: name, case: a.case, answer: a.answer, reason, ...(ids.merge ? { merge_decision_id: ids.merge } : {}), ...(decided.length ? { decision_ids: decided } : {}) });
@@ -442,8 +518,11 @@ export function reevaluateHolds() {
 
 function schedule(name, w, a) {
   cancelAuto(name, 'superseded', true);
-  const auto = { ...a, sendAt: Date.now() + config.delayMs };
-  auto.timer = setTimeout(() => fire(name, auto).catch((e) => console.error('[manager] fire', e.message)), config.delayMs);
+  // remote (Mac hook) stop: the hook gave the stop a loop-guard flag -> never answered, the owner gets it; the countdown must end before the hook stops waiting
+  if (isRemoteSession(name) && remoteHooks.noAnswer(name)) { escalate(name, w.last?.state, w.stall || { case: a.case }, a.id, 'the Stop hook was already continuing (loop guard): not answered automatically'); hookSafe(remoteHooks.cancelled, name, 'loop guard', a.id); return; }
+  const delayMs = isRemoteSession(name) ? Math.min(config.delayMs, remoteHooks.maxDelayMs() ?? config.delayMs) : config.delayMs;
+  const auto = { ...a, sendAt: Date.now() + delayMs };
+  auto.timer = setTimeout(() => fire(name, auto).catch((e) => console.error('[manager] fire', e.message)), delayMs);
   w.auto = auto;
 }
 
@@ -497,8 +576,8 @@ async function fire(name, auto) {
     return;
   }
   sentLog.set(name, [...(sentLog.get(name) || []), Date.now()]);
-  if (w.pending && w.pending.id === auto.id) w.pending.auto = true;
-  logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence, ...(kindIds(auto).merge ? { merge_decision_id: kindIds(auto).merge } : {}),
+  if (w.pending && w.pending.id === auto.id) { w.pending.auto = true; w.pending.autoAt = Date.now(); }
+  logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence, ...(auto.ready ? { ready: auto.ready } : {}), ...(kindIds(auto).merge ? { merge_decision_id: kindIds(auto).merge } : {}),
     ...(Object.keys(kinds).length || auto.menu ? { decision_ids: [...Object.values(kindIds(auto)), ...(auto.menu ? [`menu-${auto.id}`] : [])], ...(Object.keys(kinds).length ? { decided: Object.keys(kinds) } : {}) } : {}) });
   if (auto.menu) await appendJournal(menuRecord({ id: auto.id, session: name, at: new Date(), answer: a, ...auto.menu }));
 }
@@ -692,14 +771,39 @@ const jevSwitch = createJevSwitch();   // the server's JEV_ENABLED=false: one pr
 let creditsDownUntil = 0;
 export const resetJevCooldown = () => { creditsDownUntil = 0; };   // tests, and an owner top-up
 
+// ---- MiniMax fallback (round 9 item 10, minimax-fallback.js) ----
+// OpenRouter has no credit (402 cool-down, or the cached balance is 0) or the Jev breaker is open: triage and the Jev-style choices go to
+// MiniMax M3 through headless mcode instead of being skipped. Every call is logged ({type:'fallback', source:'minimax-fallback'}) and counted.
+let fallbackDecider = null;
+export const setFallbackDecider = (d) => { fallbackDecider = d; };   // tests inject a fake-mcode decider
+const getFallback = () => (fallbackDecider ||= createFallbackDecider());
+const creditsOut = () => { if (Date.now() < creditsDownUntil) return true; try { const cr = creditsPeek(); return !!(cr?.ok && cr.balance != null && cr.balance <= 0); } catch { return false; } };
+const fallbackOn = () => config.aiFallback !== 'off';
+const fallbackGate = () => (!fallbackOn() ? 'MiniMax fallback is off' : fallbackBudget.over(Infinity, config.aiFallbackDailyCalls) ? `MiniMax fallback daily cap reached (${config.aiFallbackDailyCalls})` : null);
+async function fallbackRun(kind, session, fn, why) {
+  const gate = fallbackGate();
+  if (gate) return { error: gate, source: FALLBACK_SOURCE, gated: true };
+  const r = await fn(getFallback());
+  fallbackBudget.add(0);
+  logLater({ type: 'fallback', source: FALLBACK_SOURCE, for: kind, session: session || null, why, ok: !r.error, ...(r.error ? { error: String(r.error).slice(0, 200) } : {}), ms: r.ms ?? null, model: r.model || null, cost: 0, calls: fallbackBudget.snapshot().calls, cap: config.aiFallbackDailyCalls });
+  return r;
+}
+// a Jev-shaped choice ({ choice, confidence, probabilities, ... }) from the fallback, or null when it cannot answer (the caller then skips as before)
+async function fallbackChoice(body, session, why) {
+  const r = await fallbackRun('jev', session, (f) => f.choice(body), why);
+  if (r.error || !r.answers?.choice) return null;
+  const a = r.answers.choice;
+  return { choice: a.choice, confidence: a.confidence, probabilities: a.probabilities, cost: 0, ms: r.ms, model: r.model, source: FALLBACK_SOURCE };
+}
+
 // ctx = { session, stallId, case }: what the product's log shows as "what this decision was about".
 async function jev(stall, ctx = {}) {
   if (!JEV_URL || !JEV_API_KEY) return { skipped: 'not configured' };
   if (jevSwitch.off()) return { skipped: DISABLED };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
-  if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
-  if (!jevBreaker.allow()) return { skipped: 'Jev down (3 errors in a row), rules decide' };
+  if (creditsOut()) return (fallbackOn() && await fallbackChoice(jevRequestBody(stall, { usage: FALLBACK_USAGE }), ctx.session, 'OpenRouter credit used up')) || { skipped: 'OpenRouter credit used up (402), retrying later' };
+  if (!jevBreaker.allow()) return (fallbackOn() && await fallbackChoice(jevRequestBody(stall, { usage: FALLBACK_USAGE }), ctx.session, 'Jev down (breaker open)')) || { skipped: 'Jev down (3 errors in a row), rules decide' };
   const logged = decisions.configured;   // needs VPT_TEAM_ID: the server writes no log row without a team
   const body = jevRequestBody(stall, { usage: await jevUsageNow(), refs: logged ? { team_id: VPT_TEAM_ID, source: 'ghosty-manager', session: ctx.session, stall_id: ctx.stallId, case: ctx.case } : null });
   const started = Date.now();
@@ -727,6 +831,7 @@ async function jev(stall, ctx = {}) {
       const kind = jevErrorKind(error);
       if (kind === 'credits') creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS;
       if (!j.success) jevBreaker.failure(error); else jevBreaker.success();
+      if (kind === 'credits' && fallbackOn()) { const f = await fallbackChoice(jevRequestBody(stall, { usage: FALLBACK_USAGE }), ctx.session, 'OpenRouter answered 402'); if (f) return f; }
       return { error, kind, ms: Date.now() - started, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
     }
     jevBreaker.success();
@@ -845,8 +950,9 @@ async function jevPost(body) {
   if (jevSwitch.off()) return { skipped: DISABLED };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
-  if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
-  if (!jevBreaker.allow()) return { skipped: 'Jev down (3 errors in a row), rules decide' };
+  const viaFallback = async (why) => { const f = fallbackOn() && body?.questions?.choice ? await fallbackRun('decision', body.refs?.session, (d) => d.choice(body), why) : null; return f && !f.error ? f : null; };
+  if (creditsOut()) return (await viaFallback('OpenRouter credit used up')) || { skipped: 'OpenRouter credit used up (402), retrying later' };
+  if (!jevBreaker.allow()) return (await viaFallback('Jev down (breaker open)')) || { skipped: 'Jev down (3 errors in a row), rules decide' };
   body = { ...body, usage: await jevUsageNow(), ...(decisions.configured ? { team_id: VPT_TEAM_ID } : {}) };
   try {
     const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) });
@@ -1154,6 +1260,7 @@ export function observe(s) {
   if (!w) { w = { since: s.now, hash: null, stall: null, pending: null, seen: false }; watch.set(s.name, w); }
 
   w.agent = s.agent;
+  if (s.remote) w.seen = true;   // remote stops arrive settled (REMOTE hook block above)
   const rep = s.agent === 'claude' ? s.rep || null : null;   // Codex / MiniMax have no reporter: panes only
   w.last = { state: s.state, lastSendAt: s.lastSendAt || null, now: s.now };
   const stopped = s.state === 'waiting' || s.state === 'done';
@@ -1179,6 +1286,7 @@ export function observe(s) {
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
       writeBack(p.id, outcomeFromReplyKind(reply.text ? outcomeKind(reply.text) : 'unknown'), 'owner-reply', p.auto ? null : decisionByStop.get(p.id));
       if (!p.auto) routerOutcome(p.id, reply.text ? outcomeKind(reply.text) : 'unknown');
+      settleRoundtrip(s.name, p, 'answered', p.auto ? p.autoAt || s.now : s.answeredAt ?? (sentSince ? s.lastSendAt : said?.at ?? s.now), s.machine);
       w.pending = null;
     }
     if (holdOf(s.name)) endHold(s.name, 'manager', 'session moved on', false);
@@ -1211,7 +1319,7 @@ export function observe(s) {
   if (h !== w.hash) { if (w.auto) cancelAuto(s.name, 'pane changed'); w.hash = h; w.since = s.now; w.logged = false; w.stall = stall; }
   // First sight after a restart: don't log stalls that were already sitting there.
   if (!w.seen) { w.logged = true; w.seen = true; return w.stall; }
-  if (w.logged || s.now - w.since < SETTLE_MS || !sessionOn(s.name)) return w.stall;
+  if (w.logged || (!s.remote && s.now - w.since < SETTLE_MS) || !sessionOn(s.name)) return w.stall;
   w.logged = true;
   // The very same stop as the last one logged, with no real work or send in between: not a new stop.
   // The last RECENT_STOPS logged stops are remembered per session on disk, so a restart, a repaint or an
@@ -1219,13 +1327,14 @@ export function observe(s) {
   const stopId = hash(stopKey(stall.excerpt));
   const recent = w.recent ?? (w.recent = Array.isArray(lastStops[s.name]) ? [...lastStops[s.name]] : []);
   if (w.moved) recent.length = 0;
-  if (recent.includes(stopId)) return w.stall;
+  if (recent.includes(stopId) && !s.remote) return w.stall;
   recent.push(stopId); if (recent.length > RECENT_STOPS) recent.shift();
   w.moved = false;
   lastStops[s.name] = [...recent]; saveLastStops();
 
   const id = randomUUID();
-  w.pending = { id, at: s.now, key: stopKey(stall.excerpt) };
+  if (w.pending) settleRoundtrip(s.name, w.pending, 'superseded', s.now, s.machine);
+  w.pending = { id, at: s.now, key: stopKey(stall.excerpt), ...(s.remote ? { remote: true, machine: s.machine } : {}) };
   (async () => {
     let final = stall, jevOut = null;
     if (stall.source === 'ambiguous') {
@@ -1239,6 +1348,7 @@ export function observe(s) {
     if (mock) final = { ...final, case: 'continue', source: 'mockup-first', answer: { text: mock }, autoCase: undefined, no_status: false };
     let ws = wouldSend(final);
     const confidence = final.source === 'jev' ? Number(jevOut?.probabilities?.[jevOut.choice] ?? jevOut?.confidence ?? 0) : 1;
+    if (w.pending?.id === id) w.pending.cls = final.case;
     w.stall = { ...final, would: ws, jev: jevOut?.choice ? { choice: jevOut.choice, probabilities: jevOut.probabilities || null } : null };
     await log({
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
@@ -1261,6 +1371,7 @@ export function observe(s) {
     // a recommended menu option the manager may take (or must escalate with a reason): its own text decides, not the whole question
     const menu = await menuDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] menu decision', e.message); return null; });
     if (menu?.stale || w.hash !== h) return;
+    if (readyDecision({ s, w, id, h, final, stall })) return;   // ready window (round 9 item 8)
     if (menu?.ok) { ws = wouldSend({ ...final, forbidden: null }); w.stall = { ...w.stall, forbidden: null, would: ws }; }
     else if (menu) partial.mergeWhy = menu.why;
     // a decided topic that was escalated (merge / push / deploy) must not ride on an automatic "Yes, continue."
@@ -1300,11 +1411,11 @@ export function observe(s) {
     }
     if (final.case !== 'done' && final.case !== 'background_wait' && final.case !== 'own_job_wait') escalate(s.name, s.state, final, id, why, oneLine(tri));
     return;
-  })().catch((e) => console.error('[manager]', e.message));
+  })().catch((e) => console.error('[manager]', e.message)).finally(() => { if (s.remote) hookSafe(remoteHooks.settled, s.name, id, !!watch.get(s.name)?.auto); });
   return w.stall;
 }
 
-export function forget(name) { cancelAuto(name, 'session removed'); watch.delete(name); try { ownJobs?.forget(name); } catch {} }
+export function forget(name) { cancelAuto(name, 'session removed'); const p = watch.get(name)?.pending; if (p) settleRoundtrip(name, p, 'removed', Date.now()); watch.delete(name); try { ownJobs?.forget(name); } catch {} }
 // For the own-jobs watcher: is `session` still stopped at the stop `stopId` (so a wake is still wanted), and may text be typed into it now?
 export const stillStopped = (session, stopId) => { const w = watch.get(session); return !!(w && w.pending?.id === stopId && w.last && (w.last.state === 'done' || w.last.state === 'waiting')); };
 export const canType = (session) => { const w = watch.get(session); return !!w && !w.cls?.draft && !isPaused(session) && w.last?.state === 'done'; };
@@ -1363,6 +1474,9 @@ export async function decidedView({ hours = 24, since = null, limit = 100, now =
   const recs = await readRecs();
   const all = decidedItems({ recs, journal: await readJournal(), since: sinceMs });
   const summary = decidedSummary(all, { hours: win, failed: failedCount(recs, { since: sinceMs }) });
+  // round 9: how long the owner kept sessions waiting in the same window (owner-roundtrips.jsonl); the digest carries it as one more sentence
+  const waits = summarizeRoundtrips(await roundtrips.read({ sinceMs }), { hours: win });
+  if (waits.text) { summary.waits = waits; const t = `${summary.text} ${waits.text[0].toUpperCase()}${waits.text.slice(1)}.`; summary.text = t.length > 700 ? `${t.slice(0, 697)}...` : t; }
   return { items: all.slice(0, Math.max(1, Math.min(500, Number(limit) || 100))), summary };
 }
 // One item by id (any age), or null.

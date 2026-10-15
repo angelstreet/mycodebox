@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { deriveButtons, needsOwner } from './public/buttons.js';
 import { forbiddenMatch } from './stall.js';
 import { summarize as leaseSummary } from './lease-source.js';
+import { parseReadySpeech } from './ready-window.js';
 
 export const VOICE_BY = 'owner-voice';
 const MAX_READ_OPTIONS = 6;
@@ -192,6 +193,9 @@ export function matchSpokenAnswer(transcript, item) {
     const rec = opts.filter((o) => o.recommended);
     return rec.length ? { type: 'choice', option: rec[0] } : none;
   }
+  // ---- ready window (round 9 item 8; keep this block together): "ready for 30 minutes [on <device>]" ----
+  const rdy = parseReadySpeech(t);
+  if (rdy) return { type: 'intent', intent: 'ready', minutes: rdy.minutes, device: rdy.device };
   for (const [intent, re] of INTENTS) {
     if (!re.test(t)) continue;
     if (intent === 'wait') { const w = waitOption(item || {}); return w ? { type: 'choice', option: w } : { type: 'intent', intent }; }
@@ -365,6 +369,12 @@ export function createVoice(deps) {
           if (m.intent === 'cancel') return ok({ status: 'intent', intent: 'cancel', say: 'Cancelled. Nothing was sent.' });
           if (!pend) return ok({ status: 'intent', intent: 'confirm', say: 'There is nothing to confirm.' });
           option = pend; confirmed = true;
+        } else if (m.intent === 'ready') {   // ---- ready window (round 9 item 8) ----
+          if (!deps.setReady) return ok({ status: 'intent', intent: 'ready', say: 'Ready windows are not connected.' });
+          try {
+            const w = await deps.setReady({ minutes: m.minutes, device: m.device, session: m.device ? null : item.session || null, by: VOICE_BY });
+            return ok({ status: 'intent', intent: 'ready', ready: w, say: `Okay. Sessions may retry hardware steps ${m.device ? `on ${m.device}` : item.session ? `for ${item.session}` : ''} without asking, until ${w.until_hhmm}.`.replace(/\s+/g, ' ') });
+          } catch (e) { return ok({ status: 'intent', intent: 'ready', say: `I could not set that. ${String(e.message || '').slice(0, 80)}` }); }
         } else {
           const say = m.intent === 'leases' ? await leaseSentence() : { skip: 'Skipping.', next: 'Next.', repeat: '', stop: 'Stopping.', digest: '', wait: `Okay, I will leave ${item.session} for you.` }[m.intent] ?? '';
           return ok({ status: 'intent', intent: m.intent, say });

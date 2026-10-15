@@ -1,0 +1,7 @@
+{"type":"custom-title","customTitle":"cache-work","sessionId":"sid-fixture-aaaa"}
+{"parentUuid":null,"type":"user","message":{"role":"user","content":"please add the cache layer"},"timestamp":"2026-10-15T08:00:00.000Z","sessionId":"sid-fixture-aaaa"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Looking at the reader first."},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"a.js"}}]},"timestamp":"2026-10-15T08:00:05.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"file body"}]},"timestamp":"2026-10-15T08:00:06.000Z"}
+{"type":"user","message":{"role":"user","content":"use disk, not memory"},"timestamp":"2026-10-15T08:30:00.000Z","sessionId":"sid-fixture-aaaa"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"npm test"}}]},"timestamp":"2026-10-15T08:30:09.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Two ways to store the \"cache\":\n\n1. In memory (recommended)\n2. On disk — survives restarts\n\nWhich storage should I use?"}]},"timestamp":"2026-10-15T08:31:00.000Z"}

@@ -60,7 +60,7 @@ const dir = mkdtempSync(join(tmpdir(), 'ghosty-jevoff-'));
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', VPT_TEAM_ID: 'team-x', JEV_API_KEY: 'k', JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide` });
 const m = await import('../manager.js');
 await m.initManager({ onOwnerNeeded: () => {}, sendKey: async () => {}, sendKeys: async () => {} });
-await m.setManagerConfig({ aiTriage: 'off', autoSend: false, delayMs: 0, routerShadow: true });
+await m.setManagerConfig({ aiTriage: 'off', autoSend: false, delayMs: 0, routerShadow: true, aiFallback: 'off' });
 const RULE = '─'.repeat(40);
 const pane = (body) => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'];
 const tick = (name, state, plain, now) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, realWork: state === 'working', project: 'p', now });

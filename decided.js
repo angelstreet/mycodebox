@@ -1,10 +1,10 @@
 // "Decided for you" (round 8, OWNER_DECISIONS §15): everything the manager typed on the owner's behalf, newest first, with the
 // reason, the evidence and the way back. Pure: the caller reads stalls.jsonl and the decision journal and passes the records.
 // Item: { id, at, session, kind, what, why, evidence: [], revert: { label, text } | null, url }
-//   kind: continue | menu | ai_reply | info | merge | push | deploy
+//   kind: continue | menu | ai_reply | info | ready | merge | push | deploy
 import { short } from './merge-policy.js';
 
-export const KINDS = ['merge', 'push', 'deploy', 'menu', 'continue', 'ai_reply', 'info'];
+export const KINDS = ['merge', 'push', 'deploy', 'menu', 'continue', 'ai_reply', 'info', 'ready'];
 const DECISION_KINDS = ['merge', 'push', 'deploy'];
 const ms = (v) => { if (v == null || v === '') return null; if (typeof v === 'number') return v; const t = Date.parse(v); return Number.isFinite(t) ? t : null; };
 const quote = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -51,6 +51,7 @@ const whatOf = (kind, session, j, answerText) => {
   if (kind === 'push') return `approved pushing ${j?.branch || 'a branch'} to origin/${j?.dest || j?.branch || 'its branch'} for ${s}`;
   if (kind === 'deploy') return `approved requesting the deploy of ${j?.ref || 'a ref'} to ${j?.env || 'an environment'} (${j?.scope || 'full'}) for ${s}`;
   if (kind === 'ai_reply') return `sent the AI reviewer's reply "${quote(answerText)}" to ${s}`;
+  if (kind === 'ready') return `told ${s} to retry the hardware step itself while you are at the device`;
   if (kind === 'info') return `answered a question from the docs for ${s}: "${quote(answerText)}"`;
   return `answered ${answerText.startsWith('option ') ? answerText : `'${quote(answerText)}'`} to ${s}`;
 };
@@ -60,6 +61,7 @@ const whyOf = (kind, j, stall, rec) => {
   if (kind === 'menu') return 'the agent recommended one of the options';
   if (kind === 'ai_reply') return 'the AI reviewer proposed this reply and was confident';
   if (kind === 'info') return 'the information was in the repository docs';
+  if (kind === 'ready') return 'the ready window you opened was still open (the step is retried at most twice, then it asks you)';
   return stall?.why || rec?.case || 'decided by the manager';
 };
 
@@ -95,7 +97,7 @@ export function decidedItems({ recs = [], journal = [], since = null, until = nu
       }
       continue;
     }
-    const kind = r.source === 'ai' ? 'ai_reply' : r.source === 'manager_decision' ? 'info' : r.answer?.key != null || r.case === 'menu_recommended' ? 'menu' : 'continue';
+    const kind = r.ready ? 'ready' : r.source === 'ai' ? 'ai_reply' : r.source === 'manager_decision' ? 'info' : r.answer?.key != null || r.case === 'menu_recommended' ? 'menu' : 'continue';
     const mj = kind === 'menu' ? jById.get(`menu-${r.id}`) : null;   // the menu pick's own decision record
     items.push(mk(r.id, kind, mj ? `took the ${mj.unmarked ? 'unmarked first option' : 'recommended option'} ${mj.key ?? ''} ("${quote(mj.option)}") for ${r.session || 'the session'}`.replace('option  (', 'option (') : whatOf(kind, r.session, null, answerText),
       mj ? mj.rationale : whyOf(kind, null, stall, r),
@@ -135,6 +137,7 @@ export function decidedSummary(items = [], { hours = 24, failed = 0 } = {}) {
     else if (k === 'menu') bits.push(plural(xs.length, 'menu pick', 'menu picks'));
     else if (k === 'continue') bits.push(plural(xs.length, 'continue', 'continues'));
     else if (k === 'ai_reply') bits.push(plural(xs.length, 'AI reply', 'AI replies'));
+    else if (k === 'ready') bits.push(plural(xs.length, 'hardware retry', 'hardware retries'));
     else bits.push(plural(xs.length, 'information answer', 'information answers'));
   }
   const tail = failed ? `${plural(failed, 'reply', 'replies')} could not be sent.` : 'Nothing failed.';
