@@ -39,6 +39,7 @@ import { createJevBreaker } from './jev-breaker.js';
 import { createJevSwitch, isDisabledReply, DISABLED } from './jev-switch.js';
 import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
 import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
+import { createFallbackDecider, FALLBACK_MODES, FALLBACK_SOURCE } from './minimax-fallback.js';
 import { createRoundtrips, roundtripRecord, summarizeRoundtrips, FILE_NAME as ROUNDTRIPS_FILE } from './roundtrips.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
@@ -73,7 +74,7 @@ setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
 let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true,
-  jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
+  jevUsage: 'auto', aiFallback: 'minimax', aiFallbackDailyCalls: 300, aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
 export const jevBreaker = createJevBreaker({ file: BUDGET_FILE });   // 3 errors in a row: rules only, one probe per 10 min (jev-breaker.js)
@@ -83,6 +84,7 @@ let lastStops = {};
 let lastStopsWrite = Promise.resolve();
 const saveLastStops = () => { lastStopsWrite = lastStopsWrite.then(() => writeFile(LAST_STOPS_FILE, JSON.stringify(lastStops))).catch(() => {}); };
 const aiBudget = createBudget(AI_BUDGET_FILE);
+const fallbackBudget = createBudget(join(STATE_DIR, 'ai-fallback-budget.json'));   // calls per day through the MiniMax fallback (cost is always 0)
 const triages = new Map();   // stop id -> triage result (one reviewer call per stop)
 let creditsPeek = () => null;   // injected by server.js: the cached OpenRouter credit ({ ok, balance }) or null
 let triageContext = () => ({});   // injected by server.js: (session) -> { priority, quota, leases, deploys }
@@ -132,6 +134,8 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   try { const b = JSON.parse(await readFile(BUDGET_FILE, 'utf8')); budget = { day: b.day || '', calls: b.calls || 0, cost: b.cost || 0 }; } catch {}
   try { lastStops = JSON.parse(await readFile(LAST_STOPS_FILE, 'utf8')) || {}; } catch { lastStops = {}; }
   await aiBudget.load();
+  await fallbackBudget.load();
+  if (!FALLBACK_MODES.includes(config.aiFallback)) config.aiFallback = 'minimax';
   config.autoCases = (config.autoCases || []).filter((c) => AUTO_CASES.includes(c));
   config.aiAutoCases = (config.aiAutoCases || []).filter((c) => CASES.includes(c) && !AI_NEVER_CASES.includes(c));
   if (!AI_MODES.includes(config.aiTriage)) config.aiTriage = 'simulate';
@@ -170,7 +174,7 @@ export function langfuseLinks(env = process.env) {
 
 export function managerConfig() {
   return { ...config, langfuse: langfuseLinks(), validCases: AUTO_CASES, validAiCases: CASES.filter((c) => !AI_NEVER_CASES.includes(c)), cases: CASES, jev: !!JEV_URL, jevLogged: decisions.configured, jevUsage: config.jevUsage, budget: { ...jevBreaker.state(), ...budget, dailyUsd: JEV_DAILY_USD, dailyCalls: JEV_DAILY_CALLS },
-    ai: !!(AI_URL && JEV_API_KEY), aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
+    ai: !!(AI_URL && JEV_API_KEY), aiFallbackModes: FALLBACK_MODES, aiFallbackBudget: { ...fallbackBudget.snapshot(), dailyCalls: config.aiFallbackDailyCalls }, aiModes: AI_MODES, aiBudget: { ...aiBudget.snapshot(), dailyUsd: config.aiDailyUsd, dailyCalls: config.aiDailyCalls } };
 }
 
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
@@ -180,7 +184,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour } = b;
+  const { aiFallback, aiFallbackDailyCalls, jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -191,6 +195,8 @@ export async function setManagerConfig(b = {}) {
   if (delayMs !== undefined) config.delayMs = Math.round(num(delayMs, 0, 600000, 'delayMs'));
   if (maxPerSessionPerHour !== undefined) config.maxPerSessionPerHour = Math.round(num(maxPerSessionPerHour, 0, 100, 'maxPerSessionPerHour'));
   if (jevUsage !== undefined) { if (!/^(auto|text\.decision(\.[a-z0-9_]+)*)$/.test(String(jevUsage))) throw bad('jevUsage must be "auto" or a text.decision usage key'); config.jevUsage = jevUsage; }
+  if (aiFallback !== undefined) { if (!FALLBACK_MODES.includes(aiFallback)) throw bad(`aiFallback must be one of: ${FALLBACK_MODES.join(', ')}`); config.aiFallback = aiFallback; }
+  if (aiFallbackDailyCalls !== undefined) config.aiFallbackDailyCalls = Math.round(num(aiFallbackDailyCalls, 0, 10000, 'aiFallbackDailyCalls'));
   if (aiTriage !== undefined) { if (!AI_MODES.includes(aiTriage)) throw bad(`aiTriage must be one of: ${AI_MODES.join(', ')}`); config.aiTriage = aiTriage; }
   if (aiMinConfidence !== undefined) config.aiMinConfidence = num(aiMinConfidence, 0, 1, 'aiMinConfidence');
   if (aiDailyUsd !== undefined) config.aiDailyUsd = num(aiDailyUsd, 0, 100, 'aiDailyUsd');
@@ -376,7 +382,8 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
   const rec = { type: 'triage', id, session: name, at: new Date().toISOString(), case: final.case, mode: config.aiTriage };
   const finish = async (extra, logIt = true) => { Object.assign(rec, extra); triages.set(id, rec); if (triages.size > 300) triages.delete(triages.keys().next().value); if (logIt) await log(rec); return rec; };
   if (!AI_URL || !JEV_API_KEY) return finish({ skipped: 'not configured' }, false);
-  if (aiBudget.over(config.aiDailyUsd, config.aiDailyCalls)) return finish({ skipped: 'AI daily budget reached' });
+  const viaFallback = fallbackOn() && (creditsOut() || jevBreaker.isOpen());   // OpenRouter has no credit / Jev is down: MiniMax M3 reads the stop instead
+  if (!viaFallback && aiBudget.over(config.aiDailyUsd, config.aiDailyCalls)) return finish({ skipped: 'AI daily budget reached' });
   const ctx = (() => { try { return triageContext(name, final) || {}; } catch { return {}; } })();
   const deployish = final.case === 'waiting_deploy' || !!final.deployHint || /deploy/i.test(final.forbidden || '');   // lease + deploy-queue state only matters here
   const flags = [final.forbidden ? `forbidden topic: "${final.forbidden}"` : null, stall.draft ? 'the owner has an unsent draft in the input box' : null,
@@ -384,10 +391,21 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
   const facts = { session: name, agent, project, priority: ctx.priority, state, case: final.case, source: final.source, flags,
     jev: jevOut?.choice ? jevOut : null, quota: ctx.quota, ...(deployish ? { leases: ctx.leases, deploys: ctx.deploys } : {}), options: (() => { try { return reviewerOptions({ state, stall: { question: final.question || stall.question, excerpt: stall.excerpt, options: stall.options || final.options || null } }); } catch { return []; } })(), text: stall.excerpt || final.question || '' };
   const prompt = await reviewerPrompt.get();
-  const r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, system: prompt.text, fetchFn: reviewerFetch });
-  aiBudget.add(r.cost || 0);
+  let r, fb = null;
+  if (viaFallback) {
+    fb = 'credits or Jev down';
+    r = await fallbackRun('triage', name, (d) => d.reviewer({ facts, system: prompt.text }), fb);
+    if (r.gated) return finish({ skipped: r.error });
+  } else {
+    r = await callReviewer({ url: AI_URL, apiKey: JEV_API_KEY, facts, system: prompt.text, fetchFn: reviewerFetch });
+    aiBudget.add(r.cost || 0);
+    if (r.error && jevErrorKind(r.error) === 'credits') {   // the reviewer found out first: same cool-down as Jev, and this stop still gets read
+      creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS;
+      if (fallbackOn()) { const f = await fallbackRun('triage', name, (d) => d.reviewer({ facts, system: prompt.text }), 'OpenRouter answered 402'); if (!f.gated) { r = f; fb = 'OpenRouter answered 402'; } }
+    }
+  }
   // what the eval sync and the Langfuse generation show: the prompt version used and the facts' flags (no closing text)
-  const ctxInfo = { ...(prompt.version != null ? { prompt: { name: prompt.name, version: prompt.version } } : {}), src: final.source, flags };
+  const ctxInfo = { ...(fb ? { source: FALLBACK_SOURCE, fallback: fb } : {}), ...(prompt.version != null ? { prompt: { name: prompt.name, version: prompt.version } } : {}), src: final.source, flags };
   return finish(r.ai ? { ...ctxInfo, ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model, tin: r.tin, tout: r.tout } : { ...ctxInfo, error: r.error, cost: r.cost || 0, ms: r.ms });
 }
 
@@ -709,14 +727,39 @@ const jevSwitch = createJevSwitch();   // the server's JEV_ENABLED=false: one pr
 let creditsDownUntil = 0;
 export const resetJevCooldown = () => { creditsDownUntil = 0; };   // tests, and an owner top-up
 
+// ---- MiniMax fallback (round 9 item 10, minimax-fallback.js) ----
+// OpenRouter has no credit (402 cool-down, or the cached balance is 0) or the Jev breaker is open: triage and the Jev-style choices go to
+// MiniMax M3 through headless mcode instead of being skipped. Every call is logged ({type:'fallback', source:'minimax-fallback'}) and counted.
+let fallbackDecider = null;
+export const setFallbackDecider = (d) => { fallbackDecider = d; };   // tests inject a fake-mcode decider
+const getFallback = () => (fallbackDecider ||= createFallbackDecider());
+const creditsOut = () => { if (Date.now() < creditsDownUntil) return true; try { const cr = creditsPeek(); return !!(cr?.ok && cr.balance != null && cr.balance <= 0); } catch { return false; } };
+const fallbackOn = () => config.aiFallback !== 'off';
+const fallbackGate = () => (!fallbackOn() ? 'MiniMax fallback is off' : fallbackBudget.over(Infinity, config.aiFallbackDailyCalls) ? `MiniMax fallback daily cap reached (${config.aiFallbackDailyCalls})` : null);
+async function fallbackRun(kind, session, fn, why) {
+  const gate = fallbackGate();
+  if (gate) return { error: gate, source: FALLBACK_SOURCE, gated: true };
+  const r = await fn(getFallback());
+  fallbackBudget.add(0);
+  logLater({ type: 'fallback', source: FALLBACK_SOURCE, for: kind, session: session || null, why, ok: !r.error, ...(r.error ? { error: String(r.error).slice(0, 200) } : {}), ms: r.ms ?? null, model: r.model || null, cost: 0, calls: fallbackBudget.snapshot().calls, cap: config.aiFallbackDailyCalls });
+  return r;
+}
+// a Jev-shaped choice ({ choice, confidence, probabilities, ... }) from the fallback, or null when it cannot answer (the caller then skips as before)
+async function fallbackChoice(body, session, why) {
+  const r = await fallbackRun('jev', session, (f) => f.choice(body), why);
+  if (r.error || !r.answers?.choice) return null;
+  const a = r.answers.choice;
+  return { choice: a.choice, confidence: a.confidence, probabilities: a.probabilities, cost: 0, ms: r.ms, model: r.model, source: FALLBACK_SOURCE };
+}
+
 // ctx = { session, stallId, case }: what the product's log shows as "what this decision was about".
 async function jev(stall, ctx = {}) {
   if (!JEV_URL || !JEV_API_KEY) return { skipped: 'not configured' };
   if (jevSwitch.off()) return { skipped: DISABLED };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
-  if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
-  if (!jevBreaker.allow()) return { skipped: 'Jev down (3 errors in a row), rules decide' };
+  if (creditsOut()) return (fallbackOn() && await fallbackChoice(jevRequestBody(stall, { usage: FALLBACK_USAGE }), ctx.session, 'OpenRouter credit used up')) || { skipped: 'OpenRouter credit used up (402), retrying later' };
+  if (!jevBreaker.allow()) return (fallbackOn() && await fallbackChoice(jevRequestBody(stall, { usage: FALLBACK_USAGE }), ctx.session, 'Jev down (breaker open)')) || { skipped: 'Jev down (3 errors in a row), rules decide' };
   const logged = decisions.configured;   // needs VPT_TEAM_ID: the server writes no log row without a team
   const body = jevRequestBody(stall, { usage: await jevUsageNow(), refs: logged ? { team_id: VPT_TEAM_ID, source: 'ghosty-manager', session: ctx.session, stall_id: ctx.stallId, case: ctx.case } : null });
   const started = Date.now();
@@ -744,6 +787,7 @@ async function jev(stall, ctx = {}) {
       const kind = jevErrorKind(error);
       if (kind === 'credits') creditsDownUntil = Date.now() + CREDITS_COOLDOWN_MS;
       if (!j.success) jevBreaker.failure(error); else jevBreaker.success();
+      if (kind === 'credits' && fallbackOn()) { const f = await fallbackChoice(jevRequestBody(stall, { usage: FALLBACK_USAGE }), ctx.session, 'OpenRouter answered 402'); if (f) return f; }
       return { error, kind, ms: Date.now() - started, ...(j.decision_id ? { decision_id: j.decision_id } : {}) };
     }
     jevBreaker.success();
@@ -862,8 +906,9 @@ async function jevPost(body) {
   if (jevSwitch.off()) return { skipped: DISABLED };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
-  if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
-  if (!jevBreaker.allow()) return { skipped: 'Jev down (3 errors in a row), rules decide' };
+  const viaFallback = async (why) => { const f = fallbackOn() && body?.questions?.choice ? await fallbackRun('decision', body.refs?.session, (d) => d.choice(body), why) : null; return f && !f.error ? f : null; };
+  if (creditsOut()) return (await viaFallback('OpenRouter credit used up')) || { skipped: 'OpenRouter credit used up (402), retrying later' };
+  if (!jevBreaker.allow()) return (await viaFallback('Jev down (breaker open)')) || { skipped: 'Jev down (3 errors in a row), rules decide' };
   body = { ...body, usage: await jevUsageNow(), ...(decisions.configured ? { team_id: VPT_TEAM_ID } : {}) };
   try {
     const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) });
