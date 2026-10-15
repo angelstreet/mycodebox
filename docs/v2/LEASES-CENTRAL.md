@@ -275,3 +275,26 @@ sessionGone(session), sessionStatus(session, status), tick() })`, all async, all
 
 Client exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 unavailable. A rejected token (`E_AUTH`) is exit 1 (an error, never "unavailable" and never "free"); 6 is `run` only (lease lost during the run).
 `GET /leases/:id` answers flat `{ ok, id, agent, mode, generation, state: active|reserved }` (404 `E_NOT_FOUND` when gone); `vpt-lease validate` reads it.
+
+## Appendix B. Implementation notes (round 10 build)
+
+Where the build is more specific than the design above:
+
+- **Deploy leases.** `deploy start` claims `<env>/*` for a full deploy (leased hosts skipped and caught up) and, for a
+  host deploy without `--hosts`, the known hosts that are not leased (else `<env>/*`). `deploy finish` with skipped hosts
+  queues the catch-up host deploy itself; the deploy runner does not queue one in central mode.
+- **Host deploys vs server leases.** A host deploy restarts host services only, so it no longer waits for a `server`
+  lease (the registry made it wait). This is the matrix of §3, and the one place the service is more permissive than
+  the registry; the shadow report classes it `by-design`.
+- **Identity.** Releasing, renewing, narrowing or downgrading by id needs the holder's client (the token's name); the
+  agent must match only when the caller sends one, so a legacy `release <id>` keeps working. Imported leases have no
+  client: any authenticated client may release them, as on the registry today. "Not the holder" is `E_AUTH` (403).
+- **Heartbeats.** Leases have no heartbeat requirement unless they declare `heartbeat_s`; `vpt-lease run` declares 300 s.
+- **Events.** Besides the kinds in Appendix A: `pin_overlap`, `flag` (a waiting holder kept its lease) and `deploy`.
+- **Routes.** Besides Appendix A: `POST /owner/mode` and `POST /import` (used by `scripts/lease-import.js --apply`).
+- **Validate.** `GET /leases/:id` answers `{ id, mode, generation, state: active | reserved, agent }`; `vpt-lease
+  validate` treats `active` as held and `reserved` (a granted ticket not yet collected) as not yet valid.
+- **Exit codes.** 0 ok, 1 error / not found / bad token, 3 busy, 4 deploy pending, 5 unavailable, 6 `run` only: the
+  lease was lost while the command ran.
+- **Dashboard.** `leaseAuthority` is read once at start (switching needs a restart). The service is constructed in both
+  modes so shadow reports reach it; liveness is unknown (nothing released) until the first successful tmux listing.
