@@ -500,3 +500,78 @@ test('either/or verb-phrase split: only a single short question sentence', () =>
   for (const t of none) assert.deepEqual(parseAlternatives(t), [], t);
   assert.deepEqual(parseAlternatives('Want me to fix the three stream bugs, or look at splitting vpt-monitor?').map((a) => a.phrase), ['Fix the three stream bugs', 'Look at splitting vpt-monitor']);
 });
+
+// ---- parseManagerItems / extractRecommendation (manager digest) ----
+// mock A — TL;DR card + collapsible items: the popup needs to know when a stop's closing text
+// is the mm-manager's structured "Q144.a ..." digest (cards) vs. plain prose (legacy `<pre>`).
+import { parseManagerItems, extractRecommendation } from '../public/buttons.js';
+
+test('parseManagerItems: empty / prose / single Q-letter return [] (legacy fallback)', () => {
+  assert.deepEqual(parseManagerItems(''), []);
+  assert.deepEqual(parseManagerItems(null), []);
+  assert.deepEqual(parseManagerItems('Just a plain question, no Q-IDs here.'), []);
+  // a single Q-letter alone reads fine as prose; cards would add noise
+  assert.deepEqual(parseManagerItems('Only Q144.a about something.'), []);
+});
+
+test('parseManagerItems: 4 Q-letters give 4 items, severity classified, titles + bodies split', () => {
+  const text = [
+    "Latest run #38179989378. Owner's territory (CI is owner-only carve-out). mm-manager cannot fix CI directly — owner pushes fix on a feature branch.",
+    "Q144.c OpenRouter credit $-0.20 (NEGATIVE — money side). Owner-only carve-out per brief (.env/money/secrets). mm-manager logged-only.",
+    "Q144.d Self-hosted runners vpt-163-2 + vpt-163-3 OFFLINE. Probe / restart when convenient.",
+    "Q144.e Host-down signals vpt-pi3 / vpt-pi4 / vpt-nipogi 'not registered'. vpt-pi4 is the known lease-expired artifact (NOT a host crash); vpt-pi3 + vpt-nipogi are new this digest.",
+    "Q144.f mm-manager sub-compaction: 36+ hour wake window. Per the MEMORY self-compact rule, mm-manager should signal /compact soon.",
+    '',
+    '  1. 1 (Q144.a only) Cherry-pick 9e33b065b into main — close the leak P0',
+    '  2. 2 (Q144.a+b) Above + spin up a worker',
+    '  3. 3 (Q144.a+b+c) Above + investigate the OpenRouter credit root cause',
+    '  4. 4 All of the above + restart the offline runners',
+    '  5. 5 Hold Q144.a+b+c for owner to handle later',
+    'Recommends: 1 — close the leak P0 today, defer the others to owner-driven windows',
+  ].join('\n');
+  const items = parseManagerItems(text);
+  assert.equal(items.length, 4);
+  assert.deepEqual(items.map((i) => i.letter), ['c', 'd', 'e', 'f']);
+  // c: money ($.env) — and the first sentence is "OpenRouter credit $-0.20 (NEGATIVE — money side)."
+  assert.match(items[0].title, /OpenRouter credit \$-0\.20/);
+  // d: auto (probe / restart) — small title fits the whole item
+  assert.equal(items[1].severity, 'auto');
+  // f: includes "Owner direct:" / "should signal /compact" — owner-flag wins
+  assert.match(items[3].title, /mm-manager sub-compaction/);
+});
+
+test('parseManagerItems: cross-references inside (Q144.a only) and the numbered list are not new items', () => {
+  const text = [
+    'Q144.c OpenRouter credit $-0.20. Owner-only carve-out per brief (.env/money/secrets).',
+    'Q144.d Self-hosted runners OFFLINE. Probe / restart when convenient.',
+    '',
+    '  1. 1 (Q144.a only) Cherry-pick 9e33b065b into main — close the leak P0',
+    '  2. 2 (Q144.a+b) Above + spin up a worker',
+    '  3. 3 (Q144.a+b+c) Above + investigate the OpenRouter credit root cause',
+    'Recommends: 1 — close the leak P0 today',
+  ].join('\n');
+  const items = parseManagerItems(text);
+  // The 5 "(Q144.x)" mentions in the numbered list must NOT produce items
+  assert.equal(items.length, 2, 'only the prose Q-letters count');
+  assert.deepEqual(items.map((i) => i.letter), ['c', 'd']);
+});
+
+test('extractRecommendation: "Recommends: N — text" -> { n, text }; absent -> null; tolerant of em-dash + ASCII dash', () => {
+  assert.deepEqual(extractRecommendation('Recommends: 1 — close the leak P0 today, defer the others to owner-driven windows'),
+    { n: '1', text: 'close the leak P0 today, defer the others to owner-driven windows' });
+  assert.deepEqual(extractRecommendation('Recommends: 3 - investigate the runners'),
+    { n: '3', text: 'investigate the runners' });
+  assert.equal(extractRecommendation('No recommendation line at all.'), null);
+  assert.equal(extractRecommendation(''), null);
+});
+
+test('parseManagerItems: title stops at the first sentence, not at decimal points', () => {
+  // Regression: the previous title regex `[^.!?\n]{4,160}[.!?]` choked on `$-0.20` (decimal point
+  // is a terminator) and reported the whole body as the title, leaving body empty. Fix uses a
+  // non-greedy match with `(?<!\d)[.!?]` so the FIRST real sentence wins.
+  const text = 'Q144.c OpenRouter credit $-0.20 (NEGATIVE — money side). Owner-only carve-out per brief (.env/money/secrets). mm-manager logged-only. Q144.d Foo.';
+  const [c] = parseManagerItems(text);
+  assert.equal(c.title, 'OpenRouter credit $-0.20 (NEGATIVE — money side).');
+  assert.match(c.body, /Owner-only carve-out per brief/);
+  assert.match(c.body, /mm-manager logged-only/);
+});
