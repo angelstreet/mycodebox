@@ -607,7 +607,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return read(() => {
       const l = S.leases[a.id];
       if (!l) return fail('E_NOT_FOUND', 'no such active lease', { id: a.id, state: 'gone' });
-      const out = { ok: true, id: l.id, mode: l.mode, generation: l.generation, state: l.reservedUntil ? 'reserved' : 'active' };
+      const out = { ok: true, id: l.id, agent: l.agent, mode: l.mode, generation: l.generation, state: l.reservedUntil ? 'reserved' : 'active' };   // 'active' = held; agent lets a client check the lease is its own
       if (a.generation != null && a.generation !== l.generation) out.fenced = true;
       return out;
     });

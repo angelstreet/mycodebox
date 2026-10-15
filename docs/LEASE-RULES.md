@@ -49,7 +49,7 @@ or `mac:<name>`.
 | Code | Meaning | What to do |
 |---|---|---|
 | 0 | ok / free / granted | continue |
-| 1 | error or not found | read stderr and fix the call |
+| 1 | error or not found; also a refused token (`E_AUTH`) or a missing, loose (not 0600) or empty token file: the call was rejected, nothing was granted | read stderr and fix the call or the token |
 | 3 | busy | claim again with `--wait` (or `run`); do not poll |
 | 4 | a deploy is pending on the resource | `vpt-lease deploy wait --env <env>`, then claim again |
 | 5 | UNAVAILABLE: the lease service cannot be reached | treat as busy, never as free; retry with `--wait` |

@@ -273,4 +273,5 @@ same operations as methods (`claim, ticket, cancelTicket, release, renew, heartb
 ownerRelease, deploy: { request, approve, cancel, start, finish, record, list, wait, last }, shadow: { op, report, list },
 sessionGone(session), sessionStatus(session, status), tick() })`, all async, all fail closed.
 
-Client exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 unavailable.
+Client exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 unavailable. A rejected token (`E_AUTH`) is exit 1 (an error, never "unavailable" and never "free"); 6 is `run` only (lease lost during the run).
+`GET /leases/:id` answers flat `{ ok, id, agent, mode, generation, state: active|reserved }` (404 `E_NOT_FOUND` when gone); `vpt-lease validate` reads it.

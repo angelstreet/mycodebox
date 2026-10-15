@@ -360,6 +360,8 @@ def claim_body(a, wait=None):
     did = getattr(a, "deploy_id", "") or os.environ.get("VPT_DEPLOY_ID", "")
     if did:
         body["deploy_id"] = did          # joins the running deploy's lease instead of conflicting with it
+    if getattr(a, "heartbeat_s", None):
+        body["heartbeat_s"] = a.heartbeat_s      # declares the interval: the service enforces heartbeats only for leases that do
     if getattr(a, "priority_since", None):
         body["priority_since"] = a.priority_since
     if not CFG.shadow:
@@ -715,10 +717,10 @@ def cmd_validate(a):
             print("not valid: lease %s is unknown, released or expired" % a.lease_id)
             return BUSY
         return fail(r)
-    l = r.get("lease") or {}
-    state = l.get("state") or r.get("state") or "held"
+    l = dict(r, **(r.get("lease") or {}))        # the service answers flat ({id, agent, mode, state}); a nested lease also works
+    state = l.get("state") or "held"
     why = []
-    if state != "held":
+    if state not in ("held", "active"):           # 'active' is the service's word for held
         why.append("state is %s, not held" % state)
     if (l.get("mode") or "exclusive") != "exclusive":
         why.append("mode is %s, not exclusive" % l["mode"])
@@ -958,6 +960,7 @@ def cmd_run(a, command):
         return 2
     central = CFG.mode == "central"
     a.wait, a.ticket, a.ticket_id_out = True, False, []
+    a.heartbeat_s = 300 if CFG.mode == "central" else None
     lease_id, hb = None, None
     child, got = [None], []
 
