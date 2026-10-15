@@ -1,0 +1,1231 @@
+#!/usr/bin/env python3
+"""vpt-lease: client of the one central lease service (docs/v2/LEASES-CENTRAL.md), compatible with the legacy registry CLI.
+
+Same subcommands, arguments, stdout lines and exit codes as the legacy CLI (0 ok, 1 error / not found, 3 busy,
+4 deploy pending) plus 5 = UNAVAILABLE (the service cannot be reached: never read that as "free").
+Python 3 standard library only, so it runs unchanged on every host.
+
+Mode (VPT_LEASE_MODE):
+  legacy   (default) exec the old CLI (VPT_LEASE_LEGACY, default ~/bin/vpt-lease.legacy)
+  shadow   run the old CLI (its output and exit code are what the caller sees); also send the op to the service with
+           shadow:true, compare, post disagreements to /shadow-report. A shadow failure never changes the result.
+  central  the service only
+Env: VPT_LEASE_URL (service base URL), VPT_LEASE_TOKEN_FILE (default ~/.config/vpt-lease/token, must be mode 0600),
+     VPT_LEASE_AGENT (default agent for deploy wait), VPT_LEASE_TEST_FAST=1 (short intervals, for tests).
+
+New: claim --wait | --ticket, --mode exclusive|observe|pin, --expect MIN; ticket ID [--wait] [--cancel];
+     heartbeat ID [--active]; mode ID pin|observe; run <claim args> -- <command...>.
+"""
+import argparse, contextlib, io, json, os, shlex, signal, socket, subprocess, sys, threading, time, uuid
+import urllib.error, urllib.parse, urllib.request
+from datetime import datetime, timezone
+
+BUSY, PENDING, UNAVAILABLE = 3, 4, 5
+SCOPES = ("frontend", "host", "server", "full")
+KINDS = ("server", "host", "run", "maintenance")
+KIND_ALIASES = {"run": "server", "maintenance": "host"}
+MODES = ("exclusive", "observe", "pin")
+FAST = os.environ.get("VPT_LEASE_TEST_FAST") == "1"
+LONG_TTL_MIN = 240
+NEW_FLAGS_WITH_VALUE = ("--mode", "--expect", "--deploy-id")
+NEW_FLAGS = ("--wait", "--ticket")
+
+
+class Unavailable(Exception):
+    pass
+
+
+class ConfigError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------- small helpers
+
+def now():
+    return int(time.time())
+
+
+def fmt(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def to_epoch(v):
+    """Epoch seconds from a number (s or ms) or an ISO-8601 string; None when unknown."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return v / 1000.0 if v > 1e12 else float(v)
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def hhmm(v):
+    t = to_epoch(v)
+    return time.strftime("%H:%M", time.localtime(t)) if t else "?"
+
+
+def norm_kind(k):
+    k = k or "server"
+    return KIND_ALIASES.get(k, k)
+
+
+def legacy_res(r, env=""):
+    """Typed resource (<env>/host:h, <env>/device:h/d, <env>/frontend, <env>/*) back to the legacy spelling."""
+    if env and r.startswith(env + "/"):
+        r = r[len(env) + 1:]
+    for pre in ("host:", "device:"):
+        if r.startswith(pre):
+            r = r[len(pre):]
+    return r
+
+
+def is_device(r):
+    return r not in ("*", "frontend", "server") and "/" in r and not r.startswith("/") and not r.endswith("/")
+
+
+def default_kind(wanted):
+    return "host" if wanted and all(is_device(r) for r in wanted) else "server"
+
+
+def delays():
+    """(first, cap) of the retry backoff: 5 s doubling to 120 s (design 8)."""
+    return (0.05, 0.4) if FAST else (5.0, 120.0)
+
+
+def eprint(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------- config and HTTP
+
+def read_config_file():
+    """~/.config/vpt-lease/config: KEY=VALUE lines (VPT_LEASE_MODE, VPT_LEASE_URL, VPT_LEASE_TOKEN_FILE, VPT_LEASE_LEGACY).
+    Non-interactive ssh callers do not see the shell environment, so the cut-over writes the mode here; env overrides."""
+    out = {}
+    try:
+        with open(os.path.expanduser("~/.config/vpt-lease/config")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    out[k.strip()] = v.strip().strip("'\"")
+    except OSError:
+        pass
+    return out
+
+
+class Config:
+    def __init__(self):
+        cf = read_config_file()
+        get = lambda k: os.environ.get(k) or cf.get(k) or ""
+        self.mode = (get("VPT_LEASE_MODE") or "legacy").strip().lower()
+        self.url = get("VPT_LEASE_URL").rstrip("/")
+        self.token_file = os.path.expanduser(get("VPT_LEASE_TOKEN_FILE") or "~/.config/vpt-lease/token")
+        self.legacy = get("VPT_LEASE_LEGACY") or os.path.expanduser("~/bin/vpt-lease.legacy")
+        self.shadow = False          # set while a shadow call runs
+        self._token = None
+
+    def token(self):
+        if self._token is None:
+            try:
+                st = os.stat(self.token_file)
+            except OSError:
+                raise ConfigError("token file %s not found (create it, mode 0600)" % self.token_file)
+            if st.st_mode & 0o077:
+                raise ConfigError("token file %s must be mode 0600 (is %o); refusing to use it"
+                                  % (self.token_file, st.st_mode & 0o777))
+            with open(self.token_file) as f:
+                self._token = f.read().strip()
+            if not self._token:
+                raise ConfigError("token file %s is empty" % self.token_file)
+        return self._token
+
+    def base(self):
+        if not self.url:
+            raise ConfigError("VPT_LEASE_URL is not set")
+        return self.url if "/api/lease/v1" in self.url else self.url + "/api/lease/v1"
+
+
+CFG = Config()
+
+
+def api(method, path, body=None, query=None, timeout=15):
+    """One service call. Returns the decoded JSON dict (ok true or false); raises Unavailable when the service cannot
+    answer (connection, timeout, 5xx without a JSON body, E_UNAVAILABLE)."""
+    token = CFG.token()
+    if CFG.shadow:
+        timeout = min(timeout, 2)        # a shadow call must never slow the caller down
+    q = dict(query or {})
+    if CFG.shadow:
+        q["shadow"] = "1"
+    url = CFG.base() + path
+    q = {k: v for k, v in q.items() if v not in (None, "")}
+    if q:
+        url += "?" + urllib.parse.urlencode(q)
+    data = None
+    if body is not None:
+        body = dict(body)
+        if CFG.shadow:
+            body["shadow"] = True
+        data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Authorization", "Bearer " + token)
+    req.add_header("Accept", "application/json")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw, status = r.read(), r.status
+    except urllib.error.HTTPError as e:
+        raw, status = e.read(), e.code
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise Unavailable(str(getattr(e, "reason", e)))
+    try:
+        out = json.loads(raw.decode() or "{}")
+        if not isinstance(out, dict):
+            raise ValueError("not an object")
+    except ValueError:
+        if status >= 500 or status == 0:
+            raise Unavailable("HTTP %s" % status)
+        raise Unavailable("unreadable answer (HTTP %s)" % status)
+    out.setdefault("ok", 200 <= status < 300)
+    out["_status"] = status
+    if out.get("code") == "E_UNAVAILABLE" or (status >= 500 and not out["ok"]):
+        raise Unavailable(out.get("error") or "service unavailable")
+    return out
+
+
+def fail(r, what=""):
+    """Print an ok:false answer on stderr and return its exit code."""
+    code = r.get("code")
+    msg = r.get("error") or code or "error"
+    if code == "E_NOT_FOUND":
+        eprint(msg if what == "" else what)
+    else:
+        eprint("%s: %s" % (code or "error", msg))
+    return 1
+
+
+# ---------------------------------------------------------------- rendering (legacy formats)
+
+def lease_rows(l):
+    """One legacy-style row per resource of a central lease."""
+    env = l.get("env", "")
+    since = to_epoch(l.get("since")) or now()
+    exp = to_epoch(l.get("expires_at") or l.get("expires"))
+    ttl = l.get("ttlLeftMin")
+    if ttl is None:
+        ttl = int((exp - now()) // 60) if exp else 0
+    if exp is None:
+        exp = now() + ttl * 60
+    res = l.get("resources") or ([l["resource"]] if l.get("resource") else ["*"])
+    rows = []
+    for r in res:
+        row = dict(l)
+        row.update(resource=legacy_res(r, env), since=int(since), expires=int(exp), ttlLeftMin=ttl,
+                   kind=norm_kind(l.get("kind")))
+        row.pop("resources", None)
+        rows.append(row)
+    return rows
+
+
+def show(leases):
+    if not leases:
+        print("(no active leases)")
+        return
+    rows = [r for l in leases for r in lease_rows(l)]
+    for l in sorted(rows, key=lambda l: (l["env"], l["resource"])):
+        provider = "  provider=%s" % l["provider"] if l.get("provider") else ""
+        mode = "  mode=%s" % l["mode"] if l.get("mode") not in (None, "", "exclusive") else ""
+        print("%s  %s/%s  agent=%s%s  since=%s  expires_in=%sm  purpose=%s  kind=%s%s" % (
+            l["id"], l["env"], l["resource"], l["agent"], provider, fmt(l["since"]), l["ttlLeftMin"],
+            l.get("purpose") or "-", l["kind"], mode))
+
+
+def show_deploys(ds, prefix="DEPLOY"):
+    for d in ds:
+        extra = " coalesced-into=%s" % d["coalescedInto"] if d.get("coalescedInto") else ""
+        if d.get("hosts"):
+            extra += " hosts=%s" % ",".join(d["hosts"])
+        if d.get("skippedHosts"):
+            extra += " skipped=%s" % ",".join(d["skippedHosts"])
+        print("%s %s  %s  state=%s  scope=%s  ref=%s  by=%s  purpose=%s%s" % (
+            prefix, d["id"], d["env"], d["state"], d["scope"], d["ref"], d["agent"], d.get("purpose") or "-", extra))
+
+
+def holders_text(holders):
+    names = []
+    for h in holders or []:
+        a = h.get("agent") if isinstance(h, dict) else str(h)
+        if a and a not in names:
+            names.append(a)
+    return ", ".join(names) if names else "?"
+
+
+def progress_line(t):
+    holders = holders_text(t.get("holders"))
+    return "waiting #%s, eta %s (held by %s)" % (t.get("position", "?"), hhmm(t.get("eta")), holders)
+
+
+def busy_report(r):
+    eprint("BUSY — held by:")
+    with contextlib.redirect_stdout(sys.stderr):
+        show(r.get("holders") or [])
+    if r.get("reason") == "queued":
+        eprint("free but %s waiting ahead of you: use --wait (or `vpt-lease run`) to take your place in the queue"
+               % (r.get("position") or "others"))
+    if r.get("eta"):
+        eprint("expected free around %s; wait with: vpt-lease claim ... --wait" % hhmm(r["eta"]))
+
+
+def claim_warnings(env, wanted, kind, ttl):
+    out = []
+    if kind == "server":
+        out.append("⚠ blocks server + full deploys for all of %s while held; "
+                   "if a server restart does not affect you, claim --kind host" % env)
+    for r in wanted:
+        if r not in ("*", "frontend") and "/" not in r:
+            out.append("⚠ blocks every device on %s; claim %s/<device> if you only use one" % (r, r))
+    if ttl > LONG_TTL_MIN:
+        out.append("⚠ --ttl %s min is over %s h; claim a shorter ttl and renew while you still need it" % (ttl, LONG_TTL_MIN // 60))
+    return out
+
+
+# ---------------------------------------------------------------- claim
+
+CACHE_DIR = os.path.expanduser("~/.cache/vpt-lease")
+
+
+def _cache_load(name):
+    try:
+        with open(os.path.join(CACHE_DIR, name)) as f:
+            m = json.load(f)
+            return m if isinstance(m, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _cache_save(name, m):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = os.path.join(CACHE_DIR, "%s.%d.tmp" % (name, os.getpid()))
+        with open(tmp, "w") as f:
+            json.dump(m, f)
+        os.replace(tmp, os.path.join(CACHE_DIR, name))
+    except OSError:
+        pass
+
+
+def request_id(body):
+    """Idempotency key for a claim, persisted before the first send so that a retry after a lost reply (also from a
+    restarted client) gets the same grant or ticket back instead of a second lease. Cleared once the answer is known."""
+    key = json.dumps({k: body.get(k) for k in ("env", "resources", "agent", "purpose", "mode", "kind", "wait")}, sort_keys=True)
+    m = _cache_load("request-ids.json")
+    for k in [k for k, v in m.items() if now() - v.get("at", 0) > 600]:
+        m.pop(k)
+    ent = m.get(key)
+    if not ent:
+        ent = m[key] = {"id": uuid.uuid4().hex, "at": now()}
+        _cache_save("request-ids.json", m)
+    return ent["id"]
+
+
+def request_id_done(body):
+    if body.get("request_id"):
+        m = _cache_load("request-ids.json")
+        m = {k: v for k, v in m.items() if v.get("id") != body["request_id"]}
+        _cache_save("request-ids.json", m)
+
+
+def claim_body(a, wait=None):
+    wanted = sorted({r.lower() for r in a.resources})
+    kind = norm_kind(a.kind) if a.kind else default_kind(wanted)
+    body = dict(env=a.env.lower(), resources=wanted, agent=a.agent, purpose=a.purpose, mode=a.mode, kind=kind,
+                ttl_min=a.ttl, shared=a.shared)
+    if a.provider:
+        body["provider"] = a.provider
+    if a.expect:
+        body["expect_min"] = a.expect
+    if a.agent.startswith(("codebox:", "mac:")):
+        body["session"] = a.agent
+    if wait:
+        body["wait"] = "ticket"
+    did = getattr(a, "deploy_id", "") or os.environ.get("VPT_DEPLOY_ID", "")
+    if did:
+        body["deploy_id"] = did          # joins the running deploy's lease instead of conflicting with it
+    if getattr(a, "priority_since", None):
+        body["priority_since"] = a.priority_since
+    if not CFG.shadow:
+        body["request_id"] = request_id(body)
+    return body, wanted, kind
+
+
+def granted(a, r, wanted, kind):
+    lease = r["lease"]
+    print(lease["id"], flush=True)
+    for w in claim_warnings(a.env.lower(), wanted, kind, a.ttl):
+        eprint(w)
+    if not a.agent.startswith(("codebox:", "mac:")) and a.agent != "manager:deploy" and not a.agent.startswith("update_core:"):
+        eprint("⚠ agent %r is not codebox:<tmux session> or mac:<name>: the dashboard cannot link this lease to a "
+               "session (it counts as an unknown holder); use AGENT=\"codebox:$(tmux display-message -p '#S')\"" % a.agent)
+    return lease
+
+
+def _remember_ticket(tid, body):
+    """Keep the claim of a ticket so `ticket <id> --wait` can queue again if the grant was missed."""
+    if not tid or CFG.shadow:
+        return
+    m = _cache_load("tickets.json")
+    m = {k: v for k, v in m.items() if now() - v.get("at", 0) < 86400}
+    b = {k: v for k, v in body.items() if k != "request_id"}
+    m[tid] = {"body": b, "at": now()}
+    _cache_save("tickets.json", m)
+
+
+def claim_once(a, want_ticket):
+    """-> ('lease', lease) | ('ticket', ticket) | ('exit', code). Prints legacy lines for the exit cases."""
+    body, wanted, kind = claim_body(a, wait=want_ticket)
+    r = api("POST", "/claim", body)
+    request_id_done(body)
+    if r.get("ok") and r.get("ticket"):
+        _remember_ticket(r["ticket"].get("id"), body)
+    if r.get("ok") and r.get("lease"):
+        return "lease", r["lease"], (wanted, kind)
+    if r.get("ok") and r.get("ticket"):
+        return "ticket", r["ticket"], (wanted, kind)
+    code = r.get("code")
+    if code == "E_HELD":
+        busy_report(r)
+        return "exit", BUSY, None
+    if code == "E_DEPLOY_PENDING":
+        d = (r.get("deploy") or {})
+        eprint("DEPLOY PENDING — %s. New claims on what it touches wait until it is done.\n"
+               "Wait with: vpt-lease deploy wait --env %s   then claim again." % (
+                   r.get("error") or "a deploy is pending on %s" % a.env.lower(), a.env.lower()))
+        return "exit", PENDING, None
+    return "exit", fail(r), None
+
+
+def backoff_sleep(state, why):
+    first, cap = delays()
+    state["delay"] = state.get("delay") and min(state["delay"] * 2, cap) or first
+    eprint("%s; retrying in %gs (not giving up)" % (why, state["delay"]))
+    time.sleep(state["delay"])
+
+
+def poll_ticket(tid, can_requeue=False):
+    """Long-poll a ticket until granted. Returns ('lease', lease) | ('requeue', priority_since)
+    | ('exit', code). Keeps retrying while unavailable. A ticket that was granted but not collected (missed), expired
+    or lost is handed back as 'requeue' so the caller queues again with its original place in line."""
+    state, last = {}, None
+    while True:
+        try:
+            r = api("GET", "/tickets/" + urllib.parse.quote(tid), query={"wait": 1 if FAST else 30},
+                    timeout=(5 if FAST else 45))
+            state = {}
+        except Unavailable as e:
+            backoff_sleep(state, "service unavailable (%s)" % e)
+            continue
+        if not r.get("ok"):
+            if r.get("code") == "E_NOT_FOUND" and can_requeue:
+                eprint("ticket %s is gone; queueing again" % tid)
+                return "requeue", None
+            return "exit", fail(r, "no such ticket %s" % tid)
+        t = r["ticket"]
+        st = t.get("state")
+        if st == "granted" and t.get("lease"):
+            return "lease", t["lease"]
+        if st in ("cancelled",):
+            eprint("ticket %s cancelled" % tid)
+            return "exit", 1
+        if st in ("expired", "missed"):
+            why = t.get("reason") or st
+            if can_requeue:
+                eprint("ticket %s %s; queueing again with the same priority" % (tid, why))
+                return "requeue", t.get("priority_since")
+            eprint("ticket %s %s" % (tid, why))
+            return "exit", 1
+        line = progress_line(t)
+        if line != last:
+            eprint(line)
+            last = line
+
+
+def claim_wait(a):
+    """Blocking claim: ticket plus long-poll; survives an unreachable service. Returns ('lease', lease, info) | ('exit', code)."""
+    tid = None
+    state = {}
+    try:
+        while True:
+            if tid is None:
+                try:
+                    kind, val, info = claim_once(a, True)
+                except Unavailable as e:
+                    backoff_sleep(state, "service unavailable (%s)" % e)
+                    continue
+                state = {}
+                if kind == "lease":
+                    return "lease", val, info
+                if kind == "exit":
+                    if val == PENDING:     # a deploy in the way is not an error for a waiter: wait it out
+                        backoff_sleep(state, "deploy pending")
+                        continue
+                    return "exit", val
+                tid = val["id"]
+                if a.ticket_id_out is not None:
+                    a.ticket_id_out.append(tid)
+                eprint(progress_line(val))
+            res, val = poll_ticket(tid, True)
+            if res == "requeue":
+                tid = None
+                a.priority_since = val or getattr(a, "priority_since", None)
+                continue
+            if res == "exit":
+                return "exit", val
+            wanted, kind = claim_body(a)[1:]
+            return "lease", val, (wanted, kind)
+    except KeyboardInterrupt:
+        if tid:
+            with contextlib.suppress(Exception):
+                api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
+            eprint("interrupted; ticket %s cancelled" % tid)
+        return "exit", 130
+
+
+def cmd_claim(a):
+    a.ticket_id_out = []
+    if a.wait:
+        r = claim_wait(a)
+        if r[0] == "exit":
+            return r[1]
+        _, lease, (wanted, kind) = r
+        granted(a, {"lease": lease}, wanted, kind)
+        return 0
+    kind, val, info = claim_once(a, bool(a.ticket))
+    if kind == "exit":
+        return val
+    if kind == "ticket":
+        print(val["id"], flush=True)
+        print("position=%s eta=%s held-by=%s" % (val.get("position", "?"), hhmm(val.get("eta")), holders_text(val.get("holders"))))
+        return 0
+    granted(a, {"lease": val}, *info)
+    return 0
+
+
+# ---------------------------------------------------------------- simple lease commands
+
+def cmd_release(a):
+    body = {"by": a.by or a.agent or "holder", "reason": a.reason}
+    if a.lease_id:
+        body["id"] = a.lease_id
+    else:
+        body["agent"] = a.agent
+    r = api("POST", "/release", body)
+    if not r.get("ok"):
+        return fail(r)
+    print("released %d" % len(r.get("released") or []))
+    return 0
+
+
+def cmd_renew(a):
+    r = api("POST", "/renew", {"id": a.lease_id, "ttl_min": a.ttl})
+    if not r.get("ok"):
+        return fail(r, "no such active lease")
+    exp = to_epoch((r.get("lease") or {}).get("expires_at")) or now() + a.ttl * 60
+    print("renewed until %s" % fmt(exp))
+    return 0
+
+
+def cmd_narrow(a):
+    body = {"id": a.lease_id, "kind": "host", "by": a.by, "reason": a.reason}
+    if a.resource:
+        body["resources"] = [a.resource.lower()]
+    r = api("POST", "/narrow", body)
+    if not r.get("ok"):
+        return fail(r, "no such active lease")
+    n = r.get("narrowed")
+    n = len(n) if isinstance(n, list) else (n if isinstance(n, int) else 1)
+    print("narrowed %d" % n + ("" if n else " (already host)"))
+    return 0
+
+
+def cmd_list(a):
+    r = api("GET", "/list", query={"env": a.env.lower() if a.env else ""})
+    if not r.get("ok"):
+        return fail(r)
+    leases, deploys = r.get("leases") or [], r.get("deploys") or []
+    if a.json:
+        rows = [row for l in leases for row in lease_rows(l)]
+        print(json.dumps(dict(now=now(), leases=rows, deploys=deploys, waiters=r.get("waiters") or [],
+                              tickets=r.get("tickets") or [])))
+        return 0
+    show(leases)
+    show_deploys(deploys)
+    for t in r.get("tickets") or []:
+        print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s" % (
+            t.get("id"), t.get("env", "?"), ",".join(legacy_res(x, t.get("env", "")) for x in t.get("resources") or []),
+            t.get("agent", "?"), t.get("position", "?"), hhmm(t.get("eta"))))
+    return 0
+
+
+def cmd_check(a):
+    env = a.env.lower()
+    res = [x.lower() for x in a.resources]
+    q = dict(env=env, resources=",".join(res), ignore_agent=a.ignore_agent)
+    if a.skip_leased:
+        q.update(skip_leased="1", hosts=",".join(h.strip().lower() for h in a.hosts.split(",") if h.strip()))
+    r = api("GET", "/check", query=q)
+    if not r.get("ok"):
+        return fail(r)
+    holders = r.get("holders") or []
+    if a.skip_leased:
+        lh = r.get("leased_hosts") or []
+        pairs = list(lh.items()) if isinstance(lh, dict) else [
+            (x.get("host"), x.get("agent")) if isinstance(x, dict) else tuple(x) for x in lh]
+        for h, ag in pairs:
+            print("LEASED %s %s" % (h, ag))
+        if not r.get("free"):
+            print("BUSY — %s in use (leased hosts are skipped, these cannot be):" % env)
+            show(holders)
+            return BUSY
+        print("FREE — nothing blocks this deploy on %s" % env + (" (skipping %s)" % ", ".join(p[0] for p in pairs) if pairs else ""))
+        return 0
+    if not r.get("free"):
+        print("BUSY — %s in use:" % env)
+        show(holders)
+        show_deploys(r.get("pending") or [])
+        if not res:
+            fe = [x for l in holders for x in lease_rows(l) if x["resource"] in ("*", "frontend")]
+            if not fe:
+                print("hint: this checked the whole env (full/--server deploy). A --frontend deploy is FREE: "
+                      "vpt-lease check %s frontend" % env)
+        return BUSY
+    print("FREE — nothing active on %s" % env + (" (%s)" % ", ".join(res) if res else ""))
+    if r.get("pending"):
+        print("note: a deploy is pending, new claims on this get exit 4:")
+        show_deploys(r["pending"])
+    return 0
+
+
+def cmd_events(a):
+    r = api("GET", "/events", query={"after": a.after, "limit": a.limit})
+    if not r.get("ok"):
+        return fail(r)
+    out = []
+    for e in r.get("events") or []:
+        e = dict(e)
+        e["line"] = e.get("n")
+        e["event"] = e.get("kind")
+        e["ts"] = int(to_epoch(e.get("at")) or 0)
+        res = e.get("resources") or ([e["resource"]] if e.get("resource") else [])
+        e["resources"] = [legacy_res(x, e.get("env", "")) for x in res]
+        out.append(e)
+    nxt = r.get("next", out[-1]["line"] if out else a.after)
+    if a.json:
+        print(json.dumps(dict(now=now(), next=nxt, total=r.get("total", nxt), events=out)))
+    else:
+        for e in out:
+            print("%s  %s  %s  %s  %s/%s  agent=%s" % (e["line"], fmt(e["ts"]), e["event"], e.get("id", "-"),
+                                                        e.get("env", "-"), ",".join(e["resources"]), e.get("agent", "-")))
+    return 0
+
+
+# ---------------------------------------------------------------- new commands
+
+def cmd_ticket(a):
+    tid = urllib.parse.quote(a.ticket_id)
+    if a.cancel:
+        r = api("DELETE", "/tickets/" + tid)
+        if not r.get("ok"):
+            return fail(r, "no such ticket %s" % a.ticket_id)
+        print("cancelled")
+        return 0
+    if a.wait:
+        stored = (_cache_load("tickets.json").get(a.ticket_id) or {}).get("body")
+        tid, state = a.ticket_id, {}
+        try:
+            while True:
+                res, val = poll_ticket(tid, stored is not None)
+                if res == "lease":
+                    print(val["id"], flush=True)
+                    return 0
+                if res == "exit":
+                    return val
+                # missed, expired or lost: claim again with the original priority (carried by priority_since)
+                body = dict(stored, **({"priority_since": val} if val else {}))
+                body["request_id"] = request_id(body)
+                try:
+                    r = api("POST", "/claim", body)
+                except Unavailable as e:
+                    backoff_sleep(state, "service unavailable (%s)" % e)
+                    continue
+                request_id_done(body)
+                if r.get("ok") and r.get("lease"):
+                    print(r["lease"]["id"], flush=True)
+                    return 0
+                if r.get("ok") and r.get("ticket"):
+                    tid = r["ticket"]["id"]
+                    _remember_ticket(tid, stored)
+                    eprint("queued again as ticket %s" % tid)
+                    continue
+                if r.get("code") == "E_DEPLOY_PENDING":
+                    backoff_sleep(state, "deploy pending")
+                    continue
+                return fail(r)
+        except KeyboardInterrupt:
+            return 130
+    r = api("GET", "/tickets/" + tid)
+    if not r.get("ok"):
+        return fail(r, "no such ticket %s" % a.ticket_id)
+    t = r["ticket"]
+    st = t.get("state")
+    if st == "granted" and t.get("lease"):
+        print(t["lease"]["id"])
+        return 0
+    if st == "waiting":
+        print(progress_line(t))
+        return BUSY
+    print(st or "unknown")
+    return 1
+
+
+def cmd_heartbeat(a):
+    r = api("POST", "/heartbeat", {"id": a.lease_id, "active": bool(a.active)})
+    if not r.get("ok"):
+        return fail(r, "no such active lease")
+    print("ok")
+    return 0
+
+
+def cmd_mode(a):
+    r = api("POST", "/mode", {"id": a.lease_id, "mode": a.new_mode})
+    if not r.get("ok"):
+        return fail(r, "no such active lease")
+    print("mode %s" % a.new_mode)
+    return 0
+
+
+# ---------------------------------------------------------------- deploy
+
+def first_id(r):
+    return r.get("id") or (r.get("deploy") or {}).get("id")
+
+
+def deploy_fail(r, a):
+    code = r.get("code")
+    if code == "E_NOT_FOUND":
+        eprint("no such deploy %s" % getattr(a, "deploy_id", ""))
+        return 1
+    if code == "E_HELD":
+        eprint("BUSY — %s" % (r.get("error") or "leases in the way:"))
+        with contextlib.redirect_stdout(sys.stderr):
+            for l in r.get("holders") or []:
+                for x in lease_rows(l):
+                    print("%s  %s/%s  agent=%s  kind=%s  expires_in=%sm" % (
+                        x["id"], x["env"], x["resource"], x["agent"], x["kind"], x["ttlLeftMin"]))
+        return BUSY
+    if code == "E_DEPLOY_PENDING":
+        eprint("DEPLOY PENDING — %s" % (r.get("error") or "a deploy is pending"))
+        return PENDING
+    return fail(r)
+
+
+def deploy_wait(a):
+    agent = a.agent or os.environ.get("VPT_LEASE_AGENT", "")
+    end = time.time() + a.timeout * 60
+    last, last_print, state = None, 0, {}
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            eprint("timeout waiting for the deploy")
+            return BUSY
+        try:
+            r = api("GET", "/deploy/wait", query=dict(id=a.deploy_id, env=(a.env or "").lower(), agent=agent,
+                                                      timeout=1 if FAST else int(min(30, left))),
+                    timeout=5 if FAST else 45)
+        except Unavailable as e:
+            eprint("service unavailable (%s)" % e)
+            return UNAVAILABLE
+        if not r.get("ok"):
+            return deploy_fail(r, a)
+        if a.deploy_id:
+            d = r.get("deploy") or {}
+            st = d.get("state") or r.get("state")
+            if st == "done":
+                print("deploy %s done" % d.get("id", a.deploy_id) + (" (version %s)" % d["version"] if d.get("version") else ""))
+                return 0
+            if st in ("failed", "cancelled"):
+                print("deploy %s %s" % (d.get("id", a.deploy_id), st) + (" (%s)" % d["reason"] if d.get("reason") else ""))
+                return 1
+            label = st
+        else:
+            pend = r.get("pending")
+            if pend is None:
+                pend = [d for d in r.get("deploys") or [] if d.get("state") in ("queued", "running")]
+            if not pend:
+                print("no deploy pending on %s" % a.env.lower())
+                return 0
+            label = ", ".join("%s:%s" % (d["id"], d["state"]) for d in pend)
+        if label != last or time.time() - last_print >= 60:
+            print("waiting… %s" % label, flush=True)
+            last, last_print = label, time.time()
+
+
+def render_last(a, m):
+    def ago(ts):
+        d = max(0, now() - ts)
+        return "%ds" % d if d < 90 else "%dm" % (d // 60) if d < 5400 else "%dh" % (d // 3600) if d < 172800 else "%dd" % (d // 86400)
+    generic = ("frontend", "server", "hosts")
+    if a.json:
+        print(json.dumps(dict(now=now(), envs=m)))
+        return 0
+    if not m:
+        print("(nothing recorded yet)")
+        return 0
+    for env in sorted(m):
+        print(env)
+        for t in sorted(m[env], key=lambda t: (t not in generic, generic.index(t) if t in generic else 0, t)):
+            e = m[env][t]
+            la = e.get("lastAttempt")
+            if e.get("at"):
+                src = "  [%s]" % e["source"] if e.get("source") else ""
+                print("  %-16s %-34s ref=%s  commit=%s  %s (%s ago)  by=%s%s" % (
+                    t, e.get("version") or "?", e.get("ref") or "?", (e.get("commit") or "?")[:9], fmt(e["at"]),
+                    ago(e["at"]), e.get("agent") or "?", src))
+            else:
+                print("  %-16s (no successful deploy recorded)" % t)
+            if la:
+                print("  %-16s last attempt FAILED %s (%s ago): ref=%s version=%s by=%s" % (
+                    "", fmt(la["at"]), ago(la["at"]), la.get("ref") or "?", la.get("version") or "?", la.get("agent") or "?"))
+    return 0
+
+
+def cmd_deploy(a):
+    c = a.dcmd
+    if c == "wait":
+        return deploy_wait(a)
+    if c == "request":
+        hosts = [h.strip().lower() for h in (a.hosts or "").split(",") if h.strip()]
+        if hosts and a.scope != "host":
+            eprint("vpt-lease deploy request: error: --hosts only goes with --scope host")
+            return 2
+        body = dict(env=a.env.lower(), scope=a.scope, ref=a.ref, agent=a.agent, purpose=a.purpose,
+                    approved=a.approved, ttl_min=a.ttl)
+        if hosts:
+            body["hosts"] = hosts
+        r = api("POST", "/deploy/request", body)
+        if not r.get("ok"):
+            return deploy_fail(r, a)
+        print(first_id(r))
+        return 0
+    if c == "list":
+        r = api("GET", "/deploy/list", query={"env": a.env.lower() if a.env else ""})
+        if not r.get("ok"):
+            return deploy_fail(r, a)
+        ds = r.get("deploys") or []
+        if a.json:
+            print(json.dumps(dict(now=now(), deploys=ds, leases=[x for l in r.get("leases") or [] for x in lease_rows(l)],
+                                  waiters=r.get("waiters") or [])))
+        else:
+            if not ds:
+                print("(no deploys)")
+            show_deploys(ds)
+        return 0
+    if c == "last":
+        r = api("GET", "/deploy/last", query={"env": a.env.lower() if a.env else ""})
+        if not r.get("ok"):
+            return deploy_fail(r, a)
+        return render_last(a, r.get("envs") or {})
+    if c == "record":
+        body = dict(env=a.env.lower(), scope=a.scope, hosts=[h for h in a.hosts.split(",") if h], ref=a.ref, commit=a.commit,
+                    version=a.version, agent=a.agent, status=a.status, started=a.started, note=a.note,
+                    deploy_id=a.deploy_id, source=a.source, at=a.at,
+                    fail_targets=[h for h in a.fail_targets.split(",") if h],
+                    skipped_hosts=[h for h in a.skipped_hosts.split(",") if h])
+        r = api("POST", "/deploy/record", body)
+        if not r.get("ok"):
+            return deploy_fail(r, a)
+        if r.get("already"):
+            filled = r.get("filled") or 0
+            print("already recorded %s" % a.deploy_id + (" (filled %s blank fields)" % filled if filled else ""))
+        else:
+            targets = r.get("targets") or [t for t in (body["scope"].split(",") if not body["hosts"] else body["hosts"])]
+            print("recorded %s: %s %s" % (a.status, a.env.lower(), ",".join(targets) or "-"))
+        return 0
+    body = {"id": a.deploy_id}
+    if c == "start":
+        body.update(agent=a.agent, skip_leased=a.skip_leased)
+    elif c == "finish":
+        body.update(status=a.status, version=a.version, coalesced_into=a.coalesced_into,
+                    skipped_hosts=[h for h in a.skipped_hosts.split(",") if h])
+        if a.tail_stdin:
+            body["tail"] = STDIN()[-6000:]
+    r = api("POST", "/deploy/" + c, body)
+    if not r.get("ok"):
+        return deploy_fail(r, a)
+    print({"approve": "approved", "cancel": "cancelled", "start": "running", "finish": a.status if c == "finish" else ""}[c])
+    return 0
+
+
+_stdin = []
+
+
+def STDIN():
+    if not _stdin:
+        _stdin.append(sys.stdin.read())
+    return _stdin[0]
+
+
+# ---------------------------------------------------------------- run
+
+class HeartbeatThread(threading.Thread):
+    """Heartbeats while the wrapped command runs. A refused heartbeat (fenced / lease gone) or a lease that is no longer
+    exclusive is reported loudly and heartbeating stops; run exits non-zero after the command (or kills it: --on-fence
+    kill). An unreachable service is NOT a lost lease: keep acting (the lease is time-bounded) and keep retrying."""
+
+    def __init__(self, lease_id, every, on_fence=None):
+        super().__init__(daemon=True)
+        self.lease_id, self.every, self.on_fence = lease_id, every, on_fence
+        self.stop, self.fenced = threading.Event(), None
+
+    def run(self):
+        while not self.stop.wait(self.every):
+            try:
+                r = api("POST", "/heartbeat", {"id": self.lease_id, "active": True}, timeout=10)
+                lost = None
+                if not r.get("ok"):
+                    lost = "heartbeat refused (%s)" % r.get("code")
+                elif (r.get("lease") or {}).get("mode") not in (None, "", "exclusive"):
+                    lost = "lease was downgraded to %s" % r["lease"]["mode"]
+                if lost:
+                    self.fenced = lost
+                    eprint("vpt-lease: LEASE LOST: %s. Stop mutating the resource; the next protected step must not run." % lost)
+                    if self.on_fence:
+                        self.on_fence()
+                    return
+            except Unavailable as e:
+                eprint("vpt-lease: heartbeat failed (%s); the service is down, keep going and retrying" % e)
+            except Exception as e:      # a heartbeat must never kill the run
+                eprint("vpt-lease: heartbeat error: %s" % e)
+
+
+def legacy_argv():
+    return shlex.split(CFG.legacy)
+
+
+def legacy_call(args, stdin_data=None):
+    p = subprocess.run(legacy_argv() + args, input=stdin_data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
+
+
+def cmd_run(a, command):
+    if not command:
+        eprint("vpt-lease run: nothing to run after --")
+        return 2
+    central = CFG.mode == "central"
+    a.wait, a.ticket, a.ticket_id_out = True, False, []
+    lease_id, hb = None, None
+    child, got = [None], []
+
+    def forward(sig, _frm):
+        got.append(sig)
+        if child[0] and child[0].poll() is None:
+            with contextlib.suppress(OSError):
+                child[0].send_signal(sig)
+    if central:
+        res = claim_wait(a)
+        if res[0] == "exit":
+            return res[1]
+        lease = res[1]
+        lease_id = lease["id"]
+        every = 0.2 if FAST else float(lease.get("heartbeat_s") or 300)
+        eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
+        hb = HeartbeatThread(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None)
+        hb.start()
+    else:    # legacy / shadow: the old registry is authoritative; no queue and no heartbeat there
+        args = ["claim", a.env, *a.resources, "--agent", a.agent, "--purpose", a.purpose, "--ttl", str(a.ttl)]
+        if a.kind:
+            args += ["--kind", a.kind]
+        code, out, err = legacy_call(args)
+        sys.stderr.write(err)
+        if code != 0:
+            sys.stdout.write(out)
+            return code
+        lease_id = out.splitlines()[0].strip() if out else None
+    old = {s: signal.signal(s, forward) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    code = 1
+    try:
+        try:
+            child[0] = subprocess.Popen(command)
+        except OSError as e:
+            eprint("vpt-lease run: cannot start %s: %s" % (command[0], e))
+            code = 127 if isinstance(e, FileNotFoundError) else 126
+        else:
+            while True:
+                try:
+                    rc = child[0].wait()
+                    break
+                except KeyboardInterrupt:
+                    pass
+            code = rc if rc >= 0 else 128 + (-rc)
+            if got and rc >= 0 and code == 0:
+                code = 128 + got[0]
+            if hb and hb.fenced and code == 0:
+                eprint("vpt-lease: the command finished but the lease was lost during the run; exiting non-zero")
+                code = 6
+    finally:
+        if hb:
+            hb.stop.set()
+        for s, h in old.items():
+            signal.signal(s, signal.SIG_IGN)       # nothing may interrupt the release
+        try:
+            if central:
+                for attempt in range(3):
+                    try:
+                        api("POST", "/release", {"id": lease_id, "by": a.agent, "reason": "run-finished"}, timeout=10)
+                        break
+                    except Unavailable as e:
+                        eprint("vpt-lease: release failed (%s)%s" % (e, "; the TTL will expire it" if attempt == 2 else "; retrying"))
+                        time.sleep(delays()[0])
+            elif lease_id:
+                legacy_call(["release", lease_id])
+        except Exception as e:
+            eprint("vpt-lease: release error: %s" % e)
+        for s, h in old.items():
+            signal.signal(s, h)
+    return code
+
+
+# ---------------------------------------------------------------- argument parser
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="vpt-lease")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def claim_args(c):
+        c.add_argument("env"); c.add_argument("resources", nargs="+")
+        c.add_argument("--agent", required=True); c.add_argument("--purpose", default="")
+        c.add_argument("--ttl", type=int, default=120, help="minutes (default 120)")
+        c.add_argument("--provider", default="")
+        c.add_argument("--kind", choices=KINDS, default=None)
+        c.add_argument("--shared", action="store_true")
+        c.add_argument("--mode", choices=MODES, default="exclusive", help="exclusive (default), observe (read archives), pin (keep this state)")
+        c.add_argument("--expect", type=int, default=0, help="expected hold in minutes (improves the queue ETA)")
+        c.add_argument("--deploy-id", default="", help="join the lease of this running deploy (default $VPT_DEPLOY_ID)")
+    c = sub.add_parser("claim"); claim_args(c)
+    c.add_argument("--wait", action="store_true", help="queue and block until granted (retries while the service is unreachable)")
+    c.add_argument("--ticket", action="store_true", help="queue and print the ticket id and ETA at once")
+    ru = sub.add_parser("run", help="run <claim args> -- <command...>: claim (waits), heartbeat, run, release"); claim_args(ru)
+    ru.add_argument("--on-fence", choices=("warn", "kill"), default="warn", help="when the lease is lost mid-run: warn (default) or kill the command")
+    r = sub.add_parser("release"); r.add_argument("lease_id", nargs="?"); r.add_argument("--agent")
+    r.add_argument("--by", default=""); r.add_argument("--reason", default="")
+    nw = sub.add_parser("narrow"); nw.add_argument("lease_id"); nw.add_argument("--resource", default="")
+    nw.add_argument("--kind", required=True, choices=("host",)); nw.add_argument("--by", default=""); nw.add_argument("--reason", default="")
+    ev = sub.add_parser("events"); ev.add_argument("--after", type=int, default=0)
+    ev.add_argument("--json", action="store_true"); ev.add_argument("--limit", type=int, default=200)
+    n = sub.add_parser("renew"); n.add_argument("lease_id"); n.add_argument("--ttl", type=int, default=120)
+    ls = sub.add_parser("list"); ls.add_argument("env", nargs="?"); ls.add_argument("--json", action="store_true")
+    k = sub.add_parser("check"); k.add_argument("env"); k.add_argument("resources", nargs="*")
+    k.add_argument("--ignore-agent", default=""); k.add_argument("--skip-leased", action="store_true")
+    k.add_argument("--hosts", default="")
+    t = sub.add_parser("ticket"); t.add_argument("ticket_id")
+    t.add_argument("--wait", action="store_true"); t.add_argument("--cancel", action="store_true")
+    hb = sub.add_parser("heartbeat"); hb.add_argument("lease_id"); hb.add_argument("--active", action="store_true")
+    md = sub.add_parser("mode"); md.add_argument("lease_id"); md.add_argument("new_mode", choices=("pin", "observe"))
+    dp = sub.add_parser("deploy"); dsub = dp.add_subparsers(dest="dcmd", required=True)
+    q = dsub.add_parser("request"); q.add_argument("env"); q.add_argument("--scope", required=True, choices=SCOPES)
+    q.add_argument("--ref", required=True); q.add_argument("--agent", required=True); q.add_argument("--purpose", default="")
+    q.add_argument("--approved", action="store_true"); q.add_argument("--ttl", type=int, default=360)
+    q.add_argument("--hosts", default="")
+    dl = dsub.add_parser("list"); dl.add_argument("env", nargs="?"); dl.add_argument("--json", action="store_true")
+    for name in ("approve", "cancel"):
+        x = dsub.add_parser(name); x.add_argument("deploy_id")
+    st = dsub.add_parser("start"); st.add_argument("deploy_id"); st.add_argument("--agent", default="manager:deploy")
+    st.add_argument("--skip-leased", action="store_true")
+    fi = dsub.add_parser("finish"); fi.add_argument("deploy_id"); fi.add_argument("--status", required=True, choices=("done", "failed"))
+    fi.add_argument("--version", default=""); fi.add_argument("--tail-stdin", action="store_true")
+    fi.add_argument("--coalesced-into", default=""); fi.add_argument("--skipped-hosts", default="")
+    rc = dsub.add_parser("record"); rc.add_argument("env"); rc.add_argument("--scope", required=True)
+    rc.add_argument("--hosts", default=""); rc.add_argument("--ref", default=""); rc.add_argument("--commit", default="")
+    rc.add_argument("--version", default=""); rc.add_argument("--agent", required=True)
+    rc.add_argument("--status", required=True, choices=("done", "failed")); rc.add_argument("--started", default=None)
+    rc.add_argument("--note", default=""); rc.add_argument("--deploy-id", default=""); rc.add_argument("--source", default="")
+    rc.add_argument("--at", default=None); rc.add_argument("--fail-targets", default=""); rc.add_argument("--skipped-hosts", default="")
+    lt = dsub.add_parser("last"); lt.add_argument("env", nargs="?"); lt.add_argument("--json", action="store_true")
+    w = dsub.add_parser("wait"); w.add_argument("deploy_id", nargs="?"); w.add_argument("--env")
+    w.add_argument("--agent", default=""); w.add_argument("--timeout", type=float, default=120)
+    return p
+
+
+def dispatch(a, command=None):
+    if a.cmd == "deploy":
+        return cmd_deploy(a)
+    if a.cmd == "run":
+        return cmd_run(a, command)
+    return {"claim": cmd_claim, "release": cmd_release, "renew": cmd_renew, "narrow": cmd_narrow, "list": cmd_list,
+            "check": cmd_check, "events": cmd_events, "ticket": cmd_ticket, "heartbeat": cmd_heartbeat,
+            "mode": cmd_mode}[a.cmd](a)
+
+
+def run_central(a, command=None):
+    """Central handler with the contract's exit codes: config problems 1, unreachable 5."""
+    try:
+        if a.cmd == "release" and not (a.lease_id or a.agent):
+            eprint("vpt-lease release: error: release needs <lease-id> or --agent")
+            return 2
+        return dispatch(a, command)
+    except ConfigError as e:
+        eprint("vpt-lease: %s" % e)
+        return 1
+    except Unavailable as e:
+        eprint("UNAVAILABLE — the lease service cannot be reached (%s). Treat the platform as busy, not free." % e)
+        return UNAVAILABLE
+    except KeyboardInterrupt:
+        return 130
+
+
+# ---------------------------------------------------------------- shadow
+
+def strip_new_flags(argv):
+    """The legacy CLI does not know the new claim options."""
+    out, skip = [], False
+    for x in argv:
+        if skip:
+            skip = False
+        elif x in NEW_FLAGS_WITH_VALUE:
+            skip = True
+        elif x in NEW_FLAGS or x.startswith(("--mode=", "--expect=", "--deploy-id=")):
+            pass
+        else:
+            out.append(x)
+    return out
+
+
+MAP_FILE = os.path.expanduser("~/.cache/vpt-lease/shadow-map.json")
+
+
+def map_load():
+    try:
+        with open(MAP_FILE) as f:
+            m = json.load(f)
+            return m if isinstance(m, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def map_save(m):
+    os.makedirs(os.path.dirname(MAP_FILE), exist_ok=True)
+    tmp = MAP_FILE + ".%d.tmp" % os.getpid()
+    with open(tmp, "w") as f:
+        json.dump(dict(list(m.items())[-500:]), f)
+    os.replace(tmp, MAP_FILE)
+
+
+def shadow_call(argv, legacy):
+    """Replay argv on the service in shadow mode; compare with legacy=(code, out). Never raises."""
+    try:
+        a = build_parser().parse_args(strip_new_flags(argv))
+    except SystemExit:
+        return
+    if a.cmd in ("ticket", "heartbeat", "mode", "run"):
+        return
+    if a.cmd == "deploy" and a.dcmd == "wait":
+        return
+    m = map_load()
+    legacy_id = None
+    if a.cmd in ("release", "renew", "narrow") and getattr(a, "lease_id", None):
+        legacy_id = a.lease_id
+        if legacy_id not in m:
+            return                              # not a lease the service knows: nothing to compare
+        a.lease_id = m[legacy_id]
+    if a.cmd == "claim":
+        a.wait = a.ticket = False
+    CFG.shadow = True
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = run_central(a)
+    except BaseException as e:    # noqa
+        code = UNAVAILABLE
+        out.write("shadow error: %s" % e)
+    finally:
+        CFG.shadow = False
+    lcode, lout = legacy
+    cout = out.getvalue()
+    if a.cmd == "claim":
+        if lcode == 0 and code == 0 and lout.strip() and cout.strip():
+            m[lout.splitlines()[0].strip()] = cout.splitlines()[0].strip()
+            map_save(m)
+        elif lcode != 0 and code == 0 and cout.strip():      # do not leave a stray shadow lease behind
+            CFG.shadow = True
+            with contextlib.suppress(Exception):
+                api("POST", "/release", {"id": cout.splitlines()[0].strip(), "by": "shadow", "reason": "shadow-cleanup"}, timeout=5)
+            CFG.shadow = False
+    elif a.cmd == "release" and legacy_id and lcode == 0:
+        m.pop(legacy_id, None)
+        map_save(m)
+    if code != lcode and code != UNAVAILABLE:       # an unreachable service cannot take the report either
+        CFG.shadow = False
+        with contextlib.suppress(Exception):
+            api("POST", "/shadow-report", dict(machine=os.environ.get("VPT_LEASE_MACHINE") or socket.gethostname(),
+                                              command=" ".join(argv), legacy=dict(code=lcode, out=lout[-2000:]),
+                                              central=dict(code=code, out=(cout + err.getvalue())[-2000:])), timeout=2)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    mode = CFG.mode
+    if mode not in ("legacy", "shadow", "central"):
+        eprint("vpt-lease: VPT_LEASE_MODE must be legacy, shadow or central (is %r)" % mode)
+        return 1
+    command = None
+    if "--" in argv and argv[:1] == ["run"]:
+        i = argv.index("--")
+        argv, command = argv[:i], argv[i + 1:]
+    if mode == "legacy" and argv[:1] != ["run"]:
+        if argv[:1] in (["ticket"], ["heartbeat"], ["mode"]):
+            eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % argv[0])
+            return 1
+        stripped = strip_new_flags(argv)
+        if stripped != argv:
+            eprint("vpt-lease: legacy mode has no queue: --wait/--ticket/--mode/--expect/--deploy-id are ignored (busy exits 3)")
+            argv = stripped
+        try:
+            os.execvp(legacy_argv()[0], legacy_argv() + argv)
+        except (OSError, IndexError) as e:
+            eprint("vpt-lease: cannot run the legacy CLI %r: %s" % (CFG.legacy, e))
+            return 1
+    if mode == "shadow" and argv[:1] != ["run"]:
+        data = None
+        if argv[:2] == ["deploy", "wait"]:     # long-running, read-only: plain passthrough
+            os.execvp(legacy_argv()[0], legacy_argv() + argv)
+        if "--tail-stdin" in argv:
+            data = STDIN().encode()
+        try:
+            code, out, err = legacy_call(strip_new_flags(argv), data)
+        except OSError as e:
+            eprint("vpt-lease: cannot run the legacy CLI %r: %s" % (CFG.legacy, e))
+            return 1
+        sys.stdout.write(out); sys.stdout.flush()
+        sys.stderr.write(err); sys.stderr.flush()
+        shadow_call(argv, (code, out))
+        return code
+    a = build_parser().parse_args(argv)
+    if a.cmd == "run" and command is None:
+        eprint("vpt-lease run: expected `-- <command...>` after the claim arguments")
+        return 2
+    if mode != "central" and a.cmd in ("ticket", "heartbeat", "mode"):
+        eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % a.cmd)
+        return 1
+    if mode == "central" or a.cmd == "run":
+        def _term(_s, _f):
+            raise KeyboardInterrupt        # lets a waiting claim cancel its ticket
+        signal.signal(signal.SIGTERM, _term)
+        return run_central(a, command)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
