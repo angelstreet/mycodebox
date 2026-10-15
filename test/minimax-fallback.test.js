@@ -5,7 +5,7 @@ import http from 'node:http';
 import fs, { mkdtempSync, readFileSync, writeFileSync, existsSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFallbackDecider, parseChoice, parseExecOutput } from '../minimax-fallback.js';
+import { createFallbackDecider, parseChoice, parseExecOutput, resetNoLightweightWarning } from '../minimax-fallback.js';
 
 const work = mkdtempSync(join(tmpdir(), 'fallback-'));
 const LOG = join(work, 'calls.jsonl');
@@ -14,7 +14,7 @@ const FAKE = join(work, 'mcode');
 writeFileSync(FAKE, `#!${process.execPath}
 const fs = require('fs');
 const args = process.argv.slice(2);
-if (args[0] === 'exec' && args[1] === '--help') { fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args }) + '\\n'); console.log(process.env.MCODE_FAKE_LIGHT ? '  --mode <mode>  lightweight or full\\n  --permission <p>' : '  --permission <p>'); process.exit(0); }
+if (args[0] === 'exec' && args[1] === '--help') { fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args }) + '\\n'); console.log(!process.env.MCODE_FAKE_NOLIGHT ? '  --mode <mode>  lightweight or full\\n  --permission <p>' : '  --permission <p>'); process.exit(0); }
 const mode = process.env.MCODE_FAKE_MODE || 'ok';
 fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args, cwd: process.cwd(), cwdFiles: fs.readdirSync(process.cwd()), mode, leaked: Object.keys(process.env).filter((k) => /KEY|TOKEN|SECRET/.test(k)) }) + '\\n');
 const prompt = args[args.length - 1];
@@ -36,7 +36,7 @@ else {
 chmodSync(FAKE, 0o755);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const calls = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
-const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.light ? { MCODE_FAKE_LIGHT: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, ...(({ light, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
+const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.nolight ? { MCODE_FAKE_NOLIGHT: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, ...(({ nolight, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
 const BODY = { state: '{"x":1}', questions: { choice: { type: 'choice', instructions: 'What next?', criteria: { continue: 'carry on', take_recommended: 'take it', ask_owner: 'owner decides' } } } };
 const FACTS = { session: 's', agent: 'claude', project: 'p', priority: 'P2', state: 'done', case: 'owner_decision', source: 'rule', flags: [], text: 'Redis or Postgres for the cache?' };
 
@@ -99,7 +99,7 @@ test('three failures in a row pause the fallback; a missing binary is an error, 
   assert.match((await d.choice(BODY)).error, /paused/);
   assert.equal(calls().length, n, 'no process started while paused');
   const none = await createFallbackDecider({ bin: join(work, 'no-such-mcode'), env: { PATH: process.env.PATH } }).choice(BODY);
-  assert.match(none.error, /cannot run mcode|ENOENT/);
+  assert.equal(none.skipped, 'mcode without lightweight mode', 'a binary that cannot be probed is refused');
 });
 
 // ---- the manager: credits down -> fallback; switch off; cap; a 402 found by the call itself ----
@@ -197,17 +197,40 @@ test('a tool call anywhere in the output is an error, never an answer', async ()
   assert.match((await d.choice(BODY)).error, /tool call/);
 });
 
-test('--mode lightweight when the installed mcode has it (probed once), the smart-permission fallback otherwise', async () => {
+test('lightweight mode is required: probed once, passed on every run; an mcode without --mode (0.6.3) is refused and the refusal is logged once', async () => {
   const n0 = calls().length;
-  const light = decider('ok', { light: true });
+  const light = decider('ok');
   await light.choice(BODY); await light.choice(BODY);
   const withProbe = calls().slice(n0);
-  assert.ok(withProbe.every((c) => c.args.includes('--mode') && c.args[c.args.indexOf('--mode') + 1] === 'lightweight' && c.args.includes('smart') && c.args.includes('--max-steps') || c.args[1] === '--help'));
   assert.equal(withProbe.filter((c) => c.args[1] === '--help').length, 1, 'probed once');
-  const plain = decider('ok');
-  await plain.choice(BODY);
-  const last = calls().at(-1);
-  assert.ok(!last.args.includes('--mode')); assert.ok(last.args.includes('smart') && last.args.includes('--max-steps'));
+  const runs = withProbe.filter((c) => c.args[1] !== '--help');
+  assert.equal(runs.length, 2);
+  assert.ok(runs.every((c) => c.args[c.args.indexOf('--mode') + 1] === 'lightweight' && c.args.includes('smart') && c.args.includes('--max-steps')));
+  // an mcode whose --help lacks --mode: nothing runs
+  resetNoLightweightWarning();
+  const errs = []; const orig = console.error; console.error = (...a) => errs.push(a.join(' '));
+  try {
+    const old = decider('ok', { nolight: true });
+    const n1 = calls().length;
+    const r1 = await old.choice(BODY), r2 = await old.reviewer({ facts: FACTS });
+    assert.equal(r1.skipped, 'mcode without lightweight mode'); assert.equal(r2.skipped, 'mcode without lightweight mode');
+    assert.deepEqual(calls().slice(n1).filter((c) => c.args[1] !== '--help'), [], 'no run on the old mcode');
+    await decider('ok', { nolight: true }).choice(BODY);
+    assert.equal(errs.filter((e) => /without lightweight mode/.test(e)).length, 1, 'logged once per process');
+  } finally { console.error = orig; }
+});
+
+test('MCODE_NODE_DIR\'s mcode is preferred when it supports lightweight mode; the PATH one is used when only it does', async () => {
+  const nd = mkdtempSync(join(tmpdir(), 'fallback-node-'));
+  fs.copyFileSync(FAKE, join(nd, 'mcode')); chmodSync(join(nd, 'mcode'), 0o755);
+  const mk = (envExtra) => createFallbackDecider({ bin: undefined, nodeDir: nd, env: { PATH: `${work}:${process.env.PATH}`, HOME: work, MCODE_FAKE_MODE: 'ok', MCODE_FAKE_LOG: LOG, ...envExtra } });
+  const n0 = calls().length;
+  const r = await mk({}).choice(BODY);
+  assert.equal(r.success, true);
+  assert.ok(calls().slice(n0).some((c) => c.args[1] !== '--help'));
+  // both lack --mode: refused
+  const r2 = await mk({ MCODE_FAKE_NOLIGHT: '1' }).choice(BODY);
+  assert.equal(r2.skipped, 'mcode without lightweight mode');
 });
 
 test('one fallback process at a time: a second call is skipped as "fallback busy"', async () => {
