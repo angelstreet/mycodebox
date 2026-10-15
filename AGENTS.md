@@ -21,6 +21,13 @@ must match the actual configuration until they are migrated.
 - Never commit `certs/*.pem`, `.env`, anything from the state dir, or `stalls.jsonl`-style logs.
 - Read `git diff --staged` before every commit and check for the above.
 
+## Which rule wins
+
+The dated owner decisions in this file win over older task docs, handovers and session briefs where they differ. A task
+doc from before 2026-10-14 that says "no push / no merge / no deploy" or "the owner merges" is superseded by autonomy by
+default (below): commit and push your own work, merge when the merge evaluation passes, deploy by the normal procedure.
+Never hand the owner commands to run; run them yourself, or ask only about a hard-floor item.
+
 ## Working in the code
 
 - Node 20+, ES modules, one runtime dependency (`ws`). No build step: `server.js` serves `public/` as is.

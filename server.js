@@ -41,6 +41,7 @@
 //   POST /api/leases/owner/release | /owner/mode  {id[, mode:'pin']} → owner force-release / downgrade (central only; legacy: 409); logged with the owner's identity
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
+//   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
 //   POST /api/handoffs          → {resource, from, to, due?} create a new hand-off row
 //   POST /api/handoffs/<id>/done → mark a hand-off done (body {by?})
@@ -83,6 +84,7 @@ import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
+import { createRulesWatch } from './rules-watch.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -226,6 +228,24 @@ function agentFromTree(pid, table) {
         const hit = agentFromArgs(a);
         if (hit) return hit;
       }
+      next.push(...(table.children.get(p) || []));
+    }
+    level = next;
+  }
+  return null;
+}
+
+// Pid of the shallowest agent process under a pane (same walk as agentFromTree), or null.
+function agentPidFromTree(pid, table) {
+  let level = [pid];
+  const seen = new Set();
+  for (let depth = 0; level.length && depth < 8; depth++) {
+    const next = [];
+    for (const p of level) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      const a = table.args.get(p);
+      if (a && agentFromArgs(a)) return p;
       next.push(...(table.children.get(p) || []));
     }
     level = next;
@@ -750,6 +770,32 @@ const ciWatch = createCiWatch({
   record: (e) => managerEvents.record(e),
   alert,
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).ciWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
+// Rules watch (rules-watch.js): a session started before AGENTS.md last changed on its repo's origin/main is told once,
+// while idle, to re-read it. manager.json key `rulesWatch`: "live" (default) | "dry" | "off".
+const rulesWatch = createRulesWatch({
+  stateDir: STATE_DIR,
+  git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000 })).stdout,
+  listTargets: async () => {
+    const panes = await listPanes(), table = await processTable(), mgrs = new Set(loadManagerSessions());
+    const pids = [...panes.values()].map((p) => agentPidFromTree(p.pid, table)).filter(Boolean);
+    const age = new Map();
+    if (pids.length) {
+      try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const m = l.trim().split(/\s+/); if (m.length === 2) age.set(Number(m[0]), Number(m[1])); } } catch {}
+    }
+    const out = [];
+    for (const [name, p] of panes) {
+      if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead || / \(deleted\)$/.test(p.cwd)) continue;
+      const pid = agentPidFromTree(p.pid, table);
+      if (!pid || !age.has(pid)) continue;
+      out.push({ name, cwd: p.cwd, startedAt: Date.now() - age.get(pid) * 1000,
+        working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working') });
+    }
+    return out;
+  },
+  send: (name, text) => sendKeys(name, text),
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
@@ -1909,6 +1955,7 @@ async function handleHttp(req, res) {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
+  if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
   if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
   if (req.method === 'GET' && p === '/api/handoffs') {
@@ -2189,6 +2236,7 @@ server.listen(PORT, HOST, async () => {
   await handoffs.load();
   leaseWatch.start();
   ciWatch.start();
+  rulesWatch.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:

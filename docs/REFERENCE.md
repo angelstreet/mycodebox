@@ -1101,6 +1101,16 @@ Config: `<stateDir>/ci-watch.json` `{ "repo": "<owner/name>", "workflow": "<file
 "provider": "claude|minimax|codex|opencode", "model": "<optional, cbsession -m>" }`. Without it the watch stays idle. `manager.json` `ciWatch`: `"dry"` (journal only) or `"off"`; default live.
 `GET /api/ci-watch` shows the last verdict, the action and the red streak.
 
+## Rules watch (owner, 2026-10-15)
+
+A session reads AGENTS.md once, at start. `rules-watch.js` checks every 10 min (first check 3 min after start): for each
+live agent session (not the manager's, not paused), the last commit that touched AGENTS.md on its repo's `origin/main`
+(fetched each check). If that commit is newer than the session's agent process, the session gets one message while it
+is idle: the commit, the precedence rule (AGENTS.md beats older task docs and briefs, never hand the owner commands) and
+`git show origin/main:AGENTS.md`. At most 6 sessions per check. Each session is told once per AGENTS.md commit (`rules-watch.json`),
+with a feed line `rules-watch:told` per check and a journal `rules-watch.jsonl`. `manager.json` `rulesWatch`: `"dry"`
+(journal only) or `"off"`; default live. `GET /api/rules-watch` shows the stale sessions and who was told.
+
 ## Lease binding (TASK-58 C1)
 
 `lease-watch.js` polls the configured external `vpt-lease` registry every 30 s: it writes `lease:released|expired|narrowed` to manager-events.jsonl (never pushed),
