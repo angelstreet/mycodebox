@@ -70,12 +70,14 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
   async function watch(session, { text, cwd = null, stopAt = now(), paneText = '' } = {}) {
     const job = await identify(session, { text, cwd, stopAt, paneText });
     const w = { job, stopAt, since: now(), seenRunning: false, lastMtime: null, stableSince: null, flagged: false };
+    // a pid or a process tree counts as ended only after it was seen running: a pid that is not alive here (another host, already gone) is unseeable
+    if (job.kind === 'pid' || job.kind === 'tree') { w.seenRunning = job.pids.some((p) => alive(p)); if (!w.seenRunning) { job.unseen = true; } }
     watched.set(session, w);
     if (job.kind === 'log') await stateOf(w);   // remembers the mtime now: quiet time counts from the stop, not from the first tick
-    if (!job.kind || job.detached) {
+    if (!job.kind || job.detached || job.unseen) {
       w.flagged = true;
       await record({ key: `job:unseen:${session}`, title: `${session} waits on a job the harness cannot see`,
-        body: job.detached ? `its job runs detached (nohup / setsid / disown / &), so the manager cannot tell when it ends: ${job.text}` : `STATUS names no pid, log or run id and the agent has no child process: ${job.text}`, url: `/?s=${encodeURIComponent(session)}`, priority: 'default' }).catch(() => {});
+        body: job.detached ? `its job runs detached (nohup / setsid / disown / &), so the manager cannot tell when it ends: ${job.text}` : job.unseen ? `the pid named in its STATUS is not running on this host, so the manager cannot tell when the job ends: ${job.text}` : `STATUS names no pid, log or run id and the agent has no child process: ${job.text}`, url: `/?s=${encodeURIComponent(session)}`, priority: 'default' }).catch(() => {});
     }
     log({ type: 'own_job_watch', session, job: job.kind || 'unknown', label: job.label, detached: !!job.detached });
     return { kind: job.kind, label: job.label, detached: !!job.detached };
@@ -95,6 +97,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     if (j.kind === 'pid' || j.kind === 'tree') {
       const live = j.pids.filter((p) => alive(p));
       if (live.length) { w.seenRunning = true; return { state: 'running', summary: `${j.label} is still running (pid ${live.slice(0, 3).join(', ')})` }; }
+      if (!w.seenRunning) return { state: 'unknown', summary: `${j.label}: never seen running` };
       return { state: 'ended', at: t, summary: `${j.label} has ended` };
     }
     if (j.kind === 'log') {
@@ -114,12 +117,15 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const woke = [];
     for (const [session, w] of [...watched]) {
       if (!stillWaiting(session, w.stopAt)) { watched.delete(session); continue; }
-      if (!w.job.kind) continue;
+      if (!w.job.kind || w.job.unseen) continue;
       if (!canSend(session)) continue;   // a draft in the input box, a paused session: try again next tick
       if (now() - w.since > maxAgeH * 3600e3) { watched.delete(session); log({ type: 'own_job_giveup', session, job: w.job.label }); continue; }
       const s = await stateOf(w);
       if (s.state !== 'ended') continue;
       const text = `your ${w.job.label} finished at ${hhmm(s.at || now())}, continue`;
+      // the session may have moved on, been paused or started a draft while the state was read: check again right before typing
+      if (!stillWaiting(session, w.stopAt)) { watched.delete(session); continue; }
+      if (!canSend(session)) continue;
       try { await send(session, text); } catch (e) { log({ type: 'own_job_wake_failed', session, job: w.job.label, error: e.message }); continue; }
       watched.delete(session);
       log({ type: 'own_job_wake', session, job: w.job.label, kind: w.job.kind, finishedAt: new Date(s.at || now()).toISOString(), text });
@@ -135,7 +141,13 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const s = await stateOf(w);
     return s.state === 'unknown' ? null : `${s.summary}${s.state === 'ended' ? ` (at ${hhmm(s.at || now())})` : ''}.`;
   }
-  return { watch, forget, tick, jobOf, progressOf, _watched: watched };
+  // does the agent of `session` have a live child process (a job of its own) right now?
+  async function hasLiveChild(session) {
+    const ap = await agentPid(session);
+    if (!ap) return false;
+    return jobPids(ap, await table()).length > 0;
+  }
+  return { watch, forget, tick, jobOf, progressOf, hasLiveChild, _watched: watched };
 }
 
 function readSafe(p) { try { return readFileSync(p, 'utf8'); } catch { return ''; } }

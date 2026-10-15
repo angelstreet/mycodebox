@@ -193,19 +193,74 @@ export const MIGRATION_RE = /(^|\/)migrations\/|\.sql$/i;
 
 // Additive SQL only (round 9, item 4): CREATE TABLE / INDEX / VIEW (OR REPLACE), ALTER TABLE ... ADD [COLUMN], INSERT. Anything else (DROP, DELETE,
 // TRUNCATE, RENAME, ALTER ... DROP / TYPE / ALTER COLUMN, UPDATE, a statement this does not recognise) is destructive or unknown: not additive.
-// -> { additive: boolean, why: string|null }. Comments and string literals are blanked first; "ON DELETE CASCADE" of a foreign key is structure.
+// -> { additive: boolean, why: string|null }.
+// One pass over the text, so a comment marker inside a literal cannot hide a statement and a quote inside a comment cannot open a literal:
+// '...' with '' escapes, "..." identifiers, $tag$...$tag$ bodies, -- and nested /* */ comments are blanked; E'...' strings, any backslash inside a
+// literal, a psql meta-command (a line starting with a backslash: \!, \i, \copy) and unbalanced quotes, tags or comments are refused.
+// Inherent limit (documented): a function CALLED by an allowed statement can still do anything. INSERT ... SELECT is refused, and a function call in an
+// INSERT or CREATE TABLE ... AS must be on a short allowlist; a view's body is read lazily and is not checked for what it calls later.
+const SAFE_FN = new Set(['values', 'conflict', 'now', 'current_timestamp', 'current_date', 'gen_random_uuid', 'uuid_generate_v4', 'coalesce', 'lower', 'upper', 'count', 'sum', 'min', 'max', 'avg', 'nextval', 'cast', 'array', 'row', 'any', 'in', 'exists', 'on']);
+function blank(src) {
+  const n = src.length;
+  let out = '', i = 0;
+  while (i < n) {
+    const c = src[i], d = src[i + 1];
+    if (c === '-' && d === '-') { const e = src.indexOf('\n', i); if (e < 0) { i = n; } else { i = e; } out += ' '; continue; }
+    if (c === '/' && d === '*') {
+      let depth = 1, j = i + 2;
+      while (j < n && depth) { if (src[j] === '/' && src[j + 1] === '*') { depth++; j += 2; } else if (src[j] === '*' && src[j + 1] === '/') { depth--; j += 2; } else j++; }
+      if (depth) return { why: 'unterminated block comment' };
+      i = j; out += ' '; continue;
+    }
+    if ((c === 'E' || c === 'e') && d === "'" && !/[\w$]/.test(src[i - 1] || ' ')) return { why: 'an E\'...\' escape string' };
+    if (c === "'" || c === '"') {
+      let j = i + 1, closed = false;
+      while (j < n) {
+        if (src[j] === '\\') return { why: 'a backslash inside a literal' };
+        if (src[j] === c) { if (src[j + 1] === c) { j += 2; continue; } closed = true; break; }
+        j++;
+      }
+      if (!closed) return { why: 'unbalanced quote' };
+      out += c + c; i = j + 1; continue;
+    }
+    if (c === '$' && !/[\w$]/.test(src[i - 1] || ' ')) {
+      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 80));
+      if (m) {
+        const e = src.indexOf(m[0], i + m[0].length);
+        if (e < 0) return { why: 'unbalanced dollar quote' };
+        if (src.slice(i + m[0].length, e).includes('\\')) return { why: 'a backslash inside a literal' };
+        out += "''"; i = e + m[0].length; continue;
+      }
+    }
+    out += c; i++;
+  }
+  return { text: out };
+}
 export function analyzeMigrationSql(sql) {
   const src = String(sql ?? '');
   if (!src.trim()) return { additive: false, why: 'empty migration' };
-  const bare = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ').replace(/'(?:[^']|'')*'/g, "''").replace(/\$\$[\s\S]*?\$\$/g, '$$$$');
-  if (/\$\$/.test(bare)) return { additive: false, why: 'a function body (cannot be read as additive)' };
-  const stmts = bare.split(';').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (/^[ \t]*\\/m.test(src)) return { additive: false, why: 'a psql meta-command (backslash line)' };
+  const b = blank(src);
+  if (b.why) return { additive: false, why: b.why };
+  const stmts = b.text.split(';').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
   if (!stmts.length) return { additive: false, why: 'no statements' };
+  const calls = (t) => [...t.matchAll(/\b([A-Za-z_][\w.]*)\s*\(/g)].map((m) => m[1].toLowerCase()).filter((f) => !SAFE_FN.has(f));
   for (const raw of stmts) {
     const s = raw.replace(/\bON\s+(?:UPDATE|DELETE)\s+(?:CASCADE|RESTRICT|NO ACTION|SET (?:NULL|DEFAULT))/gi, ' ');
     const bad = /\b(?:DROP|DELETE|TRUNCATE|RENAME|UPDATE|GRANT|REVOKE|COPY|VACUUM|REINDEX|CLUSTER)\b/i.exec(s);
     if (bad) return { additive: false, why: `${bad[0].toUpperCase()} in "${raw.slice(0, 60)}"` };
-    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s) || /^CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s) || /^INSERT\s+INTO\b/i.test(s)) continue;
+    if (/^INSERT\s+INTO\b/i.test(s)) {
+      if (/\bSELECT\b/i.test(s)) return { additive: false, why: `INSERT ... SELECT in "${raw.slice(0, 60)}"` };
+      const fns = calls(s.replace(/^INSERT\s+INTO\s+\S+\s*(?:\([^)]*\))?/i, ''));
+      if (fns.length) return { additive: false, why: `function call ${fns[0]}() in "${raw.slice(0, 60)}"` };
+      continue;
+    }
+    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s)) {
+      const ctas = s.search(/\bAS\s+(?:SELECT|WITH|TABLE|VALUES)\b/i);   // CREATE TABLE ... AS runs its query now
+      if (ctas >= 0) { const bf = calls(s.slice(ctas)); if (bf.length) return { additive: false, why: `function call ${bf[0]}() in "${raw.slice(0, 60)}"` }; }
+      continue;
+    }
+    if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s)) continue;
     const alter = /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\S+\s+(.*)$/i.exec(s);
     if (alter) {
       const clauses = alter[1].split(/,\s*(?=ADD\b|ALTER\b|DROP\b|RENAME\b|SET\b|OWNER\b)/i);
@@ -323,8 +378,10 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   // no database migration in what would go out: since the last deployed commit, else the session branch against its merge base
   const changed = new Set();
   let ranged = false;
+  const baseCommits = [];   // the deployed commits that resolve: what a migration file must NOT exist in to count as new
   for (const p of facts.previous) {
     if (!p.commit || !(await resolves(repo, p.commit))) continue;
+    baseCommits.push(p.commit);
     const d = await git(repo, ['diff', '--name-only', '-z', `${p.commit}..${refGit}`]);
     if (d.code !== 0) return esc(`cannot list the changed files (${d.err || 'git diff failed'})`, tests);
     for (const f of d.out.split('\0').filter(Boolean)) changed.add(f);
@@ -345,7 +402,8 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
     // migrations and deletions stay with the owner (OWNER_DECISIONS: lab vs customer DB).
     const blocked = `contains a database migration: ${mig.slice(0, 3).join(', ')}`;
     if (!(cfg.labEnvs || []).includes(facts.env)) return esc(blocked, tests);
-    const bases = [...facts.previous.map((p) => p.commit).filter(Boolean), ...(afterMerge ? [refGit] : [])];
+    const bases = [...baseCommits, ...(afterMerge ? [refGit] : [])];
+    if (!bases.length) return esc(`${blocked} (not applied by the manager: cannot tell new from edited migrations)`, tests);
     const revs = [refGit, ...(sBranch ? [`refs/heads/${sBranch}`] : [])];
     const am = await additiveMigrations(repo, mig, { revs, bases });
     if (!am.ok) return esc(`${blocked} (not applied by the manager: ${am.why})`, tests);
