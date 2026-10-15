@@ -31,7 +31,7 @@ test('decidedItems: newest first, cancelled excluded, each answer joined to its 
   assert.deepEqual([ids[0], ids[1], ids.at(-2), ids.at(-1)], ['a6', 'a5', 'a2', 'a1']);   // newest first
   assert.ok(!items.some((i) => i.id === 'a4'));
   assert.equal(items[0].id, 'a6');
-  for (const i of items) assert.deepEqual(Object.keys(i), ['id', 'at', 'session', 'kind', 'what', 'why', 'evidence', 'revert', 'url']);
+  for (const i of items) assert.deepEqual(Object.keys(i), ['id', 'at', 'session', 'kind', 'what', 'why', 'evidence', 'revert', 'url', 'productVisible']);
   const by = Object.fromEntries(items.map((i) => [i.id, i]));
   assert.equal(by.a1.kind, 'continue'); assert.equal(by.a1.what, "answered 'Yes, continue.' to api-worker");
   assert.equal(by.a2.kind, 'menu'); assert.equal(by.a2.what, 'answered option 2 to docs-bot');
@@ -109,4 +109,25 @@ test('R8-10: an answer that follows its id\'s last cancellation (held, then sent
     ans('h2', 3, 's', { text: 'Yes, continue.' }), { type: 'answer_cancelled', id: 'h2', session: 's', reason: 'pane changed', at: iso(4) },
   ];
   assert.deepEqual(decidedItems({ recs: r, journal: [] }).map((i) => i.id), ['h1']);
+});
+
+test('round 9: productVisible, product-visible picks first and named in the summary', async () => {
+  const { productVisible } = await import('../decided.js');
+  assert.equal(productVisible({ kind: 'menu', pick: 'Use the dark theme for the page' }), true);
+  assert.equal(productVisible({ kind: 'menu', pick: 'Rename the helper function' }), false);
+  assert.equal(productVisible({ kind: 'merge', what: 'approved the merge of the button branch' }), false);
+  const at = (m) => `2026-10-14T10:0${m}:00.000Z`;
+  const recs = [
+    { type: 'stall', id: 'p1', question: 'Which colour for the button?', excerpt: 'x' }, { type: 'answer', id: 'p1', at: at(1), session: 's1', case: 'menu_recommended', answer: { key: '1' }, decision_ids: ['menu-p1'] },
+    { type: 'stall', id: 'p2', question: 'Which helper name?', excerpt: 'x' }, { type: 'answer', id: 'p2', at: at(5), session: 's2', case: 'menu_recommended', answer: { key: '1' }, decision_ids: ['menu-p2'] },
+  ];
+  const journal = [
+    { decision_id: 'menu-p1', kind: 'menu', question: 'Which colour for the button?', option: 'Blue', key: 1, rationale: 'r', evidence: [] },
+    { decision_id: 'menu-p2', kind: 'menu', question: 'Which helper name?', option: 'syncer', key: 1, rationale: 'r', evidence: [] },
+  ];
+  const items = decidedItems({ recs, journal });
+  assert.deepEqual(items.map((i) => i.id), ['p1', 'p2']);   // p1 is older but product-visible
+  assert.equal(items[0].productVisible, true);
+  const sum = decidedSummary(items);
+  assert.match(sum.text, /1 product-visible pick: "Blue" \(s1\), 1 menu pick/);
 });

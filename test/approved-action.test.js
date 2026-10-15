@@ -152,3 +152,21 @@ test('round-8 probe sweep controls: m25 takes the menu, m26 is answered', async 
   const b = await stop('m26', withOrigin(), `${GREEN}\n\nShould I merge feat into main and push?`);
   assert.ok(b.typed.length === 1 && /^Merge: yes/.test(b.typed[0])); assert.equal(b.esc, undefined);
 });
+
+// ---- round 9 item 3: unmarked menus ------------------------------------------------------------------------------------
+test('unmarked menu: option 1 is taken (key), journaled as unmarked; a hard or way-out first option goes to the owner', async () => {
+  const a = await stop('u1', makeRepo(), 'Which page layout?\n ❯ 1. Use the compact layout for the settings page\n   2. Use the wide layout\n' + MENU_TAIL, 'waiting');
+  assert.deepEqual(a.keys, ['1']); assert.equal(a.esc, undefined);
+  const j = lines(join(dir, 'manager-decisions.jsonl')).find((r) => r.kind === 'menu' && r.session === 'u1');
+  assert.equal(j.unmarked, true); assert.match(j.rationale, /no option as recommended/);
+  const { decidedItems } = await import('../decided.js');
+  const items = decidedItems({ recs: stalls(), journal: lines(join(dir, 'manager-decisions.jsonl')) });
+  const it = items.find((i) => i.session === 'u1');
+  assert.equal(it.productVisible, true); assert.match(it.what, /unmarked first option/);
+  for (const [n, first] of [['u2', 'Skip the migration step'], ['u3', 'Delete the old backups'], ['u4', 'Apply database migrations']]) {
+    const r = await stop(n, makeRepo(), `Which one?\n ❯ 1. ${first}\n   2. Use the wide layout\n` + MENU_TAIL, 'waiting');
+    assert.deepEqual(r.keys, [], n); assert.ok(r.esc, n);
+  }
+  const b = await stop('u5', makeRepo(), 'Two ways to name it.\n1. Call it the sync helper\n2. Call it the copier\nWhich do you prefer?');
+  assert.deepEqual(b.typed, ['Go with option 1.']);
+});

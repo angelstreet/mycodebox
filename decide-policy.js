@@ -337,7 +337,7 @@ export function decisionRecord(kind, ev, { id, session = null, at = new Date() }
 
 // A record for a menu pick the manager sent on the owner's behalf (kind "menu"): the agent's own recommended option, taken when neither the
 // question nor that option is a hard topic (or its merge / push / deploy topics passed their evaluation, journaled separately).
-export function menuRecord({ id, session = null, at = new Date(), question = '', option = '', key = null, options = 0, answer = null } = {}) {
+export function menuRecord({ id, session = null, at = new Date(), question = '', option = '', key = null, options = 0, answer = null, unmarked = false } = {}) {
   const ts = at instanceof Date ? at.toISOString() : typeof at === 'number' ? new Date(at).toISOString() : String(at);
   const sent = answer?.text != null ? answer.text : `option ${answer?.key ?? key}`;
   return {
@@ -349,10 +349,11 @@ export function menuRecord({ id, session = null, at = new Date(), question = '',
       { option: 'escalate', pros: ['the owner picks'], cons: ['the session waits for the owner'] },
     ],
     expected_effect: `The session carries on with "${option}" without asking the owner.`,
-    rationale: `The agent marked "${option}" as its recommendation and neither the question nor that option is a hard topic.`,
-    evidence: [`question: ${question || 'unknown'}`, `recommended option ${key ?? '?'}: ${option}`, `${options} options`, `sent: ${sent}`],
+    rationale: unmarked ? `The agent marked no option as recommended; "${option}" is option 1, and neither the question nor that option is a hard topic or a way out (skip / cancel), so the manager took it as the safe, reversible default.`
+      : `The agent marked "${option}" as its recommendation and neither the question nor that option is a hard topic.`,
+    evidence: [`question: ${question || 'unknown'}`, `${unmarked ? 'unmarked first option' : 'recommended option'} ${key ?? '?'}: ${option}`, `${options} options`, `sent: ${sent}`],
     actor: { role: 'manager', runtime: null, model: null },
     confidence: 1, policy_ref: 'OWNER_DECISIONS §15', reversible: true, rollback: 'send the session a correction naming the option you wanted',
-    session, option, key: key ?? null,
+    session, option, key: key ?? null, ...(unmarked ? { unmarked: true } : {}),
   };
 }

@@ -491,6 +491,16 @@ export function menuOptions(lines) {
   return opts;
 }
 
+// Unmarked menus (round 9, item 3): no "(recommended)" tag, but option 1 is a safe, reversible default. Only a clean 1..N list counts, and option 1
+// must not be a way out ("skip", "cancel", "do nothing") nor carry a hard topic. A merge / push / deploy in it is still evaluated by the manager.
+const OUT_OPTION_RE = /^\W*(?:skip|cancel|abort|stop|quit|exit|do nothing|nothing|leave (?:it|them|this)|no\b|none\b|not now|later|wait\b|don'?t|dismiss|decline|keep (?:it )?as is|ignore|something else|other\b|type something|chat about)/i;
+export function unmarkedFirst(opts) {
+  if (!opts || opts.length < 2 || opts.some((o, i) => o.n !== i + 1) || opts.some((o) => RECOMMENDED_RE.test(o.text))) return null;
+  const first = opts[0];
+  if (OUT_OPTION_RE.test(first.text) || topicSplit([first.text, ...commandsIn(first.text)].join('\n')).hard) return null;
+  return first;
+}
+
 // The agent's own last-line verdict (AGENTS.md "End every turn with a STATUS line"):
 //   STATUS: done | needs-owner: <question> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
 // Looked for in the last 3 closing lines only. Returns { kind, text } or null (Codex/MiniMax panes, turns without the line).
@@ -543,9 +553,10 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     const rec = opts.find((o) => RECOMMENDED_RE.test(o.text));
     if (PERMISSION_RE.test(block.join('\n'))) out.case = 'permission';
     else if (rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2)) { out.case = 'menu_recommended'; out.answer = { key: String(rec.n) }; }
+    else if (!rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2) && unmarkedFirst(opts)) { out.case = 'menu_recommended'; out.answer = { key: String(opts[0].n) }; out.source = 'unmarked-first'; }
     else out.case = 'owner_decision';
     out.forbiddenText = block.join('\n');
-    if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text), forbidden: forbiddenMatch(o.text) }));
+    if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text) || (out.source === 'unmarked-first' && o.n === opts[0].n), ...(out.source === 'unmarked-first' && o.n === opts[0].n ? { unmarked: true } : {}), forbidden: forbiddenMatch(o.text) }));
     return finish(out);
   }
 
@@ -605,6 +616,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     out.action = actionOf(act, tailText);
   } else if (asks) {
     if (opts.length >= 2 && rec) { out.case = 'menu_recommended'; out.answer = { text: 'Yes, go with your recommendation.' }; }
+    else if (opts.length >= 2 && unmarkedFirst(opts) && !wait) { out.case = 'menu_recommended'; out.answer = { text: `Go with option ${opts[0].n}.` }; out.source = 'unmarked-first'; }
     else if (opts.length >= 2 || DECISION_Q.test(last)) out.case = 'owner_decision';
     else if (CONTINUE_Q.test(last)) { out.case = 'continue'; out.answer = { text: 'Yes, continue.' }; }
     else { out.case = 'owner_decision'; out.source = 'ambiguous'; }
@@ -616,7 +628,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   } else out.case = 'done';
   // no_status: a closing text that never says what is done / tested / left / next / blocked. A question,
   // a deploy wait and an owner action each state their own next step, so they are not flagged.
-  if (asks && opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text), forbidden: forbiddenMatch(o.text) }));
+  if (asks && opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text) || (out.source === 'unmarked-first' && o.n === opts[0].n), ...(out.source === 'unmarked-first' && o.n === opts[0].n ? { unmarked: true } : {}), forbidden: forbiddenMatch(o.text) }));
   if (fyi) out.fyi = fyi;
   out.no_status = !asks && !fyi && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
   if (out.no_status && out.case === 'done') { out.answer = { text: ASK_STATUS_TEXT }; out.autoCase = 'ask_status'; }

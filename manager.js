@@ -1066,7 +1066,7 @@ async function menuDecision({ s, w, id, h, final, stall }) {
   if (whys.length) return { ok: false, why: whys.join('; ') };
   return { ok: true, recText: combined, kinds: dec.kinds, evs: dec.evs, menu: menuInfo(final, rec) };
 }
-const menuInfo = (final, rec) => ({ question: String(final.question || '').slice(0, 200), option: rec.text.slice(0, 200), key: rec.n, options: final.options.length });
+const menuInfo = (final, rec) => ({ question: String(final.question || '').slice(0, 200), option: rec.text.slice(0, 200), key: rec.n, options: final.options.length, ...(rec.unmarked ? { unmarked: true } : {}) });
 // the recommended option of a menu_recommended stop, for the decision journal ("menu" kind)
 const menuPick = (final) => { const rec = final.case === 'menu_recommended' && final.options?.find((o) => o.recommended); return rec ? menuInfo(final, rec) : null; };
 const autoBlockFor = (name, final) => autoBlock(name, { case: 'menu_recommended', autoCase: final.autoCase }, 1);

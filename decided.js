@@ -8,6 +8,9 @@ export const KINDS = ['merge', 'push', 'deploy', 'menu', 'continue', 'ai_reply',
 const DECISION_KINDS = ['merge', 'push', 'deploy'];
 const ms = (v) => { if (v == null || v === '') return null; if (typeof v === 'number') return v; const t = Date.parse(v); return Number.isFinite(t) ? t : null; };
 const quote = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+// A pick is product-visible when its option or question names something the user sees: UI, wording, defaults, release notes (round 9, item 3).
+const PRODUCT_RE = /\b(?:pages?|buttons?|themes?|colou?rs?|fonts?|layouts?|wording|copy|defaults?|release[- ]notes?|screenshots?|mock-?ups?|ui|ux|icons?|labels?|headings?|tabs?|menus?|dialogs?|popups?|banners?|dark mode|light mode|styles?|styling|typography|spacing|animations?|tooltips?|toasts?)\b/i;
+export const productVisible = (item) => !!item && item.kind !== 'merge' && item.kind !== 'push' && item.kind !== 'deploy' && PRODUCT_RE.test([item.pick, item.question, item.what].filter(Boolean).join(' '));
 const urlOf = (session) => `/?s=${encodeURIComponent(session || '')}`;
 
 export const correctionDraft = (answer) => `Correction to the answer the manager gave you ("${quote(answer)}"): `;
@@ -79,7 +82,11 @@ export function decidedItems({ recs = [], journal = [], since = null, until = nu
     const answerText = r.answer?.text != null ? String(r.answer.text) : `option ${r.answer?.key}`;
     const ids = [...new Set([...(r.decision_ids || []), ...(r.merge_decision_id ? [r.merge_decision_id] : [])])];
     const js = ids.map((i) => jById.get(i)).filter(Boolean).filter((j) => DECISION_KINDS.includes(j.kind) && j.chosen === j.kind);
-    const mk = (id, kind, what, why, evidence, revert) => ({ id, at: new Date(at).toISOString(), session: r.session || '', kind, what, why, evidence, revert, url: urlOf(r.session) });
+    const mk = (id, kind, what, why, evidence, revert, extra = {}) => {
+      const it = { id, at: new Date(at).toISOString(), session: r.session || '', kind, what, why, evidence, revert, url: urlOf(r.session) };
+      for (const [k, v] of Object.entries(extra)) Object.defineProperty(it, k, { value: v, enumerable: false });   // pick / question: for productVisible and the summary, not part of the item's JSON
+      return it;
+    };
     if (js.length) {
       for (const j of js) {
         const kind = j.kind;
@@ -90,11 +97,14 @@ export function decidedItems({ recs = [], journal = [], since = null, until = nu
     }
     const kind = r.source === 'ai' ? 'ai_reply' : r.source === 'manager_decision' ? 'info' : r.answer?.key != null || r.case === 'menu_recommended' ? 'menu' : 'continue';
     const mj = kind === 'menu' ? jById.get(`menu-${r.id}`) : null;   // the menu pick's own decision record
-    items.push(mk(r.id, kind, mj ? `took the recommended option ${mj.key ?? ''} ("${quote(mj.option)}") for ${r.session || 'the session'}`.replace('option  (', 'option (') : whatOf(kind, r.session, null, answerText),
+    items.push(mk(r.id, kind, mj ? `took the ${mj.unmarked ? 'unmarked first option' : 'recommended option'} ${mj.key ?? ''} ("${quote(mj.option)}") for ${r.session || 'the session'}`.replace('option  (', 'option (') : whatOf(kind, r.session, null, answerText),
       mj ? mj.rationale : whyOf(kind, null, stall, r),
-      mj ? mj.evidence.map(String) : stall?.excerpt ? [`stop: ${quote(stall.question || stall.excerpt)}`] : [], revertOf(kind, null, answerText)));
+      mj ? mj.evidence.map(String) : stall?.excerpt ? [`stop: ${quote(stall.question || stall.excerpt)}`] : [], revertOf(kind, null, answerText),
+      { pick: quote(mj ? mj.option : answerText), question: quote(mj ? mj.question : stall?.question || '') }));
   }
-  return items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : -1));
+  for (const it of items) it.productVisible = productVisible(it);   // after the other fields: the item's JSON gains one flag
+  // product-visible picks first (the owner reviews those at the end), each group newest first
+  return items.sort((a, b) => (b.productVisible - a.productVisible) || Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : -1));
 }
 
 // Send failures in the window (replies the manager could not type): the digest says "Nothing failed" only when there were none.
@@ -111,8 +121,11 @@ export function decidedSummary(items = [], { hours = 24, failed = 0 } = {}) {
   const byKind = Object.fromEntries(KINDS.map((k) => [k, items.filter((i) => i.kind === k).length]).filter(([, n]) => n > 0));
   const count = items.length;
   if (!count) return { count: 0, byKind, text: `Nothing was decided for you in ${win}.${failed ? ` ${plural(failed, 'reply', 'replies')} could not be sent.` : ''}`.slice(0, 600) };
-  const of = (k) => items.filter((i) => i.kind === k);
+  const pv = items.filter((i) => i.productVisible);
+  const rest = items.filter((i) => !i.productVisible);
+  const of = (k) => rest.filter((i) => i.kind === k);
   const bits = [];
+  if (pv.length) bits.push(`${plural(pv.length, 'product-visible pick', 'product-visible picks')}: ${pv.slice(0, 3).map((i) => `"${quote(i.pick).slice(0, 40)}" (${i.session || 'a session'})`).join(', ')}${pv.length > 3 ? ` and ${pv.length - 3} more` : ''}`);
   for (const k of KINDS) {
     const xs = of(k); if (!xs.length) continue;
     const who = names(xs.map((i) => i.session));
