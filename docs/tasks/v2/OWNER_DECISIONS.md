@@ -374,3 +374,20 @@ I need a better ability to hear and engage by voice. My goal: I go to the gym or
 - **G2 hands-free:** voice mode reads each open question with its options, takes a spoken answer mapped to an option
   (a sensitive option needs a spoken "confirm"), speaks a digest of the last hour, and works with headset / car buttons.
   Platform limits are documented in [VOICE](../../VOICE.md); phone checks are MANUAL.
+
+
+## 16. One central lease service (2026-10-14)
+
+Owner: "We need to rethink the lease process and make sure our new codebox centralises it, because it is a main point of
+blocking for dev, test and deployment." Addendum: "you are blocking dev with a lease when you just wait".
+
+- The mycodebox server becomes the single authority for leases and the deploy queue; `vpt-lease` becomes a thin,
+  compatible client. Typed resources (env, frontend, server, host, device) and a symmetric conflict matrix: a frontend
+  deploy never waits for a device run, a device run never blocks another device on the same host.
+- Never ask, wait: a busy resource gives a ticket in a FIFO queue with an estimated start; no agent asks the owner about
+  a lease, the manager answers lease questions from the service.
+- No ghost holds: TTL, opt-in heartbeats, session liveness; idle exclusive holds and holders that only wait become pins
+  (`exclusive` / `observe` / `pin`). Owner force-release from the Leases view.
+- One rule text (`docs/LEASE-RULES.md`), rendered into the deploy skill; round 9 item 6 folds in here.
+- The fleet is switched by the owner side after a shadow period; the order (the deploy script fails closed first) and the
+  rollback are in [LEASES-CENTRAL §10](../../v2/LEASES-CENTRAL.md#10-shadow-period-cut-over-rollback).

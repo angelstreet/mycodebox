@@ -755,6 +755,29 @@ The status payload carries a small `reporter` object per live Claude session (`s
 Develop / test the plugin: `claude plugin validate claude-plugin/ghosty-reporter` and
 `claude plugin test claude-plugin/ghosty-reporter` (tests in `ghosty-reporter.test.ts`); ghosty side: `npm test`.
 
+## Central lease service (round 10, owner 2026-10-14)
+
+"We need to rethink the lease process and make sure our new codebox centralises it, because it is a main point of
+blocking for dev, test and deployment." The design, the conflict matrix, the queue and the cut-over are in
+[LEASES-CENTRAL](v2/LEASES-CENTRAL.md); the rules agents follow are in [LEASE-RULES](LEASE-RULES.md).
+
+- `lease-service.js`: the single writer of leases, tickets and the deploy queue (journal + snapshot in
+  `<state>/leases/`, fail closed). Always constructed; nothing in the fleet uses it until clients point at it.
+- `lease-routes.js`: `/api/lease/v1/*` for lease clients, bearer token per machine (`node scripts/lease-token.js add
+  <name>`; hashed in `<state>/leases/clients.json`), loopback and tailnet addresses only (`LEASE_ALLOW_CIDRS` adds
+  ranges), `LEASE_ENVS` lists the valid environments (empty: any sane name).
+- `scripts/vpt-lease`: the compatible client (Python 3, standard library): the registry CLI's commands, output and exit
+  codes, plus `--wait`, `--ticket`, `run -- <cmd>`, `heartbeat`, `validate`, modes `exclusive | observe | pin`. Mode
+  `legacy | shadow | central` in `~/.config/vpt-lease/config`.
+- `lease-source.js`: what the dashboard, the deploy runner, lease-watch and the manager read: `manager.json`
+  `leaseAuthority: "legacy"` (default: the registry over ssh, unchanged) or `"central"` (read once at start).
+- The **Leases** view (More menu, `/?leases=1`) shows held leases, tickets with position and ETA, the deploy queue,
+  overridden pins and shadow disagreements; force-release and downgrade-to-pin need two taps and are central-only.
+- The manager answers lease questions from the lease source instead of escalating them (`lease-ask.js`), and voice
+  mode has a lease line in the digest and a "who holds" question.
+- Import / export for the cut-over: `node scripts/lease-import.js` (dry run unless `--apply`), `node
+  scripts/lease-export.js`.
+
 ## Deploy queue (TASK-44 phase 7)
 
 Agents do not run `update_core.sh`; they queue a request in the shared lease registry (`vpt-lease deploy request ...`)
