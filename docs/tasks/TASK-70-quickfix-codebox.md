@@ -79,8 +79,9 @@ appended there. Two parallel queues, one per worktree-of-the-super-repo.
   NOT TASK-numbered** (per the standing rule: *"Sessions in ghosty-sessions /
   mycodebox are not TASK-numbered"*) — `codebox-quickfix` is the session name.
   The MD file keeps the `TASK-<NN>-slug.md` shape for cross-repo slotting.
-- No push to `main`, no merge, no deploy from this task. Deploy happens via
-  `update_core.sh` on `main`, after CI is green for that exact commit.
+- Superseded 2026-10-14 (AGENTS.md "Which rule wins"): commit and push your own work, merge to `main` when
+  the merge evaluation passes (clean merge, `npm test` green, nothing sensitive), and deploy with
+  `scripts/safe-restart.sh` after a fast-forward pull, never during a deploy. Never hand the owner commands to run.
 - No `.env` changes. No secrets in code, logs, or commits.
 - For ghosty-sessions worktrees: the worktree path uses the
   `~/ghosty-<slug>/` prefix — not the `~/vpt-<slug>/`
