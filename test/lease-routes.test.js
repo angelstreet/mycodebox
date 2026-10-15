@@ -265,7 +265,7 @@ test('review 4/5/6: HTTP clients cannot touch in-process leases or other clients
 test('review 16: the Tailscale login is honoured only when the server says the request came through Serve; a bare loopback request is logged as loopback', async () => {
   assert.equal(callerIdentity({ login: 'alice@example.test', viaServe: true, remoteAddress: '127.0.0.1', client: 'owner' }), 'alice@example.test via client:owner');
   assert.equal(callerIdentity({ login: 'alice@example.test', viaServe: false, remoteAddress: '127.0.0.1', client: 'owner' }), 'loopback via client:owner');
-  assert.equal(callerIdentity({ login: 'x', viaServe: false, remoteAddress: '100.64.1.2', client: 'owner' }), 'client:owner');
+  assert.equal(callerIdentity({ login: 'x', viaServe: false, remoteAddress: '100.64.1.2', client: 'owner' }), 'client:owner');   // leak-scan: allow (CGNAT test address)
   const c = await boot(undefined, { viaServe: (req) => req.headers['x-test-serve'] === '1' });
   try {
     const l = (await claim(c, 'a', ['frontend'])).body.lease;

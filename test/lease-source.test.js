@@ -202,8 +202,8 @@ test('server wiring: the lease consumers go through the source; legacy keeps the
 
 test('identity: the Serve login counts only on a proxied request; a bare loopback request is loopback (item 4)', () => {
   assert.equal(requestIdentity({ 'tailscale-user-login': 'me@example.test' }), 'loopback');   // a local process can set any header
-  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9', 'tailscale-user-login': 'me@example.test' }), 'me@example.test');
-  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9' }), 'loopback');
+  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9', 'tailscale-user-login': 'me@example.test' }), 'me@example.test');   // leak-scan: allow (CGNAT test address)
+  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9' }), 'loopback');   // leak-scan: allow (CGNAT test address)
   assert.equal(requestIdentity({}), 'loopback');
   assert.equal(requestIdentity(), 'loopback');
   const s = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
