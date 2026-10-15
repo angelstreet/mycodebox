@@ -391,3 +391,32 @@ blocking for dev, test and deployment." Addendum: "you are blocking dev with a l
 - One rule text (`docs/LEASE-RULES.md`), rendered into the deploy skill; round 9 item 6 folds in here.
 - The fleet is switched by the owner side after a shadow period; the order (the deploy script fails closed first) and the
   rollback are in [LEASES-CENTRAL §10](../../v2/LEASES-CENTRAL.md#10-shadow-period-cut-over-rollback).
+
+
+## 17. Harness review actions (2026-10-14, round 9)
+
+Owner rule for this round: "fewer stops, corrections at the end"; the source is the ranked changes of the
+[harness review](../../v2/reviews/HARNESS-REVIEW-2026-10-14.md).
+
+- **Lab vs customer database.** Owner: "an additive migration on the lab DB applied by the documented procedure is a
+  deploy step under the round-8 deploy rule; customer DBs, destructive migrations and deletions stay owner-only." The
+  deploy evaluation accepts a migration only when the target environment is listed in `labEnvs` (manager config, empty by
+  default), every migration file in the range is a newly added SQL file of additive statements (CREATE TABLE / INDEX /
+  VIEW, ALTER TABLE ... ADD COLUMN, INSERT), and the procedure is the deploy queue (or the repo's configured
+  `migrationProcedure`). Every other migration, any customer environment, and any deletion still go to the owner.
+- **The approved action, not every word.** The hard floor reads the action being approved (the option and the commands
+  it runs, or the plan it names) instead of every word of the question; a report of finished work no longer blocks a
+  routine "continue". Fable-reviewed.
+- **Unmarked menus.** A menu without a "(recommended)" marker whose first option is safe and reversible is treated as
+  recommending option 1; the Decided-for-you digest lists product-visible picks first.
+- **Mac sessions, self-checks, one open ask per session, mockup-first, ledgers, credit fallback, ready window, waking a
+  session when its own job ends**: see REFERENCE "Round 9".
+
+### Proposals for the owner (not built)
+
+- **Standing secret-use grant (review #9).** A named list of stores a session may read and use in place (the repo's
+  `.env`, a device host's documented secrets file, the MCP key a skill documents), never print, never copy between
+  hosts; reading anything else stays a stop. Would remove about 3 stops a day. Needs the owner's list of stores.
+- **Device-owner relays (review #12).** Give the session that drives a rack or modem host direct read access to that
+  host's serial console output (ssh to the rack host), so the owner stops pasting terminal output. A session-setup
+  change, not mycodebox code.

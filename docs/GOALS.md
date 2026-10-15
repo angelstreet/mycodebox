@@ -25,6 +25,9 @@ production database migrations (plus force-push / history rewrites, tag pushes a
 | Push and deploy decisions (deploy through the deploy queue, leases free, tests green, no migration, one-line rollback) | Round 8 ([REFERENCE](REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)) |
 | "Do the recommended option" on by default | Round 8 |
 | "Correct at the end": the "Decided for you" list and daily digest with revert / correct | Round 8 |
+| Stops from the owner's Mac reach the manager (Stop hook; the answer goes back while the hook waits) | Round 9 ([MAC-HOOK](MAC-HOOK.md)), installed by the owner side |
+| The manager reads the approved action, takes safe unmarked first options, answers what it can check, wakes sessions when their own job ends | Round 9 |
+| One central lease service: no waiting on leases that do not apply, never asking about a lease | Round 10 ([LEASES-CENTRAL](v2/LEASES-CENTRAL.md)), switched over by the owner side |
 
 Decision record: [OWNER_DECISIONS §14 and §15](tasks/v2/OWNER_DECISIONS.md).
 

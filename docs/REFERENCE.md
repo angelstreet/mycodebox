@@ -1122,6 +1122,26 @@ each holder (live / ended / remote / unknown / system) and the planned action. T
 
 ## Round 9: other machines, ledgers, credit fallback, ready window
 
+- **The approved action** (`stall.js` `approvedAction`, `isPastNarrative`): for a recommended option or a "continue", the hard floor reads the
+  option being approved and the commands it runs (or the plan a generic "Yes" / "Proceed" approves), not unrelated narrative. A sentence that reports
+  finished work (past tense with a time marker, no plan or future wording, plainly spelled) no longer blocks a routine answer; a hard action in the
+  approved option, its command or its plan still escalates. `FORBIDDEN_RE` is unchanged.
+- **Unmarked menus**: a clean 1..N menu without a recommendation marker whose option 1 is safe (no hard topic, not merge / push / deploy, not
+  skip / cancel / stop) is answered as if option 1 were recommended (`source: unmarked-first`). `decided.js productVisible()` sorts picks that name
+  something users see (page, button, theme, wording, default, ...) first in the Decided-for-you list and summary.
+- **Lab database** (`decide-policy.js` `analyzeMigrationSql`, `additiveMigrations`): a deploy whose range contains migrations is decided only when the
+  env is in `labEnvs` (manager config, default `[]`) and every migration is a newly added `.sql` file of additive statements; the reply names the files
+  and the procedure (`migrationProcedure[repo]`, else the deploy queue). OWNER_DECISIONS §17.
+- **Self-checks** (`self-check.js`, `selfChecks` switch, default on): before escalating, the manager answers "what version is deployed on X?" from the
+  deploy ledger, "is the run finished?" from the session's own job, and "does <path> exist?" (stat only, inside the repo or `infoRoots`, no symlink
+  escapes, secret-looking paths refused). **One open ask per session**: a new escalation supersedes the session's older open asks in the owner-asks
+  ledger; the NEEDS YOU strip shows the newest only.
+- **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
+  `kind: mockup` with a link and a deadline; a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
+  "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."
+- **Waiting on its own job** (`job-refs.js`, `own-jobs.js`): a STATUS `blocked` / `waiting` that names a pid, a log file, a run id or a deploy id is
+  case `own_job_wait`, never shown as needs-you; the job is watched (deploy state, `/proc/<pid>` or the pane's process tree, a log file's mtime)
+  and when it ends the session gets "your <job> finished at <time>, continue". A detached job (`nohup`, `setsid`, `disown`, `&`) is flagged in the feed.
 - **Remote stops** (`remote-stops.js`, `scripts/mac-stop-hook.sh`, install in [MAC-HOOK](MAC-HOOK.md)): `POST /api/remote/v1/stops` and
   `GET /api/remote/v1/stops/<id>/answer?wait=<s>`, same address allowlist and bearer-token store as the lease API, but the token's client needs
   `remote: true` (`node scripts/lease-token.js add <name> --remote`). A stop enters `manager.js observe()` as the session `mac:<session name>`
