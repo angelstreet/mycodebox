@@ -38,6 +38,8 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Usage, quota, health | `usage/`, `usage-view.js`, `quota.js`, `health.js`, `turn-meter.js` | `test/usage.test.js`, `test/quota-live.test.js`, `test/turn-meter.test.js` |
 | Optional platform operations | `deploy-runner.js`, `leases.js`, `lease-watch.js`, `handoffs.js`, `vpt-locks.js`, `ci-watch.js`, `rules-watch.js` | `test/deploy-runner.test.js`, `test/lease-watch.test.js`, `test/handoffs.test.js`, `test/ci-watch.test.js`, `test/rules-watch.test.js` |
 | Central lease service (one writer of leases and the deploy queue; `/api/lease/v1`; design in `docs/v2/LEASES-CENTRAL.md`) | `lease-service.js`, `lease-routes.js`, `scripts/lease-token.js`, `scripts/lease-import.js`, `scripts/lease-export.js` | `test/lease-service.test.js`, `test/lease-routes.test.js` |
+| Remote stops (Mac Stop hook intake, `/api/remote/v1`; install in `docs/MAC-HOOK.md`) | `remote-stops.js`, `scripts/mac-stop-hook.sh`, `manager.js` (marked remote hook block) | `test/remote-stops.test.js`, `test/mac-hook.test.js` |
+| Owner round-trip ledger (`owner-roundtrips.jsonl`, `GET /api/manager/roundtrips`) | `roundtrips.js`, `manager.js` (`settleRoundtrip`) | `test/roundtrips.test.js` |
 | V2 task contract, store, policy, intake | `orchestration/task-contract.js`, `store.js`, `policy.js`, `intake.js`, `events.js` | `test/v2-task-core*.test.js`, `test/v2-store*.test.js`, `test/v2-policy.test.js` |
 | V2 goal loop and verifier | `orchestration/goal-loop.js`, `verifier.js`, `roles.js` | `test/v2-goal-loop.test.js` |
 | V2 router, registry, budget (shadow only) | `orchestration/router.js`, `model-registry.js`, `models.json`, `budget.js` | `test/v2-routing*.test.js`, `test/v2-budget.test.js` |
