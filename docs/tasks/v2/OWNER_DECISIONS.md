@@ -404,6 +404,10 @@ Owner rule for this round: "fewer stops, corrections at the end"; the source is 
   default), every migration file in the range is a newly added SQL file of additive statements (CREATE TABLE / INDEX /
   VIEW, ALTER TABLE ... ADD COLUMN, INSERT), and the procedure is the deploy queue (or the repo's configured
   `migrationProcedure`). Every other migration, any customer environment, and any deletion still go to the owner.
+  `labEnvs` is empty by default, so nothing is relaxed until an environment is listed. Before listing one, confirm that
+  its deploy procedure really applies the SQL files (or set `migrationProcedure` for the repo): the reply promises it.
+  The SQL check is static: it refuses anything it cannot read as additive (comments and strings are tokenised, psql
+  meta-commands and unbalanced quotes refused), but a function called from an INSERT ... SELECT can still change data.
 - **The approved action, not every word.** The hard floor reads the action being approved (the option and the commands
   it runs, or the plan it names) instead of every word of the question; a report of finished work no longer blocks a
   routine "continue". Fable-reviewed.
