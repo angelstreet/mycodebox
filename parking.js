@@ -94,9 +94,13 @@ export function claudeOfPane(panePid, table, index) {
   return null;
 }
 
-// Child processes of the Claude pid that are not MCP servers: a running background command / job.
+// mcode keeps its own helper as a child of every MiniMax session: `node --input-type=module --eval` with an inline
+// `import { spawn } from "node:child_process"`. Counted as work, it made every MiniMax park fail (2026-10-15).
+const MCODE_HELPER_RE = /--input-type=module --eval\s+import \{ spawn \} from "node:child_process"/;
+// Child processes of the agent pid that are not MCP servers or the agent's own helper: a running background command / job.
 export function busyChildren(pid, table) {
-  return (table.children.get(pid) || []).map((c) => ({ pid: c, args: table.args.get(c) || '' })).filter((c) => !/mcp/i.test(c.args));
+  return (table.children.get(pid) || []).map((c) => ({ pid: c, args: table.args.get(c) || '' }))
+    .filter((c) => !/mcp/i.test(c.args) && !MCODE_HELPER_RE.test(c.args.replace(/\\012|\n/g, ' ')));
 }
 
 // Newest activity of a Claude session in ms: Claude's own idle/busy stamp, or the reporter's last turn / prompt, whichever is later.
