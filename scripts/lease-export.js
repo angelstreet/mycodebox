@@ -9,6 +9,8 @@ import { createLeaseService, toLegacyRows } from '../lease-service.js';
 const a = process.argv.slice(2);
 const i = a.indexOf('--dir');
 const dir = i >= 0 ? a[i + 1] : path.join(process.env.GHOSTY_STATE_DIR || path.join(os.homedir(), '.local', 'state', 'ghosty'), 'leases');
+import fs from 'node:fs';
+if (!fs.existsSync(dir)) { console.error(`no lease state at ${dir}`); process.exit(1); }
 const svc = createLeaseService({ dir, config: { readonly: true } });
 const r = await svc.list();
 if (!r.ok) { console.error(`cannot read the lease state: ${r.error}`); process.exit(1); }

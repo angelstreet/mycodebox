@@ -53,7 +53,7 @@ export function addrAllowed(addr, cidrs) {
 export function readClients(file) {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')).map((c) => ({ ...c, exemptAgents: Array.isArray(c.exemptAgents) ? c.exemptAgents.filter((x) => typeof x === 'string') : [] })) : [];
+    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')).map((c) => ({ ...c, exemptAgents: Array.isArray(c.exemptAgents) ? c.exemptAgents.filter((x) => typeof x === 'string') : [], owner: c.owner === true })) : [];
   } catch { return []; }
 }
 function clientOf(clients, token) {
@@ -66,6 +66,16 @@ function clientOf(clients, token) {
   return hit;
 }
 // exemptAgents patterns: an exact agent string, or a prefix ending in '*'. The exemption (deploy agents) binds to the token's client, not to the agent string a request asserts.
+// The deploy runner client: a token that lists exempt (deploy) agents. It may start, finish and cancel any deploy.
+export const isRunner = (client) => (client.exemptAgents || []).length > 0;
+// Owner-only routes need a client with `owner: true` in clients.json (lease-token.js add --owner).
+export const OWNER_ONLY = /^\/(owner\/|import$|deploy\/approve$)/;
+// Who is acting, for the logs. The Tailscale-User-Login header is honoured only on a request the server identified as coming
+// through Tailscale Serve (viaServe); on a bare loopback request anyone on the box can write that header, so it is ignored.
+export function callerIdentity({ login, viaServe, remoteAddress, client }) {
+  if (viaServe && typeof login === 'string' && login) return `${login.slice(0, 80)} via client:${client}`;
+  return /^(127\.|::1$|::ffff:127\.)/.test(String(remoteAddress || '')) ? `loopback via client:${client}` : `client:${client}`;
+}
 export const exemptFor = (client, agent) => typeof agent === 'string' && (client.exemptAgents || []).some((p) => (p.endsWith('*') ? agent.startsWith(p.slice(0, -1)) : p === agent));
 
 function readBody(req) {
@@ -92,7 +102,7 @@ function readBody(req) {
 const bool = (v) => v === true || v === '1' || v === 'true';
 const num = (v) => (v === undefined || v === '' ? undefined : Number(v));
 
-export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
+export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   let cache = { key: '', clients: [] };
@@ -107,7 +117,8 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
   // The caller's identity always comes from the token: body fields client / exempt / owner are discarded.
   const post = (path, op, fn = (b) => b) => route('POST', path, ({ body, client, who }) => {
     const { client: _c, exempt: _e, owner: _o, ...b } = fn(body, who);
-    return { op, args: { ...b, client: client.name, ...(op === 'claim' || op === 'deploy.start' ? { exempt: exemptFor(client, b.agent) } : {}) } };
+    const exempt = op === 'claim' ? exemptFor(client, b.agent) : ['deploy.start', 'deploy.finish', 'deploy.cancel'].includes(op) ? isRunner(client) : undefined;
+    return { op, args: { ...b, client: client.name, ...(exempt === undefined ? {} : { exempt }) } };
   });
   post('/claim', 'claim');
   route('GET', '/tickets/([^/]+)', ({ m, query }) => ({ op: 'ticket', args: { id: m[1], wait_s: Math.min(MAX_WAIT_S, Math.max(0, num(query.wait) || 0)) } }));
@@ -172,10 +183,14 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
     if (req.method === 'POST') {
       try { body = await readBody(req); } catch (e) { send(res, e.status || 400, { ok: false, code: 'E_INVALID', error: e.message }); return true; }
     }
-    const login = typeof req.headers['tailscale-user-login'] === 'string' ? req.headers['tailscale-user-login'].slice(0, 80) : '';
-    const who = `${login ? `${login} via ` : ''}client:${client.name}`;
+    let served = false;
+    try { served = !!viaServe(req); } catch { /* not served */ }
+    const who = callerIdentity({ login: req.headers['tailscale-user-login'], viaServe: served, remoteAddress: req.socket?.remoteAddress, client: client.name });
     const { op, args } = hit[2]({ body, query, m: hit[1].exec(sub), client, who });
-    if (sub.startsWith('/owner/')) args.owner = true;
+    if (OWNER_ONLY.test(sub)) {
+      if (!client.owner) { send(res, 403, { ok: false, code: 'E_AUTH', error: 'this route needs an owner client' }); return true; }
+      args.owner = true;                                      // never set for an ordinary token
+    }
     let out;
     try {
       const shadow = req.method === 'POST' ? body.shadow === true : bool(query.shadow);

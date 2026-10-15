@@ -17,6 +17,7 @@ function harness(cfg = {}, extra = {}) {
   h.claim = (agent, resources, o = {}) => h.svc.claim({ env: 'env-a', resources: [].concat(resources), agent, ...o });
   return h;
 }
+const TRACK = { sessions: { trackable: (s) => String(s).startsWith('codebox:') } };   // the dashboard resolves codebox sessions: idle downgrade applies there
 const held = (r) => r.ok === false && r.code === 'E_HELD';
 
 // ---- matrix --------------------------------------------------------------------------------------------------------------
@@ -204,8 +205,8 @@ test('pass-through is capped: a ticket passed more than 3 times, or older than 1
   const h = harness();
   await h.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h.claim('deployer', '*', { wait: 'ticket' });
-  for (let i = 0; i < 4; i++) { const r = await h.claim(`s${i}`, 'frontend', { expect_min: 1 }); assert.ok(r.ok, `pass ${i}`); await h.svc.release({ agent: `s${i}` }); }
-  assert.equal((await h.claim('s5', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'passed 4 times: strict');
+  for (let i = 0; i < 3; i++) { const r = await h.claim(`s${i}`, 'frontend', { expect_min: 1 }); assert.ok(r.ok, `pass ${i}`); await h.svc.release({ agent: `s${i}` }); }
+  assert.equal((await h.claim('s5', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'passed 3 times: strict');
   const h2 = harness();
   await h2.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h2.claim('deployer', '*', { wait: 'ticket' });
@@ -303,8 +304,8 @@ test('imported leases and plain claims have no heartbeat requirement (heartbeat_
 });
 
 test('idle exclusive lease is downgraded to pin after idleMs; the pin holder is told when an overlapping exclusive lease is granted', async () => {
-  const h = harness();
-  const a = (await h.claim('a', 'host-1/device1')).lease;
+  const h = harness({}, TRACK);
+  const a = (await h.claim('a', 'host-1/device1', { session: 'codebox:a' })).lease;
   await h.advance(19 * MIN);
   assert.equal((await h.svc.list()).leases[0].mode, 'exclusive');
   await h.svc.heartbeat({ id: a.id, active: true });
@@ -319,11 +320,11 @@ test('idle exclusive lease is downgraded to pin after idleMs; the pin holder is 
 });
 
 test('idle downgrade never touches deploy leases, exempt (system) holders, or leases inside expect_min; activity(session) resets the clock', async () => {
-  const h = harness();
-  await h.claim('sys', 'host-1/device1', { exempt: true });
-  await h.claim('exp', 'host-1/device2', { expect_min: 40 });
+  const h = harness({}, TRACK);
+  await h.claim('sys', 'host-1/device1', { exempt: true, session: 'codebox:sys' });
+  await h.claim('exp', 'host-1/device2', { expect_min: 40, session: 'codebox:exp' });
   await h.claim('act', 'host-2/device1', { session: 'codebox:s1' });
-  await h.claim('idle', 'host-2/device2');
+  await h.claim('idle', 'host-2/device2', { session: 'codebox:idle' });
   await h.advance(15 * MIN);
   assert.equal((await h.svc.activity('codebox:s1')).touched, 1);
   await h.advance(15 * MIN);
@@ -374,7 +375,7 @@ test('sessionGone: release after a 2 minute grace, or at once; the liveness prov
 });
 
 test('sessionStatus: waiting on its own resource is left alone; blocked/waiting on something else only downgrades when quiet and past expect_min, otherwise it flags', async () => {
-  const h = harness();
+  const h = harness({}, TRACK);
   await h.claim('codebox:s1', 'host-1/device1', { session: 'codebox:s1' });
   assert.deepEqual((await h.svc.sessionStatus('codebox:s1', 'waiting', 'script run on host-1/device1 (25 min)')), { ok: true, downgraded: [], flagged: [] });
   const recent = await h.svc.sessionStatus('codebox:s1', 'blocked', 'waiting for the owner');
@@ -516,14 +517,26 @@ test('identity: release/renew/narrow/mode by id need the holder client (and agen
   assert.equal((await h.svc.setMode({ id: l2.id, mode: 'exclusive', client: 'mac', agent: 'a' })).code, 'E_INVALID', 'downgrade only');
 });
 
-test('narrow is one-way: kind server -> host, resources only inside the lease', async () => {
+test('narrow keeps legacy semantics: --resource changes only that row\'s sensitivity and releases nothing; kind is one-way', async () => {
   const h = harness();
-  const l = (await h.claim('a', 'host-1', { kind: 'server' })).lease;
-  assert.equal((await h.svc.narrow({ id: l.id, resources: ['host-2'] })).code, 'E_INVALID');
+  const l = (await h.claim('a', ['host-1', 'host-2'], { kind: 'server' })).lease;
+  assert.equal((await h.svc.narrow({ id: l.id, resources: ['host-9'], kind: 'host' })).code, 'E_NOT_FOUND', 'no such row');
   assert.equal((await h.svc.narrow({ id: l.id, kind: 'server' })).code, 'E_INVALID');
-  const n = await h.svc.narrow({ id: l.id, resources: ['host-1/device1'], kind: 'host' });
-  assert.deepEqual(n.lease.resources, ['device:host-1/device1']); assert.equal(n.lease.kind, 'host');
-  assert.ok((await h.claim('b', 'host-1/device2')).ok, 'the freed device can be claimed');
+  const n = await h.svc.narrow({ id: l.id, resources: ['host-1'], kind: 'host' });
+  assert.equal(n.narrowed, 1); assert.deepEqual(n.lease.resources, ['host:host-1', 'host:host-2'], 'nothing released');
+  assert.deepEqual(n.lease.kinds, { 'host:host-1': 'host' });
+  assert.ok((await h.claim('srv1', 'server')).ok === false, 'the host-2 row is still server sensitive');
+  await h.svc.release({ agent: 'srv1' });
+  const again = await h.svc.narrow({ id: l.id, resources: ['host-1'], kind: 'host' });
+  assert.equal(again.narrowed, 0);
+  const all = await h.svc.narrow({ id: l.id, kind: 'host' });
+  assert.equal(all.narrowed, 1); assert.equal(all.lease.kind, 'host'); assert.equal(all.lease.kinds, null);
+  assert.ok((await h.claim('srv2', 'server')).ok, 'fully narrowed: a server claim no longer waits for it');
+  await h.svc.release({ agent: 'srv2' });
+  const r = await h.claim('b', ['host-3', 'host-4']);
+  const restrict = await h.svc.narrow({ id: r.lease.id, resources: ['host-3/device1'], restrict: true });
+  assert.deepEqual(restrict.lease.resources, ['device:host-3/device1']); assert.equal(restrict.narrowed, 2);
+  assert.ok((await h.claim('c', 'host-4')).ok, 'restrict frees the dropped rows');
 });
 
 // ---- durability ------------------------------------------------------------------------------------------------------------

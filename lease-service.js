@@ -54,8 +54,19 @@ export function parseResource(raw) {
 }
 export const canonical = (r) => (r.type === 'env' ? '*' : r.type === 'host' ? `host:${r.host}` : r.type === 'device' ? `device:${r.host}/${r.device}` : r.type);
 export const legacyName = (r) => (r.type === 'env' ? '*' : r.type === 'host' ? r.host : r.type === 'device' ? `${r.host}/${r.device}` : r.type);
-const parsedCache = new Map();
-const P = (c) => { let r = parsedCache.get(c); if (!r) { r = parseResource(c); parsedCache.set(c, r); } return r; };
+const parsedCache = new Map();   // bounded (LRU, 1000): resources arrive from clients
+const P = (c) => {
+  let r = parsedCache.get(c);
+  if (r !== undefined) { parsedCache.delete(c); parsedCache.set(c, r); return r; }
+  r = parseResource(c);
+  parsedCache.set(c, r);
+  if (parsedCache.size > 1000) parsedCache.delete(parsedCache.keys().next().value);
+  return r;
+};
+// Leases made by in-process callers (the dashboard, the deploy runner) carry this client name; no token can have it (names cannot contain ':').
+export const INTERNAL = 'internal:process';
+const kindOf = (l, c) => (l.resKinds && l.resKinds[c]) || l.kind;     // sensitivity per row (legacy narrow --resource)
+const serverKinded = (l) => l.resources.some((c) => { const t = P(c).type; return (t === 'host' || t === 'device') && kindOf(l, c) === 'server'; });
 
 // A new exclusive claim of resource n against a held exclusive lease on h (design matrix). heldKind = the held lease's sensitivity.
 function oneWay(n, h, heldKind) {
@@ -80,7 +91,7 @@ function leasesConflict(a, b, ignoreModes = false) {
   if (a.agent === b.agent) return false;
   if (a.deployId && a.deployId === b.deployId) return false;      // a claim that joined a running deploy's lease group
   if (a.shared && b.shared) return false;
-  return a.resources.some((x) => b.resources.some((y) => resourceConflict(P(x), P(y), a.kind, b.kind)));
+  return a.resources.some((x) => b.resources.some((y) => resourceConflict(P(x), P(y), kindOf(a, x), kindOf(b, y))));
 }
 const defaultKind = (parsed) => (parsed.length && parsed.every((r) => r.type === 'device') ? 'host' : 'server');
 // Which resources a deploy of this scope disturbs (pending deploys block new claims on these).
@@ -108,7 +119,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const now = () => { const t = nowIn(); if (!Number.isFinite(t)) throw new Error('wall clock is not finite'); return t; };   // wall clock: TTL and display only
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
-    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, ticketIdleMs: 10 * MIN, goneGraceMs: 2 * MIN,
+    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, ticketIdleMs: 10 * MIN, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
@@ -145,6 +156,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         S.leases[l.id] = l;
         for (const [k, g] of Object.entries(l.gens)) S.gens[k] = Math.max(S.gens[k] || 0, g);
         clk.set(l.id, { hb: mono(), act: mono() });
+        if (f.ticket) polls.delete(f.ticket);
         if (f.rkey) S.requests[f.rkey] = { kind: 'lease', ref: l.id, at: f.at };
         pruneRequests(f.at);
         if (f.ticket && S.tickets[f.ticket]) Object.assign(S.tickets[f.ticket], { state: 'granted', leaseId: l.id, grantedAt: f.at });
@@ -179,11 +191,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       case 'mode': { const l = S.leases[f.id]; if (l) { const from = l.mode; l.mode = f.to; ev('downgraded', l, f.at, { from, to: f.to, by: f.by, reason: f.reason }); } break; }
       case 'narrow': {
         const l = S.leases[f.id];
-        if (l) { const from = { resources: l.resources, sensitivity: l.kind }; l.resources = f.resources; l.kind = f.sensitivity; ev('narrowed', l, f.at, { from, by: f.by, reason: f.reason }); }
+        if (l) { const from = { resources: l.resources, sensitivity: l.kind, rows: l.resKinds || null }; l.resources = f.resources; l.kind = f.sensitivity; l.resKinds = f.resKinds || null; ev('narrowed', l, f.at, { from, by: f.by, reason: f.reason, count: f.count ?? null }); }
         break;
       }
       case 'tkt_new': f.ticket.order = f.seq; S.tickets[f.ticket.id] = f.ticket; if (f.rkey) S.requests[f.rkey] = { kind: 'ticket', ref: f.ticket.id, at: f.at }; pruneRequests(f.at); evTicket(f.ticket, f.at, 'waiting'); break;
-      case 'tkt_end': { const tk = S.tickets[f.id]; if (tk) { tk.state = f.state; tk.endedAt = f.at; evTicket(tk, f.at, f.state); } break; }
+      case 'tkt_end': { polls.delete(f.id); const tk = S.tickets[f.id]; if (tk) { tk.state = f.state; tk.endedAt = f.at; evTicket(tk, f.at, f.state); } break; }
       case 'gone': for (const l of Object.values(S.leases)) if (l.session === f.session || l.agent === f.session) { if (f.clear) delete l.goneAt; else l.goneAt = l.goneAt || f.at; } break;
       case 'dep_set': {
         const i = S.deploys.findIndex((d) => d.id === f.deploy.id);
@@ -274,6 +286,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const lock = (fn) => { const run = chain.then(fn, fn); chain = run.catch(() => {}); return run; };
   const wake = () => { for (const w of [...wakeups]) w(); };
 
+  // After a durable commit (writes and the housekeeping that reads trigger): snapshot, tell the observer about every new event, wake long-polls.
+  function afterCommit(before) {
+    if (S.seq - snapSeq >= cfg.snapshotEvery) writeSnapshot();
+    if (onEvent) for (const e of S.events) if (e.n > before) { try { onEvent(e); } catch { /* observer errors never matter */ } }
+    wake();
+  }
   async function mutate(fn) {
     return lock(async () => {
       if (broken) return unavailable(`lease service is read-only: ${broken}`);
@@ -288,9 +306,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
           broken = `journal write failed: ${String(e.message || e).slice(0, 120)}`;     // memory is ahead of disk: fail closed until restart
           return unavailable(`lease service is read-only: ${broken}`);
         }
-        if (S.seq - snapSeq >= cfg.snapshotEvery) writeSnapshot();
-        if (onEvent) for (const e of S.events) if (e.n > before) { try { onEvent(e); } catch { /* observer errors never matter */ } }
-        wake();
+        afterCommit(before);
       }
       return out;
     });
@@ -299,12 +315,13 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return lock(async () => {
       if (broken) return unavailable(`lease service is read-only: ${broken}`);
       if (!cfg.readonly) {
+        const before = S.evN;
         const pending = [];
         const emit = (f) => { f.seq = S.seq + 1; if (f.at == null) f.at = now(); apply(f); pending.push(f); };
         housekeeping(emit);
         if (pending.length) {
           try { await persist(pending); } catch (e) { broken = `journal write failed: ${String(e.message || e).slice(0, 120)}`; return unavailable(`lease service is read-only: ${broken}`); }
-          wake();
+          afterCommit(before);
         }
       }
       return fn();
@@ -321,7 +338,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const t = now();
     return {
       id: l.id, env: l.env, resources: l.resources, legacy: l.resources.map((c) => legacyName(P(c))), type: leaseType(l), mode: l.mode,
-      kind: l.kind, agent: l.agent, client: l.client || null, session: l.session || null, purpose: l.purpose || '', provider: l.provider || '',
+      kind: l.kind, kinds: l.resKinds || null, agent: l.agent, client: l.client || null, session: l.session || null, purpose: l.purpose || '', provider: l.provider || '',
       shared: !!l.shared, since: iso(l.since), expires_at: iso(l.expires), ttl_min: l.ttlMin, ttlLeftMin: Math.floor((l.expires - t) / MIN),
       long: l.ttlMin > 240, idleMin: Math.floor((mono() - (clk.get(l.id)?.act ?? mono())) / MIN), lastHeartbeatAt: iso(l.lastHb), generation: l.generation, gens: l.gens,
       heartbeat_s: l.heartbeatS ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
@@ -381,9 +398,20 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   }
 
   // ---- deploys: touches / blockers ---------------------------------------------------------------------------------
-  const pendingFor = (env, resources, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && (d.state === 'queued' || d.state === 'running') && resources.some((c) => scopeTouches(d.scope, d.hosts, P(c))));
+  // A queued or running deploy blocks a new exclusive claim exactly where its own virtual lease would conflict (the typed matrix):
+  // a queued host deploy never blocks frontend, a server deploy does not block a kind=host device claim.
+  function deployTouches(d, req) {
+    const v = (rs, kind = 'server') => ({ mode: 'exclusive', agent: '\0deploy', shared: false, resources: rs, kind });
+    const r = { resources: req.resources, kind: req.kind, resKinds: req.resKinds, agent: req.agent, shared: req.shared, mode: 'exclusive', deployId: req.deployId };
+    if (d.scope === 'frontend') return leasesConflict(v(['frontend']), r);
+    if (d.scope === 'server') return leasesConflict(v(['server']), r);
+    if (d.scope === 'full') return leasesConflict(v(['*']), r);
+    if (d.hosts?.length) return leasesConflict(v(d.hosts.map((h) => `host:${h}`), 'host'), r);
+    return r.resources.some((c) => ['env', 'host', 'device'].includes(P(c).type));       // host deploy of every host
+  }
+  const pendingFor = (env, req, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && (d.state === 'queued' || d.state === 'running') && deployTouches(d, req));
   function deployBlockers(d, { skipLeased = false, agent = '' } = {}) {
-    const ls = inEnv(d.env).filter((l) => l.mode === 'exclusive' && !l.system && l.agent !== agent);
+    const ls = inEnv(d.env).filter((l) => l.mode === 'exclusive' && l.agent !== agent && !(d.id && l.deployId === d.id));
     const hostOf = (l) => l.resources.map((c) => P(c)).filter((r) => r.type === 'host' || r.type === 'device').map((r) => r.host);
     const leasedHosts = [];
     for (const l of ls) for (const h of hostOf(l)) if (!leasedHosts.some((x) => x.host === h)) leasedHosts.push({ host: h, agent: l.agent });
@@ -394,7 +422,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     else if (d.scope === 'server') blockers = ls.filter((l) => leasesConflict(virtual(['server']), l));
     else if (d.scope === 'host' && d.hosts?.length) blockers = ls.filter((l) => leasesConflict(virtual(d.hosts.map((h) => `host:${h}`), 'host'), l));
     else if (d.scope === 'host') blockers = skipLeased ? ls.filter((l) => hasType(l, 'env')) : ls.filter((l) => hasType(l, 'env', 'host', 'device'));
-    else blockers = skipLeased ? ls.filter((l) => hasType(l, 'env', 'server', 'frontend') || (hasType(l, 'host', 'device') && l.kind === 'server')) : ls;   // full
+    else blockers = skipLeased ? ls.filter((l) => hasType(l, 'env', 'server', 'frontend') || (hasType(l, 'host', 'device') && serverKinded(l))) : ls;   // full
     return { blockers, leasedHosts: skipLeased ? leasedHosts : [] };
   }
 
@@ -425,7 +453,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       // heartbeat enforcement is opt-in: only leases that declared heartbeat_s
       if (l.mode === 'exclusive' && l.heartbeatS > 0 && m - c.hb >= cfg.missFactor * l.heartbeatS * 1000) { rel('expired', 'no-heartbeat'); continue; }
       if (l.goneAt && t - l.goneAt >= cfg.goneGraceMs) { rel('released', 'session-gone'); continue; }
-      if (l.mode === 'exclusive' && !l.system && !l.deployId && !(l.expectMin != null && t - l.since < l.expectMin * MIN)) {
+      // idle -> pin only where activity can be observed: a declared heartbeat, or a session the dashboard resolves. Plain claims from other machines keep TTL only.
+      let observable = l.heartbeatS != null;
+      if (!observable && l.session && sessions?.trackable) { try { observable = !!sessions.trackable(l.session); } catch { observable = false; } }
+      if (observable && l.mode === 'exclusive' && !l.system && !l.deployId && !(l.expectMin != null && t - l.since < l.expectMin * MIN)) {
         const limit = l.idleMin != null ? l.idleMin * MIN : cfg.idleMs[leaseType(l)];
         if (limit > 0 && m - c.act >= limit) emit({ t: 'mode', id: l.id, to: 'pin', by: 'system', reason: 'idle', at: t });
       }
@@ -452,7 +483,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const earlier = [];
     for (const tk of waitingTickets()) {
       const blocked = heldConflicts(tk).length > 0 || earlier.some((e) => e.env === tk.env && leasesConflict(tk, e))
-        || (!tk.system && pendingFor(tk.env, tk.resources, tk.deployId).length > 0);
+        || (!tk.system && pendingFor(tk.env, tk, tk.deployId).length > 0);
       if (blocked) { earlier.push(tk); continue; }
       const t = now();
       // a reservation: the holder has `reserveMs` to collect it (poll the ticket or heartbeat), else it is released and the ticket is `missed`
@@ -463,8 +494,14 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // ---- validation --------------------------------------------------------------------------------------------------
   const envOk = (e) => typeof e === 'string' && (cfg.envs.length ? cfg.envs.includes(e.toLowerCase()) : ENV_RE.test(e.toLowerCase()));
   const listOf = (v) => (Array.isArray(v) ? v : typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
-  function parseResources(v) {
-    const rs = listOf(v);
+  // `<env>/frontend`, `<env>/server`, `<env>/*`, `<env>/host:h`, `<env>/device:h/d` are the typed spellings; everything else is legacy.
+  function stripEnv(r, env) {
+    const s0 = String(r).trim().toLowerCase();
+    if (env && s0.startsWith(`${env}/`)) { const rest = s0.slice(env.length + 1); if (rest === 'frontend' || rest === 'server' || rest === '*' || /^(host|device):/.test(rest)) return rest; }
+    return r;
+  }
+  function parseResources(v, env) {
+    const rs = listOf(v).map((r) => stripEnv(r, env));
     if (!rs.length || rs.length > 20) return { error: 'resources: 1 to 20 required' };
     const parsed = [];
     for (const r of rs) { const p = parseResource(r); if (!p) return { error: `bad resource ${JSON.stringify(String(r).slice(0, 60))}` }; parsed.push(p); }
@@ -475,17 +512,24 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     if (!envOk(env)) return fail('E_INVALID', `unknown env ${JSON.stringify(String(env).slice(0, 60))}${cfg.envs.length ? ` (known: ${cfg.envs.join(', ')})` : ''}`);
     return null;
   }
+  // Legacy had no maximum: a long ttl is accepted with a warning (shown in amber), capped at 24 h.
+  function ttlCheck(v, def) {
+    const m = v ?? def;
+    if (typeof m !== 'number' || !(m > 0)) return { error: 'ttl_min must be a positive number of minutes' };
+    if (m > cfg.ttlCapMin) return { ttl: cfg.ttlCapMin, warnings: [`ttl capped at ${cfg.ttlCapMin / 60} h`] };
+    return { ttl: m, warnings: m > cfg.ttlMaxMin ? [`ttl over ${cfg.ttlMaxMin / 60} h: shown in amber`] : [] };
+  }
   function validateClaim(a) {
     if (!a || typeof a !== 'object') return fail('E_INVALID', 'body must be an object');
     const bad = envCheck(a.env); if (bad) return bad;
-    const rs = parseResources(a.resources); if (rs.error) return fail('E_INVALID', rs.error);
+    const rs = parseResources(a.resources, typeof a.env === 'string' ? a.env.toLowerCase() : null); if (rs.error) return fail('E_INVALID', rs.error);
     if (!isStr(a.agent)) return fail('E_INVALID', 'agent required');
     const mode = a.mode ?? 'exclusive';
     if (!MODES.includes(mode)) return fail('E_INVALID', `mode must be ${MODES.join('|')}`);
     const kind = a.kind == null ? defaultKind(rs.parsed) : (KIND_ALIASES[a.kind] || a.kind);
     if (kind !== 'server' && kind !== 'host') return fail('E_INVALID', 'kind must be server|host');
-    const ttlMin = a.ttl_min ?? cfg.ttlDefaultMin;
-    if (typeof ttlMin !== 'number' || !(ttlMin > 0) || ttlMin > cfg.ttlMaxMin) return fail('E_INVALID', `ttl_min must be in (0, ${cfg.ttlMaxMin}]`);
+    const tt = ttlCheck(a.ttl_min, cfg.ttlDefaultMin); if (tt.error) return fail('E_INVALID', tt.error);
+    const ttlMin = tt.ttl;
     // opt-in: only a lease that declares heartbeat_s is released when its heartbeats stop (plain claims keep TTL and the idle rule)
     const heartbeatS = a.heartbeat_s ?? null;
     if (heartbeatS != null && (typeof heartbeatS !== 'number' || heartbeatS < 10 || heartbeatS > 3600)) return fail('E_INVALID', 'heartbeat_s must be 10..3600 when given');
@@ -498,19 +542,21 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     let prioritySince = null;
     if (a.priority_since != null) { prioritySince = typeof a.priority_since === 'number' ? a.priority_since : Date.parse(a.priority_since); if (!Number.isFinite(prioritySince)) return fail('E_INVALID', 'bad priority_since'); }
     const session = typeof a.session === 'string' && a.session ? a.session.slice(0, 200) : (/^(codebox|mac):\S+$/.test(a.agent) ? a.agent : null);
-    const client = typeof a.client === 'string' ? a.client.slice(0, 80) : null;
+    const client = typeof a.client === 'string' ? a.client.slice(0, 80) : INTERNAL;
     return {
       ok: true, wait,
       req: { env: a.env.toLowerCase(), resources: rs.resources, mode, kind, agent: a.agent, client, session,
         purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', provider: typeof a.provider === 'string' ? a.provider.slice(0, 80) : '', shared: !!a.shared,
         ttlMin, heartbeatS, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
         system: a.exempt === true,                         // set by the caller's token (clients.json exemptAgents) or in-process, never by the request body
-        deployId: a.deploy_id || null, requestId: a.request_id || null, prioritySince },
+        deployId: a.deploy_id || null, requestId: a.request_id || null, prioritySince, warnings: tt.warnings },
     };
   }
   // Only the holder's client (and agent, when given) or an owner identity may act on a lease by id. In-process callers (no client) are trusted.
   function holderCheck(l, a) {
-    if (a.owner === true || a.client == null || l.client == null) return null;
+    if (a.owner === true || a.client == null) return null;
+    // imported leases have no client: only a caller naming the holder's agent (or an owner) may act on them
+    if (l.client == null) return a.agent != null && a.agent === l.agent ? null : fail('E_AUTH', 'not the holder of this (imported) lease: pass the holder agent', { status: 403 });
     if (l.client !== a.client || (a.agent != null && a.agent !== l.agent)) return fail('E_AUTH', 'not the holder of this lease', { status: 403 });
     return null;
   }
@@ -520,7 +566,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // strict (passed at most passMax times, younger than strictAgeMs) and the request's expected hold ends before the
   // ticket's earliest possible grant (its blockers' ETA).
   function canPass(req, tk, t) {
-    if ((tk.passed || 0) > cfg.passMax || t - tk.created > cfg.strictAgeMs) return false;
+    if ((tk.passed || 0) >= cfg.passMax || t - tk.created > cfg.strictAgeMs) return false;
     return t + holdMs(req) <= etaOf(tk, []);
   }
   async function claim(a) {
@@ -547,8 +593,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (req.deployId) {
           const d = findDeploy(req.deployId);
           if (!d || d.state !== 'running' || d.env !== req.env) return fail('E_INVALID', 'deploy_id is not a running deploy on this env');
+          if (!req.system && req.client !== INTERNAL && req.client !== d.client && req.client !== d.runnerClient) return fail('E_AUTH', 'only the deploy runner client or the requesting client may join a deploy', { status: 403 });
         }
-        const pend = req.system ? [] : pendingFor(req.env, req.resources, req.deployId);
+        const pend = req.system ? [] : pendingFor(req.env, req, req.deployId);
         if (pend.length) {
           if (v.wait === 'ticket') return ticketFor();                  // queued behind the deploy instead of a refusal
           const d = pend[0];
@@ -572,7 +619,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (passed.length) emit({ t: 'tkt_pass', ids: passed.map((x) => x.id), at: t });
       const lease = makeLease(req, t);
       emit({ t: 'grant', lease, rkey, at: t });
-      return { ok: true, lease: leaseView(S.leases[lease.id]) };
+      return { ok: true, lease: leaseView(S.leases[lease.id]), ...(req.warnings?.length ? { warnings: req.warnings } : {}) };
     });
   }
   const collect = (id) => mutate((emit) => { const tk = S.tickets[id]; const l = tk && S.leases[tk.leaseId]; if (l?.reservedUntil) emit({ t: 'collect', id: l.id }); return { ok: true }; });
@@ -640,6 +687,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   async function ownerRelease(a = {}) {
     if (!isStr(a.id, 64)) return fail('E_INVALID', 'id required');
     if (!isStr(a.by, 120)) return fail('E_INVALID', 'by (the caller identity) required');
+    if (a.client != null && a.owner !== true) return fail('E_AUTH', 'force-release needs an owner client', { status: 403 });
     return mutate((emit) => {
       const l = S.leases[a.id];
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
@@ -653,11 +701,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
       const no = holderCheck(l, a); if (no) return no;
-      const ttlMin = a.ttl_min ?? l.ttlMin;
-      if (typeof ttlMin !== 'number' || !(ttlMin > 0) || ttlMin > cfg.ttlMaxMin) return fail('E_INVALID', `ttl_min must be in (0, ${cfg.ttlMaxMin}]`);
+      const tt = ttlCheck(a.ttl_min, l.ttlMin); if (tt.error) return fail('E_INVALID', tt.error);
       const t = now();
-      emit({ t: 'renew', id: l.id, expires: t + ttlMin * MIN, ttlMin, at: t });
-      return { ok: true, lease: leaseView(S.leases[l.id]) };
+      emit({ t: 'renew', id: l.id, expires: t + tt.ttl * MIN, ttlMin: tt.ttl, at: t });
+      return { ok: true, lease: leaseView(S.leases[l.id]), ...(tt.warnings.length ? { warnings: tt.warnings } : {}) };
     });
   }
   async function heartbeat(a = {}) {
@@ -670,22 +717,36 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       return { ok: true, lease: leaseView(S.leases[l.id]) };
     });
   }
+  // Legacy `vpt-lease narrow <id> [--resource R] --kind host`: sensitivity becomes host for that row (or every row) and NOTHING is
+  // released; it never widens. `restrict: true` is the new way to also drop rows (the remaining resources must lie inside the lease).
   async function narrow(a = {}) {
     if (a.resources == null && a.kind == null) return fail('E_INVALID', 'narrow needs resources and/or kind');
     if (a.kind != null && (KIND_ALIASES[a.kind] || a.kind) !== 'host') return fail('E_INVALID', 'a lease can only be narrowed to kind host');
-    let rs = null;
-    if (a.resources != null) { rs = parseResources(a.resources); if (rs.error) return fail('E_INVALID', rs.error); }
     return mutate((emit) => {
       const l = S.leases[a.id];
       if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
       const no = holderCheck(l, a); if (no) return no;
-      if (rs && !rs.parsed.every((n) => l.resources.some((o) => covers(P(o), n)))) return fail('E_INVALID', 'narrow never widens: every resource must be inside the lease');
-      const resources = rs ? rs.resources : l.resources;
-      const sensitivity = a.kind != null ? 'host' : l.kind;
-      const changed = sensitivity !== l.kind || resources.join() !== l.resources.join();
-      if (changed) emit({ t: 'narrow', id: l.id, resources, sensitivity, by: typeof a.by === 'string' ? a.by.slice(0, 80) : (a.agent || 'holder'), reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : '' });
-      return { ok: true, changed, lease: leaseView(S.leases[l.id]) };
+      let rs = null;
+      if (a.resources != null) { rs = parseResources(a.resources, l.env); if (rs.error) return fail('E_INVALID', rs.error); }
+      let resources = l.resources;
+      if (rs && a.restrict === true) {
+        if (!rs.parsed.every((n) => l.resources.some((o) => covers(P(o), n)))) return fail('E_INVALID', 'narrow never widens: every resource must be inside the lease');
+        resources = rs.resources;
+      } else if (rs && !rs.resources.every((r) => l.resources.includes(r))) return fail('E_NOT_FOUND', 'no such resource on this lease');
+      const rows = rs && a.restrict !== true ? rs.resources : (a.kind != null || !rs ? resources : []);
+      const probe = { resources, kind: l.kind, resKinds: l.resKinds };
+      let count = rows.filter((r) => kindOf(probe, r) !== 'host').length;
+      const resKinds = { ...(l.resKinds || {}) };
+      for (const r of rows) resKinds[r] = 'host';
+      for (const k of Object.keys(resKinds)) if (!resources.includes(k)) delete resKinds[k];
+      const allHost = resources.every((r) => (resKinds[r] || l.kind) === 'host');
+      const kind = allHost ? 'host' : l.kind;
+      const nextKinds = allHost ? null : resKinds;
+      const dropped = l.resources.length - resources.length;
+      count += dropped;
+      if (count) emit({ t: 'narrow', id: l.id, resources, sensitivity: kind, resKinds: nextKinds, count, by: typeof a.by === 'string' ? a.by.slice(0, 80) : (a.agent || 'holder'), reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : '' });
+      return { ok: true, changed: count > 0, narrowed: count, lease: leaseView(S.leases[l.id]) };
     });
   }
   async function setMode(a = {}) {
@@ -718,23 +779,23 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   async function check(a = {}) {
     const bad = envCheck(a.env); if (bad) return bad;
     const env = a.env.toLowerCase();
-    const rs = listOf(a.resources).length ? parseResources(a.resources) : { resources: ['*'], parsed: [{ type: 'env' }] };
+    const rs = listOf(a.resources).length ? parseResources(a.resources, env) : { resources: ['*'], parsed: [{ type: 'env' }] };
     if (rs.error) return fail('E_INVALID', rs.error);
     const ignore = typeof a.ignore_agent === 'string' ? a.ignore_agent : '';
     return read(() => {
       const waiting = waitingTickets(env).length;
-      const pending = pendingFor(env, rs.resources).map(deployView);
+      const virt = { env, mode: 'exclusive', agent: ignore, shared: false, resources: rs.resources, kind: defaultKind(rs.parsed) };
+      const pending = pendingFor(env, virt).map(deployView);
       if (a.skip_leased) {
         const has = (...ts) => rs.parsed.some((r) => ts.includes(r.type));
         const hosts = listOf(a.hosts).map((h) => h.toLowerCase());
-        const scope = !listOf(a.resources).length ? 'host' : has('env', 'server') ? 'full' : 'frontend';
+        const scope = !listOf(a.resources).length ? 'host' : has('env') ? 'full' : has('server') ? 'server' : 'frontend';
         const { blockers, leasedHosts } = deployBlockers({ env, scope }, { skipLeased: true, agent: ignore });
         const leased = hosts.map((h) => leasedHosts.find((x) => x.host === h)).filter(Boolean);
-        return { ok: true, free: blockers.length === 0, holders: blockers.map(leaseView), leased_hosts: leased, pending_deploys: pending, waiting };
+        return { ok: true, free: blockers.length === 0, holders: blockers.map(leaseView), leased_hosts: leased, pending_deploys: pending, pending, waiting };
       }
-      const virt = { env, mode: 'exclusive', agent: ignore, shared: false, resources: rs.resources, kind: defaultKind(rs.parsed) };
       const holders = heldConflicts(virt).map(leaseView);
-      return { ok: true, free: holders.length === 0, holders, pending_deploys: pending, waiting };
+      return { ok: true, free: holders.length === 0, holders, pending_deploys: pending, pending, waiting };
     });
   }
   async function events(a = {}) {
@@ -794,6 +855,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const hostList = (v) => listOf(v).map((h) => String(h).toLowerCase());
   const findDeploy = (id) => S.deploys.find((d) => d.id === id);
   const depNew = () => newId((x) => S.deploys.some((d) => d.id === x));
+  // start / finish / cancel: the runner client (exempt), an owner, the client that requested the deploy, or an in-process caller.
+  function deployAuth(d, a) {
+    if (a.client == null || a.owner === true || a.exempt === true || d.client === a.client || d.runnerClient === a.client) return null;
+    return fail('E_AUTH', 'not your deploy: needs the deploy runner client, an owner, or the client that requested it', { status: 403 });
+  }
   const deploy = {
     async request(a = {}) {
       const bad = envCheck(a.env); if (bad) return bad;
@@ -806,13 +872,14 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (typeof ttl !== 'number' || !(ttl > 0) || ttl > 24 * 60) return fail('E_INVALID', 'ttl_min must be in (0, 1440]');
       return mutate((emit) => {
         const t = now();
-        const d = { id: depNew(), env: a.env.toLowerCase(), scope: a.scope, ref: a.ref, agent: a.agent, purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', state: a.approved ? 'queued' : 'awaiting-approval', approved: !!a.approved, created: t, expires: t + ttl * MIN };
+        const d = { id: depNew(), env: a.env.toLowerCase(), scope: a.scope, ref: a.ref, agent: a.agent, purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', client: typeof a.client === 'string' ? a.client : INTERNAL, state: a.approved ? 'queued' : 'awaiting-approval', approved: !!a.approved, created: t, expires: t + ttl * MIN };
         if (hosts.length) d.hosts = hosts;
         emit({ t: 'dep_set', deploy: d, event: 'request', at: t });
         return { ok: true, id: d.id, deploy: deployView(d) };
       });
     },
     async approve(a = {}) {
+      if (a.client != null && a.owner !== true) return fail('E_AUTH', 'approving a deploy needs an owner client', { status: 403 });
       return mutate((emit) => {
         const d = findDeploy(a.id);
         if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
@@ -825,6 +892,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       return mutate((emit) => {
         const d = findDeploy(a.id);
         if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
+        const no = deployAuth(d, a); if (no) return no;
         if (d.state !== 'awaiting-approval' && d.state !== 'queued') return fail('E_INVALID', `deploy ${d.id} is ${d.state}, cannot cancel`);
         emit({ t: 'dep_set', deploy: { ...d, state: 'cancelled', finished: now() }, event: 'cancel' });
         return { ok: true, deploy: deployView(findDeploy(d.id)) };
@@ -835,13 +903,14 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       return mutate((emit) => {
         const d = findDeploy(a.id);
         if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
+        const no = deployAuth(d, a); if (no) return no;
         if (d.state !== 'queued') return fail('E_INVALID', `deploy ${d.id} is ${d.state}, not queued`);
         const other = S.deploys.find((x) => x.env === d.env && x.state === 'running');
         if (other) return fail('E_HELD', `deploy ${other.id} is already running on ${d.env}`, { running: deployView(other), holders: [] });
         const { blockers, leasedHosts } = deployBlockers(d, { skipLeased: !!a.skip_leased, agent });
         if (blockers.length) return fail('E_HELD', 'leases in the way', { holders: blockers.map(leaseView) });
         const t = now();
-        const nd = { ...d, state: 'running', started: t, runner: agent };
+        const nd = { ...d, state: 'running', started: t, runner: agent, runnerClient: typeof a.client === 'string' ? a.client : INTERNAL };
         emit({ t: 'dep_set', deploy: nd, event: 'start', at: t });
         // check and claim in one step (inside the mutex): the deploy's own lease, so nothing can slip in between. Joiners claim with its deploy_id.
         const skip = new Set(leasedHosts.map((x) => x.host));
@@ -849,7 +918,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         const raw = d.scope === 'frontend' ? ['frontend'] : d.scope === 'server' ? ['server'] : d.scope === 'host' && d.hosts?.length ? d.hosts.map((h) => `host:${h}`)
           : d.scope === 'host' && known.length ? known.map((h) => `host:${h}`) : ['*'];
         const resources = [...new Set(raw.map((r) => canonical(parseResource(r))))].sort();
-        const lease = makeLease({ env: d.env, resources, mode: 'exclusive', kind: d.scope === 'host' ? 'host' : 'server', agent, client: typeof a.client === 'string' ? a.client : null, session: null,
+        const lease = makeLease({ env: d.env, resources, mode: 'exclusive', kind: d.scope === 'host' ? 'host' : 'server', agent, client: typeof a.client === 'string' ? a.client : INTERNAL, session: null,
           purpose: `deploy ${d.id}`, provider: '', shared: false, ttlMin: cfg.runningMaxMin, heartbeatS: null, system: true, deployId: d.id }, t);
         emit({ t: 'grant', lease, at: t });
         return { ok: true, state: 'running', deploy: deployView(nd), lease_id: lease.id, lease: leaseView(S.leases[lease.id]), granted: resources, leased_hosts: leasedHosts, skipped_hosts: leasedHosts.map((x) => x.host) };
@@ -860,6 +929,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       return mutate((emit) => {
         const d = findDeploy(a.id);
         if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
+        const no = deployAuth(d, a); if (no) return no;
         if (d.state !== 'queued' && d.state !== 'running') return fail('E_INVALID', `deploy ${d.id} is ${d.state}, cannot finish`);
         const t = now();
         const nd = { ...d, state: a.status, finished: t };
@@ -877,7 +947,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         }
         // hosts left out because they were leased: queue the catch-up deploy (the runner used to do this from SKIPPED_HOSTS)
         let catchup = null;
-        if (a.status === 'done' && skipped.length && !S.deploys.some((x) => x.env === nd.env && x.scope === 'host' && x.state === 'queued' && x.ref === nd.ref && skipped.every((h) => x.hosts?.includes(h)))) {
+        if (skipped.length && !S.deploys.some((x) => x.env === nd.env && x.scope === 'host' && x.state === 'queued' && x.ref === nd.ref && skipped.every((h) => x.hosts?.includes(h)))) {
           const c = { id: depNew(), env: nd.env, scope: 'host', ref: nd.ref, agent: RUNNER, purpose: `catch-up for ${nd.id}: skipped ${skipped.join(',')}`, state: 'queued', approved: true, created: t, expires: t + cfg.deployTtlMin * MIN, hosts: skipped };
           emit({ t: 'dep_set', deploy: c, event: 'request', at: t });
           catchup = c.id;
@@ -986,6 +1056,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
 
   // ---- legacy import (lease-import.js) -----------------------------------------------------------------------------
   async function importLegacy(a = {}) {
+    if (a.client != null && a.owner !== true) return fail('E_AUTH', 'import needs an owner client', { status: 403 });
     const skipped = [];
     const byId = new Map();
     for (const row of Array.isArray(a.leases) ? a.leases : []) {
@@ -1002,13 +1073,20 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (S.leases[id]) { skipped.push({ id, reason: 'already imported' }); continue; }
         const exp = (Number(first.expires) || 0) * 1000;
         if (exp <= t) { skipped.push({ id, reason: 'expired' }); continue; }
-        const rs = parseResources(rows.map((r) => r.resource));
+        const rs = parseResources(rows.map((r) => r.resource), env);
         if (rs.error) { skipped.push({ id, reason: rs.error }); continue; }
-        const kind = KIND_ALIASES[first.kind] || first.kind || 'server';
-        const l = makeLease({ env, resources: rs.resources, mode: 'exclusive', kind: kind === 'host' ? 'host' : 'server', agent: String(first.agent || 'unknown'), session: /^(codebox|mac):\S+$/.test(first.agent || '') ? first.agent : null,
-          purpose: String(first.purpose || '').slice(0, 500), provider: String(first.provider || ''), shared: !!first.shared, ttlMin: Math.max(1, Math.round((exp - t) / MIN)), heartbeatS: null }, t, { id, imported: true });
+        const rowKind = (r) => { const k = KIND_ALIASES[r.kind] || r.kind || 'server'; return k === 'host' ? 'host' : 'server'; };
+        const resKinds = {};
+        for (const r of rows) { const c = canonical(parseResource(stripEnv(r.resource, env))); resKinds[c] = rowKind(r); }
+        const kind = Object.values(resKinds).includes('server') ? 'server' : 'host';
+        const probe = { env, mode: 'exclusive', agent: String(first.agent || 'unknown'), shared: !!first.shared, resources: rs.resources, kind, resKinds };
+        const clash = heldConflicts(probe);
+        if (clash.length) { skipped.push({ id, reason: `conflicts with live lease ${clash.map((c) => c.id).join(',')}`, conflict: true, holders: clash.map((c) => c.id) }); continue; }
+        const capped = Math.min(exp, t + cfg.ttlMaxMin * MIN);
+        const l = makeLease({ env, resources: rs.resources, mode: 'exclusive', kind, agent: String(first.agent || 'unknown'), session: /^(codebox|mac):\S+$/.test(first.agent || '') ? first.agent : null,
+          purpose: String(first.purpose || '').slice(0, 500), provider: String(first.provider || ''), shared: !!first.shared, ttlMin: Math.max(1, Math.round((capped - t) / MIN)), heartbeatS: null }, t, { id, imported: true, resKinds: kind === 'server' && Object.values(resKinds).includes('host') ? resKinds : null });
         l.since = (Number(first.since) || t / 1000) * 1000;
-        l.expires = exp;
+        l.expires = capped;
         emit({ t: 'grant', lease: l, imported: true, at: t });
         leases++;
       }
@@ -1052,7 +1130,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       const row = { id: randomBytes(4).toString('hex'), at: iso(now()), machine: r.machine, command: r.command, legacy: r.legacy ?? null, central: r.central ?? null };
       const line = JSON.stringify(row).slice(0, 20000);
       if (line.length >= 20000) return fail('E_INVALID', 'report too large');
-      try { fs.mkdirSync(join(dir, 'shadow'), { recursive: true, mode: 0o700 }); fs.appendFileSync(reportsPath, line + '\n', { mode: 0o600 }); } catch (e) { return unavailable('cannot store the report'); }
+      try { fs.mkdirSync(join(dir, 'shadow'), { recursive: true, mode: 0o700 }); try { if (fs.statSync(reportsPath).size > (cfg.reportsMaxBytes || 5 * 1024 * 1024)) fs.renameSync(reportsPath, `${reportsPath}.1`); } catch { /* none yet */ } fs.appendFileSync(reportsPath, line + '\n', { mode: 0o600 }); } catch (e) { return unavailable('cannot store the report'); }
       reports.push(row);
       if (reports.length > 500) reports.shift();
       return { ok: true, id: row.id };
