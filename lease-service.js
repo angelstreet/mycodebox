@@ -58,7 +58,7 @@ const parsedCache = new Map();
 const P = (c) => { let r = parsedCache.get(c); if (!r) { r = parseResource(c); parsedCache.set(c, r); } return r; };
 
 // A new exclusive claim of resource n against a held exclusive lease on h (design matrix). heldKind = the held lease's sensitivity.
-export function resourceConflict(n, h, heldKind) {
+function oneWay(n, h, heldKind) {
   if (h.type === 'env' || n.type === 'env') return true;
   switch (n.type) {
     case 'frontend': return h.type === 'frontend';
@@ -69,6 +69,8 @@ export function resourceConflict(n, h, heldKind) {
   }
 }
 // Does resource a cover b (for narrowing)? env covers everything; a host covers its devices.
+// The relation is symmetric: M[a][b] || M[b][a], the sensitivity read from whichever side is the host/device lease.
+export function resourceConflict(n, h, nKind = 'server', hKind = 'server') { return oneWay(n, h, hKind) || oneWay(h, n, nKind); }
 const covers = (a, b) => a.type === 'env' || canonical(a) === canonical(b) || (a.type === 'host' && b.type === 'device' && a.host === b.host);
 const leaseType = (l) => l.resources.map((c) => P(c).type).sort((a, b) => RANK[a] - RANK[b])[0] || 'env';
 // Lease vs lease. Only exclusive leases conflict (unless ignoreModes: the pin footprint check); the same agent never
@@ -76,8 +78,9 @@ const leaseType = (l) => l.resources.map((c) => P(c).type).sort((a, b) => RANK[a
 function leasesConflict(a, b, ignoreModes = false) {
   if (!ignoreModes && (a.mode !== 'exclusive' || b.mode !== 'exclusive')) return false;
   if (a.agent === b.agent) return false;
+  if (a.deployId && a.deployId === b.deployId) return false;      // a claim that joined a running deploy's lease group
   if (a.shared && b.shared) return false;
-  return a.resources.some((x) => b.resources.some((y) => resourceConflict(P(x), P(y), b.kind)));
+  return a.resources.some((x) => b.resources.some((y) => resourceConflict(P(x), P(y), a.kind, b.kind)));
 }
 const defaultKind = (parsed) => (parsed.length && parsed.every((r) => r.type === 'device') ? 'host' : 'server');
 // Which resources a deploy of this scope disturbs (pending deploys block new claims on these).
@@ -88,10 +91,9 @@ function scopeTouches(scope, hosts, r) {
   if (r.type === 'frontend' || r.type === 'server') return false;                  // host
   return !hosts?.length || hosts.includes(r.host);
 }
-const exempt = (agent) => agent === RUNNER || String(agent).startsWith('update_core:');
 const med = (xs) => { const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
-const freshState = () => ({ seq: 0, leases: {}, gens: {}, tickets: {}, deploys: [], deployed: {}, recorded: [], events: [], evN: 0, stats: [] });
+const freshState = () => ({ seq: 0, leases: {}, gens: {}, tickets: {}, deploys: [], deployed: {}, recorded: [], events: [], evN: 0, stats: [], requests: {} });
 const newId = (taken) => { for (;;) { const id = randomBytes(4).toString('hex'); if (!taken(id)) return id; } };
 
 const defaultIo = {
@@ -101,10 +103,12 @@ const defaultIo = {
   },
 };
 
-export function createLeaseService({ dir, now = Date.now, sessions, onEvent, config = {} } = {}) {
+export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEvent, config = {} } = {}) {
   if (!dir) throw new Error('lease service needs a dir');
+  const now = () => { const t = nowIn(); if (!Number.isFinite(t)) throw new Error('wall clock is not finite'); return t; };   // wall clock: TTL and display only
+  const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
-    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, heartbeatS: 300, missFactor: 3, ticketIdleMs: 10 * MIN, goneGraceMs: 2 * MIN,
+    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, ticketIdleMs: 10 * MIN, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
@@ -118,7 +122,8 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
   let S = freshState();
   let broken = null;                // reason string: corrupt / lost / write failure -> everything E_UNAVAILABLE
   let snapSeq = 0;
-  const polls = new Map();          // ticket id -> last poll ms (not journaled; reset to "now" on start)
+  const polls = new Map();          // ticket id -> last poll (monotonic ms; not journaled, reset on start)
+  const clk = new Map();            // lease id -> { hb, act } monotonic ms; reset to "now" on every start (an outage is never a missed heartbeat)
   const depWaiters = new Map();     // agent|id -> { agent, deployId, env, since, seen }
   const wakeups = new Set();
 
@@ -130,6 +135,7 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
   }
   const evTicket = (tk, at, state) => ev('ticket', { env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session, mode: tk.mode }, at, { ticket: tk.id, state });
 
+  function pruneRequests(at) { for (const [k, r] of Object.entries(S.requests)) if (r.at < at - cfg.requestKeepMs) delete S.requests[k]; }
   // ---- apply: the only code that changes state (live and replay) ---------------------------------------------------
   function apply(f) {
     S.seq = f.seq;
@@ -138,6 +144,9 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
         const l = f.lease;
         S.leases[l.id] = l;
         for (const [k, g] of Object.entries(l.gens)) S.gens[k] = Math.max(S.gens[k] || 0, g);
+        clk.set(l.id, { hb: mono(), act: mono() });
+        if (f.rkey) S.requests[f.rkey] = { kind: 'lease', ref: l.id, at: f.at };
+        pruneRequests(f.at);
         if (f.ticket && S.tickets[f.ticket]) Object.assign(S.tickets[f.ticket], { state: 'granted', leaseId: l.id, grantedAt: f.at });
         if (l.mode === 'exclusive') {
           for (const p of Object.values(S.leases)) {
@@ -157,19 +166,23 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
             if (S.stats.length > 2000 || S.stats[0].at < cut) S.stats = S.stats.filter((s) => s.at >= cut).slice(-2000);
           }
           delete S.leases[id];
+          clk.delete(id);
           ev(f.why, l, f.at, { by: f.by, reason: f.reason, held_min: Math.round((f.at - l.since) / MIN) });
         }
         break;
       }
       case 'renew': { const l = S.leases[f.id]; if (l) { l.expires = f.expires; l.ttlMin = f.ttlMin; l.lastHb = f.at; } break; }
-      case 'hb': { const l = S.leases[f.id]; if (l) { l.lastHb = f.at; if (f.active) l.lastActive = f.at; } break; }
+      case 'hb': { const l = S.leases[f.id]; if (l) { l.lastHb = f.at; l.reservedUntil = null; const c = clk.get(l.id); if (c) { c.hb = mono(); if (f.active) c.act = mono(); } } break; }
+      case 'collect': { const l = S.leases[f.id]; if (l) l.reservedUntil = null; break; }
+      case 'tkt_pass': for (const id of f.ids) if (S.tickets[id]) S.tickets[id].passed = (S.tickets[id].passed || 0) + 1; break;
+      case 'flag': { const l = S.leases[f.id]; if (l) ev('flag', l, f.at, { status: f.status, text: f.text, reason: f.reason }); break; }
       case 'mode': { const l = S.leases[f.id]; if (l) { const from = l.mode; l.mode = f.to; ev('downgraded', l, f.at, { from, to: f.to, by: f.by, reason: f.reason }); } break; }
       case 'narrow': {
         const l = S.leases[f.id];
         if (l) { const from = { resources: l.resources, sensitivity: l.kind }; l.resources = f.resources; l.kind = f.sensitivity; ev('narrowed', l, f.at, { from, by: f.by, reason: f.reason }); }
         break;
       }
-      case 'tkt_new': S.tickets[f.ticket.id] = f.ticket; evTicket(f.ticket, f.at, 'waiting'); break;
+      case 'tkt_new': S.tickets[f.ticket.id] = f.ticket; if (f.rkey) S.requests[f.rkey] = { kind: 'ticket', ref: f.ticket.id, at: f.at }; pruneRequests(f.at); evTicket(f.ticket, f.at, 'waiting'); break;
       case 'tkt_end': { const tk = S.tickets[f.id]; if (tk) { tk.state = f.state; tk.endedAt = f.at; evTicket(tk, f.at, f.state); } break; }
       case 'gone': for (const l of Object.values(S.leases)) if (l.session === f.session || l.agent === f.session) { if (f.clear) delete l.goneAt; else l.goneAt = l.goneAt || f.at; } break;
       case 'dep_set': {
@@ -201,7 +214,8 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       const snap = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
       if (!snap || snap.version !== 1 || typeof snap.state !== 'object') throw new Error('snapshot unreadable');
       S = { ...freshState(), ...snap.state };
-      snapSeq = S.seq;
+      snapSeq = Number.isInteger(snap.journal_seq) ? snap.journal_seq : S.seq;
+      S.seq = snapSeq;
     }
     if (hadJournal) {
       const text = fs.readFileSync(journalPath, 'utf8');
@@ -225,7 +239,9 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       if (torn && !cfg.readonly) fs.truncateSync(journalPath, Math.min(goodLen, Buffer.byteLength(text)));
     }
     const t = now();
-    for (const tk of Object.values(S.tickets)) if (tk.state === 'waiting') polls.set(tk.id, t);
+    clk.clear();
+    for (const l of Object.values(S.leases)) { clk.set(l.id, { hb: mono(), act: mono() }); if (l.reservedUntil) l.reservedUntil = t + cfg.reserveMs; }
+    for (const tk of Object.values(S.tickets)) if (tk.state === 'waiting') polls.set(tk.id, mono());
   }
   function writeSnapshot() {
     try {
@@ -233,7 +249,7 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       const cut = now() - 60 * MIN;
       for (const [id, tk] of Object.entries(S.tickets)) if (tk.state !== 'waiting' && (tk.endedAt || tk.grantedAt || 0) < cut) delete S.tickets[id];
       const fd = fs.openSync(tmp, 'w', 0o600);
-      try { fs.writeSync(fd, JSON.stringify({ version: 1, state: S })); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      try { fs.writeSync(fd, JSON.stringify({ version: 1, journal_seq: S.seq, state: S })); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       fs.renameSync(tmp, snapshotPath);
       snapSeq = S.seq;
       fs.writeFileSync(`${journalPath}.tmp`, '', { mode: 0o600 });
@@ -307,8 +323,8 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       id: l.id, env: l.env, resources: l.resources, legacy: l.resources.map((c) => legacyName(P(c))), type: leaseType(l), mode: l.mode,
       kind: l.kind, agent: l.agent, client: l.client || null, session: l.session || null, purpose: l.purpose || '', provider: l.provider || '',
       shared: !!l.shared, since: iso(l.since), expires_at: iso(l.expires), ttl_min: l.ttlMin, ttlLeftMin: Math.floor((l.expires - t) / MIN),
-      long: l.ttlMin > 240, idleMin: Math.floor((t - l.lastActive) / MIN), lastHeartbeatAt: iso(l.lastHb), generation: l.generation, gens: l.gens,
-      heartbeat_s: l.heartbeatS, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), goneAt: iso(l.goneAt), imported: !!l.imported,
+      long: l.ttlMin > 240, idleMin: Math.floor((mono() - (clk.get(l.id)?.act ?? mono())) / MIN), lastHeartbeatAt: iso(l.lastHb), generation: l.generation, gens: l.gens,
+      heartbeat_s: l.heartbeatS ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
     };
   }
   function deployView(d) {
@@ -324,7 +340,21 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
     return xs.length >= 3 ? med(xs) : null;
   }
   const holdMs = (x) => (x.expectMin ?? medianHoldMin(leaseType(x)) ?? 10) * MIN;
-  const expectedEnd = (l) => Math.min(l.expires, Math.max(now(), l.since + holdMs(l)));
+  const samples = (type) => { const cut = now() - 7 * 24 * 60 * MIN; return S.stats.filter((x) => x.type === type && x.at >= cut).map((x) => x.min); };
+  const p75 = (xs) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * 0.75))];
+  // The holder's own statement (expect_min) wins; else the conditional estimate: the median remaining time of past holds
+  // that lasted longer than this one already has (p75 of all holds when too few did), never past the TTL.
+  function expectedEnd(l) {
+    const t = now();
+    if (l.expectMin != null) return Math.min(l.expires, Math.max(t, l.since + l.expectMin * MIN));
+    const xs = samples(leaseType(l));
+    if (xs.length < 3) return Math.min(l.expires, Math.max(t, l.since + 10 * MIN));
+    const held = (t - l.since) / MIN;
+    const longer = xs.filter((x) => x > held).map((x) => x - held);
+    const remain = longer.length >= 2 ? med(longer) : Math.max(1, p75(xs) - held);
+    return Math.min(l.expires, t + remain * MIN);
+  }
+  const etaBasis = (l) => (l.expectMin != null ? 'stated' : samples(leaseType(l)).length >= 3 ? 'median' : 'default');
   const waitingTickets = (env) => Object.values(S.tickets).filter((tk) => tk.state === 'waiting' && (!env || tk.env === env)).sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : 1));
   const inEnv = (env) => Object.values(S.leases).filter((l) => l.env === env);
   const heldConflicts = (virt) => inEnv(virt.env).filter((l) => leasesConflict(virt, l));
@@ -335,13 +365,14 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
     for (const a of ahead) end += holdMs(a);
     return end;
   }
+  const latestOf = (virt) => Math.max(now(), ...heldConflicts(virt).map((b) => b.expires));
   const aheadOf = (virt, tk) => waitingTickets(virt.env).filter((o) => (!tk || o.id !== tk.id) && (!tk || o.created < tk.created || (o.created === tk.created && o.id < tk.id)) && leasesConflict(virt, o));
   function ticketView(tk) {
-    const out = { id: tk.id, state: tk.state, env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '' };
+    const out = { id: tk.id, state: tk.state, env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null };
     if (tk.state === 'waiting') {
       const ahead = aheadOf(tk, tk);
       const t = etaOf(tk, ahead);
-      Object.assign(out, { position: ahead.length + 1, eta: iso(t), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: heldConflicts(tk).map(leaseView) });
+      Object.assign(out, { position: ahead.length + 1, priority_since: iso(tk.created), eta: iso(t), eta_latest: iso(latestOf(tk)), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: heldConflicts(tk).map(leaseView) });
     }
     if (tk.state === 'granted' && S.leases[tk.leaseId]) out.lease = leaseView(S.leases[tk.leaseId]);
     if (tk.state === 'granted') out.lease_id = tk.leaseId;
@@ -349,18 +380,18 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
   }
 
   // ---- deploys: touches / blockers ---------------------------------------------------------------------------------
-  const pendingFor = (env, resources) => S.deploys.filter((d) => d.env === env && (d.state === 'queued' || d.state === 'running') && resources.some((c) => scopeTouches(d.scope, d.hosts, P(c))));
+  const pendingFor = (env, resources, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && (d.state === 'queued' || d.state === 'running') && resources.some((c) => scopeTouches(d.scope, d.hosts, P(c))));
   function deployBlockers(d, { skipLeased = false, agent = '' } = {}) {
-    const ls = inEnv(d.env).filter((l) => l.mode === 'exclusive' && l.agent !== RUNNER && l.agent !== agent);
+    const ls = inEnv(d.env).filter((l) => l.mode === 'exclusive' && !l.system && l.agent !== agent);
     const hostOf = (l) => l.resources.map((c) => P(c)).filter((r) => r.type === 'host' || r.type === 'device').map((r) => r.host);
     const leasedHosts = [];
     for (const l of ls) for (const h of hostOf(l)) if (!leasedHosts.some((x) => x.host === h)) leasedHosts.push({ host: h, agent: l.agent });
     const hasType = (l, ...ts) => l.resources.some((c) => ts.includes(P(c).type));
-    const virtual = (rs) => ({ mode: 'exclusive', agent: '\0deploy', shared: false, resources: rs, kind: 'server' });
+    const virtual = (rs, kind = 'server') => ({ mode: 'exclusive', agent: '\0deploy', shared: false, resources: rs, kind });
     let blockers;
     if (d.scope === 'frontend') blockers = ls.filter((l) => leasesConflict(virtual(['frontend']), l));
     else if (d.scope === 'server') blockers = ls.filter((l) => leasesConflict(virtual(['server']), l));
-    else if (d.scope === 'host' && d.hosts?.length) blockers = ls.filter((l) => leasesConflict(virtual(d.hosts.map((h) => `host:${h}`)), l));
+    else if (d.scope === 'host' && d.hosts?.length) blockers = ls.filter((l) => leasesConflict(virtual(d.hosts.map((h) => `host:${h}`), 'host'), l));
     else if (d.scope === 'host') blockers = skipLeased ? ls.filter((l) => hasType(l, 'env')) : ls.filter((l) => hasType(l, 'env', 'host', 'device'));
     else blockers = skipLeased ? ls.filter((l) => hasType(l, 'env', 'server', 'frontend') || (hasType(l, 'host', 'device') && l.kind === 'server')) : ls;   // full
     return { blockers, leasedHosts: skipLeased ? leasedHosts : [] };
@@ -382,14 +413,23 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
     for (const l of Object.values({ ...S.leases })) {
       const rel = (why, reason, by = 'system') => emit({ t: 'release', ids: [l.id], why, reason, by, at: t });
       if (l.expires <= t) { rel('expired', 'ttl'); continue; }
-      if (l.mode === 'exclusive' && l.heartbeatS > 0 && t - l.lastHb >= cfg.missFactor * l.heartbeatS * 1000) { rel('expired', 'no-heartbeat'); continue; }
+      const c = clk.get(l.id) || (clk.set(l.id, { hb: mono(), act: mono() }), clk.get(l.id));
+      const m = mono();
+      if (l.reservedUntil && l.reservedUntil <= t) {                       // a ticket grant nobody collected
+        rel('released', 'ticket-missed');
+        if (l.ticketId) emit({ t: 'tkt_end', id: l.ticketId, state: 'missed', at: t });
+        continue;
+      }
+      if (l.deployId && l.system && !S.deploys.some((d) => d.id === l.deployId && d.state === 'running')) { rel('released', 'deploy-ended'); continue; }
+      // heartbeat enforcement is opt-in: only leases that declared heartbeat_s
+      if (l.mode === 'exclusive' && l.heartbeatS > 0 && m - c.hb >= cfg.missFactor * l.heartbeatS * 1000) { rel('expired', 'no-heartbeat'); continue; }
       if (l.goneAt && t - l.goneAt >= cfg.goneGraceMs) { rel('released', 'session-gone'); continue; }
-      if (l.mode === 'exclusive' && !exempt(l.agent)) {
+      if (l.mode === 'exclusive' && !l.system && !l.deployId && !(l.expectMin != null && t - l.since < l.expectMin * MIN)) {
         const limit = l.idleMin != null ? l.idleMin * MIN : cfg.idleMs[leaseType(l)];
-        if (limit > 0 && t - l.lastActive >= limit) emit({ t: 'mode', id: l.id, to: 'pin', by: 'system', reason: 'idle', at: t });
+        if (limit > 0 && m - c.act >= limit) emit({ t: 'mode', id: l.id, to: 'pin', by: 'system', reason: 'idle', at: t });
       }
     }
-    for (const tk of waitingTickets()) if (t - (polls.get(tk.id) ?? t) >= cfg.ticketIdleMs) emit({ t: 'tkt_end', id: tk.id, state: 'expired', at: t });
+    for (const tk of waitingTickets()) if (mono() - (polls.get(tk.id) ?? mono()) >= cfg.ticketIdleMs) emit({ t: 'tkt_end', id: tk.id, state: 'expired', at: t });
     for (const d of [...S.deploys]) {
       if ((d.state === 'awaiting-approval' || d.state === 'queued') && d.expires <= t) emit({ t: 'dep_set', deploy: { ...d, state: 'cancelled', finished: t, reason: 'expired' }, event: 'expired', at: t });
       else if (d.state === 'running' && d.started + cfg.runningMaxMin * MIN <= t) emit({ t: 'dep_set', deploy: { ...d, state: 'failed', finished: t, reason: 'runner lost (no finish)' }, event: 'expired', at: t });
@@ -404,17 +444,18 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
     return {
       id, env: req.env, resources: req.resources, mode: req.mode, kind: req.kind, agent: req.agent, client: req.client || null, session: req.session || null,
       purpose: req.purpose || '', provider: req.provider || '', shared: !!req.shared, since: t, expires: t + req.ttlMin * MIN, ttlMin: req.ttlMin,
-      heartbeatS: req.heartbeatS, lastHb: t, lastActive: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, gens, generation: Math.max(...Object.values(gens)), ...extra,
+      heartbeatS: req.heartbeatS ?? null, system: !!req.system, deployId: req.deployId || null, lastHb: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, requestId: req.requestId || null, gens, generation: Math.max(...Object.values(gens)), ...extra,
     };
   }
   function grantTickets(emit) {
     const earlier = [];
     for (const tk of waitingTickets()) {
       const blocked = heldConflicts(tk).length > 0 || earlier.some((e) => e.env === tk.env && leasesConflict(tk, e))
-        || (!exempt(tk.agent) && pendingFor(tk.env, tk.resources).length > 0);
+        || (!tk.system && pendingFor(tk.env, tk.resources, tk.deployId).length > 0);
       if (blocked) { earlier.push(tk); continue; }
       const t = now();
-      emit({ t: 'grant', lease: makeLease(tk, t), ticket: tk.id, at: t });
+      // a reservation: the holder has `reserveMs` to collect it (poll the ticket or heartbeat), else it is released and the ticket is `missed`
+      emit({ t: 'grant', lease: makeLease(tk, t, { reservedUntil: t + cfg.reserveMs, ticketId: tk.id }), ticket: tk.id, at: t });
     }
   }
 
@@ -440,58 +481,100 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
     if (!isStr(a.agent)) return fail('E_INVALID', 'agent required');
     const mode = a.mode ?? 'exclusive';
     if (!MODES.includes(mode)) return fail('E_INVALID', `mode must be ${MODES.join('|')}`);
-    let kind = a.kind == null ? defaultKind(rs.parsed) : (KIND_ALIASES[a.kind] || a.kind);
+    const kind = a.kind == null ? defaultKind(rs.parsed) : (KIND_ALIASES[a.kind] || a.kind);
     if (kind !== 'server' && kind !== 'host') return fail('E_INVALID', 'kind must be server|host');
     const ttlMin = a.ttl_min ?? cfg.ttlDefaultMin;
     if (typeof ttlMin !== 'number' || !(ttlMin > 0) || ttlMin > cfg.ttlMaxMin) return fail('E_INVALID', `ttl_min must be in (0, ${cfg.ttlMaxMin}]`);
-    const heartbeatS = a.heartbeat_s ?? cfg.heartbeatS;
-    if (typeof heartbeatS !== 'number' || (heartbeatS !== 0 && (heartbeatS < 10 || heartbeatS > 3600))) return fail('E_INVALID', 'heartbeat_s must be 0 or 10..3600');
+    // opt-in: only a lease that declares heartbeat_s is released when its heartbeats stop (plain claims keep TTL and the idle rule)
+    const heartbeatS = a.heartbeat_s ?? null;
+    if (heartbeatS != null && (typeof heartbeatS !== 'number' || heartbeatS < 10 || heartbeatS > 3600)) return fail('E_INVALID', 'heartbeat_s must be 10..3600 when given');
     if (a.expect_min != null && (typeof a.expect_min !== 'number' || !(a.expect_min > 0) || a.expect_min > cfg.ttlMaxMin)) return fail('E_INVALID', 'expect_min must be a positive number of minutes');
     if (a.idle_min != null && (typeof a.idle_min !== 'number' || a.idle_min < 0)) return fail('E_INVALID', 'idle_min must be >= 0 (0 = never)');
     const wait = a.wait === true ? 'ticket' : a.wait || false;
     if (wait !== false && wait !== 'ticket') return fail('E_INVALID', 'wait must be false|"ticket"');
+    if (a.request_id != null && !isStr(a.request_id, 100)) return fail('E_INVALID', 'request_id must be a string of at most 100 characters');
+    if (a.deploy_id != null && !isStr(a.deploy_id, 64)) return fail('E_INVALID', 'bad deploy_id');
+    let prioritySince = null;
+    if (a.priority_since != null) { prioritySince = typeof a.priority_since === 'number' ? a.priority_since : Date.parse(a.priority_since); if (!Number.isFinite(prioritySince)) return fail('E_INVALID', 'bad priority_since'); }
     const session = typeof a.session === 'string' && a.session ? a.session.slice(0, 200) : (/^(codebox|mac):\S+$/.test(a.agent) ? a.agent : null);
+    const client = typeof a.client === 'string' ? a.client.slice(0, 80) : null;
     return {
       ok: true, wait,
-      req: { env: a.env.toLowerCase(), resources: rs.resources, mode, kind, agent: a.agent, client: typeof a.client === 'string' ? a.client.slice(0, 80) : null, session,
+      req: { env: a.env.toLowerCase(), resources: rs.resources, mode, kind, agent: a.agent, client, session,
         purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', provider: typeof a.provider === 'string' ? a.provider.slice(0, 80) : '', shared: !!a.shared,
-        ttlMin, heartbeatS, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null },
+        ttlMin, heartbeatS, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
+        system: a.exempt === true,                         // set by the caller's token (clients.json exemptAgents) or in-process, never by the request body
+        deployId: a.deploy_id || null, requestId: a.request_id || null, prioritySince },
     };
+  }
+  // Only the holder's client (and agent, when given) or an owner identity may act on a lease by id. In-process callers (no client) are trusted.
+  function holderCheck(l, a) {
+    if (a.owner === true || a.client == null || l.client == null) return null;
+    if (l.client !== a.client || (a.agent != null && a.agent !== l.agent)) return fail('E_AUTH', 'not the holder of this lease', { status: 403 });
+    return null;
   }
 
   // ---- claim / tickets ---------------------------------------------------------------------------------------------
+  // Can `req` (which would be granted at once but for waiting ticket tk) pass in front of it? Only while the ticket is not
+  // strict (passed at most passMax times, younger than strictAgeMs) and the request's expected hold ends before the
+  // ticket's earliest possible grant (its blockers' ETA).
+  function canPass(req, tk, t) {
+    if ((tk.passed || 0) > cfg.passMax || t - tk.created > cfg.strictAgeMs) return false;
+    return t + holdMs(req) <= etaOf(tk, []);
+  }
   async function claim(a) {
     const v = validateClaim(a); if (!v.ok) return v;
     return mutate((emit) => {
       const req = v.req;
       const t = now();
+      const rkey = req.requestId ? `${req.client || ''}|${req.requestId}` : null;
+      if (rkey && S.requests[rkey]) {                                  // a retry of a request whose reply was lost: same answer
+        const r = S.requests[rkey];
+        if (r.kind === 'lease' && S.leases[r.ref]) return { ok: true, lease: leaseView(S.leases[r.ref]), replay: true };
+        if (r.kind === 'ticket' && S.tickets[r.ref]) return { ok: true, ticket: ticketView(S.tickets[r.ref]), replay: true };
+        return fail('E_NOT_FOUND', 'the grant of this request_id has already ended', { state: 'gone' });
+      }
+      const ticketFor = () => {
+        const created = req.prioritySince != null ? Math.min(t, Math.max(req.prioritySince, t - 60 * MIN)) : t;
+        const tk = { id: `t-${newId((x) => S.tickets[`t-${x}`])}`, ...req, state: 'waiting', created };
+        emit({ t: 'tkt_new', ticket: tk, rkey, at: t });
+        polls.set(tk.id, mono());
+        return { ok: true, ticket: ticketView(S.tickets[tk.id]) };
+      };
+      let passed = [];
       if (req.mode === 'exclusive') {
-        if (!exempt(req.agent)) {
-          const pend = pendingFor(req.env, req.resources);
-          if (pend.length) {
-            const d = pend[0];
-            return fail('E_DEPLOY_PENDING', `deploy ${d.id} (${d.state}) on ${req.env}: scope=${d.scope} ref=${d.ref} requested by ${d.agent}; wait for it, then claim again`, { deploy: deployView(d), deploys: pend.map(deployView) });
-          }
+        if (req.deployId) {
+          const d = findDeploy(req.deployId);
+          if (!d || d.state !== 'running' || d.env !== req.env) return fail('E_INVALID', 'deploy_id is not a running deploy on this env');
+        }
+        const pend = req.system ? [] : pendingFor(req.env, req.resources, req.deployId);
+        if (pend.length) {
+          if (v.wait === 'ticket') return ticketFor();                  // queued behind the deploy instead of a refusal
+          const d = pend[0];
+          return fail('E_DEPLOY_PENDING', `deploy ${d.id} (${d.state}) on ${req.env}: scope=${d.scope} ref=${d.ref} requested by ${d.agent}; wait for it, then claim again`, { deploy: deployView(d), deploys: pend.map(deployView) });
         }
         const holders = heldConflicts(req);
         const ahead = aheadOf(req, null);
-        if (holders.length || ahead.length) {
-          if (v.wait === 'ticket') {
-            const tk = { id: `t-${newId((x) => S.tickets[`t-${x}`])}`, ...req, state: 'waiting', created: t };
-            emit({ t: 'tkt_new', ticket: tk, at: t });
-            polls.set(tk.id, t);
-            return { ok: true, ticket: ticketView(S.tickets[tk.id]) };
-          }
-          const eta = etaOf(req, ahead);
-          return fail('E_HELD', `${req.env}/${req.resources.join(',')} is held by ${[...new Set(holders.map((h) => h.agent))].join(', ') || 'a queued claim'}`,
-            { holders: holders.map(leaseView), queued_ahead: ahead.map((x) => ({ id: x.id, agent: x.agent })), position: ahead.length + 1, eta: iso(eta), eta_in_min: Math.max(0, Math.ceil((eta - t) / MIN)) });
+        let blocking = ahead;
+        if (!holders.length && ahead.length) {
+          passed = ahead.filter((tk) => canPass(req, tk, t));
+          blocking = ahead.filter((tk) => !passed.includes(tk));
+        }
+        if (holders.length || blocking.length) {
+          if (v.wait === 'ticket') return ticketFor();
+          const eta = etaOf(req, blocking);
+          return fail('E_HELD', holders.length ? `${req.env}/${req.resources.join(',')} is held by ${[...new Set(holders.map((h) => h.agent))].join(', ')}` : `${req.env}/${req.resources.join(',')} is free but ${blocking.length} claim(s) are queued ahead: wait with a ticket`,
+            { reason: holders.length ? 'held' : 'queued', holders: holders.map(leaseView), queued_ahead: blocking.map((x) => ({ id: x.id, agent: x.agent })), position: blocking.length + 1,
+              eta: iso(eta), eta_latest: iso(latestOf(req)), eta_in_min: Math.max(0, Math.ceil((eta - t) / MIN)) });
         }
       }
+      if (passed.length) emit({ t: 'tkt_pass', ids: passed.map((x) => x.id), at: t });
       const lease = makeLease(req, t);
-      emit({ t: 'grant', lease, at: t });
+      emit({ t: 'grant', lease, rkey, at: t });
       return { ok: true, lease: leaseView(S.leases[lease.id]) };
     });
   }
+  const collect = (id) => mutate((emit) => { const tk = S.tickets[id]; const l = tk && S.leases[tk.leaseId]; if (l?.reservedUntil) emit({ t: 'collect', id: l.id }); return { ok: true }; });
   async function ticket(id, opts = {}) {
     const waitMs = Math.max(0, Math.min(30000, Number(opts.waitMs ?? (opts.wait_s != null ? opts.wait_s * 1000 : 0)) || 0));
     const deadline = Date.now() + waitMs;
@@ -499,19 +582,33 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       const r = await read(() => {
         const tk = S.tickets[id];
         if (!tk) return fail('E_NOT_FOUND', 'no such ticket');
-        if (tk.state === 'waiting') polls.set(id, now());
+        if (tk.state === 'waiting') polls.set(id, mono());
         return { ok: true, ticket: ticketView(tk) };
       });
+      if (r.ok && r.ticket.state === 'granted' && r.ticket.lease?.reserved_until) {      // collecting the reservation
+        await collect(id);
+        return read(() => (S.tickets[id] ? { ok: true, ticket: ticketView(S.tickets[id]) } : fail('E_NOT_FOUND', 'no such ticket')));
+      }
       if (!r.ok || r.ticket.state !== 'waiting' || Date.now() >= deadline) return r;
       await sleepUntilWake(Math.min(1000, deadline - Date.now()));
     }
   }
-  async function cancelTicket(id) {
+  async function cancelTicket(id, opts = {}) {
     return mutate((emit) => {
       const tk = S.tickets[id];
       if (!tk) return fail('E_NOT_FOUND', 'no such ticket');
+      if (opts.client != null && opts.owner !== true && tk.client != null && tk.client !== opts.client) return fail('E_AUTH', 'not the holder of this ticket', { status: 403 });
       if (tk.state === 'waiting') emit({ t: 'tkt_end', id, state: 'cancelled' });
       return { ok: true, ticket: ticketView(S.tickets[id]) };
+    });
+  }
+  async function get(a = {}) {                                         // GET /leases/:id: validate before acting
+    return read(() => {
+      const l = S.leases[a.id];
+      if (!l) return fail('E_NOT_FOUND', 'no such active lease', { id: a.id, state: 'gone' });
+      const out = { ok: true, id: l.id, mode: l.mode, generation: l.generation, state: l.reservedUntil ? 'reserved' : 'active' };
+      if (a.generation != null && a.generation !== l.generation) out.fenced = true;
+      return out;
     });
   }
 
@@ -525,10 +622,12 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       if (a.id) {
         const l = S.leases[a.id];
         if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
+        const no = l && holderCheck(l, a); if (no) return no;
         ids = l ? [l.id] : [];
       } else {
-        ids = Object.values(S.leases).filter((l) => l.agent === a.agent).map((l) => l.id);
-        cancelled = waitingTickets().filter((tk) => tk.agent === a.agent).map((tk) => tk.id);
+        const mine = (x) => x.agent === a.agent && (a.owner === true || a.client == null || x.client == null || x.client === a.client);
+        ids = Object.values(S.leases).filter(mine).map((l) => l.id);
+        cancelled = waitingTickets().filter(mine).map((tk) => tk.id);
       }
       const by = typeof a.by === 'string' && a.by ? a.by.slice(0, 80) : (a.agent || (S.leases[a.id]?.agent) || 'holder');
       if (ids.length) emit({ t: 'release', ids, why: 'released', by, reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : '' });
@@ -536,12 +635,14 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       return { ok: true, released: ids, cancelled };
     });
   }
+  // Force-release: `by` is the real caller identity passed in (never defaulted), logged on the event.
   async function ownerRelease(a = {}) {
     if (!isStr(a.id, 64)) return fail('E_INVALID', 'id required');
+    if (!isStr(a.by, 120)) return fail('E_INVALID', 'by (the caller identity) required');
     return mutate((emit) => {
       const l = S.leases[a.id];
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
-      emit({ t: 'release', ids: [l.id], why: 'forced', by: typeof a.by === 'string' && a.by ? a.by.slice(0, 80) : 'owner', reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : 'owner force-release' });
+      emit({ t: 'release', ids: [l.id], why: 'forced', by: a.by, reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : 'force-release' });
       return { ok: true, released: [l.id] };
     });
   }
@@ -550,6 +651,7 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       const l = S.leases[a.id];
       if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
+      const no = holderCheck(l, a); if (no) return no;
       const ttlMin = a.ttl_min ?? l.ttlMin;
       if (typeof ttlMin !== 'number' || !(ttlMin > 0) || ttlMin > cfg.ttlMaxMin) return fail('E_INVALID', `ttl_min must be in (0, ${cfg.ttlMaxMin}]`);
       const t = now();
@@ -562,6 +664,7 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       const l = S.leases[a.id];
       if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
+      const no = holderCheck(l, a); if (no) return no;
       emit({ t: 'hb', id: l.id, active: !!a.active });
       return { ok: true, lease: leaseView(S.leases[l.id]) };
     });
@@ -575,11 +678,12 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       const l = S.leases[a.id];
       if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
+      const no = holderCheck(l, a); if (no) return no;
       if (rs && !rs.parsed.every((n) => l.resources.some((o) => covers(P(o), n)))) return fail('E_INVALID', 'narrow never widens: every resource must be inside the lease');
       const resources = rs ? rs.resources : l.resources;
       const sensitivity = a.kind != null ? 'host' : l.kind;
       const changed = sensitivity !== l.kind || resources.join() !== l.resources.join();
-      if (changed) emit({ t: 'narrow', id: l.id, resources, sensitivity, by: typeof a.by === 'string' ? a.by.slice(0, 80) : 'holder', reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : '' });
+      if (changed) emit({ t: 'narrow', id: l.id, resources, sensitivity, by: typeof a.by === 'string' ? a.by.slice(0, 80) : (a.agent || 'holder'), reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : '' });
       return { ok: true, changed, lease: leaseView(S.leases[l.id]) };
     });
   }
@@ -589,10 +693,9 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       const l = S.leases[a.id];
       if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
-      const owner = a.by === 'owner';
-      if (!owner && a.agent != null && a.agent !== l.agent) return fail('E_AUTH', 'only the holder or the owner can change the mode');
+      const no = holderCheck(l, a); if (no) return no;
       if (MODE_RANK[a.mode] > MODE_RANK[l.mode]) return fail('E_INVALID', 'a mode can only be downgraded (exclusive -> pin -> observe)');
-      if (a.mode !== l.mode) emit({ t: 'mode', id: l.id, to: a.mode, by: owner ? 'owner' : (a.agent || 'holder'), reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : '' });
+      if (a.mode !== l.mode) emit({ t: 'mode', id: l.id, to: a.mode, by: typeof a.by === 'string' && a.by ? a.by.slice(0, 120) : (a.agent || 'holder'), reason: typeof a.reason === 'string' ? a.reason.slice(0, 200) : '' });
       return { ok: true, lease: leaseView(S.leases[l.id]) };
     });
   }
@@ -655,14 +758,33 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       return { ok: true, leases: ls.map((l) => l.id), immediate: !!opts.immediate };
     });
   }
-  async function sessionStatus(session, status) {
+  // The idle clock also resets on observable activity (the dashboard calls this for codebox session turns and working state).
+  async function activity(session) {
+    let n = 0;
+    for (const l of ofSession(session)) { const c = clk.get(l.id); if (c) { c.act = mono(); n++; } }
+    return { ok: true, touched: n };
+  }
+  // A STATUS of blocked, or waiting on something the lease's resources/hosts do not name, downgrades an exclusive lease to
+  // pin only when it has been inactive for idleMs and its expect_min has elapsed. Otherwise it is only flagged.
+  async function sessionStatus(session, status, text = '') {
     if (!isStr(session)) return fail('E_INVALID', 'session required');
     return mutate((emit) => {
-      const down = [];
+      const down = [], flagged = [];
       if (status === 'waiting' || status === 'blocked') {
-        for (const l of ofSession(session)) if (l.mode === 'exclusive') { down.push(l.id); emit({ t: 'mode', id: l.id, to: 'pin', by: 'system', reason: `status:${status}` }); }
+        const txt = String(text || '').toLowerCase();
+        for (const l of ofSession(session)) {
+          if (l.mode !== 'exclusive') continue;
+          const names = l.resources.flatMap((c) => { const r = P(c); return r.type === 'env' ? [l.env] : r.type === 'device' ? [r.host, r.device, `${r.host}/${r.device}`] : r.type === 'host' ? [r.host] : [r.type]; });
+          if (status === 'waiting' && names.some((n) => txt.includes(n))) continue;          // waiting on its own job on the leased resource
+          const t = now();
+          const limit = l.idleMin != null ? l.idleMin * MIN : cfg.idleMs[leaseType(l)];
+          const quiet = !clk.get(l.id) || mono() - clk.get(l.id).act >= limit;
+          const expectDone = l.expectMin == null || t - l.since >= l.expectMin * MIN;
+          if (quiet && expectDone && !l.system && !l.deployId) { down.push(l.id); emit({ t: 'mode', id: l.id, to: 'pin', by: 'system', reason: `status:${status}`, at: t }); }
+          else { flagged.push(l.id); emit({ t: 'flag', id: l.id, status, text: String(text || '').slice(0, 200), reason: 'holds an exclusive lease while waiting', at: t }); }
+        }
       }
-      return { ok: true, downgraded: down };
+      return { ok: true, downgraded: down, flagged };
     });
   }
   const tick = () => mutate(() => ({ ok: true }));
@@ -720,7 +842,16 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
         const t = now();
         const nd = { ...d, state: 'running', started: t, runner: agent };
         emit({ t: 'dep_set', deploy: nd, event: 'start', at: t });
-        return { ok: true, state: 'running', deploy: deployView(nd), leased_hosts: leasedHosts, skipped_hosts: leasedHosts.map((x) => x.host) };
+        // check and claim in one step (inside the mutex): the deploy's own lease, so nothing can slip in between. Joiners claim with its deploy_id.
+        const skip = new Set(leasedHosts.map((x) => x.host));
+        const known = Object.keys(S.deployed[d.env] || {}).filter((k) => !GENERIC.includes(k) && !skip.has(k));
+        const raw = d.scope === 'frontend' ? ['frontend'] : d.scope === 'server' ? ['server'] : d.scope === 'host' && d.hosts?.length ? d.hosts.map((h) => `host:${h}`)
+          : d.scope === 'host' && known.length ? known.map((h) => `host:${h}`) : ['*'];
+        const resources = [...new Set(raw.map((r) => canonical(parseResource(r))))].sort();
+        const lease = makeLease({ env: d.env, resources, mode: 'exclusive', kind: d.scope === 'host' ? 'host' : 'server', agent, client: typeof a.client === 'string' ? a.client : null, session: null,
+          purpose: `deploy ${d.id}`, provider: '', shared: false, ttlMin: cfg.runningMaxMin, heartbeatS: null, system: true, deployId: d.id }, t);
+        emit({ t: 'grant', lease, at: t });
+        return { ok: true, state: 'running', deploy: deployView(nd), lease_id: lease.id, lease: leaseView(S.leases[lease.id]), granted: resources, leased_hosts: leasedHosts, skipped_hosts: leasedHosts.map((x) => x.host) };
       });
     },
     async finish(a = {}) {
@@ -737,6 +868,8 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
         if (skipped.length) nd.skippedHosts = skipped;
         if (typeof a.tail === 'string') nd.tail = a.tail.slice(-6000);
         emit({ t: 'dep_set', deploy: nd, event: 'finish', at: t });
+        const own = Object.values(S.leases).filter((l) => l.deployId === d.id && l.system).map((l) => l.id);
+        if (own.length) emit({ t: 'release', ids: own, why: 'released', by: nd.runner || RUNNER, reason: 'deploy-finished', at: t });
         let recorded = null;
         if (!nd.coalescedInto) {
           recorded = ledgerRecord(emit, { env: nd.env, scope: nd.scope, hosts: nd.hosts || [], ref: nd.ref, version: nd.version || '', agent: nd.agent, status: a.status, started: secs(nd.started), deployId: nd.id });
@@ -872,7 +1005,7 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
         if (rs.error) { skipped.push({ id, reason: rs.error }); continue; }
         const kind = KIND_ALIASES[first.kind] || first.kind || 'server';
         const l = makeLease({ env, resources: rs.resources, mode: 'exclusive', kind: kind === 'host' ? 'host' : 'server', agent: String(first.agent || 'unknown'), session: /^(codebox|mac):\S+$/.test(first.agent || '') ? first.agent : null,
-          purpose: String(first.purpose || '').slice(0, 500), provider: String(first.provider || ''), shared: !!first.shared, ttlMin: Math.max(1, Math.round((exp - t) / MIN)), heartbeatS: 0 }, t, { id, imported: true });
+          purpose: String(first.purpose || '').slice(0, 500), provider: String(first.provider || ''), shared: !!first.shared, ttlMin: Math.max(1, Math.round((exp - t) / MIN)), heartbeatS: null }, t, { id, imported: true });
         l.since = (Number(first.since) || t / 1000) * 1000;
         l.expires = exp;
         emit({ t: 'grant', lease: l, imported: true, at: t });
@@ -910,7 +1043,7 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
       if (op === 'ticket' || op === 'cancelTicket') return shadowSvc[op](a.id, a);
       if (op === 'sessionGone') return shadowSvc.sessionGone(a.session, a);
       if (op === 'sessionStatus') return shadowSvc.sessionStatus(a.session, a.status);
-      if (!['claim', 'release', 'renew', 'heartbeat', 'narrow', 'setMode', 'list', 'check', 'events', 'ownerRelease'].includes(op)) return fail('E_INVALID', `unknown op ${op}`);
+      if (!['claim', 'get', 'release', 'renew', 'heartbeat', 'narrow', 'setMode', 'list', 'check', 'events', 'ownerRelease'].includes(op)) return fail('E_INVALID', `unknown op ${op}`);
       return shadowSvc[op](a);
     },
     async report(r = {}) {
@@ -927,7 +1060,7 @@ export function createLeaseService({ dir, now = Date.now, sessions, onEvent, con
   };
 
   return {
-    claim, ticket, cancelTicket, release, renew, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, tick,
+    claim, ticket, cancelTicket, get, release, renew, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, activity, tick,
     deploy, shadow, importLegacy,
     async status() { return { ok: !broken, readOnly: !!broken || cfg.readonly, reason: broken, seq: S.seq, leases: Object.keys(S.leases).length }; },
     async close() { await chain.catch(() => {}); if (shadowSvc) await shadowSvc.close(); },

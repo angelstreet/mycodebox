@@ -53,7 +53,7 @@ export function addrAllowed(addr, cidrs) {
 export function readClients(file) {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')) : [];
+    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')).map((c) => ({ ...c, exemptAgents: Array.isArray(c.exemptAgents) ? c.exemptAgents.filter((x) => typeof x === 'string') : [] })) : [];
   } catch { return []; }
 }
 function clientOf(clients, token) {
@@ -61,10 +61,12 @@ function clientOf(clients, token) {
   let hit = null;
   for (const c of clients) {                                  // no early exit: the time does not depend on which entry matches
     const ok = timingSafeEqual(h, Buffer.from(c.sha256, 'hex'));
-    if (ok && !hit) hit = c.name;
+    if (ok && !hit) hit = c;
   }
   return hit;
 }
+// exemptAgents patterns: an exact agent string, or a prefix ending in '*'. The exemption (deploy agents) binds to the token's client, not to the agent string a request asserts.
+export const exemptFor = (client, agent) => typeof agent === 'string' && (client.exemptAgents || []).some((p) => (p.endsWith('*') ? agent.startsWith(p.slice(0, -1)) : p === agent));
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -102,16 +104,23 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
   // [method, regexp, handler({ body, query, m, client }) -> result | { shadowOp, args }]
   const R = [];
   const route = (method, path, fn) => R.push([method, new RegExp(`^${path}$`), fn]);
-  const post = (path, op, fn = (b) => b) => route('POST', path, ({ body, client }) => ({ op, args: { ...fn(body), client } }));
+  // The caller's identity always comes from the token: body fields client / exempt / owner are discarded.
+  const post = (path, op, fn = (b) => b) => route('POST', path, ({ body, client, who }) => {
+    const { client: _c, exempt: _e, owner: _o, ...b } = fn(body, who);
+    return { op, args: { ...b, client: client.name, ...(op === 'claim' || op === 'deploy.start' ? { exempt: exemptFor(client, b.agent) } : {}) } };
+  });
   post('/claim', 'claim');
   route('GET', '/tickets/([^/]+)', ({ m, query }) => ({ op: 'ticket', args: { id: m[1], wait_s: Math.min(MAX_WAIT_S, Math.max(0, num(query.wait) || 0)) } }));
-  route('DELETE', '/tickets/([^/]+)', ({ m }) => ({ op: 'cancelTicket', args: { id: m[1] } }));
+  route('DELETE', '/tickets/([^/]+)', ({ m, client }) => ({ op: 'cancelTicket', args: { id: m[1], client: client.name } }));
+  route('GET', '/leases/([^/]+)', ({ m, query }) => ({ op: 'get', args: { id: m[1], generation: query.generation === undefined ? undefined : Number(query.generation) } }));
   post('/release', 'release');
   post('/renew', 'renew');
   post('/heartbeat', 'heartbeat');
   post('/narrow', 'narrow');
   post('/mode', 'setMode');
-  post('/owner/release', 'ownerRelease', (b) => ({ ...b, by: b.by || 'owner' }));
+  // owner actions: the log gets the real caller (Tailscale login when the proxy sent it, always with the token's client name), never a fixed "owner"
+  post('/owner/release', 'ownerRelease', (b, who) => ({ ...b, by: who }));
+  post('/owner/mode', 'setMode', (b, who) => ({ ...b, by: who }));
   post('/import', 'importLegacy');
   route('GET', '/list', ({ query }) => ({ op: 'list', args: { env: query.env || undefined } }));
   route('GET', '/check', ({ query }) => ({ op: 'check', args: { env: query.env, resources: query.resources, ignore_agent: query.ignore_agent, skip_leased: bool(query.skip_leased), hosts: query.hosts } }));
@@ -127,8 +136,9 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
   async function run(op, args) {
     switch (op) {
       case 'ticket': return service.ticket(args.id, args);
-      case 'cancelTicket': return service.cancelTicket(args.id);
       case 'status': return service.status();
+      case 'get': return service.get(args);
+      case 'cancelTicket': return service.cancelTicket(args.id, args);
       case 'shadow.report': return service.shadow.report(args);
       case 'shadow.list': return service.shadow.list();
       default:
@@ -162,13 +172,18 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
     if (req.method === 'POST') {
       try { body = await readBody(req); } catch (e) { send(res, e.status || 400, { ok: false, code: 'E_INVALID', error: e.message }); return true; }
     }
-    const { op, args } = hit[2]({ body, query, m: hit[1].exec(sub), client });
+    const login = typeof req.headers['tailscale-user-login'] === 'string' ? req.headers['tailscale-user-login'].slice(0, 80) : '';
+    const who = `${login ? `${login} via ` : ''}client:${client.name}`;
+    const { op, args } = hit[2]({ body, query, m: hit[1].exec(sub), client, who });
+    if (sub.startsWith('/owner/')) args.owner = true;
     let out;
     try {
       const shadow = req.method === 'POST' ? body.shadow === true : bool(query.shadow);
-      out = shadow && !op.startsWith('shadow.') && op !== 'status' ? await service.shadow.op(op, { ...args, client }) : await run(op, args);
+      // shadow: a separate store that never grants anything real and is never read by the deploy runner
+      out = shadow && !op.startsWith('shadow.') && op !== 'status' ? await service.shadow.op(op, args) : await run(op, args);
     } catch { out = { ok: false, code: 'E_UNAVAILABLE', error: 'lease service error' }; }
-    send(res, out.ok === false ? (STATUS[out.code] || 400) : 200, out);
+    const { status: forced, ...rest } = out;
+    send(res, out.ok === false ? (forced || STATUS[out.code] || 400) : 200, rest);
     return true;
   }
   return { handle, clients };
