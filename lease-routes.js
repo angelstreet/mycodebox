@@ -156,7 +156,7 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
   async function handle(req, res) {
     const url = new URL(req.url, 'http://lease.local');
     if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) return false;
-    if (!addrAllowed(req.socket?.remoteAddress, allow)) { err(res, 'E_AUTH', 'source address not allowed'); res.statusCode = 403; return true; }
+    if (!addrAllowed(req.socket?.remoteAddress, allow)) { send(res, 403, { ok: false, code: 'E_AUTH', error: 'source address not allowed' }); return true; }
     const auth = /^Bearer\s+(\S{8,512})$/i.exec(req.headers.authorization || '');
     const client = auth ? clientOf(clients(), auth[1]) : null;
     if (!client) { err(res, 'E_AUTH', 'missing or invalid bearer token'); return true; }
