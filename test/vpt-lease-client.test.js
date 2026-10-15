@@ -100,7 +100,7 @@ test('claim: busy -> exit 3 with the holders on stderr; deploy pending -> exit 4
 test('fail closed: unreachable service -> exit 5 for claim, check and every deploy subcommand', async () => {
   const url = await deadUrl();
   for (const args of [['claim', 'env-a', 'host-1', '--agent', 'codebox:x'], ['check', 'env-a'], ['deploy', 'list'], ['deploy', 'request', 'env-a', '--scope', 'frontend', '--ref', 'main', '--agent', 'a'],
-    ['deploy', 'start', 'd1'], ['deploy', 'wait', 'd1'], ['deploy', 'last']]) {
+    ['deploy', 'start', 'd1'], ['deploy', 'wait', 'd1', '--timeout', '0.02'], ['deploy', 'last']]) {
     if (args[1] === 'list' && args[0] === 'deploy') args.push('env-a');
     const r = await run(args, { url });
     assert.equal(r.code, 5, args.join(' '));
@@ -171,7 +171,7 @@ test('events: text and --json with line cursor', async () => {
 
 test('release, renew, narrow, heartbeat, mode: output lines and exit codes', async () => {
   setup((c) => ({ '/release': { ok: true, released: ['R1'] }, '/renew': { ok: true, lease: lease({ expires_at: iso(1760000000) }) },
-    '/narrow': { ok: true, narrowed: 1 }, '/heartbeat': { ok: true, lease: lease() }, '/mode': { ok: true, lease: lease({ mode: 'pin' }) } }[c.path]));
+    '/narrow': { ok: true, narrowed: 1, changed: true }, '/heartbeat': { ok: true, lease: lease() }, '/mode': { ok: true, lease: lease({ mode: 'pin' }) } }[c.path]));
   assert.equal((await run(['release', 'R1', '--by', 'me', '--reason', 'done'])).out, 'released 1\n');
   assert.deepEqual(calls[0].body, { id: 'R1', by: 'me', reason: 'done' });
   assert.equal((await run(['release', '--agent', 'codebox:x'])).out, 'released 1\n');
@@ -260,7 +260,7 @@ test('claim --wait against a dead service keeps retrying until stopped, then can
 test('deploy: request, list (text/json), approve, cancel, start, finish, wait, record, last', async () => {
   const d = { id: 'dep1', env: 'env-a', state: 'queued', scope: 'host', ref: 'main', agent: 'a', purpose: 'x', hosts: ['host-1'] };
   setup((c) => ({ '/deploy/request': { ok: true, id: 'dep1' }, '/deploy/list': { ok: true, deploys: [d], leases: [lease()], waiters: [] },
-    '/deploy/approve': { ok: true }, '/deploy/cancel': { ok: true }, '/deploy/start': { ok: true }, '/deploy/finish': { ok: true },
+    '/deploy/approve': { ok: true }, '/deploy/cancel': { ok: true }, '/deploy/start': { ok: true, state: 'running', lease_id: 'DL1' }, '/deploy/finish': { ok: true },
     '/deploy/record': { ok: true, targets: ['host-1'] }, '/deploy/wait': { ok: true, deploy: { id: 'dep1', state: 'done', version: 'v1' } },
     '/deploy/last': { ok: true, envs: { 'env-a': { frontend: { at: 1760000000, version: 'v9', ref: 'main', commit: 'abcdef1234', agent: 'a', source: 'queue' }, 'host-1': {} } } } }[c.path]));
   let r = await run(['deploy', 'request', 'env-A', '--scope', 'host', '--hosts', 'Host-1', '--ref', 'main', '--agent', 'a', '--approved']);
@@ -594,4 +594,91 @@ test('help text and LEASE-RULES document exit 6 and the validate exit codes', as
   assert.match(rules, /\| 6 \|/); assert.match(rules, /vpt-lease validate <id> --agent <agent>/);
   const h = await run(['validate', '--help']);
   assert.match(h.out, /exit 0 if the lease is held, exclusive and yours/);
+});
+
+test('R1 deploy start fails closed: ok without state/lease_id is exit 1, not "running"', async () => {
+  setup(() => ({ ok: true }));
+  let r = await run(['deploy', 'start', 'dep1']);
+  assert.equal(r.code, 1); assert.equal(r.out, ''); assert.match(r.err, /did not confirm the deploy is running/);
+  setup(() => ({ ok: true, state: 'running', lease_id: 'L9' }));
+  r = await run(['deploy', 'start', 'dep1']);
+  assert.deepEqual([r.code, r.out], [0, 'running\n']);
+});
+
+test('R2 legacy/shadow run: a missing legacy binary exits 1 with a message; an empty claim answer does not run the command', async () => {
+  const marker = path.join(tmp, 'ran-marker');
+  for (const mode of ['legacy', 'shadow']) {
+    fs.rmSync(marker, { force: true });
+    let r = await run(['run', 'env-a', 'frontend', '--agent', 'a', '--', 'touch', marker], { env: { VPT_LEASE_MODE: mode, VPT_LEASE_LEGACY: path.join(tmp, 'no-such-cli') } });
+    assert.equal(r.code, 1, mode); assert.match(r.err, /cannot run the legacy CLI/); assert.doesNotMatch(r.err, /Traceback/); assert.ok(!fs.existsSync(marker));
+    const empty = path.join(tmp, 'legacy-empty'); fs.writeFileSync(empty, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    r = await run(['run', 'env-a', 'frontend', '--agent', 'a', '--', 'touch', marker], { env: { VPT_LEASE_MODE: mode, VPT_LEASE_LEGACY: empty } });
+    assert.equal(r.code, 1, mode); assert.match(r.err, /printed no lease id/); assert.ok(!fs.existsSync(marker), 'command not run');
+  }
+});
+
+test('R3 LEASE-RULES: heartbeat release applies to run/heartbeating leases only; plain claims are bounded by TTL', () => {
+  const rules = fs.readFileSync(path.join(path.dirname(CLIENT), '..', 'docs', 'LEASE-RULES.md'), 'utf8');
+  assert.match(rules, /Only `run` and\s+other heartbeating leases/); assert.match(rules, /plain\s+`claim; work; release` keeps working and is bounded by its TTL/);
+  assert.doesNotMatch(rules, /A lease\s+with no heartbeat is released/);
+});
+
+test('R4 narrow prints the service count, never a hard-coded 1', async () => {
+  for (const [ans, out] of [[{ ok: true, narrowed: 0 }, 'narrowed 0 (already host)\n'], [{ ok: true, narrowed: 3 }, 'narrowed 3\n'], [{ ok: true, changed: false }, 'narrowed 0 (already host)\n']]) {
+    setup(() => ans);
+    const r = await run(['narrow', 'R1', '--kind', 'host']);
+    assert.deepEqual([r.code, r.out], [0, out]);
+  }
+});
+
+test('R5 check reads pending / pending_deploys: BUSY lists them, FREE prints the exit-4 note', async () => {
+  const d = { id: 'pd1', env: 'env-a', state: 'queued', scope: 'frontend', ref: 'main', agent: 'a', purpose: '' };
+  for (const key of ['pending', 'pending_deploys']) {
+    setup(() => ({ ok: true, free: false, holders: [lease({ id: 'B1' })], [key]: [d] }));
+    let r = await run(['check', 'env-a', 'host-1']);
+    assert.equal(r.code, 3); assert.match(r.out, /\nDEPLOY pd1  env-a  state=queued  scope=frontend/);
+    setup(() => ({ ok: true, free: true, holders: [], [key]: [d] }));
+    r = await run(['check', 'env-a', 'frontend']);
+    assert.equal(r.code, 0); assert.match(r.out, /^FREE .*\nnote: a deploy is pending, new claims on this get exit 4:\nDEPLOY pd1 /);
+  }
+});
+
+test('R6 shadow: an unwritable cache never changes the legacy result; deploy ids and VPT_DEPLOY_ID claims are skipped', async () => {
+  const home = fs.mkdtempSync(path.join(tmp, 'home-'));
+  fs.writeFileSync(path.join(home, '.cache'), 'a file, not a directory');       // ~/.cache/vpt-lease cannot be created
+  const fakeClaim = path.join(tmp, 'legacy-claim2');
+  fs.writeFileSync(fakeClaim, '#!/bin/sh\n[ "$1" = claim ] && echo legacyid9 || echo "released 1"\n', { mode: 0o755 });
+  setup((c) => (c.path === '/claim' ? { ok: true, lease: lease({ id: 'CEN9' }) } : { ok: true, released: ['CEN9'] }));
+  let r = await run(['claim', 'env-a', 'host-1', '--agent', 'a'], { home, env: shadowEnv({ VPT_LEASE_LEGACY: fakeClaim }) });
+  assert.deepEqual([r.code, r.out], [0, 'legacyid9\n']); assert.doesNotMatch(r.err, /Traceback|Error/);
+  // skipped: no request reaches the service
+  setup(() => ({ ok: true }));
+  for (const args of [['deploy', 'approve', 'dep1'], ['deploy', 'start', 'dep1'], ['deploy', 'finish', 'dep1', '--status', 'done'], ['deploy', 'cancel', 'dep1'], ['claim', 'env-a', 'host-1', '--agent', 'a', '--deploy-id', 'dep1']]) {
+    r = await run(args, { home, env: shadowEnv() });
+    assert.equal(r.code, 0, args.join(' '));
+  }
+  r = await run(['claim', 'env-a', 'host-1', '--agent', 'a'], { home, env: shadowEnv({ VPT_DEPLOY_ID: 'dep1' }) });
+  assert.equal(r.code, 0);
+  assert.equal(calls.length, 0, 'nothing was shadowed: ' + JSON.stringify(calls.map((c) => c.path)));
+});
+
+test('R7 deploy wait retries an unreachable service with backoff and only exits 5 once its timeout passes', async () => {
+  let n = 0;
+  setup(() => (++n <= 2 ? { ok: false, status: 503, code: 'E_UNAVAILABLE', error: 'down' } : { ok: true, deploy: { id: 'dep1', state: 'done' } }));
+  let r = await run(['deploy', 'wait', 'dep1', '--timeout', '1']);
+  assert.deepEqual([r.code, r.out], [0, 'deploy dep1 done\n']); assert.equal((r.err.match(/retrying in/g) || []).length, 2);
+  setup(() => ({ ok: false, status: 503, code: 'E_UNAVAILABLE', error: 'down' }));
+  const t0 = Date.now();
+  r = await run(['deploy', 'wait', '--env', 'env-a', '--timeout', '0.03']);
+  assert.equal(r.code, 5); assert.match(r.err, /retrying in/); assert.match(r.err, /stayed unreachable until the timeout/);
+  assert.ok(Date.now() - t0 >= 1500, 'it waited for its own timeout first');
+});
+
+test('R8 --ttl above 480 is passed through and the service long flag prints a warning', async () => {
+  setup(() => ({ ok: true, lease: lease({ id: 'LONG1', long: true }) }));
+  let r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--ttl', '1000']);
+  assert.equal(r.code, 0); assert.equal(calls[0].body.ttl_min, 1000); assert.match(r.err, /--ttl 1000 min is over 4 h/);
+  setup(() => ({ ok: true, lease: lease({ id: 'LONG2', long: true }) }));
+  r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--ttl', '100']);
+  assert.match(r.err, /min is over 4 h/, 'service flag alone triggers the warning');
 });
