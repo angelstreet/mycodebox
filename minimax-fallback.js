@@ -2,7 +2,7 @@
 // its Jev-style choices go to MiniMax M3 (a subscription, no per-call cost) through headless `mcode exec` instead of being skipped
 // (189 routes were skipped on 2026-10-14). Same prompts, JSON-only answers parsed and validated exactly like the reviewer's.
 // Safe by construction: an empty temp directory as --cwd, --permission smart (never `full`: nothing here needs a tool), --max-steps 1, and
-// --mode lightweight (no tool schemas at all) when the installed mcode has it (probed once), at most ONE process at a time ('fallback busy'),
+// --mode lightweight (no tool schemas at all), REQUIRED: an mcode without it (0.6.3) is refused, skipped 'mcode without lightweight mode' (probed once), at most ONE process at a time ('fallback busy'),
 // a detached process group killed whole after a hard 20 s timeout, MCODE_/MINIMAX_ environment only. A tool call in the output is an error.
 // Only AI triage and the ambiguous-stop Jev choice use it; merge / push / deploy evaluations never do (round-7 reasoning path). Never throws. Switch: manager.json aiFallback "minimax" | "off".
 // Invocation shapes: docs/v2/RUNTIME_FORMATS.md (MiniMax Code), orchestration/adapters/minimax.js.
@@ -12,6 +12,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { REVIEWER_SYSTEM, buildReviewerPrompt, parseReviewerAnswer } from './triage.js';
 
+export const NO_LIGHTWEIGHT = 'mcode without lightweight mode';
+let warned = false;   // logged once per process
+export const resetNoLightweightWarning = () => { warned = false; };   // tests
 export const FALLBACK_SOURCE = 'minimax-fallback';
 export const FALLBACK_MODEL = 'MiniMax-M3';
 export const FALLBACK_TIMEOUT_MS = 20000;
@@ -51,7 +54,8 @@ export function createFallbackDecider(opts = {}) {
   const spawnFn = opts.spawnFn ?? spawn;
   const nodeDir = opts.nodeDir ?? env.MCODE_NODE_DIR ?? '';
   let bin = opts.bin ?? env.MCODE_BIN ?? 'mcode';
-  if (!opts.bin && nodeDir && path.isAbsolute(nodeDir)) { try { accessSync(path.join(nodeDir, 'mcode'), constants.X_OK); bin = path.join(nodeDir, 'mcode'); } catch { /* PATH */ } }
+  let nodeBin = null;
+  if (!opts.bin && nodeDir && path.isAbsolute(nodeDir)) { try { accessSync(path.join(nodeDir, 'mcode'), constants.X_OK); nodeBin = path.join(nodeDir, 'mcode'); } catch { /* PATH */ } }
   const childEnv = () => {
     const e = { PATH: [nodeDir && path.isAbsolute(nodeDir) ? nodeDir : null, env.PATH].filter(Boolean).join(path.delimiter), HOME: env.HOME || '' };
     for (const [k, v] of Object.entries(env)) if (/^(?:MINIMAX_|MCODE_)/.test(k)) e[k] = v;
@@ -59,18 +63,29 @@ export function createFallbackDecider(opts = {}) {
   };
   let fails = 0, downUntil = 0;   // 3 failures in a row: not tried again for 10 minutes
   let busy = false;
-  let lightweight = opts.lightweight;   // true / false, or undefined = probe `mcode exec --help` once
-  const probe = () => lightweight !== undefined ? Promise.resolve(lightweight) : new Promise((resolve) => {
+  // The fallback runs ONLY on an mcode whose `exec --help` lists --mode (lightweight: no tool schemas). The mcode next to MCODE_NODE_DIR's node
+  // is tried first, then the PATH one; mcode 0.6.3 has no --mode and is refused. Probed once, cached.
+  const candidates = [...new Set([nodeBin, bin].filter(Boolean))];
+  let chosen;   // undefined = not probed, null = none supports it, else the binary
+  const probeOne = (b) => new Promise((resolve) => {
     let out = '', done = false;
-    const end = (v) => { if (done) return; done = true; lightweight = v; resolve(v); };
+    const end = (v) => { if (done) return; done = true; resolve(v); };
     try {
-      const c = spawnFn(bin, ['exec', '--help'], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+      const c = spawnFn(b, ['exec', '--help'], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
       const t = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* gone */ } end(false); }, 5000);
       c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { out += d; });
       c.on('error', () => { clearTimeout(t); end(false); });
       c.on('close', () => { clearTimeout(t); end(/--mode\b/.test(out)); });
     } catch { end(false); }
   });
+  const choose = async () => {
+    if (chosen !== undefined) return chosen;
+    if (opts.lightweight === true) return (chosen = bin);
+    chosen = null;
+    if (opts.lightweight !== false) for (const b of candidates) if (await probeOne(b)) { chosen = b; break; }
+    if (chosen === null && !warned) { warned = true; console.error(`[fallback] ${NO_LIGHTWEIGHT}: ${candidates.join(', ')} (the MiniMax fallback is off until mcode 0.6.5 or newer is installed)`); }
+    return chosen;
+  };
 
   // -> { text, ms } | { error, ms }
   async function ask(prompt, { system } = {}) {
@@ -78,7 +93,8 @@ export function createFallbackDecider(opts = {}) {
     if (Date.now() < downUntil) return { error: 'MiniMax fallback paused after 3 failures', ms: 0 };
     if (busy) return { skipped: 'fallback busy', ms: 0 };
     busy = true;
-    const light = await probe();
+    const run = await choose();
+    if (!run) { busy = false; return { skipped: NO_LIGHTWEIGHT, ms: 0 }; }
     return new Promise((resolve) => {
       let dir = null, out = '', err = '', done = false, child = null, timer = null;
       const finish = (r) => {
@@ -91,11 +107,11 @@ export function createFallbackDecider(opts = {}) {
       try {
         dir = mkdtempSync(path.join(opts.tmpRoot || tmpdir(), 'mcode-fallback-'));
         const args = ['exec', '--cwd', dir, '--output-format', 'stream-json', '--permission', 'smart', '--max-steps', '1', '--model', model.includes('/') ? model : `minimax/${model}`, '--timeout', `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`];
-        if (light) args.push('--mode', 'lightweight');
+        args.push('--mode', 'lightweight');
         if (system) args.push('--system-prompt', system);
         if (prompt.startsWith('-')) args.push('--');
         args.push(prompt);
-        child = spawnFn(bin, args, { cwd: dir, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        child = spawnFn(run, args, { cwd: dir, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       } catch (e) { return finish({ error: `cannot start mcode: ${e.message}`.slice(0, 200) }); }
       timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } } finish({ error: `timeout after ${Math.round(timeoutMs / 1000)}s` }); }, timeoutMs);
       child.stdout.on('data', (c) => { if (out.length < MAX_OUT) out += c; });
