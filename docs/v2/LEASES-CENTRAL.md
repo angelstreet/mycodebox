@@ -251,8 +251,9 @@ Errors: `{ ok: false, code, error }` with `code` one of `E_INVALID` (400), `E_AU
 
 | Route | Body / query | Answer |
 |---|---|---|
-| `POST /claim` | `{ env, resources: [..], agent, session?, purpose?, mode: exclusive\|observe\|pin, kind?: server\|host, ttl_min?, heartbeat_s?, expect_min?, wait?: false\|"ticket", shared? }` | granted: `{ ok, lease: { id, env, resources, mode, kind, agent, session, purpose, since, expires_at, generation, heartbeat_s } }`; busy without wait: `E_HELD` + `holders` + `eta`; with `wait: "ticket"`: `{ ok, ticket: { id, position, eta, holders } }` |
-| `GET /tickets/:id?wait=<s>` | long-poll up to 30 s | `{ ok, ticket: { id, state: waiting\|granted\|expired\|cancelled, position, eta, lease? } }` |
+| `POST /claim` | `{ env, resources: [..], agent, session?, purpose?, mode: exclusive\|observe\|pin, kind?: server\|host, ttl_min?, heartbeat_s?, expect_min?, wait?: false\|"ticket", shared?, request_id?, deploy_id?, priority_since? }` | granted: `{ ok, lease: { id, env, resources, mode, kind, agent, session, purpose, since, expires_at, generation, heartbeat_s } }`; busy without wait: `E_HELD` + `holders` + `eta` + `eta_latest` (+ `reason: queued`, `position` when only waiting tickets are ahead); with `wait: "ticket"`: `{ ok, ticket: { id, position, eta, holders } }` |
+| `GET /tickets/:id?wait=<s>` | long-poll up to 30 s | `{ ok, ticket: { id, state: waiting\|granted\|missed\|expired\|cancelled, position, eta, eta_latest, lease? } }` |
+| `GET /leases/:id` | | `{ ok, lease: { id, mode, generation, state, agent, expires_at } }` (validate before a protected step) |
 | `DELETE /tickets/:id` | | cancels a ticket |
 | `POST /release` | `{ id }` or `{ agent }` (+ `by`, `reason`) | `{ ok, released: [ids] }` |
 | `POST /renew` | `{ id, ttl_min? }` | `{ ok, lease }` |
