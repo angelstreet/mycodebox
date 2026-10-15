@@ -1119,3 +1119,26 @@ lease to `host` when the holder had no finished turn for 30 min (never releases 
 `by:"TASK58-C1"` in `lease-actions.jsonl`. `manager.json` `leaseBind`: `"dry"` (log only) or `"off"`; default live. `GET /api/leases/watch` shows
 each holder (live / ended / remote / unknown / system) and the planned action. The reporter plugin releases a session's leases on SessionEnd
 (not on /clear or resume). Daily report: `lease-stats.js` (deploy request -> start p95, minutes held back by a lease, unknown holders).
+
+## Round 9: other machines, ledgers, credit fallback, ready window
+
+- **Remote stops** (`remote-stops.js`, `scripts/mac-stop-hook.sh`, install in [MAC-HOOK](MAC-HOOK.md)): `POST /api/remote/v1/stops` and
+  `GET /api/remote/v1/stops/<id>/answer?wait=<s>`, same address allowlist and bearer-token store as the lease API, but the token's client needs
+  `remote: true` (`node scripts/lease-token.js add <name> --remote`). A stop enters `manager.js observe()` as the session `mac:<session name>`
+  (`s.remote`: no settle wait, no restart dedupe, a fake reporter turn carries the text); the manager reports back through one marked block
+  (`setRemoteHooks`: settled, cancelled, escalated, noAnswer, maxDelayMs). `<state>/remote.json`: `{ "waitS": 45, "checkouts": { "<project>": "/abs/path" } }`
+  (hook wait 1..120 s; local checkouts for merge / push / deploy evaluations). Dashboard rows come from `remote.statusRows()` in `pollOnce`.
+- **Owner round-trip ledger** (`roundtrips.js`): `<state>/owner-roundtrips.jsonl`, one record when a stop that reached the owner (or was answered for
+  them) resolves: `{ id, session, machine, at, answered_at, wait_s, class, by, via, resolution }`. `GET /api/manager/roundtrips?hours=24` returns
+  `{ summary: { median_s, mean_s, byClass, text }, records }`; the decided digest appends "Owner waits today: median 8 min, ... over 12 stops".
+  Nothing in this repository wrote the file before (its writer was out of tree and stopped on 2026-10-09).
+- **MiniMax credit fallback** (`minimax-fallback.js`): with no OpenRouter credit (402 cool-down or cached balance 0) or the Jev breaker open, AI triage
+  and Jev-style choices (`jev()`, `jevPost()` for merge / push / deploy evaluations) use headless `mcode exec` (MiniMax M3; `--permission smart`, empty
+  temp `--cwd`, `--max-steps 1`, 20 s kill timeout, only `MCODE_`/`MINIMAX_` environment). `manager.json`: `aiFallback` `"minimax"` (default) | `"off"`,
+  `aiFallbackDailyCalls` (default 300). Every call writes `{type:'fallback', source:'minimax-fallback', cost:0}` to `stalls.jsonl`; triage and Jev records
+  carry `source: 'minimax-fallback'`. `MCODE_BIN` / `MCODE_NODE_DIR` pick the binary.
+- **Ready window** (`ready-window.js`): `POST /api/ready { device | host | session, minutes }` (1..240; no name = any session; `{ clear: <id>|"all" }`),
+  `GET /api/ready`; voice "ready for 30 minutes [on <device>]". State `<state>/ready-windows.json`. While a window covers a session, a stop that asks
+  for a hardware step (pair, press, plug, power-cycle; `owner_action` / `owner_decision`, no forbidden or hard topic) is answered "The owner is at the
+  device until HH:MM: retry the step yourself; stop after 2 failures." through the normal manager gates; the third ask in the window escalates.
+  The decided-for-you view lists these as kind `ready`. A chip "ready HH:MM" shows beside the priority badge.

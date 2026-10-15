@@ -34,6 +34,7 @@
 //   GET  /api/voice/digest?minutes=60 → {text, parts}: deterministic spoken summary (<= 900 chars) of what happened
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/manager/merge-decisions?limit=50 → newest journal lines first, kind merge only (alias; the journal is manager-decisions.jsonl + the round-7 merge-decisions.jsonl)
+//   GET|POST /api/ready  → {device|host|session, minutes} open a hardware ready window ("ready for N minutes"); {clear: id|'all'} closes (ready-window.js)
 //   GET  /api/manager/roundtrips?hours=24 → { summary, records } owner waits per class (owner-roundtrips.jsonl, roundtrips.js)
 //   GET  /api/manager/decided?hours=24|since=<iso>&limit=100 → { items, summary }: everything the manager answered for the owner (decided.js, OWNER_DECISIONS §15)
 //   POST /api/manager/decided/:id/revert {by?} → merge/push/deploy: sends the revert text to the session (409 unless it is stopped with no draft); other kinds: { draft }
@@ -84,6 +85,7 @@ import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
 import * as managerApi from './manager.js';
+import { createReadyStore } from './ready-window.js';
 import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
@@ -1051,6 +1053,7 @@ async function pollOnce() {
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
   }
   Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)
+  for (const [k, v] of Object.entries(status)) { const rw = readyStore.chipFor(k, `${v.stall?.question || ''}\n${v.stall?.excerpt || ''}`); v.ready = rw && (rw.scope === 'session' || v.stall) ? rw : null; }   // round 9 item 8: the window covering this session, for the chip
   for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
   return { sessions, status, changedSessions };
 }
@@ -1936,6 +1939,14 @@ async function handleHttp(req, res) {
     try { return json(res, 200, await decidedView({ hours: q.get('hours') || 24, since: q.get('since') || null, limit: q.get('limit') || 100 })); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
+  if (p === '/api/ready' && req.method === 'GET') return json(res, 200, { ok: true, windows: readyStore.list() });
+  if (p === '/api/ready' && req.method === 'POST') {   // {device|host|session, minutes}: "ready for N minutes" (tap); no name = any session. {clear: <id>|'all'} closes windows
+    try {
+      const body = await readJsonBody(req);
+      if (body.clear) return json(res, 200, { ok: true, cleared: readyStore.clear(String(body.clear)) });
+      return json(res, 200, { ok: true, window: readyStore.set({ device: body.device, host: body.host, session: body.session, minutes: body.minutes, by: actorOf(body) }) });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
   if (req.method === 'GET' && p === '/api/manager/roundtrips') {   // owner wait ledger (owner-roundtrips.jsonl): { hours, summary: { median_s, mean_s, byClass, text }, records }
     try { return json(res, 200, await roundtripsView({ hours: url.searchParams.get('hours') || 24 })); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
@@ -2050,6 +2061,7 @@ async function readTailLines(file, bytes = 2_000_000) {
     } finally { await fh.close(); }
   } catch { return []; }
 }
+const readyStore = createReadyStore({ file: join(STATE_DIR, 'ready-windows.json') });   // round 9 item 8: "ready for N minutes" windows
 const voice = createVoice({
   status: async () => ((latest && Date.now() - latest.at < 1500) ? latest : await poll()).status,
   ownerAsks: () => readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')),
@@ -2064,6 +2076,7 @@ const voice = createVoice({
     return out;
   },
   logChoice: logOwnerChoice,
+  setReady: async ({ minutes, device, session, by }) => readyStore.set({ minutes, device, session, by }),   // voice: "ready for 30 minutes [on <device>]"
   leaseView: () => leaseSource.view(false),
   digestSources: async ({ since, minutes }) => {   // decided-for-you is read in-process (manager.js decidedView), never over HTTP
     const [stalls, hist, decided] = await Promise.all([
@@ -2226,6 +2239,7 @@ server.listen(PORT, HOST, async () => {
       if (isQuietHours(Date.now(), pushTierConfig())) push.record(item); else push.notify(item).catch((e) => console.error('[decided-digest] push', e.message));
     },
     onNotice: (body) => push.record({ title: 'Autonomy on', body, url: '/', tag: 'autonomy' }),
+    readyStore,   // ready windows: the manager answers a hardware-step ask while one covers the session
     leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
     onStatus: onStopStatus,
   });

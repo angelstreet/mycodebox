@@ -39,6 +39,7 @@ import { createJevBreaker } from './jev-breaker.js';
 import { createJevSwitch, isDisabledReply, DISABLED } from './jev-switch.js';
 import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
 import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
+import { isHardwareAsk, readyReply } from './ready-window.js';
 import { createFallbackDecider, FALLBACK_MODES, FALLBACK_SOURCE } from './minimax-fallback.js';
 import { createRoundtrips, roundtripRecord, summarizeRoundtrips, FILE_NAME as ROUNDTRIPS_FILE } from './roundtrips.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
@@ -101,6 +102,7 @@ let onMergeDecision = () => {};                                     // injected:
 let mergeJev = (body) => jevPost(body);                             // the merge evaluation's Jev call (tests inject a fake)
 let decideContext = () => ({ deploys: null, leases: null, envs: [] });    // injected: () => { deploys: runner snapshot, leases: lease store value, envs: [env names] }
 let onDigest = () => {};                                            // injected: ({ day, count, text }) -> feed item + push (digest tier)
+let readyWindows = null;                                            // injected: ready-window.js store (round 9 item 8). Unset = no ready windows
 let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
 let statusHook = () => {};                                          // injected: (session, status, text) for a logged stop whose STATUS is waiting / blocked
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
@@ -111,7 +113,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, readyStore } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -157,6 +159,7 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (decideCtx) decideContext = decideCtx;
   if (digestHook) onDigest = digestHook;
   if (leaseView) leaseViewOf = leaseView;
+  if (readyStore) readyWindows = readyStore;
   if (onStatus) statusHook = onStatus;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
@@ -327,6 +330,26 @@ export const isRemoteSession = (name) => String(name).startsWith(REMOTE_PREFIX);
 let remoteHooks = { settled() {}, cancelled() {}, escalated() {}, noAnswer: () => false, maxDelayMs: () => null };
 export function setRemoteHooks(h = {}) { remoteHooks = { ...remoteHooks, ...h }; }
 const hookSafe = (fn, ...a) => { try { fn(...a); } catch (e) { console.error('[manager] remote hook', e.message); } };
+
+// ---- ready window (round 9 item 8; keep this block together) ----
+// "ready for N minutes" (voice / tap, ready-window.js): while a window covers the session, a stop that asks the owner for a hardware step on the
+// device (pair, press, plug, power-cycle) is answered "retry the step yourself; stop after 2 failures". The third ask in the window goes to the owner.
+// Same gates as every manager decision (autoSend, pause, hourly cap, draft, hard floor on the reply). -> true when it scheduled an answer or escalated.
+function readyDecision({ s, w, id, h, final, stall }) {
+  if (!readyWindows || isManagerSession(s.name) || stall.draft) return false;
+  if (!isHardwareAsk({ kase: final.case, action: final.action, question: final.question, excerpt: stall.excerpt })) return false;
+  const win = readyWindows.match({ session: s.name, text: `${final.action || ''}\n${final.question || ''}\n${stall.excerpt || ''}` });
+  if (!win) return false;
+  const { n, answer } = readyWindows.noteAsk(win, s.name, id);
+  if (!answer) { escalate(s.name, s.state, final, id, `ready window: ask number ${n} in the window (the step already failed twice) - needs you`); return true; }
+  if (decisionBlock(s.name)) return false;
+  const reply = readyReply(readyWindows.view(win));
+  const pending = { id, hash: h, answer: { text: reply }, case: final.case, source: 'manager_decision', confidence: 1, kinds: {}, ready: { until: win.until, target: win.target || null, n } };
+  const pol = policyOf(s.name, s.agent);
+  if (pol.action === 'hold') applyHold(s.name, w, pending, pol);
+  else { if (holdOf(s.name)) endHold(s.name, 'manager', `quota ok: ${pol.reason}`, false); schedule(s.name, w, pending); }
+  return true;
+}
 
 // A stall that is not auto-answered goes to the owner. A waiting session was already pushed by
 // ghosty's own 'waiting' alert, so only a finished turn that asks something is pushed here.
@@ -533,7 +556,7 @@ async function fire(name, auto) {
   }
   sentLog.set(name, [...(sentLog.get(name) || []), Date.now()]);
   if (w.pending && w.pending.id === auto.id) { w.pending.auto = true; w.pending.autoAt = Date.now(); }
-  logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence, ...(kindIds(auto).merge ? { merge_decision_id: kindIds(auto).merge } : {}),
+  logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence, ...(auto.ready ? { ready: auto.ready } : {}), ...(kindIds(auto).merge ? { merge_decision_id: kindIds(auto).merge } : {}),
     ...(Object.keys(kinds).length || auto.menu ? { decision_ids: [...Object.values(kindIds(auto)), ...(auto.menu ? [`menu-${auto.id}`] : [])], ...(Object.keys(kinds).length ? { decided: Object.keys(kinds) } : {}) } : {}) });
   if (auto.menu) await appendJournal(menuRecord({ id: auto.id, session: name, at: new Date(), answer: a, ...auto.menu }));
 }
@@ -1293,6 +1316,7 @@ export function observe(s) {
     // a recommended menu option the manager may take (or must escalate with a reason): its own text decides, not the whole question
     const menu = await menuDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] menu decision', e.message); return null; });
     if (menu?.stale || w.hash !== h) return;
+    if (readyDecision({ s, w, id, h, final, stall })) return;   // ready window (round 9 item 8)
     if (menu?.ok) { ws = wouldSend({ ...final, forbidden: null }); w.stall = { ...w.stall, forbidden: null, would: ws }; }
     else if (menu) partial.mergeWhy = menu.why;
     // a decided topic that was escalated (merge / push / deploy) must not ride on an automatic "Yes, continue."
