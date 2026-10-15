@@ -1017,6 +1017,9 @@ def cmd_run(a, command):
     try:
         try:
             child[0] = subprocess.Popen(command)
+            if got and child[0].poll() is None:      # a signal / fence that arrived before the child existed
+                with contextlib.suppress(OSError):
+                    child[0].send_signal(got[0])
         except OSError as e:
             eprint("vpt-lease run: cannot start %s: %s" % (command[0], e))
             code = 127 if isinstance(e, FileNotFoundError) else 126
