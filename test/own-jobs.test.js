@@ -10,9 +10,14 @@ import { jobRefs, waitsOnOwnJob, createOwnJobs, descendants, jobPids } from '../
 const status = (line) => classifyStall({ plain: ['Started the final run.', line], state: 'done' });
 
 test('STATUS blocked / waiting on a job of its own is own_job_wait (never a needs-you); owner and deploy waits keep their cases', () => {
-  for (const l of ['STATUS: blocked - waiting on the final score_matrix run', 'STATUS: waiting: run 7 (pid 4242)', 'STATUS: waiting: /tmp/fake-run/out.log to finish', 'STATUS: blocked: export job running, resumes when it completes']) {
+  // only a concrete pid / log path / run id makes it the session's own job (round 9 review): words alone keep the old case, flagged for the live-child check
+  for (const l of ['STATUS: waiting: run 7 (pid 4242)', 'STATUS: waiting: /tmp/fake-run/out.log to finish', 'STATUS: blocked: export job running, pid 31337, resumes when it completes', 'STATUS: waiting: run id: r-12']) {
     const s = status(l);
     assert.equal(s.case, 'own_job_wait', l); assert.equal(s.answer, null);
+  }
+  for (const l of ['STATUS: blocked - waiting on the final score_matrix run', 'STATUS: blocked: waiting for the CI run to finish', 'STATUS: blocked: the nightly job on prod must finish before I can merge', 'STATUS: blocked: tests running in the other session']) {
+    const s = status(l);
+    assert.equal(s.case, 'owner_decision', l); assert.equal(s.jobNoun, true, l);
   }
   assert.equal(status('STATUS: blocked: waiting for your decision on the schema').case, 'owner_decision');
   assert.equal(status('STATUS: blocked: tests fail on feat').case, 'owner_decision');
@@ -119,6 +124,24 @@ test('the send is the guarded two-call sendKeys of server.js (paste, then Enter)
   const src = (p) => import('node:fs').then((fs) => fs.readFileSync(new URL(p, import.meta.url), 'utf8'));
   return src('../server.js').then((s) => {
     assert.match(s, /paste-buffer[\s\S]{0,200}if \(enter\)[\s\S]{0,200}'send-keys', '-t', tgt\(session\), 'Enter'/);
-    assert.match(s, /send: \(name, text\) => guardSendKeys\(name, text, true\)/);
+    assert.match(s, /send: async \(name, text\) => \{ await guardSendKeys\(name, text, true\); countSent\(name\); \}/);
   });
+});
+
+test('review: never-seen pid is unseeable (flagged, never woken); seen-then-gone wakes; the send re-checks stillWaiting and canSend', async () => {
+  const h = harness();
+  const r = await h.jobs.watch('far', { text: 'pid 4242 on host-b to finish', stopAt: 's' });   // not alive on this host
+  assert.equal(h.feed.length, 1); assert.match(h.feed[0].body, /not running on this host/);
+  assert.equal((await h.jobs.tick()).length, 0); assert.equal(h.sent.length, 0); void r;
+  // the session moves on between the state read and the send
+  const h2 = harness();
+  h2.live(600); await h2.jobs.watch('late', { text: 'pid 600', stopAt: 's' }); h2.die(600);
+  let calls = 0; const j = createOwnJobs({ procRoot: h2.proc, stillWaiting: () => ++calls < 2, send: async () => { throw new Error('must not send'); }, canSend: () => true });
+  h2.live(601); await j.watch('late2', { text: 'pid 601', stopAt: 's' }); h2.die(601);
+  assert.deepEqual(await j.tick(), []);
+  // hasLiveChild: helpers do not count
+  const h3 = harness({ table: async () => ({ children: new Map([[10, [11, 12]]]), args: new Map([[11, 'sleep 5'], [12, 'python3 score.py']]) }) });
+  assert.equal(await h3.jobs.hasLiveChild('x'), true);
+  const h4 = harness({ table: async () => ({ children: new Map([[10, [11]]]), args: new Map([[11, 'sleep 5']]) }) });
+  assert.equal(await h4.jobs.hasLiveChild('x'), false);
 });

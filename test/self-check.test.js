@@ -117,14 +117,68 @@ test('manager: a new escalation supersedes the same session\'s older open asks i
 });
 test('manager: an own_job_wait stop is never an escalation and starts the watcher; moving on forgets it', async () => {
   const calls = [];
-  await m.initManager({ ownJobs: { progressOf: async () => null, watch: async (n, o) => { calls.push(['watch', n, o.text]); return { kind: 'pid', label: 'job (pid 9)' }; }, forget: (n) => calls.push(['forget', n]) } });
-  const r = await stop('sc7', makeRepo(), 'Started the final run.\nSTATUS: waiting: final score_matrix run (pid 9)');
+  await m.initManager({ ownJobs: { progressOf: async () => null, watch: async (n, o) => { calls.push(['watch', n, o.text]); return { kind: 'pid', label: 'job (pid 99)' }; }, forget: (n) => calls.push(['forget', n]) } });
+  const r = await stop('sc7', makeRepo(), 'Started the final run.\nSTATUS: waiting: final score_matrix run (pid 99)');
   await until(() => calls.some((c) => c[0] === 'watch'));
   assert.equal(r.esc, undefined); assert.deepEqual(r.typed, []);
-  assert.deepEqual(calls.find((c) => c[0] === 'watch'), ['watch', 'sc7', 'final score_matrix run (pid 9)']);
+  assert.deepEqual(calls.find((c) => c[0] === 'watch'), ['watch', 'sc7', 'final score_matrix run (pid 99)']);
   assert.ok(stalls().some((x) => x.type === 'own_job' && x.session === 'sc7'));
   assert.equal(m.stillStopped('sc7', stalls().find((x) => x.type === 'own_job' && x.session === 'sc7').id), true);
   m.observe({ name: 'sc7', state: 'working', agent: 'claude', plain: ['busy'], raw: ['busy'], changed: true, realWork: true, project: 'p', cwd: null, now: 9000 });
   assert.ok(calls.some((c) => c[0] === 'forget' && c[1] === 'sc7'));
   assert.equal(m.toOwnerCase({ case: 'own_job_wait' }), false);
+});
+
+// ---- round 9 review fixes ----
+const { createOwnJobs } = await import('../own-jobs.js');
+test('review: a words-only job STATUS is the session\'s own only when the agent has a live child; remote sessions are skipped; wakes use the decision gates', async () => {
+  const calls = [];
+  let child = false;
+  await m.initManager({ ownJobs: { progressOf: async () => null, hasLiveChild: async () => child, watch: async (n, o) => { calls.push(['watch', n, o.text]); return { kind: 'tree', label: 'job' }; }, forget: () => {} } });
+  const a = await stop('sc8', makeRepo(), 'Kicked off the nightly run.\nSTATUS: blocked: waiting for the CI run to finish');
+  assert.ok(a.esc, 'no child process: the old case, escalated'); assert.equal(calls.length, 0);
+  child = true;
+  const b = await stop('sc9', makeRepo(), 'Kicked off the nightly run.\nSTATUS: blocked: waiting for the final score_matrix run to finish');
+  await until(() => calls.length > 0);
+  assert.equal(b.esc, undefined); assert.equal(calls[0][1], 'sc9');
+  // remote (Mac) sessions: no watcher, no progress / file self-check, no mockup answer
+  const n0 = calls.length;
+  const RULE2 = '─'.repeat(40);
+  const rstop = async (name, body) => {
+    const p = [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE2, '❯ ', RULE2, '  ⏵⏵ bypass permissions on'];
+    m.observe({ name, remote: true, machine: 'mac-test', state: 'done', agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: null, now: 1000 });
+    m.observe({ name, remote: true, machine: 'mac-test', state: 'done', agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: null, now: 3000 });
+    await until(() => stalls().some((r) => r.session === name && ['answer', 'escalated', 'answer_cancelled'].includes(r.type)));
+    await wait(150);
+    return { typed: typed.filter((x) => x.session === name).map((x) => x.text), esc: stalls().find((r) => r.type === 'escalated' && r.session === name) };
+  };
+  progress.text = 'job (pid 4242) is still running.';
+  const r1 = await rstop('mac:s1', 'Started the export.\nSTATUS: waiting: pid 4242 on host-b to finish');
+  assert.equal(calls.length, n0);
+  const r2 = await rstop('mac:s2', 'The export is going.\n\nIs the run finished?');
+  assert.deepEqual(r2.typed, []); assert.ok(r2.esc);
+  const r3 = await rstop('mac:s3', 'Done.\n\nDoes NOTES.md exist?');
+  assert.deepEqual(r3.typed, []); assert.ok(r3.esc);
+  const r4 = await rstop('mac:s4', 'The settings page layout is designed.\n\nShall I show you the mockup before I build it?');
+  assert.ok(!r4.typed.some((x) => /mockups/.test(x))); void r1;
+  progress.text = null;
+  // wake gates: canType follows autoSend / hourly cap / pause / draft
+  assert.equal(m.canType('sc9'), true);
+  m.countSent('sc9'); m.countSent('sc9'); m.countSent('sc9'); m.countSent('sc9');
+  assert.equal(m.canType('sc9'), false, 'hourly cap reached');
+  const saved = m.managerConfig();
+  await m.setManagerConfig({ autoSend: false }); assert.equal(m.canType('sc8'), false);
+  await m.setManagerConfig({ autoSend: saved.autoSend });
+});
+
+test('review: a new ask supersedes only asks older than this stop, and never again on a re-escalation', async () => {
+  const t0 = Date.now() - 60000;
+  writeFileSync(ledger, L({ at: new Date(t0).toISOString(), id: 'OLDER', session: 'sc10', question: 'old?', state: 'open' }, { at: new Date(Date.now() + 3600e3).toISOString(), id: 'NEWER', session: 'sc10', question: 'later?', state: 'open' }).join('\n') + '\n');
+  const r = await stop('sc10', makeRepo(), 'Tests are green.\n\nShould I rotate the API key now?');
+  assert.ok(r.esc);
+  await until(() => lines(ledger).some((x) => x.state === 'superseded'));
+  assert.deepEqual(lines(ledger).filter((x) => x.state === 'superseded').map((x) => x.id), ['OLDER']);
+  appendFileSync(ledger, JSON.stringify({ at: new Date(t0 - 1000).toISOString(), id: 'LATE', session: 'sc10', question: 'again?', state: 'open' }) + '\n');
+  const p = await supersedeOlder(ledger, 'sc10', 'x', { before: t0 });
+  assert.deepEqual(p, ['LATE']);
 });

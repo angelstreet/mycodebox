@@ -36,10 +36,11 @@ export async function readOpenAsks(file) {
 
 // A session escalated a new ask: every older open ask of that session is marked superseded by it (appended to the ledger, never edited).
 // -> the superseded ids. A missing ledger is not created.
-export async function supersedeOlder(file, session, newId, { now = new Date() } = {}) {
+export async function supersedeOlder(file, session, newId, { now = new Date(), before = null } = {}) {
   if (!session || !newId) return [];
   let lines; try { lines = (await readFile(file, 'utf8')).split('\n').filter(Boolean); } catch { return []; }
-  const older = openAsks(lines).filter((a) => a.session === session && a.id !== newId);
+  // `before` (ms): only asks written before the stop that raised the new one; an ask with no readable time is left alone
+  const older = openAsks(lines).filter((a) => a.session === session && a.id !== newId && (before == null || Date.parse(a.at) < before));
   if (!older.length) return [];
   await appendFile(file, older.map((a) => JSON.stringify({ at: now.toISOString(), id: a.id, state: 'superseded', by: newId })).join('\n') + '\n');
   return older.map((a) => a.id);

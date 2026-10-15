@@ -21,7 +21,7 @@
 // A forbidden topic (deploy, push to main, delete, .env, money, customer, credential, ...) or an
 // unsent draft in the input box always means owner, whatever the rules or Jev said.
 
-import { waitsOnOwnJob, jobRefs } from './job-refs.js';
+import { waitsOnOwnJob, jobRefs, hasRef } from './job-refs.js';
 
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
@@ -426,10 +426,15 @@ export function topicSplit(text) {
   return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };
 }
 
-// ---- the approved action (round 9, item 2) -------------------------------------------------------------------------------
-// What a yes / continue / recommended-option answer actually approves: the option (or the "Shall I X?" clause), plus the commands it runs.
-// Narrative elsewhere in the ask ("I removed the debug log earlier") is not approved by "yes" and no longer blocks. FORBIDDEN_RE is unchanged;
-// only the text it is read over shrinks. A generic option ("Yes", "Proceed") inherits the question's text, plan included.
+// ---- the approved action (round 9, item 2, redesigned after review) ---------------------------------------------------
+// The floor text of a yes / continue / recommended-option answer is the option (or the "Shall I X?" question) + the commands it runs + the question
+// line + the WHOLE stem around it (the other options of the menu and their descriptions are left out, as in round 8). How specific the option is never
+// removes the stem. FORBIDDEN_RE is unchanged. Only two things are dropped or relaxed:
+//   (a) a narrative sentence: the destructive verb in it is itself past tense ("removed", "overwrote", "was deleted"), no present / imperative / future /
+//       conditional wording, no command, no approval phrase ("as agreed", "approved ... ago"), no data object, a time marker, a plain spelling;
+//   (b) the soft words remove / overwrite / replace / update and the noun "migration" when their clause's object is an ordinary file or doc
+//       (SKILL.md, a README, a template, a config file) and names no data (database, table, backups, production, customer, .env, secrets ...).
+// The hard verbs (delete, drop, wipe, truncate, purge, destroy, erase, nuke, prune, rm) always block, except as a past-tense narrative under (a).
 const OPTION_LINE = /^\s*(?:[❯›>]\s*)?\d+[.)]\s+/;
 const GENERIC_FILLER = /\b(?:yes|yep|yeah|ok|okay|sure|proceed|continue|go|ahead|do|it|that|this|the|plan|planned|as|with|please|recommend(?:ed|ation)?|approve|accept|confirm|apply|run|start|now|all|and|then|sounds?|good|great|agreed|option|my|your|lets?|let's|take|choose|pick|take)\b/gi;
 const isGenericOption = (t) => {
@@ -443,50 +448,62 @@ export function commandsIn(text) {
   for (const re of COMMAND_RES) { re.lastIndex = 0; let m; while ((m = re.exec(String(text || '')))) out.push(m[1].trim()); }
   return [...new Set(out)];
 }
-// A sentence that only reports finished work: past tense, a time marker, nothing future or planned, no question. Exempt only when its hits are
-// the destructive verbs (delete / remove / overwrite / migrat ...) and are plain on the raw text (a disguised spelling stays hard).
 const DESTRUCTIVE_PART = /delet\(\?:e|migrat\(\?:e/;
+const DESTRUCTIVE_WORDS = new RegExp(FORBIDDEN_PARTS.find((p) => /delet\(\?:e/.test(p)), 'gi');
 const NONDESTRUCTIVE_RE = new RegExp([...FORBIDDEN_PARTS.filter((p) => !DESTRUCTIVE_PART.test(p)), ...HARD_EXTRA].join('|'), 'i');
-const PAST_RE = /\b(?:\w{3,}ed|overwrote|wrote|ran|did|was|were|had|got|went|made|took|has been|have been)\b/i;
+const HARD_PAST = /^(?:remov|delet|dropp|wip|truncat|purg|destroy|eras|nuk|prun)ed$|^overwr(?:ote|itten)$/i;
 const PAST_TIME_RE = /\b(?:earlier|yesterday|already|previously|ago|so far|just now|this morning|last (?:night|week|time|run|session|turn))\b/i;
-const FUTURE_RE = /\b(?:will|won'?t|going to|about to|I'?ll|we'?ll|would|first|then|next|after that|plan(?:ned)?|step|before (?:running|continuing|proceeding))\b|\bshould\b/i;
+// present, imperative-leaning, future or conditional wording: the sentence is a plan, not a report
+const PLANNED_RE = /\b(?:will|won'?t|would|going to|about to|shall|should|could|can|may|might|must|now|currently|next|then|first|runs?|running|executes?|applies|plans?|planned|steps?|if|unless|when|once|before|after that|tonight|today|tomorrow|am|is|are)\b|'ll\b/i;
+const APPROVAL_RE = /\bas (?:we |already |previously |i )?(?:discussed|agreed|approved|requested|planned|confirmed|decided|promised)\b|\balready (?:agreed|approved|discussed|requested|decided)\b|\b(?:was|were|been|is) (?:agreed|approved|requested|authori[sz]ed)\b|\bapproved\b[^.\n]{0,40}\bago\b|\bwith your (?:approval|ok|go-ahead)\b|\bper your\b|\bapproved by\b/i;
+const OBJ_FILE = /[\w./-]+\.(?:md|txt|json|ya?ml|js|ts|py|sh|toml|html|css|csv)\b|\b(?:skill|readme|docs?|documentation|templates?|config file|changelog)\b/i;
+const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|volumes?|buckets?|backups?|prod(?:uction)?|customers?|user data|rows?|records?|uploads?|secrets?|keys?|tokens?|passwords?|credentials?)\b|\.env\b/i;
 export function isPastNarrative(sentence) {
   const t = String(sentence || '').trim();
-  if (!t || /\?["')\]]*\s*$/.test(t) || !PAST_RE.test(t) || !PAST_TIME_RE.test(t) || FUTURE_RE.test(t)) return false;
+  if (!t || /\?["')\]]*\s*$/.test(t) || !PAST_TIME_RE.test(t) || PLANNED_RE.test(t) || APPROVAL_RE.test(t) || OBJ_DATA.test(t)) return false;
+  if (commandsIn(t).length || /\b(?:rm|mv|dd)\b/i.test(t) || /\bmigrat/i.test(t)) return false;
   if (matchWith(NONDESTRUCTIVE_RE, t, forbiddenExtra)) return false;
+  DESTRUCTIVE_WORDS.lastIndex = 0;
+  for (const m of t.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0])) return false;
   const hit = forbiddenMatch(t);
   return !hit || FORBIDDEN_RE.test(t);   // a hit that shows only in a disguised spelling is not narrative
 }
 const sentencesOf = (text) => String(text || '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
 export const withoutNarrative = (text) => String(text || '').split('\n').map((l) => (OPTION_LINE.test(l) ? l : sentencesOf(l).filter((x) => !isPastNarrative(x)).join(' '))).filter((l) => l.trim()).join('\n');
+// (b): a soft word is neutral when the clause around it names an ordinary file or doc and no data.
+const SOFT_RE = /\b(?:remov(?:e|es|ed|ing|al)|overwrit(?:e|es|ten|ing)|overwrote|replac(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|migrations?)\b/gi;
+export function relaxSoft(text) {
+  return String(text || '').split('\n').map((line) => {
+    return line.split(/(?<=[.;!?])\s+|;/).map((clause) => (OBJ_FILE.test(clause) && !OBJ_DATA.test(clause) && !commandsIn(clause).length ? clause.replace(SOFT_RE, 'change') : clause)).join(' ');
+  }).join('\n');
+}
+const floorText = (t) => relaxSoft(withoutNarrative(t));
+// The menu's lines without the other options (and their indented descriptions); the kept option, plan steps and everything else stay.
+function menuStem(lines, options, keepN) {
+  const others = (options || []).filter((o) => o.n !== keepN && o.text);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (OPTION_LINE.test(l) && others.some((o) => l.includes(String(o.text).slice(0, 40)))) {
+      while (i + 1 < lines.length && !OPTION_LINE.test(lines[i + 1]) && /^\s{2,}\S/.test(lines[i + 1])) i++;
+      continue;
+    }
+    out.push(l);
+  }
+  return out;
+}
 
-// stall: { case, options?, question?, fullText? | closing? | excerpt?, forbiddenText? } -> { text, commands, source }
+// stall: { options?, question?, fullText? | closing? | excerpt?, approvalText? } -> { text, commands, source }
 //   source: 'option' | 'option+question' (a generic option inherits the question) | 'question' (a yes / continue answer)
 export function approvedAction(stall) {
   const all = String(stall.fullText || stall.closing || stall.excerpt || '').split('\n');
   const rec = stall.options?.find((o) => o.recommended) || stall.rec || null;
   if (!rec) {
-    const body = withoutNarrative(String(stall.approvalText ?? stall.question ?? ''));
+    const body = floorText(String(stall.approvalText ?? stall.question ?? ''));
     return { text: body, commands: commandsIn(body), source: 'question' };
   }
-  const at = all.findIndex((l) => OPTION_LINE.test(l) && l.includes(String(rec.text).slice(0, 40)));
-  // the option's own description lines: indented rows under it, up to the next option
-  const desc = [];
-  if (at >= 0) for (let i = at + 1; i < all.length && !OPTION_LINE.test(all[i]) && /^\s{2,}\S/.test(all[i]); i++) desc.push(all[i].trim());
-  const parts = [rec.text];
-  let source = 'option';
-  const step = /\b(?:step|phase|task|part)\s*(\d+)\b/i.exec(rec.text);
-  const named = step ? all.filter((l) => !OPTION_LINE.test(l) && new RegExp(String.raw`^\s*(?:[-*]\s*)?(?:step|phase|task|part)\s*${step[1]}\b`, 'i').test(l)) : [];
-  if (isGenericOption(rec.text) || named.length) {
-    // the whole ask around the menu, minus the option run and minus finished-work narrative; the question rides along
-    let from = at, to = at;
-    if (at >= 0) { while (from > 0 && OPTION_LINE.test(all[from - 1])) from--; while (to < all.length - 1 && OPTION_LINE.test(all[to + 1])) to++; }
-    const stem = at >= 0 ? [...all.slice(0, from), ...all.slice(to + 1)] : all;
-    if (isGenericOption(rec.text)) { parts.push(withoutNarrative([...stem, stall.question || ''].join('\n'))); source = 'option+question'; }
-    else parts.push(...named);
-  }
-  const text = parts.join('\n');
-  return { text, commands: commandsIn([text, ...desc].join('\n')), source };
+  const text = floorText([...menuStem(all, stall.options, rec.n), rec.text, stall.question || ''].join('\n'));
+  return { text, commands: commandsIn(text), source: isGenericOption(rec.text) ? 'option+question' : 'option' };
 }
 
 export function menuOptions(lines) {
@@ -501,12 +518,13 @@ export function menuOptions(lines) {
 // Unmarked menus (round 9, item 3): no "(recommended)" tag, but option 1 is a safe, reversible default. Only a clean 1..N list counts, and option 1
 // must not be a way out ("skip", "cancel", "do nothing") nor carry a hard topic or a merge / push / deploy.
 const OUT_OPTION_RE = /^\W*(?:skip|cancel|abort|stop|quit|exit|do nothing|nothing|leave (?:it|them|this)|no\b|none\b|not now|later|wait\b|don'?t|dismiss|decline|keep (?:it )?as is|ignore|something else|other\b|type something|chat about)/i;
-export function unmarkedFirst(opts) {
+export function unmarkedFirst(opts, lines = []) {
   if (!opts || opts.length < 2 || opts.some((o, i) => o.n !== i + 1) || opts.some((o) => RECOMMENDED_RE.test(o.text))) return null;
   const first = opts[0];
   if (OUT_OPTION_RE.test(first.text)) return null;
-  const t = topicSplit([first.text, ...commandsIn(first.text)].join('\n'));
-  if (t.hard || t.merge || t.push || t.deploy) return null;   // a merge / push / deploy is not taken as a default pick: it needs its own evaluation, i.e. the agent's marker
+  // the stem around the menu (every line but the other options) and option 1 must hold no forbidden word at all, once (b) is applied: no narrative is dropped here
+  const text = relaxSoft([...menuStem(lines, opts, 1), first.text].join('\n'));
+  if (forbiddenMatch(text) || topicSplit(text).hard) return null;
   return first;
 }
 
@@ -562,7 +580,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     const rec = opts.find((o) => RECOMMENDED_RE.test(o.text));
     if (PERMISSION_RE.test(block.join('\n'))) out.case = 'permission';
     else if (rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2)) { out.case = 'menu_recommended'; out.answer = { key: String(rec.n) }; }
-    else if (!rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2) && unmarkedFirst(opts)) { out.case = 'menu_recommended'; out.answer = { key: String(opts[0].n) }; out.source = 'unmarked-first'; }
+    else if (!rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2) && unmarkedFirst(opts, block)) { out.case = 'menu_recommended'; out.answer = { key: String(opts[0].n) }; out.source = 'unmarked-first'; }
     else out.case = 'owner_decision';
     out.forbiddenText = block.join('\n');
     if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text) || (out.source === 'unmarked-first' && o.n === opts[0].n), ...(out.source === 'unmarked-first' && o.n === opts[0].n ? { unmarked: true } : {}), forbidden: forbiddenMatch(o.text) }));
@@ -580,8 +598,10 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     out.no_status = false;
     out.forbiddenText = close.slice(-6).join('\n');
     if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
-    else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind)) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text); out.answer = null; out.autoCase = undefined; }   // the session waits on a job of its own: the manager wakes it when the job ends (own-jobs.js); never a needs-you
-    else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; }
+    // a job of the session's own, named by a concrete pid / log / run id: the manager wakes it when the job ends (own-jobs.js); never a needs-you.
+    // Without a concrete reference the old case stands ("waiting for the CI run" may be someone else's); `jobNoun` lets the manager upgrade it when the agent has a live child process.
+    else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind) && hasRef(jobRefs(st.text))) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text); out.answer = null; out.autoCase = undefined; }
+    else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; if (waitsOnOwnJob(st.text, st.kind)) out.jobNoun = true; }
     else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; }
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
     else out.case = 'done';
@@ -626,7 +646,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     out.action = actionOf(act, tailText);
   } else if (asks) {
     if (opts.length >= 2 && rec) { out.case = 'menu_recommended'; out.answer = { text: 'Yes, go with your recommendation.' }; }
-    else if (opts.length >= 2 && unmarkedFirst(opts) && !wait) { out.case = 'menu_recommended'; out.answer = { text: `Go with option ${opts[0].n}.` }; out.source = 'unmarked-first'; }
+    else if (opts.length >= 2 && unmarkedFirst(opts, close) && !wait) { out.case = 'menu_recommended'; out.answer = { text: `Go with option ${opts[0].n}.` }; out.source = 'unmarked-first'; }
     else if (opts.length >= 2 || DECISION_Q.test(last)) out.case = 'owner_decision';
     else if (CONTINUE_Q.test(last)) { out.case = 'continue'; out.answer = { text: 'Yes, continue.' }; }
     else { out.case = 'owner_decision'; out.source = 'ambiguous'; }

@@ -375,14 +375,17 @@ function readyDecision({ s, w, id, h, final, stall }) {
 // manager.json managerSessions (default ["manager"]): the manager agent's own session is never escalated or pushed (TASK-44-MANAGER.md section 0).
 let managerSessionsOf = () => ['manager'];
 export const isManagerSession = (name) => { try { return (managerSessionsOf() || []).includes(name); } catch { return false; } };
+const stopWall = new Map();   // stop id -> wall-clock ms of the stop (the owner-asks ledger is wall-clock; observe()'s `now` may not be)
 const escalatedStops = new Set();   // stop ids the rules escalated to the owner (the wake shadow's `escalated` fact)
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
+  const firstEscalation = !escalatedStops.has(id);
   if (isRemoteSession(name)) hookSafe(remoteHooks.escalated, name, id, reason, final);
   escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
   // one open ask per session: this one supersedes the session's older open asks in the owner-asks ledger (round 9, item 5)
-  supersedeOlder(ownerAsksFile, name, id).then((ids) => { if (ids.length) logLater({ type: 'asks_superseded', session: name, by: id, ids }); }).catch((e) => console.error('[manager] supersede', e.message));
+  // only asks written before this stop, and never again on a re-escalation of the same stop
+  if (firstEscalation) supersedeOlder(ownerAsksFile, name, id, { before: stopWall.get(id) ?? Date.now() }).then((ids) => { if (ids.length) logLater({ type: 'asks_superseded', session: name, by: id, ids }); }).catch((e) => console.error('[manager] supersede', e.message));
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
   if (state === 'done' && final.case !== 'done') notify(name, aiLine ? { ...final, aiLine } : final, reason, state);
   // a live menu was already announced as "waiting" before it settled (no stop id yet, so no buttons): once settled and escalated, the "asks" alert
@@ -1090,7 +1093,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   if (leaseViewOf && !all.some((p) => p.lease)) { const whole = markLease({ text: String(final.question || '').trim(), kind: 'other' }); if (whole.lease) all = [whole]; }   // the ask only reads as a lease question as a whole
   // Self-check (round 9, item 5): version / progress / "does this file exist" are settled from the registry and the hosts. Same floor as the lease part:
   // a deploy word is the subject of a version question, not a deploy request; every other hard word keeps the part with the owner.
-  const markSelf = (p) => { const k = config.selfChecks !== false && !p.lease && p.kind !== 'merge' && !hardMatch(p.text, { deployPresent: true }) ? selfAsk(p.text) : null; return k ? { ...p, kind: 'info', self: k.kind } : p; };
+  const markSelf = (p) => { let k = config.selfChecks !== false && !p.lease && p.kind !== 'merge' && !hardMatch(p.text, { deployPresent: true }) ? selfAsk(p.text) : null; if (k && k.kind !== 'version' && isRemoteSession(name)) k = null; /* a remote (Mac) session's jobs and files are not on this host */ return k ? { ...p, kind: 'info', self: k.kind } : p; };
   all = all.map(markSelf);
   if (!all.some((p) => p.self) && config.selfChecks !== false) { const whole = markSelf({ text: String(final.question || '').trim(), kind: 'other' }); if (whole.self) all = [whole]; }
   const selfHit = all.some((p) => p.self);
@@ -1335,6 +1338,7 @@ export function observe(s) {
   const id = randomUUID();
   if (w.pending) settleRoundtrip(s.name, w.pending, 'superseded', s.now, s.machine);
   w.pending = { id, at: s.now, key: stopKey(stall.excerpt), ...(s.remote ? { remote: true, machine: s.machine } : {}) };
+  stopWall.set(id, Date.now()); if (stopWall.size > 500) stopWall.delete(stopWall.keys().next().value);
   (async () => {
     let final = stall, jevOut = null;
     if (stall.source === 'ambiguous') {
@@ -1344,7 +1348,7 @@ export function observe(s) {
     }
     if (w.hash !== h) return;   // the pane moved on while Jev was thinking: that stall is gone
     // mockup-first (round 9, item 7): "may I show you the mockup before I build?" is answered "post it to the feed and build"; the hard floor still applies to the ask
-    const mock = !isManagerSession(s.name) && !stall.draft ? mockupRule(final, { windowMin: config.mockupWindowMin, enabled: config.mockupFirst !== false }) : null;
+    const mock = !isManagerSession(s.name) && !isRemoteSession(s.name) && !stall.draft ?   /* /api/mockups is loopback-only: a remote (Mac) session cannot post */ mockupRule(final, { windowMin: config.mockupWindowMin, enabled: config.mockupFirst !== false }) : null;
     if (mock) final = { ...final, case: 'continue', source: 'mockup-first', answer: { text: mock }, autoCase: undefined, no_status: false };
     let ws = wouldSend(final);
     const confidence = final.source === 'jev' ? Number(jevOut?.probabilities?.[jevOut.choice] ?? jevOut?.confidence ?? 0) : 1;
@@ -1361,7 +1365,11 @@ export function observe(s) {
     });
     if (/^(?:waiting|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
     // a session that waits on a job of its own is woken when the job ends (own-jobs.js); a deploy it queued is followed the same way
-    if (ownJobs && !isManagerSession(s.name) && (final.case === 'own_job_wait' || (final.case === 'waiting_deploy' && final.deployHint?.id && /^waiting$/i.test(final.status || '')))) {
+    // a blocked STATUS that names a job in words only: it is the session's own when the agent has a live child process at the stop
+    if (ownJobs?.hasLiveChild && final.jobNoun && final.case === 'owner_decision' && !isRemoteSession(s.name) && !isManagerSession(s.name)) {
+      try { if (await ownJobs.hasLiveChild(s.name)) final = { ...final, case: 'own_job_wait', answer: null, autoCase: undefined, ownJob: {} }; } catch (e) { console.error('[manager] live child', e.message); }
+    }
+    if (ownJobs && !isManagerSession(s.name) && !isRemoteSession(s.name) && (final.case === 'own_job_wait' || (final.case === 'waiting_deploy' && final.deployHint?.id && /^waiting$/i.test(final.status || '')))) {
       try { const r = await ownJobs.watch(s.name, { text: final.case === 'waiting_deploy' ? `deploy ${final.deployHint.id}` : String(final.question || ''), cwd: s.cwd || null, stopAt: id, paneText: stall.excerpt || '' }); logLater({ type: 'own_job', id, session: s.name, job: r.kind || 'unknown', label: r.label || null, detached: !!r.detached }); } catch (e) { console.error('[manager] own job', e.message); }
     }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
@@ -1418,7 +1426,9 @@ export function observe(s) {
 export function forget(name) { cancelAuto(name, 'session removed'); const p = watch.get(name)?.pending; if (p) settleRoundtrip(name, p, 'removed', Date.now()); watch.delete(name); try { ownJobs?.forget(name); } catch {} }
 // For the own-jobs watcher: is `session` still stopped at the stop `stopId` (so a wake is still wanted), and may text be typed into it now?
 export const stillStopped = (session, stopId) => { const w = watch.get(session); return !!(w && w.pending?.id === stopId && w.last && (w.last.state === 'done' || w.last.state === 'waiting')); };
-export const canType = (session) => { const w = watch.get(session); return !!w && !w.cls?.draft && !isPaused(session) && w.last?.state === 'done'; };
+// The same gates as a decided reply (decisionBlock: pause, autoSend, hourly cap, draft) plus enabled / sessionOn; a wake counts in the hourly cap (countSent).
+export const canType = (session) => { const w = watch.get(session); return !!w && w.last?.state === 'done' && config.enabled && sessionOn(session) && !decisionBlock(session, {}); };
+export const countSent = (session) => { sentLog.set(session, [...(sentLog.get(session) || []), Date.now()]); };
 export function prune(live) { for (const k of [...watch.keys()]) if (!live.has(k)) forget(k); }
 
 export function stallOf(name) {
