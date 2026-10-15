@@ -22,7 +22,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
-import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint } from './stall.js';
+import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction } from './stall.js';
 import { MERGE_DEFAULTS, evaluateMerge, journalRecord, composeReply, repoToplevel } from './merge-policy.js';
 import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, menuRecord, parsePushAsk } from './decide-policy.js';
 import { decidedItems, decidedSummary, failedCount } from './decided.js';
@@ -1044,7 +1044,9 @@ async function menuDecision({ s, w, id, h, final, stall }) {
   const rec = final.options.find((o) => o.recommended);
   if (!rec) return null;
   const stem = stemOf(final, stall, rec);
-  const combined = `${stem}\n${rec.text}`;
+  // the hard floor reads the approved action (the option, or the question for a generic one, and the commands it runs), not every word of the ask
+  const act = approvedAction({ ...stall, options: final.options, question: final.question });
+  const combined = [act.text, ...act.commands].join('\n');
   const topics = topicSplit(combined);
   const present = DECISION_KINDS.filter((k) => topics[k]);
   const irreversible = (IRREVERSIBLE_RE.exec(combined) || [])[0] || null;

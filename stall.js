@@ -419,6 +419,69 @@ export function topicSplit(text) {
   return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };
 }
 
+// ---- the approved action (round 9, item 2) -------------------------------------------------------------------------------
+// What a yes / continue / recommended-option answer actually approves: the option (or the "Shall I X?" clause), plus the commands it runs.
+// Narrative elsewhere in the ask ("I removed the debug log earlier") is not approved by "yes" and no longer blocks. FORBIDDEN_RE is unchanged;
+// only the text it is read over shrinks. A generic option ("Yes", "Proceed") inherits the question's text, plan included.
+const OPTION_LINE = /^\s*(?:[❯›>]\s*)?\d+[.)]\s+/;
+const GENERIC_FILLER = /\b(?:yes|yep|yeah|ok|okay|sure|proceed|continue|go|ahead|do|it|that|this|the|plan|planned|as|with|please|recommend(?:ed|ation)?|approve|accept|confirm|apply|run|start|now|all|and|then|sounds?|good|great|agreed|option|my|your|lets?|let's|take|choose|pick|take)\b/gi;
+const isGenericOption = (t) => {
+  const bare = String(t || '').replace(/\(\s*recommended\s*\)/ig, ' ');
+  if (!bare.replace(GENERIC_FILLER, ' ').split(/[\W_\d]+/).some((w) => w.length > 2)) return true;   // a bare label ("A", "Option 2") is generic too
+  return bare.trim().split(/\s+/).length <= 3 && /\b(?:it|that|this|them|these|those)\b/i.test(bare);   // "Send it", "Apply that": a pronoun for the question's action
+};
+const COMMAND_RES = [/`([^`\n]{2,})`/g, /^\s*\$\s+(\S.*)$/gm];
+export function commandsIn(text) {
+  const out = [];
+  for (const re of COMMAND_RES) { re.lastIndex = 0; let m; while ((m = re.exec(String(text || '')))) out.push(m[1].trim()); }
+  return [...new Set(out)];
+}
+// A sentence that only reports finished work: past tense, a time marker, nothing future or planned, no question. Exempt only when its hits are
+// the destructive verbs (delete / remove / overwrite / migrat ...) and are plain on the raw text (a disguised spelling stays hard).
+const DESTRUCTIVE_PART = /delet\(\?:e|migrat\(\?:e/;
+const NONDESTRUCTIVE_RE = new RegExp([...FORBIDDEN_PARTS.filter((p) => !DESTRUCTIVE_PART.test(p)), ...HARD_EXTRA].join('|'), 'i');
+const PAST_RE = /\b(?:\w{3,}ed|overwrote|wrote|ran|did|was|were|had|got|went|made|took|has been|have been)\b/i;
+const PAST_TIME_RE = /\b(?:earlier|yesterday|already|previously|ago|so far|just now|this morning|last (?:night|week|time|run|session|turn))\b/i;
+const FUTURE_RE = /\b(?:will|won'?t|going to|about to|I'?ll|we'?ll|would|first|then|next|after that|plan(?:ned)?|step|before (?:running|continuing|proceeding))\b|\bshould\b/i;
+export function isPastNarrative(sentence) {
+  const t = String(sentence || '').trim();
+  if (!t || /\?["')\]]*\s*$/.test(t) || !PAST_RE.test(t) || !PAST_TIME_RE.test(t) || FUTURE_RE.test(t)) return false;
+  if (matchWith(NONDESTRUCTIVE_RE, t, forbiddenExtra)) return false;
+  const hit = forbiddenMatch(t);
+  return !hit || FORBIDDEN_RE.test(t);   // a hit that shows only in a disguised spelling is not narrative
+}
+const sentencesOf = (text) => String(text || '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+export const withoutNarrative = (text) => String(text || '').split('\n').map((l) => (OPTION_LINE.test(l) ? l : sentencesOf(l).filter((x) => !isPastNarrative(x)).join(' '))).filter((l) => l.trim()).join('\n');
+
+// stall: { case, options?, question?, fullText? | closing? | excerpt?, forbiddenText? } -> { text, commands, source }
+//   source: 'option' | 'option+question' (a generic option inherits the question) | 'question' (a yes / continue answer)
+export function approvedAction(stall) {
+  const all = String(stall.fullText || stall.closing || stall.excerpt || '').split('\n');
+  const rec = stall.options?.find((o) => o.recommended) || stall.rec || null;
+  if (!rec) {
+    const body = withoutNarrative(String(stall.approvalText ?? stall.question ?? ''));
+    return { text: body, commands: commandsIn(body), source: 'question' };
+  }
+  const at = all.findIndex((l) => OPTION_LINE.test(l) && l.includes(String(rec.text).slice(0, 40)));
+  // the option's own description lines: indented rows under it, up to the next option
+  const desc = [];
+  if (at >= 0) for (let i = at + 1; i < all.length && !OPTION_LINE.test(all[i]) && /^\s{2,}\S/.test(all[i]); i++) desc.push(all[i].trim());
+  const parts = [rec.text];
+  let source = 'option';
+  const step = /\b(?:step|phase|task|part)\s*(\d+)\b/i.exec(rec.text);
+  const named = step ? all.filter((l) => !OPTION_LINE.test(l) && new RegExp(String.raw`^\s*(?:[-*]\s*)?(?:step|phase|task|part)\s*${step[1]}\b`, 'i').test(l)) : [];
+  if (isGenericOption(rec.text) || named.length) {
+    // the whole ask around the menu, minus the option run and minus finished-work narrative; the question rides along
+    let from = at, to = at;
+    if (at >= 0) { while (from > 0 && OPTION_LINE.test(all[from - 1])) from--; while (to < all.length - 1 && OPTION_LINE.test(all[to + 1])) to++; }
+    const stem = at >= 0 ? [...all.slice(0, from), ...all.slice(to + 1)] : all;
+    if (isGenericOption(rec.text)) { parts.push(withoutNarrative([...stem, stall.question || ''].join('\n'))); source = 'option+question'; }
+    else parts.push(...named);
+  }
+  const text = parts.join('\n');
+  return { text, commands: commandsIn([text, ...desc].join('\n')), source };
+}
+
 export function menuOptions(lines) {
   const opts = [];
   for (const l of lines) {
@@ -583,7 +646,9 @@ function actionOf(m, text) {
 }
 
 function finish(out) {
-  const text = out.forbiddenText ?? out.question ?? '';
+  let text = out.forbiddenText ?? out.question ?? '';
+  // A yes / continue answer approves the question and its plan, not finished-work narrative around it (round 9, item 2).
+  if (out.case === 'continue' && out.forbiddenText != null) { const a = approvedAction({ case: out.case, approvalText: out.forbiddenText }); text = [a.text, ...a.commands].join('\n'); }
   out.forbidden = forbiddenMatch(text);
   out.topics = topicSplit(text);
   delete out.forbiddenText;
