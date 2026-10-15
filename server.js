@@ -42,6 +42,7 @@
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
+//   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
 //   POST /api/handoffs          → {resource, from, to, due?} create a new hand-off row
 //   POST /api/handoffs/<id>/done → mark a hand-off done (body {by?})
@@ -85,6 +86,8 @@ import { createLeaseSource, createSessionTracker, summarize as leaseSummary, cre
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
+import { createDoneCheck } from './done-check.js';
+import { statusLine } from './stall.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -771,6 +774,34 @@ const ciWatch = createCiWatch({
   alert,
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).ciWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
+// Load per core and RAM available %, for the watchers that message sessions (a message can wake a session into work).
+function hostPressure() {
+  const m = /MemTotal:\s+(\d+)[\s\S]*MemAvailable:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'));
+  return { loadPerCore: loadavg()[0] / cpus().length, ramAvailPct: m ? (Number(m[2]) / Number(m[1])) * 100 : 100 };
+}
+
+// Done check (done-check.js): an idle session whose last STATUS is done is checked against git (commits not on main,
+// uncommitted files); a mismatch is told once to the session and the feed. manager.json `doneCheck`: live | dry | off.
+const doneCheck = createDoneCheck({
+  stateDir: STATE_DIR,
+  git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 })).stdout,
+  listDone: async () => {
+    const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
+    for (const [name, p] of panes) {
+      if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead || / \(deleted\)$/.test(p.cwd)) continue;
+      const st = latest?.status?.[name];
+      const ex = st?.stall?.excerpt;
+      if (!ex || st.state === 'working' || statusLine(String(ex).split('\n'))?.kind !== 'done') continue;
+      out.push({ name, cwd: p.cwd, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working });
+    }
+    return out;
+  },
+  send: (name, text) => sendKeys(name, text),
+  pressure: hostPressure,
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheck; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
+
 // Rules watch (rules-watch.js): a session started before AGENTS.md last changed on its repo's origin/main is told once,
 // while idle, to re-read it. manager.json key `rulesWatch`: "live" (default) | "dry" | "off".
 const rulesWatch = createRulesWatch({
@@ -794,10 +825,7 @@ const rulesWatch = createRulesWatch({
     return out;
   },
   send: (name, text) => sendKeys(name, text),
-  pressure: () => {
-    const m = /MemTotal:\s+(\d+)[\s\S]*MemAvailable:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'));
-    return { loadPerCore: loadavg()[0] / cpus().length, ramAvailPct: m ? (Number(m[2]) / Number(m[1])) * 100 : 100 };
-  },
+  pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
@@ -1959,6 +1987,7 @@ async function handleHttp(req, res) {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
+  if (req.method === 'GET' && p === '/api/done-check') return json(res, 200, doneCheck.snapshot());   // sessions whose STATUS done disagrees with git
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
   if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
@@ -2241,6 +2270,7 @@ server.listen(PORT, HOST, async () => {
   leaseWatch.start();
   ciWatch.start();
   rulesWatch.start();
+  doneCheck.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:

@@ -1104,6 +1104,19 @@ Config: `<stateDir>/ci-watch.json` `{ "repo": "<owner/name>", "workflow": "<file
 "provider": "claude|minimax|codex|opencode", "model": "<optional, cbsession -m>" }`. Without it the watch stays idle. `manager.json` `ciWatch`: `"dry"` (journal only) or `"off"`; default live.
 `GET /api/ci-watch` shows the last verdict, the action and the red streak.
 
+## Done check (owner/manager, 2026-10-15)
+
+A session's `STATUS: done` is checked against git, not trusted (TASK59 said "shipped, nothing pending" with 7 commits
+never on main). `done-check.js` runs every 5 min (first check 4 min after start) over the idle sessions whose last STATUS
+line is done (not the manager's, not paused). For the session's folder, and for every branch name or worktree path its
+closing text names that exists in that repo, it counts commits not on `origin/main` (`--cherry-pick`, so equivalent
+patches count as merged; `VERSION.txt`-only stamps ignored) and uncommitted tracked files. Each repo is fetched at most
+every 30 min. A mismatch gets one feed line `done-check:<session>` and one message to the session: finish it (commit,
+merge when the merge evaluation passes, push, deploy) or say in one line why it stays. Once per finding, at most 2 per
+check, and none while the session works or the host is busy (load above 1.5 per core, under 20% RAM available).
+`manager.json` `doneCheck`: `"dry"` (journal `done-check.jsonl` only) or `"off"`; default live. `GET /api/done-check`
+shows the last check and its findings.
+
 ## Rules watch (owner, 2026-10-15)
 
 A session reads AGENTS.md once, at start. `rules-watch.js` checks every 10 min (first check 3 min after start): for each
