@@ -1,4 +1,4 @@
-STATUS: DELIVERED dc54698 https://github.com/angelstreet/mycodebox/pull/13 (round 10)
+STATUS: DELIVERED d0323ea https://github.com/angelstreet/mycodebox/pull/13 (round 10)
 
 # V2 progress
 
@@ -23,7 +23,7 @@ modes). Owner decision: OWNER_DECISIONS §16. Design: `docs/v2/LEASES-CENTRAL.md
 | R10-3 | `scripts/vpt-lease` compatible client, `docs/LEASE-RULES.md`, skill renderer, client-vs-service integration test | Sonnet / Opus + Fable review | DONE | v2/r10b-client |
 | R10-4 | `lease-source.js` (legacy / central), liveness, manager lease answers (`lease-ask.js`), Leases view, voice line | Sonnet / Opus + Fable review | DONE | v2/r10c-dashboard |
 | R10-5 | Reviews: Opus CHANGES REQUESTED -> APPROVE; Fable design CHANGES REQUESTED, code CHANGES REQUESTED -> APPROVE; final minors | coordinator | DONE | fa20b28, 9fb1d76 |
-| R10-6 | Gates, PR, DELIVERED | coordinator | DONE | dc54698: 2217/2217 Node 23.6 and 24.21; acceptance 54/54 on ef2579e and browser 67/67 on 13bb8e2 (the run on dc54698 was stopped by the memory guard); leak scan clean |
+| R10-6 | Gates, PR, DELIVERED | coordinator | DONE | d0323ea (main 5646638 merged): 2222/2222 Node 23.6; dc54698: 2217/2217 Node 23.6 and 24.21; acceptance 54/54 on ef2579e and browser 67/67 on 13bb8e2 (the run on dc54698 was stopped by the memory guard); leak scan clean |
 
 ## Round 8
 
