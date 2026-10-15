@@ -11,7 +11,7 @@ import { icon } from './icons.js';
 import { audioChipHtml, wireAudioChips } from './audio-chip.js';
 import { renderMd } from './md.js';
 import { copyPromptButtonHtml } from './copy-prompt.js';
-import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane } from './buttons.js';
+import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane, parseManagerItems, extractRecommendation } from './buttons.js';
 import { reconcileQueue, markAnswered, mapAiToButton, shouldHighlight, jevLine, whyModel, detailsText, multiFormModel, multiSendText, multiComplete, topicLabel, confirmText } from './ask-model.js';
 
 const MIN_KEY = 'ghosty.askPopup.minimized';
@@ -21,6 +21,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const stripNum = (label) => String(label).replace(/^\s*\d+\s*[.\-)\]:|·•]?\s*/, '');
 const JEV_PLAIN = { continue: 'continue', take_recommended: 'take recommended', ask_owner: 'ask you' };
 const truncText = (s, n) => { s = String(s); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
+// Severity stripe on each mini-card. Maps the keys parseManagerItems() returns to short labels.
+// 'owner' = needs the owner (red); 'money' = .env / credit / secrets / refund (orange);
+// 'auto'  = mm-manager can do it itself, no owner action (green); 'fyi' = everything else (blue).
+const SEV_LABEL = { owner: 'you', money: 'money', auto: 'auto', fyi: 'fyi' };
 
 export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmThen, onAnswer }) {
   const el = document.getElementById('askPopup');
@@ -120,11 +124,17 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     let dq = st.stall?.question ? displayQuestion(reflowPane(st.stall.question)) : '';
     if (dq.length < 60 && closingText) { const alt = displayQuestion(reflowPane(closingText)); if (alt.length > dq.length) dq = alt; }
     const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || dq || 'waiting for your answer').slice(0, 2000);   // the question area scrolls; never cut it mid-line
-    const question = form || questionsView ? '' : baseQ;
+    const question = (form || questionsView || items.length) ? '' : baseQ;
     // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
     // and indented) before display so it fills the popup width instead of a narrow column.
     const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, expanded ? 6000 : 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
-    return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, sugConf: sugId ? Number(ai?.confidence) : null, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st), forbidden: (typeof st.stall?.forbidden === 'string' && st.stall.forbidden) || (typeof ai?.forbidden === 'string' && ai.forbidden) || '' };
+    // Manager-style structured digest: one card per Q-letter ("Q144.a OpenRouter credit ... Q144.b ...").
+    // Empty when the closing text doesn't carry the enumeration; the popup then falls back to the
+    // raw `<pre>` block. The "Recommends: N — ..." line is lifted out as the TL;DR card.
+    const closing = String(st.stall?.closing || st.stall?.excerpt || st.stall?.question || '');
+    const items = form || questionsView ? [] : parseManagerItems(closing);
+    const recommendation = form || questionsView ? null : extractRecommendation(closing);
+    return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, sugConf: sugId ? Number(ai?.confidence) : null, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, items, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st), forbidden: (typeof st.stall?.forbidden === 'string' && st.stall.forbidden) || (typeof ai?.forbidden === 'string' && ai.forbidden) || '', recommendation };
   }
 
   function metaText(v) {
@@ -238,7 +248,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
     el.classList.toggle('ap-big', expanded);
-    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, expanded, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.sug, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
+    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, expanded, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.sug, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.items && v.items.map((it) => [it.letter, it.severity, it.title, (it.body || '').slice(0, 80)]), v.recommendation && [v.recommendation.n, v.recommendation.text.slice(0, 120)], v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);
@@ -254,6 +264,27 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       const topicBadge = v.buttons.some((b) => b.confirm) ? `<span class="ap-topic" title="Sensitive topic: nothing is suggested and every answer asks you to confirm">${esc(topicLabel(v.forbidden))}</span>` : '';
       const detBtn = v.details ? `<button type="button" class="ap-det" data-act="details" aria-expanded="${detOpen}">Details <span class="ap-toggle">${detOpen ? '▾' : '▸'}</span></button>` : '';
       const detBlock = (detBtn || topicBadge ? `<div class="ap-subrow">${detBtn}${topicBadge}</div>` : '') + (v.details && detOpen ? `<pre class="ap-det-t">${esc(v.details)}</pre>` : '');
+      // Manager digest: one TL;DR card + one mini-card per Q-letter. When the popup doesn't carry
+      // the manager enumeration we fall back to the legacy qBlock + raw `<pre>` behaviour above.
+      // The TL;DR card replaces qBlock (the question area) for the manager path: that's why
+      // view() blanks `v.question` when items are present.
+      const itemsText = v.items && v.items.length ? v.items.map((it) => `${it.letter}. ${it.title}${it.body ? ' ' + it.body : ''}`).join('\n') : '';
+      const tldrHtml = (v.items && v.items.length)
+        ? `<div class="ap-tldr">
+            <div class="ap-tldr-top">
+              <span class="ap-tldr-label">${esc(v.recommendation ? `needs you · ${v.items.length} items · pick ${v.recommendation.n}` : `${v.items.length} items`)}</span>
+              ${copyPromptButtonHtml({ text: itemsText, label: 'Copy items' })}
+            </div>
+            ${v.recommendation ? `<div class="ap-tldr-what">${esc(v.recommendation.text)}</div>` : ''}
+          </div>`
+        : '';
+      const itemsHtml = (v.items && v.items.length)
+        ? `<div class="ap-items">${v.items.map((it) => `<div class="ap-item ap-item-sev-${esc(it.severity)}">
+            <div class="ap-item-head"><span class="ap-item-letter">${esc(it.letter)}</span><span class="ap-item-tag ap-tag-${esc(it.severity)}">${esc(SEV_LABEL[it.severity] || it.severity)}</span></div>
+            <div class="ap-item-title">${esc(it.title)}</div>
+            ${it.body ? `<div class="ap-item-body">${esc(it.body)}</div>` : ''}
+          </div>`).join('')}</div>`
+        : '';
       body.innerHTML = `<div class="ap-head">
           <span class="ap-prio ${esc(v.prio)}">${esc(v.prio)}</span>
           <button class="ap-name" data-act="card" title="Open ${esc(item.name)}">${esc(state.rename?.[item.name] || item.name)}</button>
@@ -264,7 +295,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
           ${expanded ? '' : `<button class="ap-x" data-act="min" aria-label="Hide" title="Hide (tap the red pill to bring it back)">${icon('chevron-down', 16)}</button>`}
           <button class="ap-x" data-act="dismiss" aria-label="Dismiss" title="Dismiss: I won't answer this one, don't show it again">${icon('x', 16)}</button>
         </div>
+        ${tldrHtml}
         ${qBlock}
+        ${itemsHtml}
         ${audioChipHtml({ text: `${state.rename?.[item.name] || item.name} asks: ${v.question}${v.suggestion ? `. Claude suggests: ${truncText(v.suggestion.text, 90)}.` : ''}${detOpen && v.details ? ` Details: ${truncText(v.details, 200)}.` : ''}`.replace(/\s+/g, ' ').trim(), label: 'Read this stall aloud' })}
         ${detBlock}
         <div class="ap-btns ${esc(v.kind)}">${btns}</div>

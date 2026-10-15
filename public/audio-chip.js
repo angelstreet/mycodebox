@@ -22,7 +22,7 @@ async function hashText(text) {
 }
 
 const POLL_MS = 500;       // how often to poll /status while pending
-const POLL_MAX_MS = 30000; // give up after 30s and surface the failure
+const POLL_MAX_MS = 90000; // give up after 90s and surface the failure (piper warm ≈ 20s + cold ≈ 40s; leave headroom)
 
 // Returns HTML for one audio chip. The chip is inert until wireAudioChip() is called on its root.
 // `text` is what piper will read aloud (the truncated "[kind] title — body [jev pick]" body, or

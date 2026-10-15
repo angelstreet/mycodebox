@@ -247,6 +247,83 @@ export function parseMultiReply(text) {
   return out;
 }
 
+// ---------- manager-style "Q144.a ... Q144.b ..." enumeration ----------
+// The mm-manager closing text is structured: "Q<num>.<letter> <title>. <body>." paragraphs, then a
+// "Recommends: N — ..." sentence pointing at one of the numbered recommendations below.
+// parseManagerItems splits the prose into one item per Q-letter so the answer popup can show them
+// as cards instead of one monospace wall. Pure function, no DOM, no I/O.
+//
+// Q-IDs live mid-sentence ("... Q144.c OpenRouter credit ... Q144.d Self-hosted runners ..."), so
+// we scan for any "Q<digits>.<letter>" and slice between matches.
+// Body: text after the Q-letter up to (a) the next Q-letter, (b) the "Recommends:" line, or
+// (c) end-of-text. Whitespace collapsed.
+// Severity: a tiny heuristic —
+//   'owner'  — owner / push / cherry-pick / must / P0 / P1 / owner-only / carve-out
+//   'money'  — money / credit / $ / refund / .env / secret / secrets
+//   'auto'   — auto / mm-manager can / will probe / will restart / logged / logged-only / noted
+//   'fyi'    — everything else
+// Returns [] when the text doesn't carry a Q-letter enumeration (e.g. a plain question, or a
+// multi-question form is already in use). The popup then falls back to the legacy `<pre>` block.
+const SEVERITY = [
+  { sev: 'owner', re: /\b(?:owner[ -]only|owner pushes|owner direct|owner to handle|push(?:es)?|cherry[ -]pick|must (?:push|fix|merge)|P0|P1|carve[ -]out|owner[ -]driven windows?)\b/i },
+  { sev: 'money', re: /(?:\$[\d.,]+|credit|refund|\.env|secret|money side|money\b)/i },
+  { sev: 'auto', re: /\b(?:auto(?:matic)?|mm[- ]manager (?:can|will|logged)|logged[- ]only|noted|will (?:probe|restart)|probe\s*\/\s*restart|no owner action)\b/i },
+];
+export function parseManagerItems(closingText) {
+  const src = String(closingText || '').replace(/\r/g, '');
+  if (!src.trim()) return [];
+  // Find every "Q144.a" / "Q7.b" marker anywhere in the text. We exclude Q-IDs that are inside
+  // parentheses ("(Q144.a only)") — those are cross-references in the numbered recommendation
+  // list below the prose, not new item headers. Also stop at the numbered recommendation list
+  // ("1. 1 ...", "2. 2 ...", ...) so any Q-IDs in those lines are not parsed as item headers.
+  const stopAt = src.search(/(?:^|\n)\s*\d+\.\s+\d+\s+\(/);
+  const scope = stopAt >= 0 ? src.slice(0, stopAt) : src;
+  const re = /(?<!\()\bQ\d{1,4}\.([a-z])\b/gi;
+  const positions = [];
+  let m;
+  while ((m = re.exec(scope))) positions.push({ idx: m.index, len: m[0].length, letter: m[1].toLowerCase() });
+  if (positions.length < 2) return [];   // one Q-item alone reads fine as prose; cards would add noise
+  const items = [];
+  for (let i = 0; i < positions.length; i++) {
+    const start = positions[i].idx + positions[i].len;
+    const tail = scope.slice(start);
+    // end of this item: the next Q-letter, the "Recommends:" line, or end-of-text
+    const endRel = (() => {
+      const nextQ = tail.search(/(?<!\()\bQ\d{1,4}\.[a-z]\b/i);
+      const nextRec = tail.search(/(?:^|\s)Recommends?\s*[:\-—]/);
+      const cands = [];
+      if (nextQ >= 0) cands.push(nextQ);
+      if (nextRec >= 0) cands.push(nextRec);
+      return cands.length ? Math.min(...cands) : tail.length;
+    })();
+    let body = tail.slice(0, endRel).replace(/\s+/g, ' ').trim();
+    body = body.replace(/^[.:\s]+/, '').trim();   // strip leading ". " / ": " after Q-letter
+    if (!body) continue;
+    // First sentence: any 4–160 chars then a sentence terminator (`.!?` not preceded by a digit, then
+    // whitespace or end-of-text). Non-greedy match stops at the FIRST such terminator so we don't gobble
+    // up the whole body when there's a decimal point (`$-0.20`) inside. Falls back to a 90-char slice when
+    // no sentence boundary exists inside 160 chars.
+    const sentMatch = body.match(/^[\s\S]{4,160}?(?<!\d)[.!?](?=\s|$)/);
+    const title = sentMatch ? sentMatch[0].replace(/\s+$/, '') : (body.length > 90 ? `${body.slice(0, 89).trimEnd()}…` : body);
+    const rest = sentMatch ? body.slice(sentMatch[0].length).replace(/^\s+/, '') : '';
+    let sev = 'fyi';
+    const fullText = `${title} ${rest}`;
+    for (const s of SEVERITY) if (s.re.test(fullText)) { sev = s.sev; break; }
+    items.push({ id: `q${positions[i].letter}`, letter: positions[i].letter, title, body: rest, severity: sev });
+  }
+  return items;
+}
+
+// "Recommends: 1 — close the leak P0 today, defer the others to owner-driven windows"
+// -> { n: '1', text: 'close the leak P0 today, defer the others to owner-driven windows' }
+// Returns null when no "Recommends:" line is present. The text after the dash / em-dash is
+// kept as one trimmed sentence; the popup shows it as the TL;DR card subtitle.
+export function extractRecommendation(closingText) {
+  const m = String(closingText || '').match(/(^|\n)\s*Recommends?\s*[:\-]\s*(\d{1,2})\s*[—\-:]\s*([^\n]+)/i);
+  if (!m) return null;
+  return { n: m[2], text: m[3].trim() };
+}
+
 // Claude Code's dim input-box suggestion is a GUESS at what the owner types next, never an answer. When it only
 // repeats a parsed answer set ("1 1 1 1 1 1 1, go ahead", "yes", "2") the popup ignores it.
 export function suggestionIsAnswer(suggestion, questions, buttons = []) {

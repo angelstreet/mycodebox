@@ -1711,6 +1711,66 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   overflow: hidden; padding-left: 38px;
 }
 
+/* ------------ Manager digest (TL;DR card + Q-items list) ------------
+   Rendered when parseManagerItems() found >= 2 Q-letters in the stop's closing text. Replaces the
+   monospace `<pre>` wall (one card per Q-topic instead), with the manager's "Recommends: N — ..."
+   line lifted into a red action card on top. Falls back to the legacy qBlock + ap-det-t when the
+   closing text doesn't carry the enumeration. */
+#askPopup .ap-tldr {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, rgba(255,95,95,0.10), rgba(255,95,95,0.03));
+  border: 1px solid rgba(255,95,95,0.45); border-radius: 8px;
+}
+#askPopup .ap-tldr-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#askPopup .ap-tldr-label {
+  font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--waiting); line-height: 1.3; flex: 1 1 auto; min-width: 0;
+}
+#askPopup .ap-tldr-what {
+  font-size: 13px; line-height: 1.45; color: var(--ink);
+  overflow-wrap: anywhere;
+}
+#askPopup .ap-items {
+  display: flex; flex-direction: column; gap: 6px;
+}
+#askPopup .ap-item {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 10px;
+  background: var(--bg-3); border: 1px solid var(--line-2); border-left-width: 3px;
+  border-radius: 6px;
+}
+#askPopup .ap-item-sev-owner { border-left-color: var(--waiting); }
+#askPopup .ap-item-sev-money { border-left-color: var(--accent); }
+#askPopup .ap-item-sev-auto  { border-left-color: var(--working); }
+#askPopup .ap-item-sev-fyi   { border-left-color: var(--blue, #8ebcff); }
+#askPopup .ap-item-head { display: flex; align-items: center; gap: 8px; }
+#askPopup .ap-item-letter {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  font-size: 11px; font-weight: 800; line-height: 1;
+  background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 4px;
+  color: var(--ink-2); font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+#askPopup .ap-item-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor;
+  flex: 0 0 auto;
+}
+#askPopup .ap-tag-owner { color: var(--waiting); background: rgba(255,95,95,0.08); }
+#askPopup .ap-tag-money { color: var(--accent);   background: rgba(232,154,74,0.10); }
+#askPopup .ap-tag-auto  { color: var(--working);  background: rgba(63,207,122,0.10); }
+#askPopup .ap-tag-fyi   { color: var(--blue, #8ebcff); background: rgba(142,188,255,0.08); }
+#askPopup .ap-item-title {
+  font-size: 12.5px; font-weight: 700; color: var(--ink); line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+#askPopup .ap-item-body {
+  font-size: 11.5px; color: var(--ink-2); line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 /* Slide-up only when a stop id never shown before appears; content updates in place otherwise. */
 #askPopup.ap-anim { animation: apSlideIn 200ms ease-out; }
 @keyframes apSlideIn { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
