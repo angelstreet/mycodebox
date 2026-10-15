@@ -105,7 +105,11 @@ export function createDoneCheck({
     if (!base) return null;
     const branch = (await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim();
     const notOnMain = await notOnMainOf(cwd, base, 'HEAD');
-    const uncommitted = uncommittedOf(await git(cwd, ['status', '--porcelain', '--untracked-files=no']).catch(() => ''));
+    // Uncommitted files only count in a linked worktree: the repo's main checkout is shared by many sessions (three TASK103
+    // sessions sat in it with someone else's 10 uncommitted files, 2026-10-15), so its dirt cannot be attributed.
+    const gitDir = (await git(cwd, ['rev-parse', '--path-format=absolute', '--git-dir']).catch(() => '')).trim();
+    const shared = !gitDir || gitDir === common;
+    const uncommitted = shared ? [] : uncommittedOf(await git(cwd, ['status', '--porcelain', '--untracked-files=no']).catch(() => ''));
     return { branch: branch === 'HEAD' ? null : branch, base, notOnMain, uncommitted };
   }
 

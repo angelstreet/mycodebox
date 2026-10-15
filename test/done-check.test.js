@@ -29,11 +29,11 @@ test('message: names what git shows and offers a one-line reason instead of work
 function fakeGit(calls) {
   return async (cwd, args) => {
     calls.push(args[0]);
-    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') return '/r/.git\n';
+    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') return args[2] === '--git-dir' ? (cwd === '/w/shared' ? '/r/.git\n' : `/r/.git/worktrees${cwd}\n`) : '/r/.git\n';
     if (args[0] === 'rev-parse' && args[1] === '-q') { if (args[3] === 'origin/main') return 'abc\n'; throw new Error('no ref'); }
     if (args[0] === 'rev-parse') return cwd === '/w/t59' ? 'task59\n' : 'main\n';
     if (args[0] === 'log') return cwd === '/w/t59' ? 'cdc80ab3a\tfix(ui): a\na3ed0c37f\tfix(ui): b\n' : '';
-    if (args[0] === 'status') return cwd === '/w/dirty' ? ' M src/x.js\n M VERSION.txt\n' : ' M VERSION.txt\n';
+    if (args[0] === 'status') return cwd === '/w/dirty' || cwd === '/w/shared' ? ' M src/x.js\n M VERSION.txt\n' : ' M VERSION.txt\n';
     return '';
   };
 }
@@ -117,4 +117,10 @@ test('tick: commits whose content is already on main (clean trial merge, no chan
     const w = createDoneCheck({ stateDir: dir, git: mk(clean), mode: () => 'dry', log: { error() {} }, listDone: async () => [{ name: 's', cwd: '/w' }], send: async () => {} });
     assert.equal((await w.tick()).findings.length, n, clean ? 'clean, no-change merge' : 'conflicting merge');
   }
+});
+
+test('tick: uncommitted files in the shared main checkout are not blamed on the sessions sitting in it', async (t) => {
+  const h = harness(t, { sessions: () => [{ name: 'a', cwd: '/w/shared' }, { name: 'b', cwd: '/w/dirty' }] });
+  const r = await h.w.tick();
+  assert.deepEqual(r.findings.map((f) => f.name), ['b']);
 });
