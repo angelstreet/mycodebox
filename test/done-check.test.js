@@ -100,3 +100,21 @@ test('tick: a session on main whose STATUS names a branch with unmerged commits 
   assert.match(r.findings[0].text, /1 commit\(s\) on task59-ui not on main \(cdc80ab3a\)/);
   assert.equal(sent.length, 1);
 });
+
+test('tick: commits whose content is already on main (clean trial merge, no change) are not a finding', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'done-check-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const mk = (clean) => async (cwd, args) => {
+    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') return '/r/.git\n';
+    if (args[0] === 'rev-parse' && args[1] === '-q') { if (args[3] === 'origin/main') return 'x\n'; throw new Error('no ref'); }
+    if (args[0] === 'rev-parse') return 'squashed\n';
+    if (args[0] === 'log') return 'abc1234\tfeat: x\n';
+    if (args[0] === 'merge-tree') { if (!clean) throw new Error('conflict'); return 'tree1\n'; }
+    if (args[0] === 'diff') return '';
+    return '';
+  };
+  for (const [clean, n] of [[true, 0], [false, 1]]) {
+    const w = createDoneCheck({ stateDir: dir, git: mk(clean), mode: () => 'dry', log: { error() {} }, listDone: async () => [{ name: 's', cwd: '/w' }], send: async () => {} });
+    assert.equal((await w.tick()).findings.length, n, clean ? 'clean, no-change merge' : 'conflicting merge');
+  }
+});

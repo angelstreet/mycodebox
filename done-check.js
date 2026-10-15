@@ -58,10 +58,19 @@ export function createDoneCheck({
   async function save(st) { await mkdir(stateDir, { recursive: true }); await writeFile(stFile, JSON.stringify(st)); }
   async function note(e) { try { await appendFile(journal, JSON.stringify({ at: new Date(now()).toISOString(), ...e }) + '\n'); } catch {} }
 
-  // Commits of a ref not on base (equivalent patches count as merged, stamps ignored).
+  // Commits of a ref not on base (equivalent patches count as merged, stamps ignored). Content that reached main through
+  // other commits (a squash, a resolved cherry-pick) counts as merged too: a trial merge into base that is clean and
+  // leaves base's tree unchanged means there is nothing left to land.
   async function notOnMainOf(cwd, base, ref) {
     const log = await git(cwd, ['log', '--format=%h%x09%s', '--no-merges', '--cherry-pick', '--right-only', `${base}...${ref}`, '--', '.', ...IGNORED.map((p) => `:(exclude)${p}`)]).catch(() => '');
-    return log.split('\n').filter(Boolean).map((l) => { const [sha, ...s] = l.split('\t'); return { sha, subject: s.join('\t') }; });
+    const commits = log.split('\n').filter(Boolean).map((l) => { const [sha, ...s] = l.split('\t'); return { sha, subject: s.join('\t') }; });
+    if (!commits.length) return commits;
+    try {
+      const merged = (await git(cwd, ['merge-tree', '--write-tree', base, ref])).split('\n')[0].trim();
+      const changed = (await git(cwd, ['diff', '--name-only', base, merged, '--', '.', ...IGNORED.map((p) => `:(exclude)${p}`)])).trim();
+      if (merged && !changed) return [];
+    } catch {}   // a conflicting trial merge exits non-zero: the commits stand
+    return commits;
   }
 
   // The session's folder, plus the branches and worktree paths its closing text names that exist in that repo.

@@ -1110,7 +1110,8 @@ A session's `STATUS: done` is checked against git, not trusted (TASK59 said "shi
 never on main). `done-check.js` runs every 5 min (first check 4 min after start) over the idle sessions whose last STATUS
 line is done (not the manager's, not paused). For the session's folder, and for every branch name or worktree path its
 closing text names that exists in that repo, it counts commits not on `origin/main` (`--cherry-pick`, so equivalent
-patches count as merged; `VERSION.txt`-only stamps ignored) and uncommitted tracked files. Each repo is fetched at most
+patches count as merged; `VERSION.txt`-only stamps ignored; content that reached main through other commits counts as merged
+when a trial `git merge-tree` into main is clean and changes nothing) and uncommitted tracked files. Each repo is fetched at most
 every 30 min. A mismatch gets one feed line `done-check:<session>` and one message to the session: finish it (commit,
 merge when the merge evaluation passes, push, deploy) or say in one line why it stays. Once per finding, at most 2 per
 check, and none while the session works or the host is busy (load above 1.5 per core, under 20% RAM available).
