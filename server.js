@@ -38,6 +38,7 @@
 //   POST /api/manager/decided/:id/revert {by?} → merge/push/deploy: sends the revert text to the session (409 unless it is stopped with no draft); other kinds: { draft }
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
+//   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
 //   POST /api/handoffs          → {resource, from, to, due?} create a new hand-off row
 //   POST /api/handoffs/<id>/done → mark a hand-off done (body {by?})
@@ -75,6 +76,7 @@ import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
+import { createCiWatch } from './ci-watch.js';
 import { machinesOf, holdingsOf, deployWaitOf } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -676,6 +678,25 @@ const leaseWatch = createLeaseWatch({
   record: async (e) => { await handoffs.onLeaseEvent(e).catch((err) => console.error('[handoffs] lease event', err.message)); return managerEvents.record(e); },
   onChange: (snap) => { handoffs.onHolders(snap.holders).catch((err) => console.error('[handoffs] holders', err.message)); },
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseBind; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
+// CI watch (ci-watch.js): main red -> a fixer session (scripts/cbsession), nudged while idle, owner asked when stuck.
+// manager.json key `ciWatch`: "live" (default) | "dry" | "off". Needs <stateDir>/ci-watch.json, else it stays idle.
+const ciWatch = createCiWatch({
+  stateDir: STATE_DIR,
+  run: async (cmd, args) => (await exec(cmd, args, { maxBuffer: 32 * 1024 * 1024, timeout: 120000 })).stdout,
+  sessionState: async (name) => {
+    const exists = await sessionExists(name);
+    const live = exists ? await liveAgentOf(name) : null;
+    return { exists, alive: !!live, working: !!(live && reporter.activityOf(name)?.working) };
+  },
+  startSession: async ({ name, cwd, model, promptFile }) => {
+    if (await sessionExists(name)) await exec(TMUX, ['kill-session', '-t', `=${name}`]);   // only reached with no live agent in it
+    await exec(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'cbsession'), ['-n', name, '-d', cwd, '-m', model, '-f', promptFile], { timeout: 180000 });
+  },
+  sendToSession: (name, text) => sendKeys(name, text),
+  record: (e) => managerEvents.record(e),
+  alert,
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).ciWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
@@ -1817,6 +1838,7 @@ async function handleHttp(req, res) {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
+  if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
   if (req.method === 'GET' && p === '/api/handoffs') {
     const q = url.searchParams;
@@ -2079,6 +2101,7 @@ server.listen(PORT, HOST, async () => {
   deployRunner.start();
   await handoffs.load();
   leaseWatch.start();
+  ciWatch.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:

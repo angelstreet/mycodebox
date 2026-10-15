@@ -1065,6 +1065,19 @@ All UI icons come from one set in `public/icons.js` (24x24 grid, 2px round strok
 glyphs (⏸ ⚡ ⚠ ▲ …) or one-off `<svg>` markup: add the icon to `ICONS`, then use `${icon('name', size)}` in JS strings or
 `<i data-icon="name" data-size="18"></i>` in `index.html`. The catalogue is listed at the top of `icons.js`.
 
+## CI watch (owner, 2026-10-15)
+
+`ci-watch.js` keeps a repo's main branch green without anyone starting a session by hand. Every 30 min (first check 2 min after start)
+it reads the newest finished run of the configured workflow on the branch with `gh` (cancelled runs are ignored; a red verdict waits up
+to 60 min for a newer run still in progress). Red and no live fixer: it starts one with `scripts/cbsession` (session `ci-fix-main`,
+Sonnet by default) from a standard brief: fix the code, never skip or loosen a check, push to main, watch the run. The failed-step log
+goes to `<stateDir>/ci-fix/<run>.log`. A live fixer that is working is left alone. An idle one gets the new red run, at most every 25 min.
+After 4 dispatches in one red streak it stops and pushes the owner once (`ci-watch:stuck`). Delete `ci-watch-state.json` to let it retry.
+Feed events: `ci-watch:red`, `ci-watch:fixer-started`, `ci-watch:fixer-nudged`, `ci-watch:green`. Journal: `ci-watch.jsonl`.
+Config: `<stateDir>/ci-watch.json` `{ "repo": "<owner/name>", "workflow": "<file.yml>", "cwd": "<checkout>", "branch": "main", "model": "sonnet",
+"session": "ci-fix-main" }`. Without it the watch stays idle. `manager.json` `ciWatch`: `"dry"` (journal only) or `"off"`; default live.
+`GET /api/ci-watch` shows the last verdict, the action and the red streak.
+
 ## Lease binding (TASK-58 C1)
 
 `lease-watch.js` polls the configured external `vpt-lease` registry every 30 s: it writes `lease:released|expired|narrowed` to manager-events.jsonl (never pushed),
