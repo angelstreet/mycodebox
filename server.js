@@ -37,6 +37,8 @@
 //   GET  /api/manager/decided?hours=24|since=<iso>&limit=100 → { items, summary }: everything the manager answered for the owner (decided.js, OWNER_DECISIONS §15)
 //   POST /api/manager/decided/:id/revert {by?} → merge/push/deploy: sends the revert text to the session (409 unless it is stopped with no draft); other kinds: { draft }
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
+//   GET  /api/leases/view       → the Leases view data: authority (legacy|central), leases (mode, holder, ttl, idle, heartbeat), tickets, deploys, shadow
+//   POST /api/leases/owner/release | /owner/mode  {id[, mode:'pin']} → owner force-release / downgrade (central only; legacy: 409); logged with the owner's identity
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
 //   POST /api/handoffs          → {resource, from, to, due?} create a new hand-off row
@@ -75,7 +77,9 @@ import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
-import { machinesOf, holdingsOf, deployWaitOf } from './public/platforms.js';
+import { createLeaseSource, createSessionTracker, summarize as leaseSummary, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
+import { idleHoldEvent } from './lease-ask.js';
+import { machinesOf, holdingsOf, deployWaitOf, agentSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +104,7 @@ import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
-import { createDeployRunner } from './deploy-runner.js';
+import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
@@ -589,12 +593,12 @@ const vptLockStore = createVptLockStore({ jevUrl: process.env.JEV_URL || '', api
 const VPT_LOCKS_ENV = process.env.VPT_LOCKS_ENV || 'node1-vpt';
 // Resources this session holds ([{env, resource, ttlLeftMin, purpose, blocksDeploy}]), exact match on `<machine>:<session>`.
 function leaseFor(session, sessionNames) {
-  const v = leaseStore.peek();
+  const v = leaseSource.peek();
   if (!v?.ok) return [];
   return holdingsOf(session, v.leases, deployRunner.snapshot().deploys, sessionNames, MACHINES).map(({ id, agent, ...r }) => r);
 }
 function deployWaitFor(session, sessionNames, stall) {
-  const v = leaseStore.peek();
+  const v = leaseSource.peek();
   return deployWaitOf(session, { deploys: deployRunner.snapshot().deploys, waiters: v?.ok ? v.waiters : [], stall, sessionNames, machines: MACHINES });
 }
 
@@ -661,8 +665,30 @@ const historyLog = (rec) => history.append(rec).catch((e) => console.error('[his
 const layoutStore = createLayoutStore({ file: join(STATE_DIR, 'layout.json') });   // order / pins / groups of the session list
 const turnMeter = createTurnMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });   // elapsed + tokens of a finished turn, shown with its STATUS line (turn-meter.js)
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
+// Lease authority (lease-source.js): manager.json `leaseAuthority` "legacy" (default: the registry over ssh) | "central" (the in-process lease service).
+// Read once at boot: switching needs a restart, so one process never has two authorities.
+const leaseAuthority = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')).leaseAuthority === 'central' ? 'central' : 'legacy'; } catch { return 'legacy'; } })();
+let leaseService = null;
+// Liveness for the service: true / false for a codebox tmux session, undefined (never releases anything) when unknown: a failed tmux listing,
+// no poll yet, or an agent that is not a codebox session. A re-created name is handled by the session tracker (sessionGone, immediate).
+function leaseAlive(session) {
+  const m = /^codebox:(.+)$/.exec(String(session || ''));
+  if (!m || !listOk || !latest?.status) return undefined;
+  return Object.prototype.hasOwnProperty.call(latest.status, m[1]);
+}
+// Started in the boot callback (needs the session table); until then the source answers "lease service not available" (fail closed).
+async function startLeaseService() {
+  if (leaseAuthority !== 'central') return;
+  try {
+    const { createLeaseService } = await import('./lease-service.js');
+    leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), now: Date.now, sessions: { isAlive: leaseAlive }, onEvent: (ev) => onLeaseEvent(ev).catch((e) => console.error('[lease] event', e.message)), config: {} });
+    setInterval(() => Promise.resolve(leaseService.tick?.()).catch((e) => console.error('[lease] tick', e.message)), 30000).unref?.();
+  } catch (e) { console.error(`[lease] leaseAuthority is "central" but the lease service did not start (${e.message}): lease data is unavailable, nothing is read from the registry`); }
+}
+const leaseSource = createLeaseSource({ authority: leaseAuthority, legacy: { store: leaseStore, registry: defaultDeployRegistry() }, getService: () => leaseService });
+const leaseTracker = createSessionTracker({ source: leaseSource });
 const deployRunner = createDeployRunner({
-  stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn,
+  stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn, registry: leaseSource.deployRegistry(), catchUp: leaseAuthority !== 'central',
   pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 45 * 60 * 1000),
   onChange: (d) => broadcastStatus({ type: 'deploys', deploys: d }),
 });
@@ -670,13 +696,41 @@ const deployRunner = createDeployRunner({
 // manager.json key `leaseBind`: "live" (default) | "dry" (log what it would do) | "off".
 const handoffs = createHandoffs({ file: join(STATE_DIR, 'handoffs.json'), machines: MACHINES, record: (e) => managerEvents.record(e), log: console });
 const leaseWatch = createLeaseWatch({
-  stateDir: STATE_DIR, run: leaseRun, machines: MACHINES,
+  stateDir: STATE_DIR, run: leaseRun, machines: MACHINES, observeOnly: () => !leaseSource.acts(), listRows: () => leaseSource.get(true),
   listSessionNames: async () => (await listSessions()).map((x) => x.name),
   activityOf: (name) => reporter.activityOf(name),
   record: async (e) => { await handoffs.onLeaseEvent(e).catch((err) => console.error('[handoffs] lease event', err.message)); return managerEvents.record(e); },
   onChange: (snap) => { handoffs.onHolders(snap.holders).catch((err) => console.error('[handoffs] holders', err.message)); },
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseBind; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
+// Events of the lease service (central): the feed, the handoffs, and a one-line note to a codebox session whose exclusive lease
+// became a pin (or whose pin was overlapped). The note goes through the guarded send, by 'lease-service', only to a session that is
+// stopped on a finished turn with nothing typed; otherwise the feed event is all there is.
+async function onLeaseEvent(ev) {
+  const rec = eventRecord(ev);
+  if (rec) {
+    if (/^lease:(?:released|expired|forced)$/.test(rec.key)) await handoffs.onLeaseEvent(rec).catch((err) => console.error('[handoffs] lease event', err.message));
+    await managerEvents.record(rec);
+  }
+  if (!isNoteEvent(ev)) return;
+  const names = Object.keys(latest?.status || {});
+  const session = eventSession(ev, (a) => agentSession(a, names, MACHINES));
+  const note = eventNote(ev);
+  if (!session || !note || !noteAllowed(latest?.status?.[session])) return;
+  try {
+    await assertAgentPane(session, 'lease-service');
+    await sendKeys(session, note, true);
+    logSend(session, 'lease-service', { keys: note });
+  } catch (e) { console.error('[lease] note', session, e.message); }
+}
+// A stop whose STATUS says waiting / blocked: central -> the service (it downgrades an exclusive hold); legacy -> a feed flag when the session holds one.
+function onStopStatus(session, status, text = '') {
+  if (leaseSource.authority() === 'central') { leaseSource.sessionStatus(session, status, text).catch(() => {}); return; }
+  const names = Object.keys(latest?.status || {});
+  const rows = (leaseSource.peek()?.leases || []).filter((l) => agentSession(l.agent, names, MACHINES) === session);
+  const ev = idleHoldEvent({ session, status, rows });
+  if (ev) managerEvents.record(ev).catch((err) => console.error('[lease] flag', err.message));
+}
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
@@ -911,6 +965,7 @@ async function pollOnce() {
   reporter.prune(new Set(Object.keys(status)));
   turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
+  if (listOk) leaseTracker.observe(new Map(sessions.map((x) => [x.name, x.created]))).catch((e) => console.error('[lease] sessionGone', e.message));   // central: a vanished tmux session loses its leases
   if (listOk) {   // never judge sessions gone from a failed tmux listing
     const createdOf = new Map(sessions.map((x) => [x.name, x.created]));
     history.sync(new Map(Object.entries(status).map(([k, v]) => [k, { provider: v.agent ?? null, model: v.model ?? null, cwd: v.cwd ?? null, created: createdOf.get(k) ?? null }])), { skip: historyStarting })
@@ -944,7 +999,7 @@ function poll() {
 // Leases (shared registry on proxmox)
 // ---------------------------------------------------------------------------
 
-const getLeases = (force) => leaseStore.get(force);
+const getLeases = (force) => leaseSource.get(force);
 const leasesPayload = (v) => (v.ok ? { type: 'leases', leases: v.leases, waiters: v.waiters, hostname: hostname() } : { type: 'leases', error: v.error });
 
 // Per-session WebSocket fan-out
@@ -1587,6 +1642,21 @@ async function handleHttp(req, res) {
     { const v = await getLeases(); res.end(JSON.stringify(v.ok ? { ok: true, leases: v.leases, waiters: v.waiters, hostname: hostname() } : v)); }
     return;
   }
+  if (req.method === 'GET' && p === '/api/leases/view') {   // the Leases view: authority, held leases (mode, holder, ttl, idle), tickets, deploy queue, shadow disagreements
+    const v = await leaseSource.view(true);
+    const sessionNames = Object.keys(latest?.status || {});
+    return json(res, 200, v.ok ? { ...v, hostname: hostname(), leases: v.leases.map((l) => ({ ...l, holderSession: agentSession(l.session || l.agent, sessionNames, MACHINES) || agentSession(l.agent, sessionNames, MACHINES) || null })), deploys: deployRunner.snapshot().deploys || v.deploys } : { ...v, authority: leaseSource.authority() });
+  }
+  if (req.method === 'POST' && (p === '/api/leases/owner/release' || p === '/api/leases/owner/mode')) {   // owner actions, central only (second tap is client-side); always by 'owner'
+    let b;
+    try { b = await readJsonBody(req); } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+    const id = typeof b?.id === 'string' ? b.id.trim() : '';
+    if (!id || id.length > 80) return json(res, 400, { ok: false, error: 'id required' });
+    const identity = String(req.headers['tailscale-user-login'] || 'loopback').slice(0, 80);   // who really tapped: Serve's login header, else the loopback peer
+    const r = p.endsWith('/release') ? await leaseSource.ownerRelease(id, identity) : await leaseSource.ownerMode(id, b?.mode, identity);
+    if (r.ok) { logEvent({ type: 'lease_owner_action', action: p.endsWith('/release') ? 'release' : 'mode', id, identity, ...(b?.mode ? { mode: String(b.mode).slice(0, 12) } : {}), by: 'owner' }); leaseTick(); }
+    return json(res, r.ok ? 200 : r.status, r.ok ? { ok: true } : { ok: false, error: r.error });
+  }
   if (req.method === 'GET' && p.startsWith('/api/snapshot/')) {
     const session = decodeURIComponent(p.slice('/api/snapshot/'.length));
     let snap = lastSnapshots.get(session);
@@ -1912,6 +1982,7 @@ const voice = createVoice({
     return out;
   },
   logChoice: logOwnerChoice,
+  leaseView: () => leaseSource.view(false),
   digestSources: async ({ since, minutes }) => {   // decided-for-you is read in-process (manager.js decidedView), never over HTTP
     const [stalls, hist, decided] = await Promise.all([
       readTailLines(LOG_FILE),
@@ -1944,7 +2015,7 @@ server.on('upgrade', (req, socket, head) => {
   if (p === '/ws/status') {
     wss.handleUpgrade(req, socket, head, (ws) => {
       statusSubs.add(ws);
-      if (leaseStore.peek()?.ok) ws.send(JSON.stringify(leasesPayload(leaseStore.peek())));
+      if (leaseSource.peek()?.ok) ws.send(JSON.stringify(leasesPayload(leaseSource.peek())));
       if (latest) ws.send(JSON.stringify({ type: 'status', status: latest.status }));
       if (health) ws.send(JSON.stringify({ type: 'health', health }));
       ws.send(JSON.stringify({ type: 'deploys', deploys: deployRunner.snapshot() }));
@@ -2003,8 +2074,17 @@ async function tick() {
   }
 }
 
+// Central: a codebox session that is working (or just finished a turn) is driving what it holds: tell the service, so the idle clock does not run.
+async function leaseActivityTick() {
+  const names = Object.keys(latest?.status || {});
+  const view = leaseSource.peekView();
+  if (!view?.ok) return;
+  const by = activeHolds({ leases: view.leases, sessionOf: (l) => agentSession(l.session || l.agent, names, MACHINES) || agentSession(l.agent, names, MACHINES), activityOf: (n) => reporter.activityOf(n), now: Date.now() });
+  for (const session of by.keys()) await leaseSource.activity(session);
+}
 async function leaseTick() {
   const v = await getLeases(true);
+  if (leaseSource.authority() === 'central') leaseActivityTick().catch((e) => console.error('[lease] activity', e.message));
   if (v.ok) broadcastStatus(leasesPayload(v));
 }
 
@@ -2014,6 +2094,7 @@ async function leaseTick() {
 
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
+  await startLeaseService();
   // TTS prune (Q95=1): 14-day keep matching daily-checks.json. Runs once at boot; the cache is
   // tiny (one MP3 per unique wake brief) so the IO is cheap. Errors are non-fatal — piper not
   // installed yet (scripts/install-piper.sh) just means future renders will fail with ENOENT.
@@ -2032,7 +2113,7 @@ server.listen(PORT, HOST, async () => {
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
     onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),
-    context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseStore.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
+    context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseSource.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
     heldStore: { get: (n) => sessionMeta.held(n), set: (n, h) => sessionMeta.setHeld(n, h) },
@@ -2051,13 +2132,15 @@ server.listen(PORT, HOST, async () => {
       push.record({ title: `${Kind} ${yes ? 'approved (reply pending)' : 'escalated'}: ${session}`, body: `${what}: ${yes ? r.rationale : (r.reasons || []).join('; ') || r.rationale}${yes && undo ? ` ${undo}` : ''}`,
         url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision' });
     },
-    decideContext: () => { const snap = deployRunner.snapshot(); return { deploys: snap, leases: leaseStore.peek(), envs: snap.envs || [] }; },
+    decideContext: () => { const snap = deployRunner.snapshot(); return { deploys: snap, leases: leaseSource.peek(), envs: snap.envs || [] }; },
     // one feed item per day: pushed (notify = record + wake) while the owner is awake, only recorded in quiet hours
     onDigest: ({ count, text }) => {
       const item = { title: `Decided for you today: ${count}`, body: text, url: '/?decided=1', tag: 'decided-digest' };
       if (isQuietHours(Date.now(), pushTierConfig())) push.record(item); else push.notify(item).catch((e) => console.error('[decided-digest] push', e.message));
     },
     onNotice: (body) => push.record({ title: 'Autonomy on', body, url: '/', tag: 'autonomy' }),
+    leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
+    onStatus: onStopStatus,
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.

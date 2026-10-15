@@ -56,6 +56,7 @@ const parse = (r) => { try { return r.code === 0 ? JSON.parse(r.stdout) : null; 
 export function createLeaseWatch({
   stateDir, run, listSessionNames, activityOf = () => null, machines, record = async () => {}, mode = () => 'live',
   now = Date.now, pollMs = 30000, log = console, onChange = () => {},
+  observeOnly = () => false, listRows = null,   // central authority (lease-source.js): the service narrows and releases; this only classifies holders
 } = {}) {
   const stateFile = join(stateDir, 'lease-watch.json');
   const actionsFile = join(stateDir, 'lease-actions.jsonl');
@@ -96,20 +97,26 @@ export function createLeaseWatch({
     try {
       const m = mode();
       const t = now();
-      const lj = parse(await run(['list', '--json']));
+      const obs = observeOnly();
+      // the event cursor belongs to one source: after a switch of authority start at the end instead of replaying or skipping
+      const label = obs ? 'central' : 'legacy';
+      if (st.source && st.source !== label) st.cursor = null;
+      st.source = label;
+      const lj = obs ? await (async () => { const v = await listRows(); return v?.ok ? { leases: v.leases } : null; })() : parse(await run(['list', '--json']));
       if (!lj) { snap = { ...snap, ok: false, at: t, mode: m }; return snap; }
-      if (m !== 'off') await pullEvents();
+      if (m !== 'off' && !obs) await pullEvents();
       const names = (await listSessionNames()) || [];
       let holders = [];
       if (names.length) {
         st.known = [...new Set([...(st.known || []), ...names])].slice(-500);
         holders = classifyHolders({ leases: lj.leases || [], sessionNames: names, knownNames: st.known, machines, activity: activityOf, now: t });
       }
+      if (obs) holders = holders.map((h) => ({ ...h, plan: null }));
       // two-strike: a holder must look 'ended' on two polls in a row before anything is released
       const endedNow = new Set(holders.filter((h) => h.plan?.type === 'release').map((h) => h.id));
       for (const id of [...strikes.keys()]) if (!endedNow.has(id)) strikes.delete(id);
       for (const id of endedNow) strikes.set(id, (strikes.get(id) || 0) + 1);
-      const planned = holders.filter((h) => h.plan && (h.plan.type !== 'release' || strikes.get(h.id) >= 2));
+      const planned = obs ? [] : holders.filter((h) => h.plan && (h.plan.type !== 'release' || strikes.get(h.id) >= 2));
       let done = 0;
       for (const h of planned) {
         if (done >= MAX_ACTIONS_PER_POLL) break;
@@ -125,7 +132,7 @@ export function createLeaseWatch({
       st.days[d] = dd;
       for (const k of Object.keys(st.days).sort().slice(0, -30)) delete st.days[k];
       await save();
-      snap = { ok: true, at: t, mode: m, leases: holders.length, unknown, remote: holders.filter((h) => h.status === 'remote').length,
+      snap = { ok: true, at: t, mode: obs ? 'central' : m, leases: holders.length, unknown, remote: holders.filter((h) => h.status === 'remote').length,
         holders: holders.map(({ id, agent, env, resources, kind, status, session, idleMin, plan }) => ({ id, agent, env, resources, kind, status, session, idleMin, plan })), planned: planned.map((h) => ({ id: h.id, ...h.plan })) };
       onChange(snap);
       return snap;

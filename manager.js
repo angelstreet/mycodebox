@@ -28,6 +28,7 @@ import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, menuReco
 import { decidedItems, decidedSummary, failedCount } from './decided.js';
 import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
+import { leaseAsk, answerLeaseAsk } from './lease-ask.js';
 import { actorOf } from './api-extras.js';
 import { jevAgreesOwner } from './public/ask-model.js';
 import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, reviewerUrl } from './triage.js';
@@ -97,6 +98,8 @@ let onMergeDecision = () => {};                                     // injected:
 let mergeJev = (body) => jevPost(body);                             // the merge evaluation's Jev call (tests inject a fake)
 let decideContext = () => ({ deploys: null, leases: null, envs: [] });    // injected: () => { deploys: runner snapshot, leases: lease store value, envs: [env names] }
 let onDigest = () => {};                                            // injected: ({ day, count, text }) -> feed item + push (digest tier)
+let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
+let statusHook = () => {};                                          // injected: (session, status, text) for a logged stop whose STATUS is waiting / blocked
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -105,7 +108,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -148,6 +151,8 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (mergeJevFn) mergeJev = mergeJevFn;
   if (decideCtx) decideContext = decideCtx;
   if (digestHook) onDigest = digestHook;
+  if (leaseView) leaseViewOf = leaseView;
+  if (onStatus) statusHook = onStatus;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
 
@@ -855,6 +860,7 @@ const topicCovered = (part, ok, evs = {}, envs = []) => {
   return true;
 };
 const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'error', 'background_wait'];
+const CASES_NOT_LEASE = ['permission', 'owner_action', 'error', 'background_wait'];   // a lease question may come as waiting_deploy ("can I deploy, the lease ...")
 // A recommended option that is irreversible-looking is hard whatever the topic split says. `kinds`: the merge / push / deploy topics the
 // manager decided, exempt from the hard floor.
 const IRREVERSIBLE_RE = /\b(?:delet(?:e|es|ed|ing|ion)|drop(?:s|ped|ping)?|wip(?:e|es|ed|ing)|publish(?:es|ed|ing)?|pay(?:s|ment|ing)?|send(?:ing)?\s+(?:an?\s+|the\s+)?e-?mails?|rm\s+-rf?)\b/i;
@@ -948,40 +954,51 @@ const argsOf = (out) => ({
 async function partialDecision({ s, w, id, h, final, stall }) {
   const out = { handled: false, mergeWhy: null };
   const name = s.name;
-  if (isManagerSession(name) || !toOwnerCase(final) || CASES_NOT_PARTIAL.includes(final.case) || stall.draft) return out;
+  // A question about a lease is never an owner question (design sections 4 and 7): it is answered from the lease source.
+  const leaseHit = !!leaseViewOf && leaseAsk(final.question || '').lease;
+  if (isManagerSession(name) || !toOwnerCase(final) || (leaseHit ? CASES_NOT_LEASE : CASES_NOT_PARTIAL).includes(final.case) || stall.draft) return out;
   // Only a finished turn: free text typed into a live menu (waiting) would select the highlighted option, and any menu option means the
   // owner picks from it. Those stops go the existing way (menu_recommended: menuDecision).
   if (s.state !== 'done' || (final.options?.length || 0) >= 1 || (stall.options?.length || 0) >= 1) return out;
   const wantedAny = topicsWanted(final.topics);
-  if (!config.infoAnswers && !(wantedAny.merge || wantedAny.push || wantedAny.deploy)) return out;
+  if (!config.infoAnswers && !leaseHit && !(wantedAny.merge || wantedAny.push || wantedAny.deploy)) return out;
   if (decisionBlock(name)) return out;   // auto-answer off, paused, capped: nothing is typed, the owner gets the whole stop as before
-  const all = splitAsk(final.question || '');
+  let all = splitAsk(final.question || '').map((p) => (leaseHit && leaseAsk(p.text).lease ? { ...p, kind: 'info', lease: true } : p));
+  if (leaseHit && !all.some((p) => p.lease)) all = [{ text: String(final.question || '').trim(), kind: 'info', lease: true }];   // the ask only reads as a lease question as a whole
+  const topics = leaseHit ? topicSplit(all.filter((p) => !p.lease).map((p) => p.text).join(' ')) : final.topics;   // the lease part's own "deploy" is not a deploy topic
   const parts = all.filter((p) => p.kind !== 'other' || isAsk(p.text));   // a statement that rode along is not part of the ask
   // ...unless it carries a question or a choice ("A or B"): that is open too
   const hiddenAsk = all.filter((p) => !parts.includes(p) && /\?|\bor\b/i.test(p.text));
   if (!parts.length) return out;
   const roots = [await repoToplevel(s.cwd), ...(config.infoRoots || [])].filter(Boolean);
   const info = [];
+  if (leaseHit) {
+    let lv = null; try { lv = await leaseViewOf(name); } catch { lv = { ok: false }; }   // unreachable source = busy, never free
+    for (const p of parts.filter((x) => x.lease)) {
+      const a = answerLeaseAsk({ ask: p.text, view: lv || { ok: false }, session: name, now: s.now });
+      if (a) info.push({ part: p.text, label: 'Lease', answer: a.text, source: '' });
+    }
+  }
   if (config.infoAnswers && roots.length) {
     for (const p of parts) {
-      if (p.kind !== 'info') continue;
+      if (p.kind !== 'info' || p.lease) continue;
       let hit = null; try { hit = await lookupInfo(p, { roots }); } catch { hit = null; }
       if (hit) info.push({ part: p.text, ...hit });
     }
   }
   if (w.hash !== h) return out;   // a slow lookup must not supersede a newer stop's pending answer
-  const wanted = s.cwd ? topicsWanted(final.topics, parts) : { merge: false, push: false, deploy: false };
+  const wanted = s.cwd ? topicsWanted(topics, parts) : { merge: false, push: false, deploy: false };
   const evidenceText = stall.closing || stall.excerpt || '';
   let dec = { evs: {}, ok: {}, why: {}, kinds: {}, stale: false };
   if (wanted.merge || wanted.push || wanted.deploy) {
-    dec = await decideTopics({ s, id, h, w, text: `${final.question || ''}\n${evidenceText}`, askText: final.question || '', evidenceText, topics: final.topics, wanted });
+    dec = await decideTopics({ s, id, h, w, text: `${final.question || ''}\n${evidenceText}`, askText: final.question || '', evidenceText, topics, wanted });
     if (dec.stale || w.hash !== h) return out;   // the pane moved on while Jev was thinking
     const whys = DECISION_KINDS.map((k) => dec.why[k]).filter(Boolean);
     if (whys.length) out.mergeWhy = whys.join('; ');
   }
   // a topic present in the text but not decided (switch off, no repo) is left to the owner
-  const offTopics = DECISION_KINDS.filter((k) => final.topics?.[k] && !(k in dec.evs));
-  const hard = final.topics?.hard || null;
+  const offTopics = DECISION_KINDS.filter((k) => topics?.[k] && !(k in dec.evs));
+  const hard = topics?.hard || (leaseHit ? hardMatch(parts.filter((p) => p.lease).map((p) => p.text).join(' '), { deployPresent: true }) : null) || null;
   const args = argsOf(dec);
   let reply = composeReply({ info, ...args, remaining: true });
   if (!reply) return out;
@@ -1177,6 +1194,7 @@ export function observe(s) {
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
       ...(final.handoff ? { handoff: final.handoff } : {}),
     });
+    if (/^(?:waiting|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
     const partial = await partialDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] partial decision', e.message); return { handled: false }; });
     if (partial.handled) return;
