@@ -182,7 +182,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (l) { const from = { resources: l.resources, sensitivity: l.kind }; l.resources = f.resources; l.kind = f.sensitivity; ev('narrowed', l, f.at, { from, by: f.by, reason: f.reason }); }
         break;
       }
-      case 'tkt_new': S.tickets[f.ticket.id] = f.ticket; if (f.rkey) S.requests[f.rkey] = { kind: 'ticket', ref: f.ticket.id, at: f.at }; pruneRequests(f.at); evTicket(f.ticket, f.at, 'waiting'); break;
+      case 'tkt_new': f.ticket.order = f.seq; S.tickets[f.ticket.id] = f.ticket; if (f.rkey) S.requests[f.rkey] = { kind: 'ticket', ref: f.ticket.id, at: f.at }; pruneRequests(f.at); evTicket(f.ticket, f.at, 'waiting'); break;
       case 'tkt_end': { const tk = S.tickets[f.id]; if (tk) { tk.state = f.state; tk.endedAt = f.at; evTicket(tk, f.at, f.state); } break; }
       case 'gone': for (const l of Object.values(S.leases)) if (l.session === f.session || l.agent === f.session) { if (f.clear) delete l.goneAt; else l.goneAt = l.goneAt || f.at; } break;
       case 'dep_set': {
@@ -355,7 +355,8 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return Math.min(l.expires, t + remain * MIN);
   }
   const etaBasis = (l) => (l.expectMin != null ? 'stated' : samples(leaseType(l)).length >= 3 ? 'median' : 'default');
-  const waitingTickets = (env) => Object.values(S.tickets).filter((tk) => tk.state === 'waiting' && (!env || tk.env === env)).sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : 1));
+  const byQueue = (a, b) => a.created - b.created || a.order - b.order;
+  const waitingTickets = (env) => Object.values(S.tickets).filter((tk) => tk.state === 'waiting' && (!env || tk.env === env)).sort(byQueue);
   const inEnv = (env) => Object.values(S.leases).filter((l) => l.env === env);
   const heldConflicts = (virt) => inEnv(virt.env).filter((l) => leasesConflict(virt, l));
   function etaOf(virt, ahead) {
@@ -366,9 +367,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return end;
   }
   const latestOf = (virt) => Math.max(now(), ...heldConflicts(virt).map((b) => b.expires));
-  const aheadOf = (virt, tk) => waitingTickets(virt.env).filter((o) => (!tk || o.id !== tk.id) && (!tk || o.created < tk.created || (o.created === tk.created && o.id < tk.id)) && leasesConflict(virt, o));
+  const aheadOf = (virt, tk) => waitingTickets(virt.env).filter((o) => (!tk || o.id !== tk.id) && (!tk || byQueue(o, tk) < 0) && leasesConflict(virt, o));
   function ticketView(tk) {
-    const out = { id: tk.id, state: tk.state, env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null };
+    const out = { id: tk.id, state: tk.state, priority_since: iso(tk.created), env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null };
     if (tk.state === 'waiting') {
       const ahead = aheadOf(tk, tk);
       const t = etaOf(tk, ahead);
@@ -726,7 +727,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (a.skip_leased) {
         const has = (...ts) => rs.parsed.some((r) => ts.includes(r.type));
         const hosts = listOf(a.hosts).map((h) => h.toLowerCase());
-        const scope = has('env', 'server') ? 'full' : listOf(a.resources).length ? 'frontend' : 'host';
+        const scope = !listOf(a.resources).length ? 'host' : has('env', 'server') ? 'full' : 'frontend';
         const { blockers, leasedHosts } = deployBlockers({ env, scope }, { skipLeased: true, agent: ignore });
         const leased = hosts.map((h) => leasedHosts.find((x) => x.host === h)).filter(Boolean);
         return { ok: true, free: blockers.length === 0, holders: blockers.map(leaseView), leased_hosts: leased, pending_deploys: pending, waiting };
