@@ -28,6 +28,7 @@ export const DEFAULT_CONFIG = {
   runawayRssMB: 1024,     // ... RSS above this, OR ...
   runawayCpu: 80,         // ... CPU above this % between two samples 5 s apart
   defunctMax: 50,         // stuck pattern: more defunct processes than this
+  testLeftoverMin: 60,    // an orphaned test run (its parent gone) older than this is killed at fix level cleanup and up
   scratchMaxAgeDays: 2,   // /tmp/claude-1000 session scratch older than this (and session dead) is deletable
   npmCacheMB: 1024,       // npm cache is cleaned only above this size
   debounceHours: 6,       // same issue key is written to the manager feed at most once per this
@@ -54,6 +55,25 @@ export function evalLoad(samples, now, cores, perCore, minutes) {
 
 export function isStuckNodeTest(args) {
   return /(^|\/)node(\s+--?[\w-]+(=\S+)?)*\s+--test\s*$/.test(String(args || '').trim());
+}
+
+// A test run whose parent is gone: node --test / test files, vitest and its tinypool workers, the fake git/tmux bins the
+// mycodebox tests put in /tmp/*fresh-*/bin. 26 of them (88 processes with children) sat for up to 3.8 days on 2026-10-15.
+const TEST_ARGS_RE = /(^|\/)node\b[^\n]*(?:\s--test\b|\stest\/\S+\.test\.[cm]?[jt]sx?\b)|\bvitest\b|\btinypool\b|\/tmp\/[\w.-]*fresh-\w+\/bin\/|freeze-assert/;
+export const isTestArgs = (args) => TEST_ARGS_RE.test(String(args || ''));
+// procs: [{pid, ppid, etimes, args, mine}] -> [{ pid, args, etimes, pids }] : orphan roots (ppid 1) older than minMin whose
+// own args or any descendant's args look like a test run; pids = the root and all its descendants.
+export function findTestLeftovers(procs, minMin, protectedPids = new Set()) {
+  const kids = new Map();
+  for (const p of procs) { if (!kids.has(p.ppid)) kids.set(p.ppid, []); kids.get(p.ppid).push(p); }
+  const out = [];
+  for (const r of procs) {
+    if (!r.mine || r.ppid !== 1 || r.etimes < minMin * 60 || protectedPids.has(r.pid) || SKIP_RUNAWAY(r, protectedPids)) continue;
+    const tree = [], stack = [r];
+    while (stack.length) { const x = stack.pop(); tree.push(x); stack.push(...(kids.get(x.pid) || [])); }
+    if (tree.some((x) => isTestArgs(x.args))) out.push({ pid: r.pid, args: r.args, etimes: r.etimes, pids: tree.map((x) => x.pid) });
+  }
+  return out;
 }
 
 const SKIP_RUNAWAY = (p, protectedPids) =>
@@ -138,6 +158,12 @@ export function evaluate(m, cfg, loadTrip) {
     const lbl = ownerLabel(s.owner);
     issues.push({ type: 'stuck', key: `stuck-node-test:${lbl}`, severity: 0, decision: true, orphan: !hasLiveOwner(s.owner), pid: s.p.pid,
       title: `bare node --test (${lbl})`, what: `A 'node --test' with no file args runs (pid ${s.p.pid}, ${lbl}, ${(s.p.etimes / 60).toFixed(0)} min); it scans the whole tree and hangs.` });
+  }
+  if (m.leftovers?.length) {
+    const n = m.leftovers.reduce((k, l) => k + l.pids.length, 0);
+    issues.push({ type: 'test-leftover', key: 'test-leftover', severity: n, decision: false, leftovers: m.leftovers,
+      title: `${m.leftovers.length} orphaned test run(s), ${n} processes`,
+      what: `${m.leftovers.length} test run(s) whose parent is gone, older than ${cfg.testLeftoverMin} min (${n} processes): ${m.leftovers.slice(0, 3).map((l) => `pid ${l.pid} ${basename(l.args.split(' ')[0])} ${(l.etimes / 3600).toFixed(1)} h`).join(', ')}.` });
   }
   if (m.defunct > cfg.defunctMax) issues.push({ type: 'defunct', key: 'defunct', severity: m.defunct, decision: true, title: `${m.defunct} defunct processes`, what: `${m.defunct} defunct (zombie) processes, limit ${cfg.defunctMax}.` });
   return issues;
@@ -316,6 +342,18 @@ function runFixes(ctx) {
 function runOptionalFixes(ctx, issues) {
   const { cfg, dryRun, wts, log } = ctx;
   const verb = dryRun ? 'WOULD' : 'did';
+  if (cfg.fixLevel !== 'report') {   // an orphaned test run is never someone's work: killed at every cleanup level
+    for (const i of issues.filter((x) => x.type === 'test-leftover')) {
+      const pids = i.leftovers.flatMap((l) => l.pids);
+      if (!dryRun) {
+        for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch {} }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+        for (const pid of pids) { try { process.kill(pid, 0); process.kill(pid, 'SIGKILL'); } catch {} }
+      }
+      i.fixed = true;
+      log.push(`- ${verb} kill ${pids.length} processes of ${i.leftovers.length} orphaned test run(s): ${i.leftovers.map((l) => l.pid).join(', ')}`);
+    }
+  }
   if (cfg.fixLevel === 'cleanup+orphans' || cfg.fixLevel === 'cleanup+all') {   // killing orphans is its own opt-in
     for (const i of issues) {
       if ((i.type === 'runaway' || i.type === 'stuck') && i.orphan && i.pid) {
@@ -369,6 +407,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
     runaways: findRunaways(procs, cfg, protectedPids).map((p) => ({ p, owner: owners(p.pid) })),
     stuck: procs.filter((p) => p.mine && p.pid !== process.pid && isStuckNodeTest(p.args)).map((p) => ({ p, owner: owners(p.pid) })),
     defunct: procs.filter((p) => p.stat.startsWith('Z')).length,
+    leftovers: findTestLeftovers(procs, cfg.testLeftoverMin, protectedPids),
   };
   state.samples = [...state.samples, { t: now, load1: l1, load5 }].filter((s) => s.t >= now - (cfg.loadMinutes + 10) * 60000);
   const loadTrip = evalLoad(state.samples, now, cores, cfg.loadPerCore, cfg.loadMinutes).tripped;
@@ -389,7 +428,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];
   R.push('## Checks', '', `- disk /: ${disk.pct}% (${disk.freeGB} GB free), limit ${cfg.diskPct}%`, `- load: ${l1.toFixed(2)} / ${load5.toFixed(2)} on ${cores} cores (limit ${cfg.loadPerCore}/core for ${cfg.loadMinutes} min, sustained: ${loadTrip})`,
-    `- RAM available: ${metrics.ramAvailPct.toFixed(1)}%, limit ${cfg.ramAvailPct}%`, `- runaways: ${metrics.runaways.length}, stuck node --test: ${metrics.stuck.length}, defunct: ${metrics.defunct}`, '',
+    `- RAM available: ${metrics.ramAvailPct.toFixed(1)}%, limit ${cfg.ramAvailPct}%`, `- runaways: ${metrics.runaways.length}, stuck node --test: ${metrics.stuck.length}, orphaned test runs: ${metrics.leftovers.length}, defunct: ${metrics.defunct}`, '',
     '**Tripped:** ' + (issues.length ? issues.map((i) => i.title).join('; ') : 'none (forced run)'), '');
   R.push(investigate({ home, procs, owners, panes, claude, wts }));
 

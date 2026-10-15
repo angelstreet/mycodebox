@@ -8,7 +8,9 @@ import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const POLL_MS = 10 * 60 * 1000;
-const MAX_SENDS_PER_TICK = 6;   // circuit breaker
+const MAX_SENDS_PER_TICK = 2;   // a message can wake an idle session into work: 6 per check woke 22 in 30 min and swapped codebox to load 130 (2026-10-15)
+// No message while the host is busy: load1 per core above this, or less RAM available than this %.
+const MAX_LOAD_PER_CORE = 1.5, MIN_RAM_AVAIL_PCT = 20;
 
 // Pure. targets: [{ name, cwd, startedAt, working }]; rules: Map repoKey -> { hash, at (ms), subject } | null;
 // repoOf: Map cwd -> repoKey; told: { name: hash }. -> [{ name, hash, rules }] to message now, oldest first.
@@ -27,11 +29,12 @@ export function message(r) {
   return [
     `AGENTS.md on origin/main changed after this session started (${r.hash.slice(0, 9)}, ${new Date(r.at).toISOString().slice(0, 16)}Z: ${r.subject}).`,
     'Its dated owner rules win over your task doc, handover and brief where they differ. For example, since 2026-10-14 you commit, push, merge your own tested work and deploy by the normal procedure yourself, and you never hand the owner commands to run.',
-    'Read it now (git show origin/main:AGENTS.md), adjust what you are doing, then continue. End with a STATUS line.',
+    'Read it now (git show origin/main:AGENTS.md). If you were idle with nothing pending, start nothing new because of this message: reply only with a STATUS line. Otherwise adjust what you are doing and continue. End with a STATUS line.',
   ].join(' ');
 }
 
-export function createRulesWatch({ stateDir, git, listTargets, send, record = async () => {}, mode = () => 'live', now = Date.now, pollMs = POLL_MS, log = console } = {}) {
+// pressure(): { loadPerCore, ramAvailPct } of the host.
+export function createRulesWatch({ stateDir, git, listTargets, send, record = async () => {}, mode = () => 'live', pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console } = {}) {
   const stFile = join(stateDir, 'rules-watch.json');
   const journal = join(stateDir, 'rules-watch.jsonl');
   let last = { at: 0, mode: 'off', stale: [], sent: [] };
@@ -47,6 +50,10 @@ export function createRulesWatch({ stateDir, git, listTargets, send, record = as
     try {
       const m = mode();
       if (m === 'off') return (last = { at: now(), mode: m, stale: [], sent: [] });
+      const pr = pressure();
+      if (pr.loadPerCore > MAX_LOAD_PER_CORE || pr.ramAvailPct < MIN_RAM_AVAIL_PCT) {
+        return (last = { at: now(), mode: m, stale: last.stale, sent: [], held: `host busy (load ${pr.loadPerCore.toFixed(1)}/core, RAM ${pr.ramAvailPct.toFixed(0)}% available)` });
+      }
       const targets = await listTargets();
       const repoOf = new Map(), rules = new Map(), fetched = new Set();
       for (const t of targets) {

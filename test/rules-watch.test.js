@@ -22,11 +22,11 @@ test('plan: only sessions whose agent started before the AGENTS.md change, idle,
   assert.deepEqual(plan({ targets, rules, repoOf, told: { told: H2 } }).map((p) => p.name), ['old', 'told']);   // a newer change is told again
 });
 
-test('plan: at most 6 sessions per tick', () => {
+test("plan: at most 2 sessions per tick", () => {
   const rules = new Map([['/r/.git', { hash: H, at: T, subject: 's' }]]);
   const repoOf = new Map([['/w', '/r/.git']]);
   const targets = Array.from({ length: 9 }, (_, i) => ({ name: `s${i}`, cwd: '/w', startedAt: T - 1, working: false }));
-  assert.equal(plan({ targets, rules, repoOf, told: {} }).length, 6);
+  assert.equal(plan({ targets, rules, repoOf, told: {} }).length, 2);
 });
 
 test('message: names the commit and the precedence rule, and never asks the owner anything', () => {
@@ -78,4 +78,19 @@ test('tick: a working session waits for a later tick; dry mode only journals; of
   assert.match(readFileSync(join(dry.dir, 'rules-watch.jsonl'), 'utf8'), /"dry":true.*"session":"s"/);
   const off = harness(t, { targets: () => { throw new Error('must not list'); }, mode: 'off' });
   assert.equal((await off.w.tick()).mode, 'off');
+});
+
+test('tick: a busy host holds every message; the message tells an idle session to start nothing', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'rules-watch-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let pr = { loadPerCore: 5, ramAvailPct: 50 };
+  const sent = [];
+  const w = createRulesWatch({ stateDir: dir, pressure: () => pr, log: { error() {} },
+    git: async (c, a) => (a[0] === 'rev-parse' ? '/r/.git\n' : a[0] === 'log' ? `${H}\t${T / 1000}\ts\n` : ''),
+    listTargets: async () => Array.from({ length: 5 }, (_, i) => ({ name: `s${i}`, cwd: '/w', startedAt: T - 1, working: false })),
+    send: async (n) => { sent.push(n); } });
+  assert.match((await w.tick()).held, /host busy/); assert.equal(sent.length, 0);
+  pr = { loadPerCore: 0.5, ramAvailPct: 10 }; await w.tick(); assert.equal(sent.length, 0);
+  pr = { loadPerCore: 0.5, ramAvailPct: 50 }; await w.tick(); assert.equal(sent.length, 2, 'two per check');
+  assert.match(message({ hash: H, at: T, subject: 's' }), /idle with nothing pending, start nothing new/);
 });

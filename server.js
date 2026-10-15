@@ -74,7 +74,7 @@ import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
 import { readFile, writeFile, stat, readdir, mkdir, open as openFile } from 'node:fs/promises';
 import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, loadavg, cpus } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createCiWatch } from './ci-watch.js';
@@ -742,6 +742,10 @@ const rulesWatch = createRulesWatch({
     return out;
   },
   send: (name, text) => sendKeys(name, text),
+  pressure: () => {
+    const m = /MemTotal:\s+(\d+)[\s\S]*MemAvailable:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'));
+    return { loadPerCore: loadavg()[0] / cpus().length, ramAvailPct: m ? (Number(m[2]) / Number(m[1])) * 100 : 100 };
+  },
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
