@@ -231,7 +231,10 @@ The client has three modes, set per machine in `~/.config/vpt-lease/config` (`mo
 
 Cut-over (owner side; nothing here is done by this round). The order matters: the deploy script must fail closed
 before any machine trusts the service.
-1. Merge, restart mycodebox, create one token per machine (`node scripts/lease-token.js add <name>`).
+1. Merge, restart mycodebox, create one token per machine (`node scripts/lease-token.js add <name>`). The registry
+   host's token runs deploys: add it with `--exempt manager:deploy,update_core:*` (without it the deploy child's joined
+   claim is refused and the deploy fails). The token used for the import and for owner actions from a terminal is added
+   with `--owner`.
 2. Change `update_core.sh` and verify it during the shadow period: treat every exit code other than 0 and 3 as busy
    (no more "registry unreachable, deploying anyway"), make one atomic claim instead of check-then-claim, claim
    `<env>/server` for `--server` instead of `*`, and resolve a host given by IP to its host name.
