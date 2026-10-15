@@ -75,6 +75,8 @@ import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
+import { createLeaseService } from './lease-service.js';
+import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { machinesOf, holdingsOf, deployWaitOf } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -1388,6 +1390,8 @@ async function handleHttp(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
 
+  if (p.startsWith(LEASE_API) && await leaseRoutes.handle(req, res)) return;   // bearer-token API for lease clients; own address and auth checks
+
   if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
       && req.method !== 'OPTIONS' && !/application\/json/i.test(req.headers['content-type'] || '')
@@ -1922,6 +1926,11 @@ const voice = createVoice({
   },
 });
 
+// Central lease service (round 10): always constructed, inert until clients point at it (state dir leases/). Developer C's wiring supplies
+// `sessions.isAlive` and the event hooks; unknown liveness (undefined) never releases anything.
+const leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), sessions: { isAlive: () => undefined }, config: { envs: (process.env.LEASE_ENVS || '').split(',').map((x) => x.trim()).filter(Boolean) } });
+const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_DIR, 'leases') });
+
 const server = http.createServer((req, res) => {
   handleHttp(req, res).catch((err) => {
     console.error('[http]', req.method, String(req.url).slice(0, 80), err?.message);
@@ -2065,6 +2074,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(tick, TICK_MS);
   leaseTick();
   setInterval(leaseTick, 15000);
+  setInterval(() => leaseService.tick().catch((e) => console.error('[lease-service] tick', e.message)), 5000).unref?.();
   setInterval(digestTick, 60000);   // digest tier: one push per 30 min while the owner is awake
   setInterval(() => decidedDigestTick().catch((e) => console.error('[decided-digest]', e.message)), 60000).unref?.();   // "Decided for you today", once a day
   healthTick();
