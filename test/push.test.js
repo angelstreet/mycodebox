@@ -138,7 +138,7 @@ test('alert(): fans out to web push and ntfy, debounced per key', async () => {
   assert.equal(alert('web:waiting', a), true, 'after the window');
   resetDebounce('web:waiting');
   assert.equal(alert('web:waiting', a), true, 'reset');
-  await new Promise((r) => setTimeout(r, 100));
+  for (let i = 0; i < 60 && (ntfyCalls.length < 4 || svc.reqs.length < 4); i++) await new Promise((r) => setTimeout(r, 50));   // deliveries are async; a loaded suite needs more than a fixed 100 ms
   svc.close();
   assert.equal(ntfyCalls.length, 4);
   assert.equal(ntfyCalls[0].u, 'http://ntfy.test/topic');
