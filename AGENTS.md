@@ -36,6 +36,10 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   `layout.json`.
 - The service is `ghosty-sessions` (systemd). Restart it with `scripts/safe-restart.sh`, never during a deploy.
   The guard requires a fresh successful deploy snapshot and refuses unknown or active deployment state.
+- Run long jobs (runs, suites, builds, deploys) in the foreground of a background shell the harness tracks, so the
+  session is woken when they end. Never `nohup`, `setsid`, `disown` or a trailing `&`: the harness cannot see those
+  jobs. If you must wait on one, name its pid, log file, run id or deploy id in the `STATUS: waiting` line; the manager
+  watches it and wakes the session when it ends (`own-jobs.js`).
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.
 
