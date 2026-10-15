@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyStall, applyJev, wouldSend, inputBox, outcomeKind, setForbiddenExtra } from '../stall.js';
+import { classifyStall, applyJev, wouldSend, inputBox, outcomeKind, setForbiddenExtra, statusLine, forbiddenMatch } from '../stall.js';
 
 const RULE = '─'.repeat(60);
 // A synthetic Claude Code pane: reply, turn timer, input box, footer.
@@ -258,4 +258,45 @@ test('no STATUS line: the regex fallback is unchanged (Codex / MiniMax panes)', 
   const s = classify(claude('Phase 1 works: all 5 tests pass and the strip renders.\nShall I continue with phase 2?'));
   assert.equal(s.case, 'continue');
   assert.equal(s.status, undefined);
+});
+
+// 2026-10-15: TASK33 (MiniMax) answered a reminder with "STATUS: acknowledged. ... I will ask before any future force-push",
+// then mcode printed its todo panel. The STATUS line was missed (panel under it, and "acknowledged" was not a verdict), the
+// heuristics read "I will ask" as stopped_short, proposed "Yes, continue." and the hard floor then asked the owner.
+const T33 = [
+  '  └ • Thought for 9.4s',
+  'STATUS: acknowledged. Force-push and history rewrites are owner-gated; I will ask before any future force-push, even when undoing my own mistake. No code or host action taken.',
+  '    ✓ Note surf-hunt give-up fix + TASK-35 follow-up in TASK-33-handover.md',
+  'Monitor next */15 slot at 06:00 UTC for surf/strength milestones',
+  '    ○ If a run ends STALLED again, run scripts/pokemon_stall_review.py',
+  '    … +17 more · 18/20 done · 1 pending · Ctrl+T expand',
+];
+
+test('STATUS above the MiniMax todo panel is read; an acknowledgement is a finished turn, never a question', () => {
+  const r = classifyStall({ plain: T33, state: 'done' });
+  assert.equal(r.status, 'done');
+  assert.equal(r.case, 'done');
+  assert.equal(r.answer, null);
+});
+
+test('done aliases (acknowledged, noted, shipped, ...) read as done; one that still asks falls back to the heuristics', () => {
+  for (const v of ['acknowledged.', 'ack', 'noted', 'OK', 'shipped:', 'completed', 'finished']) assert.equal(statusLine([`STATUS: ${v} x`])?.kind, 'done', v);
+  assert.equal(statusLine(['STATUS: okay so I will push']), null);
+  assert.equal(statusLine(['STATUS: ok — should I force-push to main?']), null);
+  assert.equal(statusLine(['STATUS: shipped, see https://x.example/a?b=1'])?.kind, 'done');
+  assert.equal(statusLine(['STATUS: needs-owner: force-push? [yes / no]'])?.kind, 'needs-owner');
+});
+
+test('the hard floor is unchanged: the acknowledgement still names force-push, and a real force-push question is never answered', () => {
+  assert.match(forbiddenMatch(T33.join('\n')), /force-push/i);
+  const ask = classifyStall({ plain: ['I reset the branch locally.', 'Should I force-push fix-x to origin now?'], state: 'done' });
+  assert.ok(ask.forbidden, 'force-push question flagged');
+  assert.equal(wouldSend(ask).send, null);
+  const panel = classifyStall({ plain: ['STATUS: ok — should I force-push fix-x?', '    ○ next', '    … +2 more · 1/3 done · 1 pending · Ctrl+T expand'], state: 'done' });
+  assert.notEqual(panel.case, 'done');
+  assert.equal(wouldSend(panel).send, null);
+});
+
+test('a todo panel without a STATUS line above it changes nothing', () => {
+  assert.equal(statusLine(['I will now run the suite.', '    ○ run suite', '    … +2 more · 1/3 done · 1 pending · Ctrl+T expand']), null);
 });
