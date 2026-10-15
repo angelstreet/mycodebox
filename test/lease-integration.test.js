@@ -17,8 +17,8 @@ const dir = path.join(tmp, 'state');
 const home = path.join(tmp, 'home');
 let server, base, service, token;
 
-const tokenOf = (name) => {
-  const r = spawnSync('node', [path.join(ROOT, 'scripts', 'lease-token.js'), 'add', name, '--dir', dir], { encoding: 'utf8' });
+const tokenOf = (name, more = []) => {
+  const r = spawnSync('node', [path.join(ROOT, 'scripts', 'lease-token.js'), 'add', name, '--dir', dir, ...more], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 };
@@ -29,7 +29,7 @@ const writeConfig = (h, url, tokenFile, extra = '') => {
 
 before(async () => {
   fs.mkdirSync(home, { recursive: true });
-  token = tokenOf('test-machine');
+  token = tokenOf('test-machine', ['--owner']);   // deploy approve is owner-only
   fs.writeFileSync(path.join(home, 'token'), token + '\n', { mode: 0o600 });
   service = createLeaseService({ dir, config: { envs: ['env-a'] } });
   const routes = createLeaseRoutes({ service, dir });

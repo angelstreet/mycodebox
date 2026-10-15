@@ -7,21 +7,23 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { createLeaseService } from '../lease-service.js';
-import { createLeaseRoutes, addrAllowed, parseCidrs, hashToken, DEFAULT_CIDRS, MAX_BODY, MAX_WAIT_S, PREFIX } from '../lease-routes.js';
+import { createLeaseRoutes, addrAllowed, parseCidrs, hashToken, DEFAULT_CIDRS, MAX_BODY, MAX_WAIT_S, PREFIX, callerIdentity } from '../lease-routes.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const TOKEN = 'tok-mac-0123456789abcdef';   // leak-scan: allow (fake test token)
 const TOKEN2 = 'tok-box-0123456789abcdef';
 const DEPLOYER = 'tok-dep-0123456789abcdef';
+const OWNER = 'tok-own-0123456789abcdef';
 
-async function boot(cidrs) {
+async function boot(cidrs, opts = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-http-'));
   fs.writeFileSync(path.join(dir, 'clients.json'), JSON.stringify({ clients: [
     { name: 'mac', sha256: hashToken(TOKEN) }, { name: 'box', sha256: hashToken(TOKEN2) },
     { name: 'deployer', sha256: hashToken(DEPLOYER), exemptAgents: ['manager:deploy', 'update_core:*'] },
+    { name: 'owner', sha256: hashToken(OWNER), owner: true },
   ] }));
   const service = createLeaseService({ dir, config: { envs: ['env-a'] } });
-  const routes = createLeaseRoutes({ service, dir, cidrs });
+  const routes = createLeaseRoutes({ service, dir, cidrs, viaServe: opts.viaServe });
   const server = http.createServer((req, res) => { routes.handle(req, res).then((h) => { if (!h) { res.writeHead(404); res.end(); } }); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}${PREFIX}`;
@@ -123,10 +125,12 @@ test('identity comes from the token: body client / exempt / owner are ignored; o
     assert.equal(other.body.code, 'E_DEPLOY_PENDING', 'the exemption is for the listed agents only');
     const l = (await claim(c, 'a', ['frontend'])).body.lease;
     assert.equal((await c.call('POST', '/release', { body: { id: l.id }, token: TOKEN2 })).status, 403);
-    const forced = await c.call('POST', '/owner/release', { body: { id: l.id, by: 'owner' }, token: TOKEN2, headers: { 'tailscale-user-login': 'alice@example.test' } });
+    assert.equal((await c.call('POST', '/owner/release', { body: { id: l.id, by: 'owner', owner: true }, token: TOKEN2 })).status, 403, 'an ordinary token cannot force-release, whatever its body says');
+    assert.equal((await c.call('POST', '/owner/mode', { body: { id: l.id, mode: 'pin' }, token: TOKEN2 })).status, 403);
+    const forced = await c.call('POST', '/owner/release', { body: { id: l.id, by: 'owner' }, token: OWNER, headers: { 'tailscale-user-login': 'alice@example.test' } });
     assert.equal(forced.status, 200);
     const ev = (await c.call('GET', '/events')).body.events.find((e) => e.kind === 'forced');
-    assert.equal(ev.by, 'alice@example.test via client:box', 'the real caller, never a fixed owner');
+    assert.equal(ev.by, 'loopback via client:owner', 'a bare loopback request cannot claim a Tailscale login');
   } finally { await c.close(); }
 });
 
@@ -135,7 +139,8 @@ test('deploy routes: request, approve, start (returns the lease), finish, list, 
   try {
     const r = (await c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'frontend', ref: 'abc', agent: 'a' } })).body;
     assert.equal((await c.call('POST', '/deploy/start', { body: { id: r.id } })).status, 400);
-    assert.equal((await c.call('POST', '/deploy/approve', { body: { id: r.id } })).status, 200);
+    assert.equal((await c.call('POST', '/deploy/approve', { body: { id: r.id } })).status, 403, 'approve needs an owner client');
+    assert.equal((await c.call('POST', '/deploy/approve', { body: { id: r.id }, token: OWNER })).status, 200);
     const s = (await c.call('POST', '/deploy/start', { body: { id: r.id, agent: 'manager:deploy' } })).body;
     assert.deepEqual(s.granted, ['frontend']); assert.ok(s.lease_id);
     assert.equal((await c.call('GET', `/deploy/wait?id=${r.id}&timeout=0`)).body.final, false);
@@ -201,8 +206,90 @@ test('import through the API keeps ids; the imported lease can be released by it
   const c = await boot();
   try {
     const exp = Math.floor(Date.now() / 1000) + 3600;
-    const r = await c.call('POST', '/import', { body: { leases: [{ id: 'abcd0001', env: 'env-a', resource: 'frontend', agent: 'x', expires: exp }] } });
+    const body = { leases: [{ id: 'abcd0001', env: 'env-a', resource: 'frontend', agent: 'x', expires: exp }] };
+    assert.equal((await c.call('POST', '/import', { body })).status, 403, 'import is owner-only');
+    const r = await c.call('POST', '/import', { body, token: OWNER });
     assert.equal(r.body.leases, 1);
-    assert.equal((await c.call('POST', '/release', { body: { id: 'abcd0001' }, token: TOKEN2 })).body.released[0], 'abcd0001');
+    assert.equal((await c.call('POST', '/release', { body: { id: 'abcd0001' }, token: TOKEN2 })).status, 403, 'an imported lease needs the holder agent');
+    assert.equal((await c.call('POST', '/release', { body: { id: 'abcd0001', agent: 'x' }, token: TOKEN2 })).body.released[0], 'abcd0001');
   } finally { await c.close(); }
+});
+
+// ---- round 10 code review regressions ------------------------------------------------------------------------------------------
+test('review 1: /owner/*, /import and deploy approve need an owner client; an ordinary token cannot make itself owner through the body', async () => {
+  const c = await boot();
+  try {
+    const l = (await claim(c, 'a', ['host-1/device1'])).body.lease;
+    for (const [p, body] of [['/owner/release', { id: l.id, by: 'x', owner: true }], ['/owner/mode', { id: l.id, mode: 'pin', owner: true }], ['/import', { leases: [], owner: true }], ['/deploy/approve', { id: 'nope', owner: true }]]) {
+      const r = await c.call('POST', p, { body, token: TOKEN2 });
+      assert.equal(r.status, 403, p); assert.equal(r.body.code, 'E_AUTH');
+    }
+    assert.equal((await c.call('POST', '/release', { body: { id: l.id, owner: true }, token: TOKEN2 })).status, 403, 'owner:true in a normal body is dropped');
+    assert.equal((await c.call('POST', '/owner/mode', { body: { id: l.id, mode: 'pin' }, token: OWNER })).status, 200);
+  } finally { await c.close(); }
+});
+
+test('review 2: import conflicts are reported; lease-import --apply exits 1 when any were skipped for a conflict', async () => {
+  const c = await boot();
+  try {
+    await claim(c, 'live', ['host-1/device1']);
+    const exp = Math.floor(Date.now() / 1000) + 600;
+    const r = await c.call('POST', '/import', { body: { leases: [{ id: 'cafe0001', env: 'env-a', resource: 'host-1/device1', agent: 'mac:x', expires: exp }, { id: 'cafe0002', env: 'env-a', resource: 'frontend', agent: 'mac:x', expires: exp }] }, token: OWNER });
+    assert.equal(r.body.leases, 1); assert.equal(r.body.skipped[0].conflict, true);
+    const tokenFile = path.join(c.dir, 'owner.token'); fs.writeFileSync(tokenFile, OWNER);
+    const input = JSON.stringify({ leases: [{ id: 'cafe0003', env: 'env-a', resource: 'host-1/device1', agent: 'mac:y', expires: exp }] });
+    const url = `http://127.0.0.1:${c.server.address().port}`;
+    const out = await new Promise((resolve) => { const { spawn } = require_child(); const p = spawn('node', [path.join(ROOT, 'scripts', 'lease-import.js'), '--leases', '-', '--apply', '--url', url, '--token-file', tokenFile], { env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C' } }); let o = ''; p.stdout.on('data', (d) => { o += d; }); p.stderr.on('data', (d) => { o += d; }); p.on('close', (code) => resolve({ code, o })); p.stdin.end(input); });
+    assert.equal(out.code, 1); assert.match(out.o, /NOT imported \(conflict\) cafe0003/);
+  } finally { await c.close(); }
+});
+import * as childProcess from 'node:child_process';
+function require_child() { return childProcess; }
+
+test('review 4/5/6: HTTP clients cannot touch in-process leases or other clients\' deploys; the runner client can; a deploy_id join needs runner or requester', async () => {
+  const c = await boot();
+  try {
+    const inproc = (await c.service.claim({ env: 'env-a', resources: ['host-1/device1'], agent: 'runner' })).lease;
+    assert.equal((await c.call('POST', '/release', { body: { id: inproc.id, agent: 'runner' } })).status, 403);
+    const d = (await c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true } })).body.id;   // requested by mac
+    assert.equal((await c.call('POST', '/deploy/start', { body: { id: d }, token: TOKEN2 })).status, 403, 'box did not request it and is not the runner');
+    assert.equal((await c.call('POST', '/deploy/cancel', { body: { id: d }, token: TOKEN2 })).status, 403);
+    assert.equal((await c.call('POST', '/deploy/start', { body: { id: d, agent: 'manager:deploy' }, token: DEPLOYER })).status, 200, 'the runner client may');
+    assert.equal((await claim(c, 'x', ['frontend'], { deploy_id: d }, TOKEN2)).status, 403, 'a stranger cannot join');
+    assert.equal((await claim(c, 'x', ['frontend'], { deploy_id: d })).status, 200, 'the requester can');
+    assert.equal((await c.call('POST', '/deploy/finish', { body: { id: d, status: 'done' }, token: TOKEN2 })).status, 403);
+    assert.equal((await c.call('POST', '/deploy/finish', { body: { id: d, status: 'done' }, token: DEPLOYER })).status, 200);
+  } finally { await c.close(); }
+});
+
+test('review 16: the Tailscale login is honoured only when the server says the request came through Serve; a bare loopback request is logged as loopback', async () => {
+  assert.equal(callerIdentity({ login: 'alice@example.test', viaServe: true, remoteAddress: '127.0.0.1', client: 'owner' }), 'alice@example.test via client:owner');
+  assert.equal(callerIdentity({ login: 'alice@example.test', viaServe: false, remoteAddress: '127.0.0.1', client: 'owner' }), 'loopback via client:owner');
+  assert.equal(callerIdentity({ login: 'x', viaServe: false, remoteAddress: '100.64.1.2', client: 'owner' }), 'client:owner');
+  const c = await boot(undefined, { viaServe: (req) => req.headers['x-test-serve'] === '1' });
+  try {
+    const l = (await claim(c, 'a', ['frontend'])).body.lease;
+    await c.call('POST', '/owner/release', { body: { id: l.id }, token: OWNER, headers: { 'tailscale-user-login': 'alice@example.test', 'x-test-serve': '1' } });
+    const l2 = (await claim(c, 'a', ['frontend'])).body.lease;
+    await c.call('POST', '/owner/release', { body: { id: l2.id }, token: OWNER, headers: { 'tailscale-user-login': 'mallory@example.test' } });
+    const by = (await c.call('GET', '/events')).body.events.filter((e) => e.kind === 'forced').map((e) => e.by);
+    assert.deepEqual(by, ['alice@example.test via client:owner', 'loopback via client:owner']);
+  } finally { await c.close(); }
+});
+
+test('review 15: lease-export on a missing directory exits 1 with a message and does not create it', () => {
+  const dir = path.join(os.tmpdir(), `lease-missing-${process.pid}-${Date.now()}`);
+  const r = spawnSync('node', [path.join(ROOT, 'scripts', 'lease-export.js'), '--dir', dir], { encoding: 'utf8' });
+  assert.equal(r.status, 1); assert.match(r.stderr, /no lease state/);
+  assert.equal(fs.existsSync(dir), false);
+});
+
+test('review 1: lease-token add --owner stores owner:true and list shows it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-owner-'));
+  const run = (args) => spawnSync('node', [path.join(ROOT, 'scripts', 'lease-token.js'), ...args, '--dir', dir], { encoding: 'utf8' });
+  assert.equal(run(['add', 'dash', '--owner']).status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'clients.json'), 'utf8')).clients[0].owner, true);
+  assert.match(run(['list']).stdout, /owner/);
+  run(['add', 'plain']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'clients.json'), 'utf8')).clients[1].owner, undefined);
 });

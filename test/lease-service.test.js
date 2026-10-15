@@ -17,6 +17,7 @@ function harness(cfg = {}, extra = {}) {
   h.claim = (agent, resources, o = {}) => h.svc.claim({ env: 'env-a', resources: [].concat(resources), agent, ...o });
   return h;
 }
+const TRACK = { sessions: { trackable: (s) => String(s).startsWith('codebox:') } };   // the dashboard resolves codebox sessions: idle downgrade applies there
 const held = (r) => r.ok === false && r.code === 'E_HELD';
 
 // ---- matrix --------------------------------------------------------------------------------------------------------------
@@ -204,8 +205,8 @@ test('pass-through is capped: a ticket passed more than 3 times, or older than 1
   const h = harness();
   await h.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h.claim('deployer', '*', { wait: 'ticket' });
-  for (let i = 0; i < 4; i++) { const r = await h.claim(`s${i}`, 'frontend', { expect_min: 1 }); assert.ok(r.ok, `pass ${i}`); await h.svc.release({ agent: `s${i}` }); }
-  assert.equal((await h.claim('s5', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'passed 4 times: strict');
+  for (let i = 0; i < 3; i++) { const r = await h.claim(`s${i}`, 'frontend', { expect_min: 1 }); assert.ok(r.ok, `pass ${i}`); await h.svc.release({ agent: `s${i}` }); }
+  assert.equal((await h.claim('s5', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'passed 3 times: strict');
   const h2 = harness();
   await h2.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h2.claim('deployer', '*', { wait: 'ticket' });
@@ -303,8 +304,8 @@ test('imported leases and plain claims have no heartbeat requirement (heartbeat_
 });
 
 test('idle exclusive lease is downgraded to pin after idleMs; the pin holder is told when an overlapping exclusive lease is granted', async () => {
-  const h = harness();
-  const a = (await h.claim('a', 'host-1/device1')).lease;
+  const h = harness({}, TRACK);
+  const a = (await h.claim('a', 'host-1/device1', { session: 'codebox:a' })).lease;
   await h.advance(19 * MIN);
   assert.equal((await h.svc.list()).leases[0].mode, 'exclusive');
   await h.svc.heartbeat({ id: a.id, active: true });
@@ -319,11 +320,11 @@ test('idle exclusive lease is downgraded to pin after idleMs; the pin holder is 
 });
 
 test('idle downgrade never touches deploy leases, exempt (system) holders, or leases inside expect_min; activity(session) resets the clock', async () => {
-  const h = harness();
-  await h.claim('sys', 'host-1/device1', { exempt: true });
-  await h.claim('exp', 'host-1/device2', { expect_min: 40 });
+  const h = harness({}, TRACK);
+  await h.claim('sys', 'host-1/device1', { exempt: true, session: 'codebox:sys' });
+  await h.claim('exp', 'host-1/device2', { expect_min: 40, session: 'codebox:exp' });
   await h.claim('act', 'host-2/device1', { session: 'codebox:s1' });
-  await h.claim('idle', 'host-2/device2');
+  await h.claim('idle', 'host-2/device2', { session: 'codebox:idle' });
   await h.advance(15 * MIN);
   assert.equal((await h.svc.activity('codebox:s1')).touched, 1);
   await h.advance(15 * MIN);
@@ -374,7 +375,7 @@ test('sessionGone: release after a 2 minute grace, or at once; the liveness prov
 });
 
 test('sessionStatus: waiting on its own resource is left alone; blocked/waiting on something else only downgrades when quiet and past expect_min, otherwise it flags', async () => {
-  const h = harness();
+  const h = harness({}, TRACK);
   await h.claim('codebox:s1', 'host-1/device1', { session: 'codebox:s1' });
   assert.deepEqual((await h.svc.sessionStatus('codebox:s1', 'waiting', 'script run on host-1/device1 (25 min)')), { ok: true, downgraded: [], flagged: [] });
   const recent = await h.svc.sessionStatus('codebox:s1', 'blocked', 'waiting for the owner');
@@ -516,14 +517,26 @@ test('identity: release/renew/narrow/mode by id need the holder client (and agen
   assert.equal((await h.svc.setMode({ id: l2.id, mode: 'exclusive', client: 'mac', agent: 'a' })).code, 'E_INVALID', 'downgrade only');
 });
 
-test('narrow is one-way: kind server -> host, resources only inside the lease', async () => {
+test('narrow keeps legacy semantics: --resource changes only that row\'s sensitivity and releases nothing; kind is one-way', async () => {
   const h = harness();
-  const l = (await h.claim('a', 'host-1', { kind: 'server' })).lease;
-  assert.equal((await h.svc.narrow({ id: l.id, resources: ['host-2'] })).code, 'E_INVALID');
+  const l = (await h.claim('a', ['host-1', 'host-2'], { kind: 'server' })).lease;
+  assert.equal((await h.svc.narrow({ id: l.id, resources: ['host-9'], kind: 'host' })).code, 'E_NOT_FOUND', 'no such row');
   assert.equal((await h.svc.narrow({ id: l.id, kind: 'server' })).code, 'E_INVALID');
-  const n = await h.svc.narrow({ id: l.id, resources: ['host-1/device1'], kind: 'host' });
-  assert.deepEqual(n.lease.resources, ['device:host-1/device1']); assert.equal(n.lease.kind, 'host');
-  assert.ok((await h.claim('b', 'host-1/device2')).ok, 'the freed device can be claimed');
+  const n = await h.svc.narrow({ id: l.id, resources: ['host-1'], kind: 'host' });
+  assert.equal(n.narrowed, 1); assert.deepEqual(n.lease.resources, ['host:host-1', 'host:host-2'], 'nothing released');
+  assert.deepEqual(n.lease.kinds, { 'host:host-1': 'host' });
+  assert.ok((await h.claim('srv1', 'server')).ok === false, 'the host-2 row is still server sensitive');
+  await h.svc.release({ agent: 'srv1' });
+  const again = await h.svc.narrow({ id: l.id, resources: ['host-1'], kind: 'host' });
+  assert.equal(again.narrowed, 0);
+  const all = await h.svc.narrow({ id: l.id, kind: 'host' });
+  assert.equal(all.narrowed, 1); assert.equal(all.lease.kind, 'host'); assert.equal(all.lease.kinds, null);
+  assert.ok((await h.claim('srv2', 'server')).ok, 'fully narrowed: a server claim no longer waits for it');
+  await h.svc.release({ agent: 'srv2' });
+  const r = await h.claim('b', ['host-3', 'host-4']);
+  const restrict = await h.svc.narrow({ id: r.lease.id, resources: ['host-3/device1'], restrict: true });
+  assert.deepEqual(restrict.lease.resources, ['device:host-3/device1']); assert.equal(restrict.narrowed, 1);
+  assert.ok((await h.claim('c', 'host-4')).ok, 'restrict frees the dropped rows');
 });
 
 // ---- durability ------------------------------------------------------------------------------------------------------------
@@ -607,4 +620,145 @@ test('read-only open (export): never writes, reads work, writes are E_UNAVAILABL
   assert.equal((await ro.list()).leases.length, 1);
   assert.equal((await ro.claim({ env: 'env-a', resources: ['server'], agent: 'x' })).code, 'E_UNAVAILABLE');
   assert.equal(fs.readFileSync(path.join(h.dir, 'journal.jsonl'), 'utf8') + fs.readFileSync(path.join(h.dir, 'snapshot.json'), 'utf8'), before);
+});
+
+// ---- round 10 code review regressions ------------------------------------------------------------------------------------------
+test('review 2: import skips rows that conflict with a live exclusive lease (reported as conflict) and caps the ttl', async () => {
+  const h = harness();
+  await h.claim('live', 'host-1/device1');
+  const exp = Math.floor(h.clock.t / 1000) + 36000;
+  const r = await h.svc.importLegacy({ leases: [
+    { id: 'aaaa0001', env: 'env-a', resource: 'host-1/device1', agent: 'mac:x', expires: exp },
+    { id: 'aaaa0002', env: 'env-a', resource: 'host-2/device1', agent: 'mac:x', expires: exp },
+  ] });
+  assert.equal(r.leases, 1);
+  const bad = r.skipped.find((x) => x.id === 'aaaa0001');
+  assert.equal(bad.conflict, true); assert.match(bad.reason, /conflicts with live lease/);
+  const kept = (await h.svc.list()).leases.find((l) => l.id === 'aaaa0002');
+  assert.ok(Date.parse(kept.expires_at) - h.clock.t <= 480 * MIN, 'ttl capped at ttlMaxMin');
+  assert.equal((await h.svc.importLegacy({ leases: [], client: 'mac' })).code, 'E_AUTH', 'owner only over the API');
+});
+
+test('review 3: a pending deploy blocks exactly where its virtual lease conflicts (kind=host device under a server deploy is granted)', async () => {
+  const h = harness();
+  const q = await h.svc.deploy.request({ env: 'env-a', scope: 'server', ref: 'r', agent: 'a', approved: true });
+  for (const phase of ['queued', 'running']) {
+    assert.ok((await h.claim(`dev-${phase}`, 'host-1/device1', { kind: 'host' })).ok, `kind=host device under a ${phase} server deploy`);
+    assert.equal((await h.claim(`srv-${phase}`, 'host-2/device1', { kind: 'server' })).code, 'E_DEPLOY_PENDING', 'a server-sensitive device claim is blocked');
+    assert.ok((await h.claim(`fe-${phase}`, 'frontend')).ok, 'frontend is untouched by a server deploy');
+    await h.svc.release({ agent: `dev-${phase}` }); await h.svc.release({ agent: `fe-${phase}` });
+    if (phase === 'queued') { const st = await h.svc.deploy.start({ id: q.id, agent: 'a' }); assert.ok(st.ok); }
+  }
+});
+
+test('review 4: in-process leases carry an internal client no token can match; imported leases need the holder agent or an owner', async () => {
+  const h = harness();
+  const l = (await h.claim('runner', 'host-1/device1')).lease;
+  assert.equal(l.client, 'internal:process');
+  assert.equal((await h.svc.release({ id: l.id, client: 'mac' })).code, 'E_AUTH');
+  const exp = Math.floor(h.clock.t / 1000) + 600;
+  await h.svc.importLegacy({ leases: [{ id: 'bbbb0001', env: 'env-a', resource: 'frontend', agent: 'mac:old', expires: exp }] });
+  for (const call of [(c) => h.svc.release({ id: 'bbbb0001', ...c }), (c) => h.svc.renew({ id: 'bbbb0001', ...c }), (c) => h.svc.narrow({ id: 'bbbb0001', kind: 'host', ...c }), (c) => h.svc.setMode({ id: 'bbbb0001', mode: 'pin', ...c })]) {
+    assert.equal((await call({ client: 'mac' })).code, 'E_AUTH');
+    assert.equal((await call({ client: 'mac', agent: 'someone-else' })).code, 'E_AUTH');
+  }
+  assert.equal((await h.svc.renew({ id: 'bbbb0001', client: 'mac', agent: 'mac:old' })).ok, true);
+  assert.equal((await h.svc.release({ id: 'bbbb0001', client: 'other', owner: true })).ok, true);
+});
+
+test('review 5/6: deploy start/finish/cancel need the runner (exempt) client or the requesting client, approve needs an owner; a deploy_id join needs the runner or requesting client', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const r = (await d.request({ env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true, client: 'mac' })).id;
+  assert.equal((await d.start({ id: r, client: 'box' })).code, 'E_AUTH');
+  assert.equal((await d.cancel({ id: r, client: 'box' })).code, 'E_AUTH');
+  assert.equal((await d.approve({ id: r, client: 'mac' })).code, 'E_AUTH');
+  const st = await d.start({ id: r, client: 'runnerbox', exempt: true });
+  assert.ok(st.ok, 'the runner client may start anyone\'s deploy');
+  assert.equal((await d.finish({ id: r, status: 'done', client: 'box' })).code, 'E_AUTH');
+  assert.equal((await h.claim('stranger', 'frontend', { deploy_id: r, client: 'box' })).code, 'E_AUTH', 'a stranger cannot join');
+  assert.ok((await h.claim('joiner', 'frontend', { deploy_id: r, client: 'runnerbox' })).ok, 'the runner client may join');
+  assert.ok((await h.claim('own', 'frontend', { deploy_id: r, client: 'mac' })).ok, 'so may the requesting client');
+  assert.equal((await d.finish({ id: r, status: 'done', client: 'mac' })).ok, true, 'the requesting client may finish');
+});
+
+test('review 8: a manual update_core run holding * (exempt, not part of the deploy) blocks deploy start; the runner\'s own and the same deploy\'s leases do not', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  await h.claim('update_core:me', '*', { exempt: true });
+  const q = await d.request({ env: 'env-a', scope: 'host', hosts: ['host-1'], ref: 'r', agent: 'a', approved: true });
+  assert.equal((await d.start({ id: q.id })).code, 'E_HELD');
+  await h.svc.release({ agent: 'update_core:me' });
+  const st = await d.start({ id: q.id, agent: 'manager:deploy' });
+  assert.ok(st.ok);
+  assert.ok((await h.claim('update_core:me', 'host-1', { exempt: true, deploy_id: q.id })).ok, 'a lease of the same deploy is no blocker');
+  await d.finish({ id: q.id, status: 'done' });
+  await h.claim('manager:deploy', 'host-2', { exempt: true });
+  const q2 = await d.request({ env: 'env-a', scope: 'host', hosts: ['host-2'], ref: 'r2', agent: 'a', approved: true });
+  assert.ok((await d.start({ id: q2.id, agent: 'manager:deploy' })).ok, 'the starting agent\'s own leases are excluded');
+});
+
+test('review 9: idle downgrade needs an observable activity source; a plain mac: server-kind device lease is NOT downgraded and a server deploy stays refused', async () => {
+  const h = harness({}, TRACK);
+  await h.claim('mac:run', 'host-1/device1', { kind: 'server' });
+  await h.claim('codebox:t', 'host-2/device1', { session: 'codebox:t' });
+  await h.claim('hb', 'host-3/device1', { heartbeat_s: 3600 });
+  await h.advance(21 * MIN);
+  const modes = Object.fromEntries((await h.svc.list()).leases.map((l) => [l.agent, l.mode]));
+  assert.deepEqual(modes, { 'mac:run': 'exclusive', 'codebox:t': 'pin', hb: 'pin' });
+  const q = await h.svc.deploy.request({ env: 'env-a', scope: 'server', ref: 'r', agent: 'a', approved: true });
+  assert.equal((await h.svc.deploy.start({ id: q.id })).code, 'E_HELD', 'a server deploy stays refused');
+  await h.advance(70 * MIN);
+  assert.equal((await h.svc.list()).leases.some((l) => l.agent === 'mac:run'), true, 'only TTL reclaims it');
+});
+
+test('review 10: housekeeping triggered by a read still reaches onEvent', async () => {
+  const h = harness();
+  await h.claim('a', 'host-1/device1', { ttl_min: 5 });
+  h.events.length = 0;
+  h.clock.t += 6 * MIN; h.clock.m += 6 * MIN;                      // nobody ticks: only a read notices
+  assert.equal((await h.svc.list()).leases.length, 0);
+  assert.ok(h.events.some((e) => e.kind === 'expired' && e.reason === 'ttl'));
+});
+
+test('review 12/13/14: check returns pending too; deploy list all returns finished; catch-up on a failed finish; long ttl warns and is capped; typed env spelling; skip_leased server scope', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const q = await d.request({ env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true });
+  const chk = await h.svc.check({ env: 'env-a', resources: 'frontend' });
+  assert.equal(chk.pending.length, 1); assert.deepEqual(chk.pending, chk.pending_deploys);
+  await d.start({ id: q.id });
+  await d.finish({ id: q.id, status: 'failed', skipped_hosts: 'host-1' });
+  assert.equal((await d.list({ env: 'env-a' })).deploys.some((x) => x.id === q.id), false, 'not active');
+  const all = (await d.list({ env: 'env-a', all: true })).deploys;
+  assert.equal(all.find((x) => x.id === q.id).state, 'failed');
+  assert.ok(all.some((x) => x.scope === 'host' && x.hosts?.[0] === 'host-1'), 'catch-up queued on a failed finish with skipped hosts');
+  const long = await h.claim('l', 'host-5/device1', { ttl_min: 600 });
+  assert.equal(long.ok, true); assert.ok(long.warnings.length); assert.equal(long.lease.ttl_min, 600);
+  const huge = await h.claim('m', 'host-2/device1', { ttl_min: 5000 });
+  assert.equal(huge.lease.ttl_min, 1440); assert.match(huge.warnings[0], /capped/);
+  assert.equal((await h.claim('n', 'host-3/device1', { ttl_min: 0 })).code, 'E_INVALID');
+  await h.svc.release({ agent: 'l' }); await h.svc.release({ agent: 'm' });
+  const ht = harness();
+  for (const r of ['env-a/frontend', 'env-a/server', 'env-a/*', 'env-a/host:host-7', 'env-a/device:host-7/d1']) {
+    const g = await ht.claim(`typed-${r}`, r); assert.ok(g.ok, r);
+    await ht.svc.release({ agent: `typed-${r}` });
+  }
+  assert.deepEqual((await ht.claim('t2', 'env-a/frontend')).lease.resources, ['frontend']);
+  const h2 = harness();
+  await h2.claim('fe', 'frontend');
+  assert.equal((await h2.svc.check({ env: 'env-a', skip_leased: true, resources: 'server' })).free, true, 'a single server resource is scope server');
+  assert.equal((await h2.svc.check({ env: 'env-a', skip_leased: true, resources: '*' })).free, false, 'while * (full) is blocked by the frontend lease');
+});
+
+test('review 15: ticket polls and the parse cache do not grow; shadow reports rotate', async () => {
+  const h = harness({ reportsMaxBytes: 300 });
+  await h.claim('a', 'frontend');
+  for (let i = 0; i < 20; i++) { const t = (await h.claim(`w${i}`, 'frontend', { wait: 'ticket' })).ticket; await h.svc.cancelTicket(t.id); }
+  assert.equal((await h.svc.status()).polls, 0, 'poll entries are deleted when a ticket ends');
+  for (let i = 0; i < 1500; i++) parseResource(`host-${i}`);
+  for (let i = 0; i < 1100; i++) await h.svc.check({ env: 'env-a', resources: `hostx-${i}` });
+  assert.ok((await h.svc.status()).parsed <= 1000, 'bounded');
+  for (let i = 0; i < 6; i++) await h.svc.shadow.report({ machine: 'host-1', command: `claim ${i}`, legacy: { code: 0, out: 'x'.repeat(100) }, central: { code: 0, out: '' } });
+  assert.ok(fs.existsSync(path.join(h.dir, 'shadow', 'reports.jsonl.1')), 'rotated');
 });

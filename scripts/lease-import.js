@@ -40,5 +40,8 @@ async function main() {
   const j = await r.json().catch(() => ({}));
   console.log(r.ok ? `imported ${j.leases} lease(s), ${j.deploys} deploy(s)` : `import failed: ${j.code || r.status} ${j.error || ''}`);
   if (!r.ok) process.exit(1);
+  const clash = (j.skipped || []).filter((x) => x.conflict);
+  for (const x of clash) console.log(`  NOT imported (conflict) ${x.id}: ${x.reason}`);
+  if (clash.length) { console.error(`${clash.length} lease(s) skipped because they conflict with a live lease: resolve them by hand`); process.exit(1); }
 }
 if (import.meta.url === `file://${process.argv[1]}`) main().catch((e) => { console.error(e.message); process.exit(1); });
