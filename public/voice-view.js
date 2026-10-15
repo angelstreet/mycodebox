@@ -86,6 +86,7 @@ export function createVoiceLoop(deps) {
         case 'intent':
           if (r.intent === 'repeat') { await say(item.script); continue; }
           if (r.intent === 'digest') { await speakDigest(); await say(item.script); continue; }
+          if (r.intent === 'leases') { await say(r.say); await say(item.script); continue; }   // the lease sentence, then the open item again
           if (r.intent === 'stop') { await say(r.say); loop.stop(); return; }
           if (r.intent === 'cancel') { pending = null; skipped.add(item.id); await say(r.say); return; }
           skipped.add(item.id); await say(r.say); return;   // skip, next, wait

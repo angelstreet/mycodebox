@@ -42,7 +42,7 @@ export const mergeable = (d, x) => x.id !== d.id && x.env === d.env && x.state =
   && (!d.hosts?.length || (x.scope === 'host' && !!x.hosts?.length && x.hosts.every((h) => d.hosts.includes(h))));
 export const VERSION_RE = /\bversion\s*[:=]?\s*(v?\d+\.\d+\.\d+[\w.+-]*)/i;
 
-function defaultRegistry() {
+export function defaultRegistry() {
   const custom = process.env.DEPLOY_REGISTRY;
   const argvPrefix = custom ? JSON.parse(custom) : null;
   // returns {code, stdout, stderr}
@@ -149,7 +149,7 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind
 export function createDeployRunner({
   stateDir, alert = () => {}, onChange = () => {}, isEnabled = () => false,
   registry = defaultRegistry(), run = defaultRun, timeoutMs = 45 * 60 * 1000, pollMs = 30000,
-  orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, follow = followDetached, log = console,
+  orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
 } = {}) {
   const envsFile = join(stateDir, 'deploy-envs.json');
   const logDir = join(stateDir, 'deploys');
@@ -160,6 +160,7 @@ export function createDeployRunner({
   let liveLeases = null;                // leases of the last good poll (`deploy list --json` carries them)
   const everBlocked = new Set();        // deploy ids that were ever held back by a lease: their start/done are worth a manager event
   const blockedBy = new Map();          // deploy id -> Map(lease id -> {env, resources[], agent}) that blocked its start
+  const leaseIds = new Map();         // deploy id -> lease id the service granted at `deploy start` (central); the child joins it through VPT_LEASE_ID
   const handledOrphans = new Set();   // ids already finished as orphaned (alert once per id)
   let first = true, ticking = false, timer = null, lastJson = '';
 
@@ -228,6 +229,15 @@ export function createDeployRunner({
     }
   }
 
+  // A line for the deploy log from outside the run (the lease service says this deploy overrode a pin). Once per distinct line; the log is what the
+  // Deploys view and GET /api/deploys/:id/log show.
+  const noted = new Set();
+  async function note(id, line) {
+    if (!/^[0-9a-f]{1,16}$/.test(String(id)) || noted.has(`${id}|${line}`)) return false;
+    noted.add(`${id}|${line}`); if (noted.size > 500) noted.delete(noted.values().next().value);
+    try { await mkdir(logDir, { recursive: true }); await appendFile(join(logDir, `${id}.log`), `# ${String(line).replace(/\s+/g, ' ').slice(0, 300)}\n`); return true; } catch (e) { log.error?.('[deploy] note', e.message); return false; }
+  }
+
   async function logTail(id, n = 200) {
     try { return (await readFile(join(logDir, `${id}.log`), 'utf8')).split('\n').slice(-n - 1).join('\n').trimEnd(); } catch { return ''; }
   }
@@ -273,7 +283,7 @@ export function createDeployRunner({
     if (!adopt) alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1', blockedBy: everBlocked.has(d.id) ? ['lease'] : null }, 0);
     let status = 'failed', rc = null, timedOut = false;
     try {
-      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
+      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id}${leaseIds.get(d.id) ? ` VPT_LEASE_ID=${shq(leaseIds.get(d.id))}` : ''} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
       if (adopt) ({ code: rc, timedOut } = await follow(logDir, d.id, { onLine, timeoutMs, pollMs: followPollMs, pid: adopt.pid }));
       else ({ code: rc, timedOut } = await run(envCfg, { dir: logDir, followPollMs, id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs }));
       if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min, killed`);
@@ -300,7 +310,7 @@ export function createDeployRunner({
       ...(skipped.length ? ['--skipped-hosts', skipped.join(',')] : []), '--tail-stdin'], { stdin: tail });
     if (fin.code !== 0) log.error?.(`[deploy] finish ${d.id} failed: ${fin.stderr}`);
     for (const m of merged) await reg(['deploy', 'finish', m.id, '--status', status, '--coalesced-into', d.id, ...(version ? ['--version', version] : []), '--tail-stdin'], { stdin: tail });
-    if (skipped.length) {
+    if (skipped.length && catchUp) {   // central: the lease service queues the catch-up itself on finish
       const q = await reg(['deploy', 'request', d.env, '--scope', 'host', '--ref', d.ref, '--agent', RUNNER_AGENT, '--approved',
         '--hosts', skipped.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${skipped.join(',')}`]);
       if (q.code !== 0) log.error?.(`[deploy] catch-up request for ${d.id} failed: ${q.stderr}`);
@@ -312,7 +322,7 @@ export function createDeployRunner({
       body: status === 'done' ? `${d.ref} for ${d.agent}; waiters released${skipped.length ? `; skipped (leased): ${skipped.join(',')}` : ''}` : lines.slice(-4).join('\n'),
       priority: status === 'done' ? 'default' : 'high', ntfyTags: status === 'done' ? 'white_check_mark' : 'x', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1', blockedBy: everBlocked.has(d.id) ? ['lease'] : null,
     }, 0);
-    everBlocked.delete(d.id);
+    everBlocked.delete(d.id); leaseIds.delete(d.id);
     await tick();      // next queued one, without waiting for the poll
   }
 
@@ -368,6 +378,7 @@ export function createDeployRunner({
                 continue;
               }                 // resources busy: try a narrower request behind it
               if (r.code !== 0) { log.error?.(`[deploy] start ${d.id}: ${r.stderr}`); continue; }
+              try { const j = JSON.parse(r.stdout); const lid = j?.lease?.id ?? j?.lease_id; if (lid != null) leaseIds.set(d.id, String(lid)); } catch { /* the registry prints text: no lease id */ }
               running.set(env, d.id);
               runDeploy(d, deploys).catch((e) => { running.delete(env); log.error?.('[deploy] run', e.message); });
               break;
@@ -392,7 +403,7 @@ export function createDeployRunner({
   }
 
   return {
-    tick, snapshot, act, logTail,
+    tick, snapshot, act, logTail, note,
     start() { tick(); timer = setInterval(tick, pollMs); timer.unref?.(); },
     stop() { clearInterval(timer); },
     _running: running,

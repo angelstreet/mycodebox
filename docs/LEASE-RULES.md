@@ -1,0 +1,62 @@
+# Lease rules
+
+One rule text for every agent and session. The deploy skill gets this text rendered into its lease section
+(`scripts/render-deploy-skill.js`); do not keep a second copy. Design: [docs/v2/LEASES-CENTRAL.md](v2/LEASES-CENTRAL.md).
+
+## What to claim
+
+Claim the narrowest resource that covers the work. `<env>` is the platform name, `<agent>` is `codebox:<tmux session>`
+or `mac:<name>`.
+
+| Work | Claim | Mode |
+|---|---|---|
+| Frontend deploy | nothing on the backend; `frontend` only if you deploy it yourself (the deploy queue claims it) | exclusive |
+| Server deploy or server restart | `server` | exclusive |
+| Host deploy or host maintenance | `<host>` | exclusive |
+| Run on a device (remote keys, channel changes, scripts) | `<host>/<device>` | exclusive |
+| Whole-environment deploy or maintenance | `*`, only when nothing narrower fits | exclusive |
+| Reading archives, frames, logs, copying chunks read-only | nothing, or the resource with `--mode observe` | observe |
+| "Keep this channel or state until I am done" | the resource with `--mode pin` | pin |
+
+- Add `--kind host` when only a restart of your own host breaks you; leave the default when a server restart breaks you
+  (runs started through the server API, the UI, MCP or take-control).
+- A frontend change never needs a backend or device lease, and a run on one device never blocks another device.
+- Deploys go through the queue: `vpt-lease deploy request ...`, then `vpt-lease deploy wait ...`. Never run a deploy
+  script by hand around the queue.
+
+## How to claim
+
+1. Use `vpt-lease run <claim args> -- <command...>`: it queues if busy, heartbeats while the command runs and releases
+   when it ends, also on failure or interrupt. Or use `vpt-lease claim ... --wait`.
+2. Add `--expect <minutes>` so the queue can estimate when you are done.
+3. Never poll in a loop, never ask the owner whether a lease is free, never use `--force` and never kill another
+   agent's lease. Busy means wait in the queue: the answer to "who holds it and when is it free" is on stderr or in
+   `vpt-lease list`.
+4. To keep working while you wait: `vpt-lease claim ... --ticket` prints the ticket id and the ETA and returns at once;
+   later `vpt-lease ticket <id> --wait`.
+
+## While you hold a lease
+
+- Heartbeat: `run` does it for you; otherwise `vpt-lease heartbeat <id> --active` while you use the resource. Only `run` and
+  other heartbeating leases (those that declared a heartbeat interval) are released when their heartbeats stop; a plain
+  `claim; work; release` keeps working and is bounded by its TTL. A heartbeating or dashboard-tracked (codebox session) exclusive lease with no activity
+  for 20 minutes becomes a pin.
+- Release as soon as the work is done: `vpt-lease release <id>`. Do not park a lease "for later".
+- A session whose STATUS is `waiting` or `blocked` never keeps an exclusive lease: release it first, claim again when
+  you can work. Downgrade to a pin with `vpt-lease mode <id> pin` if you only need the state kept.
+- Narrow, do not hold broad: `vpt-lease narrow <id> --kind host` once a server restart no longer matters.
+
+## Exit codes
+
+| Code | Meaning | What to do |
+|---|---|---|
+| 0 | ok / free / granted | continue |
+| 1 | error or not found; also a refused token (`E_AUTH`) or a missing, loose (not 0600) or empty token file: the call was rejected, nothing was granted | read stderr and fix the call or the token |
+| 3 | busy | claim again with `--wait` (or `run`); do not poll |
+| 4 | a deploy is pending on the resource | `vpt-lease deploy wait --env <env>`, then claim again |
+| 5 | UNAVAILABLE: the lease service cannot be reached | treat as busy, never as free; retry with `--wait` |
+| 6 | `run` only: the lease was lost during the run (fenced, gone or downgraded); the command itself exited 0 | treat the result as not protected; claim again and redo the protected step |
+
+`vpt-lease validate <id> --agent <agent>` (central mode only; refused with exit 1 in legacy and shadow modes): exit 0 when
+the lease is held, exclusive and yours; 3 when not (the reason is printed); 5 when the service is unavailable. Run it
+right before each protected step, such as a restart, and stop on anything but 0.

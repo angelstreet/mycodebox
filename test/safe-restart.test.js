@@ -42,7 +42,7 @@ if (command === 'systemctl') console.log('0');
   }
   const result = spawnSync('/bin/bash', [resolve('scripts/safe-restart.sh'), ...args], {
     env: { PATH: `${dir}:/usr/bin:/bin`, LANG: 'C.UTF-8', GHOSTY_STATE_DIR: dir, FAKE_DIR: dir,
-      GHOSTY_URL: 'http://localhost:7777' }, encoding: 'utf8', timeout: 5000,
+      GHOSTY_URL: 'http://localhost:7777' }, encoding: 'utf8', timeout: 20000,   // several fake commands start per wait loop; 5 s was too tight under a loaded run
   });
   assert.ifError(result.error);
   let calls = [];

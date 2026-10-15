@@ -191,7 +191,7 @@ test('minimax quota / rate limit (stderr, stream event, or a run that sat retryi
   assert.equal(q.run.result.error.retry_after_ms, 3_600_000);
   const e = await mrun({}, 'event429');
   assert.equal(e.run.result.error.class, 'rate_limit');
-  const t = await mrun({ timeout_ms: 300 }, 'retrying');
+  const t = await mrun({ timeout_ms: 2500 }, 'retrying');   // room for a slow node start under a loaded suite: the fake prints its rate-limit line first, then hangs
   assert.equal(t.run.result.timed_out, true);
   assert.equal(t.run.result.error.class, 'rate_limit', 'a timed-out run that was rate limited is a quota wait');
   for (const text of ['Error: usage limit exceeded', 'token plan quota exhausted', '{"status_code": 1002, "status_msg": "rate limit"}', 'Your subscription quota has been exceeded']) {

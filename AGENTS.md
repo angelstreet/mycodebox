@@ -41,6 +41,9 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 
 ## Safety rules of the product
 
+- Leases (deploys, restarts, test devices): follow [docs/LEASE-RULES.md](docs/LEASE-RULES.md). Never ask the owner about a
+  lease: wait with `vpt-lease claim ... --wait` or `vpt-lease run ... -- <cmd>`; never poll, never `--force`.
+
 - The server has no login; Tailscale policy is the only user-access gate. Do not expose it publicly.
   The source defaults to loopback (`127.0.0.1`); follow INSTALL for private Tailscale access.
 - Owner's chosen default (2026-10-11): dashboard-created and resumed Claude/Codex sessions and the manager start with permission

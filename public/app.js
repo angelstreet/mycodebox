@@ -3591,6 +3591,45 @@ async function openDecidedView() {
   });
 }
 $('#decidedBtn').onclick = openDecidedView;
+// ----- Leases (⋮ menu, /?leases=1): GET /api/leases/view; public/leases-view.js is loaded on first use. Owner actions (central only) need a second tap -----
+async function openLeasesView() {
+  let lv;
+  try { lv = await import('/leases-view.js'); } catch { toast('leases view unavailable', 2500); return; }
+  openSheet('Leases', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('history');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    const v = { data: null, armed: null, timer: null, poll: null };
+    const paint = () => { body.innerHTML = v.data ? lv.viewHtml(v.data, { now: Date.now(), armed: v.armed }) : '<div class="sheet-empty">loading…</div>'; };
+    const load = async () => {
+      try { const r = await fetch('/api/leases/view'); v.data = await r.json(); } catch (e) { v.data = { ok: false, error: `leases unavailable: ${e.message}` }; }
+      if (body.isConnected) paint();
+    };
+    foot.onclick = (e) => { const a = e.target.closest('[data-a]')?.dataset.a; if (a === 'close') { clearInterval(v.poll); close(); } else if (a === 'refresh') load(); };
+    body.addEventListener('click', async (e) => {
+      const o = e.target.closest('[data-lv-open]');
+      if (o) { e.preventDefault(); clearInterval(v.poll); close(); openCard(o.dataset.lvOpen); return; }
+      const b = e.target.closest('[data-lv-act]');
+      if (!b) return;
+      const t = lv.tap(v.armed, b.dataset.lvAct);
+      clearTimeout(v.timer);
+      v.armed = t.arm;
+      if (t.arm) { v.timer = setTimeout(() => { v.armed = null; if (body.isConnected) paint(); }, 4000); paint(); return; }
+      const req = lv.actionRequest(t.fire);
+      if (!req) return;
+      try {
+        const r = await fetch(req.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req.body) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        toast('done', 2000);
+      } catch (er) { toast(`not done: ${er.message}`, 4000); }
+      load();
+    });
+    paint(); load();
+    v.poll = setInterval(() => { if (!body.isConnected) clearInterval(v.poll); else if (!v.armed) load(); }, 15000);
+  });
+}
+$('#leasesBtn').onclick = openLeasesView;
 // ----- Voice mode (⋮ menu, or /?voice=1 from the notification's "Speak it"): voice-view.js is loaded when first opened -----
 async function openVoiceMode() {
   try {
@@ -4889,6 +4928,7 @@ if ('serviceWorker' in navigator) {
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
   if (new URLSearchParams(location.search).get('decided')) openDecidedView();
+  if (new URLSearchParams(location.search).get('leases')) openLeasesView();
   if (new URLSearchParams(location.search).get('voice')) openVoiceMode();
   const openPlat = ['platforms', 'deploys'].some((k) => new URLSearchParams(location.search).get(k));
   const view = new URLSearchParams(location.search).get('view');

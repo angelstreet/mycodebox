@@ -42,6 +42,15 @@ export function agentSession(agent, sessionNames, machines) {
   return pre.length === 1 ? pre[0] : null;
 }
 
+// Every session name the agent could mean (exact, normalised or by prefix): more than one is ambiguous, not "none".
+export function agentSessionCandidates(agent, sessionNames, machines) {
+  const rest = agentLocalName(agent, machines);
+  if (!rest) return [];
+  const w = normName(rest);
+  return sessionNames.filter((n) => n === rest || n.toLowerCase() === rest.toLowerCase() || (w && normName(n) === w)
+    || (w && normName(n) && Math.min(normName(n).length, w.length) >= PREFIX_MIN && (normName(n).startsWith(w) || w.startsWith(normName(n)))));
+}
+
 // Does a deploy of this scope disturb a lease on res? Same table as vpt-lease scope_touches.
 export function scopeTouches(scope, res) {
   if (res === '*' || scope === 'server' || scope === 'full') return true;
