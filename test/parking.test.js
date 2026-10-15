@@ -255,3 +255,11 @@ test('resume validates saved records before creating tmux or executing a command
   await assert.rejects(fresh.resume('S', { base: 'claude', start: async () => h.log.push('start') }), /invalid resume session id/);
   assert.deepEqual(h.log, []);
 });
+
+test('busyChildren ignores the mcode helper every MiniMax session runs, still reports real work under it', () => {
+  const helper = 'node --input-type=module --eval\nimport { spawn } from "node:child_process";\nimport x from "y";';
+  const t = { children: new Map([[1, [2, 3]]]), args: new Map([[2, helper], [3, 'npm test']]) };
+  assert.deepEqual(busyChildren(1, t).map((c) => c.pid), [3]);
+  assert.deepEqual(busyChildren(1, { children: new Map([[1, [2]]]), args: new Map([[2, helper.replace(/\n/g, '\\012')]]) }), []);
+  assert.deepEqual(busyChildren(1, { children: new Map([[1, [2]]]), args: new Map([[2, 'node --input-type=module --eval "doWork()"']]) }).length, 1);
+});

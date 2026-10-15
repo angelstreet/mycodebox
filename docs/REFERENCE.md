@@ -314,7 +314,9 @@ today" block of the AI manager panel.
 cores (sustained: the last samples in `~/.local/state/ghosty/health-watch-state.json`), RAM available %, runaway
 processes (yours, older than `runawayHours`, and RSS over `runawayRssMB` or CPU over `runawayCpu` % across two
 samples 5 s apart; claude, tmux and the ghosty server are never runaways) and stuck patterns (a bare `node --test`,
-too many defunct processes). Healthy = exit 0, only the state file is touched. When a check trips it writes a markdown
+too many defunct processes) and orphaned test runs: a process whose parent is gone, older than `testLeftoverMin` (60), whose
+own or any descendant's args are a test run (`node --test`, `test/*.test.js`, vitest, tinypool, the `/tmp/*fresh-*/bin` fakes).
+Those are killed with their whole subtree at every fix level except `report` (2026-10-15: 26 sat for up to 3.8 days). Healthy = exit 0, only the state file is touched. When a check trips it writes a markdown
 report to `~/.local/state/ghosty/health-reports/<ISO>.md` (kept 7 days): top 15 processes by CPU and RSS with their
 owning tmux / Claude session, disk use of `/tmp`, `~/.cache`, `~/.claude`, `~/.npm`, the journal, docker (if usable),
 and every `~/vpt-*` / `~/ghosty-*` dir with its worktree / clean / merged / live-session status. Thresholds live in
@@ -547,7 +549,8 @@ OWNER_DECISIONS §15 ("yes merge, yes push, yes deploy, yes do the recommended o
 end"). `topicSplit(text)` returns `{ merge, push, deploy, hard }`. A push or deploy counts only when the session asks to do
 it ("should I deploy ...", "push the branch?"), not when it names a feature ("the deploy queue page"). The hard floor:
 deletions of data (every verb form: deletes, deleted, removal, drops, wiped, erased, destroyed, ...), credentials and
-secrets (revoked, rotated keys), money (pays, paid), customers, `systemctl` / `pm2` / `sudo` / sudoers / unit files /
+secrets (revoked, rotated keys; not a VirtualPyTest agent fetching and using the auto-sign test token with
+`scripts/agent/auto_sign_token.sh`, which is routine agent work, owner 2026-10-15), money (pays, paid), customers, `systemctl` / `pm2` / `sudo` / sudoers / unit files /
 reboots, database migrations and migration tools (`alembic`, `prisma migrate`, ...), database resets, force-push and
 history rewrites (`-f`, `--force-with-lease`, `--mirror`, `--delete`, `+ref`, `:ref`, pushes to prod/staging/live), tag
 pushes and publishing a package. Round 8 added the sudo, unit-file, reboot and migration-tool words to `FORBIDDEN_RE`
@@ -1101,13 +1104,26 @@ Config: `<stateDir>/ci-watch.json` `{ "repo": "<owner/name>", "workflow": "<file
 "provider": "claude|minimax|codex|opencode", "model": "<optional, cbsession -m>" }`. Without it the watch stays idle. `manager.json` `ciWatch`: `"dry"` (journal only) or `"off"`; default live.
 `GET /api/ci-watch` shows the last verdict, the action and the red streak.
 
+## Done check (owner/manager, 2026-10-15)
+
+A session's `STATUS: done` is checked against git, not trusted (TASK59 said "shipped, nothing pending" with 7 commits
+never on main). `done-check.js` runs every 5 min (first check 4 min after start) over the idle sessions whose last STATUS
+line is done (not the manager's, not paused). For the session's folder, and for every branch name or worktree path its
+closing text names that exists in that repo, it counts commits not on `origin/main` (`--cherry-pick`, so equivalent
+patches count as merged; `VERSION.txt`-only stamps ignored) and uncommitted tracked files. Each repo is fetched at most
+every 30 min. A mismatch gets one feed line `done-check:<session>` and one message to the session: finish it (commit,
+merge when the merge evaluation passes, push, deploy) or say in one line why it stays. Once per finding, at most 2 per
+check, and none while the session works or the host is busy (load above 1.5 per core, under 20% RAM available).
+`manager.json` `doneCheck`: `"dry"` (journal `done-check.jsonl` only) or `"off"`; default live. `GET /api/done-check`
+shows the last check and its findings.
+
 ## Rules watch (owner, 2026-10-15)
 
 A session reads AGENTS.md once, at start. `rules-watch.js` checks every 10 min (first check 3 min after start): for each
 live agent session (not the manager's, not paused), the last commit that touched AGENTS.md on its repo's `origin/main`
 (fetched each check). If that commit is newer than the session's agent process, the session gets one message while it
 is idle: the commit, the precedence rule (AGENTS.md beats older task docs and briefs, never hand the owner commands) and
-`git show origin/main:AGENTS.md`. At most 6 sessions per check. Each session is told once per AGENTS.md commit (`rules-watch.json`),
+`git show origin/main:AGENTS.md`. At most 2 sessions per check, and none while the host is busy (load above 1.5 per core or under 20% RAM available): a message can wake an idle session into work, and 6 per check swapped codebox on 2026-10-15. An idle session is told to start nothing new. Each session is told once per AGENTS.md commit (`rules-watch.json`),
 with a feed line `rules-watch:told` per check and a journal `rules-watch.jsonl`. `manager.json` `rulesWatch`: `"dry"`
 (journal only) or `"off"`; default live. `GET /api/rules-watch` shows the stale sessions and who was told.
 
