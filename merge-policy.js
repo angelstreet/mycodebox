@@ -337,7 +337,7 @@ export function composeReply({ info = [], merge = null, push = null, deploy = nu
   const label = (p) => String(p || '').replace(/^\s*(?:\(?[a-z0-9]\)|\d+[.)])\s*/i, '').replace(/[\s,;:.?]+$/, '').replace(/^(?:and|plus)\s+/i, '').replace(/^./, (c) => c.toUpperCase()).slice(0, 80);
   const present = { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy };
   info.forEach((i, n) => {
-    const line = `${label(i.part)}: ${i.answer}${i.source ? ` (from ${i.source})` : ''}`;
+    const line = `${i.label || label(i.part)}: ${i.answer}${i.source ? ` (from ${i.source})` : ''}`;
     if (hardMatch(line, present)) return;   // a landing is exempt only in a reply that carries its verdict
     lines.push(line); keptInfo.push(n);
   });
