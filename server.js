@@ -124,6 +124,7 @@ import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
 import { createOwnJobs } from './own-jobs.js';
+import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
 const exec = promisify(execFile);
@@ -681,6 +682,10 @@ const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTF
   } });
 
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
+const mockups = createMockups({
+  file: join(STATE_DIR, 'mockups.jsonl'), push, tokenOk: (t) => reporter.tokenOk(t), windowMin: () => managerConfig().mockupWindowMin,
+  send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); },   // the same guarded send as every other owner send
+});
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const history = createSessionHistory({ file: join(STATE_DIR, 'session-history.jsonl'), missMs: 2 * Number(process.env.TICK_MS || 1000) });   // start/end log of sessions; open instances are rebuilt from the file at boot
@@ -1642,6 +1647,20 @@ async function handleHttp(req, res) {
   if (req.method === 'POST' && p === '/api/alert') {   // the manager agent's channel to the owner: loopback + reporter token
     try {
       const r = await alertApi.handle({ remoteAddress: req.socket.remoteAddress, headers: req.headers, readBody: () => readJsonBody(req) });
+      return json(res, r.status, r.body);
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  if (req.method === 'POST' && p === '/api/mockups') {   // a session posts a mockup to the owner's feed (loopback + reporter token)
+    try {
+      const r = await mockups.post({ remoteAddress: req.socket.remoteAddress, headers: req.headers, body: await readJsonBody(req) });
+      return json(res, r.status, r.body);
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  const mo = req.method === 'POST' ? /^\/api\/mockups\/([\w-]{1,40})\/object$/.exec(p) : null;
+  if (mo) {   // the owner's "object" tap on a mockup in the feed: the session is told to wait for the owner's notes
+    try {
+      const b = await readJsonBody(req);
+      const r = await mockups.object(mo[1], { by: actorOf(b || {}) });
       return json(res, r.status, r.body);
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }

@@ -105,6 +105,7 @@ async function writeCursor(id) {
 // Buttons of a needs-you notification: the server's actions (Do recommended / Wait, only for a safe recommended option) plus
 // "Speak it" (opens the voice page). Android shows at most Notification.maxActions (often 2): Wait is dropped first.
 function notificationActions(it) {
+  if (it.kind === 'mockup' && it.mockupId) return [{ action: 'object', title: 'Object' }];   // a mockup in the feed: the session builds on unless you object (mockups.js)
   if (!it.voiceId) return [];
   const list = [...(Array.isArray(it.actions) ? it.actions : []).filter((a) => a && a.action && a.title), { action: 'speak', title: 'Speak it' }];
   const max = typeof Notification !== 'undefined' && Number.isInteger(Notification.maxActions) ? Notification.maxActions : list.length;
@@ -131,7 +132,7 @@ async function showFeed() {
     const actions = notificationActions(it);
     await self.registration.showNotification(it.title, {
       body: it.body, tag: it.tag || `ghosty-${it.id}`, renotify: true, icon: '/icon-192.png', badge: '/icon-192.png',
-      requireInteraction: high, data: { url: it.url || '/', voiceId: it.voiceId || null },
+      requireInteraction: high, data: { url: it.url || '/', voiceId: it.voiceId || null, mockupId: it.kind === 'mockup' ? it.mockupId || null : null },
       ...(actions.length ? { actions } : {}),
     });
   }
@@ -159,6 +160,12 @@ async function answerFromNotification(voiceId, action) {
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   const data = e.notification.data || {};
+  if (e.action === 'object' && data.mockupId) {
+    e.waitUntil(fetch(`/api/mockups/${encodeURIComponent(data.mockupId)}/object`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      .then((r) => self.registration.showNotification(r.ok ? 'Objection sent' : 'Not sent', { body: r.ok ? 'The session waits for your notes.' : 'Open the app.', tag: `ghosty-mockup-${data.mockupId}`, icon: '/icon-192.png', data: { url: '/' } }))
+      .catch(() => {}));
+    return;
+  }
   if ((e.action === 'recommended' || e.action === 'wait') && data.voiceId) { e.waitUntil(answerFromNotification(data.voiceId, e.action)); return; }
   const target = new URL(e.action === 'speak' ? '/?voice=1' : data.url || '/', self.location.origin);
   e.waitUntil(

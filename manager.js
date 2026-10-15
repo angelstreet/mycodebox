@@ -30,6 +30,7 @@ import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
 import { leaseAsk, answerLeaseAsk } from './lease-ask.js';
 import { selfAsk, answerSelf } from './self-check.js';
+import { mockupRule, WINDOW_DEFAULT_MIN } from './mockups.js';
 import { supersedeOlder } from './owner-asks.js';
 import { actorOf } from './api-extras.js';
 import { jevAgreesOwner } from './public/ask-model.js';
@@ -73,7 +74,7 @@ export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true, selfChecks: true,
+let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true, selfChecks: true, mockupFirst: true, mockupWindowMin: WINDOW_DEFAULT_MIN,
   jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
@@ -208,6 +209,8 @@ export async function setManagerConfig(b = {}) {
   if (typeof infoAnswers === 'boolean') config.infoAnswers = infoAnswers;
   if (typeof b.leaseAnswers === 'boolean') config.leaseAnswers = b.leaseAnswers;
   if (typeof b.selfChecks === 'boolean') config.selfChecks = b.selfChecks;
+  if (typeof b.mockupFirst === 'boolean') config.mockupFirst = b.mockupFirst;
+  if (b.mockupWindowMin !== undefined) config.mockupWindowMin = Math.round(num(b.mockupWindowMin, 0, 1440, 'mockupWindowMin'));   // minutes the owner has to object to a mockup; 0 = the rule is off
   if (typeof pushDecisions === 'boolean') config.pushDecisions = pushDecisions;
   if (typeof deployDecisions === 'boolean') config.deployDecisions = deployDecisions;
   if (pushMinConfidence !== undefined) config.pushMinConfidence = num(pushMinConfidence, 0, 1, 'pushMinConfidence');
@@ -1231,6 +1234,9 @@ export function observe(s) {
       if (jevOut.choice) final = applyJev(stall, jevOut.choice);
     }
     if (w.hash !== h) return;   // the pane moved on while Jev was thinking: that stall is gone
+    // mockup-first (round 9, item 7): "may I show you the mockup before I build?" is answered "post it to the feed and build"; the hard floor still applies to the ask
+    const mock = !isManagerSession(s.name) && !stall.draft ? mockupRule(final, { windowMin: config.mockupWindowMin, enabled: config.mockupFirst !== false }) : null;
+    if (mock) final = { ...final, case: 'continue', source: 'mockup-first', answer: { text: mock }, autoCase: undefined, no_status: false };
     let ws = wouldSend(final);
     const confidence = final.source === 'jev' ? Number(jevOut?.probabilities?.[jevOut.choice] ?? jevOut?.confidence ?? 0) : 1;
     w.stall = { ...final, would: ws, jev: jevOut?.choice ? { choice: jevOut.choice, probabilities: jevOut.probabilities || null } : null };
