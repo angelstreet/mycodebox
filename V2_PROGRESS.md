@@ -1,4 +1,4 @@
-STATUS: DELIVERED 185d982 https://github.com/angelstreet/mycodebox/pull/11 (round 8)
+STATUS: DELIVERING dc54698 (round 10)
 
 # V2 progress
 
@@ -7,9 +7,23 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 8 (autonomy by default, voice goal, `.v2/round8.md`) delivered on `v2/r8-autonomy-voice`: owner review of the PR.
-Then round 10 (central lease service), then round 9 without its item 6 (owner order, 2026-10-14). SHAs quoted before
-round 2 in this file are pre-rewrite SHAs (history rewritten 2026-10-11).
+Round 10 (one central lease service, `.v2/round10.md`) delivered on `v2/r10-leases`: owner review of the PR, then the
+owner-side cut-over (design §10). Next: round 9 without its item 6 (folded into round 10). SHAs quoted before round 2 in
+this file are pre-rewrite SHAs (history rewritten 2026-10-11).
+
+## Round 10
+
+Base: `origin/main` 923da00 (round 8 merged), merged up to 5c5e29a. Spec: `.v2/round10.md` (+ evening addendum on lease
+modes). Owner decision: OWNER_DECISIONS §16. Design: `docs/v2/LEASES-CENTRAL.md`.
+
+| Item | Scope | Owner (model) | State | Result |
+|---|---|---|---|---|
+| R10-1 | Inventory + design doc (matrix, queue, modes, heartbeats, API contract, shadow, cut-over) | coordinator + Fable design review | DONE (19 design findings folded in) | 0996e87, 6c79fd9, 0ecdbe0, 7c07a73, 6df89bf, ac4706b |
+| R10-2 | `lease-service.js`, `lease-routes.js`, token / import / export scripts | Sonnet / Opus + Fable review | DONE | v2/r10a-service |
+| R10-3 | `scripts/vpt-lease` compatible client, `docs/LEASE-RULES.md`, skill renderer, client-vs-service integration test | Sonnet / Opus + Fable review | DONE | v2/r10b-client |
+| R10-4 | `lease-source.js` (legacy / central), liveness, manager lease answers (`lease-ask.js`), Leases view, voice line | Sonnet / Opus + Fable review | DONE | v2/r10c-dashboard |
+| R10-5 | Reviews: Opus CHANGES REQUESTED -> APPROVE; Fable design CHANGES REQUESTED, code CHANGES REQUESTED -> APPROVE; final minors | coordinator | DONE | fa20b28, 9fb1d76 |
+| R10-6 | Gates, PR, DELIVERED | coordinator | DONE | dc54698: 2217/2217 Node 23.6 and 24.21; acceptance 54/54 on ef2579e and browser 67/67 on 13bb8e2 (the run on dc54698 was stopped by the memory guard); leak scan clean |
 
 ## Round 8
 
