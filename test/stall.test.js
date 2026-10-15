@@ -300,3 +300,7 @@ test('the hard floor is unchanged: the acknowledgement still names force-push, a
 test('a todo panel without a STATUS line above it changes nothing', () => {
   assert.equal(statusLine(['I will now run the suite.', '    ○ run suite', '    … +2 more · 1/3 done · 1 pending · Ctrl+T expand']), null);
 });
+
+test('the todo panel may be followed by the background-tasks line', () => {
+  assert.equal(statusLine([...T33, '  ◐ Tasks · 1 agent active · /tasks details'])?.kind, 'done');
+});

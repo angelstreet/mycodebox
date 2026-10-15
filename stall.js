@@ -438,7 +438,7 @@ const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', '
 // MiniMax (mcode) prints its todo panel under the reply: "✓ ...", "○ ...", "… +17 more · 18/20 done · 1 pending · Ctrl+T expand".
 const TODO_PANEL_END_RE = /\b\d+\/\d+ done\b[^\n]*(?:pending|Ctrl\+T)|^\s*…\s*\+\d+ more\b/;
 export function statusLine(lines) {
-  const panel = lines.slice(-2).some((l) => TODO_PANEL_END_RE.test(l));   // the STATUS line sits above the panel
+  const panel = lines.slice(-4).some((l) => TODO_PANEL_END_RE.test(l));   // the STATUS line sits above the panel (and its "◐ Tasks · 1 agent active" line)
   for (const l of lines.slice(panel ? -14 : -3).reverse()) {
     const m = STATUS_LINE_RE.exec(l);
     if (!m) continue;
