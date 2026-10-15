@@ -39,6 +39,7 @@ import { createJevBreaker } from './jev-breaker.js';
 import { createJevSwitch, isDisabledReply, DISABLED } from './jev-switch.js';
 import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
 import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
+import { createRoundtrips, roundtripRecord, summarizeRoundtrips, FILE_NAME as ROUNDTRIPS_FILE } from './roundtrips.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -328,6 +329,28 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   else if (state === 'waiting' && (final.options?.length || 0) >= 1) notify(name, aiLine ? { ...final, aiLine } : final, reason, state);
 }
 
+// ---- owner round-trip ledger (round 9 item 9, roundtrips.js) ----
+// One record in owner-roundtrips.jsonl when a stop that reached the owner (or was answered for them) resolves: the owner replied or the
+// manager answered (outcome), a newer stop superseded it, or the session was removed. Local tmux and remote (Mac hook) sessions alike.
+const roundtrips = createRoundtrips({ file: join(STATE_DIR, ROUNDTRIPS_FILE) });
+const answerers = new Map();   // session -> { by, via, at }: who sent the owner's last text (server.js logSend -> noteAnswerer)
+export function noteAnswerer(name, by) { if (by === 'owner' || by === 'owner-voice') answerers.set(name, { by, via: by === 'owner-voice' ? 'voice' : 'dashboard', at: Date.now() }); }
+function settleRoundtrip(name, p, resolution, answeredAt, machine = 'local') {
+  if (!p || p.settled || !p.id) return;
+  p.settled = true;
+  const reached = escalatedStops.has(p.id) || p.auto === true;
+  const a = answerers.get(name), answeredByOwner = resolution === 'answered' && !p.auto;
+  const ownerSent = a && a.at >= p.at - 1000;
+  const by = p.auto ? (p.remote ? 'remote-hook' : 'manager') : answeredByOwner && ownerSent ? a.by : 'owner';
+  const via = p.auto ? (p.remote ? 'hook' : 'tmux') : answeredByOwner ? (ownerSent ? a.via : p.remote ? 'mac' : 'pane') : 'none';
+  roundtrips.record(roundtripRecord({ id: p.id, session: name, machine: p.machine || machine, at: p.at, answeredAt, cls: p.cls, by, via, resolution, reachedOwner: reached })).catch(() => {});
+}
+export const roundtripsView = async ({ hours = 24, now = Date.now() } = {}) => {
+  const h = Math.max(1, Math.min(24 * 90, Number(hours) || 24));
+  const recs = await roundtrips.read({ sinceMs: now - h * 3600e3 });
+  return { hours: h, summary: summarizeRoundtrips(recs, { hours: h }), records: recs.slice(-500) };
+};
+
 // ---- AI reviewer (phase 9) ----
 // Stops that go to the owner: everything except background work and a plain finished turn without a question.
 export const toOwnerCase = (final) => final.case !== 'background_wait' && (final.case !== 'done' || /\?/.test(final.question || ''));
@@ -476,7 +499,7 @@ async function fire(name, auto) {
     return;
   }
   sentLog.set(name, [...(sentLog.get(name) || []), Date.now()]);
-  if (w.pending && w.pending.id === auto.id) w.pending.auto = true;
+  if (w.pending && w.pending.id === auto.id) { w.pending.auto = true; w.pending.autoAt = Date.now(); }
   logLater({ type: 'answer', id: auto.id, session: name, answer: a, case: auto.case, source: auto.source, confidence: auto.confidence, ...(kindIds(auto).merge ? { merge_decision_id: kindIds(auto).merge } : {}),
     ...(Object.keys(kinds).length || auto.menu ? { decision_ids: [...Object.values(kindIds(auto)), ...(auto.menu ? [`menu-${auto.id}`] : [])], ...(Object.keys(kinds).length ? { decided: Object.keys(kinds) } : {}) } : {}) });
   if (auto.menu) await appendJournal(menuRecord({ id: auto.id, session: name, at: new Date(), answer: a, ...auto.menu }));
@@ -1132,6 +1155,7 @@ export function observe(s) {
         via: p.auto ? 'manager' : reply.via, reply: reply.text ? reply.text.slice(0, 300) : null, kind: reply.text ? outcomeKind(reply.text) : 'unknown' });
       writeBack(p.id, outcomeFromReplyKind(reply.text ? outcomeKind(reply.text) : 'unknown'), 'owner-reply', p.auto ? null : decisionByStop.get(p.id));
       if (!p.auto) routerOutcome(p.id, reply.text ? outcomeKind(reply.text) : 'unknown');
+      settleRoundtrip(s.name, p, 'answered', p.auto ? p.autoAt || s.now : s.answeredAt ?? (sentSince ? s.lastSendAt : said?.at ?? s.now), s.machine);
       w.pending = null;
     }
     if (holdOf(s.name)) endHold(s.name, 'manager', 'session moved on', false);
@@ -1177,7 +1201,8 @@ export function observe(s) {
   lastStops[s.name] = [...recent]; saveLastStops();
 
   const id = randomUUID();
-  w.pending = { id, at: s.now, key: stopKey(stall.excerpt) };
+  if (w.pending) settleRoundtrip(s.name, w.pending, 'superseded', s.now, s.machine);
+  w.pending = { id, at: s.now, key: stopKey(stall.excerpt), ...(s.remote ? { remote: true, machine: s.machine } : {}) };
   (async () => {
     let final = stall, jevOut = null;
     if (stall.source === 'ambiguous') {
@@ -1188,6 +1213,7 @@ export function observe(s) {
     if (w.hash !== h) return;   // the pane moved on while Jev was thinking: that stall is gone
     let ws = wouldSend(final);
     const confidence = final.source === 'jev' ? Number(jevOut?.probabilities?.[jevOut.choice] ?? jevOut?.confidence ?? 0) : 1;
+    if (w.pending?.id === id) w.pending.cls = final.case;
     w.stall = { ...final, would: ws, jev: jevOut?.choice ? { choice: jevOut.choice, probabilities: jevOut.probabilities || null } : null };
     await log({
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
@@ -1249,7 +1275,7 @@ export function observe(s) {
   return w.stall;
 }
 
-export function forget(name) { cancelAuto(name, 'session removed'); watch.delete(name); }
+export function forget(name) { cancelAuto(name, 'session removed'); const p = watch.get(name)?.pending; if (p) settleRoundtrip(name, p, 'removed', Date.now()); watch.delete(name); }
 export function prune(live) { for (const k of [...watch.keys()]) if (!live.has(k)) forget(k); }
 
 export function stallOf(name) {
@@ -1305,6 +1331,9 @@ export async function decidedView({ hours = 24, since = null, limit = 100, now =
   const recs = await readRecs();
   const all = decidedItems({ recs, journal: await readJournal(), since: sinceMs });
   const summary = decidedSummary(all, { hours: win, failed: failedCount(recs, { since: sinceMs }) });
+  // round 9: how long the owner kept sessions waiting in the same window (owner-roundtrips.jsonl); the digest carries it as one more sentence
+  const waits = summarizeRoundtrips(await roundtrips.read({ sinceMs }), { hours: win });
+  if (waits.text) { summary.waits = waits; const t = `${summary.text} ${waits.text[0].toUpperCase()}${waits.text.slice(1)}.`; summary.text = t.length > 700 ? `${t.slice(0, 697)}...` : t; }
   return { items: all.slice(0, Math.max(1, Math.min(500, Number(limit) || 100))), summary };
 }
 // One item by id (any age), or null.

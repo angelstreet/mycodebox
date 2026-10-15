@@ -34,6 +34,7 @@
 //   GET  /api/voice/digest?minutes=60 → {text, parts}: deterministic spoken summary (<= 900 chars) of what happened
 //   GET  /api/manager/log?limit → last stall / outcome records (stalls.jsonl)
 //   GET  /api/manager/merge-decisions?limit=50 → newest journal lines first, kind merge only (alias; the journal is manager-decisions.jsonl + the round-7 merge-decisions.jsonl)
+//   GET  /api/manager/roundtrips?hours=24 → { summary, records } owner waits per class (owner-roundtrips.jsonl, roundtrips.js)
 //   GET  /api/manager/decided?hours=24|since=<iso>&limit=100 → { items, summary }: everything the manager answered for the owner (decided.js, OWNER_DECISIONS §15)
 //   POST /api/manager/decided/:id/revert {by?} → merge/push/deploy: sends the revert text to the session (409 unless it is stopped with no draft); other kinds: { draft }
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
@@ -108,7 +109,7 @@ import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds, roundtripsView, noteAnswerer } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -1394,6 +1395,7 @@ async function setSessionMeta(session, body) {
 
 // Who typed: every send is logged with its actor (the owner's UI sends no `by`, the manager agent sends 'manager-agent').
 function logSend(session, by, payload) {
+  noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
   logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
 }
 
@@ -1928,6 +1930,10 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/manager/decided') {
     const q = url.searchParams;
     try { return json(res, 200, await decidedView({ hours: q.get('hours') || 24, since: q.get('since') || null, limit: q.get('limit') || 100 })); }
+    catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/manager/roundtrips') {   // owner wait ledger (owner-roundtrips.jsonl): { hours, summary: { median_s, mean_s, byClass, text }, records }
+    try { return json(res, 200, await roundtripsView({ hours: url.searchParams.get('hours') || 24 })); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   const rv = req.method === 'POST' && /^\/api\/manager\/decided\/([^/]+)\/revert$/.exec(p);
