@@ -10,7 +10,7 @@ import { createLeaseService } from '../lease-service.js';
 import { createLeaseRoutes, addrAllowed, parseCidrs, hashToken, DEFAULT_CIDRS, MAX_BODY, MAX_WAIT_S, PREFIX } from '../lease-routes.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const TOKEN = 'tok-mac-0123456789abcdef';
+const TOKEN = 'tok-mac-0123456789abcdef';   // leak-scan: allow (fake test token)
 const TOKEN2 = 'tok-box-0123456789abcdef';
 const DEPLOYER = 'tok-dep-0123456789abcdef';
 
@@ -37,7 +37,7 @@ test('auth: no token, bad token, revoked token -> 401 E_AUTH; a good token works
   const c = await boot();
   try {
     assert.equal((await c.call('GET', '/list', { token: null })).status, 401);
-    assert.equal((await c.call('GET', '/list', { token: 'nope-nope-nope-nope' })).body.code, 'E_AUTH');
+    assert.equal((await c.call('GET', '/list', { token: 'nope-nope-nope-nope' })).body.code, 'E_AUTH');   // leak-scan: allow (fake test token)
     assert.equal((await c.call('GET', '/list')).status, 200);
     fs.writeFileSync(path.join(c.dir, 'clients.json'), JSON.stringify({ clients: [] }));
     await new Promise((r) => setTimeout(r, 10));
@@ -52,9 +52,9 @@ test('address allowlist: refused before authentication outside loopback / tailne
     assert.equal((await fake('203.0.113.9')).status, 403);
     assert.equal((await fake('203.0.113.9')).body.code, 'E_AUTH');
     assert.equal((await fake('198.51.100.7')).status, 200, 'extra CIDR');
-    assert.equal((await fake('100.64.1.2')).status, 200, 'tailnet range');
+    assert.equal((await fake('100.64.1.2')).status, 200, 'tailnet range');   // leak-scan: allow (CGNAT test address)
     assert.equal((await fake('::ffff:127.0.0.1')).status, 200, 'mapped loopback');
-    assert.equal((await fake('100.128.0.1')).status, 403, 'just outside 100.64.0.0/10');
+    assert.equal((await fake('100.128.0.1')).status, 403, 'just outside 100.64.0.0/10');   // leak-scan: allow (CGNAT test address)
   } finally { await c.close(); }
   const cidrs = parseCidrs(DEFAULT_CIDRS.join(','));
   assert.ok(addrAllowed('fd7a:115c:a1e0::1', cidrs)); assert.ok(addrAllowed('::1', cidrs)); assert.ok(!addrAllowed('2001:db8::1', cidrs)); assert.ok(!addrAllowed('garbage', cidrs));
