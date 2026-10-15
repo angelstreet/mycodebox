@@ -2228,7 +2228,7 @@ server.listen(PORT, HOST, async () => {
   // its scrollback would otherwise be mistaken for an agent (see agentFromText) — this
   // wrapper only consults the live process tree.
   const guardSendKey = async (session, key, stopId) => { if (remote.owns(session)) return remote.deliverKey(session, key, stopId); await assertAgentPane(session, 'manager'); return sendKey(session, key); };   // a mac: session is answered through the hook's long-poll
-  const guardSendKeys = async (session, keys, enter, stopId) => { if (remote.owns(session)) return remote.deliver(session, keys, stopId); await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
+  const guardSendKeys = async (session, keys, enter, stopId) => { if (stopId === undefined) noteAnswerer(session, 'own-job'); /* the manager's answers pass their stop id; a send without one is a harness wake (own-jobs): the manager, not the owner */ if (remote.owns(session)) return remote.deliver(session, keys, stopId); await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
   // Sessions waiting on a job of their own (STATUS blocked / waiting on a pid, log, run id or deploy id) are woken when it ends. The send goes through
   // the same guarded sendKeys: it pastes the text, waits, then sends Enter as a second tmux call.
   const ownJobs = createOwnJobs({
@@ -2236,7 +2236,7 @@ server.listen(PORT, HOST, async () => {
     agentPid: async (name) => { const p = (await listPanes()).get(name); return p?.pid ? agentPidFromTree(p.pid, await processTable()) : null; },
     deployState: (id) => { const d = (deployRunner.snapshot().deploys || []).find((x) => String(x.id) === String(id)); return d ? { state: d.state, finished: d.finished ? d.finished * (d.finished < 1e12 ? 1000 : 1) : null } : null; },
     stillWaiting: stillStopped, canSend: canType,
-    send: (name, text) => { noteAnswerer(name, 'own-job'); return guardSendKeys(name, text, true); },   // the harness wakes a session whose job ended: the manager, not the owner
+    send: (name, text) => guardSendKeys(name, text, true),
     record: (e) => managerEvents.record(e),
     log: (r) => logEvent(r),
   });
