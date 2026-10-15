@@ -82,6 +82,8 @@ import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
+import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
+import * as managerApi from './manager.js';
 import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
@@ -1028,7 +1030,7 @@ async function pollOnce() {
   for (const k of [...track.keys()]) if (!status[k]) track.delete(k);
   for (const k of [...metaCache.keys()]) if (!status[k]) metaCache.delete(k);
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
-  pruneManager(new Set(Object.keys(status)));
+  pruneManager(new Set([...Object.keys(status), ...remote.names()]));   // Mac sessions (mac:<name>) have no tmux pane: they are not pruned with the tmux list
   reporter.prune(new Set(Object.keys(status)));
   turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
@@ -1048,6 +1050,7 @@ async function pollOnce() {
     v.claudeSessionId = c ? c.info.sessionId : null;
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
   }
+  Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)
   for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
   return { sessions, status, changedSessions };
 }
@@ -1513,6 +1516,7 @@ async function handleHttp(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
 
+  if (p.startsWith(REMOTE_API) && await remote.handle(req, res)) return;   // bearer-token API for the Mac Stop hook; own address and auth checks
   if (p.startsWith(LEASE_API) && await leaseRoutes.handle(req, res)) return;   // bearer-token API for lease clients; own address and auth checks
 
   if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
@@ -2074,6 +2078,9 @@ const voice = createVoice({
 const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_DIR, 'leases'),
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // same proxy test as requestIdentity: only a Serve-proxied request may name a tailnet login
 
+const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR,
+  viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
+
 const server = http.createServer((req, res) => {
   handleHttp(req, res).catch((err) => {
     console.error('[http]', req.method, String(req.url).slice(0, 80), err?.message);
@@ -2187,8 +2194,8 @@ server.listen(PORT, HOST, async () => {
   // typed send with assertAgentPane first. A bash / sleep shell with old MiniMax JSON in
   // its scrollback would otherwise be mistaken for an agent (see agentFromText) — this
   // wrapper only consults the live process tree.
-  const guardSendKey = async (session, key) => { await assertAgentPane(session, 'manager'); return sendKey(session, key); };
-  const guardSendKeys = async (session, keys, enter) => { await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
+  const guardSendKey = async (session, key) => { if (remote.owns(session)) return remote.deliverKey(session, key); await assertAgentPane(session, 'manager'); return sendKey(session, key); };   // a mac: session is answered through the hook's long-poll
+  const guardSendKeys = async (session, keys, enter) => { if (remote.owns(session)) return remote.deliver(session, keys); await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
   await initManager({
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),

@@ -240,7 +240,7 @@ export async function setManagerConfig(b = {}) {
   return managerConfig();
 }
 
-const sessionOn = (name) => config.enabled && !config.disabledSessions.includes(name);
+export const sessionOn = (name) => config.enabled && !config.disabledSessions.includes(name);
 
 async function log(rec) {
   try { await appendFile(LOG_FILE, JSON.stringify(rec) + '\n'); } catch (e) { console.error('[manager] log', e.message); }
@@ -312,6 +312,16 @@ function aiBlock(name, kase, confidence) {
   return null;
 }
 
+// ---- remote stops hook point (round 9 item 1; remote-stops.js; one block, keep it together) ----
+// Stops posted by other machines (the Mac Stop hook) enter observe() as sessions named `mac:<name>` (s.remote = true: they arrive settled, no
+// tmux). The remote layer needs to know when the manager is DONE with a stop (settled), answered it (send -> deliver), dropped the countdown
+// (cancelled) or escalated it; none of this changes what the manager decides.
+export const REMOTE_PREFIX = 'mac:';
+export const isRemoteSession = (name) => String(name).startsWith(REMOTE_PREFIX);
+let remoteHooks = { settled() {}, cancelled() {}, escalated() {}, noAnswer: () => false, maxDelayMs: () => null };
+export function setRemoteHooks(h = {}) { remoteHooks = { ...remoteHooks, ...h }; }
+const hookSafe = (fn, ...a) => { try { fn(...a); } catch (e) { console.error('[manager] remote hook', e.message); } };
+
 // A stall that is not auto-answered goes to the owner. A waiting session was already pushed by
 // ghosty's own 'waiting' alert, so only a finished turn that asks something is pushed here.
 // manager.json managerSessions (default ["manager"]): the manager agent's own session is never escalated or pushed (TASK-44-MANAGER.md section 0).
@@ -320,6 +330,7 @@ export const isManagerSession = (name) => { try { return (managerSessionsOf() ||
 const escalatedStops = new Set();   // stop ids the rules escalated to the owner (the wake shadow's `escalated` fact)
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
+  if (isRemoteSession(name)) hookSafe(remoteHooks.escalated, name, id, reason, final);
   escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
@@ -386,6 +397,7 @@ export function cancelAuto(name, reason = 'cancelled by owner', quiet = false) {
   const a = w.auto;
   clearTimeout(a.timer);
   w.auto = null;
+  if (isRemoteSession(name) && !(quiet && reason === 'superseded')) hookSafe(remoteHooks.cancelled, name, reason, a.id);
   const ids = kindIds(a), decided = Object.values(ids);
   if (!quiet && decided.length) { try { onMergeCancelled(name, { id: a.id, reason, ...(ids.merge ? { merge_decision_id: ids.merge } : {}), decision_ids: decided }); } catch {} }
   if (!quiet) logLater({ type: 'answer_cancelled', id: a.id, session: name, case: a.case, answer: a.answer, reason, ...(ids.merge ? { merge_decision_id: ids.merge } : {}), ...(decided.length ? { decision_ids: decided } : {}) });
@@ -444,8 +456,11 @@ export function reevaluateHolds() {
 
 function schedule(name, w, a) {
   cancelAuto(name, 'superseded', true);
-  const auto = { ...a, sendAt: Date.now() + config.delayMs };
-  auto.timer = setTimeout(() => fire(name, auto).catch((e) => console.error('[manager] fire', e.message)), config.delayMs);
+  // remote (Mac hook) stop: the hook gave the stop a loop-guard flag -> never answered, the owner gets it; the countdown must end before the hook stops waiting
+  if (isRemoteSession(name) && remoteHooks.noAnswer(name)) { escalate(name, w.last?.state, w.stall || { case: a.case }, a.id, 'the Stop hook was already continuing (loop guard): not answered automatically'); hookSafe(remoteHooks.cancelled, name, 'loop guard', a.id); return; }
+  const delayMs = isRemoteSession(name) ? Math.min(config.delayMs, remoteHooks.maxDelayMs() ?? config.delayMs) : config.delayMs;
+  const auto = { ...a, sendAt: Date.now() + delayMs };
+  auto.timer = setTimeout(() => fire(name, auto).catch((e) => console.error('[manager] fire', e.message)), delayMs);
   w.auto = auto;
 }
 
@@ -1130,6 +1145,7 @@ export function observe(s) {
   if (!w) { w = { since: s.now, hash: null, stall: null, pending: null, seen: false }; watch.set(s.name, w); }
 
   w.agent = s.agent;
+  if (s.remote) w.seen = true;   // remote stops arrive settled (REMOTE hook block above)
   const rep = s.agent === 'claude' ? s.rep || null : null;   // Codex / MiniMax have no reporter: panes only
   w.last = { state: s.state, lastSendAt: s.lastSendAt || null, now: s.now };
   const stopped = s.state === 'waiting' || s.state === 'done';
@@ -1187,7 +1203,7 @@ export function observe(s) {
   if (h !== w.hash) { if (w.auto) cancelAuto(s.name, 'pane changed'); w.hash = h; w.since = s.now; w.logged = false; w.stall = stall; }
   // First sight after a restart: don't log stalls that were already sitting there.
   if (!w.seen) { w.logged = true; w.seen = true; return w.stall; }
-  if (w.logged || s.now - w.since < SETTLE_MS || !sessionOn(s.name)) return w.stall;
+  if (w.logged || (!s.remote && s.now - w.since < SETTLE_MS) || !sessionOn(s.name)) return w.stall;
   w.logged = true;
   // The very same stop as the last one logged, with no real work or send in between: not a new stop.
   // The last RECENT_STOPS logged stops are remembered per session on disk, so a restart, a repaint or an
@@ -1195,7 +1211,7 @@ export function observe(s) {
   const stopId = hash(stopKey(stall.excerpt));
   const recent = w.recent ?? (w.recent = Array.isArray(lastStops[s.name]) ? [...lastStops[s.name]] : []);
   if (w.moved) recent.length = 0;
-  if (recent.includes(stopId)) return w.stall;
+  if (recent.includes(stopId) && !s.remote) return w.stall;
   recent.push(stopId); if (recent.length > RECENT_STOPS) recent.shift();
   w.moved = false;
   lastStops[s.name] = [...recent]; saveLastStops();
@@ -1271,7 +1287,7 @@ export function observe(s) {
     }
     if (final.case !== 'done' && final.case !== 'background_wait') escalate(s.name, s.state, final, id, why, oneLine(tri));
     return;
-  })().catch((e) => console.error('[manager]', e.message));
+  })().catch((e) => console.error('[manager]', e.message)).finally(() => { if (s.remote) hookSafe(remoteHooks.settled, s.name, id, !!watch.get(s.name)?.auto); });
   return w.stall;
 }
 
