@@ -689,7 +689,7 @@ const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTF
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const mockups = createMockups({
   file: join(STATE_DIR, 'mockups.jsonl'), push, tokenOk: (t) => reporter.tokenOk(t), windowMin: () => managerConfig().mockupWindowMin,
-  send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); },   // the same guarded send as every other owner send
+  send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); noteAnswerer(session, by, 'mockup'); },   // the same guarded send as every other owner send
 });
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
@@ -2227,8 +2227,8 @@ server.listen(PORT, HOST, async () => {
   // typed send with assertAgentPane first. A bash / sleep shell with old MiniMax JSON in
   // its scrollback would otherwise be mistaken for an agent (see agentFromText) — this
   // wrapper only consults the live process tree.
-  const guardSendKey = async (session, key) => { if (remote.owns(session)) return remote.deliverKey(session, key); await assertAgentPane(session, 'manager'); return sendKey(session, key); };   // a mac: session is answered through the hook's long-poll
-  const guardSendKeys = async (session, keys, enter) => { if (remote.owns(session)) return remote.deliver(session, keys); await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
+  const guardSendKey = async (session, key, stopId) => { if (remote.owns(session)) return remote.deliverKey(session, key, stopId); await assertAgentPane(session, 'manager'); return sendKey(session, key); };   // a mac: session is answered through the hook's long-poll
+  const guardSendKeys = async (session, keys, enter, stopId) => { if (stopId === undefined) noteAnswerer(session, 'own-job'); /* the manager's answers pass their stop id; a send without one is a harness wake (own-jobs): the manager, not the owner */ if (remote.owns(session)) return remote.deliver(session, keys, stopId); await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
   // Sessions waiting on a job of their own (STATUS blocked / waiting on a pid, log, run id or deploy id) are woken when it ends. The send goes through
   // the same guarded sendKeys: it pastes the text, waits, then sends Enter as a second tmux call.
   const ownJobs = createOwnJobs({

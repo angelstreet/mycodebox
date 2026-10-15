@@ -85,3 +85,19 @@ test('createRoundtrips.read filters by time and tolerates junk lines; the view s
   const v = await m.roundtripsView({ hours: 24 });
   assert.equal(v.hours, 24); assert.ok(Array.isArray(v.records)); assert.ok(v.summary.count >= 1);
 });
+
+test('every actor is recorded: manager-agent and own-job wakes are manager, a mockup object is the owner, only real owner sends are by owner', async () => {
+  const t0 = Date.now();
+  const cases = [['rt-agent', 'manager-agent', 'manager', 'agent'], ['rt-job', 'own-job', 'manager', 'own-job'], ['rt-mock', 'owner', 'owner', 'mockup'], ['rt-lease', 'lease-service', 'manager', 'lease-service'], ['rt-own', 'owner', 'owner', 'dashboard']];
+  for (const [name, actor, by, via] of cases) {
+    tick(name, 'working', ['busy'], t0 - 90000);
+    tick(name, 'done', ASK, t0 - 60000); tick(name, 'done', ASK, t0 - 50000);
+    await settle(300);
+    m.noteAnswerer(name, actor, actor === 'owner' && name === 'rt-mock' ? 'mockup' : null);
+    tick(name, 'working', ['busy'], t0, { realWork: true, lastSendAt: t0 - 10000, lastSendText: 'ok' });
+    const r = await until((x) => x.session === name);
+    assert.equal(r.by, by, `${actor} -> ${by}`); assert.equal(r.via, via);
+  }
+  const s = summarizeRoundtrips(ledger().filter((x) => x.session.startsWith('rt-')), { hours: 24 });
+  assert.equal(s.owner_stops, 2, 'only the owner sends count as owner waits');
+});

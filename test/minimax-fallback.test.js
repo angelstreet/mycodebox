@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, chmodSync, readdirSync } from 'node:fs';
+import fs, { mkdtempSync, readFileSync, writeFileSync, existsSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFallbackDecider, parseChoice, parseExecOutput } from '../minimax-fallback.js';
@@ -14,11 +14,14 @@ const FAKE = join(work, 'mcode');
 writeFileSync(FAKE, `#!${process.execPath}
 const fs = require('fs');
 const args = process.argv.slice(2);
+if (args[0] === 'exec' && args[1] === '--help') { fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args }) + '\\n'); console.log(process.env.MCODE_FAKE_LIGHT ? '  --mode <mode>  lightweight or full\\n  --permission <p>' : '  --permission <p>'); process.exit(0); }
 const mode = process.env.MCODE_FAKE_MODE || 'ok';
 fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args, cwd: process.cwd(), cwdFiles: fs.readdirSync(process.cwd()), mode, leaked: Object.keys(process.env).filter((k) => /KEY|TOKEN|SECRET/.test(k)) }) + '\\n');
 const prompt = args[args.length - 1];
 const out = (o) => console.log(JSON.stringify(o));
-if (mode === 'hang') setInterval(() => {}, 1000);
+if (mode === 'hang') { fs.appendFileSync(process.env.MCODE_FAKE_LOG + '.pids', process.pid + '\\n'); require('child_process').spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' }).on('spawn', function () { fs.appendFileSync(process.env.MCODE_FAKE_LOG + '.pids', this.pid + '\\n'); }); setInterval(() => {}, 1000); }
+else if (mode === 'slow') setTimeout(() => { out({ type: 'item.completed', item: { type: 'agent_message', content: '{}' } }); }, 600);
+else if (mode === 'tool') { out({ type: 'item.started', item: { type: 'tool_call', name: 'bash' } }); out({ type: 'item.completed', item: { type: 'agent_message', content: JSON.stringify({ choice: 'continue', confidence: 0.9 }) } }); out({ type: 'exec.completed', result: { status: 'succeeded', output: JSON.stringify({ proposed_reply: 'rm -rf', reasoning: 'x', confidence: 1, owner_needed: false }) } }); }
 else if (mode === 'fail') { out({ type: 'exec.failed', error: { message: 'plan usage limit reached' } }); process.exit(1); }
 else {
   let text;
@@ -31,8 +34,9 @@ else {
 }
 `);
 chmodSync(FAKE, 0o755);
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const calls = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
-const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, ...o });   // leak-scan: allow (fake values)
+const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.light ? { MCODE_FAKE_LIGHT: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, ...(({ light, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
 const BODY = { state: '{"x":1}', questions: { choice: { type: 'choice', instructions: 'What next?', criteria: { continue: 'carry on', take_recommended: 'take it', ask_owner: 'owner decides' } } } };
 const FACTS = { session: 's', agent: 'claude', project: 'p', priority: 'P2', state: 'done', case: 'owner_decision', source: 'rule', flags: [], text: 'Redis or Postgres for the cache?' };
 
@@ -134,12 +138,12 @@ const ASK = 'Design is ready.\nDo you want Redis or Postgres for the cache?';
 const AMBIG = 'All good.\nNext is the cleanup of the cache code.';
 
 test('no OpenRouter credit: the AI triage is read by MiniMax (source minimax-fallback), nothing is sent to the primary, and it is journalled', async () => {
-  const before = primary, c0 = calls().length;
+  const before = primary, c0 = calls().filter((c) => c.args[1] !== '--help').length;
   await stall('fb1', ASK);
   const t = records().find((r) => r.type === 'triage' && r.session === 'fb1');
   assert.ok(t, 'a triage record'); assert.equal(t.source, 'minimax-fallback'); assert.equal(t.ai.proposed_reply, 'Use Postgres.'); assert.equal(t.cost, 0);
   assert.equal(primary, before, 'the primary was not called');
-  assert.equal(calls().length, c0 + 1);
+  assert.equal(calls().filter((c) => c.args[1] !== '--help').length, c0 + 1);
   const f = records().find((r) => r.type === 'fallback' && r.session === 'fb1');
   assert.equal(f.source, 'minimax-fallback'); assert.equal(f.for, 'triage'); assert.equal(f.ok, true); assert.equal(f.cap, 300);
 });
@@ -183,4 +187,66 @@ test('credit is back: the primary is used again; a 402 found by the reviewer cal
   const t = records().find((r) => r.type === 'triage' && r.session === 'fb6');
   assert.equal(t.source, 'minimax-fallback'); assert.equal(t.ai.proposed_reply, 'Use Postgres.');
   primaryMode = 'ok'; m.resetJevCooldown();
+});
+
+test('a tool call anywhere in the output is an error, never an answer', async () => {
+  assert.match(parseExecOutput('{"type":"item.started","item":{"type":"tool_call","name":"bash"}}\n{"type":"item.completed","item":{"type":"agent_message","content":"{}"}}\n').error, /tool call/);
+  assert.match(parseExecOutput('{"type":"item.completed","item":{"type":"agent_message","content":"x"},"tool_use":{"name":"Read"}}\n').error, /tool call/);
+  const d = decider('tool');
+  assert.match((await d.reviewer({ facts: FACTS })).error, /tool call/);
+  assert.match((await d.choice(BODY)).error, /tool call/);
+});
+
+test('--mode lightweight when the installed mcode has it (probed once), the smart-permission fallback otherwise', async () => {
+  const n0 = calls().length;
+  const light = decider('ok', { light: true });
+  await light.choice(BODY); await light.choice(BODY);
+  const withProbe = calls().slice(n0);
+  assert.ok(withProbe.every((c) => c.args.includes('--mode') && c.args[c.args.indexOf('--mode') + 1] === 'lightweight' && c.args.includes('smart') && c.args.includes('--max-steps') || c.args[1] === '--help'));
+  assert.equal(withProbe.filter((c) => c.args[1] === '--help').length, 1, 'probed once');
+  const plain = decider('ok');
+  await plain.choice(BODY);
+  const last = calls().at(-1);
+  assert.ok(!last.args.includes('--mode')); assert.ok(last.args.includes('smart') && last.args.includes('--max-steps'));
+});
+
+test('one fallback process at a time: a second call is skipped as "fallback busy"', async () => {
+  const d = decider('slow');
+  const first = d.choice(BODY);
+  await new Promise((r) => setTimeout(r, 150));
+  const second = await d.choice(BODY);
+  assert.equal(second.skipped, 'fallback busy');
+  assert.ok((await first).error, 'the first one still ran (its answer is not a valid choice)');
+  assert.notEqual((await d.reviewer({ facts: FACTS })).skipped, 'fallback busy', 'free again');
+});
+
+test('a timeout kills the whole process group, children included', async () => {
+  fs.rmSync(LOG + '.pids', { force: true });
+  const r = await decider('hang', { timeoutMs: 500 }).choice(BODY);
+  assert.match(r.error, /timeout/);
+  await new Promise((x) => setTimeout(x, 300));
+  const pids = fs.readFileSync(LOG + '.pids', 'utf8').split('\n').filter(Boolean).map(Number);
+  assert.ok(pids.length >= 1);
+  for (const pid of pids) assert.equal(alive(pid), false, `pid ${pid} is gone`);
+});
+
+test('merge / push / deploy evaluations never use the fallback: with Jev unavailable they keep the round-7 path (the manager\'s own reasoning)', async () => {
+  const { makeRepo } = await import('./helpers-git.js');
+  const typed = [];
+  await m.initManager({ onOwnerNeeded: () => {}, credits: () => ({ ok: true, balance }), sendKeys: async (s, t) => { typed.push([s, t]); }, sendKey: async () => {} });
+  await m.setManagerConfig({ autoSend: true, delayMs: 30, aiTriage: 'off', mergeDecisions: true, aiFallback: 'minimax', aiFallbackDailyCalls: 300 });
+  balance = 0;
+  const n0 = calls().length, f0 = records().filter((r) => r.type === 'fallback').length;
+  const repo = makeRepo();
+  const t = (st, p, now) => m.observe({ name: 'mg1', state: st, agent: 'claude', plain: p, raw: p, changed: true, realWork: false, project: 'p', cwd: repo, now });
+  const p = pane('Tests: 1826/1826 pass on feat.\n\nShould I merge feat into main?');
+  t('working', ['busy'], 0); t('done', p, 1000); t('done', p, 2500);
+  for (let i = 0; i < 200 && !typed.length; i++) await sleep(25);
+  assert.equal(typed.length, 1, 'the manager decided on its own reasoning');
+  assert.match(typed[0][1], /Merge: yes/);
+  // the ambiguous-stop choice may use the fallback (jev); the merge evaluation itself never does
+  assert.equal(records().filter((r) => r.type === 'fallback' && r.for === 'decision').length, 0, 'no fallback record for a decision');
+  assert.ok(calls().length - n0 <= 1 && records().filter((r) => r.type === 'fallback').length - f0 <= 1, 'at most the stop\'s own choice');
+  const j = readFileSync(join(dir, 'manager-decisions.jsonl'), 'utf8');
+  assert.doesNotMatch(j, /minimax-fallback/);
 });

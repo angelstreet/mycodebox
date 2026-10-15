@@ -1153,8 +1153,9 @@ each holder (live / ended / remote / unknown / system) and the planned action. T
   `{ summary: { median_s, mean_s, byClass, text }, records }`; the decided digest appends "Owner waits today: median 8 min, ... over 12 stops".
   Nothing in this repository wrote the file before (its writer was out of tree and stopped on 2026-10-09).
 - **MiniMax credit fallback** (`minimax-fallback.js`): with no OpenRouter credit (402 cool-down or cached balance 0) or the Jev breaker open, AI triage
-  and Jev-style choices (`jev()`, `jevPost()` for merge / push / deploy evaluations) use headless `mcode exec` (MiniMax M3; `--permission smart`, empty
-  temp `--cwd`, `--max-steps 1`, 20 s kill timeout, only `MCODE_`/`MINIMAX_` environment). `manager.json`: `aiFallback` `"minimax"` (default) | `"off"`,
+  and the ambiguous-stop Jev choice (`jev()`) use headless `mcode exec` (MiniMax M3; `--permission smart`, `--mode lightweight` when the installed mcode has it,
+  empty temp `--cwd`, `--max-steps 1`, one process at a time (`fallback busy`), detached process group killed after 20 s, a tool call in the output is an error, only
+  `MCODE_`/`MINIMAX_` environment). Merge / push / deploy evaluations (`jevPost()`) never use it: without Jev they keep the round-7 reasoning path. `manager.json`: `aiFallback` `"minimax"` (default) | `"off"`,
   `aiFallbackDailyCalls` (default 300). Every call writes `{type:'fallback', source:'minimax-fallback', cost:0}` to `stalls.jsonl`; triage and Jev records
   carry `source: 'minimax-fallback'`. `MCODE_BIN` / `MCODE_NODE_DIR` pick the binary.
 - **Ready window** (`ready-window.js`): `POST /api/ready { device | host | session, minutes }` (1..240; no name = any session; `{ clear: <id>|"all" }`),

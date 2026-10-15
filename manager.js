@@ -347,6 +347,19 @@ function aiBlock(name, kase, confidence) {
 export const REMOTE_PREFIX = 'mac:';
 export const isRemoteSession = (name) => String(name).startsWith(REMOTE_PREFIX);
 let remoteHooks = { settled() {}, cancelled() {}, escalated() {}, noAnswer: () => false, maxDelayMs: () => null };
+// The manager's pending id of a session's current stop: the remote layer ties every hook call to its stop by this id.
+export const pendingIdOf = (name) => watch.get(name)?.pending?.id || null;
+// The Mac hook stopped waiting (poll closed, deadline passed, deliver found nobody): a pending answer is dropped and the owner gets the stop. Never quiet.
+export function hookLost(name, id, reason) {
+  const w = watch.get(name);
+  if (!w || !id || w.pending?.id !== id) return false;
+  if (w.auto && w.auto.id === id) cancelAuto(name, reason);   // logged (answer_cancelled), then the owner is told
+  if (w.stall) escalate(name, w.last?.state || 'done', w.stall, id, reason);
+  return true;
+}
+// Merge and push are evaluated for local sessions only: a Mac session's branch is not visible here (docs/MAC-HOOK.md). Deploy reads origin and stays.
+export const REMOTE_GIT_WHY = "evaluated only for local sessions: the Mac's branch is not visible here";
+const remoteEscalation = (kind, s) => ({ verdict: 'escalate', reasons: [REMOTE_GIT_WHY], rationale: REMOTE_GIT_WHY, question: `${kind[0].toUpperCase()}${kind.slice(1)}?`, facts: { ok: false, error: REMOTE_GIT_WHY, repoName: s.project || null, files: [] }, tests: { state: 'unknown' }, decision: { source: 'floor', choice: 'escalate', confidence: 1, decision_id: null } });
 export function setRemoteHooks(h = {}) { remoteHooks = { ...remoteHooks, ...h }; }
 const hookSafe = (fn, ...a) => { try { fn(...a); } catch (e) { console.error('[manager] remote hook', e.message); } };
 
@@ -356,12 +369,14 @@ const hookSafe = (fn, ...a) => { try { fn(...a); } catch (e) { console.error('[m
 // Same gates as every manager decision (autoSend, pause, hourly cap, draft, hard floor on the reply). -> true when it scheduled an answer or escalated.
 function readyDecision({ s, w, id, h, final, stall }) {
   if (!readyWindows || isManagerSession(s.name) || stall.draft) return false;
+  if (s.state !== 'done' || (final.options?.length || 0) >= 1 || (stall.options?.length || 0) >= 1) return false;   // never type free text into a live menu (as partialDecision)
   if (!isHardwareAsk({ kase: final.case, action: final.action, question: final.question, excerpt: stall.excerpt })) return false;
   const win = readyWindows.match({ session: s.name, text: `${final.action || ''}\n${final.question || ''}\n${stall.excerpt || ''}` });
   if (!win) return false;
-  const { n, answer } = readyWindows.noteAsk(win, s.name, id);
+  const { n, answer } = readyWindows.peekAsk(win, s.name, id);
   if (!answer) { escalate(s.name, s.state, final, id, `ready window: ask number ${n} in the window (the step already failed twice) - needs you`); return true; }
-  if (decisionBlock(s.name)) return false;
+  if (decisionBlock(s.name)) return false;   // blocked (auto-answer off, paused, capped, draft): not counted as an answer
+  readyWindows.commitAsk(win, s.name, id);
   const reply = readyReply(readyWindows.view(win));
   const pending = { id, hash: h, answer: { text: reply }, case: final.case, source: 'manager_decision', confidence: 1, kinds: {}, ready: { until: win.until, target: win.target || null, n } };
   const pol = policyOf(s.name, s.agent);
@@ -398,7 +413,13 @@ function escalate(name, state, final, id, reason, aiLine = null) {
 // manager answered (outcome), a newer stop superseded it, or the session was removed. Local tmux and remote (Mac hook) sessions alike.
 const roundtrips = createRoundtrips({ file: join(STATE_DIR, ROUNDTRIPS_FILE) });
 const answerers = new Map();   // session -> { by, via, at }: who sent the owner's last text (server.js logSend -> noteAnswerer)
-export function noteAnswerer(name, by) { if (by === 'owner' || by === 'owner-voice') answerers.set(name, { by, via: by === 'owner-voice' ? 'voice' : 'dashboard', at: Date.now() }); }
+// Every actor is recorded; only a real owner send counts as `by: owner`. manager-agent, own-job wakes and other automation are `manager`.
+export function noteAnswerer(name, by, via = null) {
+  const actor = String(by || 'owner');
+  const rec = actor === 'owner' ? { by: 'owner', via: via || 'dashboard' } : actor === 'owner-voice' ? { by: 'owner-voice', via: 'voice' }
+    : actor === 'manager-agent' ? { by: 'manager', via: 'agent' } : actor === 'own-job' ? { by: 'manager', via: 'own-job' } : { by: 'manager', via: actor.slice(0, 30) };
+  answerers.set(name, { ...rec, at: Date.now() });
+}
 function settleRoundtrip(name, p, resolution, answeredAt, machine = 'local') {
   if (!p || p.settled || !p.id) return;
   p.settled = true;
@@ -523,7 +544,10 @@ function schedule(name, w, a) {
   cancelAuto(name, 'superseded', true);
   // remote (Mac hook) stop: the hook gave the stop a loop-guard flag -> never answered, the owner gets it; the countdown must end before the hook stops waiting
   if (isRemoteSession(name) && remoteHooks.noAnswer(name)) { escalate(name, w.last?.state, w.stall || { case: a.case }, a.id, 'the Stop hook was already continuing (loop guard): not answered automatically'); hookSafe(remoteHooks.cancelled, name, 'loop guard', a.id); return; }
-  const delayMs = isRemoteSession(name) ? Math.min(config.delayMs, remoteHooks.maxDelayMs() ?? config.delayMs) : config.delayMs;
+  // the countdown must end (with a margin) before the hook gives up, counted from NOW (the decision is ready); no time left = the owner gets it
+  const cap = isRemoteSession(name) ? remoteHooks.maxDelayMs(name, a.id) : null;
+  if (cap != null && cap <= 0) { escalate(name, w.last?.state, w.stall || { case: a.case }, a.id, 'the Mac hook stopped waiting before the answer'); hookSafe(remoteHooks.cancelled, name, 'the Mac hook stopped waiting before the answer', a.id); return; }
+  const delayMs = cap != null ? Math.min(config.delayMs, cap) : config.delayMs;
   const auto = { ...a, sendAt: Date.now() + delayMs };
   auto.timer = setTimeout(() => fire(name, auto).catch((e) => console.error('[manager] fire', e.message)), delayMs);
   w.auto = auto;
@@ -570,8 +594,8 @@ async function fire(name, auto) {
   w.auto = null;
   const a = auto.answer;
   try {
-    if (a.key != null) await send.key(name, String(a.key));
-    else await send.keys(name, a.text, true);
+    if (a.key != null) await send.key(name, String(a.key), auto.id);
+    else await send.keys(name, a.text, true, auto.id);
   } catch (e) {
     const ids = kindIds(auto), decided = Object.values(ids);
     if (decided.length) { try { onMergeCancelled(name, { id: auto.id, reason: `send failed: ${e.message}`, ...(ids.merge ? { merge_decision_id: ids.merge } : {}), decision_ids: decided }); } catch {} }
@@ -787,6 +811,7 @@ async function fallbackRun(kind, session, fn, why) {
   const gate = fallbackGate();
   if (gate) return { error: gate, source: FALLBACK_SOURCE, gated: true };
   const r = await fn(getFallback());
+  if (r.skipped) return { error: r.skipped, skipped: r.skipped, source: FALLBACK_SOURCE, gated: true };   // 'fallback busy': nothing ran, nothing counted
   fallbackBudget.add(0);
   logLater({ type: 'fallback', source: FALLBACK_SOURCE, for: kind, session: session || null, why, ok: !r.error, ...(r.error ? { error: String(r.error).slice(0, 200) } : {}), ms: r.ms ?? null, model: r.model || null, cost: 0, calls: fallbackBudget.snapshot().calls, cap: config.aiFallbackDailyCalls });
   return r;
@@ -953,9 +978,9 @@ async function jevPost(body) {
   if (jevSwitch.off()) return { skipped: DISABLED };
   if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
   if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return { skipped: 'daily budget reached' };
-  const viaFallback = async (why) => { const f = fallbackOn() && body?.questions?.choice ? await fallbackRun('decision', body.refs?.session, (d) => d.choice(body), why) : null; return f && !f.error ? f : null; };
-  if (creditsOut()) return (await viaFallback('OpenRouter credit used up')) || { skipped: 'OpenRouter credit used up (402), retrying later' };
-  if (!jevBreaker.allow()) return (await viaFallback('Jev down (breaker open)')) || { skipped: 'Jev down (3 errors in a row), rules decide' };
+  // merge / push / deploy evaluations never use the MiniMax fallback: when Jev is unavailable they keep the round-7 path (the manager's own reasoning)
+  if (Date.now() < creditsDownUntil) return { skipped: 'OpenRouter credit used up (402), retrying later' };
+  if (!jevBreaker.allow()) return { skipped: 'Jev down (3 errors in a row), rules decide' };
   body = { ...body, usage: await jevUsageNow(), ...(decisions.configured ? { team_id: VPT_TEAM_ID } : {}) };
   try {
     const r = await fetch(JEV_URL, { method: 'POST', headers: { 'content-type': 'application/json', 'X-API-Key': JEV_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) });
@@ -1034,7 +1059,7 @@ async function decideTopics({ s, id, h, w, text, askText = text, evidenceText, t
   };
   const stale = () => { if (w.hash !== h) { out.stale = true; return true; } return false; };
   if (wanted.merge) {
-    const ev = await evaluateMerge({ cwd: s.cwd, text, evidenceText, session: name, config, jev: jevFn });
+    const ev = s.remote ? remoteEscalation('merge', s) : await evaluateMerge({ cwd: s.cwd, text, evidenceText, session: name, config, jev: jevFn });
     if (stale()) return out;
     await record('merge', ev);
   }
@@ -1042,7 +1067,8 @@ async function decideTopics({ s, id, h, w, text, askText = text, evidenceText, t
     const mergeEv = out.evs.merge;
     const pa = parsePushAsk(askText);
     let ev;
-    if (mergeEv && !out.ok.merge && !pa.branch) {
+    if (s.remote) ev = remoteEscalation('push', s);   // round 9 remote block: no merge / push evaluation for a Mac session
+    else if (mergeEv && !out.ok.merge && !pa.branch) {
       ev = { verdict: 'escalate', reasons: ['the push lands a merge that was not decided'], rationale: 'the push lands a merge that was not decided', question: 'Push?', facts: { ok: false, repoName: mergeEv.facts.repoName, branch: mergeEv.facts.branch, dest: mergeEv.facts.target, files: [] }, tests: mergeEv.tests, decision: { source: 'floor', choice: 'escalate', confidence: 1, decision_id: null } };
     } else {
       const after = out.ok.merge && (!pa.branch || pa.branch === mergeEv.facts.target) ? { branch: mergeEv.facts.branch, target: mergeEv.facts.target, tests: mergeEv.tests, decision: mergeEv.decision, facts: mergeEv.facts } : null;

@@ -36,11 +36,18 @@ Rules the server enforces on this channel:
   escalated but never answered (loop guard).
 - The manager's cap applies per session and hour (`maxPerSessionPerHour`, default 4).
 - Cancelling the countdown on the dashboard resolves the long-poll with "no answer".
-- Merge, push and deploy questions need a local checkout of the project: map it in `<state>/remote.json`
-  (`{"checkouts": {"<project>": "/path/on/the-dashboard-host"}}`); without one those topics are escalated, never decided.
-  Information answers, lease questions, `continue` and `menu_recommended` work as for local sessions.
-- The countdown is the manager's `delayMs`, shortened to `waitS - 3` seconds so it ends before the hook gives up.
-  `waitS` is in `<state>/remote.json` too (default 45, 1..120).
+- Only the **deploy** topic is evaluated for a Mac session (it reads origin, and the runner deploys from origin; map the
+  project to a local checkout in `<state>/remote.json`: `{"checkouts": {"<project>": "/path/on/the-dashboard-host"}}`).
+  **Merge and push questions always escalate** with "evaluated only for local sessions: the Mac's branch is not visible
+  here", checkout or not. Information answers, lease questions, `continue` and `menu_recommended` work as for local sessions.
+- The countdown is the manager's `delayMs`, cut to the hook's deadline minus a 5 s margin, counted from when the decision is
+  ready (`waitS` in `<state>/remote.json`, default 45, 1..120). No time left means the owner gets the stop at once.
+- An answer is delivered only to a hook that is polling. If the hook stopped waiting (its poll closed, it did not come back
+  within a few seconds, the deadline passed, or the answer found nobody), the pending answer is dropped and the stop is
+  escalated to the owner with "the Mac hook stopped waiting before the answer". It is never marked answered.
+- Each hook call is tied to its stop by the manager's stop id, so overlapping stops of one session cannot answer each other.
+- The row is named `mac:<title>-<id6>` (title plus a fragment of the session id), so two sessions with one title stay apart.
+  Machine, project and title are slugged by the server ("[TASK72] fix" becomes `TASK72-fix`), never rejected.
 
 ## Prerequisites
 

@@ -147,3 +147,26 @@ test('decided for you: a ready answer is its own kind with a plain summary', asy
   assert.equal(decidedSummary([], {}).count, 0);
   assert.ok(decidedItems({ recs: [] }).length === 0);
 });
+
+test('a menu is never answered with free text, and a blocked answer does not use up the window\'s two', async () => {
+  sent.length = 0;
+  store.set({ device: 'pixel', minutes: 30 });
+  await ask('hw7', 'Is the pixel remote paired?\n\n1. Yes, it is paired\n2. No, press the pair button on the pixel remote'); await sleep(100);
+  assert.ok(!records().some((r) => r.type === 'answer' && r.session === 'hw7' && r.ready), 'the ready window did not answer a stop with options (the normal menu rules may)');
+  assert.ok(!sentTo('hw7').some((x) => /retry the step yourself/.test(String(x[1]))));
+  // auto-answer off: the ask is not answered and not counted
+  await m.setManagerConfig({ autoSend: false });
+  await ask('hw8', PAIR(1)); await sleep(50);
+  await ask('hw8', PAIR(2)); await sleep(50);
+  await ask('hw8', PAIR(3)); await sleep(50);
+  assert.equal(sentTo('hw8').length, 0);
+  assert.ok(!pushes.some((p) => p.s === 'hw8' && /ready window/.test(p.why)), 'blocked asks were not counted towards the third');
+  await m.setManagerConfig({ autoSend: true });
+  await ask('hw8', PAIR(4)); await sleep(100);
+  assert.equal(sentTo('hw8').length, 1, 'the first counted ask is answered');
+  await ask('hw8', PAIR(5)); await sleep(100);
+  assert.equal(sentTo('hw8').length, 2);
+  await ask('hw8', PAIR(6)); await sleep(100);
+  assert.equal(sentTo('hw8').length, 2, 'the third counted ask goes to the owner');
+  store.clear('all');
+});
