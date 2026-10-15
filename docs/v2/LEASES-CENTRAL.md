@@ -37,6 +37,15 @@ server process:
   device), the store is one in-memory index behind one async mutex, persisted as an append-only journal
   (`<state>/leases/journal.jsonl`, `fsync` before the reply) plus a periodic atomic snapshot. One process, one writer:
   no cross-file locking is needed.
+- **Durability.** Every journal entry has a sequence number; the snapshot records the `journal_seq` it covers and is
+  written to a temporary file, fsynced and renamed. Start-up replays the snapshot plus the entries after its sequence.
+  The journal is rotated only after a durable snapshot. A torn *last* line is normal (a crash after the append, the
+  reply never sent) and is dropped; a torn line anywhere else is corruption and the service starts read-only.
+  Per-resource generations, the event cursor and the hold statistics are derived from the journal and stay monotonic
+  across restarts. Heartbeat misses and idle times are measured on a monotonic clock, so a wall-clock step (NTP, a VM
+  resume) neither expires nor downgrades everything at once; the wall clock is used for TTLs and displayed times only.
+- **Restarts.** On every start the heartbeat-miss and idle clocks of all leases are reset to "now": a service outage or
+  restart never counts as missed heartbeats.
 - **Reach.** HTTP on the existing server under `/api/lease/v1/`, reachable from codebox, the owner's Mac, the registry
   host and the device hosts over the tailnet (the same listener and Tailscale Serve setup as the dashboard). Never
   public: requests from outside loopback and the tailnet range (or `LEASE_ALLOW_CIDRS`) are refused before
@@ -44,7 +53,13 @@ server process:
 - **Authentication.** A bearer token per client machine or script (`Authorization: Bearer ...`), stored hashed in
   `<state>/leases/clients.json` with its name. `node scripts/lease-token.js add <name>` prints a new token once;
   `revoke <name>` removes it. The caller's identity in every record is `<client name>` plus the agent string it sends.
-  The dashboard itself calls the service in-process.
+  A token belongs to a machine or a script, so all sessions on one machine are one principal: the agent string
+  distinguishes them but is self-asserted. The exemptions of the deploy path (`manager:deploy`, `update_core:*`) bind
+  to the token's client name (`exemptAgents` in `clients.json`), never to the agent string alone. Releasing, narrowing
+  or downgrading a lease by id requires the holder's client and agent, or an owner identity.
+  The dashboard itself calls the service in-process. Behind Tailscale Serve every request arrives from loopback, so the
+  address allowlist gates nothing in that setup: the bearer token is the real gate (Serve is private, never Funnel).
+  Owner actions from the dashboard record the real caller (`Tailscale-User-Login` when present, else `loopback`).
 - **Client.** `vpt-lease` becomes a thin client (`scripts/vpt-lease`, Python 3 standard library only, so it runs on the
   registry host and the device hosts unchanged): the same subcommands, arguments, output lines and exit codes, plus the
   new options below. Scripts and skills keep working.
@@ -72,8 +87,10 @@ Each lease also has a **mode** and, for exclusive leases, a **sensitivity**:
   UI, MCP, take-control); `host` means only a restart of your own host's services breaks you. Default: `host` for a
   device lease, `server` otherwise (as today).
 
-**Conflict matrix** (a new exclusive claim vs a held exclusive lease of another agent; `observe` and `pin` never
-conflict; the same agent never conflicts with itself):
+**Conflict matrix.** Two exclusive leases of different agents conflict when the table marks either order (the relation
+is symmetric: `conflicts(a, b) = M[a][b] or M[b][a]`, with the sensitivity read from the host or device side). `observe`
+and `pin` never conflict; the same agent never conflicts with itself; a `shared` exclusive lease conflicts only with
+non-shared ones (deploys treat shared leases as busy). The table is the upper triangle:
 
 | New claim \ held | env | frontend | server | host:h | device:h/d |
 |---|---|---|---|---|---|
@@ -84,12 +101,17 @@ conflict; the same agent never conflicts with itself):
 | device:h/d | X | - | - | same h | same h/d |
 
 So a frontend deploy never waits for a device run or a backend lease, and a run on one device never blocks another
-device on the same host.
+device on the same host. A whole-host lease defaults to sensitivity `server` (it blocks full and server deploys); the
+client warns when `--kind` is not given for one. `observe` gives no protection against a restart.
 
 **Deploys** claim their scope through the same matrix: `frontend` = frontend; `server` = server; `host` with `--hosts`
 = those hosts; `full` = env-wide, except that leased hosts are skipped (the `--skip-leased` behaviour: a held host or
 device lease drops that host from the deploy and queues a catch-up `host` deploy for it; only `env` and
-`server`-sensitive leases block a full deploy). There is exactly one implementation of these rules, in
+`server`-sensitive leases block a full deploy). A deploy restarts pinned devices on the hosts it covers; the pin holder
+gets an event and the Leases view and deploy log list the "pins overridden". `deploy start` checks and claims the
+deploy's resources atomically and returns the lease; the deploy child gets `VPT_DEPLOY_ID` and `VPT_LEASE_ID`, and a
+claim carrying the `deploy_id` of the running deploy joins that deploy's lease instead of conflicting with it.
+There is exactly one implementation of these rules, in
 `lease-service.js`; the dashboard, the deploy runner and the client ask it instead of keeping copies.
 
 ## 4. Never ask, wait: the FIFO queue
@@ -99,10 +121,20 @@ device lease drops that host from the deploy and queues a catch-up `host` deploy
   estimate at once so the session continues other work and later runs `vpt-lease ticket <id> --wait`. Without either
   option the legacy behaviour holds: exit 3 when busy.
 - Tickets are granted in FIFO order per conflict set: a ticket is granted when it conflicts with no held lease **and**
-  with no earlier waiting ticket, so a stream of short claims cannot starve a waiting deploy.
-- **ETA**: for each blocker, the later of now and its expected end (its own `expect_min` if the holder gave one, else
-  the median hold of that resource type over the last 7 days, capped by its TTL); the ticket's ETA is the latest
-  blocker end plus the expected holds of the tickets ahead of it. Every answer shows `position`, `eta` and the holders.
+  with no earlier *conflicting* waiting ticket (never per env), so a stream of short claims cannot starve a waiting
+  deploy. To avoid head-of-line convoys (a queued full deploy holding back a free frontend), a later request may pass a
+  waiting ticket when its expected hold ends before that ticket's earliest possible grant; a ticket passed 3 times or
+  older than 15 minutes becomes strict. A plain claim (no `--wait`) also respects waiting tickets; its busy answer says
+  `queued` with the position, and the client prints "free but N waiting: use --wait".
+- A granted ticket is a reservation with a 2-minute collection window (the long-poll cadence). Uncollected, it is
+  released and the ticket becomes `missed`; collecting it later re-claims with the original queue position.
+- **ETA**: for each blocker, the later of now and its expected end: its own `expect_min` if the holder gave one (shown
+  as the holder's statement), else the median *remaining* hold of that resource type given how long it has already
+  been held (holds are heavy-tailed: median 1.3 min, max 138), falling back to the 75th percentile; the ticket's ETA is
+  the latest blocker end plus the expected holds of the tickets ahead. Every answer also carries `eta_latest`, the
+  blockers' TTL expiry, an honest upper bound. Answers show `position`, `eta`, `eta_latest` and the holders.
+- A claim may carry a client `request_id`; a retry with the same id (the client retries by design) returns the same
+  grant or ticket, so a lost reply never creates a second lease.
 - A ticket expires when its client stops polling for 10 minutes (a session that went away does not keep a place).
 - **The deploy queue** moves into the same service with the registry's semantics: `deploy request / list / approve /
   cancel / start / finish / wait / record / last`, FIFO per env, coalescing of same-ref requests, catch-up host deploys
@@ -114,19 +146,29 @@ device lease drops that host from the deploy and queues a catch-up `host` deploy
 ## 5. No ghost holds
 
 - **TTL plus heartbeat.** A lease has a TTL (default 120 min, cap 8 h; a longer one needs `--ttl` and is shown in
-  amber) and a heartbeat interval (default 5 min). The client sends heartbeats while the command that holds the lease
-  runs: `vpt-lease run <claim args> -- <command>` claims, runs the command, heartbeats in the background and releases
-  when it exits (also on failure or interrupt). Interactive holders heartbeat with `vpt-lease heartbeat <id>
-  [--active]`. A lease with no heartbeat for three intervals is released and logged.
+  amber). Heartbeats are opt-in: a lease that declares a heartbeat interval (as `vpt-lease run` does) is released and
+  logged when three heartbeats are missed; a plain `claim; work; release` (the legacy pattern, and every imported lease)
+  keeps the TTL and the idle rule below as its only reclaimers, so existing scripts keep working.
+  `vpt-lease run <claim args> -- <command>` claims (waiting if needed), runs the command, sends *active* heartbeats in
+  the background (a wrapped command is driving) and releases when it exits, also on failure or interrupt. Interactive
+  holders heartbeat with `vpt-lease heartbeat <id> [--active]`.
 - **Session liveness.** A lease records the holder's session (`codebox:<tmux>`, `mac:<id>`, a script name). For codebox
   sessions the dashboard knows which tmux sessions are alive: a gone session loses its leases after a 2-minute grace;
-  session end releases them at once. Mac and other machines rely on the heartbeat (round 9's Mac hook can report
+  session end releases them at once. "Gone" is only ever derived from a successful tmux listing (a failed listing is
+  "unknown"), sessions are identified by tmux's session id as well as the name (a new session reusing a name does not
+  inherit the old one's leases), and after a dashboard restart nothing is declared gone before the first successful
+  listing. Mac and other machines rely on the heartbeat (round 9's Mac hook can report
   liveness later).
-- **Idle exclusive holds become pins** (addendum). An exclusive lease with no `--active` heartbeat (control activity on
-  the resource) for `idleMs` (default 20 min, configurable per resource type) is downgraded to `pin` and the queue moves
-  on; the holder is told. A codebox session whose last STATUS is `waiting` or `blocked` on its own job never keeps an
-  exclusive lease: it is downgraded when that STATUS is seen. Copying archived chunks read-only needs `observe` or no
-  lease at all.
+- **Idle exclusive holds become pins** (addendum). An exclusive lease with no activity for `idleMs` (default 20 min,
+  configurable per resource type) is downgraded to `pin` and the queue moves on; the holder is told. Activity is an
+  `--active` heartbeat (every `vpt-lease run` heartbeat is active), or a working turn of the holder's codebox session
+  (the dashboard reports it). Never downgraded: deploy leases (`manager:deploy`, `update_core:*`, leases made by `deploy
+  start`), which are bounded by their TTL and the 90-minute running-deploy limit, and leases whose own `expect_min` has
+  not elapsed.
+- **Waiting while holding.** A session whose STATUS is `blocked`, or `waiting` on something that is not its leased
+  resource (another lease, CI, the owner), and that shows no activity, has its exclusive leases downgraded to pins. A
+  session waiting on its own job *on* the leased device ("waiting: script run on stb-1") keeps the lease; it is only
+  flagged. Copying archived chunks read-only needs `observe` or no lease at all.
 - **Owner force-release** from the Leases view: one tap plus a second tap to confirm, logged with `by: owner`, the
   holder is told.
 
@@ -154,6 +196,12 @@ This folds in round 9 item 6 ("frontend-only deploys need no backend lease; busy
   as busy, never as free. With `--wait` the client retries with backoff (5 s doubling to 2 min) and keeps waiting; it
   never asks the owner. `update_core.sh` must stop deploying without the check when the registry is unreachable (owner
   side change, listed in the cut-over).
+- A holder of a live lease keeps acting while the service is unreachable (its lease is time-bounded) and keeps retrying
+  heartbeats; `E_UNAVAILABLE` is never read as "lease lost".
+- Fencing reaches as far as the client: external systems (systemd, the VPT server) never see the lease token. A holder
+  can check its lease right before a protected step (`vpt-lease validate <id>`, `GET /leases/<id>`), and deploy scripts
+  should do so before each restart. When a heartbeat answers fenced, gone or downgraded, `vpt-lease run` says so on
+  stderr, stops heartbeating and exits non-zero after the command ends (`--on-fence kill` stops the command at once).
 - A corrupt or missing journal: the service starts read-only and refuses grants until the owner restores it
   (`E_UNAVAILABLE`), as `lease-authority.js` does today.
 
@@ -165,25 +213,35 @@ This folds in round 9 item 6 ("frontend-only deploys need no backend lease; busy
 
 ## 10. Shadow period, cut-over, rollback
 
-The client has three modes, set per machine with `VPT_LEASE_MODE` (and `VPT_LEASE_URL`, `VPT_LEASE_TOKEN_FILE`):
+The client has three modes, set per machine in `~/.config/vpt-lease/config` (`mode=`, `url=`, `token_file=`; the
+`VPT_LEASE_*` environment variables override it, but non-interactive ssh commands only see the file):
 
 | Mode | Authoritative | Also |
 |---|---|---|
 | `legacy` (default) | the old registry | nothing (today's behaviour) |
-| `shadow` | the old registry | every command is also sent to the service with `shadow: true` (it keeps a separate shadow store and never grants anything real); the client compares the outcomes (exit code, busy or free, lease ids mapped) and posts each disagreement to `POST /shadow-report`; the Leases view shows them |
+| `shadow` | the old registry | every command is also sent to the service with `shadow: true` (2-second timeout, never retried; it keeps a separate shadow store, never grants anything real, and the deploy runner never reads it); the client compares the outcomes (exit code, busy or free, lease ids mapped) and posts each disagreement to `POST /shadow-report`, classed `by-design` (the new matrix allows what the old rules refused, e.g. frontend next to a host lease) or `mismatch`; the Leases view shows them. Options that exist only in the new client degrade in legacy and shadow mode (`--wait` becomes a plain claim, `run` claims, executes and releases), and never block |
 | `central` | the service | the old registry is not called |
 
-Cut-over (owner side; nothing here is done by this round):
+Cut-over (owner side; nothing here is done by this round). The order matters: the deploy script must fail closed
+before any machine trusts the service.
 1. Merge, restart mycodebox, create one token per machine (`node scripts/lease-token.js add <name>`).
-2. Install the client and its token on codebox, the Mac, the registry host and the device hosts; set
-   `VPT_LEASE_MODE=shadow`.
-3. Run a day in shadow; read the disagreement list on the Leases view; fix or explain each.
-4. Set `VPT_LEASE_MODE=central` on every machine at once; the service imports the registry's open leases and queued
-   deploys (`node scripts/lease-import.js`, reading `list --json` and `deploy list --json`).
-5. Update `update_core.sh` (fail closed, one atomic claim instead of check-then-claim), render and copy the deploy skill.
+2. Change `update_core.sh` and verify it during the shadow period: treat every exit code other than 0 and 3 as busy
+   (no more "registry unreachable, deploying anyway"), make one atomic claim instead of check-then-claim, claim
+   `<env>/server` for `--server` instead of `*`, and resolve a host given by IP to its host name.
+3. Install the client on the registry host *as* `~/bin/vpt-lease` (the old binary becomes `~/bin/vpt-lease.legacy`, so
+   every `ssh <registry> ~/bin/vpt-lease ...` caller follows the client's mode), and on codebox, the Mac and the device
+   hosts; write their config files with `mode=shadow`; render the deploy skill from `docs/LEASE-RULES.md` and copy it to
+   both machines.
+4. Run a day in shadow; read the disagreement list on the Leases view; fix or explain each `mismatch`.
+5. Freeze briefly (deploy runner off, no claims expected), switch the registry host to `mode=central`, import the open
+   leases and queued deploys (`node scripts/lease-import.js`; legacy lease ids and expiry times are kept, so
+   `release <old id>` still works), switch every other machine to `central`, then set `leaseAuthority: "central"` in
+   the dashboard and turn the deploy runner back on.
 
-Rollback: set `VPT_LEASE_MODE=legacy` everywhere; the old registry was never modified by the service and takes over
-again (leases granted by the service in the meantime are listed by `node scripts/lease-export.js` for the owner).
+Rollback: set `mode=legacy` everywhere; the old registry was never modified by the service and takes over again.
+`node scripts/lease-export.js` lists the leases, tickets and queued deploys the service granted in the meantime, for the
+owner to re-create on the old registry. Event cursors (lease-watch, handoffs) are kept per source, so switching back
+and forth neither replays nor skips events.
 
 ## Appendix A. API contract (v1)
 
