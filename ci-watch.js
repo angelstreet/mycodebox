@@ -2,7 +2,8 @@
 // Every 30 min it reads main's newest finished CI run (gh). Red -> one fixer session on that repo (cbsession) with a
 // standard brief, or a nudge with the new run if the fixer is already up and idle. Green -> ci-watch:green, streak reset.
 // After MAX_ATTEMPTS dispatches in one red streak it stops and asks the owner once (ci-watch:stuck, pushed).
-// Config: <stateDir>/ci-watch.json { repo, workflow, branch, cwd, model, session } (the repo slug stays out of this repo).
+// Config: <stateDir>/ci-watch.json { repo, workflow, branch, cwd, session, provider, model } (the repo slug stays out of this repo).
+// provider/model go to cbsession -p/-m (default claude, cbsession's model); the owner prefers an existing MiniMax M3 session (2026-10-15).
 // Switch: manager.json `ciWatch` "live" (default) | "dry" (log what it would do) | "off". Journal: ci-watch.jsonl.
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -82,7 +83,7 @@ export function createCiWatch({
       if (m === 'off') return (last = { ...last, at: now(), mode: m });
       let cfg;
       try { cfg = JSON.parse(await readFile(cfgFile, 'utf8')); } catch { return (last = { at: now(), mode: m, verdict: 'no ci-watch.json', action: null }); }
-      cfg = { branch: 'main', model: 'sonnet', session: 'ci-fix-main', ...cfg };
+      cfg = { branch: 'main', session: 'ci-fix-main', provider: 'claude', ...cfg };
       await load();
       const runs = await gh(['run', 'list', '-R', cfg.repo, '-b', cfg.branch, ...(cfg.workflow ? ['-w', cfg.workflow] : []), '-L', '20',
         '--json', 'databaseId,headSha,status,conclusion,createdAt,url']);
@@ -116,7 +117,7 @@ export function createCiWatch({
       if (d.type === 'start') {
         const promptFile = join(dir, `${v.run.databaseId}.prompt.md`);
         await writeFile(promptFile, text);
-        await startSession({ name: cfg.session, cwd: cfg.cwd, model: cfg.model, promptFile });
+        await startSession({ name: cfg.session, cwd: cfg.cwd, provider: cfg.provider, model: cfg.model, promptFile });
       } else {
         await sendToSession(cfg.session, `ci-watch: ${cfg.branch} is still red. Run ${v.run.url}, failing: ${jobs.join(', ') || 'see the run'}.${logFile ? ` Log excerpt: ${logFile}.` : ''} Fix it as in your brief, push, and watch the run.`);
       }

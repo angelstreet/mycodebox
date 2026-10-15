@@ -687,11 +687,12 @@ const ciWatch = createCiWatch({
   sessionState: async (name) => {
     const exists = await sessionExists(name);
     const live = exists ? await liveAgentOf(name) : null;
-    return { exists, alive: !!live, working: !!(live && reporter.activityOf(name)?.working) };
+    // Claude reports turns through the plugin; MiniMax only shows on screen, so the dashboard's own state counts too.
+    return { exists, alive: !!live, working: !!(live && (reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working')) };
   },
-  startSession: async ({ name, cwd, model, promptFile }) => {
+  startSession: async ({ name, cwd, provider, model, promptFile }) => {
     if (await sessionExists(name)) await exec(TMUX, ['kill-session', '-t', `=${name}`]);   // only reached with no live agent in it
-    await exec(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'cbsession'), ['-n', name, '-d', cwd, '-m', model, '-f', promptFile], { timeout: 180000 });
+    await exec(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'cbsession'), ['-n', name, '-d', cwd, '-p', provider, ...(model ? ['-m', model] : []), '-f', promptFile], { timeout: 180000 });
   },
   sendToSession: (name, text) => sendKeys(name, text),
   record: (e) => managerEvents.record(e),

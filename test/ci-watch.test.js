@@ -73,7 +73,7 @@ test('tick: red -> red event + fixer started with a brief file; working fixer ->
   assert.deepEqual(h.calls.events, ['ci-watch:red', 'ci-watch:fixer-started']);
   assert.equal(h.calls.started.length, 1);
   const s = h.calls.started[0];
-  assert.equal(s.name, 'ci-fix-main'); assert.equal(s.cwd, '/w/fake'); assert.equal(s.model, 'sonnet');
+  assert.equal(s.name, 'ci-fix-main'); assert.equal(s.cwd, '/w/fake'); assert.equal(s.provider, 'claude'); assert.equal(s.model, undefined);
   assert.match(readFileSync(s.promptFile, 'utf8'), /Frontend Lint/);
   assert.match(readFileSync(join(h.dir, 'ci-fix', '2.log'), 'utf8'), /unused eslint-disable/);
   h.advance(30); await h.w.tick();
