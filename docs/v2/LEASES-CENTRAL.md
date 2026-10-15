@@ -57,6 +57,10 @@ server process:
   distinguishes them but is self-asserted. The exemptions of the deploy path (`manager:deploy`, `update_core:*`) bind
   to the token's client name (`exemptAgents` in `clients.json`), never to the agent string alone. Releasing, narrowing
   or downgrading a lease by id requires the holder's client and agent, or an owner identity.
+  Owner powers (force-release, downgrade of someone else's lease, import, deploy approval) need a token created with
+  `--owner`; any other token gets `E_AUTH`. Deploy start, finish and cancel need the deploy runner's client or the
+  requesting client, and only they may join a running deploy's lease. Leases the dashboard takes in-process carry an
+  internal client name no token can match; imported leases answer to their agent string or an owner.
   The dashboard itself calls the service in-process. Behind Tailscale Serve every request arrives from loopback, so the
   address allowlist gates nothing in that setup: the bearer token is the real gate (Serve is private, never Funnel).
   Owner actions from the dashboard record the real caller (`Tailscale-User-Login` when present, else `loopback`).
@@ -159,8 +163,11 @@ There is exactly one implementation of these rules, in
   inherit the old one's leases), and after a dashboard restart nothing is declared gone before the first successful
   listing. Mac and other machines rely on the heartbeat (round 9's Mac hook can report
   liveness later).
-- **Idle exclusive holds become pins** (addendum). An exclusive lease with no activity for `idleMs` (default 20 min,
-  configurable per resource type) is downgraded to `pin` and the queue moves on; the holder is told. Activity is an
+- **Idle exclusive holds become pins** (addendum). An exclusive lease whose activity the service can observe (it declared
+  a heartbeat, or its holder is a codebox session the dashboard tracks) and that shows no activity for `idleMs`
+  (default 20 min, configurable per resource type) is downgraded to `pin` and the queue moves on; the holder is told. A
+  plain claim from another machine, or an imported lease, has no observable activity: it keeps its exclusivity until its
+  TTL (the Mac becomes observable with round 9's Mac intake). Activity is an
   `--active` heartbeat (every `vpt-lease run` heartbeat is active), or a working turn of the holder's codebox session
   (the dashboard reports it). Never downgraded: deploy leases (`manager:deploy`, `update_core:*`, leases made by `deploy
   start`), which are bounded by their TTL and the 90-minute running-deploy limit, and leases whose own `expect_min` has
@@ -290,6 +297,11 @@ Where the build is more specific than the design above:
   agent must match only when the caller sends one, so a legacy `release <id>` keeps working. Imported leases have no
   client: any authenticated client may release them, as on the registry today. "Not the holder" is `E_AUTH` (403).
 - **Heartbeats.** Leases have no heartbeat requirement unless they declare `heartbeat_s`; `vpt-lease run` declares 300 s.
+- **Import.** Rows that conflict with a live exclusive lease are skipped and reported (the import exits 1); TTLs are
+  capped like a claim's. `--ttl` above 8 h is accepted with a warning, up to 24 h (the registry had no maximum).
+- **Pending deploys.** A queued or running deploy blocks new claims only where its scope conflicts in the matrix (a
+  device claim of kind `host` is not blocked by a server deploy). A manual `update_core.sh` holding its lease blocks the
+  deploy runner's start like any other holder.
 - **Events.** Besides the kinds in Appendix A: `pin_overlap`, `flag` (a waiting holder kept its lease) and `deploy`.
 - **Routes.** Besides Appendix A: `POST /owner/mode` and `POST /import` (used by `scripts/lease-import.js --apply`).
 - **Validate.** `GET /leases/:id` answers `{ id, mode, generation, state: active | reserved, agent }`; `vpt-lease
