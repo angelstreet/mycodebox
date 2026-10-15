@@ -1141,7 +1141,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   return {
     claim, ticket, cancelTicket, get, release, renew, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, activity, tick,
     deploy, shadow, importLegacy,
-    async status() { return { ok: !broken, readOnly: !!broken || cfg.readonly, reason: broken, seq: S.seq, leases: Object.keys(S.leases).length }; },
+    async status() { return { ok: !broken, readOnly: !!broken || cfg.readonly, reason: broken, seq: S.seq, leases: Object.keys(S.leases).length, polls: polls.size, parsed: parsedCache.size }; },
     async close() { await chain.catch(() => {}); if (shadowSvc) await shadowSvc.close(); },
   };
 }
