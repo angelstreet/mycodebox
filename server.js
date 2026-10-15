@@ -1992,7 +1992,8 @@ const voice = createVoice({
   },
 });
 
-const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_DIR, 'leases') });
+const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_DIR, 'leases'),
+  viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // same proxy test as requestIdentity: only a Serve-proxied request may name a tailnet login
 
 const server = http.createServer((req, res) => {
   handleHttp(req, res).catch((err) => {
