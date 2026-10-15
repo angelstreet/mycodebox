@@ -229,6 +229,15 @@ export function createDeployRunner({
     }
   }
 
+  // A line for the deploy log from outside the run (the lease service says this deploy overrode a pin). Once per distinct line; the log is what the
+  // Deploys view and GET /api/deploys/:id/log show.
+  const noted = new Set();
+  async function note(id, line) {
+    if (!/^[0-9a-f]{1,16}$/.test(String(id)) || noted.has(`${id}|${line}`)) return false;
+    noted.add(`${id}|${line}`); if (noted.size > 500) noted.delete(noted.values().next().value);
+    try { await mkdir(logDir, { recursive: true }); await appendFile(join(logDir, `${id}.log`), `# ${String(line).replace(/\s+/g, ' ').slice(0, 300)}\n`); return true; } catch (e) { log.error?.('[deploy] note', e.message); return false; }
+  }
+
   async function logTail(id, n = 200) {
     try { return (await readFile(join(logDir, `${id}.log`), 'utf8')).split('\n').slice(-n - 1).join('\n').trimEnd(); } catch { return ''; }
   }
@@ -394,7 +403,7 @@ export function createDeployRunner({
   }
 
   return {
-    tick, snapshot, act, logTail,
+    tick, snapshot, act, logTail, note,
     start() { tick(); timer = setInterval(tick, pollMs); timer.unref?.(); },
     stop() { clearInterval(timer); },
     _running: running,

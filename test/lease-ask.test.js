@@ -99,12 +99,23 @@ test('observe: "is X free?" is answered from the lease source, not escalated', a
   assert.ok(!owner.some((o) => o.session === 'me'));
   assert.equal(stalls().find((r) => r.type === 'answer' && r.session === 'me').source, 'manager_decision');
 });
-test('observe: "can I deploy, the lease ..." (waiting_deploy) is answered too', async () => {
+test('observe: a lease ask that also asks to deploy or restart is NOT auto-answered as a lease question (item 2)', async () => {
+  const n = typed.length, o = owner.length;
+  await stop('wd', 'Frontend change is ready.\n\nCan I deploy, the lease on env-a/frontend is held by codebox:dev1?', { outcome: false });
+  await stop('d2', 'Ready.\n\nIs the server lease free so I can deploy the server now?', { outcome: false });
+  await stop('d3', 'Ready.\n\nThe lease on server is free - should I restart vpt-server and deploy?', { outcome: false });
+  await wait(400);
+  assert.ok(!typed.slice(n).some((x) => /vpt-lease|never ask the owner about a lease/.test(x.text)), JSON.stringify(typed.slice(n)));
+  assert.ok(['wd', 'd2', 'd3'].every((x) => owner.slice(o).some((y) => y.session === x)), JSON.stringify(owner.slice(o)));
+});
+test('observe: leaseAnswers off -> a pure lease question goes the old way', async () => {
   const n = typed.length;
-  await stop('wd', 'Frontend change is ready.\n\nCan I deploy, the lease on env-a/frontend is held by codebox:dev1?');
-  assert.equal(typed.length, n + 1, JSON.stringify({ owner }));
-  assert.match(typed.at(-1).text, /held by codebox:dev1/);
-  assert.ok(!owner.some((o) => o.session === 'wd'));
+  await m.setManagerConfig({ leaseAnswers: false });
+  await stop('off', 'Ready.\n\nIs env-a/frontend free?', { outcome: false });
+  await wait(300);
+  assert.equal(typed.length, n);
+  await m.setManagerConfig({ leaseAnswers: true });
+  assert.equal(m.managerConfig().leaseAnswers, true);
 });
 test('observe: a hard topic in the same stop still escalates, the lease part is answered', async () => {
   const n = typed.length, o = owner.length;

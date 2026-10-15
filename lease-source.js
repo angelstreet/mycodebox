@@ -42,7 +42,7 @@ export function normLease(l, now) {
   const ttl = Number.isFinite(l.ttlLeftMin) ? l.ttlLeftMin : expiresMs ? Math.max(0, Math.floor((expiresMs - now) / 60000)) : null;
   return {
     id: String(l.id), env, resources, mode: l.mode || 'exclusive', kind: l.kind || 'host', agent: l.agent || '', session: l.session || '', purpose: l.purpose || '',
-    sinceMs, ttlLeftMin: ttl, lastHeartbeatMs: tms(l.lastHeartbeatAt ?? l.last_heartbeat_at), idleMin: Number.isFinite(l.idleMin) ? l.idleMin : null, heartbeatS: l.heartbeat_s ?? null,
+    deployId: l.deploy_id || null, sinceMs, ttlLeftMin: ttl, lastHeartbeatMs: tms(l.lastHeartbeatAt ?? l.last_heartbeat_at), idleMin: Number.isFinite(l.idleMin) ? l.idleMin : null, heartbeatS: l.heartbeat_s ?? null,
   };
 }
 export function normTicket(t, now) {
@@ -94,8 +94,16 @@ const EXIT = { E_HELD: 3, E_DEPLOY_PENDING: 4, E_UNAVAILABLE: 5, E_NOT_FOUND: 1,
 export const exitOf = (res) => (res && res.ok === false ? EXIT[res.code] ?? 1 : 0);
 const csv = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
 
-// the caller identity the service logs: the plain owner, or the owner with the login Tailscale Serve reported
-const ownerBy = (identity) => (!identity || identity === 'loopback' ? 'owner' : `owner:${identity}`);
+// the caller identity the service logs: a bare loopback caller is `loopback` (anyone on the box can curl it: never "owner"), a request through Serve carries its login
+const ownerBy = (identity) => (!identity || identity === 'loopback' ? 'loopback' : `owner:${identity}`);
+
+// A reverse proxy (Tailscale Serve) connects from 127.0.0.1 too. Its login header counts only on a proxied request (forwarding headers present);
+// a bare loopback request is `loopback`, whatever header it may carry.
+export function requestIdentity(headers = {}) {
+  const proxied = ['x-forwarded-for', 'forwarded'].some((h) => headers[h] !== undefined);
+  const login = headers['tailscale-user-login'];
+  return proxied && typeof login === 'string' && login.trim() ? login.trim().slice(0, 80) : 'loopback';
+}
 
 export function centralRegistry(getService, { now = Date.now } = {}) {
   return async function registry(args, { stdin } = {}) {
@@ -108,7 +116,7 @@ export function centralRegistry(getService, { now = Date.now } = {}) {
     try {
       let res;
       if (sub === 'list') {
-        res = await svc.deploy.list({});
+        res = await svc.deploy.list({ all: true });   // finished deploys too: the runner's lastRef and the Platforms history read them
         const rich = await svc.list({}).catch(() => null);
         const deploys = Array.isArray(res) ? res : res?.deploys || [];
         const leases = rich?.ok === false ? undefined : legacyRows((rich?.leases || []).map((l) => normLease(l, now())));
@@ -202,7 +210,8 @@ export function createLeaseSource({ authority = 'legacy', legacy = {}, getServic
     // `text`: the STATUS text, so the service can tell "waiting on my own script on this device" from "waiting on something else"
     async sessionStatus(name, status, text = '') { if (auth() !== 'central') return false; try { await getService()?.sessionStatus?.(`codebox:${name}`, status, text); return true; } catch { return false; } },
     // control activity of a codebox session (a working turn, a recent turn end) resets the idle clock of the exclusive leases it holds
-    async activity(name) { if (auth() !== 'central') return 0; try { const r = await getService()?.activity?.(`codebox:${name}`); return r?.touched ?? 0; } catch { return 0; } },
+    // `session` is the lease's own session / agent string (`codebox:<x>` as the holder wrote it), not a resolved tmux name; a bare name gets the prefix
+    async activity(session) { if (auth() !== 'central') return 0; try { const r = await getService()?.activity?.(String(session).includes(':') ? String(session) : `codebox:${session}`); return r?.touched ?? 0; } catch { return 0; } },
   };
 }
 
@@ -226,6 +235,16 @@ export function createSessionTracker({ source, isListOk = () => true } = {}) {
 
 // STATUS of a stop -> service (central) / feed flag (legacy). Only waiting / blocked matter.
 export const WAITING_STATUS = /^(?:waiting|blocked)$/;
+
+// A `pin_overlap` event (about the pin: id, env, resources, agent; by_lease = the exclusive lease that was granted over it) -> the line for that
+// deploy's log, when the granting lease is a deploy's (view.leases carry deployId). null otherwise.
+export function pinOverrideNote(ev, view) {
+  if (String(ev?.kind || '').replace(/_/g, '-') !== 'pin-overlap' || !ev.by_lease) return null;
+  const by = (view?.leases || []).find((l) => l.id === ev.by_lease);
+  if (!by?.deployId) return null;
+  const where = `${ev.env ? `${ev.env}/` : ''}${asList(ev.resources).join(',') || '*'}`;
+  return { deployId: by.deployId, line: `pin overridden: ${where} pinned by ${ev.agent || '?'} (lease ${ev.id || '?'})` };
+}
 
 // --- service events -> feed records, and the one-line note to a codebox session ---------------------------------------------
 const EVENT_KIND = /^(downgraded|pin[-_]?overlap)$/i;
@@ -259,6 +278,21 @@ export function noteAllowed(st) {
   return !s.draft && !(s.options?.length);
 }
 
+// Liveness for the service (sessions.isAlive / sessions.trackable). `resolve(session)` maps a holder string (`codebox:<x>`) to a live tmux session
+// with the tolerant matcher the rest of the dashboard uses, or null. true = resolves now; false ONLY for a holder this process has seen alive and
+// no longer sees; undefined (never releases anything) for everything else: a never-seen name, a cron script with no session, a failed listing.
+export function createLiveness({ resolve, ready = () => true } = {}) {
+  const seen = new Set();
+  return {
+    isAlive(session) {
+      if (!ready()) return undefined;
+      if (resolve(session)) { if (seen.size > 2000) seen.clear(); seen.add(session); return true; }
+      return seen.has(session) ? false : undefined;
+    },
+    trackable: (session) => !!ready() && !!resolve(session),
+  };
+}
+
 // Exclusive leases a codebox session holds that its activity keeps alive: the session works now, or finished a turn within `windowMs`.
 export function activeHolds({ leases, sessionOf, activityOf, now, windowMs = 120000 }) {
   const by = new Map();
@@ -268,7 +302,8 @@ export function activeHolds({ leases, sessionOf, activityOf, now, windowMs = 120
     if (!s) continue;
     const a = activityOf(s);
     if (!a || !(a.working || (a.turnAt && now - a.turnAt <= windowMs) || (a.promptAt && now - a.promptAt <= windowMs))) continue;
-    by.set(s, [...(by.get(s) || []), l.id]);
+    const key = l.session || l.agent;   // what the service knows the holder as
+    by.set(key, [...(by.get(key) || []), l.id]);
   }
   return by;
 }

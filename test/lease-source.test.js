@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createLeaseSource, centralRegistry, createSessionTracker, normLease, normTicket, legacyRows, fromLegacyRows, legacyResource, summarize, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, parseArgs, exitOf, LEGACY_REFUSAL } from '../lease-source.js';
+import { pinOverrideNote, createLiveness, requestIdentity, createLeaseSource, centralRegistry, createSessionTracker, normLease, normTicket, legacyRows, fromLegacyRows, legacyResource, summarize, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, parseArgs, exitOf, LEGACY_REFUSAL } from '../lease-source.js';
 import { createLeaseWatch } from '../lease-watch.js';
 
 const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
@@ -22,7 +22,7 @@ function fakeService(over = {}) {
     heartbeat: async (a) => { calls.push(['heartbeat', a]); return { ok: true }; },
     shadow: { list: async () => ({ reports: [{ machine: 'host-1', command: 'claim', legacy: { code: 0 }, central: { code: 3 } }] }) },
     deploy: {
-      list: async () => ({ ok: true, deploys: [{ id: 'd1', env: 'env-a', state: 'queued' }] }), last: async () => ({ ok: true, envs: { 'env-a': {} } }),
+      list: async (a) => { calls.push(['deploylist', a]); return { ok: true, deploys: [{ id: 'd1', env: 'env-a', state: 'queued' }] }; }, last: async () => ({ ok: true, envs: { 'env-a': {} } }),
       request: async (a) => { calls.push(['request', a]); return { ok: true, id: 'abc123' }; }, approve: async (a) => { calls.push(['approve', a]); return { ok: true }; },
       cancel: async (a) => { calls.push(['cancel', a]); return { ok: true }; },
       start: async (a) => { calls.push(['start', a]); return a.id === 'busy' ? { ok: false, code: 'E_HELD', error: 'held' } : { ok: true, lease: { id: 'L9' } }; },
@@ -92,8 +92,10 @@ test('owner actions call the service with by owner and the identity (central); o
   assert.equal((await src.ownerRelease('L1', 'me@example.test')).ok, true);
   assert.deepEqual(svc.calls[0], ['ownerRelease', { id: 'L1', by: 'owner:me@example.test', identity: 'me@example.test' }]);
   assert.equal((await src.ownerMode('L1', 'pin')).ok, true);
-  assert.deepEqual(svc.calls[1], ['setMode', { id: 'L1', mode: 'pin', by: 'owner', owner: true, identity: 'loopback' }]);
+  assert.deepEqual(svc.calls[1], ['setMode', { id: 'L1', mode: 'pin', by: 'loopback', owner: true, identity: 'loopback' }]);
   assert.equal((await src.ownerMode('L1', 'exclusive')).status, 400);
+  await src.ownerRelease('L1');
+  assert.equal(svc.calls.at(-1)[1].by, 'loopback');   // a bare loopback caller is never logged as the owner
   const nf = createLeaseSource({ authority: 'central', getService: () => fakeService({ ownerRelease: async () => ({ ok: false, code: 'E_NOT_FOUND', error: 'no such lease' }) }) });
   assert.equal((await nf.ownerRelease('zz')).status, 404);
 });
@@ -126,7 +128,7 @@ test('activity: working or recently finished sessions keep their exclusive holds
   const leases = [normLease(svcLease, NOW), normLease(pinLease, NOW), normLease({ ...svcLease, id: 'L3', session: 'codebox:dev9', agent: 'codebox:dev9' }, NOW)];
   const act = { dev1: { working: true, turnAt: 0 }, dev9: { working: false, turnAt: NOW - 3600000, promptAt: 0 } };
   const by = activeHolds({ leases, sessionOf: (l) => l.agent.replace('codebox:', ''), activityOf: (n) => act[n] || null, now: NOW });
-  assert.deepEqual([...by], [['dev1', ['L1']]]);
+  assert.deepEqual([...by], [['codebox:dev1', ['L1']]]);   // keyed by the lease's own session string
   const svc = fakeService();
   assert.equal(await createLeaseSource({ authority: 'central', getService: () => svc }).activity('dev1'), 2);
   assert.deepEqual(svc.calls[0], ['activity', 'codebox:dev1']);
@@ -138,6 +140,7 @@ test('central deploy registry: argv in, registry-shaped answers out', async () =
   const list = await reg(['deploy', 'list', '--json']);
   const j = JSON.parse(list.stdout);
   assert.equal(list.code, 0); assert.equal(j.deploys[0].id, 'd1'); assert.equal(j.leases[0].resource, 'host-1/device2');
+  assert.deepEqual(svc.calls.find((c) => c[0] === 'deploylist'), ['deploylist', { all: true }]);   // item 3: finished deploys stay visible
   assert.equal(JSON.parse((await reg(['deploy', 'last', '--json'])).stdout).envs['env-a'] !== undefined, true);
   const req = await reg(['deploy', 'request', 'env-a', '--scope', 'host', '--ref', 'main', '--agent', 'manager:deploy', '--approved', '--hosts', 'host-1,host-2', '--purpose', 'catch-up']);
   assert.equal(req.stdout.trim(), 'abc123');
@@ -195,4 +198,54 @@ test('server wiring: the lease consumers go through the source; legacy keeps the
   assert.match(s, /observeOnly: \(\) => !leaseSource\.acts\(\)/);
   assert.match(s, /assertAgentPane\(session, 'lease-service'\)/);
   assert.match(s, /\/api\/leases\/owner\/release/);
+});
+
+test('identity: the Serve login counts only on a proxied request; a bare loopback request is loopback (item 4)', () => {
+  assert.equal(requestIdentity({ 'tailscale-user-login': 'me@example.test' }), 'loopback');   // a local process can set any header
+  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9', 'tailscale-user-login': 'me@example.test' }), 'me@example.test');
+  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9' }), 'loopback');
+  assert.equal(requestIdentity({}), 'loopback');
+  assert.equal(requestIdentity(), 'loopback');
+  const s = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(s, /requestIdentity\(req\.headers\)/);
+});
+
+test('liveness: only a holder seen alive and now gone is false; resolvable, cron and never-seen holders are never released (item 1)', () => {
+  let names = ['task-28-videos-v2', 'dev1'], ok = true;
+  const norm = (n) => String(n).toLowerCase().replace(/[^a-z0-9]/g, '');
+  // a tolerant resolver like platforms.js agentSession: ignores punctuation, unique prefix either way
+  const resolve = (s) => { const m = /^codebox:(.+)$/.exec(s); if (!m) return null; const w = norm(m[1]); return names.find((n) => norm(n) === w) || names.find((n) => Math.min(norm(n).length, w.length) >= 8 && (norm(n).startsWith(w) || w.startsWith(norm(n)))) || null; };
+  const lv = createLiveness({ resolve, ready: () => ok });
+  assert.equal(lv.isAlive('codebox:TASK-28-videos'), true);        // named differently but resolvable
+  assert.equal(lv.trackable('codebox:TASK-28-videos'), true);
+  assert.equal(lv.isAlive('codebox:nightly'), undefined);          // a cron script with no session
+  assert.equal(lv.trackable('codebox:nightly'), false);
+  assert.equal(lv.isAlive('codebox:never-seen'), undefined);       // never seen: unknown, not gone
+  assert.equal(lv.isAlive('mac:x'), undefined);
+  names = ['dev1'];
+  assert.equal(lv.isAlive('codebox:TASK-28-videos'), false);       // seen alive, now gone
+  assert.equal(lv.isAlive('codebox:nightly'), undefined);
+  assert.equal(lv.isAlive('codebox:never-seen'), undefined);
+  ok = false;
+  assert.equal(lv.isAlive('codebox:TASK-28-videos'), undefined);   // a failed listing judges nothing
+  assert.equal(lv.trackable('codebox:dev1'), false);
+  const s = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(s, /sessions: \{ isAlive: leaseLiveness\.isAlive, trackable: leaseLiveness\.trackable \}/);
+});
+
+test('pins overridden by a deploy are listed in that deploy\'s log (item 5)', async () => {
+  const view = { leases: [{ id: 'LD', deployId: 'abc123', mode: 'exclusive' }, { id: 'LX', deployId: null }] };
+  const ev = { kind: 'pin_overlap', id: 'LP', env: 'env-a', resources: ['device:host-1/device2'], agent: 'mac:x', by_lease: 'LD', by_agent: 'manager:deploy' };
+  assert.deepEqual(pinOverrideNote(ev, view), { deployId: 'abc123', line: 'pin overridden: env-a/device:host-1/device2 pinned by mac:x (lease LP)' });
+  assert.equal(pinOverrideNote({ ...ev, by_lease: 'LX' }, view), null);   // an ordinary lease, not a deploy
+  assert.equal(pinOverrideNote({ ...ev, kind: 'released' }, view), null);
+  assert.equal(normLease({ ...svcLease, deploy_id: 'abc123' }, NOW).deployId, 'abc123');
+  // the runner appends it to the log the deploy log route serves
+  const { createDeployRunner } = await import('../deploy-runner.js');
+  const dir = (await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(), 'pinlog-'));
+  const r = createDeployRunner({ stateDir: dir, registry: async () => ({ code: 1, stdout: '', stderr: '' }), log: { log() {}, error() {}, info() {} } });
+  assert.equal(await r.note('abc123', 'pin overridden: env-a/host:host-1 pinned by mac:x (lease LP)'), true);
+  assert.equal(await r.note('abc123', 'pin overridden: env-a/host:host-1 pinned by mac:x (lease LP)'), false);   // once
+  assert.equal(await r.note('../etc', 'x'), false);
+  assert.match(await r.logTail('abc123'), /^# pin overridden: env-a\/host:host-1 pinned by mac:x \(lease LP\)$/);
 });

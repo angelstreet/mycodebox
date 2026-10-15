@@ -79,7 +79,7 @@ import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
-import { createLeaseSource, createSessionTracker, summarize as leaseSummary, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
+import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -672,15 +672,11 @@ const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USA
 const leaseAuthority = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')).leaseAuthority === 'central' ? 'central' : 'legacy'; } catch { return 'legacy'; } })();
 // Liveness for the service: true / false for a codebox tmux session, undefined (never releases anything) when unknown: a failed tmux listing,
 // no poll yet, or an agent that is not a codebox session. A re-created name is handled by the session tracker (sessionGone, immediate).
-function leaseAlive(session) {
-  const m = /^codebox:(.+)$/.exec(String(session || ''));
-  if (!m || !listOk || !latest?.status) return undefined;
-  return Object.prototype.hasOwnProperty.call(latest.status, m[1]);
-}
+const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, resolve: (s) => agentSession(s, Object.keys(latest?.status || {}), MACHINES) });
 // The central lease service (round 10) is always constructed: lease clients in shadow mode report to it even while the
 // dashboard reads the legacy registry. `leaseAuthority` only decides which one the dashboard, the deploy runner and the
 // manager trust. Unknown liveness (undefined) never releases anything.
-const leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), now: Date.now, sessions: { isAlive: leaseAlive },
+const leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), now: Date.now, sessions: { isAlive: leaseLiveness.isAlive, trackable: leaseLiveness.trackable },
   onEvent: (ev) => onLeaseEvent(ev).catch((e) => console.error('[lease] event', e.message)),
   config: { envs: (process.env.LEASE_ENVS || '').split(',').map((x) => x.trim()).filter(Boolean) } });
 const leaseSource = createLeaseSource({ authority: leaseAuthority, legacy: { store: leaseStore, registry: defaultDeployRegistry() }, getService: () => leaseService });
@@ -709,6 +705,9 @@ async function onLeaseEvent(ev) {
   if (rec) {
     if (/^lease:(?:released|expired|forced)$/.test(rec.key)) await handoffs.onLeaseEvent(rec).catch((err) => console.error('[handoffs] lease event', err.message));
     await managerEvents.record(rec);
+  }
+  if (/^pin[-_]overlap$/i.test(String(ev.kind || ''))) {   // the deploy log lists the pins a deploy overrode (lease just granted: look it up after the mutation)
+    setTimeout(async () => { try { const v = await leaseSource.view(false); const n = pinOverrideNote(ev, v); if (n) await deployRunner.note(n.deployId, n.line); } catch (e) { console.error('[lease] pin note', e.message); } }, 100).unref?.();
   }
   if (!isNoteEvent(ev)) return;
   const names = Object.keys(latest?.status || {});
@@ -1652,7 +1651,7 @@ async function handleHttp(req, res) {
     try { b = await readJsonBody(req); } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
     const id = typeof b?.id === 'string' ? b.id.trim() : '';
     if (!id || id.length > 80) return json(res, 400, { ok: false, error: 'id required' });
-    const identity = String(req.headers['tailscale-user-login'] || 'loopback').slice(0, 80);   // who really tapped: Serve's login header, else the loopback peer
+    const identity = requestIdentity(req.headers);   // who really tapped: Serve's login, only when the request came through the proxy; else `loopback`
     const r = p.endsWith('/release') ? await leaseSource.ownerRelease(id, identity) : await leaseSource.ownerMode(id, b?.mode, identity);
     if (r.ok) { logEvent({ type: 'lease_owner_action', action: p.endsWith('/release') ? 'release' : 'mode', id, identity, ...(b?.mode ? { mode: String(b.mode).slice(0, 12) } : {}), by: 'owner' }); leaseTick(); }
     return json(res, r.ok ? 200 : r.status, r.ok ? { ok: true } : { ok: false, error: r.error });
@@ -2082,7 +2081,7 @@ async function leaseActivityTick() {
   const view = leaseSource.peekView();
   if (!view?.ok) return;
   const by = activeHolds({ leases: view.leases, sessionOf: (l) => agentSession(l.session || l.agent, names, MACHINES) || agentSession(l.agent, names, MACHINES), activityOf: (n) => reporter.activityOf(n), now: Date.now() });
-  for (const session of by.keys()) await leaseSource.activity(session);
+  for (const session of by.keys()) await leaseSource.activity(session);   // the lease's own session string
 }
 async function leaseTick() {
   const v = await getLeases(true);

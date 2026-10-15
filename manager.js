@@ -71,7 +71,7 @@ export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false,
+let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true,
   jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
@@ -200,6 +200,7 @@ export async function setManagerConfig(b = {}) {
   }
   if (typeof mergeDecisions === 'boolean') config.mergeDecisions = mergeDecisions;
   if (typeof infoAnswers === 'boolean') config.infoAnswers = infoAnswers;
+  if (typeof b.leaseAnswers === 'boolean') config.leaseAnswers = b.leaseAnswers;
   if (typeof pushDecisions === 'boolean') config.pushDecisions = pushDecisions;
   if (typeof deployDecisions === 'boolean') config.deployDecisions = deployDecisions;
   if (pushMinConfidence !== undefined) config.pushMinConfidence = num(pushMinConfidence, 0, 1, 'pushMinConfidence');
@@ -955,7 +956,12 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   const out = { handled: false, mergeWhy: null };
   const name = s.name;
   // A question about a lease is never an owner question (design sections 4 and 7): it is answered from the lease source.
-  const leaseHit = !!leaseViewOf && leaseAsk(final.question || '').lease;
+  // Only a PURE lease part is answered: the hard floor runs on it with no exemptions (a deploy or restart word in it makes it an owner / deploy
+  // question). The deploy / hard topics of the whole question stay in force below: they escalate, only the pure lease part is answered.
+  const markLease = (p) => (config.leaseAnswers && leaseAsk(p.text).lease && !hardMatch(p.text, {}) ? { ...p, kind: 'info', lease: true } : p);
+  let all = leaseViewOf ? splitAsk(final.question || '').map(markLease) : splitAsk(final.question || '');
+  if (leaseViewOf && !all.some((p) => p.lease)) { const whole = markLease({ text: String(final.question || '').trim(), kind: 'other' }); if (whole.lease) all = [whole]; }   // the ask only reads as a lease question as a whole
+  const leaseHit = all.some((p) => p.lease);
   if (isManagerSession(name) || !toOwnerCase(final) || (leaseHit ? CASES_NOT_LEASE : CASES_NOT_PARTIAL).includes(final.case) || stall.draft) return out;
   // Only a finished turn: free text typed into a live menu (waiting) would select the highlighted option, and any menu option means the
   // owner picks from it. Those stops go the existing way (menu_recommended: menuDecision).
@@ -963,9 +969,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   const wantedAny = topicsWanted(final.topics);
   if (!config.infoAnswers && !leaseHit && !(wantedAny.merge || wantedAny.push || wantedAny.deploy)) return out;
   if (decisionBlock(name)) return out;   // auto-answer off, paused, capped: nothing is typed, the owner gets the whole stop as before
-  let all = splitAsk(final.question || '').map((p) => (leaseHit && leaseAsk(p.text).lease ? { ...p, kind: 'info', lease: true } : p));
-  if (leaseHit && !all.some((p) => p.lease)) all = [{ text: String(final.question || '').trim(), kind: 'info', lease: true }];   // the ask only reads as a lease question as a whole
-  const topics = leaseHit ? topicSplit(all.filter((p) => !p.lease).map((p) => p.text).join(' ')) : final.topics;   // the lease part's own "deploy" is not a deploy topic
+  const topics = final.topics;   // the whole question's: a deploy / restart / hard topic anywhere in the stop is escalated, never swallowed by the lease answer
   const parts = all.filter((p) => p.kind !== 'other' || isAsk(p.text));   // a statement that rode along is not part of the ask
   // ...unless it carries a question or a choice ("A or B"): that is open too
   const hiddenAsk = all.filter((p) => !parts.includes(p) && /\?|\bor\b/i.test(p.text));
@@ -998,7 +1002,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   }
   // a topic present in the text but not decided (switch off, no repo) is left to the owner
   const offTopics = DECISION_KINDS.filter((k) => topics?.[k] && !(k in dec.evs));
-  const hard = topics?.hard || (leaseHit ? hardMatch(parts.filter((p) => p.lease).map((p) => p.text).join(' '), { deployPresent: true }) : null) || null;
+  const hard = topics?.hard || null;
   const args = argsOf(dec);
   let reply = composeReply({ info, ...args, remaining: true });
   if (!reply) return out;
