@@ -36,7 +36,7 @@ test('T03: default claude/codex/manager/resume commands carry the owner-chosen b
     assert.equal(c.bash, '');
     assert.match(managerCommand(env), /^claude --dangerously-skip-permissions /);
     assert.deepEqual(launchWarnings(env), []);
-    assert.equal(resumeCommand({ base: c.claude, args: 'claude --dangerously-skip-permissions', name: 'x', sessionId: 'abc' }), 'claude --dangerously-skip-permissions --resume abc');
+    assert.equal(resumeCommand({ base: c.claude, args: 'claude --dangerously-skip-permissions', name: 'x', sessionId: 'abc' }), "claude --dangerously-skip-permissions --remote-control 'x' -n 'x' --resume abc");
   }
   assert.equal(launchConfig({}).commands.claude, 'claude --dangerously-skip-permissions');
   assert.equal(launchConfig({}).commands.codex, 'codex --dangerously-bypass-approvals-and-sandbox');
@@ -123,7 +123,7 @@ test('T03: a tampered parked record cannot escape $HOME, start before validation
   // the honest record resumes into the canonical folder with a clean command
   save({ S: claude() });
   const out = await createParking({ file, tmux }).resume('S', { base: 'claude', start, validate });
-  assert.deepEqual(log, [['create', 'S', join(home, 'work')], ['start', 'S', 'claude --model opus --resume abc']]);
+  assert.deepEqual(log, [['create', 'S', join(home, 'work')], ['start', 'S', "claude --model opus --remote-control 'S' -n 'S' --resume abc"]]);
   assert.doesNotMatch(out.cmd, BYPASS_RE);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).parked, {});
 });

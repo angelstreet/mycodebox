@@ -1134,7 +1134,9 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
   try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
-  const cmd = AGENT_CMDS[agent];
+  // Claude always gets Remote Control under the session name (owner, 2026-10-15), unless an AGENT_CMD_CLAUDE override sets it.
+  const cmd = agent === 'claude' && AGENT_CMDS.claude && !/--remote-control\b/.test(AGENT_CMDS.claude)
+    ? `${AGENT_CMDS.claude} --remote-control '${real}' -n '${real}'` : AGENT_CMDS[agent];
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
