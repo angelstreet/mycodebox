@@ -285,7 +285,7 @@ def busy_report(r):
         eprint("expected free around %s; wait with: vpt-lease claim ... --wait" % hhmm(r["eta"]))
 
 
-def claim_warnings(env, wanted, kind, ttl):
+def claim_warnings(env, wanted, kind, ttl, long_flag=False):
     out = []
     if kind == "server":
         out.append("⚠ blocks server + full deploys for all of %s while held; "
@@ -293,7 +293,7 @@ def claim_warnings(env, wanted, kind, ttl):
     for r in wanted:
         if r not in ("*", "frontend") and "/" not in r:
             out.append("⚠ blocks every device on %s; claim %s/<device> if you only use one" % (r, r))
-    if ttl > LONG_TTL_MIN:
+    if ttl > LONG_TTL_MIN or long_flag:      # long_flag: the service marks leases over its long-hold threshold
         out.append("⚠ --ttl %s min is over %s h; claim a shorter ttl and renew while you still need it" % (ttl, LONG_TTL_MIN // 60))
     return out
 
@@ -372,7 +372,7 @@ def claim_body(a, wait=None):
 def granted(a, r, wanted, kind):
     lease = r["lease"]
     print(lease["id"], flush=True)
-    for w in claim_warnings(a.env.lower(), wanted, kind, a.ttl):
+    for w in claim_warnings(a.env.lower(), wanted, kind, a.ttl, bool(lease.get("long"))):
         eprint(w)
     if not a.agent.startswith(("codebox:", "mac:")) and a.agent != "manager:deploy" and not a.agent.startswith("update_core:"):
         eprint("⚠ agent %r is not codebox:<tmux session> or mac:<name>: the dashboard cannot link this lease to a "
@@ -553,7 +553,9 @@ def cmd_narrow(a):
     if not r.get("ok"):
         return fail(r, "no such active lease")
     n = r.get("narrowed")
-    n = len(n) if isinstance(n, list) else (n if isinstance(n, int) else 1)
+    if n is None:
+        n = r.get("changed")                 # an older answer: changed true/false
+    n = len(n) if isinstance(n, list) else int(n or 0)
     print("narrowed %d" % n + ("" if n else " (already host)"))
     return 0
 
@@ -575,6 +577,10 @@ def cmd_list(a):
             t.get("id"), t.get("env", "?"), ",".join(legacy_res(x, t.get("env", "")) for x in t.get("resources") or []),
             t.get("agent", "?"), t.get("position", "?"), hhmm(t.get("eta"))))
     return 0
+
+
+def pending_of(r):
+    return r.get("pending") or r.get("pending_deploys") or []
 
 
 def cmd_check(a):
@@ -602,7 +608,7 @@ def cmd_check(a):
     if not r.get("free"):
         print("BUSY — %s in use:" % env)
         show(holders)
-        show_deploys(r.get("pending") or [])
+        show_deploys(pending_of(r))
         if not res:
             fe = [x for l in holders for x in lease_rows(l) if x["resource"] in ("*", "frontend")]
             if not fe:
@@ -610,9 +616,9 @@ def cmd_check(a):
                       "vpt-lease check %s frontend" % env)
         return BUSY
     print("FREE — nothing active on %s" % env + (" (%s)" % ", ".join(res) if res else ""))
-    if r.get("pending"):
+    if pending_of(r):
         print("note: a deploy is pending, new claims on this get exit 4:")
-        show_deploys(r["pending"])
+        show_deploys(pending_of(r))
     return 0
 
 
@@ -773,6 +779,9 @@ def deploy_wait(a):
     while True:
         left = end - time.time()
         if left <= 0:
+            if state:      # the last attempt failed: the service is still unreachable
+                eprint("UNAVAILABLE \u2014 the lease service stayed unreachable until the timeout")
+                return UNAVAILABLE
             eprint("timeout waiting for the deploy")
             return BUSY
         try:
@@ -780,8 +789,12 @@ def deploy_wait(a):
                                                       timeout=1 if FAST else int(min(30, left))),
                     timeout=5 if FAST else 45)
         except Unavailable as e:
-            eprint("service unavailable (%s)" % e)
-            return UNAVAILABLE
+            if end - time.time() <= 0:
+                eprint("UNAVAILABLE \u2014 the lease service stayed unreachable until the timeout (%s)" % e)
+                return UNAVAILABLE
+            backoff_sleep(state, "service unavailable (%s)" % e)
+            continue
+        state = {}
         if not r.get("ok"):
             return deploy_fail(r, a)
         if a.deploy_id:
@@ -899,6 +912,9 @@ def cmd_deploy(a):
     r = api("POST", "/deploy/" + c, body)
     if not r.get("ok"):
         return deploy_fail(r, a)
+    if c == "start" and not (r.get("state") == "running" or r.get("lease_id") or (r.get("deploy") or {}).get("state") == "running"):
+        eprint("vpt-lease: the service answered ok but did not confirm the deploy is running (no state/lease_id); not starting")
+        return 1
     print({"approve": "approved", "cancel": "cancelled", "start": "running", "finish": a.status if c == "finish" else ""}[c])
     return 0
 
@@ -983,17 +999,27 @@ def cmd_run(a, command):
         args = ["claim", a.env, *a.resources, "--agent", a.agent, "--purpose", a.purpose, "--ttl", str(a.ttl)]
         if a.kind:
             args += ["--kind", a.kind]
-        code, out, err = legacy_call(args)
+        try:
+            code, out, err = legacy_call(args)
+        except (OSError, IndexError, ValueError) as e:
+            eprint("vpt-lease: cannot run the legacy CLI %r: %s" % (CFG.legacy, e))
+            return 1
         sys.stderr.write(err)
         if code != 0:
             sys.stdout.write(out)
             return code
-        lease_id = out.splitlines()[0].strip() if out else None
+        lease_id = out.splitlines()[0].strip() if out.strip() else None
+        if not lease_id:
+            eprint("vpt-lease: the legacy claim succeeded but printed no lease id; not running the command")
+            return 1
     old = {s: signal.signal(s, forward) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
     code = 1
     try:
         try:
             child[0] = subprocess.Popen(command)
+            if got and child[0].poll() is None:      # a signal / fence that arrived before the child existed
+                with contextlib.suppress(OSError):
+                    child[0].send_signal(got[0])
         except OSError as e:
             eprint("vpt-lease run: cannot start %s: %s" % (command[0], e))
             code = 127 if isinstance(e, FileNotFoundError) else 126
@@ -1161,16 +1187,29 @@ def map_save(m):
     os.replace(tmp, MAP_FILE)
 
 
+SHADOW_SKIP_DEPLOY = ("approve", "start", "finish", "cancel")
+
+
 def shadow_call(argv, legacy):
-    """Replay argv on the service in shadow mode; compare with legacy=(code, out). Never raises."""
+    """Replay argv on the service in shadow mode; compare with legacy=(code, out). Never raises: any shadow-side failure
+    (cache not writable, service down, bad answer) is swallowed, the caller's result is the legacy one."""
+    try:
+        _shadow_call(argv, legacy)
+    except BaseException:       # noqa: a shadow failure must never change the caller's result or print a traceback
+        CFG.shadow = False
+
+
+def _shadow_call(argv, legacy):
     try:
         a = build_parser().parse_args(strip_new_flags(argv))
     except SystemExit:
         return
     if a.cmd in ("ticket", "heartbeat", "mode", "validate", "run"):
         return
-    if a.cmd == "deploy" and a.dcmd == "wait":
-        return
+    if a.cmd == "deploy" and (a.dcmd == "wait" or a.dcmd in SHADOW_SKIP_DEPLOY):
+        return          # skipped: these name registry deploy ids, which the shadow store cannot know
+    if a.cmd == "claim" and (re_deploy_id(argv) or os.environ.get("VPT_DEPLOY_ID")):
+        return          # skipped: it joins a registry deploy by id
     m = map_load()
     legacy_id = None
     if a.cmd in ("release", "renew", "narrow") and getattr(a, "lease_id", None):
@@ -1206,10 +1245,13 @@ def shadow_call(argv, legacy):
         map_save(m)
     if code != lcode and code != UNAVAILABLE:       # an unreachable service cannot take the report either
         CFG.shadow = False
-        with contextlib.suppress(Exception):
-            api("POST", "/shadow-report", dict(machine=os.environ.get("VPT_LEASE_MACHINE") or socket.gethostname(),
-                                              command=" ".join(argv), legacy=dict(code=lcode, out=lout[-2000:]),
-                                              central=dict(code=code, out=(cout + err.getvalue())[-2000:])), timeout=2)
+        api("POST", "/shadow-report", dict(machine=os.environ.get("VPT_LEASE_MACHINE") or socket.gethostname(),
+                                          command=" ".join(argv), legacy=dict(code=lcode, out=lout[-2000:]),
+                                          central=dict(code=code, out=(cout + err.getvalue())[-2000:])), timeout=2)
+
+
+def re_deploy_id(argv):
+    return any(x == "--deploy-id" or x.startswith("--deploy-id=") for x in argv)
 
 
 def main(argv=None):

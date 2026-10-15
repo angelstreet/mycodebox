@@ -37,8 +37,9 @@ or `mac:<name>`.
 
 ## While you hold a lease
 
-- Heartbeat: `run` does it for you; otherwise `vpt-lease heartbeat <id> --active` while you use the resource. A lease
-  with no heartbeat is released, and an exclusive lease with no activity becomes a pin.
+- Heartbeat: `run` does it for you; otherwise `vpt-lease heartbeat <id> --active` while you use the resource. Only `run` and
+  other heartbeating leases (those that declared a heartbeat interval) are released when their heartbeats stop; a plain
+  `claim; work; release` keeps working and is bounded by its TTL. Any exclusive lease with no activity becomes a pin.
 - Release as soon as the work is done: `vpt-lease release <id>`. Do not park a lease "for later".
 - A session whose STATUS is `waiting` or `blocked` never keeps an exclusive lease: release it first, claim again when
   you can work. Downgrade to a pin with `vpt-lease mode <id> pin` if you only need the state kept.
