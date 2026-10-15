@@ -108,7 +108,7 @@ import { isPriority } from './public/prio.js';
 import { createTts } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds, stillStopped, canType } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -123,6 +123,7 @@ import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
+import { createOwnJobs } from './own-jobs.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
 const exec = promisify(execFile);
@@ -2183,7 +2184,20 @@ server.listen(PORT, HOST, async () => {
   // wrapper only consults the live process tree.
   const guardSendKey = async (session, key) => { await assertAgentPane(session, 'manager'); return sendKey(session, key); };
   const guardSendKeys = async (session, keys, enter) => { await assertAgentPane(session, 'manager'); return sendKeys(session, keys, enter); };
+  // Sessions waiting on a job of their own (STATUS blocked / waiting on a pid, log, run id or deploy id) are woken when it ends. The send goes through
+  // the same guarded sendKeys: it pastes the text, waits, then sends Enter as a second tmux call.
+  const ownJobs = createOwnJobs({
+    table: processTable,
+    agentPid: async (name) => { const p = (await listPanes()).get(name); return p?.pid ? agentPidFromTree(p.pid, await processTable()) : null; },
+    deployState: (id) => { const d = (deployRunner.snapshot().deploys || []).find((x) => String(x.id) === String(id)); return d ? { state: d.state, finished: d.finished ? d.finished * (d.finished < 1e12 ? 1000 : 1) : null } : null; },
+    stillWaiting: stillStopped, canSend: canType,
+    send: (name, text) => guardSendKeys(name, text, true),
+    record: (e) => managerEvents.record(e),
+    log: (r) => logEvent(r),
+  });
+  setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
+    ownJobs,
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
     onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),

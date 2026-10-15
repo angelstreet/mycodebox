@@ -12,6 +12,7 @@
 //   stopped_short     the agent announced its next step and stopped, no question, no blocker
 //   waiting_deploy    waiting for leases / a deploy / the owner's go-ahead to deploy (never auto-answered)
 //   owner_action      the agent asks the owner for a small manual thing (reload, plug, press)
+//   own_job_wait      STATUS blocked|waiting on a job of the session's own (pid, log, run id): woken when it ends, never a needs-you
 // Any finished turn also carries `no_status` (closing text gives no done / tested / left / next / blocked
 // information); that is a flag, not a case, with an `ask_status` would-answer candidate.
 //
@@ -19,6 +20,8 @@
 // menu, or "Yes, go with your recommendation." after a finished turn; everything else -> owner.
 // A forbidden topic (deploy, push to main, delete, .env, money, customer, credential, ...) or an
 // unsent draft in the input box always means owner, whatever the rules or Jev said.
+
+import { waitsOnOwnJob, jobRefs } from './job-refs.js';
 
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
@@ -575,6 +578,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     out.no_status = false;
     out.forbiddenText = close.slice(-6).join('\n');
     if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
+    else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind)) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text); out.answer = null; out.autoCase = undefined; }   // the session waits on a job of its own: the manager wakes it when the job ends (own-jobs.js); never a needs-you
     else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; }
     else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; }
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
@@ -683,7 +687,7 @@ export function applyJev(stall, choice) {
 
 // The final gate: what would actually be typed. Forbidden topics, drafts and owner cases never are.
 export function wouldSend(stall) {
-  if (!stall.answer) return { send: null, why: { done: 'finished', waiting_deploy: 'deploy waiting', owner_action: 'owner action', background_wait: 'background work still running' }[stall.case] || 'owner' };
+  if (!stall.answer) return { send: null, why: { done: 'finished', waiting_deploy: 'deploy waiting', owner_action: 'owner action', background_wait: 'background work still running', own_job_wait: 'waiting on its own job' }[stall.case] || 'owner' };
   if (stall.forbidden) return { send: null, why: `forbidden: ${stall.forbidden}` };
   if (stall.draft) return { send: null, why: 'owner has a draft in the input box' };
   return { send: stall.answer, why: stall.autoCase || stall.case };

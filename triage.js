@@ -7,7 +7,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { forbiddenMatch } from './stall.js';
 
 export const AI_MODES = ['off', 'simulate', 'auto'];
-export const AI_NEVER_CASES = ['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait'];   // never auto-answered by the AI
+export const AI_NEVER_CASES = ['permission', 'error', 'waiting_deploy', 'owner_action', 'background_wait', 'own_job_wait'];   // never auto-answered by the AI
 export const REVIEWER_USAGE = 'text.plan';
 
 export const REVIEWER_SYSTEM = [

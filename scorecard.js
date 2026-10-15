@@ -449,7 +449,7 @@ export function g8Section({ stallRecs, actionRecs = [], regretRecs = [], from, t
 // Router shadow (TASK-47 G2): Jev's 3 answers per stop vs what the rules did. Shadow only; nothing here is acted on.
 // ---------------------------------------------------------------------------
 const NEEDS_OWNER_CASES = new Set(['owner_decision', 'owner_action', 'permission', 'error', 'waiting_deploy']);
-const MOVES_ON_CASES = new Set(['continue', 'stopped_short', 'menu_recommended', 'done', 'background_wait']);
+const MOVES_ON_CASES = new Set(['continue', 'stopped_short', 'menu_recommended', 'done', 'background_wait', 'own_job_wait']);
 // Did the case fit what is known about the stop? true / false / null (nothing known). An owner label beats the owner's
 // next reply: wrong_case + correctCase is exact; legit = a case that needs the owner; no_reason = one that moves on.
 // An outcome: "continue" -> continue / stopped_short; "take_recommended" -> menu_recommended; the owner typing something

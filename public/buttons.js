@@ -348,7 +348,7 @@ export function questionKind({ state, stall }) {
 export function needsOwner(st) {
   const s = st?.stall;
   if (!s || st.auto) return false;
-  if (s.case === 'background_wait') return false;
+  if (s.case === 'background_wait' || s.case === 'own_job_wait') return false;
   // a plain finished report is only a question when it really asks one: a '?' followed by a space / the end (not the '?' of a '?s=' in a URL)
   if (s.case === 'done') return /\?(?=["')\]]*(?:\s|$))/.test(s.question || '');
   return true;

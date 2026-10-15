@@ -2,7 +2,7 @@
 // one line per question {at,id,session,question,options,recommendation,state:"open"}, later lines per resolution
 // {id,state:"answered|superseded|partial|amended"} or {action:"ledger-close|ledger-amend|log_intent"}. The open ones are what
 // the owner still has to answer; the page shows them in the NEEDS YOU strip.
-import { readFile } from 'node:fs/promises';
+import { readFile, appendFile } from 'node:fs/promises';
 
 const CLOSED = new Set(['answered', 'superseded', 'closed', 'resolved', 'withdrawn']);
 
@@ -24,6 +24,23 @@ export function openAsks(lines) {
     .sort((x, y) => String(y.at || '').localeCompare(String(x.at || '')));
 }
 
+// One open ask per session (round 9, item 5): the newest of a session stands, the older ones are shown no more. `asks` is newest first.
+export function newestPerSession(asks) {
+  const seen = new Set();
+  return asks.filter((a) => { if (!a.session) return true; if (seen.has(a.session)) return false; seen.add(a.session); return true; });
+}
+
 export async function readOpenAsks(file) {
-  try { return openAsks((await readFile(file, 'utf8')).split('\n').filter(Boolean)); } catch { return []; }
+  try { return newestPerSession(openAsks((await readFile(file, 'utf8')).split('\n').filter(Boolean))); } catch { return []; }
+}
+
+// A session escalated a new ask: every older open ask of that session is marked superseded by it (appended to the ledger, never edited).
+// -> the superseded ids. A missing ledger is not created.
+export async function supersedeOlder(file, session, newId, { now = new Date() } = {}) {
+  if (!session || !newId) return [];
+  let lines; try { lines = (await readFile(file, 'utf8')).split('\n').filter(Boolean); } catch { return []; }
+  const older = openAsks(lines).filter((a) => a.session === session && a.id !== newId);
+  if (!older.length) return [];
+  await appendFile(file, older.map((a) => JSON.stringify({ at: now.toISOString(), id: a.id, state: 'superseded', by: newId })).join('\n') + '\n');
+  return older.map((a) => a.id);
 }

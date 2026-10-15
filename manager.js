@@ -29,6 +29,8 @@ import { decidedItems, decidedSummary, failedCount } from './decided.js';
 import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
 import { leaseAsk, answerLeaseAsk } from './lease-ask.js';
+import { selfAsk, answerSelf } from './self-check.js';
+import { supersedeOlder } from './owner-asks.js';
 import { actorOf } from './api-extras.js';
 import { jevAgreesOwner } from './public/ask-model.js';
 import { AI_MODES, AI_NEVER_CASES, REVIEWER_SYSTEM, createBudget, callReviewer, reviewerUrl } from './triage.js';
@@ -65,13 +67,13 @@ const decisions = createDecisionsClient({ jevUrl: JEV_URL, apiKey: JEV_API_KEY, 
 const outcomeQueue = createOutcomeQueue({ file: OUTCOME_QUEUE_FILE, send: (id, outcome) => decisions.postOutcome(id, outcome) });
 const decisionByStop = new Map();   // stop id -> the product's decision_id of its Jev call (outcome write-back)
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
-export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait'];
+export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait', 'own_job_wait'];
 export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true,
+let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true, selfChecks: true,
   jevUsage: 'auto', aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
@@ -99,6 +101,8 @@ let mergeJev = (body) => jevPost(body);                             // the merge
 let decideContext = () => ({ deploys: null, leases: null, envs: [] });    // injected: () => { deploys: runner snapshot, leases: lease store value, envs: [env names] }
 let onDigest = () => {};                                            // injected: ({ day, count, text }) -> feed item + push (digest tier)
 let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
+let ownJobs = null;                                                 // injected: own-jobs.js watcher { watch, forget, progressOf } (round 9, item 11). Unset = jobs are not watched
+let ownerAsksFile = join(STATE_DIR, 'manager-owner-asks.jsonl');    // the owner-asks ledger: a new ask of a session supersedes its older open ones (round 9, item 5)
 let statusHook = () => {};                                          // injected: (session, status, text) for a logged stop whose STATUS is waiting / blocked
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
 
@@ -108,7 +112,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, ownJobs: ownJobsDep, ownerAsksFile: asksFile } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -153,6 +157,8 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (digestHook) onDigest = digestHook;
   if (leaseView) leaseViewOf = leaseView;
   if (onStatus) statusHook = onStatus;
+  if (ownJobsDep) ownJobs = ownJobsDep;
+  if (asksFile) ownerAsksFile = asksFile;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
 
@@ -201,6 +207,7 @@ export async function setManagerConfig(b = {}) {
   if (typeof mergeDecisions === 'boolean') config.mergeDecisions = mergeDecisions;
   if (typeof infoAnswers === 'boolean') config.infoAnswers = infoAnswers;
   if (typeof b.leaseAnswers === 'boolean') config.leaseAnswers = b.leaseAnswers;
+  if (typeof b.selfChecks === 'boolean') config.selfChecks = b.selfChecks;
   if (typeof pushDecisions === 'boolean') config.pushDecisions = pushDecisions;
   if (typeof deployDecisions === 'boolean') config.deployDecisions = deployDecisions;
   if (pushMinConfidence !== undefined) config.pushMinConfidence = num(pushMinConfidence, 0, 1, 'pushMinConfidence');
@@ -330,6 +337,8 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
   escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
+  // one open ask per session: this one supersedes the session's older open asks in the owner-asks ledger (round 9, item 5)
+  supersedeOlder(ownerAsksFile, name, id).then((ids) => { if (ids.length) logLater({ type: 'asks_superseded', session: name, by: id, ids }); }).catch((e) => console.error('[manager] supersede', e.message));
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
   if (state === 'done' && final.case !== 'done') notify(name, aiLine ? { ...final, aiLine } : final, reason, state);
   // a live menu was already announced as "waiting" before it settled (no stop id yet, so no buttons): once settled and escalated, the "asks" alert
@@ -339,7 +348,7 @@ function escalate(name, state, final, id, reason, aiLine = null) {
 
 // ---- AI reviewer (phase 9) ----
 // Stops that go to the owner: everything except background work and a plain finished turn without a question.
-export const toOwnerCase = (final) => final.case !== 'background_wait' && (final.case !== 'done' || /\?/.test(final.question || ''));
+export const toOwnerCase = (final) => final.case !== 'background_wait' && final.case !== 'own_job_wait' && (final.case !== 'done' || /\?/.test(final.question || ''));
 
 const QUOTA_NAMES = { claude: 'Claude Max', codex: 'Codex', minimax: 'MiniMax' };
 const oneLine = (rec) => (rec?.ai ? `${rec.ai.owner_needed ? 'needs you' : 'proposes'}${rec.ai.proposed_reply ? ` "${rec.ai.proposed_reply}"` : ''}` : null);
@@ -869,8 +878,8 @@ const topicCovered = (part, ok, evs = {}, envs = []) => {
   }
   return true;
 };
-const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'error', 'background_wait'];
-const CASES_NOT_LEASE = ['permission', 'owner_action', 'error', 'background_wait'];   // a lease question may come as waiting_deploy ("can I deploy, the lease ...")
+const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'error', 'background_wait', 'own_job_wait'];
+const CASES_NOT_LEASE = ['permission', 'owner_action', 'error', 'background_wait', 'own_job_wait'];   // a lease question may come as waiting_deploy ("can I deploy, the lease ...")
 // A recommended option that is irreversible-looking is hard whatever the topic split says. `kinds`: the merge / push / deploy topics the
 // manager decided, exempt from the hard floor.
 const IRREVERSIBLE_RE = /\b(?:delet(?:e|es|ed|ing|ion)|drop(?:s|ped|ping)?|wip(?:e|es|ed|ing)|publish(?:es|ed|ing)?|pay(?:s|ment|ing)?|send(?:ing)?\s+(?:an?\s+|the\s+)?e-?mails?|rm\s+-rf?)\b/i;
@@ -970,13 +979,19 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   const markLease = (p) => (config.leaseAnswers && leaseAsk(p.text).lease && !hardMatch(p.text, {}) ? { ...p, kind: 'info', lease: true } : p);
   let all = leaseViewOf ? splitAsk(final.question || '').map(markLease) : splitAsk(final.question || '');
   if (leaseViewOf && !all.some((p) => p.lease)) { const whole = markLease({ text: String(final.question || '').trim(), kind: 'other' }); if (whole.lease) all = [whole]; }   // the ask only reads as a lease question as a whole
+  // Self-check (round 9, item 5): version / progress / "does this file exist" are settled from the registry and the hosts. Same floor as the lease part:
+  // a deploy word is the subject of a version question, not a deploy request; every other hard word keeps the part with the owner.
+  const markSelf = (p) => { const k = config.selfChecks !== false && !p.lease && p.kind !== 'merge' && !hardMatch(p.text, { deployPresent: true }) ? selfAsk(p.text) : null; return k ? { ...p, kind: 'info', self: k.kind } : p; };
+  all = all.map(markSelf);
+  if (!all.some((p) => p.self) && config.selfChecks !== false) { const whole = markSelf({ text: String(final.question || '').trim(), kind: 'other' }); if (whole.self) all = [whole]; }
+  const selfHit = all.some((p) => p.self);
   const leaseHit = all.some((p) => p.lease);
-  if (isManagerSession(name) || !toOwnerCase(final) || (leaseHit ? CASES_NOT_LEASE : CASES_NOT_PARTIAL).includes(final.case) || stall.draft) return out;
+  if (isManagerSession(name) || !toOwnerCase(final) || (leaseHit || selfHit ? CASES_NOT_LEASE : CASES_NOT_PARTIAL).includes(final.case) || stall.draft) return out;
   // Only a finished turn: free text typed into a live menu (waiting) would select the highlighted option, and any menu option means the
   // owner picks from it. Those stops go the existing way (menu_recommended: menuDecision).
   if (s.state !== 'done' || (final.options?.length || 0) >= 1 || (stall.options?.length || 0) >= 1) return out;
   const wantedAny = topicsWanted(final.topics);
-  if (!config.infoAnswers && !leaseHit && !(wantedAny.merge || wantedAny.push || wantedAny.deploy)) return out;
+  if (!config.infoAnswers && !leaseHit && !selfHit && !(wantedAny.merge || wantedAny.push || wantedAny.deploy)) return out;
   if (decisionBlock(name)) return out;   // auto-answer off, paused, capped: nothing is typed, the owner gets the whole stop as before
   const topics = final.topics;   // the whole question's: a deploy / restart / hard topic anywhere in the stop is escalated, never swallowed by the lease answer
   const parts = all.filter((p) => p.kind !== 'other' || isAsk(p.text));   // a statement that rode along is not part of the ask
@@ -992,9 +1007,17 @@ async function partialDecision({ s, w, id, h, final, stall }) {
       if (a) info.push({ part: p.text, label: 'Lease', answer: a.text, source: '' });
     }
   }
+  if (selfHit) {
+    const dctx = (() => { try { return decideContext() || {}; } catch { return {}; } })();
+    let progress = null; try { progress = ownJobs ? await ownJobs.progressOf(name) : null; } catch { progress = null; }
+    for (const p of parts.filter((x) => x.self)) {
+      let a = null; try { a = await answerSelf(p, { deployed: dctx.deploys?.deployed || {}, envs: dctx.envs || [], roots, progress, now: s.now }); } catch { a = null; }
+      if (a) info.push({ part: p.text, ...a });
+    }
+  }
   if (config.infoAnswers && roots.length) {
     for (const p of parts) {
-      if (p.kind !== 'info' || p.lease) continue;
+      if (p.kind !== 'info' || p.lease || p.self) continue;
       let hit = null; try { hit = await lookupInfo(p, { roots }); } catch { hit = null; }
       if (hit) info.push({ part: p.text, ...hit });
     }
@@ -1015,6 +1038,13 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   // a deploy the manager decided that ships additive lab migrations covers the noun "migration(s)" in the ask (round 9, item 4); "migrate" the verb and every other hard word stay
   const migOk = !!(dec.ok.deploy && dec.evs.deploy?.facts?.migrations?.length);
   if (hard && migOk) hard = hardMatch(stall.topicsText ?? final.question ?? '', { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy, migrationsOk: true });
+  // the hard word of an answered self-check part ("what version is deployed on env-a?") is the subject of the question, not a request: read the rest
+  const selfDone = info.filter((i) => i.kind).map((i) => i.part);
+  if (hard && selfDone.length) {
+    let rest = String(stall.topicsText ?? final.question ?? '');
+    for (const p of selfDone) rest = rest.split(p).join(' ');
+    hard = hardMatch(rest, { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy, migrationsOk: migOk });
+  }
   const args = argsOf(dec);
   let reply = composeReply({ info, ...args, remaining: true });
   if (!reply) return out;
@@ -1150,6 +1180,7 @@ export function observe(s) {
     }
     if (holdOf(s.name)) endHold(s.name, 'manager', 'session moved on', false);
     w.stopSince = null;
+    try { ownJobs?.forget(s.name); } catch {}
     w.heldStall = null;
     w.hash = null; w.stall = null; w.since = s.now;
     w.seen = true;
@@ -1213,6 +1244,10 @@ export function observe(s) {
       ...(final.handoff ? { handoff: final.handoff } : {}),
     });
     if (/^(?:waiting|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
+    // a session that waits on a job of its own is woken when the job ends (own-jobs.js); a deploy it queued is followed the same way
+    if (ownJobs && !isManagerSession(s.name) && (final.case === 'own_job_wait' || (final.case === 'waiting_deploy' && final.deployHint?.id && /^waiting$/i.test(final.status || '')))) {
+      try { const r = await ownJobs.watch(s.name, { text: final.case === 'waiting_deploy' ? `deploy ${final.deployHint.id}` : String(final.question || ''), cwd: s.cwd || null, stopAt: id, paneText: stall.excerpt || '' }); logLater({ type: 'own_job', id, session: s.name, job: r.kind || 'unknown', label: r.label || null, detached: !!r.detached }); } catch (e) { console.error('[manager] own job', e.message); }
+    }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
     const partial = await partialDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] partial decision', e.message); return { handled: false }; });
     if (partial.handled) return;
@@ -1225,7 +1260,7 @@ export function observe(s) {
     // a decided topic that was escalated (merge / push / deploy) must not ride on an automatic "Yes, continue."
     if (partial.mergeWhy && ws.send && !menu?.ok) ws = { send: null, why: 'owner' };
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;
-    shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' });   // shadow: fire and forget, never awaited
+    shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' && final.case !== 'own_job_wait' });   // shadow: fire and forget, never awaited
     if (ws.send && !block) {   // the existing auto-answer handles this one
       const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence, ...(menu?.ok ? { override: true, recText: menu.recText, kinds: menu.kinds } : {}), ...(menuPick(final) ? { menu: menuPick(final) } : {}) };
       const pol = policyOf(s.name, s.agent);
@@ -1257,13 +1292,16 @@ export function observe(s) {
         return;
       }
     }
-    if (final.case !== 'done' && final.case !== 'background_wait') escalate(s.name, s.state, final, id, why, oneLine(tri));
+    if (final.case !== 'done' && final.case !== 'background_wait' && final.case !== 'own_job_wait') escalate(s.name, s.state, final, id, why, oneLine(tri));
     return;
   })().catch((e) => console.error('[manager]', e.message));
   return w.stall;
 }
 
-export function forget(name) { cancelAuto(name, 'session removed'); watch.delete(name); }
+export function forget(name) { cancelAuto(name, 'session removed'); watch.delete(name); try { ownJobs?.forget(name); } catch {} }
+// For the own-jobs watcher: is `session` still stopped at the stop `stopId` (so a wake is still wanted), and may text be typed into it now?
+export const stillStopped = (session, stopId) => { const w = watch.get(session); return !!(w && w.pending?.id === stopId && w.last && (w.last.state === 'done' || w.last.state === 'waiting')); };
+export const canType = (session) => { const w = watch.get(session); return !!w && !w.cls?.draft && !isPaused(session) && w.last?.state === 'done'; };
 export function prune(live) { for (const k of [...watch.keys()]) if (!live.has(k)) forget(k); }
 
 export function stallOf(name) {
