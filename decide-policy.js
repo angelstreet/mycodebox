@@ -8,7 +8,7 @@ import { buildRequest } from './router.js';
 import { deployHint } from './stall.js';
 import { git, repoNames, repoToplevel, scanRange, testEvidence, SENS_TEXT, short, sensitivePath, MERGE_DEFAULTS } from './merge-policy.js';
 
-export const DECIDE_DEFAULTS = { pushDecisions: true, deployDecisions: true, pushMinConfidence: 0.85, deployMinConfidence: 0.85, pushOptOut: [], deployOptOut: [] };
+export const DECIDE_DEFAULTS = { labEnvs: [], migrationProcedure: {}, pushDecisions: true, deployDecisions: true, pushMinConfidence: 0.85, deployMinConfidence: 0.85, pushOptOut: [], deployOptOut: [] };
 
 const REF_TOKEN = String.raw`[\w][\w./@+-]*`;
 const clean = (t) => String(t || '').replace(/^[`'"(\[]+|[`'"),.;:?!\]]+$/g, '');
@@ -191,6 +191,51 @@ function leaseBlockers(leases, { env, scope, hosts = [], session }) {
 const TARGETS = { full: ['frontend', 'server', 'host'], frontend: ['frontend'], server: ['server'], host: ['host'] };
 export const MIGRATION_RE = /(^|\/)migrations\/|\.sql$/i;
 
+// Additive SQL only (round 9, item 4): CREATE TABLE / INDEX / VIEW (OR REPLACE), ALTER TABLE ... ADD [COLUMN], INSERT. Anything else (DROP, DELETE,
+// TRUNCATE, RENAME, ALTER ... DROP / TYPE / ALTER COLUMN, UPDATE, a statement this does not recognise) is destructive or unknown: not additive.
+// -> { additive: boolean, why: string|null }. Comments and string literals are blanked first; "ON DELETE CASCADE" of a foreign key is structure.
+export function analyzeMigrationSql(sql) {
+  const src = String(sql ?? '');
+  if (!src.trim()) return { additive: false, why: 'empty migration' };
+  const bare = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ').replace(/'(?:[^']|'')*'/g, "''").replace(/\$\$[\s\S]*?\$\$/g, '$$$$');
+  if (/\$\$/.test(bare)) return { additive: false, why: 'a function body (cannot be read as additive)' };
+  const stmts = bare.split(';').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (!stmts.length) return { additive: false, why: 'no statements' };
+  for (const raw of stmts) {
+    const s = raw.replace(/\bON\s+(?:UPDATE|DELETE)\s+(?:CASCADE|RESTRICT|NO ACTION|SET (?:NULL|DEFAULT))/gi, ' ');
+    const bad = /\b(?:DROP|DELETE|TRUNCATE|RENAME|UPDATE|GRANT|REVOKE|COPY|VACUUM|REINDEX|CLUSTER)\b/i.exec(s);
+    if (bad) return { additive: false, why: `${bad[0].toUpperCase()} in "${raw.slice(0, 60)}"` };
+    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s) || /^CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s) || /^INSERT\s+INTO\b/i.test(s)) continue;
+    const alter = /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\S+\s+(.*)$/i.exec(s);
+    if (alter) {
+      const clauses = alter[1].split(/,\s*(?=ADD\b|ALTER\b|DROP\b|RENAME\b|SET\b|OWNER\b)/i);
+      if (clauses.every((c) => /^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?\S/i.test(c.trim()) && !/^ADD\s+(?:CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK)\b/i.test(c.trim()))) continue;
+      return { additive: false, why: `ALTER TABLE that is not only ADD COLUMN in "${raw.slice(0, 60)}"` };
+    }
+    return { additive: false, why: `unrecognised statement "${raw.slice(0, 60)}"` };
+  }
+  return { additive: true, why: null };
+}
+
+// Lab-database migrations (round 9, item 4): every migration in `files` must be an ADDED .sql file (not an edit or deletion of an applied one) whose
+// statements are all additive. `revs`: refs that may hold the file; `bases`: refs the file must not exist in. -> { ok, why, files }
+export async function additiveMigrations(repo, files, { revs, bases }) {
+  for (const f of files) {
+    if (!/\.sql$/i.test(f)) return { ok: false, why: `${f} is not a .sql file (cannot be read as additive)` };
+    let content = null;
+    for (const rev of revs) {
+      const r = await git(repo, ['show', `${rev}:${f}`], { max: 512 * 1024 });
+      if (r.code === 0) { content = r.out; break; }
+      if (r.truncated) return { ok: false, why: `${f} is larger than 512 KB` };
+    }
+    if (content == null) return { ok: false, why: `${f} is deleted or unreadable` };
+    for (const b of bases) if ((await git(repo, ['cat-file', '-e', `${b}:${f}`], { okCodes: [0, 1, 128] })).code === 0) return { ok: false, why: `${f} edits a migration that already exists` };
+    const a = analyzeMigrationSql(content);
+    if (!a.additive) return { ok: false, why: `${f}: ${a.why}` };
+  }
+  return { ok: true, why: null, files };
+}
+
 // The latest deployed commit/ref per relevant target of `env` from the "deployed now" ledger.
 export function lastDeployed(deploys, env, scope) {
   const per = deploys?.deployed?.[env] || {};
@@ -294,12 +339,24 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
     for (const f of d.out.split('\0').filter(Boolean)) changed.add(f);
   }
   const mig = [...changed].filter((f) => MIGRATION_RE.test(f) || sensitivePath(f) === 'migration');
-  if (mig.length) return esc(`contains a database migration: ${mig.slice(0, 3).join(', ')}`, tests);
+  let migNote = '';
+  if (mig.length) {
+    // An additive migration on a lab database, applied by the documented procedure, is a deploy step; customer databases, destructive
+    // migrations and deletions stay with the owner (OWNER_DECISIONS: lab vs customer DB).
+    const blocked = `contains a database migration: ${mig.slice(0, 3).join(', ')}`;
+    if (!(cfg.labEnvs || []).includes(facts.env)) return esc(blocked, tests);
+    const bases = [...facts.previous.map((p) => p.commit).filter(Boolean), ...(afterMerge ? [refGit] : [])];
+    const revs = [refGit, ...(sBranch ? [`refs/heads/${sBranch}`] : [])];
+    const am = await additiveMigrations(repo, mig, { revs, bases });
+    if (!am.ok) return esc(`${blocked} (not applied by the manager: ${am.why})`, tests);
+    facts.migrations = mig; facts.migrationProcedure = String(cfg.migrationProcedure?.[facts.repoName] || 'the deploy queue');
+    migNote = `; additive migration${mig.length === 1 ? '' : 's'} on the lab database ${facts.env} applied by ${facts.migrationProcedure}: ${mig.slice(0, 5).join(', ')}${mig.length > 5 ? ` and ${mig.length - 5} more` : ''}`;
+  }
   facts.files = changed.size; facts.ok = true;
   const strong = tests.explicit;
   const r = await rate('deploy', 'deploy', { jev, jevFacts: { session, repo: facts.repoName, env: facts.env, scope: facts.scope, ref, tests: tests.state, tests_quote: tests.quote, files: changed.size, leases_blocking: 0, floor_reasons: [] }, session, min: cfg.deployMinConfidence, reasoning: strong ? 0.9 : 0.8 });
   if (r.escalate) return done('escalate', [r.escalate], r.decision, tests);
-  return done('deploy', [], r.decision, tests, { rationale: `${facts.evidence}; no blocking lease on ${facts.env}; no database change in ${changed.size} file${changed.size === 1 ? '' : 's'}` });
+  return done('deploy', [], r.decision, tests, { rationale: `${facts.evidence}; no blocking lease on ${facts.env}; ${migNote ? migNote.slice(2) : `no database change in ${changed.size} file${changed.size === 1 ? '' : 's'}`}` });
 }
 
 // A record for <state>/manager-decisions.jsonl shaped like a V2 decision (orchestration/task-contract.js validateDecision); push and deploy.

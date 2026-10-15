@@ -170,3 +170,28 @@ test('unmarked menu: option 1 is taken (key), journaled as unmarked; a hard or w
   const b = await stop('u5', makeRepo(), 'Two ways to name it.\n1. Call it the sync helper\n2. Call it the copier\nWhich do you prefer?');
   assert.deepEqual(b.typed, ['Go with option 1.']);
 });
+
+// ---- round 9 item 4 at manager level ----------------------------------------------------------------------------------
+function deployableWith(sql) {
+  const repo = makeRepo({ files: { 'db/migrations/002_add.sql': sql, 'src.js': 'export const a = 1;\n' } });
+  const bare = join(mkdtempSync(join(tmpdir(), 'appr-origin-')), 'origin.git');
+  git(repo, 'init', '-q', '--bare', bare); git(repo, 'remote', 'add', 'origin', bare);
+  git(repo, 'checkout', '-q', 'main'); snapshot = { ...snapshot, deployed: { 'env-a': { server: { ref: 'main', commit: git(repo, 'rev-parse', 'HEAD').trim() } } } };
+  git(repo, 'merge', '-q', '--no-ff', '-m', 'merge feat', 'feat'); git(repo, 'push', '-q', 'origin', 'main', 'feat'); git(repo, 'fetch', '-q', 'origin'); git(repo, 'checkout', '-q', 'feat');
+  return repo;
+}
+test('manager: labEnvs config is validated; a lab deploy with an additive migration is answered, naming the file; a customer env or destructive one is not', async () => {
+  await assert.rejects(m.setManagerConfig({ labEnvs: 'env-a' }), /labEnvs/);
+  await assert.rejects(m.setManagerConfig({ migrationProcedure: { proj: 5 } }), /migrationProcedure/);
+  const saved = await m.setManagerConfig({ labEnvs: ['env-a'], migrationProcedure: { proj: 'the deploy queue' } });
+  assert.deepEqual(saved.labEnvs, ['env-a']);
+  const ask = `${GREEN}\n\nDeploy main to env-a? It ships the new migration file.`;
+  const ok = await stop('d1', deployableWith('CREATE TABLE t (a int);\n'), ask);
+  assert.equal(ok.typed.length, 1, JSON.stringify(ok.esc)); assert.match(ok.typed[0], /^Deploy: yes - .*additive migration on the lab database env-a applied by the deploy queue: db\/migrations\/002_add\.sql/);
+  assert.equal(ok.esc, undefined);
+  const bad = await stop('d2', deployableWith('DROP TABLE t;\n'), ask);
+  assert.deepEqual(bad.typed, []); assert.ok(bad.esc);
+  await m.setManagerConfig({ labEnvs: [] });
+  const cust = await stop('d3', deployableWith('CREATE TABLE t (a int);\n'), ask);
+  assert.deepEqual(cust.typed, []); assert.ok(cust.esc);
+});

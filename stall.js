@@ -191,6 +191,7 @@ const MERGE_MAIN = String.raw`\bmerge\b[^.\n]{0,30}\bmain\b`;
 const REBASE_MAIN = String.raw`\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`;
 const GIT_PUSH = String.raw`\bgit push\b`;
 const HARD_GIT = String.raw`force[- ]?push|reset --hard|\bhard[- ]?reset\b`;
+const MIGRATE = String.raw`\bmigrat(?:e|ion)`;
 const FORBIDDEN_PARTS = [
   // deploys and service control
   String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
@@ -208,7 +209,8 @@ const FORBIDDEN_PARTS = [
   HARD_GIT,
   // destructive data operations
   String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
-  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b|\bmigrat(?:e|ion)`,
+  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
+  MIGRATE,
   // credentials and secrets
   String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`,
   // money and customers
@@ -244,16 +246,18 @@ export const DEPLOY_RE = new RegExp([DEPLOY_WORDS, DEPLOY_SHIP].join('|'), 'i');
 export const PUSH_RE = /\bpush(?:ing)?\b|\bpushed\b(?:[^.\n]{0,30}\bmain\b)?/i;
 const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON), HARD_GIT, PUSH_TAGS].join('|'), 'i');
 const colonHit = (text) => { for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_COLON_RE); if (k) return k[0]; } return null; };
-const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false } = {}) => {
+const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false, migrationsOk = false } = {}) => {
   const drop = new Set([MERGE_MAIN]);
+  if (migrationsOk) drop.add(MIGRATE);   // the deploy evaluation read the migration files (additive, lab env): the noun is covered, "migrate" the verb is not (below)
   if (mergePresent || pushPresent) { drop.add(PUSH_MAIN); drop.add(GIT_PUSH); }
   if (deployPresent) { drop.add(DEPLOY_WORDS); drop.add(DEPLOY_SHIP); drop.add(RESTART_ANY); }
   let parts = [...FORBIDDEN_PARTS.filter((p) => !drop.has(p)), ...HARD_EXTRA.filter((p) => p !== PUSH_COLON)];
   if (deployPresent) parts.push(RESTART_HARD);
+  if (migrationsOk) parts.push(String.raw`\bmigrat(?:e|es|ed|ing)\b`);
   return parts;
 };
 const HARD_RES = new Map();
-const hardRe = (o) => { const k = `${+!!o.mergePresent}${+!!o.pushPresent}${+!!o.deployPresent}`; if (!HARD_RES.has(k)) HARD_RES.set(k, new RegExp(hardParts(o).join('|'), 'i')); return HARD_RES.get(k); };
+const hardRe = (o) => { const k = `${+!!o.mergePresent}${+!!o.pushPresent}${+!!o.deployPresent}${+!!o.migrationsOk}`; if (!HARD_RES.has(k)) HARD_RES.set(k, new RegExp(hardParts(o).join('|'), 'i')); return HARD_RES.get(k); };
 // `git push <remote> <refspec>` where the refspec is not main/master: not the landing of a merge.
 const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+(?!-)\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
 const PUSH_OTHER_RE = new RegExp(PUSH_OTHER_REF, 'i');   // read on the text and its spelling variants, not on window joins (a joined word would look like another ref)
@@ -358,7 +362,7 @@ export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenE
 // Like a deploy or a push, a merge counts as a topic only when the text asks to perform it ("Should I merge ..."), not for a noun ("the merge policy page").
 export const mergeMatch = (text) => requested(text, MERGE_RE);
 // The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any
-// plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent } (a bare boolean = mergePresent).
+// plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent, migrationsOk } (a bare boolean = mergePresent); migrationsOk: the noun "migration" is covered by a deploy evaluation of additive lab migrations.
 export function hardMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
   const hit = matchWith(hardRe(o), text, forbiddenExtra) || colonHit(text);
@@ -663,6 +667,7 @@ function finish(out) {
   if (out.case === 'continue' && out.forbiddenText != null) { const a = approvedAction({ case: out.case, approvalText: out.forbiddenText }); text = [a.text, ...a.commands].join('\n'); }
   out.forbidden = forbiddenMatch(text);
   out.topics = topicSplit(text);
+  Object.defineProperty(out, 'topicsText', { value: text, enumerable: false, writable: true });   // what the topics were read over (the manager re-reads it when a decided deploy covers a topic)
   delete out.forbiddenText;
   return out;
 }

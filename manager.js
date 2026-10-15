@@ -179,7 +179,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour } = b;
+  const { jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -210,6 +210,15 @@ export async function setManagerConfig(b = {}) {
     if (val === undefined) continue;
     if (!Array.isArray(val) || val.length > 50 || val.some((x) => typeof x !== 'string' || !x.trim())) throw bad(`${key} must be a list of up to 50 non-empty strings`);
     config[key] = [...new Set(val.map((x) => x.trim()))];
+  }
+  if (labEnvs !== undefined) {
+    if (!Array.isArray(labEnvs) || labEnvs.length > 50 || labEnvs.some((x) => typeof x !== 'string' || !x.trim())) throw bad('labEnvs must be a list of up to 50 environment names');
+    config.labEnvs = [...new Set(labEnvs.map((x) => x.trim()))];
+  }
+  if (migrationProcedure !== undefined) {
+    if (!migrationProcedure || typeof migrationProcedure !== 'object' || Array.isArray(migrationProcedure) || Object.keys(migrationProcedure).length > 50
+        || Object.entries(migrationProcedure).some(([k, v]) => !k.trim() || typeof v !== 'string' || !v.trim() || v.length > 200)) throw bad('migrationProcedure must map a repo name to a short text (the documented procedure)');
+    config.migrationProcedure = { ...migrationProcedure };
   }
   if (mergeMinConfidence !== undefined) config.mergeMinConfidence = num(mergeMinConfidence, 0, 1, 'mergeMinConfidence');
   if (mergeOptOut !== undefined) {
@@ -435,7 +444,7 @@ async function fire(name, auto) {
   const kinds = auto.kinds || {};
   const ai = auto.source === 'ai';   // the AI reviewer's proposal, auto mode: same gates, plus its own switch and a re-check of the reply itself
   const forb = (w.stall?.forbidden || w.cls?.forbidden) || (ai ? forbiddenMatch(auto.answer?.text || '') : null);
-  const hardOpts = { mergePresent: 'merge' in kinds, pushPresent: 'push' in kinds, deployPresent: 'deploy' in kinds };
+  const hardOpts = { mergePresent: 'merge' in kinds, pushPresent: 'push' in kinds, deployPresent: 'deploy' in kinds, migrationsOk: !!auto.migrationsOk && 'deploy' in kinds };
   const ws = md ? (hardMatch(auto.answer?.text || '', hardOpts) ? { send: null, why: `forbidden: ${hardMatch(auto.answer?.text || '', hardOpts)}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'manager_decision' })
     : ai ? (forb ? { send: null, why: `forbidden: ${forb}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: 'ai' })
     : auto.override ? (menuUnsafe(auto.recText, kinds) ? { send: null, why: `forbidden: ${menuUnsafe(auto.recText, kinds)}` } : w.cls?.draft ? { send: null, why: 'owner has a draft in the input box' } : { send: auto.answer, why: auto.case })   // a menu whose recommended option was decided by the manager (menuDecision)
@@ -455,7 +464,7 @@ async function fire(name, auto) {
   else if (last.lastSendAt && w.pending && last.lastSendAt > w.pending.at) reason = 'owner sent something';
   else if (w.cls?.draft) reason = 'draft in the input box';
   else if (!ws.send) { reason = ws.why; esc = true; }
-  else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence, kinds: auto.kinds, override: auto.override, recText: auto.recText, menu: auto.menu, escalated: auto.escalated, remaining: auto.remaining }, pol); reason = `held: ${pol.reason}`; }
+  else if (w.agent && policyOf(name, w.agent).action === 'hold') { const pol = policyOf(name, w.agent); applyHold(name, w, { id: auto.id, hash: auto.hash, answer: auto.answer, case: auto.case, source: auto.source, confidence: auto.confidence, kinds: auto.kinds, override: auto.override, recText: auto.recText, menu: auto.menu, escalated: auto.escalated, remaining: auto.remaining, migrationsOk: auto.migrationsOk }, pol); reason = `held: ${pol.reason}`; }
   else if (!send.key || !send.keys) reason = 'no send function';
   else if (hourCount(name) >= config.maxPerSessionPerHour) { reason = 'hourly cap reached'; esc = true; }
   if (md && reason && !auto.escalated && !/^(?:session moved on|pane changed|owner sent|session paused|manager disabled)/.test(reason)) esc = true;   // nothing else tells the owner this stop is still open
@@ -946,7 +955,7 @@ const topicsWanted = (topics, parts = null) => ({
 const argsOf = (out) => ({
   merge: out.ok.merge ? { repo: out.evs.merge.facts.repoName, branch: out.evs.merge.facts.branch, target: out.evs.merge.facts.target, rationale: out.evs.merge.rationale } : null,
   push: out.ok.push ? { repo: out.evs.push.facts.repoName, branch: out.evs.push.facts.branch, dest: out.evs.push.facts.dest, rationale: out.evs.push.rationale } : null,
-  deploy: out.ok.deploy ? { env: out.evs.deploy.facts.env, scope: out.evs.deploy.facts.scope, ref: out.evs.deploy.facts.ref, sha: out.evs.deploy.facts.sha, rationale: out.evs.deploy.rationale, rollback: out.evs.deploy.rollback } : null,
+  deploy: out.ok.deploy ? { migrations: out.evs.deploy.facts.migrations || null, env: out.evs.deploy.facts.env, scope: out.evs.deploy.facts.scope, ref: out.evs.deploy.facts.ref, sha: out.evs.deploy.facts.sha, rationale: out.evs.deploy.rationale, rollback: out.evs.deploy.rollback } : null,
 });
 
 // An owner-bound stop that asks for information and / or a merge, push or deploy: answer what the manager can (the information when it is
@@ -1002,7 +1011,10 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   }
   // a topic present in the text but not decided (switch off, no repo) is left to the owner
   const offTopics = DECISION_KINDS.filter((k) => topics?.[k] && !(k in dec.evs));
-  const hard = topics?.hard || null;
+  let hard = topics?.hard || null;
+  // a deploy the manager decided that ships additive lab migrations covers the noun "migration(s)" in the ask (round 9, item 4); "migrate" the verb and every other hard word stay
+  const migOk = !!(dec.ok.deploy && dec.evs.deploy?.facts?.migrations?.length);
+  if (hard && migOk) hard = hardMatch(stall.topicsText ?? final.question ?? '', { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy, migrationsOk: true });
   const args = argsOf(dec);
   let reply = composeReply({ info, ...args, remaining: true });
   if (!reply) return out;
@@ -1016,7 +1028,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   if (!open) reply = composeReply({ info, ...args, remaining: false });   // same kept lines, without the pointer to the owner
   const kinds = Object.fromEntries(DECISION_KINDS.filter((k) => answered[k]).map((k) => [k, dec.kinds[k]]));
   if (decisionBlock(name, kinds)) return out;
-  const pending = { id, hash: h, answer: { text: reply.text }, case: final.case, source: 'manager_decision', confidence: 1, kinds, escalated: open, remaining: open };
+  const pending = { id, hash: h, answer: { text: reply.text }, case: final.case, source: 'manager_decision', confidence: 1, kinds, escalated: open, remaining: open, ...(migOk && answered.deploy ? { migrationsOk: true } : {}) };
   const pol = policyOf(name, s.agent);
   shadowRoute({ id, session: name, agent: s.agent, final, stall, escalated: open });
   if (pol.action === 'hold') { applyHold(name, w, pending, pol); }
