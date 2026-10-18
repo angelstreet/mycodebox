@@ -24,6 +24,18 @@ export function verdictRun(runs, now) {
   return { run: done };
 }
 
+// Pure. Merges a gh run's conclusion with the platform store (cicd.ci_jobs). Platform jobs
+// (api-routes, backend-server-tests, e2e-*, web-script-local-debug, vpt-smoke) run with
+// continue-on-error, so gh reports 'success' while the platform records 'failure'. If gh
+// says 'success' but the platform has failed jobs for this run, the run is treated as red.
+// The returned run carries `jobs` either way so the brief/nudge can name the failures.
+export function mergePlatformVerdict(run, dbFailedJobs) {
+  if (!run) return run;
+  const jobs = (dbFailedJobs || []).filter(Boolean);
+  if (jobs.length && run.conclusion === 'success') return { ...run, conclusion: 'failure', jobs };
+  return { ...run, jobs };
+}
+
 // Pure. What to do this tick. st: persisted streak state; fixer: { exists, alive, working } of the fixer session.
 // -> { type: 'none'|'green'|'start'|'nudge'|'stuck', reason, red? }
 export function decide({ run, st, fixer, now }) {
@@ -86,44 +98,60 @@ export function createCiWatch({
       cfg = { branch: 'main', session: 'ci-fix-main', provider: 'claude', ...cfg };
       await load();
       const runs = await gh(['run', 'list', '-R', cfg.repo, '-b', cfg.branch, ...(cfg.workflow ? ['-w', cfg.workflow] : []), '-L', '20',
-        '--json', 'databaseId,headSha,status,conclusion,createdAt,url']);
+        '--json', 'databaseId,number,headSha,status,conclusion,createdAt,url']);
       const v = verdictRun(runs, now());
       if (v.wait) return (last = { at: now(), mode: m, verdict: v.wait, action: null });
+      // Platform store check: a green run may hide continue-on-error failures (api-routes,
+      // backend-server-tests, e2e-*, web-script-local-debug, vpt-smoke). On a failure, gh
+      // already says red so the query is skipped. If the query errors, fall back to gh.
+      let platformJobs = [];
+      if (v.run.conclusion === 'success' && v.run.number) {
+        try {
+          const q = `select j.job from cicd.ci_jobs j join cicd.ci_runs r using(project,run) where j.project='virtualpytest' and r.run_number=${Number(v.run.number)} and j.status='failure'`;
+          const out = await run('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'database', `sudo -n docker exec -i supabase_db_supabase psql -U postgres -d postgres -At -c "${q}"`]);
+          platformJobs = String(out || '').split('\n').map((s) => s.trim()).filter(Boolean);
+        } catch (e) {
+          log.error?.('[ci-watch] platform store lookup failed, falling back to gh:', String(e.message).split('\n')[0]);
+        }
+      }
+      const merged = mergePlatformVerdict(v.run, platformJobs);
       const fixer = await sessionState(cfg.session);
-      const d = decide({ run: v.run, st, fixer, now: now() });
-      last = { at: now(), mode: m, verdict: `${v.run.conclusion} run ${v.run.databaseId}`, action: d };
+      const d = decide({ run: merged, st, fixer, now: now() });
+      last = { at: now(), mode: m, verdict: `${merged.conclusion} run ${merged.databaseId}`, action: d };
       if (m === 'dry') { if (d.type !== 'none') await note({ dry: true, ...d }); return last; }
       if (d.red && !st.redSince) {   // a new red streak: once in the feed, whatever this tick does
         st = { redSince: now(), attempts: 0 }; await save();
-        await record({ key: 'ci-watch:red', title: `CI red on ${cfg.branch}`, body: d.reason, url: v.run.url, priority: 'default' });
+        await record({ key: 'ci-watch:red', title: `CI red on ${cfg.branch}`, body: d.reason, url: merged.url, priority: 'default' });
       }
       if (d.type === 'none') return last;
       if (d.type === 'green') {
-        await record({ key: 'ci-watch:green', title: `CI green again on ${cfg.branch}`, body: `${d.reason}; red since ${new Date(st.redSince).toISOString()}, ${st.attempts || 0} fixer dispatch(es)`, url: v.run.url, priority: 'default' });
+        await record({ key: 'ci-watch:green', title: `CI green again on ${cfg.branch}`, body: `${d.reason}; red since ${new Date(st.redSince).toISOString()}, ${st.attempts || 0} fixer dispatch(es)`, url: merged.url, priority: 'default' });
         await note(d); st = {}; await save(); return last;
       }
       if (d.type === 'stuck') {
         st.stuckAt = now(); await save(); await note(d);
-        const body = `${cfg.branch} is still red after ${st.attempts} fixer attempts (${v.run.url}). ci-watch stopped dispatching; look at ${cfg.session}. Delete ci-watch-state.json to let it retry.`;
-        alert('ci-watch:stuck', { title: 'CI fixer stuck', body, url: v.run.url, priority: 'high' });
+        const body = `${cfg.branch} is still red after ${st.attempts} fixer attempts (${merged.url}). ci-watch stopped dispatching; look at ${cfg.session}. Delete ci-watch-state.json to let it retry.`;
+        alert('ci-watch:stuck', { title: 'CI fixer stuck', body, url: merged.url, priority: 'high' });
         return last;
       }
-      const view = await gh(['run', 'view', String(v.run.databaseId), '-R', cfg.repo, '--json', 'jobs']);
-      const jobs = (view.jobs || []).filter((j) => j.conclusion === 'failure').map((j) => j.name);
+      const view = await gh(['run', 'view', String(merged.databaseId), '-R', cfg.repo, '--json', 'jobs']);
+      const ghJobs = (view.jobs || []).filter((j) => j.conclusion === 'failure').map((j) => j.name);
+      // Platform jobs (continue-on-error) replace gh's view when present; otherwise use gh's failed jobs.
+      const jobs = merged.jobs && merged.jobs.length ? merged.jobs : ghJobs;
       const dir = join(stateDir, 'ci-fix'); await mkdir(dir, { recursive: true });
-      let logFile = join(dir, `${v.run.databaseId}.log`);
-      try { const out = await run('gh', ['run', 'view', String(v.run.databaseId), '-R', cfg.repo, '--log-failed']); await writeFile(logFile, out.split('\n').slice(-400).join('\n')); } catch { logFile = null; }
-      const text = brief({ cfg, run: v.run, jobs, logFile });
+      let logFile = join(dir, `${merged.databaseId}.log`);
+      try { const out = await run('gh', ['run', 'view', String(merged.databaseId), '-R', cfg.repo, '--log-failed']); await writeFile(logFile, out.split('\n').slice(-400).join('\n')); } catch { logFile = null; }
+      const text = brief({ cfg, run: merged, jobs, logFile });
       if (d.type === 'start') {
-        const promptFile = join(dir, `${v.run.databaseId}.prompt.md`);
+        const promptFile = join(dir, `${merged.databaseId}.prompt.md`);
         await writeFile(promptFile, text);
         await startSession({ name: cfg.session, cwd: cfg.cwd, provider: cfg.provider, model: cfg.model, promptFile });
       } else {
-        await sendToSession(cfg.session, `ci-watch: ${cfg.branch} is still red. Run ${v.run.url}, failing: ${jobs.join(', ') || 'see the run'}.${logFile ? ` Log excerpt: ${logFile}.` : ''} Fix it as in your brief, push, and watch the run.`);
+        await sendToSession(cfg.session, `ci-watch: ${cfg.branch} is still red. Run ${merged.url}, failing: ${jobs.join(', ') || 'see the run'}.${logFile ? ` Log excerpt: ${logFile}.` : ''} Fix it as in your brief, push, and watch the run.`);
       }
       st.attempts = (st.attempts || 0) + 1; st.lastDispatchAt = now(); await save();
       await note({ ...d, jobs, attempt: st.attempts });
-      await record({ key: `ci-watch:${d.type === 'start' ? 'fixer-started' : 'fixer-nudged'}`, title: `CI fixer ${d.type === 'start' ? 'started' : 'nudged'} (${st.attempts}/${MAX_ATTEMPTS})`, body: `${cfg.session}: ${jobs.join(', ') || 'red run'}`, url: v.run.url, priority: 'default' });
+      await record({ key: `ci-watch:${d.type === 'start' ? 'fixer-started' : 'fixer-nudged'}`, title: `CI fixer ${d.type === 'start' ? 'started' : 'nudged'} (${st.attempts}/${MAX_ATTEMPTS})`, body: `${cfg.session}: ${jobs.join(', ') || 'red run'}`, url: merged.url, priority: 'default' });
       return last;
     } catch (e) {
       log.error?.('[ci-watch]', e.message);
