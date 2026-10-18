@@ -104,13 +104,23 @@ echo "started: $NAME ($PROV${MODEL:+ $MODEL}${CS:+, billing $BILL}) in $DIR"
 [ "$PROV" = claude ] && { [ -n "$URL" ] && echo "remote control: $URL" || echo "remote control: not confirmed yet — check: tmux capture-pane -p -t $NAME"; }
 echo "prompt: $P"
 
+# Record who started this session (owner, 2026-10-18): env CBSESSION_BY if the caller set it; else the tmux session
+# name of the calling pane ($TMUX_PANE -> `tmux display -p -t $TMUX_PANE '#S'`) so a session started by another
+# session is recorded as that session; else 'cbsession' (a manual terminal run, owner by default).
+STARTED_BY="${CBSESSION_BY:-}"
+if [ -z "$STARTED_BY" ] && [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null; then
+  STARTED_BY=$(tmux display -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)
+fi
+[ -n "$STARTED_BY" ] || STARTED_BY=cbsession
+export STARTED_BY
+
 # Report the start to the dashboard's session history (loopback + reporter token). Best effort: a failure only warns,
 # the tick loop records the session as 'unknown' anyway.
 {
   TOKF="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}/reporter.token"
   if [ -r "$TOKF" ] && command -v curl >/dev/null && command -v node >/dev/null; then
-    BODY=$(NAME=$NAME PROV=$PROV MODEL=$MODEL DIR=$DIR P=$P HANDOVER=$HANDOVER URL=$URL node -e '
-      const e = process.env, o = { name: e.NAME, provider: e.PROV, model: e.MODEL || null, cwd: e.DIR, prompt_ref: e.P, handover_ref: e.HANDOVER || null };
+    BODY=$(NAME=$NAME PROV=$PROV MODEL=$MODEL DIR=$DIR P=$P HANDOVER=$HANDOVER URL=$URL STARTED_BY="$STARTED_BY" node -e '
+      const e = process.env, o = { name: e.NAME, provider: e.PROV, model: e.MODEL || null, cwd: e.DIR, prompt_ref: e.P, handover_ref: e.HANDOVER || null, started_by: e.STARTED_BY };
       if (e.URL) o.remote_control_url = e.URL; process.stdout.write(JSON.stringify(o));' 2>/dev/null) || BODY=
     [ -n "$BODY" ] && curl -fsS -m 5 -o /dev/null -X POST -H 'content-type: application/json' --config - \
       --data "$BODY" "http://127.0.0.1:${GHOSTY_PORT:-${PORT:-7777}}/api/history/started" 2>/dev/null \

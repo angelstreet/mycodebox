@@ -45,6 +45,7 @@
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
+//   GET  /api/worker-auto-close → worker-auto-close snapshot: sessions the worker auto-close tick closed or skipped (worker-auto-close.js)
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
 //   POST /api/handoffs          → {resource, from, to, due?} create a new hand-off row
 //   POST /api/handoffs/<id>/done → mark a hand-off done (body {by?})
@@ -93,6 +94,7 @@ import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
 import { createDoneCheck } from './done-check.js';
+import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
 import { statusLine } from './stall.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -848,6 +850,75 @@ const doneCheck = createDoneCheck({
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheck; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 
+// Reuse done-check's git facts for a single session's cwd, without telling it / nudging: returns true when git is clean.
+async function gitCleanOf(name, cwd) {
+  if (!cwd) return true;
+  let st; try { st = await exec('git', ['-C', cwd, 'status', '--porcelain', '--untracked-files=no'], { timeout: 30000 }).stdout; } catch { return true; }
+  if (st.trim()) return false;   // uncommitted in a worktree: blame it
+  try {
+    const head = (await exec('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 30000 }).stdout).trim();
+    if (!head || head === 'HEAD') return true;   // detached / no branch: don't block
+    const base = (await exec('git', ['-C', cwd, 'rev-parse', '-q', '--verify', 'origin/main'], { timeout: 30000 }).stdout).trim();
+    if (!base) return true;
+    const ahead = (await exec('git', ['-C', cwd, ['log', '--format=%h', '--no-merges', '--cherry-pick', '--right-only', `origin/main...HEAD`].flat().join(' ')], { timeout: 30000 }).stdout).trim();
+    if (ahead) return false;
+    return true;
+  } catch { return true; }
+}
+
+// Worker auto-close (worker-auto-close.js): a session that another session started and that is done + idle + git-clean
+// for >= workerIdleMin minutes is closed politely. manager.json `workerAutoClose`: true (default) | false;
+// `workerIdleMin`: 20 (default, minutes). Reuses done-check's listDone for the STATUS done filter; its own git check
+// is the cheap worktree-only one above (so we never block on a busy host the way done-check's nudge would).
+const workerAutoClose = createWorkerAutoClose({
+  stateDir: STATE_DIR,
+  listCandidates: async () => {
+    const panes = await listPanes(), table = await processTable();
+    const mgrs = new Set(loadManagerSessions());
+    const out = [];
+    for (const [name, p] of panes) {
+      if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead) continue;
+      const sb = sessionMeta.startedBy(name);
+      // Pre-filter cheaply: owner / dashboard / unknown / empty starts are never candidates. Skip before any git work.
+      if (!sb || sb === 'owner' || sb === 'dashboard' || sb === 'unknown') continue;
+      const st = latest?.status?.[name];
+      const ex = st?.stall?.excerpt;
+      if (!ex) continue;
+      const sl = statusLine(String(ex).split('\n'));
+      if (sl?.kind !== 'done') continue;
+      const act = reporter.activityOf(name);
+      const working = !!(act?.working || st?.state === 'working');
+      const scriptBusy = scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table);
+      const backgroundWork = (act?.backgroundWork ?? 0) || (paneBackgroundOf(st?.plain || []) ? 1 : 0);
+      const draft = !!st?.stall?.draft;
+      const lastChange = st?.changeAt || 0;
+      const idleMs = Date.now() - (lastChange || st?.doneAt || Date.now());
+      const pri = sessionMeta.priority(name);
+      // Reuse done-check's factsOf (no send, no nudge) by reading the git state through the same helper it would.
+      const clean = await gitCleanOf(name, p.cwd);
+      const agent = st?.agent || 'claude';
+      out.push({ name, startedBy: sb, priority: pri, lastStatusKind: 'done', lastStatusText: sl?.text || null,
+        idleMs, working, scriptBusy, backgroundWork, draft, doneCheckClean: clean, agent,
+        tmuxSessionExists: true, paneHasProcess: true });
+    }
+    return out;
+  },
+  polite: async (args) => politeClose({
+    name: args.name, agent: args.agent,
+    sendKeys: async (n, keys, enter) => sendKeys(n, keys, enter),
+    tmuxSessionAlive: async (n) => sessionExists(n),
+    paneHasProcess: async (n) => !!(await liveAgentOf(n)),
+    killTmux: async (n) => { await exec(TMUX, ['kill-session', '-t', `=${n}`]); },
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    onPrompt: async (n) => {
+      const txt = (await exec(TMUX, ['capture-pane', '-p', '-t', `=${n}:`], { timeout: 5000 }).catch(() => ({ stdout: '' }))).stdout;
+      if (/Exit and stop tasks/.test(txt)) { await exec(TMUX, ['send-keys', '-t', `=${n}:`, 'Enter']); throw new Error('confirmed'); }
+    },
+  }),
+  record: (e) => managerEvents.record(e),
+  config: () => { try { const j = JSON.parse(readFileSync(managerConfigFile, 'utf8')); return { workerAutoClose: j.workerAutoClose !== false, workerIdleMin: Number(j.workerIdleMin) > 0 ? Number(j.workerIdleMin) : 20, managerSessions: loadManagerSessions() }; } catch { return { workerAutoClose: true, workerIdleMin: 20, managerSessions: loadManagerSessions() }; } },
+});
+
 // Rules watch (rules-watch.js): a session started before AGENTS.md last changed on its repo's origin/main is told once,
 // while idle, to re-read it. manager.json key `rulesWatch`: "live" (default) | "dry" | "off".
 const rulesWatch = createRulesWatch({
@@ -1358,6 +1429,8 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
   sessionMeta.reset(real);
   sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
   if (priority) sessionMeta.set(real, { priority });
+  // The dashboard create path is always owner-started: the owner clicked the button.
+  try { sessionMeta.setStartedBy(real, 'owner'); } catch (e) { console.error('[createSession] setStartedBy', e.message); }
   latest = null;
   } finally { historyStarting.delete(real); }
   return { ok: true, name: real, agent, cwd: dir, priority: sessionMeta.priority(real) };
@@ -1719,7 +1792,13 @@ async function handleHttp(req, res) {
     if (!reporter.tokenOk(req.headers[TOKEN_HEADER])) return json(res, 401, { ok: false, error: 'bad token' });
     try {
       const { ts: _ts, tmux_created: _tc, ...b } = await readJsonBody(req);   // server time and tmux facts only, never the client's
-      const r = await history.append({ ...b, kind: 'session.started', started_by: 'cbsession', tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
+      // cbsession reports who started it (CBSESSION_BY env or its calling tmux session). The dashboard create path
+      // records 'owner' itself; cbsession is the default when the caller forgot both (legacy cbsession, manual run).
+      const sb = typeof b.started_by === 'string' && b.started_by ? b.started_by : 'cbsession';
+      const r = await history.append({ ...b, kind: 'session.started', started_by: sb, tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
+      if (typeof b.name === 'string' && b.name) {
+        try { sessionMeta.setStartedBy(b.name, sb); } catch (e) { console.error('[history] setStartedBy', e.message); }
+      }
       return json(res, 200, { ok: true, record: r });
     } catch (err) { return json(res, err instanceof SyntaxError || err instanceof TypeError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
@@ -2083,6 +2162,7 @@ async function handleHttp(req, res) {
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
   if (req.method === 'GET' && p === '/api/done-check') return json(res, 200, doneCheck.snapshot());   // sessions whose STATUS done disagrees with git
+  if (req.method === 'GET' && p === '/api/worker-auto-close') return json(res, 200, workerAutoClose.snapshot());   // sessions the worker auto-closed (or skipped) in the last tick
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
   if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
@@ -2393,6 +2473,7 @@ server.listen(PORT, HOST, async () => {
   ciWatch.start();
   rulesWatch.start();
   doneCheck.start();
+  workerAutoClose.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:

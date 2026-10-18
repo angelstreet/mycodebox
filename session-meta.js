@@ -38,6 +38,16 @@ export function createSessionMeta({ file, now = Date.now } = {}) {
     held: (name) => data[name]?.held || null,
     setHeld(name, held) { const e = entry(name); if (held) e.held = held; else delete e.held; save(); },
     pausedAt: (name) => (data[name]?.paused ? data[name].pausedAt || null : null),
+    // Who started this session: 'owner' (dashboard create) | 'cbsession' (a terminal run) | '<tmux session>' (started by
+    // another session through `cbsession`'s CBSESSION_BY / $TMUX_PANE detection). Worker auto-close uses this to skip
+    // owner-started sessions. Empty / null / 'unknown' is also skipped (the tick sees the tmux session first).
+    startedBy: (name) => (typeof data[name]?.startedBy === 'string' && data[name].startedBy ? data[name].startedBy : null),
+    setStartedBy(name, sb) {
+      const v = typeof sb === 'string' ? sb.trim() : '';
+      if (!v) return;
+      const e = entry(name);
+      if (e.startedBy !== v) { e.startedBy = v; save(); }
+    },
     // Called every poll with the live names: registers new sessions and prunes long-gone ones.
     sync(liveNames) {
       const t = now();
