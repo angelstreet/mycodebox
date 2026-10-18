@@ -25,7 +25,7 @@ export const covers = (a, b) => a === 'full' || a === b;
 export const flagsFor = (scope) => SCOPE_FLAGS[scope] || null;
 // full and host deploys never wait for a leased host: update_core.sh drops it (--skip-leased) and reports
 // SKIPPED_HOSTS=a,b, which becomes a catch-up request. A request with `hosts` (the catch-up) deploys only those.
-const skipsLeased = (d) => d.scope === 'full' || d.scope === 'host';
+const skipsLeased = (d) => d.scope === 'full' || d.scope === 'host' || d.scope === 'server';   // server: a Pi's own server is skipped when that Pi is leased (TASK-129)
 const HOST_NAME = /^[A-Za-z0-9_.-]+$/;
 export const extraFlagsFor = (d) => [
   ...(skipsLeased(d) ? ['--skip-leased'] : []),
