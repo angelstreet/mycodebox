@@ -82,10 +82,14 @@ export function createDefaultGit() {
     child.on('close', (code) => { clearTimeout(t); resolve(timedOut ? { code: -1, out, err: 'git timed out', timedOut: true } : { code: code ?? -1, out, err }); });
   });
 }
+// A branch's tests must not see the service's environment (Langfuse / Jev keys, tokens): an allowlist, not a denylist.
+const ENV_KEEP = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LANGUAGE', 'TERM', 'TZ', 'TMPDIR', 'CI', 'GHOSTY_STATE_DIR',
+  'XDG_RUNTIME_DIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME']);
+export const scrubEnv = (env = process.env) => Object.fromEntries(Object.entries(env).filter(([k, v]) => v != null && (ENV_KEEP.has(k) || /^(LC_|NODE_)/.test(k))));
 // run(cmd, { cwd, timeoutMs, env, onData }) -> { code, out, timedOut }. `sh -c`, own process group so a timeout kills the tree.
 export function createDefaultRun() {
   return (cmd, { cwd, timeoutMs = 30 * 60_000, env, onData } = {}) => new Promise((resolve) => {
-    const child = spawn('sh', ['-c', cmd], { cwd, env: { ...process.env, ...(env || {}) }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawn('sh', ['-c', cmd], { cwd, env: { ...scrubEnv(), ...(env || {}) }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let out = '', timedOut = false;
     const take = (d) => { const s = d.toString('utf8'); out = (out + s).slice(-200_000); try { onData?.(s); } catch { /* observer */ } };
     child.stdout.on('data', take); child.stderr.on('data', take);

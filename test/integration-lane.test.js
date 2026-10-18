@@ -321,3 +321,16 @@ test('push landed, remote unreadable for a while: the request keeps running, the
   const r = await go(lane, { branch: 'feat' });
   assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(down, 0);
 });
+
+test('the test command runs with a scrubbed environment: service secrets stay out, PATH/HOME/NODE_* and the temp state dir stay in', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  process.env.LANGFUSE_SECRET_KEY = 'fake-secret'; process.env.JEV_TOKEN = 'fake-jev'; process.env.NODE_TEST_MARK = 'kept';
+  try {
+    const { lane } = mk(w, { cfg: { test: 'env; exit 1' } });
+    const r = await go(lane, { branch: 'feat' });
+    assert.equal(r.state, 'returned');
+    assert.doesNotMatch(r.tail, /LANGFUSE_|JEV_|fake-secret|fake-jev/);
+    assert.match(r.tail, /^PATH=/m); assert.match(r.tail, /^NODE_TEST_MARK=kept$/m); assert.match(r.tail, /^CI=1$/m);
+    assert.match(r.tail, /^GHOSTY_STATE_DIR=.*integration\/tmp\//m);
+  } finally { delete process.env.LANGFUSE_SECRET_KEY; delete process.env.JEV_TOKEN; delete process.env.NODE_TEST_MARK; }
+});
