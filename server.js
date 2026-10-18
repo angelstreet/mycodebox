@@ -2202,6 +2202,8 @@ const integrationNotify = createIntegrationNotify({
   log: (r) => logEvent(r),
 });
 const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
+integrationHooks.notify = integrationNotify;
+integrationHooks.deploys = integrationDeploys;
 // ===== end integration lane, sessions side =====
 
 const server = http.createServer((req, res) => {
