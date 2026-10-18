@@ -87,6 +87,8 @@ case "$cmd" in
     case "$BRANCH" in ""|HEAD) die "name the branch: integrate request <branch>" ;; esac
     SESSION=${MYCODEBOX_SESSION:-}
     [ -n "$SESSION" ] || { [ -n "$TMUX" ] && SESSION=$(tmux display-message -p '#S' 2>/dev/null); }
+    # on the Mac the tmux name is a Mac session: the server only accepts `mac:`-prefixed names from a remote client
+    case "$SESSION" in ""|mac:*) ;; *) [ "$(uname -s)" = Darwin ] && SESSION="mac:$SESSION" ;; esac
     ORIGIN=$(git remote get-url origin 2>/dev/null)
     BODY="{\"branch\":\"$(json_esc "$BRANCH")\",\"cwd\":\"$(json_esc "$PWD")\""
     [ -n "$REPO" ] && BODY="$BODY,\"repo\":\"$(json_esc "$REPO")\""

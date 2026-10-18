@@ -23,7 +23,7 @@ async function boot(w, { laneOpts = {}, cfg = {} } = {}) {
   writeFileSync(join(stateDir, 'leases', 'clients.json'), JSON.stringify({ clients: [mk('mac', CLIENT, { integrate: true }), mk('plain', PLAIN, {})] }));
   const events = [];
   const lane = createIntegrationLane({ stateDir, config: { repos: { 'env-a': w.cfg(cfg) } }, notify: (r, e) => events.push({ ...e, id: r.id }), pollMs: 1, sleep: () => new Promise((r) => setTimeout(r, 1)), ...laneOpts }).start();
-  const routes = createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk: (t) => t === REPORTER, sessionCwd: async (n) => (n === 'sess-in-dev' ? w.dev : null) });
+  const routes = createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk: (t) => t === REPORTER, sessionCwd: async (n) => (n === 'sess-in-dev' ? w.dev : null), remoteOwns: (n) => n === 'mac:known-abc123' });
   const server = http.createServer((req, res) => { routes.handle(req, res).then((ok) => { if (!ok) { res.writeHead(404); res.end(); } }); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -118,6 +118,21 @@ test('cancel a queued request; repo from the session cwd; unknown repo is refuse
     const viaClient = await b.call('POST', `${P}/requests`, { body: { branch: 'feat2', cwd: '/etc' }, headers: { authorization: `Bearer ${CLIENT}` } });
     assert.equal(viaClient.status, 200);   // a remote cwd is ignored; the single configured repo is used
     assert.equal(b.lane.get(viaClient.json.id).by, 'client:mac');
+  } finally { b.close(); }
+});
+
+test('client:* requests keep a session only when it is a registered mac: one; a bare local name is dropped', async () => {
+  const w = makeWorld(); w.branch('f1', { 'a.js': 'x\n' }); w.branch('f2', { 'b.js': 'x\n' }); w.branch('f3', { 'c.js': 'x\n' });
+  const b = await boot(w, { cfg: { test: 'fake' }, laneOpts: { run: () => new Promise(() => {}) } });
+  const hdr = { authorization: `Bearer ${CLIENT}` };
+  try {
+    const sess = async (branch, session) => b.lane.get((await b.call('POST', `${P}/requests`, { body: { branch, session }, headers: hdr })).json.id).session;
+    assert.equal(await sess('f1', 'sess-in-dev'), null);            // a Mac tmux name must not hit a local codebox session
+    assert.equal(await sess('f2', 'mac:unknown'), null);           // not registered
+    assert.equal(await sess('f3', 'mac:known-abc123'), 'mac:known-abc123');
+    // and a local caller keeps its session as before
+    const l = await b.call('POST', `${P}/requests`, { body: { branch: 'f1', session: 'local-s', deploy: undefined } });
+    assert.equal(b.lane.get(l.json.id).session, 'local-s');
   } finally { b.close(); }
 });
 

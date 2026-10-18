@@ -2180,7 +2180,8 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
     wait: (id) => integrationHooks.deploys.wait(id) },
   notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a) });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
-  sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null });
+  sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
+  remoteOwns: (name) => remote.owns(name) });   // `remote` is created below; called per request only
 integrationLane.start();
 // ===== END INTEGRATION BLOCK =====
 

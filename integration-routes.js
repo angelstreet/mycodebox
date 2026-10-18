@@ -32,7 +32,7 @@ export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, targe
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
-export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
+export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, remoteOwns = () => false, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(stateDir, 'leases', 'clients.json');
   let cache = { key: '', clients: [] };
@@ -83,7 +83,7 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     if (body.repo) return String(body.repo);
     if (body.origin) { const k = await lane.repoForUrl(String(body.origin)); if (k) return k; }
     if (who.loopback && body.cwd) { const k = await lane.repoForCwd(String(body.cwd)); if (k) return k; }
-    if (body.session) { const cwd = await sessionCwd(String(body.session)).catch(() => null); const k = cwd ? await lane.repoForCwd(cwd) : null; if (k) return k; }
+    if (body.session && !who.by.startsWith('client:')) { const cwd = await sessionCwd(String(body.session)).catch(() => null); const k = cwd ? await lane.repoForCwd(cwd) : null; if (k) return k; }
     const keys = lane.repoKeys();
     return keys.length === 1 ? keys[0] : null;
   }
@@ -103,7 +103,9 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         let body; try { body = await readBody(req, 64 * 1024); } catch (e) { fail('E_INVALID', e.message); return true; }
         const repo = await resolveRepo(body, who);
         if (!repo) { fail('E_INVALID', `repo not recognised: name it (--repo) — configured: ${lane.repoKeys().join(', ') || 'none'}`); return true; }
-        const out = lane.enqueue({ repo, branch: body.branch, session: body.session, deploy: body.deploy || null, note: body.note, by: who.by });
+        // A remote (client:*) caller's session name is the Mac's: it may only name a registered `mac:` session, never a local tmux one.
+        const session = who.by.startsWith('client:') ? (typeof body.session === 'string' && body.session.startsWith('mac:') && remoteOwns(body.session) ? body.session : null) : body.session;
+        const out = lane.enqueue({ repo, branch: body.branch, session, deploy: body.deploy || null, note: body.note, by: who.by });
         send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;
