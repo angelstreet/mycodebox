@@ -7,7 +7,16 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 9 (harness review actions, `.v2/round9.md`) delivered on `v2/r9-harness`. Round 10 is merged (PR #13).
+Owner direction 2026-10-18 (OWNER_DECISIONS §18): show results (V1 pages replaced by V2 pages move to a "Legacy" group of
+the More menu), ship first and test at the end of a build, shadow periods of 1 hour at most, no new feature rounds (ideas go
+to TODO.md). Lease cut-over: waiting on the owner for the network path of the registry host and the device hosts; then
+shadow 1 h, then central after telling the manager.
+
+## Round 12 (2026-10-18): show results
+
+| Item | What | State |
+|---|---|---|
+| Legacy menu | Platforms, Review stops, Jev decisions folded into a collapsed "Legacy pages" group of the More menu; links and `?platforms=1` / `?review=1` / `?decisions=1` keep working; service worker v148 | DONE |
 
 ## Round 9
 

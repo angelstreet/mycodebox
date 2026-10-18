@@ -25,3 +25,7 @@ Not urgent. Newest decisions first.
 ## Needs a real screen (shipped untested visually)
 Top bar + "more" menu, usage sheet views (Overview / Over time / Trending / Sessions), reader tables, task doc view,
 new-session project dropdown, Android back button, mobile layouts, web push in the APK.
+
+## Scope freeze (owner, 2026-10-18)
+
+No new feature rounds; new ideas are collected here and picked by the owner. (OWNER_DECISIONS §18)
