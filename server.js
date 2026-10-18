@@ -1296,6 +1296,8 @@ async function resizeSession(name, cols, rows) {
   const target = `=${name}:`;
   const { stdout } = await exec(TMUX, ['display-message', '-p', '-t', target, '#{session_attached}']);
   if (Number(stdout.trim()) > 0) throw Object.assign(httpError(409, 'session is attached'), { reason: 'attached' });
+  cols = Math.max(60, cols);
+  rows = Math.max(12, rows);
   await exec(TMUX, ['resize-window', '-t', target, '-x', String(cols), '-y', String(rows)]);
   try { await exec(TMUX, ['set-option', '-w', '-u', '-t', target, 'window-size']); } catch {}
   return { ok: true, cols, rows };
@@ -1857,6 +1859,13 @@ async function handleHttp(req, res) {
     } catch (err) {
       return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message, reason: err.reason });
     }
+  }
+  if (req.method === 'GET' && p.startsWith('/api/pane/')) {
+    const session = decodeURIComponent(p.slice('/api/pane/'.length));
+    const lines = Number(url.searchParams.get('lines') || PANE_LINES);
+    if (!Number.isInteger(lines) || lines < PANE_LINES || lines > 10000) return json(res, 400, { ok: false, error: 'lines 1000-10000 required' });
+    try { return json(res, 200, { ok: true, pane: await capturePane(session, lines), lines }); }
+    catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/sessions') {
     try { return json(res, 200, await createSession(await readJsonBody(req))); }

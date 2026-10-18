@@ -354,7 +354,7 @@ function getTerm(session) {
     cursorBlink: false,
     cursorStyle: 'bar',
     convertEol: true,
-    scrollback: 1000,
+    scrollback: 10000,
     disableStdin: true,
     allowProposedApi: true,
     theme: {
@@ -369,7 +369,7 @@ function getTerm(session) {
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
-  entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, paneRows: 0, laidOut: '', reqKey: '', reqTimer: 0, noFit: false };
+  entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, paneRows: 0, historyLines: 1000, laidOut: '', reqKey: '', reqTimer: 0, noFit: false };
   state.terms.set(session, entry);
   // Each pane snapshot repaints the whole grid (clear + rewrite), which wipes a text selection.
   // Hold repaints while the mouse is down on the terminal or text is selected; flush after.
@@ -1770,6 +1770,7 @@ function buildCell(s) {
     <div class="jump">
       <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">${icon('arrow-up-to-line', 15)}</button>
       <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">${icon('arrow-down-to-line', 15)}</button>
+      <button class="older" aria-label="Load older output">load older</button>
     </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
   cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
@@ -1778,7 +1779,7 @@ function buildCell(s) {
   // dock chip, grid card) is covered by the same check.
   cell.querySelector('.lk').onclick = (e) => { e.stopPropagation(); setLock(s.name); };
   for (const b of cell.querySelectorAll('.jump button')) {
-    b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
+    b.onclick = (e) => { e.stopPropagation(); if (b.classList.contains('older')) return loadOlder(s.name); jumpTo(cell, s.name, b.dataset.j); };
   }
   cell.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(cell.querySelector('.name'), s.name); };
   // one tap = select the card and put the cursor in the message box; two taps = open it as a full card.
@@ -1870,6 +1871,24 @@ function jumpTo(cell, name, where) {
   const term = state.terms.get(name)?.term;
   if (!term) return;
   if (where === 'top') term.scrollToTop(); else term.scrollToBottom();
+}
+async function loadOlder(name) {
+  const entry = state.terms.get(name);
+  if (!entry || entry.loadingOlder || entry.historyLines >= 10000) return;
+  entry.loadingOlder = true;
+  const button = document.querySelector(`[data-session="${cssEscape(name)}"] .older`);
+  if (button) button.disabled = true;
+  try {
+    const lines = entry.historyLines + 1000;
+    const r = await fetch(`/api/pane/${encodeURIComponent(name)}?lines=${lines}`);
+    if (!r.ok) throw new Error('history unavailable');
+    const d = await r.json();
+    entry.historyLines = d.lines;
+    writeToTerm(name, d.pane, { cols: entry.paneCols, rows: entry.paneRows });
+    if (button && entry.historyLines >= 10000) button.textContent = 'oldest loaded';
+  } catch { toast('older output unavailable'); }
+  entry.loadingOlder = false;
+  if (button) button.disabled = false;
 }
 
 // Single tap = select (send target), double tap = open the card.
@@ -3090,6 +3109,7 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 {
   const mb = $('#moreBtn'), mp = $('#morePop');
   mb.onclick = (e) => { e.stopPropagation(); mp.classList.toggle('hidden'); };
+  $('#moreClose').onclick = (e) => { e.stopPropagation(); mp.classList.add('hidden'); };
   mp.onclick = (e) => { e.stopPropagation(); if (e.target.closest('.icon-btn')) mp.classList.add('hidden'); };
   document.addEventListener('click', () => mp.classList.add('hidden'));
 }
@@ -3097,7 +3117,7 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 // ---------- usage view (TASK-44 phase 3): API-equivalent cost, never money spent ----------
 const SUBSCRIPTION = { manager: 'pay per call (Jev, AI reviewer)', claude: 'Claude Max 200 EUR/month', codex: 'ChatGPT Plus 20 EUR/month', minimax: 'MiniMax 40 EUR/month' };
 const usd = (c, unit = '') => (c == null ? '<span class="dim" title="unpriced: no list price for this model">&mdash;</span>' : escapeHtml(fmtUsd(c)) + unit);
-const tokLine = (e) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)} &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}</span>`;
+const tokLine = (e, ioOnly = false) => `<span class="ut">in ${fmtTok(e.input ?? e.in)} &middot; out ${fmtTok(e.output ?? e.out)}${ioOnly ? '' : ` &middot; cache r ${fmtTok(e.cache_read ?? e.cr)} &middot; cache w ${fmtTok(e.cache_creation ?? e.cw)}`}</span>`;
 function quotaOfAgent(a) {
   if (a === 'manager') return '<span class="dim">no quota</span>';
   const p = state.quota?.plans?.find((x) => x.plan === a);
@@ -3246,6 +3266,7 @@ function usageHtml(u, tab, ui) {
   if (today && !u.today) return '<div class="sheet-empty">today needs the updated ghosty-usage tailer (restart the unit)</div>';
   const src = today ? u.today : u;
   const { agent: fa, project: fp, q } = ui.f;
+  const tokenLine = (e) => tokLine(e, ui.ioOnly);
   const filtered = !!(fa || fp || q);
   const allRows = sessionRows(u, tab).sort((x, y) => (!!y.outlier - !!x.outlier) || (y.tokens - x.tokens));
   const rows = allRows.filter((r) => (!fa || r.agent === fa) && (!fp || r.project === fp) && (!q || r.session === q));
@@ -3262,7 +3283,7 @@ function usageHtml(u, tab, ui) {
       cache_read: rows.reduce((s, r) => s + r.cr, 0), cache_creation: rows.reduce((s, r) => s + r.cw, 0) };
   }
   const totCost = total.cost === 0 && total.unpriced > 0 ? null : total.cost;
-  const totalHtml = `<div class="utot"><span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns</span><br>${tokLine(total)}</div>`;
+  const totalHtml = `<div class="utot"><span class="dim">${today ? 'today (UTC day)' : `last ${u.windowDays} days`}${filtered ? ' &middot; filtered' : ''} &middot; ${total.turns ?? 0} turns</span><br>${tokenLine(total)}</div>`;
 
   // agents (with their models nested); derived from the filtered sessions when a project/session filter is on
   const narrowed = !!(fp || q);
@@ -3274,7 +3295,7 @@ function usageHtml(u, tab, ui) {
     const on = ui.openAgents.has(a.name), ms = modelsOf(a);
     return `<div class="urow ag"><div class="u1 tog" data-agent="${escapeHtml(a.name)}">${chev(on)}<i class="adot ${escapeHtml(a.name)}"></i><b>${escapeHtml(a.name)}</b><span class="dim">${ms.length} model${ms.length === 1 ? '' : 's'}</span><span class="grow"></span><b class="tk">${fmtTok(a.total)}</b></div>
       <div class="u2">${escapeHtml((SUBSCRIPTION[a.name] || 'subscription ?').replace(/\s*\d+\s*EUR\/month/i, ''))} &middot; ${quotaOfAgent(a.name)}</div>
-      <div class="u2">${tokLine(a)}</div>
+      <div class="u2">${tokenLine(a)}</div>
       ${on ? `<div class="umodels">${ms.map((m) => `<div class="urow sub"><div class="u1"><b>${escapeHtml(m.name)}</b><span class="grow"></span>${m.nocost ? '' : `<b class="tk">${fmtTok(m.total)}</b>`}</div>${m.nocost ? '' : `<div class="u2">${ioLine(m)}</div>`}</div>`).join('') || '<div class="dim">none</div>'}</div>` : ''}</div>`;
   }).join('') || '<div class="dim">none</div>';
 
@@ -3307,10 +3328,10 @@ function openUsage() {
     foot.classList.remove('hidden');
     foot.innerHTML = `${state.links?.langfuse ? `<a class="sbtn lf" href="${escapeHtml(state.links.langfuse)}" target="_blank" rel="noopener"><img src="/langfuse.svg" width="16" height="16" alt="">Langfuse</a>` : ''}<span class="grow"></span><button class="sbtn" data-a="close">close</button>`;
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
-    const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', dim: 'model', range: 7, selDay: null, view: lsGet('ghosty.usageView', 'overview') };
+    const ui = { f: { agent: '', project: '', q: '' }, open: { chart: true, total: true, quota: true, agent: true, project: true, session: true, day: true }, openAgents: new Set(), metric: 'total', dim: 'model', range: 7, selDay: null, view: lsGet('ghosty.usageView', 'overview'), ioOnly: lsGet('ghosty.usageIoOnly', '0') === '1' };
     let tab = 'today', data = null;
     body.innerHTML = `<div class="utabs"><button class="sbtn on" data-tab="today">Today</button><button class="sbtn" data-tab="14d">14 days</button></div>
-      <div class="uviews"><button data-view="overview">Overview</button><button data-view="time">Over time</button><button data-view="trend">Trending</button><button data-view="sessions">Sessions</button></div>
+      <div class="uviews"><button data-view="overview">Overview</button><button data-view="time">Over time</button><button data-view="trend">Trending</button><button data-view="sessions">Sessions</button><button data-io-toggle>in + out only</button></div>
       <div class="ufilters"><select data-f="agent" aria-label="Filter by agent"><option value="">all agents</option></select><select data-f="project" aria-label="Filter by project"><option value="">all projects</option></select><div class="ucombo"><button type="button" class="ucb" data-combo aria-label="Filter by session"><span class="ucl">all sessions</span></button><div class="ucpanel hidden"><input class="ucs" type="search" placeholder="search session…" aria-label="Search sessions"><div class="uclist"></div></div></div></div>
       <div class="ucontent"><div class="sheet-empty">loading…</div></div>`;
     const content = body.querySelector('.ucontent');
@@ -3340,6 +3361,7 @@ function openUsage() {
       for (const b of body.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === tab);
 
       for (const b of body.querySelectorAll('[data-view]')) b.classList.toggle('on', b.dataset.view === ui.view);
+      body.querySelector('[data-io-toggle]')?.classList.toggle('on', ui.ioOnly);
       body.querySelector('.ufilters').classList.toggle('hidden', !['overview', 'sessions'].includes(ui.view));
       content.innerHTML = data ? usageHtml(data, tab, ui) : '<div class="sheet-empty">loading…</div>';
     };
@@ -3360,6 +3382,7 @@ function openUsage() {
       if (t) { tab = t.dataset.tab; if (data) fillOptions(); draw(); return; }
       const vw = e.target.closest('[data-view]');
       if (vw) { ui.view = vw.dataset.view; lsSet('ghosty.usageView', ui.view); draw(); return; }
+      if (e.target.closest('[data-io-toggle]')) { ui.ioOnly = !ui.ioOnly; lsSet('ghosty.usageIoOnly', ui.ioOnly ? '1' : '0'); draw(); return; }
       const cd = e.target.closest('[data-cday]');
       if (cd) { ui.selDay = cd.dataset.cday; draw(); return; }
       const mt = e.target.closest('[data-metric]');
@@ -4780,6 +4803,7 @@ function wireFontUi() {
   $('#ctlToggle').onclick = () => setCardCtl(!state.cardCtl);
   $('#ctlToggle').classList.toggle('on', state.cardCtl);
   $('#fontBtn').onclick = (e) => { e.stopPropagation(); pop.classList.toggle('hidden'); };
+  $('#fontClose').onclick = (e) => { e.stopPropagation(); pop.classList.add('hidden'); };
   pop.onclick = (e) => e.stopPropagation();
   document.addEventListener('click', () => pop.classList.add('hidden'));
   document.addEventListener('keydown', (e) => {
