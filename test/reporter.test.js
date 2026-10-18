@@ -85,6 +85,15 @@ test('waiting stands until the pane moves on, a prompt arrives or the turn ends'
   assert.equal(rep.waitingNow('sess', 0), null);
 });
 
+test('summary exposes the scheduled wakeups (crons) of the last stop', () => {
+  rep.ingest(ev('stop', { text: 'next check in 5 min', backgroundWork: 0, crons: 1 }));
+  assert.equal(rep.summary('sess').crons, 1);
+  assert.equal(rep.summary('sess').backgroundWork, 0);
+  clock += 100;
+  rep.ingest(ev('turn.end', { text: 'next check in 5 min', reason: 'answer' }));
+  assert.equal(rep.summary('sess').crons, 1, 'turn.end after stop keeps the crons');
+});
+
 test('agents snapshot, summary for the status payload, session end', () => {
   rep.ingest(ev('agents', { agents: [{ id: 'a1', type: 'Explore', status: 'running', description: 'look' }, { id: 'a2', type: 'general-purpose', status: 'idle', description: 'wait' }] }));
   const s = rep.summary('sess');

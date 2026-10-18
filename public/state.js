@@ -9,9 +9,19 @@
 export const STATE_RANK = { waiting: 0, deploy: 1, done: 2, working: 3, idle: 4, offline: 5 };
 export const STATE_LABEL = { working: 'working', waiting: 'needs you', deploy: 'waiting deploy', done: 'done', idle: 'idle', offline: 'offline' };
 
+// True when the turn ended but the session still has work coming: background tasks or scheduled crons reported by the
+// Stop hook, or the manager's own background_wait classification.
+export function isLoopWaiting(status) {
+  if (!status) return false;
+  const r = status.reporter;
+  return !!((r && (r.backgroundWork > 0 || r.crons > 0)) || (status.stall && status.stall.case === 'background_wait'));
+}
+
 // Display state of one session given its raw status row.
 export function displayState(status) {
-  const s = (status && status.state) || 'offline';
+  let s = (status && status.state) || 'offline';
+  // A finished turn that still waits on a scheduled wakeup (/loop, ScheduleWakeup) or on background tasks is not "done": it shows as working (green)
+  if (s === 'done' && isLoopWaiting(status)) s = 'working';
   // 'waiting deploy' (violet) only for a deploy that is really queued or has a waiter in the lease registry; a session that merely
   // SAID it waits for one (a regex on its own text, kind 'said') keeps its real state, so it cannot flip purple <-> red
   const real = status && status.deployWait && status.deployWait.kind !== 'said';
