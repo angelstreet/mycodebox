@@ -10,8 +10,9 @@
 // the remote, CI and the deploy continue where they were.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { gitFacts, mergeFloor, isConvention } from './merge-policy.js';
 
 export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled']);
@@ -57,7 +58,15 @@ export function validateConfig(raw) {
     const conventionResolver = c.conventionResolver ?? 'take-target';
     if (!['take-target', 'max-plus-one'].includes(conventionResolver)) { bad('invalid conventionResolver'); continue; }
     let deploy = null;
-    if (c.deploy != null) {
+    if (c.deploy?.kind === 'self') {
+      // the repo of this very service: pull its live checkout and restart it (selfDeploy below), after every merge
+      const raw = typeof c.deploy.liveCheckout === 'string' ? c.deploy.liveCheckout.trim() : '';
+      const live = raw.startsWith('~/') ? path.join(os.homedir(), raw.slice(2)) : raw;
+      if (!path.isAbsolute(live) || /[#'\n\r]/.test(live)) { bad('deploy.liveCheckout must be an absolute or ~/ path without # or quotes'); continue; }
+      const w = c.deploy.restartWaitMin ?? 10;
+      if (!Number.isInteger(w) || w < 0 || w > 60) { bad('deploy.restartWaitMin must be an integer from 0 to 60'); continue; }
+      deploy = { kind: 'self', liveCheckout: path.normalize(live).replace(/\/+$/, ''), restartWaitMin: w };
+    } else if (c.deploy != null) {
       if (typeof c.deploy !== 'object' || typeof c.deploy.env !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(c.deploy.env)) { bad('deploy.env required'); continue; }
       const defaultScope = c.deploy.defaultScope ?? 'full';
       if (!SCOPES.has(defaultScope)) { bad(`deploy.defaultScope must be one of ${[...SCOPES].join(', ')}`); continue; }
@@ -139,6 +148,27 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
     },
   };
 }
+// Self-deploy restart. The lane runs inside the service that scripts/safe-restart.sh restarts, and the unit sets
+// NoNewPrivileges, so the script's `sudo systemctl restart` cannot run from a child of ours. The tmux server lives outside
+// the service (its own unit and cgroup, no NoNewPrivileges) and is where sessions already run safe-restart: `run-shell -b`
+// runs it there, so it outlives our stop and may sudo. Output goes to `log`, the exit code to `exit` (atomic rename).
+// restart({ cwd, waitMin, log, exit }) -> { ok, error? }
+const sq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+export function restartCommand({ cwd, waitMin, log, exit }) {
+  return `cd ${sq(cwd)} && ./scripts/safe-restart.sh --wait ${Number(waitMin) || 0} >${sq(log)} 2>&1; echo $? >${sq(`${exit}.tmp`)} && mv ${sq(`${exit}.tmp`)} ${sq(exit)}`;
+}
+export function createTmuxRestart({ tmux = process.env.TMUX_BIN || 'tmux' } = {}) {
+  return (o) => new Promise((resolve) => {
+    const cmd = restartCommand(o);
+    if (cmd.includes('#')) { resolve({ ok: false, error: 'a path contains #, which tmux would expand' }); return; }
+    execFile(tmux, ['run-shell', '-b', cmd], { timeout: 15_000 }, (e, _o, err) => resolve(e ? { ok: false, error: String(err || e.message).trim().slice(0, 300) } : { ok: true }));
+  });
+}
+// The restarted service answers. -> boolean
+export const defaultHealth = (base = `http://127.0.0.1:${Number(process.env.PORT || 7777)}`) => async () => {
+  try { const r = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(5000) }); return r.ok; } catch { return false; }
+};
+
 // Round 7 merge floor with the lane as the tester (its own test run replaces the session's test report).
 export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles }) {
   const facts = await gitFacts({ cwd, branch, branchSha, target, remote, conventionFiles });
@@ -149,8 +179,10 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
 // ---- the lane ----------------------------------------------------------------------------------------------------------
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
   deploys = null, mergeEval = defaultMergeEval, notify = () => {}, now = () => Date.now(), log = () => {},
-  pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), health = defaultHealth(),
+  restartGraceMs = 90_000, healthTries = 24 } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
+  const boot = randomBytes(8).toString('hex');   // this process: a self deploy that finds another boot was restarted under it
   const dir = path.join(stateDir, 'integration');
   const file = path.join(dir, 'requests.jsonl');
   const reqs = new Map();          // id -> request (insertion = enqueue order)
@@ -339,6 +371,14 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
           const names = failing.length ? `: ${failing.length} failing: ${failing.slice(0, 3).map((n) => n.slice(0, 80)).join('; ')}${failing.length > 3 ? '; …' : ''}` : '';
           if (!t.ok) throw new Ret(t.info?.timedOut ? `tests timed out after ${c.testTimeoutMin} min` : `tests red (exit ${t.info?.code})${names}`, r.steps.at(-1).tail, failing.length ? { failing } : {});
         }
+        if (c.deploy?.kind === 'self') {
+          // this repo restarts the service that runs the lane: a merge that does not even parse is never pushed
+          const k = await step(r, 'precheck', async () => {
+            const res = await run(`${sq(process.execPath)} --check server.js`, { cwd: wt, timeoutMs: 60_000 });
+            return { ok: res.code === 0 && !res.timedOut, tail: res.out, info: { code: res.code } };
+          });
+          if (!k.ok) throw new Ret('node --check server.js failed on the merge', r.steps.at(-1).tail);
+        }
         const p = await step(r, 'push', async () => {
           // compare-and-swap: only if the remote target is still the commit the merge was built on (never clobber a rewind or a newer push)
           const x = await G(r, c, ['push', '--porcelain', `--force-with-lease=refs/heads/${c.target}:${targetSha}`, c.remote, `${sha}:refs/heads/${c.target}`], { timeoutMs: 120_000 });
@@ -397,12 +437,134 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     return res;
   }
 
+  // ---- self deploy: the repo of this very service (deploy.kind 'self') ------------------------------------------------
+  // After the merge is on the target: refuse on tracked edits in the live checkout, pull --ff-only, npm ci when the lockfile
+  // changed, node --check, then safe-restart.sh launched outside the service. The `restarting` phase (expected sha, this
+  // boot) is persisted BEFORE the launch: the restart ends this process and the next one finishes the request
+  // (resumeSelfDeploy). Nothing is reset or reverted here; a failure after the pull carries a rollback line for the manager.
+  const short = (s) => String(s || '').slice(0, 12);
+  const restartFiles = (r) => ({ log: path.join(dir, 'restart', `${r.id}.log`), exit: path.join(dir, 'restart', `${r.id}.exit`) });
+  const readText = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
+  function selfFail(r, outcome, reason, tail = '') {
+    const sd = r.selfDeploy;
+    sd.phase = 'done'; sd.outcome = outcome;
+    const moved = sd.prevSha && sd.newSha && sd.prevSha !== sd.newSha;
+    transition(r, 'deploy_failed', { reason, tail: tailOf(tail), rollback: moved ? sd.rollback : null });
+  }
+  function selfDone(r) {
+    const sd = r.selfDeploy;
+    sd.phase = 'done'; sd.outcome = 'deployed';
+    r.deployed = { id: null, version: short(sd.newSha), env: 'live', scope: 'self', previous: sd.prevSha };
+    transition(r, 'deployed', { reason: null, rollback: sd.prevSha !== sd.newSha ? sd.rollback : null });
+  }
+
+  async function selfDeploy(r, c) {
+    const live = c.deploy.liveCheckout;
+    const L = (args, o) => git(args, { cwd: live, timeoutMs: 120_000, ...o });
+    const prior = r.selfDeploy?.prevSha || null;   // resumed mid-deploy: the service still runs the sha seen first
+    const sd = r.selfDeploy = { phase: 'checking', live, prevSha: null, newSha: null, expectedSha: null, outcome: null, rollback: null };
+    persist(r);
+    const chk = await step(r, 'deploy-check', async () => {
+      const head = await rev(r, c, 'HEAD', live);
+      if (!head) return { ok: false, tail: `${live} is not a git checkout` };
+      const st = await L(['status', '--porcelain', '--untracked-files=no']);
+      if (st.code !== 0) return { ok: false, tail: st.err || st.out };
+      const dirty = st.out.split('\n').filter(Boolean).map((l) => l.slice(3));
+      const branch = (await L(['symbolic-ref', '-q', '--short', 'HEAD'])).out.trim();
+      return { ok: !dirty.length && branch === c.target, tail: dirty.join('\n'), info: { head, dirty, branch } };
+    });
+    const ci = chk.info || {};
+    if (ci.dirty?.length) return selfFail(r, 'deploy_refused', `deploy refused: the live checkout ${live} has uncommitted changes to tracked files: ${ci.dirty.slice(0, 10).join(', ')}${ci.dirty.length > 10 ? ', …' : ''}`, chk.tail);
+    if (!chk.ok) return selfFail(r, 'deploy_refused', ci.head ? `deploy refused: the live checkout ${live} is on ${ci.branch || 'a detached HEAD'}, not ${c.target}` : `deploy refused: ${chk.tail || 'cannot read the live checkout'}`, chk.tail);
+    sd.prevSha = prior || ci.head;
+    sd.rollback = `git -C ${live} reset --hard ${short(sd.prevSha)} && cd ${live} && scripts/safe-restart.sh`;
+    persist(r);
+
+    const pull = await step(r, 'deploy-pull', async () => {
+      const x = await L(['pull', '--ff-only', '-q'], { timeoutMs: 180_000 });
+      return { ok: x.code === 0, tail: x.err || x.out };
+    });
+    if (!pull.ok) return selfFail(r, 'deploy_refused', `deploy refused: git pull --ff-only failed in ${live}`, pull.tail);
+    sd.newSha = await rev(r, c, 'HEAD', live); persist(r);
+    if (r.sha && (await L(['merge-base', '--is-ancestor', r.sha, 'HEAD'])).code !== 0) {
+      return selfFail(r, 'deploy_failed', `the live checkout pulled ${short(sd.newSha)}, which does not contain the merge ${short(r.sha)}: not restarted`);
+    }
+
+    if (sd.newSha !== sd.prevSha && (await L(['diff', '--name-only', sd.prevSha, sd.newSha, '--', 'package-lock.json'])).out.trim()) {
+      const inst = await step(r, 'deploy-install', async (setLive) => {
+        const res = await run(INSTALL_CMD, { cwd: live, timeoutMs: 15 * 60_000, onData: setLive });
+        return { ok: res.code === 0 && !res.timedOut, tail: res.out };
+      });
+      if (!inst.ok) return selfFail(r, 'install_failed', `${INSTALL_CMD} failed in ${live} at ${short(sd.newSha)}: NOT restarted, the service still runs ${short(sd.prevSha)}`, inst.tail);
+    }
+
+    const syn = await step(r, 'deploy-syntax', async () => {
+      const res = await run(`${sq(process.execPath)} --check server.js`, { cwd: live, timeoutMs: 60_000 });
+      return { ok: res.code === 0 && !res.timedOut, tail: res.out };
+    });
+    if (!syn.ok) return selfFail(r, 'check_failed', `node --check server.js FAILED in ${live} at ${short(sd.newSha)}: NOT restarted, the service still runs ${short(sd.prevSha)}`, syn.tail);
+
+    // the restart ends this process: everything the next one needs is on disk before the launch
+    const f = restartFiles(r);
+    fs.mkdirSync(path.dirname(f.log), { recursive: true, mode: 0o700 });
+    fs.rmSync(f.exit, { force: true }); fs.rmSync(f.log, { force: true });
+    Object.assign(sd, { phase: 'restarting', expectedSha: sd.newSha, boot, restartAt: iso(), ...f });
+    persist(r);
+    const la = await step(r, 'deploy-restart', async () => {
+      const x = await Promise.resolve(restart({ cwd: live, waitMin: c.deploy.restartWaitMin, log: f.log, exit: f.exit })).catch((e) => ({ ok: false, error: e?.message }));
+      return { ok: x?.ok === true, tail: x?.ok ? `safe-restart launched, expecting ${short(sd.newSha)}` : String(x?.error || 'launch failed') };
+    });
+    if (!la.ok) return selfFail(r, 'restart_failed', `could not launch scripts/safe-restart.sh: ${la.tail}. The checkout is at ${short(sd.newSha)}, the service still runs ${short(sd.prevSha)}`, la.tail);
+    await awaitRestart(r, c);
+  }
+
+  // This process is still alive after the launch: safe-restart either refused (its own text is the reason) or is about to stop us.
+  async function awaitRestart(r, c) {
+    const sd = r.selfDeploy;
+    const deadline = now() + (c.deploy.restartWaitMin + 3) * 60_000;
+    let okAt = null;
+    for (;;) {
+      if (stopped) throw new Ret('lane stopped');   // the restart's SIGTERM: the next boot resumes the request
+      const code = readText(sd.exit);
+      if (code != null && code.trim() !== '0') {
+        const out = readText(sd.log) || '';
+        const why = out.split('\n').map((l) => l.trim()).filter((l) => l && !/^deploy work pending/.test(l)).slice(-3).join(' / ') || 'no output';
+        return selfFail(r, 'restart_refused', `scripts/safe-restart.sh did not restart (exit ${code.trim()}): ${why}. The checkout is at ${short(sd.newSha)}, the service still runs ${short(sd.prevSha)}`, out);
+      }
+      if (code != null && okAt == null) okAt = now();
+      if (okAt != null && now() - okAt >= restartGraceMs) return selfFail(r, 'restart_failed', 'scripts/safe-restart.sh reported a restart but this service kept running', readText(sd.log) || '');
+      if (now() >= deadline) return selfFail(r, 'restart_failed', `scripts/safe-restart.sh did not finish in ${c.deploy.restartWaitMin + 3} min`, readText(sd.log) || '');
+      await sleep(Math.min(pollMs, 2000));
+    }
+  }
+
+  // A boot that finds a request `restarting` (another process launched the restart): deployed when the live checkout is at
+  // the expected sha and this service answers its health check; otherwise deploy_failed with what was found.
+  async function resumeSelfDeploy(r, c) {
+    const sd = r.selfDeploy;
+    if (sd.boot === boot) { await awaitRestart(r, c); return; }   // same process: the lane was only stopped and started
+    const v = await step(r, 'deploy-verify', async () => {
+      const head = await rev(r, c, 'HEAD', sd.live);
+      let up = false;
+      for (let i = 0; i < healthTries && !up; i++) {
+        up = (await Promise.resolve(health()).catch(() => false)) === true;
+        if (!up) { if (stopped) throw new Ret('lane stopped'); await sleep(Math.min(pollMs, 5000)); }
+      }
+      return { ok: head === sd.expectedSha && up, tail: readText(sd.log) || '', info: { head, up } };
+    });
+    if (v.ok) return selfDone(r);
+    const { head } = v.info || {};
+    if (head !== sd.expectedSha) return selfFail(r, 'deploy_failed', `after the restart the live checkout is at ${short(head) || 'an unreadable HEAD'}, expected ${short(sd.expectedSha)}`, v.tail);
+    return selfFail(r, 'deploy_failed', 'the service did not answer /api/health after the restart', v.tail);
+  }
+
   async function processRequest(r) {
     const c = repoCfg(r.repo);
     if (!c) { transition(r, 'returned', { reason: `repo ${r.repo} is not configured` }); return; }
     if (r.state === 'queued') { r.startedAt = iso(); r.steps = []; r.attempt = 0; transition(r, 'running', {}, {}); }
     else { r.resumed = (r.resumed || 0) + 1; emit(r, { kind: 'resumed', state: 'running', final: false }); }
     try {
+      if (r.selfDeploy?.phase === 'restarting') { await resumeSelfDeploy(r, c); return; }
       if (!r.pushed) {
         // restart check: a recorded merge may already be on the remote (the push step finished but was not recorded)
         if (r.mergeSha) {
@@ -431,6 +593,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         const ciRes = await waitCi(r, c);
         if (!ciRes.ok) { transition(r, 'merged_ci_red', { reason: ciRes.info?.timedOut ? `CI did not finish: ${ciRes.tail}` : 'CI red on the merge commit', tail: ciRes.tail }); return; }
       }
+      if (c.deploy?.kind === 'self') { await selfDeploy(r, c); return; }
       if (r.deployScope) {
         const d = await doDeploy(r, c);
         if (!d.ok) { transition(r, 'deploy_failed', { reason: `deploy failed: ${d.tail}`, tail: d.tail }); return; }
@@ -491,7 +654,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       if (!BRANCH_RE.test(branch) || branch.includes('..') || branch.endsWith('/') || branch.endsWith('.lock')) throw coded('E_INVALID', 'invalid branch name');
       if (branch === c.target) throw coded('E_INVALID', `the branch is the target (${c.target}): work on a branch`);
       let deployScope = null;
-      if (input.deploy) {
+      if (input.deploy && c.deploy?.kind !== 'self') {   // a self deploy follows every merge: no scope to ask for
         if (!c.deploy) throw coded('E_INVALID', `repo ${key} has no deploy configured`);
         deployScope = input.deploy === true ? c.deploy.defaultScope : String(input.deploy);
         if (!SCOPES.has(deployScope)) throw coded('E_INVALID', `deploy scope must be one of ${[...SCOPES].join(', ')}`);

@@ -70,6 +70,20 @@ When the merged tree has a `package-lock.json` and a test command is set, the la
 first (step `install`). Commands run with an allowlisted environment (PATH, HOME, locale, TMPDIR, `NODE_*`, CI and a
 temp `GHOSTY_STATE_DIR`), never the service's own keys and tokens.
 
+**Self deploy** (the mycodebox repo itself): `"deploy": { "kind": "self", "liveCheckout": "~/ghosty-sessions",
+"restartWaitMin": 10 }`. Every merge (no `--deploy` needed) is followed by: `node --check server.js` on the merge before
+the push (step `precheck`; a failure returns the request); then in the live checkout: refuse when tracked files have
+uncommitted changes (untracked files are fine) or the checkout is not on the target; `git pull --ff-only` (refused when
+not a fast-forward); `npm ci` when `package-lock.json` changed; `node --check server.js` (a failure is reported, the
+service is not restarted); then `scripts/safe-restart.sh --wait <restartWaitMin>`. The lane runs inside the service it
+restarts and the unit sets `NoNewPrivileges`, so the script is launched with `tmux run-shell -b` (the tmux server is
+outside the unit) and its output and exit code land in `<state>/integration/restart/<id>.{log,exit}`. The request's
+`selfDeploy` record (`prevSha`, `expectedSha`, this boot) is persisted in the `restarting` phase before the launch; the
+restarted service resumes it: live HEAD at the expected sha and `/api/health` answering -> `deployed` ("deployed live
+ghosty at <sha> (was <sha>)"), otherwise `deploy_failed`. A safe-restart refusal ends `deploy_failed` with its own text.
+`selfDeploy.outcome` says which: `deployed`, `deploy_refused`, `install_failed`, `check_failed`, `restart_refused`,
+`restart_failed`, `deploy_failed`. Nothing is ever reset; once the checkout moved, the result carries a `rollback` line.
+
 Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (HTTP), `scripts/integrate` (CLI). The queue is
 `<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:
 `node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state

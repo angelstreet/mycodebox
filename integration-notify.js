@@ -46,15 +46,18 @@ export function integrationText(r) {
   const n = normRequest(r);
   const id = one(n.id);
   const reason = one(n.reason) || 'no reason recorded';
+  const rollback = n.rollback ? ` Rollback: ${one(n.rollback)}` : '';
+  const sd = n.selfDeploy && typeof n.selfDeploy === 'object' ? n.selfDeploy : null;
   switch (n.state) {
     case 'merged': return `Integration ${id}: merged ${where(n)}.`;
-    case 'deployed': return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}.`;
+    case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)}).${rollback}`;
+      return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}.`;
     case 'returned': {
       const t = tailLines(n.tail);
       return `Integration ${id} returned: ${reason.replace(/[.\s]+$/, '')}. Fix it on your branch and run integrate request again.${t ? `\n${t}` : ''}`;
     }
     case 'merged_ci_red': return `Integration ${id}: merged ${where(n)} but CI is red (${reason.replace(/[.\s]+$/, '')}). The merge stays on ${one(n.target) || 'the target'}; the manager decides, do not revert it yourself.`;
-    case 'deploy_failed': return `Integration ${id}: merged ${where(n)} but the deploy failed (${reason.replace(/[.\s]+$/, '')}). The manager decides what happens next.`;
+    case 'deploy_failed': return `Integration ${id}: merged ${where(n)} but the ${sd ? 'live ghosty ' : ''}deploy failed (${reason.replace(/[.\s]+$/, '')}). The manager decides what happens next.${rollback}`;
     case 'cancelled': return `Integration ${id} cancelled.`;
     default: return null;
   }
