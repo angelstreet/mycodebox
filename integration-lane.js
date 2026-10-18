@@ -12,7 +12,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { createGitRunner } from './orchestration/integration-controller.js';
 import { gitFacts, mergeFloor, isConvention } from './merge-policy.js';
 
 export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled']);
@@ -73,13 +72,15 @@ export function normalizeRemoteUrl(u) {
 // ---- default injected pieces -------------------------------------------------------------------------------------------
 // git(args, { cwd, timeoutMs }) -> { code, out, err, timedOut? }; never throws on a non-zero exit.
 export function createDefaultGit() {
-  const g = createGitRunner();
-  return async (args, { cwd, timeoutMs } = {}) => {
-    try { return { code: 0, out: await g(['-c', 'pack.threads=2', ...args], { cwd, timeout_ms: timeoutMs }), err: '' }; } catch (e) {   // few pack threads: the box is memory- and pid-tight
-      if (e.code === 'E_TIMEOUT') return { code: -1, out: e.stdout || '', err: 'git timed out', timedOut: true };
-      return { code: Number.isInteger(e.exit) ? e.exit : -1, out: e.stdout || '', err: e.stderr || e.message || '' };
-    }
-  };
+  const base = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C', GIT_TERMINAL_PROMPT: '0' };   // own runner: orchestration/ must not load at server startup
+  return (args, { cwd, timeoutMs = 120_000 } = {}) => new Promise((resolve) => {
+    const child = spawn('git', ['-c', 'pack.threads=2', ...args], { cwd, env: base, stdio: ['ignore', 'pipe', 'pipe'] });   // few pack threads: the box is memory- and pid-tight
+    let out = '', err = '', timedOut = false;
+    const t = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d; }); child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => { clearTimeout(t); resolve({ code: -1, out, err: e.message }); });
+    child.on('close', (code) => { clearTimeout(t); resolve(timedOut ? { code: -1, out, err: 'git timed out', timedOut: true } : { code: code ?? -1, out, err }); });
+  });
 }
 // run(cmd, { cwd, timeoutMs, env, onData }) -> { code, out, timedOut }. `sh -c`, own process group so a timeout kills the tree.
 export function createDefaultRun() {
