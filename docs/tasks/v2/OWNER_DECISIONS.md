@@ -439,3 +439,19 @@ Owner direction, applied from 2026-10-18:
 3. **Shadow periods are 1 hour at most**, the lease cut-over included: shadow for 1 hour, then go central if the Leases
    view shows no unexplained mismatch; tell the manager before the freeze and central step.
 4. **Scope freeze.** No new rounds of features; new ideas go to `TODO.md`.
+
+
+## 19. First goal of V2: the owner never answers about leases or deployments (2026-10-18)
+
+Owner: "The owner never answers about leases or deployments. Agents are orchestrated to claim, hold, queue and release leases, and to push and deploy, so that other agents can work. A blocked agent waits in the queue, or the orchestrator asks the holder to release or narrow its lease. The owner is never asked."
+
+Concretely, for the central lease service on the registry host:
+- a deploy request waiting on a lease is queued and runs when the lease is released, with no owner step;
+- an agent holding a lease longer than its purpose, or broader than it needs, is asked by the orchestrator (the
+  manager) to release or narrow it;
+- leases expire and are reclaimed on their own;
+- no lease or deploy question is routed to the owner: a session's lease or deploy "needs-owner" is classified as a
+  manager item, not an owner item.
+
+Technical choices about leases, deploys, the network and design inside the V2 scope go to the manager, not the owner
+(manager decision, 2026-10-18).

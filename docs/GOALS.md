@@ -10,6 +10,15 @@ the linked pages and tests, never in this file alone.
 > come at the end, because when waiting for me we stop developing. Another issue: I need to be behind my laptop or
 > phone. I need a better ability to hear and engage by voice. My goal: I go to the gym or drive and can still work."
 
+## G0. The owner never answers about leases or deployments (first goal, 2026-10-18)
+
+> "The owner never answers about leases or deployments. Agents are orchestrated to claim, hold, queue and release leases, and to push and deploy, so that other agents can work. A blocked agent waits in the queue, or the orchestrator asks the holder to release or narrow its lease. The owner is never asked."
+
+A deploy waiting on a lease is queued and runs when the lease is released; a holder that keeps a lease longer or
+broader than its purpose is asked by the manager to release or narrow it; leases expire and are reclaimed on their own;
+no lease or deploy question reaches the owner (a session's lease or deploy "needs-owner" is a manager item). Status:
+[V2_PROGRESS](../V2_PROGRESS.md) Round 12.
+
 ## G1. Autonomy by default
 
 Sessions do not stop for routine confirmations. Merge, push, deploy and "the recommended option" are decided by the

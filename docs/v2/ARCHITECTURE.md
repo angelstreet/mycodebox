@@ -4,6 +4,14 @@ Status: **contract for implementation**, not a description of shipped behavior. 
 signatures; a change needs a coordinator decision recorded in `V2_PROGRESS.md`. Precedence: `AGENTS.md`,
 `docs/CONTRACT.md`, `docs/tasks/v2/OWNER_DECISIONS.md`, then this file.
 
+## Goals
+
+1. **The owner never answers about leases or deployments (owner, 2026-10-18; OWNER_DECISIONS §19).** Agents are
+   orchestrated to claim, hold, queue and release leases, and to push and deploy, so that other agents can work. A
+   blocked agent waits in the queue, or the orchestrator asks the holder to release or narrow its lease. The owner is
+   never asked. The lease authority is [LEASES-CENTRAL](LEASES-CENTRAL.md).
+2. Autonomy by default and a hands-free voice loop ([GOALS](../GOALS.md)).
+
 ## Ground rules for every module
 
 - Location `orchestration/`, Node 20+ ES modules, built-ins only (`ws` stays the only runtime dependency).
