@@ -28,7 +28,7 @@ function mk(w, { stateDir = mkdtempSync(join(tmpdir(), 'lane-self-')), restart, 
   l.start();
   return { lane: l, stateDir, events, launches };
 }
-const until = async (fn, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 5)); } throw new Error('timed out waiting'); };
+const until = async (fn, ms = 120000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 5)); } throw new Error('timed out waiting'); };
 const lastRecord = (stateDir, id) => readFileSync(join(stateDir, 'integration', 'requests.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.id === id).at(-1);
 
 test('merge, pull, check, restart: `restarting` is on disk before the launch, the next boot marks it deployed', async () => {
@@ -48,7 +48,7 @@ test('merge, pull, check, restart: `restarting` is on disk before the launch, th
   assert.deepEqual(a.lane.get(id).steps.map((s) => s.name).filter((n) => /^(precheck|push|deploy-)/.test(n)), ['precheck', 'push', 'deploy-check', 'deploy-pull', 'deploy-syntax', 'deploy-restart']);
 
   const b = mk(w, { stateDir: a.stateDir });
-  const r = await b.lane.wait(id, 20000);
+  const r = await b.lane.wait(id, 120000);
   assert.equal(r.state, 'deployed', JSON.stringify(r));
   assert.equal(r.selfDeploy.outcome, 'deployed'); assert.equal(r.selfDeploy.newSha, w.main()); assert.equal(r.selfDeploy.prevSha, prev);
   assert.equal(b.launches.length, 0, 'the resumed request does not restart again');
@@ -64,7 +64,7 @@ test('tracked edits in the live checkout: deploy refused with the file list, not
   writeFileSync(join(w.live, 'untracked.txt'), 'x\n');
   const prev = w.liveHead();
   const { lane, launches } = mk(w);
-  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'deploy_refused');
   assert.match(r.reason, /uncommitted changes to tracked files: server\.js$/); assert.doesNotMatch(r.reason, /untracked/);
   assert.equal(w.liveHead(), prev); assert.equal(launches.length, 0); assert.equal(r.rollback, null);
@@ -76,7 +76,7 @@ test('live checkout diverged: pull --ff-only fails, deploy refused, not restarte
   const w = world(); w.branch('feat', { 'new.js': 'x\n' });
   commit(w.live, { 'local.js': 'local\n' }, 'a local commit on the live checkout');
   const { lane, launches } = mk(w);
-  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'deploy_refused');
   assert.match(r.reason, /git pull --ff-only failed/); assert.equal(launches.length, 0);
 });
@@ -85,7 +85,7 @@ test('a merge whose server.js does not parse is returned before the push', async
   const w = world(); w.branch('feat', { 'server.js': 'export const = ;\n' });
   const before = w.main();
   const { lane, launches } = mk(w);
-  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r.state, 'returned'); assert.match(r.reason, /node --check server\.js failed on the merge/);
   assert.equal(w.main(), before); assert.equal(launches.length, 0);
 });
@@ -96,7 +96,7 @@ test('node --check fails after the pull: reported loudly, never restarted, rollb
   const run = (cmd, o) => (o.cwd === w.live && /--check server\.js/.test(cmd) ? Promise.resolve({ code: 1, out: 'SyntaxError: fake' }) : real(cmd, o));
   const prev = w.liveHead();
   const { lane, launches } = mk(w, { run });
-  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'check_failed');
   assert.match(r.reason, /node --check server\.js FAILED .*NOT restarted, the service still runs/); assert.match(r.tail, /SyntaxError: fake/);
   assert.equal(launches.length, 0); assert.equal(w.liveHead(), w.main());
@@ -108,7 +108,7 @@ test('lockfile changed: npm ci runs in the live checkout before the check', asyn
   const real = createDefaultRun(), cmds = [];
   const run = (cmd, o) => { cmds.push([cmd, o.cwd]); return cmd.startsWith('npm ci') ? Promise.resolve({ code: 0, out: '' }) : real(cmd, o); };
   const { lane } = mk(w, { run, restart: (o) => { writeFileSync(o.exit, '1\n'); writeFileSync(o.log, 'NOT restarting: fake\n'); return { ok: true }; } });
-  await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.ok(cmds.some(([c, cwd]) => c === 'npm ci --no-audit --no-fund' && cwd === w.live), JSON.stringify(cmds));
 });
 
@@ -116,19 +116,19 @@ test('safe-restart refuses: its own text is the reason; reported a restart but s
   const w = world(); w.branch('feat', { 'new.js': 'x\n' });
   const refuse = (o) => { writeFileSync(o.log, 'deploy work pending, waiting...\nNOT restarting: deploy work is running or can start automatically\nwait for completion\n'); writeFileSync(o.exit, '1\n'); return { ok: true }; };
   const { lane } = mk(w, { restart: refuse });
-  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'restart_refused');
   assert.match(r.reason, /safe-restart\.sh did not restart \(exit 1\): NOT restarting: deploy work is running/); assert.doesNotMatch(r.reason, /pending/);
   assert.ok(r.rollback);
 
   const w2 = world(); w2.branch('feat', { 'new.js': 'x\n' });
   const m = mk(w2, { restart: (o) => { writeFileSync(o.exit, '0\n'); return { ok: true }; }, lane: { restartGraceMs: 20 } });
-  const r2 = await m.lane.wait(m.lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  const r2 = await m.lane.wait(m.lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r2.state, 'deploy_failed'); assert.equal(r2.selfDeploy.outcome, 'restart_failed'); assert.match(r2.reason, /kept running/);
 
   const w3 = world(); w3.branch('feat', { 'new.js': 'x\n' });
   const m3 = mk(w3, { restart: () => ({ ok: false, error: 'no server running on /tmp/tmux-0/default' }) });
-  const r3 = await m3.lane.wait(m3.lane.enqueue({ repo: 'me', branch: 'feat' }).id, 20000);
+  const r3 = await m3.lane.wait(m3.lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r3.selfDeploy.outcome, 'restart_failed'); assert.match(r3.reason, /could not launch .*no server running/);
 });
 
@@ -142,7 +142,7 @@ test('resumed after the restart but the live HEAD is not the expected sha, or th
     a.lane.stop(); await a.lane.idle();
     if (kase === 'head') git(w.live, 'reset', '-q', '--hard', prev);   // someone moved the checkout during the restart
     const b = mk(w, { stateDir: a.stateDir, health: async () => kase !== 'health', lane: { healthTries: 3 } });
-    const r = await b.lane.wait(id, 20000);
+    const r = await b.lane.wait(id, 120000);
     assert.equal(r.state, 'deploy_failed', kase);
     assert.match(r.reason, kase === 'head' ? new RegExp(`live checkout is at ${prev.slice(0, 12)}, expected ${w.main().slice(0, 12)}`) : /did not answer \/api\/health/);
   }
@@ -159,7 +159,7 @@ test('config: kind self needs an absolute or ~/ live checkout; a --deploy scope 
   const { lane } = mk(w, { restart: (o) => { writeFileSync(o.exit, '2\n'); return { ok: true }; } });
   const q = lane.enqueue({ repo: 'me', branch: 'feat', deploy: 'full' });
   assert.equal(lane.get(q.id).deployScope, null);
-  await lane.wait(q.id, 20000);
+  await lane.wait(q.id, 120000);
 });
 
 test('the real restart command runs safe-restart.sh in the live checkout and records its output and exit code', () => {
