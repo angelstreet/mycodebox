@@ -75,7 +75,7 @@ export function normalizeRemoteUrl(u) {
 export function createDefaultGit() {
   const g = createGitRunner();
   return async (args, { cwd, timeoutMs } = {}) => {
-    try { return { code: 0, out: await g(args, { cwd, timeout_ms: timeoutMs }), err: '' }; } catch (e) {
+    try { return { code: 0, out: await g(['-c', 'pack.threads=2', ...args], { cwd, timeout_ms: timeoutMs }), err: '' }; } catch (e) {   // few pack threads: the box is memory- and pid-tight
       if (e.code === 'E_TIMEOUT') return { code: -1, out: e.stdout || '', err: 'git timed out', timedOut: true };
       return { code: Number.isInteger(e.exit) ? e.exit : -1, out: e.stdout || '', err: e.stderr || e.message || '' };
     }
@@ -315,14 +315,17 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   async function doDeploy(r, c) {
     if (!deploys) throw new Ret('no deploy adapter');
     const res = await step(r, 'deploy', async () => {
-      if (!r.deployId) {
-        const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: c.target, sha: r.sha, agent: `integration:${r.id}` });
-        if (!q?.id) return { ok: false, tail: q?.reason || 'deploy request refused' };
-        r.deployId = q.id; persist(r);
-      }
-      const w = await deploys.wait(r.deployId);
-      r.deployVersion = w?.version ?? null; r.deployed = w?.ok === true ? { id: r.deployId, version: r.deployVersion, env: c.deploy.env, scope: r.deployScope } : null;
-      return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}` : (w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
+      try {
+        if (!r.deployId) {
+          const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: c.target, sha: r.sha, agent: `integration:${r.id}` });
+          if (!q?.id) return { ok: false, tail: q?.reason || 'deploy request refused' };
+          r.deployId = q.id; persist(r);
+        }
+        const w = await deploys.wait(r.deployId);
+        r.deployVersion = w?.version ?? null;
+        r.deployed = w?.ok === true ? { id: r.deployId, version: r.deployVersion, env: c.deploy.env, scope: r.deployScope } : null;
+        return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}` : (w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
+      } catch (e) { return { ok: false, tail: `deploy error: ${e?.message}` }; }   // the merge is on the target: report, never throw
     });
     return res;
   }

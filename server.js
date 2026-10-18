@@ -122,6 +122,8 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
+import { createIntegrationLane } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
+import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
@@ -1580,6 +1582,7 @@ async function handleHttp(req, res) {
 
   if (p.startsWith(REMOTE_API) && await remote.handle(req, res)) return;   // bearer-token API for the Mac Stop hook; own address and auth checks
   if (p.startsWith(LEASE_API) && await leaseRoutes.handle(req, res)) return;   // bearer-token API for lease clients; own address and auth checks
+  if (p.startsWith(INTEGRATION_API) && await integrationRoutes.handle(req, res)) return;   // integration lane API: loopback + reporter token, or a bearer token flagged `integrate`
 
   if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
@@ -2164,6 +2167,20 @@ const voice = createVoice({
 
 const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_DIR, 'leases'),
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // same proxy test as requestIdentity: only a Serve-proxied request may name a tailnet login
+
+// ===== INTEGRATION BLOCK (round 13, docs/v2/INTEGRATION-LANE.md; integration-lane.js, integration-routes.js) =====
+// Sessions hand a pushed branch to the lane (scripts/integrate); it merges, tests, pushes, waits for CI and deploys.
+// `integrationHooks` is the seam for the rest of the wiring: notify(request, event) fires on every transition (event.final is true on a
+// final state: merged, deployed, returned, merged_ci_red, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
+const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
+const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
+  deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
+    wait: (id) => integrationHooks.deploys.wait(id) },
+  notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a) });
+const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
+  sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null });
+integrationLane.start();
+// ===== END INTEGRATION BLOCK =====
 
 const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR,
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
