@@ -26,6 +26,8 @@ after(() => { srv.closeAllConnections(); srv.close(); });
 const base = `http://127.0.0.1:${srv.address().port}`;
 const dir = mkdtempSync(join(tmpdir(), 'ghosty-rprompt-'));
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, JEV_URL: `${base}/server/ai/decide`, JEV_API_KEY: 'k', LANGFUSE_URL: base, LANGFUSE_PUBLIC_KEY: 'pk', LANGFUSE_SECRET_KEY: 'sk', LANGFUSE_PROJECT: 'proj1' });
+// An inherited LANGFUSE_PUBLIC_URL (the service env the lane runs tests in) would win over LANGFUSE_URL.
+delete process.env.LANGFUSE_PUBLIC_URL;
 const m = await import('../manager.js');
 const { REVIEWER_SYSTEM } = await import('../triage.js');
 await m.initManager({ onOwnerNeeded: () => {}, sendKey: async () => {}, sendKeys: async () => {}, context: () => ({}) });
