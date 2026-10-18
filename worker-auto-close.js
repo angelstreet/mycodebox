@@ -36,7 +36,7 @@ export function shouldClose(facts) {
   // Owner / dashboard / unknown starts are never auto-closed: the owner is the only one who may decide to park them,
   // and an 'unknown' start is one the tick saw before cbsession reported it — wait for the real one to settle.
   const sb = facts.startedBy == null ? '' : String(facts.startedBy);
-  if (!sb || sb === 'owner' || sb === 'dashboard' || sb === 'unknown') return { close: false, reason: `startedBy=${sb || '<empty>'} is owner-controlled`, missing };
+  if (!sb || sb === 'owner' || sb === 'dashboard' || sb === 'unknown' || sb === 'cbsession') return { close: false, reason: `startedBy=${sb || '<empty>'} is owner-controlled`, missing };
   // P0 / P1 sessions are owner-priority; auto-close is P2 (worker) only.
   if (facts.priority === 'P0' || facts.priority === 'P1') return { close: false, reason: `priority ${facts.priority} is owner-priority`, missing };
   // The manager sessions (default ['manager']) are the AI manager's own tmux sessions; they are never closed here.
