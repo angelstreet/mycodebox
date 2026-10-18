@@ -114,3 +114,6 @@ export function idleHoldEvent({ session, status, rows }) {
   return { key: 'lease:idle-hold', title: `${session} holds ${what} while STATUS is ${String(status).toLowerCase()}`,
     body: `exclusive lease held by a session that waits; it should release or downgrade it (vpt-lease release <id> / narrow); lease ids: ${rows.map((r) => r.id).join(', ')}`, url: '/?leases=1', priority: 'default' };
 }
+
+// does the text talk about a lease (a question or a statement)? Used by ops-ask.js for a STATUS that blocks on one.
+export const leaseTopic = (text) => { const t = String(text ?? ''); return !NOT_LEASE.test(t) && LEASE_WORD.test(t) && LEASE_CTX.test(t); };

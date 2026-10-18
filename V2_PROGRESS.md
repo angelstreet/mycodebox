@@ -7,12 +7,21 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Owner direction 2026-10-18 (OWNER_DECISIONS §18): show results (V1 pages replaced by V2 pages move to a "Legacy" group of
-the More menu), ship first and test at the end of a build, shadow periods of 1 hour at most, no new feature rounds (ideas go
-to TODO.md). Lease cut-over: waiting on the owner for the network path of the registry host and the device hosts; then
-shadow 1 h, then central after telling the manager.
+**First goal of V2 (owner, 2026-10-18; OWNER_DECISIONS §19): the owner never answers about leases or deployments.**
+Lease cut-over: the central lease service runs on the registry host (manager decision), shadow window 09:17-10:17 UTC,
+then central after telling the manager. Then build the missing parts of Round 12 (ship first, test at the end).
 
-## Round 12 (2026-10-18): show results
+## Round 12 (2026-10-18): the owner never answers about leases or deployments
+
+| Part | Already does it | Missing (built after the cut-over) |
+|---|---|---|
+| (a) A deploy waiting on a lease is queued and runs when the lease is released | The deploy queue: the deploy runner (on, standing approval) approves and starts the oldest request as soon as no lease blocks it; full and host deploys skip leased hosts and queue a catch-up. The central service keeps that queue and adds a FIFO ticket queue for claims (`claim --wait`, `vpt-lease run`) | `update_core.sh` started by hand exits 3 when busy: it should queue a deploy request (or wait with a ticket) instead. A request without `--approved` still waits for an owner tap when the runner is off |
+| (b) A holder keeping a lease too long or too broad is asked to release or narrow it | lease-watch narrows idle server-kind holds of codebox sessions and releases leases of ended codebox sessions; the central service turns idle exclusive holds of observable holders into pins and flags a holder that only waits; the manager manual's narrowing check (§4a) is done by hand | An automatic ask: when a queued deploy or ticket waits on a holder past its expected end, idle or broader than its purpose, the manager messages the holder (codebox: a line into the session; Mac: the Mac hook channel or the feed) to release or narrow | BUILT (`lease-nudge.js`, every 2 min, `leaseNudge` live/dry/off): a codebox holder stopped on a finished turn gets one guarded line; Mac and script holders get a `lease:nudge` manager event; once per (holder, lease) per 30 min; never releases or narrows. Mac hook channel not used (feed only) |
+| (c) Leases expire and are reclaimed on their own | TTL (legacy: lazy expiry); central: TTL, declared heartbeats, gone codebox sessions, idle pins; a deploy's lease ends with the deploy | Liveness of Mac holders (the Mac hook can report it) |
+| (d) No lease or deploy question reaches the owner | The manager answers pure lease questions from the lease data (round 10) and decides merge / push / deploy (rounds 7-8) | A session's `waiting_deploy` stop and a lease or deploy `needs-owner` are still escalated to the owner (push, NEEDS YOU): classify them as manager items (manager events, no owner push) | BUILT (`ops-ask.js`, `escalate()` target `manager`, `onManagerItem` -> `lease:manager-item` / `deploy:<id>:manager-item` events, `escalatedTo` in the stall, NEEDS YOU skips them; hard-floor topics and mixed questions stay with the owner; `opsToManager: false` reverts) |
+
+## Round 12a (2026-10-18): show results
+
 
 | Item | What | State |
 |---|---|---|

@@ -82,6 +82,7 @@ import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname, loadavg, cpus } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
+import { createLeaseNudge } from './lease-nudge.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
@@ -733,6 +734,26 @@ const leaseWatch = createLeaseWatch({
   record: async (e) => { await handoffs.onLeaseEvent(e).catch((err) => console.error('[handoffs] lease event', err.message)); return managerEvents.record(e); },
   onChange: (snap) => { handoffs.onHolders(snap.holders).catch((err) => console.error('[handoffs] holders', err.message)); },
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseBind; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
+// The orchestrator asks a holder to release or narrow (lease-nudge.js): every 2 min, for a queued deploy or ticket that waits > 10 min.
+// manager.json key `leaseNudge`: "live" (default) | "dry" | "off". Never releases or narrows by itself.
+const leaseNudge = createLeaseNudge({
+  stateDir: STATE_DIR,
+  getInputs: async () => ({ deploys: deployRunner.snapshot().deploys || [], view: await leaseSource.view(false) }),
+  sessionOf: (agent) => agentSession(agent, Object.keys(latest?.status || {}), MACHINES),
+  // the same signal as lease-watch: minutes since the session's last finished turn; a working session is never idle
+  idleMinOf: (l, session) => {
+    if (!session) return l.idleMin ?? null;
+    const act = reporter.activityOf(session);
+    if (!act) return null;
+    if (act.working) return 0;
+    const at = Math.max(act.turnAt || 0, act.promptAt || 0);
+    return at ? Math.floor((Date.now() - at) / 60000) : null;
+  },
+  canSend: (session) => noteAllowed(latest?.status?.[session]),   // stopped on a finished turn, no draft, no menu
+  send: async (session, text) => { await assertAgentPane(session, 'lease-nudge'); await sendKeys(session, text, true); logSend(session, 'lease-nudge', { keys: text }); },
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseNudge; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 // Events of the lease service (central): the feed, the handoffs, and a one-line note to a codebox session whose exclusive lease
 // became a pin (or whose pin was overlapped). The note goes through the guarded send, by 'lease-service', only to a session that is
@@ -2309,6 +2330,12 @@ server.listen(PORT, HOST, async () => {
     readyStore,   // ready windows: the manager answers a hardware-step ask while one covers the session
     leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
     onStatus: onStopStatus,
+    // a lease or deploy stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
+    onManagerItem: (it) => {
+      const key = it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : 'lease:manager-item';
+      managerEvents.record({ key, title: `${it.session}: ${it.kind} stop for the manager`, body: `${it.session} ${it.case === 'waiting_deploy' ? 'waits for a deploy' : 'asks'}: ${it.question || it.reason}`.slice(0, 300), url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
+        .catch((e) => console.error('[manager-item]', e.message));
+    },
   });
   console.log(`[ghosty] public dir: ${PUBLIC_DIR}`);
   // First poll, then on tick.
@@ -2329,6 +2356,7 @@ server.listen(PORT, HOST, async () => {
   deployRunner.start();
   await handoffs.load();
   leaseWatch.start();
+  leaseNudge.start();
   ciWatch.start();
   rulesWatch.start();
   doneCheck.start();

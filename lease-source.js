@@ -43,6 +43,7 @@ export function normLease(l, now) {
   return {
     id: String(l.id), env, resources, mode: l.mode || 'exclusive', kind: l.kind || 'host', agent: l.agent || '', session: l.session || '', purpose: l.purpose || '',
     deployId: l.deploy_id || null, sinceMs, ttlLeftMin: ttl, lastHeartbeatMs: tms(l.lastHeartbeatAt ?? l.last_heartbeat_at), idleMin: Number.isFinite(l.idleMin) ? l.idleMin : null, heartbeatS: l.heartbeat_s ?? null,
+    expectMin: Number.isFinite(l.expect_min) ? l.expect_min : null,   // the holder's own stated hold time (lease-nudge.js)
   };
 }
 export function normTicket(t, now) {
@@ -50,6 +51,7 @@ export function normTicket(t, now) {
   return {
     id: String(t.id), env, resources: asList(t.resources ?? t.resource).map((r) => legacyResource(env, r)), agent: t.agent || '', session: t.session || '', purpose: t.purpose || '',
     position: t.position ?? null, etaMs: etaMs(t.eta ?? t.eta_ms ?? t.etaMin, now), holders: asList(t.holders).map((h) => (typeof h === 'string' ? h : h?.agent || '')).filter(Boolean),
+    holderIds: asList(t.holders).map((h) => (h && typeof h === 'object' ? String(h.id || '') : '')).filter(Boolean), createdMs: tms(t.created),
   };
 }
 // legacy-shaped rows of the exclusive leases (one per resource): what leaseFor / leasesOfSession / park / triage read

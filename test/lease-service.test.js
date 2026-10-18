@@ -608,7 +608,10 @@ test('shadow store: runs the same operations on a separate journal, never affect
   assert.ok(fs.existsSync(path.join(h.dir, 'shadow', 'journal.jsonl')));
   assert.equal((await h.svc.shadow.report({ machine: 'host-1', command: 'claim env-a frontend', legacy: { code: 0, out: 'x' }, central: { code: 3, out: 'busy' } })).ok, true);
   assert.equal((await h.svc.shadow.list()).reports.length, 1);
-  assert.equal((await h.svc.shadow.op('importLegacy', {})).code, 'E_INVALID', 'no import or other write path into the real store');
+  // the shadow store may be seeded (cut-over shadow window), but nothing reaches the real store
+  const realBefore = (await h.svc.list({})).leases.length;
+  await h.svc.shadow.op('importLegacy', { owner: true, leases: [{ id: 'seed1234', env: 'env-a', resource: 'frontend', agent: 'mac:x', kind: 'server', since: Math.floor(Date.now() / 1000), expires: Math.floor(Date.now() / 1000) + 600 }], deploys: [] });
+  assert.equal((await h.svc.list({})).leases.length, realBefore, 'no import or other write path into the real store');
   assert.equal((await h.open().shadow.list()).reports.length, 1, 'reports survive a restart');
 });
 

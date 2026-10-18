@@ -90,6 +90,11 @@ More, such as deploy coordination, usage reports and the session reporter plugin
 
 ## Current capabilities / V2 roadmap
 
+**First goal of V2 (owner, 2026-10-18):** the owner never answers about leases or deployments. Agents are orchestrated
+to claim, hold, queue and release leases, and to push and deploy, so that other agents can work; a blocked agent waits
+in the queue, or the orchestrator asks the holder to release or narrow its lease. See [goals](docs/GOALS.md) and
+OWNER_DECISIONS §19.
+
 The session board above is what mycodebox does today. V2 adds a task engine next to it: a goal, deterministic checks,
 an independent review and an honest outcome. **V2 is off by default** and part of it is not built yet. This section
 separates what has code and tests from what is planned. Evidence is in [V2_VERIFICATION.md](V2_VERIFICATION.md);

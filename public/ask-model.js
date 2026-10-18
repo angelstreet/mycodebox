@@ -19,6 +19,7 @@ import { needsOwner, parseQuestionForm, parseMultiReply, formatMultiAnswer, clip
 // closing question the AI reviewer sent to the owner (triage done / skipped / error, not pending).
 export function isOwnersTurn(st) {
   if (!st) return false;
+  if (st.stall?.escalatedTo === 'manager') return false;   // a lease or deploy stop is the manager's, never the owner's (ops-ask.js)
   if (st.state === 'waiting') return true;
   return st.state === 'done' && needsOwner(st) && !!st.triage && st.triage.state !== 'pending';
 }
