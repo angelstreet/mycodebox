@@ -12,6 +12,7 @@ import { resolve, sep, isAbsolute } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { sensitivePath } from './merge-policy.js';
 import { jobRefs, hasRef, waitsOnOwnJob, DETACHED_RE } from './job-refs.js';
+import { integrationText, isFinal } from './integration-notify.js';
 export { jobRefs, hasRef, waitsOnOwnJob };
 
 // Descendants of `pid` in a ps table { children: Map<ppid, pid[]>, args: Map<pid, string> }, nearest first, the agent itself excluded.
@@ -34,9 +35,10 @@ const GENERIC_WORDS = new Set(['waiting', 'blocked', 'final', 'run', 'runs', 'jo
 const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 
 // deps: { now, procRoot, table: () => ps table, agentPid: (session) => pid|null, deployState: (id) => { state, finished }|null,
+//         integrationState: async (id) => lane request { state, ... } | null (GET /api/integration/requests/:id),
 //         stillWaiting: (session, stopAt) => bool, send: (session, text) => Promise, record: (event) => Promise, log: (rec) => void }
 export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', table = async () => ({ children: new Map(), args: new Map() }), agentPid = async () => null,
-  deployState = () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
+  deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
   const watched = new Map();   // session -> { job, stopAt, since, ... }
   // a zombie is finished: /proc/<pid>/stat is "pid (comm) S ...", the state follows the last ")"
   const alive = (pid) => {
@@ -49,7 +51,8 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const refs = jobRefs(text);
     const job = { text: String(text || '').slice(0, 200), refs, kind: null, pids: [], path: null, id: null, label: null };
     const detached = refs.detached || DETACHED_RE.test(String(paneText));
-    if (refs.deploy) { job.kind = 'deploy'; job.id = refs.deploy; job.label = `deploy ${refs.deploy}`; }
+    if (refs.integration) { job.kind = 'integration'; job.id = refs.integration; job.label = `integration ${refs.integration}`; }
+    else if (refs.deploy) { job.kind = 'deploy'; job.id = refs.deploy; job.label = `deploy ${refs.deploy}`; }
     else if (refs.pid) { job.kind = 'pid'; job.pids = [refs.pid]; job.label = `job (pid ${refs.pid})`; }
     else if (refs.path) {
       const abs = isAbsolute(refs.path) ? refs.path : refs.path.startsWith('~/') ? resolve(homedir(), refs.path.slice(2)) : resolve(cwd || '.', refs.path);
@@ -89,6 +92,12 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
   // -> { state: 'running'|'ended'|'unknown', at?: ms, summary }
   async function stateOf(w) {
     const j = w.job, t = now();
+    if (j.kind === 'integration') {
+      let r = null; try { r = await integrationState(j.id); } catch { /* the lane is unreachable: unknown, try again next tick */ }
+      if (!r) return { state: 'unknown', summary: `integration ${j.id}: not found` };
+      if (isFinal(r.state)) return { state: 'ended', at: Number(r.finishedAt || r.updatedAt) || t, summary: `integration ${j.id} ${r.state}`, text: integrationText(r) };
+      return { state: 'running', summary: `integration ${j.id} is ${r.state}${r.step ? ` (${r.step})` : ''}` };
+    }
     if (j.kind === 'deploy') {
       const d = deployState(j.id);
       if (!d) return { state: 'unknown', summary: `deploy ${j.id}: not in the queue` };
@@ -123,7 +132,8 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       if (now() - w.since > maxAgeH * 3600e3) { watched.delete(session); log({ type: 'own_job_giveup', session, job: w.job.label }); continue; }
       const s = await stateOf(w);
       if (s.state !== 'ended') continue;
-      const text = `your ${w.job.label} finished at ${hhmm(s.at || now())}, continue`;
+      // an integration wake carries the lane's outcome (same text as the guarded send of integration-notify.js)
+      const text = s.text || `your ${w.job.label} finished at ${hhmm(s.at || now())}, continue`;
       // the session may have moved on, been paused or started a draft while the state was read: check again right before typing
       if (!stillWaiting(session, w.stopAt)) { watched.delete(session); continue; }
       if (!canSend(session)) continue;

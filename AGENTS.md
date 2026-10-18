@@ -40,6 +40,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   session is woken when they end. Never `nohup`, `setsid`, `disown` or a trailing `&`: the harness cannot see those
   jobs. If you must wait on one, name its pid, log file, run id or deploy id in the `STATUS: waiting` line; the manager
   watches it and wakes the session when it ends (`own-jobs.js`).
+- Integration (round 13): commit on your own branch, push the branch, then hand off to the integration lane with
+  `integrate request <branch> [--deploy frontend|server|host|full]`. Never merge into the target branch, push the target
+  or run the deploy script yourself; the lane merges, tests, pushes, waits for CI and deploys, then tells you the result.
+  End the turn with `STATUS: waiting: integration <id>`; a returned request is fixed on your branch and requested again.
+  See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.
 
