@@ -1855,6 +1855,13 @@ async function handleHttp(req, res) {
       return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message, reason: err.reason });
     }
   }
+  if (req.method === 'GET' && p.startsWith('/api/pane/')) {
+    const session = decodeURIComponent(p.slice('/api/pane/'.length));
+    const lines = Number(url.searchParams.get('lines') || PANE_LINES);
+    if (!Number.isInteger(lines) || lines < PANE_LINES || lines > 10000) return json(res, 400, { ok: false, error: 'lines 1000-10000 required' });
+    try { return json(res, 200, { ok: true, pane: await capturePane(session, lines), lines }); }
+    catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
   if (req.method === 'POST' && p === '/api/sessions') {
     try { return json(res, 200, await createSession(await readJsonBody(req))); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
