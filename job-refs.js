@@ -4,15 +4,15 @@ const END_WORDS = /\b(?:wait(?:ing)?|running|in progress|until|finish(?:es|ed|in
 const JOB_NOUN = /\b(?:run|job|process|build|tests?|test run|suite|export|import|sync|task|script|batch|pipeline|render|training|migration run|benchmark|scan|upload|download|crawl|score_matrix|matrix)\b/i;
 export const DETACHED_RE = /\b(?:nohup|setsid|disown)\b|(?:^|[\s)])&\s*(?:$|[;&|)])|\bscreen -dm|\btmux (?:new|new-session)\b[^\n]*-d\b/i;
 const DEPLOY_ID = /\bdeploy(?:ment)?(?:\s+id)?\s*[:#=]?\s*([0-9a-f]{3,16})\b/i;
-// `integration <id>`: the lane's request id (round 13). The id must carry a digit or a hyphen, so "integration tests" / "integration lane" are not ids.
-const INTEGRATION_ID = /\bintegration(?:\s+request)?(?:\s+id)?\s*[:#=]?\s*([A-Za-z0-9][\w-]{1,40})\b/gi;
+// `integration <id>`: the lane's request id (round 13). Only the lane's own id format (`int-<base36>`, integration-lane.js enqueue), so "integration test-2" / "integration lane" are not ids.
+const INTEGRATION_ID = /\bintegration(?:\s+request)?(?:\s+id)?\s*[:#=]?\s*(int-[0-9a-z]{1,40})\b/gi;
 const PID_RE = /\bpids?\s*[:=#]?\s*(\d{2,8})\b/i;
 const RUN_ID = /\b(?:run|job|task)(?:\s+id)?\s*[:#=]\s*([A-Za-z0-9][\w.-]*)|\b(?:run|job)\s+id\s+([A-Za-z0-9][\w.-]*)|\b(?:run|job)\s+#(\d+)/i;
 const LOG_RE = /`([^`\s]+\.(?:log|out|jsonl))`|(?:^|[\s(=:])((?:~?\/|\.{1,2}\/)?[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:log|out|jsonl))\b/i;
 
 function integrationId(t) {
-  for (const m of t.matchAll(INTEGRATION_ID)) if (/[\d-]/.test(m[1])) return m[1];
-  return null;
+  const m = INTEGRATION_ID.exec(t); INTEGRATION_ID.lastIndex = 0;
+  return m ? m[1] : null;
 }
 
 // -> { deploy, pid, path, run, integration, detached }; every field null/false when not named

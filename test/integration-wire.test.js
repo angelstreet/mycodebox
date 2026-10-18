@@ -55,3 +55,39 @@ test('server.js wires the lane to notify: a merged request lands in the feed wit
     assert.equal((await fetch(`${url}/api/integration/requests`, { headers: { origin: 'http://evil.example' } })).status, 403);
   } finally { child.kill('SIGKILL'); }
 });
+
+test('a request resumed at boot (pushed, deploy pending) finds notify and deploys wired', { timeout: 60_000 }, async () => {
+  const w = makeWorld();
+  const base = mkdtempSync(join(tmpdir(), 'int-wire-')), state = join(base, 'state'), home = join(base, 'home');
+  mkdirSync(join(state, 'integration'), { recursive: true }); mkdirSync(home, { recursive: true });
+  writeFileSync(join(state, 'integration.json'), JSON.stringify({ repos: { 'env-a': w.cfg(), 'env-b': w.cfg({ deploy: { env: 'env-b', defaultScope: 'server' } }) } }));
+  const sha = 'a'.repeat(40), at = new Date().toISOString();
+  const seed = (id, seq, repo, extra) => ({ id, seq, repo, branch: 'feat', target: 'main', session: null, deployScope: null, state: 'running', createdAt: at, updatedAt: at, startedAt: at,
+    endedAt: null, step: 'push', steps: [], reason: null, tail: '', sha, branchSha: sha, pushed: true, ci: null, deployed: null, ...extra });
+  writeFileSync(join(state, 'integration', 'requests.jsonl'), `${JSON.stringify(seed('int-seedmerged', 1, 'env-a'))}\n${JSON.stringify(seed('int-seeddeploy', 2, 'env-b', { deployScope: 'server', deployId: 'd9' }))}\n`);
+  const port = await freePort();
+  const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', HOST: '127.0.0.1', PORT: String(port), GHOSTY_STATE_DIR: state, TMUX_BIN: '/bin/false',
+    TLS_KEY: join(base, 'none.pem'), TLS_CERT: join(base, 'none.pem') };
+  const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  children.add(child);
+  let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
+  const url = `http://127.0.0.1:${port}`;
+  try {
+    for (let i = 0; ; i++) {
+      try { if ((await fetch(`${url}/api/sessions`)).ok) break; } catch { /* not up yet */ }
+      if (i > 150) throw new Error(`server did not start:\n${log}`);
+      await sleep(100);
+    }
+    let item = null;
+    for (let i = 0; i < 100 && !item; i++) {
+      const f = await (await fetch(`${url}/api/push/feed?since=0`)).json();
+      item = f.items.find((x) => x.title.includes('int-seedmerged') && /merged/.test(x.title));
+      if (!item) await sleep(100);
+    }
+    assert.ok(item, `the resumed request's final notice never reached the feed\n${log}`);
+    await sleep(1500);   // the deploy keeps waiting on its recorded deploy id; it is not failed by an unwired adapter
+    const g = await (await fetch(`${url}/api/integration/requests/int-seeddeploy`, { headers: { 'sec-fetch-site': 'same-origin' } })).json();
+    assert.equal(g.state, 'running', JSON.stringify(g.request?.reason));
+    assert.doesNotMatch(log, /not wired/);
+  } finally { child.kill('SIGKILL'); }
+});

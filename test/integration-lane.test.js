@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createIntegrationLane, validateConfig, normalizeRemoteUrl, FINAL } from '../integration-lane.js';
 import { makeWorld } from './helpers-lane.js';
+import { git, commit } from './helpers-git.js';
 
 const mk = (w, o = {}) => {
   const stateDir = o.stateDir || mkdtempSync(join(tmpdir(), 'lane-state-'));
@@ -82,6 +84,15 @@ test('sensitive file: returned by the merge floor, nothing merged', async () => 
   assert.equal(w.main(), before);
 });
 
+test('the floor judges the exact commit that is merged, not a same-named local branch of the lane clone', async () => {
+  const w = makeWorld(); w.branch('feat', { 'config/credentials.txt': 'x\n' });
+  git(w.lane, 'fetch', '-q', 'origin'); git(w.lane, 'checkout', '-q', '-b', 'feat', 'origin/main'); commit(w.lane, { 'harmless.js': 'ok\n' }, 'local');
+  const before = w.main();
+  const { lane } = mk(w);
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'returned', JSON.stringify(r)); assert.match(r.reason, /credentials\.txt/); assert.equal(w.main(), before);
+});
+
 test('branch missing, or the target itself: returned / refused', async () => {
   const w = makeWorld();
   const { lane } = mk(w);
@@ -105,6 +116,17 @@ test('target moves during the run: re-merged from the new target, tests run agai
   assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(runs, 2); assert.deepEqual(evals, ['origin', 'origin']);
   assert.equal(w.show('main', 'new.js'), 'x\n'); assert.equal(w.show('main', 'other.js'), 'o\n');
   assert.equal(w.main(), r.sha);
+});
+
+test('push is a compare-and-swap: a target rewound after the fetch is not clobbered, the merge is rebuilt on it', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' }); w.moveMain({ 'o.js': 'o\n' });
+  const rewound = execFileSync('git', ['-C', w.remote, 'rev-parse', 'main~1']).toString().trim();
+  const seen = []; let runs = 0;
+  const run = async () => { runs++; if (runs === 1) execFileSync('git', ['-C', w.remote, 'update-ref', 'refs/heads/main', rewound]); else seen.push(w.main()); return { code: 0, out: 'ok' }; };
+  const { lane } = mk(w, { cfg: { test: 'fake' }, lane: { run } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(runs, 2); assert.deepEqual(seen, [rewound]);   // the first push did not land on the rewound target
+  assert.equal(execFileSync('git', ['-C', w.remote, 'rev-parse', `${r.sha}^1`]).toString().trim(), rewound);
 });
 
 test('target keeps moving: returned after three attempts', async () => {
@@ -261,4 +283,41 @@ test('repoForUrl / repoForCwd find the repository from an origin url', async () 
   assert.equal(await lane.repoForCwd(w.dev), 'env-a');
   assert.equal(await lane.repoForUrl('https://host.example/org/other'), null);
   assert.equal(await lane.repoForCwd('/nonexistent'), null);
+});
+
+test('restart between the deploy request and the saved id: the existing deploy for integration:<id> is followed, not re-requested', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  let requested = 0; const waited = [];
+  const deploys = { request: async () => { requested++; return { id: 'dNEW' }; }, find: async ({ agent }) => (/^integration:int-/.test(agent) ? 'dOLD' : null), wait: async (id) => { waited.push(id); return { ok: true, version: 'v1' }; } };
+  const { lane } = mk(w, { cfg: { deploy: { env: 'env-a', defaultScope: 'server' } }, lane: { deploys } });
+  const r = await go(lane, { branch: 'feat', deploy: true });
+  assert.equal(r.state, 'deployed', JSON.stringify(r)); assert.equal(requested, 0); assert.deepEqual(waited, ['dOLD']); assert.equal(r.deployed.id, 'dOLD');
+});
+
+test('push landed but the follow-up fetch fails: verified with ls-remote, reported merged (not returned)', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const { createDefaultGit } = await import('../integration-lane.js');
+  const real = createDefaultGit(); let pushed = false, fails = 0;
+  const git = async (args, o) => {
+    if (args.includes('push')) pushed = true;
+    if (pushed && args.includes('fetch') && fails < 2) { fails++; return { code: 1, out: '', err: 'network down' }; }
+    return real(args, o);
+  };
+  const { lane } = mk(w, { lane: { git } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(r.pushed, true); assert.equal(w.main(), r.sha); assert.ok(fails >= 1);
+});
+
+test('push landed, remote unreadable for a while: the request keeps running, then settles merged', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const { createDefaultGit } = await import('../integration-lane.js');
+  const real = createDefaultGit(); let pushed = false, down = 4;
+  const git = async (args, o) => {
+    if (args.includes('push')) pushed = true;
+    if (pushed && down > 0 && (args.includes('fetch') || args.includes('ls-remote'))) { down--; return { code: 1, out: '', err: 'network down' }; }
+    return real(args, o);
+  };
+  const { lane } = mk(w, { lane: { git } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(down, 0);
 });

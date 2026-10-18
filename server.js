@@ -2177,11 +2177,13 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
 const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
   deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
-    wait: (id) => integrationHooks.deploys.wait(id) },
+    wait: (id) => integrationHooks.deploys.wait(id),
+    find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },
   notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a) });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
-  sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null });
-integrationLane.start();
+  sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
+  remoteOwns: (name) => remote.owns(name) });   // `remote` is created below; called per request only
+// start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
 // ===== END INTEGRATION BLOCK =====
 
 const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR,
@@ -2204,6 +2206,7 @@ const integrationNotify = createIntegrationNotify({
 const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
 integrationHooks.notify = integrationNotify;
 integrationHooks.deploys = integrationDeploys;
+integrationLane.start();   // after the hooks: a request resumed at boot (pushed, mid-deploy) must find notify and deploys wired
 // ===== end integration lane, sessions side =====
 
 const server = http.createServer((req, res) => {

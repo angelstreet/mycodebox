@@ -120,8 +120,8 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
   };
 }
 // Round 7 merge floor with the lane as the tester (its own test run replaces the session's test report).
-export async function defaultMergeEval({ cwd, branch, target, remote, conventionFiles }) {
-  const facts = await gitFacts({ cwd, branch, target, remote, conventionFiles });
+export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles }) {
+  const facts = await gitFacts({ cwd, branch, branchSha, target, remote, conventionFiles });
   const reasons = mergeFloor(facts, { state: 'green' }, { conventionFiles });
   return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts };
 }
@@ -204,6 +204,22 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   const rev = async (r, c, ref, cwd) => { const x = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: cwd || c.clone }); return x.code === 0 ? x.out.trim() : null; };
   const contains = async (r, c, sha) => (await G(r, c, ['merge-base', '--is-ancestor', sha, `${c.remote}/${c.target}`])).code === 0;
 
+  // The remote's target tip read straight from the remote (no fetch needed). -> sha | null (unknown)
+  const remoteTip = async (r, c) => {
+    const x = await G(r, c, ['ls-remote', c.remote, `refs/heads/${c.target}`], { timeoutMs: 60_000 });
+    const m = x.code === 0 ? /^([0-9a-f]{40,64})\s/.exec(x.out) : null;
+    return m ? m[1] : null;
+  };
+  // Retry until the remote answers (a follow-up fetch can fail after a push that landed); a stopped lane leaves the request running.
+  const knownTip = async (r, c) => {
+    for (;;) {
+      const t = await remoteTip(r, c);
+      if (t) return t;
+      if (stopped) throw new Ret('lane stopped');
+      await sleep(pollMs);
+    }
+  };
+
   function wtPath(r) { return path.join(dir, 'wt', r.id); }
   async function dropWorktree(r, c) {
     const p = wtPath(r);
@@ -236,7 +252,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
   async function evaluate(r, c) {
     const ev = await step(r, 'evaluate', async () => {
-      const e = await mergeEval({ cwd: c.clone, branch: r.branch, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session });
+      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
       return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons } };
     });
@@ -292,11 +308,17 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
           if (!t.ok) throw new Ret(t.info?.timedOut ? `tests timed out after ${c.testTimeoutMin} min` : `tests red (exit ${t.info?.code})`, r.steps.at(-1).tail);
         }
         const p = await step(r, 'push', async () => {
-          const x = await G(r, c, ['push', c.remote, `${sha}:refs/heads/${c.target}`], { timeoutMs: 120_000 });
-          await G(r, c, ['fetch', '--prune', c.remote]);
+          // compare-and-swap: only if the remote target is still the commit the merge was built on (never clobber a rewind or a newer push)
+          const x = await G(r, c, ['push', '--porcelain', `--force-with-lease=refs/heads/${c.target}:${targetSha}`, c.remote, `${sha}:refs/heads/${c.target}`], { timeoutMs: 120_000 });
+          const f = await G(r, c, ['fetch', '--prune', c.remote]);
+          if (f.code !== 0) {   // cannot read the result by fetching: ask the remote itself before deciding anything
+            const tip = await knownTip(r, c);
+            if (tip === sha) return { ok: true, info: { rejected: false } };
+            return { ok: false, tail: x.err || x.out, info: { moved: tip !== targetSha } };
+          }
           if (await contains(r, c, sha)) return { ok: true, info: { rejected: false } };   // the remote is the truth, whatever push said
-          const moved = (await G(r, c, ['merge-base', '--is-ancestor', `${c.remote}/${c.target}`, sha])).code !== 0;
-          return { ok: false, tail: x.err || x.out, info: { moved } };
+          const now = await rev(r, c, `${c.remote}/${c.target}`);
+          return { ok: false, tail: x.err || x.out, info: { moved: now !== targetSha } };   // lease rejected / target changed: re-merge onto it
         });
         if (p.ok) { r.pushed = true; persist(r); return; }
         if (!p.info.moved) throw new Ret('push failed', p.tail);
@@ -327,6 +349,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     if (!deploys) throw new Ret('no deploy adapter');
     const res = await step(r, 'deploy', async () => {
       try {
+        // a crash between the request and the saved id would re-request: look the deploy up by its agent first
+        if (!r.deployId && deploys.find) { const id = await deploys.find({ agent: `integration:${r.id}` }).catch(() => null); if (id) { r.deployId = id; persist(r); } }
         if (!r.deployId) {
           const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: r.sha || c.target, sha: r.sha, agent: `integration:${r.id}` });
           if (!q?.id) return { ok: false, tail: q?.error ?? q?.reason ?? 'deploy request refused' };
@@ -349,7 +373,11 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     try {
       if (!r.pushed) {
         // restart check: a recorded merge may already be on the remote (the push step finished but was not recorded)
-        if (r.mergeSha) { await fetch(r, c); if (await contains(r, c, r.mergeSha)) { r.pushed = true; r.sha = r.mergeSha; persist(r); } }
+        if (r.mergeSha) {
+          let landed = false;
+          try { await fetch(r, c); landed = await contains(r, c, r.mergeSha); } catch (e) { if (!(e instanceof Ret)) throw e; landed = (await knownTip(r, c)) === r.mergeSha; }   // fetch down: read the remote tip
+          if (landed) { r.pushed = true; r.sha = r.mergeSha; persist(r); }
+        }
       }
       if (!r.pushed) {
         await fetch(r, c);

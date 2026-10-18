@@ -173,7 +173,7 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
   return { facts: out };
 }
 
-export async function gitFacts({ cwd, branch, target, remote = 'origin', conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
+export async function gitFacts({ cwd, branch, branchSha = null, target, remote = 'origin', conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
   const fail = (error) => ({ ok: false, error, repo: null, repoName: null, repoNames: [], branch: branch || null, target: target || null, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] });
   if (!cwd) return fail('no working directory');
   const top = await git(cwd, ['rev-parse', '--show-toplevel']);
@@ -184,7 +184,8 @@ export async function gitFacts({ cwd, branch, target, remote = 'origin', convent
   const resolves = async (ref) => (await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).code === 0;
   // branch: the named one; the session's current branch only when none was named
   let bName = null, bRef = null;
-  if (branch) {
+  if (branch && branchSha && /^[0-9a-f]{40,64}$/.test(branchSha) && await resolves(branchSha)) { bName = branch; bRef = branchSha; }   // a pinned commit (the integration lane): the exact one it will merge, whatever local refs say
+  else if (branch) {
     if (await resolves(`refs/heads/${branch}`)) { bName = branch; bRef = `refs/heads/${branch}`; }
     else if (await resolves(`refs/remotes/${remote}/${branch}`)) { bName = branch; bRef = `refs/remotes/${remote}/${branch}`; }
   } else {
