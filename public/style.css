@@ -2501,3 +2501,5 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .lv-res{ flex:1 1 100%; display:flex; align-items:center; gap:8px; } .lv-amber, .lv-over{ color:var(--waiting); }
 .lv-badge{ font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; border:1px solid currentColor; border-radius:999px; padding:0 8px; white-space:nowrap; }
 .lv-acts{ flex:1 1 100%; display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; } .lv-auth{ margin-bottom:8px; }
+
+.iv-tail{ flex:1 1 100%; margin:6px 0 0; padding:7px 9px; background:var(--bg-2, var(--bg-3)); border:1px solid var(--line-2); border-radius:8px; font:11px/1.35 ui-monospace, monospace; white-space:pre-wrap; overflow-wrap:anywhere; max-height:200px; overflow:auto; }

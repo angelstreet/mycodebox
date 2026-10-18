@@ -1198,3 +1198,31 @@ each holder (live / ended / remote / unknown / system) and the planned action. T
   for a hardware step (pair, press, plug, power-cycle; `owner_action` / `owner_decision`, no forbidden or hard topic) is answered "The owner is at the
   device until HH:MM: retry the step yourself; stop after 2 failures." through the normal manager gates; the third ask in the window escalates.
   The decided-for-you view lists these as kind `ready`. A chip "ready HH:MM" shows beside the priority badge.
+
+## Integration lane (round 13, owner 2026-10-18)
+
+Design: [docs/v2/INTEGRATION-LANE.md](v2/INTEGRATION-LANE.md). Sessions are developers: they push a branch and ask the lane to integrate it. One lane per
+repository, run by the server in its own clone, one request at a time per repo (repos run in parallel).
+
+- **Config** `<state>/integration.json`: `{ repos: { <key>: { clone, remote: 'origin', target: 'main', test: '<cmd>'|null, testTimeoutMin: 30,
+  ci: 'github'|null, ciTimeoutMin: 60, deploy: { env, defaultScope }|null, conventions: ['VERSION.txt'], conventionResolver: 'take-target'|'max-plus-one' } } }`.
+- **API** (loopback + reporter token; remote clients with the `integrate` token flag): `POST /api/integration/requests { repo?, branch, session?, deploy?, note? }`
+  -> `{ id, position }` (repo from the key, else matched from the session's `origin`); `GET /api/integration/requests?repo=&state=&limit=`;
+  `GET /api/integration/requests/:id`; `GET /api/integration/requests/:id/wait?timeout=30` (long-poll to a final state);
+  `POST /api/integration/requests/:id/cancel` (only while queued).
+- **CLI** `scripts/integrate`: `request <branch> [--repo k] [--deploy scope] [--note t] [--wait]`, `status [<id>]`, `wait <id> [--timeout min]`, `cancel <id>`.
+  Exit codes: 0 merged / deployed, 1 error, 3 returned (reason printed), 4 merged but CI red or deploy failed, 5 service unreachable.
+- **States**: `queued`, `running`, then final `merged`, `deployed`, `returned` (reason + output tail; fix on the branch, request again), `merged_ci_red`
+  (already on the target, never reverted automatically; the manager decides), `deploy_failed`, `cancelled`.
+- **Steps** of a request: fetch, branch check, merge evaluation floor (sensitive files, conflicts), fresh worktree from `<remote>/<target>`, `git merge --no-ff`
+  (convention files resolved by the repo's rule), the repo's test command, compare-and-swap push (target moved: re-merge, at most 3 times), CI on that
+  commit, deploy (approved request, agent `integration:<id>`, through the deploy registry; `integration-deploys.js`).
+- **Telling the session** (`integration-notify.js`, `notify(request, event)`): on a final state a feed notice (`kind: integration`) and a manager event;
+  a codebox session that is stopped (done, no draft, no menu) also gets one line through the guarded send (`by: 'integration'`):
+  `Integration <id>: merged <branch> into <target> at <sha12>[, deployed <version> to <env>].` or
+  `Integration <id> returned: <reason>. Fix it on your branch and run integrate request again.` plus the first lines of the failing output.
+  A `mac:` session gets the feed notice and the manager event only (the Mac hook channel answers stops).
+- **Own-job wake**: `STATUS: waiting: integration <id>` is the session's own job (`job-refs.js`, never a needs-you stop); `own-jobs.js` reads the request
+  from the lane and types the same text when it reaches a final state.
+- **View**: More menu "Integration" (`/?integration=1`, `public/integration-view.js`): per repo the queue (position, branch, session, requested deploy), the
+  running request with its step and live output tail, recent results; a queued request is cancelled with a second tap.

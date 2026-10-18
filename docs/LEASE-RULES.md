@@ -23,6 +23,8 @@ or `mac:<name>`.
 - A frontend change never needs a backend or device lease, and a run on one device never blocks another device.
 - Deploys go through the queue: `vpt-lease deploy request ...`, then `vpt-lease deploy wait ...`. Never run a deploy
   script by hand around the queue.
+- Deploys go through the integration lane: `integrate request <branch> --deploy <scope>`. The lane merges, tests, waits for CI and
+  then queues the deploy (approved, agent `integration:<id>`) and waits for it; you do not request or run the deploy yourself.
 
 ## How to claim
 

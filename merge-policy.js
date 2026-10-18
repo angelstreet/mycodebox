@@ -137,11 +137,11 @@ export function sensitivePath(f) {
 
 // Repo names the opt-out list is matched against: the toplevel dir (a worktree's own name), the main repo dir behind a
 // worktree, and the origin remote's repo name.
-export async function repoNames(repo) {
+export async function repoNames(repo, remote = 'origin') {
   const names = new Set([basename(repo)]);
   const cd = await git(repo, ['rev-parse', '--git-common-dir']);
   if (cd.code === 0 && cd.out.trim()) { const c = resolve(repo, cd.out.trim()); names.add(basename(basename(c) === '.git' ? dirname(c) : c).replace(/\.git$/, '')); }
-  const ro = await git(repo, ['remote', 'get-url', 'origin']);
+  const ro = await git(repo, ['remote', 'get-url', remote]);
   if (ro.code === 0) { const n = ro.out.trim().replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop(); if (n) names.add(n); }
   names.delete('');
   return [...names];
@@ -173,20 +173,21 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
   return { facts: out };
 }
 
-export async function gitFacts({ cwd, branch, target, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
+export async function gitFacts({ cwd, branch, branchSha = null, target, remote = 'origin', conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
   const fail = (error) => ({ ok: false, error, repo: null, repoName: null, repoNames: [], branch: branch || null, target: target || null, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] });
   if (!cwd) return fail('no working directory');
   const top = await git(cwd, ['rev-parse', '--show-toplevel']);
   if (top.code !== 0) return fail('not a git repository');
   const repo = top.out.trim();
   const repoName = basename(repo);
-  const names = await repoNames(repo);
+  const names = await repoNames(repo, remote);
   const resolves = async (ref) => (await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).code === 0;
   // branch: the named one; the session's current branch only when none was named
   let bName = null, bRef = null;
-  if (branch) {
+  if (branch && branchSha && /^[0-9a-f]{40,64}$/.test(branchSha) && await resolves(branchSha)) { bName = branch; bRef = branchSha; }   // a pinned commit (the integration lane): the exact one it will merge, whatever local refs say
+  else if (branch) {
     if (await resolves(`refs/heads/${branch}`)) { bName = branch; bRef = `refs/heads/${branch}`; }
-    else if (await resolves(`refs/remotes/origin/${branch}`)) { bName = branch; bRef = `refs/remotes/origin/${branch}`; }
+    else if (await resolves(`refs/remotes/${remote}/${branch}`)) { bName = branch; bRef = `refs/remotes/${remote}/${branch}`; }
   } else {
     const cur = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
     const c = cur.code === 0 ? cur.out.trim() : '';
@@ -195,10 +196,10 @@ export async function gitFacts({ cwd, branch, target, conventionFiles = MERGE_DE
   // target: named, else origin/HEAD's branch, else main; origin/<target> preferred, the local one checked too when it differs
   let tName = target || null;
   if (!tName) {
-    const h = await git(repo, ['symbolic-ref', '--short', '--quiet', 'refs/remotes/origin/HEAD']);
-    tName = h.code === 0 && h.out.trim() ? h.out.trim().replace(/^origin\//, '') : 'main';
+    const h = await git(repo, ['symbolic-ref', '--short', '--quiet', `refs/remotes/${remote}/HEAD`]);
+    tName = h.code === 0 && h.out.trim() ? h.out.trim().replace(`${remote}/`, '') : 'main';
   }
-  const oRef = (await resolves(`refs/remotes/origin/${tName}`)) ? `refs/remotes/origin/${tName}` : null;
+  const oRef = (await resolves(`refs/remotes/${remote}/${tName}`)) ? `refs/remotes/${remote}/${tName}` : null;
   const lRef = (await resolves(`refs/heads/${tName}`)) ? `refs/heads/${tName}` : null;
   const tRef = oRef || lRef;
   const base = { ok: true, repo, repoName, repoNames: names, branch: bName, target: tName, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] };

@@ -124,6 +124,8 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
+import { createIntegrationLane } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
+import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
@@ -135,6 +137,8 @@ import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
 import { createOwnJobs } from './own-jobs.js';
+import { createIntegrationNotify } from './integration-notify.js';
+import { createIntegrationDeploys } from './integration-deploys.js';
 import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
@@ -1696,6 +1700,7 @@ async function handleHttp(req, res) {
 
   if (p.startsWith(REMOTE_API) && await remote.handle(req, res)) return;   // bearer-token API for the Mac Stop hook; own address and auth checks
   if (p.startsWith(LEASE_API) && await leaseRoutes.handle(req, res)) return;   // bearer-token API for lease clients; own address and auth checks
+  if (p.startsWith(INTEGRATION_API) && await integrationRoutes.handle(req, res)) return;   // integration lane API: loopback + reporter token, or a bearer token flagged `integrate`
 
   if (req.method !== 'GET' && !originOk(req)) return json(res, 403, { ok: false, error: 'cross-origin request refused' });
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
@@ -2295,8 +2300,44 @@ const voice = createVoice({
 const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_DIR, 'leases'),
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // same proxy test as requestIdentity: only a Serve-proxied request may name a tailnet login
 
+// ===== INTEGRATION BLOCK (round 13, docs/v2/INTEGRATION-LANE.md; integration-lane.js, integration-routes.js) =====
+// Sessions hand a pushed branch to the lane (scripts/integrate); it merges, tests, pushes, waits for CI and deploys.
+// `integrationHooks` is the seam for the rest of the wiring: notify(request, event) fires on every transition (event.final is true on a
+// final state: merged, deployed, returned, merged_ci_red, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
+const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
+const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
+  deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
+    wait: (id) => integrationHooks.deploys.wait(id),
+    find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },
+  notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a) });
+const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
+  sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
+  remoteOwns: (name) => remote.owns(name) });   // `remote` is created below; called per request only
+// start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
+// ===== END INTEGRATION BLOCK =====
+
 const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR,
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
+
+// ===== integration lane, sessions side (round 13, brief B): notify + deploys adapter for createIntegrationLane({ notify, deploys }) =====
+// notify: a final state -> feed notice, manager event and, for a stopped codebox session, one guarded line (by 'integration'); a mac: session gets the first two.
+// deploys: request + wait through the same deploy registry as the runner. integrationOwnJobs is set when own-jobs starts (it forgets a session we just told).
+let integrationOwnJobs = null;
+const integrationNotify = createIntegrationNotify({
+  status: (session) => latest?.status?.[session],
+  isRemote: (session) => remote.owns(session),
+  canSend: noteAllowed,   // stopped on a finished turn, no draft, no menu
+  send: async (session, text) => { await assertAgentPane(session, 'integration'); await sendKeys(session, text, true); logSend(session, 'integration', { keys: text }); },
+  feed: (item) => push.record(item),
+  managerEvent: (e) => managerEvents.record(e),
+  afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
+  log: (r) => logEvent(r),
+});
+const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
+integrationHooks.notify = integrationNotify;
+integrationHooks.deploys = integrationDeploys;
+integrationLane.start();   // after the hooks: a request resumed at boot (pushed, mid-deploy) must find notify and deploys wired
+// ===== end integration lane, sessions side =====
 
 const server = http.createServer((req, res) => {
   handleHttp(req, res).catch((err) => {
@@ -2420,11 +2461,13 @@ server.listen(PORT, HOST, async () => {
     agentPid: async (name) => { const p = (await listPanes()).get(name); return p?.pid ? agentPidFromTree(p.pid, await processTable()) : null; },
     startedAt: async (pids) => { const m = new Map(); try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const x = l.trim().split(/\s+/); if (x.length === 2) m.set(Number(x[0]), Date.now() - Number(x[1]) * 1000); } } catch {} return m; },
     deployState: (id) => { const d = (deployRunner.snapshot().deploys || []).find((x) => String(x.id) === String(id)); return d ? { state: d.state, finished: d.finished ? d.finished * (d.finished < 1e12 ? 1000 : 1) : null } : null; },
+    integrationState: async (id) => integrationLane.get(id),   // the lane's request (GET /api/integration/requests/:id)
     stillWaiting: stillStopped, canSend: canType,
     send: async (name, text) => { await guardSendKeys(name, text, true); countSent(name); },   // a wake counts in the session's hourly cap
     record: (e) => managerEvents.record(e),
     log: (r) => logEvent(r),
   });
+  integrationOwnJobs = ownJobs;
   setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
     ownJobs,
