@@ -405,7 +405,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       for (const repo of new Set([...reqs.values()].filter((x) => x.state === 'queued' || x.state === 'running').map((x) => x.repo))) kick(repo);
       return this;
     },
-    async stop() { stopped = true; await Promise.allSettled([...workers.values()]); },
+    // Stop taking work. Does not wait for a step in flight (a hung test must not hang shutdown): await idle() for that.
+    stop() { stopped = true; },
     // Resolves when every worker has gone idle (tests, graceful shutdown).
     async idle() { while (workers.size) await Promise.allSettled([...workers.values()]); },
     config: () => cfgAll(),
