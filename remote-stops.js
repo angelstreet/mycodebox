@@ -272,5 +272,17 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
     send(res, known ? 405 : 404, { ok: false, code: known ? 'E_INVALID' : 'E_NOT_FOUND', error: known ? 'method not allowed' : 'no such route' });
     return true;
   }
-  return { handle, deliver, deliverKey, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
+  // A Mac tmux name (`mac:<tmux-name>` from scripts/integrate) -> the registered `mac:<slug>-<id6>[@machine]` session of THAT client, only when exactly one
+  // matches (an exact registered name wins); zero, several, or another client's session -> null. Never a local session.
+  function resolveFor(name, clientName) {
+    sweep();
+    const n = String(name ?? '');
+    if (!n.startsWith(manager.REMOTE_PREFIX) || !clientName) return null;
+    const exact = sessions.get(n);
+    if (exact) return exact.client === clientName ? n : null;
+    const pre = `${manager.REMOTE_PREFIX}${slug(n.slice(manager.REMOTE_PREFIX.length))}-`;
+    const hits = [...sessions.values()].filter((s) => s.client === clientName && s.name.startsWith(pre) && /^[A-Za-z0-9._]{1,6}(@.*)?$/.test(s.name.slice(pre.length)));
+    return hits.length === 1 ? hits[0].name : null;
+  }
+  return { handle, deliver, deliverKey, resolveFor, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
 }

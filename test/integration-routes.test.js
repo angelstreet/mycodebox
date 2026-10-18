@@ -23,7 +23,7 @@ async function boot(w, { laneOpts = {}, cfg = {} } = {}) {
   writeFileSync(join(stateDir, 'leases', 'clients.json'), JSON.stringify({ clients: [mk('mac', CLIENT, { integrate: true }), mk('plain', PLAIN, {})] }));
   const events = [];
   const lane = createIntegrationLane({ stateDir, config: { repos: { 'env-a': w.cfg(cfg) } }, notify: (r, e) => events.push({ ...e, id: r.id }), pollMs: 1, sleep: () => new Promise((r) => setTimeout(r, 1)), ...laneOpts }).start();
-  const routes = createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk: (t) => t === REPORTER, sessionCwd: async (n) => (n === 'sess-in-dev' ? w.dev : null), remoteOwns: (n) => n === 'mac:known-abc123' });
+  const routes = createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk: (t) => t === REPORTER, sessionCwd: async (n) => (n === 'sess-in-dev' ? w.dev : null), remoteResolve: (n, c) => (c === 'mac' && n === 'mac:known-abc123' ? n : null) });
   const server = http.createServer((req, res) => { routes.handle(req, res).then((ok) => { if (!ok) { res.writeHead(404); res.end(); } }); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;

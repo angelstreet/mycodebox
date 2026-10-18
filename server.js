@@ -2312,7 +2312,7 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
   notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a) });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
-  remoteOwns: (name) => remote.owns(name) });   // `remote` is created below; called per request only
+  remoteResolve: (name, client) => remote.resolveFor(name, client) });   // `remote` is created below; called per request only
 // start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
 // ===== END INTEGRATION BLOCK =====
 
