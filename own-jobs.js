@@ -12,7 +12,7 @@ import { resolve, sep, isAbsolute } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { sensitivePath } from './merge-policy.js';
 import { jobRefs, hasRef, waitsOnOwnJob, DETACHED_RE } from './job-refs.js';
-import { integrationText, isFinal } from './integration-notify.js';
+import { integrationText, isFinal, normRequest } from './integration-notify.js';
 export { jobRefs, hasRef, waitsOnOwnJob };
 
 // Descendants of `pid` in a ps table { children: Map<ppid, pid[]>, args: Map<pid, string> }, nearest first, the agent itself excluded.
@@ -95,6 +95,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     if (j.kind === 'integration') {
       let r = null; try { r = await integrationState(j.id); } catch { /* the lane is unreachable: unknown, try again next tick */ }
       if (!r) return { state: 'unknown', summary: `integration ${j.id}: not found` };
+      r = normRequest(r);   // lane fields -> session fields (deployScope -> deploy, endedAt -> finishedAt, ISO -> ms, live.tail -> tail while running)
       if (isFinal(r.state)) return { state: 'ended', at: Number(r.finishedAt || r.updatedAt) || t, summary: `integration ${j.id} ${r.state}`, text: integrationText(r) };
       return { state: 'running', summary: `integration ${j.id} is ${r.state}${r.step ? ` (${r.step})` : ''}` };
     }
