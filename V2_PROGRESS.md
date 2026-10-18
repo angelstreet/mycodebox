@@ -17,6 +17,8 @@ shadow 1 h, then central after telling the manager.
 | Item | What | State |
 |---|---|---|
 | Legacy menu | Platforms, Review stops, Jev decisions folded into a collapsed "Legacy pages" group of the More menu; links and `?platforms=1` / `?review=1` / `?decisions=1` keep working; service worker v148 | DONE |
+| Legacy menu | The early V1 page mockups ("Preview new pages") moved into the Legacy group too | DONE |
+| Lease shadow seed | `lease-import.js --shadow` seeds the shadow store; the legacy registry was empty at 09:00 UTC, so seeding waits for the 1-hour shadow window | READY |
 
 ## Round 9
 
