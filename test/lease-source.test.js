@@ -267,3 +267,13 @@ test('client: release <id> sends the holder agent; shadow mode skips deploy requ
   assert.match(src, /agent = a\.agent or os\.environ\.get\("VPT_LEASE_AGENT"\)/);
   assert.match(src, /SHADOW_SKIP_DEPLOY = \("request", "approve", "start", "finish", "cancel"\)/);
 });
+
+test('legacy authority: the Leases view still shows the shadow reports of the service (cut-over step 4)', async () => {
+  const store = { get: async () => ({ ok: true, leases: [], waiters: [] }), peek: () => ({ ok: true, leases: [], waiters: [] }) };
+  const svc = { shadow: { list: async () => ({ reports: [{ class: 'mismatch', command: 'check env-a frontend', legacy: { code: 3 }, central: { code: 0 } }] }) } };
+  const src = createLeaseSource({ authority: 'legacy', legacy: { store, registry: async () => ({ code: 0, stdout: '', stderr: '' }) }, getService: () => svc });
+  const v = await src.view();
+  assert.equal(v.authority, 'legacy');
+  assert.equal(v.shadow.length, 1);
+  assert.equal(src.peekView().shadow.length, 1);
+});
