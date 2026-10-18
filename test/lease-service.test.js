@@ -765,3 +765,11 @@ test('review 15: ticket polls and the parse cache do not grow; shadow reports ro
   for (let i = 0; i < 6; i++) await h.svc.shadow.report({ machine: 'host-1', command: `claim ${i}`, legacy: { code: 0, out: 'x'.repeat(100) }, central: { code: 0, out: '' } });
   assert.ok(fs.existsSync(path.join(h.dir, 'shadow', 'reports.jsonl.1')), 'rotated');
 });
+
+test('lease events carry purpose, lease kind and since (lease-watch reads them through the client)', async () => {
+  const h = harness();
+  await h.claim('a', 'frontend');
+  const e = (await h.svc.events({ after: 0 })).events.find((x) => x.kind === 'granted');
+  assert.equal(typeof e.purpose, 'string');
+  assert.ok('leaseKind' in e && 'since' in e);
+});

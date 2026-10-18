@@ -120,3 +120,18 @@ test('lease-stats: p95 of request->start, blocked minutes only for deploys a lea
   assert.deepEqual(w, { deploys: 2, p95Min: 20, blockedCount: 1, blockedMinutes: 20 });
   assert.match(leaseLines(w, w, { last: 0, unknownMax: 2 }).join('\n'), /p95 20 min.*1 deploys \/ 20 min[\s\S]*now 0, max today 2/);
 });
+
+test('central events (post cut-over): only lease lifecycle is recorded, with the right title, kind and purpose', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'lw-'));
+  const ev = (line, event, o = {}) => ({ line, ts: 1, event, id: `id${line}`, env: 'env-a', resources: ['*'], agent: 'mac:task-1', kind: 'server', purpose: 'update_core main', ...o });
+  const f = fake({ leases: [], names: [], events: [ev(6, 'granted'), ev(7, 'ticket'), ev(8, 'released', { by: 'holder' }), ev(9, 'narrowed', { kind: 'host' }), ev(10, 'forced', { by: 'owner' }), ev(11, 'downgraded', { to: 'pin' }), ev(12, 'deploy'), ev(13, 'expired', { reason: 'no-heartbeat' })] });
+  const w = createLeaseWatch({ stateDir: dir, run: f.run, machines: M, listSessionNames: async () => f.names, activityOf: f.activity, record: async (e) => f.recorded.push(e), now: () => NOW, log: { log() {}, error() {} } });
+  await w.load?.();
+  await w.poll(); await w.poll();
+  assert.deepEqual(f.recorded.map((e) => e.key), ['lease:released', 'lease:narrowed', 'lease:forced', 'lease:downgraded', 'lease:expired']);
+  assert.match(f.recorded[0].title, /^lease released: env-a\/\* \(mac:task-1\)/);
+  assert.match(f.recorded[0].body, /purpose: update_core main/);
+  assert.match(f.recorded[1].title, /^lease narrowed to host:/);
+  assert.match(f.recorded[2].title, /released by the owner/);
+  assert.match(f.recorded[3].title, /downgraded to pin/);
+});

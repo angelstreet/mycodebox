@@ -140,7 +140,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
 
   // ---- events ------------------------------------------------------------------------------------------------------
   function ev(kind, l, at, extra = {}) {
-    const e = { n: ++S.evN, at, kind, ...(l ? { id: l.id, env: l.env, resources: l.resources, agent: l.agent, session: l.session || null, mode: l.mode } : {}), ...extra };
+    const e = { n: ++S.evN, at, kind, ...(l ? { id: l.id, env: l.env, resources: l.resources, agent: l.agent, session: l.session || null, mode: l.mode, ...(l.id ? { purpose: l.purpose || '', leaseKind: l.kind || null, since: l.since ?? null } : {}) } : {}), ...extra };
     S.events.push(e);
     if (S.events.length > cfg.maxEvents) S.events.splice(0, S.events.length - cfg.maxEvents);
   }
