@@ -15,12 +15,17 @@ export const STATE_LABEL = { working: 'working', waiting: 'needs you', deploy: '
 //  - the pane footer shows an mcode/Codex background marker (status.paneBackground), or
 //  - a script is still driving a `claude -p` / `sleep` child in the pane (status.scriptBusy).
 // Display only: status.state is left untouched so the manager / auto-answer logic is unaffected.
+// "STATUS: waiting: <its own test run>" asks the owner nothing (waiting for me is green/red, never this): a plain waiting line that names
+// no deploy and no owner word is the session's own job, so it reads as working.
+const OWNER_WORDS = /\b(?:you|your|owner|approval|approve|decision|decide|go-ahead|answer|permission|input|review|confirm|sign[- ]?off|credentials?|token)\b|\?/i;
+const isOwnWait = (stall) => stall.status === 'waiting' && stall.case === 'waiting_deploy' && !stall.deployHint?.id && !OWNER_WORDS.test(stall.question || '');
+
 export function isLoopWaiting(status) {
   if (!status) return false;
   const r = status.reporter;
   return !!(
     (r && (r.backgroundWork > 0 || r.crons > 0)) ||
-    (status.stall && status.stall.case === 'background_wait') ||
+    (status.stall && (status.stall.case === 'background_wait' || status.stall.case === 'own_job_wait' || isOwnWait(status.stall))) ||
     status.paneBackground ||
     status.scriptBusy
   );
