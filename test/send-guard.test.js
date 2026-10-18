@@ -65,3 +65,114 @@ test('agentFromArgs: shells and sleep do not match any agent', () => {
   assert.equal(agentFromArgs('zsh'), null);
   assert.equal(agentFromArgs(''), null);
 });
+
+// --- Loop-wait helpers (paneBackgroundOf, scriptBusyOf) ---
+// Display-only signals for the green "working" badge: MiniMax/Codex footers that don't
+// go through the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children.
+
+import { paneBackgroundOf, scriptBusyOf } from '../api-extras.js';
+
+test('paneBackgroundOf: a MiniMax "Tasks · 1 background active" footer counts', () => {
+  const lines = [
+    '─ Worked for 2m 13s ───',
+    '   › hi',
+    '   ◐ Tasks · 1 background active',
+    '',
+  ];
+  assert.equal(paneBackgroundOf(lines), true);
+});
+
+test('paneBackgroundOf: a Codex "Running 14min50s" spinner line counts', () => {
+  const lines = [
+    'some earlier output',
+    '   ⠇ Running 14min50s',
+    '   › ',
+  ];
+  assert.equal(paneBackgroundOf(lines), true);
+});
+
+test('paneBackgroundOf: a plain idle prompt does not count', () => {
+  const lines = [
+    '─ Worked for 1m 23s ───',
+    '   › hi',
+  ];
+  assert.equal(paneBackgroundOf(lines), false);
+});
+
+test('paneBackgroundOf: empty / non-array input is safe (returns false)', () => {
+  assert.equal(paneBackgroundOf([]), false);
+  assert.equal(paneBackgroundOf(null), false);
+  assert.equal(paneBackgroundOf(undefined), false);
+  assert.equal(paneBackgroundOf('not an array'), false);
+});
+
+test('paneBackgroundOf: the signal is only read off the last ~6 non-blank lines', () => {
+  // an old "background active" line in scrollback must not count when more than 6 non-blank lines sit below it
+  const lines = [
+    '   ◐ Tasks · 1 background active',
+    'a',
+    'b',
+    'c',
+    'd',
+    'e',
+    'f',
+    'g',
+    '   › hi',
+  ];
+  assert.equal(paneBackgroundOf(lines), false);
+});
+
+const mkTable = (rows) => { // rows: [pid, ppid, args]
+  const children = new Map(), args = new Map();
+  for (const [pid, ppid, a] of rows) { args.set(pid, a); if (!children.has(ppid)) children.set(ppid, []); children.get(ppid).push(pid); }
+  return { children, args, rss: new Map() };
+};
+
+test('scriptBusyOf: a script-wrapped `claude -p` child counts', () => {
+  const t = mkTable([
+    [1, 0, 'tmux pane shell'],
+    [2, 1, 'bash /home/u/run.sh'],
+    [3, 2, '/home/u/.local/bin/claude -p "do the thing"'],
+  ]);
+  assert.equal(scriptBusyOf(1, t), true);
+});
+
+test('scriptBusyOf: a `claude --print` child counts', () => {
+  const t = mkTable([[1, 0, 'bash'], [2, 1, 'claude --print "summary"']]);
+  assert.equal(scriptBusyOf(1, t), true);
+});
+
+test('scriptBusyOf: a `sleep` under a bash script counts', () => {
+  const t = mkTable([[1, 0, 'bash /home/u/wait.sh'], [2, 1, 'sleep 60']]);
+  assert.equal(scriptBusyOf(1, t), true);
+});
+
+test('scriptBusyOf: a bare bash prompt does not count', () => {
+  const t = mkTable([[1, 0, 'bash']]);
+  assert.equal(scriptBusyOf(1, t), false);
+});
+
+test('scriptBusyOf: an interactive claude REPL does not count (the guard already labels it as the agent)', () => {
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions']]);
+  assert.equal(scriptBusyOf(1, t), false);
+});
+
+test('scriptBusyOf: bad / missing input is safe (returns false)', () => {
+  assert.equal(scriptBusyOf(0, mkTable([[1, 0, 'bash']])), false);
+  assert.equal(scriptBusyOf(null, mkTable([[1, 0, 'bash']])), false);
+  assert.equal(scriptBusyOf(1, null), false);
+  assert.equal(scriptBusyOf(1, { children: new Map(), args: new Map() }), false);
+});
+
+test('scriptBusyOf: walks the tree breadth-first to depth 8', () => {
+  // a claude -p that is 5 levels deep must still be found
+  const t = mkTable([
+    [1, 0, 'bash'],
+    [2, 1, 'bash'],
+    [3, 2, 'bash'],
+    [4, 3, 'bash'],
+    [5, 4, 'bash'],
+    [6, 5, 'claude -p "deep"'],
+  ]);
+  assert.equal(scriptBusyOf(1, t), true);
+});

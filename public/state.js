@@ -9,12 +9,21 @@
 export const STATE_RANK = { waiting: 0, deploy: 1, done: 2, working: 3, idle: 4, offline: 5 };
 export const STATE_LABEL = { working: 'working', waiting: 'needs you', deploy: 'waiting deploy', done: 'done', idle: 'idle', offline: 'offline' };
 
-// True when the turn ended but the session still has work coming: background tasks or scheduled crons reported by the
-// Stop hook, or the manager's own background_wait classification.
+// True when the turn ended but the session still has work coming:
+//  - Claude's Stop hook reported background tasks or scheduled crons (status.reporter),
+//  - the manager's own background_wait classification, or
+//  - the pane footer shows an mcode/Codex background marker (status.paneBackground), or
+//  - a script is still driving a `claude -p` / `sleep` child in the pane (status.scriptBusy).
+// Display only: status.state is left untouched so the manager / auto-answer logic is unaffected.
 export function isLoopWaiting(status) {
   if (!status) return false;
   const r = status.reporter;
-  return !!((r && (r.backgroundWork > 0 || r.crons > 0)) || (status.stall && status.stall.case === 'background_wait'));
+  return !!(
+    (r && (r.backgroundWork > 0 || r.crons > 0)) ||
+    (status.stall && status.stall.case === 'background_wait') ||
+    status.paneBackground ||
+    status.scriptBusy
+  );
 }
 
 // Display state of one session given its raw status row.
@@ -22,6 +31,10 @@ export function displayState(status) {
   let s = (status && status.state) || 'offline';
   // A finished turn that still waits on a scheduled wakeup (/loop, ScheduleWakeup) or on background tasks is not "done": it shows as working (green)
   if (s === 'done' && isLoopWaiting(status)) s = 'working';
+  // A script-wrapped `claude -p` / `sleep` child in the pane means the pane is still doing work, even when the raw
+  // state classifier marked it idle. The reporter / paneBackground signals keep the old "idle stays idle" rule
+  // (a finished turn waiting on a cron is still not actively working).
+  else if (s === 'idle' && status && status.scriptBusy) s = 'working';
   // 'waiting deploy' (violet) only for a deploy that is really queued or has a waiter in the lease registry; a session that merely
   // SAID it waits for one (a regex on its own text, kind 'said') keeps its real state, so it cannot flip purple <-> red
   const real = status && status.deployWait && status.deployWait.kind !== 'said';

@@ -50,6 +50,75 @@ export function shouldRefuse({ by, live }) {
   return null;
 }
 
+// ---- Loop-wait detection (display only) ----
+// The Claude Code Stop hook reports background tasks / scheduled crons (status.reporter).
+// MiniMax (mcode) and Codex do not run a hook, but their pane footer rotates a
+// background-work marker while the turn is over. Treat the last ~6 non-blank lines of
+// the pane as a footer: a `N background active` count, a `… Running Nm` / spinner, or a
+// `Tasks · 1 background active` line counts. Pure, no I/O.
+
+// "\bN background active\b" tolerates "Tasks · 1 background active" (the MiniMax footer)
+// and Codex's "1 background task" variants, and the inline `… · 2 background active · …` form.
+const PANE_BG_COUNT_RE = /\b\d+\s+background\s+(?:active|tasks?)\b/i;
+// "Running 14min50s", "Running 3s", Codex's "… Running 5m" inline.
+const PANE_RUNNING_RE = /\bRunning\s+\d+(?:[hms])/i;
+// Inline spinner glyphs (Codex uses ⠇ ⠋ ⠙ …).
+const PANE_SPINNER_RE = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\S/;
+
+export function paneBackgroundOf(plain) {
+  if (!Array.isArray(plain) || plain.length === 0) return false;
+  // Strip ANSI, look at the last ~6 non-blank lines. NOISE has already been removed by
+  // plainLines() upstream, so spinners and the footer are still here.
+  const tail = plain.filter((l) => String(l || '').trim()).slice(-6);
+  for (const l of tail) {
+    if (PANE_BG_COUNT_RE.test(l)) return true;
+    if (PANE_RUNNING_RE.test(l)) return true;
+    if (PANE_SPINNER_RE.test(l)) return true;
+  }
+  return false;
+}
+
+// --- Script-loop detection (process tree) ---
+// A tmux pane whose foreground process tree runs a non-interactive agent turn
+// (`claude -p ...`, `claude --print ...`, or `mcode` with a one-shot flag) or a `sleep`
+// under a bash script is still doing work, even when the screen shows no agent prompt.
+// The agent pane itself is fine; this catches the wrappers that scripts hang in.
+// table = { children: Map<ppid, pid[]>, args: Map<pid, string> } (server.js processTable()).
+// depth <= 8 mirrors agentFromTree/claudePidsUnder.
+const BASH_BIN = /^(?:\/usr)?(?:\/bin)?\/(?:bash|sh)\b|^(?:bash|sh)\b/;
+const CLAUDE_PRINT = /(?:^|\/)claude(?:-code)?\s+(?:-p\b|--print\b)/;
+const MCODE_PRINT = /(?:^|\/)mcode\s+(?:-p\b|--print\b|exec\b)/;
+const SLEEP_RE = /^(?:\/usr)?(?:\/bin)?\/sleep\s+\d|^sleep\s+\d/;
+
+export function scriptBusyOf(panePid, table) {
+  if (!panePid || !table || !table.children || !table.args) return false;
+  const seen = new Set();
+  // Breadth-first walk: track whether the current process has a bash/sh script ancestor,
+  // so a `sleep N` deep in the tree only counts when a script is driving it.
+  let level = [{ pid: panePid, underBash: false }];
+  for (let d = 0; d < 8 && level.length; d++) {
+    const next = [];
+    for (const { pid, underBash } of level) {
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      const a = String(table.args.get(pid) || '');
+      if (a) {
+        // a non-interactive `claude -p` / `claude --print` turn (printed output, not REPL)
+        if (CLAUDE_PRINT.test(a)) return true;
+        // a MiniMax one-shot: `mcode -p`, `mcode exec ...`, or `mcode --print`
+        if (MCODE_PRINT.test(a)) return true;
+        // a `sleep N` under a bash script ancestor (a script's `do_wait` step)
+        if (SLEEP_RE.test(a) && underBash) return true;
+      }
+      const kids = table.children.get(pid) || [];
+      const childUnderBash = underBash || BASH_BIN.test(a);
+      for (const c of kids) next.push({ pid: c, underBash: childUnderBash });
+    }
+    level = next;
+  }
+  return false;
+}
+
 export const ALERT_PRIORITIES = ['min', 'low', 'default', 'high', 'urgent'];
 export const ALERT_MAX_PER_HOUR = 10;
 

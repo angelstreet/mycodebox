@@ -13,10 +13,10 @@ import { fileURLToPath } from 'node:url';
 import { createLeaseService } from '../lease-service.js';
 import { createLeaseRoutes, PREFIX } from '../lease-routes.js';
 
-export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs = [], log = console } = {}) {
+export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs = [], ownServers = {}, log = console } = {}) {
   // No tmux here: liveness is unknown (never releases anything); holders are reclaimed by TTL and declared heartbeats only.
   const service = createLeaseService({ dir, sessions: { isAlive: () => undefined, trackable: () => false },
-    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs } });
+    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers } });
   const routes = createLeaseRoutes({ service, dir });
   const server = http.createServer(async (req, res) => {
     try {
@@ -37,7 +37,10 @@ export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs =
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const dir = process.env.LEASE_DIR || path.join(os.homedir(), '.local', 'state', 'mycodebox-lease');
   const envs = String(process.env.LEASE_ENVS || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const s = startLeaseServer({ dir, port: Number(process.env.LEASE_PORT || 17777), envs });
+  // LEASE_OWN_SERVERS="node1-vpt:vpt-pi1,vpt-pi4;other-env:host"  hosts that run their own secondary server (TASK-129)
+  const ownServers = Object.fromEntries(String(process.env.LEASE_OWN_SERVERS || '').split(';').map((x) => x.trim()).filter(Boolean)
+    .map((x) => { const [e, hs] = x.split(':'); return [e.trim().toLowerCase(), String(hs || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)]; }));
+  const s = startLeaseServer({ dir, port: Number(process.env.LEASE_PORT || 17777), envs, ownServers });
   s.ready.then((p) => console.log(`[lease] central lease service on 127.0.0.1:${p}, state ${dir}`))
     .catch((e) => { console.error(`[lease] cannot listen: ${e.message}`); process.exit(1); });
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { s.close().finally(() => process.exit(0)); });

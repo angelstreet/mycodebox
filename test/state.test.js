@@ -128,3 +128,26 @@ test('displayState: a plain done session stays done; loop signals do not touch o
   assert.equal(displayState({ state: 'waiting', reporter: { crons: 1 } }), 'waiting');
   assert.equal(displayState({ state: 'done', reporter: { crons: 1 }, deployWait: { id: 'd1' } }), 'deploy');
 });
+
+test('displayState: a done session with a MiniMax/Codex background footer (paneBackground) shows as working (green)', () => {
+  assert.equal(displayState({ state: 'done', paneBackground: true }), 'working');
+  // same signal on idle keeps the old "idle stays idle" rule (the cron / bg work is not active work)
+  assert.equal(displayState({ state: 'idle', paneBackground: true }), 'idle');
+});
+
+test('displayState: a pane running a script-wrapped `claude -p` / `sleep` (scriptBusy) shows as working, not idle', () => {
+  assert.equal(displayState({ state: 'idle', scriptBusy: true }), 'working');
+  assert.equal(displayState({ state: 'done', scriptBusy: true }), 'working');
+  // without the signal, the raw state passes through
+  assert.equal(displayState({ state: 'idle' }), 'idle');
+  assert.equal(displayState({ state: 'idle', scriptBusy: false }), 'idle');
+});
+
+test('displayState: scriptBusy does not override waiting / deploy / offline', () => {
+  // a live needs-you prompt always wins
+  assert.equal(displayState({ state: 'waiting', scriptBusy: true }), 'waiting');
+  // a queued deploy is still violet
+  assert.equal(displayState({ state: 'idle', scriptBusy: true, deployWait: { id: 'd1' } }), 'deploy');
+  // offline stays offline
+  assert.equal(displayState({ state: 'offline', scriptBusy: true }), 'offline');
+});
