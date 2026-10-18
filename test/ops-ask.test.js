@@ -1,11 +1,16 @@
-// Round 12 (d): a lease or deploy stop is a manager item, never an owner item (ops-ask.js, manager.js escalate, NEEDS YOU strip).
+// Round 13 (d): a lease or deploy stop is a manager item, never an owner item (ops-ask.js, manager.js escalate, NEEDS YOU strip).
+// Round 13 (2026-10-18): FORBIDDEN_RE is the AUTO-ANSWER SAFETY FILTER (restored exactly as on main -- never auto-answered).
+// OWNER_FLOOR is the NARROWER, ROUTING-ONLY set the manager uses to decide OWNER-vs-MANAGER escalation. ops-ask uses
+// OWNER_FLOOR for the routing decision: a stop whose text touches an OWNER_FLOOR topic escalates to the OWNER; any
+// other FORBIDDEN_RE topic (deploy, push, merge, sudo, migration, generated app secrets, unit files, reboot) escalates
+// to the MANAGER (the manager's merge / deploy evaluation owns it).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { opsAsk, isLeaseOrDeployAsk } from '../ops-ask.js';
-import { forbiddenMatch as forbiddenMatchForTest } from '../stall.js';
+import { forbiddenMatch as forbiddenMatchForTest, ownerFloorMatch as ownerFloorForTest } from '../stall.js';
 import { isOwnersTurn, buildQueue } from '../public/ask-model.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'ghosty-opsask-'));
@@ -15,7 +20,7 @@ const pushes = [], items = [];
 await m.initManager({ onOwnerNeeded: (s) => pushes.push(s), onManagerItem: (it) => items.push(it) });
 await m.setManagerConfig({ aiTriage: 'off', routerShadow: false, wakeShadow: false, autoSend: false });
 
-test('detection: lease and deploy asks, hard floor (round 12: only owner list), mixed and unrelated questions', () => {
+test('detection: lease and deploy asks, owner floor (round 13: only owner list), mixed and unrelated questions', () => {
   const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
   assert.equal(opsAsk({ case: 'waiting_deploy', question: 'waits for deploy d-42', deployHint: { id: 'd-42' } }), 'deploy');
   assert.equal(opsAsk(od('deploy main to env-a once the lease frees? [1 yes 2 wait]', { status: 'needs-owner' })), 'lease');
@@ -23,14 +28,14 @@ test('detection: lease and deploy asks, hard floor (round 12: only owner list), 
   assert.equal(opsAsk(od('Should I deploy to env-a?')), 'deploy');
   assert.equal(opsAsk(od('Should I restart the backend service via update_core?')), 'deploy');
   assert.equal(opsAsk(od('Is the deploy queue empty, may I approve my deploy?')), 'deploy');
-  // round 12: only money, customers, shared_data_delete, owner-held credentials, physical stay in the hard floor.
-  // Migrations, deploy, push, merge, sudo / systemctl, generated secrets: all manager items.
-  assert.equal(opsAsk(od('Deploy main to env-a and drop the old table?')), null, 'drop table stays in the floor (shared_data_delete)');
+  // round 13: only money, customers, shared_data_delete, owner-held credentials, physical stay in OWNER_FLOOR.
+  // Migrations, deploy, push, merge, sudo / systemctl, generated secrets: all manager items (routing = manager).
+  assert.equal(opsAsk(od('Deploy main to env-a and drop the old table?')), null, 'drop table stays in OWNER_FLOOR (shared_data_delete)');
   assert.equal(opsAsk({ case: 'waiting_deploy', question: 'waits for a deploy; also delete the old branch' }), null, 'delete the old branch is shared_data_delete: owner item');
-  assert.equal(opsAsk(od('Should I deploy with sudo?')), 'deploy', 'sudo is no longer in the floor; the deploy topic wins');
-  assert.equal(opsAsk(od('Deploy and use the api key from the vault?')), null, 'third-party api key is still in the floor (owner-held credential)');
-  assert.equal(opsAsk(od('Run the migrations on deploy?')), 'deploy', 'migration is no longer in the floor; the deploy topic wins');
-  assert.equal(opsAsk(od('Should I restart the ghosty service?')), 'deploy', 'systemctl / unit is no longer in the floor; deploy wins');
+  assert.equal(opsAsk(od('Should I deploy with sudo?')), 'deploy', 'sudo is NOT in OWNER_FLOOR; the deploy topic wins (routing = manager)');
+  assert.equal(opsAsk(od('Deploy and use the api key from the vault?')), null, 'third-party api key IS in OWNER_FLOOR (owner-held credential)');
+  assert.equal(opsAsk(od('Run the migrations on deploy?')), 'deploy', 'migration is NOT in OWNER_FLOOR; the deploy topic wins (routing = manager)');
+  assert.equal(opsAsk(od('Should I restart the ghosty service?')), 'deploy', 'systemctl / unit is NOT in OWNER_FLOOR; deploy wins (routing = manager)');
   // unrelated or mixed
   assert.equal(opsAsk(od('Which database should I use, A or B?')), null);
   assert.equal(opsAsk(od('Should I deploy? Also which color for the button?')), null);
@@ -82,50 +87,75 @@ test('NEEDS YOU skips manager items (isOwnersTurn / buildQueue)', () => {
   assert.match(app, /escalatedTo !== 'manager' && \(stateOf/);   // the strip itself filters the same way
 });
 
-// ---- round 12 narrowing (2026-10-18, owner rule): the five representative cases ------------------------
-test('round 12 case 1: "apply migration 0018 to Neon" is a manager item (migration is no longer in the floor)', () => {
+// ---- round 13 (2026-10-18, owner rule): the five representative cases ------------------------
+// FORBIDDEN_RE is the AUTO-ANSWER SAFETY FILTER (restored exactly as on main -- catches every topic it caught before).
+// OWNER_FLOOR is the NARROWER, ROUTING-ONLY set the manager uses to decide OWNER-vs-MANAGER escalation. ops-ask uses
+// OWNER_FLOOR for the routing decision: a stop whose text touches an OWNER_FLOOR topic escalates to the OWNER; any
+// other FORBIDDEN_RE topic (deploy, push, merge, sudo, migration, generated app secrets) escalates to the MANAGER.
+test('round 13 case 1: "apply migration 0018 to Neon" -- FORBIDDEN_RE catches it; OWNER_FLOOR does not (routing = manager)', () => {
   const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
-  // The migration verb / noun is NOT a hard floor since round 12. ops-ask still needs a lease or deploy topic
-  // to mark it as a manager item; the manager item routing is what the deploy evaluation handles in production.
-  // In the unit test we verify the floor no longer rejects the text outright.
+  // ops-ask still needs a lease or deploy topic to mark it as a manager item; the manager item routing is what
+  // the deploy evaluation handles in production. In the unit test we verify the ROUTING floor no longer escalates
+  // it to the owner (OWNER_FLOOR does not match migration).
   assert.equal(opsAsk(od('Apply migration 0018 to Neon now?', { status: 'needs-owner' })), null,
     'migration alone is not lease / deploy; the manager item routing comes from the deploy evaluation in production');
-  // But the floor does not reject it (migration is not forbidden anymore):
-  assert.equal(hardFloorForTest('Apply migration 0018 to Neon now?'), null,
-    'migration is no longer in the hard floor (round 12 narrowing)');
+  // The routing floor (OWNER_FLOOR) does not reject it (migration is not an owner topic):
+  assert.equal(ownerFloorForTest('Apply migration 0018 to Neon now?'), null,
+    'migration is NOT in OWNER_FLOOR (round 13) -- routing treats it as a manager item');
+  // But the safety filter (FORBIDDEN_RE) DOES catch it -- never auto-answered.
+  assert.ok(safetyFloorForTest('Apply migration 0018 to Neon now?'),
+    'migration IS in FORBIDDEN_RE (the safety filter) -- never auto-answered');
 });
 
-test('round 12 case 2: "set CRON_SECRET (generate)" is a manager item (generated app secret is not an owner credential)', () => {
-  // The generated-secret exception drops the credentials part: the floor no longer escalates.
+test('round 13 case 2: "set CRON_SECRET (generate)" -- OWNER_FLOOR drops it (generated-secret exception); FORBIDDEN_RE catches "the cron secret" but not the placeholder name "CRON_SECRET"', () => {
+  // The generated-secret exception drops the credentials part of OWNER_FLOOR: routing no longer escalates a
+  // generated app secret ("set CRON_SECRET (generate)", placeholder names like CRON_/JWT_/APP_/SESSION_/INTERNAL_/
+  // DB_/DATABASE_) to the owner -- it is a manager decision.
+  //
+  // FORBIDDEN_RE matches `\bsecret\b` (word boundaries). "CRON_SECRET" has underscores, so the word boundary at
+  // the start of SECRET is between `_` (word) and `S` (word) -- no boundary. The safety filter does NOT catch a
+  // placeholder name on its own. It DOES catch "the cron secret" (standalone "secret" with word boundaries).
+  // That is the intended division: the safety filter is a plain-word floor; the generated-secret routing
+  // exception is a OWNER_FLOOR-only affordance.
   const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
-  assert.equal(hardFloorForTest('Set CRON_SECRET (generate a new value) and roll the service?'), null,
-    'a generated app secret is a manager decision; the credentials part of the floor is dropped by the generated-secret exception');
-  // A real third-party credential still matches.
-  assert.match(hardFloorForTest('Rotate the Stripe API key now?') || '', /api[_ -]?key|rotat/i,
-    'real third-party credential rotation stays in the floor');
+  assert.equal(ownerFloorForTest('Set CRON_SECRET (generate a new value) and roll the service?'), null,
+    'a generated app secret is a manager decision; the credentials part of OWNER_FLOOR is dropped by the generated-secret exception');
+  assert.equal(safetyFloorForTest('Set CRON_SECRET (generate a new value) and roll the service?'), null,
+    'a placeholder name like CRON_SECRET has no word boundary around "secret" -- the safety filter does not match it');
+  assert.ok(safetyFloorForTest('Plan: rotate the cron secret.'),
+    '"the cron secret" (standalone "secret" with word boundaries) IS in FORBIDDEN_RE -- the safety filter catches it');
+  // A real third-party credential still matches OWNER_FLOOR (routing = owner).
+  assert.ok(ownerFloorForTest('Rotate the Stripe API key now?'),
+    'real third-party credential rotation IS in OWNER_FLOOR -- routing escalates to the owner');
 });
 
-test('round 12 case 3: "rotate the Stripe API key" is an owner item (third-party credentials stay in the floor)', () => {
+test('round 13 case 3: "rotate the Stripe API key" is an owner item (BOTH floors catch it)', () => {
   const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
   assert.equal(opsAsk(od('Rotate the Stripe API key now?')), null, 'owner item, not a manager item');
-  assert.match(hardFloorForTest('Rotate the Stripe API key now?') || '', /api[_ -]?key|rotat/i);
+  assert.ok(ownerFloorForTest('Rotate the Stripe API key now?'),
+    'third-party credential rotation IS in OWNER_FLOOR -- routing escalates to the owner');
+  assert.ok(safetyFloorForTest('Rotate the Stripe API key now?'),
+    'third-party credential rotation IS in FORBIDDEN_RE -- the safety filter blocks auto-answering');
 });
 
-test('round 12 case 4: "buy a domain" is an owner item (money / purchase stays in the floor)', () => {
+test('round 13 case 4: "buy a domain" is an owner item (BOTH floors catch it)', () => {
   const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
   assert.equal(opsAsk(od('Buy a domain today?')), null, 'owner item, not a manager item');
-  assert.match(hardFloorForTest('Buy a domain today?') || '', /buy|purchase/i);
+  assert.ok(ownerFloorForTest('Buy a domain today?'),
+    'a purchase IS in OWNER_FLOOR -- routing escalates to the owner');
+  assert.ok(safetyFloorForTest('Buy a domain today?'),
+    'a purchase IS in FORBIDDEN_RE -- the safety filter blocks auto-answering');
 });
 
-test('round 12 case 5: "STATUS: needs-manager: pick option 1 or 2" is always a manager item, regardless of topic', () => {
+test('round 13 case 5: "STATUS: needs-manager: pick option 1 or 2" is always a manager item, regardless of topic', () => {
   const final = { case: 'owner_decision', question: 'Pick option 1 or 2', status: 'needs-manager' };
   assert.equal(opsAsk(final), 'lease', 'needs-manager status makes ops-ask return non-null regardless of the text topic');
-  // It also beats the hard floor: even "drop the old table" with needs-manager is a manager item.
+  // It also beats the OWNER_FLOOR: even "drop the old table" with needs-manager is a manager item.
   assert.equal(opsAsk({ ...final, question: 'drop the old table' }), 'lease',
-    'needs-manager bypasses the hard floor (the text topic is irrelevant)');
+    'needs-manager bypasses OWNER_FLOOR (the text topic is irrelevant)');
 });
 
-function hardFloorForTest(text) {
-  // Thin wrapper so the test expresses intent: "is this in the hard floor?"
+function safetyFloorForTest(text) {
+  // Thin wrapper: is this caught by the AUTO-ANSWER SAFETY FILTER (FORBIDDEN_RE)?
   return forbiddenMatchForTest(text);
 }

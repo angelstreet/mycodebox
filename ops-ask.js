@@ -4,7 +4,14 @@
 // owner-held credentials (third-party logins, keys to rotate), and physical actions on a device. Migrations, generated app secrets, merge/push,
 // tests/CI, infra config and technical choices are manager items. A stop whose STATUS line is `STATUS: needs-manager: ...` is always a manager
 // item regardless of topic.
-import { hardMatch } from './stall.js';
+//
+// The OWNER-vs-MANAGER routing decision uses OWNER_FLOOR (stall.js ownerFloorMatch), NOT the FORBIDDEN_RE safety filter.
+// FORBIDDEN_RE is the auto-answer safety filter -- it is the hard gate that never lets ghosty auto-answer deploy / push /
+// merge / sudo / migration / money / customer / destructive data / third-party credential / physical, and it is restored
+// exactly as on main. Only OWNER_FLOOR topics (money, customers, shared_data_delete, owner-held credentials with the
+// generated-secret exception, physical) escalate to the owner; any other FORBIDDEN_RE topic (deploy, push, merge, sudo,
+// migration, generated app secrets) escalates to the manager (the manager's merge / deploy evaluation owns it).
+import { ownerFloorMatch } from './stall.js';
 import { leaseAsk, leaseTopic } from './lease-ask.js';
 
 // a deploy: the word, update_core, the deploy queue / approval, or a restart of a service done by the deploy procedure
@@ -21,9 +28,12 @@ export function opsAsk(final) {
   if (status === 'needs-manager') return 'lease';
   const stopKind = c === 'waiting_deploy' ? 'waiting_deploy' : c === 'owner_decision' || /^(?:needs-owner|blocked)$/.test(status) ? 'decision' : null;
   if (!stopKind) return null;
-  // the hard floor: only owner-list topics (money, customers, shared_data_delete, owner-held credentials, physical) keep the stop with the owner
-  if (hardMatch(`${text} ${final.blocked || ''}`, { deployPresent: true })) return null;
-  if (final.forbidden && hardMatch(String(final.forbidden), { deployPresent: true })) return null;
+  // the routing floor: only OWNER_FLOOR topics (money, customers, shared_data_delete, owner-held credentials with the
+  // generated-secret exception, physical) keep the stop with the owner. Deploy / push / merge / sudo / migration /
+  // generated app secrets / unit files / reboot are FORBIDDEN_RE topics that route to the manager (the manager's
+  // evaluation owns them).
+  if (ownerFloorMatch(`${text} ${final.blocked || ''}`)) return null;
+  if (final.forbidden && ownerFloorMatch(String(final.forbidden))) return null;
   if (stopKind === 'waiting_deploy') return leaseTopic(text) || leaseAsk(text).lease ? 'lease' : 'deploy';
   if (!text) return null;
   // every question of the stop must be about a lease or a deploy; a mixed stop (a product question beside a deploy one) goes to the owner

@@ -1,9 +1,12 @@
 // Push and deploy decisions (round 8, OWNER_DECISIONS §15): like merge-policy.js, the manager decides a session's "push it?" and
 // "deploy it?" questions itself when nothing argues against it. Facts come from git (read-only, async, fail closed), the deploy
 // queue snapshot, the lease list and the session's closing text; the floor lists reasons to escalate; Jev (or the manager's own
-// reasoning) rates what is left. Round 12 narrowing (2026-10-18, owner rule): migrations, generated app secrets, merge/push, deploys/
-// restarts, infra config and tests/CI are manager decisions; the owner list is now only money/payments, customers, deleting shared
-// data, owner-held credentials, and physical actions on a device (stall.js FORBIDDEN_PARTS / FORBIDDEN_RE and router.js STOP_FLOOR_TOPICS).
+// reasoning) rates what is left. Round 13 (2026-10-18): the auto-answer SAFETY FILTER (stall.js FORBIDDEN_RE) is restored exactly
+// as on main -- it is the hard gate that never lets ghosty auto-answer deploy / push / merge / sudo / migration / money / customer /
+// destructive data / third-party credential / physical. The OWNER-vs-MANAGER ROUTING floor is the narrower OWNER_FLOOR set (stall.js
+// OWNER_FLOOR_RE, router.js STOP_FLOOR_TOPICS): money/payments, customers, deleting shared data, owner-held credentials (third-party
+// logins, keys to rotate -- never app-generated secrets), and physical actions on a device. Migrations, generated app secrets, merge/
+// push, deploys/restarts, infra config and tests/CI are manager decisions and route to the manager, never to the owner.
 import { basename } from 'node:path';
 import { buildRequest } from './router.js';
 import { deployHint } from './stall.js';

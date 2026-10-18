@@ -53,7 +53,7 @@ test('round-7 signatures keep working: hardMatch(text, { mergePresent }) and the
   assert.equal(hardMatch('git push origin feat', { pushPresent: true }), null);
   assert.ok(forbiddenMatch('deploy it'));
   assert.ok(FORBIDDEN_RE.test('git push now') && FORBIDDEN_RE.test('restart the ghosty service') && FORBIDDEN_RE.test('push --tags'));
-  assert.equal(pushMatch('push to prod'), null); assert.equal(deployMatch('systemctl restart x'), null);
+  assert.equal(deployMatch('systemctl restart x'), null);   // "systemctl restart x" is a bare restart, not a deploy ask (push to prod / push to main are command forms and are detected as push topics; the noun form is covered by the safety filter)
 });
 
 // ---- round 8 review fixes ----

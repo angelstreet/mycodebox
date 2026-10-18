@@ -188,26 +188,47 @@ const STATUS_RE = /\b(?:done|finished|complete[d]?|tested|verified|passed|passin
 const NEXT_STEP = /\bnext(?::| is| step| phase| I'?d| I will| I'll)|\bI'?ll (?:now|next|then)\b|\bthen I(?:'ll| will)\b|\bstill to do\b|\bremaining\b/i;
 
 // Topics the AI manager and the rule path must never answer (AGENTS.md: the forbidden-topic filter always wins).
-// Owner items (2026-10-18, narrowing round): only money/payments, customers, deleting shared data, owner-held credentials
-// (third-party logins, keys to rotate), and physical actions on a device. Migrations, generated app secrets, merge/push,
-// tests/CI, infra config and technical choices are manager decisions; they are NOT in this floor.
+// FORBIDDEN_RE is the AUTO-ANSWER SAFETY FILTER: the hard gate that never lets ghosty auto-answer "Yes" /
+// "go with the recommendation" / any reply that touches a deploy, push, merge, hard git, migration, sudo, reboot,
+// money, customer, destructive data, third-party credential, or physical action. Restored exactly as on main so the
+// filter still catches every topic it caught before. OWNER_FLOOR (below) is a NARROWER, ROUTING-ONLY set the manager
+// uses to decide OWNER-vs-MANAGER escalation; the two are different surfaces and must not be confused.
 // One alternative per line so a paraphrase can be added without untangling a wall of regex; matched case-insensitively.
+const PUSH_MAIN = String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b`;
 const MERGE_MAIN = String.raw`\bmerge\b[^.\n]{0,30}\bmain\b`;
-// The credentials part of the floor is dropped when the text reads like a generated app secret
-// (the app creates the value: "set CRON_SECRET (generate)", "generate a JWT secret", placeholder names like CRON_/JWT_/APP_/SESSION_/INTERNAL_/DB_/DATABASE_).
-// Real third-party credentials still hit the floor: "rotate the Stripe API key", "revoke the AWS key".
-const CREDENTIALS = String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`;
-const GENERATED_SECRET = String.raw`\bgenerat\w*\b[^.\n?]{0,40}\b(?:secret|password|passphrase|token|key|cert)|(?:set|put|add|create)\b[^.\n?]{0,30}\b(?:CRON_|JWT_|SESSION_|APP_|INTERNAL_|DB_|DATABASE_)[A-Z_]+|\bgenerat(?:e|ing)\b[^.\n?]{0,20}\b(?:a |an |new |the )?(?:secret|password|passphrase|key|token|cert)`;
+const REBASE_MAIN = String.raw`\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`;
+const GIT_PUSH = String.raw`\bgit push\b`;
+const HARD_GIT = String.raw`force[- ]?push|reset --hard|\bhard[- ]?reset\b`;
+const MIGRATE = String.raw`\bmigrat(?:e|ion)`;
 const FORBIDDEN_PARTS = [
-  // destructive data operations: shared-data delete
+  // deploys and service control
+  String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
+  String.raw`systemctl (?:restart|stop|start)|pm2 (?:restart|stop|delete)`,
+  String.raw`\brestart\b[^.\n]{0,30}\b(?:service|server|unit|host|daemon|ghosty)\b`,   // "restart the ghosty service"
+  // "live"/"staging"/"main" followed by - or / is a word part or a path ("live-reload", "staging/", "feature/main-menu").
+  String.raw`\b(?:ship|release(?! (?:the |a |its |my )?locks?\b)|roll ?out|promote)\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])|\bgo(?:ing)? live\b(?![-/])`,
+  String.raw`\bpublish(?:ed|ing)?\b|\bpush(?:ed|ing)?\b[^.\n]{0,30}\btags?\b|\bterraform\b[^.\n]{0,20}\b(?:apply|destroy)\b|\bapply\b[^.\n]{0,20}\bterraform\b`,
+  String.raw`\bkill\b[^.\n]{0,30}\bprod(?:uction)?\b|\b(?:upgrade|alter|modify)\b[^.\n]{0,20}\b(?:live|prod(?:uction)?)\b(?![-/])`,
+  // git history and main (named groups: the merge topic is split out for the manager's merge evaluation, see hardMatch)
+  PUSH_MAIN,
+  MERGE_MAIN,
+  REBASE_MAIN,
+  GIT_PUSH,
+  HARD_GIT,
+  // destructive data operations
   String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
   String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
-  // owner-held credentials and secrets (third-party logins, keys to rotate)
-  CREDENTIALS,
-  // money / payments / customers
+  MIGRATE,
+  // credentials and secrets
+  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`,
+  // money and customers
   String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
-  // physical actions on a device (the agent cannot do them; the owner must)
-  String.raw`\bplug(?:\s+in)?\b|\bunplug\b|\breplug\b|\bpower[- ]?cycle\b|\bpress\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|power|switch|remote)\b|\btap\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|screen)\b`,
+  // host administration and schema tools (round 8: strictly more conservative for every caller)
+  String.raw`sudoers|/etc/sudo|visudo`,
+  String.raw`\bunit file|/etc/systemd|systemctl (?:enable|disable|daemon-reload|mask)|\.service\b`,
+  String.raw`\breboot\b|\bshutdown\b|\bsudo\b`,
+  String.raw`alembic|upgrade head|prisma migrate|db:migrate|flyway|liquibase|knex migrate`,
+  String.raw`\breset\b[^.\n]{0,20}\b(?:database|db|schema)\b|\bre-?create\b[^.\n]{0,20}\bschema\b`,
 ];
 export const FORBIDDEN_RE = new RegExp(FORBIDDEN_PARTS.join('|'), 'i');
 // The merge topic alone, and the floor without it: a merge is decided by the manager's merge evaluation (merge-policy.js);
@@ -222,26 +243,75 @@ const HARD_EXTRA = [
   String.raw`\bpush(?:ed|es|ing)?\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])`,
   String.raw`\brewrit(?:e|es|ing|ten)\b[^.\n]{0,20}\bhistory\b|\bamend(?:ed|ing|s)?\b[^.\n]{0,40}\b(?:commit|main|master)\b|\bfilter-(?:branch|repo)\b`,
 ];
-// Topic split (round 8, narrowed round 12): merge, push and deploy are decided by the manager (OWNER_DECISIONS §15).
-// The floor used here is FORBIDDEN_RE, narrowed to the owner list (money, customers, shared_data_delete, owner-held credentials, physical).
-// Deploy / push / merge are no longer in the floor; the deployMatch / pushMatch / mergeMatch topic detection still reports them so
-// out.topics (manager.js) can route them, and the merge evaluation (merge-policy.js) and the deploy evaluation (decide-policy.js)
-// still own their safety.
-const DEPLOY_WORDS_RE = String.raw`\bre-?deploy|\bdeploy(?:s|ed|ing|ment|ments)?\b|\bupdate_core\b|\bdeploy[- ]?(?:queue|runner|request|approval)\b`;
-const DEPLOY_SHIP_RE = String.raw`\b(?:ship|release(?! (?:the |a |its |my )?locks?\b)|roll ?out|promote)\b[^.\n]{0,40}\b(?:prod(?:uction)?|staging|live)\b(?![-/])|\bgo(?:ing)? live\b(?![-/])`;
-export const DEPLOY_RE = new RegExp([DEPLOY_WORDS_RE, DEPLOY_SHIP_RE].join('|'), 'i');
+// Topic split (round 8): merge, push and deploy are decided by the manager (OWNER_DECISIONS §15); the rest stays hard.
+// Deploy topic parts come from FORBIDDEN_PARTS (deploy words, ship/release/promote to prod, go live) plus a restart of a service-like thing.
+const DEPLOY_WORDS = FORBIDDEN_PARTS[0], DEPLOY_SHIP = FORBIDDEN_PARTS[3], RESTART_ANY = FORBIDDEN_PARTS[2];
+// A restart of a service is not a deploy by itself: with a deploy word it rides along, never the ghosty service or a unit.
+const RESTART_HARD = String.raw`\brestart\b[^.\n]{0,30}\b(?:unit|ghosty)\b`;
+const PUSH_TAGS = String.raw`\bpush(?:ed|es|ing)?\b[^.\n]{0,30}\btags?\b`;   // pushing a tag publishes: hard
+export const DEPLOY_RE = new RegExp([DEPLOY_WORDS, DEPLOY_SHIP].join('|'), 'i');
 // A push mention: the present tense or a "pushed to main"; whether it is hard is decided by HARD_PUSH_RE.
 export const PUSH_RE = /\bpush(?:ing)?\b|\bpushed\b(?:[^.\n]{0,30}\bmain\b)?/i;
-const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON)].join('|'), 'i');
+const HARD_PUSH_RE = new RegExp([...HARD_EXTRA.filter((p) => p !== PUSH_COLON), HARD_GIT, PUSH_TAGS].join('|'), 'i');
 const colonHit = (text) => { for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_COLON_RE); if (k) return k[0]; } return null; };
-const GENERATED_SECRET_RE = new RegExp(GENERATED_SECRET, 'i');
-const hardParts = ({ generatedSecretOk = false } = {}) => {
-  const drop = new Set();
-  if (generatedSecretOk) drop.add(CREDENTIALS);   // the app is generating the secret (set CRON_SECRET (generate), ...): not an owner credential
-  return FORBIDDEN_PARTS.filter((p) => !drop.has(p));
+const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = false, migrationsOk = false } = {}) => {
+  const drop = new Set([MERGE_MAIN]);
+  if (migrationsOk) drop.add(MIGRATE);   // the deploy evaluation read the migration files (additive, lab env): the noun is covered, "migrate" the verb is not (below)
+  if (mergePresent || pushPresent) { drop.add(PUSH_MAIN); drop.add(GIT_PUSH); }
+  if (deployPresent) { drop.add(DEPLOY_WORDS); drop.add(DEPLOY_SHIP); drop.add(RESTART_ANY); }
+  let parts = [...FORBIDDEN_PARTS.filter((p) => !drop.has(p)), ...HARD_EXTRA.filter((p) => p !== PUSH_COLON)];
+  if (deployPresent) parts.push(RESTART_HARD);
+  if (migrationsOk) parts.push(String.raw`\bmigrat(?:e|es|ed|ing)\b`);
+  return parts;
 };
 const HARD_RES = new Map();
-const hardRe = (o) => { const k = `${+!!o.generatedSecretOk}`; if (!HARD_RES.has(k)) HARD_RES.set(k, new RegExp(hardParts(o).join('|'), 'i')); return HARD_RES.get(k); };
+const hardRe = (o) => { const k = `${+!!o.mergePresent}${+!!o.pushPresent}${+!!o.deployPresent}${+!!o.migrationsOk}`; if (!HARD_RES.has(k)) HARD_RES.set(k, new RegExp(hardParts(o).join('|'), 'i')); return HARD_RES.get(k); };
+// `git push <remote> <refspec>` where the refspec is not main/master: not the landing of a merge.
+const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+(?!-)\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
+const PUSH_OTHER_RE = new RegExp(PUSH_OTHER_REF, 'i');   // read on the text and its spelling variants, not on window joins (a joined word would look like another ref)
+
+// ---- OWNER_FLOOR (round 13, 2026-10-18): routing-only subset for OWNER vs MANAGER escalation ----------------
+// Round 12 (2026-10-18) narrowed the owner list to: money/payments, customers, deleting shared data, owner-held
+// credentials (third-party logins, keys to rotate -- never app-generated secrets), and physical actions on a device.
+// A generated app secret ("set CRON_SECRET (generate)", "generate a JWT secret", placeholder names like CRON_/JWT_/APP_/
+// SESSION_/INTERNAL_/DB_/DATABASE_) drops the credentials part: a generated-secret text is a MANAGER item (the deploy
+// evaluation / merge evaluation covers it), never an owner item.
+//
+// Use OWNER_FLOOR (not FORBIDDEN_RE) only where the code decides OWNER vs MANAGER routing: ops-ask.js manager-item
+// routing and scripts/jev-ask.js stop floors (a 'touches' entry forces escalation to the owner only if it is on the
+// owner floor; other forbidden topics route to the manager, never auto-answered). The auto-answer safety filter is
+// FORBIDDEN_RE / forbiddenMatch and stays unchanged -- it still catches every topic it caught before.
+const CREDENTIALS_FOR_OWNER = String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`;
+const GENERATED_SECRET = String.raw`\bgenerat\w*\b[^.\n?]{0,40}\b(?:secret|password|passphrase|token|key|cert)|(?:set|put|add|create)\b[^.\n?]{0,30}\b(?:CRON_|JWT_|SESSION_|APP_|INTERNAL_|DB_|DATABASE_)[A-Z_]+|\bgenerat(?:e|ing)\b[^.\n?]{0,20}\b(?:a |an |new |the )?(?:secret|password|passphrase|key|token|cert)`;
+const OWNER_FLOOR_PARTS = [
+  // destructive data operations: shared-data delete
+  String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
+  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
+  // owner-held credentials and secrets (third-party logins, keys to rotate)
+  CREDENTIALS_FOR_OWNER,
+  // money / payments / customers
+  String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+  // physical actions on a device (the agent cannot do them; the owner must)
+  String.raw`\bplug(?:\s+in)?\b|\bunplug\b|\breplug\b|\bpower[- ]?cycle\b|\bpress\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|power|switch|remote)\b|\btap\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|screen)\b`,
+];
+const GENERATED_SECRET_RE = new RegExp(GENERATED_SECRET, 'i');
+const ownerFloorParts = ({ generatedSecretOk = false } = {}) => {
+  const drop = new Set();
+  if (generatedSecretOk) drop.add(CREDENTIALS_FOR_OWNER);   // the app is generating the secret (set CRON_SECRET (generate), ...): manager item, not owner
+  return OWNER_FLOOR_PARTS.filter((p) => !drop.has(p));
+};
+const OWNER_FLOOR_RES = new Map();
+const ownerFloorRe = (o) => { const k = `${+!!o.generatedSecretOk}`; if (!OWNER_FLOOR_RES.has(k)) OWNER_FLOOR_RES.set(k, new RegExp(ownerFloorParts(o).join('|'), 'i')); return OWNER_FLOOR_RES.get(k); };
+export const OWNER_FLOOR_RE = new RegExp(OWNER_FLOOR_PARTS.join('|'), 'i');
+// ownerFloorMatch: the OWNER-vs-MANAGER routing decision. Only OWNER_FLOOR topics (with the generated-secret exception)
+// escalate to the owner; any other FORBIDDEN_RE topic (deploy, push, merge, migration, sudo, ...) escalates to the
+// manager (the manager's evaluation owns it). Use this where the code decides OWNER vs MANAGER routing. The auto-answer
+// safety filter is FORBIDDEN_RE / forbiddenMatch and stays unchanged.
+export function ownerFloorMatch(text, opts = {}) {
+  const o = typeof opts === 'object' && opts ? opts : {};
+  if (o.generatedSecretOk === undefined) o.generatedSecretOk = GENERATED_SECRET_RE.test(String(text || ''));
+  return matchWith(ownerFloorRe(o), text, forbiddenExtra);
+}
 
 let forbiddenExtra = null;
 // Extra forbidden words that must not live in a public repo (customer names, ...): GHOSTY_FORBIDDEN_EXTRA.
@@ -339,24 +409,18 @@ function matchWith(re, text, extra = null) {
   return null;
 }
 
-// forbiddenMatch honours the generated-secret exception (round 12, 2026-10-18): when the text reads like a
-// generated app secret ("set CRON_SECRET (generate)", "generate a new secret"), the credentials part of the
-// floor is dropped, so a generated-secret question is NOT forbidden (it is a manager item).
-export const forbiddenMatch = (text) => {
-  const o = { generatedSecretOk: GENERATED_SECRET_RE.test(String(text || '')) };
-  return matchWith(hardRe(o), text, forbiddenExtra);
-};
+// forbiddenMatch is the AUTO-ANSWER SAFETY FILTER: it is the hard gate that never lets ghosty auto-answer "Yes" /
+// "go with the recommendation" / any reply that touches a topic in FORBIDDEN_RE. Restored exactly as on main.
+export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenExtra);
 // Like a deploy or a push, a merge counts as a topic only when the text asks to perform it ("Should I merge ..."), not for a noun ("the merge policy page").
 export const mergeMatch = (text) => requested(text, MERGE_RE);
-// The floor without the topics the manager decides. Round 12 narrowing: the floor is only the owner list (money, customers,
-// shared_data_delete, owner-held credentials, physical). A generated-secret text ("set CRON_SECRET (generate)", placeholder
-// names like CRON_/JWT_/APP_/SESSION_/INTERNAL_/DB_/DATABASE_) drops the credentials part so the manager decides the secret.
-// Options: { generatedSecretOk: bool } (auto-detected from the text by default; pass an object to override).
+// The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any
+// plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent, migrationsOk } (a bare boolean = mergePresent); migrationsOk: the noun "migration" is covered by a deploy evaluation of additive lab migrations.
 export function hardMatch(text, opts = {}) {
-  const o = typeof opts === 'object' && opts ? opts : {};
-  if (o.generatedSecretOk === undefined) o.generatedSecretOk = GENERATED_SECRET_RE.test(String(text || ''));
-  const hit = matchWith(hardRe(o), text, forbiddenExtra);
+  const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
+  const hit = matchWith(hardRe(o), text, forbiddenExtra) || colonHit(text);
   if (hit) return hit;
+  if (o.mergePresent && !o.pushPresent) for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_OTHER_RE); if (k) return k[0]; }
   return null;
 }
 // A deploy or a push counts as a topic only when the agent asks to perform it ("Should I deploy ...", "Deploy X to Y?", "ready to deploy"),
@@ -402,14 +466,19 @@ function requestHit(text, re) {
   return null;
 }
 const requested = (text, re) => { for (const v of [String(text), ...textVariants(text)]) { const k = requestHit(v, re); if (k) return k; } return null; };
-// systemctl / pm2 / push --force / history rewrite: not in the floor since round 12. They are manager items and the deploy
-// evaluation / merge evaluation handles them. deployMatch still asks "did the agent ask to perform a deploy?" so out.topics.deploy
-// stays informative; pushMatch the same.
+// pushMatch: a hard push (--tags, --force, --mirror, --delete, +ref, :ref, to prod/staging/live, history rewrite, amend, filter-branch/repo) is never a push topic --
+// the safety filter (FORBIDDEN_RE / hardMatch) catches it and escalates; the manager must not try to answer it.
+export const pushMatch = (text) => {
+  for (const v of [String(text), ...textVariants(text)]) { if (HARD_PUSH_RE.test(v) || PUSH_COLON_RE.test(v)) return null; }
+  return requested(text, PUSH_RE);
+};
+// Topic split: merge / push / deploy are decided by the manager (OWNER_DECISIONS §15). hardMatch still checks the
+// full safety floor; deployMatch / pushMatch / mergeMatch report the topic so out.topics (manager.js) can route them
+// and the merge / deploy / push evaluation (merge-policy.js, decide-policy.js) owns their safety.
 export const deployMatch = (text) => requested(text, DEPLOY_RE);
-export const pushMatch = (text) => requested(text, PUSH_RE);
 export function topicSplit(text) {
   const merge = mergeMatch(text), push = pushMatch(text), deploy = deployMatch(text);
-  return { merge, push, deploy, hard: hardMatch(text, { generatedSecretOk: GENERATED_SECRET_RE.test(String(text || '')) }) };
+  return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };
 }
 
 // ---- the approved action (round 9, item 2, redesigned after review) ---------------------------------------------------
