@@ -5,6 +5,7 @@
 // registry: (argv, opts) => { code, stdout, stderr } (leaseSource.deployRegistry()). Same-scope requests coalesce in the deploy queue
 // (the runner finishes the merged requests with the winner's result), so a coalesced entry is followed to its result as any other.
 const FINAL = { done: 'done', failed: 'failed', cancelled: 'cancelled', canceled: 'cancelled', error: 'failed', coalesced: 'done' };
+const RUNNING = new Set(['running', 'started', 'in_progress', 'in-progress', 'deploying']);
 const SCOPES = new Set(['frontend', 'server', 'host', 'full']);
 const SAFE = /^[A-Za-z0-9][\w./:@+-]{0,120}$/;
 
@@ -60,7 +61,17 @@ export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise
         const fin = FINAL[String(d.state || '').toLowerCase()];
         if (fin) return { ok: fin === 'done', state: fin, version: fin === 'done' ? await versionOf(d) : null, tail: String(d.tail || d.error || '').slice(-1000) };
       } else if (++misses >= 20) return { ok: false, state: 'unknown', version: null, tail: '', error: `deploy ${id} is not in the registry` };
-      if (now() - t0 > timeoutMs) return { ok: false, state: 'timeout', version: null, tail: '', error: `deploy ${id} did not finish in ${Math.round(timeoutMs / 60000)} min` };
+      if (now() - t0 > timeoutMs) {
+        // never report failure for a deploy that may still run later: a started deploy is waited out (up to 3x the timeout); a queued one is cancelled first,
+        // and if it cannot be cancelled (or the state is unknown) the wait goes on
+        const st = String(d?.state || '').toLowerCase();
+        if (d && !RUNNING.has(st)) {
+          const c = await reg(['deploy', 'cancel', String(id)]);
+          const after = c.code === 0 ? await listed(id) : null;
+          if (c.code === 0 && (!after || FINAL[String(after.state || '').toLowerCase()] === 'cancelled')) return { ok: false, state: 'timeout', version: null, tail: '', error: `deploy ${id} was still queued after ${Math.round(timeoutMs / 60000)} min and has been cancelled` };
+        }
+      }
+      if (now() - t0 > timeoutMs * 3) return { ok: false, state: 'timeout', version: null, tail: '', error: `deploy ${id} is still running after ${Math.round(timeoutMs * 3 / 60000)} min` };   // hard cap on a started deploy
       await sleep(pollMs);
     }
   }

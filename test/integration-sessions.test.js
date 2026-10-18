@@ -247,7 +247,21 @@ test('docs: session rules say hand off, never merge / push the target / deploy',
   assert.match(rd('../docs/REFERENCE.md'), /## Integration lane/);
 });
 
-test('deploy adapter: find returns the deploy already requested for this agent, not a failed one', async () => {
+test('deploy adapter: a deploy still queued at the timeout is cancelled before failure is reported; a running one is waited out', async () => {
+  let t = 0; const calls = []; let state = 'queued';
+  const registry = async (argv) => {
+    calls.push(argv.slice(0, 2).join(' '));
+    if (argv[1] === 'cancel') { state = 'cancelled'; return { code: 0, stdout: '{}', stderr: '' }; }
+    return { code: 0, stdout: JSON.stringify({ deploys: [{ id: 'd1', state }] }), stderr: '' };
+  };
+  const d = createIntegrationDeploys({ registry, sleep: async () => { t += 60000; }, now: () => t });
+  const w = await d.wait('d1', { timeoutMs: 120000 });
+  assert.equal(w.state, 'timeout'); assert.match(w.error, /cancelled/); assert.ok(calls.includes('deploy cancel')); assert.equal(state, 'cancelled');
+  // started: never cancelled, waited to its result
+  let t2 = 0, polls = 0; const calls2 = [];
+  const reg2 = async (argv) => { calls2.push(argv[1]); polls++; return { code: 0, stdout: JSON.stringify({ deploys: [{ id: 'd2', version: 'v1', state: polls > 6 ? 'done' : 'running' }] }), stderr: '' }; };
+  const r = await createIntegrationDeploys({ registry: reg2, sleep: async () => { t2 += 60000; }, now: () => t2 }).wait('d2', { timeoutMs: 120000 });
+  assert.equal(r.state, 'done'); assert.ok(!calls2.includes('cancel'));
   // find: the deploy already requested for this agent, not a failed one
   const f = createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: JSON.stringify({ deploys: [{ id: 'x1', agent: 'integration:i1', state: 'failed' }, { id: 'x2', agent: 'integration:i1', state: 'queued' }, { id: 'x3', agent: 'integration:i2', state: 'queued' }] }), stderr: '' }) });
   assert.equal(await f.find({ agent: 'integration:i1' }), 'x2'); assert.equal(await f.find({ agent: 'integration:none' }), null);
