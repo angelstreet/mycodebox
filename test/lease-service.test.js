@@ -485,6 +485,19 @@ test('check: legacy semantics incl. skip_leased and leased hosts', async () => {
   assert.equal(hostOnly.free, true); assert.deepEqual(hostOnly.leased_hosts.map((x) => x.host).sort(), ['host-1', 'host-2']);
 });
 
+test('ownServers: a lease on a Pi that runs its own server does not block a skip-leased server deploy, and is reported as skippable', async () => {
+  const h = harness({ ownServers: { 'env-a': ['host-pi'] } });
+  await h.claim('run', 'host-pi', { kind: 'server' });
+  const plain = await h.svc.check({ env: 'env-a', resources: 'server' });
+  assert.equal(plain.free, false, 'without --skip-leased the run still blocks the server deploy');
+  const sk = await h.svc.check({ env: 'env-a', skip_leased: true, resources: 'server', hosts: 'host-pi' });
+  assert.equal(sk.free, true);
+  assert.deepEqual(sk.leased_hosts.map((x) => x.host), ['host-pi']);
+  await h.claim('other', 'host-main', { kind: 'server' });
+  const blocked = await h.svc.check({ env: 'env-a', skip_leased: true, resources: 'server', hosts: 'host-pi' });
+  assert.equal(blocked.free, false, 'a server-kind lease on a host that uses the main server still blocks it');
+});
+
 // ---- identity, idempotency -----------------------------------------------------------------------------------------------
 test('request_id: a retry returns the same grant or ticket, and survives a restart; ids are per client', async () => {
   const h = harness();
