@@ -2,26 +2,35 @@
 # cbsession — start an AI agent session in tmux on this host (shows on the mycodebox dashboard).
 # Claude sessions always get Remote Control, so they also appear in the Claude app / claude.ai.
 #
-#   cbsession -n NAME -d DIR [-p claude|codex|minimax|opencode] [-m MODEL] (-H HANDOVER | -f PROMPT_FILE | -t "TEXT")
+#   cbsession -n NAME -d DIR [-p claude|codex|minimax|opencode] [-m MODEL] [-b BILLING] (-H HANDOVER | -f PROMPT_FILE | -t "TEXT")
 #
 #   -n  tmux session name (A-Z a-z 0-9 _ -, max 40); also the Remote Control name
 #   -d  working directory on this host (repo checkout)
 #   -p  provider (default claude)
 #   -m  model: claude haiku|sonnet|opus|fable|<id>; codex <model>; minimax MiniMax-M3 (default; the only MiniMax model, owner decision 2026-10-14);
 #       opencode <provider/model>
+#   -b  claude billing: sub (default, the Max plan login) or NAME = the API key in ~/.config/anthropic/NAME.key
+#       (one line, chmod 600; read at launch by apiKeyHelper, never copied). NAME.workspace, if present, holds the
+#       workspace id a user key (sk-ant-usr) needs. ANTHROPIC_API_KEY from the environment is always dropped.
 #   -H  handover file: the session reads it, summarises state and open items, then does the work (owner autonomy rule)
 #   -W  with -H: review only — summarise, propose the next step, then wait for the owner
 #   -f  prompt file, used verbatim;  -t  prompt text
 #   -x  dry run: print the launch command, start nothing
 # Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
 set -euo pipefail
-NAME= DIR= PROV=claude MODEL= HANDOVER= PFILE= TEXT= DRY=0 WAIT=0
-while getopts "n:d:p:m:H:f:t:xWh" o; do case $o in
-  n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,17p "$0"; exit 2;; esac; done
+NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0
+while getopts "n:d:p:m:b:H:f:t:xWh" o; do case $o in
+  n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; b) BILL=$OPTARG;; H) HANDOVER=$OPTARG;;
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,20p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
+[[ $BILL =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -b BILLING must be sub or a key name (A-Z a-z 0-9 _ -)" >&2; exit 2; }
+KF="$HOME/.config/anthropic/$BILL.key"
+if [ "$BILL" != sub ]; then
+  [ "$PROV" = claude ] || { echo "cbsession: -b applies to -p claude only" >&2; exit 2; }
+  [ -s "$KF" ] || { echo "cbsession: billing key $KF not found (one line, chmod 600)" >&2; exit 2; }
+fi
 tmux has-session -t "=$NAME" 2>/dev/null && { echo "cbsession: tmux session '$NAME' already exists" >&2; exit 1; }
 
 H="$HOME/handovers"; mkdir -p "$H"; P="$H/$NAME.prompt.md"; L="$H/$NAME.launch.sh"
@@ -54,8 +63,19 @@ elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"
 else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; fi
 
 q() { printf '%q' "$1"; }
+# -b NAME: settings file with an apiKeyHelper that reads the key file at launch (the key never lands in a file here).
+CS=
+if [ "$BILL" != sub ]; then
+  SJ="$H/$NAME.settings.json"; WF="$HOME/.config/anthropic/$BILL.workspace"
+  WS=; [ -s "$WF" ] && WS=$(tr -d '[:space:]' < "$WF")
+  KF=$KF WS=$WS node -e '
+    const e = process.env, o = { apiKeyHelper: `cat ${JSON.stringify(e.KF)}` };
+    if (e.WS) o.env = { ANTHROPIC_CUSTOM_HEADERS: `anthropic-workspace-id: ${e.WS}` };
+    process.stdout.write(JSON.stringify(o, null, 2) + "\n");' > "$SJ"
+  CS=" --settings $(q "$SJ")"
+fi
 case $PROV in
-  claude)   CMD="$(q "$HOME")/.local/bin/claude --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
+  claude)   CMD="env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN $(q "$HOME")/.local/bin/claude${CS} --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   codex)    CMD="$(q "$HOME")/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   minimax)  M=${MODEL:-MiniMax-M3}; [[ $M == */* ]] || M="minimax/$M"
             CMD="PATH=$(q "${MCODE_NODE_DIR:-$HOME/.local/node-v24.21.0-linux-x64/bin}"):\$PATH mcode -m $(q "$M") \"\$(cat $(q "$P"))\"";;
@@ -78,7 +98,7 @@ for i in $(seq 1 30); do
 done
 S=$(tmux capture-pane -p -t "=$NAME:" 2>/dev/null || true)
 URL=$(grep -o "https://claude.ai/code/session_[A-Za-z0-9]*" <<<"$S" | tail -1 || true)
-echo "started: $NAME ($PROV${MODEL:+ $MODEL}) in $DIR"
+echo "started: $NAME ($PROV${MODEL:+ $MODEL}${CS:+, billing $BILL}) in $DIR"
 [ "$PROV" = claude ] && { [ -n "$URL" ] && echo "remote control: $URL" || echo "remote control: not confirmed yet — check: tmux capture-pane -p -t $NAME"; }
 echo "prompt: $P"
 

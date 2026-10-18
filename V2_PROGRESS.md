@@ -1,4 +1,4 @@
-STATUS: DELIVERED 966c59c (round 9)
+STATUS: IN PROGRESS round 11 (lease cut-over, shadow)
 
 # V2 progress
 
@@ -7,7 +7,23 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 9 (harness review actions, `.v2/round9.md`) delivered on `v2/r9-harness`. Round 10 is merged (PR #13).
+Round 11 (central-lease cut-over, LEASES-CENTRAL §10 steps 1-4; owner go 2026-10-18): shadow mode is live on the dashboard host and installed on
+the registry host; the registry host and the device hosts need a network path to the lease service (owner decision) before
+their shadow calls count. Step 5 (freeze + central) only after telling the manager.
+
+## Round 11 (2026-10-18)
+
+| Step | What | State | Notes |
+|---|---|---|---|
+| 1 | Tokens: the dashboard host, the registry host (`--exempt manager:deploy,update_core:*`), owner (`--owner`), the Mac, 11 device hosts | DONE | 0600 files on the dashboard host, never printed; verified on loopback and the Serve URL |
+| 1 | Restart via `scripts/safe-restart.sh` | SKIPPED | the running service already serves the lease API and rounds 9/10 routes; tokens need no restart |
+| 2 | the deploy script on the registry host: fail closed (only 0 proceeds; 3/4 abort 3, anything else abort 5), one atomic claim, `<env>/server` only when the client is central (legacy keeps `*`), IP -> name from `~/.ssh/config` | INSTALLED 10:50 UTC | 12-case harness passes; backup `~/update_core.sh.bak-2026-10-18-cutover`; the next real deploy exercises it |
+| 3 | Client on the dashboard host (`~/bin/vpt-lease`, shadow, legacy via an ssh wrapper to the registry host) | DONE | shadow reports reach the service |
+| 3 | Client on the registry host (`~/bin/vpt-lease`, old -> `vpt-lease.legacy`) | INSTALLED (shadow) | every answer identical to the legacy CLI (`list`, `list --json`, `check`, `deploy list/last --json`, `events`), same speed; its shadow calls cannot reach the service yet (no tailnet, loopback-only listener) |
+| 3 | Device hosts (9 reachable) | BLOCKED | none reaches the service URL or the registry host; 5 more are offline or have no route |
+| 3 | Mac | COMMANDS GIVEN | owner side |
+| 3 | Deploy skill rendered from `docs/LEASE-RULES.md` | STAGED | `~/.claude/skills/deploy/SKILL.md.central`; swapped in at the central switch (the new rules assume `--wait`, which shadow mode degrades) |
+| 4 | Leases view disagreements | PARTIAL | the view hid shadow reports in legacy authority: fixed in PR #15 (merge pending); until then read the service's shadow store |
 
 ## Round 9
 

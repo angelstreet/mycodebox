@@ -222,8 +222,10 @@ This folds in round 9 item 6 ("frontend-only deploys need no backend lease; busy
 
 ## 10. Shadow period, cut-over, rollback
 
-The client has three modes, set per machine in `~/.config/vpt-lease/config` (`mode=`, `url=`, `token_file=`; the
-`VPT_LEASE_*` environment variables override it, but non-interactive ssh commands only see the file):
+The client has three modes, set per machine in `~/.config/vpt-lease/config` (`KEY=VALUE` lines: `VPT_LEASE_MODE`,
+`VPT_LEASE_URL`, `VPT_LEASE_TOKEN_FILE`, `VPT_LEASE_LEGACY`; the same environment variables override it, but
+non-interactive ssh commands only see the file). `VPT_LEASE_LEGACY` may be a command line: on a machine that reaches the
+registry only over ssh it names a small wrapper that forwards the quoted arguments to the old CLI there.
 
 | Mode | Authoritative | Also |
 |---|---|---|
@@ -242,15 +244,15 @@ before any machine trusts the service.
    `<env>/server` for `--server` instead of `*`, and resolve a host given by IP to its host name.
 3. Install the client on the registry host *as* `~/bin/vpt-lease` (the old binary becomes `~/bin/vpt-lease.legacy`, so
    every `ssh <registry> ~/bin/vpt-lease ...` caller follows the client's mode), and on codebox, the Mac and the device
-   hosts; write their config files with `mode=shadow`; render the deploy skill from `docs/LEASE-RULES.md` and copy it to
+   hosts; write their config files with `VPT_LEASE_MODE=shadow`; render the deploy skill from `docs/LEASE-RULES.md` and copy it to
    both machines.
 4. Run a day in shadow; read the disagreement list on the Leases view; fix or explain each `mismatch`.
-5. Freeze briefly (deploy runner off, no claims expected), switch the registry host to `mode=central`, import the open
+5. Freeze briefly (deploy runner off, no claims expected), switch the registry host to `VPT_LEASE_MODE=central`, import the open
    leases and queued deploys (`node scripts/lease-import.js`; legacy lease ids and expiry times are kept, so
    `release <old id>` still works), switch every other machine to `central`, then set `leaseAuthority: "central"` in
    the dashboard and turn the deploy runner back on.
 
-Rollback: set `mode=legacy` everywhere; the old registry was never modified by the service and takes over again.
+Rollback: set `VPT_LEASE_MODE=legacy` everywhere; the old registry was never modified by the service and takes over again.
 `node scripts/lease-export.js` lists the leases, tickets and queued deploys the service granted in the meantime, for the
 owner to re-create on the old registry. Event cursors (lease-watch, handoffs) are kept per source, so switching back
 and forth neither replays nor skips events.
