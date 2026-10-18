@@ -1,0 +1,123 @@
+#!/bin/sh
+# integrate: hand a pushed branch to the mycodebox integration lane (docs/v2/INTEGRATION-LANE.md). POSIX sh + curl; codebox and Mac.
+#   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--wait]   queue the branch (default: the current branch)
+#   integrate status [<id>]                                                              one request, or the latest ten
+#   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60)
+#   integrate cancel <id>                                                                only while it is still queued
+# Where: URL and token from ~/.config/mycodebox/config (url = ...) and ~/.config/mycodebox/token (a client added with
+# `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
+# Exit: 0 merged / deployed, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
+
+CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
+cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
+die() { printf 'integrate: %s\n' "$*" >&2; exit 1; }
+mode_of() { if [ "$(uname -s)" = Darwin ]; then stat -f %Lp "$1" 2>/dev/null; else stat -c %a "$1" 2>/dev/null; fi; }
+
+URL=${MYCODEBOX_URL:-$(cfg url)}
+STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
+HDR_NAME=""; HDR_VAL=""
+if [ -f "$CFG_DIR/token" ]; then
+  M=$(mode_of "$CFG_DIR/token")
+  case "$M" in ""|*[!0-7]*) die "cannot read the mode of $CFG_DIR/token" ;; esac
+  [ "$(( 0$M & 077 ))" -eq 0 ] || die "$CFG_DIR/token must be mode 600 (it is $M)"
+  HDR_NAME="Authorization"; HDR_VAL="Bearer $(tr -d '\r\n ' < "$CFG_DIR/token")"
+elif [ -f "$STATE_DIR/reporter.token" ]; then
+  HDR_NAME="x-ghosty-reporter-token"; HDR_VAL=$(tr -d '\r\n ' < "$STATE_DIR/reporter.token")
+fi
+[ -n "$URL" ] || URL="http://127.0.0.1:${PORT:-7777}"
+URL=${URL%/}
+case "$URL" in http://*|https://*) ;; *) die "bad url: $URL" ;; esac
+[ -n "$HDR_NAME" ] || die "no token: put one in $CFG_DIR/token (see docs/MAC-HOOK.md) or run on the codebox"
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/integrate.XXXXXX") || die "mktemp failed"
+trap 'rm -rf "$TMP"' EXIT INT TERM HUP
+OUT="$TMP/out"
+
+# api METHOD PATH [JSON]  -> body in $OUT, http code in $CODE. The token goes through curl's stdin config, never the process list.
+api() {
+  _m=$1; _p=$2; _d=$3
+  if [ -n "$_d" ]; then
+    CODE=$(printf 'header = "%s: %s"\nheader = "content-type: application/json"\n' "$HDR_NAME" "$HDR_VAL" | curl -sS -K - -X "$_m" --data-binary "$_d" -o "$OUT" -w '%{http_code}' --max-time 60 "$URL$_p" 2>"$TMP/err")
+  else
+    CODE=$(printf 'header = "%s: %s"\n' "$HDR_NAME" "$HDR_VAL" | curl -sS -K - -X "$_m" -o "$OUT" -w '%{http_code}' --max-time 60 "$URL$_p" 2>"$TMP/err")
+  fi
+  _rc=$?
+  if [ "$_rc" -ne 0 ] || [ "$CODE" = "000" ]; then printf 'integrate: service unreachable at %s (%s)\n' "$URL" "$(head -n 1 "$TMP/err")" >&2; exit 5; fi
+}
+val() { sed -n "s/^$1=//p" "$OUT" | head -n 1; }
+tail_of() { sed -n '/^---$/,$p' "$OUT" | sed 1d; }
+fail_http() { _e=$(val error); [ -n "$_e" ] || _e="HTTP $CODE"; printf 'integrate: %s\n' "$_e" >&2; exit 1; }
+json_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037'; }
+urlenc() { printf '%s' "$1" | sed 's/%/%25/g; s/ /%20/g; s/&/%26/g; s/?/%3F/g; s/#/%23/g'; }
+
+# Print a request's outcome and exit with its code.
+report() {
+  _state=$(val state); _text=$(val text); _reason=$(val reason); _exit=$(val exit)
+  printf '%s\n' "$_text"
+  case "$_state" in
+    returned|merged_ci_red|deploy_failed)
+      _t=$(tail_of); [ -n "$_t" ] && printf '%s\n' "$_t"
+      case "$_state" in returned) printf 'Fix it on your branch, push it and run integrate request again.\n' ;; *) printf 'The merge is on the target; the manager decides what happens next. Do not revert it yourself.\n' ;; esac ;;
+  esac
+  [ -n "$_exit" ] || exit 1
+  exit "$_exit"
+}
+
+do_wait() {   # do_wait ID MINUTES
+  _id=$1; _min=$2; _end=$(( $(date +%s) + _min * 60 ))
+  while :; do
+    api GET "/api/integration/requests/$_id/wait?timeout=25&format=kv"
+    [ "$CODE" = 200 ] || fail_http
+    [ "$(val final)" = true ] && report
+    [ "$(date +%s)" -lt "$_end" ] || { printf 'integrate: still %s after %s min (integrate wait %s to keep waiting)\n' "$(val state)" "$_min" "$_id" >&2; exit 1; }
+  done
+}
+
+cmd=$1; [ $# -gt 0 ] && shift
+case "$cmd" in
+  request)
+    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; WAIT=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --wait) WAIT=1; shift ;;
+        -*) die "unknown option $1" ;; *) BRANCH=$1; shift ;;
+      esac
+    done
+    [ -n "$BRANCH" ] || BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    case "$BRANCH" in ""|HEAD) die "name the branch: integrate request <branch>" ;; esac
+    SESSION=${MYCODEBOX_SESSION:-}
+    [ -n "$SESSION" ] || { [ -n "$TMUX" ] && SESSION=$(tmux display-message -p '#S' 2>/dev/null); }
+    ORIGIN=$(git remote get-url origin 2>/dev/null)
+    BODY="{\"branch\":\"$(json_esc "$BRANCH")\",\"cwd\":\"$(json_esc "$PWD")\""
+    [ -n "$REPO" ] && BODY="$BODY,\"repo\":\"$(json_esc "$REPO")\""
+    [ -n "$DEPLOY" ] && BODY="$BODY,\"deploy\":\"$(json_esc "$DEPLOY")\""
+    [ -n "$NOTE" ] && BODY="$BODY,\"note\":\"$(json_esc "$NOTE")\""
+    [ -n "$SESSION" ] && BODY="$BODY,\"session\":\"$(json_esc "$SESSION")\""
+    [ -n "$ORIGIN" ] && BODY="$BODY,\"origin\":\"$(json_esc "$ORIGIN")\""
+    BODY="$BODY}"
+    api POST "/api/integration/requests?format=kv" "$BODY"
+    [ "$CODE" = 200 ] || fail_http
+    ID=$(val id)
+    printf 'Integration %s queued for %s (position %s).\n' "$ID" "$(val repo)" "$(val position)"
+    if [ "$WAIT" = 1 ]; then do_wait "$ID" 60; fi
+    printf 'End your turn with: STATUS: waiting: integration %s\n' "$ID" ;;
+  status)
+    if [ -n "$1" ]; then
+      api GET "/api/integration/requests/$(urlenc "$1")?format=kv"; [ "$CODE" = 200 ] || fail_http
+      printf '%s\n' "$(val text)"; _r=$(val reason); [ -n "$_r" ] && printf 'reason: %s\n' "$_r"; tail_of
+    else
+      api GET "/api/integration/requests?limit=10&format=kv"; [ "$CODE" = 200 ] || fail_http
+      tail_of
+    fi ;;
+  wait)
+    ID=$1; [ -n "$ID" ] || die "usage: integrate wait <id> [--timeout min]"; shift
+    MIN=60
+    while [ $# -gt 0 ]; do case "$1" in --timeout) MIN=$2; shift 2 ;; *) die "unknown option $1" ;; esac; done
+    case "$MIN" in ""|*[!0-9]*) die "--timeout is in whole minutes" ;; esac
+    do_wait "$ID" "$MIN" ;;
+  cancel)
+    [ -n "$1" ] || die "usage: integrate cancel <id>"
+    api POST "/api/integration/requests/$(urlenc "$1")/cancel?format=kv" "{}"; [ "$CODE" = 200 ] || fail_http
+    printf '%s\n' "$(val text)" ;;
+  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--wait] | status [<id>] | wait <id> [--timeout MIN] | cancel <id>\n' >&2; exit 1 ;;
+esac

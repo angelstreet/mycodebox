@@ -55,3 +55,19 @@ evaluation (OWNER_DECISIONS §14, §19).
 3. Switch every session: AGENTS.md, the cbsession handover prompt and the deploy skill say "hand off to the lane"; the
    manager announces it to running sessions; `update_core.sh` started by hand while busy queues a deploy instead of
    failing.
+
+## Interface as built (round 13, lane core)
+
+`<state>/integration.json`:
+
+```json
+{ "repos": { "env-a": { "clone": "/abs/path/of/the/lane/clone", "remote": "origin", "target": "main",
+  "test": "npm test", "testTimeoutMin": 30, "ci": "github", "ciTimeoutMin": 60,
+  "deploy": { "env": "env-a", "defaultScope": "server" }, "conventions": ["VERSION.txt"], "conventionResolver": "take-target" } } }
+```
+
+Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (HTTP), `scripts/integrate` (CLI). The queue is
+`<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:
+`node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state
+(`merged`, `deployed`, `returned`, `merged_ci_red`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
+transition; `event.kind` is `queued | running | step | resumed | state | final`, `event.final` is true on a final state.
