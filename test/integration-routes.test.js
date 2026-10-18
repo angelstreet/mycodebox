@@ -58,6 +58,26 @@ test('auth: reporter token on loopback, or a bearer client flagged integrate; no
   } finally { b.close(); }
 });
 
+test('dashboard: same-origin list/get/cancel need no token, cross-origin is 403, creating a request stays token-gated', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const b = await boot(w);
+  try {
+    const host = new URL(b.base).host;
+    const same = { 'sec-fetch-site': 'same-origin' }, sameO = { origin: `http://${host}` }, cross = { origin: 'http://evil.example' };
+    assert.equal((await b.call('GET', `${P}/requests`, { headers: same })).status, 200);
+    assert.equal((await b.call('GET', `${P}/requests`, { headers: sameO })).status, 200);
+    assert.equal((await b.call('GET', `${P}/requests`, { headers: cross })).status, 403);
+    assert.equal((await b.call('GET', `${P}/requests`, { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
+    const q = await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'feat' } });
+    const id = q.json.id;
+    assert.equal((await b.call('GET', `${P}/requests/${id}`, { headers: same })).status, 200);
+    assert.equal((await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'feat' }, headers: sameO })).status, 401);
+    assert.equal((await b.call('POST', `${P}/requests/${id}/cancel`, { body: {}, headers: cross })).status, 403);
+    const c = await b.call('POST', `${P}/requests/${id}/cancel`, { body: {}, headers: sameO });
+    assert.ok([200, 409].includes(c.status), String(c.status));   // 409 when the worker already took it
+  } finally { b.close(); }
+});
+
 test('request -> id + position, status, long-poll wait, list filters, cancel only while queued', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' }); w.branch('feat2', { 'two.js': 'y\n' });
   let release; const gate = new Promise((r) => { release = r; });
@@ -105,7 +125,7 @@ test('describe: the one-line texts', () => {
   const r = { id: 'int-1', branch: 'feat', target: 'main', sha: 'abcdef0123456789', state: 'merged' };
   assert.equal(describe(r), 'Integration int-1: merged feat into main at abcdef012345.');
   assert.match(describe({ ...r, state: 'deployed', deployed: { version: 'v3', env: 'env-a' } }), /deployed v3 to env-a\.$/);
-  assert.equal(describe({ ...r, state: 'returned', reason: 'tests red (exit 1)' }), 'Integration int-1 returned: tests red (exit 1).');
+  assert.equal(describe({ ...r, state: 'returned', reason: 'tests red (exit 1)' }), 'Integration int-1 returned: tests red (exit 1). Fix it on your branch and run integrate request again.');
 });
 
 // ---- the CLI ----
