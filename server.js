@@ -123,7 +123,7 @@ import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
-import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, shouldRefuse } from './api-extras.js';
+import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
 import { createVptLockStore } from './vpt-locks.js';
@@ -1083,6 +1083,11 @@ async function pollOnce() {
       contextLeft: t.contextLeft, model: t.model,
       lease: leaseFor(s.name, sessionNames),
       deployWait: deployWaitFor(s.name, sessionNames, stallOf(s.name)),
+      // Display-only loop-wait signals (isLoopWaiting in public/state.js): MiniMax/Codex footers that don't go through
+      // the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children. status.state stays raw for the
+      // manager / auto-answer logic; these fields flip a done session to working (green) in the UI only.
+      paneBackground: !offline && state === 'done' ? paneBackgroundOf(plain) : false,
+      scriptBusy: !offline && scriptBusyOf(p.pid, table),
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,
     };
