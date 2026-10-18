@@ -123,6 +123,7 @@ import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
+import { createCrashResumer } from './crash-resume.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
@@ -1135,6 +1136,35 @@ async function pollOnce() {
     v.claudeSessionId = c ? c.info.sessionId : null;
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
   }
+  // Record the last known agent for each interactive session (crash-resume.js). When the agent
+  // dies at idle we still have its sessionId / model / args, so we can resume it in place with
+  // the same flags. Only claude/codex/minimax count; bash / sleep / other panes are ignored.
+  const agentAt = now;
+  for (const [k, v] of Object.entries(status)) {
+    if (v.offline) continue;
+    if (v.agent !== 'claude' && v.agent !== 'codex' && v.agent !== 'minimax') continue;
+    const pane = panes.get(k);
+    if (!pane || !pane.pid) continue;
+    let args = null;
+    try {
+      const ap = agentPidFromTree(pane.pid, table);
+      if (ap) args = table.args.get(ap) || null;
+    } catch { /* table gone */ }
+    const prev = lastAgent.get(k);
+    // Keep the entry fresh while the agent is alive; only overwrite if the agent changed
+    // (different sessionId / different cmd) or we never had one. Never overwrite during a
+    // crash: if the process is already gone, v.agent is 'bash' and we skip the loop.
+    lastAgent.set(k, {
+      agent: v.agent,
+      claudeSessionId: v.claudeSessionId || prev?.claudeSessionId || null,
+      claudeName: prev?.claudeName || v.agentCmd || k,
+      tmuxName: k,
+      model: v.model || prev?.model || null,
+      args: args || prev?.args || null,
+      cwd: v.cwd || prev?.cwd || null,
+      at: agentAt,
+    });
+  }
   Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)
   for (const [k, v] of Object.entries(status)) { const rw = readyStore.chipFor(k, `${v.stall?.question || ''}\n${v.stall?.excerpt || ''}`); v.ready = rw && (rw.scope === 'session' || v.stall) ? rw : null; }   // round 9 item 8: the window covering this session, for the chip
   for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
@@ -1391,6 +1421,41 @@ const parking = createParking({
   },
 });
 const pidAlive = async (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+// Crash auto-resume (crash-resume.js, 2026-10-18): a tmux pane whose interactive agent died
+// at idle with a crash marker (Aborted / Segfault / Killed / core dumped / FATAL ERROR) is
+// restarted in place with the same flags the parking resume / dashboard Resume use. We keep
+// a small per-session "last known agent" map (updated by pollOnce while the agent is alive)
+// so the decision survives the agent's death; the resumer only fires when the pane still
+// shows the crash marker, the session had a live agent a moment ago, and we are not
+// throttled (30 min/session).
+const lastAgent = new Map();        // name -> { agent, claudeSessionId, claudeName, model, args, cwd, at }
+const lastCrashResumeAt = new Map(); // name -> ms epoch of the last auto-resume for this session
+const crashResumer = createCrashResumer({
+  getState: async (name) => {
+    const panes = await listPanes();
+    const pane = panes.get(name);
+    if (!pane || !pane.pid) return null;
+    const table = await processTable();
+    const ag = agentFromTree(pane.pid, table);
+    const cur = ag ? ag.agent : (SHELLS.has(pane.cmd) || pane.cmd === 'sleep' || !pane.cmd ? 'bash' : 'other');
+    const isBusy = scriptBusyOf(pane.pid, table) && !interactiveAgentOf(pane.pid, table);
+    const plain = plainLines(await capturePane(name, PANE_LINES));
+    const la = lastAgent.get(name);
+    return { plain, agent: cur, scriptBusy: isBusy, lastAgentAgent: la ? la.agent : null };
+  },
+  lastAgent,
+  lastResumeAt: lastCrashResumeAt,
+  sessionMeta,
+  base: { claude: AGENT_CMDS.claude, minimax: AGENT_CMDS.minimax, codex: AGENT_CMDS.codex },
+  tmux: {
+    sendText: (name, text) => exec(TMUX, ['send-keys', '-t', `=${name}:`, '-l', '--', text]),
+    sendEnter: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']),
+    sendCtrlC: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'C-c']),
+  },
+  managerEvents,
+  log: (kind, name, extra) => logEvent({ type: 'crash-resume', kind, session: name, extra: String(extra || '').slice(0, 200) }),
+});
 
 async function parkFacts(name) {
   if (!(await sessionExists(name))) throw httpError(404, 'no such session');
@@ -2279,6 +2344,16 @@ async function tick() {
     broadcastStatus({ type: 'status', status });
   } catch (err) {
     console.error('[poll]', err.message);
+  }
+  // Crash auto-resume (crash-resume.js): one pass per tick, every session. Cheap: pure
+  // helper decides; IO only when a session actually crashed and we send the resume command.
+  // Runs after the broadcast so the UI shows the crash marker for one tick before the agent
+  // comes back; a failed resumer must never break the poll loop.
+  try {
+    const names = Object.keys(latest?.status || {});
+    if (names.length) await crashResumer.tick(names);
+  } catch (err) {
+    console.error('[crash-resume]', err.message);
   }
 }
 
