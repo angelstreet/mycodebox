@@ -148,7 +148,9 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
     },
   };
 }
-// Self-deploy restart. The lane runs inside the service that scripts/safe-restart.sh restarts, and the unit sets
+// Self-deploy restart. ONLY scripts/safe-restart.sh restarts anything (it restarts the systemd service and waits for idle);
+// tmux is used solely to launch that script outside our cgroup, never to kill or respawn a session or process.
+// The lane runs inside the service that scripts/safe-restart.sh restarts, and the unit sets
 // NoNewPrivileges, so the script's `sudo systemctl restart` cannot run from a child of ours. The tmux server lives outside
 // the service (its own unit and cgroup, no NoNewPrivileges) and is where sessions already run safe-restart: `run-shell -b`
 // runs it there, so it outlives our stop and may sudo. Output goes to `log`, the exit code to `exit` (atomic rename).
@@ -178,11 +180,9 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
-  deploys = null, mergeEval = defaultMergeEval, notify = () => {}, now = () => Date.now(), log = () => {},
-  pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), health = defaultHealth(),
-  restartGraceMs = 90_000, healthTries = 24 } = {}) {
+  deploys = null, mergeEval = defaultMergeEval, notify = () => {}, managerItem = () => {}, now = () => Date.now(), log = () => {},
+  pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart() } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
-  const boot = randomBytes(8).toString('hex');   // this process: a self deploy that finds another boot was restarted under it
   const dir = path.join(stateDir, 'integration');
   const file = path.join(dir, 'requests.jsonl');
   const reqs = new Map();          // id -> request (insertion = enqueue order)
@@ -195,8 +195,9 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   const repoCfg = (key) => cfgAll().repos[key] || null;
   const iso = () => new Date(now()).toISOString();
   const persist = (r) => { try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.appendFileSync(file, `${JSON.stringify(r)}\n`, { mode: 0o600 }); } catch (e) { log('persist failed', e.message); } };
+  let lastTold = Promise.resolve();   // the latest notify call, so a self deploy can let the notice out before its restart
   const emit = (r, event) => {
-    try { Promise.resolve(notify(view(r), { at: iso(), ...event })).catch((e) => log('notify failed', e?.message)); } catch (e) { log('notify failed', e?.message); }
+    try { lastTold = Promise.resolve(notify(view(r), { at: iso(), ...event })).catch((e) => log('notify failed', e?.message)); } catch (e) { log('notify failed', e?.message); lastTold = Promise.resolve(); }
   };
   function view(r) {
     const o = structuredClone(r);
@@ -439,9 +440,10 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
 
   // ---- self deploy: the repo of this very service (deploy.kind 'self') ------------------------------------------------
   // After the merge is on the target: refuse on tracked edits in the live checkout, pull --ff-only, npm ci when the lockfile
-  // changed, node --check, then safe-restart.sh launched outside the service. The `restarting` phase (expected sha, this
-  // boot) is persisted BEFORE the launch: the restart ends this process and the next one finishes the request
-  // (resumeSelfDeploy). Nothing is reset or reverted here; a failure after the pull carries a rollback line for the manager.
+  // changed, node --check, then the request is marked deployed and persisted, and only then safe-restart.sh is launched
+  // (outside the service). A request marked done is never resumed. Nothing is reset or reverted here; a failure after the
+  // pull carries a rollback line for the manager. A refusal or failure is a deploy_failed final state, which the notify
+  // layer raises as a high-priority manager event.
   const short = (s) => String(s || '').slice(0, 12);
   const restartFiles = (r) => ({ log: path.join(dir, 'restart', `${r.id}.log`), exit: path.join(dir, 'restart', `${r.id}.exit`) });
   const readText = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
@@ -456,6 +458,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     sd.phase = 'done'; sd.outcome = 'deployed';
     r.deployed = { id: null, version: short(sd.newSha), env: 'live', scope: 'self', previous: sd.prevSha };
     transition(r, 'deployed', { reason: null, rollback: sd.prevSha !== sd.newSha ? sd.rollback : null });
+    return lastTold;
   }
 
   async function selfDeploy(r, c) {
@@ -504,58 +507,24 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     });
     if (!syn.ok) return selfFail(r, 'check_failed', `node --check server.js FAILED in ${live} at ${short(sd.newSha)}: NOT restarted, the service still runs ${short(sd.prevSha)}`, syn.tail);
 
-    // the restart ends this process: everything the next one needs is on disk before the launch
+    // The restart is the LAST step and ends this process: the request is marked done (deployed), persisted and told (feed,
+    // manager event, session notice) first, so the restart can neither lose nor re-run it. A launch failure is recorded as
+    // `restartError` and raised as a manager item; the outcome stays `deployed`.
     const f = restartFiles(r);
     fs.mkdirSync(path.dirname(f.log), { recursive: true, mode: 0o700 });
     fs.rmSync(f.exit, { force: true }); fs.rmSync(f.log, { force: true });
-    Object.assign(sd, { phase: 'restarting', expectedSha: sd.newSha, boot, restartAt: iso(), ...f });
-    persist(r);
-    const la = await step(r, 'deploy-restart', async () => {
-      const x = await Promise.resolve(restart({ cwd: live, waitMin: c.deploy.restartWaitMin, log: f.log, exit: f.exit })).catch((e) => ({ ok: false, error: e?.message }));
-      return { ok: x?.ok === true, tail: x?.ok ? `safe-restart launched, expecting ${short(sd.newSha)}` : String(x?.error || 'launch failed') };
-    });
-    if (!la.ok) return selfFail(r, 'restart_failed', `could not launch scripts/safe-restart.sh: ${la.tail}. The checkout is at ${short(sd.newSha)}, the service still runs ${short(sd.prevSha)}`, la.tail);
-    await awaitRestart(r, c);
-  }
-
-  // This process is still alive after the launch: safe-restart either refused (its own text is the reason) or is about to stop us.
-  async function awaitRestart(r, c) {
-    const sd = r.selfDeploy;
-    const deadline = now() + (c.deploy.restartWaitMin + 3) * 60_000;
-    let okAt = null;
-    for (;;) {
-      if (stopped) throw new Ret('lane stopped');   // the restart's SIGTERM: the next boot resumes the request
-      const code = readText(sd.exit);
-      if (code != null && code.trim() !== '0') {
-        const out = readText(sd.log) || '';
-        const why = out.split('\n').map((l) => l.trim()).filter((l) => l && !/^deploy work pending/.test(l)).slice(-3).join(' / ') || 'no output';
-        return selfFail(r, 'restart_refused', `scripts/safe-restart.sh did not restart (exit ${code.trim()}): ${why}. The checkout is at ${short(sd.newSha)}, the service still runs ${short(sd.prevSha)}`, out);
-      }
-      if (code != null && okAt == null) okAt = now();
-      if (okAt != null && now() - okAt >= restartGraceMs) return selfFail(r, 'restart_failed', 'scripts/safe-restart.sh reported a restart but this service kept running', readText(sd.log) || '');
-      if (now() >= deadline) return selfFail(r, 'restart_failed', `scripts/safe-restart.sh did not finish in ${c.deploy.restartWaitMin + 3} min`, readText(sd.log) || '');
-      await sleep(Math.min(pollMs, 2000));
-    }
-  }
-
-  // A boot that finds a request `restarting` (another process launched the restart): deployed when the live checkout is at
-  // the expected sha and this service answers its health check; otherwise deploy_failed with what was found.
-  async function resumeSelfDeploy(r, c) {
-    const sd = r.selfDeploy;
-    if (sd.boot === boot) { await awaitRestart(r, c); return; }   // same process: the lane was only stopped and started
-    const v = await step(r, 'deploy-verify', async () => {
-      const head = await rev(r, c, 'HEAD', sd.live);
-      let up = false;
-      for (let i = 0; i < healthTries && !up; i++) {
-        up = (await Promise.resolve(health()).catch(() => false)) === true;
-        if (!up) { if (stopped) throw new Ret('lane stopped'); await sleep(Math.min(pollMs, 5000)); }
-      }
-      return { ok: head === sd.expectedSha && up, tail: readText(sd.log) || '', info: { head, up } };
-    });
-    if (v.ok) return selfDone(r);
-    const { head } = v.info || {};
-    if (head !== sd.expectedSha) return selfFail(r, 'deploy_failed', `after the restart the live checkout is at ${short(head) || 'an unreadable HEAD'}, expected ${short(sd.expectedSha)}`, v.tail);
-    return selfFail(r, 'deploy_failed', 'the service did not answer /api/health after the restart', v.tail);
+    Object.assign(sd, { expectedSha: sd.newSha, restartAt: iso(), restart: 'scheduled', note: 'restart scheduled via safe-restart', ...f });
+    const told = selfDone(r);
+    await Promise.race([told, new Promise((res) => setTimeout(res, 15_000).unref?.())]);   // the notice goes out before the service stops
+    const x = await Promise.resolve(restart({ cwd: live, waitMin: c.deploy.restartWaitMin, log: f.log, exit: f.exit })).catch((e) => ({ ok: false, error: e?.message }));
+    if (x?.ok === true) return;
+    const err = redact(String(x?.error || 'launch failed')).slice(0, 300);
+    sd.restart = 'launch_failed'; r.restartError = err; r.updatedAt = iso(); persist(r);
+    log('self deploy restart launch failed', r.id, err);
+    try {
+      Promise.resolve(managerItem({ key: `integration:${r.id}:restart-error`, title: `Integration ${r.id}: live restart NOT launched`, priority: 'high',
+        body: `${short(sd.newSha)} is pulled and checked in ${live} but scripts/safe-restart.sh could not be launched (${err}). The service still runs ${short(sd.prevSha)}; restart it with scripts/safe-restart.sh.`.slice(0, 600), url: '/?integration=1' })).catch((e) => log('manager item failed', e?.message));
+    } catch (e) { log('manager item failed', e?.message); }
   }
 
   async function processRequest(r) {
@@ -564,7 +533,6 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     if (r.state === 'queued') { r.startedAt = iso(); r.steps = []; r.attempt = 0; transition(r, 'running', {}, {}); }
     else { r.resumed = (r.resumed || 0) + 1; emit(r, { kind: 'resumed', state: 'running', final: false }); }
     try {
-      if (r.selfDeploy?.phase === 'restarting') { await resumeSelfDeploy(r, c); return; }
       if (!r.pushed) {
         // restart check: a recorded merge may already be on the remote (the push step finished but was not recorded)
         if (r.mergeSha) {

@@ -124,7 +124,7 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
-import { createIntegrationLane, createTmuxRestart, defaultHealth } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
+import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
@@ -2310,8 +2310,8 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
     wait: (id) => integrationHooks.deploys.wait(id),
     find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },
   notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a),
-  // deploy.kind 'self': safe-restart.sh runs in the tmux server (outside this unit), the resumed request checks our own health
-  restart: createTmuxRestart({ tmux: TMUX }), health: defaultHealth(`http://${/^[0:.]+$/.test(HOST) ? '127.0.0.1' : HOST}:${PORT}`) });
+  // deploy.kind 'self': safe-restart.sh is launched via the tmux server (outside this unit) as the last step, after the request is done
+  restart: createTmuxRestart({ tmux: TMUX }), managerItem: (e) => managerEvents.record(e) });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
   remoteResolve: (name, client) => remote.resolveFor(name, client) });   // `remote` is created below; called per request only

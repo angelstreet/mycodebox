@@ -50,7 +50,7 @@ export function integrationText(r) {
   const sd = n.selfDeploy && typeof n.selfDeploy === 'object' ? n.selfDeploy : null;
   switch (n.state) {
     case 'merged': return `Integration ${id}: merged ${where(n)}.`;
-    case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)}).${rollback}`;
+    case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)})${sd.note ? `, ${one(sd.note)}` : ''}.${rollback}`;
       return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}.`;
     case 'returned': {
       const t = tailLines(n.tail);

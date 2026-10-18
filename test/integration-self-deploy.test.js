@@ -31,31 +31,49 @@ function mk(w, { stateDir = mkdtempSync(join(tmpdir(), 'lane-self-')), restart, 
 const until = async (fn, ms = 120000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 5)); } throw new Error('timed out waiting'); };
 const lastRecord = (stateDir, id) => readFileSync(join(stateDir, 'integration', 'requests.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.id === id).at(-1);
 
-test('merge, pull, check, restart: `restarting` is on disk before the launch, the next boot marks it deployed', async () => {
+test('merge, pull, check: the request is done, persisted and told BEFORE the restart launcher runs', async () => {
   const w = world(); w.branch('feat', { 'new.js': 'x\n' });
   writeFileSync(join(w.live, 'untracked.log'), 'fine\n');   // untracked files never block a deploy
   const prev = w.liveHead();
-  let seenOnDisk = null;
-  const a = mk(w, { restart: (o) => { seenOnDisk = lastRecord(a.stateDir, id).selfDeploy; return { ok: true }; } });
+  let onDisk = null, told = null;
+  const a = mk(w, { restart: () => { onDisk = lastRecord(a.stateDir, id); told = a.events.map((x) => x.e.kind + ':' + x.e.state); return { ok: true }; } });
   const id = a.lane.enqueue({ repo: 'me', branch: 'feat', session: 's1' }).id;
-  // the restart would end this process: stop the lane once it is restarting, as the SIGTERM does
-  await until(() => a.launches.length && a.lane.get(id).selfDeploy?.phase === 'restarting');
-  a.lane.stop(); await a.lane.idle();
-  assert.equal(seenOnDisk.phase, 'restarting'); assert.equal(seenOnDisk.expectedSha, w.main()); assert.equal(seenOnDisk.prevSha, prev);
-  assert.equal(a.launches[0].cwd, w.live); assert.equal(a.launches[0].waitMin, 0);
+  const r = await a.lane.wait(id, 120000);
+  await until(() => a.launches.length);
+  assert.equal(onDisk.state, 'deployed'); assert.equal(onDisk.selfDeploy.outcome, 'deployed'); assert.equal(onDisk.selfDeploy.phase, 'done');
+  assert.equal(onDisk.selfDeploy.newSha, w.main()); assert.equal(onDisk.selfDeploy.prevSha, prev); assert.match(onDisk.selfDeploy.note, /restart scheduled via safe-restart/);
+  assert.ok(told.includes('final:deployed'), `event emitted before launch: ${told}`);
+  assert.equal(a.launches.length, 1); assert.equal(a.launches[0].cwd, w.live); assert.equal(a.launches[0].waitMin, 0);
   assert.equal(w.liveHead(), w.main(), 'the live checkout was pulled');
-  assert.equal(lastRecord(a.stateDir, id).state, 'running');
-  assert.deepEqual(a.lane.get(id).steps.map((s) => s.name).filter((n) => /^(precheck|push|deploy-)/.test(n)), ['precheck', 'push', 'deploy-check', 'deploy-pull', 'deploy-syntax', 'deploy-restart']);
-
-  const b = mk(w, { stateDir: a.stateDir });
-  const r = await b.lane.wait(id, 120000);
-  assert.equal(r.state, 'deployed', JSON.stringify(r));
-  assert.equal(r.selfDeploy.outcome, 'deployed'); assert.equal(r.selfDeploy.newSha, w.main()); assert.equal(r.selfDeploy.prevSha, prev);
-  assert.equal(b.launches.length, 0, 'the resumed request does not restart again');
+  assert.equal(r.state, 'deployed', JSON.stringify(r)); assert.equal(r.restartError, undefined);
+  assert.deepEqual(r.steps.map((s) => s.name).filter((n) => /^(precheck|push|deploy-)/.test(n)), ['precheck', 'push', 'deploy-check', 'deploy-pull', 'deploy-syntax']);
   const text = integrationText(r);
-  assert.match(text, new RegExp(`deployed live ghosty at ${w.main().slice(0, 12)} \\(was ${prev.slice(0, 12)}\\)\\.`));
+  assert.match(text, new RegExp(`deployed live ghosty at ${w.main().slice(0, 12)} \\(was ${prev.slice(0, 12)}\\), restart scheduled via safe-restart\\.`));
   assert.match(text, new RegExp(`Rollback: git -C ${w.live} reset --hard ${prev.slice(0, 12)}`));
-  assert.equal(b.events.at(-1).e.kind, 'final');
+});
+
+test('a restart after done never re-runs the request: a new boot leaves a deployed request alone', async () => {
+  const w = world(); w.branch('feat', { 'new.js': 'x\n' });
+  const a = mk(w);
+  const id = a.lane.enqueue({ repo: 'me', branch: 'feat' }).id;
+  await a.lane.wait(id, 120000); await until(() => a.launches.length);
+  a.lane.stop(); await a.lane.idle();   // the restart's SIGTERM
+  const b = mk(w, { stateDir: a.stateDir });
+  await tick(); await b.lane.idle();
+  assert.equal(b.launches.length, 0); assert.equal(b.lane.get(id).state, 'deployed'); assert.equal(b.lane.get(id).resumed, undefined);
+  assert.equal(b.events.length, 0);
+});
+
+test('launching safe-restart fails: restartError recorded, manager item raised, outcome stays deployed', async () => {
+  const w = world(); w.branch('feat', { 'new.js': 'x\n' });
+  const items = [];
+  const m = mk(w, { restart: () => ({ ok: false, error: 'no server running on the tmux socket' }), lane: { managerItem: (e) => items.push(e) } });
+  const r = await m.lane.wait(m.lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
+  await until(() => items.length);
+  assert.equal(r.state, 'deployed');
+  const rec = lastRecord(m.stateDir, r.id);
+  assert.equal(rec.state, 'deployed'); assert.match(rec.restartError, /no server running/); assert.equal(rec.selfDeploy.outcome, 'deployed');
+  assert.match(items[0].title, /restart NOT launched/); assert.equal(items[0].priority, 'high'); assert.match(items[0].body, /safe-restart\.sh/);
 });
 
 test('tracked edits in the live checkout: deploy refused with the file list, nothing pulled or restarted, the merge stays', async () => {
@@ -63,9 +81,10 @@ test('tracked edits in the live checkout: deploy refused with the file list, not
   writeFileSync(join(w.live, 'server.js'), 'export const up = 2; // hand edit\n');
   writeFileSync(join(w.live, 'untracked.txt'), 'x\n');
   const prev = w.liveHead();
-  const { lane, launches } = mk(w);
+  const { lane, launches, events } = mk(w);
   const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'deploy_refused');
+  assert.equal(events.at(-1).e.kind, 'final'); assert.equal(events.at(-1).e.state, 'deploy_failed');   // notify turns this into the high-priority manager event
   assert.match(r.reason, /uncommitted changes to tracked files: server\.js$/); assert.doesNotMatch(r.reason, /untracked/);
   assert.equal(w.liveHead(), prev); assert.equal(launches.length, 0); assert.equal(r.rollback, null);
   assert.equal(w.show('main', 'new.js'), 'x\n');
@@ -107,45 +126,9 @@ test('lockfile changed: npm ci runs in the live checkout before the check', asyn
   const w = world(); w.branch('feat', { 'package-lock.json': '{}\n' });
   const real = createDefaultRun(), cmds = [];
   const run = (cmd, o) => { cmds.push([cmd, o.cwd]); return cmd.startsWith('npm ci') ? Promise.resolve({ code: 0, out: '' }) : real(cmd, o); };
-  const { lane } = mk(w, { run, restart: (o) => { writeFileSync(o.exit, '1\n'); writeFileSync(o.log, 'NOT restarting: fake\n'); return { ok: true }; } });
+  const { lane } = mk(w, { run });
   await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.ok(cmds.some(([c, cwd]) => c === 'npm ci --no-audit --no-fund' && cwd === w.live), JSON.stringify(cmds));
-});
-
-test('safe-restart refuses: its own text is the reason; reported a restart but still alive: restart_failed', async () => {
-  const w = world(); w.branch('feat', { 'new.js': 'x\n' });
-  const refuse = (o) => { writeFileSync(o.log, 'deploy work pending, waiting...\nNOT restarting: deploy work is running or can start automatically\nwait for completion\n'); writeFileSync(o.exit, '1\n'); return { ok: true }; };
-  const { lane } = mk(w, { restart: refuse });
-  const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
-  assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'restart_refused');
-  assert.match(r.reason, /safe-restart\.sh did not restart \(exit 1\): NOT restarting: deploy work is running/); assert.doesNotMatch(r.reason, /pending/);
-  assert.ok(r.rollback);
-
-  const w2 = world(); w2.branch('feat', { 'new.js': 'x\n' });
-  const m = mk(w2, { restart: (o) => { writeFileSync(o.exit, '0\n'); return { ok: true }; }, lane: { restartGraceMs: 20 } });
-  const r2 = await m.lane.wait(m.lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
-  assert.equal(r2.state, 'deploy_failed'); assert.equal(r2.selfDeploy.outcome, 'restart_failed'); assert.match(r2.reason, /kept running/);
-
-  const w3 = world(); w3.branch('feat', { 'new.js': 'x\n' });
-  const m3 = mk(w3, { restart: () => ({ ok: false, error: 'no server running on /tmp/tmux-0/default' }) });
-  const r3 = await m3.lane.wait(m3.lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
-  assert.equal(r3.selfDeploy.outcome, 'restart_failed'); assert.match(r3.reason, /could not launch .*no server running/);
-});
-
-test('resumed after the restart but the live HEAD is not the expected sha, or the service does not answer: deploy_failed', async () => {
-  for (const kase of ['head', 'health']) {
-    const w = world(); w.branch('feat', { 'new.js': 'x\n' });
-    const prev = w.liveHead();
-    const a = mk(w);
-    const id = a.lane.enqueue({ repo: 'me', branch: 'feat' }).id;
-    await until(() => a.launches.length && a.lane.get(id).selfDeploy?.phase === 'restarting');
-    a.lane.stop(); await a.lane.idle();
-    if (kase === 'head') git(w.live, 'reset', '-q', '--hard', prev);   // someone moved the checkout during the restart
-    const b = mk(w, { stateDir: a.stateDir, health: async () => kase !== 'health', lane: { healthTries: 3 } });
-    const r = await b.lane.wait(id, 120000);
-    assert.equal(r.state, 'deploy_failed', kase);
-    assert.match(r.reason, kase === 'head' ? new RegExp(`live checkout is at ${prev.slice(0, 12)}, expected ${w.main().slice(0, 12)}`) : /did not answer \/api\/health/);
-  }
 });
 
 test('config: kind self needs an absolute or ~/ live checkout; a --deploy scope is ignored (every merge deploys)', async () => {
@@ -156,7 +139,7 @@ test('config: kind self needs an absolute or ~/ live checkout; a --deploy scope 
     assert.equal(validateConfig({ repos: { me: { clone: '/x', deploy: bad } } }).errors.length, 1, JSON.stringify(bad));
   }
   const w = world(); w.branch('feat', { 'new.js': 'x\n' });
-  const { lane } = mk(w, { restart: (o) => { writeFileSync(o.exit, '2\n'); return { ok: true }; } });
+  const { lane } = mk(w);
   const q = lane.enqueue({ repo: 'me', branch: 'feat', deploy: 'full' });
   assert.equal(lane.get(q.id).deployScope, null);
   await lane.wait(q.id, 120000);
