@@ -50,7 +50,6 @@ export function classifyKey(key) {
   }
   if (head === 'quota') return { kind: 'quota', quotaKey: key.slice(colon + 1) };
   if (head === 'disk') return { kind: 'disk', diskPath: key.slice(colon + 1) };
-  if (head === 'health') return { kind: 'health', healthKey: key.slice(colon + 1) };   // health:disk / health:ram / health:session-crash-resumed:<name> (2026-10-18, crash auto-resume)
   if (head === 'jev') return { kind: 'jev', state: key.slice(colon + 1) };   // jev:down / jev:up (circuit breaker)
   if (head === 'lease') return { kind: 'lease', state: key.slice(colon + 1) };   // lease:released / expired / narrowed (never pushed)
   if (head === 'handoff') return { kind: 'handoff', state: key.slice(colon + 1) };   // handoff:overdue (never pushed)
@@ -115,7 +114,6 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     if (cls.kind === 'jev' || cls.kind === 'lease' || cls.kind === 'handoff') rec.state = cls.state;
     if (cls.kind === 'quota') rec.quotaKey = cls.quotaKey;
     if (cls.kind === 'disk') rec.diskPath = cls.diskPath;
-    if (cls.kind === 'health') rec.healthKey = cls.healthKey;
     if (cls.kind === 'credits') rec.creditsKey = cls.creditsKey;
     rec.title = typeof event.title === 'string' ? event.title : '';
     rec.body = typeof event.body === 'string' ? event.body.slice(0, 300) : '';
