@@ -1,7 +1,9 @@
 // Integration view (round 13, brief B): pure HTML builders for GET /api/integration/requests. No DOM, no fetch (unit tested).
 // Per repo: the queue (position, branch, session, requested deploy), the running request with its current step and live output tail, recent
 // results (state, sha, deploy version, reason). A queued request can be cancelled; the button is armed by a first tap (second tap in app.js).
-// request: { id, repo, branch, target, session, deploy, state, step, steps[{name,tail}], tail, sha, commitUrl, version, env, reason, position, createdAt, finishedAt }
+// request (lane): { id, repo, branch, target, session, deployScope, deployed { id, version, env, scope }, state, sha, reason,
+//                    endedAt ISO (final), createdAt/startedAt/updatedAt ISO, live { step, tail } while running, tail (final) };
+// the helpers below call `normRequest` so HTML builders see `deploy`, `version`, `env`, `finishedAt`, numeric timestamps and the live tail.
 import { icon } from './icons.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -9,6 +11,7 @@ export const FINAL = ['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy
 export const LABEL = { queued: 'queued', running: 'running', merged: 'merged', deployed: 'deployed', returned: 'returned', merged_ci_red: 'merged, CI red', deploy_failed: 'merged, deploy failed', cancelled: 'cancelled' };
 const BAD = ['returned', 'merged_ci_red', 'deploy_failed'];
 const TAIL_LINES = 12;
+const toMs = (s) => { const n = Date.parse(String(s || '')); return Number.isFinite(n) ? n : null; };
 
 export function fmtMin(min) {
   if (min == null || !Number.isFinite(min)) return '—';
@@ -18,6 +21,21 @@ export function fmtMin(min) {
 }
 export const fmtAgo = (ms, now) => (ms == null || !Number.isFinite(Number(ms)) ? '—' : `${fmtMin(Math.max(0, (now - Number(ms)) / 60000))} ago`);
 const sha12 = (s) => String(s || '').slice(0, 12);
+// Duplicated from integration-notify.js (the browser cannot import Node modules): keep in sync.
+export function normRequest(r) {
+  if (!r || typeof r !== 'object') return r;
+  const out = { ...r };
+  if (out.deploy == null) out.deploy = out.deployScope ?? null;
+  if (out.version == null) out.version = out.deployed?.version ?? null;
+  if (out.env == null) out.env = out.deployed?.env ?? null;
+  // finishedAt: number (ms) when endedAt is set, otherwise null — the view / own-jobs read it as a number or null.
+  out.finishedAt = out.finishedAt == null ? (out.endedAt ? toMs(out.endedAt) : null) : out.finishedAt;
+  for (const k of ['createdAt', 'startedAt', 'updatedAt']) {
+    if (typeof out[k] === 'string') out[k] = toMs(out[k]);
+  }
+  if (out.state === 'running' && out.live && typeof out.live.tail === 'string') out.tail = out.live.tail;
+  return out;
+}
 export const deployScope = (r) => (r.deploy && typeof r.deploy === 'object' ? r.deploy.scope : r.deploy) || null;
 export const rowsOf = (data) => (Array.isArray(data) ? data : Array.isArray(data?.requests) ? data.requests : []);
 
@@ -34,7 +52,8 @@ export function stepOf(r) {
 
 export function groupByRepo(requests) {
   const repos = new Map();
-  for (const r of requests) {
+  for (const raw of requests) {
+    const r = normRequest(raw);   // normalise once so the sort sees numeric timestamps and the row builders see deploy / version / env
     const k = r.repo || '(unknown repo)';
     if (!repos.has(k)) repos.set(k, { repo: k, queue: [], running: [], results: [] });
     const g = repos.get(k);
@@ -49,11 +68,8 @@ export function groupByRepo(requests) {
 
 const sessionHtml = (s) => (s ? `<a href="/?s=${encodeURIComponent(s)}" data-iv-open="${esc(s)}">${esc(s)}</a>` : '<span class="lv-k">no session</span>');
 const kv = (k, v) => `<span class="lv-c"><span class="lv-k">${k}</span> ${v}</span>`;
-const shaHtml = (r) => {
-  if (!r.sha) return '';
-  const label = `<code>${esc(sha12(r.sha))}</code>`;
-  return /^https?:\/\//.test(r.commitUrl || '') ? `<a href="${esc(r.commitUrl)}" target="_blank" rel="noopener">${label}</a>` : label;
-};
+// The lane never sets `commitUrl` (the view used to render it as a link); keep the field but render only the label.
+const shaHtml = (r) => r.sha ? `<code>${esc(sha12(r.sha))}</code>` : '';
 
 // armed: the request id whose cancel button was tapped once
 export function cancelHtml(r, armed) {
@@ -63,26 +79,29 @@ export function cancelHtml(r, armed) {
 }
 
 export function queueRowHtml(r, { armed = null } = {}) {
-  return `<div class="lv-row ticket" data-iv-id="${esc(r.id)}"><span class="lv-c lv-res"><b>#${esc(r.position ?? '?')} ${icon('git-branch', 13)} ${esc(r.branch)}</b><span class="lv-badge">${esc(r.id)}</span></span>`
-    + kv('session', sessionHtml(r.session)) + (deployScope(r) ? kv('deploy', esc(deployScope(r))) : '') + cancelHtml(r, armed) + '</div>';
+  const n = normRequest(r);
+  return `<div class="lv-row ticket" data-iv-id="${esc(n.id)}"><span class="lv-c lv-res"><b>#${esc(n.position ?? '?')} ${icon('git-branch', 13)} ${esc(n.branch)}</b><span class="lv-badge">${esc(n.id)}</span></span>`
+    + kv('session', sessionHtml(n.session)) + (deployScope(n) ? kv('deploy', esc(deployScope(n))) : '') + cancelHtml(n, armed) + '</div>';
 }
 
 export function runningRowHtml(r, now = Date.now()) {
-  const step = stepOf(r), tail = tailOf(r);
-  return `<div class="lv-row" data-iv-id="${esc(r.id)}"><span class="lv-c lv-res"><b>${icon('git-branch', 13)} ${esc(r.branch)} -> ${esc(r.target || '?')}</b><span class="lv-badge central">${esc(LABEL.running)}</span></span>`
-    + kv('step', `<b>${esc(step || 'starting')}</b>`) + kv('session', sessionHtml(r.session)) + (deployScope(r) ? kv('deploy', esc(deployScope(r))) : '')
-    + kv('started', esc(fmtAgo(r.startedAt ?? r.createdAt, now)))
+  const n = normRequest(r);
+  const step = stepOf(n), tail = tailOf(n);
+  return `<div class="lv-row" data-iv-id="${esc(n.id)}"><span class="lv-c lv-res"><b>${icon('git-branch', 13)} ${esc(n.branch)} -> ${esc(n.target || '?')}</b><span class="lv-badge central">${esc(LABEL.running)}</span></span>`
+    + kv('step', `<b>${esc(step || 'starting')}</b>`) + kv('session', sessionHtml(n.session)) + (deployScope(n) ? kv('deploy', esc(deployScope(n))) : '')
+    + kv('started', esc(fmtAgo(n.startedAt ?? n.createdAt, now)))
     + (tail ? `<pre class="iv-tail">${esc(tail)}</pre>` : '') + '</div>';
 }
 
 export function resultRowHtml(r, now = Date.now()) {
-  const bad = BAD.includes(r.state);
-  return `<div class="lv-row${bad ? ' idle' : ''} iv-${esc(r.state)}" data-iv-id="${esc(r.id)}"><span class="lv-c lv-res"><b>${icon('git-branch', 13)} ${esc(r.branch)}</b><span class="lv-badge ${bad ? 'legacy' : 'central'}">${esc(LABEL[r.state] || r.state)}</span></span>`
-    + kv('id', esc(r.id)) + kv('session', sessionHtml(r.session))
-    + (r.sha ? kv('sha', shaHtml(r)) : '')
-    + (r.version ? kv('deployed', `<a href="/?deploys=1">${esc(r.version)}</a>${r.env ? ` to ${esc(r.env)}` : ''}`) : '')
-    + kv('when', esc(fmtAgo(r.finishedAt ?? r.updatedAt, now)))
-    + (r.reason ? `<span class="lv-c lv-over">${bad ? icon('alert', 11) + ' ' : ''}${esc(r.reason)}</span>` : '') + '</div>';
+  const n = normRequest(r);
+  const bad = BAD.includes(n.state);
+  return `<div class="lv-row${bad ? ' idle' : ''} iv-${esc(n.state)}" data-iv-id="${esc(n.id)}"><span class="lv-c lv-res"><b>${icon('git-branch', 13)} ${esc(n.branch)}</b><span class="lv-badge ${bad ? 'legacy' : 'central'}">${esc(LABEL[n.state] || n.state)}</span></span>`
+    + kv('id', esc(n.id)) + kv('session', sessionHtml(n.session))
+    + (n.sha ? kv('sha', shaHtml(n)) : '')
+    + (n.version ? kv('deployed', `<a href="/?deploys=1">${esc(n.version)}</a>${n.env ? ` to ${esc(n.env)}` : ''}`) : '')
+    + kv('when', esc(fmtAgo(n.finishedAt ?? n.updatedAt, now)))
+    + (n.reason ? `<span class="lv-c lv-over">${bad ? icon('alert', 11) + ' ' : ''}${esc(n.reason)}</span>` : '') + '</div>';
 }
 
 export function viewHtml(data, { now = Date.now(), armed = null, limit = 8 } = {}) {

@@ -4,16 +4,26 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { classifyStall } from '../stall.js';
 import { jobRefs, waitsOnOwnJob, createOwnJobs } from '../own-jobs.js';
-import { integrationText, integrationNotice, createIntegrationNotify, tailLines } from '../integration-notify.js';
+import { integrationText, integrationNotice, createIntegrationNotify, tailLines, normRequest } from '../integration-notify.js';
 import { createIntegrationDeploys, requestArgv } from '../integration-deploys.js';
 import * as iv from '../public/integration-view.js';
 import { ICONS } from '../public/icons.js';
 
-const req = (o = {}) => ({ id: 'int-7f3a', repo: 'demo-repo', branch: 'feat/x', target: 'main', session: 'alpha', state: 'merged', sha: 'a'.repeat(40), ...o });
+// Lane shape (integration-lane.js enqueue + transitions): deployScope, deployed { id, version, env, scope }, ISO timestamps,
+// endedAt ISO on final, live { step, tail } while running, r.tail '' while running. `normRequest` maps these onto the
+// names the session / own-jobs / view read.
+const iso = (ms) => new Date(ms).toISOString();
+const req = (o = {}) => ({
+  id: 'int-7f3a', repo: 'demo-repo', branch: 'feat/x', target: 'main', session: 'alpha',
+  state: 'merged', sha: 'a'.repeat(40), deployScope: null, deployed: null, tail: '',
+  createdAt: iso(0), updatedAt: iso(0), startedAt: null, endedAt: null, ...o,
+});
 
 test('texts: merged, deployed, returned (+ tail), ci red, deploy failed', () => {
   assert.equal(integrationText(req()), 'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa.');
-  assert.equal(integrationText(req({ state: 'deployed', version: '1.2.3', env: 'env-a' })), 'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa, deployed 1.2.3 to env-a.');
+  // deployed: the lane sets `deployed = { id, version, env, scope }` only on a successful deploy
+  assert.equal(integrationText(req({ state: 'deployed', deployed: { id: 'd-1', version: '1.2.3', env: 'env-a', scope: 'full' } })),
+    'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa, deployed 1.2.3 to env-a.');
   const r = integrationText(req({ state: 'returned', reason: 'tests are red', tail: 'FAIL a\n\n  at b\nx\ny\nz\nw' }));
   assert.match(r, /^Integration int-7f3a returned: tests are red\. Fix it on your branch and run integrate request again\.\nFAIL a\n  at b\nx\ny\nz$/);
   assert.match(integrationText(req({ state: 'merged_ci_red', reason: 'unit failed' })), /CI is red.*manager decides/);
@@ -21,6 +31,49 @@ test('texts: merged, deployed, returned (+ tail), ci red, deploy failed', () => 
   assert.equal(integrationText(req({ state: 'running' })), null);
   assert.equal(tailLines('a\nb\nc', { lines: 2 }), 'a\nb');
   assert.equal(integrationNotice(req({ state: 'merged_ci_red' })).priority, 'high');
+});
+
+test('normRequest: maps lane fields onto session-side names (deployScope->deploy, deployed->{version,env}, endedAt ISO->finishedAt ms, ISO->ms for timestamps, live.tail->tail while running)', () => {
+  const now = 1_700_000_000_000;
+  const lane = {
+    id: 'int-9', repo: 'demo', branch: 'feat/n', target: 'main', session: 'alpha',
+    deployScope: 'server', deployed: { id: 'd-7', version: '3.0.0', env: 'env-a', scope: 'server' },
+    state: 'running', step: 'test', tail: '', live: { step: 'test', tail: 'l1\nl2' },
+    sha: 'b'.repeat(40), createdAt: iso(now - 60_000), updatedAt: iso(now - 1_000), startedAt: iso(now - 30_000), endedAt: null,
+  };
+  const n = normRequest(lane);
+  assert.equal(n.deploy, 'server');
+  assert.equal(n.version, '3.0.0'); assert.equal(n.env, 'env-a');
+  assert.equal(n.tail, 'l1\nl2', 'live.tail fills tail while running');
+  assert.equal(typeof n.createdAt, 'number'); assert.equal(typeof n.startedAt, 'number'); assert.equal(typeof n.updatedAt, 'number');
+  assert.equal(n.finishedAt, null);
+
+  // final state: endedAt ISO -> finishedAt ms; live ignored; tail kept as the lane set it
+  const final = { ...lane, state: 'returned', tail: 'tests red', live: undefined, reason: 'tests red', endedAt: iso(now) };
+  const f = normRequest(final);
+  assert.equal(f.finishedAt, now);
+  assert.equal(f.tail, 'tests red', 'final tail is not overwritten by stale live');
+  assert.equal(f.version, '3.0.0'); assert.equal(f.env, 'env-a'); assert.equal(f.deploy, 'server');
+
+  // already-normalised: no overwrite
+  const already = { ...lane, deploy: 'frontend', version: '9.9.9', env: 'env-z', finishedAt: now - 1 };
+  const a = normRequest(already);
+  assert.equal(a.deploy, 'frontend'); assert.equal(a.version, '9.9.9'); assert.equal(a.env, 'env-z'); assert.equal(a.finishedAt, now - 1);
+  assert.ok(!Number.isNaN(a.createdAt), 'timestamps still normalised to numbers');
+
+  // queued: position preserved, deployScope null -> deploy null, live not set
+  const queued = { ...lane, state: 'queued', deployScope: null, deployed: null, position: 2, tail: '', live: undefined };
+  const q = normRequest(queued);
+  assert.equal(q.deploy, null); assert.equal(q.position, 2); assert.equal(q.tail, '');
+});
+
+test('notify: log line records event.kind (the lane sets kind, not type)', async () => {
+  const logs = [];
+  const notify = createIntegrationNotify({ log: (r) => logs.push(r) });
+  await notify(req({ state: 'merged' }), { kind: 'final', state: 'merged' });
+  assert.ok(logs.some((l) => l.type === 'integration_notify' && l.event === 'final'));
+  await notify(req({ id: 'int-2', state: 'returned', reason: 'x', tail: 'y' }), { kind: 'final', state: 'returned' });
+  assert.ok(logs.some((l) => l.type === 'integration_notify' && l.event === 'final'));
 });
 
 function harness(over = {}) {
@@ -76,14 +129,19 @@ test('job refs: "integration <id>" in a STATUS line is the session\'s own job, n
 });
 
 test('own-jobs: an integration id wakes the session on a final state with the same text; not before', async () => {
-  let current = { id: 'int-7f3a', state: 'running', step: 'test', branch: 'feat/x', target: 'main' };
+  // the lane's request shape: deployScope, deployed { ... }, ISO timestamps, live { step, tail } while running, endedAt ISO on final
+  let current = { id: 'int-7f3a', repo: 'demo', branch: 'feat/x', target: 'main', session: 'alpha', deployScope: null, deployed: null,
+    state: 'running', step: 'test', steps: [{ name: 'test', startedAt: iso(1_000), endedAt: null, ok: null, tail: 'part of the run' }],
+    tail: '', live: { step: 'test', tail: 'part of the run' },
+    createdAt: iso(1_000), updatedAt: iso(1_000), startedAt: iso(1_000), endedAt: null, sha: 'a'.repeat(40), reason: null };
   const sent = [];
-  const oj = createOwnJobs({ now: () => 1_000, integrationState: async (id) => (id === 'int-7f3a' ? current : null), send: async (s, t) => { sent.push([s, t]); } });
+  const oj = createOwnJobs({ now: () => 2_000, integrationState: async (id) => (id === 'int-7f3a' ? current : null), send: async (s, t) => { sent.push([s, t]); } });
   const w = await oj.watch('alpha', { text: 'integration int-7f3a' });
   assert.equal(w.kind, 'integration'); assert.equal(w.label, 'integration int-7f3a'); assert.equal(w.unseen, false);
   assert.deepEqual(await oj.tick(), []);
   assert.match(await oj.progressOf('alpha'), /integration int-7f3a is running \(test\)/);
-  current = { ...current, state: 'returned', reason: 'tests are red', tail: 'FAIL x' };
+  // final: the lane sets endedAt ISO and clears live; own-jobs normalises via normRequest
+  current = { ...current, state: 'returned', reason: 'tests are red', tail: 'FAIL x', endedAt: iso(2_000), updatedAt: iso(2_000), live: undefined };
   const woke = await oj.tick();
   assert.equal(woke.length, 1);
   assert.equal(sent[0][1], integrationText(current));
@@ -133,34 +191,38 @@ test('deploy adapter: a failed deploy, a timeout and a vanished id', async () =>
 });
 
 const now = 10_000_000;
-const rq = (o) => ({ id: 'int-1', repo: 'demo-repo', branch: 'feat/a', target: 'main', session: 'alpha', state: 'queued', createdAt: now - 60000, ...o });
+const rq = (o) => ({ id: 'int-1', repo: 'demo-repo', branch: 'feat/a', target: 'main', session: 'alpha', deployScope: null, deployed: null,
+  state: 'queued', tail: '', createdAt: iso(now - 60_000), updatedAt: iso(now - 60_000), startedAt: null, endedAt: null, ...o });
 
 test('view: per repo queue by position, running step with output tail, results with sha, version and reason', () => {
+  // the lane shape: deployScope -> deploy in the view; deployed { id, version, env, scope } -> version, env; live.tail -> tail while running; endedAt ISO -> finishedAt ms
   const data = { requests: [
-    rq({ id: 'q2', position: 2, branch: 'feat/b', deploy: 'server' }), rq({ id: 'q1', position: 1 }),
-    rq({ id: 'r1', state: 'running', step: 'test', tail: 'l1\nl2 <b>x</b>' }),
-    rq({ id: 'd1', state: 'deployed', sha: 'c'.repeat(40), version: '2.0.1', env: 'env-a', finishedAt: now - 120000, commitUrl: 'https://example.test/c/1' }),
-    rq({ id: 'x1', state: 'returned', reason: 'tests are red', finishedAt: now - 1000 }),
+    rq({ id: 'q2', position: 2, branch: 'feat/b', deployScope: 'server' }), rq({ id: 'q1', position: 1 }),
+    rq({ id: 'r1', state: 'running', step: 'test', tail: '', live: { step: 'test', tail: 'l1\nl2 <b>x</b>' } }),
+    rq({ id: 'd1', state: 'deployed', sha: 'c'.repeat(40), deployed: { id: 'd-1', version: '2.0.1', env: 'env-a', scope: 'server' }, endedAt: iso(now - 120_000), updatedAt: iso(now - 120_000) }),
+    rq({ id: 'x1', state: 'returned', reason: 'tests are red', tail: 'FAIL x', endedAt: iso(now - 1_000), updatedAt: iso(now - 1_000) }),
     rq({ id: 'o1', repo: 'other-repo', state: 'merged', sha: 'd'.repeat(40) }) ] };
   const h = iv.viewHtml(data, { now });
   assert.ok(h.indexOf('demo-repo') < h.indexOf('other-repo'));
   assert.ok(h.indexOf('data-iv-id="q1"') < h.indexOf('data-iv-id="q2"'));
   assert.match(h, /step<\/span> <b>test<\/b>/);
   assert.match(h, /<pre class="iv-tail">l1\nl2 &lt;b&gt;x&lt;\/b&gt;<\/pre>/);
-  assert.match(h, /<a href="https:\/\/example\.test\/c\/1"[^>]*><code>cccccccccccc<\/code>/);
+  assert.match(h, /<code>cccccccccccc<\/code>/);
+  assert.doesNotMatch(h, /href="[^"]*">\s*<code>cccccccccccc/, 'lane does not set commitUrl; sha is rendered as a label, not a link');
   assert.match(h, /2\.0\.1<\/a> to env-a/);
   assert.match(h, /tests are red/);
   assert.ok(h.indexOf('data-iv-id="x1"') < h.indexOf('data-iv-id="d1"'), 'newest result first');
   assert.match(h, /data-iv-cancel="q1"/); assert.doesNotMatch(h, /data-iv-cancel="r1"|data-iv-cancel="d1"/, 'only queued requests can be cancelled');
 });
 
-test('view: cancel is armed by a first tap; escaping; empty and error states; unsafe commit urls are not linked', () => {
+test('view: cancel is armed by a first tap; escaping; empty and error states; js commit urls are not linked', () => {
   assert.deepEqual(iv.tap(null, 'q1'), { arm: 'q1', fire: null });
   assert.deepEqual(iv.tap('q1', 'q1'), { arm: null, fire: 'q1' });
   assert.deepEqual(iv.tap('q1', 'q2'), { arm: 'q2', fire: null });
   assert.equal(iv.actionRequest('q1').url, '/api/integration/requests/q1/cancel');
   assert.equal(iv.actionRequest('../x'), null);
   assert.match(iv.viewHtml({ requests: [rq({ id: 'q1', position: 1 })] }, { armed: 'q1', now }), /tap again to cancel/);
+  // escaping: even when commitUrl slips in (the lane never sets it), it must not be rendered as a link
   const evil = iv.viewHtml({ requests: [rq({ branch: '<img src=x onerror=1>', session: '"><script>', state: 'merged', sha: 'e'.repeat(40), commitUrl: 'javascript:alert(1)', reason: '<b>' })] }, { now });
   assert.doesNotMatch(evil, /<img|<script|href="javascript/);
   assert.match(iv.viewHtml({ requests: [] }, { now }), /No integration requests/);

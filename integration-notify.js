@@ -3,12 +3,15 @@
 // stopped (done, no draft, no menu) through the guarded send (by 'integration'). A mac: session gets (1) and (2) only: the Mac hook channel answers stops.
 // The same text wakes a session whose STATUS names the request (own-jobs.js), so the two paths never disagree.
 //
-// request (lane): { id, repo, branch, target, session, state, sha, reason, tail, version, env, deploy }; unknown fields are ignored.
+// request (lane): { id, repo, branch, target, session, deployScope, deployed { id, version, env, scope }, state, sha, reason, tail,
+//                    endedAt (ISO, on final), createdAt/startedAt/updatedAt (ISO), live { step, tail } (while running) };
+// the session side reads different names — `normRequest(r)` maps the lane shape onto the names below.
 export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled'];
 export const isFinal = (state) => FINAL_STATES.includes(state);
 
 const one = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const sha12 = (sha) => String(sha || '').slice(0, 12);
+const toMs = (s) => { const n = Date.parse(String(s || '')); return Number.isFinite(n) ? n : null; };
 // the first lines of the failing output: a few non-empty lines, bounded
 export function tailLines(tail, { lines = 5, chars = 500 } = {}) {
   const t = (Array.isArray(tail) ? tail.join('\n') : String(tail ?? '')).split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim()).slice(0, lines).join('\n');
@@ -16,20 +19,42 @@ export function tailLines(tail, { lines = 5, chars = 500 } = {}) {
 }
 const where = (r) => `${one(r.branch) || '?'} into ${one(r.target) || 'the target'}${r.sha ? ` at ${sha12(r.sha)}` : ''}`;
 
+// The lane stores some fields under one name and the session side reads them under another (round 13 brief B review).
+// Map the lane shape onto the names the session / own-jobs / view expect; do not overwrite a value the caller already set.
+export function normRequest(r) {
+  if (!r || typeof r !== 'object') return r;
+  const out = { ...r };
+  // deploy scope: the lane stores `deployScope` (and clears `deploy`); the session reads `deploy`.
+  if (out.deploy == null) out.deploy = out.deployScope ?? null;
+  // deployed version / env: only set when the deploy actually completed (the lane sets `deployed = { id, version, env, scope }`).
+  if (out.version == null) out.version = out.deployed?.version ?? null;
+  if (out.env == null) out.env = out.deployed?.env ?? null;
+  // finishedAt: number (ms) when endedAt is set, otherwise null — the view / own-jobs read it as a number or null.
+  out.finishedAt = out.finishedAt == null ? (out.endedAt ? toMs(out.endedAt) : null) : out.finishedAt;
+  // timestamps: ISO -> ms (numbers, so fmtAgo and sort compare).
+  for (const k of ['createdAt', 'startedAt', 'updatedAt']) {
+    if (typeof out[k] === 'string') out[k] = toMs(out[k]);
+  }
+  // live output: `r.tail` is '' while running; the running step's output lives in `r.live.tail`.
+  if (out.state === 'running' && out.live && typeof out.live.tail === 'string') out.tail = out.live.tail;
+  return out;
+}
+
 // -> the line for the session (and the own-job wake), or null when the state is not final
 export function integrationText(r) {
   if (!r || !isFinal(r.state)) return null;
-  const id = one(r.id);
-  const reason = one(r.reason) || 'no reason recorded';
-  switch (r.state) {
-    case 'merged': return `Integration ${id}: merged ${where(r)}.`;
-    case 'deployed': return `Integration ${id}: merged ${where(r)}, deployed ${one(r.version) || 'the new version'} to ${one(r.env) || 'the environment'}.`;
+  const n = normRequest(r);
+  const id = one(n.id);
+  const reason = one(n.reason) || 'no reason recorded';
+  switch (n.state) {
+    case 'merged': return `Integration ${id}: merged ${where(n)}.`;
+    case 'deployed': return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}.`;
     case 'returned': {
-      const t = tailLines(r.tail);
+      const t = tailLines(n.tail);
       return `Integration ${id} returned: ${reason.replace(/[.\s]+$/, '')}. Fix it on your branch and run integrate request again.${t ? `\n${t}` : ''}`;
     }
-    case 'merged_ci_red': return `Integration ${id}: merged ${where(r)} but CI is red (${reason.replace(/[.\s]+$/, '')}). The merge stays on ${one(r.target) || 'the target'}; the manager decides, do not revert it yourself.`;
-    case 'deploy_failed': return `Integration ${id}: merged ${where(r)} but the deploy failed (${reason.replace(/[.\s]+$/, '')}). The manager decides what happens next.`;
+    case 'merged_ci_red': return `Integration ${id}: merged ${where(n)} but CI is red (${reason.replace(/[.\s]+$/, '')}). The merge stays on ${one(n.target) || 'the target'}; the manager decides, do not revert it yourself.`;
+    case 'deploy_failed': return `Integration ${id}: merged ${where(n)} but the deploy failed (${reason.replace(/[.\s]+$/, '')}). The manager decides what happens next.`;
     case 'cancelled': return `Integration ${id} cancelled.`;
     default: return null;
   }
@@ -37,14 +62,15 @@ export function integrationText(r) {
 
 // the title / body / priority of the feed notice and the manager event
 export function integrationNotice(r) {
-  const id = one(r.id), what = `${one(r.branch) || '?'} -> ${one(r.target) || '?'}`;
+  const n = normRequest(r);
+  const id = one(n.id), what = `${one(n.branch) || '?'} -> ${one(n.target) || '?'}`;
   const title = {
     merged: `Integration ${id} merged: ${what}`, deployed: `Integration ${id} deployed: ${what}`, returned: `Integration ${id} returned: ${what}`,
     merged_ci_red: `Integration ${id} merged, CI red: ${what}`, deploy_failed: `Integration ${id} merged, deploy failed: ${what}`, cancelled: `Integration ${id} cancelled: ${what}`,
-  }[r.state] || `Integration ${id}: ${r.state}`;
-  const t = r.state === 'returned' ? tailLines(r.tail, { lines: 3, chars: 240 }) : '';
+  }[n.state] || `Integration ${id}: ${n.state}`;
+  const t = n.state === 'returned' ? tailLines(n.tail, { lines: 3, chars: 240 }) : '';
   const body = [integrationText(r)?.split('\n')[0], t].filter(Boolean).join('\n').slice(0, 600);
-  return { title: title.slice(0, 160), body, priority: r.state === 'merged_ci_red' || r.state === 'deploy_failed' ? 'high' : 'default' };
+  return { title: title.slice(0, 160), body, priority: n.state === 'merged_ci_red' || n.state === 'deploy_failed' ? 'high' : 'default' };
 }
 
 // deps: { status: (session) => { state, stall } | undefined, isRemote: (session) => bool, canSend: (status) => bool, send: (session, text) => Promise,
@@ -78,7 +104,7 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
           }
         }
       }
-      log({ type: 'integration_notify', id: request.id, state: request.state, session: session || null, sent, why, event: event?.type || null });
+      log({ type: 'integration_notify', id: request.id, state: request.state, session: session || null, sent, why, event: event?.kind || null });
       return { told: true, sent, why };
     } catch (e) {
       log({ type: 'integration_notify_failed', id: request?.id, error: String(e?.message || e).slice(0, 200) });
