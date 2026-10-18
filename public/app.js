@@ -371,8 +371,28 @@ function getTerm(session) {
   term.loadAddon(fit);
   entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, paneRows: 0, laidOut: '', reqKey: '', reqTimer: 0, noFit: false };
   state.terms.set(session, entry);
+  // Each pane snapshot repaints the whole grid (clear + rewrite), which wipes a text selection.
+  // Hold repaints while the mouse is down on the terminal or text is selected; flush after.
+  // (chat-raised 2026-10-18: 'copy from the terminal gets disabled after 1s')
+  term.onSelectionChange(() => { if (!term.hasSelection() && !entry.selecting) flushTerm(session); });
   return entry;
 }
+function flushTerm(session) {
+  const e = state.terms.get(session);
+  if (e && e.held) { e.held = false; paintTerm(session, true); }
+}
+document.addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0) return;
+  for (const e of state.terms.values()) if (e.term.element?.contains(ev.target)) { e.selecting = true; return; }
+}, true);
+function endSelecting() {
+  for (const [name, e] of state.terms) {
+    if (!e.selecting) continue;
+    e.selecting = false;
+    if (!e.term.hasSelection()) flushTerm(name);
+  }
+}
+for (const t of ['pointerup', 'pointercancel']) document.addEventListener(t, endSelecting, true);
 
 // One global font for every xterm. The xterm grid is always the tmux pane's
 // cols (so hard-wrapped agent output lines up); rows follow the host. When the
@@ -534,6 +554,7 @@ function paintTerm(session, force) {
   const entry = state.terms.get(session);
   if (!entry || entry.lastPane == null || !entry.term.element) return;
   const { term } = entry;
+  if (entry.selecting || term.hasSelection()) { entry.held = true; return; }
   const buf = term.buffer.active;
   const atBottom = buf.viewportY >= buf.baseY;
   const fromBottom = buf.baseY - buf.viewportY;
