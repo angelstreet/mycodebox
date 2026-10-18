@@ -79,7 +79,7 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
     if (typeof ev.cwd === 'string' && ev.cwd) s.cwd = ev.cwd.slice(0, 500);
     s.live = ev.event !== 'session.end';
     switch (ev.event) {
-      case 'session.start': s.waiting = null; break;
+      case 'session.start': s.waiting = null; if (s.lastTurn) { s.lastTurn.crons = 0; s.lastTurn.backgroundWork = 0; } break;   // a fresh start: old crons / tasks died with the old process
       case 'session.end': s.live = false; s.waiting = null; break;
       case 'prompt':
         // A turn is metered from the prompt that starts it; a prompt typed mid-turn joins the running one.
@@ -179,7 +179,10 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
   // Small view for the status payload.
   function summary(name) {
     const s = sessions.get(name);
-    if (!liveOf(s)) return null;
+    // A session sleeping on a cron / wakeup / background task is silent by design (a 30 min loop outlasts LIVE_MS);
+    // it stays reported until session.end, else the dashboard shows it done (blue) between runs.
+    const pending = !!s && s.live && ((s.lastTurn?.crons ?? 0) > 0 || (s.lastTurn?.backgroundWork ?? 0) > 0);
+    if (!liveOf(s) && !pending) return null;
     return {
       seenAt: s.reporterSeenAt,
       turnAt: s.lastTurn?.at ?? null,

@@ -94,6 +94,16 @@ test('summary exposes the scheduled wakeups (crons) of the last stop', () => {
   assert.equal(rep.summary('sess').crons, 1, 'turn.end after stop keeps the crons');
 });
 
+test('a looping session silent past LIVE_MS still reports its cron, until session.end', () => {
+  rep.ingest(ev('stop', { text: 'next run in 30 min', backgroundWork: 0, crons: 1 }));
+  clock += 30 * 60 * 1000;
+  assert.equal(rep.summary('sess').crons, 1, 'a loop sleeping 30 min is not done');
+  rep.ingest(ev('session.start'));
+  assert.equal(rep.summary('sess').crons, 0, 'a restart drops the stale cron');
+  clock += 30 * 60 * 1000;
+  assert.equal(rep.summary('sess'), null);
+});
+
 test('agents snapshot, summary for the status payload, session end', () => {
   rep.ingest(ev('agents', { agents: [{ id: 'a1', type: 'Explore', status: 'running', description: 'look' }, { id: 'a2', type: 'general-purpose', status: 'idle', description: 'wait' }] }));
   const s = rep.summary('sess');
