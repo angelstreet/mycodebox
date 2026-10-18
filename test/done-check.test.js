@@ -86,7 +86,7 @@ test('tick: a session on main whose STATUS names a branch with unmerged commits 
   const dir = mkdtempSync(join(tmpdir(), 'done-check-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const git = async (cwd, args) => {
-    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') return '/r/.git\n';
+    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') return args[2] === '--git-dir' ? '/r/.git/worktrees/w\n' : '/r/.git\n';
     if (args[0] === 'rev-parse' && args[1] === '-q') { if (args[3] === 'origin/main' || args[3] === 'refs/remotes/origin/task59-ui') return 'x\n'; throw new Error('no ref'); }
     if (args[0] === 'rev-parse') return 'main\n';
     if (args[0] === 'log') return args.includes('origin/main...refs/remotes/origin/task59-ui') ? 'cdc80ab3a\tfix(ui): widths\n' : '';
@@ -105,7 +105,7 @@ test('tick: commits whose content is already on main (clean trial merge, no chan
   const dir = mkdtempSync(join(tmpdir(), 'done-check-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const mk = (clean) => async (cwd, args) => {
-    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') return '/r/.git\n';
+    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') return args[2] === '--git-dir' ? '/r/.git/worktrees/w\n' : '/r/.git\n';
     if (args[0] === 'rev-parse' && args[1] === '-q') { if (args[3] === 'origin/main') return 'x\n'; throw new Error('no ref'); }
     if (args[0] === 'rev-parse') return 'squashed\n';
     if (args[0] === 'log') return 'abc1234\tfeat: x\n';
