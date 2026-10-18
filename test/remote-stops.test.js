@@ -14,11 +14,12 @@ const manager = await import('../manager.js');
 const { createRemoteStops, PREFIX, validateStop, stopText, slugName, HOOK_LOST } = await import('../remote-stops.js');
 
 const REMOTE = 'tok-remote-0123456789abcdef';   // leak-scan: allow (fake test token)
+const OTHER = 'tok-other-0123456789abcdef';   // leak-scan: allow (fake test token)
 const PLAIN = 'tok-plain-0123456789abcdef';     // leak-scan: allow (fake test token)
 const leasesDir = path.join(stateDir, 'leases');
 fs.mkdirSync(leasesDir, { recursive: true });
 fs.writeFileSync(path.join(leasesDir, 'clients.json'), JSON.stringify({ clients: [
-  { name: 'mac-a', sha256: hashToken(REMOTE), remote: true }, { name: 'plain', sha256: hashToken(PLAIN) },
+  { name: 'mac-a', sha256: hashToken(REMOTE), remote: true }, { name: 'mac-b', sha256: hashToken(OTHER), remote: true }, { name: 'plain', sha256: hashToken(PLAIN) },
 ] }));
 
 const owner = [];   // onOwnerNeeded calls
@@ -263,4 +264,23 @@ test('ledger: a hook-delivered answer is recorded as remote-hook, an owner reply
   const b = ledger().find((x) => x.session === 'mac:ledger2-sid-le');
   assert.ok(b); assert.equal(b.by, 'owner'); assert.equal(b.via, 'mac'); assert.equal(b.class, 'owner_decision');
   assert.ok(b.wait_s >= 0 && b.wait_s <= 2, `the wait ends at the owner's prompt, not at the next stop (${b.wait_s})`);
+});
+
+test('resolveFor: a Mac tmux name resolves to the one registered session of the SAME client; ambiguous, other client, local name -> null', async () => {
+  const a = await post({ session_name: 'rf-solo', session_id: 'abc123-x', text: 'x\nSTATUS: done' });
+  assert.equal(a.body.session, 'mac:rf-solo-abc123');
+  assert.equal(remote.resolveFor('mac:rf-solo', 'mac-a'), 'mac:rf-solo-abc123');           // unique prefix match
+  assert.equal(remote.resolveFor('mac:rf-solo-abc123', 'mac-a'), 'mac:rf-solo-abc123');    // exact registered name
+  assert.equal(remote.resolveFor('mac:rf-solo', 'mac-b'), null);                           // another client's session is never matched
+  assert.equal(remote.resolveFor('mac:rf-solo-abc123', 'mac-b'), null);
+  assert.equal(remote.resolveFor('rf-solo', 'mac-a'), null);                               // bare local name never matches
+  assert.equal(remote.resolveFor('mac:rf-solo', undefined), null);
+  assert.equal(remote.resolveFor('mac:rf-', 'mac-a'), null);                               // a bare prefix is not a name
+  await post({ session_name: 'rf-twin', session_id: 'aaaaaa-1', text: 'x\nSTATUS: done' });
+  await post({ session_name: 'rf-twin', session_id: 'bbbbbb-2', text: 'x\nSTATUS: done' });
+  assert.equal(remote.resolveFor('mac:rf-twin', 'mac-a'), null);                           // two candidates: never guess
+  assert.equal(remote.resolveFor('mac:rf-twin-aaaaaa', 'mac-a'), 'mac:rf-twin-aaaaaa');
+  await post({ session_name: 'rf-twin', session_id: 'cccccc-3', text: 'x\nSTATUS: done' }, OTHER);
+  assert.equal(remote.resolveFor('mac:rf-twin', 'mac-b'), 'mac:rf-twin-cccccc');           // unique within mac-b's own registrations
+  assert.equal(remote.resolveFor('mac:rf-none', 'mac-a'), null);
 });
