@@ -2,7 +2,8 @@
 # integrate: hand a pushed branch to the mycodebox integration lane (docs/v2/INTEGRATION-LANE.md). POSIX sh + curl; codebox and Mac.
 #   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--wait]   queue the branch (default: the current branch)
 #   integrate status [<id>]                                                              one request, or the latest ten
-#   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60)
+#   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
+#                                                                                        an unreachable service is retried until the timeout
 #   integrate cancel <id>                                                                only while it is still queued
 # Where: URL and token from ~/.config/mycodebox/config (url = ...) and ~/.config/mycodebox/token (a client added with
 # `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
@@ -42,7 +43,13 @@ api() {
     CODE=$(printf 'header = "%s: %s"\n' "$HDR_NAME" "$HDR_VAL" | curl -sS -K - -X "$_m" -o "$OUT" -w '%{http_code}' --max-time 60 "$URL$_p" 2>"$TMP/err")
   fi
   _rc=$?
-  if [ "$_rc" -ne 0 ] || [ "$CODE" = "000" ]; then printf 'integrate: service unreachable at %s (%s)\n' "$URL" "$(head -n 1 "$TMP/err")" >&2; exit 5; fi
+  UNREACHABLE=0
+  if [ "$_rc" -ne 0 ] || [ "$CODE" = "000" ]; then
+    UNREACHABLE=1
+    # SOFT=1 (wait): the caller retries; a restart of the service (a self-deploy) must not end the wait
+    [ "${SOFT:-0}" = 1 ] && return 0
+    printf 'integrate: service unreachable at %s (%s)\n' "$URL" "$(head -n 1 "$TMP/err")" >&2; exit 5
+  fi
 }
 val() { sed -n "s/^$1=//p" "$OUT" | head -n 1; }
 tail_of() { sed -n '/^---$/,$p' "$OUT" | sed 1d; }
@@ -65,8 +72,15 @@ report() {
 
 do_wait() {   # do_wait ID MINUTES
   _id=$1; _min=$2; _end=$(( $(date +%s) + _min * 60 ))
+  _down=0
   while :; do
-    api GET "/api/integration/requests/$_id/wait?timeout=25&format=kv"
+    SOFT=1; api GET "/api/integration/requests/$_id/wait?timeout=25&format=kv"; SOFT=0
+    if [ "$UNREACHABLE" = 1 ]; then
+      if [ "$(date +%s)" -ge "$_end" ]; then printf 'integrate: service unreachable at %s (%s)\n' "$URL" "$(head -n 1 "$TMP/err")" >&2; exit 5; fi
+      [ "$_down" = 1 ] || printf 'integrate: service unreachable at %s, retrying until the timeout\n' "$URL" >&2
+      _down=1; sleep "${INTEGRATE_RETRY_SEC:-5}"; continue
+    fi
+    _down=0
     [ "$CODE" = 200 ] || fail_http
     [ "$(val final)" = true ] && report
     [ "$(date +%s)" -lt "$_end" ] || { printf 'integrate: still %s after %s min (integrate wait %s to keep waiting)\n' "$(val state)" "$_min" "$_id" >&2; exit 1; }
