@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createIntegrationLane, validateConfig, normalizeRemoteUrl, FINAL } from '../integration-lane.js';
 import { makeWorld } from './helpers-lane.js';
 
@@ -105,6 +106,17 @@ test('target moves during the run: re-merged from the new target, tests run agai
   assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(runs, 2); assert.deepEqual(evals, ['origin', 'origin']);
   assert.equal(w.show('main', 'new.js'), 'x\n'); assert.equal(w.show('main', 'other.js'), 'o\n');
   assert.equal(w.main(), r.sha);
+});
+
+test('push is a compare-and-swap: a target rewound after the fetch is not clobbered, the merge is rebuilt on it', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' }); w.moveMain({ 'o.js': 'o\n' });
+  const rewound = execFileSync('git', ['-C', w.remote, 'rev-parse', 'main~1']).toString().trim();
+  const seen = []; let runs = 0;
+  const run = async () => { runs++; if (runs === 1) execFileSync('git', ['-C', w.remote, 'update-ref', 'refs/heads/main', rewound]); else seen.push(w.main()); return { code: 0, out: 'ok' }; };
+  const { lane } = mk(w, { cfg: { test: 'fake' }, lane: { run } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(runs, 2); assert.deepEqual(seen, [rewound]);   // the first push did not land on the rewound target
+  assert.equal(execFileSync('git', ['-C', w.remote, 'rev-parse', `${r.sha}^1`]).toString().trim(), rewound);
 });
 
 test('target keeps moving: returned after three attempts', async () => {

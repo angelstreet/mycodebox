@@ -292,11 +292,12 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
           if (!t.ok) throw new Ret(t.info?.timedOut ? `tests timed out after ${c.testTimeoutMin} min` : `tests red (exit ${t.info?.code})`, r.steps.at(-1).tail);
         }
         const p = await step(r, 'push', async () => {
-          const x = await G(r, c, ['push', c.remote, `${sha}:refs/heads/${c.target}`], { timeoutMs: 120_000 });
+          // compare-and-swap: only if the remote target is still the commit the merge was built on (never clobber a rewind or a newer push)
+          const x = await G(r, c, ['push', '--porcelain', `--force-with-lease=refs/heads/${c.target}:${targetSha}`, c.remote, `${sha}:refs/heads/${c.target}`], { timeoutMs: 120_000 });
           await G(r, c, ['fetch', '--prune', c.remote]);
           if (await contains(r, c, sha)) return { ok: true, info: { rejected: false } };   // the remote is the truth, whatever push said
-          const moved = (await G(r, c, ['merge-base', '--is-ancestor', `${c.remote}/${c.target}`, sha])).code !== 0;
-          return { ok: false, tail: x.err || x.out, info: { moved } };
+          const now = await rev(r, c, `${c.remote}/${c.target}`);
+          return { ok: false, tail: x.err || x.out, info: { moved: now !== targetSha } };   // lease rejected / target changed: re-merge onto it
         });
         if (p.ok) { r.pushed = true; persist(r); return; }
         if (!p.info.moved) throw new Ret('push failed', p.tail);
