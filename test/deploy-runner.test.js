@@ -66,7 +66,7 @@ test('runs the oldest approved request: command, flags, runner agent, version, l
   const { runner, alerts, ran, stateDir } = make(reg);
   await runner.tick();
   await until(() => reg.deploys.find((d) => d.id === '2').state === 'done');
-  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=2 bash update_core.sh feat/y --server');
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=2 bash update_core.sh feat/y --server --skip-leased');
   assert.deepEqual(ran[0].flags, ['--server']);
   const d = reg.deploys.find((x) => x.id === '2');
   assert.equal(d.version, '1.2.3');
@@ -241,7 +241,7 @@ test('full and host deploys always pass --skip-leased; frontend and server do no
   assert.deepEqual(extraFlagsFor({ scope: 'host' }), ['--skip-leased']);
   assert.deepEqual(extraFlagsFor({ scope: 'host', hosts: ['a', 'b'] }), ['--skip-leased', '--hosts', 'a,b']);
   assert.deepEqual(extraFlagsFor({ scope: 'frontend' }), []);
-  assert.deepEqual(extraFlagsFor({ scope: 'server' }), []);
+  assert.deepEqual(extraFlagsFor({ scope: 'server' }), ['--skip-leased']);
 });
 
 test('parseSkipped reads the last SKIPPED_HOSTS line and ignores junk names', () => {

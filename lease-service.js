@@ -410,6 +410,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return r.resources.some((c) => ['env', 'host', 'device'].includes(P(c).type));       // host deploy of every host
   }
   const pendingFor = (env, req, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && (d.state === 'queued' || d.state === 'running') && deployTouches(d, req));
+  const ownServerHosts = (env) => new Set(((cfg.ownServers || {})[env] || []).map((h) => String(h).toLowerCase()));
+  // every resource of the lease is a host or device on an own-server host (so it can only be disturbed by that Pi's server)
+  const ownServerOnly = (l, own) => own.size > 0 && l.resources.length > 0 && l.resources.every((c) => { const r = P(c); return (r.type === 'host' || r.type === 'device') && own.has(r.host); });
   function deployBlockers(d, { skipLeased = false, agent = '' } = {}) {
     const ls = inEnv(d.env).filter((l) => l.mode === 'exclusive' && l.agent !== agent && !(d.id && l.deployId === d.id));
     const hostOf = (l) => l.resources.map((c) => P(c)).filter((r) => r.type === 'host' || r.type === 'device').map((r) => r.host);
@@ -419,7 +422,14 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const virtual = (rs, kind = 'server') => ({ mode: 'exclusive', agent: '\0deploy', shared: false, resources: rs, kind });
     let blockers;
     if (d.scope === 'frontend') blockers = ls.filter((l) => leasesConflict(virtual(['frontend']), l));
-    else if (d.scope === 'server') blockers = ls.filter((l) => leasesConflict(virtual(['server']), l));
+    else if (d.scope === 'server') {
+      // Own-server hosts (cfg.ownServers: a Pi that runs its own secondary server): with skipLeased, a lease that only
+      // touches those hosts does not block the node's server deploy. update_core drops that Pi's server from the run and
+      // the catch-up host deploy restarts it once the lease is gone.
+      const own = ownServerHosts(d.env);
+      blockers = ls.filter((l) => leasesConflict(virtual(['server']), l) && !(skipLeased && ownServerOnly(l, own)));
+      if (skipLeased) return { blockers, leasedHosts: leasedHosts.filter((x) => own.has(x.host)) };
+    }
     else if (d.scope === 'host' && d.hosts?.length) blockers = ls.filter((l) => leasesConflict(virtual(d.hosts.map((h) => `host:${h}`), 'host'), l));
     else if (d.scope === 'host') blockers = skipLeased ? ls.filter((l) => hasType(l, 'env')) : ls.filter((l) => hasType(l, 'env', 'host', 'device'));
     else blockers = skipLeased ? ls.filter((l) => hasType(l, 'env', 'server', 'frontend') || (hasType(l, 'host', 'device') && serverKinded(l))) : ls;   // full
