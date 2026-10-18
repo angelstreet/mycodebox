@@ -12,6 +12,8 @@
 #   -b  claude billing: sub (default, the Max plan login) or NAME = the API key in ~/.config/anthropic/NAME.key
 #       (one line, chmod 600; read at launch by apiKeyHelper, never copied). NAME.workspace, if present, holds the
 #       workspace id a user key (sk-ant-usr) needs. ANTHROPIC_API_KEY from the environment is always dropped.
+#       Note: the API refuses interactive Claude Code (entrypoint cli) on credit that excludes it ("Credit balance too
+#       low") while claude -p on the same key works: run API-key agents headless with claude -p.
 #   -H  handover file: the session reads it, summarises state and open items, then does the work (owner autonomy rule)
 #   -W  with -H: review only — summarise, propose the next step, then wait for the owner
 #   -f  prompt file, used verbatim;  -t  prompt text
@@ -21,7 +23,7 @@ set -euo pipefail
 NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0
 while getopts "n:d:p:m:b:H:f:t:xWh" o; do case $o in
   n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; b) BILL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,20p "$0"; exit 2;; esac; done
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,21p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
