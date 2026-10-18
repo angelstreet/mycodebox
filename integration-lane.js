@@ -18,7 +18,7 @@ export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci
 export const STATES = Object.freeze(['queued', 'running', ...FINAL]);
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const SCOPE_RE = /^[a-z][a-z0-9_-]{0,30}$/;
+const SCOPES = new Set(['frontend', 'server', 'host', 'full']);   // the deploy queue's scopes
 const MAX_PUSH_TRIES = 3;
 const coded = (code, message, extra) => Object.assign(new Error(message), { code, ...extra });
 // Remote URLs may carry credentials: never let them into a tail, a reason or a notice.
@@ -45,7 +45,7 @@ export function validateConfig(raw) {
     if (c.deploy != null) {
       if (typeof c.deploy !== 'object' || typeof c.deploy.env !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(c.deploy.env)) { bad('deploy.env required'); continue; }
       const defaultScope = c.deploy.defaultScope ?? 'full';
-      if (!SCOPE_RE.test(defaultScope)) { bad('invalid deploy.defaultScope'); continue; }
+      if (!SCOPES.has(defaultScope)) { bad(`deploy.defaultScope must be one of ${[...SCOPES].join(', ')}`); continue; }
       deploy = { env: c.deploy.env, defaultScope };
     }
     const conventions = Array.isArray(c.conventions) ? c.conventions.filter((x) => typeof x === 'string' && x) : ['VERSION.txt'];
@@ -120,8 +120,8 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
   };
 }
 // Round 7 merge floor with the lane as the tester (its own test run replaces the session's test report).
-export async function defaultMergeEval({ cwd, branch, target, conventionFiles }) {
-  const facts = await gitFacts({ cwd, branch, target, conventionFiles });
+export async function defaultMergeEval({ cwd, branch, target, remote, conventionFiles }) {
+  const facts = await gitFacts({ cwd, branch, target, remote, conventionFiles });
   const reasons = mergeFloor(facts, { state: 'green' }, { conventionFiles });
   return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts };
 }
@@ -233,11 +233,21 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     return true;
   }
 
+  // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
+  async function evaluate(r, c) {
+    const ev = await step(r, 'evaluate', async () => {
+      const e = await mergeEval({ cwd: c.clone, branch: r.branch, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session });
+      const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
+      return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons } };
+    });
+    if (!ev.ok) throw new Ret(`merge evaluation: ${ev.info.reasons.join('; ') || 'not mergeable'}`, ev.tail, { reasons: ev.info.reasons });
+  }
+
   // Merge the branch into the current remote target, test it, push it. Throws Ret to return the request.
   async function mergeAndPush(r, c, branchSha) {
     for (let attempt = 0; attempt < MAX_PUSH_TRIES; attempt++) {
       r.attempt = attempt + 1;
-      if (attempt > 0) await fetch(r, c);
+      if (attempt > 0) { await fetch(r, c); await evaluate(r, c); }
       const targetSha = await rev(r, c, `${c.remote}/${c.target}`);
       if (!targetSha) throw new Ret(`target ${c.remote}/${c.target} not found`);
       r.targetBase = targetSha;
@@ -318,14 +328,14 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     const res = await step(r, 'deploy', async () => {
       try {
         if (!r.deployId) {
-          const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: c.target, sha: r.sha, agent: `integration:${r.id}` });
-          if (!q?.id) return { ok: false, tail: q?.reason || 'deploy request refused' };
+          const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: r.sha || c.target, sha: r.sha, agent: `integration:${r.id}` });
+          if (!q?.id) return { ok: false, tail: q?.error ?? q?.reason ?? 'deploy request refused' };
           r.deployId = q.id; persist(r);
         }
         const w = await deploys.wait(r.deployId);
         r.deployVersion = w?.version ?? null;
         r.deployed = w?.ok === true ? { id: r.deployId, version: r.deployVersion, env: c.deploy.env, scope: r.deployScope } : null;
-        return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}` : (w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
+        return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}` : (w?.error || w?.tail || w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
       } catch (e) { return { ok: false, tail: `deploy error: ${e?.message}` }; }   // the merge is on the target: report, never throw
     });
     return res;
@@ -352,12 +362,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         r.branchSha = branchSha.info.sha;
         const alreadyIn = (await G(r, c, ['merge-base', '--is-ancestor', r.branchSha, `${c.remote}/${c.target}`])).code === 0;
         if (!alreadyIn) {
-          const ev = await step(r, 'evaluate', async () => {
-            const e = await mergeEval({ cwd: c.clone, branch: r.branch, target: c.target, conventionFiles: c.conventions, repo: r.repo, session: r.session });
-            const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
-            return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons } };
-          });
-          if (!ev.ok) throw new Ret(`merge evaluation: ${ev.info.reasons.join('; ') || 'not mergeable'}`, ev.tail, { reasons: ev.info.reasons });
+          await evaluate(r, c);
         }
         await mergeAndPush(r, c, r.branchSha);
       }
@@ -429,7 +434,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       if (input.deploy) {
         if (!c.deploy) throw coded('E_INVALID', `repo ${key} has no deploy configured`);
         deployScope = input.deploy === true ? c.deploy.defaultScope : String(input.deploy);
-        if (!SCOPE_RE.test(deployScope)) throw coded('E_INVALID', 'invalid deploy scope');
+        if (!SCOPES.has(deployScope)) throw coded('E_INVALID', `deploy scope must be one of ${[...SCOPES].join(', ')}`);
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
       const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope);

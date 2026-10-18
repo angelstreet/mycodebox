@@ -12,26 +12,19 @@ import fs from 'node:fs';
 import { join } from 'node:path';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, readBody } from './lease-routes.js';
 import { FINAL } from './integration-lane.js';
+import { integrationText } from './integration-notify.js';
 
 export const PREFIX = '/api/integration';
 export const MAX_WAIT_S = 30;
 const STATUS = { E_INVALID: 400, E_NOT_FOUND: 404, E_STATE: 409 };
 export const EXIT = { merged: 0, deployed: 0, returned: 3, cancelled: 3, merged_ci_red: 4, deploy_failed: 4 };
-const short = (s) => String(s || '').slice(0, 12);
 
-// One line for a session / the CLI. Same wording the notify path uses.
+// One line for a session / the CLI: the notify path's own wording (integrationText) for a final state.
 export function describe(r) {
+  const t = integrationText({ ...r, version: r.deployed?.version, env: r.deployed?.env });
+  if (t) return t.split('\n')[0];
   const base = `Integration ${r.id}`;
-  switch (r.state) {
-    case 'merged': return `${base}: merged ${r.branch} into ${r.target} at ${short(r.sha)}.`;
-    case 'deployed': return `${base}: merged ${r.branch} into ${r.target} at ${short(r.sha)}, deployed ${r.deployed?.version ?? '?'} to ${r.deployed?.env ?? '?'}.`;
-    case 'returned': return `${base} returned: ${r.reason}.`;
-    case 'merged_ci_red': return `${base}: merged ${r.branch} into ${r.target} at ${short(r.sha)} but ${r.reason}.`;
-    case 'deploy_failed': return `${base}: merged ${r.branch} into ${r.target} at ${short(r.sha)} but ${r.reason}.`;
-    case 'cancelled': return `${base} cancelled.`;
-    case 'queued': return `${base}: queued${r.position ? ` (position ${r.position})` : ''}.`;
-    default: return `${base}: running${r.step ? ` (${r.step})` : ''}.`;
-  }
+  return r.state === 'queued' ? `${base}: queued${r.position ? ` (position ${r.position})` : ''}.` : `${base}: running${r.step ? ` (${r.step})` : ''}.`;
 }
 export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, target: r.target, state: r.state, final: FINAL.includes(r.state),
   exit: FINAL.includes(r.state) ? EXIT[r.state] : null, sha: r.sha || null, version: r.deployed?.version ?? null, reason: r.reason || null,
@@ -57,7 +50,15 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
   };
 
   // -> { by } | null (already answered)
-  function authorize(req, res, fmt) {
+  // The dashboard (same origin, no token; Tailscale is the gate) may list, read, wait and cancel; creating a request stays token-gated.
+  // 'same' | 'cross' | null (no browser signal). Browsers send Origin on same-origin writes and Sec-Fetch-Site on every fetch.
+  const originOf = (req) => {
+    const o = req.headers.origin, sf = req.headers['sec-fetch-site'];
+    if (o) { try { return new URL(o).host === req.headers.host ? 'same' : 'cross'; } catch { return 'cross'; } }
+    if (sf) return sf === 'same-origin' ? 'same' : 'cross';
+    return null;
+  };
+  function authorize(req, res, fmt, sub = '') {
     const addr = req.socket?.remoteAddress;
     const auth = /^Bearer\s+(\S{8,512})$/i.exec(req.headers.authorization || '');
     if (auth) {
@@ -66,6 +67,12 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
       if (!c) { send(res, 401, { ok: false, error: 'missing or invalid bearer token' }, fmt); return null; }
       if (!c.integrate) { send(res, 403, { ok: false, error: 'this client may not use the integration lane (lease-token.js add <name> --integrate)' }, fmt); return null; }
       return { by: `client:${c.name}`, loopback: isLoopback(addr) };
+    }
+    const dashOp = (req.method === 'GET' && /^\/(requests|repos)/.test(sub)) || (req.method === 'POST' && /^\/requests\/[\w-]{1,64}\/cancel$/.test(sub));
+    if (!req.headers['x-ghosty-reporter-token'] && dashOp) {
+      const o = originOf(req);
+      if (o === 'cross') { send(res, 403, { ok: false, error: 'cross-origin request refused' }, fmt); return null; }
+      if (o === 'same') return { by: 'dashboard', loopback: false };
     }
     if (!isLoopback(addr)) { send(res, 403, { ok: false, error: 'loopback only without a bearer token' }, fmt); return null; }
     if (!reporterOk(req.headers['x-ghosty-reporter-token'])) { send(res, 401, { ok: false, error: 'bad token' }, fmt); return null; }
@@ -86,9 +93,9 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     const url = new URL(req.url, 'http://integration.local');
     if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) return false;
     const fmt = url.searchParams.get('format') === 'kv' ? 'kv' : 'json';
-    const who = authorize(req, res, fmt);
-    if (!who) return true;
     const sub = url.pathname.slice(PREFIX.length) || '/';
+    const who = authorize(req, res, fmt, sub);
+    if (!who) return true;
     const fail = (code, error) => send(res, STATUS[code] || 400, { ok: false, code, error }, fmt);
     try {
       let m;

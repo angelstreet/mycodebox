@@ -98,9 +98,11 @@ test('target moves during the run: re-merged from the new target, tests run agai
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
   let runs = 0;
   const run = async () => { runs++; if (runs === 1) w.moveMain({ 'other.js': 'o\n' }); return { code: 0, out: 'ok' }; };
-  const { lane } = mk(w, { cfg: { test: 'fake' }, lane: { run } });
+  const evals = [];
+  const mergeEval = async (o) => { evals.push(o.remote); return { verdict: 'merge', reasons: [] }; };   // the floor runs again on the moved target, with the lane's remote
+  const { lane } = mk(w, { cfg: { test: 'fake' }, lane: { run, mergeEval } });
   const r = await go(lane, { branch: 'feat' });
-  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(runs, 2);
+  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(runs, 2); assert.deepEqual(evals, ['origin', 'origin']);
   assert.equal(w.show('main', 'new.js'), 'x\n'); assert.equal(w.show('main', 'other.js'), 'o\n');
   assert.equal(w.main(), r.sha);
 });
@@ -130,7 +132,7 @@ test('CI pending then green + deploy requested: deployed with the version; argv 
   const { lane } = mk(w, { cfg: { ci: 'github', deploy: { env: 'env-a', defaultScope: 'server' } }, lane: { ci: { status: async (sha) => { asked.push(sha); return seq.shift() || 'success'; } }, deploys } });
   const r = await go(lane, { branch: 'feat', deploy: true });
   assert.equal(r.state, 'deployed', JSON.stringify(r)); assert.equal(r.deployed.version, 'v9');
-  assert.deepEqual(reqs, [{ env: 'env-a', scope: 'server', ref: 'main', sha: r.sha, agent: `integration:${r.id}` }]);
+  assert.deepEqual(reqs, [{ env: 'env-a', scope: 'server', ref: r.sha, sha: r.sha, agent: `integration:${r.id}` }]);
   assert.equal(asked.filter((x) => x === r.sha).length, 3);
 });
 
@@ -140,6 +142,20 @@ test('deploy failure: deploy_failed; no CI configured deploys right after the pu
   const { lane } = mk(w, { cfg: { deploy: { env: 'env-a', defaultScope: 'full' } }, lane: { deploys } });
   const r = await go(lane, { branch: 'feat', deploy: 'frontend' });
   assert.equal(r.state, 'deploy_failed'); assert.match(r.reason, /lease denied/);
+});
+
+test('deploy failure with the deploy adapter shape (error/tail): the text reaches reason; bad scopes are rejected early', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const deploys = { request: async () => ({ ok: true, id: 'd3' }), wait: async () => ({ ok: false, state: 'failed', tail: 'lease held by someone', error: 'deploy d3 failed' }) };
+  const { lane } = mk(w, { cfg: { deploy: { env: 'env-a', defaultScope: 'full' } }, lane: { deploys } });
+  assert.throws(() => lane.enqueue({ repo: 'env-a', branch: 'feat', deploy: 'prod' }), /scope must be one of/);
+  const r = await go(lane, { branch: 'feat', deploy: 'host' });
+  assert.equal(r.state, 'deploy_failed'); assert.match(r.reason, /deploy d3 failed/);
+  const w2 = makeWorld(); w2.branch('feat', { 'new.js': 'x\n' });
+  const d2 = { request: async () => ({ ok: false, error: 'deploy request needs a ref' }), wait: async () => ({}) };
+  const m2 = mk(w2, { cfg: { deploy: { env: 'env-a', defaultScope: 'full' } }, lane: { deploys: d2 } });
+  assert.match((await go(m2.lane, { branch: 'feat', deploy: true })).reason, /needs a ref/);
+  assert.equal(validateConfig({ repos: { a: { clone: '/x', deploy: { env: 'e', defaultScope: 'nope' } } } }).errors.length, 1);
 });
 
 test('CI that never finishes: merged_ci_red with a timeout reason', async () => {
