@@ -1291,6 +1291,8 @@ async function resizeSession(name, cols, rows) {
   const target = `=${name}:`;
   const { stdout } = await exec(TMUX, ['display-message', '-p', '-t', target, '#{session_attached}']);
   if (Number(stdout.trim()) > 0) throw Object.assign(httpError(409, 'session is attached'), { reason: 'attached' });
+  cols = Math.max(60, cols);
+  rows = Math.max(12, rows);
   await exec(TMUX, ['resize-window', '-t', target, '-x', String(cols), '-y', String(rows)]);
   try { await exec(TMUX, ['set-option', '-w', '-u', '-t', target, 'window-size']); } catch {}
   return { ok: true, cols, rows };
