@@ -334,3 +334,24 @@ test('the test command runs with a scrubbed environment: service secrets stay ou
     assert.match(r.tail, /^GHOSTY_STATE_DIR=.*integration\/tmp\//m);
   } finally { delete process.env.LANGFUSE_SECRET_KEY; delete process.env.JEV_TOKEN; delete process.env.NODE_TEST_MARK; }
 });
+
+test('package-lock.json in the merge: the lane runs npm ci before the test command; a failed install returns', async () => {
+  const { createDefaultRun } = await import('../integration-lane.js');
+  const real = createDefaultRun();
+  for (const installOk of [true, false]) {
+    const w = makeWorld(); w.branch('feat', { 'package-lock.json': '{}\n' });
+    const calls = [];
+    const run = (cmd, o) => { calls.push({ cmd, cwd: o.cwd }); return cmd.startsWith('npm ci') ? Promise.resolve({ code: installOk ? 0 : 1, out: 'npm ERR! fake' }) : real(cmd, o); };
+    const { lane } = mk(w, { cfg: { test: 'true' }, lane: { run } });
+    const r = await go(lane, { branch: 'feat' });
+    assert.deepEqual(calls.map((c) => c.cmd), installOk ? ['npm ci --no-audit --no-fund', 'true'] : ['npm ci --no-audit --no-fund']);
+    assert.equal(calls[0].cwd, calls.at(-1).cwd);
+    if (installOk) { assert.equal(r.state, 'merged', JSON.stringify(r)); assert.ok(r.steps.some((s) => s.name === 'install')); }
+    else { assert.equal(r.state, 'returned'); assert.match(r.reason, /npm ci .*failed \(exit 1\)/); assert.match(r.tail, /npm ERR! fake/); }
+  }
+  // no lockfile: no install step
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const calls = [];
+  const { lane } = mk(w, { cfg: { test: 'true' }, lane: { run: (cmd, o) => { calls.push(cmd); return real(cmd, o); } } });
+  assert.equal((await go(lane, { branch: 'feat' })).state, 'merged'); assert.deepEqual(calls, ['true']);
+});

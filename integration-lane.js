@@ -20,6 +20,7 @@ const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SCOPES = new Set(['frontend', 'server', 'host', 'full']);   // the deploy queue's scopes
 const MAX_PUSH_TRIES = 3;
+export const INSTALL_CMD = 'npm ci --no-audit --no-fund';
 const coded = (code, message, extra) => Object.assign(new Error(message), { code, ...extra });
 // Remote URLs may carry credentials: never let them into a tail, a reason or a notice.
 const redact = (t) => String(t ?? '').replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]*@/gi, '$1***@');
@@ -302,6 +303,14 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         }
         const sha = await rev(r, c, 'HEAD', wt);
         r.sha = sha; r.mergeSha = sha; persist(r);
+        // a fresh worktree has no node_modules: install from the lockfile so the test command can be plain `npm test`
+        if (c.test && fs.existsSync(path.join(wt, 'package-lock.json'))) {
+          const i = await step(r, 'install', async (setLive) => {
+            const res = await run(INSTALL_CMD, { cwd: wt, timeoutMs: c.testTimeoutMin * 60_000, onData: setLive, env: { CI: '1' } });
+            return { ok: res.code === 0 && !res.timedOut, tail: res.out, info: { code: res.code, timedOut: !!res.timedOut } };
+          });
+          if (!i.ok) throw new Ret(i.info?.timedOut ? `${INSTALL_CMD} timed out` : `${INSTALL_CMD} failed (exit ${i.info?.code})`, r.steps.at(-1).tail);
+        }
         if (c.test) {
           const t = await step(r, 'test', async (setLive) => {
             const res = await run(c.test, { cwd: wt, timeoutMs: c.testTimeoutMin * 60_000, onData: setLive,

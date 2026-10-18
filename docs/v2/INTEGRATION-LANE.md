@@ -66,6 +66,10 @@ evaluation (OWNER_DECISIONS §14, §19).
   "deploy": { "env": "env-a", "defaultScope": "server" }, "conventions": ["VERSION.txt"], "conventionResolver": "take-target" } } }
 ```
 
+When the merged tree has a `package-lock.json` and a test command is set, the lane runs `npm ci --no-audit --no-fund`
+first (step `install`). Commands run with an allowlisted environment (PATH, HOME, locale, TMPDIR, `NODE_*`, CI and a
+temp `GHOSTY_STATE_DIR`), never the service's own keys and tokens.
+
 Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (HTTP), `scripts/integrate` (CLI). The queue is
 `<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:
 `node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state
