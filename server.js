@@ -138,6 +138,7 @@ import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createIntegrationNotify } from './integration-notify.js';
+import { createCrashResumer } from './crash-resume.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
@@ -714,6 +715,16 @@ const wakeAnnotateEvent = (event, cls) => {
 };
 const wakesView = createWakesView({ stateDir: STATE_DIR });
 const managerEvents = createManagerEvents({ stateDir: STATE_DIR, managerSessions: loadManagerSessions, annotate: wakeAnnotateEvent });
+const crashResumeStates = new Map();
+const crashResumeKnown = new Map();
+const crashResumer = createCrashResumer({
+  getState: async (name) => crashResumeStates.get(name) || null,
+  sendText: (name, text) => exec(TMUX, ['send-keys', '-t', `=${name}:`, '-l', '--', text]),
+  sendEnter: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']),
+  managerSessions: loadManagerSessions,
+  record: (e) => managerEvents.record(e),
+});
+const crashResumeEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).crashResume !== false; } catch { return true; } };
 // Two-tier push (MANAGER.md section 6): interrupts at once, the rest as one digest per pushDigestMinutes while awake.
 // Knobs in manager.json: pushDigestMinutes (30), pushAwakeFrom ("07:00"), pushAwakeTo ("23:00"), pushTimezone ("Europe/Zurich"), pushInterruptPct (95).
 const pushTierConfig = () => { try { return tierConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return tierConfig({}); } };
@@ -1097,6 +1108,9 @@ async function pollOnce() {
     const ag = (!offline && agentFromTree(p.pid, table)) || (!offline && agentFromText(tailText)) || null;
     const agent = ag ? ag.agent : (SHELLS.has(p.cmd) || p.cmd === 'sleep' || !p.cmd ? 'bash' : 'other');
     const agentCmd = ag ? ag.cmd : (p.cmd || 'bash');
+    const known = crashResumeKnown.get(s.name) || {};
+    crashResumeStates.set(s.name, { name: s.name, tmuxName: s.name, lines: plain, agent: agentFromTree(p.pid, table)?.agent || null,
+      shellForeground: SHELLS.has(p.cmd), scriptBusy: false, input: '', closed: /(?:^|\s)(?:\/exit|\^C)\s*$/.test(tail.at(-1) || ''), base: known.base || launch.commands[ag?.agent || 'claude'], model: known.model || null, claudeSessionId: known.claudeSessionId || null });
 
     let state = 'idle';
     let waitReason = null;
@@ -1202,10 +1216,13 @@ async function pollOnce() {
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,
     };
+    const crashState = crashResumeStates.get(s.name);
+    if (crashState) { crashState.scriptBusy = scriptBusy; crashState.input = status[s.name].stall?.draft || ''; crashState.model = t.model; }
   });
   for (const k of [...lastSnapshots.keys()]) if (!status[k]) lastSnapshots.delete(k);
   for (const k of [...track.keys()]) if (!status[k]) track.delete(k);
   for (const k of [...metaCache.keys()]) if (!status[k]) metaCache.delete(k);
+  for (const k of [...crashResumeStates.keys()]) if (!status[k]) crashResumeStates.delete(k);
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set([...Object.keys(status), ...remote.names()]));   // Mac sessions (mac:<name>) have no tmux pane: they are not pruned with the tmux list
   reporter.prune(new Set(Object.keys(status)));
@@ -1225,6 +1242,7 @@ async function pollOnce() {
     v.lastActivity = la ? la.at : null;
     v.lastActivitySource = la ? la.source : null;
     v.claudeSessionId = c ? c.info.sessionId : null;
+    if (c?.info?.sessionId) crashResumeKnown.set(k, { claudeSessionId: c.info.sessionId, model: v.model, base: launch.commands.claude });
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
   }
   Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)
@@ -1461,6 +1479,7 @@ async function killSession(name, confirm) {
   if (confirm !== name) throw httpError(400, 'confirm must equal the session name');
   if (!(await sessionExists(name))) throw httpError(404, 'no such session');
   await exec(TMUX, ['kill-session', '-t', `=${name}`]);
+  crashResumer.recordClose(name, 'dashboard kill');
   if (history.openOf(name)) await historyLog({ kind: 'session.ended', name, reason: 'killed' });
   lastSendAt.delete(name);
   managerForget(name);
@@ -2412,6 +2431,7 @@ server.on('upgrade', (req, socket, head) => {
 async function tick() {
   try {
     const { status, changedSessions } = await poll();
+    if (crashResumeEnabled()) await crashResumer.tick(Object.keys(status));
     for (const name of changedSessions) {
       const c = lastSnapshots.get(name);
       if (c) broadcast(name, { type: 'snapshot', session: name, pane: c.pane, cols: c.cols, rows: c.rows });
