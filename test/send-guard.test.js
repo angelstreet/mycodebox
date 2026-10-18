@@ -100,7 +100,7 @@ test('agentFromArgs: shells and sleep do not match any agent', () => {
 // Display-only signals for the green "working" badge: MiniMax/Codex footers that don't
 // go through the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children.
 
-import { paneBackgroundOf, scriptBusyOf } from '../api-extras.js';
+import { paneBackgroundOf, scriptBusyOf, interactiveAgentOf } from '../api-extras.js';
 
 test('paneBackgroundOf: a MiniMax "Tasks · 1 background active" footer counts', () => {
   const lines = [
@@ -205,4 +205,116 @@ test('scriptBusyOf: walks the tree breadth-first to depth 8', () => {
     [6, 5, 'claude -p "deep"'],
   ]);
   assert.equal(scriptBusyOf(1, t), true);
+});
+
+// --- interactiveAgentOf: the companion to scriptBusyOf. server.js sets
+// scriptBusy = scriptBusyOf(...) && !interactiveAgentOf(...) so an interactive REPL
+// that launched its own background mcode exec workers or sleep children stays
+// messageable. An interactive agent is a claude / codex / mcode process whose args
+// are NOT -p/--print/exec (the same patterns scriptBusyOf uses for "non-interactive").
+test('interactiveAgentOf: a bare interactive claude REPL counts', () => {
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions']]);
+  assert.equal(interactiveAgentOf(1, t), true);
+});
+
+test('interactiveAgentOf: a bare interactive mcode REPL counts', () => {
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/mcode']]);
+  assert.equal(interactiveAgentOf(1, t), true);
+});
+
+test('interactiveAgentOf: a bare interactive codex counts', () => {
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/codex']]);
+  assert.equal(interactiveAgentOf(1, t), true);
+});
+
+test('interactiveAgentOf: a script-wrapped `claude -p` does NOT count (it is non-interactive)', () => {
+  const t = mkTable([
+    [1, 0, 'tmux pane shell'],
+    [2, 1, 'bash /home/u/run.sh'],
+    [3, 2, '/home/u/.local/bin/claude -p "do the thing"'],
+  ]);
+  assert.equal(interactiveAgentOf(1, t), false);
+});
+
+test('interactiveAgentOf: a script-wrapped `mcode exec` does NOT count', () => {
+  const t = mkTable([
+    [1, 0, 'bash'],
+    [2, 1, 'bash /home/u/run.sh'],
+    [3, 2, 'mcode exec --task "x"'],
+  ]);
+  assert.equal(interactiveAgentOf(1, t), false);
+});
+
+test('interactiveAgentOf: an interactive claude with a background mcode exec child STILL counts', () => {
+  // the false positive we are fixing: an interactive REPL that launched its own
+  // mcode exec workers in a background shell. The interactive agent is in the tree,
+  // so interactiveAgentOf returns true even though scriptBusyOf also returns true
+  // (because of the mcode exec child). server.js combines them with &&!.
+  const t = mkTable([
+    [1, 0, 'bash'],
+    [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions'],
+    [3, 2, 'bash'],
+    [4, 3, 'mcode exec --task "worker"'],
+  ]);
+  assert.equal(interactiveAgentOf(1, t), true);
+  assert.equal(scriptBusyOf(1, t), true);
+  // the combined check is what server.js uses
+  assert.equal(scriptBusyOf(1, t) && !interactiveAgentOf(1, t), false,
+    'interactive REPL with background mcode exec is NOT scriptBusy');
+});
+
+test('interactiveAgentOf: bash script -> claude -p (no interactive agent) is scriptBusy', () => {
+  const t = mkTable([
+    [1, 0, 'bash'],
+    [2, 1, 'bash /home/u/run.sh'],
+    [3, 2, 'claude -p "task"'],
+  ]);
+  assert.equal(interactiveAgentOf(1, t), false);
+  assert.equal(scriptBusyOf(1, t), true);
+  assert.equal(scriptBusyOf(1, t) && !interactiveAgentOf(1, t), true,
+    'script-driven pane with no interactive agent IS scriptBusy');
+});
+
+test('interactiveAgentOf: an interactive claude with a background sleep child is NOT scriptBusy', () => {
+  // another false positive shape: a REPL runs `sleep 60` in a background shell.
+  // scriptBusyOf finds the sleep under bash and returns true; interactiveAgentOf
+  // finds the claude REPL and returns true; the combined check is false.
+  const t = mkTable([
+    [1, 0, 'bash'],
+    [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions'],
+    [3, 2, 'bash'],
+    [4, 3, 'sleep 60'],
+  ]);
+  assert.equal(interactiveAgentOf(1, t), true);
+  assert.equal(scriptBusyOf(1, t), true);
+  assert.equal(scriptBusyOf(1, t) && !interactiveAgentOf(1, t), false,
+    'interactive REPL with background sleep is NOT scriptBusy');
+});
+
+test('interactiveAgentOf: bad / missing input is safe (returns false)', () => {
+  assert.equal(interactiveAgentOf(0, mkTable([[1, 0, 'bash']])), false);
+  assert.equal(interactiveAgentOf(null, mkTable([[1, 0, 'bash']])), false);
+  assert.equal(interactiveAgentOf(1, null), false);
+  assert.equal(interactiveAgentOf(1, { children: new Map(), args: new Map() }), false);
+});
+
+test('shouldRefuse: owner is allowed on a script pane even with an interactive agent in the tree', () => {
+  // the owner must always be allowed to type or Ctrl-C into a script pane, regardless
+  // of whether scriptBusyOf / interactiveAgentOf say it is busy or not. This pins the
+  // owner bypass so a future reorder cannot break it.
+  assert.equal(shouldRefuse({ by: 'owner', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: true }), null);
+  assert.equal(shouldRefuse({ by: 'owner', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: false }), null);
+  assert.equal(shouldRefuse({ by: 'owner', live: null, scriptBusy: true }), null);
+  assert.equal(shouldRefuse({ by: 'owner', live: null, scriptBusy: false }), null);
+});
+
+test('shouldRefuse: non-owner on a pane with an interactive agent + background mcode exec is allowed', () => {
+  // an interactive REPL that launched its own mcode exec workers is not script-driven
+  // (scriptBusy = scriptBusyOf && !interactiveAgentOf = true && !true = false), so a
+  // non-owner actor with a live agent in the pane is allowed to send.
+  assert.equal(
+    shouldRefuse({ by: 'manager-agent', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: false }),
+    null,
+    'interactive REPL with background mcode exec is not scriptBusy → non-owner allowed',
+  );
 });

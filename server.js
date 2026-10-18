@@ -123,7 +123,7 @@ import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
-import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
+import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
 import { createVptLockStore } from './vpt-locks.js';
@@ -299,7 +299,10 @@ async function assertAgentPane(session, by) {
   }
   const table = await processTable();
   const live = agentFromTree(pane.pid, table);
-  const scriptBusy = scriptBusyOf(pane.pid, table);
+  // Script-driven only when no interactive agent TUI is in the pane: an interactive
+  // claude/codex/mcode REPL that launched its own mcode exec workers or sleep children
+  // is not script-driven — typing into it must still be allowed for non-owner senders.
+  const scriptBusy = scriptBusyOf(pane.pid, table) && !interactiveAgentOf(pane.pid, table);
   const reason = shouldRefuse({ by, live, scriptBusy });
   if (reason) {
     logEvent({ type: 'send-refused', session, by, reason });
@@ -864,9 +867,11 @@ const rulesWatch = createRulesWatch({
       if (!pid || !age.has(pid)) continue;
       out.push({ name, cwd: p.cwd, startedAt: Date.now() - age.get(pid) * 1000,
         working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working'),
-        // scriptBusy: a script is driving a claude -p / mcode exec / sleep under bash in the pane; skip so the
-        // long rules-change message doesn't land in the terminal input and get read by bash as commands.
-        scriptBusy: scriptBusyOf(p.pid, table) });
+        // scriptBusy: a script is driving a claude -p / mcode exec / sleep under bash in the pane, AND there is
+        // no interactive agent TUI in the same tree; skip so the long rules-change message doesn't land in the
+        // terminal input and get read by bash as commands. An interactive REPL that launched its own background
+        // helpers (mcode exec workers, sleep) stays messageable.
+        scriptBusy: scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table) });
     }
     return out;
   },
@@ -1101,7 +1106,7 @@ async function pollOnce() {
       // the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children. status.state stays raw for the
       // manager / auto-answer logic; these fields flip a done session to working (green) in the UI only.
       paneBackground: !offline && state === 'done' ? paneBackgroundOf(plain) : false,
-      scriptBusy: !offline && scriptBusyOf(p.pid, table),
+      scriptBusy: !offline && scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table),
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,
     };
