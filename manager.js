@@ -20,6 +20,7 @@
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction } from './stall.js';
@@ -72,7 +73,7 @@ const decisions = createDecisionsClient({ jevUrl: JEV_URL, apiKey: JEV_API_KEY, 
 const outcomeQueue = createOutcomeQueue({ file: OUTCOME_QUEUE_FILE, send: (id, outcome) => decisions.postOutcome(id, outcome) });
 const decisionByStop = new Map();   // stop id -> the product's decision_id of its Jev call (outcome write-back)
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
-export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait', 'own_job_wait'];
+export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait', 'own_job_wait', 'merge_wait'];
 export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
@@ -108,6 +109,7 @@ let decideContext = () => ({ deploys: null, leases: null, envs: [] });    // inj
 let onDigest = () => {};                                            // injected: ({ day, count, text }) -> feed item + push (digest tier)
 let readyWindows = null;                                            // injected: ready-window.js store (round 9 item 8). Unset = no ready windows
 let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
+let integration = null;                                            // injected: the integration lane { repoForCwd, enqueue } (merge_wait routing)
 let ownJobs = null;                                                 // injected: own-jobs.js watcher { watch, forget, progressOf } (round 9, item 11). Unset = jobs are not watched
 let ownerAsksFile = join(STATE_DIR, 'manager-owner-asks.jsonl');    // the owner-asks ledger: a new ask of a session supersedes its older open ones (round 9, item 5)
 let managerItemHook = () => {};                                      // injected: ({ session, id, kind: 'lease'|'deploy', case, question, reason }) -> manager event (no owner push)
@@ -120,7 +122,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, ownJobs: ownJobsDep, ownerAsksFile: asksFile, readyStore } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, ownJobs: ownJobsDep, integration: integrationDep, ownerAsksFile: asksFile, readyStore } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -170,6 +172,7 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (onStatus) statusHook = onStatus;
   if (onManagerItem) managerItemHook = onManagerItem;
   if (ownJobsDep) ownJobs = ownJobsDep;
+  if (integrationDep) integration = integrationDep;
   if (asksFile) ownerAsksFile = asksFile;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
@@ -292,6 +295,7 @@ const hourCount = (name) => {
 // Owner-facing reason a stall is not auto-answered.
 function humanWhy(final, ws) {
   const w = String(ws.why || '');
+  if (final.case === 'merge_wait') return 'merge decision — the manager decides, not the owner';
   if (final.case === 'waiting_deploy') return 'deploy waiting — queue it (Phase 7)';
   if (final.case === 'owner_action') return `needs you: ${final.action || 'a manual step'}`;
   if (w.startsWith('forbidden: ')) return `${w.slice(11)} question — needs you`;
@@ -400,7 +404,7 @@ const managerStops = new Set();    // the subset escalated to the manager: a lea
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
   const firstEscalation = !escalatedStops.has(id);
-  const opsKind = config.opsToManager !== false && !final.topics?.merge && !final.topics?.push ? opsAsk(final) : null;
+  const opsKind = config.opsToManager !== false && (!final.topics?.merge || final.case === 'merge_wait') && !final.topics?.push ? opsAsk(final) : null;
   if (opsKind) {
     managerStops.add(id); if (managerStops.size > 500) managerStops.delete(managerStops.values().next().value);
     escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
@@ -1033,7 +1037,7 @@ const topicCovered = (part, ok, evs = {}, envs = []) => {
   }
   return true;
 };
-const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'error', 'background_wait', 'own_job_wait'];
+const CASES_NOT_PARTIAL = ['permission', 'owner_action', 'waiting_deploy', 'merge_wait', 'error', 'background_wait', 'own_job_wait'];
 const CASES_NOT_LEASE = ['permission', 'owner_action', 'error', 'background_wait', 'own_job_wait'];   // a lease question may come as waiting_deploy ("can I deploy, the lease ...")
 // A recommended option that is irreversible-looking is hard whatever the topic split says. `kinds`: the merge / push / deploy topics the
 // manager decided, exempt from the hard floor.
@@ -1126,6 +1130,45 @@ const argsOf = (out) => ({
 // An owner-bound stop that asks for information and / or a merge, push or deploy: answer what the manager can (the information when it is
 // in the docs, each topic when its policy says so), one reply, and escalate only the rest. -> { handled, mergeWhy } (mergeWhy: the
 // reasons a decided topic was escalated; handled: a reply is scheduled).
+// A session that waits on (or asks the owner for) a merge / PR decision: merges are not theirs or the owner's. Queue the branch with the integration lane
+// and tell the session; with no lane repo, run the merge evaluation. -> { handled } (false: the hard floor or a failure goes on to escalate()).
+const gitBranchOf = (cwd) => new Promise((res) => { if (!cwd) return res(''); execFile('git', ['-C', cwd, 'branch', '--show-current'], { timeout: 5000 }, (e, out) => res(e ? '' : String(out).trim())); });
+async function mergeHandoff({ s, w, id, h, final, stall }) {
+  const name = s.name;
+  if (final.case !== 'merge_wait' || isManagerSession(name) || s.remote || final.topics?.hard) return { handled: false };
+  const tell = async (text) => {
+    if (s.state !== 'done' || isPaused(name) || !send.keys || w.hash !== h) return false;
+    try { await send.keys(name, text, true, id); sentLog.set(name, [...(sentLog.get(name) || []), Date.now()]); return true; } catch (e) { console.error('[manager] merge handoff send', e.message); return false; }
+  };
+  const ask = final.mergeAsk || {};
+  const branch = ask.branch || await gitBranchOf(s.cwd);
+  let repo = null;
+  try { repo = integration?.repoForCwd ? await integration.repoForCwd(s.cwd) : null; } catch { repo = null; }
+  if (w.hash !== h) return { handled: true };
+  const at = new Date(s.now);
+  if (repo && branch && !/^(?:main|master)$/.test(branch)) {
+    let q = null;
+    try { q = integration.enqueue({ repo, branch, session: name, by: 'manager' }); } catch (e) { q = { error: e.message }; }
+    if (q?.id) {
+      await appendJournal({ kind: 'merge_handoff', id, session: name, at: at.toISOString(), repo, branch, pr: ask.pr || null, integration: q.id, position: q.position ?? null });
+      logLater({ type: 'merge_handoff', id, session: name, repo, branch, integration: q.id });
+      const sent = await tell(`Merges are not yours or the owner's: queued integration ${q.id}. End with STATUS: waiting: integration ${q.id}.`);
+      if (!sent) logLater({ type: 'merge_handoff_unsent', id, session: name, integration: q.id });
+      return { handled: true };
+    }
+    logLater({ type: 'merge_handoff_failed', id, session: name, repo, branch, reason: q?.error || 'enqueue failed' });
+    return { handled: false, why: `integration enqueue failed: ${q?.error || 'unknown'}` };
+  }
+  if (repo) return { handled: false, why: 'merge asked for the target branch itself: nothing to queue' };
+  const ev = await evaluateMerge({ cwd: s.cwd, text: stall.topicsText ?? final.question ?? '', evidenceText: stall.fullText || stall.excerpt || '', session: name, config, jev: (b) => mergeJev(b) });
+  if (w.hash !== h) return { handled: true };
+  await appendJournal(journalRecord(ev, { id, session: name, at }));
+  if (ev.verdict === 'merge' && config.mergeDecisions !== false) {
+    const reply = composeReply({ merge: { repo: ev.facts.repoName, branch: ev.facts.branch, target: ev.facts.target, rationale: ev.rationale } });
+    if (await tell(reply)) { logLater({ type: 'merge_decision', id, session: name, verdict: ev.verdict, repo: ev.facts.repoName || null, branch: ev.facts.branch || null }); return { handled: true }; }
+  }
+  return { handled: false, why: `merge not decided: ${(ev.reasons || []).join('; ') || 'not sent'}` };
+}
 async function partialDecision({ s, w, id, h, final, stall }) {
   const out = { handled: false, mergeWhy: null };
   const name = s.name;
@@ -1419,6 +1462,9 @@ export function observe(s) {
         if (r.unseen && final.case === 'own_job_wait') { final = { ...final, case: 'owner_decision' }; escalate(s.name, s.state, final, id, `pid ${r.pid} is not running on this host`); return; } } catch (e) { console.error('[manager] own job', e.message); }
     }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
+    const mh = await mergeHandoff({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] merge handoff', e.message); return { handled: false }; });
+    if (mh.handled) return;
+    if (w.hash !== h) return;
     const partial = await partialDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] partial decision', e.message); return { handled: false }; });
     if (partial.handled) return;
     if (w.hash !== h) return;

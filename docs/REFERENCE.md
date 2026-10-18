@@ -1204,6 +1204,8 @@ each holder (live / ended / remote / unknown / system) and the planned action. T
 Design: [docs/v2/INTEGRATION-LANE.md](v2/INTEGRATION-LANE.md). Sessions are developers: they push a branch and ask the lane to integrate it. One lane per
 repository, run by the server in its own clone, one request at a time per repo (repos run in parallel).
 
+- **Rule:** Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then `STATUS: waiting: integration <id>`. A session that stops on a merge or PR decision anyway (`STATUS: waiting/blocked/needs-owner` naming a merge or PR) is classified `merge_wait`: the manager queues the branch with the lane and tells the session the integration id; with no lane repo it runs the merge evaluation. A failure is a manager item of kind `merge`; only a hard-floor word (force-push, secrets) reaches the owner.
+
 - **Config** `<state>/integration.json`: `{ repos: { <key>: { clone, remote: 'origin', target: 'main', test: '<cmd>'|null, testTimeoutMin: 30,
   ci: 'github'|null, ciTimeoutMin: 60, deploy: { env, defaultScope }|null, conventions: ['VERSION.txt'], conventionResolver: 'take-target'|'max-plus-one' } } }`.
 - **API** (loopback + reporter token; remote clients with the `integrate` token flag): `POST /api/integration/requests { repo?, branch, session?, deploy?, note? }`
