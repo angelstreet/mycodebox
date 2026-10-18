@@ -328,6 +328,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     if (!deploys) throw new Ret('no deploy adapter');
     const res = await step(r, 'deploy', async () => {
       try {
+        // a crash between the request and the saved id would re-request: look the deploy up by its agent first
+        if (!r.deployId && deploys.find) { const id = await deploys.find({ agent: `integration:${r.id}` }).catch(() => null); if (id) { r.deployId = id; persist(r); } }
         if (!r.deployId) {
           const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: r.sha || c.target, sha: r.sha, agent: `integration:${r.id}` });
           if (!q?.id) return { ok: false, tail: q?.error ?? q?.reason ?? 'deploy request refused' };

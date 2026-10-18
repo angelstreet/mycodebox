@@ -2177,7 +2177,8 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
 const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
   deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
-    wait: (id) => integrationHooks.deploys.wait(id) },
+    wait: (id) => integrationHooks.deploys.wait(id),
+    find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },
   notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a) });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,

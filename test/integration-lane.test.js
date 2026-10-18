@@ -274,3 +274,12 @@ test('repoForUrl / repoForCwd find the repository from an origin url', async () 
   assert.equal(await lane.repoForUrl('https://host.example/org/other'), null);
   assert.equal(await lane.repoForCwd('/nonexistent'), null);
 });
+
+test('restart between the deploy request and the saved id: the existing deploy for integration:<id> is followed, not re-requested', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  let requested = 0; const waited = [];
+  const deploys = { request: async () => { requested++; return { id: 'dNEW' }; }, find: async ({ agent }) => (/^integration:int-/.test(agent) ? 'dOLD' : null), wait: async (id) => { waited.push(id); return { ok: true, version: 'v1' }; } };
+  const { lane } = mk(w, { cfg: { deploy: { env: 'env-a', defaultScope: 'server' } }, lane: { deploys } });
+  const r = await go(lane, { branch: 'feat', deploy: true });
+  assert.equal(r.state, 'deployed', JSON.stringify(r)); assert.equal(requested, 0); assert.deepEqual(waited, ['dOLD']); assert.equal(r.deployed.id, 'dOLD');
+});

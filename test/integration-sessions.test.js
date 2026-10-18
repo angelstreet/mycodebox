@@ -246,3 +246,9 @@ test('docs: session rules say hand off, never merge / push the target / deploy',
   assert.match(rd('../docs/LEASE-RULES.md'), /integrate request <branch> --deploy/);
   assert.match(rd('../docs/REFERENCE.md'), /## Integration lane/);
 });
+
+test('deploy adapter: find returns the deploy already requested for this agent, not a failed one', async () => {
+  // find: the deploy already requested for this agent, not a failed one
+  const f = createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: JSON.stringify({ deploys: [{ id: 'x1', agent: 'integration:i1', state: 'failed' }, { id: 'x2', agent: 'integration:i1', state: 'queued' }, { id: 'x3', agent: 'integration:i2', state: 'queued' }] }), stderr: '' }) });
+  assert.equal(await f.find({ agent: 'integration:i1' }), 'x2'); assert.equal(await f.find({ agent: 'integration:none' }), null);
+});

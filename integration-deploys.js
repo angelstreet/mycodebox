@@ -30,6 +30,16 @@ export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise
     if (r.code !== 0) return null;
     try { const j = JSON.parse(r.stdout); return (Array.isArray(j) ? j : j.deploys || []).find((d) => String(d.id) === String(id)) || null; } catch { return null; }
   }
+  // -> the id of a live-or-done deploy already requested for this agent (a restart between request and the saved id), else null
+  async function find({ agent } = {}) {
+    if (!/^integration:[\w.-]{1,60}$/.test(String(agent || ''))) return null;
+    const r = await reg(['deploy', 'list', '--json']);
+    if (r.code !== 0) return null;
+    try {
+      const j = JSON.parse(r.stdout), all = (Array.isArray(j) ? j : j.deploys || []).filter((d) => String(d.agent || '') === agent && !['failed', 'error', 'cancelled', 'canceled'].includes(String(d.state || '').toLowerCase()));
+      return all.length ? String(all[all.length - 1].id) : null;
+    } catch { return null; }
+  }
   async function versionOf(d) {
     if (d?.version) return String(d.version);
     const r = await reg(['deploy', 'last', d?.env || '', '--json'].filter((x) => x !== ''));
@@ -54,5 +64,5 @@ export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise
       await sleep(pollMs);
     }
   }
-  return { request, wait };
+  return { request, wait, find };
 }
