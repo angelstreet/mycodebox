@@ -1122,7 +1122,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (op === 'ticket' || op === 'cancelTicket') return shadowSvc[op](a.id, a);
       if (op === 'sessionGone') return shadowSvc.sessionGone(a.session, a);
       if (op === 'sessionStatus') return shadowSvc.sessionStatus(a.session, a.status);
-      if (!['claim', 'get', 'release', 'renew', 'heartbeat', 'narrow', 'setMode', 'list', 'check', 'events', 'ownerRelease'].includes(op)) return fail('E_INVALID', `unknown op ${op}`);
+      if (!['claim', 'get', 'release', 'renew', 'heartbeat', 'narrow', 'setMode', 'list', 'check', 'events', 'ownerRelease', 'importLegacy'].includes(op)) return fail('E_INVALID', `unknown op ${op}`);
       return shadowSvc[op](a);
     },
     async report(r = {}) {

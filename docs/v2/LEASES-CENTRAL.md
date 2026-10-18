@@ -28,6 +28,13 @@ the holder only waited.
 
 ## 2. One authority
 
+> **Where it runs (manager decision 2026-10-18):** the authority runs on the registry host, next to the legacy registry, as
+> `scripts/lease-serve.js` (the same `lease-service.js` and `lease-routes.js`), listening on that host's loopback only
+> (`127.0.0.1:17777`, kept alive by cron there). No machine gets a new network link: the registry host's own
+> `~/bin/vpt-lease` talks to it locally, and codebox, the Mac and the dashboard keep reaching leases through
+> `ssh <registry> ~/bin/vpt-lease ...` as before. The in-process service of the dashboard below stays unused for the fleet.
+> Device hosts never call `vpt-lease` and need nothing installed. The text below describes the dashboard-hosted variant.
+
 The mycodebox server is the single writer of every lease and of the deploy queue. `lease-service.js` runs inside the
 server process:
 
