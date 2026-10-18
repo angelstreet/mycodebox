@@ -155,10 +155,16 @@ export function createLeaseSource({ authority = 'legacy', legacy = {}, getServic
       const t = now();
       const leases = (r.leases || []).map((l) => normLease(l, t));
       const tickets = (r.tickets || []).map((x) => normTicket(x, t));
-      let shadow = [];
-      try { const s = await svc.shadow?.list?.({}); shadow = Array.isArray(s) ? s : s?.reports || s?.items || []; } catch { shadow = []; }
+      const shadow = await shadowReports();
       return { ok: true, authority: 'central', at: t, leases, tickets, deploys: r.deploys || [], waiters: r.waiters || [], shadow };
     } catch (e) { return { ok: false, error: String(e?.message || e).slice(0, 200) }; }
+  }
+  // Shadow disagreements live in the service in both authorities: during the shadow period the dashboard still reads the
+  // legacy registry, and the Leases view must show what the clients reported (LEASES-CENTRAL §10 step 4).
+  let shadowLast = [];
+  async function shadowReports() {
+    try { const s = await getService()?.shadow?.list?.({}); shadowLast = Array.isArray(s) ? s : s?.reports || s?.items || []; } catch { shadowLast = []; }
+    return shadowLast;
   }
   const asLegacyShape = (v) => (v.ok ? { ok: true, leases: legacyRows(v.leases), waiters: v.waiters || [] } : { ok: false, error: v.error });
 
@@ -179,12 +185,12 @@ export function createLeaseSource({ authority = 'legacy', legacy = {}, getServic
       if (auth() === 'central') { last = await central(); return last; }
       const v = await legacy.store.get(force);
       if (!v.ok) return { ok: false, error: v.error, authority: 'legacy' };
-      return { ok: true, authority: 'legacy', at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: [] };
+      return { ok: true, authority: 'legacy', at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: await shadowReports() };
     },
     peekView() {
       if (auth() === 'central') return last;
       const v = legacy.store.peek();
-      return v ? (v.ok ? { ok: true, authority: 'legacy', at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: [] } : { ok: false, error: v.error, authority: 'legacy' }) : null;
+      return v ? (v.ok ? { ok: true, authority: 'legacy', at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: shadowLast } : { ok: false, error: v.error, authority: 'legacy' }) : null;
     },
     // deploy-runner: argv -> {code, stdout, stderr}
     deployRegistry() { return auth() === 'central' ? centralRegistry(getService, { now }) : legacy.registry; },
