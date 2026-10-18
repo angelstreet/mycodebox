@@ -120,8 +120,8 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
   };
 }
 // Round 7 merge floor with the lane as the tester (its own test run replaces the session's test report).
-export async function defaultMergeEval({ cwd, branch, target, remote, conventionFiles }) {
-  const facts = await gitFacts({ cwd, branch, target, remote, conventionFiles });
+export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles }) {
+  const facts = await gitFacts({ cwd, branch, branchSha, target, remote, conventionFiles });
   const reasons = mergeFloor(facts, { state: 'green' }, { conventionFiles });
   return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts };
 }
@@ -252,7 +252,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
   async function evaluate(r, c) {
     const ev = await step(r, 'evaluate', async () => {
-      const e = await mergeEval({ cwd: c.clone, branch: r.branch, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session });
+      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
       return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons } };
     });

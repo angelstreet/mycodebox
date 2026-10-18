@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createIntegrationLane, validateConfig, normalizeRemoteUrl, FINAL } from '../integration-lane.js';
 import { makeWorld } from './helpers-lane.js';
+import { git, commit } from './helpers-git.js';
 
 const mk = (w, o = {}) => {
   const stateDir = o.stateDir || mkdtempSync(join(tmpdir(), 'lane-state-'));
@@ -81,6 +82,15 @@ test('sensitive file: returned by the merge floor, nothing merged', async () => 
   const r = await go(lane, { branch: 'feat' });
   assert.equal(r.state, 'returned'); assert.match(r.reason, /merge evaluation:.*credentials\.txt/);
   assert.equal(w.main(), before);
+});
+
+test('the floor judges the exact commit that is merged, not a same-named local branch of the lane clone', async () => {
+  const w = makeWorld(); w.branch('feat', { 'config/credentials.txt': 'x\n' });
+  git(w.lane, 'fetch', '-q', 'origin'); git(w.lane, 'checkout', '-q', '-b', 'feat', 'origin/main'); commit(w.lane, { 'harmless.js': 'ok\n' }, 'local');
+  const before = w.main();
+  const { lane } = mk(w);
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'returned', JSON.stringify(r)); assert.match(r.reason, /credentials\.txt/); assert.equal(w.main(), before);
 });
 
 test('branch missing, or the target itself: returned / refused', async () => {
