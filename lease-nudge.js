@@ -8,6 +8,7 @@
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { effectiveBlockers } from './public/platforms-view.js';
+import { normLease } from './lease-source.js';
 
 export const WAIT_MS = 10 * 60 * 1000;      // a deploy or ticket waits this long before its holders are asked
 export const IDLE_MIN = 20;                 // no finished turn for this long = idle
@@ -20,6 +21,10 @@ const WIDE_RE = /\b(?:server|backend|full|everything|all (?:hosts|devices)|every
 const mins = (ms) => Math.max(0, Math.round(ms / 60000));
 const clean = (s, n = 60) => String(s ?? '').replace(/[`\n\r]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 const resText = (l) => (l.resources?.length ? l.resources.join(',') : '*');
+
+// A host-kind lease on named host(s) / device(s): the narrowest correct lease for a running script. A deploy that restarts that host
+// blocked on it is a legitimate conflict (the deferred restart is a separate task), not an over-broad lease: never ask it to narrow.
+export const narrowlyScoped = (l) => l.kind === 'host' && (l.resources || []).length > 0 && l.resources.every((r) => r && !['*', 'server', 'frontend'].includes(r));
 
 // Why a lease is nudgeable: [] when it is not. lease: rich record (lease-source normLease); idleMin: minutes without a finished turn (null unknown).
 export function reasonsOf(l, { now, idleMin = null }) {
@@ -41,8 +46,8 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
     if (d.state !== 'queued') continue;
     const waitedMs = now - (Number(d.created) || 0) * 1000;
     if (!(waitedMs > waitMs)) continue;
-    const blockers = effectiveBlockers(d).map((b) => leases.get(String(b.id)) || { id: String(b.id), env: b.env || d.env, resources: [b.resource || '*'], kind: b.kind, agent: b.agent || '', purpose: b.purpose || '', sinceMs: null, expectMin: null, idleMin: null });
-    waits.push({ what: `deploy ${clean(d.id, 16)} (${clean(d.scope, 12)} ${clean(d.ref, 30)} to ${clean(d.env, 20)})`, waitedMs, blockers });
+    const blockers = effectiveBlockers(d).map((b) => leases.get(String(b.id)) || normLease({ ...b, env: b.env || d.env, resources: b.resources ?? b.resource }, now));
+    waits.push({ what: `deploy ${clean(d.id, 16)} (${clean(d.scope, 12)} ${clean(d.ref, 30)} to ${clean(d.env, 20)})`, waitedMs, blockers, deploy: true });
   }
   for (const t of view?.ok ? view.tickets || [] : []) {
     const waitedMs = t.createdMs ? now - t.createdMs : 0;
@@ -57,6 +62,7 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
       if (!l.agent || SYSTEM_RE.test(l.agent) || l.deployId) continue;
       const key = `${l.agent}|${l.id}`;
       if (out.has(key) || now - (last.get(key) || 0) < cooldownMs) continue;
+      if (w.deploy && narrowlyScoped(l)) continue;
       const session = /^mac:/i.test(l.agent) ? null : sessionOf(l.agent);
       const reasons = reasonsOf(l, { now, idleMin: idleMinOf(l, session) });
       if (!reasons.length) continue;

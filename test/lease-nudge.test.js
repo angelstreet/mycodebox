@@ -43,6 +43,23 @@ test('a waiting ticket nudges its holders (matched by lease id)', () => {
   assert.equal(planNudges(base({ deploys: [], view: view([lease()], [{ ...t, createdMs: NOW - 4 * MIN }]) })).length, 0);
 });
 
+test('correctly scoped host lease on a device blocked by a deploy: no nudge, even when idle or past expect_min', () => {
+  const row = { id: 'L7', env: 'env-a', resources: ['env-a/host-1/dev-3'], kind: 'host', agent: 'codebox:worker', purpose: 'script on dev-3', since: new Date(NOW - 90 * MIN).toISOString(), expect_min: 10 };
+  const d = deploy({ blocking: [row] });
+  assert.equal(planNudges(base({ deploys: [d], view: { ok: false } })).length, 0);
+  assert.equal(planNudges(base({ deploys: [d], view: view([lease({ id: 'L7', kind: 'host', resources: ['host-1/dev-3'], purpose: 'script on dev-3', expectMin: 10 })]) })).length, 0);
+});
+test('an over-broad lease is nudged with its real resource, from the view or from the runner row', () => {
+  const wide = lease({ id: 'L8', kind: 'server', resources: ['host-1'], purpose: 'host-1 script' });
+  const [a] = planNudges(base({ deploys: [deploy({ blocking: [{ id: 'L8', agent: 'codebox:worker' }] })], view: view([wide]), idleMinOf: () => 0 }));
+  assert.deepEqual(a.reasons, ['broader than its purpose']); assert.match(a.text, /lease L8 on env-a\/host-1 blocks/);
+  const row = { id: 'L9', env: 'env-a', resources: ['env-a/host-1/dev-3'], kind: 'server', agent: 'codebox:worker', purpose: 'dev-3 run' };
+  const [b] = planNudges(base({ deploys: [deploy({ blocking: [row] })], view: { ok: false } }));
+  assert.match(b.text, /lease L9 on env-a\/host-1\/dev-3 blocks/);
+  const [c] = planNudges(base({ deploys: [deploy({ blocking: [{ ...row, resources: ['env-a/*'] }] })], view: { ok: false } }));
+  assert.match(c.text, /on env-a\/\* blocks/);
+});
+
 function harness(over = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ghosty-nudge-'));
   const sent = [], events = [];
