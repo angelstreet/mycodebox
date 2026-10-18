@@ -3090,6 +3090,7 @@ document.getElementById('decisionsBtn').onclick = openDecisions;
 {
   const mb = $('#moreBtn'), mp = $('#morePop');
   mb.onclick = (e) => { e.stopPropagation(); mp.classList.toggle('hidden'); };
+  $('#moreClose').onclick = (e) => { e.stopPropagation(); mp.classList.add('hidden'); };
   mp.onclick = (e) => { e.stopPropagation(); if (e.target.closest('.icon-btn')) mp.classList.add('hidden'); };
   document.addEventListener('click', () => mp.classList.add('hidden'));
 }
@@ -4780,6 +4781,7 @@ function wireFontUi() {
   $('#ctlToggle').onclick = () => setCardCtl(!state.cardCtl);
   $('#ctlToggle').classList.toggle('on', state.cardCtl);
   $('#fontBtn').onclick = (e) => { e.stopPropagation(); pop.classList.toggle('hidden'); };
+  $('#fontClose').onclick = (e) => { e.stopPropagation(); pop.classList.add('hidden'); };
   pop.onclick = (e) => e.stopPropagation();
   document.addEventListener('click', () => pop.classList.add('hidden'));
   document.addEventListener('keydown', (e) => {
