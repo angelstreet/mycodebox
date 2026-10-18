@@ -204,6 +204,22 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   const rev = async (r, c, ref, cwd) => { const x = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: cwd || c.clone }); return x.code === 0 ? x.out.trim() : null; };
   const contains = async (r, c, sha) => (await G(r, c, ['merge-base', '--is-ancestor', sha, `${c.remote}/${c.target}`])).code === 0;
 
+  // The remote's target tip read straight from the remote (no fetch needed). -> sha | null (unknown)
+  const remoteTip = async (r, c) => {
+    const x = await G(r, c, ['ls-remote', c.remote, `refs/heads/${c.target}`], { timeoutMs: 60_000 });
+    const m = x.code === 0 ? /^([0-9a-f]{40,64})\s/.exec(x.out) : null;
+    return m ? m[1] : null;
+  };
+  // Retry until the remote answers (a follow-up fetch can fail after a push that landed); a stopped lane leaves the request running.
+  const knownTip = async (r, c) => {
+    for (;;) {
+      const t = await remoteTip(r, c);
+      if (t) return t;
+      if (stopped) throw new Ret('lane stopped');
+      await sleep(pollMs);
+    }
+  };
+
   function wtPath(r) { return path.join(dir, 'wt', r.id); }
   async function dropWorktree(r, c) {
     const p = wtPath(r);
@@ -294,7 +310,12 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         const p = await step(r, 'push', async () => {
           // compare-and-swap: only if the remote target is still the commit the merge was built on (never clobber a rewind or a newer push)
           const x = await G(r, c, ['push', '--porcelain', `--force-with-lease=refs/heads/${c.target}:${targetSha}`, c.remote, `${sha}:refs/heads/${c.target}`], { timeoutMs: 120_000 });
-          await G(r, c, ['fetch', '--prune', c.remote]);
+          const f = await G(r, c, ['fetch', '--prune', c.remote]);
+          if (f.code !== 0) {   // cannot read the result by fetching: ask the remote itself before deciding anything
+            const tip = await knownTip(r, c);
+            if (tip === sha) return { ok: true, info: { rejected: false } };
+            return { ok: false, tail: x.err || x.out, info: { moved: tip !== targetSha } };
+          }
           if (await contains(r, c, sha)) return { ok: true, info: { rejected: false } };   // the remote is the truth, whatever push said
           const now = await rev(r, c, `${c.remote}/${c.target}`);
           return { ok: false, tail: x.err || x.out, info: { moved: now !== targetSha } };   // lease rejected / target changed: re-merge onto it
@@ -352,7 +373,11 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     try {
       if (!r.pushed) {
         // restart check: a recorded merge may already be on the remote (the push step finished but was not recorded)
-        if (r.mergeSha) { await fetch(r, c); if (await contains(r, c, r.mergeSha)) { r.pushed = true; r.sha = r.mergeSha; persist(r); } }
+        if (r.mergeSha) {
+          let landed = false;
+          try { await fetch(r, c); landed = await contains(r, c, r.mergeSha); } catch (e) { if (!(e instanceof Ret)) throw e; landed = (await knownTip(r, c)) === r.mergeSha; }   // fetch down: read the remote tip
+          if (landed) { r.pushed = true; r.sha = r.mergeSha; persist(r); }
+        }
       }
       if (!r.pushed) {
         await fetch(r, c);

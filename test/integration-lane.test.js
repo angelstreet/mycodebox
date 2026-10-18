@@ -283,3 +283,31 @@ test('restart between the deploy request and the saved id: the existing deploy f
   const r = await go(lane, { branch: 'feat', deploy: true });
   assert.equal(r.state, 'deployed', JSON.stringify(r)); assert.equal(requested, 0); assert.deepEqual(waited, ['dOLD']); assert.equal(r.deployed.id, 'dOLD');
 });
+
+test('push landed but the follow-up fetch fails: verified with ls-remote, reported merged (not returned)', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const { createDefaultGit } = await import('../integration-lane.js');
+  const real = createDefaultGit(); let pushed = false, fails = 0;
+  const git = async (args, o) => {
+    if (args.includes('push')) pushed = true;
+    if (pushed && args.includes('fetch') && fails < 2) { fails++; return { code: 1, out: '', err: 'network down' }; }
+    return real(args, o);
+  };
+  const { lane } = mk(w, { lane: { git } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(r.pushed, true); assert.equal(w.main(), r.sha); assert.ok(fails >= 1);
+});
+
+test('push landed, remote unreadable for a while: the request keeps running, then settles merged', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const { createDefaultGit } = await import('../integration-lane.js');
+  const real = createDefaultGit(); let pushed = false, down = 4;
+  const git = async (args, o) => {
+    if (args.includes('push')) pushed = true;
+    if (pushed && down > 0 && (args.includes('fetch') || args.includes('ls-remote'))) { down--; return { code: 1, out: '', err: 'network down' }; }
+    return real(args, o);
+  };
+  const { lane } = mk(w, { lane: { git } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(down, 0);
+});
