@@ -12,17 +12,21 @@ const MAX_SENDS_PER_TICK = 2;   // a message can wake an idle session into work:
 // No message while the host is busy: load1 per core above this, or less RAM available than this %.
 const MAX_LOAD_PER_CORE = 1.5, MIN_RAM_AVAIL_PCT = 20;
 
-// Pure. targets: [{ name, cwd, startedAt, working }]; rules: Map repoKey -> { hash, at (ms), subject } | null;
-// repoOf: Map cwd -> repoKey; told: { name: hash }. -> [{ name, hash, rules }] to message now, oldest first.
+// Pure. targets: [{ name, cwd, startedAt, working, scriptBusy }]; rules: Map repoKey -> { hash, at (ms), subject } | null;
+// repoOf: Map cwd -> repoKey; told: { name: hash }. -> { send: [{ name, hash, rules }] (oldest first, capped),
+//   skipScript: [name] } — `skipScript` is the subset that would have been told but were
+//   skipped because a script is driving the pane (claude -p / mcode exec / sleep under bash);
+//   `tick` logs and journals those so the owner can see why a stale session was held.
 export function plan({ targets, rules, repoOf, told }) {
-  const out = [];
+  const send = [], skipScript = [];
   for (const t of targets) {
     const r = rules.get(repoOf.get(t.cwd));
     if (!r || !t.startedAt || r.at <= t.startedAt) continue;   // the session started after the change: it read the new rules
     if (told[t.name] === r.hash || t.working) continue;
-    out.push({ name: t.name, hash: r.hash, rules: r });
+    if (t.scriptBusy) { skipScript.push(t.name); continue; }    // a script is driving the pane; typing would land in its terminal input
+    send.push({ name: t.name, hash: r.hash, rules: r });
   }
-  return out.slice(0, MAX_SENDS_PER_TICK);
+  return { send: send.slice(0, MAX_SENDS_PER_TICK), skipScript };
 }
 
 export function message(r) {
@@ -72,7 +76,11 @@ export function createRulesWatch({ stateDir, git, listTargets, send, record = as
       const st = await load();
       const live = new Set(targets.map((t) => t.name));
       for (const n of Object.keys(st.told)) if (!live.has(n)) delete st.told[n];
-      const todo = plan({ targets, rules, repoOf, told: st.told });
+      const { send: todo, skipScript } = plan({ targets, rules, repoOf, told: st.told });
+      for (const n of skipScript) {
+        log.warn?.('[rules-watch] skipped: script pane', n);
+        await note({ skipped: 'script pane', session: n });
+      }
       const sent = [];
       for (const p of todo) {
         if (m === 'dry') { await note({ dry: true, session: p.name, hash: p.hash }); continue; }
@@ -84,7 +92,7 @@ export function createRulesWatch({ stateDir, git, listTargets, send, record = as
       }
       await save(st);
       if (sent.length) await record({ key: 'rules-watch:told', title: `AGENTS.md changed: ${sent.length} session(s) told to re-read it`, body: sent.join(', '), url: '/', priority: 'default' });
-      return (last = { at: now(), mode: m, stale: todo.map((p) => p.name), sent });
+      return (last = { at: now(), mode: m, stale: todo.map((p) => p.name), sent, skipped: skipScript });
     } catch (e) {
       log.error?.('[rules-watch]', e.message);
       return (last = { ...last, at: now(), error: e.message });

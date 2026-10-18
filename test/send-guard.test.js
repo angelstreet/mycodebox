@@ -37,6 +37,36 @@ test("DEFAULT_ACTOR is 'owner'", () => {
   assert.equal(DEFAULT_ACTOR, 'owner');
 });
 
+// --- scriptBusy: typing into a script-driven pane (claude -p / mcode exec / sleep under bash)
+// lands in the terminal input and gets read by bash as commands. Non-owner senders must be
+// refused even when the pane also has an interactive agent process somewhere in the tree.
+test('owner is allowed into a script-busy pane (Ghosty is also a terminal)', () => {
+  assert.equal(shouldRefuse({ by: 'owner', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: true }), null);
+  assert.equal(shouldRefuse({ by: 'owner', live: null, scriptBusy: true }), null);
+});
+
+test('non-owner is refused on a script-busy pane, even when an agent is alive', () => {
+  const r = shouldRefuse({ by: 'manager-agent', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: true });
+  assert.ok(r, 'expected a refusal reason');
+  assert.match(r, /script/i);
+  const r2 = shouldRefuse({ by: 'manager', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: true });
+  assert.ok(r2);
+  assert.match(r2, /script/i);
+});
+
+test('non-owner is allowed on a live, non-script-busy pane', () => {
+  assert.equal(shouldRefuse({ by: 'manager-agent', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: false }), null);
+  assert.equal(shouldRefuse({ by: 'manager', live: { agent: 'claude', cmd: 'claude' }, scriptBusy: false }), null);
+});
+
+test('scriptBusy defaults to false (backwards compatible)', () => {
+  // existing call sites that pass only { by, live } must keep working unchanged
+  assert.equal(shouldRefuse({ by: 'manager-agent', live: { agent: 'claude', cmd: 'claude' } }), null);
+  const r = shouldRefuse({ by: 'manager-agent', live: null });
+  assert.ok(r);
+  assert.match(r, /no claude\/codex\/minimax/i);
+});
+
 // --- agentFromArgs: the underlying matcher the guard relies on. assertAgentPane
 // calls liveAgentOf() -> processTable() -> agentFromTree() -> agentFromArgs(); the
 // last is the function that decides whether a single `ps` line names an agent.

@@ -284,15 +284,26 @@ async function liveAgentOf(session) {
 }
 
 // Gate a typed send. The owner (default actor) is always allowed — Ghosty is also a
-// terminal, shells included. Any other actor needs a live agent process in the pane;
-// otherwise we 409 and log a `send-refused` event so the refusal is auditable.
+// terminal, shells included. Any other actor needs a live agent process in the pane
+// AND a pane that is not being driven by a script (claude -p / mcode exec / sleep under
+// bash) — typing into a script-driven pane lands in the terminal input and gets read
+// by bash as commands; otherwise we 409 and log a `send-refused` event so the refusal
+// is auditable.
 async function assertAgentPane(session, by) {
   if (by === DEFAULT_ACTOR) return;
-  const live = await liveAgentOf(session);
-  const reason = shouldRefuse({ by, live });
+  const panes = await listPanes();
+  const pane = panes.get(session);
+  if (!pane || !pane.pid) {
+    logEvent({ type: 'send-refused', session, by, reason: 'pane missing or dead' });
+    throw httpError(409, `not an agent pane: ${session} has no live tmux pane`);
+  }
+  const table = await processTable();
+  const live = agentFromTree(pane.pid, table);
+  const scriptBusy = scriptBusyOf(pane.pid, table);
+  const reason = shouldRefuse({ by, live, scriptBusy });
   if (reason) {
     logEvent({ type: 'send-refused', session, by, reason });
-    throw httpError(409, `not an agent pane: ${session} runs no claude/codex/minimax process`);
+    throw httpError(409, `not an agent pane: ${session} (${reason})`);
   }
 }
 
@@ -852,7 +863,10 @@ const rulesWatch = createRulesWatch({
       const pid = agentPidFromTree(p.pid, table);
       if (!pid || !age.has(pid)) continue;
       out.push({ name, cwd: p.cwd, startedAt: Date.now() - age.get(pid) * 1000,
-        working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working') });
+        working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working'),
+        // scriptBusy: a script is driving a claude -p / mcode exec / sleep under bash in the pane; skip so the
+        // long rules-change message doesn't land in the terminal input and get read by bash as commands.
+        scriptBusy: scriptBusyOf(p.pid, table) });
     }
     return out;
   },

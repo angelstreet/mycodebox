@@ -42,11 +42,15 @@ export function agentFromArgs(argline) {
 
 // Pure policy: should the server refuse a typed send to this pane from this actor?
 // owner is always allowed (Ghosty is also a terminal, shells included). Any non-owner
-// actor is refused when `live` is null. Return value: null when allowed, otherwise a
-// short reason (logged as the `reason` of the send-refused event in manager.js).
-export function shouldRefuse({ by, live }) {
+// actor is refused when `live` is null (no agent TUI in the pane) or when the pane is
+// being driven by a script (a script-wrapped `claude -p` / `mcode exec` turn, or a
+// `sleep` under a bash script) — typing into a script-driven pane lands in the
+// terminal input and gets read by bash as commands. Return value: null when allowed,
+// otherwise a short reason (logged as the `reason` of the send-refused event in manager.js).
+export function shouldRefuse({ by, live, scriptBusy = false }) {
   if (by === DEFAULT_ACTOR) return null;
   if (!live) return 'no claude/codex/minimax process running in the pane';
+  if (scriptBusy) return 'pane is being driven by a script (claude -p / mcode exec / sleep under bash)';
   return null;
 }
 
