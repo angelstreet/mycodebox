@@ -1343,6 +1343,13 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .morepop .icon-btn{ width:100%; height:40px; justify-content:flex-start; gap:12px; padding:0 10px; border-radius:8px; color:var(--ink); }
 .morepop .icon-btn.hidden{ display:none; }
 .morepop .icon-btn .ml{ font-size:13px; }
+/* Legacy pages (owner, 2026-10-18): V1 pages a V2 page replaces, folded away under one entry */
+.morepop .legacy-group{ border-top:1px solid var(--line-2); margin-top:2px; padding-top:2px; }
+.morepop .legacy-sum{ list-style:none; display:flex; align-items:center; gap:12px; height:40px; padding:0 10px; border-radius:8px; color:var(--ink-2); cursor:pointer; }
+.morepop .legacy-sum::-webkit-details-marker{ display:none; }
+.morepop .legacy-sum .ml{ font-size:13px; }
+.morepop .legacy-group[open] .legacy-sum{ color:var(--ink); }
+.morepop .legacy-group .icon-btn{ padding-left:22px; opacity:.85; }
 .morepop .icon-btn:hover{ background:var(--bg-3); }
 .morepop .mrow-font{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 10px; color:var(--ink); }
 .morepop .mrow-font .ml{ font-size:13px; }

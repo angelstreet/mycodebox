@@ -424,3 +424,18 @@ Owner rule for this round: "fewer stops, corrections at the end"; the source is 
 - **Device-owner relays (review #12).** Give the session that drives a rack or modem host direct read access to that
   host's serial console output (ssh to the rack host), so the owner stops pasting terminal output. A session-setup
   change, not mycodebox code.
+
+
+## 18. Show results, ship first, short shadows, freeze scope (2026-10-18)
+
+Owner direction, applied from 2026-10-18:
+
+1. **Show results.** The default dashboard shows only the new (V2) pages. The old (V1) pages a V2 page replaces move into
+   a "Legacy" group of the More menu (Platforms, replaced by Leases; Review stops and Jev decisions, replaced by Decided
+   for you); new pages are added to the default menu as they land.
+2. **Ship first, test at the end.** Build and ship; run the full tests and the acceptance matrix at the end of a build or
+   before acceptance, not every round. It is a simple website and an upgrade: a failure is corrected at the end. One
+   reviewer, one round, only where state or security is touched.
+3. **Shadow periods are 1 hour at most**, the lease cut-over included: shadow for 1 hour, then go central if the Leases
+   view shows no unexplained mismatch; tell the manager before the freeze and central step.
+4. **Scope freeze.** No new rounds of features; new ideas go to `TODO.md`.

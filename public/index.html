@@ -60,7 +60,6 @@
       <i data-icon="more" data-size="18"></i>
     </button>
     <div class="morepop hidden" id="morePop">
-    <a class="icon-btn" href="/page-preview.html#manager" target="_blank" rel="noopener" aria-label="Preview new pages" title="Open page mockups in a new tab"><span class="ml">Preview new pages ↗</span></a>
     <button class="icon-btn" id="mgrBtn" aria-label="AI manager" title="AI manager: auto-answers, log">
       <i data-icon="bot" data-size="18"></i>
     <span class="ml">AI manager</span></button>
@@ -73,15 +72,6 @@
     <button class="icon-btn" id="leasesBtn" aria-label="Leases" title="Leases: who holds what, the queue with ETA, owner force-release">
       <i data-icon="lock" data-size="17"></i>
     <span class="ml">Leases</span></button>
-    <button class="icon-btn" id="platBtn" aria-label="Platforms" title="Platforms: who holds what, deploy queue, deployed now">
-      <i data-icon="server" data-size="17"></i>
-    <span class="ml">Platforms</span></button>
-    <button class="icon-btn" id="reviewBtn" aria-label="Review stops" title="Review stops: swipe good / bad">
-      <i data-icon="review" data-size="17"></i>
-    <span class="ml">Review stops (swipe)</span></button>
-    <button class="icon-btn" id="decisionsBtn" aria-label="Jev decisions" title="Jev decisions: what Jev picked and what happened">
-      <i data-icon="decisions" data-size="17"></i>
-    <span class="ml">Jev decisions</span></button>
     <button class="icon-btn" id="tasksBtn" aria-label="V2 tasks" title="V2 tasks: goals, evidence, approvals (needs GHOSTY_V2=1 on the server)">
       <i data-icon="tasks" data-size="17"></i>
     <span class="ml">V2 tasks</span></button>
@@ -97,6 +87,20 @@
     <button class="icon-btn" id="notifyBtn" aria-label="Alerts" title="Alert me when a session needs you">
       <i data-icon="bell" data-size="18"></i>
     <span class="ml">Alerts</span></button>
+    <!-- Legacy: V1 pages that a V2 page replaces (owner, 2026-10-18): parked here, links and ?params keep working -->
+    <details class="legacy-group" id="legacyGroup">
+      <summary class="legacy-sum" title="Older pages that a new page replaces: Platforms (now Leases), Review stops and Jev decisions (now Decided for you), early page mockups"><i data-icon="archive" data-size="17"></i><span class="ml">Legacy pages</span></summary>
+      <button class="icon-btn" id="platBtn" aria-label="Platforms" title="Platforms: who holds what, deploy queue, deployed now">
+        <i data-icon="server" data-size="17"></i>
+      <span class="ml">Platforms</span></button>
+      <button class="icon-btn" id="reviewBtn" aria-label="Review stops" title="Review stops: swipe good / bad">
+        <i data-icon="review" data-size="17"></i>
+      <span class="ml">Review stops (swipe)</span></button>
+      <button class="icon-btn" id="decisionsBtn" aria-label="Jev decisions" title="Jev decisions: what Jev picked and what happened">
+        <i data-icon="decisions" data-size="17"></i>
+      <span class="ml">Jev decisions</span></button>
+      <a class="icon-btn" href="/page-preview.html#manager" target="_blank" rel="noopener" aria-label="Page mockups" title="Early design mockups of the V1 pages, fictional examples (new tab)"><span class="ml">Page mockups ↗</span></a>
+    </details>
     <button class="icon-btn install-btn" id="installBtn" aria-label="Install app" title="Add to Home Screen">
       <i data-icon="download" data-size="18"></i>
     <span class="ml">Install app / get APK</span></button>

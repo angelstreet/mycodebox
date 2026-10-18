@@ -7,9 +7,18 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 
 ## Next action
 
-Round 11 (central-lease cut-over, LEASES-CENTRAL §10 steps 1-4; owner go 2026-10-18): shadow mode is live on the dashboard host and installed on
-the registry host; the registry host and the device hosts need a network path to the lease service (owner decision) before
-their shadow calls count. Step 5 (freeze + central) only after telling the manager.
+Owner direction 2026-10-18 (OWNER_DECISIONS §18): show results (V1 pages replaced by V2 pages move to a "Legacy" group of
+the More menu), ship first and test at the end of a build, shadow periods of 1 hour at most, no new feature rounds (ideas go
+to TODO.md). Lease cut-over: waiting on the owner for the network path of the registry host and the device hosts; then
+shadow 1 h, then central after telling the manager.
+
+## Round 12 (2026-10-18): show results
+
+| Item | What | State |
+|---|---|---|
+| Legacy menu | Platforms, Review stops, Jev decisions folded into a collapsed "Legacy pages" group of the More menu; links and `?platforms=1` / `?review=1` / `?decisions=1` keep working; service worker v148 | DONE |
+| Legacy menu | The early V1 page mockups ("Preview new pages") moved into the Legacy group too | DONE |
+| Lease shadow seed | `lease-import.js --shadow` seeds the shadow store; the legacy registry was empty at 09:00 UTC, so seeding waits for the 1-hour shadow window | READY |
 
 ## Round 11 (2026-10-18)
 

@@ -246,7 +246,7 @@ before any machine trusts the service.
    every `ssh <registry> ~/bin/vpt-lease ...` caller follows the client's mode), and on codebox, the Mac and the device
    hosts; write their config files with `VPT_LEASE_MODE=shadow`; render the deploy skill from `docs/LEASE-RULES.md` and copy it to
    both machines.
-4. Run a day in shadow; read the disagreement list on the Leases view; fix or explain each `mismatch`.
+4. Run 1 hour in shadow (owner, 2026-10-18, OWNER_DECISIONS §18); read the disagreement list on the Leases view; go central only when no mismatch is left unexplained, and tell the manager before the freeze.
 5. Freeze briefly (deploy runner off, no claims expected), switch the registry host to `VPT_LEASE_MODE=central`, import the open
    leases and queued deploys (`node scripts/lease-import.js`; legacy lease ids and expiry times are kept, so
    `release <old id>` still works), switch every other machine to `central`, then set `leaseAuthority: "central"` in
