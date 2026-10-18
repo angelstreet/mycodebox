@@ -1,7 +1,7 @@
 // HTTP front of the integration lane: /api/integration/* (docs/v2/INTEGRATION-LANE.md). server.js only calls handle() for paths
 // under PREFIX. Who may call: (a) a loopback peer with the reporter token (sessions on the codebox), or (b) a bearer token of a
 // clients.json client flagged `integrate` (lease-token.js add <name> --integrate) from the tailnet/loopback range (the Mac).
-//   POST /requests                    { repo?, origin?, cwd?, branch, session?, deploy?, note? } -> { ok, id, position, repo }
+//   POST /requests                    { repo?, origin?, cwd?, branch, session?, deploy?, note?, approvedBy? (manager only, else 403) } -> { ok, id, position, repo }
 //   GET  /requests?repo=&state=&limit=                                                          -> { ok, requests: [...] }
 //   GET  /requests/:id                                                                          -> { ok, request, ...summary }
 //   GET  /requests/:id/wait?timeout=30   long-poll (max 30 s) until a final state               -> { ok, request, final, ...summary }
@@ -28,7 +28,7 @@ export function describe(r) {
 }
 export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, target: r.target, state: r.state, final: FINAL.includes(r.state),
   exit: FINAL.includes(r.state) ? EXIT[r.state] : null, sha: r.sha || null, version: r.deployed?.version ?? null, reason: r.reason || null,
-  step: r.step || null, position: r.position ?? null, text: describe(r) });
+  outcome: r.outcome || null, step: r.step || null, position: r.position ?? null, text: describe(r) });
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
@@ -66,17 +66,17 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
       const c = clientOf(clients(), auth[1]);
       if (!c) { send(res, 401, { ok: false, error: 'missing or invalid bearer token' }, fmt); return null; }
       if (!c.integrate) { send(res, 403, { ok: false, error: 'this client may not use the integration lane (lease-token.js add <name> --integrate)' }, fmt); return null; }
-      return { by: `client:${c.name}`, client: c.name, loopback: isLoopback(addr) };
+      return { by: `client:${c.name}`, client: c.name, manager: c.manager === true, loopback: isLoopback(addr) };
     }
     const dashOp = (req.method === 'GET' && /^\/(requests|repos)/.test(sub)) || (req.method === 'POST' && /^\/requests\/[\w-]{1,64}\/cancel$/.test(sub));
     if (!req.headers['x-ghosty-reporter-token'] && dashOp) {
       const o = originOf(req);
       if (o === 'cross') { send(res, 403, { ok: false, error: 'cross-origin request refused' }, fmt); return null; }
-      if (o === 'same') return { by: 'dashboard', loopback: false };
+      if (o === 'same') return { by: 'dashboard', manager: false, loopback: false };
     }
     if (!isLoopback(addr)) { send(res, 403, { ok: false, error: 'loopback only without a bearer token' }, fmt); return null; }
     if (!reporterOk(req.headers['x-ghosty-reporter-token'])) { send(res, 401, { ok: false, error: 'bad token' }, fmt); return null; }
-    return { by: 'loopback', loopback: true };
+    return { by: 'loopback', manager: true, loopback: true };
   }
 
   async function resolveRepo(body, who) {
@@ -101,11 +101,13 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
       let m;
       if (req.method === 'POST' && sub === '/requests') {
         let body; try { body = await readBody(req, 64 * 1024); } catch (e) { fail('E_INVALID', e.message); return true; }
+        // --approved-by: only the manager (a client flagged `manager`) or the loopback reporter token may approve; an integrate client may not
+        if (body.approvedBy != null && !who.manager) { send(res, 403, { ok: false, error: 'approved-by needs the manager (a client added with --manager) or the loopback reporter token' }, fmt); return true; }
         const repo = await resolveRepo(body, who);
         if (!repo) { fail('E_INVALID', `repo not recognised: name it (--repo) — configured: ${lane.repoKeys().join(', ') || 'none'}`); return true; }
         // A remote (client:*) caller's session name is the Mac's: it resolves to ONE registered `mac:` session of that same client (exact or by slug prefix), else null; never a local tmux one.
         const session = who.by.startsWith('client:') ? (typeof body.session === 'string' ? remoteResolve(body.session, who.client) : null) : body.session;
-        const out = lane.enqueue({ repo, branch: body.branch, session, deploy: body.deploy || null, note: body.note, by: who.by });
+        const out = lane.enqueue({ repo, branch: body.branch, session, deploy: body.deploy || null, note: body.note, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined });
         send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;

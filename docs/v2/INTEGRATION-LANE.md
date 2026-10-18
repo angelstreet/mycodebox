@@ -71,3 +71,12 @@ Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (H
 `node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state
 (`merged`, `deployed`, `returned`, `merged_ci_red`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
 transition; `event.kind` is `queued | running | step | resumed | state | final`, `event.final` is true on a final state.
+
+## Infra paths and manager approval
+
+The merge floor treats an explicit list as CI/deploy/infra paths (CI configs, Dockerfiles, terraform/ansible/helm/k8s, `scripts/*deploy*`,
+`scripts/*restart*`, `update_core*`, `deploy-runner.js`); files under `test/` or `docs/` and `*.md` never count. When that is the floor's only
+reason, the request is returned with `outcome: needs_approval` and a manager item (branch, paths, `git diff --stat`) is raised. The manager
+resubmits with `integrate request <branch> --approved-by manager`; only the loopback reporter token or a client added with
+`lease-token.js add <name> --integrate --manager` may pass it (403 otherwise). The approval is stored on the request and in
+`merge-decisions.jsonl` and skips only the infra-path reason: secrets, migrations, sudoers, systemd units, conflicts and red tests still return it.

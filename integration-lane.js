@@ -120,15 +120,19 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
   };
 }
 // Round 7 merge floor with the lane as the tester (its own test run replaces the session's test report).
-export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles }) {
+// `approveInfra` (a manager approval on the request) drops ONLY the CI/deploy/infra-path reason; `infra` tells the lane when that
+// was the floor's only reason, so it can ask the manager instead of bouncing the branch.
+export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles, approveInfra = false }) {
   const facts = await gitFacts({ cwd, branch, branchSha, target, remote, conventionFiles });
-  const reasons = mergeFloor(facts, { state: 'green' }, { conventionFiles });
-  return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts };
+  const files = (facts.sensitive || []).filter((s) => s.why === 'deploy').map((s) => s.file);
+  const rest = mergeFloor(facts, { state: 'green' }, { conventionFiles, approveInfra: true });
+  const reasons = approveInfra ? rest : mergeFloor(facts, { state: 'green' }, { conventionFiles });
+  return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts, infra: { files, only: !approveInfra && files.length > 0 && rest.length === 0 } };
 }
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
-  deploys = null, mergeEval = defaultMergeEval, notify = () => {}, now = () => Date.now(), log = () => {},
+  deploys = null, mergeEval = defaultMergeEval, notify = () => {}, managerItem = () => {}, journal = () => {}, now = () => Date.now(), log = () => {},
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
@@ -252,10 +256,18 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
   async function evaluate(r, c) {
     const ev = await step(r, 'evaluate', async () => {
-      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session });
+      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session, approveInfra: !!r.approvedBy });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
-      return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons } };
+      return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons, infra: e?.infra?.only ? e.infra.files : null } };
     });
+    if (!ev.ok && ev.info.infra) {
+      const paths = ev.info.infra;
+      const st = await G(r, c, ['diff', '--stat', `${c.remote}/${c.target}...${r.branchSha}`]);
+      const stat = tailOf(st.out || st.err || '');
+      const reason = `needs manager approval: touches CI/deploy/infra paths: ${paths.join(', ')}`;
+      try { managerItem({ kind: 'merge', id: r.id, repo: r.repo, branch: r.branch, session: r.session, paths, diffStat: stat, text: `${reason}\n${stat}\nApprove: integrate request ${r.branch} --repo ${r.repo} --approved-by manager` }); } catch (err) { log('manager item failed', err?.message); }
+      throw new Ret(reason, stat, { outcome: 'needs_approval', infraPaths: paths, reasons: ev.info.reasons });
+    }
     if (!ev.ok) throw new Ret(`merge evaluation: ${ev.info.reasons.join('; ') || 'not mergeable'}`, ev.tail, { reasons: ev.info.reasons });
   }
 
@@ -465,14 +477,16 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (!SCOPES.has(deployScope)) throw coded('E_INVALID', `deploy scope must be one of ${[...SCOPES].join(', ')}`);
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
-      const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope);
+      const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.approvedBy === !input.approvedBy);
       if (dup) return { id: dup.id, position: ahead(dup) + 1, repo: key, duplicate: true };
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
       const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
         deployScope, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
-        sha: null, branchSha: null, ci: null, deployed: null };
+        sha: null, branchSha: null, ci: null, deployed: null,
+        ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}) };
       reqs.set(r.id, r); persist(r);
+      if (r.approvedBy) { try { journal({ kind: 'merge', decision_id: `merge-approval-${r.id}`, ts: r.approvedAt, source: 'integration-lane', question: `Approve the infra-path floor reason for ${branch} into ${c.target}?`, chosen: 'approve', approvedBy: r.approvedBy, approvedAt: r.approvedAt, rationale: 'a manager approval skips only the CI/deploy/infra-path floor reason; secrets, migrations, sudoers, units, red tests and conflicts still return the request', request: r.id, repo: key, branch, target: c.target }); } catch (e) { log('journal failed', e?.message); } }
       emit(r, { kind: 'queued', state: 'queued', final: false });
       const out = { id: r.id, position: ahead(r) + 1, repo: key };
       kick(key);

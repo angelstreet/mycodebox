@@ -321,3 +321,39 @@ test('push landed, remote unreadable for a while: the request keeps running, the
   const r = await go(lane, { branch: 'feat' });
   assert.equal(r.state, 'merged', JSON.stringify(r)); assert.equal(down, 0);
 });
+
+test('floor: a test file named *deploy* merges; real infra paths return needs_approval and raise a manager item', async () => {
+  const w = makeWorld(); w.branch('t', { 'test/foo-deploy.test.js': 'x\n', 'docs/deploy.md': 'd\n' });
+  const items = [];
+  const { lane } = mk(w, { lane: { mergeEval: undefined, managerItem: (i) => items.push(i) } });
+  assert.equal((await go(lane, { branch: 't' })).state, 'merged');
+  assert.equal(items.length, 0);
+  w.branch('infra', { 'scripts/deploy.sh': 'echo\n', 'ok.js': 'y\n' });
+  const before = w.main();
+  const r = await go(lane, { branch: 'infra' });
+  assert.equal(r.state, 'returned'); assert.equal(r.outcome, 'needs_approval');
+  assert.deepEqual(r.infraPaths, ['scripts/deploy.sh']);
+  assert.equal(w.main(), before);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, 'merge'); assert.equal(items[0].branch, 'infra'); assert.deepEqual(items[0].paths, ['scripts/deploy.sh']);
+  assert.match(items[0].diffStat, /scripts\/deploy\.sh/);
+});
+
+test('floor: a manager approval skips only the infra reason, is recorded and journaled', async () => {
+  const w = makeWorld(); w.branch('infra', { 'scripts/deploy.sh': 'echo\n' });
+  const journal = [];
+  const { lane } = mk(w, { lane: { mergeEval: undefined, journal: (j) => journal.push(j) } });
+  const r = await go(lane, { branch: 'infra', approvedBy: 'manager' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(r.approvedBy, 'manager'); assert.ok(r.approvedAt);
+  assert.equal(journal.length, 1); assert.equal(journal[0].approvedBy, 'manager'); assert.equal(journal[0].kind, 'merge'); assert.equal(journal[0].request, r.id);
+  // never a secret, a unit or red tests
+  for (const [name, files] of [['sec', { 'scripts/deploy.sh': 'a\n', '.env': 'K=1\n' }], ['unit', { 'scripts/deploy.sh': 'a\n', 'systemd/x.service': '[Unit]\n' }], ['mig', { 'scripts/deploy.sh': 'a\n', 'migrations/1.sql': 'select 1;\n' }]]) {
+    w.branch(name, files); const m = w.main();
+    const x = await go(lane, { branch: name, approvedBy: 'manager' });
+    assert.equal(x.state, 'returned', name); assert.notEqual(x.outcome, 'needs_approval', name); assert.equal(w.main(), m);
+  }
+  const red = mk(w, { cfg: { test: 'exit 2' }, lane: { mergeEval: undefined } });
+  w.branch('red', { 'scripts/deploy.sh': 'b\n' });
+  assert.equal((await go(red.lane, { branch: 'red', approvedBy: 'manager' })).state, 'returned');
+});
