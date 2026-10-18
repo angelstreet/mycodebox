@@ -53,7 +53,7 @@ export function addrAllowed(addr, cidrs) {
 export function readClients(file) {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')).map((c) => ({ ...c, exemptAgents: Array.isArray(c.exemptAgents) ? c.exemptAgents.filter((x) => typeof x === 'string') : [], owner: c.owner === true, remote: c.remote === true, integrate: c.integrate === true })) : [];
+    return Array.isArray(j.clients) ? j.clients.filter((c) => c && typeof c.name === 'string' && /^[0-9a-f]{64}$/.test(c.sha256 || '')).map((c) => ({ ...c, exemptAgents: Array.isArray(c.exemptAgents) ? c.exemptAgents.filter((x) => typeof x === 'string') : [], owner: c.owner === true, remote: c.remote === true, integrate: c.integrate === true, manager: c.manager === true })) : [];
   } catch { return []; }
 }
 export function clientOf(clients, token) {

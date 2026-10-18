@@ -79,7 +79,7 @@ import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
 import { readFile, writeFile, stat, readdir, mkdir, open as openFile } from 'node:fs/promises';
-import { existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
+import { appendFile, existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { homedir, hostname, loadavg, cpus } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
@@ -2309,7 +2309,10 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
   deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
     wait: (id) => integrationHooks.deploys.wait(id),
     find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },
-  notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a) });
+  notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a),
+  // a branch the floor returned only for infra paths becomes a manager item (no owner push); a manager approval is journaled with the merge decisions
+  managerItem: (it) => { managerEvents.record({ key: `merge:${it.id}:manager-item`, title: `${it.repo}: ${it.branch} needs infra approval`, body: String(it.text).slice(0, 1500), url: '/', priority: 'default', session: it.session || undefined }).catch((e) => console.error('[integration] manager item', e.message)); },
+  journal: (rec) => { appendFile(join(STATE_DIR, 'merge-decisions.jsonl'), `${JSON.stringify(rec)}\n`, (e) => { if (e) console.error('[integration] journal', e.message); }); } });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
   remoteResolve: (name, client) => remote.resolveFor(name, client) });   // `remote` is created below; called per request only

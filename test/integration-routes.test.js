@@ -211,3 +211,24 @@ test('CLI on the codebox: no config, loopback url + the reporter token file', as
     assert.equal(none.code, 1); assert.match(none.stderr, /no token/);
   } finally { b.close(); }
 });
+
+test('--approved-by: the loopback reporter token or a manager client; an integrate client gets 403', async () => {
+  const w = makeWorld(); w.branch('infra', { 'scripts/deploy.sh': 'echo\n' });
+  const b = await boot(w, { laneOpts: { mergeEval: undefined } });
+  try {
+    const mgr = 'mgr-token-0123456789abcdef';
+    const { writeFileSync: wf } = await import('node:fs');
+    const mk = (name, token, extra) => ({ name, sha256: hashToken(token), exemptAgents: [], ...extra });
+    wf(join(b.stateDir, 'leases', 'clients.json'), JSON.stringify({ clients: [mk('mac', CLIENT, { integrate: true }), mk('boss', mgr, { integrate: true, manager: true })] }));
+    const body = { repo: 'env-a', branch: 'infra', approvedBy: 'manager' };
+    assert.equal((await b.call('POST', `${P}/requests`, { body, headers: { authorization: `Bearer ${CLIENT}` } })).status, 403);
+    const ok = await b.call('POST', `${P}/requests`, { body: { ...body, branch: 'infra' }, headers: { authorization: `Bearer ${mgr}` } });
+    assert.equal(ok.status, 200);
+    const lp = await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'infra', approvedBy: 'manager', note: 'again' } });
+    assert.equal(lp.status, 200);
+    assert.equal(b.lane.get(lp.json.id).approvedBy, 'manager');
+    assert.match(b.lane.get(ok.json.id).approvedBy, /^manager \(client:boss\)$/);
+    // without approvedBy an integrate client still works
+    assert.equal((await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'infra' }, headers: { authorization: `Bearer ${CLIENT}` } })).status, 200);
+  } finally { b.close(); }
+});

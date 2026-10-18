@@ -121,6 +121,15 @@ const SENSITIVE_CONTENT = [
   [/xox[baprs]-[A-Za-z0-9-]{10,}/, 'chat token'], [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/, 'api key'],
 ];
 export const SECRET_PATTERNS = SENSITIVE_CONTENT.map(([re]) => re);
+// Explicit allowlist of deploy/infra paths (matched on the lowercased path). Never a substring match on "deploy": tests and
+// docs are exempt, and a feature file such as integration-deploys.js is code, not infra.
+const DOC_OR_TEST = /^(?:tests?|docs?)\/|\.(?:md|markdown)$|\.test\.[cm]?js$/;
+const INFRA_PATHS = [
+  /^scripts\/[^/]*(?:deploy|update_core|safe-restart|restart)/,   // scripts/deploy.sh, scripts/safe-restart.sh
+  /(?:^|\/)update_core[^/]*$/,
+  /(?:^|\/)deploy-runner\.js$/,
+  /(?:^|\/)(?:safe-restart|deploy)\.(?:sh|ya?ml)$/,
+];
 export function sensitivePath(f) {
   const segs = f.split('/'), base = segs[segs.length - 1], lower = f.toLowerCase();
   if (/^\.env/.test(base) || /^(?:\.netrc|\.npmrc|\.pypirc|authorized_keys)$/.test(base)) return 'secret';
@@ -129,9 +138,10 @@ export function sensitivePath(f) {
   if (/(^|\/)migrations\//.test(lower) || /\.sql$/.test(lower)) return 'migration';
   if (/sudoers/.test(lower)) return 'sudoers';
   if (/\.(service|timer|socket)$/.test(lower) || /(^|\/)systemd\//.test(lower)) return 'systemd';
-  if (/^\.github\/workflows\//.test(lower) || /(^|\/)(?:\.gitlab-ci\.yml|jenkinsfile)$/.test(lower) || /^\.circleci\//.test(lower)
-    || /^dockerfile|^docker-compose/.test(base.toLowerCase()) || /\.tf$/.test(lower) || /(^|\/)(?:terraform|ansible|helm|k8s|kubernetes)\//.test(lower)) return 'deploy';
-  if (!/\.(?:md|markdown)$/i.test(f) && segs.some((s) => /deploy|update_core|safe-restart|restart/i.test(s))) return 'deploy';
+  if (!DOC_OR_TEST.test(lower) && (/^\.github\/workflows\//.test(lower) || /(^|\/)(?:\.gitlab-ci\.yml|jenkinsfile)$/.test(lower) || /^\.circleci\//.test(lower)
+    || /^dockerfile|^docker-compose/.test(base.toLowerCase()) || /\.tf$/.test(lower) || /(^|\/)(?:terraform|ansible|helm|k8s|kubernetes)\//.test(lower))) return 'deploy';
+  if (DOC_OR_TEST.test(lower)) return null;   // tests and docs only describe infra (test/foo-deploy.test.js, docs/deploy.md), they never change it
+  if (INFRA_PATHS.some((re) => re.test(lower))) return 'deploy';
   return null;
 }
 
@@ -227,7 +237,7 @@ export async function gitFacts({ cwd, branch, branchSha = null, target, remote =
 
 export const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', deploy: 'a CI/deploy/infra path', 'secret-content': 'secret-looking content' };
 // Reasons to escalate; empty = the manager may proceed.
-export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
+export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, approveInfra = false } = {}) {
   if (!facts) return ['not a git repository or git error'];
   const reasons = [];
   const out = (optOut || []).map(String);
@@ -239,7 +249,7 @@ export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEF
   if (outside.length) reasons.push(`conflicts outside convention: ${outside.join(', ')}`);
   if (ev?.state === 'red') reasons.push(`tests reported red: ${ev.quote}`);
   else if (ev?.state !== 'green' && !facts.docsOnly) reasons.push('no green test report on the branch');
-  for (const s of facts.sensitive || []) reasons.push(`touches ${SENS_TEXT[s.why] || 'a sensitive path'}: ${s.file}`);
+  for (const s of facts.sensitive || []) if (!(approveInfra && s.why === 'deploy')) reasons.push(`touches ${SENS_TEXT[s.why] || 'a sensitive path'}: ${s.file}`);
   if (facts.scanError) reasons.push('diff too large or unreadable to scan');
   for (const f of facts.binary || []) reasons.push(`adds a binary file: ${f}`);
   return reasons;

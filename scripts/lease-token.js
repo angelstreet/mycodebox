@@ -3,6 +3,7 @@
 // `add` prints the new token once and stores only its sha256 in <dir>/clients.json (mode 0600). Never logs a token elsewhere.
 // --owner: the client may use the owner-only routes (/owner/*, /import, deploy approve); give it to the dashboard side only, never to agent machines.
 // --remote: the client may post stops from another machine (POST /api/remote/v1/stops, docs/MAC-HOOK.md); give it to the Mac hook only.
+// --manager: the client may pass --approved-by on an integration request (the manager's own token; implies nothing else).
 // --integrate: the client may use the integration lane (/api/integration/*, docs/v2/INTEGRATION-LANE.md); give it to the Mac sessions' integrate CLI.
 // --exempt: agent names this client may claim as deploy agents (exact or a trailing * prefix), e.g. manager:deploy,update_core:*
 import fs from 'node:fs';
@@ -19,6 +20,8 @@ const owner = args.includes('--owner');
 if (owner) args.splice(args.indexOf('--owner'), 1);
 const remote = args.includes('--remote');
 if (remote) args.splice(args.indexOf('--remote'), 1);
+const manager = args.includes('--manager');
+if (manager) args.splice(args.indexOf('--manager'), 1);
 const integrate = args.includes('--integrate');
 if (integrate) args.splice(args.indexOf('--integrate'), 1);
 const [cmd, name] = args;
@@ -30,16 +33,16 @@ const save = (clients) => {
   fs.renameSync(tmp, file);
 };
 const bad = (m) => { console.error(m); process.exit(1); };
-if (!['add', 'revoke', 'list'].includes(cmd)) bad('usage: lease-token.js add|revoke|list [name] [--dir D] [--exempt agent,prefix*] [--owner] [--remote] [--integrate]');
+if (!['add', 'revoke', 'list'].includes(cmd)) bad('usage: lease-token.js add|revoke|list [name] [--dir D] [--exempt agent,prefix*] [--owner] [--remote] [--integrate] [--manager]');
 const clients = readClients(file);
 if (cmd === 'list') {
-  for (const c of clients) console.log(`${c.name}\t${c.created || '-'}\t${c.owner ? 'owner ' : ''}${c.remote ? 'remote ' : ''}${c.integrate ? 'integrate ' : ''}${c.exemptAgents.length ? `exempt: ${c.exemptAgents.join(',')}` : ''}`);
+  for (const c of clients) console.log(`${c.name}\t${c.created || '-'}\t${c.owner ? 'owner ' : ''}${c.remote ? 'remote ' : ''}${c.integrate ? 'integrate ' : ''}${c.manager ? 'manager ' : ''}${c.exemptAgents.length ? `exempt: ${c.exemptAgents.join(',')}` : ''}`);
 } else {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name || '')) bad('a client name is required (letters, digits, . _ -)');
   if (cmd === 'add') {
     if (clients.some((c) => c.name === name)) bad(`client ${name} exists: revoke it first to issue a new token`);
     const token = randomBytes(32).toString('base64url');
-    save([...clients, { name, sha256: hashToken(token), created: new Date().toISOString(), exemptAgents: exempt, ...(owner ? { owner: true } : {}), ...(remote ? { remote: true } : {}), ...(integrate ? { integrate: true } : {}) }]);
+    save([...clients, { name, sha256: hashToken(token), created: new Date().toISOString(), exemptAgents: exempt, ...(owner ? { owner: true } : {}), ...(remote ? { remote: true } : {}), ...(integrate ? { integrate: true } : {}), ...(manager ? { manager: true } : {}) }]);
     console.log(token);
     console.error(`token for ${name} printed once above; only its hash is stored`);
   } else {
