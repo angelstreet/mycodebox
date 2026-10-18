@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { topicSplit, hardMatch, forbiddenMatch, FORBIDDEN_RE, pushMatch, deployMatch, mergeMatch } from '../stall.js';
+import { topicSplit, hardMatch, forbiddenMatch, FORBIDDEN_RE, pushMatch, deployMatch, mergeMatch, ownerFloorMatch, OWNER_FLOOR_RE } from '../stall.js';
 
 test('push topic: a plain push of a branch, push to main, push a tag', () => {
   for (const x of ['push feat?', 'git push origin feat', 'push to main', 'git push -u origin feature', 'merge X into main and push main']) {
@@ -54,6 +54,82 @@ test('round-7 signatures keep working: hardMatch(text, { mergePresent }) and the
   assert.ok(forbiddenMatch('deploy it'));
   assert.ok(FORBIDDEN_RE.test('git push now') && FORBIDDEN_RE.test('restart the ghosty service') && FORBIDDEN_RE.test('push --tags'));
   assert.equal(deployMatch('systemctl restart x'), null);   // "systemctl restart x" is a bare restart, not a deploy ask (push to prod / push to main are command forms and are detected as push topics; the noun form is covered by the safety filter)
+});
+
+// Round 3 (2026-10-18, owner-ask-narrow): deployMatch must keep its SERVICE_CTL_RE guard back. systemctl / pm2 are
+// hard commands; they must never be reported as a deploy topic by the manager (the safety filter catches them as
+// forbidden, and a deploy topic would route them to the manager as a deploy instead of a forbidden hard floor).
+test('round 3: deployMatch("systemctl restart vpt-server") is null (SERVICE_CTL_RE guard restored, as on main)', () => {
+  // On main, deployMatch is `(matchWith(SERVICE_CTL_RE, text) ? null : requested(text, DEPLOY_RE))`. With the guard
+  // restored, systemctl / pm2 commands are filtered out and deployMatch returns null -- the safety filter
+  // (FORBIDDEN_RE / hardMatch) catches them, not the deploy topic.
+  assert.equal(deployMatch('systemctl restart vpt-server'), null,
+    'systemctl restart is a SERVICE_CTL command, not a deploy topic (SERVICE_CTL_RE guard must be in place)');
+  assert.equal(deployMatch('systemctl restart ghosty'), null, 'systemctl restart ghosty is a SERVICE_CTL command');
+  assert.equal(deployMatch('systemctl stop nginx'), null, 'systemctl stop is a SERVICE_CTL command');
+  assert.equal(deployMatch('pm2 restart api'), null, 'pm2 restart is a SERVICE_CTL command');
+  // And FORBIDDEN_RE still catches the same systemctl / pm2 commands -- the safety filter is the hard gate.
+  assert.ok(forbiddenMatch('systemctl restart vpt-server'), 'FORBIDDEN_RE catches systemctl restart vpt-server');
+  assert.ok(FORBIDDEN_RE.test('systemctl restart vpt-server'), 'FORBIDDEN_RE.test catches systemctl restart vpt-server');
+  assert.ok(forbiddenMatch('pm2 restart api'), 'FORBIDDEN_RE catches pm2 restart');
+});
+
+// Round 3: the safety filter (FORBIDDEN_RE) must still match push to main, update_core, sudo, migration, systemctl restart.
+test('round 3: FORBIDDEN_RE (the safety filter) still matches push-to-main / update_core / sudo / migration / systemctl restart', () => {
+  for (const q of [
+    'push to main now',
+    'git push origin main',
+    'update_core main --host',
+    'sudo apt install foo',
+    'apply the migration',
+    'run the migration on the db',
+    'systemctl restart vpt-server',
+    'systemctl stop nginx',
+    'pm2 restart api',
+  ]) {
+    assert.ok(forbiddenMatch(q), `FORBIDDEN_RE must catch "${q}" (the safety filter blocks auto-answering)`);
+    assert.ok(FORBIDDEN_RE.test(q), `FORBIDDEN_RE.test must catch "${q}"`);
+  }
+});
+
+// Round 3: OWNER_FLOOR must match the three representative owner items: rotate a third-party key, buy a domain, delete shared data.
+test('round 3: OWNER_FLOOR matches "rotate the Stripe API key", "buy a domain", "delete the shared bucket" (routing = owner)', () => {
+  for (const q of [
+    'rotate the Stripe API key',
+    'buy a domain today',
+    'delete the shared bucket',
+  ]) {
+    assert.ok(ownerFloorMatch(q), `OWNER_FLOOR must catch "${q}" -- routing escalates to the owner`);
+    assert.ok(OWNER_FLOOR_RE.test(q), `OWNER_FLOOR_RE.test must catch "${q}"`);
+  }
+});
+
+// Round 3: OWNER_FLOOR must NOT match manager items: migrations and generated app secrets.
+// "set CRON_SECRET (generate)" has no word boundary around "secret" (underscore is a word char), so the default
+// OWNER_FLOOR_RE already does not match it. "apply migration 0018" has no credentials / money / delete / physical
+// at all, so neither ownerFloorMatch nor OWNER_FLOOR_RE matches it. "generate a JWT secret" has a standalone
+// "secret" with word boundaries -- the default OWNER_FLOOR_RE.test matches it, but ownerFloorMatch applies the
+// generated-secret exception and returns null. Both surfaces are tested separately below.
+test('round 3: ownerFloorMatch drops "apply migration 0018" and "set CRON_SECRET (generate)" (routing = manager)', () => {
+  for (const q of [
+    'apply migration 0018 to Neon',
+    'set CRON_SECRET (generate a new value)',
+    'generate a JWT secret',
+  ]) {
+    assert.equal(ownerFloorMatch(q), null, `ownerFloorMatch must NOT match "${q}" -- routing treats it as a manager item (generated-secret exception applies where needed)`);
+  }
+});
+
+test('round 3: OWNER_FLOOR_RE (the default regex, no generated-secret exception) does NOT match "apply migration 0018" or "set CRON_SECRET (generate)"', () => {
+  // OWNER_FLOOR_RE is the plain regex without the generated-secret exception. "set CRON_SECRET (generate)" has no
+  // word boundary around "secret" (the underscore is a word character), so it does not match the credentials
+  // pattern. "apply migration 0018" has no credentials / money / delete / physical at all.
+  for (const q of [
+    'apply migration 0018 to Neon',
+    'set CRON_SECRET (generate a new value)',
+  ]) {
+    assert.equal(OWNER_FLOOR_RE.test(q), false, `OWNER_FLOOR_RE.test must NOT match "${q}"`);
+  }
 });
 
 // ---- round 8 review fixes ----

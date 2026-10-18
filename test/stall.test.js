@@ -379,11 +379,16 @@ test('round 13 case 4: "buy a domain" -- BOTH FORBIDDEN_RE and OWNER_FLOOR catch
   assert.equal(wouldSend(s).send, null);
 });
 
-test('round 13 case 5: "STATUS: needs-manager: pick option 1 or 2" is always a manager item, regardless of topic', () => {
+test('round 13 case 5: needs-manager STATUS line is a regular owner question on main (round 3: needs-manager was out of scope and was removed from stall.js; ops-ask.js still handles the status if it ever arrives)', () => {
+  // Round 3 (2026-10-18, owner-ask-narrow): stall.js is reset to main. The needs-manager STATUS line support
+  // (added in round 13) was out of scope for this round and was removed -- stall.js on main only recognises
+  // needs-owner, blocked, handoff, waiting in the STATUS line. ops-ask.js still has the `status === 'needs-manager'`
+  // check (kept as a no-op safety net in case the status is set by a future caller).
   const s = classify(claude('Two ways to do it.\n1. Run the suite locally\n2. Push the branch and let CI run\nWhich one?\nSTATUS: needs-manager: pick option 1 or 2'));
-  assert.equal(s.status, 'needs-manager', 'the STATUS line decides first and the kind is needs-manager');
-  assert.equal(s.managerDecision, true, 'out.managerDecision is set so ops-ask routes it as a manager item');
-  assert.equal(s.case, 'owner_decision');
+  // The STATUS line is not recognised as needs-manager on main: it falls through to the heuristics, which see a
+  // numbered menu and pick the recommended / unmarked-first case.
+  assert.notEqual(s.status, 'needs-manager', 'on main, the STATUS line does not recognise needs-manager');
+  assert.equal(s.case, 'menu_recommended', 'the menu heuristic picks the recommended option');
 });
 
 // ---- round 13 regression: FORBIDDEN_RE still catches push-to-main / update_core / sudo / migration -------------

@@ -188,11 +188,6 @@ const STATUS_RE = /\b(?:done|finished|complete[d]?|tested|verified|passed|passin
 const NEXT_STEP = /\bnext(?::| is| step| phase| I'?d| I will| I'll)|\bI'?ll (?:now|next|then)\b|\bthen I(?:'ll| will)\b|\bstill to do\b|\bremaining\b/i;
 
 // Topics the AI manager and the rule path must never answer (AGENTS.md: the forbidden-topic filter always wins).
-// FORBIDDEN_RE is the AUTO-ANSWER SAFETY FILTER: the hard gate that never lets ghosty auto-answer "Yes" /
-// "go with the recommendation" / any reply that touches a deploy, push, merge, hard git, migration, sudo, reboot,
-// money, customer, destructive data, third-party credential, or physical action. Restored exactly as on main so the
-// filter still catches every topic it caught before. OWNER_FLOOR (below) is a NARROWER, ROUTING-ONLY set the manager
-// uses to decide OWNER-vs-MANAGER escalation; the two are different surfaces and must not be confused.
 // One alternative per line so a paraphrase can be added without untangling a wall of regex; matched case-insensitively.
 const PUSH_MAIN = String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b`;
 const MERGE_MAIN = String.raw`\bmerge\b[^.\n]{0,30}\bmain\b`;
@@ -269,49 +264,6 @@ const hardRe = (o) => { const k = `${+!!o.mergePresent}${+!!o.pushPresent}${+!!o
 // `git push <remote> <refspec>` where the refspec is not main/master: not the landing of a merge.
 const PUSH_OTHER_REF = String.raw`\bgit push\b(?:\s+-{1,2}[\w-]+)*\s+(?!-)\S+\s+(?!(?:main|master|and|then|after|once|when|if|to|now|again|too|so|or|before)\b)\S`;
 const PUSH_OTHER_RE = new RegExp(PUSH_OTHER_REF, 'i');   // read on the text and its spelling variants, not on window joins (a joined word would look like another ref)
-
-// ---- OWNER_FLOOR (round 13, 2026-10-18): routing-only subset for OWNER vs MANAGER escalation ----------------
-// Round 12 (2026-10-18) narrowed the owner list to: money/payments, customers, deleting shared data, owner-held
-// credentials (third-party logins, keys to rotate -- never app-generated secrets), and physical actions on a device.
-// A generated app secret ("set CRON_SECRET (generate)", "generate a JWT secret", placeholder names like CRON_/JWT_/APP_/
-// SESSION_/INTERNAL_/DB_/DATABASE_) drops the credentials part: a generated-secret text is a MANAGER item (the deploy
-// evaluation / merge evaluation covers it), never an owner item.
-//
-// Use OWNER_FLOOR (not FORBIDDEN_RE) only where the code decides OWNER vs MANAGER routing: ops-ask.js manager-item
-// routing and scripts/jev-ask.js stop floors (a 'touches' entry forces escalation to the owner only if it is on the
-// owner floor; other forbidden topics route to the manager, never auto-answered). The auto-answer safety filter is
-// FORBIDDEN_RE / forbiddenMatch and stays unchanged -- it still catches every topic it caught before.
-const CREDENTIALS_FOR_OWNER = String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`;
-const GENERATED_SECRET = String.raw`\bgenerat\w*\b[^.\n?]{0,40}\b(?:secret|password|passphrase|token|key|cert)|(?:set|put|add|create)\b[^.\n?]{0,30}\b(?:CRON_|JWT_|SESSION_|APP_|INTERNAL_|DB_|DATABASE_)[A-Z_]+|\bgenerat(?:e|ing)\b[^.\n?]{0,20}\b(?:a |an |new |the )?(?:secret|password|passphrase|key|token|cert)`;
-const OWNER_FLOOR_PARTS = [
-  // destructive data operations: shared-data delete
-  String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
-  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
-  // owner-held credentials and secrets (third-party logins, keys to rotate)
-  CREDENTIALS_FOR_OWNER,
-  // money / payments / customers
-  String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
-  // physical actions on a device (the agent cannot do them; the owner must)
-  String.raw`\bplug(?:\s+in)?\b|\bunplug\b|\breplug\b|\bpower[- ]?cycle\b|\bpress\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|power|switch|remote)\b|\btap\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|screen)\b`,
-];
-const GENERATED_SECRET_RE = new RegExp(GENERATED_SECRET, 'i');
-const ownerFloorParts = ({ generatedSecretOk = false } = {}) => {
-  const drop = new Set();
-  if (generatedSecretOk) drop.add(CREDENTIALS_FOR_OWNER);   // the app is generating the secret (set CRON_SECRET (generate), ...): manager item, not owner
-  return OWNER_FLOOR_PARTS.filter((p) => !drop.has(p));
-};
-const OWNER_FLOOR_RES = new Map();
-const ownerFloorRe = (o) => { const k = `${+!!o.generatedSecretOk}`; if (!OWNER_FLOOR_RES.has(k)) OWNER_FLOOR_RES.set(k, new RegExp(ownerFloorParts(o).join('|'), 'i')); return OWNER_FLOOR_RES.get(k); };
-export const OWNER_FLOOR_RE = new RegExp(OWNER_FLOOR_PARTS.join('|'), 'i');
-// ownerFloorMatch: the OWNER-vs-MANAGER routing decision. Only OWNER_FLOOR topics (with the generated-secret exception)
-// escalate to the owner; any other FORBIDDEN_RE topic (deploy, push, merge, migration, sudo, ...) escalates to the
-// manager (the manager's evaluation owns it). Use this where the code decides OWNER vs MANAGER routing. The auto-answer
-// safety filter is FORBIDDEN_RE / forbiddenMatch and stays unchanged.
-export function ownerFloorMatch(text, opts = {}) {
-  const o = typeof opts === 'object' && opts ? opts : {};
-  if (o.generatedSecretOk === undefined) o.generatedSecretOk = GENERATED_SECRET_RE.test(String(text || ''));
-  return matchWith(ownerFloorRe(o), text, forbiddenExtra);
-}
 
 let forbiddenExtra = null;
 // Extra forbidden words that must not live in a public repo (customer names, ...): GHOSTY_FORBIDDEN_EXTRA.
@@ -409,8 +361,6 @@ function matchWith(re, text, extra = null) {
   return null;
 }
 
-// forbiddenMatch is the AUTO-ANSWER SAFETY FILTER: it is the hard gate that never lets ghosty auto-answer "Yes" /
-// "go with the recommendation" / any reply that touches a topic in FORBIDDEN_RE. Restored exactly as on main.
 export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenExtra);
 // Like a deploy or a push, a merge counts as a topic only when the text asks to perform it ("Should I merge ..."), not for a noun ("the merge policy page").
 export const mergeMatch = (text) => requested(text, MERGE_RE);
@@ -423,6 +373,7 @@ export function hardMatch(text, opts = {}) {
   if (o.mergePresent && !o.pushPresent) for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_OTHER_RE); if (k) return k[0]; }
   return null;
 }
+const SERVICE_CTL_RE = new RegExp(FORBIDDEN_PARTS[1], 'i');
 // A deploy or a push counts as a topic only when the agent asks to perform it ("Should I deploy ...", "Deploy X to Y?", "ready to deploy"),
 // not when the word is a noun or a modifier ("the deploy queue page", "push notifications"). Text that mentions the word without
 // asking stays in the hard floor, so it is escalated, never answered.
@@ -466,16 +417,10 @@ function requestHit(text, re) {
   return null;
 }
 const requested = (text, re) => { for (const v of [String(text), ...textVariants(text)]) { const k = requestHit(v, re); if (k) return k; } return null; };
-// pushMatch: a hard push (--tags, --force, --mirror, --delete, +ref, :ref, to prod/staging/live, history rewrite, amend, filter-branch/repo) is never a push topic --
-// the safety filter (FORBIDDEN_RE / hardMatch) catches it and escalates; the manager must not try to answer it.
-export const pushMatch = (text) => {
-  for (const v of [String(text), ...textVariants(text)]) { if (HARD_PUSH_RE.test(v) || PUSH_COLON_RE.test(v)) return null; }
-  return requested(text, PUSH_RE);
-};
-// Topic split: merge / push / deploy are decided by the manager (OWNER_DECISIONS §15). hardMatch still checks the
-// full safety floor; deployMatch / pushMatch / mergeMatch report the topic so out.topics (manager.js) can route them
-// and the merge / deploy / push evaluation (merge-policy.js, decide-policy.js) owns their safety.
-export const deployMatch = (text) => requested(text, DEPLOY_RE);
+// systemctl / pm2 commands stay hard: no deploy topic beside them.
+export const deployMatch = (text) => (matchWith(SERVICE_CTL_RE, text) ? null : requested(text, DEPLOY_RE));
+// A plain push (not a force, a rewrite, a delete or a push to prod/staging/live: those stay hard).
+export const pushMatch = (text) => (matchWith(HARD_PUSH_RE, text) || colonHit(text) ? null : requested(text, PUSH_RE));
 export function topicSplit(text) {
   const merge = mergeMatch(text), push = pushMatch(text), deploy = deployMatch(text);
   return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };
@@ -605,10 +550,9 @@ export function unmarkedFirst(opts, lines = []) {
 }
 
 // The agent's own last-line verdict (AGENTS.md "End every turn with a STATUS line"):
-//   STATUS: done | needs-owner: <question> | needs-manager: <question> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
-// "needs-manager" addresses the manager directly (round 12 narrowing, 2026-10-18): always a manager item regardless of topic.
+//   STATUS: done | needs-owner: <question> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
 // Looked for in the last 3 closing lines only. Returns { kind, text } or null (Codex/MiniMax panes, turns without the line).
-const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(done|needs-owner|needs-manager|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
+const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(done|needs-owner|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
 // Verdicts agents write instead of "done" ("STATUS: acknowledged.", "STATUS: shipped"): a finished turn, never a question.
 // Read as plain text they fell to the heuristics: "I will ask before any force-push" became stopped_short (2026-10-15).
 const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', 'complete', 'completed', 'finished']);
@@ -675,9 +619,6 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
     out.no_status = false;
     out.forbiddenText = close.slice(-6).join('\n');
     if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
-    // needs-manager (round 12 narrowing, 2026-10-18): the agent addresses the manager directly. Set out.managerDecision so
-    // ops-ask.js can route it as a manager item (no hard floor, no lease/deploy topic check) regardless of what the text says.
-    else if (st.kind === 'needs-manager') { out.case = 'owner_decision'; out.managerDecision = true; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
     // a job of the session's own, named by a concrete pid / log / run id: the manager wakes it when the job ends (own-jobs.js); never a needs-you.
     // Without a concrete reference the old case stands ("waiting for the CI run" may be someone else's); `jobNoun` lets the manager upgrade it when the agent has a live child process.
     else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind) && hasRef(jobRefs(st.text))) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text); out.answer = null; out.autoCase = undefined; }
@@ -802,4 +743,47 @@ export function outcomeKind(text) {
   if (/^\d$/.test(t) || /^(?:go with|take) (?:your |the )?(?:recommend|option \d)/i.test(t)) return 'take_recommended';
   if (t.length <= 40 && /^(?:y|yes|yep|yeah|ok|okay|sure|go|go ahead|continue|proceed|carry on|keep going|do it|please do|yes,? (?:continue|go ahead|please|do it|proceed))\b[.!]*$/i.test(t)) return 'continue';
   return 'owner_specific';
+}
+
+// ---- OWNER_FLOOR (round 13, 2026-10-18): routing-only subset for OWNER vs MANAGER escalation ----------------
+// Round 12 (2026-10-18) narrowed the owner list to: money/payments, customers, deleting shared data, owner-held
+// credentials (third-party logins, keys to rotate -- never app-generated secrets), and physical actions on a device.
+// A generated app secret ("set CRON_SECRET (generate)", "generate a JWT secret", placeholder names like CRON_/JWT_/APP_/
+// SESSION_/INTERNAL_/DB_/DATABASE_) drops the credentials part: a generated-secret text is a MANAGER item (the deploy
+// evaluation / merge evaluation covers it), never an owner item.
+//
+// Use OWNER_FLOOR (not FORBIDDEN_RE) only where the code decides OWNER vs MANAGER routing: ops-ask.js manager-item
+// routing and scripts/jev-ask.js stop floors (a 'touches' entry forces escalation to the owner only if it is on the
+// owner floor; other forbidden topics route to the manager, never auto-answered). The auto-answer safety filter is
+// FORBIDDEN_RE / forbiddenMatch and stays unchanged -- it still catches every topic it caught before.
+const CREDENTIALS_FOR_OWNER = String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`;
+const GENERATED_SECRET = String.raw`\bgenerat\w*\b[^.\n?]{0,40}\b(?:secret|password|passphrase|token|key|cert)|(?:set|put|add|create)\b[^.\n?]{0,30}\b(?:CRON_|JWT_|SESSION_|APP_|INTERNAL_|DB_|DATABASE_)[A-Z_]+|\bgenerat(?:e|ing)\b[^.\n?]{0,20}\b(?:a |an |new |the )?(?:secret|password|passphrase|key|token|cert)`;
+const OWNER_FLOOR_PARTS = [
+  // destructive data operations: shared-data delete
+  String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
+  String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
+  // owner-held credentials and secrets (third-party logins, keys to rotate)
+  CREDENTIALS_FOR_OWNER,
+  // money / payments / customers
+  String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+  // physical actions on a device (the agent cannot do them; the owner must)
+  String.raw`\bplug(?:\s+in)?\b|\bunplug\b|\breplug\b|\bpower[- ]?cycle\b|\bpress\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|power|switch|remote)\b|\btap\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|screen)\b`,
+];
+const GENERATED_SECRET_RE = new RegExp(GENERATED_SECRET, 'i');
+const ownerFloorParts = ({ generatedSecretOk = false } = {}) => {
+  const drop = new Set();
+  if (generatedSecretOk) drop.add(CREDENTIALS_FOR_OWNER);   // the app is generating the secret (set CRON_SECRET (generate), ...): manager item, not owner
+  return OWNER_FLOOR_PARTS.filter((p) => !drop.has(p));
+};
+const OWNER_FLOOR_RES = new Map();
+const ownerFloorRe = (o) => { const k = `${+!!o.generatedSecretOk}`; if (!OWNER_FLOOR_RES.has(k)) OWNER_FLOOR_RES.set(k, new RegExp(ownerFloorParts(o).join('|'), 'i')); return OWNER_FLOOR_RES.get(k); };
+export const OWNER_FLOOR_RE = new RegExp(OWNER_FLOOR_PARTS.join('|'), 'i');
+// ownerFloorMatch: the OWNER-vs-MANAGER routing decision. Only OWNER_FLOOR topics (with the generated-secret exception)
+// escalate to the owner; any other FORBIDDEN_RE topic (deploy, push, merge, migration, sudo, ...) escalates to the
+// manager (the manager's evaluation owns it). Use this where the code decides OWNER vs MANAGER routing. The auto-answer
+// safety filter is FORBIDDEN_RE / forbiddenMatch and stays unchanged.
+export function ownerFloorMatch(text, opts = {}) {
+  const o = typeof opts === 'object' && opts ? opts : {};
+  if (o.generatedSecretOk === undefined) o.generatedSecretOk = GENERATED_SECRET_RE.test(String(text || ''));
+  return matchWith(ownerFloorRe(o), text, forbiddenExtra);
 }
