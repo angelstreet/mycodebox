@@ -430,7 +430,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       blockers = ls.filter((l) => leasesConflict(virtual(['server']), l) && !(skipLeased && ownServerOnly(l, own)));
       if (skipLeased) return { blockers, leasedHosts: leasedHosts.filter((x) => own.has(x.host)) };
     }
-    else if (d.scope === 'host' && d.hosts?.length) blockers = ls.filter((l) => leasesConflict(virtual(d.hosts.map((h) => `host:${h}`), 'host'), l));
+    else if (d.scope === 'host' && d.hosts?.length) {
+      // with skipLeased only a whole-host or env-wide lease keeps the deploy from starting: device leases on the host do not,
+      // because update_core syncs the code at once and defers the vpt-host restart to the catch-up (TASK-129 P1f). A catch-up of a
+      // deploy that already deferred (d.strict) waits for the host to be free: it is the one that restarts, and it must not loop.
+      blockers = ls.filter((l) => leasesConflict(virtual(d.hosts.map((h) => `host:${h}`), 'host'), l) && (!skipLeased || d.strict || hasType(l, 'env', 'host')));
+    }
     else if (d.scope === 'host') blockers = skipLeased ? ls.filter((l) => hasType(l, 'env')) : ls.filter((l) => hasType(l, 'env', 'host', 'device'));
     else blockers = skipLeased ? ls.filter((l) => hasType(l, 'env', 'server', 'frontend') || (hasType(l, 'host', 'device') && serverKinded(l))) : ls;   // full
     return { blockers, leasedHosts: skipLeased ? leasedHosts : [] };
@@ -925,9 +930,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         // check and claim in one step (inside the mutex): the deploy's own lease, so nothing can slip in between. Joiners claim with its deploy_id.
         const skip = new Set(leasedHosts.map((x) => x.host));
         const known = Object.keys(S.deployed[d.env] || {}).filter((k) => !GENERIC.includes(k) && !skip.has(k));
-        const raw = d.scope === 'frontend' ? ['frontend'] : d.scope === 'server' ? ['server'] : d.scope === 'host' && d.hosts?.length ? d.hosts.map((h) => `host:${h}`)
+        const raw = d.scope === 'frontend' ? ['frontend'] : d.scope === 'server' ? ['server'] : d.scope === 'host' && d.hosts?.length ? d.hosts.filter((h) => !skip.has(String(h).toLowerCase())).map((h) => `host:${h}`)
           : d.scope === 'host' && known.length ? known.map((h) => `host:${h}`) : ['*'];
         const resources = [...new Set(raw.map((r) => canonical(parseResource(r))))].sort();
+        // every named host is only device-leased: update_core syncs them without a lease, so the deploy holds nothing
+        if (!resources.length) return { ok: true, state: 'running', deploy: deployView(nd), granted: [], leased_hosts: leasedHosts, skipped_hosts: leasedHosts.map((x) => x.host) };
         const lease = makeLease({ env: d.env, resources, mode: 'exclusive', kind: d.scope === 'host' ? 'host' : 'server', agent, client: typeof a.client === 'string' ? a.client : INTERNAL, session: null,
           purpose: `deploy ${d.id}`, provider: '', shared: false, ttlMin: cfg.runningMaxMin, heartbeatS: null, system: true, deployId: d.id }, t);
         emit({ t: 'grant', lease, at: t });
@@ -958,7 +965,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         // hosts left out because they were leased: queue the catch-up deploy (the runner used to do this from SKIPPED_HOSTS)
         let catchup = null;
         if (skipped.length && !S.deploys.some((x) => x.env === nd.env && x.scope === 'host' && x.state === 'queued' && x.ref === nd.ref && skipped.every((h) => x.hosts?.includes(h)))) {
-          const c = { id: depNew(), env: nd.env, scope: 'host', ref: nd.ref, agent: RUNNER, purpose: `catch-up for ${nd.id}: skipped ${skipped.join(',')}`, state: 'queued', approved: true, created: t, expires: t + cfg.deployTtlMin * MIN, hosts: skipped };
+          const c = { id: depNew(), env: nd.env, scope: 'host', ref: nd.ref, agent: RUNNER, purpose: `catch-up for ${nd.id}: skipped ${skipped.join(',')}`, state: 'queued', approved: true, created: t, expires: t + cfg.deployTtlMin * MIN, hosts: skipped, ...((nd.strict || String(nd.purpose || '').startsWith('catch-up')) ? { strict: true } : {}) };
           emit({ t: 'dep_set', deploy: c, event: 'request', at: t });
           catchup = c.id;
         }
