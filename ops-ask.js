@@ -26,7 +26,7 @@ export function opsAsk(final) {
   const status = String(final.status || '').toLowerCase();
   // needs-manager: the agent addresses the manager directly, always a manager item (no topic check)
   if (status === 'needs-manager') return 'lease';
-  const stopKind = c === 'waiting_deploy' ? 'waiting_deploy' : c === 'owner_decision' || /^(?:needs-owner|blocked)$/.test(status) ? 'decision' : null;
+  const stopKind = c === 'merge_wait' ? 'waiting_deploy' : c === 'waiting_deploy' ? 'waiting_deploy' : c === 'owner_decision' || /^(?:needs-owner|blocked)$/.test(status) ? 'decision' : null;
   if (!stopKind) return null;
   // the routing floor: only OWNER_FLOOR topics (money, customers, shared_data_delete, owner-held credentials with the
   // generated-secret exception, physical) keep the stop with the owner. Deploy / push / merge / sudo / migration /
@@ -34,6 +34,7 @@ export function opsAsk(final) {
   // evaluation owns them).
   if (ownerFloorMatch(`${text} ${final.blocked || ''}`)) return null;
   if (final.forbidden && ownerFloorMatch(String(final.forbidden))) return null;
+  if (c === 'merge_wait') return final.topics?.hard ? null : 'merge';   // never the owner's: a hard word (force-push, secrets) keeps it with the owner
   if (stopKind === 'waiting_deploy') return leaseTopic(text) || leaseAsk(text).lease ? 'lease' : 'deploy';
   if (!text) return null;
   // every question of the stop must be about a lease or a deploy; a mixed stop (a product question beside a deploy one) goes to the owner

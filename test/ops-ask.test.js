@@ -159,3 +159,8 @@ function safetyFloorForTest(text) {
   // Thin wrapper: is this caught by the AUTO-ANSWER SAFETY FILTER (FORBIDDEN_RE)?
   return forbiddenMatchForTest(text);
 }
+
+test('merge_wait is a manager item of kind merge, unless a hard word keeps it with the owner', () => {
+  assert.equal(opsAsk({ case: 'merge_wait', question: 'your merge decision on PR #22', status: 'waiting', topics: { merge: 'merge' } }), 'merge');
+  assert.equal(opsAsk({ case: 'merge_wait', question: 'merge PR #22 with a force-push', status: 'needs-owner', topics: { merge: 'merge', hard: 'force-push' } }), null);
+});

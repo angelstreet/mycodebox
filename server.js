@@ -2470,7 +2470,7 @@ server.listen(PORT, HOST, async () => {
   integrationOwnJobs = ownJobs;
   setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
-    ownJobs,
+    ownJobs, integration: integrationLane,
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
     onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),

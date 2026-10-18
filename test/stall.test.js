@@ -416,3 +416,17 @@ test('round 13 regression: OWNER_FLOOR matches "rotate the Stripe API key", "buy
 test('the todo panel may be followed by the background-tasks line', () => {
   assert.equal(statusLine([...T33, '  ◐ Tasks · 1 agent active · /tasks details'])?.kind, 'done');
 });
+
+test('merge_wait: a STATUS waiting / blocked / needs-owner on a merge or PR decision is never a deploy wait or an owner question', () => {
+  for (const [kind, text] of [['waiting', 'your merge decision on PR #22'], ['blocked', 'merge decision on PR #22'], ['needs-owner', 'merge PR #22?']]) {
+    const s = classify(claude(`Branch pushed.\nSTATUS: ${kind} — ${text}`));
+    assert.equal(s.case, 'merge_wait', `${kind}: ${text}`);
+    assert.equal(s.mergeAsk.pr, 22);
+    assert.ok(s.topics.merge, 'the merge topic is set even for the noun use');
+    assert.equal(s.answer, null);
+  }
+  assert.equal(classify(claude('Queued.\nSTATUS: waiting: deploy d-1')).case, 'waiting_deploy');
+  const i = classify(claude('Queued.\nSTATUS: waiting: integration int-abc123'));
+  assert.notEqual(i.case, 'merge_wait');
+  assert.equal(classify(claude('Queued.\nSTATUS: waiting: integration int-abc123 to merge')).case !== 'merge_wait', true);
+});

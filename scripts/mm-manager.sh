@@ -118,6 +118,7 @@ builtin_table() {
 | continue, stopped_short, ask_status | "Yes, continue." if the rule set's safety gates allow (case in autoCases, no draft, no forbidden topic); else escalate as a batch item |
 | menu_recommended | read `stall.options`; if the recommended option is non-forbidden and the question is "how", send its number or "Yes, go with your recommendation." — otherwise escalate |
 | owner_decision | never guess; escalate with a one-line proposed reply |
+| merge_wait | never ask the owner; integrate request or the merge evaluation decides |
 | waiting_deploy | never answer; check leases and escalate the deploy request / blocking lease |
 | owner_action | escalate, batched, with `stall.action` |
 | permission | escalate (never approve a permission prompt on the owner's behalf) |

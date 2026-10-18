@@ -44,6 +44,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   `integrate request <branch> [--deploy frontend|server|host|full]`. Never merge into the target branch, push the target
   or run the deploy script yourself; the lane merges, tests, pushes, waits for CI and deploys, then tells you the result.
   End the turn with `STATUS: waiting: integration <id>`; a returned request is fixed on your branch and requested again.
+  Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then `STATUS: waiting: integration <id>`.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.

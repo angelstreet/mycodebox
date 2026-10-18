@@ -10,6 +10,7 @@
 //   done              the turn finished, nothing asked
 //   error             usage limit, rate limit, API error
 //   stopped_short     the agent announced its next step and stopped, no question, no blocker
+//   merge_wait        STATUS waiting / blocked / needs-owner on a merge or PR decision (the manager queues an integration; never the owner)
 //   waiting_deploy    waiting for leases / a deploy / the owner's go-ahead to deploy (never auto-answered)
 //   owner_action      the agent asks the owner for a small manual thing (reload, plug, press)
 //   own_job_wait      STATUS blocked|waiting on a job of the session's own (pid, log, run id): woken when it ends, never a needs-you
@@ -416,6 +417,16 @@ function requestHit(text, re) {
   }
   return null;
 }
+// A STATUS that waits on / blocks on / hands the owner a merge or PR decision: never the owner's, never a deploy wait (the manager hands it to the integration lane).
+export const MERGE_WAIT_RE = /\b(?:merge|merged|merging|PR\s*#?\d+|pull request)\b/i;
+const INTEGRATION_ID_RE = /\bint-[\w-]+/i, DEPLOY_WAIT_RE = /^deploy\b|\bdeploy\s+(?:id\s+)?[\w-]*\d/i;
+export function mergeWaitOf(text) {
+  const t = String(text || '');
+  if (!MERGE_WAIT_RE.test(t) || INTEGRATION_ID_RE.test(t) || DEPLOY_WAIT_RE.test(t)) return null;
+  const pr = /\b(?:PR|pull request)\s*#?(\d+)/i.exec(t);
+  const br = /\bbranch\s+[`'"]?([\w][\w./-]*)/i.exec(t) || /\bmerg(?:e|ing)\s+[`'"]?([\w-]+\/[\w./-]+)/i.exec(t);
+  return { pr: pr ? Number(pr[1]) : null, branch: br ? br[1].replace(/[.,;:]+$/, '') : null };
+}
 const requested = (text, re) => { for (const v of [String(text), ...textVariants(text)]) { const k = requestHit(v, re); if (k) return k; } return null; };
 // systemctl / pm2 commands stay hard: no deploy topic beside them.
 export const deployMatch = (text) => (matchWith(SERVICE_CTL_RE, text) ? null : requested(text, DEPLOY_RE));
@@ -620,7 +631,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     out.source = 'rule';
     out.no_status = false;
     out.forbiddenText = close.slice(-6).join('\n');
-    if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
+    const mw = ['needs-owner', 'blocked', 'waiting'].includes(st.kind) && !((waitsOnOwnJob(st.text, st.kind) || /\b(?:finish(?:es|ed)?|completes?|ends?)\b/i.test(st.text)) && !/\bPR\s*#?\d|pull request|decision/i.test(st.text)) ? mergeWaitOf(st.text) : null;   // "the nightly job must finish before I can merge" waits on a job, not on a merge decision
+    if (mw) { out.case = 'merge_wait'; out.mergeAsk = mw; out.answer = null; }
+    else if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
     // a job of the session's own, named by a concrete pid / log / run id: the manager wakes it when the job ends (own-jobs.js); never a needs-you.
     // Without a concrete reference the old case stands ("waiting for the CI run" may be someone else's); `jobNoun` lets the manager upgrade it when the agent has a live child process.
     else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind) && hasRef(jobRefs(st.text))) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text); out.answer = null; out.autoCase = undefined; }
@@ -716,6 +729,7 @@ function finish(out) {
   if (out.case === 'continue' && out.forbiddenText != null) { const a = approvedAction({ case: out.case, approvalText: out.forbiddenText }); text = [a.text, ...a.commands].join('\n'); }
   out.forbidden = forbiddenMatch(text);
   out.topics = topicSplit(text);
+  if (out.mergeAsk && !out.topics.merge) out.topics.merge = 'merge';   // "your merge decision" reads as a noun: still the merge topic
   Object.defineProperty(out, 'topicsText', { value: text, enumerable: false, writable: true });   // what the topics were read over (the manager re-reads it when a decided deploy covers a topic)
   delete out.forbiddenText;
   return out;
