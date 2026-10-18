@@ -1,0 +1,186 @@
+// Round 13 brief B: notify texts and targets, the own-job wake on an integration id, the deploy adapter argv, the view helpers.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { classifyStall } from '../stall.js';
+import { jobRefs, waitsOnOwnJob, createOwnJobs } from '../own-jobs.js';
+import { integrationText, integrationNotice, createIntegrationNotify, tailLines } from '../integration-notify.js';
+import { createIntegrationDeploys, requestArgv } from '../integration-deploys.js';
+import * as iv from '../public/integration-view.js';
+import { ICONS } from '../public/icons.js';
+
+const req = (o = {}) => ({ id: 'int-7f3a', repo: 'demo-repo', branch: 'feat/x', target: 'main', session: 'alpha', state: 'merged', sha: 'a'.repeat(40), ...o });
+
+test('texts: merged, deployed, returned (+ tail), ci red, deploy failed', () => {
+  assert.equal(integrationText(req()), 'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa.');
+  assert.equal(integrationText(req({ state: 'deployed', version: '1.2.3', env: 'env-a' })), 'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa, deployed 1.2.3 to env-a.');
+  const r = integrationText(req({ state: 'returned', reason: 'tests are red', tail: 'FAIL a\n\n  at b\nx\ny\nz\nw' }));
+  assert.match(r, /^Integration int-7f3a returned: tests are red\. Fix it on your branch and run integrate request again\.\nFAIL a\n  at b\nx\ny\nz$/);
+  assert.match(integrationText(req({ state: 'merged_ci_red', reason: 'unit failed' })), /CI is red.*manager decides/);
+  assert.match(integrationText(req({ state: 'deploy_failed', reason: 'health check' })), /deploy failed/);
+  assert.equal(integrationText(req({ state: 'running' })), null);
+  assert.equal(tailLines('a\nb\nc', { lines: 2 }), 'a\nb');
+  assert.equal(integrationNotice(req({ state: 'merged_ci_red' })).priority, 'high');
+});
+
+function harness(over = {}) {
+  const sent = [], feed = [], events = [], after = [];
+  const status = { alpha: { state: 'done', stall: {} }, busy: { state: 'working' }, drafty: { state: 'done', stall: { draft: true } }, menu: { state: 'done', stall: { options: [1, 2] } } };
+  const canSend = (st) => st.state === 'done' && !st.stall?.draft && !st.stall?.options?.length;
+  const notify = createIntegrationNotify({ status: (s) => status[s], isRemote: (s) => s.startsWith('mac:'), canSend, send: async (s, t) => { sent.push([s, t]); },
+    feed: (i) => feed.push(i), managerEvent: async (e) => { events.push(e); }, afterSend: (s, r) => after.push([s, r.id]), ...over });
+  return { notify, sent, feed, events, after };
+}
+
+test('notify: a stopped codebox session gets one line; the feed and the manager always get an event', async () => {
+  const h = harness();
+  const r = await h.notify(req(), { type: 'state' });
+  assert.deepEqual(h.sent, [['alpha', 'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa.']]);
+  assert.equal(r.sent, true);
+  assert.equal(h.feed.length, 1); assert.equal(h.feed[0].kind, 'integration');
+  assert.equal(h.events.length, 1); assert.equal(h.events[0].key, 'integration:int-7f3a:merged'); assert.equal(h.events[0].session, 'alpha');
+  assert.deepEqual(h.after, [['alpha', 'int-7f3a']]);
+  await h.notify(req());   // the same transition twice: told once
+  assert.equal(h.sent.length, 1); assert.equal(h.feed.length, 1);
+});
+
+test('notify: working / draft / menu / unknown / remote / cancelled sessions get no typed line, but the feed and manager are told', async () => {
+  for (const [session, state] of [['busy', 'merged'], ['drafty', 'merged'], ['menu', 'returned'], ['ghost', 'merged'], ['mac:laptop', 'merged'], ['alpha', 'cancelled'], [undefined, 'merged']]) {
+    const h = harness();
+    await h.notify(req({ session, state, reason: 'x' }));
+    assert.equal(h.sent.length, 0, `${session}/${state}`);
+    assert.equal(h.feed.length, 1, `${session}/${state} feed`);
+    assert.equal(h.events.length, 1, `${session}/${state} event`);
+  }
+});
+
+test('notify: non-final transitions are ignored; a failing send or feed never throws into the lane', async () => {
+  const h = harness();
+  assert.equal((await h.notify(req({ state: 'running' }), { type: 'step' })).told, false);
+  assert.equal(h.feed.length + h.events.length, 0);
+  const bad = harness({ send: async () => { throw new Error('pane is not an agent'); }, feed: () => { throw new Error('feed down'); } });
+  const r = await bad.notify(req({ id: 'int-9' }));
+  assert.equal(r.told, false);
+  assert.equal(bad.events.length, 1, 'the manager event is written before the send is tried');
+});
+
+test('job refs: "integration <id>" in a STATUS line is the session\'s own job, never a needs-you', () => {
+  assert.equal(jobRefs('waiting: integration int-7f3a').integration, 'int-7f3a');
+  assert.equal(jobRefs('integration 42 queued').integration, '42');
+  assert.equal(jobRefs('integration request id: r9x').integration, 'r9x');
+  assert.equal(jobRefs('waiting for the integration tests').integration, null);
+  assert.equal(jobRefs('the integration lane is slow').integration, null);
+  assert.equal(waitsOnOwnJob('waiting: integration int-7f3a', 'waiting'), true);
+  const s = classifyStall({ plain: ['Pushed my branch.', 'STATUS: waiting: integration int-7f3a'], state: 'done' });
+  assert.equal(s.case, 'own_job_wait'); assert.equal(s.answer, null); assert.equal(s.ownJob.integration, 'int-7f3a');
+});
+
+test('own-jobs: an integration id wakes the session on a final state with the same text; not before', async () => {
+  let current = { id: 'int-7f3a', state: 'running', step: 'test', branch: 'feat/x', target: 'main' };
+  const sent = [];
+  const oj = createOwnJobs({ now: () => 1_000, integrationState: async (id) => (id === 'int-7f3a' ? current : null), send: async (s, t) => { sent.push([s, t]); } });
+  const w = await oj.watch('alpha', { text: 'integration int-7f3a' });
+  assert.equal(w.kind, 'integration'); assert.equal(w.label, 'integration int-7f3a'); assert.equal(w.unseen, false);
+  assert.deepEqual(await oj.tick(), []);
+  assert.match(await oj.progressOf('alpha'), /integration int-7f3a is running \(test\)/);
+  current = { ...current, state: 'returned', reason: 'tests are red', tail: 'FAIL x' };
+  const woke = await oj.tick();
+  assert.equal(woke.length, 1);
+  assert.equal(sent[0][1], integrationText(current));
+  assert.match(sent[0][1], /returned: tests are red/);
+  assert.deepEqual(await oj.tick(), [], 'woken once');
+});
+
+test('own-jobs: an unknown id or an unreachable lane does not wake and does not throw', async () => {
+  const oj = createOwnJobs({ integrationState: async () => { throw new Error('lane down'); }, send: async () => { throw new Error('must not send'); } });
+  await oj.watch('alpha', { text: 'integration int-1' });
+  assert.deepEqual(await oj.tick(), []);
+});
+
+test('deploy adapter: request argv, id from stdout, refusals, wait polls the list and reads the version', async () => {
+  assert.deepEqual(requestArgv({ env: 'env-a', scope: 'server', ref: 'main', agent: 'integration:int-7f3a' }),
+    ['deploy', 'request', 'env-a', '--scope', 'server', '--ref', 'main', '--agent', 'integration:int-7f3a', '--approved']);
+  const calls = [];
+  let polls = 0;
+  const registry = async (argv) => {
+    calls.push(argv);
+    if (argv[1] === 'request') return { code: 0, stdout: 'd-42\n', stderr: '' };
+    if (argv[1] === 'list') { polls++; return { code: 0, stdout: JSON.stringify({ deploys: [{ id: 'd-42', env: 'env-a', state: polls < 3 ? 'running' : 'done' }] }), stderr: '' }; }
+    if (argv[1] === 'last') return { code: 0, stdout: JSON.stringify({ envs: { 'env-a': { version: '1.2.3' } } }), stderr: '' };
+    return { code: 1, stdout: '', stderr: 'unsupported' };
+  };
+  const d = createIntegrationDeploys({ registry, sleep: async () => {} });
+  const q = await d.request({ env: 'env-a', scope: 'server', ref: 'main', sha: 'a'.repeat(40), agent: 'integration:int-7f3a' });
+  assert.deepEqual(q, { ok: true, id: 'd-42', sha: 'a'.repeat(40) });
+  assert.deepEqual(calls[0], requestArgv({ env: 'env-a', scope: 'server', ref: 'main', agent: 'integration:int-7f3a' }));
+  const w = await d.wait('d-42');
+  assert.deepEqual([w.ok, w.state, w.version], [true, 'done', '1.2.3']);
+  assert.equal(polls, 3);
+  for (const bad of [{ env: 'e;rm', scope: 'server', ref: 'main', agent: 'integration:i1' }, { env: 'env-a', scope: 'all', ref: 'main', agent: 'integration:i1' },
+    { env: 'env-a', scope: 'server', ref: '--evil', agent: 'integration:i1' }, { env: 'env-a', scope: 'server', ref: 'main', agent: 'someone' }]) assert.equal((await d.request(bad)).ok, false);
+  const refuse = createIntegrationDeploys({ registry: async () => ({ code: 3, stdout: '', stderr: 'E_HELD' }) });
+  assert.match((await refuse.request({ env: 'env-a', scope: 'server', ref: 'main', agent: 'integration:i1' })).error, /E_HELD/);
+});
+
+test('deploy adapter: a failed deploy, a timeout and a vanished id', async () => {
+  const mk = (state) => createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: JSON.stringify({ deploys: state ? [{ id: 'd1', env: 'e', state, tail: 'boom' }] : [] }), stderr: '' }), sleep: async () => {} });
+  const f = await mk('failed').wait('d1');
+  assert.deepEqual([f.ok, f.state, f.tail], [false, 'failed', 'boom']);
+  let t = 0;
+  const slow = createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: JSON.stringify({ deploys: [{ id: 'd1', state: 'running' }] }), stderr: '' }), sleep: async () => { t += 60000; }, now: () => t });
+  assert.equal((await slow.wait('d1', { timeoutMs: 120000 })).state, 'timeout');
+  assert.equal((await mk(null).wait('d1')).state, 'unknown');
+});
+
+const now = 10_000_000;
+const rq = (o) => ({ id: 'int-1', repo: 'demo-repo', branch: 'feat/a', target: 'main', session: 'alpha', state: 'queued', createdAt: now - 60000, ...o });
+
+test('view: per repo queue by position, running step with output tail, results with sha, version and reason', () => {
+  const data = { requests: [
+    rq({ id: 'q2', position: 2, branch: 'feat/b', deploy: 'server' }), rq({ id: 'q1', position: 1 }),
+    rq({ id: 'r1', state: 'running', step: 'test', tail: 'l1\nl2 <b>x</b>' }),
+    rq({ id: 'd1', state: 'deployed', sha: 'c'.repeat(40), version: '2.0.1', env: 'env-a', finishedAt: now - 120000, commitUrl: 'https://example.test/c/1' }),
+    rq({ id: 'x1', state: 'returned', reason: 'tests are red', finishedAt: now - 1000 }),
+    rq({ id: 'o1', repo: 'other-repo', state: 'merged', sha: 'd'.repeat(40) }) ] };
+  const h = iv.viewHtml(data, { now });
+  assert.ok(h.indexOf('demo-repo') < h.indexOf('other-repo'));
+  assert.ok(h.indexOf('data-iv-id="q1"') < h.indexOf('data-iv-id="q2"'));
+  assert.match(h, /step<\/span> <b>test<\/b>/);
+  assert.match(h, /<pre class="iv-tail">l1\nl2 &lt;b&gt;x&lt;\/b&gt;<\/pre>/);
+  assert.match(h, /<a href="https:\/\/example\.test\/c\/1"[^>]*><code>cccccccccccc<\/code>/);
+  assert.match(h, /2\.0\.1<\/a> to env-a/);
+  assert.match(h, /tests are red/);
+  assert.ok(h.indexOf('data-iv-id="x1"') < h.indexOf('data-iv-id="d1"'), 'newest result first');
+  assert.match(h, /data-iv-cancel="q1"/); assert.doesNotMatch(h, /data-iv-cancel="r1"|data-iv-cancel="d1"/, 'only queued requests can be cancelled');
+});
+
+test('view: cancel is armed by a first tap; escaping; empty and error states; unsafe commit urls are not linked', () => {
+  assert.deepEqual(iv.tap(null, 'q1'), { arm: 'q1', fire: null });
+  assert.deepEqual(iv.tap('q1', 'q1'), { arm: null, fire: 'q1' });
+  assert.deepEqual(iv.tap('q1', 'q2'), { arm: 'q2', fire: null });
+  assert.equal(iv.actionRequest('q1').url, '/api/integration/requests/q1/cancel');
+  assert.equal(iv.actionRequest('../x'), null);
+  assert.match(iv.viewHtml({ requests: [rq({ id: 'q1', position: 1 })] }, { armed: 'q1', now }), /tap again to cancel/);
+  const evil = iv.viewHtml({ requests: [rq({ branch: '<img src=x onerror=1>', session: '"><script>', state: 'merged', sha: 'e'.repeat(40), commitUrl: 'javascript:alert(1)', reason: '<b>' })] }, { now });
+  assert.doesNotMatch(evil, /<img|<script|href="javascript/);
+  assert.match(iv.viewHtml({ requests: [] }, { now }), /No integration requests/);
+  assert.match(iv.viewHtml([], { now }), /No integration requests/);
+  assert.match(iv.viewHtml({ ok: false, error: 'lane down' }, { now }), /lane down/);
+});
+
+test('static: view icons exist, no emoji or pasted svg; service worker precaches the view at v149; the menu and app wire it', () => {
+  const rd = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
+  const view = rd('../public/integration-view.js'), sw = rd('../public/sw.js'), html = rd('../public/index.html'), app = rd('../public/app.js');
+  for (const m of view.matchAll(/icon\('([\w-]+)'/g)) assert.ok(ICONS[m[1]], `icon ${m[1]}`);
+  assert.doesNotMatch(view, /<svg|\p{Extended_Pictographic}/u);
+  assert.match(sw, /'\/integration-view\.js'/); assert.match(sw, /ghosty-shell-v149/);
+  assert.ok(html.indexOf('id="integrationBtn"') > 0 && html.indexOf('id="integrationBtn"') < html.indexOf('id="legacyGroup"'), 'default menu, not Legacy');
+  assert.match(app, /import\('\/integration-view\.js'\)/); assert.match(app, /get\('integration'\)\) openIntegrationView/);
+});
+
+test('docs: session rules say hand off, never merge / push the target / deploy', () => {
+  const rd = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
+  for (const f of ['../AGENTS.md', '../scripts/cbsession']) { const t = rd(f); assert.match(t, /integrate request/); assert.match(t, /STATUS: waiting:\s+integration <id>/); }
+  assert.match(rd('../docs/LEASE-RULES.md'), /integrate request <branch> --deploy/);
+  assert.match(rd('../docs/REFERENCE.md'), /## Integration lane/);
+});

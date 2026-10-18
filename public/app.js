@@ -3656,6 +3656,45 @@ async function openLeasesView() {
   });
 }
 $('#leasesBtn').onclick = openLeasesView;
+// ----- Integration (⋮ menu, /?integration=1): GET /api/integration/requests; public/integration-view.js is loaded on first use. Cancel of a queued request needs a second tap -----
+async function openIntegrationView() {
+  let iv;
+  try { iv = await import('/integration-view.js'); } catch { toast('integration view unavailable', 2500); return; }
+  openSheet('Integration', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('history');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    const v = { data: null, armed: null, timer: null, poll: null };
+    const paint = () => { body.innerHTML = v.data ? iv.viewHtml(v.data, { now: Date.now(), armed: v.armed }) : '<div class="sheet-empty">loading…</div>'; };
+    const load = async () => {
+      try { const r = await fetch('/api/integration/requests?limit=100'); v.data = r.ok ? await r.json() : { ok: false, error: `integration lane unavailable (HTTP ${r.status})` }; } catch (e) { v.data = { ok: false, error: `integration lane unavailable: ${e.message}` }; }
+      if (body.isConnected && !v.armed) paint();
+    };
+    foot.onclick = (e) => { const a = e.target.closest('[data-a]')?.dataset.a; if (a === 'close') { clearInterval(v.poll); close(); } else if (a === 'refresh') load(); };
+    body.addEventListener('click', async (e) => {
+      const o = e.target.closest('[data-iv-open]');
+      if (o) { e.preventDefault(); clearInterval(v.poll); close(); openCard(o.dataset.ivOpen); return; }
+      const b = e.target.closest('[data-iv-cancel]');
+      if (!b) return;
+      const t = iv.tap(v.armed, b.dataset.ivCancel);
+      clearTimeout(v.timer);
+      v.armed = t.arm;
+      if (t.arm) { v.timer = setTimeout(() => { v.armed = null; if (body.isConnected) paint(); }, 4000); paint(); return; }
+      const req = iv.actionRequest(t.fire);
+      if (!req) return;
+      try {
+        const r = await fetch(req.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req.body) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        toast('cancelled', 2000);
+      } catch (er) { toast(`not cancelled: ${er.message}`, 4000); }
+      load();
+    });
+    paint(); load();
+    v.poll = setInterval(() => { if (!body.isConnected) clearInterval(v.poll); else load(); }, 4000);   // the running step's output tail is live
+  });
+}
+$('#integrationBtn').onclick = openIntegrationView;
 // ----- Voice mode (⋮ menu, or /?voice=1 from the notification's "Speak it"): voice-view.js is loaded when first opened -----
 async function openVoiceMode() {
   try {
@@ -4955,6 +4994,7 @@ if ('serviceWorker' in navigator) {
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
   if (new URLSearchParams(location.search).get('decided')) openDecidedView();
   if (new URLSearchParams(location.search).get('leases')) openLeasesView();
+  if (new URLSearchParams(location.search).get('integration')) openIntegrationView();
   if (new URLSearchParams(location.search).get('voice')) openVoiceMode();
   const openPlat = ['platforms', 'deploys'].some((k) => new URLSearchParams(location.search).get(k));
   const view = new URLSearchParams(location.search).get('view');

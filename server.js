@@ -133,6 +133,8 @@ import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
 import { createOwnJobs } from './own-jobs.js';
+import { createIntegrationNotify } from './integration-notify.js';
+import { createIntegrationDeploys } from './integration-deploys.js';
 import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
@@ -2168,6 +2170,23 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR,
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
 
+// ===== integration lane, sessions side (round 13, brief B): notify + deploys adapter for createIntegrationLane({ notify, deploys }) =====
+// notify: a final state -> feed notice, manager event and, for a stopped codebox session, one guarded line (by 'integration'); a mac: session gets the first two.
+// deploys: request + wait through the same deploy registry as the runner. integrationOwnJobs is set when own-jobs starts (it forgets a session we just told).
+let integrationOwnJobs = null;
+const integrationNotify = createIntegrationNotify({
+  status: (session) => latest?.status?.[session],
+  isRemote: (session) => remote.owns(session),
+  canSend: noteAllowed,   // stopped on a finished turn, no draft, no menu
+  send: async (session, text) => { await assertAgentPane(session, 'integration'); await sendKeys(session, text, true); logSend(session, 'integration', { keys: text }); },
+  feed: (item) => push.record(item),
+  managerEvent: (e) => managerEvents.record(e),
+  afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
+  log: (r) => logEvent(r),
+});
+const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
+// ===== end integration lane, sessions side =====
+
 const server = http.createServer((req, res) => {
   handleHttp(req, res).catch((err) => {
     console.error('[http]', req.method, String(req.url).slice(0, 80), err?.message);
@@ -2290,11 +2309,13 @@ server.listen(PORT, HOST, async () => {
     agentPid: async (name) => { const p = (await listPanes()).get(name); return p?.pid ? agentPidFromTree(p.pid, await processTable()) : null; },
     startedAt: async (pids) => { const m = new Map(); try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const x = l.trim().split(/\s+/); if (x.length === 2) m.set(Number(x[0]), Date.now() - Number(x[1]) * 1000); } } catch {} return m; },
     deployState: (id) => { const d = (deployRunner.snapshot().deploys || []).find((x) => String(x.id) === String(id)); return d ? { state: d.state, finished: d.finished ? d.finished * (d.finished < 1e12 ? 1000 : 1) : null } : null; },
+    integrationState: async (id) => integrationLane.get(id),   // the lane's request (GET /api/integration/requests/:id)
     stillWaiting: stillStopped, canSend: canType,
     send: async (name, text) => { await guardSendKeys(name, text, true); countSent(name); },   // a wake counts in the session's hourly cap
     record: (e) => managerEvents.record(e),
     log: (r) => logEvent(r),
   });
+  integrationOwnJobs = ownJobs;
   setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
     ownJobs,

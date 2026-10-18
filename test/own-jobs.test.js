@@ -25,7 +25,7 @@ test('STATUS blocked / waiting on a job of its own is own_job_wait (never a need
   assert.equal(status('STATUS: waiting: the owner go-ahead').case, 'waiting_deploy');
 });
 test('jobRefs / waitsOnOwnJob', () => {
-  assert.deepEqual(jobRefs('waiting on pid 4242 and /tmp/fake-run/out.log nohup'), { deploy: null, pid: 4242, path: '/tmp/fake-run/out.log', run: null, detached: true });
+  assert.deepEqual(jobRefs('waiting on pid 4242 and /tmp/fake-run/out.log nohup'), { deploy: null, pid: 4242, path: '/tmp/fake-run/out.log', run: null, integration: null, detached: true });
   assert.equal(jobRefs('deploy 3f9a').deploy, '3f9a');
   assert.equal(jobRefs('run id: r-12').run, 'r-12');
   assert.equal(waitsOnOwnJob('are you ok with the run?'), false);
