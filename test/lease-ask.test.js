@@ -106,7 +106,8 @@ test('observe: a lease ask that also asks to deploy or restart is NOT auto-answe
   await stop('d3', 'Ready.\n\nThe lease on server is free - should I restart vpt-server and deploy?', { outcome: false });
   await wait(400);
   assert.ok(!typed.slice(n).some((x) => /vpt-lease|never ask the owner about a lease/.test(x.text)), JSON.stringify(typed.slice(n)));
-  assert.ok(['wd', 'd2', 'd3'].every((x) => owner.slice(o).some((y) => y.session === x)), JSON.stringify(owner.slice(o)));
+  // round 12: not answered as a lease question, and no longer an owner item either: a lease / deploy stop is the manager's (ops-ask.js)
+  assert.ok(['wd', 'd2', 'd3'].every((x) => !owner.slice(o).some((y) => y.session === x) && m.stallOf(x)?.escalatedTo === 'manager'), JSON.stringify([owner.slice(o), ['wd', 'd2', 'd3'].map((x) => m.stallOf(x)?.escalatedTo)]));
 });
 test('observe: leaseAnswers off -> a pure lease question goes the old way', async () => {
   const n = typed.length;

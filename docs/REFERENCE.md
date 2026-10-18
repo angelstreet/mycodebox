@@ -1137,6 +1137,24 @@ lease to `host` when the holder had no finished turn for 30 min (never releases 
 each holder (live / ended / remote / unknown / system) and the planned action. The reporter plugin releases a session's leases on SessionEnd
 (not on /clear or resume). Daily report: `lease-stats.js` (deploy request -> start p95, minutes held back by a lease, unknown holders).
 
+### Leases and deploys never reach the owner (round 12, OWNER_DECISIONS section 19)
+
+- **A lease or deploy stop is a manager item.** `ops-ask.js` `opsAsk(final)` says `'lease'`, `'deploy'` or `null`: the case `waiting_deploy`, or an
+  `owner_decision` / STATUS `needs-owner` / `blocked` whose every question is about a lease, a deploy, `update_core`, the deploy queue or approval, or the
+  restart of a service by the deploy procedure. The hard floor (`hardMatch` with `deployPresent`) runs on the whole text first: a deletion, credential,
+  money, customer, migration or `sudo` word keeps the stop with the owner, as does a second, unrelated question in the same stop. A merge or push in the
+  stop that the policy escalated also stays with the owner. The lease-answer path (`lease-ask.js`) still runs first; only what it leaves goes on.
+- **What happens.** `escalate()` logs `{type:'escalated', target:'manager', kind}`, calls `onManagerItem` (server.js: one `manager-events.jsonl` line, key
+  `lease:manager-item` or `deploy:<stop id>:manager-item`, for the `manager` session to read) and does not call the owner push. `stallOf()` exposes
+  `escalatedTo: 'owner'|'manager'`; `isOwnersTurn` (`public/ask-model.js`) and the NEEDS YOU strip skip `'manager'` stops. Switch: `manager.json`
+  `opsToManager: false` restores the old routing. Not covered: the raw `waiting` push of a live terminal menu fires before the manager has classified the stop.
+- **The orchestrator asks the holder** (`lease-nudge.js`, every 2 min). For a queued deploy (the runner's `blocking`) or a ticket waiting more than 10 min,
+  each blocking holder is asked once per (holder, lease) per 30 min when its lease is past its own `expect_min`, idle (no finished turn for 20 min, the
+  lease-watch signal) or broader than its purpose (env-wide or server-kind lease whose purpose names one host, device or the frontend). A codebox session stopped
+  on a finished turn with no draft and no menu gets one line through the guarded send (`by: 'lease-nudge'`); any other holder (Mac, scripts) gets a
+  `lease:nudge` manager event with the same text. It never releases or narrows. Audit: `lease-nudges.jsonl`; cooldowns: `lease-nudge.json`.
+  `manager.json` `leaseNudge`: `"live"` (default) | `"dry"` (log only) | `"off"`.
+
 ## Round 9: other machines, ledgers, credit fallback, ready window
 
 - **The approved action** (`stall.js` `approvedAction`, `isPastNarrative`): for a recommended option or a "continue", the hard floor reads the

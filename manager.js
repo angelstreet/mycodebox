@@ -29,6 +29,7 @@ import { decidedItems, decidedSummary, failedCount } from './decided.js';
 import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
 import { leaseAsk, answerLeaseAsk } from './lease-ask.js';
+import { opsAsk } from './ops-ask.js';
 import { selfAsk, answerSelf } from './self-check.js';
 import { mockupRule, WINDOW_DEFAULT_MIN } from './mockups.js';
 import { supersedeOlder } from './owner-asks.js';
@@ -109,6 +110,7 @@ let readyWindows = null;                                            // injected:
 let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
 let ownJobs = null;                                                 // injected: own-jobs.js watcher { watch, forget, progressOf } (round 9, item 11). Unset = jobs are not watched
 let ownerAsksFile = join(STATE_DIR, 'manager-owner-asks.jsonl');    // the owner-asks ledger: a new ask of a session supersedes its older open ones (round 9, item 5)
+let managerItemHook = () => {};                                      // injected: ({ session, id, kind: 'lease'|'deploy', case, question, reason }) -> manager event (no owner push)
 let statusHook = () => {};                                          // injected: (session, status, text) for a logged stop whose STATUS is waiting / blocked
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
 
@@ -118,7 +120,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, ownJobs: ownJobsDep, ownerAsksFile: asksFile, readyStore } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, ownJobs: ownJobsDep, ownerAsksFile: asksFile, readyStore } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -166,6 +168,7 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (leaseView) leaseViewOf = leaseView;
   if (readyStore) readyWindows = readyStore;
   if (onStatus) statusHook = onStatus;
+  if (onManagerItem) managerItemHook = onManagerItem;
   if (ownJobsDep) ownJobs = ownJobsDep;
   if (asksFile) ownerAsksFile = asksFile;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
@@ -391,10 +394,25 @@ function readyDecision({ s, w, id, h, final, stall }) {
 let managerSessionsOf = () => ['manager'];
 export const isManagerSession = (name) => { try { return (managerSessionsOf() || []).includes(name); } catch { return false; } };
 const stopWall = new Map();   // stop id -> wall-clock ms of the stop (the owner-asks ledger is wall-clock; observe()'s `now` may not be)
-const escalatedStops = new Set();   // stop ids the rules escalated to the owner (the wake shadow's `escalated` fact)
+const escalatedStops = new Set();   // stop ids the rules escalated (to the owner or to the manager; the wake shadow's `escalated` fact)
+const managerStops = new Set();    // the subset escalated to the manager: a lease or deploy stop (ops-ask.js), never pushed, not in NEEDS YOU
+// A merge or push in the stop keeps it with the owner when the policy escalated it; a deploy (queue, approval, lease) goes to the manager.
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
   const firstEscalation = !escalatedStops.has(id);
+  const opsKind = config.opsToManager !== false && !final.topics?.merge && !final.topics?.push ? opsAsk(final) : null;
+  if (opsKind) {
+    managerStops.add(id); if (managerStops.size > 500) managerStops.delete(managerStops.values().next().value);
+    escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
+    if (isRemoteSession(name)) hookSafe(remoteHooks.escalated, name, id, reason, final);
+    logLater({ type: 'escalated', id, session: name, case: final.case, reason, target: 'manager', kind: opsKind });
+    if (firstEscalation) {
+      supersedeOlder(ownerAsksFile, name, id, { before: stopWall.get(id) ?? Date.now() }).catch(() => {});
+      try { managerItemHook({ session: name, id, kind: opsKind, case: final.case, question: String(final.question || '').slice(0, 300), reason }); } catch (e) { console.error('[manager] manager item', e.message); }
+    }
+    return;
+  }
+  managerStops.delete(id);
   if (isRemoteSession(name)) hookSafe(remoteHooks.escalated, name, id, reason, final);
   escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
   logLater({ type: 'escalated', id, session: name, case: final.case, reason });
@@ -1466,7 +1484,7 @@ export function stallOf(name) {
   return { case: st.case, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
     id: w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null,   // the previous stop's id never rides on a new stop's content
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
-    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), draft: !!(w.cls?.draft), jev: st.jev || null };
+    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), escalatedTo: (() => { const sid = w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null; return managerStops.has(sid) ? 'manager' : escalatedStops.has(sid) ? 'owner' : null; })(), draft: !!(w.cls?.draft), jev: st.jev || null };
 }
 
 // The AI reviewer's view for the UI: { id, state: pending|done|skipped|error, ai?, skipped?, error?, ... } for the current stop, or null.
