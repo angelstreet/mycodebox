@@ -3826,6 +3826,14 @@ async function dispatch(text, targets, isRetry) {
   return p.phase !== 'error';
 }
 
+// Mobile keyboards (IME/autocorrect) can re-commit the composed word right after value = '',
+// so the sent text stayed in the box; clear again on the next tick if it came back unchanged.
+function clearSendInput(sent) {
+  els.sendInput.value = '';
+  autoGrow();
+  setTimeout(() => { if (els.sendInput.value === sent) { els.sendInput.value = ''; autoGrow(); } }, 80);
+}
+
 async function send() {
   const keys = els.sendInput.value;
   const targets = dockTargets();
@@ -3838,8 +3846,7 @@ async function send() {
   }
   if (!keys.trim()) return;
   if (!targets.length) { toast(dock.multi ? 'pick at least one target' : 'no session'); return; }
-  els.sendInput.value = '';
-  autoGrow();
+  clearSendInput(keys);
   dock.recalled = null;
   const ok = await dispatch(keys, targets);
   if (!ok && !els.sendInput.value) { els.sendInput.value = keys; autoGrow(); }
