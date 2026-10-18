@@ -786,3 +786,30 @@ test('lease events carry purpose, lease kind and since (lease-watch reads them t
   assert.equal(typeof e.purpose, 'string');
   assert.ok('leaseKind' in e && 'since' in e);
 });
+
+test('deploy start: a catch-up host deploy with --skip-leased starts under device leases, but not under a whole-host lease', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  await h.claim('dev', 'host-1/device1', { kind: 'host' });
+  const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true });
+  assert.equal((await d.start({ id: r.id })).code, 'E_HELD', 'a plain start still waits for the device lease');
+  const s = await d.start({ id: r.id, skip_leased: true });
+  assert.equal(s.ok, true, 'skip-leased: only device leases on the host, so the deploy starts');
+  assert.deepEqual(s.skipped_hosts, ['host-1']); assert.deepEqual(s.granted, []);
+  assert.equal((await h.svc.list()).leases.length, 1, 'the device lease is untouched and the deploy holds nothing');
+  await d.finish({ id: r.id, status: 'done' });
+  await h.claim('whole', 'host-2');
+  const r2 = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-2'], approved: true });
+  assert.equal((await d.start({ id: r2.id, skip_leased: true })).code, 'E_HELD', 'a whole-host lease still blocks');
+});
+
+test('a catch-up that defers again queues a strict catch-up that waits for the host to be free', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  await h.claim('dev', 'host-1/device1', { kind: 'host' });
+  const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x' });
+  assert.equal((await d.start({ id: r.id, skip_leased: true })).ok, true);
+  const f = await d.finish({ id: r.id, status: 'done', skipped_hosts: 'host-1' });
+  assert.ok(f.catchup);
+  assert.equal((await d.start({ id: f.catchup, skip_leased: true })).code, 'E_HELD', 'strict: waits for the device lease');
+});
