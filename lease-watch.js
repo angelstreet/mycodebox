@@ -76,9 +76,12 @@ export function createLeaseWatch({
     if (st.cursor == null) { st.cursor = j.next; return; }       // first run ever: start at the end, do not replay history
     for (const e of j.events || []) {
       const where = `${e.env}/${(e.resources || []).join(',')}`;
-      const title = e.event === 'released' ? `lease released: ${where} (${e.agent})`
-        : e.event === 'expired' ? `lease expired: ${where} (${e.agent})`
-        : `lease narrowed to host: ${where} (${e.agent})`;
+      // the legacy registry only logs release / expiry / narrow; the central service also logs grants, tickets, flags and
+      // deploys (not lease lifecycle: skipped), owner force-releases and downgrades to a pin
+      const TITLES = { released: 'lease released', expired: 'lease expired', forced: 'lease released by the owner', narrowed: `lease narrowed${e.kind ? ` to ${e.kind}` : ''}`,
+        downgraded: `lease downgraded to ${e.to || 'pin'}` };   // the service's own reclaims are released / expired with the reason (ttl, no-heartbeat, session-gone)
+      if (!TITLES[e.event]) continue;
+      const title = `${TITLES[e.event]}: ${where} (${e.agent})`;
       const body = `lease ${e.id}${e.by ? ` by ${e.by}` : ''}${e.reason ? ` (${e.reason})` : ''}; purpose: ${e.purpose || '-'}`;
       await record({ key: `lease:${e.event}`, title, body, url: '/?platforms=1', priority: 'default', at: new Date((e.ts || 0) * 1000).toISOString(), leaseId: e.id, agent: e.agent, env: e.env, resources: e.resources || [] });
     }

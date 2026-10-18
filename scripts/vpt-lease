@@ -633,7 +633,10 @@ def cmd_events(a):
     for e in r.get("events") or []:
         e = dict(e)
         e["line"] = e.get("n")
-        e["event"] = e.get("kind")
+        e["event"] = e.get("kind")                  # legacy field names: event = what happened, kind = the lease's kind
+        e["kind"] = e.pop("leaseKind", None)
+        if isinstance(e.get("since"), (int, float)) and e["since"] > 1e11:
+            e["since"] = int(e["since"] / 1000)
         e["ts"] = int(to_epoch(e.get("at")) or 0)
         res = e.get("resources") or ([e["resource"]] if e.get("resource") else [])
         e["resources"] = [legacy_res(x, e.get("env", "")) for x in res]
