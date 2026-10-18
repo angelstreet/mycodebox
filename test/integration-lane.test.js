@@ -324,15 +324,15 @@ test('push landed, remote unreadable for a while: the request keeps running, the
 
 test('the test command runs with a scrubbed environment: service secrets stay out, PATH/HOME/NODE_* and the temp state dir stay in', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
-  process.env.LANGFUSE_SECRET_KEY = 'fake-secret'; process.env.JEV_TOKEN = 'fake-jev'; process.env.NODE_TEST_MARK = 'kept';
+  process.env.LANGFUSE_SECRET_KEY = 'fake-secret'; process.env.JEV_TOKEN = 'fake-jev'; process.env.NODE_LANE_MARK = 'kept';
   try {
     const { lane } = mk(w, { cfg: { test: 'env; exit 1' } });
     const r = await go(lane, { branch: 'feat' });
     assert.equal(r.state, 'returned');
     assert.doesNotMatch(r.tail, /LANGFUSE_|JEV_|fake-secret|fake-jev/);
-    assert.match(r.tail, /^PATH=/m); assert.match(r.tail, /^NODE_TEST_MARK=kept$/m); assert.match(r.tail, /^CI=1$/m);
+    assert.match(r.tail, /^PATH=/m); assert.match(r.tail, /^NODE_LANE_MARK=kept$/m); assert.match(r.tail, /^CI=1$/m);
     assert.match(r.tail, /^GHOSTY_STATE_DIR=.*integration\/tmp\//m);
-  } finally { delete process.env.LANGFUSE_SECRET_KEY; delete process.env.JEV_TOKEN; delete process.env.NODE_TEST_MARK; }
+  } finally { delete process.env.LANGFUSE_SECRET_KEY; delete process.env.JEV_TOKEN; delete process.env.NODE_LANE_MARK; }
 });
 
 test('package-lock.json in the merge: the lane runs npm ci before the test command; a failed install returns', async () => {
@@ -354,4 +354,18 @@ test('package-lock.json in the merge: the lane runs npm ci before the test comma
   const calls = [];
   const { lane } = mk(w, { cfg: { test: 'true' }, lane: { run: (cmd, o) => { calls.push(cmd); return real(cmd, o); } } });
   assert.equal((await go(lane, { branch: 'feat' })).state, 'merged'); assert.deepEqual(calls, ['true']);
+});
+
+test('red node tests: the reason names the failing tests and the tail keeps the failing block, not only the last lines', async () => {
+  const w = makeWorld();
+  w.branch('feat', { 't/x.test.js': "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('fine', () => {});\n"
+    + "test('the widget counts', () => { assert.equal(1 + 1, 3); });\ntest('other breaks', () => { throw new Error('other-boom'); });\n" });
+  const noisy = 'node --test t/x.test.js; rc=$?; i=0; while [ $i -lt 120 ]; do echo trailing noise $i; i=$((i+1)); done; exit $rc';
+  const { lane } = mk(w, { cfg: { test: noisy } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'returned');
+  assert.match(r.reason, /^tests red \(exit 1\): 2 failing: the widget counts; other breaks$/);
+  assert.deepEqual(r.failing, ['the widget counts', 'other breaks']);
+  assert.match(r.tail, /^✖ failing tests:/); assert.match(r.tail, /2 !== 3/); assert.match(r.tail, /other-boom/);
+  assert.match(r.tail, /ℹ fail 2/); assert.doesNotMatch(r.tail, /node:internal/);
 });

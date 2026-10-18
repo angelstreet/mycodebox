@@ -25,6 +25,20 @@ const coded = (code, message, extra) => Object.assign(new Error(message), { code
 // Remote URLs may carry credentials: never let them into a tail, a reason or a notice.
 const redact = (t) => String(t ?? '').replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]*@/gi, '$1***@');
 export const tailOf = (text, lines = 60, chars = 6000) => redact(String(text ?? '')).split('\n').slice(-lines).join('\n').slice(-chars).trim();
+// Red tests: the node test runner's `✖ failing tests:` block (names, assertions, own stack frames) matters more than the
+// last lines, which a long block or trailing npm noise pushes out. -> { tail, failing: [names] }; plain tail without one.
+export function testFailure(text, chars = 6000) {
+  const t = redact(String(text ?? ''));
+  const i = t.lastIndexOf('✖ failing tests:');
+  if (i < 0) return { tail: tailOf(t), failing: [] };
+  const block = t.slice(i).split('\n').filter((l) => !/^\s+at .*\bnode:/.test(l));   // runtime-internal frames say nothing
+  const failing = [...new Set(block.map((l) => /^\s*✖ (.+?) \([\d.]+m?s\)\s*$/.exec(l)?.[1]).filter(Boolean))];
+  const summary = t.slice(0, i).split('\n').filter((l) => /^ℹ (tests|pass|fail|cancelled) /.test(l)).slice(-4);
+  let body = block.join('\n').trim();
+  const room = chars - summary.join('\n').length - 4;
+  if (body.length > room) body = `${body.slice(0, room - 1)}…`;
+  return { tail: [body, ...summary].join('\n'), failing };
+}
 
 // ---- config ------------------------------------------------------------------------------------------------------------
 // -> { repos: {key: normalized}, errors: [] }. Unknown keys are ignored; an invalid repo is dropped and reported.
@@ -86,7 +100,8 @@ export function createDefaultGit() {
 // A branch's tests must not see the service's environment (Langfuse / Jev keys, tokens): an allowlist, not a denylist.
 const ENV_KEEP = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LANGUAGE', 'TERM', 'TZ', 'TMPDIR', 'CI', 'GHOSTY_STATE_DIR',
   'XDG_RUNTIME_DIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME']);
-export const scrubEnv = (env = process.env) => Object.fromEntries(Object.entries(env).filter(([k, v]) => v != null && (ENV_KEEP.has(k) || /^(LC_|NODE_)/.test(k))));
+// NODE_TEST_CONTEXT would turn a nested `node --test` into a child reporter of ours (exit 0 on red): never pass it on.
+export const scrubEnv = (env = process.env) => Object.fromEntries(Object.entries(env).filter(([k, v]) => v != null && k !== 'NODE_TEST_CONTEXT' && (ENV_KEEP.has(k) || /^(LC_|NODE_)/.test(k))));
 // run(cmd, { cwd, timeoutMs, env, onData }) -> { code, out, timedOut }. `sh -c`, own process group so a timeout kills the tree.
 export function createDefaultRun() {
   return (cmd, { cwd, timeoutMs = 30 * 60_000, env, onData } = {}) => new Promise((resolve) => {
@@ -185,7 +200,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     const setLive = (chunk) => { const l = live.get(r.id); if (l) l.tail = redact(l.tail + chunk).slice(-4000); };
     try {
       const out = (await fn(setLive)) || {};
-      s.ok = out.ok !== false; s.tail = tailOf(out.tail ?? ''); if (out.info !== undefined) s.info = out.info;
+      s.ok = out.ok !== false; s.tail = out.bounded ? redact(out.tail) : tailOf(out.tail ?? ''); if (out.info !== undefined) s.info = out.info;
       return out;
     } catch (e) { s.ok = false; s.tail = tailOf(e.message); throw e; } finally { s.endedAt = iso(); persist(r); }
   }
@@ -316,9 +331,13 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
             const res = await run(c.test, { cwd: wt, timeoutMs: c.testTimeoutMin * 60_000, onData: setLive,
               env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1' } });
             fs.rmSync(path.join(dir, 'tmp', r.id), { recursive: true, force: true });
-            return { ok: res.code === 0 && !res.timedOut, tail: res.out, info: { code: res.code, timedOut: !!res.timedOut } };
+            const ok = res.code === 0 && !res.timedOut;
+            const f = ok ? { tail: res.out, failing: [] } : testFailure(res.out);
+            return { ok, tail: f.tail, bounded: !ok, info: { code: res.code, timedOut: !!res.timedOut, failing: f.failing } };
           });
-          if (!t.ok) throw new Ret(t.info?.timedOut ? `tests timed out after ${c.testTimeoutMin} min` : `tests red (exit ${t.info?.code})`, r.steps.at(-1).tail);
+          const failing = t.info?.failing || [];
+          const names = failing.length ? `: ${failing.length} failing: ${failing.slice(0, 3).map((n) => n.slice(0, 80)).join('; ')}${failing.length > 3 ? '; …' : ''}` : '';
+          if (!t.ok) throw new Ret(t.info?.timedOut ? `tests timed out after ${c.testTimeoutMin} min` : `tests red (exit ${t.info?.code})${names}`, r.steps.at(-1).tail, failing.length ? { failing } : {});
         }
         const p = await step(r, 'push', async () => {
           // compare-and-swap: only if the remote target is still the commit the merge was built on (never clobber a rewind or a newer push)
