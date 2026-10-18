@@ -35,9 +35,13 @@ pgrep -P "$pane" -f claude >/dev/null && { echo "claude did not exit"; exit 1; }
 node --input-type=module -e "import {pathToFileURL} from 'node:url'; const {trustFolder}=await import(pathToFileURL(process.argv[1]).href); await trustFolder('claude', process.argv[2]).catch(()=>{})" "$SCRIPT_DIR/../trust.js" "$(tmux display -p -t "=$S:" '#{pane_current_path}')" || true   # best effort
 tmux send-keys -t "=$S:" -l "$CMD"; sleep 0.3; tmux send-keys -t "=$S:" Enter
 ready=0
-for i in $(seq 1 30); do sleep 2; if tmux capture-pane -p -t "=$S:" | grep -q "remote-control is active"; then ready=1; break; fi; done
+# Current Claude Code no longer prints "remote-control is active" under --remote-control; it prints a session link
+# (https://claude.ai/code/session_...) and the normal prompt footer ("bypass permissions on"). Accept any of them,
+# but only when a claude process is actually running under the pane — a bare shell that happens to show an old
+# link from a previous session must not count, otherwise the kickoff would land in the wrong pane.
+for i in $(seq 1 30); do sleep 2; if pgrep -P "$pane" -f claude >/dev/null && tmux capture-pane -p -t "=$S:" | grep -qE "remote-control is active|claude\.ai/code/session_|bypass permissions on"; then ready=1; break; fi; done
 # Never type the kickoff into a pane that is not the agent (launch failed, bare shell, login prompt).
-[ "$ready" = 1 ] || { echo "manager did not report remote-control active in 60s; kickoff NOT sent" >&2; exit 1; }
+[ "$ready" = 1 ] || { echo "manager did not show readiness in 60s; kickoff NOT sent" >&2; exit 1; }
 sleep 3
 KICK='Fresh start of the AI manager (nightly restart, short context on purpose). Read ~/vpt-manager/docs/tasks/TASK-44-MANAGER.md (§0 start, §2 authority, §4 loop, §5 actions, §5b delegating, §6 escalation, §7 report) and ~/vpt-manager/docs/tasks/TASK-44-ai-manager.md. Your settings are in ~/.local/state/ghosty/manager.json (owner delegations already recorded: keep them). Resume from your last-seen event (GET /api/manager/events?since=<last at in ~/.local/state/ghosty/manager-actions.jsonl or your last-seen file>) and the open items in manager-actions.jsonl / manager-asks.jsonl. Wait for events ONLY with `Bash run_in_background: ~/ghosty-sessions/scripts/manager-wait.sh` (it exits on the first filtered event; re-run it after each wake) — never a Monitor (its 30-min expiry wakes you for nothing). Hourly sweep with ScheduleWakeup as before. Stay lean: short wakes, delegate building. Budget = tokens and % of the weekly Claude plan (scorecard), never dollars.'
 python3 -c "import json,sys;print(json.dumps({'keys':sys.argv[1],'enter':True}))" "$KICK" | curl -s -X POST "$BASE/api/send/$S" "${H[@]}" -d @- >/dev/null
