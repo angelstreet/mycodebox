@@ -30,6 +30,25 @@ test('dry run per provider writes the launch file and starts nothing', () => {
   assert.match(fs.readFileSync(path.join(home, 'handovers', 'cb-h.prompt.md'), 'utf8'), /Read the handover: .*handover\.md/);
 });
 
+test('billing: sub drops env keys, -b NAME points apiKeyHelper at the key file', () => {
+  let r = run('-x', '-n', 'cb-sub', '-d', work, '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(launch('cb-sub'), /env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \S+\/claude --dangerously/);
+  const kd = path.join(home, '.config', 'anthropic'); fs.mkdirSync(kd, { recursive: true });
+  fs.writeFileSync(path.join(kd, 'team.key'), 'sk-ant-secret\n', { mode: 0o600 });
+  fs.writeFileSync(path.join(kd, 'team.workspace'), 'wrkspc_abc\n');
+  r = run('-x', '-n', 'cb-team', '-d', work, '-b', 'team', '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  const sj = path.join(home, 'handovers', 'cb-team.settings.json');
+  assert.match(launch('cb-team'), new RegExp(`claude --settings ${sj} --dangerously`));
+  const st = JSON.parse(fs.readFileSync(sj, 'utf8'));
+  assert.equal(st.apiKeyHelper, `cat "${path.join(kd, 'team.key')}"`);
+  assert.equal(st.env.ANTHROPIC_CUSTOM_HEADERS, 'anthropic-workspace-id: wrkspc_abc');
+  assert.ok(!launch('cb-team').includes('sk-ant-secret') && !fs.readFileSync(sj, 'utf8').includes('sk-ant-secret'));
+  assert.equal(run('-x', '-n', 'cb-nokey', '-d', work, '-b', 'missing', '-t', 'x').status, 2);
+  assert.equal(run('-x', '-n', 'cb-mmb', '-d', work, '-p', 'minimax', '-b', 'team', '-t', 'x').status, 2);
+});
+
 test('argument errors', () => {
   assert.equal(run('-x', '-n', 'bad name', '-d', work, '-t', 'x').status, 2);
   assert.equal(run('-x', '-n', 'ok', '-d', '/nonexistent-dir', '-t', 'x').status, 2);
