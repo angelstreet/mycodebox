@@ -300,3 +300,72 @@ test('jev-ask: merge point forces escalate when the floor reasons are present, m
     assert.equal(JSON.parse(b.stdout).source, 'rule');
   } finally { await rm(stateDir, { recursive: true, force: true }); }
 });
+
+// ---- round 12 narrowing (2026-10-18, owner rule) -- the five representative cases via the stop point ----
+// The stop point (router.js: text.decision.manager) checks STOP_FLOOR_TOPICS against facts.touches. Round 12 narrows
+// the floor to money / customers / shared_data_delete / credentials / physical; migrations, generated secrets,
+// merge/push, deploy/restart, infra config and tests/CI are manager items.
+test('stop round 12 case 1: migration is a manager item, not in the floor (no touches -> answer)', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    // "apply migration 0018 to Neon" arrives at the stop point as { case: 'owner_decision', touches: [] } because
+    // the migration topic is NOT in STOP_FLOOR_TOPICS anymore. ruleDefault: case=owner_decision -> escalate.
+    const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision', touches: [] })], { env });
+    assert.equal(code, 0, code);
+    // The rule default for owner_decision with no delegation is escalate; Jev may downgrade when recommended+reversible.
+    // Without a Jev server, the rule default stands: escalate (the manager escalates because no delegation, no recommendation).
+    const rec = JSON.parse(stdout);
+    assert.equal(rec.pick, 'escalate', 'no touches, no delegation, no recommendation -> escalate');
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
+
+test('stop round 12 case 2: generated app secret is a manager item, not in the floor', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    // "set CRON_SECRET (generate)" -> no touches (generated_secret is NOT in STOP_FLOOR_TOPICS).
+    // With delegation + recommended+reversible, the rule default is answer: the manager takes it.
+    const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision', touches: [], delegated: true })], { env });
+    assert.equal(code, 0, code);
+    assert.equal(JSON.parse(stdout).pick, 'answer', 'delegated stop with no touches -> manager answers');
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
+
+test('stop round 12 case 3: third-party credential rotation is an owner item (escalate)', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    // "rotate the Stripe API key" -> touches=['credentials'] -> forced escalate.
+    const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision', touches: ['credentials'] })], { env });
+    assert.equal(code, 0, code);
+    const rec = JSON.parse(stdout);
+    assert.equal(rec.pick, 'escalate', 'touches credentials -> forced escalate');
+    assert.equal(rec.source, 'forced');
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
+
+test('stop round 12 case 4: money / purchase is an owner item (escalate)', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    // "buy a domain" -> touches=['money'] -> forced escalate.
+    const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision', touches: ['money'] })], { env });
+    assert.equal(code, 0, code);
+    const rec = JSON.parse(stdout);
+    assert.equal(rec.pick, 'escalate', 'touches money -> forced escalate');
+    assert.equal(rec.source, 'forced');
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
+
+test('stop round 12 case 5: STATUS: needs-manager stops are manager items (no touches, delegated -> answer)', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    // "STATUS: needs-manager: pick option 1 or 2" -> the agent addresses the manager directly. The stop point sees
+    // an owner_decision with a menu. With a recommended+reversible option (delegated), the manager answers.
+    const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision', touches: [], recommended: true, reversible: true })], { env });
+    assert.equal(code, 0, code);
+    assert.equal(JSON.parse(stdout).pick, 'answer', 'recommended+reversible -> manager answers');
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});

@@ -183,15 +183,18 @@ const retry = {
 // ruleDefault: 'answer' when (delegated === true) OR (recommended === true AND
 //   reversible === true) OR own_cleanup === true — and no floor applies; else today's
 //   default ('answer' for case continue, else 'escalate').
-const STOP_FLOOR_TOPICS = ['money', 'credentials', 'customers', 'shared_data_delete', 'migration', 'merge_main', 'deploy_restart'];
+// Round 12 narrowing (2026-10-18, owner rule): only money/payments, customers, shared_data_delete, owner-held credentials,
+// and physical actions on a device force escalation to the owner. Migrations, merge/push, deploys/restarts,
+// generated app secrets, infra config and technical choices are manager decisions, not owner items.
+const STOP_FLOOR_TOPICS = ['money', 'credentials', 'customers', 'shared_data_delete', 'physical'];
 const stop = {
   usage: 'text.decision.manager',
   options: {
     // The criteria text below must stay short and readable without context; they are the only
     // thing Jev (and a human reading the test diff) sees. The two options state the owner's
     // delegation in plain words so Jev knows what is safe to take and what is not.
-    answer: 'manager can answer: a design or scope choice with a recommended, reversible option; cleanup of the session\'s own files (its worktree, scratch or temp); continuing planned work; or a fact the manager knows. If the facts say delegated, or recommended and reversible, lean to answer',
-    escalate: 'only the owner can answer: money or cost beyond plan, credentials or secrets, customers, deleting shared data, database migrations, merges to main, restarts or deploys; also a choice between directions with no recommendation, a product or taste question (what the product should show or do) with no recommendation, an irreversible choice, or anything forbidden / unclear',
+    answer: 'manager can answer: a design or scope choice with a recommended, reversible option; cleanup of the session\'s own files (its worktree, scratch or temp); continuing planned work; database migrations, merges to main, deploys or restarts, generated app secrets, infra config and tests/CI; or a fact the manager knows. If the facts say delegated, or recommended and reversible, lean to answer',
+    escalate: 'only the owner can answer: money or cost beyond plan, third-party credentials (rotate the Stripe key, revoke a third-party token), customers, deleting shared data, or physical actions on a device (plug, power-cycle, press a button); also a choice between directions with no recommendation, a product or taste question (what the product should show or do) with no recommendation, an irreversible choice, or anything forbidden / unclear',
   },
   instructions: 'Should the manager answer this stopped session itself (inside the owner\'s delegation), or escalate it to the owner?',
   floor(facts) {

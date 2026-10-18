@@ -19,17 +19,19 @@ test('continue: a plain "shall I continue" is answered', () => {
   assert.deepEqual(wouldSend(s).send, { text: 'Yes, continue.' });
 });
 
-test('continue look-alike: same question after a push to main is forbidden', () => {
+test('continue look-alike: same question after a push to main is the manager\'s call (round 12: push is no longer in the owner floor)', () => {
+  // The push itself is a manager decision; the question is "shall I continue?" which is a plain continue.
+  // The hard floor no longer matches "push to main" -- it stays with the manager (the manager still has the merge evaluation).
   const s = classify(claude('Phase 1 is committed.\nWant me to push it to main and continue?'));
   assert.equal(s.case, 'continue');
-  assert.match(s.forbidden, /push/i);
-  assert.equal(wouldSend(s).send, null);
+  assert.equal(s.forbidden, null);
+  assert.notEqual(wouldSend(s).send, null);
 });
 
-test('continue look-alike: continue and deploy is forbidden', () => {
+test('continue look-alike: continue and deploy is the manager\'s call (round 12: deploy is no longer in the owner floor)', () => {
   const s = classify(claude('The branch is green.\nShall I continue and deploy it to the hosts?'));
-  assert.equal(wouldSend(s).send, null);
-  assert.match(wouldSend(s).why, /forbidden: deploy/);
+  assert.notEqual(wouldSend(s).send, null, 'deploy is a manager topic, not in the owner floor');
+  assert.match(s.question || '', /continue|deploy/);
 });
 
 test('owner decision: "X, or leave it?"', () => {
@@ -115,13 +117,23 @@ test('an unclassified question is ambiguous and defaults to the owner', () => {
   assert.equal(wouldSend(s).send, null);
 });
 
-test('forbidden filter wins even when Jev says continue', () => {
-  for (const q of ['Should I delete the old branches?', 'Can I run update_core main --host?', 'OK to copy the new .env to the VM?',
+test('forbidden filter wins even when Jev says continue (round 12: only owner-list topics stay in the floor)', () => {
+  // Round 12 narrowing (2026-10-18): money, customers, shared_data_delete, owner-held credentials, physical -> owner.
+  // update_core (deploy), force-push, migration are now manager items: the loop here only covers the owner list.
+  for (const q of ['Should I delete the old branches?', 'OK to copy the new .env to the VM?',
     'Shall I rotate the API key now?', 'Should I add credit to the account?', 'Should I send this to the customer?',
-    'Shall I force-push the branch?', 'Ready to apply the migration?']) {
+    'Should I drop the old test table from the DB?']) {
     const s = applyJev(classify(claude(`Everything else is ready.\n${q}`)), 'continue');
     assert.equal(wouldSend(s).send, null, q);
     assert.ok(s.forbidden, q);
+  }
+});
+
+test('forbidden filter does NOT block manager items (round 12): deploy, push, force-push, migration are not in the floor', () => {
+  for (const q of ['Can I run update_core main --host?', 'Shall I force-push the branch?', 'Ready to apply the migration?']) {
+    const s = applyJev(classify(claude(`Everything else is ready.\n${q}`)), 'continue');
+    assert.equal(s.forbidden, null, q);
+    assert.notEqual(wouldSend(s).send, null, q);
   }
 });
 
@@ -304,18 +316,55 @@ test('done aliases (acknowledged, noted, shipped, ...) read as done; one that st
   assert.equal(statusLine(['STATUS: needs-owner: force-push? [yes / no]'])?.kind, 'needs-owner');
 });
 
-test('the hard floor is unchanged: the acknowledgement still names force-push, and a real force-push question is never answered', () => {
-  assert.match(forbiddenMatch(T33.join('\n')), /force-push/i);
+test('round 12: force-push / migration / deploy are manager items, not in the floor; an acknowledgement that names them is not an ask', () => {
+  // T33 names "force-push" as a safety commitment; the text alone is not in the floor since force-push is a manager topic.
+  assert.equal(forbiddenMatch(T33.join('\n')), null, 'force-push is a manager item, not a forbidden topic');
+  // A direct "Should I force-push?" question is now a manager item (the manager's merge evaluation handles it).
   const ask = classifyStall({ plain: ['I reset the branch locally.', 'Should I force-push fix-x to origin now?'], state: 'done' });
-  assert.ok(ask.forbidden, 'force-push question flagged');
-  assert.equal(wouldSend(ask).send, null);
+  assert.equal(ask.forbidden, null, 'force-push question is NOT flagged as forbidden (manager item)');
+  // The panel question is still unanswered (no recommendation, no reversible option) but not because of the floor.
   const panel = classifyStall({ plain: ['STATUS: ok — should I force-push fix-x?', '    ○ next', '    … +2 more · 1/3 done · 1 pending · Ctrl+T expand'], state: 'done' });
   assert.notEqual(panel.case, 'done');
-  assert.equal(wouldSend(panel).send, null);
+  assert.equal(panel.forbidden, null, 'force-push is not forbidden, the stop is escalated for another reason');
 });
 
 test('a todo panel without a STATUS line above it changes nothing', () => {
   assert.equal(statusLine(['I will now run the suite.', '    ○ run suite', '    … +2 more · 1/3 done · 1 pending · Ctrl+T expand']), null);
+});
+
+// ---- round 12 narrowing (2026-10-18, owner rule) -------------------------------------------------------
+// Owner items are now only: money/payments, customers, deleting shared data, owner-held credentials (third-party logins,
+// keys to rotate), and physical actions on a device. The five representative cases:
+test('round 12 case 1: "apply migration 0018 to Neon" is a manager item (migration is no longer in the owner floor)', () => {
+  const s = classify(claude('All reviews are in.\nShould I apply migration 0018 to Neon?'));
+  assert.equal(s.case, 'owner_decision', 'plain yes/no question is an owner_decision, not a menu');
+  // The migration verb is NOT a hard floor: the hard floor used to escalate migration questions to the owner.
+  // Now the stop is a manager item (the manager has the migration / deploy evaluation).
+  assert.equal(s.forbidden, null, 'migration is no longer in the floor (round 12)');
+});
+
+test('round 12 case 2: "set CRON_SECRET (generate)" is a manager item (generated app secret is not an owner credential)', () => {
+  const s = classify(claude('Plan: rotate the cron secret.\nSet CRON_SECRET (generate a new value) and roll the service?'));
+  assert.equal(s.forbidden, null, 'a generated app secret is a manager decision, not a forbidden credential');
+});
+
+test('round 12 case 3: "rotate the Stripe API key" is an owner item (third-party credentials stay in the floor)', () => {
+  const s = classify(claude('Stripe asked us to rotate.\nRotate the Stripe API key now?'));
+  assert.ok(s.forbidden, 'third-party credential rotation is still a hard floor (owner item)');
+  assert.equal(wouldSend(s).send, null);
+});
+
+test('round 12 case 4: "buy a domain" is an owner item (money / purchase stays in the floor)', () => {
+  const s = classify(claude('We need a stable URL.\nBuy a domain today?'));
+  assert.ok(s.forbidden, 'a purchase is money, an owner item');
+  assert.equal(wouldSend(s).send, null);
+});
+
+test('round 12 case 5: "STATUS: needs-manager: pick option 1 or 2" is always a manager item, regardless of topic', () => {
+  const s = classify(claude('Two ways to do it.\n1. Run the suite locally\n2. Push the branch and let CI run\nWhich one?\nSTATUS: needs-manager: pick option 1 or 2'));
+  assert.equal(s.status, 'needs-manager', 'the STATUS line decides first and the kind is needs-manager');
+  assert.equal(s.managerDecision, true, 'out.managerDecision is set so ops-ask routes it as a manager item');
+  assert.equal(s.case, 'owner_decision');
 });
 
 test('the todo panel may be followed by the background-tasks line', () => {

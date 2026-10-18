@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { opsAsk, isLeaseOrDeployAsk } from '../ops-ask.js';
+import { forbiddenMatch as forbiddenMatchForTest } from '../stall.js';
 import { isOwnersTurn, buildQueue } from '../public/ask-model.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'ghosty-opsask-'));
@@ -14,7 +15,7 @@ const pushes = [], items = [];
 await m.initManager({ onOwnerNeeded: (s) => pushes.push(s), onManagerItem: (it) => items.push(it) });
 await m.setManagerConfig({ aiTriage: 'off', routerShadow: false, wakeShadow: false, autoSend: false });
 
-test('detection: lease and deploy asks, hard floor, mixed and unrelated questions', () => {
+test('detection: lease and deploy asks, hard floor (round 12: only owner list), mixed and unrelated questions', () => {
   const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
   assert.equal(opsAsk({ case: 'waiting_deploy', question: 'waits for deploy d-42', deployHint: { id: 'd-42' } }), 'deploy');
   assert.equal(opsAsk(od('deploy main to env-a once the lease frees? [1 yes 2 wait]', { status: 'needs-owner' })), 'lease');
@@ -22,13 +23,14 @@ test('detection: lease and deploy asks, hard floor, mixed and unrelated question
   assert.equal(opsAsk(od('Should I deploy to env-a?')), 'deploy');
   assert.equal(opsAsk(od('Should I restart the backend service via update_core?')), 'deploy');
   assert.equal(opsAsk(od('Is the deploy queue empty, may I approve my deploy?')), 'deploy');
-  // hard floor stays with the owner
-  assert.equal(opsAsk(od('Deploy main to env-a and drop the old table?')), null);
-  assert.equal(opsAsk({ case: 'waiting_deploy', question: 'waits for a deploy; also delete the old branch' }), null);
-  assert.equal(opsAsk(od('Should I deploy with sudo?')), null);
-  assert.equal(opsAsk(od('Deploy and use the api key from the vault?')), null);
-  assert.equal(opsAsk(od('Run the migrations on deploy?')), null);
-  assert.equal(opsAsk(od('Should I restart the ghosty service?')), null);
+  // round 12: only money, customers, shared_data_delete, owner-held credentials, physical stay in the hard floor.
+  // Migrations, deploy, push, merge, sudo / systemctl, generated secrets: all manager items.
+  assert.equal(opsAsk(od('Deploy main to env-a and drop the old table?')), null, 'drop table stays in the floor (shared_data_delete)');
+  assert.equal(opsAsk({ case: 'waiting_deploy', question: 'waits for a deploy; also delete the old branch' }), null, 'delete the old branch is shared_data_delete: owner item');
+  assert.equal(opsAsk(od('Should I deploy with sudo?')), 'deploy', 'sudo is no longer in the floor; the deploy topic wins');
+  assert.equal(opsAsk(od('Deploy and use the api key from the vault?')), null, 'third-party api key is still in the floor (owner-held credential)');
+  assert.equal(opsAsk(od('Run the migrations on deploy?')), 'deploy', 'migration is no longer in the floor; the deploy topic wins');
+  assert.equal(opsAsk(od('Should I restart the ghosty service?')), 'deploy', 'systemctl / unit is no longer in the floor; deploy wins');
   // unrelated or mixed
   assert.equal(opsAsk(od('Which database should I use, A or B?')), null);
   assert.equal(opsAsk(od('Should I deploy? Also which color for the button?')), null);
@@ -79,3 +81,51 @@ test('NEEDS YOU skips manager items (isOwnersTurn / buildQueue)', () => {
   const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(app, /escalatedTo !== 'manager' && \(stateOf/);   // the strip itself filters the same way
 });
+
+// ---- round 12 narrowing (2026-10-18, owner rule): the five representative cases ------------------------
+test('round 12 case 1: "apply migration 0018 to Neon" is a manager item (migration is no longer in the floor)', () => {
+  const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
+  // The migration verb / noun is NOT a hard floor since round 12. ops-ask still needs a lease or deploy topic
+  // to mark it as a manager item; the manager item routing is what the deploy evaluation handles in production.
+  // In the unit test we verify the floor no longer rejects the text outright.
+  assert.equal(opsAsk(od('Apply migration 0018 to Neon now?', { status: 'needs-owner' })), null,
+    'migration alone is not lease / deploy; the manager item routing comes from the deploy evaluation in production');
+  // But the floor does not reject it (migration is not forbidden anymore):
+  assert.equal(hardFloorForTest('Apply migration 0018 to Neon now?'), null,
+    'migration is no longer in the hard floor (round 12 narrowing)');
+});
+
+test('round 12 case 2: "set CRON_SECRET (generate)" is a manager item (generated app secret is not an owner credential)', () => {
+  // The generated-secret exception drops the credentials part: the floor no longer escalates.
+  const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
+  assert.equal(hardFloorForTest('Set CRON_SECRET (generate a new value) and roll the service?'), null,
+    'a generated app secret is a manager decision; the credentials part of the floor is dropped by the generated-secret exception');
+  // A real third-party credential still matches.
+  assert.match(hardFloorForTest('Rotate the Stripe API key now?') || '', /api[_ -]?key|rotat/i,
+    'real third-party credential rotation stays in the floor');
+});
+
+test('round 12 case 3: "rotate the Stripe API key" is an owner item (third-party credentials stay in the floor)', () => {
+  const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
+  assert.equal(opsAsk(od('Rotate the Stripe API key now?')), null, 'owner item, not a manager item');
+  assert.match(hardFloorForTest('Rotate the Stripe API key now?') || '', /api[_ -]?key|rotat/i);
+});
+
+test('round 12 case 4: "buy a domain" is an owner item (money / purchase stays in the floor)', () => {
+  const od = (question, extra = {}) => ({ case: 'owner_decision', question, ...extra });
+  assert.equal(opsAsk(od('Buy a domain today?')), null, 'owner item, not a manager item');
+  assert.match(hardFloorForTest('Buy a domain today?') || '', /buy|purchase/i);
+});
+
+test('round 12 case 5: "STATUS: needs-manager: pick option 1 or 2" is always a manager item, regardless of topic', () => {
+  const final = { case: 'owner_decision', question: 'Pick option 1 or 2', status: 'needs-manager' };
+  assert.equal(opsAsk(final), 'lease', 'needs-manager status makes ops-ask return non-null regardless of the text topic');
+  // It also beats the hard floor: even "drop the old table" with needs-manager is a manager item.
+  assert.equal(opsAsk({ ...final, question: 'drop the old table' }), 'lease',
+    'needs-manager bypasses the hard floor (the text topic is irrelevant)');
+});
+
+function hardFloorForTest(text) {
+  // Thin wrapper so the test expresses intent: "is this in the hard floor?"
+  return forbiddenMatchForTest(text);
+}

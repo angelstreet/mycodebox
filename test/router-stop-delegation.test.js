@@ -25,7 +25,7 @@ test('stop: touches that are not in STOP_FLOOR_TOPICS are ignored by the floor',
   assert.deepEqual(f.allowed, ['answer', 'escalate']);
 });
 test('stop: touches entry coexists with today\'s floors (case=permission wins first)', () => {
-  const f = floor('stop', { case: 'permission', touches: ['merge_main'] });
+  const f = floor('stop', { case: 'permission', touches: ['money'] });
   assert.equal(f.forced, 'escalate');
   // case reason wins because permission is checked first
   assert.match(f.reasons.join(' '), /permission/);
@@ -34,6 +34,14 @@ test('stop: forbidden_topic + touches still forces escalate (only one reason nee
   const f = floor('stop', { case: 'owner_decision', forbidden_topic: true, touches: ['money'] });
   assert.equal(f.forced, 'escalate');
   assert.match(f.reasons.join(' '), /forbidden topic/);
+});
+test('stop round 12: touches that are no longer in STOP_FLOOR_TOPICS (migration, merge_main, deploy_restart) do NOT force escalate', () => {
+  // Round 12 narrowing (2026-10-18, owner rule): only money, customers, shared_data_delete, credentials, physical
+  // are owner-only floors. Migrations, merge_main, deploy_restart are manager items: they do not force escalate.
+  for (const topic of ['migration', 'merge_main', 'deploy_restart']) {
+    const f = floor('stop', { case: 'owner_decision', touches: [topic] });
+    assert.equal(f.forced, null, `topic=${topic} must NOT force escalate (round 12 manager item)`);
+  }
 });
 
 // ---- ruleDefault table (no call, no forced floor) ----
@@ -61,7 +69,7 @@ for (const [label, facts, expected] of RULE_DEFAULT_CASES) {
 }
 
 // ---- criteria text contains the delegation language ----
-test('stop: buildRequest answer criteria states the delegation in plain words', () => {
+test('stop: buildRequest answer criteria states the delegation in plain words (round 12 narrowing)', () => {
   const body = buildRequest('stop', { case: 'owner_decision' }, { teamId: 't' });
   assert.ok(body, 'floor did not force escalate on plain owner_decision');
   const a = body.questions.choice.criteria.answer;
@@ -70,21 +78,30 @@ test('stop: buildRequest answer criteria states the delegation in plain words', 
   assert.match(a, /design or scope choice with a recommended, reversible option/);
   assert.match(a, /session's own files/);
   assert.match(a, /continuing planned work/);
-  // owner-only floors listed on escalate
+  // round 12: migrations, generated secrets, merges, deploys/restarts, infra config, tests/CI are manager items
+  assert.match(a, /database migrations/);
+  assert.match(a, /merges to main/);
+  assert.match(a, /deploys or restarts/);
+  assert.match(a, /generated app secrets/);
+  assert.match(a, /infra config/);
+  assert.match(a, /tests\/CI/);
+  // owner-only floors listed on escalate (round 12: only the owner list)
   assert.match(e, /money or cost beyond plan/);
-  assert.match(e, /credentials or secrets/);
+  assert.match(e, /third-party credentials/);
   assert.match(e, /customers/);
   assert.match(e, /deleting shared data/);
-  assert.match(e, /database migrations/);
-  assert.match(e, /merges to main/);
-  assert.match(e, /restarts or deploys/);
+  assert.match(e, /physical actions on a device/);
+  // the old "database migrations / merges / restarts" are no longer on escalate (they are manager items)
+  assert.doesNotMatch(e, /database migrations/);
+  assert.doesNotMatch(e, /merges to main/);
+  assert.doesNotMatch(e, /restarts or deploys/);
   assert.match(e, /choice between directions with no recommendation/);
 });
 test('stop: instructions mention the owner\'s delegation', () => {
   assert.match(POINTS.stop.instructions, /delegation/);
 });
 test('stop: floor forced by touches -> buildRequest returns null (no call)', () => {
-  const body = buildRequest('stop', { case: 'owner_decision', touches: ['merge_main'] }, { teamId: 't' });
+  const body = buildRequest('stop', { case: 'owner_decision', touches: ['money'] }, { teamId: 't' });
   assert.equal(body, null);
 });
 test('stop: decide with touches entry returns forced=escalate and does not call post', async () => {

@@ -1,8 +1,9 @@
 // Push and deploy decisions (round 8, OWNER_DECISIONS §15): like merge-policy.js, the manager decides a session's "push it?" and
 // "deploy it?" questions itself when nothing argues against it. Facts come from git (read-only, async, fail closed), the deploy
 // queue snapshot, the lease list and the session's closing text; the floor lists reasons to escalate; Jev (or the manager's own
-// reasoning) rates what is left. Remaining hard floors stay in stall.js (deletes, credentials, money, customers, migrations,
-// force pushes, systemctl / pm2 / sudoers, publishing).
+// reasoning) rates what is left. Round 12 narrowing (2026-10-18, owner rule): migrations, generated app secrets, merge/push, deploys/
+// restarts, infra config and tests/CI are manager decisions; the owner list is now only money/payments, customers, deleting shared
+// data, owner-held credentials, and physical actions on a device (stall.js FORBIDDEN_PARTS / FORBIDDEN_RE and router.js STOP_FLOOR_TOPICS).
 import { basename } from 'node:path';
 import { buildRequest } from './router.js';
 import { deployHint } from './stall.js';
