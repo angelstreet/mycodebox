@@ -255,8 +255,8 @@ function fmtShort(sec) {
 function badgeText(name) { return vstateOf(name) === 'deploy' ? '' : stateText(name).replace(/^(working|done|idle|needs you) ?/, ''); }
 function stateText(name) {
   const st = state.status[name] || {};
-  const s = stateOf(name);
-  if (vstateOf(name) === 'deploy') return 'deploy';
+  const s = vstateOf(name);   // a done session waiting on a loop / wakeup reads as working
+  if (s === 'deploy') return 'deploy';
   const now = Date.now();
   const drift = (now - state.statusAt) / 1000;
   if (s === 'working') {

@@ -99,7 +99,7 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
         const prev = s.lastTurn;
         const merge = prev && prev.stopAt && t - prev.stopAt < MERGE_MS;
         s.lastTurn = { text: str(ev.text), at: t, reason: str(ev.reason, 20) || null, usage: ev.usage && typeof ev.usage === 'object' ? ev.usage : null,
-          backgroundWork: merge ? prev.backgroundWork : null, stopAt: merge ? prev.stopAt : null };
+          backgroundWork: merge ? prev.backgroundWork : null, crons: merge ? prev.crons : 0, stopAt: merge ? prev.stopAt : null };
         s.waiting = null;
         break;
       }
@@ -184,6 +184,7 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
       seenAt: s.reporterSeenAt,
       turnAt: s.lastTurn?.at ?? null,
       backgroundWork: s.lastTurn?.backgroundWork ?? 0,
+      crons: s.lastTurn?.crons ?? 0,
       waiting: s.waiting ? { message: s.waiting.message.slice(0, 200), at: s.waiting.at } : null,
       agents: agentSummary(s),
       agentList: s.agents.slice(0, 12).map((a) => ({ type: a.type, status: a.status, description: a.description.slice(0, 80) })),

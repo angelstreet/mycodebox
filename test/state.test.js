@@ -114,3 +114,17 @@ test('displayState: a deployWait of kind "said" (only the agent\'s words) does n
   assert.equal(displayState({ state: 'done', deployWait: { kind: 'requested', id: '1' } }), 'deploy');
   assert.equal(displayState({ state: 'done', deployWait: { kind: 'waiter' } }), 'deploy');
 });
+
+test('displayState: a done session waiting on a loop / wakeup / background work shows as working (green)', () => {
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 0, crons: 1 } }), 'working');
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 2, crons: 0 } }), 'working');
+  assert.equal(displayState({ state: 'done', stall: { case: 'background_wait' } }), 'working');
+});
+
+test('displayState: a plain done session stays done; loop signals do not touch other states', () => {
+  assert.equal(displayState({ state: 'done' }), 'done');
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 0, crons: 0 }, stall: { case: 'done' } }), 'done');
+  assert.equal(displayState({ state: 'idle', reporter: { crons: 1 } }), 'idle');
+  assert.equal(displayState({ state: 'waiting', reporter: { crons: 1 } }), 'waiting');
+  assert.equal(displayState({ state: 'done', reporter: { crons: 1 }, deployWait: { id: 'd1' } }), 'deploy');
+});
