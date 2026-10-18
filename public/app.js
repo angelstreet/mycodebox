@@ -616,7 +616,13 @@ function connectSession(session) {
   ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data);
-      if (msg.type === 'snapshot') writeToTerm(msg.session, msg.pane, { cols: msg.cols, rows: msg.rows });
+      if (msg.type === 'snapshot') {
+        const entry = state.terms.get(msg.session);
+        if (entry?.historyLines > 1000) {
+          fetch(`/api/pane/${encodeURIComponent(msg.session)}?lines=${entry.historyLines}`)
+            .then((r) => r.ok ? r.json() : null).then((d) => { if (d) writeToTerm(msg.session, d.pane, { cols: msg.cols, rows: msg.rows }); }).catch(() => {});
+        } else writeToTerm(msg.session, msg.pane, { cols: msg.cols, rows: msg.rows });
+      }
     } catch {}
   };
   ws.onclose = () => {
