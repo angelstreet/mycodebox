@@ -119,8 +119,8 @@ test('notify: non-final transitions are ignored; a failing send or feed never th
 
 test('job refs: "integration <id>" in a STATUS line is the session\'s own job, never a needs-you', () => {
   assert.equal(jobRefs('waiting: integration int-7f3a').integration, 'int-7f3a');
-  assert.equal(jobRefs('integration 42 queued').integration, '42');
-  assert.equal(jobRefs('integration request id: r9x').integration, 'r9x');
+  assert.equal(jobRefs('integration int-42 queued').integration, 'int-42');
+  assert.equal(jobRefs('integration request id: int-r9x').integration, 'int-r9x');
   assert.equal(jobRefs('waiting for the integration tests').integration, null);
   assert.equal(jobRefs('the integration lane is slow').integration, null);
   assert.equal(waitsOnOwnJob('waiting: integration int-7f3a', 'waiting'), true);
@@ -265,4 +265,11 @@ test('deploy adapter: a deploy still queued at the timeout is cancelled before f
   // find: the deploy already requested for this agent, not a failed one
   const f = createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: JSON.stringify({ deploys: [{ id: 'x1', agent: 'integration:i1', state: 'failed' }, { id: 'x2', agent: 'integration:i1', state: 'queued' }, { id: 'x3', agent: 'integration:i2', state: 'queued' }] }), stderr: '' }) });
   assert.equal(await f.find({ agent: 'integration:i1' }), 'x2'); assert.equal(await f.find({ agent: 'integration:none' }), null);
+});
+
+test('jobRefs: "integration test-2" is a sentence, not a request id; the deploy id in it is still found', () => {
+  const t = 'waiting on deploy 3fa9c1, then the integration test-2 suite';
+  assert.equal(jobRefs(t).integration, null); assert.equal(jobRefs(t).deploy, '3fa9c1');
+  assert.equal(jobRefs('integration tests-9 done').integration, null);
+  assert.equal(jobRefs('integration request id: int-lq3k9a0b1c2d').integration, 'int-lq3k9a0b1c2d');
 });
