@@ -34,10 +34,11 @@ export function weeklyProjection(plan, now) {
 
 const planOf = (quota, agent) => (quota?.plans || []).find((p) => p.plan === PLAN_OF_AGENT[agent]);
 
-export function evaluatePolicy({ priority = 'P2', agent, quota, now = Date.now(), config } = {}) {
+export function evaluatePolicy({ priority = 'P2', agent, quota, now = Date.now(), config, billing } = {}) {
   const c = cfgOf(config);
   if (!c.policyEnabled) return { action: 'allow', reason: 'policy off' };
   if (priority === 'P0') return { action: 'allow', reason: 'P0 always continues' };
+  if (billing === 'api_key') return { action: 'allow', reason: 'API-key billing is outside the Max plan' };
   const plan = planOf(quota, agent);
   if (!plan) return { action: 'allow', reason: 'quota unknown' };
   const label = plan.label || plan.plan;

@@ -1354,7 +1354,7 @@ export function observe(s) {
   // Classify only when the pane changed (or the state did, or a report arrived); a still pane gives the same answer.
   const key = `${s.state}|${useReport ? turn.at : ''}|${bgWait}`;
   if (s.changed || !w.cls || w.clsKey !== key) {
-    w.cls = classifyStall({ plain: useReport ? turn.text.split('\n') : s.plain, raw: s.raw, state: s.state, fromReport: useReport });
+    w.cls = classifyStall({ plain: useReport ? turn.text.split('\n') : s.plain, raw: s.raw, state: s.state, fromReport: useReport, scriptBusy: s.scriptBusy });
     w.cls.textSource = useReport ? 'reporter' : 'pane';
     if (useReport) w.cls.fullText = turn.text;   // the whole reported turn: the menu decision reads every line of it
     if (bgWait) Object.assign(w.cls, { case: 'background_wait', answer: null, autoCase: undefined, forbidden: null, no_status: false, source: 'rule', backgroundWork: turn.backgroundWork });

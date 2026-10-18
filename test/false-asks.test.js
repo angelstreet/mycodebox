@@ -122,6 +122,12 @@ test('a plain numbered status list with no question stays done', () => {
   assert.equal(s.case, 'done');
 });
 
+test('a script-driven pane is background work even when its output contains a connector warning', () => {
+  const s = classifyStall({ plain: claude('claude.ai connectors are disabled'), state: 'done', scriptBusy: true });
+  assert.equal(s.case, 'background_wait');
+  assert.equal(s.source, 'script');
+});
+
 test('options before the question still ask', () => {
   const s = classify('1. Skip the table\n2. Replace it\nWhich do you want?');
   assert.equal(s.case, 'owner_decision');

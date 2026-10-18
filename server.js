@@ -227,6 +227,20 @@ async function processTable() {
   return { children, args, rss };
 }
 
+function apiKeyBillingOf(pid, table) {
+  const seen = new Set(), queue = [pid];
+  while (queue.length) {
+    const p = queue.shift(); if (seen.has(p)) continue; seen.add(p);
+    const args = table.args.get(p) || '';
+    if (/--settings\s+\S+/.test(args)) {
+      const m = /--settings\s+(['"]?)([^'"\s]+)\1/.exec(args);
+      if (m) { try { if (/apiKeyHelper/.test(readFileSync(m[2], 'utf8'))) return true; } catch {} }
+    }
+    for (const child of table.children.get(p) || []) queue.push(child);
+  }
+  return false;
+}
+
 // Breadth-first walk under pane pid; shallowest agent process wins. agentFromArgs lives in api-extras.js.
 function agentFromTree(pid, table) {
   const seen = new Set();
@@ -1146,9 +1160,12 @@ async function pollOnce() {
     } else { t.contextLeft = null; t.model = null; }
     const meta = offline ? { cwd: p.cwd || null, repo: null, branch: null, dirty: null } : await getMeta(s.name, p.cwd || null);
 
+    const scriptBusy = !offline && scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table);
+    const apiKeyBilling = !offline && apiKeyBillingOf(p.pid, table);
     if (!offline) {
       observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state, realWork: spinning,
         project: meta.project ?? null, cwd: meta.cwd || null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now,
+        scriptBusy,
         rep: agent === 'claude' && reporter.liveOf(s.name) ? { turnStart: () => reporter.activityOf(s.name)?.promptAt || null, turnForStop: (since) => reporter.turnForStop(s.name, since), promptSince: (since) => reporter.promptSince(s.name, since) } : null });
       t.prevObserved = state;
     }
@@ -1177,7 +1194,7 @@ async function pollOnce() {
       // the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children. status.state stays raw for the
       // manager / auto-answer logic; these fields flip a done session to working (green) in the UI only.
       paneBackground: !offline && state === 'done' ? paneBackgroundOf(plain) : false,
-      scriptBusy: !offline && scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table),
+      scriptBusy, apiKeyBilling,
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,
     };
@@ -2416,7 +2433,7 @@ server.listen(PORT, HOST, async () => {
     onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseSource.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),
-    policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), now: Date.now(), config: policyConfig() }),
+    policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), billing: latest?.status?.[n]?.apiKeyBilling ? 'api_key' : undefined, now: Date.now(), config: policyConfig() }),
     heldStore: { get: (n) => sessionMeta.held(n), set: (n, h) => sessionMeta.setHeld(n, h) },
     onHold: (n, kind, reason) => alert(`${n}:${kind}`, {
       title: kind === 'hold' ? `${n} held: ${reason} (${sessionMeta.priority(n)})` : `${n} resumed`,

@@ -14,7 +14,7 @@ const plan = (p, label, windows, extra = {}) => ({ plan: p, label, windows, stal
 const week = (used, elapsed) => win('week', used, { resetsAt: nowS + (1 - elapsed) * 7 * DAY });
 const q = (...plans) => ({ at: NOW, plans });
 const claude = (h, wk = week(10, 0.5)) => plan('claude', 'Claude Max', [win('5h', h), wk]);
-const run = (priority, quota, agent = 'claude', config) => ev({ priority, agent, quota, now: NOW, config });
+const run = (priority, quota, agent = 'claude', config, billing) => ev({ priority, agent, quota, now: NOW, config, billing });
 
 test('P0 is always allowed, even at 99 %', () => {
   assert.equal(run('P0', q(claude(99))).action, 'allow');
@@ -76,6 +76,10 @@ test('policy is per agent: codex quota does not hold a claude session', () => {
   const cx = plan('codex', 'Codex', [win('5h', 90)]);
   assert.equal(run('P2', q(cx, claude(10)), 'claude').action, 'allow');
   assert.equal(run('P2', q(cx, claude(10)), 'codex').action, 'hold');
+});
+
+test('API-key billed Claude is outside the Max quota policy', () => {
+  assert.equal(run('P2', q(claude(99)), 'claude', undefined, 'api_key').action, 'allow');
 });
 
 test('minimax: 5h percent drives the policy like any plan', () => {

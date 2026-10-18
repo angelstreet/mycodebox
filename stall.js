@@ -578,7 +578,7 @@ export function stripSeparator(text) {
 // plain = ANSI-stripped pane lines; raw = the same lines with ANSI (for the input box);
 // state = ghosty state ('waiting' | 'done' | 'idle' | ...).
 // Returns { case, source: 'rule'|'ambiguous', answer, question, forbidden, draft, suggestion, excerpt }.
-export function classifyStall({ plain, raw = null, state, fromReport = false }) {
+export function classifyStall({ plain, raw = null, state, fromReport = false, scriptBusy = false }) {
   plain = stripSurvey(plain);
   raw = raw ? stripSurvey(raw) : null;
   const close = closingLines(plain, 16);
@@ -587,6 +587,8 @@ export function classifyStall({ plain, raw = null, state, fromReport = false }) 
   const closing = closingLines(plain, 90).join('\n').slice(-6000);   // the long closing text: the popup's multi-question form needs every numbered question, not the 16-line tail
   const { draft, suggestion } = inputBox(fromReport ? raw || [] : raw || plain);   // the draft is always read off the pane
   const out = { case: null, source: 'rule', answer: null, question: null, forbidden: null, draft, suggestion, excerpt, closing };
+
+  if (scriptBusy) { out.case = 'background_wait'; out.source = 'script'; out.answer = null; out.no_status = false; return finish(out); }
 
   if (tail.slice(-3).some((l) => ERROR_RE.test(l))) {
     out.case = 'error';
