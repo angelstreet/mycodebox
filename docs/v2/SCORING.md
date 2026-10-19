@@ -581,3 +581,71 @@ completion) for every group. `--json` groups carry `flatPlanAttempts`, `tokens`,
 | V2 task store | reviewer verdicts stay in `v2-score.js` (goal loop), not in this ledger | - |
 
 `node scripts/v2-ledger.js --by prompt_version` groups by the game-dispatch prompt version (other sources group as `none`).
+
+## Round 15: shadow routing and the daily digest (read-only, observe only)
+
+Scoring feeds a **shadow** recommendation next to every live runtime choice. Nothing here changes a choice, a config,
+a prompt or a registry entry: the loop calls the shadow after it decided, ignores the result and the shadow swallows every error.
+
+### Task types
+
+`classifyTaskType({source, role, text})` in `scripts/v2-ledger.js`; every ledger record now carries `type`. `text` is the
+lane branch, the manager run task plus worktree name, or the V2 task title and goal. Precedence, first match wins:
+
+| Type | Rule |
+|---|---|
+| `game_run` | source `game-dispatch`, or the text names `game`/`league`/`lol` and `run` |
+| `review` | role `reviewer`/`security`, or the text has `review`, `reviewer`, `audit` |
+| `infra` | V2 work type `operations`, or the text has `infra, lease(s), deploy(s), systemd, restart, ci, cutover, tailscale, service, host(s), ops, install, runner, watchdog` |
+| `small_fix` | the text has `fix(es), bugfix, hotfix, typo, regression, crash, flaky, patch` |
+| `other` | everything else, including unknown |
+
+Conservative choices: an infra word wins over a fix word (`lease-fix-ttl` is infra); no file-count rule (lane records carry
+none); ledger sources have no reviewer-only records, so `review` history is thin and mostly "insufficient data".
+
+### Recommendation ranking (`recommend()`)
+
+Per type, group the ledger records by (model, runtime); skip model `unknown`/`none`. A group is eligible only with
+**at least `minVerified` verified (default 10) and at least `minAttempts` attempts (default 15)**
+(`GHOSTY_SHADOW_MIN_VERIFIED`, `GHOSTY_SHADOW_MIN_ATTEMPTS`). Among eligible groups, in this order:
+
+1. higher verified rate;
+2. fewer tokens per verified (a group with no token figure ranks last on this key);
+3. more verified completions;
+4. model and runtime name (so the answer is deterministic).
+
+No eligible group: `recommended: null`, reason `insufficient data (need >= N verified and >= M attempts; best seen K verified)`.
+Cost is not a key (flat-plan models have none). History is all records in the ledger; unknown attribution is never counted for a model.
+
+### Where the shadow sits
+
+`routing-shadow.js` (`createRoutingShadow`), wired in `orchestration/v2-runtime.js` as the goal loop's `shadow` option
+(`GHOSTY_ROUTING_SHADOW=0` turns it off). `orchestration/goal-loop.js` `shadowNote()` is called at the two live choice points:
+`sPlanned` (the developer entry actually chosen, after any escalation climb) and the reviewer choice (`runReviewer`, after the independence
+check). Speculative `routeFor` calls (escalation probes, fallbacks) are not noted. The ledger is read through a 10-minute
+in-process cache (a failed read is cached too, no retry storm); one line per (task, role, choice key).
+
+**No live change guarantee.** `note()` returns nothing; the call is in try/catch, a returned promise gets a `.catch`; the
+choice variable is computed before the call and never reassigned from it. `test/v2-goal-loop.test.js` ("R15 shadow") runs
+the same task with no shadow, a recording, a throwing and a rejecting shadow and asserts identical developer and reviewer entries;
+`test/v2-shadow-routing.test.js` proves the logger swallows an unwritable state dir and junk input.
+
+### Log: `<state dir>/routing-shadow.jsonl` (append-only)
+
+`{ts, task_id, role, type, chosen: {entry, runtime, model}, recommended: {model, runtime, verifiedRate, tokensPerVerified} | null,
+agree: true|false|null, reason, samples: {typeRecords, eligible, recommended: {attempts, verified}|null, chosen: {attempts, verified}|null}}`.
+`agree` compares **models** (case-insensitive); `null` = no recommendation (insufficient data), excluded from the agreement rate.
+No prompts, no task text, no paths are logged.
+
+### Daily digest
+
+`node scripts/v2-ledger.js --digest [--since 24h|7d|ISO date] [--json] [--state-dir DIR]`, or
+`GET /api/manager/score-digest?since=24h` (same payload; read-only, no cache, no writer). Default window 24 h; the **previous
+window** is the equal span before it. Contents: per model verified rate, tokens per verified, rework (window, plus previous window
+counts); regressions; the per-type recommendations; shadow agreement (`agree` / comparable, entries without a recommendation, in the window).
+
+- **Rate-drop regression:** a model whose verified rate fell by at least `regressionDrop` (default 0.2, `GHOSTY_SHADOW_REGRESSION_DROP`) against the previous window, both windows non-empty.
+- **Lane return after green:** a lane request in the window that ended `returned`/`failed` for a repo/branch that had an earlier verified request.
+- **Caveat:** every model row, rate-drop and the agreement rate carries `low sample (n < minAttempts)` when below `minAttempts` (rate-drop uses the smaller of the two windows). A lane-return is a single event and says so. Treat caveated numbers as not significant.
+
+There is no scheduler: the manager calls the script or the route. The digest never writes.

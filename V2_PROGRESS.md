@@ -1,4 +1,4 @@
-STATUS: IN PROGRESS round 11 (lease cut-over, shadow)
+STATUS: IN PROGRESS round 15 (shadow routing: branch v2/r15-shadow-routing). Rounds 14, 14b DONE. Round 11 (lease cut-over) NOT DONE: live authority is still legacy (see Round 11 below). Rounds 12/12a: built, waiting on the cut-over
 
 # V2 progress
 
@@ -10,6 +10,18 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 **First goal of V2 (owner, 2026-10-18; OWNER_DECISIONS §19): the owner never answers about leases or deployments.**
 Lease cut-over: the central lease service runs on the registry host (manager decision), shadow window 09:17-10:17 UTC,
 then central after telling the manager. Then build the missing parts of Round 12 (ship first, test at the end).
+
+## Round 15 (2026-10-19): scoring into routing, shadow only
+
+| Item | What | State |
+|---|---|---|
+| 1 Progress | line 1 and Round 11 state corrected from evidence | DONE |
+| 2 Types | `classifyTaskType` (small_fix, infra, review, game_run, other); `type` on every ledger record | DONE |
+| 2 Recommend | `recommend()`: verified rate, then tokens per verified; needs minVerified 10 and minAttempts 15, else "insufficient data" | DONE |
+| 2 Shadow hook | `routing-shadow.js` + goal loop `shadowNote()` at the developer and reviewer live choices; `routing-shadow.jsonl`; never changes the choice | DONE |
+| 3 Digest | `v2-ledger.js --digest [--since] [--json]`, `GET /api/manager/score-digest`: per model, regressions with sample caveats, shadow agreement | DONE |
+| 4 Docs, tests | SCORING.md "Round 15"; `test/v2-shadow-routing.test.js`, "R15 shadow" in `test/v2-goal-loop.test.js` | DONE |
+| Later | Let the router consume the recommendation (needs enough verified samples first; owner decision, not this round); deploy so the shadow starts logging | OPEN |
 
 ## Round 14 (2026-10-19): scoring and auto-improvement (read-only)
 
@@ -52,6 +64,14 @@ then central after telling the manager. Then build the missing parts of Round 12
 | Lease shadow seed | `lease-import.js --shadow` seeds the shadow store; the legacy registry was empty at 09:00 UTC, so seeding waits for the 1-hour shadow window | READY |
 
 ## Round 11 (2026-10-18)
+
+**State (checked 2026-10-19): NOT DONE, cut-over not performed.** Evidence on the dashboard host: the client config
+`VPT_LEASE_MODE=legacy`; `GET /api/leases/view` answers `authority: legacy` (loopback, both listeners); the central journal
+`leases/journal.jsonl` is empty and the shadow store holds only its 2026-10-18 `.initialized` marker; the deploy skill is still the
+pre-central text (`SKILL.md.central` is staged, not swapped). Done: steps 1 (tokens), 2 (deploy script installed on the registry
+host), 3 on the dashboard host (shadow client). Open: shadow window and its comparison, device hosts (BLOCKED, no route to the
+service), Mac (owner side), the switch to `central` + skill swap, step 4's PR #15 is merged (the view shows shadow data).
+The registry host's own mode was not checked from here.
 
 | Step | What | State | Notes |
 |---|---|---|---|
