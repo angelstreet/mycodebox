@@ -81,7 +81,7 @@ export function createGoalLoop({
   readEvents = (id) => (typeof store.events === 'function' ? store.events(id) : readTaskEvents(store.dir, id, fs)), reviewRoot, allowFake = false, hostId = 'local',
   runTimeoutMs = 30 * 60_000, estimateRun = null, quota = () => null,
   commitIdentity = { name: 'mycodebox goal loop', email: 'goal-loop@localhost.invalid' },
-  controller = {},
+  controller = {}, shadow = null,
 } = {}) {
   if (!store || !registry || !worktrees || !worktreeRoot || !verifier || !reviewRoot) {
     throw new Error('goal loop: store, registry, worktrees, worktreeRoot, verifier and reviewRoot are required');
@@ -383,6 +383,14 @@ export function createGoalLoop({
     const lim = entry ? limitsOf(ctx, p, entry) : { limits: engineLimits(runTimeoutMs), source: {}, error: null };
     const opts = runOptions(lim.limits, { role, support: adapter?.limitSupport || {}, adapter: entry?.runtime || 'adapter' });
     return { ...opts, stall_runs_to_no_progress: lim.limits.stall_runs_to_no_progress ?? null, source: lim.source, error: lim.error };
+  }
+  // Round 15: shadow scoring note next to the live choice. Observe only: never awaited, never throws, result ignored.
+  function shadowNote(ctx, role, choice, key) {
+    if (!shadow) return;
+    try {
+      const v = ctx.v || {};
+      Promise.resolve(shadow.note({ task_id: ctx.id, role, text: `${v.title || ''} ${v.goal || ''}`, workType: classifyWork(v).type, entry: registry.get(choice) || { id: choice }, key })).catch(() => {});
+    } catch { /* shadow must never break routing */ }
   }
   const routeKey = (ctx) => `route:${ctx.v.base_sha}`;
   const adapterFor = (entryId) => adapters[entryId] || adapters[entryId.split(':')[0]] || null;
@@ -844,6 +852,7 @@ export function createGoalLoop({
     // D-026: a recorded escalation names its rung; it is used while the router still has it among the floored candidates.
     const climbed = up && r.candidates.some((c) => c.id === up) ? up : null;
     const choice = climbed || r.choice;
+    shadowNote(ctx, 'developer', choice, ctx.v.base_sha);
     const strategy = { ...prev, entry: choice, effort: ctx.cp.interpretation?.effort ?? null,
       cost_est_usd: r.candidates.find((c) => c.id === choice)?.cost_est_usd ?? null };   // W2b: the developer gate's first estimate
     const alts = r.candidates.slice(0, 4).map((c) => alt(c.id, `score ${c.score}`, c.cost_est_usd == null ? 'cost unknown' : `est $${c.cost_est_usd}`));
@@ -1253,6 +1262,7 @@ export function createGoalLoop({
     let r = null;
     let choice = fixedEntry;
     if (!choice) { r = await routeFor(ctx, p, { exclude: [...devEntries, ...rf.excluded], role }); choice = r.choice; }
+    if (choice && !devEntries.includes(choice)) shadowNote(ctx, role, choice, head);
     if (!choice || devEntries.includes(choice)) return { stop: await noReviewer(ctx, `no ${role} runtime independent of ${devEntries.join(', ')}${fixedEntry ? ` (policy names ${fixedEntry})` : ''}`) };
     const stop = await budgetGate(ctx, choice, 'reviewer', 'ready', { patch: { verify_only: true }, routeHint: r });   // #6
     if (stop) return { stop };

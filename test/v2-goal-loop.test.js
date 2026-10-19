@@ -880,3 +880,20 @@ test('m4 other keyless integration results (post-merge CI red) stay owner decisi
   await b.loop.cancel(tb.task_id, { actor: { role: 'owner', id: 'owner-1' } });
   assert.equal((await b.view(tb.task_id)).status, 'cancelled');
 });
+
+// ---- Round 15: shadow routing never changes the live choice ---------------------------------------
+test('R15 shadow: the live runtime choice is identical with no shadow, a recording shadow and a throwing shadow', async () => {
+  const run = async (shadow) => {
+    const env = world({ dev: [GOOD], loopOpts: shadow === undefined ? {} : { shadow } });
+    const task = await env.submit();
+    assert.equal((await env.loop.run(task.task_id)).state, 'accepted');
+    return { dev: started(env, task.task_id).map((x) => x.entry), rev: started(env, task.task_id, 'reviewer').map((x) => x.entry) };
+  };
+  const base = await run(undefined);
+  const calls = [];
+  assert.deepEqual(await run({ note: (a) => { calls.push(a); return 'ignored'; } }), base);
+  assert.deepEqual(await run({ note: () => { throw new Error('shadow exploded'); } }), base);
+  assert.deepEqual(await run({ note: async () => { throw new Error('async boom'); } }).catch(() => 'unhandled'), base);
+  assert.ok(calls.some((c) => c.role === 'developer' && c.entry.id === base.dev[0]), 'developer choice was noted');
+  assert.ok(calls.some((c) => c.role !== 'developer' && c.entry.id === base.rev[0]), 'reviewer choice was noted');
+});

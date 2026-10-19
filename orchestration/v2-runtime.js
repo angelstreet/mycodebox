@@ -11,6 +11,7 @@
 // GHOSTY_V2_WORK_ROOT (required, outside this checkout, the state dir and every allowlisted repo). Adapters are the real
 // runtimes (launch modes unchanged: no bypass flags); the scripted fake adapter exists only behind the test-only
 // GHOSTY_V2_TEST_FAKE_ADAPTER, and then it is the ONLY runtime (no real CLI can be reached from a test).
+import { createRoutingShadow } from '../routing-shadow.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ContractError, TERMINAL } from './task-contract.js';
@@ -291,7 +292,7 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
     const loop = createGoalLoop({ store, registry, adapters, estimateRun, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
       worktreeRoot: roots[0], reviewRoot: roots[1], verifier: createVerifier({ tmpRoot: path.join(cfg.workRoot, 'vtmp'), artifactRoot: path.join(cfg.workRoot, 'artifacts') }),
       leases, route: withHistory(pinnedRoute(realRoute), historyProvider({ store, registry, log })), allowFake, hostId: HOST_ID, integrate: createServerIntegrate({ git, pushRemote: cfg.pushRemote }),
-      opsRequester: requester, incidents, ...(cfg.runTimeoutMs ? { runTimeoutMs: cfg.runTimeoutMs } : {}) });
+      opsRequester: requester, incidents, shadow: env.GHOSTY_ROUTING_SHADOW === '0' ? null : createRoutingShadow({ stateDir, env }), ...(cfg.runTimeoutMs ? { runTimeoutMs: cfg.runTimeoutMs } : {}) });
     const listOpen = async () => (await store.list()).filter((t) => !TERMINAL.includes(t.status) && !t.store_error && !isInformational(t)).map((t) => t.task_id);
     const beforeStep = async (id) => { const t = await store.get(id); if (t) info.set(id, { goal: t.goal, capLeft: capLeft(t) }); };
     const scheduler = createScheduler({ step: (id) => loop.step(id), listOpen, beforeStep, concurrency: cfg.concurrency, safetyMs, log });

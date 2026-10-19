@@ -51,6 +51,7 @@
 //   POST /api/handoffs/<id>/done → mark a hand-off done (body {by?})
 //   GET  /api/manager/actions?since=<ISO>&limit=100 → { actions, regrets } tail of manager-actions.jsonl (newest last) + the `at|session` keys the owner marked wrong
 //   POST /api/manager/regret → {at, session, decision?, undo?} one-tap "wrong" on a manager action; appends to manager-regret.jsonl (regret.js)
+//   GET  /api/manager/score-digest?since=24h → read-only per-model score digest + shadow routing agreement (scripts/v2-ledger.js --digest)
 //   GET  /api/manager/scorecard?days=7 → { today, days:[...] } performance + cost + Jev integration for the window
 //                                       (cached 60 s; manager sessions, subagents, workers, Jev, reviewer, judge; see scorecard.js)
 //   POST /api/session-meta/:s   → {priority:'P0'|'P1'|'P2'} and/or {paused:bool} (pause = Esc once + hold; resume = "continue")
@@ -2241,6 +2242,10 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/manager/wakes') {   // per-wake log built from the manager's Claude transcript (60 s cache)
     try { return json(res, 200, await wakesView(url.searchParams.get('day') || '')); } catch (e) { return json(res, 500, { error: String(e.message || e) }); }
+  }
+  if (req.method === 'GET' && p === '/api/manager/score-digest') {   // Round 15: read-only daily score digest (scripts/v2-ledger.js --digest)
+    try { const { buildDigest, parseSince } = await import('./scripts/v2-ledger.js'); const sn = url.searchParams.get('since'); return json(res, 200, buildDigest({ stateDir: STATE_DIR, since: sn ? parseSince(sn) : undefined })); }
+    catch (e) { return json(res, /needs a date/.test(e.message) ? 400 : 500, { ok: false, error: String(e.message || e) }); }
   }
   if (req.method === 'GET' && p === '/api/manager/scorecard') {
     // 60 s in-process cache: the file is ~35k lines and the UI re-renders on every status tick.
