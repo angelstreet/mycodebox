@@ -776,12 +776,12 @@ const CREDENTIALS_FOR_OWNER = String.raw`\.env\b|credential|password|passphrase|
 const GENERATED_SECRET = String.raw`\bgenerat\w*\b[^.\n?]{0,40}\b(?:secret|password|passphrase|token|key|cert)|(?:set|put|add|create)\b[^.\n?]{0,30}\b(?:CRON_|JWT_|SESSION_|APP_|INTERNAL_|DB_|DATABASE_)[A-Z_]+|\bgenerat(?:e|ing)\b[^.\n?]{0,20}\b(?:a |an |new |the )?(?:secret|password|passphrase|key|token|cert)`;
 const OWNER_FLOOR_PARTS = [
   // destructive data operations: shared-data delete
-  String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
+  String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bbranch\s+-D\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
   String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
   // owner-held credentials and secrets (third-party logins, keys to rotate)
   CREDENTIALS_FOR_OWNER,
   // money / payments / customers
-  String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+  String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\btop[- ]?up\b|\b(?:ai|api|provider|account|openrouter)\s+credits?\b|\bcredits?\s+(?:balance|block\w*|left|low|exhausted)\b|\b(?:out of|no|low|insufficient)\s+credits?\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
   // physical actions on a device (the agent cannot do them; the owner must)
   String.raw`\bplug(?:\s+in)?\b|\bunplug\b|\breplug\b|\bpower[- ]?cycle\b|\bpress\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|power|switch|remote)\b|\btap\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|screen)\b`,
 ];

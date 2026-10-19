@@ -42,11 +42,11 @@ const dep = (id, o = {}) => ({ id, env: 'node1-vpt', scope: 'frontend', ref: 'ma
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(pred, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return; await sleep(10); } throw new Error('timeout'); }
 
-function make(reg, { enabled = true, run, envs } = {}) {
+function make(reg, { enabled = true, run, envs, managerItem } = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-dep-'));
   const alerts = [], ran = [];
   const runner = createDeployRunner({
-    stateDir, registry: reg.fn, isEnabled: () => enabled, alert: (k, p) => alerts.push([k, p.title]), log: { error() {} },
+    stateDir, registry: reg.fn, isEnabled: () => enabled, managerItem, alert: (k, p) => alerts.push([k, p.title]), log: { error() {} },
     run: run || (async (env, o) => { ran.push(o); o.onLine('deploying'); o.onLine('VERSION 1.2.3'); return { code: 0 }; }),
   });
   return { runner, alerts, ran, stateDir };
@@ -117,6 +117,17 @@ test('runner off: unapproved requests wait and alert once for approval', async (
   assert.deepEqual(alerts.filter(([k]) => k.endsWith(':approve')).map(([k]) => k), ['deploy:2:approve']);
   assert.equal(reg.deploys[0].state, 'awaiting-approval');
   assert.ok(!reg.calls.some((c) => c.startsWith('deploy approve')));
+});
+
+test('runner off with a managerItem hook: the approval ask is a manager item, no owner alert', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { state: 'awaiting-approval' })] });
+  const items = [];
+  const { runner, alerts } = make(reg, { enabled: false, managerItem: (e) => items.push(e) });
+  await runner.tick();
+  reg.deploys.push(dep('2', { state: 'awaiting-approval' }));
+  await runner.tick(); await runner.tick();
+  assert.deepEqual(items.map((i) => i.key), ['deploy:2:manager-item']);
+  assert.equal(alerts.filter(([k]) => k.endsWith(':approve')).length, 0);
 });
 
 test('deployRunner off: queue is read but nothing starts', async () => {
