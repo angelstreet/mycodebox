@@ -202,12 +202,12 @@ test('queue is per conflict set: a ticket for the env does not block unrelated n
 });
 
 test('pass-through is capped: a ticket passed more than 3 times, or older than 15 min, becomes strict', async () => {
-  const h = harness();
+  const h = harness({ ticketIdleMs: 60 * MIN });
   await h.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h.claim('deployer', '*', { wait: 'ticket' });
   for (let i = 0; i < 3; i++) { const r = await h.claim(`s${i}`, 'frontend', { expect_min: 1 }); assert.ok(r.ok, `pass ${i}`); await h.svc.release({ agent: `s${i}` }); }
   assert.equal((await h.claim('s5', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'passed 3 times: strict');
-  const h2 = harness();
+  const h2 = harness({ ticketIdleMs: 60 * MIN });
   await h2.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h2.claim('deployer', '*', { wait: 'ticket' });
   const tid = (await h2.svc.list()).tickets[0].id;
@@ -215,14 +215,14 @@ test('pass-through is capped: a ticket passed more than 3 times, or older than 1
   assert.equal((await h2.claim('s', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'older than 15 min: strict');
 });
 
-test('ticket expires after 10 minutes without a poll; polling keeps it; cancel works', async () => {
+test('ticket expires after 2 minutes without a poll (4x the 30s client long-poll); polling keeps it; cancel works', async () => {
   const h = harness();
   await h.claim('a', 'frontend');
   const t1 = (await h.claim('b', 'frontend', { wait: 'ticket' })).ticket;
   const t2 = (await h.claim('c', 'frontend', { wait: 'ticket' })).ticket;
   const t3 = (await h.claim('d', 'frontend', { wait: 'ticket' })).ticket;
-  await h.advance(6 * MIN); await h.svc.ticket(t2.id);
-  await h.advance(6 * MIN);
+  await h.advance(90 * 1000); await h.svc.ticket(t2.id);
+  await h.advance(90 * 1000);
   assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'expired');
   assert.equal((await h.svc.ticket(t2.id)).ticket.state, 'waiting');
   assert.equal((await h.svc.cancelTicket(t3.id)).ticket.state, 'expired', 'already expired by then');
@@ -231,7 +231,7 @@ test('ticket expires after 10 minutes without a poll; polling keeps it; cancel w
 });
 
 test('a granted ticket is a reservation: uncollected after 2 minutes it is released and the ticket is missed; priority_since keeps the position', async () => {
-  const h = harness();
+  const h = harness({ ticketIdleMs: 60 * MIN });
   const a = (await h.claim('a', 'frontend')).lease;
   const t1 = (await h.claim('b', 'frontend', { wait: 'ticket' })).ticket;
   await h.advance(MIN);
@@ -263,7 +263,7 @@ test('collecting: polling a granted ticket confirms the reservation, which then 
 });
 
 test('ETA uses the median hold of the last 7 days, conditional on the time already held; expect_min is the holder statement', async () => {
-  const h = harness({ idleMs: { device: 0, frontend: 0, host: 0, server: 0, env: 0 } });
+  const h = harness({ ticketIdleMs: 60 * MIN, idleMs: { device: 0, frontend: 0, host: 0, server: 0, env: 0 } });
   for (const m of [2, 4, 6, 40, 50]) { const l = (await h.claim('x', 'host-1/device1')).lease; await h.advance(m * MIN); await h.svc.release({ id: l.id }); }
   const a = (await h.claim('a', 'host-1/device1')).lease;
   const t = (await h.claim('b', 'host-1/device1', { wait: 'ticket' })).ticket;
@@ -456,6 +456,19 @@ test('deploy/start claims atomically; a claim carrying the running deploy_id joi
   assert.equal((await h.claim('upd', 'server', { deploy_id: r.id })).ok, true, 'joins the deploy lease');
   assert.equal((await h.claim('upd', 'server', { deploy_id: 'nope' })).code, 'E_INVALID');
   await d.finish({ id: r.id, status: 'failed' });
+});
+
+test('a claim joining the running deploy does not queue behind tickets that were waiting for that deploy (self-deadlock)', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const r = await d.request({ env: 'env-a', scope: 'server', ref: 'r', agent: 'manager:deploy', approved: true });
+  const w = await h.claim('waiter', 'server', { wait: 'ticket' });           // queued behind the pending deploy
+  assert.equal(w.ticket.state, 'waiting');
+  await d.start({ id: r.id });
+  const j = await h.claim('manager:deploy', 'server', { deploy_id: r.id, wait: 'ticket' });
+  assert.equal(j.ok, true);
+  assert.ok(j.lease, 'granted at once, not a ticket behind the waiter');
+  await d.finish({ id: r.id, status: 'done' });
 });
 
 test('running deploy fails after 90 minutes without finish; queued expires after its ttl', async () => {
@@ -812,4 +825,64 @@ test('a catch-up that defers again queues a strict catch-up that waits for the h
   const f = await d.finish({ id: r.id, status: 'done', skipped_hosts: 'host-1' });
   assert.ok(f.catchup);
   assert.equal((await d.start({ id: f.catchup, skip_leased: true })).code, 'E_HELD', 'strict: waits for the device lease');
+});
+
+// ---- queue: grant per conflicting resource, never strict FIFO across disjoint resources ------------------------------------
+test('tickets on disjoint resources are granted out of order; conflicting tickets stay FIFO', async () => {
+  const h = harness();
+  const l1 = (await h.claim('x1', 'host-1/device1')).lease;
+  const l2 = (await h.claim('x2', 'host-2/device1')).lease;
+  const t1 = (await h.claim('w1', 'host:host-1', { wait: 'ticket' })).ticket;   // older, waits for l1
+  const t2 = (await h.claim('w2', 'host:host-2', { wait: 'ticket' })).ticket;   // younger, disjoint from t1
+  const t3 = (await h.claim('w3', 'host:host-2', { wait: 'ticket' })).ticket;   // conflicts with t2: behind it
+  assert.equal(t1.position, 1); assert.equal(t2.position, 1); assert.equal(t3.position, 2);
+  assert.deepEqual(t3.behind, [t2.id]);
+  await h.svc.release({ id: l2.id });
+  assert.equal((await h.svc.ticket(t2.id)).ticket.state, 'granted', 'the younger disjoint ticket does not wait for t1');
+  assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'waiting');
+  assert.equal((await h.svc.ticket(t3.id)).ticket.state, 'waiting', 'a conflicting younger ticket stays behind t2');
+  await h.svc.release({ id: l1.id });
+  assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'granted');
+});
+
+test('an earlier conflicting ticket is never starved by a younger disjoint-then-conflicting stream', async () => {
+  const h = harness();
+  const l1 = (await h.claim('x1', 'host-1/device1')).lease;
+  const big = (await h.claim('big', ['host:host-1', 'host:host-2'], { wait: 'ticket' })).ticket;
+  const small = (await h.claim('small', 'host:host-2', { wait: 'ticket' })).ticket;    // conflicts with big on host-2 although host-2 is free
+  assert.equal(small.state, 'waiting'); assert.deepEqual(small.behind, [big.id]);
+  await h.svc.release({ id: l1.id });
+  assert.equal((await h.svc.ticket(big.id)).ticket.state, 'granted', 'the earlier ticket goes first');
+  assert.equal((await h.svc.ticket(small.id)).ticket.state, 'waiting');
+});
+
+test('server claim vs host leases: kind=host never blocks it; a default (server-kind) host ticket does, and drags later server-kind host claims behind it', async () => {
+  const h = harness();
+  const dev = (await h.claim('dev', 'host-1/device1', { kind: 'host' })).lease;       // device lease on a Pi, kind host
+  const free = await h.claim('srv', 'server');
+  assert.ok(free.ok, 'a server claim is not blocked by a kind=host device lease');
+  await h.svc.release({ id: free.lease.id });
+  const hd = (await h.claim('hd', 'host:host-1', { wait: 'ticket' })).ticket;          // default kind = server
+  assert.equal(hd.kind, 'server');
+  const srv = (await h.claim('srv2', 'server', { wait: 'ticket' })).ticket;
+  assert.deepEqual(srv.behind, [hd.id], 'server ticket is behind the server-kind host ticket');
+  const p4 = (await h.claim('p4', 'host:host-4', { wait: 'ticket' })).ticket;
+  assert.deepEqual(p4.behind, [srv.id], 'a server-kind claim on another host is behind the server ticket');
+  const p5 = await h.claim('p5', 'host:host-5', { kind: 'host' });
+  assert.ok(p5.ok, 'the same claim with --kind host is granted at once');
+  void dev;
+});
+
+test('deploy lease TTL is deployLeaseMin (12), not runningMaxMin; the runner-lost timeout still uses runningMaxMin', async () => {
+  const h = harness();
+  const q = await h.svc.deploy.request({ env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true });
+  const s = await h.svc.deploy.start({ id: q.id });
+  assert.equal(s.ok, true);
+  assert.equal(s.lease.ttl_min, 12, 'owner rule: a deploy never holds a lease more than 10 min (+ grace)');
+  const h2 = harness({ deployLeaseMin: 15 });
+  const q2 = await h2.svc.deploy.request({ env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true });
+  assert.equal((await h2.svc.deploy.start({ id: q2.id })).lease.ttl_min, 15, 'configurable');
+  await h.advance(13 * MIN);
+  assert.equal((await h.svc.list()).leases.some((l) => l.deployId), false, 'the lease expires after 13 min');
+  assert.equal((await h.svc.deploy.list({ env: 'env-a' })).deploys.find((x) => x.id === q.id).state, 'running', 'the deploy itself is only failed after runningMaxMin');
 });

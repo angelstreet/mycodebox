@@ -374,6 +374,8 @@ function getTerm(session) {
   // Each pane snapshot repaints the whole grid (clear + rewrite), which wipes a text selection.
   // Hold repaints while the mouse is down on the terminal or text is selected; flush after.
   // (chat-raised 2026-10-18: 'copy from the terminal gets disabled after 1s')
+  // Reaching the top of the scrollback pulls 1000 more lines (up to 10000); no button.
+  term.onScroll((y) => { if (y === 0 && term.buffer.active.baseY > 0) loadOlder(session); });
   term.onSelectionChange(() => { if (!term.hasSelection() && !entry.selecting) flushTerm(session); });
   return entry;
 }
@@ -1776,7 +1778,6 @@ function buildCell(s) {
     <div class="jump">
       <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">${icon('arrow-up-to-line', 15)}</button>
       <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">${icon('arrow-down-to-line', 15)}</button>
-      <button class="older" aria-label="Load older output">load older</button>
     </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
   cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
@@ -1785,7 +1786,7 @@ function buildCell(s) {
   // dock chip, grid card) is covered by the same check.
   cell.querySelector('.lk').onclick = (e) => { e.stopPropagation(); setLock(s.name); };
   for (const b of cell.querySelectorAll('.jump button')) {
-    b.onclick = (e) => { e.stopPropagation(); if (b.classList.contains('older')) return loadOlder(s.name); jumpTo(cell, s.name, b.dataset.j); };
+    b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
   cell.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(cell.querySelector('.name'), s.name); };
   // one tap = select the card and put the cursor in the message box; two taps = open it as a full card.
@@ -1882,8 +1883,6 @@ async function loadOlder(name) {
   const entry = state.terms.get(name);
   if (!entry || entry.loadingOlder || entry.historyLines >= 10000) return;
   entry.loadingOlder = true;
-  const button = document.querySelector(`[data-session="${cssEscape(name)}"] .older`);
-  if (button) button.disabled = true;
   try {
     const lines = entry.historyLines + 1000;
     const r = await fetch(`/api/pane/${encodeURIComponent(name)}?lines=${lines}`);
@@ -1891,10 +1890,8 @@ async function loadOlder(name) {
     const d = await r.json();
     entry.historyLines = d.lines;
     writeToTerm(name, d.pane, { cols: entry.paneCols, rows: entry.paneRows });
-    if (button && entry.historyLines >= 10000) button.textContent = 'oldest loaded';
   } catch { toast('older output unavailable'); }
   entry.loadingOlder = false;
-  if (button) button.disabled = false;
 }
 
 // Single tap = select (send target), double tap = open the card.

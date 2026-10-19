@@ -295,3 +295,15 @@ test('R2-6: scripts under docs/ are not docs', async () => {
   for (const f of ['docs/x.ps1', 'docs/x.psm1', 'docs/x.bat', 'docs/x.cmd', 'docs/Makefile']) assert.equal(isDocFile(f), false, f);
   assert.equal(isDocFile('docs/guide.txt'), true);
 });
+
+test('infra paths: an explicit allowlist, tests and docs never count', async () => {
+  const { sensitivePath, mergeFloor } = await import('../merge-policy.js');
+  for (const f of ['test/foo-deploy.test.js', 'test/integration-self-deploy.test.js', 'docs/deploy.md', 'docs/v2/DEPLOY-NOTES.txt', 'README-deploy.md', 'integration-deploys.js', 'public/deployed.js', 'test/fixtures/Dockerfile', 'test/safe-restart.test.js', 'scripts/render-deploy-skill.md']) assert.equal(sensitivePath(f), null, f);
+  for (const f of ['.github/workflows/ci.yml', 'scripts/deploy.sh', 'scripts/deploy-host.sh', 'scripts/safe-restart.sh', 'update_core.sh', 'deploy-runner.js', 'Dockerfile']) assert.equal(sensitivePath(f), 'deploy', f);
+  for (const f of ['systemd/ghosty.service', 'x.timer', 'systemd/a.conf']) assert.equal(sensitivePath(f), 'systemd', f);
+  // approveInfra drops only the infra reason
+  const facts = { ok: true, branch: 'b', target: 'main', conflicts: [], docsOnly: false, files: [], binary: [], sensitive: [{ file: 'scripts/deploy.sh', why: 'deploy' }, { file: '.env', why: 'secret' }, { file: 'systemd/a.service', why: 'systemd' }] };
+  const r = mergeFloor(facts, { state: 'green' }, { approveInfra: true });
+  assert.equal(r.length, 2); assert.ok(r.every((x) => !/deploy\.sh/.test(x)));
+  assert.equal(mergeFloor(facts, { state: 'green' }).length, 3);
+});

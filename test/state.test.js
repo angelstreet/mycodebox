@@ -151,3 +151,11 @@ test('displayState: scriptBusy does not override waiting / deploy / offline', ()
   // offline stays offline
   assert.equal(displayState({ state: 'offline', scriptBusy: true }), 'offline');
 });
+
+test('displayState: a done turn whose STATUS is "waiting" on its own job reads as working, not done', () => {
+  const w = (over) => ({ state: 'done', stall: { status: 'waiting', case: 'waiting_deploy', question: "Sonnet worker's full test run on v2/r13c-wire", ...over } });
+  assert.equal(displayState(w({})), 'working');
+  assert.equal(displayState({ state: 'done', stall: { case: 'own_job_wait' } }), 'working');
+  assert.equal(displayState(w({ question: 'the owner go-ahead' })), 'done');
+  assert.equal(displayState(w({ deployHint: { id: 'd-42' } })), 'done');
+});

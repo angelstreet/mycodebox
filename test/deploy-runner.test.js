@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS } from '../deploy-runner.js';
+import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, remoteLeaseCmd, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS } from '../deploy-runner.js';
 
 // In-memory registry that mimics `vpt-lease deploy ...` (start = atomic check against leases + one running per env).
 function fakeRegistry({ leases = [], deploys = [] } = {}) {
@@ -23,7 +23,7 @@ function fakeRegistry({ leases = [], deploys = [] } = {}) {
       if (!d || d.state !== 'queued') return { code: 1, stdout: '', stderr: 'not queued' };
       if (st.deploys.some((x) => x.env === d.env && x.state === 'running')) return { code: 3, stdout: '', stderr: 'running' };
       if (st.leases.some((l) => l.env === d.env && l.agent !== 'manager:deploy' && touches(d.scope, l.resource))) return { code: 3, stdout: '', stderr: 'leases' };
-      d.state = 'running'; return { code: 0, stdout: 'running', stderr: '' };
+      d.state = 'running'; if (st.grantLease) st.leases.push({ id: `L${d.id}`, env: d.env, resource: 'server', agent: 'manager:deploy', deploy_id: d.id }); return { code: 0, stdout: 'running', stderr: '' };
     }
     if (sub === 'finish') {
       d.state = args[args.indexOf('--status') + 1]; d.finished = Date.now(); d.tail = stdin;
@@ -486,4 +486,73 @@ test('lease freed: a host-kind lease that a full deploy skips is never tracked',
   reg.leases.length = 0;
   await runner.tick();
   assert.ok(!alerts.some(([k]) => k.includes('lease-freed')));
+});
+
+test('remoteLeaseCmd: only approve uses the owner token file', () => {
+  assert.equal(remoteLeaseCmd(['deploy', 'approve', 'ab12']), 'VPT_LEASE_TOKEN_FILE=~/.config/vpt-lease/owner-token ~/bin/vpt-lease deploy approve ab12');
+  for (const a of [['deploy', 'list', '--json'], ['deploy', 'start', 'ab12'], ['deploy', 'cancel', 'ab12'], ['deploy', 'finish', 'ab12']]) assert.ok(!remoteLeaseCmd(a).includes('owner-token'), a.join(' '));
+});
+
+test('a failed auto-approve is logged with its exit and stderr, and the approval alert still fires', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { state: 'awaiting-approval' })] });
+  const inner = reg.fn; const errs = []; const alerts = [];
+  const r = createDeployRunner({ stateDir: mkdtempSync(join(tmpdir(), 'dr-')), isEnabled: () => true, catchUp: false,
+    registry: async (a, o) => (a[1] === 'approve' ? { code: 1, stdout: '', stderr: 'E_AUTH: this route needs an owner client' } : inner(a, o)),
+    alert: (k) => alerts.push(k), log: { info() {}, error: (m) => errs.push(m) } });
+  await r.tick(); await r.tick();
+  assert.ok(errs.some((m) => /auto-approve 1 failed \(exit 1\).*owner client/.test(m)), errs.join('|'));
+  assert.equal(reg.deploys[0].state, 'awaiting-approval');
+});
+
+// ---- hold clock: the timeout measures the lease HOLD, not the wait in the registry queue ----------------------------------
+import { followDetached } from '../deploy-runner.js';
+import { mkdtempSync as mkd, writeFileSync as wf, appendFileSync as af } from 'node:fs';
+import { tmpdir as tmp } from 'node:os';
+import { join as pj } from 'node:path';
+
+const follow = (dir, opts) => { const lines = []; const p = followDetached(dir, 'd1', { onLine: (l) => lines.push(l), pollMs: 10, pid: process.pid, ...opts }); return { p, lines }; };
+
+test('queued deploy is not killed by the hold timeout; killed maxMs after start when never granted', async () => {
+  const dir = mkd(pj(tmp(), 'dr-'));
+  wf(pj(dir, 'd1.run'), 'busy: queueing for the lease (vpt-lease claim --wait)\n');
+  // pid = this test process: followDetached would SIGTERM -pid on a timeout; use a pid whose group kill fails harmlessly
+  const { p } = follow(dir, { timeoutMs: 50, maxMs: 400, pid: 2 ** 22 + 1 });
+  const r = await Promise.race([p, sleep(200).then(() => 'still-waiting')]);
+  assert.equal(r, 'still-waiting', 'a 50 ms hold timeout must not fire while queued');
+});
+
+test('hold clock starts at the "holding lease" line', async () => {
+  const dir = mkd(pj(tmp(), 'dr-'));
+  wf(pj(dir, 'd1.run'), 'busy: queueing\n');
+  const killed = [];
+  const orig = process.kill;
+  process.kill = (pid, sig) => { if (pid < 0) { killed.push(sig); wf(pj(dir, 'd1.exit'), '143'); return true; } return orig(pid, sig); };
+  try {
+    const { p } = follow(dir, { timeoutMs: 150, maxMs: 60000, pid: process.pid });
+    await sleep(300);                                   // queued for 2x the hold timeout: still alive
+    assert.deepEqual(killed, []);
+    af(pj(dir, 'd1.run'), 'holding lease abc on node1-vpt (server) for the deploy\n');
+    const r = await p;
+    assert.equal(r.timedOut, 'hold'); assert.ok(killed.includes('SIGTERM'));
+  } finally { process.kill = orig; }
+});
+
+test('overall cap ends a deploy that stays queued', async () => {
+  const dir = mkd(pj(tmp(), 'dr-'));
+  wf(pj(dir, 'd1.run'), 'busy: queueing\n');
+  const orig = process.kill;
+  process.kill = (pid, sig) => { if (pid < 0) { wf(pj(dir, 'd1.exit'), '143'); return true; } return orig(pid, sig); };
+  try {
+    const r = await follow(dir, { timeoutMs: 20, maxMs: 120, pid: process.pid }).p;
+    assert.equal(r.timedOut, 'cap');
+  } finally { process.kill = orig; }
+});
+
+test('the lease granted at deploy start is read back from the list and handed to the child as VPT_LEASE_ID', async () => {
+  const reg = fakeRegistry({ deploys: [dep('7', { scope: 'server', ref: 'main' })] });
+  reg.grantLease = true;
+  const { runner, ran } = make(reg);
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '7').state === 'done');
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=7 VPT_LEASE_ID=L7 bash update_core.sh main --server --skip-leased');
 });

@@ -1,6 +1,7 @@
 #!/bin/sh
 # integrate: hand a pushed branch to the mycodebox integration lane (docs/v2/INTEGRATION-LANE.md). POSIX sh + curl; codebox and Mac.
-#   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--wait]   queue the branch (default: the current branch)
+#   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--wait]   queue the branch (default: the current branch)
+#                                                                                        --approved-by: manager only; skips ONLY the infra-path floor reason
 #   integrate status [<id>]                                                              one request, or the latest ten
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
 #                                                                                        an unreachable service is retried until the timeout
@@ -64,7 +65,7 @@ report() {
   case "$_state" in
     returned|merged_ci_red|deploy_failed)
       _t=$(tail_of); [ -n "$_t" ] && printf '%s\n' "$_t"
-      case "$_state" in returned) printf 'Fix it on your branch, push it and run integrate request again.\n' ;; *) printf 'The merge is on the target; the manager decides what happens next. Do not revert it yourself.\n' ;; esac ;;
+      case "$_state" in returned) if [ "$(val outcome)" = needs_approval ]; then printf 'Waiting for the manager: a manager item was created; it approves with integrate request <branch> --approved-by manager.\n'; else printf 'Fix it on your branch, push it and run integrate request again.\n'; fi ;; *) printf 'The merge is on the target; the manager decides what happens next. Do not revert it yourself.\n' ;; esac ;;
   esac
   [ -n "$_exit" ] || exit 1
   exit "$_exit"
@@ -90,10 +91,10 @@ do_wait() {   # do_wait ID MINUTES
 cmd=$1; [ $# -gt 0 ] && shift
 case "$cmd" in
   request)
-    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; WAIT=0
+    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; APPROVER=""; WAIT=0
     while [ $# -gt 0 ]; do
       case "$1" in
-        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --wait) WAIT=1; shift ;;
+        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --approved-by) APPROVER=$2; shift 2 ;; --wait) WAIT=1; shift ;;
         -*) die "unknown option $1" ;; *) BRANCH=$1; shift ;;
       esac
     done
@@ -108,6 +109,7 @@ case "$cmd" in
     [ -n "$REPO" ] && BODY="$BODY,\"repo\":\"$(json_esc "$REPO")\""
     [ -n "$DEPLOY" ] && BODY="$BODY,\"deploy\":\"$(json_esc "$DEPLOY")\""
     [ -n "$NOTE" ] && BODY="$BODY,\"note\":\"$(json_esc "$NOTE")\""
+    [ -n "$APPROVER" ] && BODY="$BODY,\"approvedBy\":\"$(json_esc "$APPROVER")\""
     [ -n "$SESSION" ] && BODY="$BODY,\"session\":\"$(json_esc "$SESSION")\""
     [ -n "$ORIGIN" ] && BODY="$BODY,\"origin\":\"$(json_esc "$ORIGIN")\""
     BODY="$BODY}"

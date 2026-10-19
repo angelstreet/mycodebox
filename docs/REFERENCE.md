@@ -794,7 +794,7 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
 - **Env map** (not in the repo): `$GHOSTY_STATE_DIR/deploy-envs.json`, written with defaults on first run:
   `{ "<env>": { "ssh": "<host>", "cmd": "bash update_core.sh", "health": "<optional remote command, exit 0 = healthy>" } }`.
   Only envs in the map are deployed. Scope to flags: `frontend` -> `--frontend`, `host` -> `--host`, `server` -> `--server`,
-  `full` -> none. The command runs as `ssh <host> "VPT_LEASE_AGENT=manager:deploy <cmd> <ref> <flags>"` (45 min timeout), output in
+  `full` -> none. The command runs as `ssh <host> "VPT_LEASE_AGENT=manager:deploy <cmd> <ref> <flags>"` (11 min timeout: the 10-min lease cap plus 1 min grace), output in
   `$GHOSTY_STATE_DIR/deploys/<id>.log`. Without `health`, only update_core's exit code decides done / failed.
 - One running deploy per env. Queued requests with the same env + ref that the running scope covers (`full` covers all; other scopes only
   themselves) are finished with its result (`coalescedInto`).
