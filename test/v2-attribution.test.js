@@ -115,3 +115,26 @@ test('lane records the session usage window and the merge review on the request'
     assert.ok(readFileSync(join(stateDir, 'integration', 'requests.jsonl'), 'utf8').includes('"usage"'));
   } finally { rmSync(stateDir, { recursive: true, force: true }); }
 });
+
+test('lane attributes by requester worktree first, session window as fallback', async () => {
+  const stateDir = tmp(), w = makeWorld(); w.branch('f1', { 'a.js': '1\n' }); w.branch('f2', { 'b.js': '1\n' });
+  try {
+    const now = Date.now();
+    writeFileSync(join(stateDir, 'usage-ledger.jsonl'), jl([
+      row({ ts: now - 3e5, label: 's1', cwd: '/fake/wt-a/sub', agent: 'claude', model: 'fake-big', cost: { total: 3 } }),
+      row({ ts: now - 3e5, label: 's1', cwd: '/fake/wt-b', agent: 'claude', model: 'fake-big', cost: { total: 40 } }),
+      row({ ts: now - 3e5, label: 's1', cwd: '/fake/wt-ab', agent: 'claude', model: 'fake-big', cost: { total: 500 } }),
+    ]));
+    const lane = createIntegrationLane({ stateDir, config: { repos: { 'env-a': w.cfg() } }, pollMs: 1, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+    lane.start();
+    const r1 = await lane.wait(lane.enqueue({ repo: 'env-a', branch: 'f1', session: 's1', worktree: '/fake/wt-a' }).id, 30000);
+    assert.equal(r1.usage.attribution, 'worktree'); assert.equal(r1.usage.costUsd, 3);   // wt-ab is not inside wt-a
+    const r2 = await lane.wait(lane.enqueue({ repo: 'env-a', branch: 'f2', session: 's1', worktree: '/fake/none' }).id, 30000);
+    assert.equal(r2.usage, null);   // window now starts after r1; nothing left
+    const lane2 = createIntegrationLane({ stateDir: tmp(), config: { repos: { 'env-a': w.cfg() } }, usage: (o) => o });
+    const q = lane2.enqueue({ repo: 'env-a', branch: 'f1', session: 's1', worktree: '/x/y' });
+    assert.equal(lane2.get(q.id).usage.worktree, '/x/y');
+    const sw = (await import('../integration-lane.js')).sessionUsage({ stateDir, session: 's1', worktree: '/fake/none', from: now - 864e5, to: now });
+    assert.equal(sw.attribution, 'session-window'); assert.equal(sw.costUsd, 543);
+  } finally { rmSync(stateDir, { recursive: true, force: true }); }
+});

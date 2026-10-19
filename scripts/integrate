@@ -106,6 +106,7 @@ case "$cmd" in
     case "$SESSION" in ""|mac:*) ;; *) [ "$(uname -s)" = Darwin ] && SESSION="mac:$SESSION" ;; esac
     ORIGIN=$(git remote get-url origin 2>/dev/null)
     BODY="{\"branch\":\"$(json_esc "$BRANCH")\",\"cwd\":\"$(json_esc "$PWD")\""
+    WT=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$WT" ] && BODY="$BODY,\"worktree\":\"$(json_esc "$WT")\""
     [ -n "$REPO" ] && BODY="$BODY,\"repo\":\"$(json_esc "$REPO")\""
     [ -n "$DEPLOY" ] && BODY="$BODY,\"deploy\":\"$(json_esc "$DEPLOY")\""
     [ -n "$NOTE" ] && BODY="$BODY,\"note\":\"$(json_esc "$NOTE")\""

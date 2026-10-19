@@ -557,7 +557,7 @@ All of it is computed by `usage-window.js` from the ledger rows the usage tailer
 | Source | Recorded where | Rule |
 |---|---|---|
 | manager run | `node scripts/manager-run.js end <id> [--verdict ..] [--review pass\|fail] [--model M] [--session LABEL]` writes `usage` on the end line of `manager-runs.jsonl` | ledger rows whose `cwd` is the run's worktree (or whose `label` is `--session`) in (startedAt, endedAt]; dominant model and runtime, tokens in/out/cache, summed cost. `--model` only fills the model when no row exists (tokens and cost stay unknown) |
-| lane request | `usage` on the request record in `integration/requests.jsonl`, frozen at enqueue | rows labelled with the requesting session in (from, to], `to` = request time, `from` = the later of the session's previous request (any branch) and 24 h earlier. Per session, not per branch: a session working two branches at once splits by time |
+| lane request | `usage` on the request record in `integration/requests.jsonl`, frozen at enqueue | `integrate request` sends the requester's git toplevel (`worktree`, loopback callers only). Rows whose `cwd` is inside it in (from, to] are summed (`attribution: worktree`, per branch); with no worktree or no matching rows, rows labelled with the requesting session (`attribution: session-window`, splits by time when a session works two branches). `to` = request time, `from` = the later of the session's previous request (any branch) and 24 h earlier |
 | game-dispatch | `runs.jsonl` | its own `model` and `prompt_version` (`-` = none); no tokens or cost |
 
 `usage` = `{model, runtime, tokens (in+out+cache), tokensIn, tokensOut, costUsd, plan, rule, (from, to)}`.

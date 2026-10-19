@@ -37,11 +37,11 @@ function indexUsage(rows) {
 // Recorded usage (written at request / run end, Round 14b) wins; otherwise the time-window join over the usage ledger, marked
 // approximate. -> { a: attribution|null, how: 'recorded'|'time-window'|'none' }
 function pick(recorded, windowFn) {
-  if (recorded && typeof recorded === 'object') return { a: { agent: recorded.runtime ?? null, model: recorded.model ?? null, tokens: recorded.tokens ?? null, tokensIn: recorded.tokensIn ?? null, tokensOut: recorded.tokensOut ?? null, costUsd: recorded.costUsd ?? null, plan: recorded.plan ?? null }, how: 'recorded' };
+  if (recorded && typeof recorded === 'object') return { a: { agent: recorded.runtime ?? null, model: recorded.model ?? null, tokens: recorded.tokens ?? null, tokensIn: recorded.tokensIn ?? null, tokensOut: recorded.tokensOut ?? null, costUsd: recorded.costUsd ?? null, plan: recorded.plan ?? null, attribution: recorded.attribution ?? null }, how: 'recorded' };
   const a = windowFn();
   return { a, how: a ? 'time-window' : 'none' };
 }
-const usageFields = (a, how) => ({ costUsd: a?.costUsd ?? null, plan: a?.plan ?? null, tokens: a?.tokens ?? null, tokensIn: a?.tokensIn ?? null, tokensOut: a?.tokensOut ?? null, attribution: how, approximate: how === 'time-window' });
+const usageFields = (a, how) => ({ costUsd: a?.costUsd ?? null, plan: a?.plan ?? null, tokens: a?.tokens ?? null, tokensIn: a?.tokensIn ?? null, tokensOut: a?.tokensOut ?? null, attribution: a?.attribution && how === 'recorded' ? a.attribution : how, approximate: how === 'time-window' });
 
 // Integration lane: one record per request id (last snapshot wins). Verified = merged/deployed AND pushed AND the final
 // test step green AND not alreadyMerged (the lane did not test those). returned/failed = unverified; queued/running = open.

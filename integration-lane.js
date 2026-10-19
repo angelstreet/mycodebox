@@ -186,11 +186,16 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
 // ---- the lane ----------------------------------------------------------------------------------------------------------
 // Per-request attribution (Round 14b, docs/v2/SCORING.md): the requesting session's usage-ledger rows labelled with the session
 // in (from, to], where from = the session's previous request (any branch) or 24 h before, whichever is later, and to = the request
-// time. Frozen on the request at enqueue. Per session, not per branch: a session on two branches splits by time.
-export function sessionUsage({ stateDir, session, from, to }) {
-  if (!session) return null;
-  const a = attribute(readLedgerTail(path.join(stateDir, 'usage-ledger.jsonl')).filter((r) => r.label === session), from, to);
-  return a && { model: a.model, runtime: a.agent, tokens: a.tokens, tokensIn: a.tokensIn, tokensOut: a.tokensOut, costUsd: a.costUsd, plan: a.plan, from: new Date(from).toISOString(), to: new Date(to).toISOString(), rule: 'session ledger rows since its previous request (max 24h)' };
+// time. With the requester's worktree (git toplevel, sent by `integrate`) the rows are those whose cwd is inside it (attribution
+// 'worktree', per branch); without it, or when none match, the session-label rows ('session-window', splits by time). Frozen at enqueue.
+export function sessionUsage({ stateDir, session, worktree = null, from, to }) {
+  if (!session && !worktree) return null;
+  const rows = readLedgerTail(path.join(stateDir, 'usage-ledger.jsonl'));
+  const wt = worktree && path.isAbsolute(worktree) ? worktree.replace(/\/+$/, '') : null;
+  let a = wt ? attribute(rows.filter((r) => r.cwd && (r.cwd === wt || r.cwd.startsWith(`${wt}/`))), from, to) : null;
+  const rule = a ? 'worktree' : 'session-window';
+  if (!a && session) a = attribute(rows.filter((r) => r.label === session), from, to);
+  return a && { attribution: rule, model: a.model, runtime: a.agent, tokens: a.tokens, tokensIn: a.tokensIn, tokensOut: a.tokensOut, costUsd: a.costUsd, plan: a.plan, from: new Date(from).toISOString(), to: new Date(to).toISOString(), rule: rule === 'worktree' ? 'ledger rows with cwd inside the requester worktree since the session\'s previous request (max 24h)' : 'session ledger rows since its previous request (max 24h)' };
 }
 
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
@@ -653,17 +658,18 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (!SCOPES.has(deployScope)) throw coded('E_INVALID', `deploy scope must be one of ${[...SCOPES].join(', ')}`);
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
+      const worktree = typeof input.worktree === 'string' && path.isAbsolute(input.worktree) ? input.worktree.slice(0, 500) : null;
       const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.approvedBy === !input.approvedBy);
       if (dup) return { id: dup.id, position: ahead(dup) + 1, repo: key, duplicate: true };
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
       const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
-        deployScope, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
+        deployScope, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
         ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}) };
       try {
         const prev = Math.max(0, ...[...reqs.values()].filter((x) => session && x.session === session).map((x) => Date.parse(x.createdAt) || 0));
-        const to = now(); r.usage = usage({ stateDir, session, from: Math.max(prev, to - 864e5), to });
+        const to = now(); r.usage = usage({ stateDir, session, worktree: r.worktree, from: Math.max(prev, to - 864e5), to });
       } catch (e) { log('usage attribution failed', e?.message); }
       reqs.set(r.id, r); persist(r);
       if (r.approvedBy) { try { journal({ kind: 'merge', decision_id: `merge-approval-${r.id}`, ts: r.approvedAt, source: 'integration-lane', question: `Approve the infra-path floor reason for ${branch} into ${c.target}?`, chosen: 'approve', approvedBy: r.approvedBy, approvedAt: r.approvedAt, rationale: 'a manager approval skips only the CI/deploy/infra-path floor reason; secrets, migrations, sudoers, units, red tests and conflicts still return the request', request: r.id, repo: key, branch, target: c.target }); } catch (e) { log('journal failed', e?.message); } }
