@@ -238,8 +238,27 @@ registry only over ssh it names a small wrapper that forwards the quoted argumen
 |---|---|---|
 | `legacy` (default) | the old registry | nothing (today's behaviour) |
 | `shadow` | the old registry | every command is also sent to the service with `shadow: true` (2-second timeout, never retried; it keeps a separate shadow store, never grants anything real, and the deploy runner never reads it); the client compares the outcomes (exit code, busy or free, lease ids mapped) and posts each disagreement to `POST /shadow-report`, classed `by-design` (the new matrix allows what the old rules refused, e.g. frontend next to a host lease) or `mismatch`; the Leases view shows them. Options that exist only in the new client degrade in legacy and shadow mode (`--wait` becomes a plain claim, `run` claims, executes and releases), and never block |
-| `central-through-ssh` | the one central service on the registry host | Round 11 decision (a). For a machine that reaches that service only through the ssh wrapper (`VPT_LEASE_LEGACY`): the client runs exactly the `legacy` code path (same exec, same exit codes, no HTTP, queue options degraded), the name only says that the wrapper's target is the central authority. Use `ssh <registry-host> vpt-lease` for `--wait`, `ticket`, `heartbeat`, `validate` |
+| `central-through-ssh` | the one central service on the registry host | Round 11 decision (a), completed by the forwarding follow-up. For a machine that reaches the service only through ssh: the local client forwards every call (`claim`, `release`, `renew`, `list`, `check`, `events`, `ticket`, `heartbeat`, `mode`, `validate`, `deploy ...`) to the registry host's own `vpt-lease`, which runs in `central` mode there, so `--wait`, `--ticket`, `--expect` and the central-only commands work with full central semantics and one command on every machine (see "central-through-ssh forwarding" below) |
 | `central` | the service | the old registry is not called |
+
+### central-through-ssh forwarding
+
+Config (`~/.config/vpt-lease/config` or env): `VPT_LEASE_MODE=central-through-ssh`, `VPT_LEASE_SSH_TARGET=<registry-host>` (the ssh
+destination) and optionally `VPT_LEASE_REMOTE_CMD` (default `~/bin/vpt-lease`). Without `VPT_LEASE_SSH_TARGET` the client uses
+`VPT_LEASE_LEGACY` (an existing ssh wrapper that already runs the registry host's `vpt-lease` with its arguments quoted) as the
+transport, so a machine that has that wrapper needs no new key.
+
+- Every call runs `ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 <target> "VPT_LEASE_MODE=central VPT_LEASE_FORWARDED=1 <remote-cmd> <args>"`
+  with each argument `shlex.quote`d. stdin is passed through (`deploy finish --tail-stdin`), stdout and stderr stream back live, and the
+  remote exit code is the local exit code exactly (0/1/3/4/5/6). ssh exit 255 (cannot connect) is exit 5 UNAVAILABLE, never "free".
+- No recursion: the remote side is forced to `central` and carries `VPT_LEASE_FORWARDED=1`; a client that sees that variable in
+  `central-through-ssh` mode refuses (exit 1) instead of forwarding again. `VPT_DEPLOY_ID` and `VPT_LEASE_AGENT` are forwarded.
+- `run <claim args> -- <command>` does not send the command anywhere. It forwards `claim ... --wait --heartbeat-s 300` (the lease id is
+  the first stdout line), runs the command locally with the usual signal forwarding and exit-code passthrough, forwards
+  `heartbeat <id> --active` every 300 s from a thread (exit 1/3 = lease lost, run exits 6; an ssh failure only retries), joins that thread
+  before `release <id>` (three attempts if ssh is down; the TTL covers the rest).
+- Limits: killing a local `claim --wait` drops the ssh connection but the remote client is not signalled, so its ticket is left to
+  expire unpolled; a downgrade of a `run` lease to a pin is noticed only when the next heartbeat is refused.
 
 Cut-over (owner side; nothing here is done by this round). The order matters: the deploy script must fail closed
 before any machine trusts the service.

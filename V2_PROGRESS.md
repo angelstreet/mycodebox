@@ -87,6 +87,14 @@ is `central` or `leaseServiceClaims: true`; reads and the shadow store stay open
 codebox client config and `manager.json` to `central-through-ssh` and swaps the deploy skill (prepared as `SKILL.md.central-ssh`).
 Device hosts and the Mac still use their own route (see the table). The older state below is the 2026-10-18 to 19 history.
 
+**Follow-up (2026-10-19, `v2/lease-ssh-forward`): `central-through-ssh` forwards every call.** Manager decision: in this mode the local
+`vpt-lease` no longer takes the legacy path; it forwards each call over ssh to the registry host's `vpt-lease` (which runs `central`
+there), so `claim ... --wait`, `ticket`, `heartbeat`, `mode`, `validate`, `deploy ...` work identically on every machine. Config:
+`VPT_LEASE_SSH_TARGET` and `VPT_LEASE_REMOTE_CMD` (default `~/bin/vpt-lease`), or the existing `VPT_LEASE_LEGACY` ssh wrapper as the
+transport (no new key). Exit codes pass through, ssh 255 = 5, `VPT_LEASE_FORWARDED` prevents recursion. `run` claims (with wait),
+heartbeats and releases over ssh while the wrapped command runs locally. Requires the registry host's `vpt-lease` to be this version
+(`claim --heartbeat-s`). Tests: `test/vpt-lease-ssh-forward.test.js`. Design: LEASES-CENTRAL.md "central-through-ssh forwarding".
+
 **Earlier state (checked 2026-10-19): NOT DONE, cut-over not performed.** Evidence on the dashboard host: the client config
 `VPT_LEASE_MODE=legacy`; `GET /api/leases/view` answers `authority: legacy` (loopback, both listeners); the central journal
 `leases/journal.jsonl` is empty and the shadow store holds only its 2026-10-18 `.initialized` marker; the deploy skill is still the
@@ -312,6 +320,11 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 - Round 11 (leases), Mac: put `VPT_LEASE_MODE=central-through-ssh` and `VPT_LEASE_LEGACY=<ssh wrapper to the registry host's vpt-lease>` in
   `~/.config/vpt-lease/config` on the Mac (keep a dated backup), then run `vpt-lease list` and compare with `ssh <registry-host> vpt-lease list`.
   Until then the Mac keeps calling the registry host directly, which is the same authority.
+- Round 11 follow-up (ssh forwarding), owner actions: (1) point the device hosts' lease route at the registry host
+  (`VPT_LEASE_MODE=central-through-ssh` plus `VPT_LEASE_SSH_TARGET=<registry-host>`, or their existing wrapper as `VPT_LEASE_LEGACY`)
+  so they use the same one command; (2) update the Mac copy of the deploy skill (`<mac-skill-path>/SKILL.md`) to the rendered
+  version with `vpt-lease claim ... --wait` / `run`; (3) install this `scripts/vpt-lease` on the registry host (`~/bin/vpt-lease`) before
+  any machine switches, because a forwarded `run` uses `claim --heartbeat-s`.
 
 - Live unit sets `HOST=0.0.0.0` explicitly (read-only inspection). Upgrading keeps it (no access break) and now logs a
   warning; owner should switch to `127.0.0.1` + private Serve or a literal Tailscale IP.
