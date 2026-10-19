@@ -45,6 +45,18 @@ then central after telling the manager. Then build the missing parts of Round 12
 | 6 Reviewer evidence | lane `review` (merge evaluation) and manager `--review pass\|fail` persisted and counted as evidence | DONE |
 | Test | `test/v2-attribution.test.js` | DONE |
 
+### Round 11 cut-over check (2026-10-19): STOPPED, topology differs from the plan
+
+| Check | Result |
+|---|---|
+| Shadow reports (service shadow store) | 2 total, both 2026-10-18 08:36 (`check <env> frontend`, legacy BUSY vs shadow FREE); explained: the shadow store was unseeded at the time (seeded empty at 08:59), not a rule mismatch. None since |
+| Legacy registry (`vpt-lease.legacy` on the registry host) | 0 active leases; its event log is frozen (last row 2026-10-12) |
+| Registry-host client (central) vs codebox client (legacy wrapper over ssh) | identical: 3 leases, 1 ticket, same 200 events; the codebox "legacy" wrapper already calls the registry host's central client |
+| Verdict on the data | no unexplained mismatch |
+| Blocker | the live central service is the standalone `lease-serve.js` on the registry host (loopback only; every machine reaches it through `ssh <registry-host> vpt-lease`). Codebox's configured service URL is ghosty's own in-process service, whose store is empty (0 leases). `VPT_LEASE_MODE=central` on codebox, or `leaseAuthority: "central"` in ghosty's `manager.json`, would read/write that empty store: split brain, other agents would not see codebox claims. Config was switched, observed (`list` returned no leases) and restored to `legacy` at once (backup `config.bak-2026-10-19`) |
+| Effective state | codebox already follows the central authority through the ssh wrapper; ghosty's view (`authority: legacy`) reads it through the registry client |
+| Open | decide the codebox endpoint: (a) keep the wrapper (nothing to switch; the label stays `legacy`), or (b) point `VPT_LEASE_URL` and ghosty's service at the registry host service (needs a reachable URL, now loopback-only there). Deploy skill swap waits for this |
+
 ## Round 12 (2026-10-18): the owner never answers about leases or deployments
 
 | Part | Already does it | Missing (built after the cut-over) |
