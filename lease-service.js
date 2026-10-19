@@ -384,7 +384,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return end;
   }
   const latestOf = (virt) => Math.max(now(), ...heldConflicts(virt).map((b) => b.expires));
-  const aheadOf = (virt, tk) => waitingTickets(virt.env).filter((o) => (!tk || o.id !== tk.id) && (!tk || byQueue(o, tk) < 0) && leasesConflict(virt, o));
+  // A ticket that waits only on leases of `agent` itself (it has holders, and every one is that agent's) is not ahead of that
+  // agent's own claim/ticket: the agent releases only after its own deploy, so queueing it behind that ticket is a deadlock.
+  const waitsOnlyOn = (o, agent) => { const hs = heldConflicts(o); return hs.length > 0 && hs.every((l) => l.agent === agent); };
+  const aheadOf = (virt, tk) => waitingTickets(virt.env).filter((o) => (!tk || o.id !== tk.id) && (!tk || byQueue(o, tk) < 0) && leasesConflict(virt, o) && !waitsOnlyOn(o, virt.agent));
   function ticketView(tk) {
     const out = { id: tk.id, state: tk.state, priority_since: iso(tk.created), env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null, kind: tk.kind };
     if (tk.state === 'waiting') {
@@ -497,7 +500,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   function grantTickets(emit) {
     const earlier = [];
     for (const tk of waitingTickets()) {
-      const blocked = heldConflicts(tk).length > 0 || earlier.some((e) => e.env === tk.env && leasesConflict(tk, e))
+      const blocked = heldConflicts(tk).length > 0 || earlier.some((e) => e.env === tk.env && leasesConflict(tk, e) && !waitsOnlyOn(e, tk.agent))
         || (!tk.system && pendingFor(tk.env, tk, tk.deployId).length > 0);
       if (blocked) { earlier.push(tk); continue; }
       const t = now();

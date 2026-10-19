@@ -886,3 +886,21 @@ test('deploy lease TTL is deployLeaseMin (12), not runningMaxMin; the runner-los
   assert.equal((await h.svc.list()).leases.some((l) => l.deployId), false, 'the lease expires after 13 min');
   assert.equal((await h.svc.deploy.list({ env: 'env-a' })).deploys.find((x) => x.id === q.id).state, 'running', 'the deploy itself is only failed after runningMaxMin');
 });
+
+test('a ticket whose agent holds the lease blocking the tickets ahead passes them (no self-deadlock)', async () => {
+  const h = harness();
+  const a = await h.claim('codebox:TASK-135-p2', ['device:host-clone-2/host'], { kind: 'host' });
+  assert.equal(a.ok, true);
+  const t1 = await h.claim('mac:edit-dialogs-glowup', ['host:host-clone-2', 'host:vpt-pi1', 'server'], { wait: 'ticket', kind: 'host' });
+  assert.equal(t1.ok, true); assert.ok(t1.ticket, 'first ticket queued behind the holder');
+  const t2 = await h.claim('codebox:TASK-135-p2', ['host:host-clone-2'], { wait: 'ticket', kind: 'host' });
+  assert.equal(t2.ok, true);
+  // the second request is the holder itself: it must not be queued behind the ticket that waits for its own lease
+  assert.ok(t2.lease || t2.ticket?.position === 1, `holder's ticket must not sit behind ticket #1: ${JSON.stringify(t2.ticket || t2)}`);
+  await h.svc.tick();
+  const got = await h.svc.ticket(t2.ticket?.id || 'none');
+  const lease = t2.lease || got.lease || got.ticket?.lease;
+  assert.ok(lease || got.ticket?.state === 'granted', `holder's ticket granted: ${JSON.stringify(got)}`);
+  const v1 = await h.svc.ticket(t1.ticket.id);
+  assert.equal((v1.ticket || v1).state, 'waiting', 'ticket #1 keeps waiting for the holder');
+});
