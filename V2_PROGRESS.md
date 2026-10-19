@@ -11,6 +11,16 @@ Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHIT
 Lease cut-over: the central lease service runs on the registry host (manager decision), shadow window 09:17-10:17 UTC,
 then central after telling the manager. Then build the missing parts of Round 12 (ship first, test at the end).
 
+## Round 14 (2026-10-19): scoring and auto-improvement (read-only)
+
+| Item | What | State |
+|---|---|---|
+| Ledger | `scripts/v2-ledger.js`: normalized ledger over the integration lane, manager runs and game-dispatch (`scripts/v2-score.js` already scores the V2 task store and stays) | DONE |
+| Metrics | per model / runtime / source: attempts, verified completions and rate, cost per verified completion, median/p90 latency, rework; `--json`, `--since`, `--by`, `--state-dir`; read-only, missing sources skipped | DONE |
+| Doc | `docs/v2/SCORING.md` "Round 14": record schema, per-source "verified" definitions, how the router reads `--json` (minimum samples, proposals only) | DONE |
+| Test | `test/v2-ledger.test.js` with synthetic fixtures under the home directory | DONE |
+| Later | Record reviewer-pass evidence and MiniMax prices so the gaps in SCORING.md close; a manager proposal job reading `--json` | OPEN |
+
 ## Round 12 (2026-10-18): the owner never answers about leases or deployments
 
 | Part | Already does it | Missing (built after the cut-over) |

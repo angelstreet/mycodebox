@@ -475,3 +475,73 @@ From round 5 a task's declared `task_class` that names a work type (`docs`, `tes
 (`orchestration/router.js` `classifyWork`). Before, keywords alone decided, so a docs task whose definition of done
 named its checks ("project-tests passes") was classified `test`. Scorecards grouped by work type from round 4 and
 round 5 are therefore not directly comparable for tasks that declare a class.
+
+## Round 14: cross-source ledger (`scripts/v2-ledger.js`)
+
+`v2-score.js` scores tasks that ran inside the V2 task store. Most work on the box does not: sessions hand branches to
+the integration lane, the manager runs MiniMax workers, `game-dispatch` runs scripted jobs. `scripts/v2-ledger.js`
+(OWNER_DECISIONS §8) joins those real sources into one normalized ledger and prints the same metrics. It is read-only:
+it opens files for reading, never writes, never edits a config, prompt or routing file. A missing source is listed as
+`skipped`, not an error.
+
+```sh
+node scripts/v2-ledger.js                       # per model and per runtime
+node scripts/v2-ledger.js --by source --since 2026-10-01
+node scripts/v2-ledger.js --json [--records]    # --records adds the normalized ledger
+node scripts/v2-ledger.js --state-dir DIR       # default $GHOSTY_STATE_DIR or ~/.local/state/ghosty
+```
+
+### Ledger record
+
+One record per attempt (queued and running items are open, not attempts):
+
+| Field | Meaning |
+|---|---|
+| `source` | `lane`, `manager`, `game-dispatch` |
+| `id`, `ref`, `kind` | source id; branch (`repo/branch`), worktree or job name; what it was |
+| `model`, `runtime` | attributed model and agent (`unknown` when it cannot be attributed; `none` for no-LLM jobs) |
+| `started`, `ended`, `latencyMs` | ISO times and their difference |
+| `outcome` | source state: `merged`, `deployed`, `returned`, `accepted`, `fixed`, `rejected`, `no-verdict`, `completed`, `abandoned`, ... |
+| `verified`, `evidence` | yes/no and the reason; only verified completions count as successes |
+| `costUsd`, `tokens` | summed from `usage-ledger.jsonl` rows in the attribution window; `null` cost = unknown (MiniMax has no price), never `$0` |
+| `rework`, `reworkEvent` | earlier failed attempts for the same key; whether this attempt is itself a rework event |
+
+### Per-source mapping
+
+| Source | File | Attempt | Verified when (evidence) | Rework |
+|---|---|---|---|---|
+| lane | `integration/requests.jsonl` (snapshots, last per id wins) | one request in a final state | state `merged` or `deployed`, `pushed`, the final `test` step green, not `alreadyMerged` (evidence: lane tests green + pushed) | a `returned` request; `rework` = earlier returns of the same repo/branch |
+| manager | `manager-runs.jsonl` (start + end lines per id) | one worker run that ended, or never closed after 6 h | verdict `accepted` or `fixed` (the manager reviewed and accepted the work) | verdict `fixed` or `rejected` |
+| game-dispatch | `~/.cache/game-dispatch/runs.jsonl` | one run; `started` older than 6 h is `abandoned` | `completed` with a `script_result_id` | a non-completed run before a later run of the same job |
+
+Attribution (model, runtime, cost, tokens) comes from `usage-ledger.jsonl`. Lane: rows labelled with the request's
+session inside the window from the session's previous request (at most 24 h) to this request; the dominant model by cost
+is credited, with `session-history.jsonl` as fallback. Manager: `minimax` rows whose `cwd` is the run's worktree inside
+the run window. Game-dispatch: its own `model` field. This is an approximation: a session working on two branches at once
+splits cost by time, not by branch.
+
+### Metrics (per group)
+
+`attempts`; `verified`; `verifiedRate` = verified / attempts; `costPerVerified` = cost of all priced attempts in the group
+(failed ones included) / verified, `null` when nothing is priced; `medianMs`, `p90Ms` of verified completions (lane
+latency is lane time from request to result, not the session's work time); `rework` = number of rework events.
+
+### How the router consumes it
+
+The router reads `node scripts/v2-ledger.js --json` (groups by model and runtime) as read-only input, in addition to
+`v2-score.js` `router_history`, to rank model/runtime choices per task kind:
+
+- A group is only used with at least 5 attempts and 3 verified completions; below that it is an anecdote and the static
+  routing table decides. Groups named `unknown` are never ranked.
+- Rank by verified rate first, then cost per verified completion (unknown cost ranks after known), then median latency.
+  Rework above 30% of attempts demotes a group one place.
+- Sources differ in difficulty (a docs fix versus a game run); compare within one `--by source` slice when possible.
+- Output is a proposal for the manager (a suggested change to the routing config with the numbers behind it). Nothing
+  applies it automatically: no write to routing config, prompts or registry. The manager decides under the usual
+  evaluation and records the decision in the journal.
+
+### Gaps (2026-10-19)
+
+The usage ledger has no price for MiniMax, so its cost per verified completion is unknown. Lane and manager records
+without usage rows in their window have model `unknown`. Manager verdicts are optional, so unclosed runs count as
+unverified. Reviewer-pass evidence is not recorded as its own field yet.
