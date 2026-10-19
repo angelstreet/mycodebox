@@ -115,7 +115,9 @@ const n = (x) => (Number.isFinite(x) ? x : 0);
 
 // One Claude Code transcript line -> record | null. A message can be written as several lines with the
 // same message.id; callers dedupe on record.id.
-export function parseClaudeLine(o, { subagent = false } = {}) {
+// When `workCwd` is passed it is recorded as a separate field: the subagent's actual working dir (entry cwd or
+// first Edit/Write file_path's directory), distinct from `cwd` which stays the parent session's folder.
+export function parseClaudeLine(o, { subagent = false, workCwd = null } = {}) {
   const m = o && o.message;
   if (!m || typeof m !== 'object' || !m.usage || !m.id || !m.model || m.model === '<synthetic>') return null;
   const u = m.usage;
@@ -130,7 +132,31 @@ export function parseClaudeLine(o, { subagent = false } = {}) {
   if (!(usage.input + usage.output + usage.cache_read + usage.cache_write_5m + usage.cache_write_1h)) return null;
   const ts = Date.parse(o.timestamp);
   if (!o.sessionId || !Number.isFinite(ts)) return null;
-  return { id: `claude:${m.id}`, agent: 'claude', session: o.sessionId, cwd: o.cwd || null, ts, model: m.model, usage, subagent };
+  const rec = { id: `claude:${m.id}`, agent: 'claude', session: o.sessionId, cwd: o.cwd || null, ts, model: m.model, usage, subagent };
+  if (subagent && workCwd) rec.workCwd = workCwd;
+  return rec;
+}
+
+// Subagent's real cwd from a Claude Code subagent jsonl. Each entry's `cwd` is the dir the tool actually
+// ran in; the latest one is where the subagent ended up. If no cwd was written at all, fall back to the
+// directory of the first Edit/Write tool call's file_path (Bash entries usually carry cwd, so this is rare).
+// `texts` = array of complete raw jsonl line texts; returns { cwd, toolPath } where toolPath is non-null only when
+// no cwd was found (callers can compute dirname themselves, or ignore it).
+export function workCwdOfSubagent(texts) {
+  let cwd = null, toolPath = null;
+  for (const text of texts) {
+    let o; try { o = JSON.parse(text); } catch { continue; }
+    if (!o) continue;
+    if (typeof o.cwd === 'string' && o.cwd) cwd = o.cwd;
+    if (!toolPath && Array.isArray(o?.message?.content)) {
+      for (const c of o.message.content) {
+        if (!c || c.type !== 'tool_use' || !c.input) continue;
+        const p = c.input.file_path;
+        if (typeof p === 'string' && p) { toolPath = p; break; }
+      }
+    }
+  }
+  return { cwd, toolPath };
 }
 
 // Codex rollout file: stateful (session_meta + turn_context precede the usage lines). Feed lines in order.
@@ -422,10 +448,20 @@ export function createIngester(cfg, hooks = {}) {
       const sub = f.path.includes('/subagents/');
       const buf = await readFrom(f.path, off, f.size);
       let end = off;
-      for (const l of completeLines(buf, off)) {
+      // Subagent transcript: each entry's top-level cwd is the directory the tool actually ran in.
+      // Compute the latest such cwd once for the whole file so every usage row carries it as workCwd
+      // (the parent session's `cwd` still records the parent's folder, which the row keeps for labelling).
+      let workCwd = null;
+      const lines = sub ? [...completeLines(buf, off)] : null;
+      if (sub) {
+        const { cwd, toolPath } = workCwdOfSubagent(lines.map((l) => l.text));
+        workCwd = cwd || (toolPath ? toolPath.replace(/\/[^/]*$/, '') || toolPath : null);
+      }
+      const iter = lines || completeLines(buf, off);
+      for (const l of iter) {
         end = l.end;
         if (!l.text.includes('"usage"')) continue;
-        try { push(parseClaudeLine(JSON.parse(l.text), { subagent: sub })); } catch {}
+        try { push(parseClaudeLine(JSON.parse(l.text), { subagent: sub, workCwd: sub ? workCwd : null })); } catch {}
       }
       nextFiles[f.path] = end;
     }

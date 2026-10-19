@@ -14,7 +14,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { gitFacts, mergeFloor, isConvention } from './merge-policy.js';
-import { attribute, readLedgerTail } from './usage-window.js';
+import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
 
 export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled']);
 export const STATES = Object.freeze(['queued', 'running', ...FINAL]);
@@ -184,15 +184,17 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
 }
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
+
 // Per-request attribution (Round 14b, docs/v2/SCORING.md): the requesting session's usage-ledger rows labelled with the session
 // in (from, to], where from = the session's previous request (any branch) or 24 h before, whichever is later, and to = the request
 // time. With the requester's worktree (git toplevel, sent by `integrate`) the rows are those whose cwd is inside it (attribution
 // 'worktree', per branch); without it, or when none match, the session-label rows ('session-window', splits by time). Frozen at enqueue.
+// Subagent rows match by `workCwd` (the directory the subagent tool actually ran in) before falling back to `cwd` (parent's folder).
 export function sessionUsage({ stateDir, session, worktree = null, from, to }) {
   if (!session && !worktree) return null;
   const rows = readLedgerTail(path.join(stateDir, 'usage-ledger.jsonl'));
   const wt = worktree && path.isAbsolute(worktree) ? worktree.replace(/\/+$/, '') : null;
-  let a = wt ? attribute(rows.filter((r) => r.cwd && (r.cwd === wt || r.cwd.startsWith(`${wt}/`))), from, to) : null;
+  let a = wt ? attribute(rows.filter((r) => rowCwdMatchesWorktree(r, wt)), from, to) : null;
   const rule = a ? 'worktree' : 'session-window';
   if (!a && session) a = attribute(rows.filter((r) => r.label === session), from, to);
   return a && { attribution: rule, model: a.model, runtime: a.agent, tokens: a.tokens, tokensIn: a.tokensIn, tokensOut: a.tokensOut, costUsd: a.costUsd, plan: a.plan, from: new Date(from).toISOString(), to: new Date(to).toISOString(), rule: rule === 'worktree' ? 'ledger rows with cwd inside the requester worktree since the session\'s previous request (max 24h)' : 'session ledger rows since its previous request (max 24h)' };
