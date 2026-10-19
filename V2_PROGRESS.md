@@ -19,7 +19,19 @@ then central after telling the manager. Then build the missing parts of Round 12
 | Metrics | per model / runtime / source: attempts, verified completions and rate, cost per verified completion, median/p90 latency, rework; `--json`, `--since`, `--by`, `--state-dir`; read-only, missing sources skipped | DONE |
 | Doc | `docs/v2/SCORING.md` "Round 14": record schema, per-source "verified" definitions, how the router reads `--json` (minimum samples, proposals only) | DONE |
 | Test | `test/v2-ledger.test.js` with synthetic fixtures under the home directory | DONE |
-| Later | Record reviewer-pass evidence and MiniMax prices so the gaps in SCORING.md close; a manager proposal job reading `--json` | OPEN |
+| Later | A manager proposal job reading `--json` (reviewer evidence and MiniMax cost: see Round 14b) | OPEN |
+
+## Round 14b (2026-10-19): recorded attribution
+
+| Item | What | State |
+|---|---|---|
+| 1 Manager runs | `manager-run.js end` records model, runtime, tokens in/out and cost of the run window (rule in SCORING.md) | DONE |
+| 2 Lane | each request records the requesting session's model, tokens, cost (window since its previous request, max 24 h) at enqueue | DONE |
+| 3 Flat plans | MiniMax (registry billing `subscription`): cost null + `plan: flat`, shown as `in plan`, out of $/verified, tokens per verified shown | DONE |
+| 4 Ledger | prefers recorded fields, time-window join only for old records, marked `approximate` | DONE |
+| 5 Game-dispatch | `model` and `prompt_version` carried; `--by prompt_version` | DONE |
+| 6 Reviewer evidence | lane `review` (merge evaluation) and manager `--review pass\|fail` persisted and counted as evidence | DONE |
+| Test | `test/v2-attribution.test.js` | DONE |
 
 ## Round 12 (2026-10-18): the owner never answers about leases or deployments
 
