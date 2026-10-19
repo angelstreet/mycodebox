@@ -1045,6 +1045,7 @@ def cmd_run(a, command):
     finally:
         if hb:
             hb.stop.set()
+            hb.join(timeout=12)     # an in-flight heartbeat must not land after the release
         for s, h in old.items():
             signal.signal(s, signal.SIG_IGN)       # nothing may interrupt the release
         try:
