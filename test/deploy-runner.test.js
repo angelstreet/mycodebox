@@ -23,7 +23,7 @@ function fakeRegistry({ leases = [], deploys = [] } = {}) {
       if (!d || d.state !== 'queued') return { code: 1, stdout: '', stderr: 'not queued' };
       if (st.deploys.some((x) => x.env === d.env && x.state === 'running')) return { code: 3, stdout: '', stderr: 'running' };
       if (st.leases.some((l) => l.env === d.env && l.agent !== 'manager:deploy' && touches(d.scope, l.resource))) return { code: 3, stdout: '', stderr: 'leases' };
-      d.state = 'running'; return { code: 0, stdout: 'running', stderr: '' };
+      d.state = 'running'; if (st.grantLease) st.leases.push({ id: `L${d.id}`, env: d.env, resource: 'server', agent: 'manager:deploy', deploy_id: d.id }); return { code: 0, stdout: 'running', stderr: '' };
     }
     if (sub === 'finish') {
       d.state = args[args.indexOf('--status') + 1]; d.finished = Date.now(); d.tail = stdin;
@@ -546,4 +546,13 @@ test('overall cap ends a deploy that stays queued', async () => {
     const r = await follow(dir, { timeoutMs: 20, maxMs: 120, pid: process.pid }).p;
     assert.equal(r.timedOut, 'cap');
   } finally { process.kill = orig; }
+});
+
+test('the lease granted at deploy start is read back from the list and handed to the child as VPT_LEASE_ID', async () => {
+  const reg = fakeRegistry({ deploys: [dep('7', { scope: 'server', ref: 'main' })] });
+  reg.grantLease = true;
+  const { runner, ran } = make(reg);
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '7').state === 'done');
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=7 VPT_LEASE_ID=L7 bash update_core.sh main --server --skip-leased');
 });

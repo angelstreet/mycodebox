@@ -404,7 +404,16 @@ export function createDeployRunner({
                 continue;
               }                 // resources busy: try a narrower request behind it
               if (r.code !== 0) { log.error?.(`[deploy] start ${d.id}: ${r.stderr}`); continue; }
-              try { const j = JSON.parse(r.stdout); const lid = j?.lease?.id ?? j?.lease_id; if (lid != null) leaseIds.set(d.id, String(lid)); } catch { /* the registry prints text: no lease id */ }
+              // `vpt-lease deploy start` prints the single word "running", never the lease id: read the deploy's own lease
+              // (system lease, deploy_id == d.id) back from `deploy list --json`, so the child can join it (VPT_LEASE_ID)
+              try { const j = JSON.parse(r.stdout); const lid = j?.lease?.id ?? j?.lease_id; if (lid != null) leaseIds.set(d.id, String(lid)); } catch { /* text output */ }
+              if (!leaseIds.has(d.id)) {
+                try {
+                  const l = await reg(['deploy', 'list', '--json']);
+                  const own = (JSON.parse(l.stdout).leases || []).find((x) => x.deploy_id === d.id && x.id != null);
+                  if (own) leaseIds.set(d.id, String(own.id));
+                } catch { /* no lease id: the child claims by deploy_id (service-side join) */ }
+              }
               running.set(env, d.id);
               runDeploy(d, deploys).catch((e) => { running.delete(env); log.error?.('[deploy] run', e.message); });
               break;
