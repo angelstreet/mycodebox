@@ -120,7 +120,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
     envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, ticketIdleMs: 2 * MIN, goneGraceMs: 2 * MIN,
-    snapshotEvery: 200, runningMaxMin: 90, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
+    snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
   };
@@ -936,7 +936,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         // every named host is only device-leased: update_core syncs them without a lease, so the deploy holds nothing
         if (!resources.length) return { ok: true, state: 'running', deploy: deployView(nd), granted: [], leased_hosts: leasedHosts, skipped_hosts: leasedHosts.map((x) => x.host) };
         const lease = makeLease({ env: d.env, resources, mode: 'exclusive', kind: d.scope === 'host' ? 'host' : 'server', agent, client: typeof a.client === 'string' ? a.client : INTERNAL, session: null,
-          purpose: `deploy ${d.id}`, provider: '', shared: false, ttlMin: cfg.runningMaxMin, heartbeatS: null, system: true, deployId: d.id }, t);
+          purpose: `deploy ${d.id}`, provider: '', shared: false, ttlMin: cfg.deployLeaseMin, heartbeatS: null, system: true, deployId: d.id }, t);
         emit({ t: 'grant', lease, at: t });
         return { ok: true, state: 'running', deploy: deployView(nd), lease_id: lease.id, lease: leaseView(S.leases[lease.id]), granted: resources, leased_hosts: leasedHosts, skipped_hosts: leasedHosts.map((x) => x.host) };
       });

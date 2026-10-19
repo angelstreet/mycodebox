@@ -872,3 +872,17 @@ test('server claim vs host leases: kind=host never blocks it; a default (server-
   assert.ok(p5.ok, 'the same claim with --kind host is granted at once');
   void dev;
 });
+
+test('deploy lease TTL is deployLeaseMin (12), not runningMaxMin; the runner-lost timeout still uses runningMaxMin', async () => {
+  const h = harness();
+  const q = await h.svc.deploy.request({ env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true });
+  const s = await h.svc.deploy.start({ id: q.id });
+  assert.equal(s.ok, true);
+  assert.equal(s.lease.ttl_min, 12, 'owner rule: a deploy never holds a lease more than 10 min (+ grace)');
+  const h2 = harness({ deployLeaseMin: 15 });
+  const q2 = await h2.svc.deploy.request({ env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true });
+  assert.equal((await h2.svc.deploy.start({ id: q2.id })).lease.ttl_min, 15, 'configurable');
+  await h.advance(13 * MIN);
+  assert.equal((await h.svc.list()).leases.some((l) => l.deployId), false, 'the lease expires after 13 min');
+  assert.equal((await h.svc.deploy.list({ env: 'env-a' })).deploys.find((x) => x.id === q.id).state, 'running', 'the deploy itself is only failed after runningMaxMin');
+});
