@@ -544,4 +544,40 @@ The router reads `node scripts/v2-ledger.js --json` (groups by model and runtime
 
 The usage ledger has no price for MiniMax, so its cost per verified completion is unknown. Lane and manager records
 without usage rows in their window have model `unknown`. Manager verdicts are optional, so unclosed runs count as
-unverified. Reviewer-pass evidence is not recorded as its own field yet.
+unverified. Reviewer-pass evidence is not recorded as its own field yet. (Closed by Round 14b below for new records.)
+
+## Round 14b: recorded attribution (manager runs, lane requests, flat plans, reviewer evidence)
+
+Round 14 attributed model and cost by joining a time window over `usage-ledger.jsonl` afterwards. Round 14b records the
+attribution when the run or request is made; `v2-ledger.js` prefers it and uses the window only for old records.
+All of it is computed by `usage-window.js` from the ledger rows the usage tailer already prices; there is no second price table.
+
+### Rules
+
+| Source | Recorded where | Rule |
+|---|---|---|
+| manager run | `node scripts/manager-run.js end <id> [--verdict ..] [--review pass\|fail] [--model M] [--session LABEL]` writes `usage` on the end line of `manager-runs.jsonl` | ledger rows whose `cwd` is the run's worktree (or whose `label` is `--session`) in (startedAt, endedAt]; dominant model and runtime, tokens in/out/cache, summed cost. `--model` only fills the model when no row exists (tokens and cost stay unknown) |
+| lane request | `usage` on the request record in `integration/requests.jsonl`, frozen at enqueue | `integrate request` sends the requester's git toplevel (`worktree`, loopback callers only). Rows whose `cwd` is inside it in (from, to] are summed (`attribution: worktree`, per branch); with no worktree or no matching rows, rows labelled with the requesting session (`attribution: session-window`, splits by time when a session works two branches). `to` = request time, `from` = the later of the session's previous request (any branch) and 24 h earlier |
+| game-dispatch | `runs.jsonl` | its own `model` and `prompt_version` (`-` = none); no tokens or cost |
+
+`usage` = `{model, runtime, tokens (in+out+cache), tokensIn, tokensOut, costUsd, plan, rule, (from, to)}`.
+Records written before 14b have no `usage`: the ledger falls back to the Round 14 window join and marks them
+`approximate: true` (`attribution: "time-window"`, `"recorded"` otherwise, `"none"` when nothing matched).
+
+### Flat plans
+
+A model whose registry billing is `subscription` (`orchestration/models.json`, today MiniMax) has no per-token cost.
+Its `costUsd` is `null` with `plan: "flat"`, never 0. The report prints `in plan`, leaves such attempts out of cost and
+`$/verified` (the denominator is the metered verified completions), and shows `tok/verified` (tokens per verified
+completion) for every group. `--json` groups carry `flatPlanAttempts`, `tokens`, `tokensPerVerified`, `approximate`.
+
+### Reviewer evidence
+
+| Source | Reviewer field | Effect on `verified` |
+|---|---|---|
+| lane | `review {pass, source, confidence}` set by the merge evaluation step (merge floor; `jev` or `reasoning` when the merge evaluator reports its decision) | a `pass: false` blocks verification; a pass is named in the evidence |
+| manager | `review: pass\|fail` from `manager-run.js end --review` (the independent reviewer's verdict) | `fail` blocks; `pass` verifies a run with no manager verdict; with an `accepted`/`fixed` verdict it is added to the evidence |
+| game-dispatch | none | evidence stays the completed run with a script result id |
+| V2 task store | reviewer verdicts stay in `v2-score.js` (goal loop), not in this ledger | - |
+
+`node scripts/v2-ledger.js --by prompt_version` groups by the game-dispatch prompt version (other sources group as `none`).

@@ -4,14 +4,18 @@
 // closes it after.
 //
 //   node scripts/manager-run.js start --kind minimax --worktree <abs path> --task <text>
-//   node scripts/manager-run.js end   <id> [--verdict accepted|fixed|rejected]
+//   node scripts/manager-run.js end   <id> [--verdict accepted|fixed|rejected] [--review pass|fail] [--model M] [--session LABEL]
 //
-// Append-only file: `start` writes {id, kind, worktree, task, startedAt, by}; `end` writes {id, endedAt, verdict?}.
+// Append-only file: `start` writes {id, kind, worktree, task, startedAt, by}; `end` writes {id, endedAt, verdict?, review?, usage?}.
+// Round 14b: `end` also records usage = the model, runtime, tokens and cost of the usage-ledger rows with cwd = the run's worktree
+// (or label = --session) inside (startedAt, endedAt], so the run is attributed at its end, not by a later time-window join.
+// A flat-plan model (MiniMax) records plan 'flat' and costUsd null. --review is the independent reviewer's pass/fail.
 // Readers (scorecard.foldRuns) merge by id and treat an unmatched start as still running (endedAt = null).
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { attribute, readLedgerTail } from '../usage-window.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const FILE = join(STATE_DIR, 'manager-runs.jsonl');
@@ -54,8 +58,18 @@ async function cmdEnd(id, opts) {
   const endedAt = Date.now();
   const verdict = opts.verdict || null;
   if (verdict && !['accepted', 'fixed', 'rejected'].includes(verdict)) throw new Error(`--verdict must be one of accepted|fixed|rejected, got "${verdict}"`);
-  await append({ id, endedAt, verdict });
-  process.stdout.write(JSON.stringify({ id, endedAt, verdict }) + '\n');
+  const review = opts.review || null;
+  if (review && !['pass', 'fail'].includes(review)) throw new Error(`--review must be pass or fail, got "${review}"`);
+  const start = (await readLines()).find((l) => l.id === id && l.startedAt);
+  if (!start) throw new Error(`no started run ${id}`);
+  const rows = readLedgerTail(join(STATE_DIR, 'usage-ledger.jsonl')).filter((r) => r.cwd === start.worktree || (opts.session && r.label === opts.session));
+  const a = attribute(rows, start.startedAt, endedAt);
+  // --model covers a run with no usage rows (the model is then known but tokens and cost are not)
+  const model = a?.model || opts.model || null;
+  const usage = a || model ? { model, runtime: a?.agent || (start.kind === 'minimax' ? 'minimax' : null), tokens: a?.tokens ?? null, tokensIn: a?.tokensIn ?? null, tokensOut: a?.tokensOut ?? null, costUsd: a?.costUsd ?? null, plan: a?.plan ?? null, rule: 'ledger rows of the worktree cwd (or --session label) in (startedAt, endedAt]' } : null;
+  const rec = { id, endedAt, verdict, ...(review ? { review } : {}), ...(usage ? { usage } : {}) };
+  await append(rec);
+  process.stdout.write(JSON.stringify(rec) + '\n');
 }
 
 async function cmdList() {
@@ -66,7 +80,7 @@ async function cmdList() {
 
 const HELP = `usage:
   node scripts/manager-run.js start --kind minimax --worktree <abs path> --task <text> [--by owner]
-  node scripts/manager-run.js end   <id> [--verdict accepted|fixed|rejected]
+  node scripts/manager-run.js end   <id> [--verdict accepted|fixed|rejected] [--review pass|fail] [--model M] [--session LABEL]
   node scripts/manager-run.js list
 `;
 

@@ -14,6 +14,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { gitFacts, mergeFloor, isConvention } from './merge-policy.js';
+import { attribute, readLedgerTail } from './usage-window.js';
 
 export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled']);
 export const STATES = Object.freeze(['queued', 'running', ...FINAL]);
@@ -183,8 +184,22 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
 }
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
+// Per-request attribution (Round 14b, docs/v2/SCORING.md): the requesting session's usage-ledger rows labelled with the session
+// in (from, to], where from = the session's previous request (any branch) or 24 h before, whichever is later, and to = the request
+// time. With the requester's worktree (git toplevel, sent by `integrate`) the rows are those whose cwd is inside it (attribution
+// 'worktree', per branch); without it, or when none match, the session-label rows ('session-window', splits by time). Frozen at enqueue.
+export function sessionUsage({ stateDir, session, worktree = null, from, to }) {
+  if (!session && !worktree) return null;
+  const rows = readLedgerTail(path.join(stateDir, 'usage-ledger.jsonl'));
+  const wt = worktree && path.isAbsolute(worktree) ? worktree.replace(/\/+$/, '') : null;
+  let a = wt ? attribute(rows.filter((r) => r.cwd && (r.cwd === wt || r.cwd.startsWith(`${wt}/`))), from, to) : null;
+  const rule = a ? 'worktree' : 'session-window';
+  if (!a && session) a = attribute(rows.filter((r) => r.label === session), from, to);
+  return a && { attribution: rule, model: a.model, runtime: a.agent, tokens: a.tokens, tokensIn: a.tokensIn, tokensOut: a.tokensOut, costUsd: a.costUsd, plan: a.plan, from: new Date(from).toISOString(), to: new Date(to).toISOString(), rule: rule === 'worktree' ? 'ledger rows with cwd inside the requester worktree since the session\'s previous request (max 24h)' : 'session ledger rows since its previous request (max 24h)' };
+}
+
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
-  deploys = null, mergeEval = defaultMergeEval, notify = () => {}, managerItem = () => {}, journal = () => {}, now = () => Date.now(), log = () => {},
+  deploys = null, mergeEval = defaultMergeEval, usage = sessionUsage, notify = () => {}, managerItem = () => {}, journal = () => {}, now = () => Date.now(), log = () => {},
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart() } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
@@ -311,6 +326,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     const ev = await step(r, 'evaluate', async () => {
       const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session, approveInfra: !!r.approvedBy });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
+      // The evaluation is the lane's review: recorded as evidence (source: floor, or jev/reasoning when mergeEval reports its decision).
+      r.review = { pass: e?.verdict === 'merge', source: e?.decision?.source || 'floor', confidence: Number.isFinite(e?.decision?.confidence) ? e.decision.confidence : null, at: iso() };
       return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons, infra: e?.infra?.only ? e.infra.files : null } };
     });
     if (!ev.ok && ev.info.infra) {
@@ -641,14 +658,19 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (!SCOPES.has(deployScope)) throw coded('E_INVALID', `deploy scope must be one of ${[...SCOPES].join(', ')}`);
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
+      const worktree = typeof input.worktree === 'string' && path.isAbsolute(input.worktree) ? input.worktree.slice(0, 500) : null;
       const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.approvedBy === !input.approvedBy);
       if (dup) return { id: dup.id, position: ahead(dup) + 1, repo: key, duplicate: true };
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
       const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
-        deployScope, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
+        deployScope, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
         ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}) };
+      try {
+        const prev = Math.max(0, ...[...reqs.values()].filter((x) => session && x.session === session).map((x) => Date.parse(x.createdAt) || 0));
+        const to = now(); r.usage = usage({ stateDir, session, worktree: r.worktree, from: Math.max(prev, to - 864e5), to });
+      } catch (e) { log('usage attribution failed', e?.message); }
       reqs.set(r.id, r); persist(r);
       if (r.approvedBy) { try { journal({ kind: 'merge', decision_id: `merge-approval-${r.id}`, ts: r.approvedAt, source: 'integration-lane', question: `Approve the infra-path floor reason for ${branch} into ${c.target}?`, chosen: 'approve', approvedBy: r.approvedBy, approvedAt: r.approvedAt, rationale: 'a manager approval skips only the CI/deploy/infra-path floor reason; secrets, migrations, sudoers, units, red tests and conflicts still return the request', request: r.id, repo: key, branch, target: c.target }); } catch (e) { log('journal failed', e?.message); } }
       emit(r, { kind: 'queued', state: 'queued', final: false });
