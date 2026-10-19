@@ -458,6 +458,19 @@ test('deploy/start claims atomically; a claim carrying the running deploy_id joi
   await d.finish({ id: r.id, status: 'failed' });
 });
 
+test('a claim joining the running deploy does not queue behind tickets that were waiting for that deploy (self-deadlock)', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const r = await d.request({ env: 'env-a', scope: 'server', ref: 'r', agent: 'manager:deploy', approved: true });
+  const w = await h.claim('waiter', 'server', { wait: 'ticket' });           // queued behind the pending deploy
+  assert.equal(w.ticket.state, 'waiting');
+  await d.start({ id: r.id });
+  const j = await h.claim('manager:deploy', 'server', { deploy_id: r.id, wait: 'ticket' });
+  assert.equal(j.ok, true);
+  assert.ok(j.lease, 'granted at once, not a ticket behind the waiter');
+  await d.finish({ id: r.id, status: 'done' });
+});
+
 test('running deploy fails after 90 minutes without finish; queued expires after its ttl', async () => {
   const h = harness();
   const d = h.svc.deploy;

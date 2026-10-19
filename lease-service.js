@@ -617,7 +617,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
           return fail('E_DEPLOY_PENDING', `deploy ${d.id} (${d.state}) on ${req.env}: scope=${d.scope} ref=${d.ref} requested by ${d.agent}; wait for it, then claim again`, { deploy: deployView(d), deploys: pend.map(deployView) });
         }
         const holders = heldConflicts(req);
-        const ahead = aheadOf(req, null);
+        const ahead = req.deployId ? [] : aheadOf(req, null);     // a joiner of the running deploy holds its resource already: tickets that waited for the deploy must not queue it behind themselves (self-deadlock)
         let blocking = ahead;
         if (!holders.length && ahead.length) {
           passed = ahead.filter((tk) => canPass(req, tk, t));
