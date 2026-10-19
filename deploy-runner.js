@@ -154,7 +154,7 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind
 
 export function createDeployRunner({
   stateDir, alert = () => {}, onChange = () => {}, isEnabled = () => false,
-  registry = defaultRegistry(), run = defaultRun, timeoutMs = 45 * 60 * 1000, pollMs = 30000,
+  registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, pollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
 } = {}) {
   const envsFile = join(stateDir, 'deploy-envs.json');

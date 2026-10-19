@@ -766,7 +766,7 @@ const leaseSource = createLeaseSource({ authority: leaseAuthority, legacy: { sto
 const leaseTracker = createSessionTracker({ source: leaseSource });
 const deployRunner = createDeployRunner({
   stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn, registry: leaseSource.deployRegistry(), catchUp: leaseAuthority !== 'central',
-  pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 45 * 60 * 1000),
+  pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 11 * 60 * 1000),
   onChange: (d) => broadcastStatus({ type: 'deploys', deploys: d }),
 });
 // Lease <-> session binding (lease-watch.js): lease:* manager events, release of ended holders, narrow of idle server leases.
