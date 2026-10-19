@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS } from '../deploy-runner.js';
+import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, remoteLeaseCmd, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS } from '../deploy-runner.js';
 
 // In-memory registry that mimics `vpt-lease deploy ...` (start = atomic check against leases + one running per env).
 function fakeRegistry({ leases = [], deploys = [] } = {}) {
@@ -486,4 +486,20 @@ test('lease freed: a host-kind lease that a full deploy skips is never tracked',
   reg.leases.length = 0;
   await runner.tick();
   assert.ok(!alerts.some(([k]) => k.includes('lease-freed')));
+});
+
+test('remoteLeaseCmd: only approve uses the owner token file', () => {
+  assert.equal(remoteLeaseCmd(['deploy', 'approve', 'ab12']), 'VPT_LEASE_TOKEN_FILE=~/.config/vpt-lease/owner-token ~/bin/vpt-lease deploy approve ab12');
+  for (const a of [['deploy', 'list', '--json'], ['deploy', 'start', 'ab12'], ['deploy', 'cancel', 'ab12'], ['deploy', 'finish', 'ab12']]) assert.ok(!remoteLeaseCmd(a).includes('owner-token'), a.join(' '));
+});
+
+test('a failed auto-approve is logged with its exit and stderr, and the approval alert still fires', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { state: 'awaiting-approval' })] });
+  const inner = reg.fn; const errs = []; const alerts = [];
+  const r = createDeployRunner({ stateDir: mkdtempSync(join(tmpdir(), 'dr-')), isEnabled: () => true, catchUp: false,
+    registry: async (a, o) => (a[1] === 'approve' ? { code: 1, stdout: '', stderr: 'E_AUTH: this route needs an owner client' } : inner(a, o)),
+    alert: (k) => alerts.push(k), log: { info() {}, error: (m) => errs.push(m) } });
+  await r.tick(); await r.tick();
+  assert.ok(errs.some((m) => /auto-approve 1 failed \(exit 1\).*owner client/.test(m)), errs.join('|'));
+  assert.equal(reg.deploys[0].state, 'awaiting-approval');
 });
