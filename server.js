@@ -124,7 +124,7 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
-import { createIntegrationLane } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
+import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
@@ -2330,8 +2330,11 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
     wait: (id) => integrationHooks.deploys.wait(id),
     find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },
   notify: (r, e) => integrationHooks.notify(r, e), log: (...a) => console.error('[integration]', ...a),
-  // a branch the floor returned only for infra paths becomes a manager item (no owner push); a manager approval is journaled with the merge decisions
-  managerItem: (it) => { managerEvents.record({ key: `merge:${it.id}:manager-item`, title: `${it.repo}: ${it.branch} needs infra approval`, body: String(it.text).slice(0, 1500), url: '/', priority: 'default', session: it.session || undefined }).catch((e) => console.error('[integration] manager item', e.message)); },
+  // deploy.kind 'self': safe-restart.sh is launched via the tmux server (outside this unit) as the last step, after the request is done
+  restart: createTmuxRestart({ tmux: TMUX }),
+  // a merge item (infra paths, no owner push) is mapped to a manager event; other items (self-deploy refusals, restart errors) arrive as ready events
+  managerItem: (it) => { const ev = it.kind === 'merge' ? { key: `merge:${it.id}:manager-item`, title: `${it.repo}: ${it.branch} needs infra approval`, body: String(it.text).slice(0, 1500), url: '/', priority: 'default', session: it.session || undefined } : it;
+    Promise.resolve(managerEvents.record(ev)).catch((e) => console.error('[integration] manager item', e.message)); },
   journal: (rec) => { appendFile(join(STATE_DIR, 'merge-decisions.jsonl'), `${JSON.stringify(rec)}\n`, (e) => { if (e) console.error('[integration] journal', e.message); }); } });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,

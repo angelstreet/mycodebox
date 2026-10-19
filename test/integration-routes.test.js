@@ -197,6 +197,29 @@ test('CLI: returned exits 3 with the reason and the tail; CI red exits 4; unreac
   } finally { b2.close(); }
 });
 
+test('CLI: wait retries an unreachable service (a self-deploy restart) until the timeout, then exits 5', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const b = await boot(w);
+  const c = await cliWorld(w, b);
+  const q = await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'feat' } });
+  const id = q.json.id;
+  await b.lane.wait(id, 30000);
+  const port = Number(new URL(b.base).port);
+  await new Promise((r) => b.server.close(r));
+  // down at first, back on the same port a moment later: the wait reports the outcome instead of quitting
+  const pending = cli(['wait', id, '--timeout', '1'], { ...c, env: { ...c.env, INTEGRATE_RETRY_SEC: '1' } });
+  await new Promise((r) => setTimeout(r, 1500));
+  const routes = createIntegrationRoutes({ lane: b.lane, stateDir: b.stateDir, isLoopback, reporterOk: (t) => t === REPORTER, sessionCwd: async () => null, remoteResolve: () => null });
+  const again = http.createServer((req, res) => { routes.handle(req, res).then((ok) => { if (!ok) { res.writeHead(404); res.end(); } }); });
+  await new Promise((r) => again.listen(port, '127.0.0.1', r));
+  try {
+    const r = await pending;
+    assert.equal(r.code, 0, r.stdout + r.stderr); assert.match(r.stderr, /unreachable .*retrying/); assert.match(r.stdout, /merged feat/);
+  } finally { await new Promise((r) => again.close(r)); }
+  const gone = await cli(['wait', id, '--timeout', '0'], c);
+  assert.equal(gone.code, 5); assert.match(gone.stderr, /unreachable/);
+});
+
 test('CLI on the codebox: no config, loopback url + the reporter token file', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
   const b = await boot(w);
