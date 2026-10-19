@@ -47,7 +47,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | V2 leases, incidents, system operations | `orchestration/lease-authority.js`, `incidents.js`, `telemetry.js`, `system-ops.js` | `test/v2-lease-authority*.test.js`, `test/v2-system-ops*.test.js` |
 | V2 HTTP routes and Tasks view | `orchestration/http.js`, `public/tasks-view.js` | `test/v2-http.test.js`, `test/v2-tasks-view.test.js`; browser: `scripts/v2-ui-check.js` (dev only) |
 | V2 server wiring (engine assembly, scheduler, server integration hook) | `orchestration/v2-runtime.js` (imported by `server.js` only with `GHOSTY_V2=1`), `orchestration/v2-integrate.js` | `test/v2-server-wiring.test.js` (boots the real `server.js` as a child) |
-| V2 scoring report, scorecard, tool score, proposals | `scripts/v2-score.js`, `orchestration/scorecard.js`, `orchestration/proposals.js`, [SCORING](v2/SCORING.md) | `test/v2-score.test.js`, `test/v2-scorecard.test.js` |
+| V2 scoring report, scorecard, tool score, proposals | `scripts/v2-score.js`, `scripts/v2-ledger.js`, `orchestration/scorecard.js`, `orchestration/proposals.js`, [SCORING](v2/SCORING.md) | `test/v2-score.test.js`, `test/v2-ledger.test.js`, `test/v2-scorecard.test.js` |
 | V2 integration agent and delivery bridge | `orchestration/integration-controller.js`, `integration-queue.js`, `ci-gates.js`, `delivery.js` | `test/v2-integration*.test.js`, `test/v2-delivery*.test.js` |
 | V2 acceptance and live smoke (dev only) | `scripts/v2-acceptance.js`, `scripts/v2-live-smoke.js`, [ACCEPTANCE](v2/ACCEPTANCE.md) | `test/v2-acceptance-*.test.js`, shared fixture `test/fixtures/v2-world.js` |
 | Documentation links | `README.md`, `docs/` | `test/v2-docs-links.test.js` |
