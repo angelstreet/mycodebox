@@ -72,7 +72,7 @@ export function decideCrashResume({ state, consecutiveNoAgent = 0, managerSessio
   if (scan.cwdGone || /\(deleted\)\s*$/.test(state.cwd || '')) return { ok: false, reason: 'cwd-gone', crash };
   if (lastResumeAt != null && now - lastResumeAt < intervalMs) return { ok: false, reason: 'throttled' };
   const command = buildCrashResumeCommand({ base: state.base, crash, model: state.model, claudeSessionId: state.claudeSessionId });
-  return command ? { ok: true, command, crash } : { ok: false, reason: 'missing-resume-data' };
+  return command ? { ok: true, command, crash } : { ok: false, reason: 'missing-resume-data', crash };
 }
 
 // Claude Code session id of a crashed job, from its transcripts: newest *.jsonl under ~/.claude/projects/<cwd with / and . as ->
