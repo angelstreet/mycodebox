@@ -42,13 +42,19 @@ export const mergeable = (d, x) => x.id !== d.id && x.env === d.env && x.state =
   && (!d.hosts?.length || (x.scope === 'host' && !!x.hosts?.length && x.hosts.every((h) => d.hosts.includes(h))));
 export const VERSION_RE = /\bversion\s*[:=]?\s*(v?\d+\.\d+\.\d+[\w.+-]*)/i;
 
+// Central lease service: approving a deploy needs an OWNER client (E_AUTH "approving a deploy needs an owner client",
+// exit 1), the normal token is refused. Runner on = the owner's standing approval, so approve (only approve) runs with
+// the owner token file on proxmox. Legacy mode ignores the token. Never the owner token for anything else.
+export const OWNER_TOKEN_FILE = '~/.config/vpt-lease/owner-token';
+export const remoteLeaseCmd = (args) => `${args[0] === 'deploy' && args[1] === 'approve' ? `VPT_LEASE_TOKEN_FILE=${OWNER_TOKEN_FILE} ` : ''}~/bin/vpt-lease ${args.map(shq).join(' ')}`;
+
 export function defaultRegistry() {
   const custom = process.env.DEPLOY_REGISTRY;
   const argvPrefix = custom ? JSON.parse(custom) : null;
   // returns {code, stdout, stderr}
   return (args, { stdin, timeout = 15000 } = {}) => new Promise((resolve) => {
     const [cmd, ...pre] = argvPrefix || ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', 'proxmox'];
-    const argv = argvPrefix ? [...pre, ...args] : [...pre, `~/bin/vpt-lease ${args.map(shq).join(' ')}`];
+    const argv = argvPrefix ? [...pre, ...args] : [...pre, remoteLeaseCmd(args)];
     const child = execFile(cmd, argv, { timeout, maxBuffer: 4 << 20 }, (err, stdout, stderr) =>
       resolve({ code: err ? (typeof err.code === 'number' ? err.code : 255) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
     if (stdin != null) child.stdin.end(stdin); else child.stdin.end();
@@ -339,6 +345,7 @@ export function createDeployRunner({
           if (d.state === 'awaiting-approval' && isEnabled()) {
             const r = await reg(['deploy', 'approve', d.id]);
             if (r.code === 0) { d.state = 'queued'; log.info?.(`[deploy] auto-approved ${d.id} (runner on)`); continue; }
+            log.error?.(`[deploy] auto-approve ${d.id} failed (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(0, 200)}`);
           }
           if (d.state === 'awaiting-approval' && !seenAwaiting.has(d.id)) {
             seenAwaiting.add(d.id);
