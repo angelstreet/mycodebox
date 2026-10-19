@@ -138,7 +138,7 @@ import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createIntegrationNotify } from './integration-notify.js';
-import { createCrashResumer } from './crash-resume.js';
+import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
@@ -723,6 +723,7 @@ const crashResumer = createCrashResumer({
   sendEnter: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']),
   managerSessions: loadManagerSessions,
   record: (e) => managerEvents.record(e),
+  resolveSessionId: ({ name, cwd }) => findClaudeSessionId({ name, cwd, projectsDir: join(homedir(), '.claude', 'projects'), fs: { readdir, stat, readTail: async (f, n) => { const h = await openFile(f); try { const { size } = await h.stat(); const len = Math.min(size, n); const b = Buffer.alloc(len); await h.read(b, 0, len, size - len); return b.toString('utf8'); } finally { await h.close(); } } } }),
 });
 const crashResumeEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).crashResume !== false; } catch { return true; } };
 // Two-tier push (MANAGER.md section 6): interrupts at once, the rest as one digest per pushDigestMinutes while awake.
@@ -1109,7 +1110,7 @@ async function pollOnce() {
     const agent = ag ? ag.agent : (SHELLS.has(p.cmd) || p.cmd === 'sleep' || !p.cmd ? 'bash' : 'other');
     const agentCmd = ag ? ag.cmd : (p.cmd || 'bash');
     const known = crashResumeKnown.get(s.name) || {};
-    crashResumeStates.set(s.name, { name: s.name, tmuxName: s.name, lines: plain, agent: agentFromTree(p.pid, table)?.agent || null,
+    crashResumeStates.set(s.name, { name: s.name, tmuxName: s.name, cwd: p.cwd, lines: plain, agent: agentFromTree(p.pid, table)?.agent || null,
       shellForeground: SHELLS.has(p.cmd), scriptBusy: false, input: '', closed: /(?:^|\s)(?:\/exit|\^C)\s*$/.test(tail.at(-1) || ''), base: known.base || launch.commands[ag?.agent || 'claude'], model: known.model || null, claudeSessionId: known.claudeSessionId || null });
 
     let state = 'idle';
