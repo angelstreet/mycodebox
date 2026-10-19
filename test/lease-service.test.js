@@ -813,3 +813,49 @@ test('a catch-up that defers again queues a strict catch-up that waits for the h
   assert.ok(f.catchup);
   assert.equal((await d.start({ id: f.catchup, skip_leased: true })).code, 'E_HELD', 'strict: waits for the device lease');
 });
+
+// ---- queue: grant per conflicting resource, never strict FIFO across disjoint resources ------------------------------------
+test('tickets on disjoint resources are granted out of order; conflicting tickets stay FIFO', async () => {
+  const h = harness();
+  const l1 = (await h.claim('x1', 'host-1/device1')).lease;
+  const l2 = (await h.claim('x2', 'host-2/device1')).lease;
+  const t1 = (await h.claim('w1', 'host:host-1', { wait: 'ticket' })).ticket;   // older, waits for l1
+  const t2 = (await h.claim('w2', 'host:host-2', { wait: 'ticket' })).ticket;   // younger, disjoint from t1
+  const t3 = (await h.claim('w3', 'host:host-2', { wait: 'ticket' })).ticket;   // conflicts with t2: behind it
+  assert.equal(t1.position, 1); assert.equal(t2.position, 1); assert.equal(t3.position, 2);
+  assert.deepEqual(t3.behind, [t2.id]);
+  await h.svc.release({ id: l2.id });
+  assert.equal((await h.svc.ticket(t2.id)).ticket.state, 'granted', 'the younger disjoint ticket does not wait for t1');
+  assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'waiting');
+  assert.equal((await h.svc.ticket(t3.id)).ticket.state, 'waiting', 'a conflicting younger ticket stays behind t2');
+  await h.svc.release({ id: l1.id });
+  assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'granted');
+});
+
+test('an earlier conflicting ticket is never starved by a younger disjoint-then-conflicting stream', async () => {
+  const h = harness();
+  const l1 = (await h.claim('x1', 'host-1/device1')).lease;
+  const big = (await h.claim('big', ['host:host-1', 'host:host-2'], { wait: 'ticket' })).ticket;
+  const small = (await h.claim('small', 'host:host-2', { wait: 'ticket' })).ticket;    // conflicts with big on host-2 although host-2 is free
+  assert.equal(small.state, 'waiting'); assert.deepEqual(small.behind, [big.id]);
+  await h.svc.release({ id: l1.id });
+  assert.equal((await h.svc.ticket(big.id)).ticket.state, 'granted', 'the earlier ticket goes first');
+  assert.equal((await h.svc.ticket(small.id)).ticket.state, 'waiting');
+});
+
+test('server claim vs host leases: kind=host never blocks it; a default (server-kind) host ticket does, and drags later server-kind host claims behind it', async () => {
+  const h = harness();
+  const dev = (await h.claim('dev', 'host-1/device1', { kind: 'host' })).lease;       // device lease on a Pi, kind host
+  const free = await h.claim('srv', 'server');
+  assert.ok(free.ok, 'a server claim is not blocked by a kind=host device lease');
+  await h.svc.release({ id: free.lease.id });
+  const hd = (await h.claim('hd', 'host:host-1', { wait: 'ticket' })).ticket;          // default kind = server
+  assert.equal(hd.kind, 'server');
+  const srv = (await h.claim('srv2', 'server', { wait: 'ticket' })).ticket;
+  assert.deepEqual(srv.behind, [hd.id], 'server ticket is behind the server-kind host ticket');
+  const p4 = (await h.claim('p4', 'host:host-4', { wait: 'ticket' })).ticket;
+  assert.deepEqual(p4.behind, [srv.id], 'a server-kind claim on another host is behind the server ticket');
+  const p5 = await h.claim('p5', 'host:host-5', { kind: 'host' });
+  assert.ok(p5.ok, 'the same claim with --kind host is granted at once');
+  void dev;
+});

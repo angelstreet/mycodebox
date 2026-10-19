@@ -386,11 +386,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const latestOf = (virt) => Math.max(now(), ...heldConflicts(virt).map((b) => b.expires));
   const aheadOf = (virt, tk) => waitingTickets(virt.env).filter((o) => (!tk || o.id !== tk.id) && (!tk || byQueue(o, tk) < 0) && leasesConflict(virt, o));
   function ticketView(tk) {
-    const out = { id: tk.id, state: tk.state, priority_since: iso(tk.created), env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null };
+    const out = { id: tk.id, state: tk.state, priority_since: iso(tk.created), env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null, kind: tk.kind };
     if (tk.state === 'waiting') {
       const ahead = aheadOf(tk, tk);
       const t = etaOf(tk, ahead);
-      Object.assign(out, { position: ahead.length + 1, priority_since: iso(tk.created), eta: iso(t), eta_latest: iso(latestOf(tk)), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: heldConflicts(tk).map(leaseView) });
+      Object.assign(out, { behind: ahead.map((a) => a.id), position: ahead.length + 1, priority_since: iso(tk.created), eta: iso(t), eta_latest: iso(latestOf(tk)), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: heldConflicts(tk).map(leaseView) });
     }
     if (tk.state === 'granted' && S.leases[tk.leaseId]) out.lease = leaseView(S.leases[tk.leaseId]);
     if (tk.state === 'granted') out.lease_id = tk.leaseId;

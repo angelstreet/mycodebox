@@ -65,6 +65,9 @@ export function defaultRegistry() {
 // `<deploys>/<id>.run` through a file descriptor, never a pipe through ghosty. A tiny sh wrapper writes its exit code
 // to `<id>.exit` (atomic mv); we write the wrapper pid to `<id>.pid`. A restarted runner re-adopts from these files:
 // they must not be deleted. systemd must also leave the child alone on stop: the unit needs KillMode=process.
+// update_core prints one of these once it holds its lease (or when it needs none): from then on the hold clock runs.
+const HOLD_RE = /^(holding lease \S+ on |restart of .* only: no lease needed|Windows-only deploy: nothing to claim|every requested host is leased by another agent)/;
+const DEFAULT_MAX_MS = 3 * 60 * 60 * 1000;
 const WRAP = '"$@"; rc=$?; echo $rc > "$0.tmp" && mv "$0.tmp" "$0"; exit $rc';
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 const pidFile = (dir, id) => join(dir, `${id}.pid`);
@@ -74,10 +77,13 @@ const nap = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Follows a detached deploy: copies new bytes of `<id>.run` to onLine, until the exit file appears or the pid is gone.
 // Resolves {code, timedOut}. The consumed offset is kept in `<id>.off` so an adopting runner does not repeat lines.
-export function followDetached(dir, id, { onLine, timeoutMs, pollMs = 1000, pid }) {
+// timeoutMs caps the HOLD (the clock starts when update_core reports it holds the lease, see HOLD_RE); maxMs caps the whole
+// deploy including the wait in the registry queue. Resolves timedOut = 'hold' | 'cap' | false.
+export function followDetached(dir, id, { onLine: emit, timeoutMs, maxMs = DEFAULT_MAX_MS, pollMs = 1000, pid }) {
   return new Promise((resolve) => {
-    let off = 0, buf = '', timedOut = false, done = false, busy = false, t = null;
+    let off = 0, buf = '', timedOut = false, done = false, busy = false, t = null, holdStart = null;
     const started = Date.now();
+    const onLine = (l) => { if (holdStart == null && HOLD_RE.test(l)) holdStart = Date.now(); emit(l); };
     const runFile = join(dir, `${id}.run`), offFile = join(dir, `${id}.off`);
     const drain = async () => {
       let fh;
@@ -104,20 +110,29 @@ export function followDetached(dir, id, { onLine, timeoutMs, pollMs = 1000, pid 
           done = true; clearInterval(t);
           return resolve({ code, timedOut });
         }
-        if (!timedOut && Date.now() - started > timeoutMs) {
-          timedOut = true;
+        const over = holdStart != null ? (Date.now() - holdStart > timeoutMs ? 'hold' : null) : (Date.now() - started > maxMs ? 'cap' : null);
+        if (!timedOut && over) {
+          timedOut = over;
           try { process.kill(-pid, 'SIGTERM'); } catch {}
           setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} }, 5000).unref();
         }
       } finally { busy = false; }
     };
-    readInt(offFile).then((n) => { off = n || 0; t = setInterval(check, pollMs); check(); });
+    readInt(offFile).then(async (n) => {
+      off = n || 0;
+      // re-adopted deploy: the lease may have been granted before the restart; the hold clock then restarts now (at most the downtime too generous)
+      if (off > 0) { try { if (HOLD_RE.test(await readFile(runFile, 'utf8'))) holdStart = Date.now(); } catch {} }
+      t = setInterval(check, pollMs); check();
+    });
   });
 }
 
 // Runs the deploy command. Streams every output line to onLine; resolves {code, timedOut}.
 // kind 'deploy' is detached (survives a restart, see above); the short health check stays a plain piped child.
-function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind = 'deploy', id = '', dir, followPollMs }) {
+function defaultRun(env, { ref, scope, flags, remoteCmd, onLine: emit, timeoutMs, maxMs = DEFAULT_MAX_MS, kind = 'deploy', id = '', dir, followPollMs }) {
+  let holdTimer = null, capTimer = null;
+  const onLine = kind === 'deploy' ? (l) => { if (!holdTimer && HOLD_RE.test(l)) { clearTimeout(capTimer); holdTimer = setTimeout(() => stop('hold'), timeoutMs); } emit(l); } : emit;
+  let stop = () => {};
   if (kind === 'deploy' && dir) {
     mkdirSync(dir, { recursive: true });
     const argv = env.argv || ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', env.ssh, remoteCmd];
@@ -132,7 +147,7 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind
     return new Promise((resolve) => {
       child.on('error', (e) => { onLine(`spawn error: ${e.message}`); resolve({ code: 255, timedOut: false }); });
       if (!child.pid) return;
-      writeFile(pidFile(dir, id), String(child.pid)).then(() => followDetached(dir, id, { onLine, timeoutMs, pollMs: followPollMs, pid: child.pid })).then(resolve);
+      writeFile(pidFile(dir, id), String(child.pid)).then(() => followDetached(dir, id, { onLine: emit, timeoutMs, maxMs, pollMs: followPollMs, pid: child.pid })).then(resolve);
     });
   }
   return new Promise((resolve) => {
@@ -143,18 +158,21 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine, timeoutMs, kind
       child = spawn('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', env.ssh, remoteCmd], { stdio: ['ignore', 'pipe', 'pipe'] });
     }
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000).unref(); }, timeoutMs);
+    stop = (why) => { timedOut = why; child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000).unref(); };
+    // a health check is not a deploy: its timeout is the whole run; a deploy's is armed by the 'holding lease' line
+    const timer = kind === 'deploy' ? null : setTimeout(() => stop('hold'), timeoutMs);
+    if (kind === 'deploy') capTimer = setTimeout(() => stop('cap'), maxMs);
     let buf = '';
     const feed = (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { onLine(buf.slice(0, i)); buf = buf.slice(i + 1); } };
     child.stdout.on('data', feed); child.stderr.on('data', feed);
-    child.on('error', (e) => { clearTimeout(timer); onLine(`spawn error: ${e.message}`); resolve({ code: 255, timedOut }); });
-    child.on('close', (code) => { clearTimeout(timer); if (buf) onLine(buf); resolve({ code: code ?? 255, timedOut }); });
+    child.on('error', (e) => { clearTimeout(timer); clearTimeout(capTimer); clearTimeout(holdTimer); onLine(`spawn error: ${e.message}`); resolve({ code: 255, timedOut }); });
+    child.on('close', (code) => { clearTimeout(timer); clearTimeout(capTimer); clearTimeout(holdTimer); if (buf) onLine(buf); resolve({ code: code ?? 255, timedOut }); });
   });
 }
 
 export function createDeployRunner({
   stateDir, alert = () => {}, onChange = () => {}, isEnabled = () => false,
-  registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, pollMs = 30000,
+  registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, pollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
 } = {}) {
   const envsFile = join(stateDir, 'deploy-envs.json');
@@ -290,9 +308,10 @@ export function createDeployRunner({
     let status = 'failed', rc = null, timedOut = false;
     try {
       const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id}${leaseIds.get(d.id) ? ` VPT_LEASE_ID=${shq(leaseIds.get(d.id))}` : ''} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
-      if (adopt) ({ code: rc, timedOut } = await follow(logDir, d.id, { onLine, timeoutMs, pollMs: followPollMs, pid: adopt.pid }));
-      else ({ code: rc, timedOut } = await run(envCfg, { dir: logDir, followPollMs, id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs }));
-      if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min, killed`);
+      if (adopt) ({ code: rc, timedOut } = await follow(logDir, d.id, { onLine, timeoutMs, maxMs, pollMs: followPollMs, pid: adopt.pid }));
+      else ({ code: rc, timedOut } = await run(envCfg, { dir: logDir, followPollMs, id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs, maxMs }));
+      if (timedOut === 'cap') onLine(`# TIMEOUT: still not finished ${Math.round(maxMs / 60000)} min after start (queue wait included), killed`);
+      else if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min holding the lease, killed`);
       else onLine(`# update_core exit ${rc}`);
       status = rc === 0 && !timedOut ? 'done' : 'failed';
       if (status === 'done') {

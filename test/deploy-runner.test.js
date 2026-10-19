@@ -503,3 +503,47 @@ test('a failed auto-approve is logged with its exit and stderr, and the approval
   assert.ok(errs.some((m) => /auto-approve 1 failed \(exit 1\).*owner client/.test(m)), errs.join('|'));
   assert.equal(reg.deploys[0].state, 'awaiting-approval');
 });
+
+// ---- hold clock: the timeout measures the lease HOLD, not the wait in the registry queue ----------------------------------
+import { followDetached } from '../deploy-runner.js';
+import { mkdtempSync as mkd, writeFileSync as wf, appendFileSync as af } from 'node:fs';
+import { tmpdir as tmp } from 'node:os';
+import { join as pj } from 'node:path';
+
+const follow = (dir, opts) => { const lines = []; const p = followDetached(dir, 'd1', { onLine: (l) => lines.push(l), pollMs: 10, pid: process.pid, ...opts }); return { p, lines }; };
+
+test('queued deploy is not killed by the hold timeout; killed maxMs after start when never granted', async () => {
+  const dir = mkd(pj(tmp(), 'dr-'));
+  wf(pj(dir, 'd1.run'), 'busy: queueing for the lease (vpt-lease claim --wait)\n');
+  // pid = this test process: followDetached would SIGTERM -pid on a timeout; use a pid whose group kill fails harmlessly
+  const { p } = follow(dir, { timeoutMs: 50, maxMs: 400, pid: 2 ** 22 + 1 });
+  const r = await Promise.race([p, sleep(200).then(() => 'still-waiting')]);
+  assert.equal(r, 'still-waiting', 'a 50 ms hold timeout must not fire while queued');
+});
+
+test('hold clock starts at the "holding lease" line', async () => {
+  const dir = mkd(pj(tmp(), 'dr-'));
+  wf(pj(dir, 'd1.run'), 'busy: queueing\n');
+  const killed = [];
+  const orig = process.kill;
+  process.kill = (pid, sig) => { if (pid < 0) { killed.push(sig); wf(pj(dir, 'd1.exit'), '143'); return true; } return orig(pid, sig); };
+  try {
+    const { p } = follow(dir, { timeoutMs: 150, maxMs: 60000, pid: process.pid });
+    await sleep(300);                                   // queued for 2x the hold timeout: still alive
+    assert.deepEqual(killed, []);
+    af(pj(dir, 'd1.run'), 'holding lease abc on node1-vpt (server) for the deploy\n');
+    const r = await p;
+    assert.equal(r.timedOut, 'hold'); assert.ok(killed.includes('SIGTERM'));
+  } finally { process.kill = orig; }
+});
+
+test('overall cap ends a deploy that stays queued', async () => {
+  const dir = mkd(pj(tmp(), 'dr-'));
+  wf(pj(dir, 'd1.run'), 'busy: queueing\n');
+  const orig = process.kill;
+  process.kill = (pid, sig) => { if (pid < 0) { wf(pj(dir, 'd1.exit'), '143'); return true; } return orig(pid, sig); };
+  try {
+    const r = await follow(dir, { timeoutMs: 20, maxMs: 120, pid: process.pid }).p;
+    assert.equal(r.timedOut, 'cap');
+  } finally { process.kill = orig; }
+});
