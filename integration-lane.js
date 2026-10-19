@@ -492,7 +492,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     if (ci.dirty?.length) return selfFail(r, 'deploy_refused', `deploy refused: the live checkout ${live} has uncommitted changes to tracked files: ${ci.dirty.slice(0, 10).join(', ')}${ci.dirty.length > 10 ? ', …' : ''}`, chk.tail);
     if (!chk.ok) return selfFail(r, 'deploy_refused', ci.head ? `deploy refused: the live checkout ${live} is on ${ci.branch || 'a detached HEAD'}, not ${c.target}` : `deploy refused: ${chk.tail || 'cannot read the live checkout'}`, chk.tail);
     sd.prevSha = prior || ci.head;
-    sd.rollback = `git -C ${live} reset --hard ${short(sd.prevSha)} && cd ${live} && scripts/safe-restart.sh`;
+    // Never reset --hard: detach the live checkout on the previous sha, then revert the merge on the target through the lane.
+    sd.rollback = `git -C ${live} checkout --detach ${short(sd.prevSha)} && cd ${live} && scripts/safe-restart.sh; then revert on ${c.target} through the lane: git revert -m 1 ${short(r.mergeSha)}`;
     persist(r);
 
     const pull = await step(r, 'deploy-pull', async () => {
