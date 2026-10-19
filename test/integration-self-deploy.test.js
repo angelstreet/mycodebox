@@ -11,7 +11,8 @@ import { integrationText } from '../integration-notify.js';
 import { makeWorld } from './helpers-lane.js';
 import { git, commit } from './helpers-git.js';
 
-const BASE = { 'server.js': 'export const up = 1;\n', 'VERSION.txt': '1\n' };
+// package.json type=module like the real repo: node 23.6's --check exits 0 on a broken ES module without it (module-syntax detection)
+const BASE = { 'server.js': 'export const up = 1;\n', 'VERSION.txt': '1\n', 'package.json': '{"type":"module"}\n' };
 function world() {
   const w = makeWorld({ name: 'self-repo', base: BASE });
   w.live = join(w.root, 'live');
