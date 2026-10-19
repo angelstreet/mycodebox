@@ -171,7 +171,7 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine: emit, timeoutMs
 }
 
 export function createDeployRunner({
-  stateDir, alert = () => {}, onChange = () => {}, isEnabled = () => false,
+  stateDir, alert = () => {}, managerItem = null, onChange = () => {}, isEnabled = () => false,
   registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, pollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
 } = {}) {
@@ -368,7 +368,10 @@ export function createDeployRunner({
           }
           if (d.state === 'awaiting-approval' && !seenAwaiting.has(d.id)) {
             seenAwaiting.add(d.id);
-            if (!first) alert(`deploy:${d.id}:approve`, { title: `deploy needs approval: ${d.env} ${d.scope}`, body: `${d.ref} requested by ${d.agent}${d.purpose ? ` — ${d.purpose}` : ''}`, priority: 'high', ntfyTags: 'warning', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
+            // OWNER_DECISIONS §19: an approval is never an owner tap. With a managerItem hook the request goes to the manager's feed
+            // (the manager evaluates and approves it); without one the old owner alert stays.
+            if (!first && managerItem) managerItem({ key: `deploy:${d.id}:manager-item`, title: `deploy awaiting approval (runner off): ${d.env} ${d.scope}`, body: `${d.ref} requested by ${d.agent}${d.purpose ? ` — ${d.purpose}` : ''}; manager: evaluate and approve`, url: '/?deploys=1', priority: 'default' });
+            else if (!first) alert(`deploy:${d.id}:approve`, { title: `deploy needs approval: ${d.env} ${d.scope}`, body: `${d.ref} requested by ${d.agent}${d.purpose ? ` — ${d.purpose}` : ''}`, priority: 'high', ntfyTags: 'warning', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0);
           }
         }
         first = false;

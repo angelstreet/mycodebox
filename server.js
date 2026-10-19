@@ -772,7 +772,9 @@ const leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), now: D
 const leaseSource = createLeaseSource({ authority: leaseAuthority, legacy: { store: leaseStore, registry: defaultDeployRegistry() }, getService: () => leaseService });
 const leaseTracker = createSessionTracker({ source: leaseSource });
 const deployRunner = createDeployRunner({
-  stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn, registry: leaseSource.deployRegistry(), catchUp: leaseSource.authority() !== 'central',
+  stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn,
+  // runner off + a request without --approved: a manager item (feed event, no owner push), never an owner tap (§19); `opsToManager: false` reverts
+  managerItem: (e) => { let on = true; try { on = JSON.parse(readFileSync(managerConfigFile, 'utf8')).opsToManager !== false; } catch { /* default on */ } if (!on) return alert(e.key.replace(/manager-item$/, 'approve'), { ...e, priority: 'high', ntfyTags: 'warning' }, 0); managerEvents.record({ ...e, at: new Date().toISOString() }).catch((err) => console.error('[deploy-approve]', err.message)); }, registry: leaseSource.deployRegistry(), catchUp: leaseSource.authority() !== 'central',
   pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 11 * 60 * 1000),
   onChange: (d) => broadcastStatus({ type: 'deploys', deploys: d }),
 });
@@ -2542,7 +2544,7 @@ server.listen(PORT, HOST, async () => {
     onStatus: onStopStatus,
     // a lease or deploy stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
     onManagerItem: (it) => {
-      const key = it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : 'lease:manager-item';
+      const key = it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : it.kind === 'fix' ? 'lease:manager-fix' : 'lease:manager-item';
       managerEvents.record({ key, title: `${it.session}: ${it.kind} stop for the manager`, body: `${it.session} ${it.case === 'waiting_deploy' ? 'waits for a deploy' : 'asks'}: ${it.question || it.reason}`.slice(0, 300), url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
         .catch((e) => console.error('[manager-item]', e.message));
     },

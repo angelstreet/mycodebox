@@ -16,6 +16,9 @@ import { leaseAsk, leaseTopic } from './lease-ask.js';
 
 // a deploy: the word, update_core, the deploy queue / approval, or a restart of a service done by the deploy procedure
 const DEPLOY_TOPIC = /\bdeploy(?:s|ed|ing|ment|ments)?\b|\bredeploy\w*|\bupdate_core\b|\bdeploy[- ]?(?:queue|runner|request|approval)\b|\brestart(?:ing|s|ed)?\b[^.?\n]{0,40}\b(?:service|services|server|backend|frontend|pm2|vpt-[\w-]+|unit)\b/i;
+// a yes/no "fix <your own defect> now?": the session found a defect in its own work and asks leave to fix it. Never an owner question
+// (AGENTS: fix own defects, never ask); a manager item that the manager answers "yes, fix it". Floor topics are excluded before this runs.
+const OWN_FIX = /^(?:(?:should|shall|may|can|do you want me to|ok to|okay to)\s+(?:i|we)\s+)?(?:fix|patch|repair|correct)\b[^?]{0,80}\bnow\s*\?$/i;
 const NOT_OPS = /\b(?:deploy(?:ment)? (?:docs?|documentation|diagram|tests?|script (?:name|file)))\b/i;
 
 // -> 'lease' | 'deploy' | null  (any non-null value signals: this stop is a manager item)
@@ -44,6 +47,7 @@ export function opsAsk(final) {
   for (const s of parts) {
     const lease = leaseAsk(s).lease || leaseTopic(s);
     const deploy = DEPLOY_TOPIC.test(s) && !NOT_OPS.test(s);
+    if (!lease && !deploy && OWN_FIX.test(s) && parts.length === 1) return 'fix';
     if (!lease && !deploy) return null;
     kind = kind === 'deploy' || (deploy && !lease) ? 'deploy' : 'lease';
   }
