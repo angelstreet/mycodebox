@@ -771,9 +771,11 @@ blocking for dev, test and deployment." The design, the conflict matrix, the que
   ranges), `LEASE_ENVS` lists the valid environments (empty: any sane name).
 - `scripts/vpt-lease`: the compatible client (Python 3, standard library): the registry CLI's commands, output and exit
   codes, plus `--wait`, `--ticket`, `run -- <cmd>`, `heartbeat`, `validate`, modes `exclusive | observe | pin`. Mode
-  `legacy | central-through-ssh | shadow | central` in `~/.config/vpt-lease/config`.
+  `legacy | central-through-ssh | shadow | central` in `~/.config/vpt-lease/config`. `central-through-ssh` forwards every call over ssh to the
+  registry host's own `vpt-lease` (`VPT_LEASE_SSH_TARGET`, `VPT_LEASE_REMOTE_CMD` default `~/bin/vpt-lease`; else `VPT_LEASE_LEGACY` is the transport):
+  full central semantics, remote exit code passed through, ssh failure (255) = 5; `run` claims/heartbeats/releases over ssh and runs the command locally.
 - `lease-source.js`: what the dashboard, the deploy runner, lease-watch and the manager read: `manager.json`
-  `leaseAuthority: "legacy"` (default: the registry over ssh, unchanged), `"central-through-ssh"` (the same path, labelled: the registry host's central service through the ssh wrapper) or `"central"` (the in-process service; read once at start). Unless `central`, the in-process service refuses writes with `E_NOT_AUTHORITY` (`leaseServiceClaims: true` turns them on).
+  `leaseAuthority: "legacy"` (default: the registry over ssh, unchanged), `"central-through-ssh"` (the same registry paths, labelled: the registry host's central service reached by the client forwarding over ssh) or `"central"` (the in-process service; read once at start). Unless `central`, the in-process service refuses writes with `E_NOT_AUTHORITY` (`leaseServiceClaims: true` turns them on).
 - The **Leases** view (More menu, `/?leases=1`) shows held leases, tickets with position and ETA, the deploy queue,
   overridden pins and shadow disagreements; force-release and downgrade-to-pin need two taps and are central-only.
 - The manager answers lease questions from the lease source instead of escalating them (`lease-ask.js`), and voice

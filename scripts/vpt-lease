@@ -10,8 +10,11 @@ Mode (VPT_LEASE_MODE):
   shadow   run the old CLI (its output and exit code are what the caller sees); also send the op to the service with
            shadow:true, compare, post disagreements to /shadow-report. A shadow failure never changes the result.
   central  the service only
-  central-through-ssh  the registry host's one central service, reached by running its vpt-lease over ssh: the legacy CLI
-           (VPT_LEASE_LEGACY is that ssh wrapper). Behaves exactly like legacy; the name only says where the authority is.
+  central-through-ssh  the registry host's one central service, reached by forwarding EVERY call over ssh to the registry
+           host's own vpt-lease (which runs in central mode there): full central semantics (--wait, ticket, heartbeat, mode,
+           validate, deploy ...), one command on every machine. The ssh target is VPT_LEASE_SSH_TARGET and the remote command
+           VPT_LEASE_REMOTE_CMD (default ~/bin/vpt-lease); without a target, VPT_LEASE_LEGACY (an ssh wrapper to that host)
+           is used as the transport. `run` claims, heartbeats and releases over ssh; the wrapped command runs locally.
 Env: VPT_LEASE_URL (service base URL), VPT_LEASE_TOKEN_FILE (default ~/.config/vpt-lease/token, must be mode 0600),
      VPT_LEASE_AGENT (default agent for deploy wait), VPT_LEASE_TEST_FAST=1 (short intervals, for tests).
 
@@ -128,8 +131,10 @@ class Config:
         cf = read_config_file()
         get = lambda k: os.environ.get(k) or cf.get(k) or ""
         self.mode_label = (get("VPT_LEASE_MODE") or "legacy").strip().lower()
-        # central-through-ssh is the legacy path (the wrapper goes to the one central service): same code, other name
-        self.mode = "legacy" if self.mode_label == "central-through-ssh" else self.mode_label
+        # central-through-ssh forwards every call to the registry host's central client over ssh
+        self.mode = "ssh" if self.mode_label == "central-through-ssh" else self.mode_label
+        self.ssh_target = get("VPT_LEASE_SSH_TARGET").strip()
+        self.remote_cmd = get("VPT_LEASE_REMOTE_CMD").strip() or "~/bin/vpt-lease"
         self.url = get("VPT_LEASE_URL").rstrip("/")
         self.token_file = os.path.expanduser(get("VPT_LEASE_TOKEN_FILE") or "~/.config/vpt-lease/token")
         self.legacy = get("VPT_LEASE_LEGACY") or os.path.expanduser("~/bin/vpt-lease.legacy")
@@ -980,13 +985,87 @@ def legacy_call(args, stdin_data=None):
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
+def ssh_argv(args):
+    """The local command that runs `vpt-lease <args>` on the registry host. With a configured target: ssh that never
+    prompts and keeps the connection alive for a long --wait; the remote side is forced to central mode and marked as
+    forwarded so it can never forward again. Without a target, VPT_LEASE_LEGACY (an ssh wrapper to that host) is the transport."""
+    if not CFG.ssh_target:
+        return legacy_argv() + args
+    env = "".join("%s=%s " % (k, shlex.quote(os.environ[k])) for k in ("VPT_DEPLOY_ID", "VPT_LEASE_AGENT") if os.environ.get(k))
+    remote = env + "VPT_LEASE_MODE=central VPT_LEASE_FORWARDED=1 " + CFG.remote_cmd + "".join(" " + shlex.quote(x) for x in args)
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=4", CFG.ssh_target, remote]
+
+
+def ssh_call(args, capture=False, stdin=None, interruptible=False):
+    """Run one forwarded call. Returns (code, stdout or ''); the remote exit code passes through exactly; an ssh connect
+    failure (255) is UNAVAILABLE, never "free". stdin=None inherits ours (stdin passthrough)."""
+    try:
+        p = subprocess.Popen(ssh_argv(args), stdin=stdin, stdout=subprocess.PIPE if capture else None)
+    except (OSError, IndexError, ValueError) as e:
+        eprint("vpt-lease: cannot run the ssh transport (%s): %s" % (CFG.ssh_target or CFG.legacy, e))
+        return 1, ""
+    old = {}
+    if interruptible:         # a signal while waiting: drop the connection and report it
+        def _fwd(sig, _f):
+            with contextlib.suppress(OSError):
+                p.terminate()
+        old = {s: signal.signal(s, _fwd) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    try:
+        out, _ = p.communicate()
+    finally:
+        for s, h in old.items():
+            signal.signal(s, h)
+    rc = p.returncode
+    if rc == 255:
+        eprint("UNAVAILABLE — the lease service cannot be reached over ssh (%s). Treat the platform as busy, not free." % (CFG.ssh_target or "transport"))
+        rc = UNAVAILABLE
+    elif rc < 0:
+        rc = 128 + (-rc)
+    return rc, (out or b"").decode(errors="replace")
+
+
+class SshHeartbeat(HeartbeatThread):
+    """run's heartbeat over ssh: the registry host's `heartbeat <id> --active`. Exit 1/3 = refused (lease gone or fenced);
+    5 (ssh down) is not a lost lease: keep going and retry."""
+
+    def run(self):
+        while not self.stop.wait(self.every):
+            code, _ = ssh_call(["heartbeat", self.lease_id, "--active"], capture=True, stdin=subprocess.DEVNULL)
+            if code in (1, 3):
+                self.fenced = "heartbeat refused (exit %d)" % code
+                eprint("vpt-lease: LEASE LOST: %s. Stop mutating the resource; the next protected step must not run." % self.fenced)
+                if self.on_fence:
+                    self.on_fence()
+                return
+            if code != 0:
+                eprint("vpt-lease: heartbeat failed (exit %d); keep going and retrying" % code)
+
+
+def remote_claim_args(a):
+    args = ["claim", a.env, *a.resources, "--agent", a.agent, "--purpose", a.purpose, "--ttl", str(a.ttl),
+            "--mode", a.mode, "--wait", "--heartbeat-s", str(a.heartbeat_s)]
+    if a.kind:
+        args += ["--kind", a.kind]
+    if a.provider:
+        args += ["--provider", a.provider]
+    if a.shared:
+        args += ["--shared"]
+    if a.expect:
+        args += ["--expect", str(a.expect)]
+    if a.deploy_id:
+        args += ["--deploy-id", a.deploy_id]
+    return args
+
+
 def cmd_run(a, command):
     if not command:
         eprint("vpt-lease run: nothing to run after --")
         return 2
+    remote = CFG.mode == "ssh"
     central = CFG.mode == "central"
     a.wait, a.ticket, a.ticket_id_out = True, False, []
-    a.heartbeat_s = 300 if CFG.mode == "central" else None
+    a.heartbeat_s = 300 if (central or remote) else None
     lease_id, hb = None, None
     child, got = [None], []
 
@@ -995,7 +1074,20 @@ def cmd_run(a, command):
         if child[0] and child[0].poll() is None:
             with contextlib.suppress(OSError):
                 child[0].send_signal(sig)
-    if central:
+    if remote:
+        code, out = ssh_call(remote_claim_args(a), capture=True, stdin=subprocess.DEVNULL, interruptible=True)
+        if code != 0:
+            sys.stdout.write(out)
+            return code
+        lease_id = out.splitlines()[0].strip() if out.strip() else None
+        if not lease_id:
+            eprint("vpt-lease: the remote claim succeeded but printed no lease id; not running the command")
+            return 1
+        every = 0.2 if FAST else 300.0
+        eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
+        hb = SshHeartbeat(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None)
+        hb.start()
+    elif central:
         res = claim_wait(a)
         if res[0] == "exit":
             return res[1]
@@ -1053,7 +1145,15 @@ def cmd_run(a, command):
         for s, h in old.items():
             signal.signal(s, signal.SIG_IGN)       # nothing may interrupt the release
         try:
-            if central:
+            if remote:
+                for attempt in range(3):
+                    rcode, _ = ssh_call(["release", lease_id, "--agent", a.agent, "--by", a.agent, "--reason", "run-finished"],
+                                       capture=True, stdin=subprocess.DEVNULL)
+                    if rcode != UNAVAILABLE:
+                        break
+                    eprint("vpt-lease: release failed (ssh down)%s" % ("; the TTL will expire it" if attempt == 2 else "; retrying"))
+                    time.sleep(delays()[0])
+            elif central:
                 for attempt in range(3):
                     try:
                         api("POST", "/release", {"id": lease_id, "by": a.agent, "reason": "run-finished"}, timeout=10)
@@ -1089,6 +1189,7 @@ def build_parser():
     c = sub.add_parser("claim"); claim_args(c)
     c.add_argument("--wait", action="store_true", help="queue and block until granted (retries while the service is unreachable)")
     c.add_argument("--ticket", action="store_true", help="queue and print the ticket id and ETA at once")
+    c.add_argument("--heartbeat-s", type=int, default=None, help=argparse.SUPPRESS)   # declared by a forwarded `run`
     ru = sub.add_parser("run", help="run <claim args> -- <command...>: claim (waits), heartbeat, run, release"); claim_args(ru)
     ru.add_argument("--on-fence", choices=("warn", "kill"), default="warn", help="when the lease is lost mid-run: warn (default) or kill the command")
     r = sub.add_parser("release"); r.add_argument("lease_id", nargs="?"); r.add_argument("--agent")
@@ -1268,13 +1369,19 @@ def re_deploy_id(argv):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = CFG.mode
-    if mode not in ("legacy", "shadow", "central"):
+    if mode not in ("legacy", "shadow", "central", "ssh"):
         eprint("vpt-lease: VPT_LEASE_MODE must be legacy, central-through-ssh, shadow or central (is %r)" % CFG.mode_label)
         return 1
     command = None
     if "--" in argv and argv[:1] == ["run"]:
         i = argv.index("--")
         argv, command = argv[:i], argv[i + 1:]
+    if mode == "ssh":
+        if os.environ.get("VPT_LEASE_FORWARDED"):
+            eprint("vpt-lease: this call was already forwarded; refusing to forward again (the registry host must run VPT_LEASE_MODE=central)")
+            return 1
+        if argv[:1] != ["run"]:
+            return ssh_call(argv)[0]
     if mode == "legacy" and argv[:1] != ["run"]:
         if argv[:1] in (["ticket"], ["heartbeat"], ["mode"], ["validate"]):
             eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % argv[0])
@@ -1310,10 +1417,10 @@ def main(argv=None):
     if a.cmd == "run" and command is None:
         eprint("vpt-lease run: expected `-- <command...>` after the claim arguments")
         return 2
-    if mode != "central" and a.cmd in ("ticket", "heartbeat", "mode", "validate"):
+    if mode in ("legacy", "shadow") and a.cmd in ("ticket", "heartbeat", "mode", "validate"):
         eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % a.cmd)
         return 1
-    if mode == "central" or a.cmd == "run":
+    if mode in ("central", "ssh") or a.cmd == "run":     # ssh mode only gets here for run
         def _term(_s, _f):
             raise KeyboardInterrupt        # lets a waiting claim cancel its ticket
         signal.signal(signal.SIGTERM, _term)

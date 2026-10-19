@@ -605,28 +605,12 @@ test('R1 deploy start fails closed: ok without state/lease_id is exit 1, not "ru
   assert.deepEqual([r.code, r.out], [0, 'running\n']);
 });
 
-test('central-through-ssh behaves exactly like legacy: same exec of the wrapper, same exit codes, no HTTP, queue flags ignored, central-only commands refused', async () => {
+test('central-through-ssh is not the legacy path: an unknown mode is rejected naming it; forwarding is tested in vpt-lease-ssh-forward.test.js', async () => {
   setup(() => ({ ok: true }));
-  const marker = path.join(tmp, 'ran-marker-ssh');
-  for (const args of [['claim', 'env-a', 'host-1', '--agent', 'a'], ['list'], ['check', 'env-a'], ['claim', 'env-a', 'frontend', '--agent', 'a', '--wait', '--expect', '5'], ['release', 'x1']]) {
-    for (const code of ['0', '3', '4']) {
-      const env = (mode) => ({ VPT_LEASE_MODE: mode, VPT_LEASE_LEGACY: legacyCli, FAKE_LEGACY_CODE: code, FAKE_LEGACY_ERR: 'E' });
-      const a = await run(args, { env: env('legacy') }), b = await run(args, { env: env('central-through-ssh') });
-      assert.deepEqual([b.code, b.out, b.err], [a.code, a.out, a.err], args.join(' ') + ' ' + code);
-    }
-  }
-  assert.equal(calls.length, 0, 'no HTTP to the in-process service');
-  for (const cmd of [['ticket', 'T1'], ['heartbeat', 'L1'], ['mode', 'L1', 'pin'], ['validate', 'L1', '--agent', 'a']]) {
-    const a = await run(cmd, { env: { VPT_LEASE_MODE: 'legacy', VPT_LEASE_LEGACY: legacyCli } }), b = await run(cmd, { env: { VPT_LEASE_MODE: 'central-through-ssh', VPT_LEASE_LEGACY: legacyCli } });
-    assert.deepEqual([b.code, b.out, b.err], [a.code, a.out, a.err]); assert.equal(b.code, 1);
-  }
-  for (const mode of ['legacy', 'central-through-ssh']) {   // run: also the legacy path (no heartbeat thread), a missing wrapper exits 1
-    fs.rmSync(marker, { force: true });
-    const r = await run(['run', 'env-a', 'frontend', '--agent', 'a', '--', 'touch', marker], { env: { VPT_LEASE_MODE: mode, VPT_LEASE_LEGACY: path.join(tmp, 'no-such-cli') } });
-    assert.equal(r.code, 1, mode); assert.match(r.err, /cannot run the legacy CLI/); assert.ok(!fs.existsSync(marker));
-  }
   const bad = await run(['list'], { env: { VPT_LEASE_MODE: 'bogus' } });
   assert.equal(bad.code, 1); assert.match(bad.err, /central-through-ssh/);
+  const none = await run(['list'], { env: { VPT_LEASE_MODE: 'central-through-ssh', VPT_LEASE_LEGACY: path.join(tmp, 'no-such-cli') } });
+  assert.equal(none.code, 1); assert.match(none.err, /cannot run the ssh transport/); assert.equal(calls.length, 0);
 });
 
 test('R2 legacy/shadow run: a missing legacy binary exits 1 with a message; an empty claim answer does not run the command', async () => {
