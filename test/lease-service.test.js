@@ -202,12 +202,12 @@ test('queue is per conflict set: a ticket for the env does not block unrelated n
 });
 
 test('pass-through is capped: a ticket passed more than 3 times, or older than 15 min, becomes strict', async () => {
-  const h = harness();
+  const h = harness({ ticketIdleMs: 60 * MIN });
   await h.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h.claim('deployer', '*', { wait: 'ticket' });
   for (let i = 0; i < 3; i++) { const r = await h.claim(`s${i}`, 'frontend', { expect_min: 1 }); assert.ok(r.ok, `pass ${i}`); await h.svc.release({ agent: `s${i}` }); }
   assert.equal((await h.claim('s5', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'passed 3 times: strict');
-  const h2 = harness();
+  const h2 = harness({ ticketIdleMs: 60 * MIN });
   await h2.claim('dev', 'host-1/device1', { expect_min: 120 });
   await h2.claim('deployer', '*', { wait: 'ticket' });
   const tid = (await h2.svc.list()).tickets[0].id;
@@ -215,14 +215,14 @@ test('pass-through is capped: a ticket passed more than 3 times, or older than 1
   assert.equal((await h2.claim('s', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'older than 15 min: strict');
 });
 
-test('ticket expires after 10 minutes without a poll; polling keeps it; cancel works', async () => {
+test('ticket expires after 2 minutes without a poll (4x the 30s client long-poll); polling keeps it; cancel works', async () => {
   const h = harness();
   await h.claim('a', 'frontend');
   const t1 = (await h.claim('b', 'frontend', { wait: 'ticket' })).ticket;
   const t2 = (await h.claim('c', 'frontend', { wait: 'ticket' })).ticket;
   const t3 = (await h.claim('d', 'frontend', { wait: 'ticket' })).ticket;
-  await h.advance(6 * MIN); await h.svc.ticket(t2.id);
-  await h.advance(6 * MIN);
+  await h.advance(90 * 1000); await h.svc.ticket(t2.id);
+  await h.advance(90 * 1000);
   assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'expired');
   assert.equal((await h.svc.ticket(t2.id)).ticket.state, 'waiting');
   assert.equal((await h.svc.cancelTicket(t3.id)).ticket.state, 'expired', 'already expired by then');
@@ -231,7 +231,7 @@ test('ticket expires after 10 minutes without a poll; polling keeps it; cancel w
 });
 
 test('a granted ticket is a reservation: uncollected after 2 minutes it is released and the ticket is missed; priority_since keeps the position', async () => {
-  const h = harness();
+  const h = harness({ ticketIdleMs: 60 * MIN });
   const a = (await h.claim('a', 'frontend')).lease;
   const t1 = (await h.claim('b', 'frontend', { wait: 'ticket' })).ticket;
   await h.advance(MIN);
@@ -263,7 +263,7 @@ test('collecting: polling a granted ticket confirms the reservation, which then 
 });
 
 test('ETA uses the median hold of the last 7 days, conditional on the time already held; expect_min is the holder statement', async () => {
-  const h = harness({ idleMs: { device: 0, frontend: 0, host: 0, server: 0, env: 0 } });
+  const h = harness({ ticketIdleMs: 60 * MIN, idleMs: { device: 0, frontend: 0, host: 0, server: 0, env: 0 } });
   for (const m of [2, 4, 6, 40, 50]) { const l = (await h.claim('x', 'host-1/device1')).lease; await h.advance(m * MIN); await h.svc.release({ id: l.id }); }
   const a = (await h.claim('a', 'host-1/device1')).lease;
   const t = (await h.claim('b', 'host-1/device1', { wait: 'ticket' })).ticket;
