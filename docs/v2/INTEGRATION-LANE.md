@@ -77,10 +77,11 @@ uncommitted changes (untracked files are fine) or the checkout is not on the tar
 not a fast-forward); `npm ci` when `package-lock.json` changed; `node --check server.js` (a failure is reported, the
 service is not restarted); then `scripts/safe-restart.sh --wait <restartWaitMin>`. The lane runs inside the service it
 restarts and the unit sets `NoNewPrivileges`, so the script is launched with `tmux run-shell -b` (the tmux server is
-outside the unit) and its output and exit code land in `<state>/integration/restart/<id>.{log,exit}`. The request's
-`selfDeploy` record (`prevSha`, `expectedSha`, this boot) is persisted in the `restarting` phase before the launch; the
-restarted service resumes it: live HEAD at the expected sha and `/api/health` answering -> `deployed` ("deployed live
-ghosty at <sha> (was <sha>)"), otherwise `deploy_failed`. A safe-restart refusal ends `deploy_failed` with its own text.
+outside the unit) and its output and exit code land in `<state>/integration/restart/<id>.{log,exit}`. The restart is
+the last step: the request is first persisted done (`deployed`, "deployed live ghosty at <sha> (was <sha>), restart
+scheduled via safe-restart"), the result event and the session notice go out, and only then is the script launched, so
+the lane's own restart can neither lose nor re-run the request. A launch failure is recorded as `restartError` and
+raised as a manager item; the outcome stays `deployed`.
 `selfDeploy.outcome` says which: `deployed`, `deploy_refused`, `install_failed`, `check_failed`, `restart_refused`,
 `restart_failed`, `deploy_failed`. Nothing is ever reset; once the checkout moved, the result carries a `rollback` line.
 
