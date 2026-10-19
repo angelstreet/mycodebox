@@ -1,5 +1,5 @@
 // One interface for the lease data the dashboard uses (round 10, docs/v2/LEASES-CENTRAL.md section 6 and 7).
-// manager.json `leaseAuthority`: "legacy" (default) reads the registry over ssh (leases.js, deploy-runner.js) as before;
+// manager.json `leaseAuthority`: "central-through-ssh" is "legacy" under another name (see AUTHORITY_LABELS); "legacy" (default) reads the registry over ssh (leases.js, deploy-runner.js) as before;
 // "central" asks the in-process lease service (lease-service.js, Appendix A) and never calls the registry.
 // No imports: the legacy pieces and the service are injected, so this module is pure and testable with fakes.
 // Rows keep the legacy shape ({id, env, resource, agent, purpose, kind, ttlLeftMin}) so every old consumer works unchanged;
@@ -143,8 +143,17 @@ export function centralRegistry(getService, { now = Date.now } = {}) {
 // --- the source -------------------------------------------------------------------------------------------------------
 // legacy: { store (leases.js createLeaseStore), registry (deploy-runner default registry fn) }
 // getService: () => the lease service (central), or null
+// manager.json `leaseAuthority` values: 'legacy' (default), 'central-through-ssh' (the registry host's one central service,
+// reached through the ssh vpt-lease wrapper: behaves exactly like 'legacy', only the label differs), 'central' (the in-process service).
+export const AUTHORITY_LABELS = ['legacy', 'central-through-ssh', 'central'];
+export const normAuthority = (x) => (AUTHORITY_LABELS.includes(x) ? x : 'legacy');
+export const NOT_AUTHORITY_NOTE = 'the in-process lease service is not the authority; the registry host service is, reached through the ssh vpt-lease wrapper';
+
 export function createLeaseSource({ authority = 'legacy', legacy = {}, getService = () => null, now = Date.now } = {}) {
-  const auth = () => (typeof authority === 'function' ? authority() : authority) === 'central' ? 'central' : 'legacy';
+  const label = () => normAuthority(typeof authority === 'function' ? authority() : authority);
+  const auth = () => (label() === 'central' ? 'central' : 'legacy');   // behaviour: central-through-ssh takes the legacy paths unchanged
+  // the view says where the authority is; the in-process service is only listed (never as the authority) when it is not
+  const svcNote = () => (label() === 'central' ? {} : { inProcessService: { authority: false, note: NOT_AUTHORITY_NOTE } });
   let last = null;   // last central answer (peek)
   const notReady = { ok: false, error: 'lease service not available' };
 
@@ -172,6 +181,7 @@ export function createLeaseSource({ authority = 'legacy', legacy = {}, getServic
 
   return {
     authority: auth,
+    label,
     // what GET /api/leases, the 15 s WebSocket payload, leaseFor / leasesOfSession, triage and park read: {ok, leases: legacy rows, waiters} | {ok:false, error}
     async get(force = false) {
       if (auth() === 'legacy') return legacy.store.get(force);
@@ -186,13 +196,13 @@ export function createLeaseSource({ authority = 'legacy', legacy = {}, getServic
     async view(force = true) {
       if (auth() === 'central') { last = await central(); return last; }
       const v = await legacy.store.get(force);
-      if (!v.ok) return { ok: false, error: v.error, authority: 'legacy' };
-      return { ok: true, authority: 'legacy', at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: await shadowReports() };
+      if (!v.ok) return { ok: false, error: v.error, authority: label() };
+      return { ok: true, authority: label(), at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: await shadowReports(), ...svcNote() };
     },
     peekView() {
       if (auth() === 'central') return last;
       const v = legacy.store.peek();
-      return v ? (v.ok ? { ok: true, authority: 'legacy', at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: shadowLast } : { ok: false, error: v.error, authority: 'legacy' }) : null;
+      return v ? (v.ok ? { ok: true, authority: label(), at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: shadowLast, ...svcNote() } : { ok: false, error: v.error, authority: label() }) : null;
     },
     // deploy-runner: argv -> {code, stdout, stderr}
     deployRegistry() { return auth() === 'central' ? centralRegistry(getService, { now }) : legacy.registry; },

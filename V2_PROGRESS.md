@@ -1,4 +1,4 @@
-STATUS: IN PROGRESS round 15 (shadow routing: branch v2/r15-shadow-routing). Rounds 14, 14b DONE. Round 11 (lease cut-over) NOT DONE: live authority is still legacy (see Round 11 below). Rounds 12/12a: built, waiting on the cut-over
+STATUS: IN PROGRESS round 15 (shadow routing: branch v2/r15-shadow-routing). Rounds 11 (decision (a), branch v2/r11-central-ssh, awaiting lane deploy and the live config edits), 14, 14b DONE. Rounds 12/12a: built, unblocked by the cut-over
 
 # V2 progress
 
@@ -77,7 +77,17 @@ then central after telling the manager. Then build the missing parts of Round 12
 
 ## Round 11 (2026-10-18)
 
-**State (checked 2026-10-19): NOT DONE, cut-over not performed.** Evidence on the dashboard host: the client config
+**State (2026-10-19): DONE by manager decision (a): keep the ssh wrapper as the cut-over, label it `central-through-ssh`.** Evidence:
+the shadow comparison (no unexplained mismatch; the registry-host client and the codebox wrapper return identical leases, tickets and
+events); the codebox wrapper already calls the one central service, so no lease behaviour changes. Built on `v2/r11-central-ssh`:
+`central-through-ssh` is accepted by the `vpt-lease` client (`VPT_LEASE_MODE`, runs the legacy path unchanged) and by ghosty
+(`leaseAuthority`: same registry paths as `legacy`, the Leases view and `GET /api/leases/view` report it); ghosty's own in-process
+lease service is labelled not-the-authority (`authority: false`) and refuses every write with `E_NOT_AUTHORITY` unless `leaseAuthority`
+is `central` or `leaseServiceClaims: true`; reads and the shadow store stay open. Live: after the lane deploy the coordinator changes the
+codebox client config and `manager.json` to `central-through-ssh` and swaps the deploy skill (prepared as `SKILL.md.central-ssh`).
+Device hosts and the Mac still use their own route (see the table). The older state below is the 2026-10-18 to 19 history.
+
+**Earlier state (checked 2026-10-19): NOT DONE, cut-over not performed.** Evidence on the dashboard host: the client config
 `VPT_LEASE_MODE=legacy`; `GET /api/leases/view` answers `authority: legacy` (loopback, both listeners); the central journal
 `leases/journal.jsonl` is empty and the shadow store holds only its 2026-10-18 `.initialized` marker; the deploy skill is still the
 pre-central text (`SKILL.md.central` is staged, not swapped). Done: steps 1 (tokens), 2 (deploy script installed on the registry
@@ -93,7 +103,7 @@ The registry host's own mode was not checked from here.
 | 3 | Client on the dashboard host (`~/bin/vpt-lease`, shadow, legacy via an ssh wrapper to the registry host) | DONE | shadow reports reach the service |
 | 3 | Client on the registry host (`~/bin/vpt-lease`, old -> `vpt-lease.legacy`) | INSTALLED (shadow) | every answer identical to the legacy CLI (`list`, `list --json`, `check`, `deploy list/last --json`, `events`), same speed; its shadow calls cannot reach the service yet (no tailnet, loopback-only listener) |
 | 3 | Device hosts (9 reachable) | BLOCKED | none reaches the service URL or the registry host; 5 more are offline or have no route |
-| 3 | Mac | COMMANDS GIVEN | owner side |
+| 3 | Mac | OWNER ACTION | owner side: see the owner-action list (Mac lease client) |
 | 3 | Deploy skill rendered from `docs/LEASE-RULES.md` | STAGED | `~/.claude/skills/deploy/SKILL.md.central`; swapped in at the central switch (the new rules assume `--wait`, which shadow mode degrades) |
 | 4 | Leases view disagreements | PARTIAL | the view hid shadow reports in legacy authority: fixed in PR #15 (merge pending); until then read the service's shadow store |
 
@@ -298,6 +308,10 @@ Base: `origin/v2/integration` e1a9a5b (post-rewrite).
 | D-006 | Leak scan = `scripts/leak-scan.js` (generic patterns) + private denylist outside the repo (`LEAK_SCAN_EXTRA`) | patterns in repo | Real identifiers must never be committed, including in the scanner | yes |
 
 ## OWNER-REVIEW / owner actions (collected for the PR)
+
+- Round 11 (leases), Mac: put `VPT_LEASE_MODE=central-through-ssh` and `VPT_LEASE_LEGACY=<ssh wrapper to the registry host's vpt-lease>` in
+  `~/.config/vpt-lease/config` on the Mac (keep a dated backup), then run `vpt-lease list` and compare with `ssh <registry-host> vpt-lease list`.
+  Until then the Mac keeps calling the registry host directly, which is the same authority.
 
 - Live unit sets `HOST=0.0.0.0` explicitly (read-only inspection). Upgrading keeps it (no access break) and now logs a
   warning; owner should switch to `127.0.0.1` + private Serve or a literal Tailscale IP.
