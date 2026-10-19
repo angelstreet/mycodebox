@@ -89,12 +89,15 @@ for (const s of states) {
   if (out.source === 'forced') stats[s.point].forced++;
 
   stats[s.point].jev.total++;
-  if (out.choice === s.expect) stats[s.point].jev.agree++;
+  // `expect_any` (optional): a list of acceptable choices, used by the real-event fixtures where the observed
+  // outcome only says wake / no wake. `expect` stays the single value of the original fixtures.
+  const ok = (v) => Array.isArray(s.expect_any) ? s.expect_any.includes(v) : v === s.expect;
+  if (ok(out.choice)) stats[s.point].jev.agree++;
   stats[s.point].rule.total++;
-  if (out.ruleDefault === s.expect) stats[s.point].rule.agree++;
+  if (ok(out.ruleDefault)) stats[s.point].rule.agree++;
 
   rows.push({
-    point: s.point, label: s.label, expect: s.expect,
+    point: s.point, label: s.label, expect: Array.isArray(s.expect_any) ? s.expect_any.join('|') : s.expect,
     ruleDefault: out.ruleDefault, choice: out.choice, confidence: out.confidence,
     source: out.source, decision_id: out.decision_id || null,
     allowed: out.allowed,
@@ -108,11 +111,11 @@ for (const s of states) {
 
 // Per-state lines.
 console.log('');
-console.log(pad('point', 10), pad('label', 44), pad('expect', 18), pad('ruleDefault', 14), pad('choice', 18), pad('conf', 6), pad('source', 8));
+console.log(pad('point', 10), pad('label', 44), pad('expect', 22), pad('ruleDefault', 14), pad('choice', 18), pad('conf', 6), pad('source', 8));
 console.log('-'.repeat(120));
 for (const r of rows) {
   const conf = r.confidence == null ? 'n/a' : r.confidence.toFixed(2);
-  console.log(pad(r.point, 10), pad(r.label, 44), pad(r.expect, 18), pad(r.ruleDefault || '-', 14), pad(r.choice || '-', 18), pad(conf, 6), pad(r.source, 8));
+  console.log(pad(r.point, 10), pad(r.label, 44), pad(r.expect, 22), pad(r.ruleDefault || '-', 14), pad(r.choice || '-', 18), pad(conf, 6), pad(r.source, 8));
 }
 
 // Per-point agreement.
