@@ -1135,7 +1135,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const shadow = {
     async op(op, args = {}) {
       if (cfg.noShadow) return fail('E_INVALID', 'no nested shadow');
-      shadowSvc ||= createLeaseService({ dir: join(dir, 'shadow'), now, config: { ...config, noShadow: true, readonly: false } });
+      shadowSvc ||= createLeaseService({ dir: join(dir, 'shadow'), now, config: { ...config, noShadow: true, readonly: false, notAuthority: undefined } });
       await shadowSvc.tick();
       const a = { ...args }; delete a.shadow;
       if (op.startsWith('deploy.')) { const f = shadowSvc.deploy[op.slice(7)]; return f ? f(a) : fail('E_INVALID', `unknown op ${op}`); }
@@ -1158,10 +1158,22 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     async list() { return { ok: true, reports: [...reports].reverse() }; },
   };
 
+  // config.notAuthority = { authority: '<name of the real authority>' }: this store is not the authority (the registry host service is, reached
+  // through the ssh wrapper), so every write is refused with a clear error. Reads, tick, the deploy list/wait/last reads and the shadow store stay open.
+  const na = cfg.notAuthority;
+  const refuse = () => fail('E_NOT_AUTHORITY', `this in-process lease service is not the authority; ${na.authority || 'the registry host service'} is: claim there (vpt-lease through the ssh wrapper)`, { status: 409 });
+  const guard = (f) => (na ? async () => refuse() : f);
+  const guarded = na ? {
+    claim: guard(claim), ticket: guard(ticket), cancelTicket: guard(cancelTicket), release: guard(release), renew: guard(renew), heartbeat: guard(heartbeat),
+    narrow: guard(narrow), setMode: guard(setMode), ownerRelease: guard(ownerRelease), importLegacy: guard(importLegacy),
+  } : {};
+  const deployApi = na ? { ...deploy, request: guard(), approve: guard(), cancel: guard(), start: guard(), finish: guard(), record: guard() } : deploy;
+
   return {
     claim, ticket, cancelTicket, get, release, renew, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, activity, tick,
-    deploy, shadow, importLegacy,
-    async status() { return { ok: !broken, readOnly: !!broken || cfg.readonly, reason: broken, seq: S.seq, leases: Object.keys(S.leases).length, polls: polls.size, parsed: parsedCache.size }; },
+    deploy: deployApi, shadow, importLegacy,
+    ...guarded,
+    async status() { return { ok: !broken, authority: !na, ...(na ? { authorityNote: `not the authority: ${na.authority || 'the registry host service'} is` } : {}), readOnly: !!broken || cfg.readonly, reason: broken, seq: S.seq, leases: Object.keys(S.leases).length, polls: polls.size, parsed: parsedCache.size }; },
     async close() { await chain.catch(() => {}); if (shadowSvc) await shadowSvc.close(); },
   };
 }

@@ -10,6 +10,8 @@ Mode (VPT_LEASE_MODE):
   shadow   run the old CLI (its output and exit code are what the caller sees); also send the op to the service with
            shadow:true, compare, post disagreements to /shadow-report. A shadow failure never changes the result.
   central  the service only
+  central-through-ssh  the registry host's one central service, reached by running its vpt-lease over ssh: the legacy CLI
+           (VPT_LEASE_LEGACY is that ssh wrapper). Behaves exactly like legacy; the name only says where the authority is.
 Env: VPT_LEASE_URL (service base URL), VPT_LEASE_TOKEN_FILE (default ~/.config/vpt-lease/token, must be mode 0600),
      VPT_LEASE_AGENT (default agent for deploy wait), VPT_LEASE_TEST_FAST=1 (short intervals, for tests).
 
@@ -125,7 +127,9 @@ class Config:
     def __init__(self):
         cf = read_config_file()
         get = lambda k: os.environ.get(k) or cf.get(k) or ""
-        self.mode = (get("VPT_LEASE_MODE") or "legacy").strip().lower()
+        self.mode_label = (get("VPT_LEASE_MODE") or "legacy").strip().lower()
+        # central-through-ssh is the legacy path (the wrapper goes to the one central service): same code, other name
+        self.mode = "legacy" if self.mode_label == "central-through-ssh" else self.mode_label
         self.url = get("VPT_LEASE_URL").rstrip("/")
         self.token_file = os.path.expanduser(get("VPT_LEASE_TOKEN_FILE") or "~/.config/vpt-lease/token")
         self.legacy = get("VPT_LEASE_LEGACY") or os.path.expanduser("~/bin/vpt-lease.legacy")
@@ -1265,7 +1269,7 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = CFG.mode
     if mode not in ("legacy", "shadow", "central"):
-        eprint("vpt-lease: VPT_LEASE_MODE must be legacy, shadow or central (is %r)" % mode)
+        eprint("vpt-lease: VPT_LEASE_MODE must be legacy, central-through-ssh, shadow or central (is %r)" % CFG.mode_label)
         return 1
     command = None
     if "--" in argv and argv[:1] == ["run"]:

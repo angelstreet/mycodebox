@@ -83,8 +83,10 @@ export function shadowHtml(items) {
 export function viewHtml(data, { now = Date.now(), armed = null } = {}) {
   if (!data || data.ok === false) return `<div class="sheet-empty" role="alert">${esc(data?.error || 'leases unavailable')} (${esc(data?.authority || 'unknown')} authority; treated as busy)</div>`;
   const central = data.authority === 'central';
-  const head = `<div class="lv-auth"><span class="lv-badge ${central ? 'central' : 'legacy'}">${central ? 'central lease service' : 'legacy registry'}</span>`
-    + `${central ? '' : ' <span class="lv-k">read-only: release a lease on the registry host</span>'}</div>`;
+  const viaSsh = data.authority === 'central-through-ssh';   // the registry host's one central service, read through the ssh wrapper (same data path as legacy)
+  const head = `<div class="lv-auth"><span class="lv-badge ${central || viaSsh ? 'central' : 'legacy'}">${central ? 'central lease service' : viaSsh ? 'central-through-ssh' : 'legacy registry'}</span>`
+    + `${central ? '' : ' <span class="lv-k">read-only: release a lease on the registry host</span>'}`
+    + `${data.inProcessService && data.inProcessService.authority === false ? ' <span class="lv-k">the in-process lease service is not the authority</span>' : ''}</div>`;
   const envs = groupByEnv(data);
   const over = pinsOverridden(data.leases);
   if (!envs.length) return `${head}<div class="sheet-empty">No leases held, nobody waiting.</div>${shadowHtml(data.shadow)}`;

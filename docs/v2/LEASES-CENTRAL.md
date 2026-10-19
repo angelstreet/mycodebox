@@ -238,6 +238,7 @@ registry only over ssh it names a small wrapper that forwards the quoted argumen
 |---|---|---|
 | `legacy` (default) | the old registry | nothing (today's behaviour) |
 | `shadow` | the old registry | every command is also sent to the service with `shadow: true` (2-second timeout, never retried; it keeps a separate shadow store, never grants anything real, and the deploy runner never reads it); the client compares the outcomes (exit code, busy or free, lease ids mapped) and posts each disagreement to `POST /shadow-report`, classed `by-design` (the new matrix allows what the old rules refused, e.g. frontend next to a host lease) or `mismatch`; the Leases view shows them. Options that exist only in the new client degrade in legacy and shadow mode (`--wait` becomes a plain claim, `run` claims, executes and releases), and never block |
+| `central-through-ssh` | the one central service on the registry host | Round 11 decision (a). For a machine that reaches that service only through the ssh wrapper (`VPT_LEASE_LEGACY`): the client runs exactly the `legacy` code path (same exec, same exit codes, no HTTP, queue options degraded), the name only says that the wrapper's target is the central authority. Use `ssh <registry-host> vpt-lease` for `--wait`, `ticket`, `heartbeat`, `validate` |
 | `central` | the service | the old registry is not called |
 
 Cut-over (owner side; nothing here is done by this round). The order matters: the deploy script must fail closed
@@ -322,5 +323,10 @@ Where the build is more specific than the design above:
   validate` treats `active` as held and `reserved` (a granted ticket not yet collected) as not yet valid.
 - **Exit codes.** 0 ok, 1 error / not found / bad token, 3 busy, 4 deploy pending, 5 unavailable, 6 `run` only: the
   lease was lost while the command ran.
-- **Dashboard.** `leaseAuthority` is read once at start (switching needs a restart). The service is constructed in both
+- **Dashboard.** `leaseAuthority` (`legacy` | `central-through-ssh` | `central`) is read once at start (switching needs a restart). `central-through-ssh`
+  takes the same read, claim and deploy-runner paths as `legacy` (through the wrapper) and only changes the label shown (the Leases view
+  badge, `authority` in `GET /api/leases/view`). While the in-process service is not the authority (any value but `central`, unless
+  `manager.json` `leaseServiceClaims: true`) it refuses every write (`claim`, `ticket`, `release`, `renew`, `heartbeat`, `narrow`,
+  `setMode`, `ownerRelease`, `importLegacy`, deploy request/approve/start/finish/cancel/record) with `409 E_NOT_AUTHORITY` naming the
+  real authority; `/status` and the view say `authority: false`. Reads and the shadow store stay open. The service is constructed in both
   modes so shadow reports reach it; liveness is unknown (nothing released) until the first successful tmux listing.

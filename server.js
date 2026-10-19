@@ -39,7 +39,7 @@
 //   GET  /api/manager/decided?hours=24|since=<iso>&limit=100 → { items, summary }: everything the manager answered for the owner (decided.js, OWNER_DECISIONS §15)
 //   POST /api/manager/decided/:id/revert {by?} → merge/push/deploy: sends the revert text to the session (409 unless it is stopped with no draft); other kinds: { draft }
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
-//   GET  /api/leases/view       → the Leases view data: authority (legacy|central), leases (mode, holder, ttl, idle, heartbeat), tickets, deploys, shadow
+//   GET  /api/leases/view       → the Leases view data: authority (legacy|central-through-ssh|central), leases (mode, holder, ttl, idle, heartbeat), tickets, deploys, shadow
 //   POST /api/leases/owner/release | /owner/mode  {id[, mode:'pin']} → owner force-release / downgrade (central only; legacy: 409); logged with the owner's identity
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
@@ -90,7 +90,7 @@ import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
 import * as managerApi from './manager.js';
 import { createReadyStore } from './ready-window.js';
-import { createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
+import { normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
@@ -751,9 +751,13 @@ const historyLog = (rec) => history.append(rec).catch((e) => console.error('[his
 const layoutStore = createLayoutStore({ file: join(STATE_DIR, 'layout.json') });   // order / pins / groups of the session list
 const turnMeter = createTurnMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });   // elapsed + tokens of a finished turn, shown with its STATUS line (turn-meter.js)
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
-// Lease authority (lease-source.js): manager.json `leaseAuthority` "legacy" (default: the registry over ssh) | "central" (the in-process lease service).
+// Lease authority (lease-source.js): manager.json `leaseAuthority` "legacy" (default: the registry over ssh) | "central-through-ssh" (same path, labelled: the registry host service through the ssh wrapper) | "central" (the in-process lease service).
 // Read once at boot: switching needs a restart, so one process never has two authorities.
-const leaseAuthority = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')).leaseAuthority === 'central' ? 'central' : 'legacy'; } catch { return 'legacy'; } })();
+const leaseCfg = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')); } catch { return {}; } })();
+const leaseAuthority = normAuthority(leaseCfg.leaseAuthority);   // 'legacy' | 'central-through-ssh' (same behaviour, other label) | 'central'
+// The in-process service is the authority only for 'central', or when manager.json `leaseServiceClaims: true` says so explicitly; otherwise it
+// refuses claims (E_NOT_AUTHORITY) and every view labels it as not the authority. Shadow reports and reads stay open.
+const leaseServiceIsAuthority = leaseAuthority === 'central' || leaseCfg.leaseServiceClaims === true;
 // Liveness for the service: true / false for a codebox tmux session, undefined (never releases anything) when unknown: a failed tmux listing,
 // no poll yet, or an agent that is not a codebox session. A re-created name is handled by the session tracker (sessionGone, immediate).
 const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, resolve: (s) => agentSession(s, Object.keys(latest?.status || {}), MACHINES),
@@ -763,11 +767,12 @@ const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, 
 // manager trust. Unknown liveness (undefined) never releases anything.
 const leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), now: Date.now, sessions: { isAlive: leaseLiveness.isAlive, trackable: leaseLiveness.trackable },
   onEvent: (ev) => onLeaseEvent(ev).catch((e) => console.error('[lease] event', e.message)),
-  config: { envs: (process.env.LEASE_ENVS || '').split(',').map((x) => x.trim()).filter(Boolean) } });
+  config: { envs: (process.env.LEASE_ENVS || '').split(',').map((x) => x.trim()).filter(Boolean),
+    ...(leaseServiceIsAuthority ? {} : { notAuthority: { authority: leaseAuthority === 'legacy' ? 'the legacy registry' : 'the registry host service (reached through the ssh vpt-lease wrapper)' } }) } });
 const leaseSource = createLeaseSource({ authority: leaseAuthority, legacy: { store: leaseStore, registry: defaultDeployRegistry() }, getService: () => leaseService });
 const leaseTracker = createSessionTracker({ source: leaseSource });
 const deployRunner = createDeployRunner({
-  stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn, registry: leaseSource.deployRegistry(), catchUp: leaseAuthority !== 'central',
+  stateDir: STATE_DIR, alert, isEnabled: deployRunnerOn, registry: leaseSource.deployRegistry(), catchUp: leaseSource.authority() !== 'central',
   pollMs: Number(process.env.DEPLOY_POLL_MS || 30000), timeoutMs: Number(process.env.DEPLOY_TIMEOUT_MS || 11 * 60 * 1000),
   onChange: (d) => broadcastStatus({ type: 'deploys', deploys: d }),
 });
@@ -1945,7 +1950,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/leases/view') {   // the Leases view: authority, held leases (mode, holder, ttl, idle), tickets, deploy queue, shadow disagreements
     const v = await leaseSource.view(true);
     const sessionNames = Object.keys(latest?.status || {});
-    return json(res, 200, v.ok ? { ...v, hostname: hostname(), leases: v.leases.map((l) => ({ ...l, holderSession: agentSession(l.session || l.agent, sessionNames, MACHINES) || agentSession(l.agent, sessionNames, MACHINES) || null })), deploys: deployRunner.snapshot().deploys || v.deploys } : { ...v, authority: leaseSource.authority() });
+    return json(res, 200, v.ok ? { ...v, hostname: hostname(), leases: v.leases.map((l) => ({ ...l, holderSession: agentSession(l.session || l.agent, sessionNames, MACHINES) || agentSession(l.agent, sessionNames, MACHINES) || null })), deploys: deployRunner.snapshot().deploys || v.deploys } : { ...v, authority: leaseSource.label() });
   }
   if (req.method === 'POST' && (p === '/api/leases/owner/release' || p === '/api/leases/owner/mode')) {   // owner actions, central only (second tap is client-side); always by 'owner'
     let b;
