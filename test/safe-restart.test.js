@@ -81,7 +81,6 @@ for (const [name, r] of [
 for (const patch of [
   { running: { test: 'test-deploy' } }, { deploys: [deploy('running')] },
   { enabled: true, deploys: [deploy('queued')] },
-  { enabled: true, deploys: [deploy('awaiting-approval')] },
 ]) test(`blocks work ${JSON.stringify(patch)}`, (t) => {
   const r = invoke(t, [response(snapshot(patch))]);
   assert.notEqual(r.status, 0);
@@ -96,6 +95,12 @@ for (const state of ['done', 'failed', 'cancelled', 'queued', 'awaiting-approval
     assert.deepEqual(restarts(r), [['sudo', '-n', 'systemctl', 'restart', 'ghosty-sessions']]);
   });
 }
+
+test('an awaiting-approval request does not block, even with the runner on (approval needs the restart)', (t) => {
+  const r = invoke(t, [response(snapshot({ enabled: true, deploys: [deploy('awaiting-approval')] })), response(snapshot({ enabled: true, deploys: [deploy('awaiting-approval')] }))]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(restarts(r).length, 1);
+});
 
 test('second snapshot blocks a newly running deploy', (t) => {
   const r = invoke(t, [response(), response(snapshot({ deploys: [deploy('running')] }))]);

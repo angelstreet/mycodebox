@@ -52,8 +52,9 @@ try:
         if any(not isinstance(item.get(k), str) or not item[k] for k in ("id", "env")): raise ValueError()
         if item["id"] in ids: raise ValueError()
         ids.add(item["id"])
+        # awaiting-approval does NOT block: it can only be approved after the restart (it would deadlock the restart)
         # approved = owner said yes, the runner starts it as soon as its leases are free: busy whether or not the runner is on
-        busy |= item["state"] in {"running", "approved"} or (d["enabled"] and item["state"] in {"queued", "awaiting-approval"})
+        busy |= item["state"] in {"running", "approved"} or (d["enabled"] and item["state"] == "queued")
 except Exception:
     print("NOT restarting: invalid, unsuccessful, or stale deploy snapshot", file=sys.stderr)
     sys.exit(2)
