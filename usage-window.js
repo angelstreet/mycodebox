@@ -58,3 +58,11 @@ export function attribute(rows, from, to) {
   const isFlat = flatPlan(agent, model);
   return { agent, model, tokens: tokIn + tokOut + tokCache, tokensIn: tokIn, tokensOut: tokOut, costUsd: priced ? cost : null, plan: isFlat && !priced ? 'flat' : null, rows: n };
 }
+
+// True when `row`'s working directory sits inside `wt`. Subagent rows carry workCwd (the directory the
+// subagent tool actually ran in); `cwd` is the parent session's folder and is only used when workCwd is absent.
+export function rowCwdMatchesWorktree(row, wt) {
+  if (!row || !wt) return false;
+  const c = row.workCwd || row.cwd;
+  return !!(c && (c === wt || c.startsWith(`${wt}/`)));
+}
