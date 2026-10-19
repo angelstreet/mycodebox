@@ -83,7 +83,7 @@ scheduled via safe-restart"), the result event and the session notice go out, an
 the lane's own restart can neither lose nor re-run the request. A launch failure is recorded as `restartError` and
 raised as a manager item; the outcome stays `deployed`.
 `selfDeploy.outcome` says which: `deployed`, `deploy_refused`, `install_failed`, `check_failed`, `restart_refused`,
-`restart_failed`, `deploy_failed`. Nothing is ever reset; once the checkout moved, the result carries a `rollback` line.
+`restart_failed`, `deploy_failed`. Nothing is ever reset; once the checkout moved, the result carries a `rollback` line: `git -C <live> checkout --detach <prev sha> && scripts/safe-restart.sh`, then `git revert -m 1 <merge>` on the target through the lane (never `reset --hard`; the next self-deploy refuses until the live checkout is back on the target branch).
 
 Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (HTTP), `scripts/integrate` (CLI). The queue is
 `<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:

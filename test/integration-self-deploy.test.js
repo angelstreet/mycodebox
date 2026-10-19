@@ -50,7 +50,8 @@ test('merge, pull, check: the request is done, persisted and told BEFORE the res
   assert.deepEqual(r.steps.map((s) => s.name).filter((n) => /^(precheck|push|deploy-)/.test(n)), ['precheck', 'push', 'deploy-check', 'deploy-pull', 'deploy-syntax']);
   const text = integrationText(r);
   assert.match(text, new RegExp(`deployed live ghosty at ${w.main().slice(0, 12)} \\(was ${prev.slice(0, 12)}\\), restart scheduled via safe-restart\\.`));
-  assert.match(text, new RegExp(`Rollback: git -C ${w.live} reset --hard ${prev.slice(0, 12)}`));
+  assert.match(text, new RegExp(`Rollback: git -C ${w.live} checkout --detach ${prev.slice(0, 12)} && cd ${w.live} && scripts/safe-restart.sh; then revert on main through the lane: git revert -m 1 [0-9a-f]{12}`));
+  assert.doesNotMatch(text, /reset --hard/);
 });
 
 test('a restart after done never re-runs the request: a new boot leaves a deployed request alone', async () => {
@@ -120,7 +121,7 @@ test('node --check fails after the pull: reported loudly, never restarted, rollb
   assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'check_failed');
   assert.match(r.reason, /node --check server\.js FAILED .*NOT restarted, the service still runs/); assert.match(r.tail, /SyntaxError: fake/);
   assert.equal(launches.length, 0); assert.equal(w.liveHead(), w.main());
-  assert.match(r.rollback, new RegExp(`reset --hard ${prev.slice(0, 12)}`));
+  assert.match(r.rollback, new RegExp(`checkout --detach ${prev.slice(0, 12)}.*git revert -m 1 [0-9a-f]{12}`));
 });
 
 test('lockfile changed: npm ci runs in the live checkout before the check', async () => {
