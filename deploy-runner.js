@@ -47,12 +47,14 @@ export const isCatchUp = (d) => /^catch-up[ :]/.test(String(d.purpose || ''));
 // Catch-ups the queue already holds for any of `hosts` in `env`: one catch-up per (env, host set), never a chain of them.
 export const coveringCatchUps = (deploys, env, hosts) => (deploys || []).filter((x) => x.env === env && isCatchUp(x)
   && (x.state === 'queued' || x.state === 'running') && (x.hosts || []).some((h) => hosts.includes(h)));
-// What a finished deploy does with them. `held` already deploys these hosts (one is running, or the same ref is already
-// queued), so nothing new is queued. Every other queued one is an older deploy's request: the newer deploy produced this
-// catch-up, so it replaces them (`deploy cancel`) instead of piling up behind them.
+// What a finished deploy does with them. `held` (same ref, queued or running) already deploys these hosts, so nothing new is
+// queued. A queued one at another ref is an older deploy's request: the newer deploy produced this catch-up, so it replaces
+// them (`deploy cancel`) instead of piling up behind them.
+// Only a catch-up at the SAME ref covers this one: a running catch-up at an older ref must not stop the newer ref from being
+// queued (the hosts would stay on the older code). Running ones are never cancelled; queued ones at another ref are.
 export const catchUpPlan = (existing, d) => {
-  const held = existing.filter((x) => x.state === 'running' || x.ref === d.ref);
-  return { queue: held.length === 0, held, cancel: existing.filter((x) => !held.includes(x)) };
+  const held = existing.filter((x) => x.ref === d.ref);
+  return { queue: held.length === 0, held, cancel: existing.filter((x) => x.state === 'queued' && x.ref !== d.ref) };
 };
 export const VERSION_RE = /\bversion\s*[:=]?\s*(v?\d+\.\d+\.\d+[\w.+-]*)/i;
 

@@ -283,7 +283,7 @@ test('SKIPPED_HOSTS: recorded on the deploy and a catch-up host request is queue
   assert.ok(alerts.some(([k, t]) => k === 'deploy:1:done' && /1 host\(s\) skipped/.test(t)));
 });
 
-test('one catch-up per (env, host set): a running or equal queued one is kept, an older queued one is replaced', () => {
+test('one catch-up per (env, host set): an equal-ref one is kept, an older queued one is replaced, an older running one does not block', () => {
   const c = (id, o = {}) => ({ id, env: 'e', state: 'queued', ref: 'main', hosts: ['host-a'], purpose: `catch-up: ${id}`, ...o });
   const running = c('r', { state: 'running', ref: 'old' }), same = c('s'), older = c('o', { ref: 'old', hosts: ['host-a', 'host-b'] });
   const d = { env: 'e', ref: 'main' };
@@ -293,9 +293,10 @@ test('one catch-up per (env, host set): a running or equal queued one is kept, a
   assert.equal(isCatchUp({}), false);
   assert.deepEqual(coveringCatchUps([running, same, older, c('done', { state: 'done' }), c('other-hosts', { hosts: ['host-c'] }), c('other-env', { env: 'e2' }), c('manual', { purpose: 'manual hotfix' })], 'e', ['host-a']).map((x) => x.id), ['r', 's', 'o']);
   assert.deepEqual(catchUpPlan([same], d), { queue: false, held: [same], cancel: [] });
-  assert.deepEqual(catchUpPlan([running], d), { queue: false, held: [running], cancel: [] });
+  assert.deepEqual(catchUpPlan([running], d), { queue: true, held: [], cancel: [] });   // running at an older ref: the newer ref still goes
   assert.deepEqual(catchUpPlan([older], d), { queue: true, held: [], cancel: [older] });
-  assert.deepEqual(catchUpPlan([running, older], d), { queue: false, held: [running], cancel: [older] });
+  assert.deepEqual(catchUpPlan([running, older], d), { queue: true, held: [], cancel: [older] });
+  assert.deepEqual(catchUpPlan([c('rs', { state: 'running' })], d).queue, false);   // running at the same ref covers it
   assert.deepEqual(catchUpPlan([], d), { queue: true, held: [], cancel: [] });
 });
 
