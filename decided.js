@@ -82,6 +82,17 @@ export function decidedItems({ recs = [], journal = [], since = null, until = nu
   const items = [];
   const claimed = new Set();   // journal ids an answer already shows
   for (const r of recs) for (const i of [...(r?.decision_ids || []), ...(r?.merge_decision_id ? [r.merge_decision_id] : [])]) claimed.add(i);
+  // decisions the manager took by itself, recorded by scripts/owner-ask.js decide (an owner-floor question the manager answered):
+  // no session answer carries them, the journal record is the item, with the owner's undo line as the revert
+  for (const j of journal) {
+    if (j?.source !== 'owner-ask' || !j.decision_id || claimed.has(j.decision_id)) continue;
+    const at = ms(j.ts);
+    if (at == null || (lo != null && at < lo) || (hi != null && at > hi)) continue;
+    const what = String(j.what || j.question || j.chosen || '').trim();
+    items.push({ id: j.decision_id, at: new Date(at).toISOString(), session: j.session || '', kind: 'menu', what,
+      why: String(j.rationale || '').trim(), evidence: Array.isArray(j.evidence) ? j.evidence.map(String) : [],
+      revert: j.undo ? { label: 'Undo', text: String(j.undo) } : null, url: urlOf(j.session) });
+  }
   // decisions the integration lane took by itself (a merge verdict, a self deploy): no session answer carries them, the journal record is the item
   for (const j of journal) {
     if (j?.source !== 'integration-lane' || !DECISION_KINDS.includes(j.kind) || j.chosen !== j.kind || !j.decision_id || claimed.has(j.decision_id)) continue;
