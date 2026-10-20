@@ -10,6 +10,7 @@ import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
+import { registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
@@ -369,6 +370,7 @@ function getTerm(session) {
       brightCyan:'#9adcd0', brightWhite:'#ffffff',
     },
   });
+  registerUrlLinks(term, (url) => { window.open(url, '_blank', 'noopener'); });   // URLs in the output open in a new tab, wrapped ones included
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, paneRows: 0, historyLines: 1000, laidOut: '', reqKey: '', reqTimer: 0, noFit: false };
