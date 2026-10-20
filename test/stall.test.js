@@ -281,6 +281,42 @@ test('STATUS: waiting: deploy is the deploy case with the id', () => {
   assert.equal(s.deployHint.id, 'd-42');
 });
 
+// A queued wait (ticket / queue position / `claim --wait` / a deploy already queued or awaiting approval) is not an
+// escalation: the session is in a line and no agent makes it move faster (router wake point, 2026-10-20).
+test('queued wait: a ticket, a queue position, --wait or a queued/awaiting deploy sets queued', () => {
+  const waits = [
+    'STATUS: waiting: deploy t-9f21 ticket',                       // ticket id
+    'STATUS: waiting: the lease ticket t-4c1 is not free yet',
+    'STATUS: waiting: deploy queue position 2',
+    'STATUS: waiting: running lease-claim box-1 unit-2 --wait',    // the queueing call itself
+    'STATUS: waiting: the deploy is queued behind the CI run',
+    'STATUS: waiting: deploy d-42 awaiting approval',
+    'STATUS: waiting: in the deploy queue since 14:02',
+  ];
+  for (const text of waits) {
+    const s = classify(claude(`Queued.\n${text}`));
+    assert.equal(s.case, 'waiting_deploy', text);
+    assert.equal(s.queued, true, text);
+  }
+  const noStatus = classify(claude('Tests pass.\nWaiting on the box-1 lease ticket t-4c1 before I can run the suite.'));
+  assert.equal(noStatus.case, 'waiting_deploy');
+  assert.equal(noStatus.queued, true);
+});
+test('queued wait: a plain go-ahead wait is NOT queued (nothing to queue behind)', () => {
+  const waits = [
+    'STATUS: waiting: deploy go-ahead for the server restart',
+    'STATUS: waiting: your go-ahead to run update_core.sh --server',
+  ];
+  for (const text of waits) {
+    const s = classify(claude(`Queued.\n${text}`));
+    assert.equal(s.case, 'waiting_deploy', text);
+    assert.equal(s.queued, undefined, text);
+  }
+  const plain = classify(claude('Tests pass.\nI need your go-ahead to deploy the server.'));
+  assert.equal(plain.case, 'waiting_deploy');
+  assert.equal(plain.queued, undefined);
+});
+
 test('STATUS line is read from report text lines too (fromReport)', () => {
   const s = classifyStall({ plain: ['Did a thing?', 'STATUS: done'], state: 'done', fromReport: true });
   assert.equal(s.case, 'done');

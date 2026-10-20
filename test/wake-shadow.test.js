@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createManagerEvents, classifyKey } from '../manager-events.js';
 import { createWakeAnnotator, wakeFacts, quotaPercents, observedNeed, dueOutcomes } from '../wake-shadow.js';
+import { ruleDefault } from '../router.js';
 import { wakeShadowSection, buildScorecard } from '../scorecard.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'ghosty-wake-'));
@@ -125,6 +126,19 @@ test('hot floor (P0 blocked / deploy failed / disk 96 %) only allows wake picks;
   assert.equal(d.deploy.state, 'failed');
   assert.equal(wakeFacts({ cls: classifyKey('disk:/'), event: {}, diskPct: 96 }).disk_pct, 96);
   assert.deepEqual(quotaPercents({ plans: [{ plan: 'claude', windows: [{ name: '5h', usedPercent: 97 }, { name: 'week', usedPercent: null }] }] }), { 'claude:5h': 97 });
+});
+
+test('wakeFacts: the escalation target and a queued wait ride on the event (nothing an agent can move)', () => {
+  const owner = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { case: 'owner_decision', escalated: true, escalatedTo: 'owner' } });
+  assert.equal(owner.event.escalated, true); assert.equal(owner.event.escalated_to, 'owner');
+  assert.equal(ruleDefault('wake', owner), 'rules_handle', 'an owner escalation is parked, not an Opus wake');
+  const queued = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { case: 'waiting_deploy', queued: true } });
+  assert.equal(queued.event.queued, true); assert.equal(queued.event.stall_case, 'waiting_deploy');
+  assert.equal(ruleDefault('wake', queued), 'rules_handle');
+  // neither key appears when the stall carries neither
+  const plain = wakeFacts({ cls: classifyKey('web:asks'), event: {}, stall: { case: 'owner_decision', escalated: true, escalatedTo: null, queued: false } });
+  assert.equal('escalated_to' in plain.event, false); assert.equal('queued' in plain.event, false);
+  assert.equal(ruleDefault('wake', plain), 'wake_opus', 'an escalation the manager owns still wakes Opus');
 });
 
 test('wakeFacts: stall_text is included when stall has a question, omitted otherwise', () => {

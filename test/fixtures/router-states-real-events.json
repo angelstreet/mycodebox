@@ -33,10 +33,11 @@
         "title": "session asks the owner (needs-owner, escalated), nobody acted in 15 min",
         "priority": "high",
         "session": "session-a",
-        "stall_case": null,
+        "stall_case": "owner_decision",
         "forbidden_topic": null,
         "escalated": true,
-        "p0_blocked": false
+        "p0_blocked": false,
+        "escalated_to": "owner"
       }
     },
     "expect": "ignore|rules_handle",
@@ -45,8 +46,7 @@
       "rules_handle"
     ],
     "expect_source": "observed",
-    "reason": "Observed not_needed: the question was parked until the owner was back; waking an agent would not have helped. Conflicts with the escalated rule: open case.",
-    "open": true,
+    "reason": "Observed not_needed: the question was parked until the owner was back; waking an agent would not have helped. Re-recorded 2026-10-20: the shadow now carries escalated_to=owner, so an owner escalation parks (rules_handle) instead of waking Opus.",
     "observed": "not_needed",
     "day": "2026-10-19"
   },
@@ -84,10 +84,11 @@
         "title": "session waiting on a device lease ticket (escalated flag set)",
         "priority": "high",
         "session": "session-a",
-        "stall_case": null,
+        "stall_case": "waiting_deploy",
         "forbidden_topic": null,
-        "escalated": true,
-        "p0_blocked": false
+        "escalated": false,
+        "p0_blocked": false,
+        "queued": true
       }
     },
     "expect": "ignore|rules_handle",
@@ -96,8 +97,7 @@
       "rules_handle"
     ],
     "expect_source": "observed",
-    "reason": "Observed not_needed: a queued lease claim is not a question; nothing to answer. Open case: the escalated flag comes from the stall classifier.",
-    "open": true,
+    "reason": "Observed not_needed: a queued lease claim is not a question; nothing to answer. Re-recorded 2026-10-20: stall.js marks the wait queued (ticket), so the manager no longer counts it as escalated and the rule default is rules_handle.",
     "observed": "not_needed",
     "day": "2026-10-19"
   },
@@ -110,10 +110,11 @@
         "title": "session waiting on a deploy ticket (escalated flag set)",
         "priority": "high",
         "session": "session-a",
-        "stall_case": null,
+        "stall_case": "waiting_deploy",
         "forbidden_topic": null,
-        "escalated": true,
-        "p0_blocked": false
+        "escalated": false,
+        "p0_blocked": false,
+        "queued": true
       }
     },
     "expect": "ignore|rules_handle",
@@ -122,8 +123,7 @@
       "rules_handle"
     ],
     "expect_source": "observed",
-    "reason": "Observed not_needed: waiting for the deploy queue is not a question. Open case, same as the lease ticket.",
-    "open": true,
+    "reason": "Observed not_needed: waiting for the deploy queue is not a question. Re-recorded 2026-10-20: same as the lease ticket — a queued wait is not an escalation, the rule default is rules_handle.",
     "observed": "not_needed",
     "day": "2026-10-19"
   },
