@@ -1141,6 +1141,9 @@ async function mergeHandoff({ s, w, id, h, final, stall }) {
     if (s.state !== 'done' || isPaused(name) || !send.keys || w.hash !== h) return false;
     try { await send.keys(name, text, true, id); sentLog.set(name, [...(sentLog.get(name) || []), Date.now()]); return true; } catch (e) { console.error('[manager] merge handoff send', e.message); return false; }
   };
+  // the same switches as every decision the manager types (autoSend, mergeDecisions, pause, hourly cap, an owner draft): off means the owner gets the stop
+  const blocked = decisionBlock(name, { merge: 1 }) || (stall.draft ? 'owner has a draft in the input box' : null);
+  if (blocked) return { handled: false, why: `merge not handed off: ${blocked}` };
   const ask = final.mergeAsk || {};
   const branch = ask.branch || await gitBranchOf(s.cwd);
   let repo = null;
@@ -1153,8 +1156,11 @@ async function mergeHandoff({ s, w, id, h, final, stall }) {
     if (q?.id) {
       await appendJournal({ kind: 'merge_handoff', id, session: name, at: at.toISOString(), repo, branch, pr: ask.pr || null, integration: q.id, position: q.position ?? null });
       logLater({ type: 'merge_handoff', id, session: name, repo, branch, integration: q.id });
-      const sent = await tell(`Merges are not yours or the owner's: queued integration ${q.id}. End with STATUS: waiting: integration ${q.id}.`);
+      const text = `Merges are not yours or the owner's: queued integration ${q.id}. End with STATUS: waiting: integration ${q.id}.`;
+      const sent = await tell(text);
       if (!sent) logLater({ type: 'merge_handoff_unsent', id, session: name, integration: q.id });
+      // the answer joins "Decided for you" to the lane's own verdict record (lane-merge-<id>, integration-lane.js); no verdict, no item
+      else logLater({ type: 'answer', id, session: name, answer: { text }, case: 'merge_wait', source: 'manager_decision', decision_ids: [`lane-merge-${q.id}`] });
       return { handled: true };
     }
     logLater({ type: 'merge_handoff_failed', id, session: name, repo, branch, reason: q?.error || 'enqueue failed' });
@@ -1166,7 +1172,11 @@ async function mergeHandoff({ s, w, id, h, final, stall }) {
   await appendJournal(journalRecord(ev, { id, session: name, at }));
   if (ev.verdict === 'merge' && config.mergeDecisions !== false) {
     const reply = composeReply({ merge: { repo: ev.facts.repoName, branch: ev.facts.branch, target: ev.facts.target, rationale: ev.rationale } });
-    if (await tell(reply)) { logLater({ type: 'merge_decision', id, session: name, verdict: ev.verdict, repo: ev.facts.repoName || null, branch: ev.facts.branch || null }); return { handled: true }; }
+    if (reply && await tell(reply.text)) {
+      logLater({ type: 'merge_decision', id, session: name, verdict: ev.verdict, repo: ev.facts.repoName || null, branch: ev.facts.branch || null });
+      logLater({ type: 'answer', id, session: name, answer: { text: reply.text }, case: 'merge_wait', source: 'manager_decision', merge_decision_id: `merge-${id}`, decision_ids: [`merge-${id}`], decided: ['merge'] });
+      return { handled: true };
+    }
   }
   return { handled: false, why: `merge not decided: ${(ev.reasons || []).join('; ') || 'not sent'}` };
 }

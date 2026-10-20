@@ -33,6 +33,18 @@ test('merge_wait with a lane repo: enqueues, tells the session the id, never ask
   assert.equal(pushes.length, 0);
   assert.equal(items.length, 0);
   assert.ok(!log().some((r) => r.type === 'escalated' && r.session === 'mw1'));
+  const ans = log().find((r) => r.type === 'answer' && r.session === 'mw1');   // finding 5: the hand-off is an answer joined to the lane's verdict record
+  assert.equal(ans.case, 'merge_wait'); assert.deepEqual(ans.decision_ids, ['lane-merge-int-fake01']);
+});
+
+test('finding 6: autoSend off or an owner draft: nothing is enqueued, the stop goes on to the owner', async () => {
+  repo = 'mycodebox';
+  const n = enq.length;
+  await m.setManagerConfig({ autoSend: false });
+  try {
+    const e = await stop('mw-off', 'Pushed v2/y.\nSTATUS: waiting — your merge decision on PR #30 (branch v2/y)', (r) => r.type === 'escalated' || r.type === 'merge_handoff');
+    assert.notEqual(e.type, 'merge_handoff'); assert.equal(enq.length, n);
+  } finally { await m.setManagerConfig({ autoSend: true }); }
 });
 
 test('merge_wait without a lane repo: the merge evaluation runs; its failure is a manager item of kind merge, not an owner ask', async () => {
