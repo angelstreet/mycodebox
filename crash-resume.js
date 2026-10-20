@@ -2,9 +2,14 @@
 
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
 const JOB_RE = /line \d+: +\d+ (Aborted|Segmentation fault|Killed)(?:\s|$)/;
+// A RESUMED claude that dies again leaves no wrapper job line: interactive bash only reports "Aborted (core dumped)",
+// possibly behind a leftover TUI marker. The text is not unique per crash, so the resumer dedupes these per resume.
+const BARE_ABORT_RE = /^\s*(?:[❯>]\s*)?(Aborted|Segmentation fault|Killed)(?:\s*\(core dumped\))?\s*$/;
 const REMOTE_RE = /(?:--remote-control|-n)(?:=|\s+)(['"]?)([A-Za-z0-9_.-]+)\1/;
 const MODEL_RE = /--model(?:=|\s+)(['"]?)([A-Za-z0-9_.\[\]-]+)\1/;
 const DEFAULT_INTERVAL = 30 * 60 * 1000;
+const CRASH_LOOP_MAX = 3; // resumes allowed in the window; the next crash inside it needs a human
+const CRASH_LOOP_MS = 6 * 60 * 60 * 1000;
 
 // Lines that may follow a crash job line in a dead shell: shell-init/getcwd errors, a prompt (empty or with a command a
 // human typed), bash's "command not found" reply, and leftovers of the dead agent's TUI (status bar, rules, update banner).
@@ -37,6 +42,20 @@ export function crashLineOf(lines) {
   return scanCrash(lines)?.line || null;
 }
 
+// Bare abort of a resumed agent: the last non-tolerated pane line is "Aborted"/"Killed"/"Segmentation fault" (with or
+// without a leftover TUI prompt marker in front, and with the dead agent's status bar cut off on the same line).
+// Scanning from the end means only tolerated lines can follow. null otherwise.
+export function scanBareAbort(lines) {
+  const all = (Array.isArray(lines) ? lines : []).map((x) => String(x ?? ''));
+  let j = -1;
+  for (let i = all.length - 1; i >= 0; i--) if (!tolerated(all[i])) { j = i; break; }
+  if (j < 0) return null;
+  const line = cutRight(all[j]).replace(/^[❯>]\s*/, '').trim();
+  if (!BARE_ABORT_RE.test(line)) return null;
+  const rest = all.slice(j + 1);
+  return { line, cwdGone: rest.some((l) => GETCWD_RE.test(l)) };
+}
+
 export function parseCrashCommand(line, fallbackName) {
   if (!line || !JOB_RE.test(line)) return null;
   const m = line.match(REMOTE_RE);
@@ -66,13 +85,18 @@ export function decideCrashResume({ state, consecutiveNoAgent = 0, managerSessio
   if (state.agent && AGENTS.has(state.agent)) return { ok: false, reason: 'agent-alive' };
   if (consecutiveNoAgent < 2) return { ok: false, reason: 'agent-not-absent-twice' };
   const scan = scanCrash(state.lines);
-  const crash = parseCrashCommand(scan?.line, state.tmuxName || state.name);
+  // A wrapper job line is proof; otherwise only a bare abort line counts (a resumed agent that died again).
+  const bareScan = scan ? null : scanBareAbort(state.lines);
+  const crash = scan
+    ? parseCrashCommand(scan.line, state.tmuxName || state.name)
+    : bareScan && { name: state.tmuxName || state.name, model: state.model || null, line: bareScan.line };
   if (!crash) return { ok: false, reason: 'no-exact-job-message' };
+  const bare = !!bareScan;
   // The session's directory is gone (deleted worktree): resuming there would fail or run in the wrong place. Needs the owner/manager.
-  if (scan.cwdGone || /\(deleted\)\s*$/.test(state.cwd || '')) return { ok: false, reason: 'cwd-gone', crash };
+  if ((scan || bareScan).cwdGone || /\(deleted\)\s*$/.test(state.cwd || '')) return { ok: false, reason: 'cwd-gone', crash, bare };
   if (lastResumeAt != null && now - lastResumeAt < intervalMs) return { ok: false, reason: 'throttled' };
   const command = buildCrashResumeCommand({ base: state.base, crash, model: state.model, claudeSessionId: state.claudeSessionId });
-  return command ? { ok: true, command, crash } : { ok: false, reason: 'missing-resume-data', crash };
+  return command ? { ok: true, command, crash, bare } : { ok: false, reason: 'missing-resume-data', crash, bare };
 }
 
 // Claude Code session id of a crashed job, from its transcripts: newest *.jsonl under ~/.claude/projects/<cwd with / and . as ->
@@ -96,7 +120,9 @@ export async function findClaudeSessionId({ name, cwd, projectsDir, fs }) {
 }
 
 export function createCrashResumer({ getState, sendText, sendEnter, record, managerSessions = () => [], now = Date.now, intervalMs = DEFAULT_INTERVAL, resolveSessionId = null } = {}) {
-  const absent = new Map(), resumed = new Map(), closed = new Set(), handled = new Map();
+  const absent = new Map(), resumed = new Map(), closed = new Set(), handled = new Map(), crashes = new Map(), looped = new Set();
+  // Resumes of this session inside the rolling window: the 4th crash in 6 h is a loop, not something to resume again.
+  const hitsIn = (name, t) => (crashes.get(name) || []).filter((x) => t - x < CRASH_LOOP_MS);
   const recordClose = (name, reason) => { closed.add(name); record?.({ key: `health:session-closed:${name}`, kind: 'health', title: `session closed: ${name}`, body: String(reason || 'closed').slice(0, 120) }); };
   // Runs every poll for every session (a pane that was already dead before ghosty started is covered after two polls).
   // Each crash job line is acted on once per session: resumed, or recorded as a manager item.
@@ -113,20 +139,31 @@ export function createCrashResumer({ getState, sendText, sendEnter, record, mana
         const sid = await resolveSessionId({ name: d.crash?.name || name, cwd: state.cwd }).catch(() => null);
         if (sid) d = decideCrashResume({ ...args, state: { ...state, claudeSessionId: sid } });
       }
+      // A bare abort line repeats across crashes, so it is handled once per resume (new key after every resume).
+      const key = d.bare ? `bare@${resumed.get(name) ?? 'none'}` : d.crash?.line;
       if (d.crash && (d.ok || d.reason === 'cwd-gone' || d.reason === 'missing-resume-data')) {
-        if (handled.get(name) === d.crash.line) { out.push({ name, ok: false, reason: 'already-handled', crash: d.crash }); continue; }
+        if (handled.get(name) === key) { out.push({ name, ok: false, reason: 'already-handled', crash: d.crash }); continue; }
+      }
+      // Crash loop: handed to the manager once per window, then the session is left alone until the window passes.
+      const t = d.ok ? now() : 0, hits = d.ok ? hitsIn(name, t) : null;
+      if (hits && hits.length >= CRASH_LOOP_MAX) {
+        out.push({ name, ok: false, reason: 'crash-loop', crash: d.crash, bare: d.bare });
+        if (!looped.has(name)) { looped.add(name); await record?.({ key: `health:session-crash-loop:${name}`, kind: 'health', title: `session crash loop, needs manual resume: ${name}`, body: `${hits.length + 1} crashes in 6 h; last: ${d.crash.line}` }); }
+        continue;
       }
       out.push({ name, ...d });
       if (d.reason === 'cwd-gone' || d.reason === 'missing-resume-data') {
-        handled.set(name, d.crash.line);
+        handled.set(name, key);
         await record?.({ key: `health:session-crash-needs-owner:${name}`, kind: 'health', title: `session crashed, needs manual resume: ${name}`, body: d.reason === 'cwd-gone' ? `directory ${state.cwd || ''} is gone (deleted worktree): recreate it, then resume ${d.crash.name}` : `no Claude session id found for ${d.crash.name}` });
         continue;
       }
       if (!d.ok) continue;
-      handled.set(name, d.crash.line);
+      handled.set(name, key);
       await sendText(name, d.command);
       await sendEnter(name);
       resumed.set(name, now());
+      crashes.set(name, [...hits, t]);
+      looped.delete(name);
       await record?.({ key: `health:session-crash-resumed:${name}`, kind: 'health', title: `session crash resumed: ${name}`, body: `name=${d.crash.name} command=${d.command}` });
     }
     return out;

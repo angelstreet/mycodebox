@@ -40,6 +40,22 @@ export const parseSkipped = (lines) => {
 // `hosts` is only covered when d is unrestricted or lists all of them.
 export const mergeable = (d, x) => x.id !== d.id && x.env === d.env && x.state === 'queued' && x.ref === d.ref && covers(d.scope, x.scope)
   && (!d.hosts?.length || (x.scope === 'host' && !!x.hosts?.length && x.hosts.every((h) => d.hosts.includes(h))));
+
+// A catch-up: the runner's own request for hosts a leased deploy skipped ("catch-up: hosts skipped by <id> (leased): ...").
+// The central lease service words its own the same way ("catch-up for <id>: skipped ..."), so both count.
+export const isCatchUp = (d) => /^catch-up[ :]/.test(String(d.purpose || ''));
+// Catch-ups the queue already holds for any of `hosts` in `env`: one catch-up per (env, host set), never a chain of them.
+export const coveringCatchUps = (deploys, env, hosts) => (deploys || []).filter((x) => x.env === env && isCatchUp(x)
+  && (x.state === 'queued' || x.state === 'running') && (x.hosts || []).some((h) => hosts.includes(h)));
+// What a finished deploy does with them. `held` (same ref, queued or running) already deploys these hosts, so nothing new is
+// queued. A queued one at another ref is an older deploy's request: the newer deploy produced this catch-up, so it replaces
+// them (`deploy cancel`) instead of piling up behind them.
+// Only a catch-up at the SAME ref covers this one: a running catch-up at an older ref must not stop the newer ref from being
+// queued (the hosts would stay on the older code). Running ones are never cancelled; queued ones at another ref are.
+export const catchUpPlan = (existing, d) => {
+  const held = existing.filter((x) => x.ref === d.ref);
+  return { queue: held.length === 0, held, cancel: existing.filter((x) => x.state === 'queued' && x.ref !== d.ref) };
+};
 export const VERSION_RE = /\bversion\s*[:=]?\s*(v?\d+\.\d+\.\d+[\w.+-]*)/i;
 
 // Central lease service: approving a deploy needs an OWNER client (E_AUTH "approving a deploy needs an owner client",
@@ -223,6 +239,17 @@ export function createDeployRunner({
     } catch { return snap.deployed || {}; }
   }
 
+  // The registry is the queue: read it fresh where the poll's list is too old (the poll predates this deploy's finish).
+  // Unreadable: the caller's list is better than guessing.
+  async function listDeploys(fallback = []) {
+    try {
+      const r = await reg(['deploy', 'list', '--json']);
+      if (r.code !== 0) return fallback;
+      const j = JSON.parse(r.stdout);
+      return Array.isArray(j.deploys) ? j.deploys : fallback;
+    } catch { return fallback; }
+  }
+
   // Which leases keep `d` from starting (same rule as vpt-lease: with --skip-leased only env-wide leases, plus server
   // leases for a full deploy, block; otherwise every lease that overlaps the scope). Our own and update_core's never count.
   function blockersOf(d) {
@@ -324,7 +351,7 @@ export function createDeployRunner({
     } catch (e) { onLine(`# runner error: ${e.message}`); }
     const skipped = parseSkipped(lines);
     if (skipped.length) {
-      onLine(`# skipped (leased): ${skipped.join(',')} — catch-up deploy queued`);
+      onLine(`# skipped (leased): ${skipped.join(',')}`);
       // a queued request for a skipped host (or any unrestricted host request) must not be closed by this run
       merged = merged.filter((m) => m.scope !== 'host' || (m.hosts?.length && !m.hosts.some((h) => skipped.includes(h))));
     }
@@ -335,11 +362,28 @@ export function createDeployRunner({
       ...(skipped.length ? ['--skipped-hosts', skipped.join(',')] : []), '--tail-stdin'], { stdin: tail });
     if (fin.code !== 0) log.error?.(`[deploy] finish ${d.id} failed: ${fin.stderr}`);
     for (const m of merged) await reg(['deploy', 'finish', m.id, '--status', status, '--coalesced-into', d.id, ...(version ? ['--version', version] : []), '--tail-stdin'], { stdin: tail });
-    if (skipped.length && catchUp) {   // central: the lease service queues the catch-up itself on finish
-      const q = await reg(['deploy', 'request', d.env, '--scope', 'host', '--ref', d.ref, '--agent', RUNNER_AGENT, '--approved',
-        '--hosts', skipped.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${skipped.join(',')}`]);
-      if (q.code !== 0) log.error?.(`[deploy] catch-up request for ${d.id} failed: ${q.stderr}`);
-      else onLine(`# catch-up request ${q.stdout.trim()} for ${skipped.join(',')}`);
+    if (skipped.length && catchUp) {
+      const say = async (l) => { onLine(l); await note(d.id, l); };   // the run's log stream is closed by now: note() appends
+      if (isCatchUp(d)) {
+        // a catch-up whose hosts are leased again does not chain: the next real deploy of these hosts, or the lease release, covers it
+        await say(`# catch-up ${d.id} skipped ${skipped.join(',')} again (leased): no new catch-up; the next deploy of these hosts or the lease release covers it`);
+      } else {
+        // one catch-up per (env, host set): what the queue already holds for these hosts decides, so several deploys that
+        // skip the same leased hosts cannot pile up duplicates (or an older ref that would roll the hosts back).
+        const plan = catchUpPlan(coveringCatchUps(await listDeploys(deploys), d.env, skipped), d);
+        for (const x of plan.cancel) {
+          const c = await reg(['deploy', 'cancel', x.id]);
+          if (c.code !== 0) log.error?.(`[deploy] catch-up replace: cancel ${x.id} failed: ${c.stderr}`);
+          else await say(`# catch-up ${x.id} (ref ${x.ref}) cancelled: superseded by ${d.id} at ${d.ref}`);
+        }
+        if (!plan.queue) await say(`# catch-up for ${skipped.join(',')} already covered by ${plan.held.map((x) => `${x.id} (${x.state}, ${x.ref})`).join(', ')}: no new request`);
+        else {
+          const q = await reg(['deploy', 'request', d.env, '--scope', 'host', '--ref', d.ref, '--agent', RUNNER_AGENT, '--approved',
+            '--hosts', skipped.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${skipped.join(',')}`]);
+          if (q.code !== 0) log.error?.(`[deploy] catch-up request for ${d.id} failed: ${q.stderr}`);
+          else await say(`# catch-up request ${q.stdout.trim()} for ${skipped.join(',')}`);
+        }
+      }
     }
     running.delete(d.env);
     alert(`deploy:${d.id}:${status}`, {
