@@ -18,6 +18,10 @@ const sshLog = path.join(tmp, 'ssh.log'), remoteLog = path.join(tmp, 'remote.log
 fs.writeFileSync(path.join(bin, 'ssh'), `#!/bin/sh
 node -e 'require("fs").appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)) + "\\n")' "${sshLog}" "$@"
 [ -n "$FAKE_SSH_EXIT" ] && { echo "ssh: connect failed" >&2; exit "$FAKE_SSH_EXIT"; }
+# FAKE_SSH_FAIL_N=n: the first n calls drop (255), later ones work; FAKE_SSH_FAIL_AFTER=n: every call after the n-th drops
+c="${sshLog}.n"; n=$(cat "$c" 2>/dev/null || echo 0); echo $((n+1)) > "$c"
+[ -n "$FAKE_SSH_FAIL_N" ] && [ "$n" -lt "$FAKE_SSH_FAIL_N" ] && { echo "ssh: dropped" >&2; exit 255; }
+[ -n "$FAKE_SSH_FAIL_AFTER" ] && [ "$n" -ge "$FAKE_SSH_FAIL_AFTER" ] && { echo "ssh: dropped" >&2; exit 255; }
 for last; do :; done
 exec sh -c "$last"
 `, { mode: 0o755 });
@@ -30,16 +34,19 @@ case "$1" in
   claim) echo "L-42"; exit \${FAKE_CLAIM_CODE:-0};;
   heartbeat) echo ok; exit \${FAKE_HB_CODE:-0};;
   release) echo "released 1"; exit 0;;
+  list) if [ -n "$FAKE_LIST_JSON" ]; then echo "$FAKE_LIST_JSON"; else echo "out:$*"; fi; exit 0;;
   deploy) cat; exit 0;;
   *) echo "out:$*"; exit \${FAKE_CODE:-0};;
 esac
 `, { mode: 0o755 });
+const sleeper = path.join(tmp, 'sleeper');
+fs.writeFileSync(sleeper, '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });   // one process, so a kill ends it and closes the pipes
 const localCmd = path.join(tmp, 'local-cmd');
 fs.writeFileSync(localCmd, `#!/bin/sh\necho local-cmd >> "${order}"\nsleep \${LOCAL_SLEEP:-0}\nexit \${LOCAL_EXIT:-0}\n`, { mode: 0o755 });
 
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 const lines = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean) : []);
-const reset = () => { for (const f of [sshLog, remoteLog, order]) fs.rmSync(f, { force: true }); };
+const reset = () => { for (const f of [sshLog, sshLog + '.n', remoteLog, order]) fs.rmSync(f, { force: true }); };
 
 function run(args, { env = {}, input } = {}) {
   return new Promise((resolve) => {
@@ -85,8 +92,19 @@ test('the remote exit code passes through exactly; ssh exit 255 is UNAVAILABLE (
   reset();
   const down = await run(['check', 'env-a'], { env: { FAKE_SSH_EXIT: '255' } });
   assert.equal(down.code, 5); assert.match(down.err, /UNAVAILABLE/); assert.match(down.err, /busy, not free/); assert.equal(lines(remoteLog).length, 0);
-  const other = await run(['claim', 'env-a', 'x', '--agent', 'a', '--wait'], { env: { FAKE_SSH_EXIT: '255' } });
-  assert.equal(other.code, 5);
+  const poll = await run(['claim', 'env-a', 'x', '--agent', 'a'], { env: { FAKE_SSH_EXIT: '255' } });   // a plain claim does not wait: unavailable
+  assert.equal(poll.code, 5);
+});
+
+test('a forwarded claim --wait survives an ssh drop: backs off, cancels the stale ticket of the dropped call, claims again', async () => {
+  reset();
+  const stale = JSON.stringify({ tickets: [{ id: 'T-9', env: 'env-a', resources: ['env-a/host:x'], agent: 'a' }, { id: 'T-other', env: 'env-a', resources: ['env-a/host:x'], agent: 'someone-else' }] });
+  const r = await run(['claim', 'env-a', 'x', '--agent', 'a', '--wait'], { env: { FAKE_SSH_FAIL_N: '1', FAKE_LIST_JSON: stale } });
+  assert.equal(r.code, 0, r.err); assert.match(r.err, /retrying in/); assert.match(r.err, /cancelled stale ticket T-9/);
+  const remote = lines(remoteLog).map((l) => JSON.parse(l).args);
+  assert.deepEqual(remote.find((a) => a[0] === 'ticket'), ['ticket', 'T-9', '--cancel']);
+  assert.ok(!remote.some((a) => a[0] === 'ticket' && a[1] === 'T-other'));
+  assert.equal(remote.at(-1)[0], 'claim'); assert.equal(r.out, 'L-42\n');
 });
 
 test('stdin passes through to the remote client', async () => {
@@ -129,8 +147,33 @@ test('run: heartbeats go over ssh while the command runs and all end before the 
   assert.equal(lost.code, 6); assert.match(lost.err, /LEASE LOST/); assert.equal(lines(order).at(-1), 'release');
 });
 
-test('run: a busy or unreachable claim exits with that code and never runs the command or releases', async () => {
-  for (const [env, code] of [[{ FAKE_CLAIM_CODE: '3' }, 3], [{ FAKE_SSH_EXIT: '255' }, 5]]) {
+test('run: an ssh drop during the initial claim --wait is retried, not exit 5; the command then runs', async () => {
+  reset();
+  const r = await run(['run', 'env-a', 'host-1', '--agent', 'codebox:x', '--', localCmd], { env: { FAKE_SSH_FAIL_N: '2' } });
+  assert.equal(r.code, 0, r.err); assert.match(r.err, /retrying in/); assert.deepEqual(lines(order).filter((x) => x !== 'list'), ['claim', 'local-cmd', 'release']);
+});
+
+test('run: the heartbeat thread renews the lease (a heartbeat alone does not extend it) with the run ttl', async () => {
+  reset();
+  const r = await run(['run', 'env-a', 'host-1', '--agent', 'codebox:x', '--ttl', '45', '--', localCmd], { env: { LOCAL_SLEEP: '1' } });
+  assert.equal(r.code, 0, r.err);
+  const renews = lines(remoteLog).map((l) => JSON.parse(l).args).filter((a) => a[0] === 'renew');
+  assert.ok(renews.length >= 1); assert.deepEqual(renews[0], ['renew', 'L-42', '--ttl', '45']);
+});
+
+test('run: heartbeats unreachable past the service miss window mean the lease is lost: exit 6, or the command is killed with --on-fence kill', async () => {
+  reset();
+  // claim works (call 1), every later ssh call drops; 3 x 0.2 s without a success = lost
+  const lost = await run(['run', 'env-a', 'host-1', '--agent', 'codebox:x', '--', localCmd], { env: { LOCAL_SLEEP: '3', FAKE_SSH_FAIL_AFTER: '1' } });
+  assert.equal(lost.code, 6, lost.err); assert.match(lost.err, /LEASE LOST: no successful heartbeat/);
+  reset();
+  const t0 = Date.now();
+  const killed = await run(['run', 'env-a', 'host-1', '--agent', 'codebox:x', '--on-fence', 'kill', '--', sleeper], { env: { FAKE_SSH_FAIL_AFTER: '1' } });
+  assert.ok(Date.now() - t0 < 20000, 'the command was killed, not waited out'); assert.notEqual(killed.code, 0); assert.match(killed.err, /LEASE LOST/);
+});
+
+test('run: a busy claim exits with that code and never runs the command or releases', async () => {
+  for (const [env, code] of [[{ FAKE_CLAIM_CODE: '3' }, 3]]) {
     reset();
     const r = await run(['run', 'env-a', 'host-1', '--agent', 'a', '--', localCmd], { env });
     assert.equal(r.code, code); assert.ok(!lines(order).includes('local-cmd')); assert.ok(!lines(order).includes('release'));

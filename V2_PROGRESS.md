@@ -83,7 +83,7 @@ events); the codebox wrapper already calls the one central service, so no lease 
 `central-through-ssh` is accepted by the `vpt-lease` client (`VPT_LEASE_MODE`, runs the legacy path unchanged) and by ghosty
 (`leaseAuthority`: same registry paths as `legacy`, the Leases view and `GET /api/leases/view` report it); ghosty's own in-process
 lease service is labelled not-the-authority (`authority: false`) and refuses every write with `E_NOT_AUTHORITY` unless `leaseAuthority`
-is `central` or `leaseServiceClaims: true`; reads and the shadow store stay open. Live: after the lane deploy the coordinator changes the
+is `central` (no other switch; `leaseServiceClaims` was removed); reads are refused too, only status and the shadow store stay open. Live: after the lane deploy the coordinator changes the
 codebox client config and `manager.json` to `central-through-ssh` and swaps the deploy skill (prepared as `SKILL.md.central-ssh`).
 Device hosts and the Mac still use their own route (see the table). The older state below is the 2026-10-18 to 19 history.
 
@@ -392,3 +392,8 @@ Reviewed source repair `e9fbf2b78fb5934f1c2d7559096a1d496b6028e6` was cherry-pic
 Authority was exclusive ownership of this disposable local worktree only; no shared-resource lease or remote permission is implied. Main has advanced to reported `dccab06` and retains unrelated changes. Eventual integration must resolve the fresh full main SHA, preserve owner changes, and rerun gates on the resulting integration SHA. No shared/main/remote mutation occurred.
 
 Use mycodebox as the product/repository name; preserve existing technical service/package/path identifiers until migrated.
+
+**Follow-up (2026-10-19, `v2/fix-leases`, review findings 11 to 14).** Non-authority in-process service refuses reads too; `leaseServiceClaims` deleted.
+Live mode keeps `tickets` and idle/expect/session/mode from `vpt-lease list --json`. Under `central-through-ssh` idle-to-pin and liveness downgrades
+are NOT live (registry host service has no liveness; see LEASES-CENTRAL "What is live"). `vpt-lease run` over ssh renews, declares the lease lost after
+3 missed heartbeat intervals, and a `claim --wait` survives ssh drops (backoff plus stale-ticket cancel). Finding 10 (shared identity) is open.

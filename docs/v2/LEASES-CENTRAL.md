@@ -344,8 +344,25 @@ Where the build is more specific than the design above:
   lease was lost while the command ran.
 - **Dashboard.** `leaseAuthority` (`legacy` | `central-through-ssh` | `central`) is read once at start (switching needs a restart). `central-through-ssh`
   takes the same read, claim and deploy-runner paths as `legacy` (through the wrapper) and only changes the label shown (the Leases view
-  badge, `authority` in `GET /api/leases/view`). While the in-process service is not the authority (any value but `central`, unless
-  `manager.json` `leaseServiceClaims: true`) it refuses every write (`claim`, `ticket`, `release`, `renew`, `heartbeat`, `narrow`,
+  badge, `authority` in `GET /api/leases/view`). While the in-process service is not the authority (any value but `central`) it refuses every read and write (`get`, `list`, `check`, `events`, `deploy list|wait|last`, and the writes `claim`, `ticket`, `release`, `renew`, `heartbeat`, `narrow`,
   `setMode`, `ownerRelease`, `importLegacy`, deploy request/approve/start/finish/cancel/record) with `409 E_NOT_AUTHORITY` naming the
-  real authority; `/status` and the view say `authority: false`. Reads and the shadow store stay open. The service is constructed in both
+  real authority; `/status` and the view say `authority: false`. Only `status`, `tick` and the shadow store stay open. The service is constructed in both
   modes so shadow reports reach it; liveness is unknown (nothing released) until the first successful tmux listing.
+
+
+### What is live under `central-through-ssh` (2026-10-19, review findings 11 to 14)
+
+- **Live:** claim, queue and tickets, TTL expiry, heartbeat-miss expiry (3 missed `heartbeat_s`, `lease-serve.js`), deploy leases, lease-watch over ssh,
+  the dashboard Leases view with tickets, `idleMin`, `expect_min` and mode (parsed from `vpt-lease list --json`, `leases.js`), lease-ask "you are #N" and
+  lease-nudge for waiting tickets and holders past `expect_min`.
+- **Not live:** idle exclusive holds becoming pins and the session-gone / session-status downgrades. The registry host service runs with
+  `isAlive: () => undefined, trackable: () => false` and `run` heartbeats are always `--active`, so no activity or liveness ever reaches it; ghosty's own
+  liveness is forwarded only when `leaseAuthority` is `central`. A hold ends by release, TTL or a missed-heartbeat expiry, not by idleness.
+  Forwarding `sessionGone` / `sessionStatus` / `activity` through the wrapper is open work.
+- **`vpt-lease run` over ssh:** the heartbeat thread sends `heartbeat --active` then `renew --ttl <run ttl>` every `heartbeat_s` (a heartbeat does not extend
+  `expires`), so a run longer than the ttl keeps its lease. If no heartbeat succeeds for 3 x `heartbeat_s` (the service's miss window; ssh 255 and exit 5
+  count as failures) the lease is treated as lost: `LEASE LOST`, exit 6, or the command is killed with `--on-fence kill`. A refused heartbeat (exit 1/3) fences at once.
+- **Dropped ssh during `claim --wait`** (a forwarded `claim --wait` or the first claim of `run`): backs off (5 s doubling to 120 s), cancels our queued
+  tickets for the same env, agent and resources, and queues again; it never exits 5. A plain claim without `--wait` still answers 5.
+- **Install:** `scripts/vpt-lease` is a client: install it on codebox (forwarding client) and on the registry host (`~/bin/vpt-lease`), plus every
+  other machine that runs `vpt-lease run`.

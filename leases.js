@@ -18,7 +18,11 @@ export function createLeaseStore({ run = sshRun, ttlMs = 15000, now = Date.now }
     try {
       if (r.code !== 0) throw new Error((r.stderr || `exit ${r.code}`).trim().slice(0, 200));
       const j = JSON.parse(r.stdout);
-      value = { ok: true, leases: (j.leases || []).map((l) => ({ id: l.id, env: l.env, resource: l.resource || '*', agent: l.agent || '', purpose: l.purpose || '', kind: l.kind || 'run', ttlLeftMin: l.ttlLeftMin })), waiters: j.waiters || [] };
+      value = { ok: true, leases: (j.leases || []).map((l) => ({ id: l.id, env: l.env, resource: l.resource || '*', agent: l.agent || '', purpose: l.purpose || '', kind: l.kind || 'run', ttlLeftMin: l.ttlLeftMin,
+        // rich fields the client passes through from the central service (mode, idle, hold time, session): feed the Leases view, lease-ask and lease-nudge
+        ...(l.mode ? { mode: l.mode } : {}), ...(l.session ? { session: l.session } : {}), ...(l.since ? { since: l.since } : {}), idleMin: l.idleMin ?? null, expect_min: l.expect_min ?? null,
+        heartbeat_s: l.heartbeat_s ?? null, lastHeartbeatAt: l.lastHeartbeatAt ?? l.last_heartbeat_at ?? null, deploy_id: l.deploy_id ?? null })),
+        waiters: j.waiters || [], tickets: Array.isArray(j.tickets) ? j.tickets : [] };
     } catch (e) { value = { ok: false, error: String(e.message || e).slice(0, 200) }; }
     cache = { at: now(), value };
     return value;
