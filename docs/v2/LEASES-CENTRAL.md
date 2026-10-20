@@ -192,16 +192,16 @@ There is exactly one implementation of these rules, in
 
 "We cannot let coc hold a lease 110 min when coc is not priority and a turn is max 10 min." The service, not each client, enforces it.
 
-- **Priority on everything.** Every lease and ticket carries the holder's priority `P0|P1|P2` (P0 highest), shown as `priority` (and
+- **Priority on everything.** Every lease and ticket carries the holder's priority `P0|P1|P2|P3` (P0 highest, P3 = background for scheduled bots), shown as `priority` (and
   `priority_source`: `claim`, `session-meta` or `default`) in the lease and ticket views, `GET /list`, `vpt-lease list` (`priority=P2`, and
   `YIELD` when a renewal would be refused) and `--json`. Source, in order: the claim's `priority` field (`vpt-lease claim|run --priority`);
   the holder session's priority from session-meta (`sessions.json`, key = tmux name; the in-process service asks `sessions.priority(name)`,
   and the `vpt-lease` client on codebox reads the same file and sends the field, which is how it reaches the registry-host service that
   has no session-meta); else the default **P1** (`defaultPriority`). Note that session-meta itself defaults every session the dashboard
   has seen to **P2** until the owner raises it. Leases from before this change, imports and deploy (system) leases count as P1 and are exempt from the cap.
-- **P2 cap.** A lease of priority `lowPriority` (config, default `P2`) or lower is clamped to `lowPriorityMaxTtlMin` (config, default 10) per
+- **P2/P3 cap.** A lease of priority `lowPriority` (config, default `P2`) or lower (so P2 and P3) is clamped to `lowPriorityMaxTtlMin` (config, default 10) per
   claim and per renewal; the lease view records `ttl_clamped_from`, the claim answers with a warning and the client prints it.
-- **Yield.** While a ticket of higher-or-equal priority waits on a resource the P2 lease blocks, `POST /renew` is refused with `409
+- **Yield.** While a ticket of STRICTLY higher priority waits on a resource the P2/P3 lease blocks (P2 yields to P0/P1, P3 to P0..P2; an equal-priority waiter never forces a yield, FIFO and the 10 min claims stay), `POST /renew` is refused with `409
   E_YIELD_REQUIRED` (`reason: yield_required`, `waiting`; `vpt-lease renew` exits 7) and `POST /heartbeat` answers `yield_required: true` (a
   heartbeat extends nothing, so it stays ok). The holder gets one **`yield`** event per lease the moment such a ticket queues (feed key
   `lease:yield`; a codebox session gets the note "stop at the next turn boundary and release it"); it is cleared and can fire again if the
@@ -314,12 +314,12 @@ Errors: `{ ok: false, code, error }` with `code` one of `E_INVALID` (400), `E_AU
 
 | Route | Body / query | Answer |
 |---|---|---|
-| `POST /claim` | `{ env, resources: [..], agent, session?, purpose?, mode: exclusive\|observe\|pin, kind?: server\|host, ttl_min?, heartbeat_s?, expect_min?, wait?: false\|"ticket", priority?: P0\|P1\|P2, shared?, request_id?, deploy_id?, priority_since? }` | granted: `{ ok, lease: { id, env, resources, mode, kind, agent, session, purpose, since, expires_at, generation, heartbeat_s } }`; busy without wait: `E_HELD` + `holders` + `eta` + `eta_latest` (+ `reason: queued`, `position` when only waiting tickets are ahead); with `wait: "ticket"`: `{ ok, ticket: { id, position, eta, holders } }` |
+| `POST /claim` | `{ env, resources: [..], agent, session?, purpose?, mode: exclusive\|observe\|pin, kind?: server\|host, ttl_min?, heartbeat_s?, expect_min?, wait?: false\|"ticket", priority?: P0\|P1\|P2\|P3, shared?, request_id?, deploy_id?, priority_since? }` | granted: `{ ok, lease: { id, env, resources, mode, kind, agent, session, purpose, since, expires_at, generation, heartbeat_s } }`; busy without wait: `E_HELD` + `holders` + `eta` + `eta_latest` (+ `reason: queued`, `position` when only waiting tickets are ahead); with `wait: "ticket"`: `{ ok, ticket: { id, position, eta, holders } }` |
 | `GET /tickets/:id?wait=<s>` | long-poll up to 30 s | `{ ok, ticket: { id, state: waiting\|granted\|missed\|expired\|cancelled, position, eta, eta_latest, lease? } }` |
 | `GET /leases/:id` | | `{ ok, lease: { id, mode, generation, state, agent, expires_at } }` (validate before a protected step) |
 | `DELETE /tickets/:id` | | cancels a ticket |
 | `POST /release` | `{ id }` or `{ agent }` (+ `by`, `reason`) | `{ ok, released: [ids] }` |
-| `POST /renew` | `{ id, ttl_min? }` | `{ ok, lease }`; `409 E_YIELD_REQUIRED` for a P2 lease while a higher-or-equal ticket waits |
+| `POST /renew` | `{ id, ttl_min? }` | `{ ok, lease }`; `409 E_YIELD_REQUIRED` for a P2/P3 lease while a strictly higher ticket waits |
 | `POST /heartbeat` | `{ id, active?: bool }` | `{ ok, lease, yield_required?, yield_message? }` (`active` = control activity, resets the idle clock) |
 | `POST /narrow` | `{ id, resources?, kind? }` | one-way narrowing, as `vpt-lease narrow` |
 | `POST /mode` | `{ id, mode }` | downgrade only (exclusive -> pin/observe) by the holder; owner may do it for anyone |

@@ -733,3 +733,9 @@ test('central run renews the lease every heartbeat so a P2 run outlives its 10 m
   r = await run(['run', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--', 'sh', '-c', 'sleep 1; echo done']);
   assert.equal(r.code, 0); assert.match(r.err, /YIELD REQUIRED for lease RN2/); assert.match(r.out, /done/);
 });
+
+test('priority: --priority accepts P3 and sends it', async () => {
+  setup(() => ({ ok: true, lease: lease({ id: 'P3A', priority: 'P3' }) }));
+  const r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:bot', '--priority', 'P3']);
+  assert.equal(r.code, 0); assert.equal(calls[0].body.priority, 'P3');
+});

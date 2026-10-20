@@ -18,12 +18,12 @@ Mode (VPT_LEASE_MODE):
 Env: VPT_LEASE_URL (service base URL), VPT_LEASE_TOKEN_FILE (default ~/.config/vpt-lease/token, must be mode 0600),
      VPT_LEASE_AGENT (default agent for deploy wait), VPT_LEASE_TEST_FAST=1 (short intervals, for tests).
 
-New: claim --wait | --ticket, --mode exclusive|observe|pin, --expect MIN, --priority P0|P1|P2; ticket ID [--wait] [--cancel];
+New: claim --wait | --ticket, --mode exclusive|observe|pin, --expect MIN, --priority P0|P1|P2|P3; ticket ID [--wait] [--cancel];
      heartbeat ID [--active]; mode ID pin|observe; validate ID --agent A; run <claim args> -- <command...>.
 
 Exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 UNAVAILABLE (service unreachable: never "free"),
 6 `run` only: the lease was lost during the run (the command itself finished with 0).
-7 `renew` only: yield_required, a P2 lease cannot be extended while a claim of higher or equal priority waits (release it).
+7 `renew` only: yield_required, a P2 lease cannot be extended while a claim of higher priority waits (release it).
 `validate ID --agent A` (central only): 0 when the lease is held, exclusive and A's; 3 otherwise (the reason is printed);
 5 when the service is unavailable. Call it right before each protected step (a restart, a deploy step).
 """
@@ -32,7 +32,7 @@ import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
 BUSY, PENDING, UNAVAILABLE = 3, 4, 5
-YIELD = 7        # renew refused: a claim of higher or equal priority waits on a P2 lease (service code E_YIELD_REQUIRED)
+YIELD = 7        # renew refused: a claim of higher priority waits on a P2 lease (service code E_YIELD_REQUIRED)
 SCOPES = ("frontend", "host", "server", "full")
 KINDS = ("server", "host", "run", "maintenance")
 KIND_ALIASES = {"run": "server", "maintenance": "host"}
@@ -357,8 +357,8 @@ def request_id_done(body):
         _cache_save("request-ids.json", m)
 
 
-PRIORITIES = ("P0", "P1", "P2")
-YIELD_HELP = ("a claim of higher or equal priority is waiting: stop at the next turn boundary and release the lease "
+PRIORITIES = ("P0", "P1", "P2", "P3")
+YIELD_HELP = ("a claim of higher priority is waiting: stop at the next turn boundary and release the lease "
               "(a P2 lease cannot be renewed while one waits)")
 
 
@@ -415,7 +415,7 @@ def granted(a, r, wanted, kind):
         eprint(w)
     if lease.get("ttl_clamped_from"):
         eprint("⚠ --ttl %s min clamped to %s min: this is a %s lease (max 10 min per claim; it cannot be renewed while a claim of "
-               "higher or equal priority waits)" % (lease["ttl_clamped_from"], lease.get("ttl_min"), lease.get("priority")))
+               "higher priority waits)" % (lease["ttl_clamped_from"], lease.get("ttl_min"), lease.get("priority")))
     if not a.agent.startswith(("codebox:", "mac:")) and a.agent != "manager:deploy" and not a.agent.startswith("update_core:"):
         eprint("⚠ agent %r is not codebox:<tmux session> or mac:<name>: the dashboard cannot link this lease to a "
                "session (it counts as an unknown holder); use AGENT=\"codebox:$(tmux display-message -p '#S')\"" % a.agent)
@@ -1011,7 +1011,7 @@ class HeartbeatThread(threading.Thread):
                 lost = None
                 if r.get("ok") and self.renew_ttl:
                     # a heartbeat does not extend expires: renew like the ssh path, so a run outlives its ttl (a P2 lease is
-                    # capped at 10 min by the service and refused while a claim of higher or equal priority waits)
+                    # capped at 10 min by the service and refused while a claim of higher priority waits)
                     rr = api("POST", "/renew", {"id": self.lease_id, "ttl_min": self.renew_ttl}, timeout=10)
                     if rr.get("code") == "E_YIELD_REQUIRED":
                         self.say_yield()
@@ -1297,7 +1297,7 @@ def build_parser():
         c.add_argument("--shared", action="store_true")
         c.add_argument("--mode", choices=MODES, default="exclusive", help="exclusive (default), observe (read archives), pin (keep this state)")
         c.add_argument("--expect", type=int, default=0, help="expected hold in minutes (improves the queue ETA)")
-        c.add_argument("--priority", choices=PRIORITIES, default=None, help="holder priority P0 (highest) .. P2; default: the session's own, else P1. A P2 lease is capped at 10 min per claim and cannot be renewed while a claim of higher or equal priority waits")
+        c.add_argument("--priority", choices=PRIORITIES, default=None, help="holder priority P0 (highest) .. P3 (background: scheduled bots); default: the session's own, else P1. A P2 or P3 lease is capped at 10 min per claim and cannot be renewed while a claim of higher priority waits")
         c.add_argument("--deploy-id", default="", help="join the lease of this running deploy (default $VPT_DEPLOY_ID)")
     c = sub.add_parser("claim"); claim_args(c)
     c.add_argument("--wait", action="store_true", help="queue and block until granted (retries while the service is unreachable)")

@@ -93,7 +93,7 @@ function leasesConflict(a, b, ignoreModes = false) {
   if (a.shared && b.shared) return false;
   return a.resources.some((x) => b.resources.some((y) => resourceConflict(P(x), P(y), kindOf(a, x), kindOf(b, y))));
 }
-const PRIOS = ['P0', 'P1', 'P2'];
+const PRIOS = ['P0', 'P1', 'P2', 'P3'];     // P3 = background (scheduled bots)
 const isPrio = (p) => PRIOS.includes(p);
 const prioRank = (p) => PRIOS.indexOf(p);
 const defaultKind = (parsed) => (parsed.length && parsed.every((r) => r.type === 'device') ? 'host' : 'server');
@@ -125,7 +125,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, ticketIdleMs: 2 * MIN, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
-    // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of higher-or-equal priority waits on a resource it blocks (`yield`).
+    // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
     defaultPriority: 'P1', lowPriority: 'P2', lowPriorityMaxTtlMin: 10, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
@@ -191,7 +191,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       }
       case 'renew': { const l = S.leases[f.id]; if (l) { l.expires = f.expires; l.ttlMin = f.ttlMin; l.lastHb = f.at; } break; }
       case 'hb': { const l = S.leases[f.id]; if (l) { l.lastHb = f.at; l.reservedUntil = null; const c = clk.get(l.id); if (c) { c.hb = mono(); if (f.active) c.act = mono(); } } break; }
-      case 'yield': { const l = S.leases[f.id]; if (l) { if (f.clear) delete l.yieldAt; else { l.yieldAt = f.at; ev('yield', l, f.at, { priority: prioOf(l), waiting: f.waiting, reason: 'a claim of higher or equal priority is waiting: stop at the next turn boundary and release' }); } } break; }
+      case 'yield': { const l = S.leases[f.id]; if (l) { if (f.clear) delete l.yieldAt; else { l.yieldAt = f.at; ev('yield', l, f.at, { priority: prioOf(l), waiting: f.waiting, reason: 'a claim of higher priority is waiting: stop at the next turn boundary and release' }); } } break; }
       case 'collect': { const l = S.leases[f.id]; if (l) l.reservedUntil = null; break; }
       case 'tkt_pass': for (const id of f.ids) if (S.tickets[id]) S.tickets[id].passed = (S.tickets[id].passed || 0) + 1; break;
       case 'flag': { const l = S.leases[f.id]; if (l) ev('flag', l, f.at, { status: f.status, text: f.text, reason: f.reason }); break; }
@@ -498,10 +498,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // ---- priority ------------------------------------------------------------------------------------------------------
   function prioOf(x) { return isPrio(x?.priority) ? x.priority : cfg.defaultPriority; }   // a declaration: journal replay (load) runs before this line   // leases from before priorities existed (and imports) count as the default
   const isLow = (x) => !x.system && !x.deployId && prioRank(prioOf(x)) >= prioRank(cfg.lowPriority);
-  // Tickets of higher-or-equal priority waiting on something this low-priority lease blocks: while any, the holder may not extend and must yield.
+  // Tickets of STRICTLY higher priority waiting on something this low-priority lease blocks: while any, the holder may not extend and must yield.
   function yieldWaiters(l) {
     if (!l || l.mode !== 'exclusive' || !isLow(l)) return [];
-    return waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && prioRank(prioOf(tk)) <= prioRank(prioOf(l)) && leasesConflict(tk, l));
+    return waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && prioRank(prioOf(tk)) < prioRank(prioOf(l)) && leasesConflict(tk, l));
   }
   const yieldFail = (l, ws) => fail('E_YIELD_REQUIRED', `yield_required: a ${prioOf(ws[0])} claim (${ws.map((w) => w.agent).slice(0, 3).join(', ')}) waits on ${l.env}/${l.resources.join(',')} and this ${prioOf(l)} lease may not be extended: stop at the next turn boundary and release (vpt-lease release ${l.id})`,
     { reason: 'yield_required', lease: l.id, priority: prioOf(l), waiting: ws.map((w) => ({ id: w.id, agent: w.agent, priority: prioOf(w) })) });
@@ -577,7 +577,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const tt = ttlCheck(a.ttl_min, cfg.ttlDefaultMin); if (tt.error) return fail('E_INVALID', tt.error);
     let ttlMin = tt.ttl;
     let warnings = tt.warnings;
-    if (a.priority != null && !isPrio(a.priority)) return fail('E_INVALID', 'priority must be P0|P1|P2');
+    if (a.priority != null && !isPrio(a.priority)) return fail('E_INVALID', 'priority must be P0|P1|P2|P3');
     // opt-in: only a lease that declares heartbeat_s is released when its heartbeats stop (plain claims keep TTL and the idle rule)
     const heartbeatS = a.heartbeat_s ?? null;
     if (heartbeatS != null && (typeof heartbeatS !== 'number' || heartbeatS < 10 || heartbeatS > 3600)) return fail('E_INVALID', 'heartbeat_s must be 10..3600 when given');
@@ -602,7 +602,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     let ttlClampedFrom = null;
     if (!system && !a.deploy_id && prioRank(priority) >= prioRank(cfg.lowPriority) && ttlMin > cfg.lowPriorityMaxTtlMin) {
       ttlClampedFrom = ttlMin; ttlMin = cfg.lowPriorityMaxTtlMin;
-      warnings = [`ttl clamped from ${ttlClampedFrom} to ${ttlMin} min: a ${priority} lease is capped at ${cfg.lowPriorityMaxTtlMin} min per claim and cannot be renewed while a claim of higher or equal priority waits`];
+      warnings = [`ttl clamped from ${ttlClampedFrom} to ${ttlMin} min: a ${priority} lease is capped at ${cfg.lowPriorityMaxTtlMin} min per claim and cannot be renewed while a claim of higher priority waits`];
     }
     return {
       ok: true, wait,
@@ -779,7 +779,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       const no = holderCheck(l, a); if (no) return no;
       emit({ t: 'hb', id: l.id, active: !!a.active });
       const ws = yieldWaiters(S.leases[l.id]);
-      return { ok: true, lease: leaseView(S.leases[l.id]), ...(ws.length ? { yield_required: true, yield_message: `a claim of higher or equal priority waits: stop at the next turn boundary and release ${l.id}` } : {}) };
+      return { ok: true, lease: leaseView(S.leases[l.id]), ...(ws.length ? { yield_required: true, yield_message: `a claim of higher priority waits: stop at the next turn boundary and release ${l.id}` } : {}) };
     });
   }
   // Legacy `vpt-lease narrow <id> [--resource R] --kind host`: sensitivity becomes host for that row (or every row) and NOTHING is

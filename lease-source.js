@@ -286,7 +286,7 @@ export function eventNote(ev) {
   const kind = String(ev?.kind || ev?.event || '').toLowerCase().replace(/_/g, '-');
   const w = where(ev);
   if (kind === 'downgraded') return `Your exclusive lease on ${w} became a pin (${ev.reason || 'no control activity for 20 min'}). Claim again with vpt-lease claim ... --wait when you drive it.`;
-  if (kind === 'yield') return `Your ${ev.priority || 'P2'} lease ${ev.id || ''} on ${w} cannot be renewed: a claim of higher or equal priority is waiting. Stop at the next turn boundary and release it (vpt-lease release ${ev.id || '<id>'}); claim again with --wait when you need it.`;
+  if (kind === 'yield') return `Your ${ev.priority || 'P2'} lease ${ev.id || ''} on ${w} cannot be renewed: a claim of higher priority is waiting. Stop at the next turn boundary and release it (vpt-lease release ${ev.id || '<id>'}); claim again with --wait when you need it.`;
   if (kind === 'pin-overlap') return `Someone else was granted an exclusive lease that overlaps your pin on ${w}${ev.by_agent || ev.by || ev.holder ? ` (${ev.by_agent || ev.by || ev.holder})` : ''}. Your pin does not block them; claim again with vpt-lease claim ... --wait if you need to drive it.`;
   return null;
 }
