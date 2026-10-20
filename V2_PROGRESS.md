@@ -1,4 +1,4 @@
-STATUS: DELIVERED 343063f2f7e8 (main, via the integration lane; the lane replaced the draft-PR step of §9). Final report below; gate detail in docs/v2/DELIVERY-GATES.md; owner actions (§15 floors only) at the end of the report.
+STATUS: DELIVERED 343063f2f7e8 (main, via the integration lane; the lane replaced the draft-PR step of §9). Final report below; gate detail in docs/v2/DELIVERY-GATES.md; owner actions (tagged by §15 floor) at the end of the report.
 
 # V2 progress
 
@@ -64,17 +64,17 @@ Extra hardening merged: v2/test-history-race `c0740e1`, v2/tmp-autoclean `91cc56
 - Device hosts have no route to the lease service (BLOCKED since round 11).
 - The router has 3 open wake cases (escalated waits); they need a `stall.js` fix.
 
-### Owner-action list (only items under an OWNER_DECISIONS §15 floor)
+### Owner-action list (§15-floor items, plus what agents cannot do: permission denial or the owner's machine)
 
 1. [§15 floor: credentials and secrets] Finding 10, per-machine lease identity under central-through-ssh. Choose (a) per-machine ssh keys with a `ForceCommand` wrapper that selects the token file per key, or (b) forward the caller's token in the ssh environment. Until then any machine's session can release/renew/narrow any lease.
 2. [§15 floor: credentials and secrets] Mac `vpt-lease` client config (`central-through-ssh` plus the ssh wrapper, with a dated backup): it needs the Mac's ssh key/token for the registry host (depends on item 1).
 3. [§15 floor: deletions of data] Codebox disk at about 80-91%: clean docker images and build cache, the `/tmp` `*-pg-*` dirs and Trash.
+4. [no floor; owner permission setting, Q193] Change `scripts/safe-restart.sh` so lease-blocked queued deploys do not count as pending work, or allow lane changes to it: agents are permission-denied on that script.
+5. [no floor; owner's machine, no agent reaches it] Mac: install the Stop hook with a heartbeat to the intake (nudges and Mac liveness) and update the Mac copy of the deploy skill.
 
 ### Next work (manager, not owner; no §15 floor, §19)
 
 - Confirm the lane-only revert (the typed-instruction revert replaced by a lane revert route).
-- Change `scripts/safe-restart.sh` so lease-blocked queued deploys do not count as pending work (the coordinator and its workers are permission-denied on that script; the manager decides who may edit it).
-- Mac: install the Stop hook with a heartbeat to the intake (nudges and Mac liveness) and update the Mac copy of the deploy skill.
 - Point the device hosts' lease route at the registry host (`central-through-ssh` + ssh target); the registry host already runs the current `vpt-lease`, installed 2026-10-20.
 - Router: `stall.js` fix for the 3 open wake cases (escalated waits on a lease/deploy ticket).
 - Convert the remaining ~150 leaking test temp prefixes to `test/helpers-tmp.js` (health-watch sweeps them meanwhile).
