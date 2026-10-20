@@ -181,7 +181,7 @@ const SHORT_BLOCK_RE = /\bblocked\b|\bcannot\b|\bcan'?t\b|\bwaiting\b|\bI'?ll wa
 // A queued wait is not an escalation: the session is in a line (a lease / deploy ticket, a queue position,
 // `claim --wait`, a deploy already queued or awaiting approval) and no agent makes that line move faster.
 // Only the wait text decides: a deploy hint alone (a scope or ref) is not a queue position.
-const QUEUED_RE = /\bt-[\w-]{2,}\b|\btickets?\b|\bqueue(?:d|ing|s)?\b|\bposition\s+(?:#?\d|one|two|three|first|last)\b|--wait\b|\bawaiting\b|\bin (?:the )?(?:deploy )?queue\b/i;
+const QUEUED_RE = /\bt-[\w-]{2,}\b|\btickets?\b|\bqueued\b|\bqueueing\b|\bposition\s+(?:#?\d|one|two|three|first|last)\b|--wait\b|\bawaiting\b|\bin (?:the )?(?:deploy )?queue\b/i;
 const queuedWait = (text) => QUEUED_RE.test(String(text || ''));
 // waiting_deploy: waiting on leases, live runs, a deploy, or the owner's go-ahead for one.
 const WAIT_DEPLOY_RE = /\b(?:may|can|shall|should) I (?:queue|deploy|restart)\b[^.\n]{0,60}\?|\bwaiting (?:on|for)\b[^.\n]{0,80}(?:go-ahead|approval|approve|leases?|deploy|restart|live runs?)|\bgo-ahead (?:to|for)\b[^.\n]{0,60}(?:deploy|restart|update_core)|\bwait(?:ing)? (?:for|on) your (?:answer|ok|go-ahead|approval)\b[^.\n]{0,40}(?:deploy|restart)|\bupdate_core(?:\.sh)?\b[^.\n]{0,40}(?:go-ahead|approv|waiting)|\bblocked by\b[^.\n]{0,40}(?:live )?(?:runs?|leases?)|\b(?:once|when|after)\b[^.\n]{0,40}\bleases? (?:clear|release|free|expire)|\bnot deployed yet\b|\bneeds a (?:server |host |frontend )?restart\b/i;
