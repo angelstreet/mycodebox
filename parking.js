@@ -197,7 +197,9 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
     checks(facts) {
       const r = [];
       const agent = facts.claude ? 'claude' : facts.minimax ? 'minimax' : null;
-      if (!agent) return ['no Claude or MiniMax process in this pane'];
+      // Dead session: no agent process left in the pane (it exited or crashed, the pane is a bare shell). Parkable
+      // only when the caller says so with facts.dead — a pane we know nothing about is still refused.
+      if (!agent && !facts.dead) return ['no Claude or MiniMax process in this pane'];
       // Per-agent prerequisite checks (Claude only knows its own idle / sessionId; MiniMax is idle by the board's `state`).
       if (agent === 'claude') {
         if (facts.claude.info.status !== 'idle') r.push(`Claude status is "${facts.claude.info.status}", not idle`);
@@ -219,6 +221,16 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       await load();
       const reasons = this.checks(facts);
       if (reasons.length) throw err(409, `not parked: ${reasons.join('; ')}`, reasons);
+      // Dead session: the agent is already gone, so there is nothing to /exit and nothing to wait for. Record the
+      // same shape as a Claude park (so resume is unchanged: new tmux + `claude --resume <id>`) with dead:true, then
+      // kill the bare-shell pane. sessionId may be null when no conversation was found; resume then refuses.
+      if (facts.dead && !facts.claude && !facts.minimax) {
+        const rec = { session: name, cwd: facts.cwd || null, sessionId: facts.sessionId || null, claudeName: name, args: '', priority: facts.priority || null, rssMb: facts.rssMb ?? null, lastActivity: null, parkedAt: now(), dead: true };
+        data.parked[name] = rec;
+        await save();
+        await tmux.kill(name);
+        return rec;
+      }
       let rec;
       if (facts.claude) {
         const { info, args } = facts.claude;
@@ -276,6 +288,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       if (await tmux.exists(name)) throw err(409, 'a tmux session with that name already exists');
       let cmd;
       if (rec.agent === 'minimax') cmd = `${base} -c`;
+      else if (!rec.sessionId) throw err(400, 'this parked session has no conversation id to resume (the agent had already died); start a new session in its folder instead');
       else cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId });
       await tmux.create(name, rec.cwd);
       await start(name, rec, cmd);

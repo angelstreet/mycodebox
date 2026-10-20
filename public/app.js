@@ -1641,6 +1641,15 @@ function buildSideRow(s) {
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
   return li;
 }
+// A pane with no agent in it (the agent exited or crashed, only bash/zsh/sh left) is a dead session: still
+// parkable, it just gets killed and resumed by conversation id. Only status fields already on the page are used.
+const SHELL_CMDS = new Set(['bash', 'zsh', 'sh']);
+function parkable(n) {
+  const st = state.status[n] || {};
+  if (st.agent === 'claude') return true;
+  const cmd = String(st.agentCmd || '').trim().split('/').pop().split(/\s+/)[0];
+  return SHELL_CMDS.has(cmd);
+}
 function syncSide() {
   // which sessions are on screen right now: the focused one always; in the grid, every visible card
   const shownNames = new Set(state.mode === 'grid' ? [...els.gridPane.children].map((c) => c.dataset.session) : state.mode === 'card' && state.active ? [state.active] : []);
@@ -1660,7 +1669,7 @@ function syncSide() {
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
     li.querySelector('.sst').textContent = badgeText(n);   // the dot's colour says the state (its tooltip names it); the row shows only the time
-    li.querySelector('.park').hidden = (state.status[n] || {}).agent !== 'claude';
+    li.querySelector('.park').hidden = !parkable(n);
     const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
     syncPill(li.querySelector('.pp'), n);
