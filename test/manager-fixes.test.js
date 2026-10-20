@@ -1,14 +1,15 @@
 // TASK-44 manager fixes: safe defaults, no repeat logging across restarts, outcome attribution, alert API, actor field.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createReporter } from '../reporter.js';
 import { createAlerts } from '../push.js';
 import { actorOf, createAlertApi, ALERT_MAX_PER_HOUR } from '../api-extras.js';
+import { tmp } from './helpers-tmp.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-fixes-'));
+const dir = tmp('ghosty-fixes-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: '', JEV_API_KEY: '' });
 const m = await import('../manager.js');
 await m.initManager({ onOwnerNeeded: () => {} });

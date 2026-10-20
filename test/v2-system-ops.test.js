@@ -2,15 +2,16 @@
 // admission pause, allowlisted reversible actions under a real (file) lease authority, approval for everything else.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, appendFile, mkdir, symlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, appendFile, mkdir, symlink } from 'node:fs/promises';
+
 import { join } from 'node:path';
 import { createLeaseAuthority, fileBackend, fakeBackend } from '../orchestration/lease-authority.js';
 import { createIncidentStore, sanitizeText, INCIDENT_TYPES } from '../orchestration/incidents.js';
 import { createTelemetry, readingsFromHealth } from '../orchestration/telemetry.js';
 import { createSystemOps, createAdmissionController, ALLOWED_ACTIONS } from '../orchestration/system-ops.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-sysops-'));
+const tmp = () => mkTmp('v2-sysops-');
 const H = 'host-a';
 
 // Harness: fake telemetry (mutable `m`), fake deploy registry, recording actions, real lease authority on a temp dir.

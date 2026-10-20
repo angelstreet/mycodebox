@@ -3,13 +3,14 @@
 // Tests marked `todo: 'defect: ...'` assert the behaviour the design promises and report as todo until fixed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
+
 import { join } from 'node:path';
 import { createLeaseAuthority, fileBackend, fakeBackend } from '../orchestration/lease-authority.js';
 import { deadControllerIntents } from '../orchestration/goal-loop.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-lease-verify5-'));
+const tmp = () => mkTmp('v2-lease-verify5-');
 const W = 'worktree:task-4';
 const C = 'service:node-a:goal-loop';
 const id = { owner: 'goal-loop', task_id: 'task-4' };

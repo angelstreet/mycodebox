@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-mgrsess-'));
+
+import { tmp } from './helpers-tmp.js';
+
+const dir = tmp('ghosty-mgrsess-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000' });
 const m = await import('../manager.js');
 const pushes = [];

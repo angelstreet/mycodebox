@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSessionHistory } from '../session-history.js';
 import { createHistoryView } from '../history-view.js';
+import { tmp } from './helpers-tmp.js';
 
 const M = 60000, D = 24 * 3600e3;
 const T0 = Date.UTC(2026, 9, 11, 9, 0, 0);
@@ -16,7 +17,7 @@ const row = (label, ts, over = {}) => ({ id: `c:${label}:${ts}`, agent: 'claude'
   usage: { input: 10, output: 5, cache_read: 100, cache_write_5m: 1 }, cost: { total: 0.25 }, ...over });
 
 function world() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hv6b-'));
+  const dir = tmp('hv6b-');
   const ledger = path.join(dir, 'usage-ledger.jsonl');
   const rows = [
     ...Array.from({ length: 40 }, (_, i) => row('live', T0 + i * 2 * M)),                 // the long-running session, days before history

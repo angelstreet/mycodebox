@@ -2,10 +2,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
+
+
 import { runShadow } from '../router-shadow.js';
+import { tmp } from './helpers-tmp.js';
 
 const TEAM = 'team-shadow';
 const seen = { shadow: [], manager: [], outcome: [] };
@@ -39,7 +40,7 @@ const srv = http.createServer((req, res) => {
 await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 test.after(() => srv.closeAllConnections?.() || srv.close());
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-shadow-'));
+const dir = tmp('ghosty-shadow-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', VPT_TEAM_ID: TEAM, JEV_API_KEY: 'k', JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide` });
 const m = await import('../manager.js');
 const sc = await import('../scorecard.js');

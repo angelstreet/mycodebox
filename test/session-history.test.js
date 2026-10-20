@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSessionHistory, validateRecord, sanitizePromptRef, fold } from '../session-history.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sh-')), 'session-history.jsonl');
+const tmp = () => path.join(mkTmp('sh-'), 'session-history.jsonl');
 const start = (name, ts, over = {}) => ({ kind: 'session.started', name, provider: 'claude', model: null, cwd: '/w/a', started_by: 'dashboard', prompt_ref: null, handover_ref: null, ts, ...over });
 const end = (name, ts, reason = 'killed') => ({ kind: 'session.ended', name, ts, reason });
 

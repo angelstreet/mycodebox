@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tmp } from './helpers-tmp.js';
 
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'cbsession');
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbs-'));
+const home = tmp('cbs-');
 const work = path.join(home, 'work'); fs.mkdirSync(work);
 fs.writeFileSync(path.join(home, 'handover.md'), '# h\n');
 const run = (...args) => spawnSync('bash', [SCRIPT, ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, MCODE_NODE_DIR: '/opt/fake-node/bin', GHOSTY_STATE_DIR: path.join(home, 'state') } });

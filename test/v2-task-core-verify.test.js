@@ -2,17 +2,18 @@
 // document defects found by the verifier and pass once the defect is fixed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTaskStore, actorKey } from '../orchestration/store.js';
 import { loadPolicy, checkAction, restrictedTopics } from '../orchestration/policy.js';
 import { narrowsParent, normalizeTask } from '../orchestration/task-contract.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-const tmp = () => mkdtempSync(join(tmpdir(), 'v2-verify-'));
+const tmp = () => mkTmp('v2-verify-');
 const open = (dir = tmp()) => createTaskStore({ dir, ...clock() });
 const PATH = ['clarified', 'planned', 'ready', 'executing', 'evaluating'];
 const toState = async (s, id, last = 'evaluating') => { for (const x of PATH.slice(0, PATH.indexOf(last) + 1)) await s.transition(id, x); };

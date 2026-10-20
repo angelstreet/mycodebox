@@ -6,11 +6,12 @@
 // a temp GHOSTY_STATE_DIR and feed two separate runs of the same input to assert what is printed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { tmp } from './helpers-tmp.js';
 
 const SH = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'manager-event-filter.sh');
 
@@ -26,7 +27,7 @@ const kinds = (r) => r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(
 const seenPath = (dir) => join(dir, 'manager-reports', '.seen-keys');
 
 test('cross-run dedupe: asks / waiting / lease are suppressed in run 2; deploy / hold keep per-run dedupe only', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-filt-'));
+  const dir = tmp('ghosty-filt-');
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
   const input = asksLine + waitingLine + leaseLine + deployLine + holdLine;
 
@@ -40,7 +41,7 @@ test('cross-run dedupe: asks / waiting / lease are suppressed in run 2; deploy /
 });
 
 test('seen-keys file: only cross-run kinds (asks / waiting / lease) are appended; per-run kinds (deploy / hold) are not', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-filt-'));
+  const dir = tmp('ghosty-filt-');
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
   run(env, asksLine + waitingLine + leaseLine + deployLine + holdLine);
   const lines = readFileSync(seenPath(dir), 'utf8').trim().split('\n').filter(Boolean);
@@ -54,7 +55,7 @@ test('seen-keys file: only cross-run kinds (asks / waiting / lease) are appended
 });
 
 test('seen-keys: entries older than 6 h are pruned on startup, so the same asks line prints again', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-filt-'));
+  const dir = tmp('ghosty-filt-');
   mkdirSync(join(dir, 'manager-reports'), { recursive: true });
   const seven_h_ago = Math.floor(Date.now() / 1000) - 7 * 3600;
   writeFileSync(seenPath(dir), `${seven_h_ago} web|asks|ShouldIdeploynow?\n`);
@@ -65,7 +66,7 @@ test('seen-keys: entries older than 6 h are pruned on startup, so the same asks 
 });
 
 test('seen-keys: an entry within the 6 h window is kept and suppresses the same asks line in a later run', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-filt-'));
+  const dir = tmp('ghosty-filt-');
   mkdirSync(join(dir, 'manager-reports'), { recursive: true });
   const one_h_ago = Math.floor(Date.now() / 1000) - 3600;
   writeFileSync(seenPath(dir), `${one_h_ago} web|asks|ShouldIdeploynow?\n`);

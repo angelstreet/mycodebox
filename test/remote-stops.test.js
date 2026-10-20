@@ -7,8 +7,9 @@ import path from 'node:path';
 import http from 'node:http';
 import { PassThrough } from 'node:stream';
 import { hashToken } from '../lease-routes.js';
+import { tmp } from './helpers-tmp.js';
 
-const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghosty-remote-'));
+const stateDir = tmp('ghosty-remote-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '' });
 const manager = await import('../manager.js');
 const { createRemoteStops, PREFIX, validateStop, stopText, slugName, HOOK_LOST } = await import('../remote-stops.js');
@@ -215,7 +216,7 @@ test('two Mac sessions with the same title do not share a row', async () => {
 });
 
 test('merge and push questions from a Mac session escalate (evaluated only for local sessions); a checkout does not change that', async () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'mac-checkout-'));
+  const repo = tmp('mac-checkout-');
   fs.writeFileSync(path.join(stateDir, 'remote.json'), JSON.stringify({ waitS: 10, checkouts: { 'co-proj': repo } }));
   for (const [title, text] of [['rm-merge', 'Tests: 120/120 pass on feat.\nShould I merge feat into main?'], ['rm-push', 'Tests: 120/120 pass on feat.\nShall I push feat to origin?']]) {
     const before = owner.length;

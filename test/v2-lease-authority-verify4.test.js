@@ -3,12 +3,12 @@
 // adopt(attempted) with that private id. The three findings are kept as hard assertions against the new design.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createLeaseAuthority, fileBackend, fakeBackend } from '../orchestration/lease-authority.js';
 
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-lease-verify4-'));
+
+import { createLeaseAuthority, fileBackend, fakeBackend } from '../orchestration/lease-authority.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
+
+const tmp = () => mkTmp('v2-lease-verify4-');
 const R = 'repo:demo:integration';
 const W = 'worktree:task-4';
 const opts = (owner, extra = {}) => ({ owner, task_id: `task-${owner}`, ttl_ms: 60_000, scope: 'merge', approval_ref: 'appr-1', ...extra });

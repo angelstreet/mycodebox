@@ -2,10 +2,11 @@
 // and one end-to-end run against a throwaway HOME with fake check commands.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { parseCheckResult, buildEvent, shouldWake, loadConfig, run } from '../scripts/daily-checks.js';
+import { tmp } from './helpers-tmp.js';
 
 const chk = { id: 'x', title: 'X', command: ['n'] };
 const ok = (o) => ({ status: 0, stdout: 'noise\n' + JSON.stringify(o) + '\n' });
@@ -44,7 +45,7 @@ test('shouldWake: new, unchanged inside the window, changed text, window elapsed
 });
 
 test('run: end-to-end — healthy writes a report and no event; a finding writes one event, then debounces, then re-wakes after clearing', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'daily-'));
+  const home = tmp('daily-');
   const dir = join(home, '.local/state/ghosty'); mkdirSync(dir, { recursive: true });
   const script = join(home, 'chk.js');
   writeFileSync(script, `const fs=require('fs'); const bad=fs.existsSync(process.env.HOME+'/bad'); console.log(JSON.stringify({summary:'s',report:'body',findings:bad?[{key:'leak:b',title:'Leak',body:'x'}]:[]}))`);
@@ -68,7 +69,7 @@ test('run: end-to-end — healthy writes a report and no event; a finding writes
 
 test('loadConfig: missing file is reported, malformed checks are dropped', () => {
   assert.match(loadConfig('/nonexistent/x.json').error, /no config/);
-  const p = join(mkdtempSync(join(tmpdir(), 'daily-')), 'c.json');
+  const p = join(tmp('daily-'), 'c.json');
   writeFileSync(p, JSON.stringify({ checks: [{ id: 'a', command: ['x'] }, { id: 'b' }, 7] }));
   assert.deepEqual(loadConfig(p).checks.map((c) => c.id), ['a']);
 });

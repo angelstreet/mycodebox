@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { desiredState, scoresOfStop, indexStops, scoreIdOf, stopObsIdOf, createEvalSync, DATASET } from '../usage/lfeval.js';
 import { genIdOf, traceIdOf } from '../usage/lf-common.js';
+import { tmp } from './helpers-tmp.js';
 
 // Synthetic log only: no real stop content.
 const NOW = Date.parse('2026-10-04T12:00:00Z');
@@ -101,7 +102,7 @@ function mock({ traces = [] } = {}) {
   return new Promise((ok) => srv.listen(0, '127.0.0.1', () => ok({ calls, url: `http://127.0.0.1:${srv.address().port}` })));
 }
 async function setup(recs, lf) {
-  const dir = await fs.mkdtemp(join(tmpdir(), 'lfeval-'));
+  const dir = tmp('lfeval-');
   const cfg = { langfuseUrl: lf.url, publicKey: 'pk', secretKey: 'sk', stallsFile: join(dir, 'stalls.jsonl'), evalStateFile: join(dir, 'lfeval-state.json'), now: () => NOW, backfillDays: 14 };
   const write = (r) => fs.writeFile(cfg.stallsFile, r.map((x) => JSON.stringify(x)).join('\n') + '\n');
   await write(recs);

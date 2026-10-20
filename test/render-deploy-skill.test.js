@@ -6,12 +6,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { render, rulesBody, BEGIN, END } from '../scripts/render-deploy-skill.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const script = path.join(root, 'scripts', 'render-deploy-skill.js');
 const fixture = path.join(root, 'test', 'fixtures', 'sample-deploy-skill.md');
 const rules = fs.readFileSync(path.join(root, 'docs', 'LEASE-RULES.md'), 'utf8');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'render-skill-'));
+const tmp = mkTmp('render-skill-');
 
 test('the lease rules say the required things, generically', () => {
   for (const s of ['--wait', 'vpt-lease run', 'never use `--force`', 'heartbeat', 'release', 'pin', 'observe', 'frontend', 'UNAVAILABLE', '`waiting` or `blocked`']) {

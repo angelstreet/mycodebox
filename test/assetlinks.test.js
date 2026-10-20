@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { buildAssetlinks, loadAssetlinks, publicLinks } from '../assetlinks.js';
+import { tmp } from './helpers-tmp.js';
 
 const FP = Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0').toUpperCase()).join(':');
 const FP2 = Array(32).fill('AB').join(':');
@@ -31,7 +32,7 @@ test('assetlinks: invalid or half-set values are refused', () => {
 });
 
 test('assetlinks: state-dir file is served verbatim; env wins; bad file or none -> error/null', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-al-'));
+  const dir = tmp('ghosty-al-');
   assert.equal(await loadAssetlinks({}, dir), null);
   writeFileSync(join(dir, 'assetlinks.json'), '[ {"x": 1} ]\n');
   assert.equal((await loadAssetlinks({}, dir)).json, '[ {"x": 1} ]\n');

@@ -1,14 +1,15 @@
 // Round 9 item 8: "ready for N minutes" on a device -> the manager answers hardware-step asks while the window is open.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createReadyStore, parseReadySpeech, isHardwareAsk, readyReply, MAX_MINUTES } from '../ready-window.js';
 import { matchSpokenAnswer, normalizeSpeech, createVoice } from '../voice.js';
 import { decidedItems, decidedSummary } from '../decided.js';
+import { tmp } from './helpers-tmp.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-ready-'));
+const dir = tmp('ghosty-ready-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: '', JEV_API_KEY: '' });
 const m = await import('../manager.js');
 let clock = Date.now();

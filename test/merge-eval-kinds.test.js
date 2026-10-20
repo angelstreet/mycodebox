@@ -3,11 +3,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { makeRepo, git } from './helpers-git.js';
 import { validateDecision } from '../orchestration/task-contract.js';
+import { tmp } from './helpers-tmp.js';
 
 const SCRIPT = new URL('../scripts/merge-eval.js', import.meta.url).pathname;
 const GREEN = 'Tests: 1826/1826 pass on feat.';
@@ -17,17 +18,17 @@ function run(args, { env = {} } = {}) {
       resolve({ code: err ? err.code : 0, stdout: stdout.trim(), stderr, json: (() => { try { return JSON.parse(stdout.trim().split('\n').pop()); } catch { return null; } })() }));
   });
 }
-const stateDir = (runner = true) => { const d = mkdtempSync(join(tmpdir(), 'meval-state-')); writeFileSync(join(d, 'manager.json'), JSON.stringify({ deployRunner: runner })); writeFileSync(join(d, 'deploy-envs.json'), JSON.stringify({ 'env-a': {}, 'env-b': {} })); return d; };
+const stateDir = (runner = true) => { const d = tmp('meval-state-'); writeFileSync(join(d, 'manager.json'), JSON.stringify({ deployRunner: runner })); writeFileSync(join(d, 'deploy-envs.json'), JSON.stringify({ 'env-a': {}, 'env-b': {} })); return d; };
 function withOrigin() {
   const repo = makeRepo();
-  const bare = join(mkdtempSync(join(tmpdir(), 'meval-origin-')), 'origin.git');
+  const bare = join(tmp('meval-origin-'), 'origin.git');
   git(repo, 'init', '-q', '--bare', bare); git(repo, 'remote', 'add', 'origin', bare); git(repo, 'push', '-q', 'origin', 'main', 'feat'); git(repo, 'fetch', '-q', 'origin');
   git(repo, 'commit', '-q', '--allow-empty', '-m', 'more');
   return repo;
 }
 // a fake `vpt-lease`: DEPLOY_REGISTRY='["node","<file>"]'
 function fakeRegistry({ leases = [], deployed = {}, fail = false } = {}) {
-  const f = join(mkdtempSync(join(tmpdir(), 'meval-reg-')), 'vpt-lease.mjs');
+  const f = join(tmp('meval-reg-'), 'vpt-lease.mjs');
   writeFileSync(f, `const a = process.argv.slice(2).join(' ');
 if (${JSON.stringify(fail)}) { console.error('down'); process.exit(3); }
 if (a === 'deploy list --json') console.log(JSON.stringify({ deploys: [], leases: ${JSON.stringify(leases)} }));

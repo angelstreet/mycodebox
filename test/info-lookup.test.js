@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { splitAsk, lookupInfo } from '../info-lookup.js';
 import { makeRepo, git } from './helpers-git.js';
+import { tmp } from './helpers-tmp.js';
 
 test('splitAsk: (a)/(b), numbers, semicolons, "and" before an imperative', () => {
   assert.deepEqual(splitAsk('(a) send the SRF 1 buffer path for row b, and (b) say whether to merge task90-open'),
@@ -33,7 +34,7 @@ test('lookupInfo: untracked docs and a plain (non-git) directory are read', asyn
   writeFileSync(join(repo, 'notes', 'a.md'), 'Telemetry export dir: ~/exports/telemetry-out\n');
   git(repo, 'add', '-A'); git(repo, 'commit', '-q', '-m', 'notes');   // git grep reads tracked files only
   assert.equal((await lookupInfo('where is the telemetry export dir', { roots: [repo] })).answer, '~/exports/telemetry-out');
-  const plain = mkdtempSync(join(tmpdir(), 'info-plain-'));
+  const plain = tmp('info-plain-');
   writeFileSync(join(plain, 'state.md'), 'gamma cache path /var/fake/gamma-cache\n');
   const r = await lookupInfo('what is the gamma cache path', { roots: [plain] });
   assert.equal(r.answer, '/var/fake/gamma-cache'); assert.equal(r.source, 'state.md:1');
@@ -56,7 +57,7 @@ test('M8: only filesystem paths from clean lines are answered', async () => {
   assert.equal((await lookupInfo('send the gamma cache path', { roots: [repo] })).answer, '/data/fake/gamma-cache');
 });
 test('M8: json files in a plain directory and untracked docs are not read', async () => {
-  const plain = mkdtempSync(join(tmpdir(), 'info-plain-'));
+  const plain = tmp('info-plain-');
   writeFileSync(join(plain, 'state.json'), JSON.stringify({ note: 'delta cache path /var/fake/delta-cache' }));
   assert.equal(await lookupInfo('what is the delta cache path', { roots: [plain] }), null);
   const repo = makeRepo();

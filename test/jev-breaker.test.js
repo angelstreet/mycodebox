@@ -1,15 +1,16 @@
 // Jev circuit breaker (jev-breaker.js): 3 errors in a row open it, a probe every 10 min, a success closes it, one announcement per transition.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createJevBreaker, PROBE_MS } from '../jev-breaker.js';
 import { decide } from '../router.js';
 import { classifyKey, createManagerEvents } from '../manager-events.js';
+import { tmp } from './helpers-tmp.js';
 
 const setup = () => {
-  const file = join(mkdtempSync(join(tmpdir(), 'ghosty-jevb-')), 'jev-budget.json');
+  const file = join(tmp('ghosty-jevb-'), 'jev-budget.json');
   let t = Date.parse('2026-10-05T10:00:00Z');
   const b = createJevBreaker({ file, now: () => t });
   return { b, file, tick: (ms) => { t += ms; }, read: () => JSON.parse(readFileSync(file, 'utf8')) };
@@ -86,7 +87,7 @@ test('router decide: an API failure is source "error", an unsure answer stays "r
 
 test('jev:down / jev:up are manager events of kind jev', async () => {
   assert.deepEqual(classifyKey('jev:down'), { kind: 'jev', state: 'down' });
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-jevb-ev-'));
+  const dir = tmp('ghosty-jevb-ev-');
   const me = createManagerEvents({ stateDir: dir });
   assert.equal(await me.record({ key: 'jev:down', title: 'Jev is down', body: 'x' }), true);
   const l = JSON.parse(readFileSync(me.file, 'utf8').trim());
@@ -99,7 +100,7 @@ test('jev-ask CLI: 403s give source "error"; after 3 the breaker is open and the
   let hits = 0;
   const srv = createServer((req, res) => { hits++; res.writeHead(403, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: false, error: 'key limit exceeded' })); });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-jevb-cli-'));
+  const dir = tmp('ghosty-jevb-cli-');
   const cli = fileURLToPath(new URL('../scripts/jev-ask.js', import.meta.url));
   const env = { ...process.env, GHOSTY_STATE_DIR: dir, GHOSTY_ENV_FILE: join(dir, 'none.env'), JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide`, JEV_API_KEY: 'k' };
   const ask = () => new Promise((res) => { import('node:child_process').then(({ spawn }) => { const p = spawn('node', [cli, 'stop', '--facts', JSON.stringify({ case: 'owner_decision' })], { env }); let o = ''; p.stdout.on('data', (d) => { o += d; }); p.on('close', () => res(JSON.parse(o))); }); });

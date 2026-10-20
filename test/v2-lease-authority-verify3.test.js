@@ -2,13 +2,14 @@
 // lost-record guard. Tests marked `todo: 'defect: ...'` assert the correct behaviour and report as todo until fixed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, utimes, unlink, readdir, readFile } from 'node:fs/promises';
+import { writeFile, utimes, unlink, readdir, readFile } from 'node:fs/promises';
 import * as realFs from 'node:fs';
-import { hostname, tmpdir } from 'node:os';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { createLeaseAuthority, fileBackend, validResource } from '../orchestration/lease-authority.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-lease-verify3-'));
+const tmp = () => mkTmp('v2-lease-verify3-');
 const R = 'repo:demo:integration';
 const K = encodeURIComponent(R);
 const opts = (owner, extra = {}) => ({ owner, task_id: `task-${owner}`, ttl_ms: 60_000, scope: 'merge', approval_ref: 'appr-1', ...extra });

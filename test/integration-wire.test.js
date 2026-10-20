@@ -4,11 +4,12 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeWorld } from './helpers-lane.js';
+import { tmp } from './helpers-tmp.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -18,7 +19,7 @@ const freePort = () => new Promise((res, rej) => { const s = net.createServer();
 
 test('server.js wires the lane to notify: a merged request lands in the feed with the lane wording', { timeout: 60_000 }, async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
-  const base = mkdtempSync(join(tmpdir(), 'int-wire-')), state = join(base, 'state'), home = join(base, 'home');
+  const base = tmp('int-wire-'), state = join(base, 'state'), home = join(base, 'home');
   mkdirSync(state, { recursive: true }); mkdirSync(home, { recursive: true });
   writeFileSync(join(state, 'integration.json'), JSON.stringify({ repos: { 'env-a': w.cfg() } }));
   const port = await freePort();
@@ -58,7 +59,7 @@ test('server.js wires the lane to notify: a merged request lands in the feed wit
 
 test('a request resumed at boot (pushed, deploy pending) finds notify and deploys wired', { timeout: 60_000 }, async () => {
   const w = makeWorld();
-  const base = mkdtempSync(join(tmpdir(), 'int-wire-')), state = join(base, 'state'), home = join(base, 'home');
+  const base = tmp('int-wire-'), state = join(base, 'state'), home = join(base, 'home');
   mkdirSync(join(state, 'integration'), { recursive: true }); mkdirSync(home, { recursive: true });
   writeFileSync(join(state, 'integration.json'), JSON.stringify({ repos: { 'env-a': w.cfg(), 'env-b': w.cfg({ deploy: { env: 'env-b', defaultScope: 'server' } }) } }));
   const sha = 'a'.repeat(40), at = new Date().toISOString();

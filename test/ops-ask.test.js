@@ -6,14 +6,15 @@
 // to the MANAGER (the manager's merge / deploy evaluation owns it).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { opsAsk, isLeaseOrDeployAsk } from '../ops-ask.js';
 import { forbiddenMatch as forbiddenMatchForTest, ownerFloorMatch as ownerFloorForTest } from '../stall.js';
 import { isOwnersTurn, buildQueue } from '../public/ask-model.js';
+import { tmp } from './helpers-tmp.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-opsask-'));
+const dir = tmp('ghosty-opsask-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: '', JEV_API_KEY: '' });
 const m = await import('../manager.js');
 const pushes = [], items = [];

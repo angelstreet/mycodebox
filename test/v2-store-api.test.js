@@ -1,13 +1,13 @@
 // Store read APIs used by controllers: events() and independence() (judged from the store's own records).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+
+
 import { createTaskStore } from '../orchestration/store.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp } from './helpers-tmp.js';
 
-const open = () => createTaskStore({ dir: mkdtempSync(join(tmpdir(), 'v2-store-api-')), ...clock() });
+const open = () => createTaskStore({ dir: tmp('v2-store-api-'), ...clock() });
 const DEV = { role: 'developer', id: 'dev-1' };
 
 test('events(): the validated log in seq order; unknown task -> E_NOT_FOUND', async () => {

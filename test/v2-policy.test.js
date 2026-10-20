@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPolicy, checkAction, clarificationFor, restrictedTopics, textVariants, POLICY_PATH } from '../orchestration/policy.js';
@@ -9,9 +9,10 @@ import { MANDATORY_APPROVAL, normalizeTask } from '../orchestration/task-contrac
 import { createTaskStore } from '../orchestration/store.js';
 import { setForbiddenExtra } from '../stall.js';
 import { spec, clock } from './fixtures/v2-task.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-const tmp = () => mkdtempSync(join(tmpdir(), 'v2-policy-'));
+const tmp = () => mkTmp('v2-policy-');
 const repoWith = (text) => { const d = tmp(); mkdirSync(join(d, '.ai')); writeFileSync(join(d, POLICY_PATH), text); return d; };
 const sample = () => JSON.parse(readFileSync(join(REPO, POLICY_PATH), 'utf8'));
 const policy = (over = {}) => ({ ...sample(), ...over });

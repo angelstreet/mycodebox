@@ -1,11 +1,12 @@
 // Round 9 item 11: a session that waits on a job of its own is woken when the job ends; the harness flags what it cannot see.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { classifyStall } from '../stall.js';
 import { jobRefs, waitsOnOwnJob, createOwnJobs, descendants, jobPids } from '../own-jobs.js';
+import { tmp } from './helpers-tmp.js';
 
 const status = (line) => classifyStall({ plain: ['Started the final run.', line], state: 'done' });
 
@@ -38,7 +39,7 @@ test('process tree: children of the agent except shells and helpers', () => {
 });
 
 function harness(over = {}) {
-  const proc = mkdtempSync(join(tmpdir(), 'fake-proc-'));
+  const proc = tmp('fake-proc-');
   const sent = [], feed = [], logs = [];
   let t = 1_700_000_000_000;
   const state = { waiting: true, canSend: true, deploys: {}, table: { children: new Map(), args: new Map() }, agent: 10 };
@@ -78,7 +79,7 @@ test('no reference in the line: the pane process tree is the job; waits for all 
 });
 test('a log file: ends when its mtime stops changing for N minutes, sooner with a completion marker', async () => {
   const h = harness();
-  const dir = mkdtempSync(join(tmpdir(), 'fake-run-'));
+  const dir = tmp('fake-run-');
   const log = join(dir, 'out.log');
   writeFileSync(log, 'step 1\nstep 2\n');
   const sec = h.now() / 1000;

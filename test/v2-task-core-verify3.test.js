@@ -2,13 +2,14 @@
 // the open low findings.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createTaskStore, actorKey } from '../orchestration/store.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'v2-verify3-'));
+const tmp = () => mkTmp('v2-verify3-');
 const open = (dir = tmp()) => createTaskStore({ dir, ...clock() });
 const PATH = ['clarified', 'planned', 'ready', 'executing', 'evaluating'];
 const toState = async (s, id) => { for (const x of PATH) await s.transition(id, x); };

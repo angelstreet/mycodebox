@@ -2,9 +2,10 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { parseManagerLine, langfuseEvents, createIngester, defaults, priceFor, costOf, buildSummary, genIdOf, traceIdOf } from '../usage/ingest.js';
+import { tmp } from './helpers-tmp.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const prices = JSON.parse(await fs.readFile(new URL('../usage/prices.json', import.meta.url), 'utf8'));
@@ -33,7 +34,7 @@ const claudeLine = (id, ts, usage, extra = {}) => JSON.stringify({
 }) + '\n';
 
 async function fixture(lf) {
-  const dir = await fs.mkdtemp(join(tmpdir(), 'usage-test-'));
+  const dir = tmp('usage-test-');
   const cfg = {
     ...defaults({}), langfuseUrl: lf.url, publicKey: 'pk', secretKey: 'sk',
     claudeDir: join(dir, 'claude'), codexDir: join(dir, 'codex'), minimaxDb: join(dir, 'none.sqlite'), opencodeDb: join(dir, 'none-oc.sqlite'),

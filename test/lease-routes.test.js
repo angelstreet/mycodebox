@@ -16,7 +16,7 @@ const DEPLOYER = 'tok-dep-0123456789abcdef';
 const OWNER = 'tok-own-0123456789abcdef';
 
 async function boot(cidrs, opts = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-http-'));
+  const dir = tmp('lease-http-');
   fs.writeFileSync(path.join(dir, 'clients.json'), JSON.stringify({ clients: [
     { name: 'mac', sha256: hashToken(TOKEN) }, { name: 'box', sha256: hashToken(TOKEN2) },
     { name: 'deployer', sha256: hashToken(DEPLOYER), exemptAgents: ['manager:deploy', 'update_core:*'] },
@@ -174,7 +174,7 @@ test('request_id over HTTP: a retried claim returns the same lease', async () =>
 });
 
 test('scripts: lease-token add / list / revoke (token printed once, only the hash stored), lease-export, lease-import dry run', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-scripts-'));
+  const dir = tmp('lease-scripts-');
   const run = (script, args, input) => spawnSync('node', [path.join(ROOT, 'scripts', script), ...args], { encoding: 'utf8', input, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C', GHOSTY_STATE_DIR: dir } });
   const add = run('lease-token.js', ['add', 'mac', '--dir', dir, '--exempt', 'manager:deploy,update_core:*']);
   assert.equal(add.status, 0);
@@ -244,6 +244,7 @@ test('review 2: import conflicts are reported; lease-import --apply exits 1 when
   } finally { await c.close(); }
 });
 import * as childProcess from 'node:child_process';
+import { tmp } from './helpers-tmp.js';
 function require_child() { return childProcess; }
 
 test('review 4/5/6: HTTP clients cannot touch in-process leases or other clients\' deploys; the runner client can; a deploy_id join needs runner or requester', async () => {
@@ -285,7 +286,7 @@ test('review 15: lease-export on a missing directory exits 1 with a message and 
 });
 
 test('review 1: lease-token add --owner stores owner:true and list shows it', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-owner-'));
+  const dir = tmp('lease-owner-');
   const run = (args) => spawnSync('node', [path.join(ROOT, 'scripts', 'lease-token.js'), ...args, '--dir', dir], { encoding: 'utf8' });
   assert.equal(run(['add', 'dash', '--owner']).status, 0);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'clients.json'), 'utf8')).clients[0].owner, true);

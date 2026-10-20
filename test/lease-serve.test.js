@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { startLeaseServer } from '../scripts/lease-serve.js';
+import { tmp } from './helpers-tmp.js';
 
 test('standalone lease service: loopback listener, token required, same routes as the dashboard', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-serve-'));
+  const dir = tmp('lease-serve-');
   const token = execFileSync(process.execPath, ['scripts/lease-token.js', 'add', 'registry', '--dir', dir], { encoding: 'utf8' }).trim().split('\n')[0];
   const s = startLeaseServer({ dir, port: 0, log: { log() {}, error() {} } });
   try {
@@ -23,7 +24,7 @@ test('standalone lease service: loopback listener, token required, same routes a
 });
 
 test('the shadow store can be seeded with the legacy leases (cut-over shadow window)', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-serve-'));
+  const dir = tmp('lease-serve-');
   const { createLeaseService } = await import('../lease-service.js');
   const svc = createLeaseService({ dir, config: {} });
   try {

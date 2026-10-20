@@ -1,12 +1,13 @@
 // Round 9 item 9: owner-roundtrips.jsonl is written when a stop resolves (owner reply, manager answer, superseded, removed).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { roundtripRecord, summarizeRoundtrips, createRoundtrips } from '../roundtrips.js';
+import { tmp } from './helpers-tmp.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-rt-'));
+const dir = tmp('ghosty-rt-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: '', JEV_API_KEY: '' });
 const m = await import('../manager.js');
 await m.initManager({ onOwnerNeeded: () => {} });
@@ -76,7 +77,7 @@ test('a stop replaced by a newer one is recorded as superseded; a removed sessio
 });
 
 test('createRoundtrips.read filters by time and tolerates junk lines; the view summarises', async () => {
-  const d2 = mkdtempSync(join(tmpdir(), 'ghosty-rt2-'));
+  const d2 = tmp('ghosty-rt2-');
   const rt = createRoundtrips({ file: join(d2, 'x.jsonl') });
   await rt.record(roundtripRecord({ id: 'old', session: 's', at: 1000, answeredAt: 2000, reachedOwner: true }));
   await rt.record(roundtripRecord({ id: 'new', session: 's', at: Date.now() - 1000, answeredAt: Date.now(), reachedOwner: true }));

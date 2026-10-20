@@ -1,11 +1,12 @@
 // G8 P0: computeShare — dedupe, exclusion, autonomous paths, owner-confirmed, regret, day bucketing.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { computeShare, dailyRollup } from '../scripts/decision-share.js';
+import { tmp } from './helpers-tmp.js';
 
 const NOW = '2026-10-05T12:00:00.000Z';
 const t = (s, day = 1) => `2026-10-0${day}T${s}:00.000Z`;   // minute-precision ISO times
@@ -29,7 +30,7 @@ test('missing files: empty input gives zero decisions', () => {
 });
 
 test('dedupe: repeated stall records with same stopKey collapse to one decision', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-ds-'));
+  const dir = tmp('ghosty-ds-');
   const excerpt = 'should I run npm install here, or use the existing lockfile?';
   writeFixtures(dir, [
     stall({ session: 'feat', id: 'a', at: t('10:00', 1), case: 'owner_decision', excerpt }),
@@ -309,7 +310,7 @@ test('end-to-end: mixed fixture yields the expected rollup', () => {
 
 // CLI smoke test: write synthetic stalls into a temp state dir, invoke the script, parse its JSON output.
 test('CLI smoke --json parses a synthetic state dir', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-ds-cli-'));
+  const dir = tmp('ghosty-ds-cli-');
   const excerpt = 'should I ship this build, or wait for QA?';
   const records = [
     stall({ session: 'feat', id: 'a', at: t('10:00', 1), case: 'owner_decision', excerpt }),

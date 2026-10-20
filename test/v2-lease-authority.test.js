@@ -3,16 +3,17 @@
 // clock, persisted monotonic generations, ordered all-or-nothing acquisition, identity-checked renew/release.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, utimes, unlink, chmod } from 'node:fs/promises';
+import { readFile, writeFile, utimes, unlink, chmod } from 'node:fs/promises';
 import * as realFs from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createLeaseAuthority, fileBackend, fakeBackend, fence, validResource, canonicalOrder } from '../orchestration/lease-authority.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
 const MOD = pathToFileURL(new URL('../orchestration/lease-authority.js', import.meta.url).pathname).href;
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-lease-'));
+const tmp = () => mkTmp('v2-lease-');
 const clock = (t = 1_800_000_000_000) => { const c = () => c.t; c.t = t; return c; };
 const opts = (owner, extra = {}) => ({ owner, task_id: `task-${owner}`, ttl_ms: 60_000, scope: 'merge', approval_ref: 'appr-1', ...extra });
 const readAudit = async (dir) => (await readFile(join(dir, 'audit.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));

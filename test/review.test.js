@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { tmp } from './helpers-tmp.js';
 
 // Synthetic log only: no real stop content.
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-review-'));
+const dir = tmp('ghosty-review-');
 process.env.GHOSTY_STATE_DIR = dir;
 const m = await import('../manager.js');
 const log = join(dir, 'stalls.jsonl');

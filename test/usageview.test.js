@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { fmtTok, fmtUsd, costOrNull, usageByLabel, sessionDays, sessionRows, topEntries, dayBars, summaryFresh } from '../public/usage.js';
 import { createUsage } from '../usage-view.js';
 import { buildSummary } from '../usage/ingest.js';
+import { tmp } from './helpers-tmp.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const z = { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0, cost: 0, unpriced: 0, turns: 0 };
@@ -116,7 +117,7 @@ test('buildSummary emits today block, per-session today/days/activeHours and an 
 });
 
 test('createUsage: missing file -> null / null body (404-safe); present file is cached ~30 s', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gu-'));
+  const dir = tmp('gu-');
   const file = join(dir, 'usage-summary.json');
   let t = NOW;
   const u = createUsage({ file, now: () => t });

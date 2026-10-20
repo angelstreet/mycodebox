@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
+import { tmp } from './helpers-tmp.js';
 
 // Mock VPT server: decide, the decision log (summary / list / outcome), each switchable.
 const TEAM = 'team-test-1';
@@ -32,7 +33,7 @@ const srv = http.createServer((req, res) => {
 });
 await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-jevdec-'));
+const dir = tmp('ghosty-jevdec-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', VPT_TEAM_ID: TEAM, JEV_API_KEY: 'k-test',
   JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide` });
 const m = await import('../manager.js');

@@ -1,13 +1,14 @@
 // Round 9 item 7: mockup-first default. A mockup in the feed (kind mockup, link, deadlineAt), the manager answer, the owner's object tap.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createPush } from '../push.js';
 import { TOKEN_HEADER } from '../reporter.js';
+import { tmp } from './helpers-tmp.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-mockups-'));
+const dir = tmp('ghosty-mockups-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000' });
 delete process.env.JEV_URL; delete process.env.JEV_API_KEY;
 const { mockupRule, createMockups, OBJECT_TEXT } = await import('../mockups.js');
@@ -29,7 +30,7 @@ test('mockupRule: a mockup approval ask is answered; menus, other topics and a z
 });
 
 test('POST /api/mockups logic: loopback + token, a feed record with kind mockup, link and deadlineAt; the object tap tells the session once', async () => {
-  const push = createPush({ stateDir: mkdtempSync(join(tmpdir(), 'mk-push-')), log: { error() {} } });
+  const push = createPush({ stateDir: tmp('mk-push-'), log: { error() {} } });
   const sent = [];
   let t = 1_700_000_000_000;
   const mk = createMockups({ file: join(dir, 'mockups.jsonl'), push, tokenOk: (x) => x === 'tok', now: () => t, windowMin: () => 10, send: async (s, text, by) => { sent.push({ s, text, by }); } });

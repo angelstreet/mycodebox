@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { statusLine, stripSeparator } from '../stall.js';
 import { createReporter } from '../reporter.js';
 import { createManagerEvents } from '../manager-events.js';
 import { createTurnMeter, normalizeUsage, ledgerTokens, formatDuration, formatTokens, statusMeterLine, buildLastTurn, verdictOf, clipInfo, INFO_MAX } from '../turn-meter.js';
+import { tmp } from './helpers-tmp.js';
 
 test('separator stripping: em dash, en dash, hyphen, colon, middle dot; text that merely starts with a dash stays', () => {
   for (const sep of ['—', '–', ':', '·', ' — ', '- ', ': ', '· ']) {
@@ -69,7 +70,7 @@ test('verdict + lastTurn: missing values are omitted, nothing at all is null', (
 });
 
 test('reporter: a turn is metered prompt -> turn end, tokens summed from the usage, a new prompt starts over', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-tm-'));
+  const dir = tmp('ghosty-tm-');
   let clock = 5_000_000;
   const rep = createReporter({ stateDir: dir, now: () => clock });
   await rep.init();
@@ -101,7 +102,7 @@ test('reporter: a turn is metered prompt -> turn end, tokens summed from the usa
 });
 
 test('reporter: without a seen prompt the hook duration is the elapsed time', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-tm-'));
+  const dir = tmp('ghosty-tm-');
   const rep = createReporter({ stateDir: dir, now: () => 9_000_000 });
   await rep.init();
   rep.ingest({ v: 1, event: 'turn.end', session: 's2', sessionId: 'x', text: 't', durationMs: 7000 });
@@ -109,7 +110,7 @@ test('reporter: without a seen prompt the hook duration is the elapsed time', as
 });
 
 test('turn meter (Codex / MiniMax): ledger delta since the send, elapsed send -> stop; unknown stop time omits both', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-tm-'));
+  const dir = tmp('ghosty-tm-');
   const ledgerFile = join(dir, 'usage-ledger.jsonl');
   const row = (label, ts, n) => JSON.stringify({ id: `codex:${ts}`, agent: 'codex', label, ts, usage: { input: n, output: n, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 } });
   writeFileSync(ledgerFile, [row('cx', 1000, 7), row('cx', 61_000, 100), row('cx', 121_000, 200), row('other', 100_000, 9999), 'not json'].join('\n') + '\n');
@@ -156,7 +157,7 @@ test('turn meter (Claude): reporter meter and its text give the line', () => {
 });
 
 test('manager event: carries the turn, and two sightings of one stop with different meters still dedupe', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-tm-'));
+  const dir = tmp('ghosty-tm-');
   const ev = createManagerEvents({ stateDir: dir });
   const turn = (n) => ({ elapsedMs: n, tokens: null, status: 'needs-owner', info: 'ship it?', line: `STATUS: needs-owner · ${n}s · ship it?` });
   const e = (n) => ({ at: new Date(Date.UTC(2026, 9, 6, 12, 0, n)).toISOString(), key: 'sess:asks', title: 'sess asks you', body: `STATUS: needs-owner · ${n}s · ship it?\nthe question`, turn: turn(n) });

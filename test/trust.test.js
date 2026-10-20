@@ -4,8 +4,9 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trustClaude, trustCodex } from '../trust.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = async () => fs.mkdtemp(join(tmpdir(), 'trust-'));
+const tmp = async () => mkTmp('trust-');
 
 test('trustClaude adds a trusted project and keeps everything else', async () => {
   const f = join(await tmp(), 'claude.json');

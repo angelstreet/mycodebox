@@ -3,13 +3,14 @@
 // timing) and assert the correct behaviour; they were `todo` until the fixes landed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, utimes, unlink, readdir } from 'node:fs/promises';
+import { writeFile, utimes, unlink, readdir } from 'node:fs/promises';
 import * as realFs from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { createLeaseAuthority, fileBackend, fakeBackend } from '../orchestration/lease-authority.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-lease-verify-'));
+const tmp = () => mkTmp('v2-lease-verify-');
 const R = 'repo:demo:integration';
 const opts = (owner, extra = {}) => ({ owner, task_id: `task-${owner}`, ttl_ms: 60_000, scope: 'merge', approval_ref: 'appr-1', ...extra });
 const nap = (ms) => new Promise((r) => setTimeout(r, ms));

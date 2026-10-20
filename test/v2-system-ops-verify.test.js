@@ -3,15 +3,16 @@
 // A `todo: 'defect: ...'` marks a confirmed gap: the assertion states the expected behaviour and currently fails.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, symlink, appendFile, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, symlink, appendFile, readFile, writeFile } from 'node:fs/promises';
+
 import { join } from 'node:path';
 import { createLeaseAuthority, fileBackend } from '../orchestration/lease-authority.js';
 import { createIncidentStore, sanitizeText, INCIDENT_EVENTS } from '../orchestration/incidents.js';
 import { createTelemetry } from '../orchestration/telemetry.js';
 import { createSystemOps, createAdmissionController, ALLOWED_ACTIONS, SYSTEM_ROLE } from '../orchestration/system-ops.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-sysops-verify-'));
+const tmp = () => mkTmp('v2-sysops-verify-');
 const H = 'host-a';
 const SPEC_EVENTS = ['incident.opened', 'incident.acknowledged', 'incident.mitigation_requested', 'incident.approval_required', 'incident.resolved', 'incident.escalated', 'incident.unknown'];
 

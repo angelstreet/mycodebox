@@ -2,14 +2,15 @@
 // separate number; autonomy + regret show in the scorecard and the daily report.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { appendRegret, readRegrets, effectiveRegrets, regretAppliesTo, regretKey } from '../regret.js';
 import { computeShare, summarizeShare, dailyRollup, loadShare } from '../scripts/decision-share.js';
 import { buildScorecard } from '../scorecard.js';
 import { g8Summary } from '../public/usage.js';
 import { g8Lines, run } from '../scripts/daily-checks.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
 const T = (hm, day = 4) => `2026-10-0${day}T${hm}:00.000Z`;
 const stall = (o) => ({ type: 'stall', excerpt: o.question, agent: 'claude', ...o });
@@ -25,7 +26,7 @@ const actions = [
 ];
 const opts = { days: 7, now: T('23:00'), managerSessions: ['manager'] };
 
-async function tmp() { const d = mkdtempSync(join(tmpdir(), 'g8-')); return d; }
+async function tmp() { const d = mkTmp('g8-'); return d; }
 
 test('regret.js: append, newest line wins, unregret withdraws, bad input is a 400, file is append-only jsonl', async () => {
   const stateDir = await tmp();
@@ -98,7 +99,7 @@ test('scorecard: buildScorecard carries g8 (autonomy + regret) for its window; t
 });
 
 test('daily report: run() writes the G8 section with autonomy, regret and the labelled guess', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'g8-daily-'));
+  const home = mkTmp('g8-daily-');
   const dir = join(home, '.local/state/ghosty'); mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'stalls.jsonl'), stalls.map((x) => JSON.stringify(x)).join('\n') + '\n');
   writeFileSync(join(dir, 'manager-actions.jsonl'), actions.map((x) => JSON.stringify(x)).join('\n') + '\n');

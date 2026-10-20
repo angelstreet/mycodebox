@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-mergedec-'));
+import { join } from 'node:path';
+import { tmp } from './helpers-tmp.js';
+
+const dir = tmp('ghosty-mergedec-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000' });
 delete process.env.JEV_URL; delete process.env.JEV_API_KEY;
 const m = await import('../manager.js');

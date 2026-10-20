@@ -1,11 +1,12 @@
 // Round 12 (b): the orchestrator asks the holder to release or narrow (lease-nudge.js). Fake snapshots and sessions only.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { planNudges, createLeaseNudge, reasonsOf } from '../lease-nudge.js';
 import { classifyKey } from '../manager-events.js';
+import { tmp } from './helpers-tmp.js';
 
 const NOW = 1_800_000_000_000, MIN = 60000;
 const lease = (o = {}) => ({ id: 'L1', env: 'env-a', resources: ['server'], mode: 'exclusive', kind: 'server', agent: 'codebox:worker', session: '', purpose: 'full run', sinceMs: NOW - 90 * MIN, expectMin: null, idleMin: null, ...o });
@@ -61,7 +62,7 @@ test('an over-broad lease is nudged with its real resource, from the view or fro
 });
 
 function harness(over = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-nudge-'));
+  const dir = tmp('ghosty-nudge-');
   const sent = [], events = [];
   let t = NOW;
   const n = createLeaseNudge({ stateDir: dir, getInputs: async () => ({ deploys: [deploy({ blocking: [...deploy().blocking, { id: 'M1', env: 'env-a', resource: '*', kind: 'server', agent: 'mac:laptop' }] })], view: view([lease(), lease({ id: 'M1', agent: 'mac:laptop', resources: ['*'], purpose: 'frontend check' })]) }),
