@@ -356,10 +356,13 @@ test('session history: dashboard create/kill, unknown tick start, v2 runs, cbses
     // Dashboard create (agent bash = no command) and kill.
     const c = await s.api('POST', '/api/sessions', { name: 'hist-dash', agent: 'bash', cwd: path.join(w.base, 'home') });
     assert.equal(c.status, 200, JSON.stringify(c.body));
-    const st = recs().find((r) => r.name === 'hist-dash');
+    // A tick may see the new tmux session first and log an 'unknown' start; the folder enriches it in place (session-history.js).
+    const st = recs().find((r) => r.name === 'hist-dash' && r.started_by === 'dashboard');
     assert.deepEqual([st.kind, st.started_by, st.provider, st.cwd, st.schema_version], ['session.started', 'dashboard', 'bash', fs.realpathSync(path.join(w.base, 'home')), 1]);
-    await sleep(2500);   // ticks must not add an 'unknown' start for it
-    assert.equal(recs().filter((r) => r.name === 'hist-dash' && r.kind === 'session.started').length, 1);
+    await sleep(2500);   // ticks must not add an 'unknown' start for it after the dashboard start
+    const starts = recs().filter((r) => r.name === 'hist-dash' && r.kind === 'session.started');
+    assert.equal(starts.filter((r) => r.started_by === 'dashboard').length, 1);
+    assert.equal(starts.slice(starts.findIndex((r) => r.started_by === 'dashboard') + 1).length, 0, JSON.stringify(starts));
     assert.equal((await s.api('DELETE', '/api/sessions/hist-dash?confirm=hist-dash')).status, 200);
     assert.equal(recs().find((r) => r.name === 'hist-dash' && r.kind === 'session.ended').reason, 'killed');
     // cbsession endpoint: token required.

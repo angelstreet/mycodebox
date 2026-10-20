@@ -719,13 +719,17 @@ const wakesView = createWakesView({ stateDir: STATE_DIR });
 const managerEvents = createManagerEvents({ stateDir: STATE_DIR, managerSessions: loadManagerSessions, annotate: wakeAnnotateEvent });
 const crashResumeStates = new Map();
 const crashResumeKnown = new Map();
+// The last Claude conversation of a session, read from Claude's own project transcripts (crash-resume.js).
+// Shared by the crash resumer and by parking a dead session, where no live agent is left to name its id.
+const claudeProjectsDir = join(homedir(), '.claude', 'projects');
+const resolveClaudeSessionId = ({ name, cwd }) => findClaudeSessionId({ name, cwd, projectsDir: claudeProjectsDir, fs: { readdir, stat, readTail: async (f, n) => { const h = await openFile(f); try { const { size } = await h.stat(); const len = Math.min(size, n); const b = Buffer.alloc(len); await h.read(b, 0, len, size - len); return b.toString('utf8'); } finally { await h.close(); } } } });
 const crashResumer = createCrashResumer({
   getState: async (name) => crashResumeStates.get(name) || null,
   sendText: (name, text) => exec(TMUX, ['send-keys', '-t', `=${name}:`, '-l', '--', text]),
   sendEnter: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']),
   managerSessions: loadManagerSessions,
   record: (e) => managerEvents.record(e),
-  resolveSessionId: ({ name, cwd }) => findClaudeSessionId({ name, cwd, projectsDir: join(homedir(), '.claude', 'projects'), fs: { readdir, stat, readTail: async (f, n) => { const h = await openFile(f); try { const { size } = await h.stat(); const len = Math.min(size, n); const b = Buffer.alloc(len); await h.read(b, 0, len, size - len); return b.toString('utf8'); } finally { await h.close(); } } } }),
+  resolveSessionId: resolveClaudeSessionId,
 });
 const crashResumeEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).crashResume !== false; } catch { return true; } };
 // Two-tier push (MANAGER.md section 6): interrupts at once, the rest as one digest per pushDigestMinutes while awake.
@@ -756,9 +760,9 @@ const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USA
 // Read once at boot: switching needs a restart, so one process never has two authorities.
 const leaseCfg = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')); } catch { return {}; } })();
 const leaseAuthority = normAuthority(leaseCfg.leaseAuthority);   // 'legacy' | 'central-through-ssh' (same behaviour, other label) | 'central'
-// The in-process service is the authority only for 'central', or when manager.json `leaseServiceClaims: true` says so explicitly; otherwise it
-// refuses claims (E_NOT_AUTHORITY) and every view labels it as not the authority. Shadow reports and reads stay open.
-const leaseServiceIsAuthority = leaseAuthority === 'central' || leaseCfg.leaseServiceClaims === true;
+// The in-process service is the authority only for 'central'; otherwise it refuses claims and reads (E_NOT_AUTHORITY) and every view labels it as
+// not the authority. Shadow reports stay open.
+const leaseServiceIsAuthority = leaseAuthority === 'central';
 // Liveness for the service: true / false for a codebox tmux session, undefined (never releases anything) when unknown: a failed tmux listing,
 // no poll yet, or an agent that is not a codebox session. A re-created name is handled by the session tracker (sessionGone, immediate).
 const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, resolve: (s) => agentSession(s, Object.keys(latest?.status || {}), MACHINES),
@@ -1524,17 +1528,22 @@ async function parkFacts(name) {
   const claude = claudeOfPane(pane?.pid || 0, table, idx);
   // MiniMax (minimax-code / mcode) is the other agent we park; no session file, so cwd comes from the pane.
   const minimax = claude ? null : minimaxOfPane(pane?.pid || 0, table, pane?.cwd || HOME);
+  // Dead session: the agent exited or crashed and the pane is a bare shell (bash/zsh/sh). Still parkable — its last
+  // conversation id comes from the resolver (Claude's own project transcripts) and there is nothing to /exit.
+  const dead = !!pane && !claude && !minimax && !agentFromTree(pane.pid, table) && SHELLS.has(pane.cmd);
+  let sessionId = null;
+  if (dead) { try { sessionId = await resolveClaudeSessionId({ name, cwd: pane?.cwd || null }); } catch { sessionId = null; } }
   const sess = (await listSessions()).find((x) => x.name === name);
   const st = (latest && latest.status[name]) || null;
   const lz = await getLeases(true);
   let leases = null;
   if (lz?.ok) leases = leasesOfSession(lz.leases, [name, claude?.info?.name || '']);
   let rssMb = null;
-  const agentPid = claude?.pid || minimax?.pid;
+  const agentPid = claude?.pid || minimax?.pid || (dead ? pane?.pid : null);
   if (agentPid) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(agentPid)])).stdout.trim()) / 1024); } catch {} }
   const rw = reporter.detail(name);
   return {
-    claude, minimax,
+    claude, minimax, dead, cwd: pane?.cwd || null, sessionId,
     state: st?.state || null, attached: !!sess?.attached, reporterWaiting: !!(rw && reporter.waitingNow(name, 0)),
     backgroundWork: rw?.lastTurn?.backgroundWork || 0,
     busy: claude ? busyChildren(claude.pid, table) : (minimax ? busyChildren(minimax.pid, table) : []),

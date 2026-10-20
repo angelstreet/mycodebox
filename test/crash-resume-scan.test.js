@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scanCrash, crashLineOf, decideCrashResume, createCrashResumer, findClaudeSessionId } from '../crash-resume.js';
+import { scanCrash, scanBareAbort, crashLineOf, decideCrashResume, createCrashResumer, findClaudeSessionId } from '../crash-resume.js';
 
 const base = 'claude --dangerously-skip-permissions';
 // Captured session output from a real abort trace: keep the structure (wrap + jndoye@codebox prompt) but use a
@@ -26,6 +26,16 @@ const TYPED = [
   '-bash: what: command not found',
   'user@host:~/virtualpytest$',
 ];
+// A RESUMED claude that aborts again leaves no "line N: pid" wrapper line: interactive bash only prints the bare
+// message, sometimes behind a leftover TUI marker and next to the dead agent's status bar.
+const BARE = ['Aborted', 'user@host:~/virtualpytest$'];
+const BARE_TUI = [
+  '❯ Aborted                                             ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  '  ⏵⏵ auto-accept edits on (shift+tab to cycle)                                                                new task? /clear to save 166.5k tokens',
+  'user@host:~/virtualpytest$',
+];
+const BARE_CORE = ['Aborted (core dumped)', 'user@host:~/virtualpytest$'];
+const BARE_THEN_OUTPUT = ['Aborted', 'the report was written to disk', 'user@host:~/virtualpytest$'];
 const st = (lines, extra = {}) => ({ name: 'pane', tmuxName: 'pane', cwd: '/home/user/virtualpytest', base, model: null, claudeSessionId: 'sid', shellForeground: true, agent: null, scriptBusy: false, input: '', lines, ...extra });
 const dec = (s) => decideCrashResume({ state: s, consecutiveNoAgent: 2 });
 
@@ -99,4 +109,57 @@ test('missing session id is looked up from transcripts', async () => {
   const r = createCrashResumer({ getState: async () => st(GAME, { claudeSessionId: null }), sendText: async (...x) => calls.push(x), sendEnter: async () => {}, record: async () => {}, resolveSessionId: async () => 'found-id' });
   await r.tick(['pane']); await r.tick(['pane']);
   assert.match(calls[0][1], /--resume found-id$/);
+});
+
+test('bare abort lines resume; real agent output after one is not a crash', () => {
+  assert.equal(scanBareAbort(BARE).line, 'Aborted');
+  assert.equal(scanBareAbort(BARE_CORE).line, 'Aborted (core dumped)');
+  assert.equal(scanBareAbort(BARE_TUI).line, 'Aborted');
+  assert.equal(scanBareAbort(BARE_THEN_OUTPUT), null);
+  assert.equal(scanCrash(BARE), null);
+  for (const lines of [BARE, BARE_TUI, BARE_CORE]) {
+    const d = dec(st(lines));
+    assert.equal(d.ok, true, lines[0]);
+    assert.equal(d.bare, true);
+    assert.equal(d.crash.name, 'pane');
+    assert.match(d.command, /--remote-control 'pane' -n 'pane' --resume sid$/);
+  }
+  assert.equal(dec(st(BARE_THEN_OUTPUT)).reason, 'no-exact-job-message');
+});
+
+test('a bare Aborted after a resume is resumed again: the line text is not the dedupe key', async () => {
+  const calls = [], events = [];
+  let t = 1000;
+  const r = createCrashResumer({ getState: async () => st(BARE), sendText: async (...x) => calls.push(['text', ...x]), sendEnter: async (...x) => calls.push(['enter', ...x]), record: async (e) => events.push(e), now: () => t });
+  assert.equal((await r.tick(['pane']))[0].reason, 'agent-not-absent-twice');
+  assert.equal((await r.tick(['pane']))[0].ok, true);
+  assert.equal((await r.tick(['pane']))[0].reason, 'throttled');
+  t += 31 * 60 * 1000;
+  assert.equal((await r.tick(['pane']))[0].ok, true, 'same pane, same Aborted text, new crash after the throttle');
+  assert.equal(calls.filter((c) => c[0] === 'text').length, 2);
+  assert.equal(events.length, 2);
+});
+
+test('4th crash inside 6 h is a crash loop: one manager record, nothing sent, resumes again after the window', async () => {
+  const calls = [], events = [];
+  let t = 1000;
+  const r = createCrashResumer({ getState: async () => st(BARE), sendText: async (...x) => calls.push(['text', ...x]), sendEnter: async (...x) => calls.push(['enter', ...x]), record: async (e) => events.push(e), now: () => t });
+  assert.equal((await r.tick(['pane']))[0].reason, 'agent-not-absent-twice');
+  for (let i = 0; i < 3; i++) { assert.equal((await r.tick(['pane']))[0].ok, true, `resume ${i + 1}`); t += 31 * 60 * 1000; }
+  assert.equal((await r.tick(['pane']))[0].reason, 'crash-loop');
+  assert.equal((await r.tick(['pane']))[0].reason, 'crash-loop');
+  assert.equal(calls.filter((c) => c[0] === 'text').length, 3);
+  const loops = events.filter((e) => e.key === 'health:session-crash-loop:pane');
+  assert.equal(loops.length, 1);
+  assert.equal(loops[0].title, 'session crash loop, needs manual resume: pane');
+  assert.equal(loops[0].body, '4 crashes in 6 h; last: Aborted');
+  t += 6 * 60 * 60 * 1000;
+  assert.equal((await r.tick(['pane']))[0].ok, true);
+});
+
+test('first-ever bare crash without a session id is resolved from transcripts and resumed', async () => {
+  const calls = [];
+  const r = createCrashResumer({ getState: async () => st(BARE_CORE, { claudeSessionId: null }), sendText: async (...x) => calls.push(x), sendEnter: async () => {}, record: async () => {}, resolveSessionId: async ({ name }) => (name === 'pane' ? 'found-id' : null) });
+  await r.tick(['pane']); await r.tick(['pane']);
+  assert.deepEqual(calls[0], ['pane', `${base} --remote-control 'pane' -n 'pane' --resume found-id`]);
 });

@@ -120,6 +120,50 @@ test('park refuses with reasons and does not touch tmux', async () => {
   assert.ok(!existsSync(h.file));
 });
 
+test('dead park: no agent in the pane -> records dead:true, skips /exit, kills tmux; resume runs claude --resume', async () => {
+  const h = harness();
+  const facts = { ...h.facts, claude: null, minimax: null, dead: true, cwd: '/w/dead', sessionId: 'dead-sid' };
+  assert.deepEqual(h.p.checks(facts), []);                 // the only refusal that used to fire is gone
+  const rec = await h.p.park('D', facts, { claudeAlive: h.isAlive });
+  assert.equal(rec.dead, true);
+  assert.equal(rec.sessionId, 'dead-sid');
+  assert.equal(rec.cwd, '/w/dead');
+  assert.equal(rec.claudeName, 'D');                       // same shape as a live Claude park, so resume is unchanged
+  assert.deepEqual(h.log, ['kill D']);                     // no /exit, no wait: nothing was running
+  assert.equal(JSON.parse(readFileSync(h.file, 'utf8')).parked.D.dead, true);
+  const started = [];
+  const out = await h.p.resume('D', { base: 'claude --dangerously-skip-permissions', start: async (n, r, cmd) => started.push(cmd) });
+  assert.equal(started[0], "claude --dangerously-skip-permissions --remote-control 'D' -n 'D' --resume dead-sid");
+  assert.equal(out.dead, true);
+  assert.deepEqual(JSON.parse(readFileSync(h.file, 'utf8')).parked, {});
+});
+
+test('dead park without a conversation id still parks (sessionId null); resume refuses before creating tmux', async () => {
+  const h = harness();
+  const facts = { ...h.facts, claude: null, minimax: null, dead: true, cwd: '/w/dead', sessionId: null };
+  const rec = await h.p.park('D', facts, { claudeAlive: h.isAlive });
+  assert.equal(rec.sessionId, null);
+  assert.equal(rec.dead, true);
+  assert.deepEqual(h.log, ['kill D']);
+  let started = false;
+  await assert.rejects(h.p.resume('D', { base: 'claude', start: async () => { started = true; } }), (e) => e.status === 400 && /no conversation id/.test(e.message));
+  assert.equal(started, false);                            // refused before anything was launched
+  assert.ok(!h.log.includes('create /w/dead'));             // and before a tmux session was created
+  assert.equal(JSON.parse(readFileSync(h.file, 'utf8')).parked.D.sessionId, null);   // still parked, nothing lost
+});
+
+test('dead park keeps the other refusals: lease held, busy children, no lease readable; an unknown pane is still refused', async () => {
+  const h = harness();
+  const dead = { ...h.facts, claude: null, minimax: null, dead: true, cwd: '/w', sessionId: 'x' };
+  assert.match(h.p.checks({ ...dead, leases: [{ id: 'L' }] })[0], /holds vpt-lease: L/);
+  assert.match(h.p.checks({ ...dead, busy: [{ pid: 1, args: 'sleep 9' }] })[0], /child process/);
+  assert.match(h.p.checks({ ...dead, leases: null })[0], /vpt-lease/);
+  assert.match(h.p.checks({ ...dead, attached: true })[0], /attached/);
+  assert.match(h.p.checks({ claude: null, minimax: null })[0], /no Claude or MiniMax/);   // no dead flag -> unchanged refusal
+  await assert.rejects(h.p.park('D', { ...dead, leases: [{ id: 'L' }] }, { claudeAlive: h.isAlive }), (e) => e.status === 409);
+  assert.deepEqual(h.log, []);
+});
+
 test('readManualNotes parses valid entries (newest first), skips bad rows, tolerates missing/corrupt file', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ghosty-mn-'));
   const file = join(dir, 'parked.json');
