@@ -811,6 +811,7 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
   stop: `ghosty-sessions.service` needs `KillMode=process` (one line in `[Service]`, in `systemd/`); `/etc/systemd/system` is a hand copy, so
   copy it and `systemctl daemon-reload` (no restart needed for the unit text to be read; it applies at the next stop/start).
 - API: `GET /api/deploys`, `POST /api/deploys/:id/approve|cancel`, `GET /api/deploys/:id/log?tail=200`; `{type:'deploys'}` on `/ws/status`.
+- **Restart guard** (`scripts/safe-restart.sh`): busy = a `running` deploy, or an `approved` one, or a `queued` one while the runner is on, each deploy item except when it carries `blocked: true` (its last start attempt was refused because a lease or a ticket held it, so it cannot start before the restart; Q199, owner 2026-10-20). A `running` item is busy even when blocked; a missing `blocked` field counts as not blocked (an older server keeps today's safe rule) and a non-boolean one is an invalid snapshot (exit 2).
 
 ## Platforms page, lease ownership, waiting for a deploy (TASK-44)
 

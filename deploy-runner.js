@@ -202,6 +202,7 @@ export function createDeployRunner({
   let liveLeases = null;                // leases of the last good poll (`deploy list --json` carries them)
   const everBlocked = new Set();        // deploy ids that were ever held back by a lease: their start/done are worth a manager event
   const blockedBy = new Map();          // deploy id -> Map(lease id -> {env, resources[], agent}) that blocked its start
+  const blockedIds = new Set();         // ids whose last start attempt was refused (lease or ticket); `blocked` in the snapshot
   const leaseIds = new Map();         // deploy id -> lease id the service granted at `deploy start` (central); the child joins it through VPT_LEASE_ID
   const handledOrphans = new Set();   // ids already finished as orphaned (alert once per id)
   let first = true, ticking = false, timer = null, lastJson = '';
@@ -269,6 +270,7 @@ export function createDeployRunner({
 
   // One manager event + push per blocking lease that disappears (released or expired) while the deploy still waits.
   function checkFreed(deploys) {
+    for (const id of [...blockedIds]) if (!deploys.some((d) => d.id === id && d.state === 'queued')) blockedIds.delete(id);
     if (!liveLeases) return;
     const present = new Set(liveLeases.map((l) => l.id));
     for (const [id, m] of [...blockedBy]) {
@@ -453,10 +455,12 @@ export function createDeployRunner({
               const r = await reg(['deploy', 'start', d.id, ...(skipsLeased(d) ? ['--skip-leased'] : [])]);
               if (r.code === 3) {
                 const b = blockersOf(d);
+                blockedIds.add(d.id);                    // leases or a ticket hold it: not pending work (safe-restart reads this)
                 if (b.size) { everBlocked.add(d.id); const m = blockedBy.get(d.id) || new Map(); for (const [k, v] of b) if (!m.has(k)) m.set(k, v); blockedBy.set(d.id, m); }
                 continue;
               }                 // resources busy: try a narrower request behind it
               if (r.code !== 0) { log.error?.(`[deploy] start ${d.id}: ${r.stderr}`); continue; }
+              blockedIds.delete(d.id);                    // it starts now: no longer waiting on anything
               // `vpt-lease deploy start` prints the single word "running", never the lease id: read the deploy's own lease
               // (system lease, deploy_id == d.id) back from `deploy list --json`, so the child can join it (VPT_LEASE_ID)
               try { const j = JSON.parse(r.stdout); const lid = j?.lease?.id ?? j?.lease_id; if (lid != null) leaseIds.set(d.id, String(lid)); } catch { /* text output */ }
@@ -476,11 +480,13 @@ export function createDeployRunner({
       }
     } catch (e) { log.error?.('[deploy] tick', e.message); }
     finally { ticking = false; }
-    const j = JSON.stringify([snap.ok, snap.error, snap.deploys.map((d) => [d.id, d.state]), snap.deployed, [...running]]);
+    const j = JSON.stringify([snap.ok, snap.error, snap.deploys.map((d) => [d.id, d.state, blockedIds.has(d.id)]), snap.deployed, [...running]]);
     if (j !== lastJson) { lastJson = j; onChange(snapshot()); }
   }
 
-  function snapshot() { return { ...snap, enabled: !!isEnabled(), running: Object.fromEntries(running), envs: Object.keys(envs) }; }
+  // `blocked`: the runner's last start attempt for this deploy was refused (lease or ticket held it), so it is not
+  // pending work a restart must wait for (safe-restart reads it). Strictly boolean; false for every other deploy.
+  function snapshot() { return { ...snap, deploys: snap.deploys.map((d) => ({ ...d, blocked: blockedIds.has(d.id) })), enabled: !!isEnabled(), running: Object.fromEntries(running), envs: Object.keys(envs) }; }
 
   async function act(id, what) {          // approve | cancel
     if (!/^[0-9a-f]{1,16}$/.test(id)) return { ok: false, status: 400, error: 'bad id' };
