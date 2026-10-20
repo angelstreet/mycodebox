@@ -415,16 +415,18 @@ test('round 13 case 4: "buy a domain" -- BOTH FORBIDDEN_RE and OWNER_FLOOR catch
   assert.equal(wouldSend(s).send, null);
 });
 
-test('round 13 case 5: needs-manager STATUS line is a regular owner question on main (round 3: needs-manager was out of scope and was removed from stall.js; ops-ask.js still handles the status if it ever arrives)', () => {
-  // Round 3 (2026-10-18, owner-ask-narrow): stall.js is reset to main. The needs-manager STATUS line support
-  // (added in round 13) was out of scope for this round and was removed -- stall.js on main only recognises
-  // needs-owner, blocked, handoff, waiting in the STATUS line. ops-ask.js still has the `status === 'needs-manager'`
-  // check (kept as a no-op safety net in case the status is set by a future caller).
+// Round 3 (2026-10-18, owner-ask-narrow) had stall.js reset to main and left this as an owner question, because
+// needs-manager was out of scope that round and ops-ask.js's `status === 'needs-manager'` check was a no-op safety net.
+// It is no longer a no-op: 2026-10-20 a turn ending "STATUS: needs-manager: <what the manager must do>" classified as a plain
+// 'done' -- blue LED, no manager event -- and TASK142 waited ~20 min until the owner noticed. The status is its own case again,
+// and it wins over the menu heuristic below: the agent addressed the manager, so no option is typed.
+test('round 13 case 5: a needs-manager STATUS line is the needs_manager case, not an owner menu question', () => {
   const s = classify(claude('Two ways to do it.\n1. Run the suite locally\n2. Push the branch and let CI run\nWhich one?\nSTATUS: needs-manager: pick option 1 or 2'));
-  // The STATUS line is not recognised as needs-manager on main: it falls through to the heuristics, which see a
-  // numbered menu and pick the recommended / unmarked-first case.
-  assert.notEqual(s.status, 'needs-manager', 'on main, the STATUS line does not recognise needs-manager');
-  assert.equal(s.case, 'menu_recommended', 'the menu heuristic picks the recommended option');
+  assert.equal(s.status, 'needs-manager', 'the STATUS verdict wins over the heuristics below it');
+  assert.equal(s.case, 'needs_manager');
+  assert.equal(s.managerAsk, 'pick option 1 or 2', 'the STATUS text is what the manager is asked');
+  assert.equal(s.answer, null, 'never auto-answered, not even with a menu');
+  assert.equal(wouldSend(s).send, null);
 });
 
 // ---- round 13 regression: FORBIDDEN_RE still catches push-to-main / update_core / sudo / migration -------------
@@ -465,6 +467,29 @@ test('merge_wait: a STATUS waiting / blocked / needs-owner on a merge or PR deci
   const i = classify(claude('Queued.\nSTATUS: waiting: integration int-abc123'));
   assert.notEqual(i.case, 'merge_wait');
   assert.equal(classify(claude('Queued.\nSTATUS: waiting: integration int-abc123 to merge')).case !== 'merge_wait', true);
+});
+
+test('needs_manager: a STATUS needs-manager is its own case, never a done and never an owner question (2026-10-20 TASK142)', () => {
+  // The real case: a turn that ended "STATUS: needs-manager: please verify and request <branch> with --approved-by manager"
+  // was classified as a plain 'done' (blue LED, no manager event) because the parser only knew needs-owner/blocked/waiting.
+  const ask = 'please verify and request fix/needs-manager-status with --approved-by manager';
+  const s = classify(claude(`Branch pushed, tests green.\nSTATUS: needs-manager: ${ask}`));
+  assert.equal(s.case, 'needs_manager', 'its own case, not done / owner_decision / merge_wait');
+  assert.equal(s.status, 'needs-manager', 'the raw verdict keyword stays available for ops-ask (which routes it to the manager)');
+  assert.equal(s.managerAsk, ask, 'the STATUS text is kept as the manager ask');
+  assert.equal(s.answer, null, 'never auto-answered');
+  assert.equal(s.autoCase, undefined, 'never an ask_status would-answer');
+  assert.equal(wouldSend(s).send, null, 'nothing is typed into the pane');
+  assert.notEqual(s.case, 'merge_wait', 'the "request <branch>" wording must not be swallowed by the merge lane');
+  assert.equal(s.no_status, false, 'it did state what it needs');
+
+  // needs-owner and done keep their own cases: the three verdicts stay apart.
+  assert.equal(classify(claude('Tests pass.\nSTATUS: needs-owner: shall I rotate the key?')).case, 'owner_decision');
+  assert.equal(classify(claude('Everything is merged and clean.\nSTATUS: done')).case, 'done');
+  assert.equal(classify(claude('All green.\nSTATUS: needs-manager')).case, 'needs_manager', 'the verdict alone, with no text after it');
+  assert.equal(statusLine(['STATUS: needs-manager: verify branch x'])?.kind, 'needs-manager');
+  assert.equal(statusLine(['STATUS: needs-owner: rotate the key?'])?.kind, 'needs-owner');
+  assert.equal(statusLine(['STATUS: done'])?.kind, 'done');
 });
 
 test('review fixes: a numbered plan is not a menu, and the continue floor reads the whole closing text', () => {

@@ -115,10 +115,119 @@ test('migrationAdditive: SQL statements are read by effect, not by path', () => 
   }
   // one destructive statement anywhere is enough, and anything unreadable is not additive
   assert.deepEqual(migrationAdditive(f, ['CREATE TABLE a (id int);', '', 'ALTER TABLE a DROP COLUMN id;']), { additive: false, reason: 'DROP COLUMN' });
-  assert.equal(migrationAdditive(f, ['GRANT SELECT ON tasks TO app;']).additive, false);
+  assert.equal(migrationAdditive(f, ['REVOKE SELECT ON tasks FROM app;']).additive, false);
   assert.deepEqual(migrationAdditive(f, ['CREATE TABLE a (id int);']).additive, true);
   assert.deepEqual(migrationAdditive(f, ['-- only a comment', '', '   ']), { additive: true, empty: true });
   assert.deepEqual(migrationAdditive(f, null), { additive: false, reason: 'unreadable diff' });
+  // GRANT is bookkeeping the migration carries, not a write
+  assert.deepEqual(migrationAdditive(f, ['GRANT SELECT ON tasks TO app;']), { additive: true });
+});
+// The real file that was refused as "not additive: begin" (setup/db/migrations/20261020g_ai_benchmarks.sql, virtualpytest).
+test('migrationAdditive: a real transaction-wrapped migration with policies and RLS is additive', () => {
+  const f = 'setup/db/migrations/20261020g_ai_benchmarks.sql';
+  const sql = [
+    'BEGIN;',
+    'CREATE TABLE IF NOT EXISTS ai_benchmarks (',
+    '  id bigserial PRIMARY KEY,',
+    '  name text NOT NULL,',
+    '  score numeric(10,2)',
+    ');',
+    'CREATE INDEX IF NOT EXISTS ai_benchmarks_name ON ai_benchmarks (name);',
+    'CREATE INDEX IF NOT EXISTS ai_benchmarks_score ON ai_benchmarks (score);',
+    'CREATE INDEX IF NOT EXISTS ai_benchmarks_created ON ai_benchmarks (created_at);',
+    'CREATE INDEX IF NOT EXISTS ai_benchmarks_model ON ai_benchmarks (model);',
+    'ALTER TABLE ai_benchmarks ENABLE ROW LEVEL SECURITY;',
+    'DROP POLICY IF EXISTS "ai_benchmarks_read" ON ai_benchmarks;',
+    'CREATE POLICY "ai_benchmarks_read" ON ai_benchmarks FOR SELECT USING (true);',
+    'COMMIT;',
+  ];
+  assert.deepEqual(migrationAdditive(f, sql), { additive: true });
+  // the session and comment bookkeeping a migration carries
+  assert.deepEqual(migrationAdditive(f, ['SET LOCAL search_path TO public;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['SET search_path = public;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ["COMMENT ON TABLE ai_benchmarks IS 'benchmark rows';"]), { additive: true });
+  // a role change is not a session setting
+  assert.equal(migrationAdditive(f, ['SET ROLE admin;']).additive, false);
+  // a BEGIN/COMMIT wrapper does not make a destructive file pass
+  assert.deepEqual(migrationAdditive(f, ['BEGIN;', 'DROP TABLE ai_benchmarks;', 'COMMIT;']), { additive: false, reason: 'DROP TABLE' });
+  assert.deepEqual(migrationAdditive(f, ['START TRANSACTION;', 'ALTER TABLE t DROP COLUMN c;', 'COMMIT;']), { additive: false, reason: 'DROP COLUMN' });
+});
+test('migrationAdditive: DROP POLICY is additive only as the re-create pattern', () => {
+  const f = 'setup/db/migrations/20261020g_ai_benchmarks.sql';
+  const create = 'CREATE POLICY "p" ON ai_benchmarks FOR SELECT USING (true);';
+  // dropped, then created again with the same name on the same table
+  assert.deepEqual(migrationAdditive(f, ['DROP POLICY IF EXISTS "p" ON ai_benchmarks;', create]), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['DROP POLICY "p" ON ai_benchmarks;', create]), { additive: true });
+  // dropped, and never created again
+  assert.equal(migrationAdditive(f, ['DROP POLICY IF EXISTS "p" ON ai_benchmarks;']).additive, false);
+  assert.match(migrationAdditive(f, ['DROP POLICY IF EXISTS "p" ON ai_benchmarks;']).reason, /^DROP POLICY/);
+  // created under another name, or on another table: still only a drop
+  assert.equal(migrationAdditive(f, ['DROP POLICY IF EXISTS "p" ON ai_benchmarks;', 'CREATE POLICY "other" ON ai_benchmarks FOR SELECT USING (true);']).additive, false);
+  assert.equal(migrationAdditive(f, ['DROP POLICY IF EXISTS "p" ON ai_benchmarks;', 'CREATE POLICY "p" ON other_table FOR SELECT USING (true);']).additive, false);
+  // created first, dropped after: the policy is gone at the end of the file
+  assert.equal(migrationAdditive(f, [create, 'DROP POLICY "p" ON ai_benchmarks;']).additive, false);
+  // DROP TABLE never has a re-create pattern
+  assert.deepEqual(migrationAdditive(f, ['DROP TABLE ai_benchmarks;', create]), { additive: false, reason: 'DROP TABLE' });
+});
+test('migrationAdditive: REVOKE is additive only on a table this file creates earlier', () => {
+  const f = 'setup/db/migrations/20261020h_ai_benchmarks.sql';
+  // the real file that was refused as "migration is destructive: REVOKE": a new table locked down
+  assert.deepEqual(migrationAdditive(f, [
+    'CREATE TABLE IF NOT EXISTS public.ai_benchmarks (id bigserial PRIMARY KEY, score numeric(10,2));',
+    'ALTER TABLE public.ai_benchmarks ENABLE ROW LEVEL SECURITY;',
+    'DROP POLICY IF EXISTS "p" ON public.ai_benchmarks;',
+    'CREATE POLICY "p" ON public.ai_benchmarks FOR ALL TO service_role USING (true) WITH CHECK (true);',
+    'REVOKE ALL ON public.ai_benchmarks FROM anon, authenticated;',
+  ]), { additive: true });
+  // the same table, named bare or quoted: "x" and "public.x" are one object, quotes and case do not matter
+  for (const [create, revoke] of [
+    ['CREATE TABLE ai_benchmarks (id int);', 'REVOKE ALL ON ai_benchmarks FROM anon;'],
+    ['CREATE TABLE public.ai_benchmarks (id int);', 'REVOKE ALL ON public.ai_benchmarks FROM anon;'],
+    ['CREATE TABLE IF NOT EXISTS public.ai_benchmarks (id int);', 'REVOKE ALL ON "public"."ai_benchmarks" FROM anon;'],
+    ['CREATE TABLE "Public"."AI_Benchmarks" (id int);', 'revoke all on ai_benchmarks from anon;'],
+    ['CREATE TABLE ai_benchmarks (id int);', 'REVOKE ALL ON TABLE ai_benchmarks FROM anon;'],
+  ]) {
+    assert.deepEqual(migrationAdditive(f, [create, revoke]), { additive: true }, revoke);
+  }
+  // a REVOKE on a table the file does not create
+  assert.deepEqual(migrationAdditive(f, ['REVOKE ALL ON public.ai_benchmarks FROM anon;']), { additive: false, reason: 'REVOKE' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE other (id int);', 'REVOKE ALL ON ai_benchmarks FROM anon;']), { additive: false, reason: 'REVOKE' });
+  // created after the REVOKE: the table existed before the file ran
+  assert.deepEqual(migrationAdditive(f, ['REVOKE ALL ON ai_benchmarks FROM anon;', 'CREATE TABLE ai_benchmarks (id int);']), { additive: false, reason: 'REVOKE' });
+  // one existing table in the list is enough to refuse it
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE ai_benchmarks (id int);', 'REVOKE ALL ON ai_benchmarks, public.tasks FROM anon;']), { additive: false, reason: 'REVOKE' });
+  // the revoke shapes that are not a table this file creates
+  for (const sql of ['REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;', 'REVOKE ALL ON SCHEMA public FROM anon;',
+    'REVOKE ALL ON FUNCTION public.f(int) FROM anon;', 'REVOKE ALL ON DATABASE mydb FROM anon;', 'REVOKE app FROM joe;']) {
+    assert.deepEqual(migrationAdditive(f, [sql]), { additive: false, reason: 'REVOKE' }, sql);
+  }
+  // a REVOKE that was never redeemed reads as a REVOKE, and the DROP POLICY message still names the policy
+  assert.match(migrationAdditive(f, ['DROP POLICY IF EXISTS "p" ON ai_benchmarks;']).reason, /^DROP POLICY/);
+  assert.deepEqual(migrationAdditive(f, ['REVOKE SELECT ON tasks FROM app;']).additive, false);
+});
+test('migrationAdditive: a statement is read whole, whatever its markers', () => {
+  const f = 'setup/db/migrations/20261020g_ai_benchmarks.sql';
+  // a ';' inside a literal or a dollar-quoted body does not end the statement
+  assert.deepEqual(migrationAdditive(f, ["COMMENT ON TABLE t IS 'a;b';"]), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['CREATE FUNCTION f() RETURNS void AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: true });
+  // a marker inside a literal or a comment does not hide a destructive statement
+  assert.equal(migrationAdditive(f, ['-- DROP TABLE y', 'CREATE TABLE x (id int);']).additive, true);
+  assert.equal(migrationAdditive(f, ["INSERT INTO t VALUES ('DROP TABLE y');"]).additive, false);
+  assert.equal(migrationAdditive(f, ['/* nothing */ CREATE TABLE x (id int); DROP TABLE y;']).additive, false);
+  // OR REPLACE rewrites an object that may already exist, so it is not additive even when it is a FUNCTION
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION f() RETURNS void AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: false, reason: 'replaces an existing object' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE VIEW v AS SELECT 1;']), { additive: false, reason: 'replaces an existing object' });
+  // a statement we cannot read is not additive
+  assert.deepEqual(migrationAdditive(f, ["INSERT INTO t VALUES ('unterminated);"]), { additive: false, reason: 'unbalanced quote' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE x (id int); /* unterminated']), { additive: false, reason: 'unterminated comment' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE FUNCTION f() AS $body$ SELECT 1;']), { additive: false, reason: 'unbalanced dollar quote' });
+  // a psql meta-command is not SQL we read
+  assert.equal(migrationAdditive(f, ['\\i /tmp/evil.sql']).additive, false);
+  // ALTER TABLE is additive action by action
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN c int NOT NULL DEFAULT 0;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t FORCE ROW LEVEL SECURITY;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN c int, DROP COLUMN d;']), { additive: false, reason: 'DROP COLUMN' });
 });
 test('migrationAdditive: a non-SQL migration is additive only with the three ops', () => {
   const f = 'alembic/versions/003_add_col.py';

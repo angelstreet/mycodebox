@@ -15,6 +15,7 @@
   --working:   #3fcf7a;
   --waiting:   #ff5f5f;
   --done:      #6aa8ff;
+  --manager:   #4fd6c8;   /* STATUS needs-manager: the AI manager owns the next step -- teal, apart from done blue / deploy violet */
   --deploy:    #a070ff;   /* waiting for a deploy: violet, apart from done blue / agent purple */
   --idle:      #8a909c;
   --offline:   #3b3f48;
@@ -99,6 +100,7 @@ button{ font-family:inherit; cursor:pointer; }
 .summary .chip.working{ color:var(--working); }
 .summary .chip.done{ color:var(--done); border-color:rgba(106,168,255,0.4); background:rgba(106,168,255,0.08); }
 .summary .chip.deploy{ color:var(--deploy); border-color:rgba(160,112,255,0.4); background:rgba(160,112,255,0.08); }
+.summary .chip.manager{ color:var(--manager); border-color:rgba(79,214,200,0.4); background:rgba(79,214,200,0.08); }
 .summary .chip.on{ border-color:var(--ink-2); }
 
 .modes, .gridsizes{
@@ -199,6 +201,7 @@ button{ font-family:inherit; cursor:pointer; }
 .dot.working::after{ box-shadow:0 0 0 0 var(--working); }
 .dot.waiting{ background:var(--waiting); }
 .dot.done{ background:var(--done); }
+.dot.manager{ background:var(--manager); }
 .dot.deploy{ background:var(--deploy); }
 .dot.waiting::after{ animation-duration:1.1s; }
 @keyframes ring{
@@ -231,6 +234,7 @@ button{ font-family:inherit; cursor:pointer; }
 .state.waiting .dot{ background:#1a0606; color:#1a0606; }
 .state.done{ color:var(--done); }
 .state.deploy{ color:var(--deploy); border:1px solid rgba(160,112,255,.55); background:rgba(160,112,255,.12); padding:1px 8px 1px 6px; border-radius:999px; cursor:pointer; }
+.state.manager{ color:var(--manager); border:1px solid rgba(79,214,200,.5); background:rgba(79,214,200,.12); padding:1px 8px 1px 6px; border-radius:999px; }
 .state.offline{ color:var(--ink-3); }
 @keyframes blink{ 50%{ opacity:.65; } }
 
@@ -285,6 +289,7 @@ body{ display:flex; flex-direction:column; }
 .cell.focus{ border-color:var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 16px rgba(232,154,74,0.22); }
 .cell.waiting.focus{ box-shadow: 0 0 0 2px var(--waiting), 0 0 0 4px var(--accent); }
 .cell.deploy{ border-color:var(--deploy); box-shadow:0 0 0 1px var(--deploy), 0 0 14px rgba(160,112,255,0.22); }
+.cell.manager{ border-color:var(--manager); box-shadow:0 0 0 1px var(--manager), 0 0 14px rgba(79,214,200,0.20); }
 .cell.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); z-index:2; pointer-events:none; }   /* a marker drawn inside, not a thicker border: the card's content never shifts when the state changes */
 .grid-pane .cell.focus{ box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(232,154,74,0.35); }
 .cell .h .tgt{
@@ -327,7 +332,8 @@ body{ display:flex; flex-direction:column; }
 .cell .reader{ display:none; }
 .cell.rd-on .reader{
   display:block; flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
-  padding:12px 14px 16px; background:var(--bg-term);
+  /* reading column: text capped at 820px and centred (same as the VirtualPyTest agent chat); the scrollbar stays at the edge */
+  padding:12px max(14px, calc((100% - 820px) / 2)) 16px; background:var(--bg-term);
   font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size:calc(var(--tf, 12) * 1px + 2px); line-height:1.55; color:var(--ink); user-select:text; -webkit-user-select:text;
   overscroll-behavior:contain; touch-action:pan-y; -webkit-overflow-scrolling:touch;
@@ -406,15 +412,18 @@ body{ display:flex; flex-direction:column; }
 .row-item.focus{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
 .row-item.waiting{ border-color:var(--waiting); background:rgba(255,95,95,0.06); }
 .row-item.deploy{ border-color:var(--deploy); background:rgba(160,112,255,0.07); }
+.row-item.manager{ border-color:var(--manager); background:rgba(79,214,200,0.07); }
 .row-item{ position:relative; }
 .row-item.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); border-radius:10px 0 0 10px; pointer-events:none; }
 /* 'needs you' accent on list rows: a thick red bar on the left edge so the owner
    can spot waiting cards while scrolling (chat-raised 2026-10-08: 'put a need
    you'). Deploy cards get the same treatment in violet for symmetry. */
 .row-item.waiting::before,
-.row-item.deploy::before{ content:''; position:absolute; left:-1px; top:0; bottom:0; width:5px; border-radius:10px 0 0 10px; pointer-events:none; }
+.row-item.deploy::before,
+.row-item.manager::before{ content:''; position:absolute; left:-1px; top:0; bottom:0; width:5px; border-radius:10px 0 0 10px; pointer-events:none; }
 .row-item.waiting::before{ background:var(--waiting); }
 .row-item.deploy::before{ background:var(--deploy); }
+.row-item.manager::before{ background:var(--manager); }
 .row-item.offline{ opacity:.55; }
 .row-item .l1{ display:flex; align-items:center; gap:8px; min-width:0; }
 .row-item .name{ font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }

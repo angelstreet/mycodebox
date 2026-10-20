@@ -11,6 +11,8 @@
 //   error             usage limit, rate limit, API error
 //   stopped_short     the agent announced its next step and stopped, no question, no blocker
 //   merge_wait        STATUS waiting / blocked / needs-owner on a merge or PR decision (the manager queues an integration; never the owner)
+//   needs_manager     STATUS needs-manager: the agent hands the next step to the AI manager (2026-10-20: TASK142 waited ~20 min
+//                     because the parser only knew needs-owner/blocked/waiting, so this stop read as a plain "done"); never a needs-you
 //   waiting_deploy    waiting for leases / a deploy / the owner's go-ahead to deploy (never auto-answered)
 //   owner_action      the agent asks the owner for a small manual thing (reload, plug, press)
 //   own_job_wait      STATUS blocked|waiting on a job of the session's own (pid, log, run id): woken when it ends, never a needs-you
@@ -595,9 +597,12 @@ export function unmarkedFirst(opts, lines = []) {
 }
 
 // The agent's own last-line verdict (AGENTS.md "End every turn with a STATUS line"):
-//   STATUS: done | needs-owner: <question> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
+//   STATUS: done | needs-owner: <question> | needs-manager: <what the manager must do> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
 // Looked for in the last 3 closing lines only. Returns { kind, text } or null (Codex/MiniMax panes, turns without the line).
-const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(done|needs-owner|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
+// "needs-manager" is the agent addressing the AI manager directly ("please verify and request <branch> with --approved-by manager"):
+// its own verdict, never the owner's. It used to be missing here, so such a turn fell through to a plain "done" (blue LED, no manager
+// event) and the manager never saw it (2026-10-20 ~17:30, TASK142 waited ~20 min until the owner noticed).
+const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(needs-manager|done|needs-owner|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
 // Verdicts agents write instead of "done" ("STATUS: acknowledged.", "STATUS: shipped"): a finished turn, never a question.
 // Read as plain text they fell to the heuristics: "I will ask before any force-push" became stopped_short (2026-10-15).
 const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', 'complete', 'completed', 'finished']);
@@ -666,6 +671,10 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     out.question = st.text || last.slice(0, 300);
     out.source = 'rule';
     out.no_status = false;
+    // "STATUS: needs-manager: <what the manager must do>" hands the next step to the AI manager, not to the owner.
+    // Checked before the merge-wait rules below: "request branch x with --approved-by manager" reads like a merge ask and the
+    // merge lane would swallow it. Never auto-answered, never a needs-you (2026-10-20: TASK142 waited ~20 min for the owner).
+    if (st.kind === 'needs-manager') { out.case = 'needs_manager'; out.answer = null; out.autoCase = undefined; out.managerAsk = st.text; out.forbiddenText = askText(out, [], close); return finish(out); }
     const mw = ['needs-owner', 'blocked', 'waiting'].includes(st.kind) && !((waitsOnOwnJob(st.text, st.kind) || /\b(?:finish(?:es|ed)?|completes?|ends?)\b/i.test(st.text)) && !/\bPR\s*#?\d|pull request|decision/i.test(st.text)) ? mergeWaitOf(st.text) : null;   // "the nightly job must finish before I can merge" waits on a job, not on a merge decision
     if (mw) { out.case = 'merge_wait'; out.mergeAsk = mw; out.answer = null; }
     else if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }

@@ -6,6 +6,10 @@
 //   GET  /api/sessions          → list tmux sessions + status pill
 //   GET  /ws/:session           → WebSocket: streams pane content (1 Hz tick)
 //   POST /api/send/:session     → body {keys: "..."} → tmux send-keys + Enter
+//                                 {…, when: "idle"}: a working pane, a typed draft, a held or a paused session queues the message
+//                                 instead ({ok, queued, id}); the poll loop delivers it at the next idle moment (send-queue.js)
+//   GET  /api/send-queue[?session=] → {ok, entries[], count, maxPerSession} pending messages, oldest first (expired ones are dropped)
+//   DELETE /api/send-queue/:id[?by=] → cancel one queued message
 //   GET  /api/snapshot/:session → last full pane snapshot (for first paint)
 //                                 each stopped agent also has `lastTurn` {at, elapsedMs, tokens{in,out,cacheRead,cacheWrite,total}, status, info, line, source} (turn-meter.js; null parts = unknown)
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
@@ -130,6 +134,7 @@ import { createIntegrationLane, createTmuxRestart } from './integration-lane.js'
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
+import { createSendQueue, planSend, MAX_PER_SESSION as SEND_QUEUE_MAX } from './send-queue.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
 import { createVptLockStore } from './vpt-locks.js';
@@ -755,6 +760,7 @@ const historyView = createHistoryView({ history, ledgerFile: join(STATE_DIR, 'us
 const historyStarting = new Set();   // names being created right now: the tick must not record them as 'unknown'
 const historyLog = (rec) => history.append(rec).catch((e) => console.error('[history]', e.message));   // history never breaks a session action
 const layoutStore = createLayoutStore({ file: join(STATE_DIR, 'layout.json') });   // order / pins / groups of the session list
+const sendQueue = createSendQueue({ file: join(STATE_DIR, 'send-queue.json') });   // when:'idle' sends parked while a session is busy (send-queue.js)
 const turnMeter = createTurnMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });   // elapsed + tokens of a finished turn, shown with its STATUS line (turn-meter.js)
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
 // Lease authority (lease-source.js): manager.json `leaseAuthority` "legacy" (default: the registry over ssh) | "central-through-ssh" (same path, labelled: the registry host service through the ssh wrapper) | "central" (the in-process lease service).
@@ -1532,8 +1538,10 @@ async function parkFacts(name) {
   // Dead session: the agent exited or crashed and the pane is a bare shell (bash/zsh/sh). Still parkable — its last
   // conversation id comes from the resolver (Claude's own project transcripts) and there is nothing to /exit.
   const dead = !!pane && !claude && !minimax && !agentFromTree(pane.pid, table) && SHELLS.has(pane.cmd);
-  let sessionId = null;
-  if (dead) { try { sessionId = await resolveClaudeSessionId({ name, cwd: pane?.cwd || null }); } catch { sessionId = null; } }
+  let sessionId = null, sessionCwd = null;
+  // The transcript's own directory: a dead pane is often not in it any more (shell back at $HOME, deleted worktree), and
+  // parking that cwd would resume the conversation in the wrong place.
+  if (dead) { try { const hit = await resolveClaudeSessionId({ name, cwd: pane?.cwd || null }); sessionId = hit?.sessionId || null; sessionCwd = hit?.cwd || null; } catch { sessionId = null; } }
   const sess = (await listSessions()).find((x) => x.name === name);
   const st = (latest && latest.status[name]) || null;
   const lz = await getLeases(true);
@@ -1544,7 +1552,7 @@ async function parkFacts(name) {
   if (agentPid) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(agentPid)])).stdout.trim()) / 1024); } catch {} }
   const rw = reporter.detail(name);
   return {
-    claude, minimax, dead, cwd: pane?.cwd || null, sessionId,
+    claude, minimax, dead, cwd: sessionCwd || pane?.cwd || null, sessionId,
     state: st?.state || null, attached: !!sess?.attached, reporterWaiting: !!(rw && reporter.waitingNow(name, 0)),
     backgroundWork: rw?.lastTurn?.backgroundWork || 0,
     busy: claude ? busyChildren(claude.pid, table) : (minimax ? busyChildren(minimax.pid, table) : []),
@@ -1646,6 +1654,21 @@ async function setSessionMeta(session, body) {
 function logSend(session, by, payload) {
   noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
   logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
+}
+
+// What a queued send sees of a session: the last poll status, plus the hold and pause flags, which live off it.
+function sendCtxOf(session) {
+  return { status: latest?.status?.[session], held: !!heldOf(session), paused: !!sessionMeta.isPaused(session) };
+}
+
+// The guarded send a queued message is delivered through: the same pane guard as an owner tap, then the send itself.
+async function guardedSend(session, payload) {
+  await assertAgentPane(session, actorOf(payload));
+  const out = payload.key !== undefined
+    ? await sendKey(session, String(payload.key))
+    : await sendKeys(session, payload.keys || '', payload.enter !== false);
+  logSend(session, actorOf(payload), payload);
+  return out;
 }
 
 async function sendMany(sessions, payload) {
@@ -2022,8 +2045,17 @@ async function handleHttp(req, res) {
     }
     try {
       const by = actorOf(payload);
+      const when = payload.when === undefined || payload.when === null ? null : String(payload.when);
       if (!(await sessionExists(session))) throw httpError(404, 'no such session');
       await assertAgentPane(session, by);
+      // when:'idle' and the pane cannot take free text right now (working, a draft typed, held, paused): park the
+      // message instead. The poll loop's tick delivers it at the next idle moment. No `when`: unchanged, typed now.
+      if (planSend({ when, ctx: sendCtxOf(session) }).mode === 'queue') {
+        if (payload.key === undefined && typeof payload.keys !== 'string') throw httpError(400, 'keys (string) or key required');
+        const entry = sendQueue.enqueue({ session, key: payload.key, keys: payload.keys, enter: payload.enter !== false, by });
+        logEvent({ type: 'send-queued', session, by, id: entry.id, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
+        return json(res, 200, { ok: true, queued: true, id: entry.id, session, pending: entry.pending, expiresAt: entry.expiresAt });
+      }
       const out = payload.key !== undefined
         ? await sendKey(session, String(payload.key))
         : await sendKeys(session, payload.keys || '', payload.enter !== false);
@@ -2035,6 +2067,20 @@ async function handleHttp(req, res) {
       res.end(JSON.stringify({ ok: false, error: err.message }));
     }
     return;
+  }
+  if (p === '/api/send-queue') {
+    if (req.method === 'GET') {
+      const session = url.searchParams.get('session');
+      const entries = sendQueue.list(session || undefined);
+      return json(res, 200, { ok: true, entries, count: entries.length, maxPerSession: SEND_QUEUE_MAX });
+    }
+  }
+  if (req.method === 'DELETE' && p.startsWith('/api/send-queue/')) {
+    const id = decodeURIComponent(p.slice('/api/send-queue/'.length));
+    const cancelled = sendQueue.cancel(id);
+    if (!cancelled) return json(res, 404, { ok: false, error: 'no such queued send' });
+    logEvent({ type: 'send-queue-cancelled', session: cancelled.session, by: actorOf({ by: url.searchParams.get('by') }), id });
+    return json(res, 200, { ok: true, cancelled: true, id, session: cancelled.session });
   }
   if (req.method === 'POST' && p.startsWith('/api/resize/')) {
     const session = decodeURIComponent(p.slice('/api/resize/'.length));
@@ -2497,6 +2543,7 @@ async function tick() {
   try {
     const { status, changedSessions } = await poll();
     if (crashResumeEnabled()) await crashResumer.tick(Object.keys(status));
+    await sendQueueTick(status);
     for (const name of changedSessions) {
       const c = lastSnapshots.get(name);
       if (c) broadcast(name, { type: 'snapshot', session: name, pane: c.pane, cols: c.cols, rows: c.rows });
@@ -2505,6 +2552,27 @@ async function tick() {
     broadcastStatus({ type: 'status', status });
   } catch (err) {
     console.error('[poll]', err.message);
+  }
+}
+
+// Queued sends: hand the oldest parked message of every session whose pane just became free. Delivered through the same
+// guarded path as an owner tap, so a non-owner actor is still refused on a pane with no agent in it. The status from this
+// tick is used as is (no second tmux round trip); a session not in it is simply not ready.
+async function sendQueueTick(status) {
+  try {
+    await sendQueue.tick({
+      status: (s) => status?.[s] ?? latest?.status?.[s],
+      isHeld: (s) => !!heldOf(s),
+      isPaused: (s) => !!sessionMeta.isPaused(s),
+      deliver: (s, e) => guardedSend(s, { key: e.key, keys: e.keys, enter: e.enter, by: e.by }),
+      onDelivered: (e) => {
+        logEvent({ type: 'send-queued-delivered', session: e.session, by: e.by, id: e.id, ...(e.key !== undefined ? { key: e.key } : { text: String(e.keys || '').slice(0, 200) }) });
+        push.record({ title: `Queued message sent: ${e.session}`, body: oneLine(e.keys || e.key || '', 200) || 'sent', url: `/?s=${encodeURIComponent(e.session)}`, tag: `send-queue-${e.session}` });
+      },
+      onError: (e, err) => console.error('[send-queue]', e.session, err.message),
+    });
+  } catch (err) {
+    console.error('[send-queue] tick', err.message);
   }
 }
 
@@ -2591,10 +2659,13 @@ server.listen(PORT, HOST, async () => {
     readyStore,   // ready windows: the manager answers a hardware-step ask while one covers the session
     leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
     onStatus: onStopStatus,
-    // a lease or deploy stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
+    // a lease, deploy or needs-manager stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
     onManagerItem: (it) => {
-      const key = it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : it.kind === 'fix' ? 'lease:manager-fix' : 'lease:manager-item';
-      managerEvents.record({ key, title: `${it.session}: ${it.kind} stop for the manager`, body: `${it.session} ${it.case === 'waiting_deploy' ? 'waits for a deploy' : 'asks'}: ${it.question || it.reason}`.slice(0, 300), url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
+      // "STATUS: needs-manager: <what the manager must do>": its own key, so the manager's own wait filter sees it as a session ask.
+      const key = it.kind === 'manager-item' ? `${it.session}:needs-manager` : it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : it.kind === 'fix' ? 'lease:manager-fix' : 'lease:manager-item';
+      const body = it.kind === 'manager-item' ? `${it.session} needs the manager: ${it.question || it.reason}`.slice(0, 300)
+        : `${it.session} ${it.case === 'waiting_deploy' ? 'waits for a deploy' : 'asks'}: ${it.question || it.reason}`.slice(0, 300);
+      managerEvents.record({ key, title: `${it.session}: ${it.kind === 'manager-item' ? 'needs the manager' : `${it.kind} stop for the manager`}`, body, url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
         .catch((e) => console.error('[manager-item]', e.message));
     },
   });

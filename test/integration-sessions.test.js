@@ -269,7 +269,7 @@ test('static: view icons exist, no emoji or pasted svg; service worker precaches
   const view = rd('../public/integration-view.js'), sw = rd('../public/sw.js'), html = rd('../public/index.html'), app = rd('../public/app.js');
   for (const m of view.matchAll(/icon\('([\w-]+)'/g)) assert.ok(ICONS[m[1]], `icon ${m[1]}`);
   assert.doesNotMatch(view, /<svg|\p{Extended_Pictographic}/u);
-  assert.match(sw, /'\/integration-view\.js'/); assert.match(sw, /ghosty-shell-v151/);
+  assert.match(sw, /'\/integration-view\.js'/); assert.match(sw, /ghosty-shell-v152/);
   assert.ok(html.indexOf('id="integrationBtn"') > 0 && html.indexOf('id="integrationBtn"') < html.indexOf('id="legacyGroup"'), 'default menu, not Legacy');
   assert.match(app, /import\('\/integration-view\.js'\)/); assert.match(app, /get\('integration'\)\) openIntegrationView/);
 });
