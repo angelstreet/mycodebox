@@ -1,0 +1,8 @@
+# npm test / npm ci / node --test / pytest runs from any session: not essential, so they hit their own cap first
+# and yield CPU to the agents.
+[Unit]
+Description=codebox test runs
+
+[Slice]
+TasksMax=1024
+CPUWeight=25

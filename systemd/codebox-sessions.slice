@@ -1,0 +1,8 @@
+# Every other tmux session and worker, one scope each (cb-<session>.scope), plus cb-orphans.scope for processes
+# whose session died. 6144 tasks fits 30+ sessions at ~150 tasks each.
+[Unit]
+Description=codebox sessions and workers
+
+[Slice]
+TasksMax=6144
+CPUWeight=100

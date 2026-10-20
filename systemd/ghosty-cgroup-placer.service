@@ -1,0 +1,15 @@
+# EXAMPLE: copy to /etc/systemd/system/ with the codebox*.slice files and replace /home/<user>/ghosty-sessions with
+# your checkout path (see docs/INSTALL.md). Runs as root: moving processes between units needs it.
+[Unit]
+Description=Ghosty: place tmux sessions and test runs into the codebox core/sessions/tests slices
+After=mm-manager-session.service
+
+[Service]
+ExecStart=/usr/local/bin/node /home/<user>/ghosty-sessions/scripts/cgroup-placer.js
+Environment=CGROUP_TMUX_SOCKET=/tmp/tmux-1000/default
+Restart=always
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

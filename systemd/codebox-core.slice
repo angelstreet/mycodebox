@@ -1,0 +1,7 @@
+# The manager and the builder (CGROUP_CORE): never capped, served first when CPU is short.
+[Unit]
+Description=codebox core agents (manager, builder)
+
+[Slice]
+TasksMax=infinity
+CPUWeight=400

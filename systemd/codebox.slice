@@ -1,0 +1,3 @@
+# Parent of the three agent slices (scripts/cgroup-placer.js). No cap of its own.
+[Unit]
+Description=codebox agents: core, sessions, tests
