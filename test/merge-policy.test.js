@@ -169,6 +169,42 @@ test('migrationAdditive: DROP POLICY is additive only as the re-create pattern',
   // DROP TABLE never has a re-create pattern
   assert.deepEqual(migrationAdditive(f, ['DROP TABLE ai_benchmarks;', create]), { additive: false, reason: 'DROP TABLE' });
 });
+test('migrationAdditive: REVOKE is additive only on a table this file creates earlier', () => {
+  const f = 'setup/db/migrations/20261020h_ai_benchmarks.sql';
+  // the real file that was refused as "migration is destructive: REVOKE": a new table locked down
+  assert.deepEqual(migrationAdditive(f, [
+    'CREATE TABLE IF NOT EXISTS public.ai_benchmarks (id bigserial PRIMARY KEY, score numeric(10,2));',
+    'ALTER TABLE public.ai_benchmarks ENABLE ROW LEVEL SECURITY;',
+    'DROP POLICY IF EXISTS "p" ON public.ai_benchmarks;',
+    'CREATE POLICY "p" ON public.ai_benchmarks FOR ALL TO service_role USING (true) WITH CHECK (true);',
+    'REVOKE ALL ON public.ai_benchmarks FROM anon, authenticated;',
+  ]), { additive: true });
+  // the same table, named bare or quoted: "x" and "public.x" are one object, quotes and case do not matter
+  for (const [create, revoke] of [
+    ['CREATE TABLE ai_benchmarks (id int);', 'REVOKE ALL ON ai_benchmarks FROM anon;'],
+    ['CREATE TABLE public.ai_benchmarks (id int);', 'REVOKE ALL ON public.ai_benchmarks FROM anon;'],
+    ['CREATE TABLE IF NOT EXISTS public.ai_benchmarks (id int);', 'REVOKE ALL ON "public"."ai_benchmarks" FROM anon;'],
+    ['CREATE TABLE "Public"."AI_Benchmarks" (id int);', 'revoke all on ai_benchmarks from anon;'],
+    ['CREATE TABLE ai_benchmarks (id int);', 'REVOKE ALL ON TABLE ai_benchmarks FROM anon;'],
+  ]) {
+    assert.deepEqual(migrationAdditive(f, [create, revoke]), { additive: true }, revoke);
+  }
+  // a REVOKE on a table the file does not create
+  assert.deepEqual(migrationAdditive(f, ['REVOKE ALL ON public.ai_benchmarks FROM anon;']), { additive: false, reason: 'REVOKE' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE other (id int);', 'REVOKE ALL ON ai_benchmarks FROM anon;']), { additive: false, reason: 'REVOKE' });
+  // created after the REVOKE: the table existed before the file ran
+  assert.deepEqual(migrationAdditive(f, ['REVOKE ALL ON ai_benchmarks FROM anon;', 'CREATE TABLE ai_benchmarks (id int);']), { additive: false, reason: 'REVOKE' });
+  // one existing table in the list is enough to refuse it
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE ai_benchmarks (id int);', 'REVOKE ALL ON ai_benchmarks, public.tasks FROM anon;']), { additive: false, reason: 'REVOKE' });
+  // the revoke shapes that are not a table this file creates
+  for (const sql of ['REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;', 'REVOKE ALL ON SCHEMA public FROM anon;',
+    'REVOKE ALL ON FUNCTION public.f(int) FROM anon;', 'REVOKE ALL ON DATABASE mydb FROM anon;', 'REVOKE app FROM joe;']) {
+    assert.deepEqual(migrationAdditive(f, [sql]), { additive: false, reason: 'REVOKE' }, sql);
+  }
+  // a REVOKE that was never redeemed reads as a REVOKE, and the DROP POLICY message still names the policy
+  assert.match(migrationAdditive(f, ['DROP POLICY IF EXISTS "p" ON ai_benchmarks;']).reason, /^DROP POLICY/);
+  assert.deepEqual(migrationAdditive(f, ['REVOKE SELECT ON tasks FROM app;']).additive, false);
+});
 test('migrationAdditive: a statement is read whole, whatever its markers', () => {
   const f = 'setup/db/migrations/20261020g_ai_benchmarks.sql';
   // a ';' inside a literal or a dollar-quoted body does not end the statement
