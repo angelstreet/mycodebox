@@ -180,6 +180,38 @@ test('deploy adapter: request argv, id from stdout, refusals, wait polls the lis
   assert.match((await refuse.request({ env: 'env-a', scope: 'server', ref: 'main', agent: 'integration:i1' })).error, /E_HELD/);
 });
 
+test('deploy adapter: the version is this deploy\'s own ledger entry, not the server\'s (real case 2026-10-20 23:44)', async () => {
+  // `deploy last env-a --json` really returns one entry per target (server, frontend, each host name). A scope-host
+  // deploy put main-2026.10.20-89466 on every host while the server stayed on the older main-2026.10.20-89445, and
+  // `env.server || env.frontend || env.host` made the lane report 89445. Nothing here names a real env or host.
+  const entry = (o) => ({ agent: 'manager:deploy', status: 'done', ...o });
+  const hosts = (o = {}) => ({ 'host-a': entry({ at: 1200, version: 'main-2026.10.20-89466', ...o }), 'host-b': entry({ at: 1201, version: 'main-2026.10.20-89466', ...o }) });
+  const server = entry({ at: 1000, version: 'main-2026.10.20-89445', commit: 'a1a1a1a', deployId: 'older-1' });
+  const frontend = entry({ at: 900, version: 'main-2026.10.20-89400' });
+  const mk = (map, deploy = {}) => createIntegrationDeploys({ registry: async (argv) => {
+    if (argv[1] === 'list') return { code: 0, stdout: JSON.stringify({ deploys: [{ id: 'd9', env: 'env-a', state: 'done', scope: 'host', agent: 'integration:int-7f3a', ...deploy }] }), stderr: '' };
+    if (argv[1] === 'last') return { code: 0, stdout: typeof map === 'string' ? map : JSON.stringify({ envs: { 'env-a': map } }), stderr: '' };
+    return { code: 1, stdout: '', stderr: 'unsupported' };
+  }, sleep: async () => {} }).wait('d9');
+
+  assert.equal((await mk({ server, frontend, ...hosts({ deployId: 'd9' }) })).version, 'main-2026.10.20-89466', 'the entry carrying this deploy id wins');
+  assert.equal((await mk({ server, frontend, 'host-a': entry({ at: 1100, version: 'main-2026.10.20-89450', lastAttempt: { deployId: 'd9', status: 'done', version: 'main-2026.10.20-89466' } }) })).version,
+    'main-2026.10.20-89450', 'a done lastAttempt of this deploy marks its entry, whose own version is returned');
+  assert.equal((await mk({ server, frontend, 'host-a': entry({ at: 1100, version: 'main-2026.10.20-89450', lastAttempt: { deployId: 'another', status: 'failed' } }), ...hosts() })).version,
+    'main-2026.10.20-89466', 'a failed lastAttempt of another deploy marks nothing');
+  // no deployId anywhere: this deploy's own agent wins, even against a newer entry written by someone else
+  assert.equal((await mk({ server: entry({ at: 1300, version: 'main-2026.10.20-89470' }), 'host-a': entry({ at: 1200, version: 'main-2026.10.20-89466', agent: 'integration:int-7f3a' }) })).version, 'main-2026.10.20-89466');
+  // neither: the newest entry inside the deploy's scope
+  assert.equal((await mk({ server, frontend, ...hosts() })).version, 'main-2026.10.20-89466');
+  assert.equal((await mk({ server, frontend, ...hosts({ deployId: 'another' }) }, { scope: 'server' })).version, 'main-2026.10.20-89445', 'scope server reads the server entry');
+  assert.equal((await mk({ server, frontend, ...hosts({ deployId: 'another' }) }, { scope: 'full' })).version, 'main-2026.10.20-89466', 'scope full reads the newest of all targets');
+  assert.equal((await mk({ server: entry({ at: 1000, version: 'main-2026.10.20-89445', deployId: 'd9' }), 'host-a': entry({ at: 1300, version: 'main-2026.10.20-89470' }) }, { scope: 'server' })).version,
+    'main-2026.10.20-89445', 'a deployId match wins over a newer unrelated entry');
+  assert.equal((await mk({ version: '1.2.3' })).version, '1.2.3', 'a flat entry keeps its own version');
+  assert.equal((await mk('not json')).version, null, 'unparsable output is no version');
+  assert.equal((await mk({})).version, null, 'an env without entries is no version');
+});
+
 test('deploy adapter: a failed deploy, a timeout and a vanished id', async () => {
   const mk = (state) => createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: JSON.stringify({ deploys: state ? [{ id: 'd1', env: 'e', state, tail: 'boom' }] : [] }), stderr: '' }), sleep: async () => {} });
   const f = await mk('failed').wait('d1');
