@@ -2198,6 +2198,11 @@ async function handleHttp(req, res) {
       const plan = revertPlan(item, { exists, state: st?.state ?? null, draft: !!st?.stall?.draft, menu: (st?.stall?.options?.length || 0) > 0, reverted: item ? (await revertedIds()).has(id) : false });
       if (plan.error) throw httpError(plan.status, plan.error);
       if (plan.draft) return json(res, 200, { ok: true, draft: plan.draft, label: plan.label, session: item.session });
+      if (plan.lane) {   // a lane merge: the lane reverts the merge commit, no session involved
+        let q; try { q = integrationLane.revert(plan.lane.request, { by, session: item.session || null }); } catch (e) { throw httpError(e.code === 'E_NOT_FOUND' ? 404 : 409, e.message); }
+        await logRevert({ id, session: item.session, by });
+        return json(res, 200, { ok: true, enqueued: q.id, repo: q.repo, session: item.session });
+      }
       await assertAgentPane(item.session, by);   // the same guarded send path as every other owner send
       await sendKeys(item.session, plan.send, true);
       logSend(item.session, by, { keys: plan.send });
@@ -2337,7 +2342,7 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 // `integrationHooks` is the seam for the rest of the wiring: notify(request, event) fires on every transition (event.final is true on a
 // final state: merged, deployed, returned, merged_ci_red, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
-const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
+const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut: () => managerConfig().mergeOptOut,
   deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
     wait: (id) => integrationHooks.deploys.wait(id),
     find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },

@@ -187,7 +187,7 @@ test('evaluateMerge: a word-only green report is below the default confidence wi
 test('composeReply: merge, information and the pointer to the owner', () => {
   const r = composeReply({ info: [{ part: 'send the SRF 1 buffer path', answer: '/data/fake/srf1-buffer', source: 'docs/HANDOVER.md:3' }], merge: { repo: 'proj', branch: 'task90-open', target: 'main', rationale: 'merges cleanly, tests green' }, remaining: true });
   assert.match(r.text, /Send the SRF 1 buffer path: \/data\/fake\/srf1-buffer \(from docs\/HANDOVER\.md:3\)/);
-  assert.match(r.text, /Merge: yes - the manager evaluated proj task90-open -> main: merges cleanly, tests green\. Do not merge it yourself\./);
+  assert.match(r.text, /Merge: yes - the manager evaluated proj task90-open -> main: merges cleanly, tests green\. Request it with `integrate request task90-open`.*Do not merge it yourself\./);
   assert.match(r.text, /The rest of your question went to the owner: wait for their answer on it\.$/);
   assert.equal(hardMatch(r.text, { mergePresent: true }), null);
   assert.equal(composeReply({ info: [], merge: null, remaining: true }), null);

@@ -131,3 +131,20 @@ test('round 9: productVisible, product-visible picks first and named in the summ
   const sum = decidedSummary(items);
   assert.match(sum.text, /1 product-visible pick: "Blue" \(s1\), 1 menu pick/);
 });
+
+test('finding 5/22: a lane verdict is a decided item on its own; its revert is a lane revert, no session needed', () => {
+  const lane = { decision_id: 'lane-merge-int-1', kind: 'merge', chosen: 'merge', source: 'integration-lane', ts: iso(5), session: 'gone-s', branch: 'feat', target: 'main', request: 'int-1', rationale: 'floor passed', evidence: ['x'] };
+  const esc = { ...lane, decision_id: 'lane-merge-int-2', chosen: 'escalate' };
+  const dep = { decision_id: 'lane-deploy-int-1', kind: 'deploy', chosen: 'deploy', source: 'integration-lane', ts: iso(6), session: 'gone-s', env: 'live', scope: 'self', ref: 'main', rollback: 'checkout the previous sha' };
+  const items = decidedItems({ recs: [], journal: [lane, esc, dep] });
+  assert.deepEqual(items.map((i) => i.id).sort(), ['lane-deploy-int-1', 'lane-merge-int-1']);
+  const m = items.find((i) => i.kind === 'merge');
+  assert.deepEqual(m.revert.lane, { request: 'int-1' });
+  assert.deepEqual(revertPlan(m, { exists: false }), { status: 200, lane: { request: 'int-1' } });
+  assert.equal(revertPlan(m, { exists: false, reverted: true }).status, 409);
+  // a hand-off answer carrying the lane id shows once, under the answer's id
+  const withAnswer = decidedItems({ recs: [ans('h1', 5, 'gone-s', { text: 'queued' }, { case: 'merge_wait', source: 'manager_decision', decision_ids: ['lane-merge-int-1'] })], journal: [lane] });
+  assert.deepEqual(withAnswer.map((i) => i.id), ['h1']);
+  // a hand-off whose verdict was escalate decided nothing
+  assert.deepEqual(decidedItems({ recs: [ans('h2', 5, 's', { text: 'queued' }, { case: 'merge_wait', source: 'manager_decision', decision_ids: ['lane-merge-int-2'] })], journal: [esc] }), []);
+});
