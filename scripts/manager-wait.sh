@@ -6,8 +6,18 @@
 # new lines through scripts/manager-event-filter.sh, and writes the offset back once something is delivered. Events that land
 # while the manager is busy are therefore delivered by the next call. First run (no cursor) starts at EOF.
 # With a custom filter-command: legacy behaviour, the command is run as-is and has to do its own tailing (no cursor).
+# Single instance: two waits racing on .cursor crashed one of them on the shared .cursor.tmp, so the lock is taken
+# before anything else and held for the whole life of the wait (the fd survives the exec, filters inherit it).
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export MANAGER_WAIT_DEFAULT_FILTER="$HERE/manager-event-filter.sh"
+STATE="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
+mkdir -p "$STATE"
+exec {LOCKFD}>>"$STATE/manager-wait.lock"                     # append, never truncate: a loser must still read the winner's pid
+if ! flock -n "$LOCKFD"; then
+  printf 'another manager-wait is running (pid %s)\n' "$(tr -dc 0-9 <"$STATE/manager-wait.lock" 2>/dev/null)" >&2
+  exit 3
+fi
+printf '%s\n' "$$" >"$STATE/manager-wait.lock"              # we hold it: record our pid for the next loser
 exec python3 - "$1" <<'PY'
 import os, select, signal, subprocess, sys, time
 filt = sys.argv[1]
@@ -45,7 +55,7 @@ def read_cursor():
 
 def write_cursor(n):
     os.makedirs(os.path.dirname(cursor_file), exist_ok=True)
-    tmp = cursor_file + '.tmp'
+    tmp = cursor_file + '.tmp.' + str(os.getpid())       # per-pid temp: a crash leaves one orphan, never a shared file to trip over
     with open(tmp, 'w') as f: f.write(str(n) + '\n')
     os.replace(tmp, cursor_file)
 
