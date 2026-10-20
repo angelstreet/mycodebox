@@ -519,14 +519,14 @@ without fetch, checkout or any ref, index or work-tree change (`git merge-tree -
 | The closing text reports tests green ("1826/1826 pass", "all green"), with no failure; or every changed file is documentation (`.md`, LICENSE / CHANGELOG-style files, non-code files under `docs/`; test code and generic `.txt` need a green report) | `tests reported red: ...` / `no green test report on the branch` |
 | No changed path or added line touches secrets or credentials, migrations / `*.sql`, sudoers, systemd units, CI / deploy / infra files (workflows, Dockerfile, `*.tf`, deploy scripts), no new binary file, and the diff could be scanned (`diff too large or unreadable to scan` otherwise) | `touches a secret/credential path: ...`, ... |
 | The repo is not in `mergeOptOut` (matched against the checkout directory name, the main repo directory behind a worktree and the origin remote's repo name, or the full path) | `repo opted out` |
-| Jev (router point `merge`) picks `merge` at or above `mergeMinConfidence` (default 0.85); without Jev, the manager's reasoning: 0.9 with a test count or docs-only, 0.8 for a green word alone | `Jev rates it escalate (0.62)` / `confidence 0.80 below 0.85` |
+| Jev (router point `merge`) picks `merge` at or above `mergeMinConfidence` (default 0.85); without Jev, the manager's reasoning (a deliberate constant, not a measurement; "Jev unavailable"): 0.9 with a test count or docs-only, 0.8 for a green word alone, so with Jev down every floor-passing merge with a test count is approved until the minimum is raised | `Jev rates it escalate (0.62)` / `confidence 0.80 below 0.85` |
 
 Every evaluation, merge or escalate, is appended to `<state>/merge-decisions.jsonl` (V2 decision-record shape: rationale,
 evidence, `jev_decision_id` or `reasoning`, branch and target SHAs, rollback `git revert -m 1 <merge commit>`), logged as
 `{type:'merge_decision'}` in `stalls.jsonl`, and recorded as an owner feed notice ("Merge approved (reply pending): <session>" or "Merge
 escalated: <session>"; the later `answer` / `answer_cancelled` record carries `merge_decision_id`). `GET /api/manager/merge-decisions?limit=50` returns the newest records.
 
-The reply ("Merge: yes - the manager evaluated <branch> -> <target>: ... Merge it now.") goes through the usual countdown
+The reply ("Merge: yes - the manager evaluated <branch> -> <target>: ... Request it with `integrate request <branch>` ... Do not merge it yourself.") never tells the session to merge or push the target (the lane is the only merger, AGENTS.md); it goes through the usual countdown
 and cancel pill with source `manager_decision`; it needs `autoSend` and `mergeDecisions` on (not `autoCases`), and the fire-time
 gate re-checks draft, pause, hourly cap, pane and that the reply itself names no hard topic.
 
@@ -583,7 +583,7 @@ and to the feed. The interactive manager runs the same checks with
 `GET /api/manager/decided?hours=24|since=<iso>&limit=100` -> `{ items: [{ id, at, session, kind, what, why, evidence,
 revert: { label, text }, url }], summary: { count, byKind, text } }`. `POST /api/manager/decided/:id/revert` sends the
 revert text for a merge, push or deploy to the session, once per item, through the guarded send path as the caller's actor (`by`, default `owner`); 409 when the session has not finished its turn, shows a menu, has a draft, or the item was already reverted;
-other kinds return a correction draft instead. The dashboard view is in the More menu (`/?decided=1`, Revert needs a
+other kinds return a correction draft instead. A merge the integration lane made (journal source `integration-lane`: records `lane-merge-<request>` per verdict in `merge-decisions.jsonl`, `lane-deploy-<request>` per deploy; they are decided items on their own) is reverted by the lane, session or not: the response is `{ enqueued: <request id> }` and the lane runs `git revert -m 1` on the merge commit, tests and pushes it. The manager's `merge_handoff` is logged as an `answer` (case `merge_wait`) joined to the lane's verdict record; it needs `autoSend`, `mergeDecisions`, no owner draft and the hourly cap, and `mergeOptOut` reaches the lane's own evaluation (and `scripts/merge-eval.js`). The dashboard view is in the More menu (`/?decided=1`, Revert needs a
 second tap, Correct opens the session with the draft). Once a day at `decidedDigestHour` (18, in `pushTimezone`) a
 digest-tier push "Decided for you today: N" carries the summary; voice mode speaks the same summary.
 
