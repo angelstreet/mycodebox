@@ -35,8 +35,16 @@ const weakId = (name, st) => `~${name}|${String(st?.waitReason || st?.stall?.que
 const prioRank = (p) => ({ P0: 0, P1: 1, P2: 2 }[p] ?? 2);
 const byPrio = (a, b) => prioRank(a.priority) - prioRank(b.priority) || a.name.localeCompare(b.name);
 
-// The live queue: every session that needs the owner now, P0 first (the strip's order).
-export function buildQueue(statuses, prios, sessions) {
+// The manager's open questions (ledger asks) that no waiting session already carries. The NEEDS YOU strip
+// counts them ("manager · N questions") and the answer popup lists them, so the two always agree.
+export function unattachedAsks(asks, statuses, sessions) {
+  const waiting = new Set((sessions || []).filter((s) => isOwnersTurn((statuses || {})[s.name])).map((s) => s.name));
+  return (asks || []).filter((a) => a && !waiting.has(a.session));
+}
+
+// The live queue: every session that needs the owner now, P0 first (the strip's order), then the
+// manager's unattached open questions (one item each; answered by telling the manager).
+export function buildQueue(statuses, prios, sessions, asks = []) {
   const out = [];
   for (const s of sessions) {
     const st = statuses[s.name];
@@ -44,6 +52,10 @@ export function buildQueue(statuses, prios, sessions) {
     const real = stallId(st);
     const id = real || weakId(s.name, st);
     out.push({ name: s.name, id, weak: !real, key: `${s.name}\x1f${id}`, priority: st?.priority || prios?.[s.name] || 'P2' });
+  }
+  for (const a of unattachedAsks(asks, statuses, sessions)) {
+    const id = String(a.id || a.question || '').slice(0, 80);
+    out.push({ name: `ask:${id}`, id, weak: false, key: `ask:${id}\x1f${id}`, priority: 'P2', ask: a });
   }
   return out.sort(byPrio);
 }
@@ -55,8 +67,8 @@ export const KEEP_MS = 8000;
 // waiting / done-needs-owner continuously for >= KEEP_MS, or (c) its stall id changed (that is a new item).
 // prev = { items, answered: Map<key, ts> }. Returns { items, answered, changed, added } where `added` are
 // items whose key was not in prev (the popup animates only for ids it has never shown).
-export function reconcileQueue(prev, statuses, sessions, now = Date.now()) {
-  const live = buildQueue(statuses, {}, sessions);
+export function reconcileQueue(prev, statuses, sessions, now = Date.now(), asks = []) {
+  const live = buildQueue(statuses, {}, sessions, asks);
   const answered = new Map(prev.answered || []);
   for (const [k, t] of answered) if (now - t > 10 * 60 * 1000) answered.delete(k);
   const liveByKey = new Map(live.map((it) => [it.key, it]));

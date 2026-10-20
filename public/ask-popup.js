@@ -224,8 +224,37 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     return `<div class="ap-opt ${b.id === 'yes' || b.id === 'no' ? 'yn' : ''}">${inner}${open ? `<div class="ap-desc">${esc(b.desc)}</div>` : ''}</div>`;
   }
 
+  // A manager question (ledger ask): read-only card. The owner answers by telling the manager.
+  function renderManagerAsk(item, r) {
+    ctx = null;
+    const a = item.ask;
+    const idx = q.items.findIndex((i) => i.key === item.key);
+    pill.querySelector('.ap-pill-n').textContent = String(q.items.length);
+    pill.classList.toggle('hidden', !minimised);
+    document.body.classList.toggle('has-ask-pill', minimised && !pill.classList.contains('hidden'));
+    el.classList.toggle('hidden', minimised);
+    el.classList.toggle('ap-big', expanded);
+    const opts = Array.isArray(a.options) ? a.options : [];
+    const text = [a.question, opts.length ? opts.map((o, i) => `${i + 1}. ${o}`).join('\n') : '', a.recommendation ? `Recommends: ${a.recommendation}` : ''].filter(Boolean).join('\n');
+    body.innerHTML = `<div class="ap-head">
+        <span class="ap-prio P2">manager</span>
+        <span class="ap-name">${esc(a.id || 'question')}</span>
+        ${q.items.length > 1 ? `<span class="ap-cnt">${idx + 1}/${q.items.length}</span>
+        <button class="ap-nav" data-act="prev" aria-label="Previous">\u2039</button>
+        <button class="ap-nav" data-act="next" aria-label="Next">\u203a</button>` : ''}
+        ${expanded ? '' : `<button class="ap-x" data-act="min" aria-label="Hide">${icon('chevron-down', 16)}</button>`}
+        <button class="ap-x" data-act="dismiss" aria-label="Dismiss">${icon('x', 16)}</button>
+      </div>
+      <div class="ap-q mdbody">${copyPromptButtonHtml({ text, label: 'Copy question' })}${renderMd(String(a.question || ''))}</div>
+      ${opts.length ? `<ol class="ap-opts">${opts.map((o) => `<li>${esc(o)}</li>`).join('')}</ol>` : ''}
+      ${a.recommendation ? `<div class="ap-tldr"><div class="ap-tldr-what">Recommends: ${esc(a.recommendation)}</div></div>` : ''}
+      <div class="ap-meta">Answer in: tell the manager</div>`;
+    renderedKey = '';
+    if (!r.added.length) el.classList.remove('ap-anim');
+  }
+
   function render(force) {
-    const r = reconcileQueue(q, state.status || {}, state.sessions || []);
+    const r = reconcileQueue(q, state.status || {}, state.sessions || [], Date.now(), state.ownerAsks || []);
     q = { items: r.items.filter((i) => !dismissed.has(i.key)), answered: r.answered };
     r.added = r.added.filter((i) => !dismissed.has(i.key));
     if (!q.items.length) {
@@ -238,6 +267,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       curKey = q.items[0].key;
     }
     const item = cur();
+    if (item.ask) return renderManagerAsk(item, r);
     const v = view(item);
     if (!v) return;
     ctx = v;
