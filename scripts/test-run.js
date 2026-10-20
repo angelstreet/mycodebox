@@ -7,8 +7,9 @@
 //   npm test -- test/a.test.js ...   exactly these files
 // A run of BIG_RUN files or more waits for a ticket: a slot file in TEST_SLOT_DIR holding the owner's pid, freed on
 // exit, taken over when that pid is dead.
+// Each run gets its own TMPDIR, removed on exit: the tests' mkdtemp dirs were never cleaned and ~99k piled up in /tmp.
 import { execFileSync, spawn } from 'node:child_process';
-import { readdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -74,10 +75,13 @@ async function main() {
   console.log(`test-run: ${files.length} of ${all.length} test files (${why})`);
   if (!files.length) return 0;
   const release = files.length >= BIG_RUN ? await ticket() : () => {};
-  const child = spawn(process.execPath, ['--test', '--test-timeout=300000', '--test-force-exit', ...files], { cwd: root, stdio: 'inherit' });
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 't-'));   // short: unix socket paths under it must stay < 104 chars
+  const child = spawn(process.execPath, ['--test', '--test-timeout=300000', '--test-force-exit', ...files],
+    { cwd: root, stdio: 'inherit', env: { ...process.env, TMPDIR: tmp } });
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => child.kill(sig));
   const code = await new Promise((r) => child.on('exit', (c, s) => r(c ?? (s ? 1 : 0))));
   release();
+  rmSync(tmp, { recursive: true, force: true });
   return code;
 }
 if (import.meta.url === `file://${process.argv[1]}`) process.exit(await main());
