@@ -3,34 +3,37 @@ import assert from 'node:assert/strict';
 import { scanCrash, crashLineOf, decideCrashResume, createCrashResumer, findClaudeSessionId } from '../crash-resume.js';
 
 const base = 'claude --dangerously-skip-permissions';
+// Captured session output from a real abort trace: keep the structure (wrap + jndoye@codebox prompt) but use a
+// placeholder home path so this fixture cannot leak a real /home/<user> location. The original wrapped the launcher
+// across two physical lines (column-wrap); we keep that structure for the scanner test.
 const T129 = [
-  '❯ /home/jndoye/handovers/TASK129-deferred-restart.launch.sh: line 3: 3526208 Aborted                 env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN /home/jndo',
-  'ye/.local/bin/claude --dangerously-skip-permissions --remote-control TASK129-deferred-restart -n TASK129-deferred-restart --model sonnet "$(cat /home/jndoye/han',
+  '❯ /home/user/handovers/TASK129-deferred-restart.launch.sh: line 3: 99999 Aborted                 env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN /home/user/.local/bin/clau',
+  'de --dangerously-skip-permissions --remote-control TASK129-deferred-restart -n TASK129-deferred-restart --model sonnet "$(cat /home/user/han',
   'dovers/TASK129-deferred-restart.prompt.md)"                                                                             ✔ Update installed · Restart to update',
   'shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory     new task? /clear to save 166.5k tokens',
-  'jndoye@codebox:~/vpt-deferred-restart$                                                                                                                     /rc',
+  'user@host:~/vpt-deferred-restart$                                                                                                                     /rc',
 ];
 const GAME = [
-  '❯ /home/jndoye/handovers/game-report-ai-usage.launch.sh: line 3: 2344833 Aborted                 env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN /home/jndoye/.local/bin/claude --dangerous',
-  'ly-skip-permissions --remote-control game-report-ai-usage -n game-report-ai-usage --model sonnet "$(cat /home/jndoye/handovers/game-report-ai-usage.prompt.md)"─────────────────────────────',
-  'jndoye@codebox:~/virtualpytest$                                                                                                                     ✔ Update installed · Restart to update',
+  '❯ /home/user/handovers/game-report-ai-usage.launch.sh: line 3: 88888 Aborted                 env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN /home/user/.local/bin/claude --dangerous',
+  'ly-skip-permissions --remote-control game-report-ai-usage -n game-report-ai-usage --model sonnet "$(cat /home/user/handovers/game-report-ai-usage.prompt.md)"─────────────────────────────',
+  'user@host:~/virtualpytest$                                                                                                                     ✔ Update installed · Restart to update',
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)                                                                                                     new task? /clear to save 138.7k tokens',
   '                                                                                                                                                                                       /rc',
 ];
 const TYPED = [
   'launch.sh: line 3: 99 Aborted                 env claude --remote-control coc-llm-haiku -n coc-llm-haiku --model haiku "$(cat p.md)"',
-  'jndoye@codebox:~/virtualpytest$ what is the status are we still waiting ?',
+  'user@host:~/virtualpytest$ what is the status are we still waiting ?',
   '-bash: what: command not found',
-  'jndoye@codebox:~/virtualpytest$',
+  'user@host:~/virtualpytest$',
 ];
-const st = (lines, extra = {}) => ({ name: 'pane', tmuxName: 'pane', cwd: '/home/jndoye/virtualpytest', base, model: null, claudeSessionId: 'sid', shellForeground: true, agent: null, scriptBusy: false, input: '', lines, ...extra });
+const st = (lines, extra = {}) => ({ name: 'pane', tmuxName: 'pane', cwd: '/home/user/virtualpytest', base, model: null, claudeSessionId: 'sid', shellForeground: true, agent: null, scriptBusy: false, input: '', lines, ...extra });
 const dec = (s) => decideCrashResume({ state: s, consecutiveNoAgent: 2 });
 
 test('wrapped job line + trailing banner noise + getcwd error: parsed, but cwd gone is not resumed', () => {
   const scan = scanCrash(T129);
-  assert.match(scan.line, /--remote-control TASK129-deferred-restart -n TASK129-deferred-restart --model sonnet "\$\(cat \/home\/jndoye\/handovers\/TASK129-deferred-restart\.prompt\.md\)"$/);
+  assert.match(scan.line, /--remote-control TASK129-deferred-restart -n TASK129-deferred-restart --model sonnet "\$\(cat \/home\/user\/handovers\/TASK129-deferred-restart\.prompt\.md\)"$/);
   assert.equal(scan.cwdGone, true);
-  const d = dec(st(T129, { cwd: '/home/jndoye/vpt-deferred-restart (deleted)' }));
+  const d = dec(st(T129, { cwd: '/home/user/vpt-deferred-restart (deleted)' }));
   assert.equal(d.reason, 'cwd-gone');
   assert.equal(d.crash.name, 'TASK129-deferred-restart');
 });
@@ -50,12 +53,12 @@ test('human-typed line in the bare shell and its command-not-found reply are tol
 });
 
 test('real output after the job line (agent ran again / command output) is not a crash', () => {
-  assert.equal(crashLineOf([...TYPED, 'some real output', 'jndoye@codebox:~$']), null);
-  assert.equal(crashLineOf([...TYPED.slice(0, 1), '❯ hello', 'jndoye@codebox:~$']), null);
+  assert.equal(crashLineOf([...TYPED, 'some real output', 'user@host:~$']), null);
+  assert.equal(crashLineOf([...TYPED.slice(0, 1), '❯ hello', 'user@host:~$']), null);
 });
 
 test('no job line (older one scrolled off or loop script ended): no resume', () => {
-  assert.equal(dec(st(['40 turns done; restart the loop to continue', 'jndoye@codebox:~/virtualpytest$'])).reason, 'no-exact-job-message');
+  assert.equal(dec(st(['40 turns done; restart the loop to continue', 'user@host:~/virtualpytest$'])).reason, 'no-exact-job-message');
 });
 
 test('safety rules still hold', () => {
@@ -78,7 +81,7 @@ test('tick covers an already-dead pane once: resumes after two polls, never twic
 
 test('cwd gone is recorded once as a manager item, nothing is sent', async () => {
   const calls = [], events = [];
-  const r = createCrashResumer({ getState: async () => st(T129, { cwd: '/home/jndoye/vpt-deferred-restart (deleted)' }), sendText: async (...x) => calls.push(x), sendEnter: async (...x) => calls.push(x), record: async (e) => events.push(e) });
+  const r = createCrashResumer({ getState: async () => st(T129, { cwd: '/home/user/vpt-deferred-restart (deleted)' }), sendText: async (...x) => calls.push(x), sendEnter: async (...x) => calls.push(x), record: async (e) => events.push(e) });
   for (let i = 0; i < 4; i++) await r.tick(['pane']);
   assert.equal(calls.length, 0);
   assert.equal(events.length, 1);
@@ -91,7 +94,7 @@ test('missing session id is looked up from transcripts', async () => {
     stat: async (f) => ({ mtimeMs: f.endsWith('b.jsonl') ? 2 : 1 }),
     readTail: async (f) => (f.endsWith('a.jsonl') ? '{"agentName":"game-report-ai-usage"}' : '{"agentName":"other"}'),
   };
-  assert.equal(await findClaudeSessionId({ name: 'game-report-ai-usage', cwd: '/home/jndoye/virtualpytest', projectsDir: '/p', fs }), 'a');
+  assert.equal(await findClaudeSessionId({ name: 'game-report-ai-usage', cwd: '/home/user/virtualpytest', projectsDir: '/p', fs }), 'a');
   const calls = [];
   const r = createCrashResumer({ getState: async () => st(GAME, { claudeSessionId: null }), sendText: async (...x) => calls.push(x), sendEnter: async () => {}, record: async () => {}, resolveSessionId: async () => 'found-id' });
   await r.tick(['pane']); await r.tick(['pane']);
