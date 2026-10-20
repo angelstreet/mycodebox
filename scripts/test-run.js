@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// `npm test`. Owner 2026-10-20: a worker tests only what its change touches; the full suite runs in the integration
-// lane (TEST_SCOPE=full), and at most TEST_SLOTS (default 2) big runs share the host at once. Five full suites at once
+// `npm test`. Owner 2026-10-20: every run tests only what its change touches, the integration lane included (it sets
+// V2_BASE_SHA to the target before the merge); the full suite runs once a day on main (scripts/full-suite-check.js,
+// a daily check). At most TEST_SLOTS (default 2) big runs share the host at once. Five full suites at once
 // on 6 cores made each 3-5x slower and timed tests out, so the extra runs bought nothing.
 //   npm test                         changed-only vs V2_BASE_SHA, else merge-base with origin/main (falls back to full)
 //   TEST_SCOPE=full npm test         the whole suite (npm run test:full)
 //   npm test -- test/a.test.js ...   exactly these files
 // A run of BIG_RUN files or more waits for a ticket: a slot file in TEST_SLOT_DIR holding the owner's pid, freed on
 // exit, taken over when that pid is dead.
+// Each run gets its own TMPDIR, removed on exit: the tests' mkdtemp dirs were never cleaned and ~99k piled up in /tmp.
 import { execFileSync, spawn } from 'node:child_process';
-import { readdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -69,15 +71,18 @@ async function main() {
     const { base, changed } = changedPaths(root);
     const s = select(changed, all, (t) => readFileSync(path.join(root, t), 'utf8'));
     if (s.full) { files = all; why = `full: ${s.full}`; }
-    else { files = s.files; why = `changed-only vs ${base}, the integration lane runs the full suite`; }
+    else { files = s.files; why = `changed-only vs ${base}; the full suite runs daily on main`; }
   }
   console.log(`test-run: ${files.length} of ${all.length} test files (${why})`);
   if (!files.length) return 0;
   const release = files.length >= BIG_RUN ? await ticket() : () => {};
-  const child = spawn(process.execPath, ['--test', '--test-timeout=300000', '--test-force-exit', ...files], { cwd: root, stdio: 'inherit' });
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'gtr-'));   // short: unix socket paths under it must stay < 104 chars; distinct so health-watch can sweep it
+  const child = spawn(process.execPath, ['--test', '--test-timeout=300000', '--test-force-exit', ...files],
+    { cwd: root, stdio: 'inherit', env: { ...process.env, TMPDIR: tmp } });
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => child.kill(sig));
   const code = await new Promise((r) => child.on('exit', (c, s) => r(c ?? (s ? 1 : 0))));
   release();
+  rmSync(tmp, { recursive: true, force: true });
   return code;
 }
 if (import.meta.url === `file://${process.argv[1]}`) process.exit(await main());

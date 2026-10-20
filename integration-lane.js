@@ -209,8 +209,10 @@ export function sessionUsage({ stateDir, session, worktree = null, from, to }) {
   return a && { attribution: rule, model: a.model, runtime: a.agent, tokens: a.tokens, tokensIn: a.tokensIn, tokensOut: a.tokensOut, costUsd: a.costUsd, plan: a.plan, from: new Date(from).toISOString(), to: new Date(to).toISOString(), rule: rule === 'worktree' ? 'ledger rows with cwd inside the requester worktree since the session\'s previous request (max 24h)' : 'session ledger rows since its previous request (max 24h)' };
 }
 
+const TASK_BRANCH_RE = /^v2\/task\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/;
+
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
-  deploys = null, mergeEval = defaultMergeEval, usage = sessionUsage, notify = () => {}, managerItem = () => {}, journal = () => {}, mergeOptOut = () => [], now = () => Date.now(), log = () => {},
+  taskGrant = null, deploys = null, mergeEval = defaultMergeEval, usage = sessionUsage, notify = () => {}, managerItem = () => {}, journal = () => {}, mergeOptOut = () => [], now = () => Date.now(), log = () => {},
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), pidAlive = waiterAlive } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
@@ -427,7 +429,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (c.test) {
           const t = await step(r, 'test', async (setLive) => {
             const res = await run(c.test, { cwd: wt, timeoutMs: c.testTimeoutMin * 60_000, onData: setLive,
-              env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1', TEST_SCOPE: 'full' } });   // the one full run per merge (scripts/test-run.js)
+              env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1', V2_BASE_SHA: targetSha } });   // tests what the merge touches; full suite nightly (scripts/test-run.js)
             fs.rmSync(path.join(dir, 'tmp', r.id), { recursive: true, force: true });
             const ok = res.code === 0 && !res.timedOut;
             const f = ok ? { tail: res.out, failing: [] } : testFailure(res.out);
@@ -641,6 +643,9 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         r.branchSha = branchSha.info.sha;
         const alreadyIn = (await G(r, c, ['merge-base', '--is-ancestor', r.branchSha, `${c.remote}/${c.target}`])).code === 0;
         if (!alreadyIn) {
+          // A V2 task branch merges only with the owner's SHA-bound integration grant in the task store (OWNER_DECISIONS §11.1); no store, no merge.
+          const tm = TASK_BRANCH_RE.exec(r.branch);
+          if (tm && !(taskGrant && await Promise.resolve(taskGrant(tm[1], r.branchSha)).catch(() => false))) throw new Ret(`${r.branch} at ${r.branchSha.slice(0, 12)}: no integration grant for this SHA in the V2 task store; the owner approves the merge of this exact SHA first`);
           await evaluate(r, c);
         }
         await mergeAndPush(r, c, r.branchSha);

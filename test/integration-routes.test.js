@@ -255,3 +255,34 @@ test('--approved-by: the loopback reporter token or a manager client; an integra
     assert.equal((await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'infra' }, headers: { authorization: `Bearer ${CLIENT}` } })).status, 200);
   } finally { b.close(); }
 });
+
+test('callerOf (V2 writes): same-origin dashboard and manager clients decide; a reporter-token session may not; nothing else', async () => {
+  const w = makeWorld();
+  const b = await boot(w);
+  try {
+    const mgr = 'mgr-token-0123456789abcdef';
+    const { writeFileSync: wf } = await import('node:fs');
+    wf(join(b.stateDir, 'leases', 'clients.json'), JSON.stringify({ clients: [{ name: 'boss', sha256: hashToken(mgr), exemptAgents: [], integrate: true, manager: true }, { name: 'mac', sha256: hashToken(CLIENT), exemptAgents: [], integrate: true }] }));
+    const routes = createIntegrationRoutes({ lane: b.lane, stateDir: b.stateDir, isLoopback, reporterOk: (t) => t === REPORTER });
+    const req = (headers, remoteAddress = '127.0.0.1') => ({ headers: { host: 'dash.local', ...headers }, socket: { remoteAddress } });
+    assert.deepEqual(routes.callerOf(req({ origin: 'http://dash.local' })), { actor: 'owner', mayDecide: true });
+    assert.deepEqual(routes.callerOf(req({ 'sec-fetch-site': 'same-origin' })), { actor: 'owner', mayDecide: true });
+    assert.equal(routes.callerOf(req({})), null, 'no browser signal, no token: a bare curl from a worker');
+    assert.equal(routes.callerOf(req({ origin: 'http://evil.example' })), null);
+    assert.deepEqual(routes.callerOf(req({ 'x-ghosty-reporter-token': REPORTER, origin: 'http://dash.local' })), { actor: 'loopback', mayDecide: false }, 'the token wins over a same-origin header');
+    assert.equal(routes.callerOf(req({ 'x-ghosty-reporter-token': 'wrong' })), null);
+    assert.deepEqual(routes.callerOf(req({ authorization: `Bearer ${mgr}` })), { actor: 'manager:boss', mayDecide: true });
+    assert.equal(routes.callerOf(req({ authorization: `Bearer ${CLIENT}` })), null, 'an integrate client is not a manager');
+  } finally { b.close(); }
+});
+
+test('INTEGRATION_MANAGER_CLIENT_ONLY=1: the shared reporter token no longer passes --approved-by', async () => {
+  const w = makeWorld(); w.branch('infra', { 'scripts/deploy.sh': 'echo\n' });
+  const b = await boot(w);
+  process.env.INTEGRATION_MANAGER_CLIENT_ONLY = '1';
+  try {
+    const r = await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'infra', approvedBy: 'manager' } });
+    assert.equal(r.status, 403);
+    assert.equal((await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'infra' } })).status, 200, 'a plain request still works');
+  } finally { delete process.env.INTEGRATION_MANAGER_CLIENT_ONLY; b.close(); }
+});

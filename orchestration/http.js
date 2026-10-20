@@ -270,7 +270,7 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
     return run;
   };
 
-  async function decide(id, kind, raw) {
+  async function decide(id, kind, raw, actor = OWNER) {
     const p = parseBody(raw);
     if (p.error) return p.error;
     const bad = checkDecisionBody(p.body);
@@ -290,9 +290,9 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
       const granted = kind === 'approve';
       const binding = { k: pending.k, sha: pending.sha };
       const meta = { action_id: pending.action_id, action: { kind: pending.kind, question: pending.question, classes: pending.classes }, sha: pending.sha, reason: p.body.reason ?? null };
-      if (granted) await loop.approve(id, { actor: OWNER, approval_ref: pending.action_id, binding, meta });
-      else await loop.deny(id, { actor: OWNER, reason: p.body.reason ?? null, binding, meta });
-      return reply(200, { ok: true, recorded: granted ? 'approval.granted' : 'approval.denied', action_id: pending.action_id, actor: OWNER, sha: pending.sha,
+      if (granted) await loop.approve(id, { actor, approval_ref: pending.action_id, binding, meta });
+      else await loop.deny(id, { actor, reason: p.body.reason ?? null, binding, meta });
+      return reply(200, { ok: true, recorded: granted ? 'approval.granted' : 'approval.denied', action_id: pending.action_id, actor, sha: pending.sha,
         note: 'recorded by the goal loop; the task moves on its next step' });
     });
   }
@@ -309,7 +309,9 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
     return { ...sc, runs_count: runs.length };
   }
 
-  async function handle({ method, pathname, readBody }) {
+  // caller (server.js, integration-routes callerOf): { actor, mayDecide }. Absent = an in-process call, the owner. approve/deny need
+  // mayDecide (the dashboard's same-origin owner or a manager client); the real actor is what gets recorded.
+  async function handle({ method, pathname, readBody, caller = { actor: OWNER, mayDecide: true } }) {
     if (pathname === '/api/v2/scorecard') {
       if (method !== 'GET') return err(405, 'E_METHOD', 'method not allowed: the scorecard is read-only');
       try { return reply(200, { ok: true, scorecard: await scorecard() }); } catch (e) {
@@ -358,7 +360,7 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
         // Delivery is opt-in per task: the goal template's review policy plus deliver:true (integration stays owner-gated).
         if (deliver === true) input.review_policy = { ...structuredClone(TEMPLATES.goal.review_policy), deliver: true };
         // The UI is the owner at the keyboard: actor 'owner'. Created is a record, not a start.
-        const r = await intake.createTask(input, { source: 'ui', actor_id: OWNER, idempotencyKey: idempotency_key, template });
+        const r = await intake.createTask(input, { source: 'ui', actor_id: caller.actor, idempotencyKey: idempotency_key, template });
         return reply(201, { ok: true, task: summary(r.task), defaults_applied: r.defaults_applied, admission_paused: r.admission_paused,
           note: 'recorded; the goal loop of this server runs it' });
       }
@@ -373,11 +375,12 @@ export function createV2Http({ store, intake, loop = null, log = (m) => console.
         const reason = p.body.reason || 'cancelled by owner';
         // D-018/D-020: cancel goes through the loop (controller lease, recovery first); no loop here -> nothing written.
         if (!loop?.cancel) return err(503, 'E_NO_CONTROLLER', NO_CONTROLLER);
-        await loop.cancel(id, { actor: OWNER, reason });
+        await loop.cancel(id, { actor: caller.actor, reason });
         const after = await store.get(id);
         return reply(200, { ok: true, state: after.status, outcome: outcomeOf(after.status) });
       }
-      return await decide(id, verb, raw);
+      if (!caller.mayDecide) return err(403, 'E_FORBIDDEN', 'approve/deny need the owner (the dashboard) or a manager client; nothing was written');
+      return await decide(id, verb, raw, caller.actor);
     } catch (e) {
       if (e?.code === 'E_STORE_FAILED') { log(`[v2] ${e.message}`); return err(503, 'E_STORE_FAILED', COARSE_ERROR); }
       return mapError(e);
