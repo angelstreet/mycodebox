@@ -33,7 +33,7 @@ export function makeWorld({ name = 'demo-repo', base = { 'src.js': 'export const
     show: (ref, file) => git(remote, 'show', `${ref}:${file}`),
     count: () => Number(git(remote, 'rev-list', '--count', 'main').trim()),
     // `settleMs: 0`: the lane settles a queued request for a minute by default (production), which these fixtures do not test.
-cfg: (extra = {}) => ({ clone: lane, remote: 'origin', target: 'main', test: null, ci: null, deploy: null, conventions: ['VERSION.txt'], settleMs: 0, ...extra }),
+    cfg: (extra = {}) => ({ clone: lane, remote: 'origin', target: 'main', test: null, ci: null, deploy: null, conventions: ['VERSION.txt'], settleMs: 0, ...extra }),
   };
   return w;
 }
