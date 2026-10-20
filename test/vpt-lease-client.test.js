@@ -696,7 +696,7 @@ test('priority: --priority is passed in the claim body; a codebox session withou
   let r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--ttl', '110', '--priority', 'P2']);
   assert.equal(r.code, 0); assert.equal(calls[0].body.priority, 'P2'); assert.match(r.err, /clamped to 10 min/);
   setup(() => ({ ok: true, lease: lease({ id: 'PR2' }) }));
-  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'vpt-lease-prio-'));
+  const state = fs.mkdtempSync(path.join(tmp, 'prio-'));
   fs.writeFileSync(path.join(state, 'sessions.json'), JSON.stringify({ 'coc-hourly-run': { priority: 'P2' } }));
   r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:coc-hourly-run'], { env: { GHOSTY_STATE_DIR: state } });
   assert.equal(calls.at(-1).body.priority, 'P2', 'from the session meta');
