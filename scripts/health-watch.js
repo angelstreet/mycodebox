@@ -12,15 +12,16 @@
 //        --dry-run delete nothing, write no event (report + state sample are still written)
 // No dependencies, no AI calls.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, lstatSync, statfsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, lstatSync, statfsSync, rmSync, opendirSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { homedir, cpus, loadavg } from 'node:os';
+import { homedir, cpus, loadavg, tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_CONFIG = {
   diskPct: 85,            // trip when / is at least this full
+  inodePct: 85,           // trip when / has at least this % of its inodes used
   loadPerCore: 1.0,       // trip when load1 AND load5 per core exceed this ...
   loadMinutes: 10,        // ... for this long (state file keeps the samples)
   ramAvailPct: 10,        // trip when MemAvailable is below this % of MemTotal
@@ -148,6 +149,7 @@ export function evaluate(m, cfg, loadTrip) {
   const issues = [];
   if (m.diskPct >= cfg.diskPct) issues.push({ type: 'disk', key: 'disk', severity: m.diskPct, title: `disk ${m.diskPct}% full`, what: `Disk / is ${m.diskPct}% full (${m.diskFreeGB} GB free, limit ${cfg.diskPct}%).` });
   if (loadTrip) issues.push({ type: 'load', key: 'load', severity: m.load5, decision: true, title: `load ${m.load5.toFixed(1)} on ${m.cores} cores`, what: `Load ${m.load1.toFixed(1)}/${m.load5.toFixed(1)} (1/5 min) on ${m.cores} cores, above ${cfg.loadPerCore}/core for ${cfg.loadMinutes} min.` });
+  if (m.inodePct >= cfg.inodePct) issues.push({ type: 'inode', key: 'inode', severity: m.inodePct, title: `inodes ${m.inodePct}% used`, what: `Inodes on / are ${m.inodePct}% used (${m.inodeFree} free, limit ${cfg.inodePct}%).` });
   if (m.ramAvailPct < cfg.ramAvailPct) issues.push({ type: 'ram', key: 'ram', severity: 100 - m.ramAvailPct, decision: true, title: `RAM ${m.ramAvailPct.toFixed(0)}% available`, what: `Only ${m.ramAvailPct.toFixed(1)}% RAM available (limit ${cfg.ramAvailPct}%).` });
   for (const r of m.runaways) {
     const lbl = ownerLabel(r.owner), name = basename(r.p.args.split(' ')[0]);
@@ -214,6 +216,73 @@ function readDisk() {
   const s = statfsSync('/');
   const total = s.blocks * s.bsize, free = s.bavail * s.bsize, used = total - s.bfree * s.bsize;
   return { pct: Math.round((used / (used + free)) * 100), freeGB: +(free / 1e9).toFixed(1) };
+}
+
+// ---------------------------------------------------------------- tmp auto-clean + inodes
+// Test suites leak mkdtemp dirs in os.tmpdir() (2026-10-20: 186k entries ate every inode). Names of every
+// mkdtemp prefix (join of tmpdir and a literal) in test/ and scripts/; test/health-watch.test.js asserts the list stays complete.
+export const TMP_PREFIXES = [
+  'appr-origin-', 'auto-origin-', 'cbs-', 'ci-watch-', 'cs-', 'daily-', 'dec-origin-', 'done-check-', 'dr-',
+  'fake-proc-', 'fake-run-', 'fallback-', 'fallback-node-', 'g8-', 'g8-daily-', 'ghosty-adopt-', 'ghosty-al-',
+  'ghosty-approved-', 'ghosty-auto-', 'ghosty-autonomy-', 'ghosty-dedupe-', 'ghosty-dep-', 'ghosty-ds-',
+  'ghosty-ds-cli-', 'ghosty-fb-', 'ghosty-filt-', 'ghosty-fixes-', 'ghosty-form-', 'ghosty-hold-', 'ghosty-jevb-',
+  'ghosty-jevb-cli-', 'ghosty-jevb-ev-', 'ghosty-jevdec-', 'ghosty-jevoff-', 'ghosty-judge-', 'ghosty-leaseask-',
+  'ghosty-mactions-', 'ghosty-mergedec-', 'ghosty-mergewait-', 'ghosty-mevents-', 'ghosty-mgr-', 'ghosty-mgrsess-',
+  'ghosty-mig-', 'ghosty-mig2-', 'ghosty-mn-', 'ghosty-mockups-', 'ghosty-mwait-', 'ghosty-nudge-', 'ghosty-opsask-',
+  'ghosty-p5-', 'ghosty-p5mgr-', 'ghosty-push-', 'ghosty-r9review-', 'ghosty-ready-', 'ghosty-real-',
+  'ghosty-remote-', 'ghosty-rep-', 'ghosty-repmgr-', 'ghosty-review-', 'ghosty-rpf-', 'ghosty-rprompt-',
+  'ghosty-rt-', 'ghosty-rt2-', 'ghosty-run-', 'ghosty-selfcheck-', 'ghosty-shadow-', 'ghosty-tm-', 'ghosty-triage-',
+  'ghosty-tts-test-', 'ghosty-wake-', 'ghosty-wakes-', 'ghosty-wk-', 'gu-', 'handoffs-', 'hv-', 'hv6b-',
+  'info-plain-', 'int-wire-', 'ja-', 'jev-ask-', 'jev-ask-facts-', 'lane-', 'lane-api-', 'lane-cli-', 'lane-home-',
+  'lane-restart-', 'lane-self-', 'lane-state-', 'launch-path-', 'layout-', 'lease-cssh-', 'lease-http-',
+  'lease-integ-', 'lease-owner-', 'lease-scripts-', 'lease-serve-', 'lease-svc-', 'lfeval-', 'lw-', 'mac-checkout-',
+  'mac-hook-', 'merge-pol-', 'meval-origin-', 'meval-reg-', 'meval-state-', 'mk-push-', 'mm-mgr-', 'mmmgr-fake-',
+  'mycodebox-restart-', 'p1fix-fresh-', 'pk-', 'pk-mm-', 'render-skill-', 'rules-watch-', 'rv2-fresh-', 'self-out-',
+  'self-root-', 'send-ui-shots-', 'send-ui-work-', 'sh-', 'slots-', 'trust-', 'trust-ctl-', 'usage-attr-',
+  'usage-test-', 'v2-acc-fx-', 'v2-acc-runner-', 'v2-acc-state-', 'v2-acceptance-', 'v2-adapters-', 'v2-adverify-',
+  'v2-bench-', 'v2-bench-http-', 'v2-bench-http-reap-', 'v2-bench-http-test-', 'v2-bench-out-', 'v2-bench-r4-test-',
+  'v2-bench-test-', 'v2-d017-', 'v2-delivery-', 'v2-delivery-verify-', 'v2-gl-', 'v2-glstall-', 'v2-glv-',
+  'v2-glv2-', 'v2-glv3-', 'v2-glv4-', 'v2-glv5-', 'v2-glv6-', 'v2-grants-', 'v2-http-', 'v2-int-', 'v2-intv-',
+  'v2-lease-', 'v2-lease-verify-', 'v2-lease-verify2-', 'v2-lease-verify3-', 'v2-lease-verify4-',
+  'v2-lease-verify5-', 'v2-live-smoke-', 'v2-loop-', 'v2-mcode-node-', 'v2-policy-', 'v2-r3-verify-', 'v2-r4-',
+  'v2-r4gl-', 'v2-r5-', 'v2-score-', 'v2-score-v-', 'v2-store-', 'v2-store-api-', 'v2-sysops-', 'v2-sysops-verify-',
+  'v2-sysops-verify2-', 'v2-ui-shots-', 'v2-ui-work-', 'v2-verify-', 'v2-verify06-', 'v2-verify2-', 'v2-verify3-',
+  'v2-verify4-', 'v2-wiring-', 'v2-wt-', 'v2-wtr-', 'v2-wtverify-', 'voice-push-', 'vpt-lease-test-',
+];
+export const TMP_MAX_AGE_MS = 2 * 3600e3, TMP_MAX_REMOVALS = 2000, TMP_BUDGET_MS = 20000;
+
+// Remove stale test dirs directly in `root`: own uid, known prefix, real directory (lstat: symlinks are never followed),
+// mtime older than maxAgeMs. Bounded by count and time; the rest goes next tick. Never throws.
+export function cleanTmp({ root = tmpdir(), uid = process.getuid?.(), now = Date.now(), prefixes = TMP_PREFIXES, maxAgeMs = TMP_MAX_AGE_MS,
+  maxRemovals = TMP_MAX_REMOVALS, budgetMs = TMP_BUDGET_MS, clock = Date.now, dryRun = false } = {}) {
+  const r = { removed: 0, failed: 0, truncated: false };
+  try {
+    const t0 = clock();
+    const dir = opendirSync(root);
+    try {
+      for (let e; (e = dir.readSync());) {
+        if (!e.isDirectory() || !prefixes.some((p) => e.name.startsWith(p))) continue;
+        if (r.removed >= maxRemovals || clock() - t0 > budgetMs) { r.truncated = true; break; }
+        const p = join(root, e.name);
+        try {
+          const st = lstatSync(p);
+          if (!st.isDirectory() || st.uid !== uid || now - st.mtimeMs < maxAgeMs) continue;
+          if (!dryRun) rmSync(p, { recursive: true, force: true });
+          r.removed++;
+        } catch { r.failed++; }
+      }
+    } finally { try { dir.closeSync(); } catch {} }
+  } catch { r.failed++; }
+  return r;
+}
+
+// Inode use of the mount holding `path`, same shape as readDisk (statfs: files = total inodes, ffree = free).
+export function readInodes(path = '/', statfs = statfsSync) {
+  try {
+    const s = statfs(path);
+    if (!s.files) return { pct: 0, free: 0 };
+    return { pct: Math.round(((s.files - s.ffree) / s.files) * 100), free: s.ffree };
+  } catch { return { pct: 0, free: 0 }; }
 }
 
 // ---------------------------------------------------------------- config / state
@@ -384,7 +453,9 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const state = loadState(statePath);
   const cores = cpus().length, [l1, , ] = loadavg();
   const load5 = loadavg()[1];
-  const mem = readMem(), disk = readDisk();
+  const tmpClean = cleanTmp({ dryRun });   // before the inode read, so a freed backlog counts
+  if (tmpClean.removed || tmpClean.failed) out(`tmp auto-clean: ${dryRun ? 'would remove' : 'removed'} ${tmpClean.removed} stale test dirs${tmpClean.truncated ? ' (budget hit, rest next tick)' : ''}${tmpClean.failed ? `, ${tmpClean.failed} failed` : ''}`);
+  const mem = readMem(), disk = readDisk(), inodes = readInodes('/');
   const procs = readPs();
 
   // Sustained CPU: only for processes already old enough to be runaway candidates.
@@ -402,7 +473,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const protectedPids = new Set([process.pid, ...claudeMap.keys()]);
 
   const metrics = {
-    diskPct: disk.pct, diskFreeGB: disk.freeGB, load1: l1, load5, cores,
+    diskPct: disk.pct, diskFreeGB: disk.freeGB, inodePct: inodes.pct, inodeFree: inodes.free, load1: l1, load5, cores,
     ramAvailPct: mem.total ? (mem.avail / mem.total) * 100 : 100,
     runaways: findRunaways(procs, cfg, protectedPids).map((p) => ({ p, owner: owners(p.pid) })),
     stuck: procs.filter((p) => p.mine && p.pid !== process.pid && isStuckNodeTest(p.args)).map((p) => ({ p, owner: owners(p.pid) })),
@@ -427,7 +498,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const wts = worktreeInfos(home, panes, claude);
   const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];
-  R.push('## Checks', '', `- disk /: ${disk.pct}% (${disk.freeGB} GB free), limit ${cfg.diskPct}%`, `- load: ${l1.toFixed(2)} / ${load5.toFixed(2)} on ${cores} cores (limit ${cfg.loadPerCore}/core for ${cfg.loadMinutes} min, sustained: ${loadTrip})`,
+  R.push('## Checks', '', `- disk /: ${disk.pct}% (${disk.freeGB} GB free), limit ${cfg.diskPct}%`, `- inodes /: ${inodes.pct}% used (${inodes.free} free), limit ${cfg.inodePct}%`, `- load: ${l1.toFixed(2)} / ${load5.toFixed(2)} on ${cores} cores (limit ${cfg.loadPerCore}/core for ${cfg.loadMinutes} min, sustained: ${loadTrip})`,
     `- RAM available: ${metrics.ramAvailPct.toFixed(1)}%, limit ${cfg.ramAvailPct}%`, `- runaways: ${metrics.runaways.length}, stuck node --test: ${metrics.stuck.length}, orphaned test runs: ${metrics.leftovers.length}, defunct: ${metrics.defunct}`, '',
     '**Tripped:** ' + (issues.length ? issues.map((i) => i.title).join('; ') : 'none (forced run)'), '');
   R.push(investigate({ home, procs, owners, panes, claude, wts }));

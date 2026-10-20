@@ -1,7 +1,7 @@
 // Pure parts of scripts/health-watch.js: thresholds, owner resolution, scratch eligibility, worktree class, debounce, event shape.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs } from '../scripts/health-watch.js';
+import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs } from '../scripts/health-watch.js';
 
 const cfg = DEFAULT_CONFIG;
 const base = { diskPct: 50, diskFreeGB: 30, load1: 0.5, load5: 0.5, cores: 6, ramAvailPct: 50, runaways: [], stuck: [], defunct: 0 };
@@ -125,4 +125,59 @@ test('findTestLeftovers: orphaned test runs older than the limit, with their who
   assert.deepEqual(got.map((l) => [l.pid, l.pids.sort((a, b) => a - b)]), [[10, [10, 11]], [20, [20]], [30, [30]]]);
   assert.ok(isTestArgs('node_modules/.bin/vitest run'));
   assert.ok(!isTestArgs('node server.js --testing-mode'));
+});
+
+// ---- tmp auto-clean + inode check
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, utimesSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+test('TMP_PREFIXES covers every mkdtemp(join(tmpdir(), prefix)) in test/ and scripts/', () => {
+  const re = /mkdtemp(?:Sync)?\(\s*(?:path\.)?join\(\s*(?:os\.)?tmpdir\(\)\s*,\s*(['"`])([^'"`$]*)/g;
+  const found = new Set();
+  for (const d of ['test', 'scripts']) for (const f of readdirSync(new URL(`../${d}`, import.meta.url))) {
+    if (!/\.m?js$/.test(f)) continue;
+    for (const m of readFileSync(new URL(`../${d}/${f}`, import.meta.url), 'utf8').matchAll(re)) found.add(m[2]);
+  }
+  assert.ok(found.size > 100);
+  const missing = [...found].filter((p) => !TMP_PREFIXES.some((q) => p.startsWith(q)));
+  assert.deepEqual(missing, [], 'add these prefixes to TMP_PREFIXES in scripts/health-watch.js');
+});
+
+test('cleanTmp: removes only old, own, known-prefix real dirs; never follows symlinks; bounded', () => {
+  const root = mkdtempSync(join(homedir(), 'tmpclean-test-'));
+  try {
+    const now = Date.now(), old = new Date(now - 3 * 3600e3), fresh = new Date(now - 600e3);
+    const mk = (name, t) => { const p = join(root, name); mkdirSync(join(p, 'sub'), { recursive: true }); writeFileSync(join(p, 'sub', 'f'), 'x'); utimesSync(p, t, t); return p; };
+    mk('cbs-old1', old); mk('cbs-old2', old); mk('cbs-fresh', fresh); mk('other-old', old);
+    writeFileSync(join(root, 'cbs-file'), 'x');
+    const victim = mk('victim', old);
+    symlinkSync(victim, join(root, 'cbs-link'));
+    const uid = process.getuid();
+    const r0 = cleanTmp({ root, uid: uid + 1, now, prefixes: ['cbs-'] });
+    assert.equal(r0.removed, 0, 'other owner untouched');
+    const r1 = cleanTmp({ root, uid, now, prefixes: ['cbs-'], maxRemovals: 1 });
+    assert.deepEqual([r1.removed, r1.truncated], [1, true], 'bounded by count');
+    const r2 = cleanTmp({ root, uid, now, prefixes: ['cbs-'] });
+    assert.equal(r2.removed, 1);
+    assert.deepEqual(readdirSync(root).sort(), ['cbs-file', 'cbs-fresh', 'cbs-link', 'other-old', 'victim']);
+    assert.ok(existsSync(join(victim, 'sub', 'f')), 'symlink target intact');
+    // time budget: a clock that jumps stops the sweep without throwing
+    mk('cbs-old3', old);
+    let t = 0; const r3 = cleanTmp({ root, uid, now, prefixes: ['cbs-'], budgetMs: 10, clock: () => (t += 100) });
+    assert.deepEqual([r3.removed, r3.truncated], [0, true]);
+    assert.equal(cleanTmp({ root, uid, now, prefixes: ['cbs-'], dryRun: true }).removed, 1);
+    assert.ok(existsSync(join(root, 'cbs-old3')), 'dry run deletes nothing');
+    assert.doesNotThrow(() => cleanTmp({ root: join(root, 'missing'), uid }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('readInodes + evaluate: inode % from statfs, alert at the 85% threshold like the bytes check', () => {
+  assert.deepEqual(readInodes('/', () => ({ files: 1000, ffree: 150 })), { pct: 85, free: 150 });
+  assert.deepEqual(readInodes('/', () => ({ files: 0, ffree: 0 })), { pct: 0, free: 0 });
+  assert.deepEqual(readInodes('/', () => { throw new Error('x'); }), { pct: 0, free: 0 });
+  const hit = evaluate({ ...base, inodePct: 85, inodeFree: 150 }, cfg, false);
+  assert.equal(hit[0].type, 'inode');
+  assert.match(hit[0].what, /Inodes on \/ are 85% used \(150 free, limit 85%\)/);
+  assert.equal(evaluate({ ...base, inodePct: 84, inodeFree: 160 }, cfg, false).length, 0);
 });

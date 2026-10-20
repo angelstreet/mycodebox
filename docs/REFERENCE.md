@@ -321,7 +321,8 @@ report to `~/.local/state/ghosty/health-reports/<ISO>.md` (kept 7 days): top 15 
 owning tmux / Claude session, disk use of `/tmp`, `~/.cache`, `~/.claude`, `~/.npm`, the journal, docker (if usable),
 and every `~/vpt-*` / `~/ghosty-*` dir with its worktree / clean / merged / live-session status. Thresholds live in
 `~/.local/state/ghosty/health-watch.json` (created with defaults: `diskPct` 85, `loadPerCore` 1.0 for `loadMinutes` 10,
-`ramAvailPct` 10, `runawayHours` 2, `runawayRssMB` 1024, `runawayCpu` 80, `fixLevel`).
+`ramAvailPct` 10, `runawayHours` 2, `runawayRssMB` 1024, `runawayCpu` 80, `fixLevel`, `inodePct` 85, `fixLevel`).
+Every tick (also healthy ones) it first removes stale test leftovers: directories directly in `os.tmpdir()` owned by the service uid, named with one of `TMP_PREFIXES` (every test/script `mkdtemp` prefix; `test/health-watch.test.js` fails when a new one is missing), `lstat`-checked (symlinks never followed) and with mtime older than 2 h, at most 2000 per tick and 20 s (the backlog goes on next tick); it never throws and logs one line with the count when it removed something. Next to the disk check it reads inode use of `/` (`statfs` files/ffree) and trips an `inode` issue at `inodePct` (85 %) with the same report / debounce / manager-wake path (2026-10-20: 186k leaked tmp dirs exhausted the inodes).
 
 **Daily checks (zero tokens unless something is wrong).** `scripts/daily-checks.js` (no deps, no AI calls) runs once a day at
 07:00 Europe/Zurich from `systemd/ghosty-daily-checks.timer` (install like the health watchdog; `Persistent=true` catches a
