@@ -42,7 +42,7 @@ then central after telling the manager. Then build the missing parts of Round 12
 | 3 Flat plans | MiniMax (registry billing `subscription`): cost null + `plan: flat`, shown as `in plan`, out of $/verified, tokens per verified shown | DONE |
 | 4 Ledger | prefers recorded fields, time-window join only for old records, marked `approximate` | DONE |
 | 5 Game-dispatch | `model` and `prompt_version` carried; `--by prompt_version` | DONE |
-| 6 Reviewer evidence | lane `review` (merge evaluation) and manager `--review pass\|fail` persisted and counted as evidence | DONE |
+| 6 Reviewer evidence | lane `review` is the merge evaluation (the merge floor, or the merge decision's source), not an independent reviewer; manager `--review pass\|fail` (the independent reviewer's verdict) persisted and counted as evidence | DONE |
 | Test | `test/v2-attribution.test.js` | DONE |
 
 ### Round 11 cut-over check (2026-10-19): STOPPED, topology differs from the plan
@@ -56,6 +56,20 @@ then central after telling the manager. Then build the missing parts of Round 12
 | Blocker | the live central service is the standalone `lease-serve.js` on the registry host (loopback only; every machine reaches it through `ssh <registry-host> vpt-lease`). Codebox's configured service URL is ghosty's own in-process service, whose store is empty (0 leases). `VPT_LEASE_MODE=central` on codebox, or `leaseAuthority: "central"` in ghosty's `manager.json`, would read/write that empty store: split brain, other agents would not see codebox claims. Config was switched, observed (`list` returned no leases) and restored to `legacy` at once (backup `config.bak-2026-10-19`) |
 | Effective state | codebox already follows the central authority through the ssh wrapper; ghosty's view (`authority: legacy`) reads it through the registry client |
 | Open | decide the codebox endpoint: (a) keep the wrapper (nothing to switch; the label stays `legacy`), or (b) point `VPT_LEASE_URL` and ghosty's service at the registry host service (needs a reachable URL, now loopback-only there). Deploy skill swap waits for this |
+
+## Round 13 (2026-10-18): the integration lane
+
+Owner priority after the lease goal (OWNER_DECISIONS §19). Design and state: `docs/v2/INTEGRATION-LANE.md`.
+
+| Item | What | State |
+|---|---|---|
+| 1 Lane | `integration-lane.js`: one request at a time per repository, in its own clone: merge evaluation floor, merge in a fresh worktree (convention files by rule), the lane's own test run (`npm ci` first on a lockfile), compare-and-swap push, remote CI wait, optional deploy through the deploy queue | DONE |
+| 2 Client | `integrate request <branch> [--deploy ...]`; sessions end the turn with `STATUS: waiting: integration <id>` and are told the outcome (guarded send, manager notification) | DONE |
+| 3 Routes, notify, deploys | `integration-routes.js`, `integration-notify.js`, `integration-deploys.js`; self deploy of this repository after a merge (restart last) | DONE |
+| 4 Follow-ups | Mac tmux name resolution, usage attribution to the requester worktree, rollback safety (PR #21, #22) | DONE |
+| Not used | `orchestration/integration-controller.js` / `integration-queue.js` / `ci-gates.js` / `delivery.js` serve the opt-in V2 task engine; the lane imports only `merge-policy.js` and `usage-window.js` | - |
+
+The lane's `review` evidence is its merge evaluation, not an independent reviewer.
 
 ## Round 12 (2026-10-18): the owner never answers about leases or deployments
 
@@ -98,7 +112,7 @@ heartbeats and releases over ssh while the wrapped command runs locally. Require
 **Earlier state (checked 2026-10-19): NOT DONE, cut-over not performed.** Evidence on the dashboard host: the client config
 `VPT_LEASE_MODE=legacy`; `GET /api/leases/view` answers `authority: legacy` (loopback, both listeners); the central journal
 `leases/journal.jsonl` is empty and the shadow store holds only its 2026-10-18 `.initialized` marker; the deploy skill is still the
-pre-central text (`SKILL.md.central` is staged, not swapped). Done: steps 1 (tokens), 2 (deploy script installed on the registry
+pre-central text (`SKILL.md.central` was staged then; superseded by `SKILL.md.central-ssh`, see the State above). Done: steps 1 (tokens), 2 (deploy script installed on the registry
 host), 3 on the dashboard host (shadow client). Open: shadow window and its comparison, device hosts (BLOCKED, no route to the
 service), Mac (owner side), the switch to `central` + skill swap, step 4's PR #15 is merged (the view shows shadow data).
 The registry host's own mode was not checked from here.
@@ -112,7 +126,7 @@ The registry host's own mode was not checked from here.
 | 3 | Client on the registry host (`~/bin/vpt-lease`, old -> `vpt-lease.legacy`) | INSTALLED (shadow) | every answer identical to the legacy CLI (`list`, `list --json`, `check`, `deploy list/last --json`, `events`), same speed; its shadow calls cannot reach the service yet (no tailnet, loopback-only listener) |
 | 3 | Device hosts (9 reachable) | BLOCKED | none reaches the service URL or the registry host; 5 more are offline or have no route |
 | 3 | Mac | OWNER ACTION | owner side: see the owner-action list (Mac lease client) |
-| 3 | Deploy skill rendered from `docs/LEASE-RULES.md` | STAGED | `~/.claude/skills/deploy/SKILL.md.central`; swapped in at the central switch (the new rules assume `--wait`, which shadow mode degrades) |
+| 3 | Deploy skill rendered from `docs/LEASE-RULES.md` | STAGED (earlier state; the current staging is `SKILL.md.central-ssh`) | `~/.claude/skills/deploy/SKILL.md.central`; swapped in at the central switch (the new rules assume `--wait`, which shadow mode degrades) |
 | 4 | Leases view disagreements | PARTIAL | the view hid shadow reports in legacy authority: fixed in PR #15 (merge pending); until then read the service's shadow store |
 
 ## Round 9

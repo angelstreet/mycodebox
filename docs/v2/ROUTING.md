@@ -21,6 +21,12 @@ Modules: `orchestration/model-registry.js`, `orchestration/router.js` (shadow on
 
 ## Round 4: run limits, billing, history and the escalation ladder (OWNER_DECISIONS §12)
 
+Policy switches under `routing` in `.ai/project.json`: `escalation` (the ladder, default on) and `history` (default on; `false`
+= live routing ignores the scorecard history and ranks on the priors; see SCORING.md "Feeding the router"). Reviewer
+independence is by provider + model: a reviewer that serves the same provider and model as a developer of the task is
+excluded even through another runtime, and the first stalled run of a short-leash entry (also one that committed before
+its limit) triggers one independent feasibility review once its checks fail.
+
 ### Run limits (`orchestration/run-limits.js`, D-024)
 
 One limits object: `{ timeout_ms, max_steps, effort, context_mode, stall_runs_to_no_progress }`.

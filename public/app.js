@@ -9,6 +9,7 @@ import { suggestAgent } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
+import { closeBgAtNewlines } from '/term-sgr.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
@@ -562,7 +563,7 @@ function paintTerm(session, force) {
   const atBottom = buf.viewportY >= buf.baseY;
   const fromBottom = buf.baseY - buf.viewportY;
   let text = entry.lastPane.replace(/\n+$/, '');
-  term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + text, () => {
+  term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + closeBgAtNewlines(text), () => {
     const b = term.buffer.active;
     if (atBottom) term.scrollToBottom();
     else term.scrollToLine(Math.max(0, b.baseY - fromBottom));
@@ -3809,7 +3810,8 @@ async function postSend(name, body) {
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   state.sentAt[name] = Date.now();
-  if (popupApi) popupApi.sent(name, body.keys);   // a send to a session answers its stop
+  // a send to a session answers its stop; the text is already delivered, so a throw here must not report the send as failed
+  try { if (popupApi) popupApi.sent(name, body.keys); } catch (e) { console.warn('[send] popup bookkeeping failed:', e); }
 }
 
 // Returns the list of session names that failed.

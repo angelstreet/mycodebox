@@ -1,5 +1,5 @@
 // One interface for the lease data the dashboard uses (round 10, docs/v2/LEASES-CENTRAL.md section 6 and 7).
-// manager.json `leaseAuthority`: "central-through-ssh" is "legacy" under another name (see AUTHORITY_LABELS); "legacy" (default) reads the registry over ssh (leases.js, deploy-runner.js) as before;
+// manager.json `leaseAuthority`: "central-through-ssh" reads the registry like "legacy" in this dashboard (see AUTHORITY_LABELS), but the vpt-lease client forwards every call over ssh in that mode; "legacy" (default) reads the registry over ssh (leases.js, deploy-runner.js) as before;
 // "central" asks the in-process lease service (lease-service.js, Appendix A) and never calls the registry.
 // No imports: the legacy pieces and the service are injected, so this module is pure and testable with fakes.
 // Rows keep the legacy shape ({id, env, resource, agent, purpose, kind, ttlLeftMin}) so every old consumer works unchanged;

@@ -90,7 +90,7 @@ test('mixed: "merge, push and deploy to env-a?" all pass -> one reply with three
   await stop('mx1', repo, `${GREEN}\n\nShould I merge feat into main, push and deploy to env-a?`);
   await until(() => typed.some((x) => x.session === 'mx1'));
   const t = typed.find((x) => x.session === 'mx1').text;
-  assert.match(t, /^Merge: yes - .*Merge it now\. Push: yes - proj main -> origin\/main: .*Push it now\. Deploy: yes - env-a full main@[0-9a-f]{12}: .*Request it through the deploy queue/);
+  assert.match(t, /^Merge: yes - .*Do not merge it yourself\. Push: yes - proj main -> origin\/main: .*The integration lane pushes it with the merge\. Deploy: yes - env-a full main@[0-9a-f]{12}: .*Request it through the deploy queue/);
   assert.match(t, /Rollback: the previous release is unknown for env-a \(full\): ask the owner before deploying anything else\.$/);
   assert.ok(!owner.some((o) => o.session === 'mx1'), 'nothing left for the owner');
   const j = journal().filter((r) => r.session === 'mx1');

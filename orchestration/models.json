@@ -1,5 +1,5 @@
 {
-  "_comment": "Versioned model registry (synthetic-but-plausible). Prices are NOT stored here: they resolve from usage/prices.json by longest-prefix (price_model), and a PLACEHOLDER row or a missing row is unknown (null), never $0. Capabilities/efforts here are static claims; adapter probes override or limit them. billing defaults by runtime (claude/codex per_token, minimax subscription); quota null = unknown. run_limits: per task class short leash for light models (docs/v2/ROUTING.md, D-024). latency_ms of the light models follows the round-4 measurement (M3.1-Flash < M3 < Haiku, docs/v2/SCORING.md).",
+  "_comment": "Versioned model registry (synthetic-but-plausible). Prices are NOT stored here: they resolve from usage/prices.json by longest-prefix (price_model), and a PLACEHOLDER row or a missing row is unknown (null), never $0. Capabilities/efforts here are static claims; adapter probes override or limit them. billing defaults by runtime (claude/codex per_token, minimax subscription); quota null = unknown. run_limits: per task class short leash for light models (docs/v2/ROUTING.md, D-024). latency_ms of the light models follows the round-4 measurement (M3 < Haiku, docs/v2/SCORING.md \"Round 4\"; the M3.1-Flash preview measured there is no longer registered).",
   "version": 1,
   "as_of": "2026-10-11",
   "models": [

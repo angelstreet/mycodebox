@@ -88,6 +88,19 @@ systemctl status ghosty-sessions --no-pager
 
 This is a first-install start. For an existing service, use the update procedure below.
 
+### Optional: per-class task caps (many agents on one host)
+
+All tmux panes inherit the cgroup of whatever started the tmux server, so every agent, worker and test run shares one
+`TasksMax` (systemd's default is 15% of `kernel.threads-max`, about 1000 on a small VM). Leaked dev servers plus a few
+parallel `npm test` runs fill it, thread creation fails and agents abort. `scripts/cgroup-placer.js` (root, polling
+every 2 s) moves them into three slices: `codebox-core.slice` (the sessions in `CGROUP_CORE`, default
+`manager,mycodebox-v2,mm-manager`; no cap), `codebox-sessions.slice` (one `cb-<session>.scope` per session, 6144 tasks)
+and `codebox-tests.slice` (npm test/ci, node --test, pytest; 1024 tasks, low CPU weight). Processes whose session died
+land in `cb-orphans.scope`. Install it by copying `systemd/codebox*.slice` and an edited
+`systemd/ghosty-cgroup-placer.service`, then `sudo systemctl daemon-reload && sudo systemctl enable --now
+ghosty-cgroup-placer`. Run `systemd-cgtop -P codebox.slice` to see who holds the tasks, and
+`sudo node scripts/cgroup-placer.js --dry-run` to check placements without moving anything.
+
 ### Recommended: private HTTPS with Tailscale Serve
 
 Enable MagicDNS and HTTPS certificates for the tailnet as described in [Tailscale's HTTPS guide](https://tailscale.com/docs/how-to/set-up-https-certificates). Certificate issuance publishes the certificate's DNS name in public certificate-transparency logs; choose a non-sensitive node name.

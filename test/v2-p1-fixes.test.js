@@ -177,7 +177,7 @@ test('F7: systemd units carry placeholders and an example header, nothing machin
   for (const f of readdirSync(new URL('systemd', ROOT)).filter((n) => n.endsWith('.service'))) {
     const s = src(`systemd/${f}`);
     assert.match(s, /^# EXAMPLE: copy/, f);
-    assert.match(s, /^User=<user>$/m, f);
+    assert.match(s, /^User=(?:<user>|root)$/m, f);   // root only where moving processes between units needs it
     assert.doesNotMatch(s, /\/home\/(?!<user>)/, f);
   }
 });

@@ -175,11 +175,11 @@ export const defaultHealth = (base = `http://127.0.0.1:${Number(process.env.PORT
 // Round 7 merge floor with the lane as the tester (its own test run replaces the session's test report).
 // `approveInfra` (a manager approval on the request) drops ONLY the CI/deploy/infra-path reason; `infra` tells the lane when that
 // was the floor's only reason, so it can ask the manager instead of bouncing the branch.
-export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles, approveInfra = false }) {
+export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles, approveInfra = false, optOut = [] }) {
   const facts = await gitFacts({ cwd, branch, branchSha, target, remote, conventionFiles });
   const files = (facts.sensitive || []).filter((s) => s.why === 'deploy').map((s) => s.file);
-  const rest = mergeFloor(facts, { state: 'green' }, { conventionFiles, approveInfra: true });
-  const reasons = approveInfra ? rest : mergeFloor(facts, { state: 'green' }, { conventionFiles });
+  const rest = mergeFloor(facts, { state: 'green' }, { conventionFiles, approveInfra: true, optOut });
+  const reasons = approveInfra ? rest : mergeFloor(facts, { state: 'green' }, { conventionFiles, optOut });
   return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts, infra: { files, only: !approveInfra && files.length > 0 && rest.length === 0 } };
 }
 
@@ -201,7 +201,7 @@ export function sessionUsage({ stateDir, session, worktree = null, from, to }) {
 }
 
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
-  deploys = null, mergeEval = defaultMergeEval, usage = sessionUsage, notify = () => {}, managerItem = () => {}, journal = () => {}, now = () => Date.now(), log = () => {},
+  deploys = null, mergeEval = defaultMergeEval, usage = sessionUsage, notify = () => {}, managerItem = () => {}, journal = () => {}, mergeOptOut = () => [], now = () => Date.now(), log = () => {},
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart() } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
@@ -323,13 +323,32 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     return true;
   }
 
+  const optOutList = () => { try { return mergeOptOut() || []; } catch { return []; } };
+  // OWNER_DECISIONS §15: every lane verdict and self-deploy is a decision record (merge-decisions.jsonl) for "Decided for you".
+  // `request` joins it to the lane request (a revert finds the merge commit there); a retry on a moved target gets its own id.
+  const jr = (rec) => { try { journal({ task_id: `manager:${rec.session || 'lane'}`, source: 'integration-lane', policy_ref: 'OWNER_DECISIONS §15', reversible: true, actor: { role: 'integration-lane', runtime: null, model: null }, ...rec }); } catch (err) { log('journal failed', err?.message); } };
+  function journalVerdict(r, c, e, reasons) {
+    const ok = e?.verdict === 'merge', f = e?.facts || {};
+    jr({ decision_id: `lane-merge-${r.id}${r.attempt > 1 ? `-${r.attempt}` : ''}`, kind: 'merge', ts: iso(), question: `Merge ${r.branch} into ${c.target}?`, chosen: ok ? 'merge' : 'escalate',
+      rationale: ok ? 'the merge floor passed on the current target; the lane tests the merge before it pushes' : reasons.join('; ') || 'not mergeable',
+      evidence: [`branch ${r.branch}@${String(r.branchSha || '').slice(0, 12)} -> ${c.target}`, `floor: ${ok ? 'passed' : reasons.join('; ') || 'failed'}`, `files: ${f.files?.length ?? 0}${f.docsOnly ? ' (docs-only)' : ''}`],
+      confidence: Number.isFinite(e?.decision?.confidence) ? e.decision.confidence : null, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
+      session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id, ...(ok ? {} : { reasons }) });
+  }
+  function journalDeploy(r, c, o) {
+    jr({ decision_id: `lane-deploy-${r.id}`, kind: 'deploy', ts: iso(), question: `Deploy ${r.branch} (${String(r.sha || '').slice(0, 12)}) to ${o.env}?`, chosen: 'deploy',
+      rationale: `the merge ${String(r.sha || '').slice(0, 12)} passed the lane's tests${r.ci === 'success' ? ' and CI' : ''}; this repo deploys every merge`, evidence: [`env ${o.env} scope ${o.scope} ref ${c.target}@${String(r.sha || '').slice(0, 12)}`],
+      confidence: null, rollback: o.rollback || 'deploy the previous release', session: r.session, repo: r.repo, branch: r.branch, env: o.env, scope: o.scope, ref: c.target, sha: r.sha, request: r.id });
+  }
+
   // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
   async function evaluate(r, c) {
     const ev = await step(r, 'evaluate', async () => {
-      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session, approveInfra: !!r.approvedBy });
+      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session, approveInfra: !!r.approvedBy, optOut: optOutList() });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
       // The evaluation is the lane's review: recorded as evidence (source: floor, or jev/reasoning when mergeEval reports its decision).
       r.review = { pass: e?.verdict === 'merge', source: e?.decision?.source || 'floor', confidence: Number.isFinite(e?.decision?.confidence) ? e.decision.confidence : null, at: iso() };
+      journalVerdict(r, c, e, reasons);
       return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons, infra: e?.infra?.only ? e.infra.files : null } };
     });
     if (!ev.ok && ev.info.infra) {
@@ -347,11 +366,12 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   async function mergeAndPush(r, c, branchSha) {
     for (let attempt = 0; attempt < MAX_PUSH_TRIES; attempt++) {
       r.attempt = attempt + 1;
-      if (attempt > 0) { await fetch(r, c); await evaluate(r, c); }
+      if (attempt > 0) { await fetch(r, c); if (!r.revertOf) await evaluate(r, c); }
       const targetSha = await rev(r, c, `${c.remote}/${c.target}`);
       if (!targetSha) throw new Ret(`target ${c.remote}/${c.target} not found`);
       r.targetBase = targetSha;
-      if ((await G(r, c, ['merge-base', '--is-ancestor', branchSha, targetSha])).code === 0) { r.alreadyMerged = true; r.sha = targetSha; r.pushed = true; return; }
+      if (r.revertOf && (await G(r, c, ['merge-base', '--is-ancestor', r.revertOf, targetSha])).code !== 0) throw new Ret(`the merge ${r.revertOf.slice(0, 12)} is not on ${c.remote}/${c.target}: nothing to revert`);
+      if (!r.revertOf && (await G(r, c, ['merge-base', '--is-ancestor', branchSha, targetSha])).code === 0) { r.alreadyMerged = true; r.sha = targetSha; r.pushed = true; return; }
       const wt = wtPath(r);
       await dropWorktree(r, c);
       try {
@@ -363,6 +383,11 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (!fs.existsSync(wt)) throw new Ret('could not create a worktree', '');
         const msg = `Merge ${r.branch} into ${c.target} (integration ${r.id})`;
         const m = await step(r, 'merge', async () => {
+          if (r.revertOf) {   // a lane revert (owner's one-tap undo): revert the merge commit on the current target, then test and push like a merge
+            const y = await git([...ident, 'revert', '-m', '1', '--no-edit', r.revertOf], { cwd: wt, timeoutMs: 120_000 });
+            if (y.code !== 0) await git(['revert', '--abort'], { cwd: wt });
+            return { ok: y.code === 0, tail: y.err || y.out, info: { error: true } };
+          }
           const x = await git([...ident, 'merge', '--no-ff', '--no-edit', '-m', msg, branchSha], { cwd: wt, timeoutMs: 120_000 });
           if (x.code === 0) return { ok: true, info: { conflicts: [] } };
           const u = await git(['diff', '--name-only', '--diff-filter=U', '-z'], { cwd: wt });
@@ -377,7 +402,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         });
         if (!m.ok) {
           const files = m.info?.conflicts || [];
-          if (m.info?.error) throw new Ret('merge failed', m.tail);
+          if (m.info?.error) throw new Ret(r.revertOf ? 'revert failed' : 'merge failed', m.tail);
           throw new Ret(`merge conflict outside convention files: ${files.join(', ')}`, m.tail, { conflicts: files });
         }
         const sha = await rev(r, c, 'HEAD', wt);
@@ -393,7 +418,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (c.test) {
           const t = await step(r, 'test', async (setLive) => {
             const res = await run(c.test, { cwd: wt, timeoutMs: c.testTimeoutMin * 60_000, onData: setLive,
-              env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1' } });
+              env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1', TEST_SCOPE: 'full' } });   // the one full run per merge (scripts/test-run.js)
             fs.rmSync(path.join(dir, 'tmp', r.id), { recursive: true, force: true });
             const ok = res.code === 0 && !res.timedOut;
             const f = ok ? { tail: res.out, failing: [] } : testFailure(res.out);
@@ -488,6 +513,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     const sd = r.selfDeploy;
     sd.phase = 'done'; sd.outcome = 'deployed';
     r.deployed = { id: null, version: short(sd.newSha), env: 'live', scope: 'self', previous: sd.prevSha };
+    journalDeploy(r, repoCfg(r.repo), { env: 'live', scope: 'self', rollback: sd.prevSha !== sd.newSha ? sd.rollback : null });
     transition(r, 'deployed', { reason: null, rollback: sd.prevSha !== sd.newSha ? sd.rollback : null });
     return lastTold;
   }
@@ -516,10 +542,15 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     persist(r);
 
     const pull = await step(r, 'deploy-pull', async () => {
-      const x = await L(['pull', '--ff-only', '-q'], { timeoutMs: 180_000 });
+      // exactly the tested merge: never whatever the target is now (it may carry commits nobody tested)
+      if (!r.sha) return { ok: false, tail: 'the request has no merge sha' };
+      const f = await L(['fetch', '-q', c.remote], { timeoutMs: 180_000 });
+      if (f.code !== 0) return { ok: false, tail: f.err || f.out };
+      if ((await L(['merge-base', '--is-ancestor', r.sha, `${c.remote}/${c.target}`])).code !== 0) return { ok: false, tail: `${c.remote}/${c.target} no longer contains the tested merge ${short(r.sha)} (rewound or rewritten)` };
+      const x = await L(['merge', '--ff-only', '-q', r.sha], { timeoutMs: 180_000 });
       return { ok: x.code === 0, tail: x.err || x.out };
     });
-    if (!pull.ok) return selfFail(r, 'deploy_refused', `deploy refused: git pull --ff-only failed in ${live}`, pull.tail);
+    if (!pull.ok) return selfFail(r, 'deploy_refused', `deploy refused: could not fast-forward ${live} to the tested merge ${short(r.sha)}`, pull.tail);
     sd.newSha = await rev(r, c, 'HEAD', live); persist(r);
     if (r.sha && (await L(['merge-base', '--is-ancestor', r.sha, 'HEAD'])).code !== 0) {
       return selfFail(r, 'deploy_failed', `the live checkout pulled ${short(sd.newSha)}, which does not contain the merge ${short(r.sha)}: not restarted`);
@@ -573,7 +604,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
           if (landed) { r.pushed = true; r.sha = r.mergeSha; persist(r); }
         }
       }
-      if (!r.pushed) {
+      if (!r.pushed && r.revertOf) { await fetch(r, c); await mergeAndPush(r, c, null); }
+      else if (!r.pushed) {
         await fetch(r, c);
         const branchSha = await step(r, 'resolve', async () => {
           if (r.branch === c.target) return { ok: false, tail: 'the branch is the target' };
@@ -593,10 +625,13 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         const ciRes = await waitCi(r, c);
         if (!ciRes.ok) { transition(r, 'merged_ci_red', { reason: ciRes.info?.timedOut ? `CI did not finish: ${ciRes.tail}` : 'CI red on the merge commit', tail: ciRes.tail }); return; }
       }
+      // a re-request of a branch that was already on the target changes nothing: it does not restart the service unless --deploy was explicit
+      if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: null }); return; }
       if (c.deploy?.kind === 'self') { await selfDeploy(r, c); return; }
       if (r.deployScope) {
         const d = await doDeploy(r, c);
         if (!d.ok) { transition(r, 'deploy_failed', { reason: `deploy failed: ${d.tail}`, tail: d.tail }); return; }
+        journalDeploy(r, c, { env: c.deploy.env, scope: r.deployScope });
         transition(r, 'deployed', { reason: null }); return;
       }
       transition(r, 'merged', { reason: null });
@@ -661,11 +696,11 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
       const worktree = typeof input.worktree === 'string' && path.isAbsolute(input.worktree) ? input.worktree.slice(0, 500) : null;
-      const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.approvedBy === !input.approvedBy);
+      const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.deployExplicit === !input.deploy && !x.revertOf && !x.approvedBy === !input.approvedBy);
       if (dup) return { id: dup.id, position: ahead(dup) + 1, repo: key, duplicate: true };
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
       const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
-        deployScope, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
+        deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
         ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}) };
@@ -678,6 +713,26 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       emit(r, { kind: 'queued', state: 'queued', final: false });
       const out = { id: r.id, position: ahead(r) + 1, repo: key };
       kick(key);
+      return out;
+    },
+    // The owner's one-tap revert of a merge the lane made: a request that reverts the merge commit (git revert -m 1) on the target, tests it and
+    // pushes it like any merge. -> { id, position, repo }. Throws E_NOT_FOUND / E_INVALID.
+    revert(id, { by = null, session = null } = {}) {
+      const o = reqs.get(id);
+      if (!o) throw coded('E_NOT_FOUND', `unknown request ${id}`);
+      if (!o.pushed || !o.mergeSha || o.alreadyMerged || o.revertOf) throw coded('E_INVALID', `request ${id} has no merge commit of its own to revert`);
+      const dup = [...reqs.values()].find((x) => x.revertOf === o.mergeSha && (x.state === 'queued' || x.state === 'running'));
+      if (dup) return { id: dup.id, position: ahead(dup) + 1, repo: dup.repo, duplicate: true };
+      const c = repoCfg(o.repo);
+      if (!c) throw coded('E_NOT_FOUND', `repo ${o.repo} is not configured`);
+      const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
+      const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: o.repo, branch: `revert-${o.mergeSha.slice(0, 12)}`, target: c.target, session: session ?? o.session,
+        deployScope: null, deployExplicit: false, revertOf: o.mergeSha, revertOfRequest: o.id, worktree: null, note: `revert of ${o.branch} (${o.id})`, by: by ? String(by).slice(0, 80) : null,
+        state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '', sha: null, branchSha: null, ci: null, deployed: null };
+      reqs.set(r.id, r); persist(r);
+      emit(r, { kind: 'queued', state: 'queued', final: false });
+      const out = { id: r.id, position: ahead(r) + 1, repo: r.repo };
+      kick(r.repo);
       return out;
     },
     get: (id) => (reqs.has(id) ? view(reqs.get(id)) : null),

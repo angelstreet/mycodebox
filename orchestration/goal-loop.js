@@ -308,7 +308,7 @@ export function createGoalLoop({
   }
   function readPolicy(ctx) {
     let r;
-    try { r = loadPolicy(ctx.v); } catch (e) { r = { ok: false, code: 'E_POLICY_INVALID', errors: [{ path: '', message: e.message }] }; }
+    try { r = loadPolicy(ctx.v, { registryIds: typeof registry.entries === 'function' ? registry.entries().map((e) => e.id) : null }); } catch (e) { r = { ok: false, code: 'E_POLICY_INVALID', errors: [{ path: '', message: e.message }] }; }
     return r && typeof r === 'object' ? r : { ok: false, code: 'E_POLICY_INVALID', errors: [{ path: '', message: 'loader returned nothing' }] };
   }
   const policyRef = (p) => (p?.ok ? `policy@${hashOf(p.policy)}` : null);
@@ -371,7 +371,8 @@ export function createGoalLoop({
     // D-024: candidates whose run limits they cannot honour are floored out; D-026: the escalation ladder picks the
     // developer's starting rung (reviewers rank by score).
     return route(task, { registry: reg, policy: routerPolicy, checkAction: check, allowFake, exclude, now, realpath: (x) => fs.realpathSync(x), floorGrants, role,
-      limitsFor: (entry) => limitsOf(ctx, p, entry), escalation: role === 'developer' && pol.routing?.escalation !== false });
+      limitsFor: (entry) => limitsOf(ctx, p, entry), escalation: role === 'developer' && pol.routing?.escalation !== false,
+      ...(pol.routing?.history === false ? { history: {} } : {}) });   // routing.history:false = priors only (an explicit empty history wins over the provider's)
   }
   // Run limits for one entry on this task (D-024): task > project > registry > engine defaults.
   const workOf = (ctx) => classifyWork(ctx.v).type;
@@ -1152,7 +1153,8 @@ export function createGoalLoop({
     const feasDone = ctx.v.decisions.filter((d) => d.loop && d.kind === 'feasibility_review');
     if (feasDone.some((d) => d.evidence.includes(`sha ${head}`))) return null;
     const claimed = ctx.cp.claim?.run_id === dev.payload.run_id;
-    const stalled = ctx.cp.stall_run === dev.payload.run_id && !!dev.payload.limits?.stall_runs_to_no_progress && !feasDone.length;
+    // stall_pending: a stall that committed is counted only once its checks fail, and they just did (the §12.2 first-stall review)
+    const stalled = (ctx.cp.stall_run === dev.payload.run_id || ctx.cp.stall_pending === dev.payload.run_id) && !!dev.payload.limits?.stall_runs_to_no_progress && !feasDone.length;
     if (!claimed && !stalled) return null;
     const why = claimed ? `developer run ${dev.payload.run_id} claims the requirements are impossible` : `developer run ${dev.payload.run_id} stalled (time limit or no change)`;
     const devEntries = devEntriesOf(ctx);
@@ -1207,7 +1209,13 @@ export function createGoalLoop({
   }
 
   // ---------- independent evaluation ----------
-  const devEntriesOf = (ctx) => [...new Set(ctx.events.filter((e) => e.kind === 'task.started' && e.payload.role === 'developer').map((e) => e.payload.entry))];
+  // Independence is by provider+model, not registry id: another runtime serving the same model is not an independent mind.
+  const devEntriesOf = (ctx) => {
+    const ids = [...new Set(ctx.events.filter((e) => e.kind === 'task.started' && e.payload.role === 'developer').map((e) => e.payload.entry))];
+    const pm = new Set(ids.map((id) => registry.get(id)).filter(Boolean).map((e) => `${e.provider}\0${e.model}`));
+    const same = typeof registry.entries === 'function' && pm.size ? registry.entries().filter((e) => pm.has(`${e.provider}\0${e.model}`)).map((e) => e.id) : [];
+    return [...new Set([...ids, ...same])];
+  };
 
   // #15: no runtime independent of the developers: time does not fix that, new inputs do.
   const noReviewer = (ctx, why) => decide(ctx, decision('evaluator_unavailable', 'No independent evaluator can be routed: accept on tests alone?', [

@@ -343,8 +343,9 @@ Where the build is more specific than the design above:
 - **Exit codes.** 0 ok, 1 error / not found / bad token, 3 busy, 4 deploy pending, 5 unavailable, 6 `run` only: the
   lease was lost while the command ran.
 - **Dashboard.** `leaseAuthority` (`legacy` | `central-through-ssh` | `central`) is read once at start (switching needs a restart). `central-through-ssh`
-  takes the same read, claim and deploy-runner paths as `legacy` (through the wrapper) and only changes the label shown (the Leases view
-  badge, `authority` in `GET /api/leases/view`). While the in-process service is not the authority (any value but `central`) it refuses every read and write (`get`, `list`, `check`, `events`, `deploy list|wait|last`, and the writes `claim`, `ticket`, `release`, `renew`, `heartbeat`, `narrow`,
+  takes the same read, claim and deploy-runner paths as `legacy` in the dashboard (through the wrapper) and only changes the label shown
+  there (the Leases view badge, `authority` in `GET /api/leases/view`); the `vpt-lease` client does not behave like legacy in this mode: it
+  forwards every call over ssh to the registry host. While the in-process service is not the authority (any value but `central`) it refuses every read and write (`get`, `list`, `check`, `events`, `deploy list|wait|last`, and the writes `claim`, `ticket`, `release`, `renew`, `heartbeat`, `narrow`,
   `setMode`, `ownerRelease`, `importLegacy`, deploy request/approve/start/finish/cancel/record) with `409 E_NOT_AUTHORITY` naming the
   real authority; `/status` and the view say `authority: false`. Only `status`, `tick` and the shadow store stay open. The service is constructed in both
   modes so shadow reports reach it; liveness is unknown (nothing released) until the first successful tmux listing.

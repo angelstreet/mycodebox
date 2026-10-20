@@ -99,7 +99,7 @@ test('live checkout diverged: pull --ff-only fails, deploy refused, not restarte
   const { lane, launches } = mk(w);
   const r = await lane.wait(lane.enqueue({ repo: 'me', branch: 'feat' }).id, 120000);
   assert.equal(r.state, 'deploy_failed'); assert.equal(r.selfDeploy.outcome, 'deploy_refused');
-  assert.match(r.reason, /git pull --ff-only failed/); assert.equal(launches.length, 0);
+  assert.match(r.reason, /could not fast-forward/); assert.equal(launches.length, 0);
 });
 
 test('a merge whose server.js does not parse is returned before the push', async () => {

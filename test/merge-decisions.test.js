@@ -50,7 +50,7 @@ test('1. merge question, tests green, clean merge: the manager answers "merge", 
   assert.equal(typed.length, 1, JSON.stringify({ typed, owner, stalls: stalls().map((s) => s.type) }));
   assert.equal(typed[0].session, 's1');
   assert.match(typed[0].text, /Merge: yes - the manager evaluated proj feat -> main/);
-  assert.match(typed[0].text, /Merge it now\.$/);
+  assert.match(typed[0].text, /Do not merge it yourself\.$/);
   assert.doesNotMatch(typed[0].text, /rest of your question/);
   const j = lines(join(dir, 'manager-decisions.jsonl'));
   assert.equal(j.length, 1);

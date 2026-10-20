@@ -124,16 +124,16 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     let dq = st.stall?.question ? displayQuestion(reflowPane(st.stall.question)) : '';
     if (dq.length < 60 && closingText) { const alt = displayQuestion(reflowPane(closingText)); if (alt.length > dq.length) dq = alt; }
     const baseQ = ((st.state === 'waiting' ? st.waitReason : null) || dq || 'waiting for your answer').slice(0, 2000);   // the question area scrolls; never cut it mid-line
-    const question = (form || questionsView || items.length) ? '' : baseQ;
-    // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
-    // and indented) before display so it fills the popup width instead of a narrow column.
-    const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, expanded ? 6000 : 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
     // Manager-style structured digest: one card per Q-letter ("Q144.a OpenRouter credit ... Q144.b ...").
     // Empty when the closing text doesn't carry the enumeration; the popup then falls back to the
     // raw `<pre>` block. The "Recommends: N — ..." line is lifted out as the TL;DR card.
     const closing = String(st.stall?.closing || st.stall?.excerpt || st.stall?.question || '');
     const items = form || questionsView ? [] : parseManagerItems(closing);
     const recommendation = form || questionsView ? null : extractRecommendation(closing);
+    const question = (form || questionsView || items.length) ? '' : baseQ;
+    // The Details pane is the tail of the stop's closing text. Reflow it (pane-wrapped at 25-60 cols
+    // and indented) before display so it fills the popup width instead of a narrow column.
+    const details = [st.lastTurn?.line, reflowPane(detailsText(st.stall, expanded ? 6000 : 1800))].filter(Boolean).join('\n');   // the metered STATUS line leads the details
     return { item, kind: form ? 'multi' : d.kind, form, suggestion: form ? null : d.suggestion, buttons: form ? btnsView.filter((b) => b.reply) : btnsView, aiId, sugConf: sugId ? Number(ai?.confidence) : null, aiConf: aiId ? Number(ai.confidence) : null, jev: st.stall?.jev || null, details, items, question, questions: questionsView, decisionCount: decisions.length, prio: st.priority || item.priority || 'P2', why: whyModel(st), forbidden: (typeof st.stall?.forbidden === 'string' && st.stall.forbidden) || (typeof ai?.forbidden === 'string' && ai.forbidden) || '', recommendation };
   }
 

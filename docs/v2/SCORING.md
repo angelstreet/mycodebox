@@ -84,10 +84,18 @@ count, so `verified <= attempts` and `errors <= attempts` (the router's coherenc
 `total_usd / verified` as the cost per verified completion; `total_usd` here is the group's total spend including failed tasks, and it is omitted whenever the figure is unknown. Entries for `unknown`
 runtimes are not exported.
 
-The router ignores an entry with fewer than its minimum attempts, and ignores an incoherent one (the rationale says so),
-so thin or corrupt data cannot steer a choice. The router runs in shadow mode only: the history changes a
-recommendation, not a live route. To use it, a person saves the JSON, passes the `router_history` object as `history`
-in a dry run, reviews the recommendation and decides. Nothing in this repository does that automatically.
+The router ignores an entry with fewer than its minimum attempts (5), and ignores an incoherent one (the rationale says so),
+so thin or corrupt data cannot steer a choice.
+
+**What the live router consumes.** The server rebuilds this history from its own task store (`historyProvider` in
+`orchestration/v2-runtime.js`, `buildScorecard` -> `routeHistory`, cached 60 s, read-only; a store that cannot be read gives
+the last good history or none) and passes it to every live `route()` (OWNER_DECISIONS §12.3). With 5 or more attempts per
+model it replaces the tier priors with measured quality (verified rate scaled 0.85..1 by first-pass rate), reliability,
+latency, tokens and cost per verified completion. The switch is the project policy field `routing.history` in
+`.ai/project.json` (default `true`; `false` = priors only, an explicit empty history). Nothing else in this document
+reaches a live route: the ledger (`v2-ledger.js`), `recommend()`, the digest and the proposals never change a choice.
+To try another history without touching live routing, pass a saved `router_history` object as `history` in a dry run
+(`ROUTER_DRYRUN.md`).
 
 ## Scorecard
 
@@ -177,7 +185,7 @@ least 5 settled tasks:
 
 | Kind | Rule | Evaluation |
 |---|---|---|
-| `router_history` | the score report's `router_history` has an entry with 5+ attempts and differs from the history in use (`--history FILE`, default none = priors) | shadow |
+| `router_history` | the score report's `router_history` has an entry with 5+ attempts and differs from the history in use (`--history FILE`, default none = priors). Stale since D-025: live routing already uses the store history, so this compares against priors, not against what runs | shadow |
 | `router_weights` | overall first pass < 50%: quality +0.1, cost -0.1; or verified >= 90%, first pass >= 80% and all costs known: cost +0.1, quality -0.1 (renormalized) | shadow |
 | `model_registry` | a model's verified rate < 50%: exclude it from routing (`models.json` or the project `model_allowlist`). Owner-cancelled tasks count against the model (settled, not verified), so a model whose work the owner keeps cancelling can be proposed for exclusion | shadow with `exclude` |
 | `role_prompt` | reviewer rejects per settled task >= 0.5 for a developer model: developer prompt text | text only |
@@ -526,19 +534,19 @@ splits cost by time, not by branch.
 (failed ones included) / verified, `null` when nothing is priced; `medianMs`, `p90Ms` of verified completions (lane
 latency is lane time from request to result, not the session's work time); `rework` = number of rework events.
 
-### How the router consumes it
+### What the ledger feeds (and what it does not)
 
-The router reads `node scripts/v2-ledger.js --json` (groups by model and runtime) as read-only input, in addition to
-`v2-score.js` `router_history`, to rank model/runtime choices per task kind:
+The live router does **not** read `v2-ledger.js`. The ledger feeds only the read-only outputs: the `recommend()` ranking, the
+daily digest and the routing shadow (Round 15 below), plus `v2-score.js --json` for a person. Live routing history comes from
+the task store ("Feeding the router" above).
 
-- A group is only used with at least 5 attempts and 3 verified completions; below that it is an anecdote and the static
-  routing table decides. Groups named `unknown` are never ranked.
-- Rank by verified rate first, then cost per verified completion (unknown cost ranks after known), then median latency.
-  Rework above 30% of attempts demotes a group one place.
+- `recommend()` needs `minVerified` 10 verified and `minAttempts` 15 attempts per (model, runtime) and task type
+  (`GHOSTY_SHADOW_MIN_VERIFIED` / `GHOSTY_SHADOW_MIN_ATTEMPTS`); it ranks by verified rate, then tokens per verified, then
+  more verified. Models named `unknown` or `none` are never ranked. There is no cost or rework term.
+- Cost per verified completion is `null` when any verified record in the group has no known cost (a flat plan record counts
+  as unmetered and stays out), so an unpriced run never lowers the figure. Unpriced usage rows are unknown, not 0.
 - Sources differ in difficulty (a docs fix versus a game run); compare within one `--by source` slice when possible.
-- Output is a proposal for the manager (a suggested change to the routing config with the numbers behind it). Nothing
-  applies it automatically: no write to routing config, prompts or registry. The manager decides under the usual
-  evaluation and records the decision in the journal.
+- The output is a suggestion for the manager. Nothing applies it: no write to routing config, prompts or registry.
 
 ### Gaps (2026-10-19)
 
@@ -556,7 +564,7 @@ All of it is computed by `usage-window.js` from the ledger rows the usage tailer
 
 | Source | Recorded where | Rule |
 |---|---|---|
-| manager run | `node scripts/manager-run.js end <id> [--verdict ..] [--review pass\|fail] [--model M] [--session LABEL]` writes `usage` on the end line of `manager-runs.jsonl` | ledger rows whose `cwd` is the run's worktree (or whose `label` is `--session`) in (startedAt, endedAt]; dominant model and runtime, tokens in/out/cache, summed cost. `--model` only fills the model when no row exists (tokens and cost stay unknown) |
+| manager run | `node scripts/manager-run.js end <id> [--verdict ..] [--review pass\|fail] [--model M] [--session LABEL]` writes `usage` on the end line of `manager-runs.jsonl` | ledger rows whose `cwd` is the run's worktree (or whose `label` is `--session`, and for a `minimax` run only rows of agent `minimax`, so the manager's own rows never count) in (startedAt, endedAt]; dominant model and runtime, tokens in/out/cache, summed cost (unknown when any non-plan row is unpriced). `--model` only fills the model when no row exists (tokens and cost stay unknown) |
 | lane request | `usage` on the request record in `integration/requests.jsonl`, frozen at enqueue | `integrate request` sends the requester's git toplevel (`worktree`, loopback callers only). Rows whose `cwd` is inside it in (from, to] are summed (`attribution: worktree`, per branch); with no worktree or no matching rows, rows labelled with the requesting session (`attribution: session-window`, splits by time when a session works two branches). `to` = request time, `from` = the later of the session's previous request (any branch) and 24 h earlier |
 | game-dispatch | `runs.jsonl` | its own `model` and `prompt_version` (`-` = none); no tokens or cost |
 
@@ -630,7 +638,7 @@ choice variable is computed before the call and never reassigned from it. `test/
 the same task with no shadow, a recording, a throwing and a rejecting shadow and asserts identical developer and reviewer entries;
 `test/v2-shadow-routing.test.js` proves the logger swallows an unwritable state dir and junk input.
 
-### Log: `<state dir>/routing-shadow.jsonl` (append-only)
+### Log: `<state dir>/routing-shadow.jsonl` (append-only, rotated once to `.jsonl.1` at 5 MiB)
 
 `{ts, task_id, role, type, chosen: {entry, runtime, model}, recommended: {model, runtime, verifiedRate, tokensPerVerified} | null,
 agree: true|false|null, reason, samples: {typeRecords, eligible, recommended: {attempts, verified}|null, chosen: {attempts, verified}|null}}`.
@@ -640,7 +648,7 @@ No prompts, no task text, no paths are logged.
 ### Daily digest
 
 `node scripts/v2-ledger.js --digest [--since 24h|7d|ISO date] [--json] [--state-dir DIR]`, or
-`GET /api/manager/score-digest?since=24h` (same payload; read-only, no cache, no writer). Default window 24 h; the **previous
+`GET /api/manager/score-digest?since=24h` (same payload; read-only, cached 60 s per `since`, no writer). Default window 24 h; the **previous
 window** is the equal span before it. Contents: per model verified rate, tokens per verified, rework (window, plus previous window
 counts); regressions; the per-type recommendations; shadow agreement (`agree` / comparable, entries without a recommendation, in the window).
 

@@ -62,7 +62,7 @@ async function cmdEnd(id, opts) {
   if (review && !['pass', 'fail'].includes(review)) throw new Error(`--review must be pass or fail, got "${review}"`);
   const start = (await readLines()).find((l) => l.id === id && l.startedAt);
   if (!start) throw new Error(`no started run ${id}`);
-  const rows = readLedgerTail(join(STATE_DIR, 'usage-ledger.jsonl')).filter((r) => r.cwd === start.worktree || (opts.session && r.label === opts.session));
+  const rows = readLedgerTail(join(STATE_DIR, 'usage-ledger.jsonl')).filter((r) => r.cwd === start.worktree || (opts.session && r.label === opts.session && (start.kind !== 'minimax' || r.agent === 'minimax')));   // the manager's own rows under that label never count for a MiniMax worker
   const a = attribute(rows, start.startedAt, endedAt);
   // --model covers a run with no usage rows (the model is then known but tokens and cost are not)
   const model = a?.model || opts.model || null;

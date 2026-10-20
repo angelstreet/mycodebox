@@ -613,6 +613,7 @@ const shortHash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 8);
 
 const META_TTL_MS = 10000;
 const metaCache = new Map(); // session -> { at, cwd, repo, branch, dirty, busy }
+const digestCache = new Map();  // since -> { at, body } for GET /api/manager/score-digest
 
 async function gitInfo(cwd) {
   try {
@@ -2198,6 +2199,11 @@ async function handleHttp(req, res) {
       const plan = revertPlan(item, { exists, state: st?.state ?? null, draft: !!st?.stall?.draft, menu: (st?.stall?.options?.length || 0) > 0, reverted: item ? (await revertedIds()).has(id) : false });
       if (plan.error) throw httpError(plan.status, plan.error);
       if (plan.draft) return json(res, 200, { ok: true, draft: plan.draft, label: plan.label, session: item.session });
+      if (plan.lane) {   // a lane merge: the lane reverts the merge commit, no session involved
+        let q; try { q = integrationLane.revert(plan.lane.request, { by, session: item.session || null }); } catch (e) { throw httpError(e.code === 'E_NOT_FOUND' ? 404 : 409, e.message); }
+        await logRevert({ id, session: item.session, by });
+        return json(res, 200, { ok: true, enqueued: q.id, repo: q.repo, session: item.session });
+      }
       await assertAgentPane(item.session, by);   // the same guarded send path as every other owner send
       await sendKeys(item.session, plan.send, true);
       logSend(item.session, by, { keys: plan.send });
@@ -2251,7 +2257,8 @@ async function handleHttp(req, res) {
     try { return json(res, 200, await wakesView(url.searchParams.get('day') || '')); } catch (e) { return json(res, 500, { error: String(e.message || e) }); }
   }
   if (req.method === 'GET' && p === '/api/manager/score-digest') {   // Round 15: read-only daily score digest (scripts/v2-ledger.js --digest)
-    try { const { buildDigest, parseSince } = await import('./scripts/v2-ledger.js'); const sn = url.searchParams.get('since'); return json(res, 200, buildDigest({ stateDir: STATE_DIR, since: sn ? parseSince(sn) : undefined })); }
+    try { const { buildDigest, parseSince } = await import('./scripts/v2-ledger.js'); const sn = url.searchParams.get('since'); const key = sn || '', hit = digestCache.get(key); if (hit && Date.now() - hit.at < 60_000) return json(res, 200, hit.body);   // the ledger parse is synchronous: cache 60 s per `since`
+      const body = buildDigest({ stateDir: STATE_DIR, since: sn ? parseSince(sn) : undefined }); if (digestCache.size > 20) digestCache.clear(); digestCache.set(key, { at: Date.now(), body }); return json(res, 200, body); }
     catch (e) { return json(res, /needs a date/.test(e.message) ? 400 : 500, { ok: false, error: String(e.message || e) }); }
   }
   if (req.method === 'GET' && p === '/api/manager/scorecard') {
@@ -2337,7 +2344,7 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 // `integrationHooks` is the seam for the rest of the wiring: notify(request, event) fires on every transition (event.final is true on a
 // final state: merged, deployed, returned, merged_ci_red, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
-const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
+const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut: () => managerConfig().mergeOptOut,
   deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
     wait: (id) => integrationHooks.deploys.wait(id),
     find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },
