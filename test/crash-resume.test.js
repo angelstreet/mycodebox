@@ -16,8 +16,25 @@ test('live agent with an Aborted word is never a crash', () => {
 
 test('requires exact job message, shell, and two absent polls', () => {
   assert.equal(decideCrashResume({ state: state(), consecutiveNoAgent: 1 }).reason, 'agent-not-absent-twice');
-  assert.equal(decideCrashResume({ state: state({ lines: ['Aborted (core dumped)', 'bash$'] }), consecutiveNoAgent: 2 }).reason, 'no-exact-job-message');
+  // "Aborted" only counts when it is the whole line (see the bare abort test below), not inside text.
+  assert.equal(decideCrashResume({ state: state({ lines: ['Aborted while reading the agent log', 'bash$'] }), consecutiveNoAgent: 2 }).reason, 'no-exact-job-message');
   assert.equal(decideCrashResume({ state: state({ shellForeground: false }), consecutiveNoAgent: 2 }).reason, 'not-shell');
+});
+
+test('bare abort with no wrapper job line is a crash of this session', () => {
+  const d = decideCrashResume({ state: state({ lines: ['Aborted (core dumped)', 'bash$'] }), consecutiveNoAgent: 2 });
+  assert.equal(d.ok, true);
+  assert.equal(d.bare, true);
+  assert.deepEqual(d.crash, { name: 'pane', model: 'opus', line: 'Aborted (core dumped)' });
+  assert.equal(d.command, `${base} --model opus --remote-control 'pane' -n 'pane' --resume sid`);
+});
+
+test('bare abort still needs two absent polls, a dead shell and a live cwd', () => {
+  const lines = ['Aborted', 'bash$'];
+  assert.equal(decideCrashResume({ state: state({ lines }), consecutiveNoAgent: 1 }).reason, 'agent-not-absent-twice');
+  assert.equal(decideCrashResume({ state: state({ lines, agent: 'claude' }), consecutiveNoAgent: 2 }).reason, 'agent-alive');
+  assert.equal(decideCrashResume({ state: state({ lines, shellForeground: false }), consecutiveNoAgent: 2 }).reason, 'not-shell');
+  assert.equal(decideCrashResume({ state: state({ lines, cwd: '/work/tree (deleted)' }), consecutiveNoAgent: 2 }).reason, 'cwd-gone');
 });
 
 test('builds resume with real remote name, model, base, and id', () => {
