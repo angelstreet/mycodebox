@@ -161,8 +161,8 @@ const mkTable = (rows) => { // rows: [pid, ppid, args]
 test('scriptBusyOf: a script-wrapped `claude -p` child counts', () => {
   const t = mkTable([
     [1, 0, 'tmux pane shell'],
-    [2, 1, 'bash /home/u/run.sh'],
-    [3, 2, '/home/u/.local/bin/claude -p "do the thing"'],
+    [2, 1, 'bash /home/user/run.sh'],
+    [3, 2, '/home/user/.local/bin/claude -p "do the thing"'],
   ]);
   assert.equal(scriptBusyOf(1, t), true);
 });
@@ -173,7 +173,7 @@ test('scriptBusyOf: a `claude --print` child counts', () => {
 });
 
 test('scriptBusyOf: a `sleep` under a bash script counts', () => {
-  const t = mkTable([[1, 0, 'bash /home/u/wait.sh'], [2, 1, 'sleep 60']]);
+  const t = mkTable([[1, 0, 'bash /home/user/wait.sh'], [2, 1, 'sleep 60']]);
   assert.equal(scriptBusyOf(1, t), true);
 });
 
@@ -183,7 +183,7 @@ test('scriptBusyOf: a bare bash prompt does not count', () => {
 });
 
 test('scriptBusyOf: an interactive claude REPL does not count (the guard already labels it as the agent)', () => {
-  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions']]);
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/user/.local/bin/claude --dangerously-skip-permissions']]);
   assert.equal(scriptBusyOf(1, t), false);
 });
 
@@ -213,25 +213,25 @@ test('scriptBusyOf: walks the tree breadth-first to depth 8', () => {
 // messageable. An interactive agent is a claude / codex / mcode process whose args
 // are NOT -p/--print/exec (the same patterns scriptBusyOf uses for "non-interactive").
 test('interactiveAgentOf: a bare interactive claude REPL counts', () => {
-  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions']]);
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/user/.local/bin/claude --dangerously-skip-permissions']]);
   assert.equal(interactiveAgentOf(1, t), true);
 });
 
 test('interactiveAgentOf: a bare interactive mcode REPL counts', () => {
-  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/mcode']]);
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/user/.local/bin/mcode']]);
   assert.equal(interactiveAgentOf(1, t), true);
 });
 
 test('interactiveAgentOf: a bare interactive codex counts', () => {
-  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/u/.local/bin/codex']]);
+  const t = mkTable([[1, 0, 'bash'], [2, 1, '/home/user/.local/bin/codex']]);
   assert.equal(interactiveAgentOf(1, t), true);
 });
 
 test('interactiveAgentOf: a script-wrapped `claude -p` does NOT count (it is non-interactive)', () => {
   const t = mkTable([
     [1, 0, 'tmux pane shell'],
-    [2, 1, 'bash /home/u/run.sh'],
-    [3, 2, '/home/u/.local/bin/claude -p "do the thing"'],
+    [2, 1, 'bash /home/user/run.sh'],
+    [3, 2, '/home/user/.local/bin/claude -p "do the thing"'],
   ]);
   assert.equal(interactiveAgentOf(1, t), false);
 });
@@ -239,7 +239,7 @@ test('interactiveAgentOf: a script-wrapped `claude -p` does NOT count (it is non
 test('interactiveAgentOf: a script-wrapped `mcode exec` does NOT count', () => {
   const t = mkTable([
     [1, 0, 'bash'],
-    [2, 1, 'bash /home/u/run.sh'],
+    [2, 1, 'bash /home/user/run.sh'],
     [3, 2, 'mcode exec --task "x"'],
   ]);
   assert.equal(interactiveAgentOf(1, t), false);
@@ -252,7 +252,7 @@ test('interactiveAgentOf: an interactive claude with a background mcode exec chi
   // (because of the mcode exec child). server.js combines them with &&!.
   const t = mkTable([
     [1, 0, 'bash'],
-    [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions'],
+    [2, 1, '/home/user/.local/bin/claude --dangerously-skip-permissions'],
     [3, 2, 'bash'],
     [4, 3, 'mcode exec --task "worker"'],
   ]);
@@ -266,7 +266,7 @@ test('interactiveAgentOf: an interactive claude with a background mcode exec chi
 test('interactiveAgentOf: bash script -> claude -p (no interactive agent) is scriptBusy', () => {
   const t = mkTable([
     [1, 0, 'bash'],
-    [2, 1, 'bash /home/u/run.sh'],
+    [2, 1, 'bash /home/user/run.sh'],
     [3, 2, 'claude -p "task"'],
   ]);
   assert.equal(interactiveAgentOf(1, t), false);
@@ -281,7 +281,7 @@ test('interactiveAgentOf: an interactive claude with a background sleep child is
   // finds the claude REPL and returns true; the combined check is false.
   const t = mkTable([
     [1, 0, 'bash'],
-    [2, 1, '/home/u/.local/bin/claude --dangerously-skip-permissions'],
+    [2, 1, '/home/user/.local/bin/claude --dangerously-skip-permissions'],
     [3, 2, 'bash'],
     [4, 3, 'sleep 60'],
   ]);
