@@ -20,7 +20,7 @@ import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
-import { isOwnersTurn } from '/ask-model.js';
+import { isOwnersTurn, unattachedAsks } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 import * as hv from '/history-view.js';
@@ -1102,13 +1102,13 @@ function renderAttention() {
   for (const q of state.ownerAsks || []) { const k = q.session || 'owner'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(q); }
   // one chip per task that needs you, whatever the reason (a stop, a question, a block): just the task name
   const names = waiting.map((s) => s.name);
-  // The headline count AND the rendered chips match the answer-popup pill: only sessions that
-  // actually need you now (`isOwnersTurn`). Leftover ledger questions about sessions no longer
-  // in `waiting` are NOT shown — they inflated the badge and disagreed with the dialog
-  // (TASK-70 chat 2026-10-08: dialog said 2, strip said 11). Those questions still live in the
-  // manager ledger; nothing is lost, just no longer surfaced here.
+  // The headline count AND the chips match the answer popup: sessions that need you now
+  // (`isOwnersTurn`) plus the manager's open questions no waiting session carries (`unattachedAsks`),
+  // shown as one "manager" chip. (TASK-70 2026-10-08 hid leftover ledger asks; that also hid the
+  // manager's own questions about finished sessions, so the strip said "none" with 5 open.)
   const entries = names;
-  const total = names.length;
+  const mgrAsks = unattachedAsks(state.ownerAsks, state.status, state.sessions);
+  const total = names.length + mgrAsks.length;
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
   const label = (k) => (k === 'owner-direct' || k === 'owner' ? 'for you' : displayName(k));
   // TTS text for the chip (Q94=2, every surface gets the audio chip). Reads aloud what the
@@ -1129,7 +1129,7 @@ function renderAttention() {
   // Strip is one-line overview; audio chip lives on the dialog popup (showOwnerAsks below) —
   // chat-raised 2026-10-08: 'keep that on the dialogue not the alert top not enough space'.
   const chip = (k) => `<button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>`;
-  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('');
+  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('') + (mgrAsks.length ? `<button data-mgr="1" title="${escapeHtml(mgrAsks.map((q) => `${q.id}: ${q.question}`).join('\n'))}">manager \u00b7 ${mgrAsks.length} question${mgrAsks.length === 1 ? '' : 's'}</button>` : '');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = (e) => {
@@ -1138,6 +1138,8 @@ function renderAttention() {
       if (groups.has(k)) { e.stopPropagation(); showOwnerAsks(b, k, groups.get(k), audioText(k)); } else openCard(k);
     };
   }
+  const mb = els.attention.querySelector('button[data-mgr]');
+  if (mb) mb.onclick = (e) => { e.stopPropagation(); showOwnerAsks(mb, 'manager', mgrAsks, `The manager has ${mgrAsks.length} open question${mgrAsks.length === 1 ? '' : 's'} for you. ${mgrAsks.map((q) => q.question).join('. ')}`); };
   markAttentionOverflow();
   syncAlertRowVisibility();
 }

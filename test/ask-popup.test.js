@@ -224,3 +224,28 @@ test('whyModel: owner_needed shows "yours to decide"; jevAgreesOwner treats open
   assert.equal(w.ai.reasoning, 'policy call');
   assert.equal(jevAgreesOwner('continue', 'continue', null), true);
 });
+
+// ---- the manager's open questions (NEEDS YOU strip + popup agree) ----
+import { unattachedAsks } from '../public/ask-model.js';
+const askN = (n, session = 'manager:topic') => Array.from({ length: n }, (_, i) => ({ id: `Q${i + 1}`, session: `${session}-${i}`, question: `q${i}?`, options: ['a', 'b'], recommendation: '1' }));
+test('manager asks: 5 open, no session waits -> strip count and popup queue are both 5', () => {
+  const asks = askN(5), sessions = [{ name: 'a' }], statuses = { a: { state: 'working' } };
+  assert.equal(unattachedAsks(asks, statuses, sessions).length, 5);
+  const q = buildQueue(statuses, {}, sessions, asks);
+  assert.equal(q.length, 5);
+  assert.ok(q.every((it) => it.ask && it.name.startsWith('ask:')));
+  assert.equal(reconcileQueue({ items: [] }, statuses, sessions, 1, asks).items.length, 5);
+});
+test('manager asks: none open -> 0', () => {
+  assert.equal(unattachedAsks([], {}, []).length, 0);
+  assert.equal(buildQueue({}, {}, [], []).length, 0);
+  assert.equal(buildQueue({}, {}, []).length, 0);
+});
+test('manager asks: a waiting session + 2 asks -> 3; an ask about the waiting session is not counted twice', () => {
+  const sessions = [{ name: 'w' }], statuses = { w: { state: 'waiting', stall: { id: 's1' } } };
+  const two = [{ id: 'Q1', session: 'x', question: 'a?' }, { id: 'Q2', session: 'y', question: 'b?' }];
+  assert.equal(buildQueue(statuses, {}, sessions, two).length, 3);
+  const attached = [...two, { id: 'Q3', session: 'w', question: 'c?' }];
+  assert.equal(unattachedAsks(attached, statuses, sessions).length, 2);
+  assert.equal(buildQueue(statuses, {}, sessions, attached).length, 3);
+});
