@@ -405,3 +405,18 @@ test('floor: a manager approval skips only the infra reason, is recorded and jou
   w.branch('red', { 'scripts/deploy.sh': 'b\n' });
   assert.equal((await go(red.lane, { branch: 'red', approvedBy: 'manager' })).state, 'returned');
 });
+
+test('a v2/task/<id> branch merges only with the owner grant for its exact SHA (taskGrant)', async () => {
+  const w = makeWorld(); w.branch('v2/task/t-1', { 'new.js': 'x\n' }); w.branch('feat', { 'other.js': 'y\n' });
+  const before = w.main();
+  const asked = [];
+  const none = mk(w);   // no store wired: refused
+  const r0 = await go(none.lane, { branch: 'v2/task/t-1' });
+  assert.equal(r0.state, 'returned'); assert.match(r0.reason, /no integration grant/); assert.equal(w.main(), before);
+  const denied = mk(w, { lane: { taskGrant: (id, sha) => { asked.push([id, sha]); return false; } } });
+  assert.equal((await go(denied.lane, { branch: 'v2/task/t-1' })).state, 'returned');
+  assert.equal(asked[0][0], 't-1'); assert.match(asked[0][1], /^[0-9a-f]{40}$/);
+  assert.equal((await go(denied.lane, { branch: 'feat' })).state, 'merged', 'other branches are not gated');
+  const granted = mk(w, { lane: { taskGrant: (id, sha) => id === 't-1' && sha === asked[0][1] } });
+  assert.equal((await go(granted.lane, { branch: 'v2/task/t-1' })).state, 'merged');
+});

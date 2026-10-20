@@ -258,3 +258,21 @@ test('delivery: requested by deliver flag or integration resource; integrated on
   assert.equal((await d(x.task_id)).integrated, false);
   assert.equal((await d(x.task_id)).label, 'integration requested, not yet integrated');
 });
+
+test('caller: the recorded actor is the real caller; approve/deny need mayDecide (the owner UI or a manager client)', async () => {
+  const { store, api } = setup();
+  const { task_id: id } = await store.createTask(spec());
+  await store.setHead(id, SHA_A, { actor: DEV });
+  await askOwner(store, id);
+  const p = (await api.handle({ method: 'GET', pathname: `/api/v2/tasks/${id}` })).body.task.pending_approval;
+  const body = { action_id: p.action_id, sha: SHA_A };
+  const post = (verb, caller) => api.handle({ method: 'POST', pathname: `/api/v2/tasks/${id}/${verb}`, readBody: async () => body, caller });
+  for (const verb of ['approve', 'deny']) {
+    const r = await post(verb, { actor: 'loopback', mayDecide: false });
+    assert.equal(r.status, 403, verb); assert.equal(r.body.code, 'E_FORBIDDEN');
+  }
+  assert.equal((await store.events(id)).filter((e) => /^approval\./.test(e.kind)).length, 0, 'a session caller wrote nothing');
+  const ok = await post('approve', { actor: 'manager:boss', mayDecide: true });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body)); assert.equal(ok.body.actor, 'manager:boss');
+  assert.equal((await store.events(id)).find((e) => e.kind === 'approval.granted').payload.actor, 'manager:boss');
+});

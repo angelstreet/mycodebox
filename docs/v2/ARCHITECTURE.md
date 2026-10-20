@@ -400,9 +400,11 @@ Recorded from `v2/r3-wire` (OWNER_DECISIONS §11.1); additive. Env keys: [REFERE
    `push:task-branch:<task>:<sha>`, read back from the remote; an unknown outcome is reconciled from the remote, never
    re-pushed blindly). The merge into `main` is an `integration` request with key
    `integration:merge:<project_id>:main:<sha>` (`merge_protected` when `main` is protected), bound to the SHA. This
-   server has no integration lane (no remote CI or deploy-state source for `integration-controller.js`), so an approved
-   merge is not executed: the task waits (`reason: integration`, retry 10 min) until `main` contains the SHA, then
-   `release_verifying` -> `accepted`. Nothing merges, deploys or force-pushes a branch the task does not own.
+   hook does not merge (it has no remote CI or deploy-state source): the task waits (`reason: integration`, retry 10
+   min) until `main` contains the SHA, then `release_verifying` -> `accepted`. The merge itself is done by the
+   integration lane (`integration-lane.js`), which takes a `v2/task/<id>` branch only when the task store holds that
+   granted key for the branch's exact SHA (`taskGrant`; no grant, no V2 store: the request is returned).
+   Nothing deploys or force-pushes a branch the task does not own.
 9. System operations: `GET /api/v2/ops/telemetry` and `/incidents` are read-only; `POST /api/v2/ops/requests` goes
    through System Operations' request-only `requester` (incident `mitigation_requested`); no executor is configured
    and the controller object is not kept. The loop gets the same `requester` for infrastructure incidents.

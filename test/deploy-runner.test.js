@@ -49,11 +49,11 @@ const catchUp = (id, o = {}) => dep(id, { scope: 'host', ref: 'main', agent: RUN
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(pred, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return; await sleep(10); } throw new Error('timeout'); }
 
-function make(reg, { enabled = true, run, envs, managerItem } = {}) {
+function make(reg, { enabled = true, run, envs, managerItem, approveClients } = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-dep-'));
   const alerts = [], ran = [];
   const runner = createDeployRunner({
-    stateDir, registry: reg.fn, isEnabled: () => enabled, managerItem, alert: (k, p) => alerts.push([k, p.title]), log: { error() {} },
+    stateDir, registry: reg.fn, isEnabled: () => enabled, managerItem, ...(approveClients ? { approveClients } : {}), alert: (k, p) => alerts.push([k, p.title]), log: { error() {} },
     run: run || (async (env, o) => { ran.push(o); o.onLine('deploying'); o.onLine('VERSION 1.2.3'); return { code: 0 }; }),
   });
   return { runner, alerts, ran, stateDir };
@@ -654,4 +654,31 @@ test('the lease granted at deploy start is read back from the list and handed to
   await runner.tick();
   await until(() => reg.deploys.find((d) => d.id === '7').state === 'done');
   assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=7 VPT_LEASE_ID=L7 bash update_core.sh main --server --skip-leased');
+});
+
+test('runner on: only the in-process requester (the lane) or a named manager client is auto-approved; any other token goes to the manager', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { state: 'awaiting-approval', client: 'internal:process' }), dep('2', { state: 'awaiting-approval', client: 'some-session', env: 'other' })] });
+  const items = [];
+  const { runner, ran } = make(reg, { managerItem: (e) => items.push(e.key), envs: { 'node1-vpt': {}, other: {} } });
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done');
+  assert.ok(reg.calls.includes('deploy approve 1'));
+  assert.ok(!reg.calls.includes('deploy approve 2'), 'a bearer-token requester is not covered by the standing approval');
+  assert.equal(reg.deploys[1].state, 'awaiting-approval');
+  assert.equal(ran.length, 1);
+  const named = fakeRegistry({ deploys: [dep('3', { state: 'awaiting-approval', client: 'boss' })] });
+  const m = make(named, { approveClients: ['boss'] });
+  await m.runner.tick(); await until(() => named.deploys[0].state === 'done');
+  assert.ok(named.calls.includes('deploy approve 3'));
+});
+
+test('runner on: by default a request through the central registry client is auto-approved; an unknown bearer client is not', async () => {
+  const reg = fakeRegistry({ deploys: [dep('4', { state: 'awaiting-approval', client: 'registry' }), dep('5', { state: 'awaiting-approval', client: 'some-session', env: 'other' })] });
+  const items = [];
+  const { runner } = make(reg, { managerItem: (e) => items.push(e.key), envs: { 'node1-vpt': {}, other: {} } });
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done');
+  assert.ok(reg.calls.includes('deploy approve 4'));
+  assert.ok(!reg.calls.includes('deploy approve 5'));
+  assert.equal(reg.deploys[1].state, 'awaiting-approval');
 });

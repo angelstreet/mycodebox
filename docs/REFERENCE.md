@@ -802,6 +802,7 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
   themselves) are finished with its result (`coalescedInto`).
 - Registry: the default SSH adapter is deployment-specific (see `deploy-runner.js`). Override `DEPLOY_REGISTRY` with a JSON command array for your registry; for example, `DEPLOY_REGISTRY='["python3","/path/vpt-lease"]'` for a local registry. This setting does not configure every other lease adapter.
   `DEPLOY_POLL_MS`, `DEPLOY_TIMEOUT_MS` override the timings.
+- **Standing approval is bounded.** With the runner on, it approves only requests made in-process (the integration lane, after its merge evaluation; the manager) or by a client named in `DEPLOY_AUTO_APPROVE_CLIENTS` (comma list of lease client names; default `registry`, the central client every agent's `vpt-lease deploy request` arrives through; set it to replace the list), and requests with no recorded client (legacy registry). A request any other bearer token made stays `awaiting-approval` and goes to the manager item.
 - **Survives a restart (BUG-0341).** The deploy child is detached (own session, output to `deploys/<id>.run` via a file descriptor) and a
   tiny `sh` wrapper writes `deploys/<id>.pid` / `<id>.exit`. A restarted ghosty re-adopts every `running` deploy of the runner whose
   wrapper is alive or left an exit file, and finishes it as usual; with neither file the orphan sweep still applies. So a restart no
@@ -1004,6 +1005,7 @@ for non-GET requests. Store: `$GHOSTY_STATE_DIR/v2`. Writes (create, cancel, app
 only while this process holds the goal-loop controller lease; otherwise 503 `E_NO_CONTROLLER` and nothing is written
 (another live server, or `GHOSTY_V2_WORK_ROOT` unset). Reads always work.
 All bodies are JSON objects, max 64 KB, with unknown fields rejected. Task ids match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
+Writes (POST) need a caller: the dashboard (same-origin `Origin` or `Sec-Fetch-Site`, no token) or a bearer client flagged `manager` may create, cancel, approve and deny; a loopback session with the reporter token may only create and cancel (approve/deny: 403 `E_FORBIDDEN`); anything else is 403. The recorded actor is the real caller (`owner`, `manager:<client>`, `loopback`). A local process can still forge a same-origin `Origin`: Tailscale remains the gate.
 Errors are `{ ok:false, error, code }` (400 invalid, 404 not found, 409 conflict or terminal, 413 too large, 503 store failed or no controller).
 
 | Route | Body | Result |
@@ -1215,7 +1217,7 @@ repository, run by the server in its own clone, one request at a time per repo (
 - **API** (loopback + reporter token; remote clients with the `integrate` token flag): `POST /api/integration/requests { repo?, branch, session?, deploy?, note? }`
   -> `{ id, position }` (repo from the key, else matched from the session's `origin`); `GET /api/integration/requests?repo=&state=&limit=`;
   `GET /api/integration/requests/:id`; `GET /api/integration/requests/:id/wait?timeout=30` (long-poll to a final state);
-  `POST /api/integration/requests/:id/cancel` (only while queued).
+  `POST /api/integration/requests/:id/cancel` (only while queued). A `v2/task/<id>` branch is merged only when the V2 store holds the owner's `integration:merge:*:<sha>` grant for the branch's exact SHA (otherwise the request is returned). `--approved-by` is accepted from a `manager` client or, by default, the loopback reporter token; `INTEGRATION_MANAGER_CLIENT_ONLY=1` removes the reporter-token path (the manager then needs a client token in its `~/.config/mycodebox/token`).
 - **CLI** `scripts/integrate`: `request <branch> [--repo k] [--deploy scope] [--note t] [--wait]`, `status [<id>]`, `wait <id> [--timeout min]`, `cancel <id>`.
   Exit codes: 0 merged / deployed, 1 error, 3 returned (reason printed), 4 merged but CI red or deploy failed, 5 service unreachable.
 - **States**: `queued`, `running`, then final `merged`, `deployed`, `returned` (reason + output tail; fix on the branch, request again), `merged_ci_red`
