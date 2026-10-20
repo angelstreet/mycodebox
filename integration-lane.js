@@ -155,10 +155,11 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
 // NoNewPrivileges, so the script's `sudo systemctl restart` cannot run from a child of ours. The tmux server lives outside
 // the service (its own unit and cgroup, no NoNewPrivileges) and is where sessions already run safe-restart: `run-shell -b`
 // runs it there, so it outlives our stop and may sudo. Output goes to `log`, the exit code to `exit` (atomic rename).
-// restart({ cwd, waitMin, log, exit }) -> { ok, error? }
+// restart({ cwd, waitMin, log, exit, pid }) -> { ok, error? }
 const sq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-export function restartCommand({ cwd, waitMin, log, exit }) {
-  return `cd ${sq(cwd)} && ./scripts/safe-restart.sh --wait ${Number(waitMin) || 0} >${sq(log)} 2>&1; echo $? >${sq(`${exit}.tmp`)} && mv ${sq(`${exit}.tmp`)} ${sq(exit)}`;
+export function restartCommand({ cwd, waitMin, log, exit, pid }) {
+  // `pid`: the shell's own pid is written first, so a later self deploy can tell a waiter that is still waiting from a dead one
+  return `cd ${sq(cwd)} && ${pid ? `echo $$ >${sq(pid)} && ` : ''}./scripts/safe-restart.sh --wait ${Number(waitMin) || 0} >${sq(log)} 2>&1; echo $? >${sq(`${exit}.tmp`)} && mv ${sq(`${exit}.tmp`)} ${sq(exit)}`;
 }
 export function createTmuxRestart({ tmux = process.env.TMUX_BIN || 'tmux' } = {}) {
   return (o) => new Promise((resolve) => {
@@ -166,6 +167,14 @@ export function createTmuxRestart({ tmux = process.env.TMUX_BIN || 'tmux' } = {}
     if (cmd.includes('#')) { resolve({ ok: false, error: 'a path contains #, which tmux would expand' }); return; }
     execFile(tmux, ['run-shell', '-b', cmd], { timeout: 15_000 }, (e, _o, err) => resolve(e ? { ok: false, error: String(err || e.message).trim().slice(0, 300) } : { ok: true }));
   });
+}
+// A launched waiter is alive while its pid file names a live process whose command line is still the safe-restart shell
+// (a recycled pid is another command). Unreadable /proc (not Linux): the signal-0 probe alone.
+export function waiterAlive(pidFile) {
+  let pid; try { pid = parseInt(fs.readFileSync(pidFile, 'utf8'), 10); } catch { return false; }
+  if (!Number.isInteger(pid) || pid < 2) return false;
+  try { process.kill(pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('safe-restart'); } catch { return true; }
 }
 // The restarted service answers. -> boolean
 export const defaultHealth = (base = `http://127.0.0.1:${Number(process.env.PORT || 7777)}`) => async () => {
@@ -204,7 +213,7 @@ const TASK_BRANCH_RE = /^v2\/task\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/;
 
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
   taskGrant = null, deploys = null, mergeEval = defaultMergeEval, usage = sessionUsage, notify = () => {}, managerItem = () => {}, journal = () => {}, mergeOptOut = () => [], now = () => Date.now(), log = () => {},
-  pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart() } = {}) {
+  pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), pidAlive = waiterAlive } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
   const file = path.join(dir, 'requests.jsonl');
@@ -503,7 +512,14 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // pull carries a rollback line for the manager. A refusal or failure is a deploy_failed final state, which the notify
   // layer raises as a high-priority manager event.
   const short = (s) => String(s || '').slice(0, 12);
-  const restartFiles = (r) => ({ log: path.join(dir, 'restart', `${r.id}.log`), exit: path.join(dir, 'restart', `${r.id}.exit`) });
+  const restartFiles = (r) => ({ log: path.join(dir, 'restart', `${r.id}.log`), exit: path.join(dir, 'restart', `${r.id}.exit`), pid: path.join(dir, 'restart', `${r.id}.pid`) });
+  // The request whose safe-restart waiter was launched by the lane and has not exited (no .exit file, process alive), read from the
+  // persisted requests so a lane restart keeps it. A waiter launched a moment ago may not have written its pid file yet (60 s grace).
+  const pendingWaiter = (self) => [...reqs.values()].find((x) => {
+    const s = x.selfDeploy;
+    if (x.id === self || s?.restart !== 'scheduled' || !s.exit || fs.existsSync(s.exit)) return false;
+    return fs.existsSync(s.pid || '') ? pidAlive(s.pid) : Date.now() - Date.parse(s.restartAt) < 60_000;
+  }) || null;
   const readText = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
   function selfFail(r, outcome, reason, tail = '') {
     const sd = r.selfDeploy;
@@ -575,13 +591,22 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     // The restart is the LAST step and ends this process: the request is marked done (deployed), persisted and told (feed,
     // manager event, session notice) first, so the restart can neither lose nor re-run it. A launch failure is recorded as
     // `restartError` and raised as a manager item; the outcome stays `deployed`.
+    // One waiter: a safe-restart this lane launched that is still waiting restarts into whatever the live checkout holds then,
+    // which is the sha pulled just now, so no second waiter is launched.
+    const pw = pendingWaiter(r.id);
+    if (pw) {
+      Object.assign(sd, { expectedSha: sd.newSha, restartAt: iso(), restart: 'coalesced', restartWaiter: pw.id, note: `restart pending (coalesced with ${pw.id})` });
+      const told = selfDone(r);
+      await Promise.race([told, new Promise((res) => setTimeout(res, 15_000).unref?.())]);
+      return;
+    }
     const f = restartFiles(r);
     fs.mkdirSync(path.dirname(f.log), { recursive: true, mode: 0o700 });
-    fs.rmSync(f.exit, { force: true }); fs.rmSync(f.log, { force: true });
+    fs.rmSync(f.exit, { force: true }); fs.rmSync(f.log, { force: true }); fs.rmSync(f.pid, { force: true });
     Object.assign(sd, { expectedSha: sd.newSha, restartAt: iso(), restart: 'scheduled', note: 'restart scheduled via safe-restart', ...f });
     const told = selfDone(r);
     await Promise.race([told, new Promise((res) => setTimeout(res, 15_000).unref?.())]);   // the notice goes out before the service stops
-    const x = await Promise.resolve(restart({ cwd: live, waitMin: c.deploy.restartWaitMin, log: f.log, exit: f.exit })).catch((e) => ({ ok: false, error: e?.message }));
+    const x = await Promise.resolve(restart({ cwd: live, waitMin: c.deploy.restartWaitMin, log: f.log, exit: f.exit, pid: f.pid })).catch((e) => ({ ok: false, error: e?.message }));
     if (x?.ok === true) return;
     const err = redact(String(x?.error || 'launch failed')).slice(0, 300);
     sd.restart = 'launch_failed'; r.restartError = err; r.updatedAt = iso(); persist(r);
