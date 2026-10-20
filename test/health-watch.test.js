@@ -36,6 +36,29 @@ test('findRunaways: age AND (rss or cpu); skips young, foreign, claude/tmux and 
   assert.deepEqual(findRunaways(procs, cfg, new Set([7])).map((p) => p.pid), [1, 2]);
 });
 
+test('findRunaways: the agent of a tmux pane is not a runaway; its children still are (3 false alerts 2026-10-20)', () => {
+  // Real topology on codebox: pane 100 -> bash launch script -> agent, plus the agent run straight from the pane.
+  const panes = new Set([100, 200]);
+  const hot = { etimes: 6 * 3600, rssKB: 1500 * 1024, cpu: 114 };
+  const procs = [
+    proc({ pid: 100, ppid: 1, args: '-bash', ...hot }),
+    proc({ pid: 200, ppid: 100, args: 'minimax-code', ...hot }),
+    proc({ pid: 201, ppid: 100, args: '/home/u/.local/bin/claude --dangerously-skip-permissions', ...hot }),
+    proc({ pid: 202, ppid: 100, args: 'node /home/u/lib/node_modules/@minimax-ai/code/cli.js', ...hot }),
+    proc({ pid: 203, ppid: 100, args: 'node /home/u/lib/node_modules/@openai/codex/bin/cli.js', ...hot }),
+    proc({ pid: 110, ppid: 100, args: 'bash /home/u/handovers/task.launch.sh' }),      // pane shell -> launch script
+    proc({ pid: 111, ppid: 110, args: 'minimax-code', ...hot }),                       // the agent behind it
+    proc({ pid: 112, ppid: 110, args: 'python3 build.py', ...hot }),                   // same wrapper, but not an agent
+    proc({ pid: 210, ppid: 201, args: 'node --test test/foo.test.js', ...hot }),        // child of the agent: still a candidate
+    proc({ pid: 211, ppid: 100, args: 'npm run build', ...hot }),                      // not an agent command
+    proc({ pid: 300, ppid: 99, args: 'minimax-code', ...hot }),                         // agent-shaped but no pane
+  ];
+  assert.deepEqual(findRunaways(procs, cfg, new Set(), panes).map((p) => p.pid), [100, 112, 210, 211, 300],
+    'only the agents (200-203, 111) are exempt; shells, launch-script children and agent children keep the normal rule');
+  assert.deepEqual(findRunaways(procs, cfg, new Set()).map((p) => p.pid), [100, 200, 202, 203, 111, 112, 210, 211, 300],
+    'without pane info the behaviour is unchanged (201 `claude` was already exempt before this change)');
+});
+
 test('isStuckNodeTest: bare node --test only', () => {
   assert.equal(isStuckNodeTest('node --test'), true);
   assert.equal(isStuckNodeTest('/usr/local/bin/node --test'), true);

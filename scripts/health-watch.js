@@ -81,9 +81,40 @@ const SKIP_RUNAWAY = (p, protectedPids) =>
   protectedPids.has(p.pid) || /^(claude|tmux)\b/.test(basename(p.args.split(' ')[0] || '')) || /tmux: (server|client)/.test(p.args)
   || /ghosty-sessions\/server\.js/.test(p.args);
 
+const AGENT_CMDS = new Set(['claude', 'minimax-code', 'mcode', 'codex']);
+const AGENT_PKG = /@(anthropic-ai\/claude-code|minimax-ai\/code|openai\/codex)\b/;
+// mcode and minimax-code are node CLIs here, so they show up as `node .../@minimax-ai/code/cli.js`, not as their own name.
+export function isAgentCmd(args) {
+  const argv = String(args || '').trim().split(/\s+/).filter(Boolean);
+  if (!argv.length) return false;
+  if (AGENT_CMDS.has(basename(argv[0]))) return true;
+  if (basename(argv[0]) !== 'node') return false;
+  return argv.slice(1).some((a) => AGENT_PKG.test(a) || AGENT_CMDS.has(basename(a)));
+}
+
+// The agent of a live tmux session is working, not stray: 3 false alerts on 2026-10-20 (MiniMax 4.3 h at 80 % CPU and
+// 5.2 h at 114 %, an 88 h idle manager at 90 %). A pane's agent is reached through the pane pid or through the pane shell
+// and its launch script (pane bash -> bash handover.launch.sh -> minimax-code), so walk up to the pane, not one level.
+// Only agent commands are exempt; what the agent runs - node --test, npm, builds - is not an agent command and keeps the
+// normal runaway rule.
+// table: Map pid -> ppid (same shape resolveOwner takes).
+export function isPaneAgent(p, panePids, table) {
+  if (!panePids || !panePids.size || !isAgentCmd(p.args)) return false;
+  if (panePids.has(p.pid)) return true;   // the pane process itself
+  let cur = p.ppid, guard = 0;
+  while (cur > 1 && guard++ < 64) {
+    if (panePids.has(cur)) return true;   // child of the pane shell, or of its launch script
+    const up = table && table.get(cur);
+    if (!up) return false;
+    cur = up;
+  }
+  return false;
+}
+
 // procs: [{pid, ppid, etimes, rssKB, args, stat, mine, cpu?}] ; cpu = % between two samples (optional)
-export function findRunaways(procs, cfg, protectedPids = new Set()) {
-  return procs.filter((p) => p.mine && p.etimes > cfg.runawayHours * 3600 && !SKIP_RUNAWAY(p, protectedPids)
+export function findRunaways(procs, cfg, protectedPids = new Set(), panePids = new Set()) {
+  const table = new Map(procs.map((p) => [p.pid, p.ppid]));
+  return procs.filter((p) => p.mine && p.etimes > cfg.runawayHours * 3600 && !SKIP_RUNAWAY(p, protectedPids) && !isPaneAgent(p, panePids, table)
     && ((p.rssKB / 1024) > cfg.runawayRssMB || (p.cpu ?? 0) > cfg.runawayCpu));
 }
 
@@ -487,7 +518,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const metrics = {
     diskPct: disk.pct, diskFreeGB: disk.freeGB, inodePct: inodes.pct, inodeFree: inodes.free, load1: l1, load5, cores,
     ramAvailPct: mem.total ? (mem.avail / mem.total) * 100 : 100,
-    runaways: findRunaways(procs, cfg, protectedPids).map((p) => ({ p, owner: owners(p.pid) })),
+    runaways: findRunaways(procs, cfg, protectedPids, new Set(paneMap.keys())).map((p) => ({ p, owner: owners(p.pid) })),
     stuck: procs.filter((p) => p.mine && p.pid !== process.pid && isStuckNodeTest(p.args)).map((p) => ({ p, owner: owners(p.pid) })),
     defunct: procs.filter((p) => p.stat.startsWith('Z')).length,
     leftovers: findTestLeftovers(procs, cfg.testLeftoverMin, protectedPids),
