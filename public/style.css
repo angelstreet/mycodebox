@@ -602,7 +602,7 @@ body{ display:flex; flex-direction:column; }
 
 /* delivery status pill: floats above the dock, never changes its height */
 .dstat{
-  position:absolute; right:10px; bottom:calc(100% + 6px);
+  position:absolute; left:10px; bottom:calc(100% + 6px);   /* left: the bottom-right corner belongs to the jump arrows and the "need you" pill */
   padding:5px 11px; border-radius:999px; font-size:11.5px;
   background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2);
   opacity:0; transform:translateY(4px); pointer-events:none;
@@ -895,9 +895,6 @@ body{ display:flex; flex-direction:column; }
 /* QF-02: while the "N need you" pill is on screen, push the per-card jump
    arrows up so they don't sit under the pill. (chat-raised 2026-10-09) */
 body.has-ask-pill .cell .jump{ bottom:84px; }
-/* the delivery pill (sent / failed · retry) floats over the card's bottom-right corner too */
-body.has-dstat .cell .jump{ bottom:60px; }
-body.has-dstat.has-ask-pill .cell .jump{ bottom:134px; }
 .cell:hover .jump, .cell.focus .jump, .cell .jump:focus-within{ opacity:1; }
 .cell .jump button{
   width:34px; height:34px; border-radius:9px; padding:0;

@@ -3932,7 +3932,6 @@ function checkDelivery() {
 function renderDockStatus() {
   const p = dock.pending;
   const el = dk.stat;
-  document.body.classList.toggle('has-dstat', !!p);
   if (!p) { el.className = 'dstat'; el.textContent = ''; return; }
   const multi = p.targets.length > 1;
   let t = '';
