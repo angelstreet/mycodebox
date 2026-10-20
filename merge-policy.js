@@ -255,7 +255,8 @@ export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEF
   return reasons;
 }
 
-// The manager's own rating when Jev is not available (the floor already passed).
+// The manager's own rating when Jev is not available (the floor already passed). A deliberate constant, not a measurement: 0.9 with explicit
+// green tests or a docs-only change, 0.8 otherwise, against mergeMinConfidence 0.85 (docs/REFERENCE.md, "Jev unavailable"). Raise the minimum to stop it.
 export function reasoningDecision(facts, ev) {
   const strong = facts.docsOnly || (ev.state === 'green' && ev.explicit);
   return { source: 'reasoning', choice: 'merge', confidence: strong ? 0.9 : 0.8 };
@@ -361,11 +362,14 @@ export function composeReply({ info = [], merge = null, push = null, deploy = nu
   };
   if (merge) {
     const r = merge.repo ? merge.repo + ' ' : '';
-    add('merge', `Merge: yes - the manager evaluated ${r}${merge.branch} -> ${merge.target}: ${merge.rationale}. Merge it now.`, `Merge: yes - the manager evaluated ${r}${merge.branch} -> ${merge.target}. Merge it now.`);
+    // the lane is the only merger (AGENTS.md, round 13): the session asks for it, it never merges or pushes the target itself
+    const how = `Request it with \`integrate request ${merge.branch}\`; the integration lane merges and tests it and lands it on ${merge.target}. Do not merge it yourself.`;
+    add('merge', `Merge: yes - the manager evaluated ${r}${merge.branch} -> ${merge.target}: ${merge.rationale}. ${how}`, `Merge: yes - the manager evaluated ${r}${merge.branch} -> ${merge.target}. ${how}`);
   }
   if (push) {
     const r = push.repo ? push.repo + ' ' : '';
-    add('push', `Push: yes - ${r}${push.branch} -> origin/${push.dest}: ${push.rationale}. Push it now.`, `Push: yes - ${r}${push.branch} -> origin/${push.dest}. Push it now.`);
+    const land = merge && push.dest === merge.target ? 'The integration lane pushes it with the merge.' : 'Push it now.';   // a push of the merge target is the lane's, not the session's
+    add('push', `Push: yes - ${r}${push.branch} -> origin/${push.dest}: ${push.rationale}. ${land}`, `Push: yes - ${r}${push.branch} -> origin/${push.dest}. ${land}`);
   }
   if (deploy) {
     const head = `Deploy: yes - ${deploy.env} ${deploy.scope} ${deploy.ref}@${String(deploy.sha || '').slice(0, 12)}`;

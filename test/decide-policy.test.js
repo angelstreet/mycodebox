@@ -189,7 +189,7 @@ test('composeReply: merge, push and deploy parts in one reply; each passes the f
   const r = composeReply({ merge: { repo: 'proj', branch: 'feat', target: 'main', rationale: 'merges cleanly' }, push: { repo: 'proj', branch: 'main', dest: 'main', rationale: 'lands the merge' },
     deploy: { env: 'env-a', scope: 'full', ref: 'main', sha: 'abcdef0123456789', rationale: 'tests green', rollback: 'Rollback: request a deploy of the previous release to env-a (full).' }, remaining: false });
   assert.deepEqual([r.merge, r.push, r.deploy], [true, true, true]);
-  assert.match(r.text, /Merge: yes - .*Merge it now\. Push: yes - .*Push it now\. Deploy: yes - env-a full main@abcdef012345/);
+  assert.match(r.text, /Merge: yes - .*Do not merge it yourself\. Push: yes - .*The integration lane pushes it with the merge\. Deploy: yes - env-a full main@abcdef012345/);
   assert.equal(hardMatch(r.text, { mergePresent: true, pushPresent: true, deployPresent: true }), null);
 });
 
