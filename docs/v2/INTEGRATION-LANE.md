@@ -83,6 +83,7 @@ the last step: the request is first persisted done (`deployed`, "deployed live g
 scheduled via safe-restart"), the result event and the session notice go out, and only then is the script launched, so
 the lane's own restart can neither lose nor re-run the request. A launch failure is recorded as `restartError` and
 raised as a manager item; the outcome stays `deployed`.
+One waiter at a time: the launch writes the waiter shell's pid to `<id>.pid`. If a safe-restart this lane launched is still waiting (no `<id>.exit`, process alive and still a safe-restart shell; a stale entry never blocks), a later self deploy does the pull and checks but launches nothing: the request records `selfDeploy.restart: 'coalesced'` and `restartWaiter: <id of the request whose waiter runs>`, and the notice says "restart pending (coalesced with <id>)". The pending waiter restarts into whatever the live checkout holds then, so the latest pulled sha goes live. The state is read from the persisted requests, so a lane restart keeps it.
 `selfDeploy.outcome` says which: `deployed`, `deploy_refused`, `install_failed`, `check_failed`, `restart_refused`,
 `restart_failed`, `deploy_failed`. Nothing is ever reset; once the checkout moved, the result carries a `rollback` line: `git -C <live> checkout --detach <prev sha> && scripts/safe-restart.sh`, then `git revert -m 1 <merge>` on the target through the lane (never `reset --hard`; the next self-deploy refuses until the live checkout is back on the target branch).
 
