@@ -9,6 +9,7 @@ import { suggestAgent } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
+import { closeBgAtNewlines } from '/term-sgr.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
@@ -562,7 +563,7 @@ function paintTerm(session, force) {
   const atBottom = buf.viewportY >= buf.baseY;
   const fromBottom = buf.baseY - buf.viewportY;
   let text = entry.lastPane.replace(/\n+$/, '');
-  term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + text, () => {
+  term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + closeBgAtNewlines(text), () => {
     const b = term.buffer.active;
     if (atBottom) term.scrollToBottom();
     else term.scrollToLine(Math.max(0, b.baseY - fromBottom));

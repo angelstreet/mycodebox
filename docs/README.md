@@ -9,6 +9,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Understand the product | [README](../README.md), [goals](GOALS.md) | Overview and quick start; what the product is for and what is shipped |
 | Install or configure a machine | [Installation](INSTALL.md) | Prerequisites, Tailscale, service, verification, updates and removal |
 | Use the dashboard | [Usage](USAGE.md) | First session, sending replies, pause, notifications and troubleshooting |
+| V2 Phase-0 baseline (historical) | [Baseline inventory](v2/CURRENT_STATE.md) | Source observations before V2 was built; line references are stale |
 | Find implementation code | [Repository map](MAP.md) | Components, data flow, state and test locations |
 | Work as an agent | [AGENTS.md](../AGENTS.md), then [agent contract](CONTRACT.md) | Safety invariants, workflow and completion evidence |
 | Look up settings and behavior | [Technical reference](REFERENCE.md) | Environment settings, feature APIs and implementation details |

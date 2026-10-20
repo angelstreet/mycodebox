@@ -17,6 +17,9 @@ export const correctionDraft = (answer) => `Correction to the answer the manager
 
 // The revert text the owner sends (merge / push / deploy) or the draft they edit (everything else).
 export function revertOf(kind, j, answerText) {
+  if (kind === 'merge' && j?.source === 'integration-lane' && j.request) {   // the lane merged it: the lane reverts it, whether or not the session is still there
+    return { label: 'Revert merge', text: `Queue a revert of the merge of ${j.branch || 'the branch'} on ${j.target || 'the target branch'} through the integration lane (git revert -m 1, tested, pushed).`, lane: { request: j.request } };
+  }
   if (kind === 'merge') {
     const branch = j?.branch || 'the branch', target = j?.target || 'the target branch';
     return { label: 'Revert merge', text: `Revert the merge the manager approved: git revert -m 1 the merge commit of ${branch} on ${target}, run the tests, push.` };
@@ -36,6 +39,7 @@ export function revertPlan(item, { exists = false, state = null, draft = false, 
   if (!item.revert) return { status: 409, error: 'nothing to revert' };
   if (!DECISION_KINDS.includes(item.kind)) return { status: 200, draft: item.revert.text, label: item.revert.label };
   if (reverted) return { status: 409, error: 'already reverted' };
+  if (item.revert.lane) return { status: 200, lane: item.revert.lane };
   if (!exists) return { status: 409, error: 'the session no longer exists' };
   if (state !== 'done') return { status: 409, error: 'the session is not stopped with a finished turn' };
   if (menu) return { status: 409, error: 'the session shows a menu: free text would pick an option' };
@@ -76,6 +80,17 @@ export function decidedItems({ recs = [], journal = [], since = null, until = nu
   const jById = new Map();
   for (const j of journal) if (j?.decision_id) jById.set(j.decision_id, j);
   const items = [];
+  const claimed = new Set();   // journal ids an answer already shows
+  for (const r of recs) for (const i of [...(r?.decision_ids || []), ...(r?.merge_decision_id ? [r.merge_decision_id] : [])]) claimed.add(i);
+  // decisions the integration lane took by itself (a merge verdict, a self deploy): no session answer carries them, the journal record is the item
+  for (const j of journal) {
+    if (j?.source !== 'integration-lane' || !DECISION_KINDS.includes(j.kind) || j.chosen !== j.kind || !j.decision_id || claimed.has(j.decision_id)) continue;
+    const at = ms(j.ts);
+    if (at == null || (lo != null && at < lo) || (hi != null && at > hi)) continue;
+    const it = { id: j.decision_id, at: new Date(at).toISOString(), session: j.session || '', kind: j.kind, what: whatOf(j.kind, j.session, j, ''), why: whyOf(j.kind, j, null, null),
+      evidence: Array.isArray(j.evidence) ? j.evidence.map(String) : [], revert: revertOf(j.kind, j, ''), url: urlOf(j.session) };
+    items.push(it);
+  }
   for (const [idx, r] of recs.entries()) {
     if (r?.type !== 'answer' || !r.id || (lastCancel.has(r.id) && lastCancel.get(r.id) > idx)) continue;
     const at = ms(r.at);
@@ -97,6 +112,7 @@ export function decidedItems({ recs = [], journal = [], since = null, until = nu
       }
       continue;
     }
+    if (r.case === 'merge_wait') continue;   // a lane hand-off whose verdict was not "merge" decided nothing
     const kind = r.ready ? 'ready' : r.source === 'ai' ? 'ai_reply' : r.source === 'manager_decision' ? 'info' : r.answer?.key != null || r.case === 'menu_recommended' ? 'menu' : 'continue';
     const mj = kind === 'menu' ? jById.get(`menu-${r.id}`) : null;   // the menu pick's own decision record
     items.push(mk(r.id, kind, mj ? `took the ${mj.unmarked ? 'unmarked first option' : 'recommended option'} ${mj.key ?? ''} ("${quote(mj.option)}") for ${r.session || 'the session'}`.replace('option  (', 'option (') : whatOf(kind, r.session, null, answerText),

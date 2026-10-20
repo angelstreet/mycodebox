@@ -57,7 +57,8 @@ export function createGitRunner({ bin = 'git', env: baseEnv, timeoutMs = 120_000
 }
 
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
-const under = (path, prefix) => { const a = norm(path), b = norm(prefix); return b === '' || b === '.' || a === b || a.startsWith(`${b}/`); };
+// A trailing * is a name-prefix glob ("Dockerfile*", "deploy*"); otherwise a path prefix on directory boundaries.
+const under = (path, prefix) => { const a = norm(path), b = norm(prefix); return b.endsWith('*') ? a.startsWith(b.slice(0, -1)) : b === '' || b === '.' || a === b || a.startsWith(`${b}/`); };
 const scopePaths = (task) => (task?.scope && typeof task.scope === 'object' && Array.isArray(task.scope.paths)
   && task.scope.paths.every((s) => typeof s === 'string') ? task.scope.paths : null);
 

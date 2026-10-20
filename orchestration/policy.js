@@ -16,7 +16,16 @@ const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStrArr = (v) => Array.isArray(v) && v.every((s) => typeof s === 'string' && s !== '');
 const isArgv = (v) => isStrArr(v) && v.length > 0;
 
-export function validatePolicy(p) {
+// Paths a project that ships through CI/containers/deploy scripts should protect (an allowlisted dir can hold them).
+export const RECOMMENDED_PROTECTED = Object.freeze(['.github', 'Dockerfile*', 'docker-compose*', 'deploy*', 'systemd']);
+// Non-fatal advisories for a valid policy: [{ path, message }].
+export function policyWarnings(p) {
+  const have = new Set((Array.isArray(p?.protected_paths) ? p.protected_paths : []).map(norm));
+  const missing = RECOMMENDED_PROTECTED.filter((g) => !have.has(g));
+  return missing.length ? [{ path: 'protected_paths', message: `does not protect CI/container/deploy paths: ${missing.join(', ')}` }] : [];
+}
+
+export function validatePolicy(p, { registryIds = null } = {}) {
   const errors = [];
   const err = (path, message) => errors.push({ path, message });
   if (!isObj(p)) return [{ path: '', message: 'policy must be a JSON object' }];
@@ -31,6 +40,8 @@ export function validatePolicy(p) {
     for (const k of ['runtimes', 'models']) if (a[k] !== null && a[k] !== undefined && !isStrArr(a[k])) err(`allowlists.${k}`, 'array or null');
   }
   for (const k of ['excluded_paths', 'protected_paths', 'prohibited_actions', 'protected_branches', 'denied_args']) if (p[k] !== undefined && !isStrArr(p[k])) err(k, 'array of strings');
+  // security_reviewer names a registry entry; an unknown one would otherwise fail every high-risk review at run time.
+  if (p.security_reviewer !== undefined && (typeof p.security_reviewer !== 'string' || !p.security_reviewer || (registryIds && !registryIds.includes(p.security_reviewer)))) err('security_reviewer', registryIds ? 'a registry entry id (runtime:model)' : 'non-empty string');
   if (!isObj(p.approval_policy) || !isStrArr(p.approval_policy.requires)) err('approval_policy.requires', 'array of action classes');
   if (p.default_risk_class !== undefined && !RISK_CLASSES.includes(p.default_risk_class)) err('default_risk_class', RISK_CLASSES.join('|'));
   // D-024: per runtime/model and task class run limits; D-026: routing.escalation (the escalation ladder, default on).
@@ -38,8 +49,9 @@ export function validatePolicy(p) {
   if (p.routing !== undefined) {
     if (!isObj(p.routing)) err('routing', 'object');
     else {
-      for (const k of Object.keys(p.routing)) if (k !== 'escalation') err(`routing.${k}`, 'unknown field');
+      for (const k of Object.keys(p.routing)) if (!['escalation', 'history'].includes(k)) err(`routing.${k}`, 'unknown field');
       if (p.routing.escalation !== undefined && typeof p.routing.escalation !== 'boolean') err('routing.escalation', 'boolean');
+      if (p.routing.history !== undefined && typeof p.routing.history !== 'boolean') err('routing.history', 'boolean');   // false = live routing ignores the scorecard history (default on, OWNER §12.3)
     }
   }
   // Round 5: acceptance checks per task class (intake default) and the check time limit (fits the real suite).
@@ -65,7 +77,7 @@ export function validatePolicy(p) {
 }
 
 // -> { ok, policy } | { ok:false, code:'E_POLICY_MISSING'|'E_POLICY_INVALID', errors }. Never throws.
-export function loadPolicy(repoDir, { fs = realFs } = {}) {
+export function loadPolicy(repoDir, { fs = realFs, registryIds = null } = {}) {
   const path = join(repoDir, POLICY_PATH);
   let text;
   try { text = fs.readFileSync(path, 'utf8'); } catch (e) {
@@ -74,11 +86,11 @@ export function loadPolicy(repoDir, { fs = realFs } = {}) {
   }
   let policy;
   try { policy = JSON.parse(text); } catch (e) { return { ok: false, code: 'E_POLICY_INVALID', errors: [{ path: POLICY_PATH, message: `JSON: ${e.message}` }] }; }
-  const errors = validatePolicy(policy);
+  const errors = validatePolicy(policy, { registryIds });
   if (errors.length) return { ok: false, code: 'E_POLICY_INVALID', errors };
   // The mandatory approval classes cannot be configured away.
   policy.approval_policy.requires = [...new Set([...MANDATORY_APPROVAL, ...policy.approval_policy.requires])];
-  return { ok: true, policy };
+  return { ok: true, policy, warnings: policyWarnings(policy) };
 }
 
 // What a refused policy turns into for the task (T01): never run, ask the owner to fix the policy.
@@ -171,7 +183,8 @@ export function restrictedTopics(text, { protectedBranches } = {}) {
 const taskText = (t) => [t?.goal, typeof t?.scope === 'string' ? t.scope : JSON.stringify(t?.scope ?? ''), ...(t?.definition_of_done || [])]
   .filter(Boolean).join('\n');
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
-const under = (path, prefix) => { const a = norm(path), b = norm(prefix); return b === '' || b === '.' || a === b || a.startsWith(`${b}/`); };
+// A trailing * is a name-prefix glob ("Dockerfile*", "deploy*"); otherwise a path prefix on directory boundaries.
+const under = (path, prefix) => { const a = norm(path), b = norm(prefix); return b.endsWith('*') ? a.startsWith(b.slice(0, -1)) : b === '' || b === '.' || a === b || a.startsWith(`${b}/`); };
 const argvAllowed = (argv, allow) => allow.some((pre) => pre.length <= argv.length && pre.every((s, i) => s === argv[i]));
 
 // action: { class, argv?, paths?, text?, runtime?, model? }. The executor derives `class` from the operation it

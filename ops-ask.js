@@ -11,7 +11,7 @@
 // exactly as on main. Only OWNER_FLOOR topics (money, customers, shared_data_delete, owner-held credentials with the
 // generated-secret exception, physical) escalate to the owner; any other FORBIDDEN_RE topic (deploy, push, merge, sudo,
 // migration, generated app secrets) escalates to the manager (the manager's merge / deploy evaluation owns it).
-import { ownerFloorMatch } from './stall.js';
+import { ownerFloorMatch, hardMatch } from './stall.js';
 import { leaseAsk, leaseTopic } from './lease-ask.js';
 
 // a deploy: the word, update_core, the deploy queue / approval, or a restart of a service done by the deploy procedure
@@ -37,6 +37,7 @@ export function opsAsk(final) {
   // evaluation owns them).
   if (ownerFloorMatch(`${text} ${final.blocked || ''}`)) return null;
   if (final.forbidden && ownerFloorMatch(String(final.forbidden))) return null;
+  if (hardMatch(`${text} ${final.blocked || ''}`, { mergePresent: true, pushPresent: true, deployPresent: true })) return null;   // OWNER_DECISIONS §15 hard floor (force-push, tags, publish, sudoers, units, migrations): never a manager item; the deploy / push / merge words themselves are the manager's
   if (c === 'merge_wait') return final.topics?.hard ? null : 'merge';   // never the owner's: a hard word (force-push, secrets) keeps it with the owner
   if (stopKind === 'waiting_deploy') return leaseTopic(text) || leaseAsk(text).lease ? 'lease' : 'deploy';
   if (!text) return null;
