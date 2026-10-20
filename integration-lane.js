@@ -75,9 +75,28 @@ export function validateConfig(raw) {
       deploy = { env: c.deploy.env, defaultScope };
     }
     const conventions = Array.isArray(c.conventions) ? c.conventions.filter((x) => typeof x === 'string' && x) : ['VERSION.txt'];
+    // Shared files that every merge edits collide on: `unionFiles` keeps both sides' added lines, `regenerate` takes the
+    // target's file and lets the repo's own generator rewrite it. Absent = today (only VERSION.txt resolves).
+    const safePath = (x) => typeof x === 'string' && !!x.trim() && !path.isAbsolute(x) && !x.split('/').includes('..') && !/[\0\n\r]/.test(x);
+    const unionFiles = [];
+    if (c.unionFiles != null) {
+      if (!Array.isArray(c.unionFiles)) bad('unionFiles must be an array of paths');
+      else for (const f of c.unionFiles) { if (safePath(f)) unionFiles.push(f.trim()); else bad(`unionFiles: invalid path ${JSON.stringify(f)}`); }
+    }
+    const regenerate = [];
+    if (c.regenerate != null) {
+      if (!Array.isArray(c.regenerate)) bad('regenerate must be an array of { files, cmd }');
+      else for (const g of c.regenerate) {
+        const files = Array.isArray(g?.files) ? g.files.filter(safePath).map((f) => f.trim()) : [];
+        const cmd = typeof g?.cmd === 'string' ? g.cmd.trim() : '';
+        // a malformed entry is dropped, not fatal: the file then behaves like any other conflict (the request returns)
+        if (!files.length || !cmd || /[\0\n\r]/.test(cmd)) bad('regenerate entries need files: [...] and a non-empty cmd');
+        else regenerate.push({ files, cmd });
+      }
+    }
     const mins = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
     repos[key] = { key, clone: c.clone, remote, target, test: c.test ? c.test.trim() : null, testTimeoutMin: mins(c.testTimeoutMin, 30),
-      ci: c.ci ?? null, ciTimeoutMin: mins(c.ciTimeoutMin, 60), deploy, conventions, conventionResolver };
+      ci: c.ci ?? null, ciTimeoutMin: mins(c.ciTimeoutMin, 60), deploy, conventions, conventionResolver, unionFiles, regenerate };
   }
   return { repos, errors };
 }
@@ -342,6 +361,62 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     return true;
   }
 
+  // Which resolver owns a conflicting file: a repo-configured union file, a regenerate group, or none. A configured path
+  // matches the full repo path or a bare basename (like isConvention). Regenerate entries sharing a command run once.
+  // -> { union, regenerate: [{ cmd, files }], other }
+  const classify = (c, files) => {
+    const hit = (list, f) => list.some((x) => f === x || path.basename(f) === x);
+    const union = [], groups = new Map(), other = [];
+    for (const f of files) {
+      const g = (c.regenerate || []).find((e) => hit(e.files, f));
+      if (g) {
+        const k = groups.get(g.cmd) || { cmd: g.cmd, files: [] };
+        k.files.push(f); groups.set(g.cmd, k);
+      } else if (hit(c.unionFiles || [], f)) union.push(f);
+      else other.push(f);
+    }
+    return { union, regenerate: [...groups.values()], other };
+  };
+
+  // Union files (append-only lists like the release notes): keep both sides' added lines. `git merge-file --union` on the
+  // three conflict stages is the same three-way merge git would have run, with conflict markers replaced by both sides.
+  // -> true when every file resolved.
+  async function resolveUnion(wt, files) {
+    const tmp = path.join(dir, 'tmp', `union-${randomBytes(6).toString('hex')}`);
+    fs.mkdirSync(tmp, { recursive: true });
+    try {
+      for (const f of files) {
+        const [b, o, t] = await Promise.all([1, 2, 3].map((s) => git(['show', `:${s}:${f}`], { cwd: wt })));
+        if (b.code !== 0 || o.code !== 0 || t.code !== 0) return false;   // a rename/delete side has no content to union
+        const [bp, op, tp] = ['base', 'ours', 'theirs'].map((n) => path.join(tmp, n));
+        fs.writeFileSync(bp, b.out); fs.writeFileSync(op, o.out); fs.writeFileSync(tp, t.out);
+        const m = await git(['merge-file', '--union', '--stdout', op, bp, tp], { cwd: wt });
+        if (m.code !== 0) return false;
+        fs.writeFileSync(path.join(wt, f), m.out);
+        if ((await git(['add', '--', f], { cwd: wt })).code !== 0) return false;
+      }
+      return true;
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // Regenerate files (a generated index and its siblings): the target's version wins, then the repo's own generator
+  // rewrites the file in the merge worktree and its output is staged. Anything the command adds or rewrites is staged
+  // too, so a file the generator owns but the branch never conflicted on still ends up consistent. -> { ok, tail }
+  async function resolveRegenerate(c, wt, groups) {
+    for (const g of groups) {
+      if ((await git(['checkout', '--ours', '--', ...g.files], { cwd: wt })).code !== 0) return { ok: false, tail: `could not take the target's ${g.files.join(', ')}` };
+      if ((await git(['add', '--', ...g.files], { cwd: wt })).code !== 0) return { ok: false, tail: `could not stage ${g.files.join(', ')}` };
+      const before = new Set((await git(['status', '--porcelain', '-z'], { cwd: wt })).out.split('\0').filter(Boolean));
+      const res = await run(g.cmd, { cwd: wt, timeoutMs: c.testTimeoutMin * 60_000 });
+      if (res.code !== 0 || res.timedOut) return { ok: false, tail: res.timedOut ? `${g.cmd} timed out` : `${g.cmd} failed (exit ${res.code})\n${tailOf(res.out, 20, 2000)}` };
+      const after = (await git(['status', '--porcelain', '-z'], { cwd: wt })).out.split('\0').filter(Boolean);
+      const extra = after.filter((l) => !before.has(l) && !/^[RC]/.test(l)).map((l) => l.slice(3));   // what the generator wrote: a new or changed path
+      const add = [...new Set([...g.files.filter((f) => fs.existsSync(path.join(wt, f))), ...extra])];
+      if (add.length && (await git(['add', '--', ...add], { cwd: wt })).code !== 0) return { ok: false, tail: `could not stage the output of ${g.cmd}` };
+    }
+    return { ok: true };
+  }
+
   // A clean merge carries a convention file the branch changed straight into the target, so main ends up with the branch's
   // label (twice on 2026-10-20, virtualpytest); the pre-push hook does not see the lane's push. After the merge commit
   // exists, restore every convention file the branch changed to the target's version and amend. max-plus-one keeps its
@@ -396,10 +471,14 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       approvedBy: r.approvedBy, session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id });
   }
 
+  // Every file the lane knows how to resolve on conflict: the repo's conventions plus its union / regenerate files. The
+// merge floor sees them as resolvable, so a collision on them does not return the request before the merge step runs.
+const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || []), ...(c.regenerate || []).flatMap((g) => g.files)])];
+
   // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
   async function evaluate(r, c) {
     const ev = await step(r, 'evaluate', async () => {
-      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session, approveInfra: !!r.approvedBy, migrationApplied: !!r.migrationApplied, optOut: optOutList() });
+      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: resolvable(c), repo: r.repo, session: r.session, approveInfra: !!r.approvedBy, migrationApplied: !!r.migrationApplied, optOut: optOutList() });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
       // The evaluation is the lane's review: recorded as evidence (source: floor, or jev/reasoning when mergeEval reports its decision).
       r.review = { pass: e?.verdict === 'merge', source: e?.decision?.source || 'floor', confidence: Number.isFinite(e?.decision?.confidence) ? e.decision.confidence : null, at: iso() };
@@ -453,13 +532,22 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
           const u = await git(['diff', '--name-only', '--diff-filter=U', '-z'], { cwd: wt });
           const files = u.out.split('\0').filter(Boolean);
           if (!files.length) { await git(['merge', '--abort'], { cwd: wt }); return { ok: false, tail: x.err || x.out, info: { error: true } }; }
-          if (files.every((f) => isConvention(f, c.conventions))) {
-            if (await resolveConventions(r, c, wt, files)
-              && (await git([...ident, 'commit', '--no-edit', '-m', `${msg}; resolved ${files.join(', ')} (${c.conventionResolver})`], { cwd: wt })).code === 0) {
-                const e = await enforceConventions(r, c, wt, { branchSha, targetSha, msg });   // a second convention file may have merged cleanly
-                if (!e.ok) return { ok: false, tail: e.tail, info: { error: true, convention: e.files } };
-                return { ok: true, info: { conflicts: files, resolved: c.conventionResolver, fixed: e.files } };
-              }
+          // Shared files the repo configures resolve here; a conflict in anything else still returns the request.
+          const conv = files.filter((f) => isConvention(f, c.conventions));
+          const groups = classify(c, files.filter((f) => !conv.includes(f)));
+          if (!groups.other.length) {
+            let fine = conv.length ? await resolveConventions(r, c, wt, conv) : true;
+            if (fine && groups.union.length) fine = await resolveUnion(wt, groups.union);
+            const reg = fine && groups.regenerate.length ? await resolveRegenerate(c, wt, groups.regenerate) : { ok: true };
+            fine = fine && reg.ok;
+            const labels = [conv.length && `${conv.join(', ')} (${c.conventionResolver})`, groups.union.length && `${groups.union.join(', ')} (union)`,
+              groups.regenerate.length && `${groups.regenerate.flatMap((g) => g.files).join(', ')} (regenerate)`].filter(Boolean);
+            if (fine && (await git([...ident, 'commit', '--no-edit', '-m', `${msg}; resolved ${labels.join(', ')}`], { cwd: wt })).code === 0) {
+              const e = await enforceConventions(r, c, wt, { branchSha, targetSha, msg });   // a second convention file may have merged cleanly
+              if (!e.ok) return { ok: false, tail: e.tail, info: { error: true, convention: e.files } };
+              return { ok: true, info: { conflicts: files, resolved: labels.join(', '), fixed: e.files } };
+            }
+            if (!reg.ok) return { ok: false, tail: reg.tail, info: { error: true, regenerate: groups.regenerate.flatMap((g) => g.files) } };
           }
           await git(['merge', '--abort'], { cwd: wt });
           return { ok: false, tail: files.join('\n'), info: { conflicts: files } };
@@ -467,6 +555,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (!m.ok) {
           const files = m.info?.conflicts || [];
           if (m.info?.convention) throw new Ret(`could not restore ${m.info.convention.join(', ')} to the target's version`, m.tail, { conflicts: m.info.convention });
+          if (m.info?.regenerate) throw new Ret(`could not regenerate ${m.info.regenerate.join(', ')}`, m.tail, { conflicts: m.info.regenerate });
           if (m.info?.error) throw new Ret(r.revertOf ? 'revert failed' : 'merge failed', m.tail);
           throw new Ret(`merge conflict outside convention files: ${files.join(', ')}`, m.tail, { conflicts: files });
         }

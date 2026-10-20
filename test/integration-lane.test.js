@@ -100,6 +100,57 @@ test('clean merge that leaves VERSION.txt alone: the target file is untouched an
   }
 });
 
+test('union conflict: both sides entries are kept and the merge goes through', async () => {
+  const base = { 'src.js': 'export const a = 0;\n', 'VERSION.txt': '1\n', 'docs/release_note/README.md': '# Release notes\n- base\n' };
+  const w = makeWorld({ base });
+  w.branch('feat', { 'docs/release_note/README.md': '# Release notes\n- base\n- branch entry\n' });
+  w.moveMain({ 'docs/release_note/README.md': '# Release notes\n- base\n- target entry\n' });
+  const { lane } = mk(w, { cfg: { unionFiles: ['docs/release_note/README.md'] } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  const notes = w.show('main', 'docs/release_note/README.md');
+  assert.match(notes, /- target entry/); assert.match(notes, /- branch entry/);   // nothing is dropped
+  assert.doesNotMatch(notes, /<<<<<<<|>>>>>>>/, 'no conflict markers are left behind');
+  assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved docs\/release_note\/README\.md \(union\)$/);
+});
+
+test('regenerate conflict: the target version is taken, the generator runs and its output is staged', async () => {
+  // a tiny stand-in for scripts/gen_docs_index.py: rewrite the index from the docs it finds, plus one sibling file
+  const gen = `import { readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+mkdirSync('docs/agent', { recursive: true });
+const files = readdirSync('docs').filter((f) => f.endsWith('.md')).sort();
+writeFileSync('docs/agent/INDEX.json', JSON.stringify({ files }) + '\\n');
+writeFileSync('docs/agent/INDEX.md', '# Index\\n\\n' + files.map((f) => '- ' + f).join('\\n') + '\\n');
+`;
+  const w = makeWorld({ base: { 'src.js': 'export const a = 0;\n', 'VERSION.txt': '1\n', 'gen.mjs': gen, 'docs/a.md': '# a\n', 'docs/agent/INDEX.json': '{"files":["a.md"]}\n' } });
+  w.branch('feat', { 'docs/b.md': '# b\n', 'docs/agent/INDEX.json': '{"files":["a.md","b.md"]}\n' });
+  w.moveMain({ 'docs/c.md': '# c\n', 'docs/agent/INDEX.json': '{"files":["a.md","c.md"]}\n' });
+  const { lane } = mk(w, { cfg: { regenerate: [{ files: ['docs/agent/INDEX.json'], cmd: 'node gen.mjs' }] } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  // the generator ran in the merge worktree: the index lists the merged docs, not either side's hand-written value
+  assert.deepEqual(JSON.parse(w.show('main', 'docs/agent/INDEX.json')), { files: ['a.md', 'b.md', 'c.md'] });
+  assert.match(w.show('main', 'docs/agent/INDEX.md'), /- c\.md/);   // a generated sibling the command rewrites is staged too
+  assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved docs\/agent\/INDEX\.json \(regenerate\)$/);
+});
+
+test('a conflict outside union and regenerate files still returns the request', async () => {
+  const w = makeWorld({ base: { 'src.js': 'export const a = 0;\n', 'VERSION.txt': '1\n', 'docs/release_note/README.md': '# Release notes\n- base\n' } });
+  w.branch('feat', { 'src.js': 'export const a = 1;\n', 'docs/release_note/README.md': '# Release notes\n- base\n- branch entry\n' });
+  w.moveMain({ 'src.js': 'export const a = 2;\n', 'docs/release_note/README.md': '# Release notes\n- base\n- target entry\n' });
+  const before = w.main();
+  const { lane } = mk(w, { cfg: { unionFiles: ['docs/release_note/README.md'], regenerate: [{ files: ['docs/agent/INDEX.json'], cmd: 'node gen.mjs' }] } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'returned', JSON.stringify(r));
+  assert.match(r.reason, /conflicts outside convention: src\.js/);   // the floor sees only src.js as unresolvable
+  assert.equal(w.main(), before);
+  // the union file does not rescue a merge that also conflicts elsewhere (floor bypassed, merge step decides)
+  const m = mk(w, { cfg: { unionFiles: ['docs/release_note/README.md'] }, lane: { mergeEval: async () => ({ verdict: 'merge', reasons: [] }) } });
+  const r2 = await go(m.lane, { branch: 'feat' });
+  assert.equal(r2.state, 'returned'); assert.deepEqual(r2.conflicts, ['docs/release_note/README.md', 'src.js']);
+  assert.equal(w.main(), before);
+});
+
 test('sensitive file: returned by the merge floor, nothing merged', async () => {
   const w = makeWorld(); w.branch('feat', { 'config/credentials.txt': 'x\n' });
   const before = w.main();
@@ -290,10 +341,15 @@ test('a duplicate queued request returns the same id; final states are stable', 
 test('config validation and remote url normalisation', () => {
   const { repos, errors } = validateConfig({ repos: {
     ok: { clone: '/srv/lane/demo', test: 'npm test', ci: 'github', deploy: { env: 'env-a' }, extra: 1 },
+    shared: { clone: '/x', unionFiles: ['docs/release_note/README.md'], regenerate: [{ files: ['docs/agent/INDEX.json'], cmd: 'python3 scripts/gen_docs_index.py' }] },
+    badRel: { clone: '/x', unionFiles: ['/etc/passwd', '../out.md'] }, badRegen: { clone: '/x', regenerate: [{ files: ['a.json'] }, { files: [], cmd: 'x' }, 'nope'] },
     bad1: { clone: 'relative' }, bad2: { clone: '/x', ci: 'jenkins' }, bad3: { clone: '/x', conventionResolver: 'ours' }, 'bad key!': { clone: '/x' } } });
-  assert.deepEqual(Object.keys(repos), ['ok']); assert.equal(errors.length, 4);
+  assert.deepEqual(Object.keys(repos), ['ok', 'shared', 'badRel', 'badRegen']); assert.equal(errors.length, 9);   // 2 dropped union paths + 3 bad regenerate entries + 4 pre-existing
   assert.deepEqual(repos.ok, { key: 'ok', clone: '/srv/lane/demo', remote: 'origin', target: 'main', test: 'npm test', testTimeoutMin: 30, ci: 'github',
-    ciTimeoutMin: 60, deploy: { env: 'env-a', defaultScope: 'full' }, conventions: ['VERSION.txt'], conventionResolver: 'take-target' });
+    ciTimeoutMin: 60, deploy: { env: 'env-a', defaultScope: 'full' }, conventions: ['VERSION.txt'], conventionResolver: 'take-target', unionFiles: [], regenerate: [] });
+  assert.deepEqual(repos.shared.unionFiles, ['docs/release_note/README.md']);
+  assert.deepEqual(repos.shared.regenerate, [{ files: ['docs/agent/INDEX.json'], cmd: 'python3 scripts/gen_docs_index.py' }]);
+  assert.deepEqual(repos.badRel.unionFiles, [], 'an escaping path is dropped, the repo still works');
   const n = normalizeRemoteUrl;
   assert.equal(n('git@host.example:org/demo-repo.git'), 'host.example/org/demo-repo');
   assert.equal(n('https://user:tok@host.example/org/Demo-Repo.git/'), 'host.example/org/demo-repo');
