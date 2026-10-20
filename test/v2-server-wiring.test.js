@@ -87,7 +87,7 @@ async function boot(w, { v2 = true, extra = {} } = {}) {
   const exited = new Promise((r) => child.on('exit', (code, sig) => { children.delete(child); r({ code, sig }); }));
   const base = `http://127.0.0.1:${port}`;
   const api = async (method, p, body) => {
-    const r = await fetch(`${base}${p}`, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const r = await fetch(`${base}${p}`, { method, headers: { origin: base, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, body: await r.json().catch(() => null) };
   };
   for (let i = 0; ; i++) {

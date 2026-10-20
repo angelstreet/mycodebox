@@ -97,5 +97,5 @@ The merge floor treats an explicit list as CI/deploy/infra paths (CI configs, Do
 `scripts/*restart*`, `update_core*`, `deploy-runner.js`); files under `test/` or `docs/` and `*.md` never count. When that is the floor's only
 reason, the request is returned with `outcome: needs_approval` and a manager item (branch, paths, `git diff --stat`) is raised. The manager
 resubmits with `integrate request <branch> --approved-by manager`; only the loopback reporter token or a client added with
-`lease-token.js add <name> --integrate --manager` may pass it (403 otherwise). The approval is stored on the request and in
+`lease-token.js add <name> --integrate --manager` may pass it (403 otherwise; with `INTEGRATION_MANAGER_CLIENT_ONLY=1` only the client, since every session can read the reporter token). The approval is stored on the request and in
 `merge-decisions.jsonl` and skips only the infra-path reason: secrets, migrations, sudoers, systemd units, conflicts and red tests still return it.

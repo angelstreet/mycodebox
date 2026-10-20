@@ -1741,7 +1741,10 @@ async function handleHttp(req, res) {
   // --- V2 task routes (behind the Origin + JSON content-type checks above) ---
   if (p.startsWith('/api/v2/')) {
     if (!v2) return json(res, 404, { ok: false, error: 'V2 engine is off (set GHOSTY_V2=1)' });
-    const r = await v2.http.handle({ method: req.method, pathname: p, readBody: () => readJsonBody(req) });
+    const write = req.method !== 'GET' && req.method !== 'HEAD';
+    const caller = write ? integrationRoutes.callerOf(req) : undefined;
+    if (write && !caller) return json(res, 403, { ok: false, error: 'V2 writes need the dashboard (same origin), a manager client or the loopback reporter token' });
+    const r = await v2.http.handle({ method: req.method, pathname: p, readBody: () => readJsonBody(req), ...(caller ? { caller } : {}) });
     if (r) return json(res, r.status, r.body);
     return json(res, 404, { ok: false, error: 'not found' });
   }
@@ -2338,6 +2341,9 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 // final state: merged, deployed, returned, merged_ci_red, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
 const integrationLane = createIntegrationLane({ stateDir: STATE_DIR,
+  // a v2/task/<id> branch merges only at a SHA the owner granted an `integration:merge:*:<sha>` key for in the V2 store
+  taskGrant: async (id, sha) => { if (!v2) return false; const { effectiveGrants } = await import('./orchestration/task-contract.js');
+    return effectiveGrants(await v2.store.events(id)).some((e) => e.payload.grants?.request_kind === 'integration' && (e.payload.grants.keys || []).some((k) => k.startsWith('integration:merge:') && k.endsWith(`:${sha}`))); },
   deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
     wait: (id) => integrationHooks.deploys.wait(id),
     find: (o) => (integrationHooks.deploys ? integrationHooks.deploys.find(o) : Promise.resolve(null)) },

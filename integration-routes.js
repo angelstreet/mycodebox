@@ -76,7 +76,7 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     }
     if (!isLoopback(addr)) { send(res, 403, { ok: false, error: 'loopback only without a bearer token' }, fmt); return null; }
     if (!reporterOk(req.headers['x-ghosty-reporter-token'])) { send(res, 401, { ok: false, error: 'bad token' }, fmt); return null; }
-    return { by: 'loopback', manager: true, loopback: true };
+    return { by: 'loopback', manager: process.env.INTEGRATION_MANAGER_CLIENT_ONLY !== '1', loopback: true };   // INTEGRATION_MANAGER_CLIENT_ONLY=1: --approved-by needs a manager client, not the shared reporter token
   }
 
   async function resolveRepo(body, who) {
@@ -86,6 +86,20 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     if (body.session && !who.by.startsWith('client:')) { const cwd = await sessionCwd(String(body.session)).catch(() => null); const k = cwd ? await lane.repoForCwd(cwd) : null; if (k) return k; }
     const keys = lane.repoKeys();
     return keys.length === 1 ? keys[0] : null;
+  }
+
+  // Who may write to /api/v2 (server.js): a manager client (bearer) or the dashboard (same-origin browser signal, no token) may decide;
+  // a loopback reporter-token session may create/cancel only. -> { actor, mayDecide } | null. A forged Origin from a local process
+  // still passes as the dashboard: the server has no login, Tailscale is the gate.
+  function callerOf(req) {
+    const addr = req.socket?.remoteAddress;
+    const auth = /^Bearer\s+(\S{8,512})$/i.exec(req.headers.authorization || '');
+    if (auth) {
+      const c = addrAllowed(addr, allow) ? clientOf(clients(), auth[1]) : null;
+      return c && c.manager === true ? { actor: `manager:${c.name}`, mayDecide: true } : null;
+    }
+    if (req.headers['x-ghosty-reporter-token']) return isLoopback(addr) && reporterOk(req.headers['x-ghosty-reporter-token']) ? { actor: 'loopback', mayDecide: false } : null;
+    return originOf(req) === 'same' ? { actor: 'owner', mayDecide: true } : null;
   }
 
   // -> true when the request belonged to the integration API (and has been answered)
@@ -134,5 +148,5 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     }
     return true;
   }
-  return { handle, clients };
+  return { handle, clients, callerOf };
 }

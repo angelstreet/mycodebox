@@ -229,9 +229,12 @@ every push, token frugality (tests run directly with Bash; Sonnet default; Fable
   accepted / waiting / awaiting_approval. Repos limited to the allowlist in `.ai/project.json`.
 - Approve, deny and cancel from the dashboard work through the loop (no more 503 when V2 is on); proposal tasks from the
   scorecard can be approved from the dashboard.
+- (Per-SHA owner approval for a merge is now enforced by the integration lane's `taskGrant` check, not by an in-server merge; see docs/v2/ARCHITECTURE.md item 8.)
 - Integration controller: may push only `v2/*`-style task branches it owns; anything touching a protected branch, merge or
   deploy stays `awaiting_approval` with an SHA-bound owner approval, exactly as the contract says. No merge/deploy happens
   without that approval.
+  *Superseded in part by §14/§15 (the integration lane merges; the manager decides) and by the lane, which now enforces the per-SHA
+  approval itself: a `v2/task/<id>` branch merges only with the owner's `integration:merge:*:<sha>` grant in the task store.*
 - System operations: wire telemetry/incidents read-only plus request-only actions; nothing destructive.
 - The existing manager, its `routerShadow`, sessions board and every pre-V2 behaviour are unchanged when `GHOSTY_V2` is unset.
 - Fable reviews the wiring (security-critical). Add tests that boot the real server module in a child process on a
