@@ -331,6 +331,7 @@ test('real work still blocks: a build child, a busy turn, a held lease, shell st
   assert.match(p.checks({ ...okFacts, backgroundWork: 1 })[0], /1 background job/);
 });
 
+const TAKEOVER = '{"type":"system","subtype":"informational","content":"Remote Control disconnected \u2014 another connection took over this session (usually another device or Claude Code session) \u2014 this device is standing down (code 4090)"}';
 const GONE = '{"type":"system","subtype":"informational","content":"Remote Control disconnected \u2014 this session was ended or archived from another device or app (code 4090)"}';
 test('rcArchivedInTail: the 4090 line archives, a later bridge_status reconnects, other text does not', () => {
   const ACTIVE = '{"type":"system","subtype":"bridge_status","content":"/remote-control is active \u00b7 x"}';
@@ -338,13 +339,15 @@ test('rcArchivedInTail: the 4090 line archives, a later bridge_status reconnects
   assert.equal(rcArchivedInTail(`${ACTIVE}\n${GONE}\n`), true);
   assert.equal(rcArchivedInTail(`${GONE}\n${ACTIVE}\n`), false);
   assert.equal(rcArchivedInTail('nothing about it'), false);
+  // a take-over shares code 4090 but the owner keeps working elsewhere: never archived
+  assert.equal(rcArchivedInTail(TAKEOVER), false);
   assert.equal(transcriptFile('/p', '/home/u/my.proj', 'sid'), '/p/-home-u-my-proj/sid.jsonl');
 });
 
 test('autoParkArchived parks only archived + parkable sessions, announces a refusal once, skips managers and live bridges', async () => {
   const claude = (bridge) => ({ pid: 5, info: { status: 'idle', sessionId: 's', cwd: '/w', bridgeSessionId: bridge } });
-  const tails = { done: GONE, held: GONE, live: GONE, mgr: GONE, plain: 'no marker' };
-  const panes = ['done', 'held', 'live', 'mgr', 'plain'].map((name) => ({ name, claude: claude(name === 'live' ? 'session_x' : null) }));
+  const tails = { done: GONE, held: GONE, live: GONE, mgr: GONE, plain: 'no marker', taken: TAKEOVER };
+  const panes = ['done', 'held', 'live', 'mgr', 'plain', 'taken'].map((name) => ({ name, claude: claude(name === 'live' ? 'session_x' : null) }));
   const parked = [], notices = [], seen = new Map();
   const p = mkP();
   const run = () => autoParkArchived({
@@ -357,5 +360,5 @@ test('autoParkArchived parks only archived + parkable sessions, announces a refu
   assert.deepEqual(parked, ['done', 'done']);
   const held = notices.filter((n) => n.session === 'held');
   assert.equal(held.length, 1); assert.match(held[0].reasons[0], /holds vpt-lease: L9/);
-  assert.ok(!notices.some((n) => ['live', 'mgr', 'plain'].includes(n.session)));
+  assert.ok(!notices.some((n) => ['live', 'mgr', 'plain', 'taken'].includes(n.session)));
 });
