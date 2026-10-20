@@ -1,5 +1,8 @@
 # V2 verification
 
+**Current status (2026-10-20): delivery gates run on `343063f2f7e8`: all 54 T/GL gates pass, npm test green on Node 23.6 and 24.21 (2646/2646), reporter suite 25/25, leak scan clean. Record: [docs/v2/DELIVERY-GATES.md](docs/v2/DELIVERY-GATES.md). Everything below is history (pre-delivery rounds).**
+
+
 **Status: round 6b (History view: ledger backfill, live defect) on `v2/r6b-history-ledger`, PR to `main`. Round 6 is
 merged and live (main 602d2f3). All local gates pass on the gated SHA. Nothing was deployed or restarted.**
 

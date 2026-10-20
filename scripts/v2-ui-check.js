@@ -16,6 +16,8 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+// the service worker's current shell cache: read, not hardcoded, so a cache bump never breaks this check
+const SHELL_CACHE = readFileSync(join(ROOT, 'public', 'sw.js'), 'utf8').match(/SHELL_CACHE = '([^']+)'/)[1];
 const pwPath = process.env.PLAYWRIGHT_CORE;
 if (!pwPath) { console.log('SKIPPED: set PLAYWRIGHT_CORE to a playwright-core directory to run the browser check'); process.exit(0); }
 
@@ -214,7 +216,7 @@ async function main() {
         const sw = await page.evaluate(async () => { try { const r = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]); return { active: !!r.active, scope: r.scope }; } catch (e) { return { error: e.message }; } });
         check(`${label}: service worker registers and activates`, sw.active, JSON.stringify(sw));
         const cached = await page.evaluate(async () => { const names = await caches.keys(); const c = await caches.open(names.find((n) => n.startsWith('ghosty-shell-')) || names[0]); return { names, has: !!(await c.match('/tasks-view.js')) }; });
-        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes('ghosty-shell-v149'), JSON.stringify(cached.names));
+        check(`${label}: tasks-view.js is precached under the new cache name`, cached.has && cached.names.includes(SHELL_CACHE), JSON.stringify(cached.names));
 
         await page.click('#moreBtn');
         await page.click('#tasksBtn');
