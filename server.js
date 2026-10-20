@@ -2657,10 +2657,13 @@ server.listen(PORT, HOST, async () => {
     readyStore,   // ready windows: the manager answers a hardware-step ask while one covers the session
     leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
     onStatus: onStopStatus,
-    // a lease or deploy stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
+    // a lease, deploy or needs-manager stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
     onManagerItem: (it) => {
-      const key = it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : it.kind === 'fix' ? 'lease:manager-fix' : 'lease:manager-item';
-      managerEvents.record({ key, title: `${it.session}: ${it.kind} stop for the manager`, body: `${it.session} ${it.case === 'waiting_deploy' ? 'waits for a deploy' : 'asks'}: ${it.question || it.reason}`.slice(0, 300), url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
+      // "STATUS: needs-manager: <what the manager must do>": its own key, so the manager's own wait filter sees it as a session ask.
+      const key = it.kind === 'manager-item' ? `${it.session}:needs-manager` : it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : it.kind === 'fix' ? 'lease:manager-fix' : 'lease:manager-item';
+      const body = it.kind === 'manager-item' ? `${it.session} needs the manager: ${it.question || it.reason}`.slice(0, 300)
+        : `${it.session} ${it.case === 'waiting_deploy' ? 'waits for a deploy' : 'asks'}: ${it.question || it.reason}`.slice(0, 300);
+      managerEvents.record({ key, title: `${it.session}: ${it.kind === 'manager-item' ? 'needs the manager' : `${it.kind} stop for the manager`}`, body, url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
         .catch((e) => console.error('[manager-item]', e.message));
     },
   });

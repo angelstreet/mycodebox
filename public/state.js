@@ -6,8 +6,8 @@
 // always wins) or 'offline'. Pure: no globals, no DOM, used from app.js and
 // unit-tested in test/state.test.js.
 
-export const STATE_RANK = { waiting: 0, deploy: 1, done: 2, working: 3, idle: 4, offline: 5 };
-export const STATE_LABEL = { working: 'working', waiting: 'needs you', deploy: 'waiting deploy', done: 'done', idle: 'idle', offline: 'offline' };
+export const STATE_RANK = { waiting: 0, manager: 1, deploy: 2, done: 3, working: 4, idle: 5, offline: 6 };
+export const STATE_LABEL = { working: 'working', waiting: 'needs you', manager: 'manager', deploy: 'waiting deploy', done: 'done', idle: 'idle', offline: 'offline' };
 
 // True when the turn ended but the session still has work coming:
 //  - Claude's Stop hook reported background tasks or scheduled crons (status.reporter),
@@ -34,6 +34,9 @@ export function isLoopWaiting(status) {
 // Display state of one session given its raw status row.
 export function displayState(status) {
   let s = (status && status.state) || 'offline';
+  // "STATUS: needs-manager: <what the manager must do>": the turn is finished but the next step belongs to the AI manager,
+  // so it reads as 'manager' (its own LED) instead of the blue 'done'. A live 'waiting' prompt and 'offline' still win.
+  if (s !== 'waiting' && s !== 'offline' && status && status.stall && status.stall.case === 'needs_manager') s = 'manager';
   // A finished turn that still waits on a scheduled wakeup (/loop, ScheduleWakeup) or on background tasks is not "done": it shows as working (green)
   if (s === 'done' && isLoopWaiting(status)) s = 'working';
   // A script-wrapped `claude -p` / `sleep` child in the pane means the pane is still doing work, even when the raw
@@ -43,7 +46,7 @@ export function displayState(status) {
   // 'waiting deploy' (violet) only for a deploy that is really queued or has a waiter in the lease registry; a session that merely
   // SAID it waits for one (a regex on its own text, kind 'said') keeps its real state, so it cannot flip purple <-> red
   const real = status && status.deployWait && status.deployWait.kind !== 'said';
-  return real && s !== 'waiting' && s !== 'offline' ? 'deploy' : s;
+  return real && s !== 'waiting' && s !== 'offline' && s !== 'manager' ? 'deploy' : s;
 }
 
 // Convenience wrapper used by the page: name + status map -> display state.

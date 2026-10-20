@@ -73,7 +73,7 @@ const decisions = createDecisionsClient({ jevUrl: JEV_URL, apiKey: JEV_API_KEY, 
 const outcomeQueue = createOutcomeQueue({ file: OUTCOME_QUEUE_FILE, send: (id, outcome) => decisions.postOutcome(id, outcome) });
 const decisionByStop = new Map();   // stop id -> the product's decision_id of its Jev call (outcome write-back)
 const AGENTS = new Set(['claude', 'codex', 'minimax']);
-export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait', 'own_job_wait', 'merge_wait'];
+export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decision', 'done', 'error', 'stopped_short', 'waiting_deploy', 'owner_action', 'background_wait', 'own_job_wait', 'merge_wait', 'needs_manager'];
 export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
@@ -407,7 +407,10 @@ const escalatedTargetOf = (id) => (id == null ? null : managerStops.has(id) ? 'm
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
   const firstEscalation = !escalatedStops.has(id);
-  const opsKind = config.opsToManager !== false && (!final.topics?.merge || final.case === 'merge_wait') && !final.topics?.push ? opsAsk(final) : null;
+  // "STATUS: needs-manager: <what the manager must do>": the agent addressed the manager itself, so this is always its item --
+  // no topic guard (a push/merge word in the ask must not hand it back to the owner), and no owner fallback at all.
+  const opsKind = final.case === 'needs_manager' ? 'manager-item'
+    : config.opsToManager !== false && (!final.topics?.merge || final.case === 'merge_wait') && !final.topics?.push ? opsAsk(final) : null;
   if (opsKind) {
     managerStops.add(id); if (managerStops.size > 500) managerStops.delete(managerStops.values().next().value);
     escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
@@ -463,7 +466,8 @@ export const roundtripsView = async ({ hours = 24, now = Date.now() } = {}) => {
 
 // ---- AI reviewer (phase 9) ----
 // Stops that go to the owner: everything except background work and a plain finished turn without a question.
-export const toOwnerCase = (final) => final.case !== 'background_wait' && final.case !== 'own_job_wait' && (final.case !== 'done' || /\?/.test(final.question || ''));
+// needs_manager is the agent handing the next step to the AI manager (STATUS: needs-manager) -- the manager's, never a needs-you.
+export const toOwnerCase = (final) => final.case !== 'background_wait' && final.case !== 'own_job_wait' && final.case !== 'needs_manager' && (final.case !== 'done' || /\?/.test(final.question || ''));
 
 const QUOTA_NAMES = { claude: 'Claude Max', codex: 'Codex', minimax: 'MiniMax' };
 const oneLine = (rec) => (rec?.ai ? `${rec.ai.owner_needed ? 'needs you' : 'proposes'}${rec.ai.proposed_reply ? ` "${rec.ai.proposed_reply}"` : ''}` : null);
