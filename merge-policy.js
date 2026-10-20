@@ -157,10 +157,92 @@ export async function repoNames(repo, remote = 'origin') {
   return [...names];
 }
 
+// ---- migrations by effect (Q199, owner 2026-10-20) ----
+// A migration merges when it only ADDS objects (CREATE TABLE / CREATE INDEX / ALTER TABLE ... ADD COLUMN): the lane cannot read the
+// target DB, so the manager attests with --migration-applied that those objects are already there. Anything that removes, rewrites or
+// writes data is destructive and stays with the owner; anything we cannot read is not additive.
+const MIG_LINE_CAP = 4000;
+const SQL_CREATE_TABLE = /^create\s+(?:temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)?table\b/;
+const SQL_CREATE_INDEX = /^create\s+(?:unique\s+|fulltext\s+|spatial\s+)?index\b/;
+const SQL_ADD_COLUMN = /^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?[`"'\w.$]+(?:\s*\.\s*[`"'\w.$]+)?\s+add\s+(?:if\s+not\s+exists\s+)?column\b/;
+// The destructive shape, most specific first, so the reason names what it found ("DROP COLUMN in db/migrations/x.sql").
+const SQL_DESTRUCTIVE = [
+  [/\bdrop\s+(column|table|index|constraint|view|schema|function|type|trigger|sequence|database|extension)\b/, (m) => `DROP ${m[1].toUpperCase()}`],
+  [/\btruncate\b/, () => 'TRUNCATE'],
+  [/\bdelete\s+from\b/, () => 'DELETE'],
+  [/\bupdate\s+(?!or\s+roll\s+back\s+on\s+no\s+data\s+found)[\w"'`.[\]]+\s+set\b/, () => 'UPDATE'],
+  [/\binsert\s+into\b/, () => 'INSERT'],
+  [/\btype\s+\w+/, () => 'ALTER ... TYPE'],
+  [/\brename\s+(to|column|constraint)\b/, () => 'RENAME'],
+  [/\balter\s+(table|column)\b[\s\S]*\bset\s+default\b/, () => 'ALTER ... SET DEFAULT'],
+];
+// An alembic (or any non-SQL) revision: only the three additive ops, module boilerplate around them ignored.
+const PY_ADDITIVE = /^op\.(create_table|create_index|add_column)\s*\(/;
+const PY_BOILERPLATE = /^(?:from\s+\S+\s+import\b|import\s+\S+|\w+\s*=\s*(?:sa\.)?(?:sqlalchemy\.)?Column|revision\b|down_revision\b|branch_labels\b|depends_on\b|def\s+\w+\s*\(|"""|'''|#)/;
+const PY_DESTRUCTIVE = /^op\.(drop_\w+|alter_column|batch_alter_table|execute|bulk_insert)\s*\(/;
+// Join a statement spread over several lines (a CREATE TABLE body, an op.create_table( block) into one logical line. A trailing
+// backslash is psql's line continuation.
+function joinStatements(lines) {
+  const out = [];
+  let cur = null, depth = 0, cont = false;
+  for (const raw of lines) {
+    const text = cont ? `${cur || ''} ${raw.trim()}` : raw.trim();
+    depth += (text.match(/\(/g) || []).length - (text.match(/\)/g) || []).length;
+    cont = /\\$/.test(text);
+    if (cont) { cur = text.replace(/\\$/, '').trim(); continue; }
+    if (cur !== null) { cur += ` ${text}`; if (depth <= 0) { out.push(cur); cur = null; depth = 0; continue; } continue; }
+    if (depth > 0) { cur = text; continue; }
+    out.push(text);
+  }
+  if (cur !== null) out.push(cur);
+  return out;
+}
+const norm = (s) => s.replace(/;+\s*$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+const isPy = (file) => /\.(?:py|rb|js|ts|go|java)$/i.test(file || '');
+// The added lines of ONE migration file -> { additive: true } | { additive: false, reason }. Comments and blank lines are ignored;
+// anything not read as an additive statement (including a statement we only half read) is not additive.
+export function migrationAdditive(file, addedLines) {
+  if (!Array.isArray(addedLines)) return { additive: false, reason: 'unreadable diff' };
+  const py = isPy(file);
+  const stmts = joinStatements(addedLines.filter((l) => !/^\s*$/.test(l)))
+    .map((s) => (py ? s.replace(/#.*$/, '') : s.replace(/--.*$/, '').replace(/\/\*[\s\S]*?\*\//g, ' ')))
+    .map((s) => norm(s))
+    .filter((s) => s.length && !/^(--|#)/.test(s));
+  if (!stmts.length) return { additive: true, empty: true };
+  for (const s of stmts) {
+    const head = s.replace(/^[^a-z]*/, '');
+    if (py) {
+      if (PY_ADDITIVE.test(head)) continue;
+      if (PY_BOILERPLATE.test(head)) continue;   // module boilerplate around the ops says nothing about their effect
+      const op = /^op\.(\w+)/.exec(head);
+      if (op && PY_DESTRUCTIVE.test(head)) return { additive: false, reason: op[1] };
+      return { additive: false, reason: op ? `not additive: ${head.slice(0, 80)}` : `unreadable statement: ${head.slice(0, 80)}` };
+    }
+    if (SQL_CREATE_TABLE.test(head) || SQL_CREATE_INDEX.test(head) || SQL_ADD_COLUMN.test(head)) continue;
+    for (const [re, name] of SQL_DESTRUCTIVE) { const m = re.exec(s); if (m) return { additive: false, reason: name(m) }; }
+    return { additive: false, reason: `not additive: ${head.slice(0, 80)}` };
+  }
+  return { additive: true };
+}
+// The migration floor of a diff (Q199): every migration file in `facts.sensitive` must read additive, and an additive migration needs
+// the manager's approval plus the --migration-applied attestation. -> [] (it may merge) | [reasons].
+export function migrationReasons(facts, { approvedBy = false, migrationApplied = false } = {}) {
+  const files = (facts?.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file);
+  if (!files.length) return [];
+  const adds = facts?.migrationAdds || {};
+  const bad = files.map((file) => [file, migrationAdditive(file, adds[file])]).filter(([, v]) => !v.additive);
+  if (bad.length) return bad.map(([file, v]) => `migration is destructive: ${v.reason} in ${file}`);
+  if (!approvedBy) return ['additive migration needs --approved-by manager --migration-applied (objects already in the target DB)'];
+  if (!migrationApplied) return ['additive migration needs --migration-applied (the manager attests the objects already exist in the target DB)'];
+  return [];
+}
+const MIGRATION_REASON = /^touches a migration: /;
+
 // Files, docs-only, sensitive paths / content and binaries of a diff spec ("a...b"). -> { error } | { facts }. A scan that cannot
-// read the whole diff sets scanError (fails closed in the floors).
+// read the whole diff sets scanError (fails closed in the floors). Migration files keep their ADDED lines (migrationAdds) so the
+// lane can classify them by effect instead of by path (Q199).
 export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles) {
-  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] };
+  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {} };
   const names2 = await git(repo, ['diff', '--name-only', '-z', spec]);
   if (names2.code !== 0) return { error: `git diff failed: ${names2.err || 'unknown'}` };
   out.files = names2.out.split('\0').filter(Boolean);
@@ -176,6 +258,12 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
     const bin = /^Binary files (.*) and (.*) differ$/.exec(line);
     if (bin) { if (bin[1] === '/dev/null') { const nf = bin[2].replace(/^b\//, ''); if (!DOC_IMAGE.test(nf)) out.binary.push(nf); } continue; }
     if (!line.startsWith('+')) continue;
+    const added = line.slice(1);
+    if (file && sensitivePath(file) === 'migration') {
+      const lines = out.migrationAdds[file] || (out.migrationAdds[file] = []);
+      // a migration file with more added lines than we read is treated as unreadable, never as additive
+      if (lines.length < MIG_LINE_CAP) lines.push(added); else out.migrationAdds[file] = null;
+    }
     for (const [re, label] of SENSITIVE_CONTENT) {
       if (re.test(line) && !out.sensitive.some((s) => s.file === file && s.why === 'secret-content')) out.sensitive.push({ file, why: 'secret-content', what: label });
     }

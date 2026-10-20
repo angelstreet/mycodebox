@@ -1,7 +1,8 @@
 #!/bin/sh
 # integrate: hand a pushed branch to the mycodebox integration lane (docs/v2/INTEGRATION-LANE.md). POSIX sh + curl; codebox and Mac.
-#   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--wait]   queue the branch (default: the current branch)
+#   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait]   queue the branch (default: the current branch)
 #                                                                                        --approved-by: manager only; skips ONLY the infra-path floor reason
+#                                                                                        --migration-applied: manager only, with --approved-by; attests an ADDITIVE migration's objects already exist in the target DB (Q199)
 #   integrate status [<id>]                                                              one request, or the latest ten
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
 #                                                                                        an unreachable service is retried until the timeout
@@ -91,10 +92,10 @@ do_wait() {   # do_wait ID MINUTES
 cmd=$1; [ $# -gt 0 ] && shift
 case "$cmd" in
   request)
-    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; APPROVER=""; WAIT=0
+    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; APPROVER=""; MIGAPPLIED=0; WAIT=0
     while [ $# -gt 0 ]; do
       case "$1" in
-        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --approved-by) APPROVER=$2; shift 2 ;; --wait) WAIT=1; shift ;;
+        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --approved-by) APPROVER=$2; shift 2 ;; --migration-applied) MIGAPPLIED=1; shift ;; --wait) WAIT=1; shift ;;
         -*) die "unknown option $1" ;; *) BRANCH=$1; shift ;;
       esac
     done
@@ -111,6 +112,7 @@ case "$cmd" in
     [ -n "$DEPLOY" ] && BODY="$BODY,\"deploy\":\"$(json_esc "$DEPLOY")\""
     [ -n "$NOTE" ] && BODY="$BODY,\"note\":\"$(json_esc "$NOTE")\""
     [ -n "$APPROVER" ] && BODY="$BODY,\"approvedBy\":\"$(json_esc "$APPROVER")\""
+    [ "$MIGAPPLIED" = 1 ] && [ -n "$APPROVER" ] && BODY="$BODY,\"migrationApplied\":true"
     [ -n "$SESSION" ] && BODY="$BODY,\"session\":\"$(json_esc "$SESSION")\""
     [ -n "$ORIGIN" ] && BODY="$BODY,\"origin\":\"$(json_esc "$ORIGIN")\""
     BODY="$BODY}"
@@ -138,5 +140,5 @@ case "$cmd" in
     [ -n "$1" ] || die "usage: integrate cancel <id>"
     api POST "/api/integration/requests/$(urlenc "$1")/cancel?format=kv" "{}"; [ "$CODE" = 200 ] || fail_http
     printf '%s\n' "$(val text)" ;;
-  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--wait] | status [<id>] | wait <id> [--timeout MIN] | cancel <id>\n' >&2; exit 1 ;;
+  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] | status [<id>] | wait <id> [--timeout MIN] | cancel <id>\n' >&2; exit 1 ;;
 esac

@@ -100,4 +100,36 @@ The merge floor treats an explicit list as CI/deploy/infra paths (CI configs, Do
 reason, the request is returned with `outcome: needs_approval` and a manager item (branch, paths, `git diff --stat`) is raised. The manager
 resubmits with `integrate request <branch> --approved-by manager`; only the loopback reporter token or a client added with
 `lease-token.js add <name> --integrate --manager` may pass it (403 otherwise; with `INTEGRATION_MANAGER_CLIENT_ONLY=1` only the client, since every session can read the reporter token). The approval is stored on the request and in
-`merge-decisions.jsonl` and skips only the infra-path reason: secrets, migrations, sudoers, systemd units, conflicts and red tests still return it.
+`merge-decisions.jsonl` and skips only the infra-path reason: secrets, sudoers, systemd units, conflicts and red tests still return it
+(a migration is its own rule, below).
+
+## Migrations merge by effect (Q199, owner 2026-10-20)
+
+The migration floor used to be a path check, so every migration returned the request. It is now read by **effect**. The lane
+collects the ADDED lines of each migration file of the diff (comments and blank lines ignored) and classifies them:
+
+- **Additive**: only `CREATE TABLE`, `CREATE INDEX` and `ALTER TABLE ... ADD COLUMN`. A non-SQL migration (alembic `.py`) is additive
+  only when its operations are `op.create_table`, `op.create_index` and `op.add_column`; anything else (e.g. `op.drop_column`) is not.
+  Anything the lane cannot read (truncated diff, a statement it does not recognise) is **not** additive.
+
+An additive migration may merge with:
+
+```
+integrate request <branch> --approved-by manager --migration-applied
+```
+
+`--migration-applied` is the manager's **attestation that the objects already exist in the target DB** — the lane cannot read it.
+The flag needs the manager (a `--manager` client or the loopback reporter token, 403 otherwise) and is stored on the request
+(`migrationApplied`, `migrationAppliedAt`). The merge is journaled in `merge-decisions.jsonl` as a `merge` decision
+(`lane-migration-<id>`, `migrationApplied: true`) so it shows in the owner's "Decided for you" feed.
+
+Everything else still returns the request, with a reason naming what was found:
+
+- `migration is destructive: DROP COLUMN in db/migrations/x.sql` (also `DROP TABLE`, `ALTER ... TYPE`, `RENAME`, `UPDATE`, `DELETE`,
+  `INSERT`, `TRUNCATE`, an `op.drop_*`, or a statement that cannot be read)
+- `additive migration needs --approved-by manager --migration-applied (objects already in the target DB)`
+- `additive migration needs --migration-applied (the manager attests the objects already exist in the target DB)`
+
+**Still the owner's:** a destructive migration (any DROP, `ALTER ... TYPE/RENAME`, or data write), an unreadable one, and every
+other hard floor (secrets, sudoers, systemd units, red tests, conflicts). Q199 relaxes the *path* rule for additive migrations only;
+a production migration that changes data is still never decided by the manager on its own.
