@@ -720,3 +720,16 @@ test('priority: list shows it; renew refused with yield_required exits 7; run pr
   assert.equal(r.code, 0); assert.match(r.out, /done/); assert.match(r.err, /YIELD REQUIRED for lease RUNP/);
   assert.equal((r.err.match(/YIELD REQUIRED/g) || []).length, 1, 'said once');
 });
+
+test('central run renews the lease every heartbeat so a P2 run outlives its 10 min cap when nobody waits; a refused renewal prints YIELD and the command keeps running', async () => {
+  setup((c) => (c.path === '/claim' ? { ok: true, lease: lease({ id: 'RN1', heartbeat_s: 1, priority: 'P2', ttl_min: 10 }) } : { ok: true, lease: lease({ id: 'RN1' }) }));
+  let r = await run(['run', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--priority', 'P2', '--ttl', '110', '--', 'sh', '-c', 'sleep 1; echo done']);
+  assert.equal(r.code, 0); assert.match(r.out, /done/);
+  const renews = calls.filter((c) => c.path === '/renew');
+  assert.ok(renews.length >= 1, 'renewed while the command ran'); assert.equal(renews[0].body.id, 'RN1'); assert.equal(renews[0].body.ttl_min, 110);
+  assert.doesNotMatch(r.err, /YIELD|LEASE LOST/);
+  setup((c) => (c.path === '/claim' ? { ok: true, lease: lease({ id: 'RN2', heartbeat_s: 1 }) }
+    : c.path === '/renew' ? { ok: false, status: 409, code: 'E_YIELD_REQUIRED', error: 'yield_required' } : { ok: true, lease: lease({ id: 'RN2' }) }));
+  r = await run(['run', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--', 'sh', '-c', 'sleep 1; echo done']);
+  assert.equal(r.code, 0); assert.match(r.err, /YIELD REQUIRED for lease RN2/); assert.match(r.out, /done/);
+});

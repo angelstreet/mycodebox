@@ -989,9 +989,9 @@ class HeartbeatThread(threading.Thread):
     exclusive is reported loudly and heartbeating stops; run exits non-zero after the command (or kills it: --on-fence
     kill). An unreachable service is NOT a lost lease: keep acting (the lease is time-bounded) and keep retrying."""
 
-    def __init__(self, lease_id, every, on_fence=None):
+    def __init__(self, lease_id, every, on_fence=None, renew_ttl=None):
         super().__init__(daemon=True)
-        self.lease_id, self.every, self.on_fence = lease_id, every, on_fence
+        self.lease_id, self.every, self.on_fence, self.renew_ttl = lease_id, every, on_fence, renew_ttl
         self.stop, self.fenced = threading.Event(), None
         self.yielded = False
 
@@ -1009,6 +1009,14 @@ class HeartbeatThread(threading.Thread):
                 if r.get("ok") and r.get("yield_required"):
                     self.say_yield()
                 lost = None
+                if r.get("ok") and self.renew_ttl:
+                    # a heartbeat does not extend expires: renew like the ssh path, so a run outlives its ttl (a P2 lease is
+                    # capped at 10 min by the service and refused while a claim of higher or equal priority waits)
+                    rr = api("POST", "/renew", {"id": self.lease_id, "ttl_min": self.renew_ttl}, timeout=10)
+                    if rr.get("code") == "E_YIELD_REQUIRED":
+                        self.say_yield()
+                    elif not rr.get("ok"):
+                        eprint("vpt-lease: renew failed (%s); keep going" % rr.get("code"))
                 if not r.get("ok"):
                     lost = "heartbeat refused (%s)" % r.get("code")
                 elif (r.get("lease") or {}).get("mode") not in (None, "", "exclusive"):
@@ -1199,7 +1207,7 @@ def cmd_run(a, command):
         lease_id = lease["id"]
         every = 0.2 if FAST else float(lease.get("heartbeat_s") or 300)
         eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
-        hb = HeartbeatThread(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None)
+        hb = HeartbeatThread(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None, renew_ttl=a.ttl)
         hb.start()
     else:    # legacy / shadow: the old registry is authoritative; no queue and no heartbeat there
         args = ["claim", a.env, *a.resources, "--agent", a.agent, "--purpose", a.purpose, "--ttl", str(a.ttl)]
