@@ -2,8 +2,7 @@
 // (approval is explicit and never blanket), T22 (unknown usage stays null).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
 import { createIntake } from '../orchestration/intake.js';
@@ -11,17 +10,18 @@ import { createV2Http } from '../orchestration/http.js';
 import { createGoalLoop } from '../orchestration/goal-loop.js';
 import { createRegistry } from '../orchestration/model-registry.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp } from './helpers-tmp.js';
 // D-020: approve/deny are recorded by the goal loop; the smallest loop the factory accepts (never steps here).
 const REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
   capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };
 const loopOver = (store) => createGoalLoop({ store, registry: createRegistry(REGISTRY), adapters: {}, worktrees: {},
-  worktreeRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), verifier: {}, reviewRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), allowFake: true });
+  worktreeRoot: tmp('v2-loop-'), verifier: {}, reviewRoot: tmp('v2-loop-'), allowFake: true });
 
 const DEV = { role: 'developer', id: 'dev-1' };
 const POLICY = { ok: true, policy: { project_id: 'fixture-project', test_command: ['npm', 'test'] } };
 
 function setup() {
-  const store = createTaskStore({ dir: mkdtempSync(join(tmpdir(), 'v2-http-')), ...clock() });
+  const store = createTaskStore({ dir: tmp('v2-http-'), ...clock() });
   const intake = createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A });
   const api = createV2Http({ store, intake, loop: loopOver(store) });
   const call = (method, pathname, body) => api.handle({ method, pathname, readBody: async () => body });
@@ -116,7 +116,7 @@ test('create: UI source goes through intake, same contract; strict body; idempot
 });
 
 test('create without repository policy and checks is refused with E_INTAKE_NEEDS_CHECKS', async () => {
-  const store = createTaskStore({ dir: mkdtempSync(join(tmpdir(), 'v2-http-')), ...clock() });
+  const store = createTaskStore({ dir: tmp('v2-http-'), ...clock() });
   const api = createV2Http({ store, intake: createIntake({ store, loadPolicy: () => ({ ok: false }), resolveSha: () => SHA_A }) });
   const r = await api.handle({ method: 'POST', pathname: '/api/v2/tasks', readBody: async () => ({ goal: 'g', repository: '/x' }) });
   assert.equal(r.status, 400);
@@ -187,7 +187,7 @@ test('deny records the denial; concurrent approve+deny: exactly one wins', async
 });
 
 test('a really corrupted log reads as unknown with a coarse error; the detail goes to the server log only', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-http-'));
+  const dir = tmp('v2-http-');
   const s1 = createTaskStore({ dir, ...clock() });
   const { task_id: id } = await s1.createTask(spec());
   await s1.transition(id, 'clarified');

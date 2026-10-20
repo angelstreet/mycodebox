@@ -30,7 +30,7 @@ Read [AGENTS.md](../AGENTS.md) first. This contract applies to repository change
 
 ## Validation and delivery
 
-- Tests must use temporary state; never write the live `layout.json`. Run `GHOSTY_STATE_DIR="$(mktemp -d)" npm test` before a commit. It runs the tests your change touches (the integration lane does the same per merge); the full suite (`npm run test:full`) runs daily on main. Add meaningful tests for behavior changes, not duplicate tests for prose.
+- Tests must use temporary state; never write the live `layout.json`. Create test temp dirs with `tmp()` from `test/helpers-tmp.js`, never a bare `mkdtemp()`: the tracker removes them when the test file ends (untracked calls filled the system temp dir until the box ran out of inodes; `test/tmp-cleanup.test.js` guards it). Run `GHOSTY_STATE_DIR="$(mktemp -d)" npm test` before a commit. It runs the tests your change touches (the integration lane does the same per merge); the full suite (`npm run test:full`) runs daily on main. Add meaningful tests for behavior changes, not duplicate tests for prose.
 - A temporary state directory alone does not isolate a running server: it still discovers tmux and may poll optional integrations. Prefer module tests and fake adapters.
 - For UI changes, check the affected flow on phone and desktop sizes, and review the service worker's cache/update behavior.
 - For docs, verify local links, commands, source defaults and consistency across the index, install guide and reference.

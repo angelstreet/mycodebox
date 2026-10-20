@@ -2,14 +2,14 @@
 // the throwaway remote), a fake restart launcher and a fake health check; the real restart command runs a fake safe-restart.sh.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createIntegrationLane, createDefaultRun, validateConfig, restartCommand } from '../integration-lane.js';
 import { integrationText } from '../integration-notify.js';
 import { makeWorld } from './helpers-lane.js';
 import { git, commit } from './helpers-git.js';
+import { tmp } from './helpers-tmp.js';
 
 // package.json type=module like the real repo: node 23.6's --check exits 0 on a broken ES module without it (module-syntax detection)
 const BASE = { 'server.js': 'export const up = 1;\n', 'VERSION.txt': '1\n', 'package.json': '{"type":"module"}\n' };
@@ -21,7 +21,7 @@ function world() {
   return w;
 }
 const tick = () => new Promise((r) => setTimeout(r, 1));
-function mk(w, { stateDir = mkdtempSync(join(tmpdir(), 'lane-self-')), restart, health = async () => true, run, cfg = {}, lane = {} } = {}) {
+function mk(w, { stateDir = tmp('lane-self-'), restart, health = async () => true, run, cfg = {}, lane = {} } = {}) {
   const events = [], launches = [];
   const l = createIntegrationLane({ stateDir, config: { repos: { me: w.cfg({ deploy: { kind: 'self', liveCheckout: w.live, restartWaitMin: 0 }, ...cfg }) } },
     notify: (r, e) => events.push({ r, e }), pollMs: 1, sleep: tick, health, ...(run ? { run } : {}),
@@ -148,7 +148,7 @@ test('config: kind self needs an absolute or ~/ live checkout; a --deploy scope 
 });
 
 test('the real restart command runs safe-restart.sh in the live checkout and records its output and exit code', () => {
-  const root = mkdtempSync(join(tmpdir(), 'lane-restart-'));
+  const root = tmp('lane-restart-');
   const live = join(root, "live dir"), out = join(root, 'out');
   mkdirSync(join(live, 'scripts'), { recursive: true }); mkdirSync(out);
   writeFileSync(join(live, 'scripts', 'safe-restart.sh'), '#!/bin/sh\necho "args: $*"; echo "cwd: $(pwd)"; echo "NOT restarting: fake guard" >&2; exit 2\n');
@@ -201,7 +201,7 @@ test('the pending waiter survives a lane restart (read from the persisted reques
   assert.equal(b.launches.length, 0); assert.equal(r2.selfDeploy.restartWaiter, id1);
 });
 test('the restart command records the waiter pid', () => {
-  const root = mkdtempSync(join(tmpdir(), 'lane-restart-')); const live = join(root, 'live'); mkdirSync(join(live, 'scripts'), { recursive: true });
+  const root = tmp('lane-restart-'); const live = join(root, 'live'); mkdirSync(join(live, 'scripts'), { recursive: true });
   writeFileSync(join(live, 'scripts', 'safe-restart.sh'), '#!/bin/sh\nexit 0\n'); chmodSync(join(live, 'scripts', 'safe-restart.sh'), 0o755);
   const pid = join(root, 'w.pid'), exit = join(root, 'w.exit');
   execFileSync('sh', ['-c', restartCommand({ cwd: live, waitMin: 1, log: join(root, 'w.log'), exit, pid })]);

@@ -2,14 +2,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createLeaseService, resourceConflict, parseResource, canonical, toLegacyRows } from '../lease-service.js';
+import { tmp } from './helpers-tmp.js';
 
 const MIN = 60000;
 function harness(cfg = {}, extra = {}) {
   const clock = { t: Date.UTC(2026, 9, 14, 12, 0, 0), m: 5000 };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-svc-'));
+  const dir = tmp('lease-svc-');
   const events = [];
   const open = (more = {}) => createLeaseService({ dir, now: () => clock.t, onEvent: (e) => events.push(e), ...extra, ...more, config: { mono: () => clock.m, envs: ['env-a', 'env-b'], ...cfg, ...(more.config || {}) } });
   const h = { clock, dir, events, open, svc: open() };

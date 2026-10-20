@@ -4,20 +4,20 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { createIntegrationLane } from '../integration-lane.js';
 import { createIntegrationRoutes, describe } from '../integration-routes.js';
 import { hashToken } from '../lease-routes.js';
 import { isLoopback } from '../reporter.js';
 import { makeWorld } from './helpers-lane.js';
+import { tmp } from './helpers-tmp.js';
 
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const REPORTER = 'rep-token-0123456789abcdef', CLIENT = 'integ-token-0123456789abcdef', PLAIN = 'plain-token-0123456789abcdef';
 
 async function boot(w, { laneOpts = {}, cfg = {} } = {}) {
-  const stateDir = mkdtempSync(join(tmpdir(), 'lane-api-'));
+  const stateDir = tmp('lane-api-');
   mkdirSync(join(stateDir, 'leases'));
   const mk = (name, token, extra) => ({ name, sha256: hashToken(token), exemptAgents: [], ...extra });
   writeFileSync(join(stateDir, 'leases', 'clients.json'), JSON.stringify({ clients: [mk('mac', CLIENT, { integrate: true }), mk('plain', PLAIN, {})] }));
@@ -148,7 +148,7 @@ const cli = (args, { cwd, env }) => new Promise((res) => {
   execFile('sh', [join(ROOT, 'scripts/integrate'), ...args], { cwd, env: { PATH: process.env.PATH, HOME: env.HOME, ...env }, timeout: 60000 }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr }));
 });
 async function cliWorld(w, boot_) {
-  const cfgDir = mkdtempSync(join(tmpdir(), 'lane-cli-'));
+  const cfgDir = tmp('lane-cli-');
   const b = boot_;
   writeFileSync(join(cfgDir, 'config'), `url = ${b.base}\n`);
   writeFileSync(join(cfgDir, 'token'), `${CLIENT}\n`); chmodSync(join(cfgDir, 'token'), 0o600);
@@ -224,7 +224,7 @@ test('CLI on the codebox: no config, loopback url + the reporter token file', as
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
   const b = await boot(w);
   try {
-    const home = mkdtempSync(join(tmpdir(), 'lane-home-'));
+    const home = tmp('lane-home-');
     const state = join(home, 'state'); mkdirSync(state); writeFileSync(join(state, 'reporter.token'), `${REPORTER}\n`);
     const r = await cli(['request', 'feat', '--wait'], { cwd: w.dev, env: { HOME: home, MYCODEBOX_URL: b.base, GHOSTY_STATE_DIR: state, MYCODEBOX_SESSION: 'my-session' } });
     assert.equal(r.code, 0, r.stdout + r.stderr);

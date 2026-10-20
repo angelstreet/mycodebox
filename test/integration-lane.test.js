@@ -1,16 +1,16 @@
 // The integration lane against real throwaway git repos (a bare remote + clones); CI, deploys and notify are fakes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createIntegrationLane, validateConfig, normalizeRemoteUrl, FINAL } from '../integration-lane.js';
 import { makeWorld } from './helpers-lane.js';
 import { git, commit } from './helpers-git.js';
+import { tmp } from './helpers-tmp.js';
 
 const mk = (w, o = {}) => {
-  const stateDir = o.stateDir || mkdtempSync(join(tmpdir(), 'lane-state-'));
+  const stateDir = o.stateDir || tmp('lane-state-');
   const events = [];
   const lane = createIntegrationLane({ stateDir, config: { repos: { 'env-a': w.cfg(o.cfg) } }, notify: (r, e) => events.push({ id: r.id, state: r.state, ...e }),
     pollMs: 1, sleep: () => new Promise((r) => setTimeout(r, 1)), ...o.lane });
@@ -197,7 +197,7 @@ test('queue: FIFO per repo, repos in parallel, cancel only while queued', async 
   const open = []; const starts = [];
   const run = (cmd) => new Promise((resolve) => { starts.push(cmd); open.push({ cmd, go: () => resolve({ code: 0, out: '' }) }); });
   const release = (cmd) => open.splice(open.findIndex((x) => x.cmd === cmd), 1)[0].go();
-  const lane = createIntegrationLane({ stateDir: mkdtempSync(join(tmpdir(), 'lane-state-')), run,
+  const lane = createIntegrationLane({ stateDir: tmp('lane-state-'), run,
     config: { repos: { a: wa.cfg({ test: 'A' }), b: wb.cfg({ test: 'B' }) } } }).start();
   const a1 = lane.enqueue({ repo: 'a', branch: 'a1' }), a2 = lane.enqueue({ repo: 'a', branch: 'a2' }), a3 = lane.enqueue({ repo: 'a', branch: 'a3' });
   const b1 = lane.enqueue({ repo: 'b', branch: 'b1' });
@@ -222,7 +222,7 @@ test('queue: FIFO per repo, repos in parallel, cancel only while queued', async 
 
 test('restart: a request running at the crash is resumed in a fresh worktree', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
-  const stateDir = mkdtempSync(join(tmpdir(), 'lane-state-'));
+  const stateDir = tmp('lane-state-');
   const hang = mk(w, { stateDir, cfg: { test: 'fake' }, lane: { run: () => new Promise(() => {}) } });
   const q = hang.lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1' });
   await until(() => hang.lane.get(q.id).step === 'test');
@@ -237,7 +237,7 @@ test('restart: a request running at the crash is resumed in a fresh worktree', a
 
 test('restart after the push: the remote is read, nothing is pushed twice, CI continues', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
-  const stateDir = mkdtempSync(join(tmpdir(), 'lane-state-'));
+  const stateDir = tmp('lane-state-');
   const first = mk(w, { stateDir, cfg: { ci: 'github', test: 'fake' }, lane: { run: async () => ({ code: 0, out: 'ok' }), ci: { status: async () => 'pending' }, sleep: () => new Promise(() => {}) } });
   const q = first.lane.enqueue({ repo: 'env-a', branch: 'feat' });
   await until(() => first.lane.get(q.id).step === 'ci');
