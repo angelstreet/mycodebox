@@ -9,11 +9,28 @@ set -uo pipefail
 S=manager; BASE="${GHOSTY_URL:-http://127.0.0.1:7777}"; H=(-H 'content-type: application/json' -H "origin: $BASE")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
-STAMP="$STATE_DIR/manager-watch.last"; EVENTS="$STATE_DIR/manager-events.jsonl"
+STAMP="$STATE_DIR/manager-watch.last"; EVENTS="$STATE_DIR/manager-events.jsonl"; WAKES="$STATE_DIR/manager-wakes.jsonl"
 STALE_MS=$((75*60*1000)); DEBOUNCE_MS=$((60*60*1000))   # dead-loop threshold, one nudge per hour
 DRY=0; if [ "${1:-}" = "--dry-run" ]; then DRY=1; fi
 NUDGE='Watchdog: no wake for 75 min, your loop is dead. Relaunch `Bash run_in_background: ~/ghosty-sessions/scripts/manager-wait.sh` and ScheduleWakeup the hourly sweep (TASK-44-MANAGER.md §4), then do one sweep. Do not ask the owner anything already in manager-asks.jsonl.'
 say() { echo "manager-watch: $1"; }
+
+# Milliseconds of the newest wake from the wakes log, 0 when there is none. A manager turn is no signal here: manager
+# sessions record no reporter turn (they are excluded from stop reporting) and lastSendAt only moves when someone
+# types, so a manager waking on its own waiter or ScheduleWakeup read as dead after 75 min (2026-10-20, 08:52 wake,
+# 08:53 nudge). Missing/unreadable log -> 0, i.e. the old turn/send behaviour. `end` is null while a wake is open, so
+# fall back to `start`.
+lastWake() {
+  [ -r "$WAKES" ] || { echo 0; return; }
+  tail -n 1 "$WAKES" 2>/dev/null | python3 -c "
+import datetime,json,sys
+try: w=json.loads(sys.stdin.read() or '{}')
+except Exception: w={}
+t=w.get('end') or w.get('start')
+try: print(int(datetime.datetime.fromisoformat(str(t).replace('Z','+00:00')).timestamp()*1000))
+except Exception: print(0)
+" 2>/dev/null || echo 0
+}
 
 # No manager session to guard: nothing to do, and not an error (the session may be created later).
 tmux has-session -t "=$S" 2>/dev/null || { say "no $S session, nothing to do"; exit 0; }
@@ -46,6 +63,8 @@ say "manager alive, state=$st lastTurn=${turnAt:-0} lastSend=${lastSendAt:-0}"
 
 now=$(date +%s%3N)
 last=$(( turnAt > lastSendAt ? turnAt : lastSendAt ))
+wakeAt=$(lastWake); case "$wakeAt" in ''|*[!0-9]*) wakeAt=0;; esac   # never let a garbage wake time into the arithmetic
+[ "$wakeAt" -gt "$last" ] && last=$wakeAt
 age=$(( now - last ))
 [ "$age" -ge "$STALE_MS" ] || { say "last turn/send $(( age/60000 )) min ago (< 75), nothing to do"; exit 0; }
 
