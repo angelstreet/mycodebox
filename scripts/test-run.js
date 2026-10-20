@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// `npm test`. Owner 2026-10-20: a worker tests only what its change touches; the full suite runs in the integration
-// lane (TEST_SCOPE=full), and at most TEST_SLOTS (default 2) big runs share the host at once. Five full suites at once
+// `npm test`. Owner 2026-10-20: every run tests only what its change touches, the integration lane included (it sets
+// V2_BASE_SHA to the target before the merge); the full suite runs once a day on main (scripts/full-suite-check.js,
+// a daily check). At most TEST_SLOTS (default 2) big runs share the host at once. Five full suites at once
 // on 6 cores made each 3-5x slower and timed tests out, so the extra runs bought nothing.
 //   npm test                         changed-only vs V2_BASE_SHA, else merge-base with origin/main (falls back to full)
 //   TEST_SCOPE=full npm test         the whole suite (npm run test:full)
@@ -70,7 +71,7 @@ async function main() {
     const { base, changed } = changedPaths(root);
     const s = select(changed, all, (t) => readFileSync(path.join(root, t), 'utf8'));
     if (s.full) { files = all; why = `full: ${s.full}`; }
-    else { files = s.files; why = `changed-only vs ${base}, the integration lane runs the full suite`; }
+    else { files = s.files; why = `changed-only vs ${base}; the full suite runs daily on main`; }
   }
   console.log(`test-run: ${files.length} of ${all.length} test files (${why})`);
   if (!files.length) return 0;

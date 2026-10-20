@@ -31,8 +31,9 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 ## Working in the code
 
 - Node 20+, ES modules, one runtime dependency (`ws`). No build step: `server.js` serves `public/` as is.
-- Run `npm test` before you commit; it must pass. It runs only the tests your change touches (vs `origin/main`); the
-  integration lane runs the full suite (`npm run test:full`) on every merge, so do not run the full suite yourself.
+- Run `npm test` before you commit; it must pass. It runs only the tests your change touches (vs `origin/main`), and so
+  does the integration lane on each merge. The full suite (`npm run test:full`) runs once a day on main as a daily check;
+  do not run it yourself unless the selection says `full`.
   At most two big test runs share the host: a third waits for a ticket (owner, 2026-10-20; `scripts/test-run.js`).
 - Tests must not touch live state: point `GHOSTY_STATE_DIR` at a temp directory, and never write the live
   `layout.json`.
