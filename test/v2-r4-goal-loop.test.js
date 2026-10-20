@@ -302,3 +302,25 @@ test('without a stall limit, a run that changes nothing is not a stall (capable 
   assert.equal(D(v, 'run_no_change').length, 0);
   assert.equal(env.log.dev.length, 4);
 });
+
+test('first stall that committed is reviewed for feasibility once its checks fail (SS12.2): impossible -> stops after one run', async () => {
+  const env = world({ dev: { cheap: [[...BAD, USAGE, { op: 'hang' }]] }, rev: [IMPOSSIBLE], testFile: TEST_IMPOSSIBLE });
+  const task = await env.submit();
+  assert.equal((await env.loop.run(task.task_id)).state, 'waiting');
+  const v = await env.store.get(task.task_id);
+  assert.equal(D(v, 'feasibility_review').length, 1);
+  assert.equal(env.log.dev.length, 1, 'stopped on the first stall, not the second');
+  assert.equal(env.log.rev[0].review_role, 'feasibility');
+});
+
+test('policy routing.history:false gives the router an empty history; default leaves the provider history', async () => {
+  const seen = [];
+  const spy = (task, ro) => { seen.push(ro.history); return realRoute(task, ro); };
+  const off = world({ dev: { cheap: [GOOD] }, route: spy, policy: { routing: { history: false } } });
+  await off.loop.run((await off.submit()).task_id);
+  assert.ok(seen.length && seen.every((h) => h && Object.keys(h).length === 0));
+  seen.length = 0;
+  const on = world({ dev: { cheap: [GOOD] }, route: spy });
+  await on.loop.run((await on.submit()).task_id);
+  assert.ok(seen.length && seen.every((h) => h === undefined));
+});

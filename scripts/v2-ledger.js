@@ -145,12 +145,12 @@ export function summarize(records, by) {
   for (const r of records) { const k = r[f] ?? 'none'; (g.get(k) || g.set(k, []).get(k)).push(r); }
   return [...g.entries()].map(([k, rs]) => {
     const v = rs.filter((r) => r.verified), priced = rs.filter((r) => r.costUsd != null), lat = v.map((r) => r.latencyMs).filter(Number.isFinite);
-    const flatN = rs.filter((r) => r.plan === 'flat').length, vMetered = v.filter((r) => r.plan !== 'flat').length;
+    const flatN = rs.filter((r) => r.plan === 'flat').length, vMeteredRs = v.filter((r) => r.plan !== 'flat'), vMetered = vMeteredRs.length;
     const cost = priced.reduce((s, r) => s + r.costUsd, 0), toks = rs.filter((r) => r.tokens != null);
     return {
       [by]: k, attempts: rs.length, verified: v.length, verifiedRate: rs.length ? v.length / rs.length : null,
       pricedAttempts: priced.length, flatPlanAttempts: flatN, costUsd: priced.length ? cost : null,
-      costPerVerified: priced.length && vMetered ? cost / vMetered : null,
+      costPerVerified: priced.length && vMetered && vMeteredRs.every((r) => r.costUsd != null) ? cost / vMetered : null,   // unknown cost is never a number: one unpriced verified record -> null
       tokens: toks.length ? toks.reduce((s, r) => s + r.tokens, 0) : null,
       tokensPerVerified: toks.length && v.length ? toks.reduce((s, r) => s + r.tokens, 0) / v.length : null,
       approximate: rs.filter((r) => r.approximate).length,

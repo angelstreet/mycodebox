@@ -57,7 +57,7 @@ function parse(o) {
   }
 }
 
-// mcode model ids are `provider/model`; registry names are bare (MiniMax-M3, MiniMax-M3.1-Flash-Preview).
+// mcode model ids are `provider/model`; registry names are bare (see models.json, e.g. MiniMax-M3).
 export const mcodeModel = (m) => (m.includes('/') ? m : `minimax/${m}`);
 
 const createCli = makeCliAdapter({

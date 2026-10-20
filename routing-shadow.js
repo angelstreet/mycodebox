@@ -2,11 +2,13 @@
 // runtime choice, note what the scoring ledger would have recommended for this type of task, next to what was used.
 // Append-only routing-shadow.jsonl in the state dir. It NEVER changes the choice: note() returns nothing, swallows every
 // error, reads the ledger through a TTL cache (the ledger is read-only) and the loop ignores whatever happens here.
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildLedger, summarize, recommend, classifyTaskType, sameModel, shadowThresholds } from './scripts/v2-ledger.js';
 
-export function createRoutingShadow({ stateDir, home, ttlMs = 10 * 60_000, now = Date.now, env = process.env, onError = () => {} } = {}) {
+export const SHADOW_LOG_MAX_BYTES = 5 * 1024 * 1024;   // one rotation to routing-shadow.jsonl.1: the log stays under ~2x this
+
+export function createRoutingShadow({ stateDir, home, ttlMs = 10 * 60_000, now = Date.now, env = process.env, onError = () => {}, maxBytes = SHADOW_LOG_MAX_BYTES } = {}) {
   if (!stateDir) throw new Error('routing shadow: stateDir required');
   let cache = null;
   const seen = new Set();
@@ -36,7 +38,9 @@ export function createRoutingShadow({ stateDir, home, ttlMs = 10 * 60_000, now =
         samples: { typeRecords: r?.records ?? 0, eligible: r?.eligible ?? 0, recommended: rec ? { attempts: rec.attempts, verified: rec.verified } : null, chosen: chosenRow ? { attempts: chosenRow.attempts, verified: chosenRow.verified } : null },
       };
       mkdirSync(stateDir, { recursive: true });
-      appendFileSync(join(stateDir, 'routing-shadow.jsonl'), JSON.stringify(line) + '\n');
+      const file = join(stateDir, 'routing-shadow.jsonl');
+      try { if (statSync(file).size >= maxBytes) renameSync(file, `${file}.1`); } catch { /* no file yet */ }
+      appendFileSync(file, JSON.stringify(line) + '\n');
     } catch (e) { try { onError(e); } catch { /* never break routing */ } }
   }
   return { note, refresh: () => { cache = null; } };

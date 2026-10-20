@@ -41,7 +41,7 @@ export function readLedgerTail(file, bytes = LEDGER_TAIL_BYTES) {
 // Dominant model/agent (by cost, then tokens) plus summed tokens and cost of the rows inside (from, to]; null with no rows.
 // -> { agent, model, tokens (in+out+cache), tokensIn, tokensOut, costUsd (null = unknown or flat plan), plan: 'flat'|null, rows }
 export function attribute(rows, from, to) {
-  const m = new Map(); let cost = 0, priced = false, tokIn = 0, tokOut = 0, tokCache = 0, n = 0;
+  const m = new Map(); let cost = 0, priced = false, unpriced = false, tokIn = 0, tokOut = 0, tokCache = 0, n = 0;
   for (const r of rows || []) {
     if (!Number.isFinite(r.ts) || r.ts <= from || r.ts > to) continue;
     n++;
@@ -50,13 +50,14 @@ export function attribute(rows, from, to) {
     const isFlat = flatPlan(r.agent, r.model);
     const c = !isFlat && r.cost && Number.isFinite(r.cost.total) ? r.cost.total : 0;
     if (c > 0) { cost += c; priced = true; }
+    if (!isFlat && !(r.cost && Number.isFinite(r.cost.total))) unpriced = true;   // an unpriced row is unknown, not 0
     const key = `${r.agent || 'unknown'}\t${r.model || 'unknown'}`;
     const e = m.get(key) || { w: 0 }; e.w += c * 1e6 + (u.input || 0) + (u.output || 0) + cache; m.set(key, e);
   }
   if (!n) return null;
   const [agent, model] = [...m.entries()].sort((a, b) => b[1].w - a[1].w)[0][0].split('\t');
   const isFlat = flatPlan(agent, model);
-  return { agent, model, tokens: tokIn + tokOut + tokCache, tokensIn: tokIn, tokensOut: tokOut, costUsd: priced ? cost : null, plan: isFlat && !priced ? 'flat' : null, rows: n };
+  return { agent, model, tokens: tokIn + tokOut + tokCache, tokensIn: tokIn, tokensOut: tokOut, costUsd: priced && !unpriced ? cost : null, plan: isFlat && !priced ? 'flat' : null, rows: n };
 }
 
 // True when `row`'s working directory sits inside `wt`. Subagent rows carry workCwd (the directory the
