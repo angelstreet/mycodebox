@@ -199,6 +199,20 @@ const SQL_DROP_POLICY = /^drop\s+policy\s+(?:if\s+exists\s+)?("[^"]+"|[^\s]+)\s+
 const SQL_CREATE_POLICY = /^create\s+policy\s+(?:if\s+not\s+exists\s+)?("[^"]+"|[^\s]+)\s+on\s+("[^"]+"|[^\s]+)/;
 const policyParts = (sql) => { const m = SQL_CREATE_POLICY.exec(sql) || SQL_DROP_POLICY.exec(sql); return m ? [m[1], m[2]] : null; };
 const policyKey = ([name, table]) => `${String(name).replace(/["'`]/g, '').toLowerCase()} on ${String(table).replace(/["'`]/g, '').toLowerCase()}`;
+// The default-grant rule: REVOKE <privs> ON [TABLE] <obj>[, <obj>...] FROM <roles> is additive only when EVERY object it names is
+// CREATEd as a table EARLIER in the same file. It then strips the default grants of a table this file adds, so by effect it removes
+// nothing that existed before. Anything else stays destructive with reason REVOKE: an existing table, ALL TABLES IN SCHEMA, a
+// schema/function/database, a role membership (REVOKE <role> FROM <user>), or a table created AFTER the REVOKE.
+const SQL_REVOKE_ON = /^revoke\b[\s\S]*?\bon\s+(.+?)\s+from\b/;
+// the created table's name is read whole: a dotted path whose segments may be quoted (public.ai_benchmarks, "public"."ai_benchmarks")
+const SQL_CREATE_TABLE = /^create\s+table\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|[\w$]+)(?:\s*\.\s*(?:"[^"]+"|[\w$]+))*)/;
+// The object list, one entry per comma: REVOKE ALL ON TABLE t FROM app and REVOKE ALL ON t, t2 FROM app name the same objects.
+const revokeObjects = (sql) => {
+  const m = SQL_REVOKE_ON.exec(sql);
+  return m ? m[1].replace(/^table\s+/, '').split(',').map((o) => o.trim()).filter(Boolean) : null;
+};
+// A bare name is public, so "x" and "public.x" are the same object; "other.x" is not. Quotes and case never matter.
+const objectKey = (name) => { const p = String(name).replace(/["'`]/g, '').toLowerCase().split('.').map((s) => s.trim()).filter(Boolean); return p.length > 1 ? p.join('.') : `public.${p[0] || ''}`; };
 // An alembic (or any non-SQL) revision: only the three additive ops, module boilerplate around them ignored.
 const PY_ADDITIVE = /^op\.(create_table|create_index|add_column)\s*\(/;
 const PY_BOILERPLATE = /^(?:from\s+\S+\s+import\b|import\s+\S+|\w+\s*=\s*(?:sa\.)?(?:sqlalchemy\.)?Column|revision\b|down_revision\b|branch_labels\b|depends_on\b|def\s+\w+\s*\(|"""|'''|#)/;
@@ -248,13 +262,14 @@ function splitSql(lines) {
   flush();
   return { stmts };
 }
-// One SQL statement of the file -> true (additive) | null (a policy drop the caller judges against the later statements) |
+// One SQL statement of the file -> true (additive) | null (a statement the caller judges against the file's other statements) |
 // { reason } naming what it found.
 function sqlAdditive(s) {
   const head = s.toLowerCase().replace(/;+\s*$/, '').replace(/^[^a-z$]*/, '');
   if (head.startsWith('\\')) return { reason: 'a psql meta-command' };
   for (const re of SQL_ADDITIVE) if (re.test(head)) return true;
   if (SQL_DROP_POLICY.test(head)) return null;   // additive only as the re-create pattern, the caller has the later statements
+  if (SQL_REVOKE_ON.test(head)) return null;      // additive only on tables this file CREATEs earlier, the caller has the earlier statements
   const alter = SQL_ALTER_TABLE.exec(head);
   if (alter && alter[1].split(/,\s*(?=add\b|drop\b|alter\b|rename\b|set\b|owner\b)/).every((c) => SQL_ALTER_ADDITIVE.test(c.trim()))) return true;
   for (const [re, name] of SQL_DESTRUCTIVE) { const m = re.exec(head); if (m) return { reason: name(m) }; }
@@ -294,11 +309,18 @@ export function migrationAdditive(file, addedLines) {
       const k = policyKey(policyParts(heads[i]));
       return heads.some((h, j) => j > i && SQL_CREATE_POLICY.test(h) && policyKey(policyParts(h)) === k);
     };
+    // the default-grant pattern: REVOKE ... ON t is additive only when every object it names is CREATEd as a table EARLIER in this file
+    const ownTables = (i) => {
+      const objs = revokeObjects(heads[i]);
+      if (!objs) return false;
+      return objs.every((o) => heads.some((h, j) => j < i && SQL_CREATE_TABLE.test(h) && objectKey(SQL_CREATE_TABLE.exec(h)[1]) === objectKey(o)));
+    };
     for (let i = 0; i < heads.length; i++) {
       const r = sqlAdditive(cut.stmts[i]);
       if (r === true) continue;
-      if (r === null && recreated(i)) continue;   // the dropped policy is created again later in this file
-      return { additive: false, reason: r ? r.reason : `DROP POLICY in "${heads[i].slice(0, 80)}"` };
+      // a null verdict is a statement the file itself redeems: a policy created again later, a REVOKE on tables created earlier
+      if (r === null && (SQL_DROP_POLICY.test(heads[i]) ? recreated(i) : ownTables(i))) continue;
+      return { additive: false, reason: r ? r.reason : SQL_REVOKE_ON.test(heads[i]) ? 'REVOKE' : `DROP POLICY in "${heads[i].slice(0, 80)}"` };
     }
     return { additive: true };
   }
