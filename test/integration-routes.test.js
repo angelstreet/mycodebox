@@ -47,11 +47,11 @@ test('auth: reporter token on loopback, or a bearer client flagged integrate; no
     assert.equal((await b.call('GET', `${P}/requests`, { headers: { authorization: `Bearer ${CLIENT}` } })).status, 200);
     assert.equal((await b.call('GET', `${P}/requests`)).status, 200);
     // a peer outside loopback / tailnet is refused before the token is looked at
-    const req = Object.assign(new EventEmitter(), { url: `${P}/requests`, method: 'GET', headers: { 'x-ghosty-reporter-token': REPORTER, authorization: `Bearer ${CLIENT}` }, socket: { remoteAddress: '8.8.8.8' } });
+    const req = Object.assign(new EventEmitter(), { url: `${P}/requests`, method: 'GET', headers: { 'x-ghosty-reporter-token': REPORTER, authorization: `Bearer ${CLIENT}` }, socket: { remoteAddress: '198.51.100.10' } });
     let code = 0; const res = { writeHead: (c) => { code = c; }, end: () => {} };
     const routes = createIntegrationRoutes({ lane: b.lane, stateDir: b.stateDir, isLoopback, reporterOk: () => true });
     await routes.handle(req, res); assert.equal(code, 403);
-    const req2 = Object.assign(new EventEmitter(), { url: `${P}/requests`, method: 'GET', headers: { 'x-ghosty-reporter-token': REPORTER }, socket: { remoteAddress: '100.64.1.2' } });
+    const req2 = Object.assign(new EventEmitter(), { url: `${P}/requests`, method: 'GET', headers: { 'x-ghosty-reporter-token': REPORTER }, socket: { remoteAddress: '203.0.113.5' } });
     await routes.handle(req2, res); assert.equal(code, 403);   // the reporter token alone never works off loopback
     // other paths are not ours
     assert.equal(await routes.handle(Object.assign(new EventEmitter(), { url: '/api/other', method: 'GET', headers: {}, socket: {} }), res), false);

@@ -32,10 +32,14 @@ test('detection: lease and deploy asks, owner floor (round 13: only owner list),
   // Migrations, deploy, push, merge, sudo / systemctl, generated secrets: all manager items (routing = manager).
   assert.equal(opsAsk(od('Deploy main to env-a and drop the old table?')), null, 'drop table stays in OWNER_FLOOR (shared_data_delete)');
   assert.equal(opsAsk({ case: 'waiting_deploy', question: 'waits for a deploy; also delete the old branch' }), null, 'delete the old branch is shared_data_delete: owner item');
-  assert.equal(opsAsk(od('Should I deploy with sudo?')), 'deploy', 'sudo is NOT in OWNER_FLOOR; the deploy topic wins (routing = manager)');
+  assert.equal(opsAsk(od('Should I deploy with sudo?')), null, 'sudo is a §15 hard topic: it stays with the owner (review finding 8)');
   assert.equal(opsAsk(od('Deploy and use the api key from the vault?')), null, 'third-party api key IS in OWNER_FLOOR (owner-held credential)');
-  assert.equal(opsAsk(od('Run the migrations on deploy?')), 'deploy', 'migration is NOT in OWNER_FLOOR; the deploy topic wins (routing = manager)');
-  assert.equal(opsAsk(od('Should I restart the ghosty service?')), 'deploy', 'systemctl / unit is NOT in OWNER_FLOOR; deploy wins (routing = manager)');
+  assert.equal(opsAsk(od('Run the migrations on deploy?')), null, 'a migration is a §15 hard topic: owner');
+  assert.equal(opsAsk(od('Should I restart the ghosty service?')), null, 'a service unit is a §15 hard topic: owner');
+  for (const q of ['Deploy main to env-a and force-push the release tag?', 'Deploy and run the production migration?', 'Deploy and edit /etc/sudoers?', 'Deploy and publish the npm package?']) {
+    assert.equal(opsAsk(od(q)), null, q);
+    assert.equal(opsAsk(od(q, { topics: { hard: 'x' } })), null, `${q} (topics given)`);
+  }
   // unrelated or mixed
   assert.equal(opsAsk(od('Which database should I use, A or B?')), null);
   assert.equal(opsAsk(od('Should I deploy? Also which color for the button?')), null);

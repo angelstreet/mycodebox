@@ -17,7 +17,7 @@ const { makeRepo } = await import('./helpers-git.js');
 const SQL = [
   [`INSERT INTO t VALUES ('a--b'); DROP TABLE x;`, false], [`INSERT INTO t VALUES ('/*'); DROP TABLE x; INSERT INTO t VALUES ('*/');`, false],
   [`CREATE TABLE x (id int)\n\\! rm -rf /srv/data\n;`, false], [`CREATE TABLE x (id int);\n\\i /tmp/evil.sql\n`, false],
-  [`CREATE OR REPLACE VIEW v AS SELECT 1 AS a;`, true], [`CREATE TABLE y AS SELECT * FROM x;`, true], [`ALTER TABLE t ADD COLUMN c int NOT NULL DEFAULT 0;`, true],
+  [`CREATE VIEW v AS SELECT 1 AS a;`, true], [`CREATE OR REPLACE VIEW v AS SELECT 1 AS a;`, false], [`CREATE TABLE y AS SELECT * FROM x;`, false], [`CREATE TABLE z (a int, b int GENERATED ALWAYS AS (a + 1) STORED);`, true], [`ALTER TABLE t ADD COLUMN c int NOT NULL DEFAULT 0;`, true],
   [`INSERT INTO t (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = 1;`, false], [`ALTER TABLE t ADD COLUMN c int, DROP COLUMN d;`, false],
   [`DO $$ BEGIN DELETE FROM t; END $$;`, false], [`CREATE OR REPLACE FUNCTION f() RETURNS void AS $f$ TRUNCATE t; $f$ LANGUAGE sql;`, false],
   [`CREATE TRIGGER tr BEFORE INSERT ON t EXECUTE FUNCTION f();`, false], [`create table x(id int); drop table y;`, false],

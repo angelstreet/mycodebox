@@ -238,7 +238,7 @@ Recorded from `v2/02-task-core` and accepted by the task-core verifier. All are 
    otherwise the effect is reported with `moved: false` and still blocks acceptance.
 9. Policy: `loadPolicy` restores the mandatory approval classes a file omits (`validateTask` refuses the same
    omission on a task). Project allowlists are a floor: a task allowlist can only narrow them. `denied_args`,
-   `protected_paths` and `protected_branches` are optional policy keys. The executor derives `action.class` from
+   `protected_paths` and `protected_branches` are optional policy keys. A `protected_paths` entry is a path prefix, or a name prefix when it ends in `*` (`Dockerfile*`, `deploy*`); `loadPolicy` returns `warnings` when `.github`, `Dockerfile*`, `docker-compose*`, `deploy*` and `systemd` are not all protected (this repo's policy protects them). Edits are classified from the diff paths only: an executed `mcode` tool event is not classified (no adapter emits `action_request` events), so a worker's shell commands are bounded by its worktree and the pre-merge diff check, not by a per-command check. The executor derives `action.class` from
    the operation it performs, never from model output.
 
 ## Implementation notes (goal loop)
@@ -272,7 +272,7 @@ Recorded from `v2/05-goal-loop`; additive to §1, §9 and §10.
    developer's first estimate is the router's price-based `cost_est_usd`, kept in the strategy at assignment. A reached
    cap is asked as "raise or cancel"; `approve()` without a higher `budget_policy` is refused (`E_INVALID`).
 4. Risk (D-013, D-014): `risk_class` high/critical additionally needs the policy's `security_reviewer` verdict (when
-   the policy names that registry entry) and an owner approval bound to the exact head SHA before `accepted`. An owner
+   the policy names that registry entry; `loadPolicy` in the goal loop refuses a name that is not a registry id, so a typo is an owner clarification, not a crash loop) and an owner approval bound to the exact head SHA before `accepted`. An owner
    approval of a critical task's routing question (bound to task + base SHA) is passed to the router as
    `floorGrants: ['critical_risk']`; no other router floor is waivable.
 5. Delivery (D5): a task asks for delivery with `review_policy.deliver: true` or a `repo:<repo>:integration` entry in

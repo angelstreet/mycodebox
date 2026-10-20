@@ -141,7 +141,7 @@ async function main() {
     const x = ev.facts;
     out = { verdict: ev.verdict, reasons: ev.reasons, rationale: ev.rationale, env: x.env, scope: x.scope, ref: x.ref, sha: x.sha, branch: x.branch, tests: ev.tests, decision: ev.decision, rollback: ev.rollback };
   } else {
-    ev = await evaluateMerge({ cwd, text, session, config: MERGE_DEFAULTS, jev, branch: named(f.branch), target: named(f.target), tests });
+    ev = await evaluateMerge({ cwd, text, session, config: { ...MERGE_DEFAULTS, ...await managerJson() }, jev, branch: named(f.branch), target: named(f.target), tests });
     const f2 = ev.facts;
     out = { verdict: ev.verdict, reasons: ev.reasons, rationale: ev.rationale, branch: f2.branch, target: f2.target, branch_sha: f2.branchSha, target_sha: f2.targetSha,
       conflicts: f2.conflicts, docsOnly: f2.docsOnly, tests: ev.tests, decision: ev.decision };

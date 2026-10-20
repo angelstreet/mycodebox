@@ -430,3 +430,13 @@ test('merge_wait: a STATUS waiting / blocked / needs-owner on a merge or PR deci
   assert.notEqual(i.case, 'merge_wait');
   assert.equal(classify(claude('Queued.\nSTATUS: waiting: integration int-abc123 to merge')).case !== 'merge_wait', true);
 });
+
+test('review fixes: a numbered plan is not a menu, and the continue floor reads the whole closing text', () => {
+  const plan = classify(claude('Plan:\n1. Add the index\n2. Drop the legacy_users table\n3. Run the suite\nShall I proceed?'));
+  assert.notEqual(plan.source, 'unmarked-first'); assert.equal(wouldSend(plan).send, null);
+  const pick = classify(claude('Two ways:\n1. Add the index\n2. Drop the legacy_users table\nWhich one?'));
+  assert.equal(pick.case, 'owner_decision', 'another option holds a hard word: not a default pick');
+  const far = classify(claude('Next I will drop the legacy_users table and rebuild it.\n' + 'Phase 1 notes.\n'.repeat(8) + 'Shall I continue?'));
+  assert.equal(far.case, 'continue'); assert.ok(far.forbidden, 'the destructive step eight lines up is still seen');
+  assert.equal(wouldSend(far).send, null);
+});

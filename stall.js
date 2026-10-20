@@ -534,7 +534,7 @@ export function approvedAction(stall) {
     const body = floorText(String(stall.approvalText ?? stall.question ?? ''));
     return { text: body, commands: commandsIn(body), source: 'question' };
   }
-  const text = floorText([...menuStem(all, rec.text), rec.text, stall.question || ''].join('\n'));
+  const text = floorText([...(rec.unmarked ? all : menuStem(all, rec.text)), rec.text, stall.question || ''].join('\n'));   // an unmarked pick has no recommendation to isolate: the other options stay in the floor
   return { text, commands: commandsIn(text), source: isGenericOption(rec.text) ? 'option+question' : 'option' };
 }
 
@@ -555,7 +555,10 @@ export function unmarkedFirst(opts, lines = []) {
   const first = opts[0];
   if (OUT_OPTION_RE.test(first.text)) return null;
   // the stem around the menu (every line but the other options) and option 1 must hold no forbidden word at all, once (b) is applied: no narrative is dropped here
-  const text = relaxSoft([...menuStem(lines, first.text), first.text].join('\n'));
+  // every numbered line stays in: "1. add the index 2. drop the table 3. run the suite / Shall I proceed?" is a plan, not a menu, and the pick runs all of it
+  const text = relaxSoft([...lines, first.text].join('\n'));
+  const ask = [...lines].reverse().find((l) => l.trim() && !OPTION_LINE.test(l)) || '';
+  if (CONTINUE_Q.test(ask) && !/^\W*(?:yes|ok(?:ay)?|sure)\b/i.test(first.text)) return null;   // a proceed / continue question over a list asks for the whole list
   if (forbiddenMatch(text) || topicSplit(text).hard || SOFT_VERB.test(text)) return null;   // a soft verb that the template did not relax is a change we cannot read: not a default pick
   return first;
 }
@@ -630,7 +633,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     out.question = st.text || last.slice(0, 300);
     out.source = 'rule';
     out.no_status = false;
-    out.forbiddenText = close.slice(-6).join('\n');
+    out.forbiddenText = closing;   // the whole closing text: a step announced above the last lines is still approved by the answer
     const mw = ['needs-owner', 'blocked', 'waiting'].includes(st.kind) && !((waitsOnOwnJob(st.text, st.kind) || /\b(?:finish(?:es|ed)?|completes?|ends?)\b/i.test(st.text)) && !/\bPR\s*#?\d|pull request|decision/i.test(st.text)) ? mergeWaitOf(st.text) : null;   // "the nightly job must finish before I can merge" waits on a job, not on a merge decision
     if (mw) { out.case = 'merge_wait'; out.mergeAsk = mw; out.answer = null; }
     else if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
@@ -648,7 +651,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
   let asks = /\?(?:["')\]]|\s|$)/.test(last.replace(/https?:\S+/g, ''));
   const opts = menuOptions(close);
   const rec = opts.find((o) => RECOMMENDED_RE.test(o.text)) || (/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' ')) && { n: Number(/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' '))[1]) });
-  out.forbiddenText = close.slice(-6).join('\n');
+  out.forbiddenText = closing;
   // The agent's own words: lines after the last tool-output line (its "5 passed" is not a status report).
   const toolEnd = close.reduce((k, l, i) => (/^\s*[⎿└]/.test(l) ? i : k), -1);
   const msg = close.slice(toolEnd + 1).length ? close.slice(toolEnd + 1) : close;

@@ -41,11 +41,13 @@ by its key; a session's checkout is recognised from its `origin` URL.
 
 ## What it reuses
 
-The durable integration queue (`orchestration/integration-queue.js`), the git runner and merge-in-a-fresh-worktree
-logic and the compare-and-swap push of `orchestration/integration-controller.js`, the CI status gate
-(`orchestration/ci-gates.js`), the merge evaluation floor (`merge-policy.js`), the deploy queue on the central lease
-service, the own-job wake (`own-jobs.js`). The owner's per-merge approval of the V2 controller is replaced by the merge
-evaluation (OWNER_DECISIONS §14, §19).
+The lane is its own module (`integration-lane.js`) with its own durable request log, git steps, compare-and-swap push and CI
+wait. From the V2 engine it imports only the merge evaluation floor (`merge-policy.js`) and the usage attribution window
+(`usage-window.js`); it also uses the deploy queue on the central lease service and the own-job wake (`own-jobs.js`).
+`orchestration/integration-controller.js`, `integration-queue.js`, `ci-gates.js` and `delivery.js` belong to the opt-in V2
+task engine and are not used by the lane. The owner's per-merge approval of the V2 controller is replaced by the merge
+evaluation (OWNER_DECISIONS §14, §19). The request's `review` field is that evaluation (the merge floor, or the merge
+decision's source), not an independent reviewer.
 
 ## Rollout
 
@@ -71,10 +73,9 @@ first (step `install`). Commands run with an allowlisted environment (PATH, HOME
 temp `GHOSTY_STATE_DIR`), never the service's own keys and tokens.
 
 **Self deploy** (the mycodebox repo itself): `"deploy": { "kind": "self", "liveCheckout": "~/ghosty-sessions",
-"restartWaitMin": 10 }`. Every merge (no `--deploy` needed) is followed by: `node --check server.js` on the merge before
+"restartWaitMin": 10 }`. Every merge (no `--deploy` needed; a re-request of a branch already on the target is not redeployed unless `--deploy` is explicit) is followed by: `node --check server.js` on the merge before
 the push (step `precheck`; a failure returns the request); then in the live checkout: refuse when tracked files have
-uncommitted changes (untracked files are fine) or the checkout is not on the target; `git pull --ff-only` (refused when
-not a fast-forward); `npm ci` when `package-lock.json` changed; `node --check server.js` (a failure is reported, the
+uncommitted changes (untracked files are fine) or the checkout is not on the target; `git fetch` then `git merge --ff-only <tested merge sha>` (never whatever the target is now; refused when the target no longer contains the sha or the live checkout cannot fast-forward to it); `npm ci` when `package-lock.json` changed; `node --check server.js` (a failure is reported, the
 service is not restarted); then `scripts/safe-restart.sh --wait <restartWaitMin>`. The lane runs inside the service it
 restarts and the unit sets `NoNewPrivileges`, so the script is launched with `tmux run-shell -b` (the tmux server is
 outside the unit) and its output and exit code land in `<state>/integration/restart/<id>.{log,exit}`. The restart is

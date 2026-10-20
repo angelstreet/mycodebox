@@ -1,5 +1,7 @@
 # V2 baseline inventory
 
+> Historical: the Phase-0 baseline (before V2 was built). File and line references are of that revision and are stale; current structure is in [MAP](../MAP.md) and [REFERENCE](../REFERENCE.md).
+
 Source revision: `b9a83e14b7167a2efb35fa6c4367a692fadb94d1`. These are source observations, not deployed configuration. The original checkout has unrelated server edits and untracked files; this baseline excludes them and preserves them in place.
 
 | Area | Existing source evidence | V2 work / safety constraint |
