@@ -43,14 +43,34 @@ test('displayStateOf: looks the session up in the status map', () => {
   assert.equal(displayStateOf('missing', undefined), 'offline');
 });
 
-test('STATE_RANK: waiting < deploy < done < working < idle < offline', () => {
+test('STATE_RANK: waiting < manager < deploy < done < working < idle < offline', () => {
   // the order is what the urgency sort uses; a deploy-wait session sorts above done/working/idle
-  // but below a live needs-you prompt.
+  // but below a live needs-you prompt. 'manager' sits next to it: both wait on someone else, not on the owner's answer.
+  assert.ok(STATE_RANK.waiting < STATE_RANK.manager);
+  assert.ok(STATE_RANK.manager < STATE_RANK.deploy);
   assert.ok(STATE_RANK.waiting < STATE_RANK.deploy);
   assert.ok(STATE_RANK.deploy < STATE_RANK.done);
   assert.ok(STATE_RANK.done < STATE_RANK.working);
   assert.ok(STATE_RANK.working < STATE_RANK.idle);
   assert.ok(STATE_RANK.idle < STATE_RANK.offline);
+});
+
+test('needs_manager: a STATUS needs-manager stop shows as manager (its own LED), never as the blue done (2026-10-20)', () => {
+  const st = (s, extra = {}) => ({ state: s, stall: { case: 'needs_manager', ...extra } });
+  assert.equal(displayState(st('done')), 'manager', 'the bug: this used to read as done');
+  assert.equal(displayState(st('idle')), 'manager');
+  assert.equal(STATE_LABEL.manager, 'manager', 'the label, not "needs you"');
+  assert.notEqual(STATE_LABEL.manager, STATE_LABEL.waiting, 'a manager stop is never an owner ask');
+  // a live needs-you prompt and an offline session keep their real state
+  assert.equal(displayState(st('waiting')), 'waiting');
+  assert.equal(displayState(st('offline')), 'offline');
+  // a plain done / needs-owner stop is untouched
+  assert.equal(displayState({ state: 'done', stall: { case: 'done' } }), 'done');
+  assert.equal(displayState({ state: 'done', stall: { case: 'owner_decision' } }), 'done');
+  // the manager state wins over the violet deploy display, so the two never fight over one session
+  assert.equal(displayState({ state: 'done', stall: { case: 'needs_manager' }, deployWait: { kind: 'requested', id: '1' } }), 'manager');
+  // no stall row at all: the old behaviour
+  assert.equal(displayState({ state: 'done' }), 'done');
 });
 
 test('STATE_LABEL: every state the UI shows, including a "waiting deploy" for the chip', () => {

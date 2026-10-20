@@ -1287,7 +1287,7 @@ function renderQuickRow() {
   const all = state.sessions.map((s) => s.name);
   const cnt = (pred) => all.filter(pred).length;
   const chip = (g, v, inner, n) => `<button class="qchip${(state[g] || []).includes(v) ? ' on' : ''}" data-g="${g}" data-v="${escapeHtml(v)}">${inner}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
-  const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline', 'paused'].filter((k) => cnt((n) => filterStateOf(n) === k));
+  const states = ['waiting', 'manager', 'deploy', 'done', 'working', 'idle', 'offline', 'paused'].filter((k) => cnt((n) => filterStateOf(n) === k));
   const agents = ['claude', 'codex', 'minimax'].filter((x) => all.some((n) => agentOf(n) === x));
   const projects = [...new Set(all.map(projectOf))].sort((x, y) => (x === '') - (y === '') || x.localeCompare(y));
   const html = `<button class="qchip${anyFilter() ? '' : ' on'}" data-g="" data-v="">all</button>` +
@@ -1319,8 +1319,8 @@ function renderFilterBar() {
   const chip = (group, val, label, n, cls = '') =>
     `<button class="fchip ${cls}${(val === null ? !(state[group] || []).length : (state[group] || []).includes(val)) ? ' on' : ''}" data-g="${group}" data-v="${val ?? ''}">${label}${n != null ? `<span class="n">${n}</span>` : ''}</button>`;
   // 'waiting deploy' sits next to the other states: it is the violet display state a session shows
-  // while its status has deployWait (and the raw state isn't waiting/offline).
-  const states = ['waiting', 'deploy', 'done', 'working', 'idle', 'offline'];
+  // while its status has deployWait (and the raw state isn't waiting/offline). 'manager' is a STATUS needs-manager stop.
+  const states = ['waiting', 'manager', 'deploy', 'done', 'working', 'idle', 'offline'];
   const projects = [...new Set(all.map(projectOf))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const agents = ['claude', 'codex', 'minimax'].filter((a) => all.some((n) => agentOf(n) === a));
   // fTask is a single boolean, not a multi-select group; render its own chip with data-g='fTask' and no data-v.
