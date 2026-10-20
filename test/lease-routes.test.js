@@ -294,3 +294,20 @@ test('review 1: lease-token add --owner stores owner:true and list shows it', ()
   run(['add', 'plain']);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'clients.json'), 'utf8')).clients[1].owner, undefined);
 });
+
+test('priority over HTTP: claim carries it, a P2 ttl is clamped, a refused renewal is 409 E_YIELD_REQUIRED', async () => {
+  const c = await boot();
+  try {
+    const g = await claim(c, 'codebox:coc-hourly-run', ['host:host-1'], { priority: 'P2', ttl_min: 110 });
+    assert.equal(g.status, 200); assert.equal(g.body.lease.priority, 'P2'); assert.equal(g.body.lease.ttl_min, 10); assert.equal(g.body.lease.ttl_clamped_from, 110);
+    const w = await claim(c, 'codebox:other', ['host:host-1'], { priority: 'P1', wait: 'ticket' }, TOKEN2);
+    assert.equal(w.body.ticket.priority, 'P1');
+    const r = await c.call('POST', '/renew', { body: { id: g.body.lease.id, ttl_min: 10 } });
+    assert.equal(r.status, 409); assert.equal(r.body.code, 'E_YIELD_REQUIRED');
+    const hb = await c.call('POST', '/heartbeat', { body: { id: g.body.lease.id, active: true } });
+    assert.equal(hb.status, 200); assert.equal(hb.body.yield_required, true);
+    const l = await c.call('GET', '/list');
+    assert.equal(l.body.leases[0].priority, 'P2'); assert.equal(l.body.tickets[0].priority, 'P1');
+    assert.equal((await claim(c, 'x', ['host:host-2'], { priority: 'high' })).status, 400);
+  } finally { await c.close(); }
+});

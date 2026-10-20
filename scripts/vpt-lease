@@ -18,11 +18,12 @@ Mode (VPT_LEASE_MODE):
 Env: VPT_LEASE_URL (service base URL), VPT_LEASE_TOKEN_FILE (default ~/.config/vpt-lease/token, must be mode 0600),
      VPT_LEASE_AGENT (default agent for deploy wait), VPT_LEASE_TEST_FAST=1 (short intervals, for tests).
 
-New: claim --wait | --ticket, --mode exclusive|observe|pin, --expect MIN; ticket ID [--wait] [--cancel];
+New: claim --wait | --ticket, --mode exclusive|observe|pin, --expect MIN, --priority P0|P1|P2|P3; ticket ID [--wait] [--cancel];
      heartbeat ID [--active]; mode ID pin|observe; validate ID --agent A; run <claim args> -- <command...>.
 
 Exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 UNAVAILABLE (service unreachable: never "free"),
 6 `run` only: the lease was lost during the run (the command itself finished with 0).
+7 `renew` only: yield_required, a P2 lease cannot be extended while a claim of higher priority waits (release it).
 `validate ID --agent A` (central only): 0 when the lease is held, exclusive and A's; 3 otherwise (the reason is printed);
 5 when the service is unavailable. Call it right before each protected step (a restart, a deploy step).
 """
@@ -31,13 +32,14 @@ import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
 BUSY, PENDING, UNAVAILABLE = 3, 4, 5
+YIELD = 7        # renew refused: a claim of higher priority waits on a P2 lease (service code E_YIELD_REQUIRED)
 SCOPES = ("frontend", "host", "server", "full")
 KINDS = ("server", "host", "run", "maintenance")
 KIND_ALIASES = {"run": "server", "maintenance": "host"}
 MODES = ("exclusive", "observe", "pin")
 FAST = os.environ.get("VPT_LEASE_TEST_FAST") == "1"
 LONG_TTL_MIN = 240
-NEW_FLAGS_WITH_VALUE = ("--mode", "--expect", "--deploy-id")
+NEW_FLAGS_WITH_VALUE = ("--mode", "--expect", "--deploy-id", "--priority")
 NEW_FLAGS = ("--wait", "--ticket")
 
 
@@ -253,9 +255,11 @@ def show(leases):
     for l in sorted(rows, key=lambda l: (l["env"], l["resource"])):
         provider = "  provider=%s" % l["provider"] if l.get("provider") else ""
         mode = "  mode=%s" % l["mode"] if l.get("mode") not in (None, "", "exclusive") else ""
-        print("%s  %s/%s  agent=%s%s  since=%s  expires_in=%sm  purpose=%s  kind=%s%s" % (
+        prio = "  priority=%s" % l["priority"] if l.get("priority") else ""
+        prio += "  YIELD" if l.get("yield_required") else ""
+        print("%s  %s/%s  agent=%s%s  since=%s  expires_in=%sm  purpose=%s  kind=%s%s%s" % (
             l["id"], l["env"], l["resource"], l["agent"], provider, fmt(l["since"]), l["ttlLeftMin"],
-            l.get("purpose") or "-", l["kind"], mode))
+            l.get("purpose") or "-", l["kind"], mode, prio))
 
 
 def show_deploys(ds, prefix="DEPLOY"):
@@ -353,6 +357,29 @@ def request_id_done(body):
         _cache_save("request-ids.json", m)
 
 
+PRIORITIES = ("P0", "P1", "P2", "P3")
+YIELD_HELP = ("a claim of higher priority is waiting: stop at the next turn boundary and release the lease "
+              "(a P2 lease cannot be renewed while one waits)")
+
+
+def session_priority(agent):
+    """The owner's priority for a codebox session (sessions.json in the dashboard's state dir), or None when this machine
+    cannot tell: the service then uses the default (P1). Read-only; a missing or unreadable file is not an error."""
+    if not agent.startswith("codebox:"):
+        return None
+    base = os.environ.get("GHOSTY_STATE_DIR") or os.path.expanduser("~/.local/state/ghosty")
+    try:
+        with open(os.path.join(base, "sessions.json")) as f:
+            p = (json.load(f).get(agent[len("codebox:"):]) or {}).get("priority")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return p if p in PRIORITIES else None
+
+
+def resolve_priority(a):
+    return getattr(a, "priority", None) or session_priority(a.agent)
+
+
 def claim_body(a, wait=None):
     wanted = sorted({r.lower() for r in a.resources})
     kind = norm_kind(a.kind) if a.kind else default_kind(wanted)
@@ -362,6 +389,9 @@ def claim_body(a, wait=None):
         body["provider"] = a.provider
     if a.expect:
         body["expect_min"] = a.expect
+    prio = resolve_priority(a)
+    if prio:
+        body["priority"] = prio          # else the service looks the session up, else its default (P1)
     if a.agent.startswith(("codebox:", "mac:")):
         body["session"] = a.agent
     if wait:
@@ -383,6 +413,9 @@ def granted(a, r, wanted, kind):
     print(lease["id"], flush=True)
     for w in claim_warnings(a.env.lower(), wanted, kind, a.ttl, bool(lease.get("long"))):
         eprint(w)
+    if lease.get("ttl_clamped_from"):
+        eprint("⚠ --ttl %s min clamped to %s min: this is a %s lease (max 10 min per claim; it cannot be renewed while a claim of "
+               "higher priority waits)" % (lease["ttl_clamped_from"], lease.get("ttl_min"), lease.get("priority")))
     if not a.agent.startswith(("codebox:", "mac:")) and a.agent != "manager:deploy" and not a.agent.startswith("update_core:"):
         eprint("⚠ agent %r is not codebox:<tmux session> or mac:<name>: the dashboard cannot link this lease to a "
                "session (it counts as an unknown holder); use AGENT=\"codebox:$(tmux display-message -p '#S')\"" % a.agent)
@@ -551,7 +584,8 @@ def cmd_release(a):
 def cmd_renew(a):
     r = api("POST", "/renew", {"id": a.lease_id, "ttl_min": a.ttl})
     if not r.get("ok"):
-        return fail(r, "no such active lease")
+        rc = fail(r, "no such active lease")
+        return YIELD if r.get("code") == "E_YIELD_REQUIRED" else rc
     exp = to_epoch((r.get("lease") or {}).get("expires_at")) or now() + a.ttl * 60
     print("renewed until %s" % fmt(exp))
     return 0
@@ -585,9 +619,10 @@ def cmd_list(a):
     show(leases)
     show_deploys(deploys)
     for t in r.get("tickets") or []:
-        print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s" % (
+        print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s%s" % (
             t.get("id"), t.get("env", "?"), ",".join(legacy_res(x, t.get("env", "")) for x in t.get("resources") or []),
-            t.get("agent", "?"), t.get("position", "?"), hhmm(t.get("eta"))))
+            t.get("agent", "?"), t.get("position", "?"), hhmm(t.get("eta")),
+            "  priority=%s" % t["priority"] if t.get("priority") else ""))
     return 0
 
 
@@ -723,6 +758,10 @@ def cmd_heartbeat(a):
     r = api("POST", "/heartbeat", {"id": a.lease_id, "active": bool(a.active)})
     if not r.get("ok"):
         return fail(r, "no such active lease")
+    if r.get("yield_required"):
+        print("ok yield_required")
+        eprint("vpt-lease: yield_required: %s" % YIELD_HELP)
+        return 0
     print("ok")
     return 0
 
@@ -950,16 +989,34 @@ class HeartbeatThread(threading.Thread):
     exclusive is reported loudly and heartbeating stops; run exits non-zero after the command (or kills it: --on-fence
     kill). An unreachable service is NOT a lost lease: keep acting (the lease is time-bounded) and keep retrying."""
 
-    def __init__(self, lease_id, every, on_fence=None):
+    def __init__(self, lease_id, every, on_fence=None, renew_ttl=None):
         super().__init__(daemon=True)
-        self.lease_id, self.every, self.on_fence = lease_id, every, on_fence
+        self.lease_id, self.every, self.on_fence, self.renew_ttl = lease_id, every, on_fence, renew_ttl
         self.stop, self.fenced = threading.Event(), None
+        self.yielded = False
+
+    def say_yield(self):
+        """The service refuses to extend this lease: tell the wrapped command's operator once. The command is not killed;
+        the lease expires at its ttl as it always does (a P2 lease: at most 10 min per claim)."""
+        if not self.yielded:
+            self.yielded = True
+            eprint("vpt-lease: YIELD REQUIRED for lease %s: %s" % (self.lease_id, YIELD_HELP))
 
     def run(self):
         while not self.stop.wait(self.every):
             try:
                 r = api("POST", "/heartbeat", {"id": self.lease_id, "active": True}, timeout=10)
+                if r.get("ok") and r.get("yield_required"):
+                    self.say_yield()
                 lost = None
+                if r.get("ok") and self.renew_ttl:
+                    # a heartbeat does not extend expires: renew like the ssh path, so a run outlives its ttl (a P2 lease is
+                    # capped at 10 min by the service and refused while a claim of higher priority waits)
+                    rr = api("POST", "/renew", {"id": self.lease_id, "ttl_min": self.renew_ttl}, timeout=10)
+                    if rr.get("code") == "E_YIELD_REQUIRED":
+                        self.say_yield()
+                    elif not rr.get("ok"):
+                        eprint("vpt-lease: renew failed (%s); keep going" % rr.get("code"))
                 if not r.get("ok"):
                     lost = "heartbeat refused (%s)" % r.get("code")
                 elif (r.get("lease") or {}).get("mode") not in (None, "", "exclusive"):
@@ -1044,14 +1101,18 @@ class SshHeartbeat(HeartbeatThread):
     def run(self):
         last_ok = time.monotonic()
         while not self.stop.wait(self.every):
-            code, _ = ssh_call(["heartbeat", self.lease_id, "--active"], capture=True, stdin=subprocess.DEVNULL)
+            code, hout = ssh_call(["heartbeat", self.lease_id, "--active"], capture=True, stdin=subprocess.DEVNULL)
+            if code == 0 and "yield_required" in hout:
+                self.say_yield()
             if code in (1, 3):
                 return self.lose("heartbeat refused (exit %d)" % code)
             if code == 0:
                 last_ok = time.monotonic()
                 if self.renew_ttl:
                     rcode, _ = ssh_call(["renew", self.lease_id, "--ttl", str(self.renew_ttl)], capture=True, stdin=subprocess.DEVNULL)
-                    if rcode != 0:
+                    if rcode == YIELD:
+                        self.say_yield()
+                    elif rcode != 0:
                         eprint("vpt-lease: renew failed (exit %d); keep going" % rcode)
                 continue
             if time.monotonic() - last_ok >= self.lost_after:
@@ -1103,6 +1164,9 @@ def remote_claim_args(a):
         args += ["--expect", str(a.expect)]
     if a.deploy_id:
         args += ["--deploy-id", a.deploy_id]
+    prio = resolve_priority(a)
+    if prio:
+        args += ["--priority", prio]
     return args
 
 
@@ -1143,7 +1207,7 @@ def cmd_run(a, command):
         lease_id = lease["id"]
         every = 0.2 if FAST else float(lease.get("heartbeat_s") or 300)
         eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
-        hb = HeartbeatThread(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None)
+        hb = HeartbeatThread(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None, renew_ttl=a.ttl)
         hb.start()
     else:    # legacy / shadow: the old registry is authoritative; no queue and no heartbeat there
         args = ["claim", a.env, *a.resources, "--agent", a.agent, "--purpose", a.purpose, "--ttl", str(a.ttl)]
@@ -1233,6 +1297,7 @@ def build_parser():
         c.add_argument("--shared", action="store_true")
         c.add_argument("--mode", choices=MODES, default="exclusive", help="exclusive (default), observe (read archives), pin (keep this state)")
         c.add_argument("--expect", type=int, default=0, help="expected hold in minutes (improves the queue ETA)")
+        c.add_argument("--priority", choices=PRIORITIES, default=None, help="holder priority P0 (highest) .. P3 (background: scheduled bots); default: the session's own, else P1. A P2 or P3 lease is capped at 10 min per claim and cannot be renewed while a claim of higher priority waits")
         c.add_argument("--deploy-id", default="", help="join the lease of this running deploy (default $VPT_DEPLOY_ID)")
     c = sub.add_parser("claim"); claim_args(c)
     c.add_argument("--wait", action="store_true", help="queue and block until granted (retries while the service is unreachable)")
@@ -1320,7 +1385,7 @@ def strip_new_flags(argv):
             skip = False
         elif x in NEW_FLAGS_WITH_VALUE:
             skip = True
-        elif x in NEW_FLAGS or x.startswith(("--mode=", "--expect=", "--deploy-id=")):
+        elif x in NEW_FLAGS or x.startswith(("--mode=", "--expect=", "--deploy-id=", "--priority=")):
             pass
         else:
             out.append(x)
@@ -1414,6 +1479,17 @@ def re_deploy_id(argv):
     return any(x == "--deploy-id" or x.startswith("--deploy-id=") for x in argv)
 
 
+def with_priority(argv):
+    """A forwarded claim runs on the registry host, which cannot read this machine's session priorities: add --priority here."""
+    if argv[:1] != ["claim"] or any(x == "--priority" or x.startswith("--priority=") for x in argv):
+        return argv
+    for i, x in enumerate(argv[:-1]):
+        if x == "--agent":
+            prio = session_priority(argv[i + 1])
+            return argv + ["--priority", prio] if prio else argv
+    return argv
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = CFG.mode
@@ -1428,6 +1504,7 @@ def main(argv=None):
         if os.environ.get("VPT_LEASE_FORWARDED"):
             eprint("vpt-lease: this call was already forwarded; refusing to forward again (the registry host must run VPT_LEASE_MODE=central)")
             return 1
+        argv = with_priority(argv)
         if argv[:1] == ["claim"] and "--wait" in argv:
             return ssh_claim_wait(build_parser().parse_args(argv), argv, False)[0]
         if argv[:1] != ["run"]:

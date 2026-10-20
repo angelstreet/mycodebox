@@ -48,6 +48,19 @@ or `mac:<name>`.
   you can work. Downgrade to a pin with `vpt-lease mode <id> pin` if you only need the state kept.
 - Narrow, do not hold broad: `vpt-lease narrow <id> --kind host` once a server restart no longer matters.
 
+## Priority: P2 and P3 leases are short, and yield to a higher priority
+
+Every lease and ticket carries the holder's priority P0 (highest) to P3 (background): `--priority P0|P1|P2|P3` on `claim` and `run`, else the
+session's own priority (the owner's setting on the dashboard, read from the state dir on codebox), else P1.
+
+- **P3 is for scheduled bots** (hourly runs, cron-started sessions); everything interactive is P0 to P2.
+- A **P2 or P3** lease is capped at **10 minutes per claim** (a longer `--ttl` is clamped and says so). A turn is at most 10 minutes: claim
+  per turn, release at the end of the turn, claim again with `--wait` for the next one.
+- A P2 or P3 lease is **not renewed while a claim of STRICTLY higher priority waits** on a resource it blocks (P2 yields to P0/P1, P3 to P0/P1/P2). An equal-priority waiter changes nothing: first in, first out, 10-minute claims, so two long P2 runs do not preempt each other: `renew` exits 7
+  (`yield_required`) and `run` prints `YIELD REQUIRED`. The holder also gets a `lease:yield` message. Stop at the next turn boundary
+  and `vpt-lease release <id>`; do not retry the renewal.
+- P0 and P1 leases keep the ordinary TTL and renewal rules.
+
 ## Exit codes
 
 | Code | Meaning | What to do |
@@ -57,6 +70,7 @@ or `mac:<name>`.
 | 3 | busy | claim again with `--wait` (or `run`); do not poll |
 | 4 | a deploy is pending on the resource | `vpt-lease deploy wait --env <env>`, then claim again |
 | 5 | UNAVAILABLE: the lease service cannot be reached | treat as busy, never as free; retry with `--wait` |
+| 7 | `renew` only: `yield_required`, a P2/P3 lease cannot be extended while a claim of strictly higher priority waits | stop at the next turn boundary and release |
 | 6 | `run` only: the lease was lost during the run (fenced, gone or downgraded); the command itself exited 0 | treat the result as not protected; claim again and redo the protected step |
 
 `vpt-lease validate <id> --agent <agent>` (central mode only; refused with exit 1 in legacy and shadow modes): exit 0 when

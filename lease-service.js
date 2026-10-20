@@ -93,6 +93,9 @@ function leasesConflict(a, b, ignoreModes = false) {
   if (a.shared && b.shared) return false;
   return a.resources.some((x) => b.resources.some((y) => resourceConflict(P(x), P(y), kindOf(a, x), kindOf(b, y))));
 }
+const PRIOS = ['P0', 'P1', 'P2', 'P3'];     // P3 = background (scheduled bots)
+const isPrio = (p) => PRIOS.includes(p);
+const prioRank = (p) => PRIOS.indexOf(p);
 const defaultKind = (parsed) => (parsed.length && parsed.every((r) => r.type === 'device') ? 'host' : 'server');
 // Which resources a deploy of this scope disturbs (pending deploys block new claims on these).
 function scopeTouches(scope, hosts, r) {
@@ -120,7 +123,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
     envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, ticketIdleMs: 2 * MIN, goneGraceMs: 2 * MIN,
-    snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
+    snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12,
+    // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
+    // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
+    defaultPriority: 'P1', lowPriority: 'P2', lowPriorityMaxTtlMin: 10, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
   };
@@ -185,6 +191,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       }
       case 'renew': { const l = S.leases[f.id]; if (l) { l.expires = f.expires; l.ttlMin = f.ttlMin; l.lastHb = f.at; } break; }
       case 'hb': { const l = S.leases[f.id]; if (l) { l.lastHb = f.at; l.reservedUntil = null; const c = clk.get(l.id); if (c) { c.hb = mono(); if (f.active) c.act = mono(); } } break; }
+      case 'yield': { const l = S.leases[f.id]; if (l) { if (f.clear) delete l.yieldAt; else { l.yieldAt = f.at; ev('yield', l, f.at, { priority: prioOf(l), waiting: f.waiting, reason: 'a claim of higher priority is waiting: stop at the next turn boundary and release' }); } } break; }
       case 'collect': { const l = S.leases[f.id]; if (l) l.reservedUntil = null; break; }
       case 'tkt_pass': for (const id of f.ids) if (S.tickets[id]) S.tickets[id].passed = (S.tickets[id].passed || 0) + 1; break;
       case 'flag': { const l = S.leases[f.id]; if (l) ev('flag', l, f.at, { status: f.status, text: f.text, reason: f.reason }); break; }
@@ -300,7 +307,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       const pending = [];
       const emit = (f) => { f.seq = S.seq + 1; if (f.at == null) f.at = now(); apply(f); pending.push(f); };
       let out;
-      try { housekeeping(emit); out = fn(emit); grantTickets(emit); } catch (e) { out = fail('E_UNAVAILABLE', `internal error: ${String(e.message || e).slice(0, 120)}`); }
+      try { housekeeping(emit); out = fn(emit); grantTickets(emit); yieldSweep(emit); } catch (e) { out = fail('E_UNAVAILABLE', `internal error: ${String(e.message || e).slice(0, 120)}`); }
       if (pending.length) {
         try { await persist(pending); } catch (e) {
           broken = `journal write failed: ${String(e.message || e).slice(0, 120)}`;     // memory is ahead of disk: fail closed until restart
@@ -342,6 +349,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       shared: !!l.shared, since: iso(l.since), expires_at: iso(l.expires), ttl_min: l.ttlMin, ttlLeftMin: Math.floor((l.expires - t) / MIN),
       long: l.ttlMin > 240, idleMin: Math.floor((mono() - (clk.get(l.id)?.act ?? mono())) / MIN), lastHeartbeatAt: iso(l.lastHb), generation: l.generation, gens: l.gens,
       heartbeat_s: l.heartbeatS ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
+      priority: prioOf(l), priority_source: l.prioritySrc || 'default', ttl_clamped_from: l.ttlClampedFrom ?? null, yield_required: yieldWaiters(l).length > 0,
     };
   }
   function deployView(d) {
@@ -389,7 +397,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const waitsOnlyOn = (o, agent) => { const hs = heldConflicts(o); return hs.length > 0 && hs.every((l) => l.agent === agent); };
   const aheadOf = (virt, tk) => waitingTickets(virt.env).filter((o) => (!tk || o.id !== tk.id) && (!tk || byQueue(o, tk) < 0) && leasesConflict(virt, o) && !waitsOnlyOn(o, virt.agent));
   function ticketView(tk) {
-    const out = { id: tk.id, state: tk.state, priority_since: iso(tk.created), env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null, kind: tk.kind };
+    const out = { id: tk.id, state: tk.state, priority_since: iso(tk.created), env: tk.env, resources: tk.resources, agent: tk.agent, session: tk.session || null, created: iso(tk.created), purpose: tk.purpose || '', request_id: tk.requestId || null, kind: tk.kind, priority: prioOf(tk) };
     if (tk.state === 'waiting') {
       const ahead = aheadOf(tk, tk);
       const t = etaOf(tk, ahead);
@@ -487,6 +495,25 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     for (const [k, w] of depWaiters) if (t - w.seen > 10 * MIN) depWaiters.delete(k);
   }
 
+  // ---- priority ------------------------------------------------------------------------------------------------------
+  function prioOf(x) { return isPrio(x?.priority) ? x.priority : cfg.defaultPriority; }   // a declaration: journal replay (load) runs before this line   // leases from before priorities existed (and imports) count as the default
+  const isLow = (x) => !x.system && !x.deployId && prioRank(prioOf(x)) >= prioRank(cfg.lowPriority);
+  // Tickets of STRICTLY higher priority waiting on something this low-priority lease blocks: while any, the holder may not extend and must yield.
+  function yieldWaiters(l) {
+    if (!l || l.mode !== 'exclusive' || !isLow(l)) return [];
+    return waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && prioRank(prioOf(tk)) < prioRank(prioOf(l)) && leasesConflict(tk, l));
+  }
+  const yieldFail = (l, ws) => fail('E_YIELD_REQUIRED', `yield_required: a ${prioOf(ws[0])} claim (${ws.map((w) => w.agent).slice(0, 3).join(', ')}) waits on ${l.env}/${l.resources.join(',')} and this ${prioOf(l)} lease may not be extended: stop at the next turn boundary and release (vpt-lease release ${l.id})`,
+    { reason: 'yield_required', lease: l.id, priority: prioOf(l), waiting: ws.map((w) => ({ id: w.id, agent: w.agent, priority: prioOf(w) })) });
+  // once per lease: tell the holder (event kind `yield`) as soon as a claim that outranks it waits; cleared again when none waits
+  function yieldSweep(emit) {
+    for (const l of Object.values(S.leases)) {
+      const ws = yieldWaiters(l);
+      if (ws.length && !l.yieldAt) emit({ t: 'yield', id: l.id, waiting: ws.map((w) => w.id), at: now() });
+      else if (!ws.length && l.yieldAt) emit({ t: 'yield', id: l.id, clear: true, at: now() });
+    }
+  }
+
   function makeLease(req, t, extra = {}) {
     const gens = {};
     for (const c of req.resources) gens[`${req.env}|${c}`] = (S.gens[`${req.env}|${c}`] || 0) + 1;
@@ -494,7 +521,8 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return {
       id, env: req.env, resources: req.resources, mode: req.mode, kind: req.kind, agent: req.agent, client: req.client || null, session: req.session || null,
       purpose: req.purpose || '', provider: req.provider || '', shared: !!req.shared, since: t, expires: t + req.ttlMin * MIN, ttlMin: req.ttlMin,
-      heartbeatS: req.heartbeatS ?? null, system: !!req.system, deployId: req.deployId || null, lastHb: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, requestId: req.requestId || null, gens, generation: Math.max(...Object.values(gens)), ...extra,
+      heartbeatS: req.heartbeatS ?? null, system: !!req.system, deployId: req.deployId || null, lastHb: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, requestId: req.requestId || null, priority: req.priority || null, prioritySrc: req.prioritySrc || null, ttlClampedFrom: req.ttlClampedFrom ?? null,
+      gens, generation: Math.max(...Object.values(gens)), ...extra,
     };
   }
   function grantTickets(emit) {
@@ -547,7 +575,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const kind = a.kind == null ? defaultKind(rs.parsed) : (KIND_ALIASES[a.kind] || a.kind);
     if (kind !== 'server' && kind !== 'host') return fail('E_INVALID', 'kind must be server|host');
     const tt = ttlCheck(a.ttl_min, cfg.ttlDefaultMin); if (tt.error) return fail('E_INVALID', tt.error);
-    const ttlMin = tt.ttl;
+    let ttlMin = tt.ttl;
+    let warnings = tt.warnings;
+    if (a.priority != null && !isPrio(a.priority)) return fail('E_INVALID', 'priority must be P0|P1|P2|P3');
     // opt-in: only a lease that declares heartbeat_s is released when its heartbeats stop (plain claims keep TTL and the idle rule)
     const heartbeatS = a.heartbeat_s ?? null;
     if (heartbeatS != null && (typeof heartbeatS !== 'number' || heartbeatS < 10 || heartbeatS > 3600)) return fail('E_INVALID', 'heartbeat_s must be 10..3600 when given');
@@ -561,13 +591,26 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     if (a.priority_since != null) { prioritySince = typeof a.priority_since === 'number' ? a.priority_since : Date.parse(a.priority_since); if (!Number.isFinite(prioritySince)) return fail('E_INVALID', 'bad priority_since'); }
     const session = typeof a.session === 'string' && a.session ? a.session.slice(0, 200) : (/^(codebox|mac):\S+$/.test(a.agent) ? a.agent : null);
     const client = typeof a.client === 'string' ? a.client.slice(0, 80) : INTERNAL;
+    // priority: the claim's own field, else the holder session's (owner setting, when this process can look it up), else the default
+    let priority = a.priority ?? null, prioritySrc = priority ? 'claim' : null;
+    if (!priority && session && sessions?.priority) {
+      let sp; try { sp = sessions.priority(session.replace(/^codebox:/, '')); } catch { sp = null; }
+      if (isPrio(sp)) { priority = sp; prioritySrc = 'session-meta'; }
+    }
+    if (!priority) { priority = cfg.defaultPriority; prioritySrc = 'default'; }
+    const system = a.exempt === true;
+    let ttlClampedFrom = null;
+    if (!system && !a.deploy_id && prioRank(priority) >= prioRank(cfg.lowPriority) && ttlMin > cfg.lowPriorityMaxTtlMin) {
+      ttlClampedFrom = ttlMin; ttlMin = cfg.lowPriorityMaxTtlMin;
+      warnings = [`ttl clamped from ${ttlClampedFrom} to ${ttlMin} min: a ${priority} lease is capped at ${cfg.lowPriorityMaxTtlMin} min per claim and cannot be renewed while a claim of higher priority waits`];
+    }
     return {
       ok: true, wait,
       req: { env: a.env.toLowerCase(), resources: rs.resources, mode, kind, agent: a.agent, client, session,
         purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', provider: typeof a.provider === 'string' ? a.provider.slice(0, 80) : '', shared: !!a.shared,
         ttlMin, heartbeatS, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
-        system: a.exempt === true,                         // set by the caller's token (clients.json exemptAgents) or in-process, never by the request body
-        deployId: a.deploy_id || null, requestId: a.request_id || null, prioritySince, warnings: tt.warnings },
+        system,                         // set by the caller's token (clients.json exemptAgents) or in-process, never by the request body
+        deployId: a.deploy_id || null, requestId: a.request_id || null, prioritySince, warnings, priority, prioritySrc, ttlClampedFrom },
     };
   }
   // Only the holder's client (and agent, when given) or an owner identity may act on a lease by id. In-process callers (no client) are trusted.
@@ -720,6 +763,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
       const no = holderCheck(l, a); if (no) return no;
       const tt = ttlCheck(a.ttl_min, l.ttlMin); if (tt.error) return fail('E_INVALID', tt.error);
+      const ws = yieldWaiters(l);
+      if (ws.length) return yieldFail(l, ws);                // the yield event itself was emitted by yieldSweep
+      if (isLow(l) && tt.ttl > cfg.lowPriorityMaxTtlMin) { tt.warnings = [`ttl clamped from ${tt.ttl} to ${cfg.lowPriorityMaxTtlMin} min (${prioOf(l)} lease)`]; tt.ttl = cfg.lowPriorityMaxTtlMin; }
       const t = now();
       emit({ t: 'renew', id: l.id, expires: t + tt.ttl * MIN, ttlMin: tt.ttl, at: t });
       return { ok: true, lease: leaseView(S.leases[l.id]), ...(tt.warnings.length ? { warnings: tt.warnings } : {}) };
@@ -732,7 +778,8 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
       const no = holderCheck(l, a); if (no) return no;
       emit({ t: 'hb', id: l.id, active: !!a.active });
-      return { ok: true, lease: leaseView(S.leases[l.id]) };
+      const ws = yieldWaiters(S.leases[l.id]);
+      return { ok: true, lease: leaseView(S.leases[l.id]), ...(ws.length ? { yield_required: true, yield_message: `a claim of higher priority waits: stop at the next turn boundary and release ${l.id}` } : {}) };
     });
   }
   // Legacy `vpt-lease narrow <id> [--resource R] --kind host`: sensitivity becomes host for that row (or every row) and NOTHING is

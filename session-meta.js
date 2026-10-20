@@ -33,6 +33,8 @@ export function createSessionMeta({ file, now = Date.now } = {}) {
   const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
 
   return {
+    // null when the session has no entry (unknown to the dashboard): callers pick their own default
+    priorityIfKnown: (name) => (isPriority(data[name]?.priority) ? data[name].priority : null),
     priority: (name) => (isPriority(data[name]?.priority) ? data[name].priority : DEFAULT_PRIORITY),
     isPaused: (name) => !!data[name]?.paused,
     held: (name) => data[name]?.held || null,
