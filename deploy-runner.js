@@ -174,7 +174,8 @@ export function createDeployRunner({
   stateDir, alert = () => {}, managerItem = null, onChange = () => {}, isEnabled = () => false,
   registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, pollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
-  approveClients = String(process.env.DEPLOY_AUTO_APPROVE_CLIENTS || '').split(',').map((x) => x.trim()).filter(Boolean),
+  // 'registry' is the central client every agent's `vpt-lease deploy request` arrives through (codebox -> registry host); the env replaces the list.
+  approveClients = (process.env.DEPLOY_AUTO_APPROVE_CLIENTS ?? 'registry').split(',').map((x) => x.trim()).filter(Boolean),
 } = {}) {
   const envsFile = join(stateDir, 'deploy-envs.json');
   const logDir = join(stateDir, 'deploys');
@@ -362,8 +363,8 @@ export function createDeployRunner({
         for (const d of deploys) {
           // Runner ON is the owner's standing approval (2026-10-04: "if no lease, deploy all"):
           // an unapproved request is approved here and then waits only for its leases.
-          // Only the in-process requester (the integration lane, which has run the merge evaluation; the manager) or a named manager client
-          // (DEPLOY_AUTO_APPROVE_CLIENTS) is covered: a request any other bearer token made goes to the manager item below. No recorded
+          // Only the in-process requester (the integration lane, which has run the merge evaluation; the manager) or a named client
+          // (DEPLOY_AUTO_APPROVE_CLIENTS, default 'registry': agent requests through the central client) is covered: a request any other bearer token made goes to the manager item below. No recorded
           // client (the legacy registry has no identity) keeps the old behaviour.
           const trusted = typeof d.client !== 'string' || d.client === 'internal:process' || approveClients.includes(d.client);
           if (d.state === 'awaiting-approval' && isEnabled() && trusted) {

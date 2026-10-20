@@ -583,3 +583,14 @@ test('runner on: only the in-process requester (the lane) or a named manager cli
   await m.runner.tick(); await until(() => named.deploys[0].state === 'done');
   assert.ok(named.calls.includes('deploy approve 3'));
 });
+
+test('runner on: by default a request through the central registry client is auto-approved; an unknown bearer client is not', async () => {
+  const reg = fakeRegistry({ deploys: [dep('4', { state: 'awaiting-approval', client: 'registry' }), dep('5', { state: 'awaiting-approval', client: 'some-session', env: 'other' })] });
+  const items = [];
+  const { runner } = make(reg, { managerItem: (e) => items.push(e.key), envs: { 'node1-vpt': {}, other: {} } });
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done');
+  assert.ok(reg.calls.includes('deploy approve 4'));
+  assert.ok(!reg.calls.includes('deploy approve 5'));
+  assert.equal(reg.deploys[1].state, 'awaiting-approval');
+});
