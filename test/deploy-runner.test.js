@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, remoteLeaseCmd, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS } from '../deploy-runner.js';
+import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, remoteLeaseCmd, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS, isCatchUp, coveringCatchUps, catchUpPlan } from '../deploy-runner.js';
 
 // In-memory registry that mimics `vpt-lease deploy ...` (start = atomic check against leases + one running per env).
 function fakeRegistry({ leases = [], deploys = [] } = {}) {
@@ -34,11 +34,18 @@ function fakeRegistry({ leases = [], deploys = [] } = {}) {
     }
     if (sub === 'last') return st.deployed ? { code: 0, stdout: JSON.stringify({ now: 1, envs: st.deployed }), stderr: '' } : { code: 2, stdout: '', stderr: 'invalid choice' };
     if (sub === 'approve') { d.state = 'queued'; return { code: 0, stdout: 'approved', stderr: '' }; }
+    if (sub === 'cancel') {
+      if (!d) return { code: 1, stdout: '', stderr: 'not found' };
+      if (d.state !== 'queued' && d.state !== 'awaiting-approval') return { code: 1, stdout: '', stderr: `cannot cancel a ${d.state} deploy` };
+      d.state = 'canceled'; return { code: 0, stdout: d.id, stderr: '' };
+    }
     return { code: 1, stdout: '', stderr: 'unknown' };
   };
   return st;
 }
 const dep = (id, o = {}) => ({ id, env: 'node1-vpt', scope: 'frontend', ref: 'main', agent: 'a:1', state: 'queued', created: Number(id.replace(/\D/g, '')) || 1, ...o });
+// a catch-up as the queue holds it: the runner's own request for hosts a leased deploy skipped
+const catchUp = (id, o = {}) => dep(id, { scope: 'host', ref: 'main', agent: RUNNER_AGENT, hosts: ['host-a'], purpose: `catch-up: hosts skipped by 9 (leased): host-a`, ...o });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(pred, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return; await sleep(10); } throw new Error('timeout'); }
 
@@ -274,6 +281,85 @@ test('SKIPPED_HOSTS: recorded on the deploy and a catch-up host request is queue
   assert.match(cu.purpose, /^catch-up: hosts skipped by 1 \(leased\): labox-dongle$/);
   assert.ok(reg.calls.some((c) => /deploy request node1-vpt --scope host --ref main --agent manager:deploy --approved --hosts labox-dongle/.test(c)));
   assert.ok(alerts.some(([k, t]) => k === 'deploy:1:done' && /1 host\(s\) skipped/.test(t)));
+});
+
+test('one catch-up per (env, host set): a running or equal queued one is kept, an older queued one is replaced', () => {
+  const c = (id, o = {}) => ({ id, env: 'e', state: 'queued', ref: 'main', hosts: ['host-a'], purpose: `catch-up: ${id}`, ...o });
+  const running = c('r', { state: 'running', ref: 'old' }), same = c('s'), older = c('o', { ref: 'old', hosts: ['host-a', 'host-b'] });
+  const d = { env: 'e', ref: 'main' };
+  assert.equal(isCatchUp({ purpose: 'catch-up: hosts skipped by 1 (leased): host-a' }), true);
+  assert.equal(isCatchUp({ purpose: 'catch-up for 1: skipped host-a' }), true);            // the central service's spelling
+  assert.equal(isCatchUp({ purpose: 're-run after a catch-up' }), false);
+  assert.equal(isCatchUp({}), false);
+  assert.deepEqual(coveringCatchUps([running, same, older, c('done', { state: 'done' }), c('other-hosts', { hosts: ['host-c'] }), c('other-env', { env: 'e2' }), c('manual', { purpose: 'manual hotfix' })], 'e', ['host-a']).map((x) => x.id), ['r', 's', 'o']);
+  assert.deepEqual(catchUpPlan([same], d), { queue: false, held: [same], cancel: [] });
+  assert.deepEqual(catchUpPlan([running], d), { queue: false, held: [running], cancel: [] });
+  assert.deepEqual(catchUpPlan([older], d), { queue: true, held: [], cancel: [older] });
+  assert.deepEqual(catchUpPlan([running, older], d), { queue: false, held: [running], cancel: [older] });
+  assert.deepEqual(catchUpPlan([], d), { queue: true, held: [], cancel: [] });
+});
+
+test('an equal catch-up already queued for the hosts: no second request, no cancel', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' }), catchUp('20')] });
+  const { runner, stateDir } = make(reg, { run: async (env, o) => { if (o.id === '1') o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '1').state === 'done'); await sleep(60);
+  assert.equal(reg.calls.filter((c) => c.startsWith('deploy request')).length, 0);
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy cancel')));
+  assert.match(readFileSync(join(stateDir, 'deploys', '1.log'), 'utf8'), /already covered by 20 \(queued, main\): no new request/);
+});
+
+test('a catch-up already running for the hosts when the deploy finishes: no new request, the running one is left alone', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' }), catchUp('20')] });
+  const { runner, stateDir } = make(reg, { run: async (env, o) => {
+    if (o.id === '1') { o.onLine('SKIPPED_HOSTS=host-a'); reg.deploys.find((d) => d.id === '20').state = 'running'; }   // it started meanwhile
+    return { code: 0 };
+  } });
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '1').state === 'done'); await sleep(60);
+  assert.equal(reg.calls.filter((c) => c.startsWith('deploy request')).length, 0);
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy cancel')));
+  assert.equal(reg.deploys.find((d) => d.id === '20').state, 'running');
+  assert.match(readFileSync(join(stateDir, 'deploys', '1.log'), 'utf8'), /already covered by 20 \(running, main\): no new request/);
+});
+
+test('a queued catch-up at another ref is cancelled and replaced by the newer deploy\'s catch-up', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' }), catchUp('20', { ref: 'old-ref' })] });
+  const { runner, stateDir } = make(reg, { run: async (env, o) => { if (o.id === '1') o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '1').state === 'done'); await sleep(60);
+  assert.ok(reg.calls.includes('deploy cancel 20'));
+  assert.equal(reg.deploys.find((d) => d.id === '20').state, 'canceled');
+  const live = reg.deploys.filter((d) => isCatchUp(d) && d.state !== 'canceled');       // exactly one catch-up left for these hosts
+  assert.equal(live.length, 1);
+  assert.deepEqual([live[0].ref, live[0].hosts], ['main', ['host-a']]);
+  assert.match(live[0].purpose, /^catch-up: hosts skipped by 1 \(leased\): host-a$/);
+  assert.match(readFileSync(join(stateDir, 'deploys', '1.log'), 'utf8'), /# catch-up 20 \(ref old-ref\) cancelled: superseded by 1 at main/);
+});
+
+test('a catch-up whose hosts are leased again queues no new catch-up (no chain)', async () => {
+  const reg = fakeRegistry({ deploys: [catchUp('5')] });
+  const { runner, stateDir } = make(reg, { run: async (env, o) => { o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done'); await sleep(60);
+  assert.deepEqual(reg.deploys[0].skippedHosts, ['host-a']);                           // the skip is still recorded
+  assert.equal(reg.calls.filter((c) => c.startsWith('deploy request')).length, 0);
+  assert.equal(reg.deploys.filter((d) => isCatchUp(d)).length, 1);
+  const log = readFileSync(join(stateDir, 'deploys', '5.log'), 'utf8');
+  assert.match(log, /# catch-up 5 skipped host-a again \(leased\): no new catch-up/);
+  assert.equal((log.match(/no new catch-up/g) || []).length, 1);                      // one line, not a chain
+});
+
+test('a queued request that is not a catch-up for the same hosts is left alone, and the catch-up is still queued', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' }), dep('20', { scope: 'host', hosts: ['host-a'], purpose: 'manual hotfix', agent: 'codebox:run' })] });
+  const { runner } = make(reg, { run: async (env, o) => { if (o.id === '1') o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys.find((d) => d.id === '1').state === 'done'); await sleep(60);
+  const manual = reg.deploys.find((d) => d.id === '20');
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy cancel')), 'a normal request is never cancelled by the catch-up dedupe');
+  assert.notEqual(manual.state, 'canceled');
+  assert.equal(manual.coalescedInto, undefined);                                      // skipped hosts keep their request open
+  assert.ok(reg.deploys.some((d) => isCatchUp(d) && d.ref === 'main' && d.hosts?.includes('host-a')));
 });
 
 test('the catch-up runs with --hosts, only when its hosts are free', async () => {
