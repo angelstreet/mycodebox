@@ -188,6 +188,28 @@ There is exactly one implementation of these rules, in
 - **Owner force-release** from the Leases view: one tap plus a second tap to confirm, logged with `by: owner`, the
   holder is told.
 
+### Priority, the P2 cap and yielding (owner, 2026-10-20)
+
+"We cannot let coc hold a lease 110 min when coc is not priority and a turn is max 10 min." The service, not each client, enforces it.
+
+- **Priority on everything.** Every lease and ticket carries the holder's priority `P0|P1|P2` (P0 highest), shown as `priority` (and
+  `priority_source`: `claim`, `session-meta` or `default`) in the lease and ticket views, `GET /list`, `vpt-lease list` (`priority=P2`, and
+  `YIELD` when a renewal would be refused) and `--json`. Source, in order: the claim's `priority` field (`vpt-lease claim|run --priority`);
+  the holder session's priority from session-meta (`sessions.json`, key = tmux name; the in-process service asks `sessions.priority(name)`,
+  and the `vpt-lease` client on codebox reads the same file and sends the field, which is how it reaches the registry-host service that
+  has no session-meta); else the default **P1** (`defaultPriority`). Note that session-meta itself defaults every session the dashboard
+  has seen to **P2** until the owner raises it. Leases from before this change, imports and deploy (system) leases count as P1 and are exempt from the cap.
+- **P2 cap.** A lease of priority `lowPriority` (config, default `P2`) or lower is clamped to `lowPriorityMaxTtlMin` (config, default 10) per
+  claim and per renewal; the lease view records `ttl_clamped_from`, the claim answers with a warning and the client prints it.
+- **Yield.** While a ticket of higher-or-equal priority waits on a resource the P2 lease blocks, `POST /renew` is refused with `409
+  E_YIELD_REQUIRED` (`reason: yield_required`, `waiting`; `vpt-lease renew` exits 7) and `POST /heartbeat` answers `yield_required: true` (a
+  heartbeat extends nothing, so it stays ok). The holder gets one **`yield`** event per lease the moment such a ticket queues (feed key
+  `lease:yield`; a codebox session gets the note "stop at the next turn boundary and release it"); it is cleared and can fire again if the
+  waiters go away. `vpt-lease run` prints `YIELD REQUIRED` once and keeps the command running: the lease then simply expires at its ttl, as
+  any lease does, so a P2 command is bounded by 10 minutes plus the last renewal. P0 and P1 leases keep today's behaviour.
+- **Deploy leases.** `deploy start` creates the deploy's lease with `deployLeaseMin` (12), never `runningMaxMin` (90, which only bounds how long a
+  running deploy may go without `finish`, see §5). `update_core.sh` (VirtualPyTest repo) claims its own lease with `DEPLOY_LEASE_TTL_MIN`, default 10.
+
 ## 6. Visible
 
 - A **Leases** view on the dashboard (More menu and `/?leases=1`): per env, each held lease with resource, mode,
@@ -288,17 +310,17 @@ and forth neither replays nor skips events.
 
 All routes are under `/api/lease/v1`, JSON in and out, `Authorization: Bearer <token>` (in-process callers skip HTTP).
 Errors: `{ ok: false, code, error }` with `code` one of `E_INVALID` (400), `E_AUTH` (401/403), `E_HELD` (409, with
-`holders`), `E_DEPLOY_PENDING` (409), `E_NOT_FOUND` (404), `E_FENCED` (409), `E_UNAVAILABLE` (503).
+`holders`), `E_DEPLOY_PENDING` (409), `E_NOT_FOUND` (404), `E_FENCED` (409), `E_YIELD_REQUIRED` (409), `E_UNAVAILABLE` (503).
 
 | Route | Body / query | Answer |
 |---|---|---|
-| `POST /claim` | `{ env, resources: [..], agent, session?, purpose?, mode: exclusive\|observe\|pin, kind?: server\|host, ttl_min?, heartbeat_s?, expect_min?, wait?: false\|"ticket", shared?, request_id?, deploy_id?, priority_since? }` | granted: `{ ok, lease: { id, env, resources, mode, kind, agent, session, purpose, since, expires_at, generation, heartbeat_s } }`; busy without wait: `E_HELD` + `holders` + `eta` + `eta_latest` (+ `reason: queued`, `position` when only waiting tickets are ahead); with `wait: "ticket"`: `{ ok, ticket: { id, position, eta, holders } }` |
+| `POST /claim` | `{ env, resources: [..], agent, session?, purpose?, mode: exclusive\|observe\|pin, kind?: server\|host, ttl_min?, heartbeat_s?, expect_min?, wait?: false\|"ticket", priority?: P0\|P1\|P2, shared?, request_id?, deploy_id?, priority_since? }` | granted: `{ ok, lease: { id, env, resources, mode, kind, agent, session, purpose, since, expires_at, generation, heartbeat_s } }`; busy without wait: `E_HELD` + `holders` + `eta` + `eta_latest` (+ `reason: queued`, `position` when only waiting tickets are ahead); with `wait: "ticket"`: `{ ok, ticket: { id, position, eta, holders } }` |
 | `GET /tickets/:id?wait=<s>` | long-poll up to 30 s | `{ ok, ticket: { id, state: waiting\|granted\|missed\|expired\|cancelled, position, eta, eta_latest, lease? } }` |
 | `GET /leases/:id` | | `{ ok, lease: { id, mode, generation, state, agent, expires_at } }` (validate before a protected step) |
 | `DELETE /tickets/:id` | | cancels a ticket |
 | `POST /release` | `{ id }` or `{ agent }` (+ `by`, `reason`) | `{ ok, released: [ids] }` |
-| `POST /renew` | `{ id, ttl_min? }` | `{ ok, lease }` |
-| `POST /heartbeat` | `{ id, active?: bool }` | `{ ok, lease }` (`active` = control activity, resets the idle clock) |
+| `POST /renew` | `{ id, ttl_min? }` | `{ ok, lease }`; `409 E_YIELD_REQUIRED` for a P2 lease while a higher-or-equal ticket waits |
+| `POST /heartbeat` | `{ id, active?: bool }` | `{ ok, lease, yield_required?, yield_message? }` (`active` = control activity, resets the idle clock) |
 | `POST /narrow` | `{ id, resources?, kind? }` | one-way narrowing, as `vpt-lease narrow` |
 | `POST /mode` | `{ id, mode }` | downgrade only (exclusive -> pin/observe) by the holder; owner may do it for anyone |
 | `GET /list?env=` | | `{ ok, leases: [...with ttlLeftMin, idleMin, lastHeartbeatAt], tickets: [...], deploys: [...] }` |
@@ -314,7 +336,7 @@ same operations as methods (`claim, ticket, cancelTicket, release, renew, heartb
 ownerRelease, deploy: { request, approve, cancel, start, finish, record, list, wait, last }, shadow: { op, report, list },
 sessionGone(session), sessionStatus(session, status), tick() })`, all async, all fail closed.
 
-Client exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 unavailable. A rejected token (`E_AUTH`) is exit 1 (an error, never "unavailable" and never "free"); 6 is `run` only (lease lost during the run).
+Client exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 unavailable, 7 `renew` refused with `yield_required`. A rejected token (`E_AUTH`) is exit 1 (an error, never "unavailable" and never "free"); 6 is `run` only (lease lost during the run).
 `GET /leases/:id` answers flat `{ ok, id, agent, mode, generation, state: active|reserved }` (404 `E_NOT_FOUND` when gone); `vpt-lease validate` reads it.
 
 ## Appendix B. Implementation notes (round 10 build)

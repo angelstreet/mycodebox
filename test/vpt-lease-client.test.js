@@ -690,3 +690,33 @@ test('R8 --ttl above 480 is passed through and the service long flag prints a wa
   r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--ttl', '100']);
   assert.match(r.err, /min is over 4 h/, 'service flag alone triggers the warning');
 });
+
+test('priority: --priority is passed in the claim body; a codebox session without it is looked up in sessions.json; the clamp is announced', async () => {
+  setup(() => ({ ok: true, lease: lease({ id: 'PR1', priority: 'P2', ttl_min: 10, ttl_clamped_from: 110 }) }));
+  let r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--ttl', '110', '--priority', 'P2']);
+  assert.equal(r.code, 0); assert.equal(calls[0].body.priority, 'P2'); assert.match(r.err, /clamped to 10 min/);
+  setup(() => ({ ok: true, lease: lease({ id: 'PR2' }) }));
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'vpt-lease-prio-'));
+  fs.writeFileSync(path.join(state, 'sessions.json'), JSON.stringify({ 'coc-hourly-run': { priority: 'P2' } }));
+  r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:coc-hourly-run'], { env: { GHOSTY_STATE_DIR: state } });
+  assert.equal(calls.at(-1).body.priority, 'P2', 'from the session meta');
+  r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:unknown'], { env: { GHOSTY_STATE_DIR: state } });
+  assert.equal(calls.at(-1).body.priority, undefined, 'unknown: the service default applies');
+  r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'mac:me', '--priority', 'P9']);
+  assert.notEqual(r.code, 0);
+  fs.rmSync(state, { recursive: true, force: true });
+});
+
+test('priority: list shows it; renew refused with yield_required exits 7; run prints a clear YIELD message and does not kill the command', async () => {
+  setup((c) => (c.path === '/list' ? { ok: true, leases: [lease({ id: 'LP', priority: 'P2', yield_required: true })], tickets: [{ id: 't1', env: 'env-a', resources: ['env-a/host:host-1'], agent: 'a', position: 1, priority: 'P1' }], deploys: [] } : { ok: true }));
+  let r = await run(['list']);
+  assert.match(r.out, /priority=P2  YIELD/); assert.match(r.out, /TICKET t1.*priority=P1/);
+  setup(() => ({ ok: false, status: 409, code: 'E_YIELD_REQUIRED', error: 'yield_required: stop' }));
+  r = await run(['renew', 'LP', '--ttl', '10']);
+  assert.equal(r.code, 7); assert.match(r.err, /yield_required/);
+  setup((c) => (c.path === '/claim' ? { ok: true, lease: lease({ id: 'RUNP', heartbeat_s: 1, priority: 'P2' }) }
+    : c.path === '/heartbeat' ? { ok: true, yield_required: true, lease: lease({ id: 'RUNP' }) } : { ok: true }));
+  r = await run(['run', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--priority', 'P2', '--', 'sh', '-c', 'sleep 1; echo done']);
+  assert.equal(r.code, 0); assert.match(r.out, /done/); assert.match(r.err, /YIELD REQUIRED for lease RUNP/);
+  assert.equal((r.err.match(/YIELD REQUIRED/g) || []).length, 1, 'said once');
+});

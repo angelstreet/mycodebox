@@ -230,7 +230,7 @@ test('liveness: only a holder seen alive and now gone is false; resolvable, cron
   assert.equal(lv.isAlive('codebox:TASK-28-videos'), undefined);   // a failed listing judges nothing
   assert.equal(lv.trackable('codebox:dev1'), false);
   const s = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-  assert.match(s, /sessions: \{ isAlive: leaseLiveness\.isAlive, trackable: leaseLiveness\.trackable \}/);
+  assert.match(s, /sessions: \{ isAlive: leaseLiveness\.isAlive, trackable: leaseLiveness\.trackable, priority: /);
 });
 
 test('pins overridden by a deploy are listed in that deploy\'s log (item 5)', async () => {
@@ -276,4 +276,12 @@ test('legacy authority: the Leases view still shows the shadow reports of the se
   assert.equal(v.authority, 'legacy');
   assert.equal(v.shadow.length, 1);
   assert.equal(src.peekView().shadow.length, 1);
+});
+
+test('yield event: a note for the holder session and a lease:yield feed record', async () => {
+  const { isNoteEvent, eventNote, eventRecord } = await import('../lease-source.js');
+  const ev = { kind: 'yield', id: 'L1', env: 'env-a', resources: ['env-a/host:host-1'], agent: 'codebox:coc-hourly-run', priority: 'P2', at: Date.now() };
+  assert.equal(isNoteEvent(ev), true);
+  assert.match(eventNote(ev), /turn boundary and release it \(vpt-lease release L1\)/);
+  assert.equal(eventRecord(ev).key, 'lease:yield');
 });

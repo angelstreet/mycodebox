@@ -10,7 +10,7 @@ export const PREFIX = '/api/lease/v1';
 export const MAX_BODY = 256 * 1024;
 export const MAX_WAIT_S = 30;
 export const DEFAULT_CIDRS = ['127.0.0.0/8', '::1/128', '100.64.0.0/10', 'fd7a:115c:a1e0::/48'];   // loopback, tailnet (CGNAT v4 and the Tailscale ULA)   // leak-scan: allow (public tailnet ranges, no address of ours)
-const STATUS = { E_INVALID: 400, E_AUTH: 401, E_NOT_FOUND: 404, E_HELD: 409, E_DEPLOY_PENDING: 409, E_FENCED: 409, E_UNAVAILABLE: 503, E_NOT_AUTHORITY: 409 };
+const STATUS = { E_INVALID: 400, E_AUTH: 401, E_NOT_FOUND: 404, E_HELD: 409, E_DEPLOY_PENDING: 409, E_FENCED: 409, E_YIELD_REQUIRED: 409, E_UNAVAILABLE: 503, E_NOT_AUTHORITY: 409 };
 
 export const hashToken = (token) => createHash('sha256').update(String(token)).digest('hex');
 

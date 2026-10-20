@@ -267,7 +267,7 @@ export function pinOverrideNote(ev, view) {
 }
 
 // --- service events -> feed records, and the one-line note to a codebox session ---------------------------------------------
-const EVENT_KIND = /^(downgraded|pin[-_]?overlap)$/i;
+const EVENT_KIND = /^(downgraded|pin[-_]?overlap|yield)$/i;
 export const isNoteEvent = (ev) => EVENT_KIND.test(String(ev?.kind || ev?.event || ''));
 const where = (ev) => `${ev.env ? `${ev.env}/` : ''}${asList(ev.resources ?? ev.resource).join(',') || '*'}`;
 export function eventRecord(ev) {
@@ -276,7 +276,7 @@ export function eventRecord(ev) {
   const w = where(ev);
   const title = kind === 'released' ? `lease released: ${w} (${ev.agent || '?'})` : kind === 'expired' ? `lease expired: ${w} (${ev.agent || '?'})`
     : kind === 'downgraded' ? `lease became a pin: ${w} (${ev.agent || '?'})` : kind === 'forced' ? `lease force-released: ${w} (${ev.agent || '?'})`
-    : kind === 'narrowed' ? `lease narrowed to host: ${w} (${ev.agent || '?'})` : `lease ${kind}: ${w} (${ev.agent || '?'})`;
+    : kind === 'narrowed' ? `lease narrowed to host: ${w} (${ev.agent || '?'})` : kind === 'yield' ? `lease:yield ${ev.priority || 'P2'} holder must release: ${w} (${ev.agent || '?'})` : `lease ${kind}: ${w} (${ev.agent || '?'})`;
   const key = kind === 'pin-overlap' ? 'lease:pin-overlap' : `lease:${kind}`;
   return { key, title, body: `lease ${ev.id || ev.lease || '?'}${ev.by ? ` by ${ev.by}` : ''}${ev.reason ? ` (${ev.reason})` : ''}; purpose: ${ev.purpose || '-'}`, url: '/?leases=1', priority: 'default',
     at: new Date(tms(ev.at) || Date.now()).toISOString(), leaseId: ev.id || ev.lease, agent: ev.agent, env: ev.env, resources: asList(ev.resources ?? ev.resource) };
@@ -286,6 +286,7 @@ export function eventNote(ev) {
   const kind = String(ev?.kind || ev?.event || '').toLowerCase().replace(/_/g, '-');
   const w = where(ev);
   if (kind === 'downgraded') return `Your exclusive lease on ${w} became a pin (${ev.reason || 'no control activity for 20 min'}). Claim again with vpt-lease claim ... --wait when you drive it.`;
+  if (kind === 'yield') return `Your ${ev.priority || 'P2'} lease ${ev.id || ''} on ${w} cannot be renewed: a claim of higher or equal priority is waiting. Stop at the next turn boundary and release it (vpt-lease release ${ev.id || '<id>'}); claim again with --wait when you need it.`;
   if (kind === 'pin-overlap') return `Someone else was granted an exclusive lease that overlaps your pin on ${w}${ev.by_agent || ev.by || ev.holder ? ` (${ev.by_agent || ev.by || ev.holder})` : ''}. Your pin does not block them; claim again with vpt-lease claim ... --wait if you need to drive it.`;
   return null;
 }

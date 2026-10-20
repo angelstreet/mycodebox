@@ -904,3 +904,96 @@ test('a ticket whose agent holds the lease blocking the tickets ahead passes the
   const v1 = await h.svc.ticket(t1.ticket.id);
   assert.equal((v1.ticket || v1).state, 'waiting', 'ticket #1 keeps waiting for the holder');
 });
+
+// ---- priority (owner 2026-10-20): P2 is capped at 10 min and must yield to a higher-or-equal claim ----------------------------------
+test('priority: stored on lease and ticket, from the claim, else the session lookup, else P1; shown in list', async () => {
+  const looked = [];
+  const h = harness({}, { sessions: { priority: (n) => { looked.push(n); return n === 'known' ? 'P0' : null; } } });
+  const a = await h.claim('a', 'host:host-1', { priority: 'P0' });
+  assert.equal(a.lease.priority, 'P0'); assert.equal(a.lease.priority_source, 'claim');
+  const b = await h.claim('codebox:known', 'host:host-2');
+  assert.equal(b.lease.priority, 'P0'); assert.equal(b.lease.priority_source, 'session-meta'); assert.deepEqual(looked, ['known']);
+  const c = await h.claim('codebox:other', 'host:host-3');
+  assert.equal(c.lease.priority, 'P1'); assert.equal(c.lease.priority_source, 'default');
+  const t = await h.claim('w', 'host:host-1', { wait: 'ticket', priority: 'P2' });
+  assert.equal(t.ticket.priority, 'P2');
+  const l = await h.svc.list();
+  assert.deepEqual(l.leases.map((x) => x.priority).sort(), ['P0', 'P0', 'P1']); assert.equal(l.tickets[0].priority, 'P2');
+  assert.equal((await h.claim('x', 'host:host-4', { priority: 'P9' })).code, 'E_INVALID');
+});
+
+test('priority: a P2 claim is clamped to 10 min and the clamp is recorded; P0/P1 keep their ttl', async () => {
+  const h = harness();
+  const p2 = await h.claim('lo', 'host:host-1', { priority: 'P2', ttl_min: 110 });
+  assert.equal(p2.lease.ttl_min, 10); assert.equal(p2.lease.ttl_clamped_from, 110); assert.match(p2.warnings[0], /clamped from 110 to 10/);
+  const small = await h.claim('lo2', 'host:host-2', { priority: 'P2', ttl_min: 5 });
+  assert.equal(small.lease.ttl_min, 5); assert.equal(small.lease.ttl_clamped_from, null);
+  const p1 = await h.claim('mid', 'host:host-3', { priority: 'P1', ttl_min: 110 });
+  assert.equal(p1.lease.ttl_min, 110); assert.equal(p1.lease.ttl_clamped_from, null);
+  const p0 = await h.claim('hi', 'host:host-4', { ttl_min: 110, priority: 'P0' });
+  assert.equal(p0.lease.ttl_min, 110);
+  const noPrio = await h.claim('none', 'host:host-5', { ttl_min: 110 });
+  assert.equal(noPrio.lease.ttl_min, 110, 'default P1');
+  await h.advance(11 * MIN);
+  assert.equal((await h.svc.list()).leases.some((x) => x.agent === 'lo'), false, 'expired at 10 min');
+});
+
+test('priority: a P2 renewal is refused (E_YIELD_REQUIRED) while a higher-or-equal ticket waits; allowed with none or only lower', async () => {
+  const h = harness();
+  const lo = (await h.claim('lo', 'host:host-1', { priority: 'P2', ttl_min: 10 })).lease;
+  assert.equal((await h.svc.renew({ id: lo.id, ttl_min: 120 })).lease.ttl_min, 10, 'no one waits: allowed, clamped to 10');
+  assert.equal((await h.svc.renew({ id: lo.id, ttl_min: 120 })).warnings.length, 1);
+  assert.equal((await h.svc.list()).leases[0].yield_required, false);
+  const lower = await h.claim('lower', 'host:host-1', { wait: 'ticket', priority: 'P2' });   // equal priority (P2 is the lowest there is)
+  assert.ok(lower.ticket);
+  const r = await h.svc.renew({ id: lo.id, ttl_min: 10 });
+  assert.equal(r.ok, false); assert.equal(r.code, 'E_YIELD_REQUIRED'); assert.match(r.error, /yield_required/); assert.equal(r.reason, 'yield_required');
+  assert.equal((await h.svc.list()).leases[0].yield_required, true);
+  await h.svc.cancelTicket(lower.ticket.id);
+  assert.equal((await h.svc.renew({ id: lo.id, ttl_min: 10 })).ok, true, 'ticket gone: allowed again');
+  // a lower-priority waiter does not force a P1 holder, and a P1 holder is never refused
+  const p1 = (await h.claim('p1', 'host:host-2', { priority: 'P1', ttl_min: 60 })).lease;
+  await h.claim('w2', 'host:host-2', { wait: 'ticket', priority: 'P0' });
+  assert.equal((await h.svc.renew({ id: p1.id, ttl_min: 60 })).ok, true, 'P1 unaffected by a P0 ticket');
+  // P2 holder, ticket on an unrelated resource: allowed
+  const lo2 = (await h.claim('lo2', 'host:host-3', { priority: 'P2' })).lease;
+  assert.equal((await h.svc.renew({ id: lo2.id, ttl_min: 10 })).ok, true);
+});
+
+test('priority: a lower-priority ticket does not stop a P2 renewal... but a P1 or P0 ticket does, and the P1 holder keeps today\'s behaviour', async () => {
+  const h = harness({ lowPriority: 'P1' });          // threshold is a config constant: here P1 and P2 are "low", so a P2 ticket cannot outrank a P1 holder
+  const holder = (await h.claim('h', 'host:host-1', { priority: 'P1' })).lease;
+  assert.equal(holder.ttl_min, 10);
+  await h.claim('w', 'host:host-1', { wait: 'ticket', priority: 'P2' });
+  assert.equal((await h.svc.renew({ id: holder.id })).ok, true, 'a P2 ticket is lower than a P1 holder');
+  await h.claim('w1', 'host:host-1', { wait: 'ticket', priority: 'P1' });
+  assert.equal((await h.svc.renew({ id: holder.id })).code, 'E_YIELD_REQUIRED');
+});
+
+test('priority: the holder gets a yield event once, as soon as an outranking claim waits; the heartbeat says so too', async () => {
+  const h = harness();
+  const lo = (await h.claim('codebox:coc-hourly-run', 'host:host-1', { priority: 'P2', ttl_min: 110 })).lease;
+  assert.equal(h.events.filter((e) => e.kind === 'yield').length, 0);
+  await h.claim('waiter', 'host:host-1', { wait: 'ticket', priority: 'P1' });
+  const ys = h.events.filter((e) => e.kind === 'yield');
+  assert.equal(ys.length, 1); assert.equal(ys[0].id, lo.id); assert.equal(ys[0].agent, 'codebox:coc-hourly-run'); assert.equal(ys[0].session, 'codebox:coc-hourly-run'); assert.equal(ys[0].priority, 'P2');
+  assert.match(ys[0].reason, /turn boundary/);
+  const hb = await h.svc.heartbeat({ id: lo.id, active: true });
+  assert.equal(hb.ok, true); assert.equal(hb.yield_required, true); assert.match(hb.yield_message, /release/);
+  await h.svc.renew({ id: lo.id }); await h.svc.heartbeat({ id: lo.id });
+  assert.equal(h.events.filter((e) => e.kind === 'yield').length, 1, 'not repeated');
+  // no yield event for a P1 holder
+  const p1 = (await h.claim('p1', 'host:host-2', { priority: 'P1' })).lease;
+  await h.claim('w2', 'host:host-2', { wait: 'ticket', priority: 'P0' });
+  assert.equal(h.events.filter((e) => e.kind === 'yield' && e.id === p1.id).length, 0);
+});
+
+test('priority survives a restart (journal replay) and the ticket grant carries it to the lease', async () => {
+  const h = harness();
+  const lo = (await h.claim('lo', 'host:host-1', { priority: 'P2', ttl_min: 110 })).lease;
+  const t = await h.claim('nxt', 'host:host-1', { wait: 'ticket', priority: 'P0', ttl_min: 60 });
+  await h.svc.release({ id: lo.id });
+  const svc2 = h.open();
+  const l = (await svc2.list()).leases;
+  assert.equal(l.length, 1); assert.equal(l[0].priority, 'P0'); assert.equal(l[0].ttl_min, 60); void t;
+});

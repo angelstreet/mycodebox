@@ -770,7 +770,7 @@ const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, 
 // The central lease service (round 10) is always constructed: lease clients in shadow mode report to it even while the
 // dashboard reads the legacy registry. `leaseAuthority` only decides which one the dashboard, the deploy runner and the
 // manager trust. Unknown liveness (undefined) never releases anything.
-const leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), now: Date.now, sessions: { isAlive: leaseLiveness.isAlive, trackable: leaseLiveness.trackable },
+const leaseService = createLeaseService({ dir: join(STATE_DIR, 'leases'), now: Date.now, sessions: { isAlive: leaseLiveness.isAlive, trackable: leaseLiveness.trackable, priority: (name) => sessionMeta.priorityIfKnown(name) },
   onEvent: (ev) => onLeaseEvent(ev).catch((e) => console.error('[lease] event', e.message)),
   config: { envs: (process.env.LEASE_ENVS || '').split(',').map((x) => x.trim()).filter(Boolean),
     ...(leaseServiceIsAuthority ? {} : { notAuthority: { authority: leaseAuthority === 'legacy' ? 'the legacy registry' : 'the registry host service (reached through the ssh vpt-lease wrapper)' } }) } });
