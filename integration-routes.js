@@ -1,7 +1,7 @@
 // HTTP front of the integration lane: /api/integration/* (docs/v2/INTEGRATION-LANE.md). server.js only calls handle() for paths
 // under PREFIX. Who may call: (a) a loopback peer with the reporter token (sessions on the codebox), or (b) a bearer token of a
 // clients.json client flagged `integrate` (lease-token.js add <name> --integrate) from the tailnet/loopback range (the Mac).
-//   POST /requests                    { repo?, origin?, cwd?, branch, session?, deploy?, note?, approvedBy? (manager only, else 403) } -> { ok, id, position, repo }
+//   POST /requests                    { repo?, origin?, cwd?, branch, session?, deploy?, note?, approvedBy? (manager only, else 403), migrationApplied? (manager only, else 403) } -> { ok, id, position, repo }
 //   GET  /requests?repo=&state=&limit=                                                          -> { ok, requests: [...] }
 //   GET  /requests/:id                                                                          -> { ok, request, ...summary }
 //   GET  /requests/:id/wait?timeout=30   long-poll (max 30 s) until a final state               -> { ok, request, final, ...summary }
@@ -117,11 +117,13 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         let body; try { body = await readBody(req, 64 * 1024); } catch (e) { fail('E_INVALID', e.message); return true; }
         // --approved-by: only the manager (a client flagged `manager`) or the loopback reporter token may approve; an integrate client may not
         if (body.approvedBy != null && !who.manager) { send(res, 403, { ok: false, error: 'approved-by needs the manager (a client added with --manager) or the loopback reporter token' }, fmt); return true; }
+        // --migration-applied: the same gate (it is the manager's attestation), and only read together with the approval
+        if (body.migrationApplied != null && !who.manager) { send(res, 403, { ok: false, error: 'migration-applied needs the manager (a client added with --manager) or the loopback reporter token' }, fmt); return true; }
         const repo = await resolveRepo(body, who);
         if (!repo) { fail('E_INVALID', `repo not recognised: name it (--repo) — configured: ${lane.repoKeys().join(', ') || 'none'}`); return true; }
         // A remote (client:*) caller's session name is the Mac's: it resolves to ONE registered `mac:` session of that same client (exact or by slug prefix), else null; never a local tmux one.
         const session = who.by.startsWith('client:') ? (typeof body.session === 'string' ? remoteResolve(body.session, who.client) : null) : body.session;
-        const out = lane.enqueue({ repo, branch: body.branch, session, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined });
+        const out = lane.enqueue({ repo, branch: body.branch, session, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
         send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;

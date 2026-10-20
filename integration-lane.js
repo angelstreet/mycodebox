@@ -13,7 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
-import { gitFacts, mergeFloor, isConvention } from './merge-policy.js';
+import { gitFacts, mergeFloor, isConvention, migrationReasons } from './merge-policy.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
 
 export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled']);
@@ -22,6 +22,7 @@ const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SCOPES = new Set(['frontend', 'server', 'host', 'full']);   // the deploy queue's scopes
 const MAX_PUSH_TRIES = 3;
+const MIGRATION_REASON = /^touches a migration: /;   // the path-based floor line the effect-based migration reasons replace
 export const INSTALL_CMD = 'npm ci --no-audit --no-fund';
 const coded = (code, message, extra) => Object.assign(new Error(message), { code, ...extra });
 // Remote URLs may carry credentials: never let them into a tail, a reason or a notice.
@@ -184,12 +185,19 @@ export const defaultHealth = (base = `http://127.0.0.1:${Number(process.env.PORT
 // Round 7 merge floor with the lane as the tester (its own test run replaces the session's test report).
 // `approveInfra` (a manager approval on the request) drops ONLY the CI/deploy/infra-path reason; `infra` tells the lane when that
 // was the floor's only reason, so it can ask the manager instead of bouncing the branch.
-export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles, approveInfra = false, optOut = [] }) {
+// Q199: a migration merges by EFFECT. An additive-only migration (CREATE TABLE / CREATE INDEX / ADD COLUMN) merges with the manager's
+// approval AND the --migration-applied attestation (the lane cannot read the target DB, so the manager says the objects are there);
+// a destructive one is returned with the construct that makes it so.
+export async function defaultMergeEval({ cwd, branch, branchSha, target, remote, conventionFiles, approveInfra = false, migrationApplied = false, optOut = [] }) {
   const facts = await gitFacts({ cwd, branch, branchSha, target, remote, conventionFiles });
   const files = (facts.sensitive || []).filter((s) => s.why === 'deploy').map((s) => s.file);
   const rest = mergeFloor(facts, { state: 'green' }, { conventionFiles, approveInfra: true, optOut });
-  const reasons = approveInfra ? rest : mergeFloor(facts, { state: 'green' }, { conventionFiles, optOut });
-  return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts, infra: { files, only: !approveInfra && files.length > 0 && rest.length === 0 } };
+  const base = approveInfra ? rest : mergeFloor(facts, { state: 'green' }, { conventionFiles, optOut });
+  // the path-based migration reasons become the effect-based ones (or vanish when the attestation allows the merge)
+  const mig = migrationReasons(facts, { approvedBy: approveInfra, migrationApplied });
+  const reasons = base.filter((x) => !MIGRATION_REASON.test(x)).concat(mig);
+  return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts, infra: { files, only: !approveInfra && files.length > 0 && rest.length === 0 },
+    migration: { files: (facts.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file), allowed: mig.length === 0 && base.length > 0, applied: !!migrationApplied } };
 }
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
@@ -376,14 +384,27 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       confidence: null, rollback: o.rollback || 'deploy the previous release', session: r.session, repo: r.repo, branch: r.branch, env: o.env, scope: o.scope, ref: c.target, sha: r.sha, request: r.id });
   }
 
+  // Q199: the additive-migration merge the manager attested is a decision of its own, in the owner's "Decided for you" feed.
+  function journalMigration(r, c, e) {
+    const m = e?.migration;
+    if (!m?.allowed || !m.files?.length) return;
+    jr({ decision_id: `lane-migration-${r.id}${r.attempt > 1 ? `-${r.attempt}` : ''}`, kind: 'merge', ts: iso(),
+      question: `Merge additive migration ${m.files.join(', ')} already applied in the target DB?`, chosen: 'approve',
+      rationale: `Q199 (owner 2026-10-20): the lane cannot read the target DB, so the migration floor goes by effect. These files only add objects (CREATE TABLE / CREATE INDEX / ADD COLUMN), and the manager attested with --migration-applied that they already exist in the target DB; a destructive migration still returns to the owner`,
+      evidence: [`migration files: ${m.files.join(', ')}`, 'effect: additive only (no DROP, ALTER ... TYPE/RENAME, or data writes)', `attestation: migrationApplied (${r.migrationAppliedBy || r.approvedBy || 'manager'})`],
+      confidence: null, reversible: true, migrationApplied: true, migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
+      approvedBy: r.approvedBy, session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id });
+  }
+
   // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
   async function evaluate(r, c) {
     const ev = await step(r, 'evaluate', async () => {
-      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session, approveInfra: !!r.approvedBy, optOut: optOutList() });
+      const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: c.conventions, repo: r.repo, session: r.session, approveInfra: !!r.approvedBy, migrationApplied: !!r.migrationApplied, optOut: optOutList() });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];
       // The evaluation is the lane's review: recorded as evidence (source: floor, or jev/reasoning when mergeEval reports its decision).
       r.review = { pass: e?.verdict === 'merge', source: e?.decision?.source || 'floor', confidence: Number.isFinite(e?.decision?.confidence) ? e.decision.confidence : null, at: iso() };
       journalVerdict(r, c, e, reasons);
+      if (e?.verdict === 'merge') journalMigration(r, c, e);
       return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons, infra: e?.infra?.only ? e.infra.files : null } };
     });
     if (!ev.ok && ev.info.infra) {
@@ -759,14 +780,16 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
       const worktree = typeof input.worktree === 'string' && path.isAbsolute(input.worktree) ? input.worktree.slice(0, 500) : null;
-      const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.deployExplicit === !input.deploy && !x.revertOf && !x.approvedBy === !input.approvedBy);
+      const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.deployExplicit === !input.deploy && !x.revertOf && !x.approvedBy === !input.approvedBy && !!x.migrationApplied === !!input.migrationApplied);
       if (dup) return { id: dup.id, position: ahead(dup) + 1, repo: key, duplicate: true };
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
       const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
         deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
-        ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}) };
+        ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}),
+        // --migration-applied: the manager attests the additive migration's objects already exist in the target DB (Q199); only ever read with --approved-by
+        ...(input.migrationApplied ? { migrationApplied: true, migrationAppliedBy: input.approvedBy ? String(input.approvedBy).slice(0, 80) : null, migrationAppliedAt: iso() } : {}) };
       try {
         const prev = Math.max(0, ...[...reqs.values()].filter((x) => session && x.session === session).map((x) => Date.parse(x.createdAt) || 0));
         const to = now(); r.usage = usage({ stateDir, session, worktree: r.worktree, from: Math.max(prev, to - 864e5), to });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDecision } from '../orchestration/task-contract.js';
-import { MERGE_DEFAULTS, parseMergeAsk, testEvidence, gitFacts, mergeFloor, reasoningDecision, evaluateMerge, journalRecord, composeReply } from '../merge-policy.js';
+import { MERGE_DEFAULTS, parseMergeAsk, testEvidence, gitFacts, mergeFloor, reasoningDecision, evaluateMerge, journalRecord, composeReply, migrationAdditive, migrationReasons } from '../merge-policy.js';
 import { hardMatch } from '../stall.js';
 import { makeRepo, commit, git } from './helpers-git.js';
 
@@ -95,6 +95,59 @@ test('mergeFloor: reasons', async () => {
   assert.match(mergeFloor({ ...facts, sensitive: [{ file: 'x/y.sql', why: 'migration' }] }, green, {})[0], /^touches a migration: x\/y\.sql$/);
   assert.match(mergeFloor({ ...facts, sensitive: [{ file: '.env', why: 'secret' }] }, green, {})[0], /^touches a secret\/credential path: \.env$/);
   assert.deepEqual(mergeFloor({ ...facts, docsOnly: true }, testEvidence('done'), {}), []);
+});
+
+// ---- migrations by effect (Q199) ----
+test('migrationAdditive: SQL statements are read by effect, not by path', () => {
+  const f = 'db/migrations/002.sql';
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE tasks (id serial PRIMARY KEY);']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['create unique index tasks_name on tasks (name);']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE tasks ADD COLUMN done_at timestamptz;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE IF EXISTS "public"."tasks" ADD COLUMN IF NOT EXISTS done_at timestamptz;']), { additive: true });
+  // comments and blank lines are ignored, a CREATE TABLE body may span lines
+  assert.deepEqual(migrationAdditive(f, ['', '-- 002 new', '/* add the table */', 'CREATE TABLE tasks (', '  id serial PRIMARY KEY,', '  name text NOT NULL', ');']), { additive: true });
+  // destructive shapes name themselves
+  for (const [sql, why] of [['ALTER TABLE tasks DROP COLUMN name;', 'DROP COLUMN'], ['DROP TABLE tasks;', 'DROP TABLE'], ['DROP INDEX tasks_name;', 'DROP INDEX'],
+    ['ALTER TABLE tasks ALTER COLUMN name TYPE varchar(9);', 'ALTER ... TYPE'], ['ALTER TABLE tasks RENAME TO job;', 'RENAME'],
+    ['UPDATE tasks SET done_at = now();', 'UPDATE'], ["DELETE FROM tasks WHERE done_at IS NOT NULL;", 'DELETE'], ["INSERT INTO tasks (name) VALUES ('x');", 'INSERT'],
+    ['TRUNCATE tasks;', 'TRUNCATE']]) {
+    assert.deepEqual(migrationAdditive(f, [sql]), { additive: false, reason: why }, sql);
+  }
+  // one destructive statement anywhere is enough, and anything unreadable is not additive
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE a (id int);', '', 'ALTER TABLE a DROP COLUMN id;']), { additive: false, reason: 'DROP COLUMN' });
+  assert.equal(migrationAdditive(f, ['GRANT SELECT ON tasks TO app;']).additive, false);
+  assert.deepEqual(migrationAdditive(f, ['CREATE TABLE a (id int);']).additive, true);
+  assert.deepEqual(migrationAdditive(f, ['-- only a comment', '', '   ']), { additive: true, empty: true });
+  assert.deepEqual(migrationAdditive(f, null), { additive: false, reason: 'unreadable diff' });
+});
+test('migrationAdditive: a non-SQL migration is additive only with the three ops', () => {
+  const f = 'alembic/versions/003_add_col.py';
+  assert.deepEqual(migrationAdditive(f, ['op.add_column("tasks", sa.Column("done_at", sa.DateTime(), nullable=True))']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['op.create_index("ix_tasks_name", "tasks", ["name"])']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['op.create_table(', '    "tasks",', '    sa.Column("id", sa.Integer(), primary_key=True),', ')', 'op.add_column("tasks", sa.Column("n", sa.Integer()))']), { additive: true });
+  // module boilerplate around them is ignored, a destructive op is not
+  assert.deepEqual(migrationAdditive(f, ['from alembic import op', 'import sqlalchemy as sa', 'revision = "003"', 'def upgrade():', '    op.add_column("tasks", sa.Column("n", sa.Integer()))']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['op.add_column("tasks", sa.Column("n", sa.Integer()))', 'op.drop_column("tasks", "old")']), { additive: false, reason: 'drop_column' });
+  assert.deepEqual(migrationAdditive(f, ['op.execute("UPDATE tasks SET n = 0")']), { additive: false, reason: 'execute' });
+  assert.equal(migrationAdditive(f, ['whatever()']).additive, false);
+});
+test('migrationReasons: additive needs the approval and the attestation; destructive never merges', async () => {
+  const sql = 'CREATE TABLE tasks (id serial PRIMARY KEY);';
+  const facts = (file, adds) => ({ sensitive: [{ file, why: 'migration' }], migrationAdds: { [file]: adds } });
+  assert.deepEqual(migrationReasons({ sensitive: [] }), [], 'no migration, no reason');
+  const add = facts('db/migrations/002.sql', [sql]);
+  assert.deepEqual(migrationReasons(add), ['additive migration needs --approved-by manager --migration-applied (objects already in the target DB)']);
+  assert.deepEqual(migrationReasons(add, { approvedBy: true }), ['additive migration needs --migration-applied (the manager attests the objects already exist in the target DB)']);
+  assert.deepEqual(migrationReasons(add, { approvedBy: true, migrationApplied: true }), []);
+  const drop = facts('db/migrations/002.sql', ['ALTER TABLE tasks DROP COLUMN name;']);
+  const why = migrationReasons(drop, { approvedBy: true, migrationApplied: true });
+  assert.deepEqual(why, ['migration is destructive: DROP COLUMN in db/migrations/002.sql']);
+  assert.deepEqual(migrationReasons(facts('db/migrations/002.sql', null), { approvedBy: true, migrationApplied: true }), ['migration is destructive: unreadable diff in db/migrations/002.sql']);
+  // gitFacts carries the added lines of a migration file
+  const repo = makeRepo({ files: { 'db/migrations/002.sql': `${sql}\n` } });
+  const f = await gitFacts({ cwd: repo, branch: 'feat' });
+  assert.deepEqual(f.migrationAdds['db/migrations/002.sql'], [`CREATE TABLE tasks (id serial PRIMARY KEY);`]);
+  assert.deepEqual(migrationReasons(f, { approvedBy: true, migrationApplied: true }), []);
 });
 test('reasoningDecision: confidence by evidence', () => {
   assert.equal(reasoningDecision({ docsOnly: true }, { state: 'unknown' }).confidence, 0.9);
