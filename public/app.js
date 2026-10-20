@@ -3809,7 +3809,8 @@ async function postSend(name, body) {
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   state.sentAt[name] = Date.now();
-  if (popupApi) popupApi.sent(name, body.keys);   // a send to a session answers its stop
+  // a send to a session answers its stop; the text is already delivered, so a throw here must not report the send as failed
+  try { if (popupApi) popupApi.sent(name, body.keys); } catch (e) { console.warn('[send] popup bookkeeping failed:', e); }
 }
 
 // Returns the list of session names that failed.
