@@ -1,7 +1,8 @@
 // The lane's `deploys` adapter (round 13, brief B): a deploy request through the existing deploy registry path, then wait for it.
 //   request: deploy request <env> --scope <s> --ref <target> --agent integration:<id> --approved   -> the deploy id on stdout
 //   wait:    the registry has a blocking `deploy wait` only on the legacy side (the central registry rejects it), so wait polls
-//            `deploy list --json` for that id until it is finished; the version is the entry's own, else `deploy last <env> --json`.
+//            `deploy list --json` for that id until it is finished (a deploy it no longer lists, i.e. already finished, is asked
+//            about with `deploy wait <id>`); the version is the entry's own, else `deploy last <env> --json`.
 // registry: (argv, opts) => { code, stdout, stderr } (leaseSource.deployRegistry()). Same-scope requests coalesce in the deploy queue
 // (the runner finishes the merged requests with the winner's result), so a coalesced entry is followed to its result as any other.
 const FINAL = { done: 'done', failed: 'failed', cancelled: 'cancelled', canceled: 'cancelled', error: 'failed', coalesced: 'done' };
@@ -50,6 +51,20 @@ export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise
       return String(env?.version || e?.version || '') || null;
     } catch { return null; }
   }
+  // The list only holds queued/running deploys, so one that finishes between two polls (or before the first) is gone from it:
+  // ask the registry itself for that id's final state before a miss is counted, else a deploy that succeeded is reported
+  // as not in the registry (real case 2026-10-20: two lane deploys, both `deploy wait <id>` said done).
+  // `deploy wait <id> --timeout 5` prints one line and exits 0 on done / 1 on failed|cancelled; anything else (still queued or
+  // running, timeout, unreachable, unknown id) returns null so the poll carries on.
+  async function finalById(id) {
+    const r = await reg(['deploy', 'wait', String(id), '--timeout', '5']);
+    const line = String(r.stdout || '').split('\n').map((l) => l.trim()).find((l) => l.startsWith('deploy ')) || '';
+    let m = r.code === 0 ? /^deploy\s+\S+\s+done(?:\s+\(version\s+(.+)\))?$/.exec(line) : null;
+    if (m) return { ok: true, state: 'done', version: m[1] ? String(m[1]) : await versionOf({}), tail: '' };
+    m = r.code === 1 ? /^deploy\s+\S+\s+(failed|cancelled|canceled)(?:\s+\((.*)\))?$/.exec(line) : null;
+    if (m) return { ok: false, state: m[1] === 'failed' ? 'failed' : 'cancelled', version: null, tail: String(m[2] || '').slice(-1000) };
+    return null;
+  }
   // -> { ok, state: 'done'|'failed'|'cancelled'|'timeout'|'unknown', version, tail, error? }
   async function wait(id, { timeoutMs = timeoutMin * 60000 } = {}) {
     const t0 = now();
@@ -60,7 +75,11 @@ export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise
         misses = 0;
         const fin = FINAL[String(d.state || '').toLowerCase()];
         if (fin) return { ok: fin === 'done', state: fin, version: fin === 'done' ? await versionOf(d) : null, tail: String(d.tail || d.error || '').slice(-1000) };
-      } else if (++misses >= 20) return { ok: false, state: 'unknown', version: null, tail: '', error: `deploy ${id} is not in the registry` };
+      } else {
+        const fin = await finalById(id);   // finished and gone from the list: its result is not a miss
+        if (fin) return fin;
+        if (++misses >= 20) return { ok: false, state: 'unknown', version: null, tail: '', error: `deploy ${id} is not in the registry` };
+      }
       if (now() - t0 > timeoutMs) {
         // never report failure for a deploy that may still run later: a started deploy is waited out (up to 3x the timeout); a queued one is cancelled first,
         // and if it cannot be cancelled (or the state is unknown) the wait goes on
