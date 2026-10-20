@@ -476,3 +476,56 @@ test('review fixes: a numbered plan is not a menu, and the continue floor reads 
   assert.equal(far.case, 'continue'); assert.ok(far.forbidden, 'the destructive step eight lines up is still seen');
   assert.equal(wouldSend(far).send, null);
 });
+
+// ---- the forbidden scan reads the ask, not the pane (the stop that was tagged "sudo" / "Deploy") ------------------
+// A stop was escalated because the scan read the whole closing text: an earlier tool line (ssh ... sudo -n -u x ...) and a
+// background shell named "...Deploy..." sat above a plain UI question. The filter reads the question, its option labels and the
+// STATUS line only: tool-call lines, command outputs and background-task listings are chrome, never the ask.
+test('a tool line holding "sudo -n -u x" above a plain UI question is not forbidden', () => {
+  const s = classifyStall({ plain: [
+    '⏺ Bash(ssh vpt-node1 "sudo -n -u deploy systemctl restart ghosty")',
+    '  ⎿  ok',
+    '',
+    '⏺ The review page is ready.',
+    '  Shall I continue with phase 2?',
+    '', '✻ Baked for 3m 31s · done 3:59 PM', RULE, '❯ ', RULE,
+  ], state: 'done' });
+  assert.equal(s.case, 'continue');
+  assert.equal(s.forbidden, null, 'the sudo command line is tool chrome, not the ask');
+  assert.deepEqual(wouldSend(s).send, { text: 'Yes, continue.' }, 'a plain question after a sudo tool line still auto-answers');
+});
+
+test('a background-shell list mentioning "Deploy" with an exit menu is not forbidden', () => {
+  const s = classifyStall({ plain: [
+    '⏺ Bash(npm run deploy:watch)',
+    '  ⎿  Running in background shell tmux_Deploy_watch_3',
+    '',
+    '⏺ Everything is merged and the checks are green.',
+    '  How do you want to finish?',
+    '  1. Exit the session (recommended)',
+    '  2. Keep the pane open',
+    '', '✻ Baked for 3m 31s · done 3:59 PM', RULE, '❯ ', RULE,
+  ], state: 'done' });
+  assert.equal(s.case, 'menu_recommended');
+  assert.equal(s.forbidden, null, 'the background-shell listing is chrome, not the ask');
+  assert.ok(wouldSend(s).send, 'the exit menu still auto-answers');
+});
+
+test('a question that itself asks to deploy is still forbidden', () => {
+  const s = classify(claude('The branch is green.\nShall I deploy it to the hosts?'));
+  assert.ok(s.forbidden, 'the ask itself names the deploy -- the safety filter still blocks it');
+  assert.ok(s.topics?.deploy, 'the deploy topic is set so ops-ask routes it as a manager item');
+  assert.equal(wouldSend(s).send, null);
+});
+
+// The scoping must not blind the live-menu path: a permission prompt does not end on "?", so the question fallback takes the
+// chrome line ("Esc to cancel") and the prompt above the options is the only place the ask is written.
+test('a live menu still reads the prompt line above its options', () => {
+  const s = classifyStall({ plain: [
+    'Run this command? deploy the frontend to production',
+    '❯ 1. Yes', "  2. Yes, and don't ask again", '  3. No', 'Esc to cancel',
+  ], state: 'waiting' });
+  assert.ok(s.forbidden, 'the prompt above the options is the ask -- deploy is still forbidden');
+  assert.ok(s.topics?.deploy, 'the deploy topic is set so every key needs a confirm');
+  assert.equal(wouldSend(s).send, null);
+});
