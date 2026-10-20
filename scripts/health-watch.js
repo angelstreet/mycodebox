@@ -222,6 +222,7 @@ function readDisk() {
 // Test suites leak mkdtemp dirs in os.tmpdir() (2026-10-20: 186k entries ate every inode). Names of every
 // mkdtemp prefix (join of tmpdir and a literal) in test/ and scripts/; test/health-watch.test.js asserts the list stays complete.
 export const TMP_PREFIXES = [
+  'full-suite-', 'full-suite-state-', 'gtr-',
   'appr-origin-', 'auto-origin-', 'cbs-', 'ci-watch-', 'cs-', 'daily-', 'dec-origin-', 'done-check-', 'dr-',
   'fake-proc-', 'fake-run-', 'fallback-', 'fallback-node-', 'g8-', 'g8-daily-', 'ghosty-adopt-', 'ghosty-al-',
   'ghosty-approved-', 'ghosty-auto-', 'ghosty-autonomy-', 'ghosty-dedupe-', 'ghosty-dep-', 'ghosty-ds-',

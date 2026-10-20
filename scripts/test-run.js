@@ -76,7 +76,7 @@ async function main() {
   console.log(`test-run: ${files.length} of ${all.length} test files (${why})`);
   if (!files.length) return 0;
   const release = files.length >= BIG_RUN ? await ticket() : () => {};
-  const tmp = mkdtempSync(path.join(os.tmpdir(), 't-'));   // short: unix socket paths under it must stay < 104 chars
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'gtr-'));   // short: unix socket paths under it must stay < 104 chars; distinct so health-watch can sweep it
   const child = spawn(process.execPath, ['--test', '--test-timeout=300000', '--test-force-exit', ...files],
     { cwd: root, stdio: 'inherit', env: { ...process.env, TMPDIR: tmp } });
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => child.kill(sig));
