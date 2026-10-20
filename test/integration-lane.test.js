@@ -72,6 +72,31 @@ test('VERSION.txt conflict: take-target keeps the target file, max-plus-one bump
     assert.equal(r.state, 'merged', `${resolver}: ${JSON.stringify(r)}`);
     assert.equal(w.show('main', 'VERSION.txt'), want, resolver);
     assert.equal(w.show('main', 'new.js'), 'n\n');
+    assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), new RegExp(`; resolved VERSION\\.txt \\(${resolver}\\)$`), resolver);
+  }
+});
+
+test('clean merge of a changed VERSION.txt: main keeps the target file, the merge still has two parents', async () => {
+  const w = makeWorld(); w.branch('feat', { 'VERSION.txt': 'current:fix/branch-label-2026.10.20-1\n', 'new.js': 'x\n' });
+  const { lane } = mk(w);
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(w.show('main', 'VERSION.txt'), '1\n');       // the target's label, never the branch's
+  assert.equal(w.show('main', 'new.js'), 'x\n');
+  assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved VERSION\.txt \(take-target\)$/);
+  assert.equal(git(w.remote, 'rev-list', '--parents', '-n', '1', r.sha).trim().split(' ').length, 3);   // amended, still a merge
+});
+
+test('clean merge that leaves VERSION.txt alone: the target file is untouched and nothing is resolved', async () => {
+  for (const [i, moved] of [[0, false], [1, true]]) {   // main itself may have moved its own file: that is the target's version too
+    const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+    if (moved) w.moveMain({ 'VERSION.txt': '5\n', 'other.js': 'o\n' });
+    const { lane } = mk(w);
+    const r = await go(lane, { branch: 'feat' });
+    assert.equal(r.state, 'merged', `${i}: ${JSON.stringify(r)}`);
+    assert.equal(w.show('main', 'VERSION.txt'), moved ? '5\n' : '1\n', `case ${i}`);
+    assert.equal(w.show('main', 'new.js'), 'x\n');
+    assert.doesNotMatch(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /resolved/, `case ${i}`);
   }
 });
 
