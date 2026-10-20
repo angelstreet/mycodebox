@@ -2358,7 +2358,8 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
 const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut: () => managerConfig().mergeOptOut,
   // a v2/task/<id> branch merges only at a SHA the owner granted an `integration:merge:*:<sha>` key for in the V2 store
-  taskGrant: async (id, sha) => { if (!v2) return false; const { effectiveGrants } = await import('./orchestration/task-contract.js');
+  // GHOSTY_V2 off: no V2 store, so no grant and the V2 module is never imported
+  taskGrant: async (id, sha) => { if (!V2_ON || !v2) return false; const { effectiveGrants } = await import('./orchestration/task-contract.js');
     return effectiveGrants(await v2.store.events(id)).some((e) => e.payload.grants?.request_kind === 'integration' && (e.payload.grants.keys || []).some((k) => k.startsWith('integration:merge:') && k.endsWith(`:${sha}`))); },
   deploys: { request: (o) => (integrationHooks.deploys ? integrationHooks.deploys.request(o) : Promise.reject(new Error('deploy adapter not wired'))),
     wait: (id) => integrationHooks.deploys.wait(id),
