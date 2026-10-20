@@ -39,6 +39,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   `layout.json`.
 - The service is `ghosty-sessions` (systemd). Restart it with `scripts/safe-restart.sh`, never during a deploy.
   The guard requires a fresh successful deploy snapshot and refuses unknown or active deployment state.
+- Kill only your own processes: `kill <pid>`, `pkill -P <your pid>`, or a pattern naming your own worktree path. Never
+  `killall` or `pkill -f "node --test"`-style patterns: the host is shared, and on 2026-10-20 one killed the
+  integration lane's test run. A Claude hook on codebox (`~/.claude/hooks/kill-guard.py`) refuses them.
+- Never write work-in-progress into the live checkout (`~/ghosty-sessions`): it blocks deploys and risks committing
+  secrets. Work in a worktree.
 - Run long jobs (runs, suites, builds, deploys) in the foreground of a background shell the harness tracks, so the
   session is woken when they end. Never `nohup`, `setsid`, `disown` or a trailing `&`: the harness cannot see those
   jobs. If you must wait on one, name its pid, log file, run id or deploy id in the `STATUS: waiting` line; the manager

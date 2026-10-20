@@ -2,6 +2,7 @@ node_modules
 *.log
 .env
 .env.local
+.env.*
 .DS_Store
 certs/key.pem
 certs/cert.pem

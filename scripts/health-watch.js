@@ -177,6 +177,17 @@ const sh = (cmd, args, timeout = 20000) => { try { return execFileSync(cmd, args
 // du exits non-zero on unreadable entries but its stdout is still the answer
 const shOut = (cmd, args, timeout) => { try { return execFileSync(cmd, args, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] }); } catch (e) { return typeof e.stdout === 'string' ? e.stdout : null; } };
 const duKB = (path) => { const o = shOut('du', ['-sk', path], 120000); const n = o ? parseInt(o, 10) : NaN; return Number.isFinite(n) ? n : 0; };
+// Report-only sizes: they change slowly, but while the disk alarm stayed on, re-walking /tmp and 41 worktrees took ~60 s
+// of every 5-min tick (2026-10-20). Cached for DU_TTL_MS in health-du-cache.json; cleanup steps still measure fresh.
+export const DU_TTL_MS = 60 * 60 * 1000;
+let duCache = null;   // { key: { at, v } }; null = uncached (tests)
+export function cachedSize(key, fn, now = Date.now(), cache = duCache) {
+  if (!cache) return fn();
+  const e = cache[key];
+  if (e && now - e.at < DU_TTL_MS) return e.v;
+  const v = fn(); cache[key] = { at: now, v }; return v;
+}
+const duR = (path) => cachedSize(`du:${path}`, () => duKB(path));
 const human = (kb) => kb >= 1048576 ? (kb / 1048576).toFixed(1) + ' GB' : kb >= 1024 ? (kb / 1024).toFixed(0) + ' MB' : kb + ' KB';
 
 export function parsePs(text, myUid) {
@@ -347,23 +358,23 @@ function investigate(ctx) {
   L.push('## Top 15 processes by CPU', '', topProcs(procs, owners, 'cpu'), '', '## Top 15 processes by RSS', '', topProcs(procs, owners, 'rss'), '');
   L.push('## Disk use of the usual suspects', '');
   // one `du -d1` per directory (children and total in a single walk), not one du per child
-  const dirKids = (dir, n = 15) => {
+  const dirKids = (dir, n = 15) => cachedSize(`kids:${dir}`, () => {
     const o = shOut('du', ['-k', '-d1', dir], 180000) || '';
     const rows = o.split('\n').filter(Boolean).map((l) => { const m = l.match(/^(\d+)\t(.*)$/); return m ? { kb: +m[1], path: m[2] } : null; }).filter(Boolean);
     const total = rows.find((r) => r.path === dir);
     return { total: total ? total.kb : 0, kids: rows.filter((r) => r.path !== dir).sort((a, b) => b.kb - a.kb).slice(0, n) };
-  };
+  });
   const tmpK = dirKids('/tmp');
   L.push(`- /tmp total: ${human(tmpK.total)}`);
   for (const k of tmpK.kids) L.push(`  - ${k.path}: ${human(k.kb)}`);
   const cacheK = dirKids(join(home, '.cache'));
   L.push(`- ~/.cache total: ${human(cacheK.total)}`);
   for (const k of cacheK.kids) L.push(`  - ${k.path.replace(home, '~')}: ${human(k.kb)}`);
-  L.push(`- ~/.claude: ${human(duKB(join(home, '.claude')))}`, `- ~/.npm: ${human(duKB(join(home, '.npm')))}`, `- ~/.local/state/ghosty: ${human(duKB(join(home, '.local/state/ghosty')))}`);
+  L.push(`- ~/.claude: ${human(duR(join(home, '.claude')))}`, `- ~/.npm: ${human(duR(join(home, '.npm')))}`, `- ~/.local/state/ghosty: ${human(duR(join(home, '.local/state/ghosty')))}`);
   const jd = sh('journalctl', ['--user', '--disk-usage']) || sh('journalctl', ['--disk-usage']);
   L.push(`- journal: ${jd ? jd.trim() : 'n/a'}`, '');
   L.push('## Worktrees (~/vpt-*, ~/ghosty-*)', '', '| dir | branch | size | git worktree | clean | merged into main | live session | class |', '|---|---|---|---|---|---|---|---|');
-  for (const w of wts) L.push(`| ${w.name} | ${w.branch} | ${human(duKB(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} |`);
+  for (const w of wts) L.push(`| ${w.name} | ${w.branch} | ${human(duR(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} |`);
   L.push('');
   const dk = sh('docker', ['system', 'df']);
   L.push('## Docker', '', dk ? '```\n' + dk.trim() + '\n```' : 'skipped (docker not usable without sudo)', '');
@@ -496,6 +507,8 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const iso = new Date(now).toISOString().replace(/[:.]/g, '-');
   const reportsDir = join(stateDir, 'health-reports');
   const reportPath = join(reportsDir, `${iso}.md`);
+  const duPath = join(stateDir, 'health-du-cache.json');
+  try { duCache = Object.fromEntries(Object.entries(JSON.parse(readFileSync(duPath, 'utf8'))).filter(([, e]) => now - e.at < DU_TTL_MS)); } catch { duCache = {}; }
   const wts = worktreeInfos(home, panes, claude);
   const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];
@@ -503,6 +516,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
     `- RAM available: ${metrics.ramAvailPct.toFixed(1)}%, limit ${cfg.ramAvailPct}%`, `- runaways: ${metrics.runaways.length}, stuck node --test: ${metrics.stuck.length}, orphaned test runs: ${metrics.leftovers.length}, defunct: ${metrics.defunct}`, '',
     '**Tripped:** ' + (issues.length ? issues.map((i) => i.title).join('; ') : 'none (forced run)'), '');
   R.push(investigate({ home, procs, owners, panes, claude, wts }));
+  try { writeFileSync(duPath, JSON.stringify(duCache)); } catch {}
 
   // SAFE AUTO-FIX
   let freedKB = 0;

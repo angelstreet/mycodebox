@@ -183,3 +183,12 @@ test('readInodes + evaluate: inode % from statfs, alert at the 85% threshold lik
   assert.match(hit[0].what, /Inodes on \/ are 85% used \(150 free, limit 85%\)/);
   assert.equal(evaluate({ ...base, inodePct: 84, inodeFree: 160 }, cfg, false).length, 0);
 });
+
+test('cachedSize: a report size is walked once per DU_TTL_MS, then again after it expires', async () => {
+  const { cachedSize, DU_TTL_MS } = await import('../scripts/health-watch.js');
+  const cache = {}; let walks = 0; const walk = () => ++walks;
+  assert.equal(cachedSize('du:/x', walk, 1000, cache), 1);
+  assert.equal(cachedSize('du:/x', walk, 1000 + DU_TTL_MS - 1, cache), 1);
+  assert.equal(cachedSize('du:/x', walk, 1000 + DU_TTL_MS, cache), 2);
+  assert.equal(cachedSize('du:/y', walk, 0, null), 3);   // no cache: always fresh
+});
