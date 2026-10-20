@@ -54,3 +54,36 @@ as raw `ruleDefault`; that is a script change outside this package's rules.
 
 * Live Jev agreement/cost/latency/unsafe-pick numbers need a server run with `JEV_URL`/`JEV_API_KEY`; not done here.
 * The router stays shadow only; no flag was added or flipped.
+
+## Re-check and extended set with real manager events (2026-10-19)
+
+Re-verification of the original fixtures on current main: wake rule default **10/10** (was 6/10 at baseline; the four
+misses and their verdicts are in the table above: three rule defects, one unsafe rule defect, no fixture defects, no
+open cases). Nothing in `router.js` needed changing in this pass.
+
+Extended set: `test/fixtures/router-states-real-events.json`, 24 sanitized wake events taken from the live
+`manager-events.jsonl` of 2026-10-18/19 (session, host, deploy and lease names, URLs and text replaced by generic labels;
+only the fields the wake point reads are kept). The label is the observed outcome in `stalls.jsonl`
+(`wake_outcome`: needed = a manager-agent alert, a send/answer on the session or a deploy action inside 15 min), or a
+judged label where the observed one is known to mislead. Each fixture says which (`expect_source`) and why (`reason`).
+`expect_any` lists the acceptable choices: needed means `wake_cheap|wake_opus`, not_needed means `ignore|rules_handle`.
+The dry-run script accepts `expect_any`. Run it with `--fixtures test/fixtures/router-states-real-events.json`.
+
+Result: wake rule default **21/24 (87.5 %)**; no rule change, because the three misses cannot be fixed by a general
+rule from the facts the event line carries:
+
+| fixture | rule | label | verdict |
+|---|---|---|---|
+| escalated ask parked until the owner is back (nobody acted in 15 min) | wake_opus | rules_handle/ignore | Open case. The label is weak (a real question for the owner). |
+| session waiting on a device lease ticket | wake_opus | rules_handle/ignore | Open case. A queued claim is not a question, but `escalated` is set upstream by the stall classifier; the router sees only that flag. |
+| session waiting on a deploy queue ticket | wake_opus | rules_handle/ignore | Open case, same cause. Fix belongs in `stall.js` (do not mark a "STATUS: waiting" on a ticket as escalated), not in the router. Across all logged `asks`, 136 of 302 were not_needed. |
+
+One fixture was relabelled during this pass: a permission-style confirm prompt first labelled wake-only. The needed label
+also counts the rules-only auto-answer as an action, so `rules_handle` is correct (fixture defect, fixed).
+One fixture (CI fixer stuck after 4 attempts) agrees with the rule but is flagged open: Jev leans `wake_cheap`, the observed
+outcome says nobody was needed because the owner is pushed directly.
+
+Caveats: the labels are only as good as `observedNeed` (failed deploys were not_needed in the log although they were
+real failures, hence judged labels); `escalated` for session events is inferred from the logged rule default; 24 events
+is a sample, not a scorecard. Failed deploys, critical quota and escalated asks agree; the day was otherwise dominated by
+never-pushed lease/integration events, all rules_handle.
