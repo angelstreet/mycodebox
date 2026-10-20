@@ -427,7 +427,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         if (c.test) {
           const t = await step(r, 'test', async (setLive) => {
             const res = await run(c.test, { cwd: wt, timeoutMs: c.testTimeoutMin * 60_000, onData: setLive,
-              env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1', TEST_SCOPE: 'full' } });   // the one full run per merge (scripts/test-run.js)
+              env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1', V2_BASE_SHA: targetSha } });   // tests what the merge touches; full suite nightly (scripts/test-run.js)
             fs.rmSync(path.join(dir, 'tmp', r.id), { recursive: true, force: true });
             const ok = res.code === 0 && !res.timedOut;
             const f = ok ? { tail: res.out, failing: [] } : testFailure(res.out);
