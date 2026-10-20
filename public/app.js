@@ -1641,14 +1641,11 @@ function buildSideRow(s) {
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
   return li;
 }
-// A pane with no agent in it (the agent exited or crashed, only bash/zsh/sh left) is a dead session: still
-// parkable, it just gets killed and resumed by conversation id. Only status fields already on the page are used.
-const SHELL_CMDS = new Set(['bash', 'zsh', 'sh']);
+// A pane with no agent in it (agent 'bash': the agent exited or crashed, only a shell is left) is a dead session:
+// still parkable. Live codex/opencode panes stay unparkable; the server re-checks the pane before parking.
 function parkable(n) {
-  const st = state.status[n] || {};
-  if (st.agent === 'claude') return true;
-  const cmd = String(st.agentCmd || '').trim().split('/').pop().split(/\s+/)[0];
-  return SHELL_CMDS.has(cmd);
+  const ag = (state.status[n] || {}).agent;
+  return ag === 'claude' || ag === 'bash';
 }
 function syncSide() {
   // which sessions are on screen right now: the focused one always; in the grid, every visible card

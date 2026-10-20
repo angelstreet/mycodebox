@@ -1529,7 +1529,7 @@ async function parkFacts(name) {
   const minimax = claude ? null : minimaxOfPane(pane?.pid || 0, table, pane?.cwd || HOME);
   // Dead session: the agent exited or crashed and the pane is a bare shell (bash/zsh/sh). Still parkable — its last
   // conversation id comes from the resolver (Claude's own project transcripts) and there is nothing to /exit.
-  const dead = !claude && !minimax;
+  const dead = !!pane && !claude && !minimax && !agentFromTree(pane.pid, table) && SHELLS.has(pane.cmd);
   let sessionId = null;
   if (dead) { try { sessionId = await resolveClaudeSessionId({ name, cwd: pane?.cwd || null }); } catch { sessionId = null; } }
   const sess = (await listSessions()).find((x) => x.name === name);
