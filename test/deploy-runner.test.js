@@ -274,6 +274,7 @@ test('SKIPPED_HOSTS: recorded on the deploy and a catch-up host request is queue
   const { runner, ran, alerts } = make(reg, { run: async (env, o) => { o.onLine('deploying'); if (o.id === '1') { o.onLine('SKIPPED (leased by mac:m): labox-dongle'); o.onLine('SKIPPED_HOSTS=labox-dongle'); } return { code: 0 }; } });
   await runner.tick();
   await until(() => reg.deploys.find((d) => d.id === '1').state === 'done');
+  await until(() => alerts.some(([k]) => k === 'deploy:1:done'));   // the alert follows the catch-up step (a registry read first)
   assert.deepEqual(reg.deploys.find((d) => d.id === '1').skippedHosts, ['labox-dongle']);
   const cu = reg.deploys.find((d) => d.agent === 'manager:deploy');
   assert.ok(cu);
