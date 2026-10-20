@@ -157,7 +157,8 @@ test('F3: the timer unit loads the checkout .env like the dashboard unit', () =>
 test('F5: the idle check treats approved as busy and the vocabulary matches the deploy runner', () => {
   const script = src('scripts/safe-restart.sh');
   assert.match(script, /states = \{[^}]*"approved"[^}]*\}/);
-  assert.match(script, /item\["state"\] in \{"running", "approved"\}/);
+  // Q199: approved stays busy unless the runner marked it blocked (lease/ticket); running is always busy
+  assert.match(script, /item\["state"\] == "running" or \(not blocked and \(item\["state"\] == "approved"/);
   for (const s of ['awaiting-approval', 'queued', 'approved', 'running']) assert.ok(src('triage.js').includes(`'${s}'`), s);
 });
 
