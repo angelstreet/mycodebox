@@ -14,6 +14,7 @@
 //   POST /api/sessions          → {name, agent, cwd, priority?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the Claude conversation, /exit, kill the tmux session (refuses when not idle / lease held / job running)
+//   (auto) a Claude session archived in the Claude app (Remote Control code 4090 in its transcript, no bridge) is parked every 30 s when done and lease-free; manager.json autoParkArchived:false turns it off
 //   POST /api/sessions/:name/resume → recreate the tmux session in the same folder and run `claude --resume <id>`
 //   GET  /api/parking               → { cap, live, over, candidates[], parked[], manual[], ramSavedMb } (manual notes read from <STATE_DIR>/parked.json, never counted in ramSavedMb or in parked)
 //   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
@@ -127,7 +128,7 @@ import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
-import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, SESSION_CAP } from './parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
@@ -1558,6 +1559,27 @@ async function parkSession(name) {
   return { ok: true, parked: rec };
 }
 
+// Archived in the Claude app (Remote Control ended, code 4090) -> park it when it is done and holds no lease. manager.json autoParkArchived (default on).
+const autoParkSeen = new Map();
+const autoParkEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).autoParkArchived !== false; } catch { return true; } };
+async function autoParkTick() {
+  if (!autoParkEnabled()) return;
+  const panes = await listPanes();
+  const table = await processTable();
+  const idx = await claudeIndex.get();
+  const rows = [...panes].map(([name, p]) => ({ name, claude: claudeOfPane(p.pid, table, idx) })).filter((r) => r.claude && !r.claude.info.bridgeSessionId);
+  const readTail = async (info) => {
+    const h = await openFile(transcriptFile(claudeProjectsDir, info.cwd, info.sessionId));
+    try { const { size } = await h.stat(); const len = Math.min(size, 262144); const b = Buffer.alloc(len); await h.read(b, 0, len, size - len); return b.toString('utf8'); } finally { await h.close(); }
+  };
+  const managers = new Set(loadManagerSessions());
+  await autoParkArchived({
+    panes: rows, tailOf: readTail, factsOf: parkFacts, checks: (f) => parking.checks(f), seen: autoParkSeen, skip: (n) => managers.has(n),
+    park: (n) => parkSession(n),
+    notice: async ({ session, parked, reasons }) => push.record({ title: parked ? `Archived in Claude, parked: ${session}` : `Archived in Claude, not parked yet: ${session}`, body: parked ? 'Done and no lease: parked (Resume brings it back).' : reasons.join('; ').slice(0, 300), url: `/?s=${encodeURIComponent(session)}`, tag: 'auto-park' }),
+  });
+}
+
 async function resumeSession(name) {
   const rec = await parking.get(name);
   if (!rec) throw httpError(404, 'not parked');
@@ -2578,6 +2600,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(tick, TICK_MS);
   leaseTick();
   setInterval(leaseTick, 15000);
+  setInterval(() => autoParkTick().catch((e) => console.error('[auto-park]', e.message)), 30000).unref?.();
   setInterval(() => leaseService.tick().catch((e) => console.error('[lease-service] tick', e.message)), 5000).unref?.();
   setInterval(digestTick, 60000);   // digest tier: one push per 30 min while the owner is awake
   setInterval(() => decidedDigestTick().catch((e) => console.error('[decided-digest]', e.message)), 60000).unref?.();   // "Decided for you today", once a day

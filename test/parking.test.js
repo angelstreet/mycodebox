@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 
 import { join } from 'node:path';
-import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes } from '../parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes, isWatcher, rcArchivedInTail, transcriptFile, autoParkArchived } from '../parking.js';
 import { tmp } from './helpers-tmp.js';
 
 const table = (rows) => { // rows: [pid, ppid, args]
@@ -307,4 +307,55 @@ test('busyChildren ignores the mcode helper every MiniMax session runs, still re
   assert.deepEqual(busyChildren(1, t).map((c) => c.pid), [3]);
   assert.deepEqual(busyChildren(1, { children: new Map([[1, [2]]]), args: new Map([[2, helper.replace(/\n/g, '\\012')]]) }), []);
   assert.deepEqual(busyChildren(1, { children: new Map([[1, [2]]]), args: new Map([[2, 'node --input-type=module --eval "doWork()"']]) }).length, 1);
+});
+
+const WATCH = "/bin/bash -c source /h/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval 'until ! pgrep -f gate >/dev/null; do sleep 3; done; tail -3 /x/log'";
+const okFacts = { claude: { pid: 5, info: { status: 'idle', sessionId: 's' }, args: 'claude' }, state: 'done', busy: [], leases: [] };
+const mkP = () => createParking({ file: join(tmp('park-'), 'p.json'), tmux: {} });
+
+test('a finished session whose only leftovers are watcher loops parks (status shell, reporter job count ignored)', () => {
+  assert.equal(isWatcher(WATCH), true);
+  assert.equal(isWatcher('/bin/bash -c source /h/.claude/shell-snapshots/snapshot-1.sh && eval "npm test"'), false);
+  const p = mkP();
+  const f = { ...okFacts, claude: { ...okFacts.claude, info: { status: 'shell', sessionId: 's' } }, busy: [{ pid: 7, args: WATCH }, { pid: 8, args: WATCH }], backgroundWork: 2 };
+  assert.deepEqual(p.checks(f), []);
+});
+
+test('real work still blocks: a build child, a busy turn, a held lease, shell status with a non-watcher child', () => {
+  const p = mkP();
+  const sh = { ...okFacts.claude, info: { status: 'shell', sessionId: 's' } };
+  const r = p.checks({ ...okFacts, claude: sh, busy: [{ pid: 7, args: WATCH }, { pid: 9, args: 'npm test' }] });
+  assert.ok(r.some((x) => /running child process: npm test/.test(x)) && r.some((x) => /not idle/.test(x)));
+  assert.match(p.checks({ ...okFacts, claude: { ...okFacts.claude, info: { status: 'busy', sessionId: 's' } } })[0], /"busy", not idle/);
+  assert.match(p.checks({ ...okFacts, leases: [{ id: 'L1' }] })[0], /holds vpt-lease: L1/);
+  assert.match(p.checks({ ...okFacts, backgroundWork: 1 })[0], /1 background job/);
+});
+
+const GONE = '{"type":"system","subtype":"informational","content":"Remote Control disconnected \u2014 this session was ended or archived from another device or app (code 4090)"}';
+test('rcArchivedInTail: the 4090 line archives, a later bridge_status reconnects, other text does not', () => {
+  const ACTIVE = '{"type":"system","subtype":"bridge_status","content":"/remote-control is active \u00b7 x"}';
+  assert.equal(rcArchivedInTail(GONE), true);
+  assert.equal(rcArchivedInTail(`${ACTIVE}\n${GONE}\n`), true);
+  assert.equal(rcArchivedInTail(`${GONE}\n${ACTIVE}\n`), false);
+  assert.equal(rcArchivedInTail('nothing about it'), false);
+  assert.equal(transcriptFile('/p', '/home/u/my.proj', 'sid'), '/p/-home-u-my-proj/sid.jsonl');
+});
+
+test('autoParkArchived parks only archived + parkable sessions, announces a refusal once, skips managers and live bridges', async () => {
+  const claude = (bridge) => ({ pid: 5, info: { status: 'idle', sessionId: 's', cwd: '/w', bridgeSessionId: bridge } });
+  const tails = { done: GONE, held: GONE, live: GONE, mgr: GONE, plain: 'no marker' };
+  const panes = ['done', 'held', 'live', 'mgr', 'plain'].map((name) => ({ name, claude: claude(name === 'live' ? 'session_x' : null) }));
+  const parked = [], notices = [], seen = new Map();
+  const p = mkP();
+  const run = () => autoParkArchived({
+    panes, tailOf: async (info) => tails[panes.find((x) => x.claude.info === info).name], seen, skip: (n) => n === 'mgr',
+    factsOf: async (n) => ({ ...okFacts, leases: n === 'held' ? [{ id: 'L9' }] : [] }), checks: (f) => p.checks(f),
+    park: async (n) => { parked.push(n); }, notice: async (x) => { notices.push(x); },
+  });
+  assert.deepEqual(await run(), ['done']);
+  await run();
+  assert.deepEqual(parked, ['done', 'done']);
+  const held = notices.filter((n) => n.session === 'held');
+  assert.equal(held.length, 1); assert.match(held[0].reasons[0], /holds vpt-lease: L9/);
+  assert.ok(!notices.some((n) => ['live', 'mgr', 'plain'].includes(n.session)));
 });

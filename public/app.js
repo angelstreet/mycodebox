@@ -947,13 +947,19 @@ function setHidden(name, on) {
   toast(on ? `${displayName(name)} hidden (⋮ menu, Hidden sessions, brings it back)` : `${displayName(name)} is back`, 2600);
   renderAll(); renderParking(); syncHiddenMenu();
 }
+// The refusal names every blocker (server reasons), shown at the top for 9s: never a silent or truncated failure.
+function parkRefusal(name, j, status) {
+  const rs = Array.isArray(j?.reasons) && j.reasons.length ? j.reasons : [String(j?.error || `HTTP ${status}`).replace(/^not parked: /, '')];
+  return `Can't park ${name}: ${rs.join('; ')}`;
+}
 async function parkSession(name) {
   toast(`parking ${name}…`, 4000);
   try {
     const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/park`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    const j = await r.json();
-    toast(r.ok ? `${name} parked` : (j.error || `park failed: HTTP ${r.status}`), r.ok ? 1800 : 6000);
-  } catch (err) { toast(`park failed: ${err.message}`); }
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) toast(`${name} parked`, 1800);
+    else topToast(parkRefusal(name, j, r.status), 9000);
+  } catch (err) { topToast(`Can't park ${name}: ${err.message}`, 9000); }
   fetchParking();
 }
 async function resumeParked(name, btn) {
@@ -1645,10 +1651,10 @@ function buildSideRow(s) {
   return li;
 }
 // A pane with no agent in it (agent 'bash': the agent exited or crashed, only a shell is left) is a dead session:
-// still parkable. Live codex/opencode panes stay unparkable; the server re-checks the pane before parking.
+// still parkable. Live claude/minimax panes are parkable (codex/opencode are not); the server re-checks the pane before parking.
 function parkable(n) {
   const ag = (state.status[n] || {}).agent;
-  return ag === 'claude' || ag === 'bash';
+  return ag === 'claude' || ag === 'minimax' || ag === 'bash';
 }
 function syncSide() {
   // which sessions are on screen right now: the focused one always; in the grid, every visible card
