@@ -6,6 +6,20 @@ const TRAIL = /[.,;:!?)\]}>]+$/;
 const BORDER = /^\s*[│┃|]/;
 const MAX_ROWS = 12;
 
+// "report (https://...)": the agent prints a link as a label plus the URL in parentheses. In a table cell the label sits on
+// the row above, in the URL's column. Returns the label's segment {row, x1, x2}, or null.
+function labelOf(lines, row, line, tok, urlAt) {
+  if (line[tok] !== '(' || urlAt !== tok + 1) return null;
+  const before = /([^\s│┃|]+)[ \t]+$/.exec(line.slice(0, tok));
+  if (before) return { row, x1: before.index, x2: before.index + before[1].length };
+  const sameCell = /[│┃|]\s*$/.test(line.slice(0, tok));   // the "(" opens its cell (other columns may hold text): the label is above
+  const prev = lines[row - 1];
+  if (!sameCell || prev == null) return null;
+  const w = /^[^\s│┃|()]+/.exec(prev.slice(tok));
+  if (!w || (tok > 0 && !/[\s│┃|]/.test(prev[tok - 1] || ' '))) return null;
+  return { row: row - 1, x1: tok, x2: tok + w[0].length };
+}
+
 // lines: array of row strings (0-based). Chains that START on `row`: [{ url, segs: [{ row, x1, x2 }] }] with x1 inclusive, x2 exclusive (0-based cells).
 export function urlChains(lines, row, cols) {
   const line = lines[row] || '';
@@ -39,7 +53,7 @@ export function urlChains(lines, row, cols) {
         if (len <= left) { left -= len; segs.pop(); } else { last.x2 -= left; left = 0; }
       }
     }
-    if (url.length > 8 && segs.length) chains.push({ url, segs });
+    if (url.length > 8 && segs.length) chains.push({ url, segs, label: labelOf(lines, row, line, tok, m.index) });
   }
   return chains;
 }
@@ -53,9 +67,9 @@ export function registerUrlLinks(term, open) {
       const lines = [];
       for (let i = first; i <= y - 1 + MAX_ROWS && i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) || '');
       const out = [];
-      for (let r = 0; r <= y - 1 - first; r++) {
+      for (let r = 0; r <= Math.min(y - first, lines.length - 1); r++) {
         for (const c of urlChains(lines, r, term.cols)) {
-          for (const s of c.segs) {
+          for (const s of [...c.segs, ...(c.label ? [c.label] : [])]) {
             if (s.row + first !== y - 1) continue;
             out.push({ text: c.url, range: { start: { x: s.x1 + 1, y }, end: { x: s.x2, y } }, activate: (_e, t) => open(t) });
           }

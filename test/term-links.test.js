@@ -30,3 +30,24 @@ test('a table column far from the left edge still continues', () => {
   const lines = ['| mobile | (https://ex.test/script-reports/ |', '|        | av_check/report.html?X-Amz- |', '|        | Signature=3ae3e9) - 07d41d76 |'];
   assert.equal(urlChains(lines, 0, 80)[0].url, 'https://ex.test/script-reports/av_check/report.html?X-Amz-Signature=3ae3e9');
 });
+
+test('a label on the row above, in the URL column, is part of the link', () => {
+  const lines = ['| mobile | report                   |', '|        | (https://ex.test/a/re    |', '|        | port.html) - 07d41d76    |'];
+  const [c] = urlChains(lines, 1, 80);
+  assert.equal(c.url, 'https://ex.test/a/report.html');
+  assert.deepEqual(c.label, { row: 0, x1: 11, x2: 17 });
+});
+test('a label before the parenthesis on the same row', () => {
+  const [c] = urlChains(['see report (https://ex.test/x) ok'], 0, 80);
+  assert.deepEqual(c.label, { row: 0, x1: 4, x2: 10 });
+});
+test('a bare URL has no label', () => {
+  assert.equal(urlChains(['go https://ex.test/x'], 0, 80)[0].label, null);
+});
+
+test('a label above is found when the other columns hold text', () => {
+  const lines = ['│ mobile — │ PASS, frame change │ report          │', '│ vpt-mf1  │ 19.7 %, motion     │ (https://ex.test/a/re │', '│          │                    │ port.html) — 07d4 │'];
+  const [c] = urlChains(lines, 1, 120);
+  assert.equal(c.url, 'https://ex.test/a/report.html');
+  assert.deepEqual(c.label, { row: 0, x1: 34, x2: 40 });
+});
