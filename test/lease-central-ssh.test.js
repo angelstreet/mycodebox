@@ -10,12 +10,13 @@ import { createLeaseService } from '../lease-service.js';
 import { createLeaseRoutes, hashToken, PREFIX } from '../lease-routes.js';
 import { createLeaseSource, normAuthority } from '../lease-source.js';
 import { viewHtml } from '../public/leases-view.js';
+import { tmp } from './helpers-tmp.js';
 
 const NOW = Date.UTC(2026, 9, 19, 12, 0, 0);
 const rows = [{ id: 'a1', env: 'env-a', resource: 'frontend', agent: 'codebox:dev1', purpose: 'ui', kind: 'host', ttlLeftMin: 50 }];
 const store = () => { const s = { calls: 0, get: async () => { s.calls++; return { ok: true, leases: rows, waiters: [] }; }, peek: () => ({ ok: true, leases: rows, waiters: [] }) }; return s; };
 const mk = (authority, st) => createLeaseSource({ authority, legacy: { store: st, registry: 'REG' }, getService: () => { throw new Error('the in-process service must not be read'); }, now: () => NOW });
-const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'lease-cssh-'));
+const tmpdir = () => tmp('lease-cssh-');
 
 test('normAuthority: three labels, anything else is legacy', () => {
   assert.deepEqual(['legacy', 'central-through-ssh', 'central', 'x', undefined].map(normAuthority), ['legacy', 'central-through-ssh', 'central', 'legacy', 'legacy']);

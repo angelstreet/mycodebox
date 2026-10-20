@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { normalizeLayout, createLayoutStore } from '../layout.js';
+import { tmp } from './helpers-tmp.js';
 
 test('normalizeLayout drops junk, dedupes and derives group names', () => {
   const n = normalizeLayout({ order: ['a', 'b', 'a', 5, '', ' c '], pins: 'x', groups: { a: 'G', b: '', '': 'Z', c: 7 }, collapsed: ['pin'] });
@@ -18,7 +19,7 @@ test('normalizeLayout drops junk, dedupes and derives group names', () => {
 });
 
 test('store persists to disk, merges partial PUTs, survives a restart', async () => {
-  const dir = await fs.mkdtemp(join(tmpdir(), 'layout-'));
+  const dir = tmp('layout-');
   const file = join(dir, 'nested', 'layout.json');
   const s = createLayoutStore({ file });
   assert.deepEqual((await s.get()).order, []);
@@ -33,7 +34,7 @@ test('store persists to disk, merges partial PUTs, survives a restart', async ()
 });
 
 test('store keeps the previous version as layout.json.bak', async () => {
-  const dir = await fs.mkdtemp(join(tmpdir(), 'layout-'));
+  const dir = tmp('layout-');
   const file = join(dir, 'layout.json');
   const s = createLayoutStore({ file });
   await s.set({ order: ['a', 'b'] });

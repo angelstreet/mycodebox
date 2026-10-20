@@ -2,10 +2,11 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createIngester, defaults, OPENCODE_SQL, normalizeMinimaxModel } from '../usage/ingest.js';
+import { tmp } from './helpers-tmp.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const servers = [];
@@ -15,7 +16,7 @@ const lf = () => new Promise((ok) => {
   servers.push(srv); srv.listen(0, '127.0.0.1', () => ok(`http://127.0.0.1:${srv.address().port}`));
 });
 async function setup() {
-  const dir = await fs.mkdtemp(join(tmpdir(), 'usage-attr-'));
+  const dir = tmp('usage-attr-');
   const stateDir = join(dir, 'state');
   const cfg = { ...defaults({ GHOSTY_STATE_DIR: stateDir }), langfuseUrl: await lf(), publicKey: 'pk', secretKey: 'sk', stateDir, now: () => NOW, paceMs: 0,
     claudeDir: join(dir, 'c'), codexDir: join(dir, 'x'), minimaxDb: join(dir, 'none-mm.sqlite'), opencodeDb: join(dir, 'none-oc.sqlite') };

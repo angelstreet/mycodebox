@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { select, ticket } from '../scripts/test-run.js';
+import { tmp } from './helpers-tmp.js';
 
 const all = ['test/a.test.js', 'test/b.test.js', 'test/c.test.js'];
 const src = { 'test/a.test.js': "import x from '../lane.js';", 'test/b.test.js': "readFileSync('docs/USAGE.md')", 'test/c.test.js': '' };
@@ -21,7 +22,7 @@ test('select: lockfile, package.json, helpers and fixtures, or an unknown diff m
 });
 
 test('ticket: two slots, a third waits, a dead holder is taken over', async () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'slots-'));
+  const dir = tmp('slots-');
   const quiet = () => {};
   const r1 = await ticket({ dir, slots: 2, pid: process.pid, log: quiet });
   const r2 = await ticket({ dir, slots: 2, pid: process.pid, log: quiet });

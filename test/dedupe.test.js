@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { tmp } from './helpers-tmp.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-dedupe-'));
+const dir = tmp('ghosty-dedupe-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000' });
 delete process.env.JEV_URL;
 const m = await import('../manager.js');

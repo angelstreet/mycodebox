@@ -4,10 +4,11 @@
 //     and the rules, makes no network call (GHOSTY_PORT points at a closed port).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { tmp } from './helpers-tmp.js';
 
 import {
   realAction,
@@ -149,7 +150,7 @@ test('dayKey: extracts YYYY-MM-DD in UTC', () => {
 // ---------------------------------------------------------------------------
 test('mm-manager.sh --once --dry writes a prompt with events + rules; tolerates a closed port', () => {
   const repo = join(import.meta.dirname, '..');
-  const dir = mkdtempSync(join(tmpdir(), 'mm-mgr-'));
+  const dir = tmp('mm-mgr-');
   const eventsFile = join(dir, 'events.jsonl');
   writeFileSync(eventsFile, [
     JSON.stringify({ at: '2026-10-04T12:00:00.000Z', key: 's1:asks', session: 's1', kind: 'asks' }),
@@ -203,7 +204,7 @@ test('agent-alert naming the session counts as a real alert; one naming another 
   assert.equal(realAction({ at: ev(0).at, eventsForSession: named }), 'alert');
 });
 test('mm-manager.sh --once with a fake mcode records proposals, mm_ms and tokens (no network)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'mmmgr-fake-'));
+  const dir = tmp('mmmgr-fake-');
   const fake = join(dir, 'fakemcode');
   writeFileSync(fake, '#!/bin/bash\ncat >/dev/null\necho \'{"type":"exec.result","output":"{\\"key\\":\\"s1:asks\\",\\"at\\":\\"2026-10-04T12:00:00Z\\",\\"proposal\\":\\"answer\\",\\"reply\\":\\"Yes\\",\\"why\\":\\"ok\\",\\"sonnet\\":false}","usage":{"inputTokens":5,"outputTokens":6,"cacheReadTokens":7}}\'\n', { mode: 0o755 });
   const evFile = join(dir, 'events.jsonl');

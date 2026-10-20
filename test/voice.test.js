@@ -7,6 +7,7 @@ import { createAlerts, tierConfig, createPush } from '../push.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { tmp } from './helpers-tmp.js';
 
 const menuStop = (over = {}) => ({ state: 'waiting', lastActivitySec: 60, stall: { id: 'st1', case: 'menu_recommended', question: 'Which approach should I take for the parser?', options: [
   { n: 1, text: 'Keep the old parser', recommended: false, forbidden: null },
@@ -313,7 +314,7 @@ test('feedActions: only for a recommended option that is not forbidden', () => {
 });
 
 test('push feed items carry voiceId and actions only when given (interrupt tier and a one-item digest)', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-push-'));
+  const dir = tmp('voice-push-');
   const push = createPush({ stateDir: dir });
   const sent = [];
   const real = push.notify;

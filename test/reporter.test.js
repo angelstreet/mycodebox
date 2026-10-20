@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createReporter, isLoopback } from '../reporter.js';
+import { tmp } from './helpers-tmp.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-rep-'));
+const dir = tmp('ghosty-rep-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000' });
 let clock = 1_000_000;
 const rep = createReporter({ stateDir: dir, now: () => clock });

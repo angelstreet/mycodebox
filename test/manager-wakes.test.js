@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { splitWakes, parseJsonl, summarizeWakes, wakesOfDay, classifyTrigger, findManagerTranscripts, computeWakes, writeWakesFile, createWakesView } from '../manager-wakes.js';
+import { tmp } from './helpers-tmp.js';
 
 const PRICES = { models: { 'claude-test-1': { input: 10, output: 50, cache_write: 12.5, cache_write_1h: 20, cache_read: 1 } } };
 const T = (m, s = 0) => new Date(Date.UTC(2026, 0, 1, 10, m, s)).toISOString();
@@ -87,7 +88,7 @@ test('summary: by trigger, usd, top 5, share that did nothing; day filter', () =
 });
 
 test('finds the transcript through the ledger label, writes the day file idempotently, serves the cached view', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ghosty-wakes-'));
+  const root = tmp('ghosty-wakes-');
   const stateDir = join(root, 'state'), claudeDir = join(root, 'projects');
   const sid = '11111111-2222-3333-4444-555555555555', other = '99999999-2222-3333-4444-555555555555';
   mkdirSync(stateDir); mkdirSync(join(claudeDir, '-proj'), { recursive: true });
@@ -115,7 +116,7 @@ test('writeWakesFile with a day keeps other days; startWakesLogger refreshes tod
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { writeWakesFile, startWakesLogger } = await import('../manager-wakes.js');
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-wk-'));
+  const dir = tmp('ghosty-wk-');
   await writeWakesFile(dir, [{ start: '2026-10-04T10:00:00Z', n: 1 }]);
   await writeWakesFile(dir, [{ start: '2026-10-05T10:00:00Z', n: 2 }], '2026-10-05');
   await writeWakesFile(dir, [{ start: '2026-10-05T11:00:00Z', n: 3 }], '2026-10-05');

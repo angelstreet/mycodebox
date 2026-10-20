@@ -11,6 +11,7 @@ import { runBench, parseArgs, planRuns, runLimitsFor, checkRunLimitsFit } from '
 import { spendOf, registryDoc, realEnv } from '../scripts/v2-bench-http.js';
 import { validateManifest } from '../orchestration/scorecard.js';
 import { profileFor, entryOf } from '../scripts/v2-bench.js';
+import { tmp } from './helpers-tmp.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-http-test-')));
@@ -87,7 +88,7 @@ test('http driver: an unknown-cost budget stop is confirmed through the API and 
 });
 
 test('http driver: the server child and its tmux server die with the driver (SIGKILL)', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-bench-http-reap-'));
+  const dir = tmp('v2-bench-http-reap-');
   const scripts = path.join(dir, 'scripts.json'); fs.writeFileSync(scripts, '{}');
   const code = `import('${pathToFileURL(path.join(ROOT, 'scripts/v2-bench-http.js')).href}').then(async (m) => { const s = await m.startServer({ dir: '${dir}', stateDir: '${dir}/state', workRoot: '${dir}/work', repos: [], fake: true, fakeScripts: '${scripts}' }); console.log(JSON.stringify({ pid: s.pid, sock: s.sock })); setInterval(() => {}, 1000); });`;
   const drv = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'inherit'] });

@@ -2,12 +2,13 @@
 // Pure functions get fixtures; the CLI and the judge get a tmp state dir.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync, writeFileSync, appendFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import { buildScorecard, scorecardDays, foldRuns, langfuseScoreEvents, scorecardTraceId } from '../scorecard.js';
+import { tmp } from './helpers-tmp.js';
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -382,7 +383,7 @@ test('scorecardDays: one card per UTC day, oldest first', () => {
 // ---------------------------------------------------------------------------
 
 test('manager-run.js: start prints id; end folds by id; list reads back', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-run-'));
+  const dir = tmp('ghosty-run-');
   const prev = process.env.GHOSTY_STATE_DIR; process.env.GHOSTY_STATE_DIR = dir;
   try {
     const id = execFileSync('node', ['scripts/manager-run.js', 'start', '--kind', 'minimax', '--worktree', '/tmp/foo', '--task', 'demo'], { encoding: 'utf8' }).trim();
@@ -401,7 +402,7 @@ test('manager-run.js: start prints id; end folds by id; list reads back', () => 
 });
 
 test('manager-run.js: rejects unknown kind and bad verdict', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-run-'));
+  const dir = tmp('ghosty-run-');
   const prev = process.env.GHOSTY_STATE_DIR; process.env.GHOSTY_STATE_DIR = dir;
   try {
     assert.throws(() => execFileSync('node', ['scripts/manager-run.js', 'start', '--kind', 'wrong', '--worktree', '/tmp/x'], { encoding: 'utf8' }));
@@ -414,7 +415,7 @@ test('manager-run.js: rejects unknown kind and bad verdict', () => {
 // ---------------------------------------------------------------------------
 
 test('judge.js: appends manager.judge ledger rows for each call (success + unparsable)', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-judge-'));
+  const dir = tmp('ghosty-judge-');
   const ledgerFile = join(dir, 'usage-ledger.jsonl');
   const judgeStateFile = join(dir, 'lfeval-judge.json');
   // pre-populate one triage record so the judge has something to do

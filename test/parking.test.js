@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes } from '../parking.js';
+import { tmp } from './helpers-tmp.js';
 
 const table = (rows) => { // rows: [pid, ppid, args]
   const children = new Map(), args = new Map();
@@ -58,7 +59,7 @@ test('capView: under the cap no candidates; over it lists idle-longest first', (
 });
 
 test('claude index reads session files and ignores junk', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cs-'));
+  const dir = tmp('cs-');
   writeFileSync(join(dir, '5.json'), JSON.stringify({ pid: 5, sessionId: 'x', cwd: '/c' }));
   writeFileSync(join(dir, '6.json'), '{half');
   writeFileSync(join(dir, '7.key'), 'k');
@@ -67,7 +68,7 @@ test('claude index reads session files and ignores junk', async () => {
 });
 
 function harness({ exits = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'pk-'));
+  const dir = tmp('pk-');
   const log = [];
   let alive = true, exists = true;
   const tmux = { exists: async () => exists, kill: async (n) => { log.push('kill ' + n); exists = false; }, sendText: async (n, t) => log.push('text ' + t), sendEnter: async () => { log.push('enter'); if (exits) alive = false; },
@@ -165,7 +166,7 @@ test('dead park keeps the other refusals: lease held, busy children, no lease re
 });
 
 test('readManualNotes parses valid entries (newest first), skips bad rows, tolerates missing/corrupt file', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-mn-'));
+  const dir = tmp('ghosty-mn-');
   const file = join(dir, 'parked.json');
   assert.deepEqual(await readManualNotes(file), []);                     // missing file -> []
   writeFileSync(file, '{not json');                                       // corrupt JSON -> []
@@ -197,7 +198,7 @@ test('session-cap-check: no finding under the cap, one finding listing idle-long
 });
 // MiniMax harness: same shape as harness() above, but the pane's agent is minimax-code / mcode; no claude session file.
 function mmHarness({ exits = true, hasCtrlC = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'pk-mm-'));
+  const dir = tmp('pk-mm-');
   const log = [];
   let alive = true, exists = true;
   const tmux = {

@@ -5,13 +5,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, statSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createAlerts } from '../push.js';
 import { createManagerEvents, classifyKey, FILE_NAME, FILE_NAME_OLD } from '../manager-events.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'ghosty-mevents-'));
+const tmp = () => mkTmp('ghosty-mevents-');
 const quiet = { error() {} };
 const readLines = (file) => existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }) : [];
 

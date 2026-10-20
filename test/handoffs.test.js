@@ -3,18 +3,19 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+
+
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseHandoff, dueFromHM, createHandoffs } from '../handoffs.js';
 import { classifyKey } from '../manager-events.js';
 import { machinesOf } from '../public/platforms.js';
+import { tmp } from './helpers-tmp.js';
 
 const M = machinesOf('codebox-vm');
 const NOW = 1_800_000_000_000;
 
-const tmpDir = async () => mkdtemp(join(tmpdir(), 'handoffs-'));
+const tmpDir = async () => tmp('handoffs-');
 
 // ---------------------------------------------------------------------------
 // parseHandoff: arrow variants, whitespace, optional due, garbage

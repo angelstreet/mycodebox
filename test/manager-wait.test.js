@@ -1,17 +1,18 @@
 // manager-wait.sh cursor: events appended while the manager is "busy" (no wait running) are all delivered by the next call.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
+
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
+import { tmp } from './helpers-tmp.js';
 
 const SH = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'manager-wait.sh');
 const ev = (i, extra = {}) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), key: `s${i}:asks`, kind: 'asks', session: `s${i}`, title: `t${i}`, body: `question ${i}`, ...extra }) + '\n';
 const noise = (i) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), kind: 'deploy', state: 'start', session: undefined, body: `noise ${i}`, blockedBy: [] }) + '\n';
 const setup = () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ghosty-mwait-'));
+  const dir = tmp('ghosty-mwait-');
   mkdirSync(join(dir, 'manager-reports'));
   return { dir, events: join(dir, 'manager-events.jsonl'), cursor: join(dir, 'manager-reports', '.cursor'), env: { ...process.env, GHOSTY_STATE_DIR: dir, MANAGER_WAIT_POLL: '0.1', MANAGER_WAIT_GRACE: '0.5' } };
 };

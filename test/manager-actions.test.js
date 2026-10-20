@@ -1,12 +1,13 @@
 // readActions(): the read-only view of manager-actions.jsonl behind GET /api/manager/actions.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { readActions, ACTIONS_FILE } from '../manager-events.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'ghosty-mactions-'));
+const tmp = () => mkTmp('ghosty-mactions-');
 const row = (i) => JSON.stringify({ at: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(), trigger: 'event', session: 's' + i, decision: 'd' + i, action: 'a' });
 
 test('readActions: missing file gives []', async () => {

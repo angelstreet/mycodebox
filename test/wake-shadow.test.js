@@ -1,14 +1,15 @@
 // TASK-47 G10: wake shadow. Jev's opinion on each manager event line, the 3 s cap, the switch, the 15 min outcome and the scorecard.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createManagerEvents, classifyKey } from '../manager-events.js';
 import { createWakeAnnotator, wakeFacts, quotaPercents, observedNeed, dueOutcomes } from '../wake-shadow.js';
 import { wakeShadowSection, buildScorecard } from '../scorecard.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'ghosty-wake-'));
+const tmp = () => mkTmp('ghosty-wake-');
 const lines = (f) => (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const reply = (choice, p = 0.9, extra = {}) => ({ success: true, ms: 7, cost: 0.00001, decision_id: 'd-' + choice, answers: { choice: { choice, probabilities: { [choice]: p } } }, ...extra });

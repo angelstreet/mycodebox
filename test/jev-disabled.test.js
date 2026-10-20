@@ -3,13 +3,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJevSwitch, isDisabledReply } from '../jev-switch.js';
 import { runShadow } from '../router-shadow.js';
 import { createWakeAnnotator, wakeFacts } from '../wake-shadow.js';
+import { tmp } from './helpers-tmp.js';
 
 const OFF = { success: false, error: 'jev_disabled', disabled: true, answers: {}, decision_id: null };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,7 +57,7 @@ const srv = http.createServer((req, res) => {
 });
 await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 test.after(() => srv.closeAllConnections?.() || srv.close());
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-jevoff-'));
+const dir = tmp('ghosty-jevoff-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', VPT_TEAM_ID: 'team-x', JEV_API_KEY: 'k', JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide` });
 const m = await import('../manager.js');
 await m.initManager({ onOwnerNeeded: () => {}, sendKey: async () => {}, sendKeys: async () => {} });
@@ -92,7 +93,7 @@ test('jev-ask: server disabled -> rule default, source rule, jev: disabled', asy
   const here = dirname(fileURLToPath(import.meta.url));
   const out = await new Promise((resolve) => {
     const c = spawn('node', [join(here, '..', 'scripts', 'jev-ask.js'), 'stop', '--facts', JSON.stringify({ session: 's1', agent: 'claude', case: 'owner_decision' })], {
-      env: { ...process.env, JEV_URL: `http://127.0.0.1:${srv.address().port}`, JEV_API_KEY: 'k', VPT_TEAM_ID: 't', GHOSTY_STATE_DIR: mkdtempSync(join(tmpdir(), 'ja-')) }, stdio: ['ignore', 'pipe', 'pipe'] });
+      env: { ...process.env, JEV_URL: `http://127.0.0.1:${srv.address().port}`, JEV_API_KEY: 'k', VPT_TEAM_ID: 't', GHOSTY_STATE_DIR: tmp('ja-') }, stdio: ['ignore', 'pipe', 'pipe'] });
     let s = ''; c.stdout.on('data', (d) => (s += d)); c.on('close', (code) => resolve({ code, s }));
   });
   assert.equal(out.code, 0);

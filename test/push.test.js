@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, statSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { statSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { loadOrCreateVapid, vapidJwt, verifyVapidJwt, createPush, createAlerts } from '../push.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
 process.env.GHOSTY_PUSH_ALLOW_HTTP = '1';   // mock push services are plain http
-const tmp = () => mkdtempSync(join(tmpdir(), 'ghosty-push-'));
+const tmp = () => mkTmp('ghosty-push-');
 const quiet = { error() {} };
 
 // A mock push service. `status` can be changed per test; every request is recorded.

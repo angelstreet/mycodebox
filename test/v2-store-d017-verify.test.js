@@ -3,15 +3,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as realFs from 'node:fs';
-import { mkdtempSync, readFileSync, appendFileSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, appendFileSync, writeFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
 import { createGoalLoop } from '../orchestration/goal-loop.js';
 import { createRegistry } from '../orchestration/model-registry.js';
 import { spec, clock, SHA_A } from './fixtures/v2-task.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'v2-d017-'));
+const tmp = () => mkTmp('v2-d017-');
 // The smallest loop the factory accepts: no adapters, no leases, stub worktrees/verifier (never reached here).
 const REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
   capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };

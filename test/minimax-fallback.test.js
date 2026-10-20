@@ -6,8 +6,9 @@ import fs, { mkdtempSync, readFileSync, writeFileSync, existsSync, chmodSync, re
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFallbackDecider, parseChoice, parseExecOutput, resetNoLightweightWarning } from '../minimax-fallback.js';
+import { tmp } from './helpers-tmp.js';
 
-const work = mkdtempSync(join(tmpdir(), 'fallback-'));
+const work = tmp('fallback-');
 const LOG = join(work, 'calls.jsonl');
 const FAKE = join(work, 'mcode');
 // A fake `mcode`: logs its argv, then prints 0.6.5-shaped JSONL according to MCODE_FAKE_MODE.
@@ -115,7 +116,7 @@ const srv = http.createServer((req, res) => {
   });
 });
 await new Promise((r) => srv.listen(0, '127.0.0.1', r));
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-fb-'));
+const dir = tmp('ghosty-fb-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide`, JEV_API_KEY: 'test-key' });
 const m = await import('../manager.js');
 let balance = 0;
@@ -221,7 +222,7 @@ test('lightweight mode is required: probed once, passed on every run; an mcode w
 });
 
 test('MCODE_NODE_DIR\'s mcode is preferred when it supports lightweight mode; the PATH one is used when only it does', async () => {
-  const nd = mkdtempSync(join(tmpdir(), 'fallback-node-'));
+  const nd = tmp('fallback-node-');
   fs.copyFileSync(FAKE, join(nd, 'mcode')); chmodSync(join(nd, 'mcode'), 0o755);
   const mk = (envExtra) => createFallbackDecider({ bin: undefined, nodeDir: nd, env: { PATH: `${work}:${process.env.PATH}`, HOME: work, MCODE_FAKE_MODE: 'ok', MCODE_FAKE_LOG: LOG, ...envExtra } });
   const n0 = calls().length;

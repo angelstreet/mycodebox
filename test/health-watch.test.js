@@ -139,7 +139,9 @@ test('TMP_PREFIXES covers every mkdtemp(join(tmpdir(), prefix)) in test/ and scr
     if (!/\.m?js$/.test(f)) continue;
     for (const m of readFileSync(new URL(`../${d}/${f}`, import.meta.url), 'utf8').matchAll(re)) found.add(m[2]);
   }
-  assert.ok(found.size > 100);
+  // Enough to prove the scan still matches, not a fixed count: tests that create dirs via helpers-tmp.js
+  // contribute no mkdtemp prefix, so this shrinks as the leak fix lands.
+  assert.ok(found.size > 20, `scan only found ${found.size} prefixes; expected the regex to still match`);
   const missing = [...found].filter((p) => !TMP_PREFIXES.some((q) => p.startsWith(q)));
   assert.deepEqual(missing, [], 'add these prefixes to TMP_PREFIXES in scripts/health-watch.js');
 });

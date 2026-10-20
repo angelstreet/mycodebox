@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSessionHistory } from '../session-history.js';
 import { createHistoryView } from '../history-view.js';
+import { tmp } from './helpers-tmp.js';
 
 const M = 60000;
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hv-'));
+const dir = tmp('hv-');
 const T0 = Date.UTC(2026, 9, 10, 12, 0, 0);
 const row = (label, ts, over = {}) => ({ id: `c:${label}:${ts}`, agent: 'claude', label, cwd: `/w/${label}`, ts, model: 'claude-x', usage: { input: 10, output: 5, cache_read: 100, cache_write_5m: 1, cache_write_1h: 2 }, cost: { total: 0.5 }, ...over });
 const ledger = path.join(dir, 'usage-ledger.jsonl');

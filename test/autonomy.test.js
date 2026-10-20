@@ -2,12 +2,13 @@
 // by default, the autonomy migration of a saved manager.json, and the decided-for-you journal the decisions feed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-autonomy-'));
+import { join } from 'node:path';
+import { tmp } from './helpers-tmp.js';
+
+const dir = tmp('ghosty-autonomy-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000' });
 delete process.env.JEV_URL; delete process.env.JEV_API_KEY;
 const m = await import('../manager.js');
@@ -44,7 +45,7 @@ const esc = (name) => stalls().find((r) => r.type === 'escalated' && r.session =
 const GREEN = 'Tests: 1826/1826 pass on feat.';
 function withOrigin(opts = {}) {
   const repo = makeRepo(opts);
-  const bare = join(mkdtempSync(join(tmpdir(), 'auto-origin-')), 'origin.git');
+  const bare = join(tmp('auto-origin-'), 'origin.git');
   git(repo, 'init', '-q', '--bare', bare); git(repo, 'remote', 'add', 'origin', bare); git(repo, 'push', '-q', 'origin', 'main', 'feat'); git(repo, 'fetch', '-q', 'origin');
   return repo;
 }
@@ -64,7 +65,7 @@ test('defaults of a fresh install: autoSend on, autoCases continue + menu_recomm
 });
 
 const probe = (saved) => {
-  const d = mkdtempSync(join(tmpdir(), 'ghosty-mig-'));
+  const d = tmp('ghosty-mig-');
   if (saved) writeFileSync(join(d, 'manager.json'), JSON.stringify(saved));
   const out = execFileSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(new URL('../manager.js', import.meta.url).href)}); await m.initManager({}); console.log(JSON.stringify(m.managerConfig()));`],
     { env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C', GHOSTY_STATE_DIR: d }, encoding: 'utf8' });
@@ -310,7 +311,7 @@ test('R8-18: a menu pick is journaled with kind "menu" and shows in Decided for 
 
 test('R8-17: an unreadable manager.json fails closed (auto-answer off for the run); the migration records one notice', () => {
   const run = (saved, raw) => {
-    const d = mkdtempSync(join(tmpdir(), 'ghosty-mig2-'));
+    const d = tmp('ghosty-mig2-');
     if (raw != null) writeFileSync(join(d, 'manager.json'), raw); else if (saved) writeFileSync(join(d, 'manager.json'), JSON.stringify(saved));
     const out = execFileSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(new URL('../manager.js', import.meta.url).href)}); const n = []; await m.initManager({ onNotice: (t) => n.push(t) }); console.log(JSON.stringify({ autoSend: m.managerConfig().autoSend, n }));`],
       { env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C', GHOSTY_STATE_DIR: d }, encoding: 'utf8' });

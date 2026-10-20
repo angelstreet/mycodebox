@@ -2,15 +2,16 @@
 // (test/v2-system-ops-verify.test.js). A `todo: 'defect: ...'` marks a gap that is still open.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, symlink, writeFile, readFile, appendFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, symlink, writeFile, readFile, appendFile } from 'node:fs/promises';
+
 import { join } from 'node:path';
 import { createLeaseAuthority, fileBackend } from '../orchestration/lease-authority.js';
 import { createIncidentStore, sanitizeText } from '../orchestration/incidents.js';
 import { createTelemetry } from '../orchestration/telemetry.js';
 import { createSystemOps, createAdmissionController, realpathDeepest, SYSTEM_ROLE } from '../orchestration/system-ops.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtemp(join(tmpdir(), 'v2-sysops-verify2-'));
+const tmp = () => mkTmp('v2-sysops-verify2-');
 const H = 'host-a';
 
 async function harness({ actions: extra = {}, plans, minCleanupAgeMs = 5, realpath, actionsObject } = {}) {

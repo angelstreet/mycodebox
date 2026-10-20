@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as realFs from 'node:fs';
-import { mkdtempSync, readFileSync, existsSync, writeFileSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync, writeFileSync, appendFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'v2-store-'));
+const tmp = () => mkTmp('v2-store-');
 const open = (dir, fs) => createTaskStore({ dir, fs, ...clock() });
 const logOf = (dir, id) => readFileSync(join(dir, 'tasks', id, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 const PATH = ['clarified', 'planned', 'ready', 'executing', 'evaluating'];

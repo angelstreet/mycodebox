@@ -1,8 +1,8 @@
 // scripts/v2-score.js: read-only scoring over a synthetic store (OWNER_DECISIONS §8). Unknown stays unknown (T22).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, appendFileSync, writeFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, readdirSync, appendFileSync, writeFileSync, statSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createTaskStore } from '../orchestration/store.js';
@@ -10,6 +10,7 @@ import { scoreStore, renderTable, creditOf, foldTask } from '../scripts/v2-score
 import { loadRegistry } from '../orchestration/model-registry.js';
 import { route } from '../orchestration/router.js';
 import { spec, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp } from './helpers-tmp.js';
 
 const SCRIPT = new URL('../scripts/v2-score.js', import.meta.url).pathname;
 const T0 = Date.parse('2026-01-01T00:00:00Z');
@@ -36,7 +37,7 @@ async function failed(s, id, who) {
 }
 
 async function build() {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-score-'));
+  const dir = tmp('v2-score-');
   const s = storeIn(dir);
   await accepted(s, 'a1', 'claude:m1', { usd: [0.1, 0.05], rework: 1 });
   await accepted(s, 'a2', 'claude:m1', { usd: [0.25] });

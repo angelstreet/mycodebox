@@ -11,15 +11,16 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, statSync, readdirSync, rmSync, utimesSync } from 'node:fs';
+import { writeFileSync, statSync, readdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTts } from '../tts.js';
+import { tmp } from './helpers-tmp.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function freshCache() {
-  return mkdtempSync(join(tmpdir(), 'ghosty-tts-test-'));
+  return tmp('ghosty-tts-test-');
 }
 
 // Fake piper: drop a stub file at outFile. Records every invocation so tests can assert on it.

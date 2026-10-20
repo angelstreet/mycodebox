@@ -1,9 +1,9 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+
+
+import { tmp } from './helpers-tmp.js';
 
 // One mock server plays the VPT server (/server/ai/complete) and Langfuse (/api/public/v2/prompts/...).
 const reviewerCalls = [];
@@ -24,7 +24,7 @@ await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 after(() => { srv.closeAllConnections(); srv.close(); });
 
 const base = `http://127.0.0.1:${srv.address().port}`;
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-rprompt-'));
+const dir = tmp('ghosty-rprompt-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, JEV_URL: `${base}/server/ai/decide`, JEV_API_KEY: 'k', LANGFUSE_URL: base, LANGFUSE_PUBLIC_KEY: 'pk', LANGFUSE_SECRET_KEY: 'sk', LANGFUSE_PROJECT: 'proj1' });
 // An inherited LANGFUSE_PUBLIC_URL (the service env the lane runs tests in) would win over LANGFUSE_URL.
 delete process.env.LANGFUSE_PUBLIC_URL;

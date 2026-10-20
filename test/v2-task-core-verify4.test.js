@@ -2,13 +2,14 @@
 // a task whose log is corrupt.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp as mkTmp } from './helpers-tmp.js';
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'v2-verify4-'));
+const tmp = () => mkTmp('v2-verify4-');
 const open = (dir = tmp()) => createTaskStore({ dir, ...clock() });
 const PATH = ['clarified', 'planned', 'ready', 'executing', 'evaluating'];
 const DEV = { role: 'developer', id: 'dev-agent-1' };

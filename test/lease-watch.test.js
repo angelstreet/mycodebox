@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
+
 import { join } from 'node:path';
 import { classifyHolders, createLeaseWatch, BY } from '../lease-watch.js';
 import { deployWaits, leaseLines, p95 } from '../lease-stats.js';
 import { classifyKey } from '../manager-events.js';
 import { agentSession, machinesOf } from '../public/platforms.js';
+import { tmp } from './helpers-tmp.js';
 
 const M = machinesOf('codebox-vm');
 const NOW = 1_800_000_000_000;
@@ -61,7 +62,7 @@ function fake({ leases, names, events = [], activity = () => null, mode = 'live'
 }
 
 test('poll: first run primes the event cursor; later events become lease:* records; ended is released only on the 2nd poll', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'lw-'));
+  const dir = tmp('lw-');
   const f = fake({ leases: [L({ agent: 'codebox:TASK99-gone' }), L({ id: 'l2', agent: 'codebox:TASK28-videos' }), L({ id: 'l3', agent: 'mac:x' })], names: ['TASK28-videos', 'manager'],
     events: [{ line: 6, ts: 1, event: 'released', id: 'zz', env: 'node1-vpt', resources: ['vpt-pi3'], agent: 'codebox:x', by: 'session-end', reason: 'session-ended', purpose: 'p' }] });
   const w = createLeaseWatch({ stateDir: dir, run: f.run, machines: M, listSessionNames: async () => f.names, activityOf: f.activity, record: async (e) => f.recorded.push(e), now: () => NOW, log: { log() {}, error() {} } });
@@ -81,7 +82,7 @@ test('poll: first run primes the event cursor; later events become lease:* recor
 });
 
 test('poll: dry mode acts on nothing but logs; an empty tmux list never releases anything', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'lw-'));
+  const dir = tmp('lw-');
   const f = fake({ leases: [L({ agent: 'codebox:TASK99-gone' })], names: ['TASK28-videos'] });
   let mode = 'dry';
   const w = createLeaseWatch({ stateDir: dir, run: f.run, machines: M, listSessionNames: async () => f.names, mode: () => mode, now: () => NOW, log: { log() {}, error() {} } });
@@ -95,7 +96,7 @@ test('poll: dry mode acts on nothing but logs; an empty tmux list never releases
 });
 
 test('poll: idle server lease is narrowed, counted unknown holders are exposed', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'lw-'));
+  const dir = tmp('lw-');
   const f = fake({ leases: [L(), L({ id: 'u1', agent: 'weird-name' })], names: ['TASK28-videos'], activity: () => ({ turnAt: NOW - 45 * MIN, promptAt: 0, working: false }) });
   const w = createLeaseWatch({ stateDir: dir, run: f.run, machines: M, listSessionNames: async () => f.names, activityOf: f.activity, now: () => NOW, log: { log() {}, error() {} } });
   const s = await w.poll();
@@ -122,7 +123,7 @@ test('lease-stats: p95 of request->start, blocked minutes only for deploys a lea
 });
 
 test('central events (post cut-over): only lease lifecycle is recorded, with the right title, kind and purpose', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'lw-'));
+  const dir = tmp('lw-');
   const ev = (line, event, o = {}) => ({ line, ts: 1, event, id: `id${line}`, env: 'env-a', resources: ['*'], agent: 'mac:task-1', kind: 'server', purpose: 'update_core main', ...o });
   const f = fake({ leases: [], names: [], events: [ev(6, 'granted'), ev(7, 'ticket'), ev(8, 'released', { by: 'holder' }), ev(9, 'narrowed', { kind: 'host' }), ev(10, 'forced', { by: 'owner' }), ev(11, 'downgraded', { to: 'pin' }), ev(12, 'deploy'), ev(13, 'expired', { reason: 'no-heartbeat' })] });
   const w = createLeaseWatch({ stateDir: dir, run: f.run, machines: M, listSessionNames: async () => f.names, activityOf: f.activity, record: async (e) => f.recorded.push(e), now: () => NOW, log: { log() {}, error() {} } });

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
+
+
+import { tmp } from './helpers-tmp.js';
 
 // Mock Jev: the probability it gives its choice ("continue") is set per test.
 let jevProb = 0.95;
@@ -14,7 +15,7 @@ const jev = http.createServer((req, res) => {
 });
 await new Promise((r) => jev.listen(0, '127.0.0.1', r));
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-auto-'));
+const dir = tmp('ghosty-auto-');
 Object.assign(process.env, {
   GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: `http://127.0.0.1:${jev.address().port}/server/ai/decide`, JEV_API_KEY: 'test',
 });

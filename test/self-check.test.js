@@ -1,11 +1,12 @@
 // Round 9 item 5: the manager settles version / progress / "does this file exist" questions itself; one open ask per session.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-selfcheck-'));
+import { join } from 'node:path';
+import { tmp } from './helpers-tmp.js';
+
+const dir = tmp('ghosty-selfcheck-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000' });
 delete process.env.JEV_URL; delete process.env.JEV_API_KEY;
 const { selfAsk, answerVersion, answerFile, pathsIn } = await import('../self-check.js');
@@ -31,7 +32,7 @@ test('answerVersion: from the deployed-now ledger, named env first, target filte
   assert.equal(answerVersion({ ask: 'what version?', deployed: {} }), null);
 });
 test('answerFile: stat inside the roots only; never outside, never a secret path, never content', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'self-root-')), outside = mkdtempSync(join(tmpdir(), 'self-out-'));
+  const root = tmp('self-root-'), outside = tmp('self-out-');
   mkdirSync(join(root, 'docs')); writeFileSync(join(root, 'docs', 'NOTES.md'), 'hello'); writeFileSync(join(outside, 'x.txt'), 'x'); writeFileSync(join(root, '.env'), 'K=V');
   symlinkSync(outside, join(root, 'link'));
   assert.match(await answerFile({ ask: 'does docs/NOTES.md exist?', roots: [root] }), /^Yes: docs\/NOTES\.md exists in .* \(file, 5 bytes, modified \d+ min ago\)\.$/);

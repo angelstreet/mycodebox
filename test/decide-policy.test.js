@@ -1,19 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+
+
 import { join } from 'node:path';
 import { evaluatePush, evaluateDeploy, parsePushAsk, decisionRecord, rollbackText } from '../decide-policy.js';
 import { composeReply } from '../merge-policy.js';
 import { hardMatch } from '../stall.js';
 import { validateDecision } from '../orchestration/task-contract.js';
 import { makeRepo, git, commit } from './helpers-git.js';
+import { tmp } from './helpers-tmp.js';
 
 const GREEN = 'Tests: 1826/1826 pass on feat.';
 // a repo with a bare "origin" (a temp dir, no network): main and feat are pushed, then feat gets one more local commit
 function withOrigin(opts = {}) {
   const repo = makeRepo(opts);
-  const bare = join(mkdtempSync(join(tmpdir(), 'dec-origin-')), 'origin.git');
+  const bare = join(tmp('dec-origin-'), 'origin.git');
   git(repo, 'init', '-q', '--bare', bare);
   git(repo, 'remote', 'add', 'origin', bare);
   git(repo, 'push', '-q', 'origin', 'main', 'feat');

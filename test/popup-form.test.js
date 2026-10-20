@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { classifyStall } from '../stall.js';
 import { parseInlineOptions, parseQuestionForm, formatMultiAnswer, parseMultiReply, deriveButtons, reflowPane, displayQuestion } from '../public/buttons.js';
 import { multiFormModel, multiSendText, multiComplete, detailsText } from '../public/ask-model.js';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { buildScorecard } from '../scorecard.js';
 
-process.env.GHOSTY_STATE_DIR = mkdtempSync(join(tmpdir(), 'ghosty-form-'));
+
+import { buildScorecard } from '../scorecard.js';
+import { tmp } from './helpers-tmp.js';
+
+process.env.GHOSTY_STATE_DIR = tmp('ghosty-form-');
 const { logOwnerChoice } = await import('../manager.js');
 
 // The real TASK-49 closing text (6 numbered questions, "(1) ... *(recommended)*, (2) ..., or (3) ...?").

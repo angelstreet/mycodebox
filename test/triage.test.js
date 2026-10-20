@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { tmp } from './helpers-tmp.js';
 
 // Mock VPT server: /server/ai/decide (Jev) and /server/ai/complete (the AI reviewer).
 const calls = [];
@@ -25,7 +26,7 @@ const srv = http.createServer((req, res) => {
 });
 await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 
-const dir = mkdtempSync(join(tmpdir(), 'ghosty-triage-'));
+const dir = tmp('ghosty-triage-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide`, JEV_API_KEY: 'test-key' });
 const m = await import('../manager.js');
 const tri = await import('../triage.js');
