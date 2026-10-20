@@ -362,3 +362,26 @@ test('autoParkArchived parks only archived + parkable sessions, announces a refu
   assert.equal(held.length, 1); assert.match(held[0].reasons[0], /holds vpt-lease: L9/);
   assert.ok(!notices.some((n) => ['live', 'mgr', 'plain', 'taken'].includes(n.session)));
 });
+
+const MENU = 'Background work is running\n 1. Exit and stop tasks\n 2. Move to background and exit\n 3. Stay';
+function menuHarness(busy) {
+  const sent = []; let alive = true;
+  const tmux = { sendText: async (_n, t) => { sent.push(t); if (t === '1') alive = false; }, sendEnter: async () => {}, kill: async () => { sent.push('kill'); } };
+  const p = createParking({ file: join(tmp('park-'), 'p.json'), tmux, exitWaitMs: 200, pollMs: 5, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) });
+  const facts = { ...okFacts, busy: [], backgroundWork: 0 };
+  return { p, sent, facts, opts: { claudeAlive: async () => alive, readPane: async () => MENU, busyNow: async () => busy } };
+}
+
+test('exit menu with watcher loops only: sends 1 and parks', async () => {
+  const h = menuHarness([{ pid: 7, args: WATCH }]);
+  const rec = await h.p.park('s', h.facts, h.opts);
+  assert.equal(rec.session, 's');
+  assert.deepEqual(h.sent.filter((x) => x !== '/exit'), ['1', 'kill']);
+});
+
+test('exit menu with a real child: sends 3 (Stay), reports the reason, does not park', async () => {
+  const h = menuHarness([{ pid: 7, args: WATCH }, { pid: 9, args: 'npm test' }]);
+  await assert.rejects(h.p.park('s', h.facts, h.opts), (e) => e.status === 409 && /npm test/.test(e.reasons[0]));
+  assert.deepEqual(h.sent.filter((x) => x !== '/exit'), ['3']);
+  assert.equal(await h.p.get('s'), null);
+});

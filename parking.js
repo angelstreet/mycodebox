@@ -243,7 +243,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
     },
     // Records the session, exits the agent with /exit, kills the tmux session only once the agent process is gone ( Claude: refuses if it
     // doesn't exit within the wait; MiniMax: falls back to Ctrl-C twice when /exit didn't take effect, then kills the tmux session anyway).
-    async park(name, facts, { claudeAlive }) {
+    async park(name, facts, { claudeAlive, readPane, busyNow }) {
       await load();
       const reasons = this.checks(facts);
       if (reasons.length) throw err(409, `not parked: ${reasons.join('; ')}`, reasons);
@@ -268,8 +268,22 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
         await tmux.sendEnter(name);
         const t0 = now();
         let gone = false;
+        let menu = false;
         while (now() - t0 < exitWaitMs) {
           if (!(await claudeAlive(facts.claude.pid))) { gone = true; break; }
+          // /exit with background shells opens "Background work is running: 1. Exit and stop tasks / 2. Move to background / 3. Stay".
+          if (readPane && !menu && /Background work is running/.test(await readPane(name).catch(() => ''))) {
+            menu = true;
+            const now_ = busyNow ? await busyNow() : (facts.busy || []);
+            const real = now_.filter((c) => !isWatcher(c.args));
+            if (!real.length) await tmux.sendText(name, '1');   // only watcher loops: stopping them loses nothing
+            else {
+              await tmux.sendText(name, '3');                    // Stay: the session keeps running untouched
+              delete data.parked[name];
+              await save();
+              throw err(409, `not parked: background work is running: ${real[0].args.slice(0, 80)}`, [`running background work: ${real[0].args.slice(0, 80)}`]);
+            }
+          }
           await sleep(pollMs);
         }
         if (!gone) {

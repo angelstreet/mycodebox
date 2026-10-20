@@ -1554,7 +1554,11 @@ async function parkFacts(name) {
 
 async function parkSession(name) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid session name');
-  const rec = await parking.park(name, await parkFacts(name), { claudeAlive: pidAlive });
+  const rec = await parking.park(name, await parkFacts(name), {
+    claudeAlive: pidAlive,
+    readPane: async (n) => (await exec(TMUX, ['capture-pane', '-p', '-t', `=${n}:`], { timeout: 5000 })).stdout,
+    busyNow: async () => { const f = await parkFacts(name); return f.busy; },
+  });
   latest = null;
   return { ok: true, parked: rec };
 }
