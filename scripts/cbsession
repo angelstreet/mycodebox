@@ -39,6 +39,8 @@ H="$HOME/handovers"; mkdir -p "$H"; P="$H/$NAME.prompt.md"; L="$H/$NAME.launch.s
 if [ -n "$HANDOVER" ]; then
   [ -f "$HANDOVER" ] || { echo "cbsession: handover $HANDOVER not found on this host (scp it to ~/handovers/ first)" >&2; exit 2; }
   HANDOVER=$(cd "$(dirname "$HANDOVER")" && pwd)/$(basename "$HANDOVER")
+  # Unquoted heredoc (it must interpolate $DIR/$HANDOVER): every ` ... ` is a command substitution unless escaped,
+  # which silently ran the integration commands and emptied them out of the prompt (2026-10-20).
   cat > "$P" <<EOF
 You are picking up work in a fresh session on this host. Working directory: $DIR.
 1. Read the handover: $HANDOVER, then the files it links as needed.
@@ -52,10 +54,10 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
    are woken when they end; never nohup, setsid, disown or a trailing & (the harness cannot see those). If you must
    wait on a job anyway, name its pid, log file, run id or deploy id in the STATUS line (STATUS: waiting: run r-12,
    pid 4242, log /tmp/run.log): the manager then wakes you when it ends. Waiting on your own job is not "blocked".
-   Integration: commit on your own branch, push the branch and run `integrate request <branch> [--deploy <scope>]`; never
-   merge into the target, push the target or run the deploy script yourself. End the turn with `STATUS: waiting:
-   integration <id>`; the lane tells you the result (a returned request: fix it on your branch, request again).
-   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then `STATUS: waiting: integration <id>`.
+   Integration: commit on your own branch, push the branch and run \`integrate request <branch> [--deploy <scope>]\`; never
+   merge into the target, push the target or run the deploy script yourself. End the turn with \`STATUS: waiting:
+   integration <id>\`; the lane tells you the result (a returned request: fix it on your branch, request again).
+   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run \`integrate request\`, then \`STATUS: waiting: integration <id>\`.
    This brief and the repo's AGENTS.md win over older task docs and handovers that say "no push / no merge / no
    deploy" or "the owner merges". Never hand the owner commands to run: run them yourself.
 4. Ask the owner only for: deleting data, credentials or secrets, money, customers, sudoers or system units on hosts,
