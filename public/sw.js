@@ -10,6 +10,7 @@ const SHELL_FILES = [
   '/prio.js',
   '/sent-echo.js',
   '/term-sgr.js',
+  '/term-links.js',
   '/policy.js',
   '/usage.js',
   '/review.js',
