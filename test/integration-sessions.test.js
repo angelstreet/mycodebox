@@ -190,6 +190,40 @@ test('deploy adapter: a failed deploy, a timeout and a vanished id', async () =>
   assert.equal((await mk(null).wait('d1')).state, 'unknown');
 });
 
+test('deploy adapter: a deploy that finished between polls is read from the registry, not counted as a miss', async () => {
+  // `deploy list` only holds queued/running deploys: a finished one is gone, so the registry is asked (`deploy wait <id>`)
+  const mk = (waitResult) => {
+    const calls = [];
+    const d = createIntegrationDeploys({ registry: async (argv) => {
+      calls.push(argv.join(' '));
+      if (argv[1] === 'list') return { code: 0, stdout: JSON.stringify({ deploys: [] }), stderr: '' };
+      if (argv[1] === 'wait') return waitResult();
+      if (argv[1] === 'last') return { code: 0, stdout: JSON.stringify({ envs: { 'env-a': { version: '1.2.3' } } }), stderr: '' };
+      return { code: 1, stdout: '', stderr: 'unsupported' };
+    }, sleep: async () => {} });
+    return { d, calls };
+  };
+  // done with a version on the line
+  let a = mk(() => ({ code: 0, stdout: 'deploy d9 done (version 2.0.1)\n', stderr: '' }));
+  assert.deepEqual(await a.d.wait('d9'), { ok: true, state: 'done', version: '2.0.1', tail: '' });
+  assert.ok(a.calls.includes('deploy wait d9 --timeout 5'), 'asks the registry for that id');
+  // done without a version: the version is read from `deploy last`, as for a listed entry
+  const b = mk(() => ({ code: 0, stdout: 'deploy d9 done\n', stderr: '' }));
+  const w = await b.d.wait('d9');
+  assert.deepEqual([w.ok, w.state, w.version, w.tail], [true, 'done', '1.2.3', '']);
+  assert.ok(b.calls.includes('deploy last --json'));
+  // failed and cancelled carry their reason as the tail
+  const f = await mk(() => ({ code: 1, stdout: 'deploy d9 failed (health check failed)\n', stderr: '' })).d.wait('d9');
+  assert.deepEqual([f.ok, f.state, f.version, f.tail], [false, 'failed', null, 'health check failed']);
+  const c = await mk(() => ({ code: 1, stdout: 'deploy d9 cancelled (the owner stopped it)\n', stderr: '' })).d.wait('d9');
+  assert.deepEqual([c.ok, c.state, c.version, c.tail], [false, 'cancelled', null, 'the owner stopped it']);
+  // a wait that only times out (still queued/running, or the registry is unavailable) counts the miss as before
+  let polls = 0;
+  const t = mk(() => { polls++; return { code: 75, stdout: '', stderr: 'timeout waiting for the deploy' }; });
+  const u = await t.d.wait('d9');
+  assert.equal(polls, 20); assert.equal(u.state, 'unknown'); assert.match(u.error, /not in the registry/);
+});
+
 const now = 10_000_000;
 const rq = (o) => ({ id: 'int-1', repo: 'demo-repo', branch: 'feat/a', target: 'main', session: 'alpha', deployScope: null, deployed: null,
   state: 'queued', tail: '', createdAt: iso(now - 60_000), updatedAt: iso(now - 60_000), startedAt: null, endedAt: null, ...o });
