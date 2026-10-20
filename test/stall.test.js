@@ -477,10 +477,11 @@ test('review fixes: a numbered plan is not a menu, and the continue floor reads 
   assert.equal(wouldSend(far).send, null);
 });
 
-// ---- the forbidden scan reads the ask, not the pane (the stop that was tagged "sudo" / "Deploy") ------------------
+// ---- the forbidden scan reads the agent's own prose, not the pane (the stop that was tagged "sudo" / "Deploy") ---
 // A stop was escalated because the scan read the whole closing text: an earlier tool line (ssh ... sudo -n -u x ...) and a
-// background shell named "...Deploy..." sat above a plain UI question. The filter reads the question, its option labels and the
-// STATUS line only: tool-call lines, command outputs and background-task listings are chrome, never the ask.
+// background shell named "...Deploy..." sat above a plain UI question. The filter reads the agent's own closing prose -- its
+// text paragraphs, the STATUS line, the question and the option labels -- with the pane furniture removed: tool-call lines and
+// their outputs, `$ ` command lines, "Ran …" / "Running …" summaries, background-task and shell listings, status bars and rules.
 test('a tool line holding "sudo -n -u x" above a plain UI question is not forbidden', () => {
   const s = classifyStall({ plain: [
     '⏺ Bash(ssh vpt-node1 "sudo -n -u deploy systemctl restart ghosty")',
@@ -527,5 +528,39 @@ test('a live menu still reads the prompt line above its options', () => {
   ], state: 'waiting' });
   assert.ok(s.forbidden, 'the prompt above the options is the ask -- deploy is still forbidden');
   assert.ok(s.topics?.deploy, 'the deploy topic is set so every key needs a confirm');
+  assert.equal(wouldSend(s).send, null);
+});
+
+// The floor the previous scoping lost: in a continue / stopped_short stop the agent announces the risky step in its own prose
+// ABOVE the question ("Next I'll push to main and deploy the server. Shall I continue?"). A scan that read only the question
+// would see "Shall I continue?" and auto-answer, approving the deploy. The prose is the ask; the pane furniture around it
+// (the tool call and its result rows here) stays out.
+test('prose above the question announces a deploy + "Shall I continue?" -> still forbidden', () => {
+  const s = classifyStall({ plain: [
+    '⏺ The phase-2 refactor is done and the suite is green.',
+    '⏺ Next I\'ll push to main and deploy the server.',
+    '⏺ Bash(git log --oneline -3)',
+    '  ⎿  a1b2c3 fix: widen the floor scan',
+    '⏺ Shall I continue?',
+    '', '✻ Baked for 3m 31s · done 3:59 PM', RULE, '❯ ', RULE,
+  ], state: 'done' });
+  assert.equal(s.case, 'continue', 'the bare "Shall I continue?" still classifies as continue');
+  assert.ok(s.forbidden, 'the announced deploy in the prose above the question is still forbidden');
+  assert.ok(s.topics?.deploy, 'the deploy topic is set so ops-ask routes it as a manager item');
+  assert.equal(wouldSend(s).send, null, 'an auto-answer must not approve the announced deploy');
+});
+
+test('prose announces a push to main -> forbidden', () => {
+  const s = classifyStall({ plain: [
+    '⏺ The branch is green.',
+    '⏺ Next I\'ll push the branch to main once the run finishes.',
+    '⏺ Bash(git status --short)',
+    '  ⎿  M stall.js',
+    '⏺ Shall I continue with the push?',
+    '', '✻ Baked for 3m 31s · done 3:59 PM', RULE, '❯ ', RULE,
+  ], state: 'done' });
+  assert.equal(s.case, 'continue');
+  assert.ok(s.forbidden, 'push to main is in FORBIDDEN_RE -- the announced push is never auto-answered');
+  assert.ok(s.topics?.push, 'the push topic is set so ops-ask routes it as a manager item');
   assert.equal(wouldSend(s).send, null);
 });

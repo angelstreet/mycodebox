@@ -552,13 +552,30 @@ export function menuOptions(lines) {
   return opts;
 }
 
-// The text the forbidden-topic filter reads: the ask itself -- the parsed question text (which carries the STATUS line's own
-// wording), the menu option labels, and nothing else. A tool-call line, a command output or a background-task listing is chrome:
-// it is not what the owner would be answering, so a stop is never forbidden because of one (a pane held an
-// `ssh ... sudo -n ...` command and a background shell named "...Deploy..." above a plain question).
-function askText(out, opts = [], question = out.question) {
+// ---- the text the forbidden-topic filter reads: the agent's own prose, never the pane furniture -----------
+// The scan input is everything the agent WROTE in its closing turn -- its text paragraphs, the STATUS line, the
+// question and the option labels -- because a `continue` / `stopped_short` stop announces the risky step ABOVE the
+// question ("Next I'll push to main and deploy the server. Shall I continue?") and the auto-answer approves the whole
+// paragraph, not just the sentence that ends on "?". Scanning only the question would let it approve a deploy.
+// The pane furniture around those words is chrome and never the ask, so it is dropped: tool-call lines and their result
+// rows (⎿ / ├ / └ / │), `$ ` command lines, "Ran ..." / "Running ..." summaries, background-task and shell listings
+// ("Background work is running", "shell · ..."), status bars and box-drawing rules. A stop is never forbidden because of
+// one (a pane held an `ssh ... sudo -n ...` command and a background shell named "...Deploy..." above a plain question).
+const TOOL_ROW_RE = /^\s*[⎿├└┌┐┘│┃▏▕]/;   // a tool result row, a deeper-indented continuation and a box border
+const SHELL_ROW_RE = /^\s*\$\s+\S/;   // "$ npm run deploy:watch"
+const BOX_RULE_RE = /^\s*[─━═╭╮╰╯╔╗╚╝]{2,}/;
+// A command echo is a summary, not a sentence: a full stop or comma ("Ran the deploy last night.") makes it the
+// agent's own prose and keeps it in the scan.
+const TOOL_SUMMARY_RE = /^\s*(?:[⏺●•]\s*)?(?:Ran|Running|Executed|Started)\b[^,.!?]*$/i;
+const BACKGROUND_ROW_RE = /^\s*(?:Background work is running|Background (?:task|shell|command)s?\b[^.?]*$|(?:shell|process|task|job)s?\s*·)/i;
+const STATUS_BAR_RE = /^\s*(?:[✻✶✳✢✽⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|.*\bbypass permissions\b|\/rc\s*$|.*\bfor shortcuts\b)/;
+const isChrome = (l) => TOOL_CALL_RE.test(l) || TOOL_ROW_RE.test(l) || SHELL_ROW_RE.test(l) || BOX_RULE_RE.test(l)
+  || TOOL_SUMMARY_RE.test(l) || BACKGROUND_ROW_RE.test(l) || STATUS_BAR_RE.test(l) || RULE_LINE.test(l);
+const ownProse = (lines) => lines.map((l) => String(l).replace(/\s+$/, '')).filter((l) => l.trim() && !isChrome(l));
+
+function askText(out, opts = [], lines = [], question = out.question) {
   const labels = [...new Set([...opts, ...(out.options || [])].map((o) => o.text || ''))];
-  return [question || '', ...labels].filter((s) => String(s).trim()).join('\n');
+  return [...new Set([question, ...ownProse(lines), ...labels].map((s) => String(s || '').replace(/\s+$/, '')).filter((s) => s.trim()))].join('\n');
 }
 
 // Unmarked menus (round 9, item 3): no "(recommended)" tag, but option 1 is a safe, reversible default. Only a clean 1..N list counts, and option 1
@@ -633,11 +650,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     else if (rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2)) { out.case = 'menu_recommended'; out.answer = { key: String(rec.n) }; }
     else if (!rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2) && unmarkedFirst(opts, block)) { out.case = 'menu_recommended'; out.answer = { key: String(opts[0].n) }; out.source = 'unmarked-first'; }
     else out.case = 'owner_decision';
-    // The menu's own prompt ("Run this command? deploy the frontend to production"): the last line above the options that is
-    // neither an option nor the live-menu chrome. It is the ask, so it stays in the scan when the question fallback took the
-    // chrome line instead -- a permission prompt rarely ends on "?" itself.
-    const prompt = block.slice().reverse().find((l) => l.trim() && !OPTION_LINE.test(l) && !LIVE_MENU_RE.test(l)) || '';
-    out.forbiddenText = askText(out, opts, [out.question, prompt].filter((s) => s && s.trim()).join('\n'));
+    // The whole block's prose, not just the question line: a permission prompt does not end on "?", and the risky step
+    // an auto-answer would approve can sit above the menu ("Next I'll deploy the server." + "Run this command?").
+    out.forbiddenText = askText(out, opts, block);
     if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text) || (out.source === 'unmarked-first' && o.n === opts[0].n), ...(out.source === 'unmarked-first' && o.n === opts[0].n ? { unmarked: true } : {}), forbidden: forbiddenMatch(o.text) }));
     return finish(out);
   }
@@ -661,7 +676,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; if (queuedWait(st.text)) out.queued = true; }
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
     else out.case = 'done';
-    out.forbiddenText = askText(out);   // the STATUS line's own text and the menu option labels: the ask the owner answers
+    out.forbiddenText = askText(out, [], close);   // the STATUS line's own text, the option labels and the closing prose around them: the ask the owner answers
     return finish(out);
   }
   out.question = tailSentences(last, 300);
@@ -719,7 +734,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
   if (fyi) out.fyi = fyi;
   out.no_status = !asks && !fyi && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
   if (out.no_status && out.case === 'done') { out.answer = { text: ASK_STATUS_TEXT }; out.autoCase = 'ask_status'; }
-  out.forbiddenText = askText(out, opts);
+  out.forbiddenText = askText(out, opts, close);   // the closing prose (minus chrome) carries the step a "Yes, continue." would approve
   return finish(out);
 }
 
