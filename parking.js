@@ -111,6 +111,28 @@ export function lastActivityOf({ info, reporterAt }) {
   return b > a ? { at: b, source: 'reporter' } : { at: a, source: 'claude' };
 }
 
+// A watcher: Claude's own Monitor / background `until ...; do sleep` poll loop (a bash -c from its shell-snapshots). It waits for
+// something and does no work, and a finished session leaves it behind for hours (2026-10-20: it kept Claude at status "shell").
+export const isWatcher = (args) => {
+  const a = String(args || '').replace(/\\012|\n/g, ' ');
+  return /shell-snapshots\/snapshot-/.test(a) && /\b(?:until|while)\b[^;]*;\s*do\b/.test(a);
+};
+
+// Remote Control (claude.ai / app) ends with a system line in the transcript when the session was archived or ended there.
+// Claude also clears bridgeSessionId in its session file. A later "/remote-control is active" line means it was reconnected.
+const RC_GONE = /"subtype":"informational","content":"Remote Control disconnected [^"]*ended or archived[^"]*\(code 4090\)/;
+const RC_ACTIVE = /"subtype":"bridge_status","content":"\/remote-control is active/;
+export function rcArchivedInTail(text) {
+  const s = String(text || '');
+  const gone = s.search(RC_GONE);
+  if (gone < 0) return false;
+  let last = -1;
+  for (const m of s.matchAll(new RegExp(RC_ACTIVE, 'g'))) last = m.index;
+  return last < gone;
+}
+// Claude's project folder name: the cwd with every non-alphanumeric turned into "-".
+export const transcriptFile = (projectsDir, cwd, sessionId) => join(projectsDir, String(cwd || '').replace(/[^A-Za-z0-9]/g, '-'), `${sessionId}.jsonl`);
+
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 // Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude, which carries the bypass flag by default; recorded args never add one) + the model the old process had + --resume.
@@ -201,16 +223,20 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       // only when the caller says so with facts.dead — a pane we know nothing about is still refused.
       if (!agent && !facts.dead) return ['no Claude or MiniMax process in this pane'];
       // Per-agent prerequisite checks (Claude only knows its own idle / sessionId; MiniMax is idle by the board's `state`).
+      // "shell" = the turn is over and only background shells are left; they count below, so only watchers are forgiven.
+      const work = (facts.busy || []).filter((c) => !(agent === 'claude' && isWatcher(c.args)));
       if (agent === 'claude') {
-        if (facts.claude.info.status !== 'idle') r.push(`Claude status is "${facts.claude.info.status}", not idle`);
+        const st = facts.claude.info.status;
+        if (st !== 'idle' && !(st === 'shell' && !work.length)) r.push(`Claude status is "${st}", not idle`);
         if (!facts.claude.info.sessionId) r.push('no resumable session id');
       }
       // Shared checks (busy children / lease held / not idle).
       if (facts.state && !['idle', 'done'].includes(facts.state)) r.push(`board state is ${facts.state}`);
       if (facts.attached) r.push('a terminal is attached');
       if (facts.reporterWaiting) r.push('a permission prompt / question is pending');
-      if (facts.backgroundWork > 0) r.push(`${facts.backgroundWork} background job(s) reported`);
-      if (facts.busy?.length) r.push(`running child process: ${facts.busy[0].args.slice(0, 80)}`);
+      // The reporter's job count includes the watchers: when the tree shows only watchers (or status shell without work), they are not work.
+      if (facts.backgroundWork > 0 && !(agent === 'claude' && !work.length && (facts.busy?.length || facts.claude.info.status === 'shell'))) r.push(`${facts.backgroundWork} background job(s) reported`);
+      if (work.length) r.push(`running child process: ${work[0].args.slice(0, 80)}`);
       if (facts.leases == null) r.push('could not read vpt-lease (cannot prove no lease is held)');
       else if (facts.leases.length) r.push(`holds vpt-lease: ${facts.leases.map((l) => l.id).join(', ')}`);
       return r;
@@ -297,4 +323,27 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       return { ...rec, cmd };
     },
   };
+}
+// Auto-park sessions archived in the Claude app (Remote Control). One pass over the live panes:
+//   panes: [{ name, claude: {pid, info} }]; tailOf(info) -> transcript tail text; factsOf(name); park(name); notice({session, parked, reasons}).
+// Archived = no bridge in Claude's session file AND the 4090 line in the transcript (rcArchivedInTail). A session that is
+// not parkable yet (turn running, lease held) is retried on the next pass; its refusal is announced once per reason set.
+export async function autoParkArchived({ panes, tailOf, factsOf, park, checks, notice, seen, skip = () => false }) {
+  const out = [];
+  for (const { name, claude } of panes) {
+    if (!claude || claude.info.bridgeSessionId || skip(name)) continue;
+    let tail = '';
+    try { tail = await tailOf(claude.info); } catch { continue; }
+    if (!rcArchivedInTail(tail)) continue;
+    const facts = await factsOf(name);
+    const reasons = checks(facts);
+    if (reasons.length) {
+      const key = reasons.join('|');
+      if (seen.get(name) !== key) { seen.set(name, key); await notice({ session: name, parked: false, reasons }); }
+      continue;
+    }
+    try { await park(name); seen.delete(name); out.push(name); await notice({ session: name, parked: true, reasons: [] }); }
+    catch (e) { const key = `err:${e.message}`; if (seen.get(name) !== key) { seen.set(name, key); await notice({ session: name, parked: false, reasons: [e.message] }); } }
+  }
+  return out;
 }
