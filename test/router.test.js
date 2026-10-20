@@ -404,3 +404,15 @@ test('pick: confidence is the probability of the chosen option when probabilitie
   assert.equal(hi.source, 'jev');
   assert.equal(hi.confidence, 0.9);
 });
+
+// ---- wake: real manager events (sanitized, 2026-10-18/19) ----
+test('wake: real-event fixtures: rule default agrees except the documented open cases', async () => {
+  const { readFileSync } = await import('node:fs');
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/router-states-real-events.json', import.meta.url), 'utf8'));
+  assert.ok(fx.length >= 20);
+  const text = JSON.stringify(fx);
+  assert.ok(!/\d+\.\d+\.\d+\.\d+|@|https?:|\/home\/|vpt-|host-clone|mac-wt/i.test(text), 'fixtures must stay sanitized');
+  const missed = fx.filter((s) => !s.expect_any.includes(ruleDefault('wake', s.facts)));
+  assert.ok(missed.every((s) => s.open), 'every disagreement must be a documented open case: ' + missed.filter((s) => !s.open).map((s) => s.label));
+  assert.equal(fx.length - missed.length, 21);
+});
