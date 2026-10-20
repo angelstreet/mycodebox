@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 
 import { join } from 'node:path';
 import { classifyStall } from '../stall.js';
-import { jobRefs, waitsOnOwnJob, createOwnJobs, descendants, jobPids } from '../own-jobs.js';
+import { jobRefs, waitsOnOwnJob, hasRef, createOwnJobs, descendants, jobPids } from '../own-jobs.js';
 import { tmp } from './helpers-tmp.js';
 
 const status = (line) => classifyStall({ plain: ['Started the final run.', line], state: 'done' });
@@ -26,11 +26,36 @@ test('STATUS blocked / waiting on a job of its own is own_job_wait (never a need
   assert.equal(status('STATUS: waiting: the owner go-ahead').case, 'waiting_deploy');
 });
 test('jobRefs / waitsOnOwnJob', () => {
-  assert.deepEqual(jobRefs('waiting on pid 4242 and /tmp/fake-run/out.log nohup'), { deploy: null, pid: 4242, path: '/tmp/fake-run/out.log', run: null, integration: null, detached: true });
+  assert.deepEqual(jobRefs('waiting on pid 4242 and /tmp/fake-run/out.log nohup'), { deploy: null, pid: 4242, path: '/tmp/fake-run/out.log', run: null, watcher: null, integration: null, detached: true });
   assert.equal(jobRefs('deploy 3f9a').deploy, '3f9a');
   assert.equal(jobRefs('run id: r-12').run, 'r-12');
   assert.equal(waitsOnOwnJob('are you ok with the run?'), false);
   assert.equal(waitsOnOwnJob('waiting for the owner approval of the run'), false);
+});
+
+test('job refs: real STATUS lines waiting on a GitHub Actions run / a watcher task are the session\'s own job, not a manager deploy stop', () => {
+  const A = 'dispatch 39512799794 on dfddba379 (testcase subroutes added to ALLOW_404); poll will resume when API Route Sweep completes.';
+  const B = 'API Route Sweep on 39512799794 (dfddba379) in_progress since 23:19:34Z; poll will resume when it completes.';
+  const C = 'the 19:00 CoC run for the live proof of BUG-0725 (watcher bg_1a2b284f, run ff3606fe still going)';
+  for (const [t, run, watcher] of [[A, '39512799794', null], [B, '39512799794', null], [C, 'ff3606fe', 'bg_1a2b284f']]) {
+    assert.equal(waitsOnOwnJob(t, 'waiting'), true, t);
+    const r = jobRefs(t);
+    assert.equal(hasRef(r), true, t); assert.equal(r.run, run, t); assert.equal(r.watcher, watcher, t);
+    const s = status(`STATUS: waiting: ${t}`);
+    assert.equal(s.case, 'own_job_wait', t); assert.equal(s.answer, null, t);
+  }
+  // every other way an id is written
+  assert.equal(jobRefs('workflow run 98765432101 queued').run, '98765432101');
+  assert.equal(jobRefs('https://github.com/o/r/actions/runs/39512799794 is green').run, '39512799794');
+  assert.equal(jobRefs('run 3f9a1b2 still going').run, '3f9a1b2');
+  assert.equal(jobRefs('run facade is over').run, null, 'an ordinary word is not a run id');
+  assert.equal(jobRefs('watcher bg_1a2b284f is quiet').watcher, 'bg_1a2b284f');
+  assert.equal(jobRefs('bg_1a2b284f still going').watcher, 'bg_1a2b284f');
+  // never a run id: a date or time, a version, a percentage, a size, a number in a URL path, a compact date-time
+  for (const t of ['in_progress since 2026-10-20T23:19:34Z', 'sweep is 12 percent done', 'log grew to 39512799794 bytes', 'https://ci.example.com/builds/39512799794 finished', 'version 2026.10.20-89466 is live', 'watcher since 202610202319']) assert.equal(jobRefs(t).run, null, t);
+  // still not own jobs: the owner, a question, a review, credentials
+  for (const t of ['waiting for the owner to approve deploy 3 of the CI run', 'are you ok with the run?', 'waiting for review', 'blocked: need credentials']) assert.equal(waitsOnOwnJob(t, 'waiting'), false, t);
+  assert.equal(status('STATUS: waiting: deploy 3f9a still running').case, 'waiting_deploy', '^deploy stays the deploy case');
 });
 test('process tree: children of the agent except shells and helpers', () => {
   const table = { children: new Map([[10, [11]], [11, [12, 13]], [13, [14]]]), args: new Map([[11, 'bash -c run'], [12, 'sleep 5'], [13, 'python3 score_matrix.py --run r-12'], [14, 'worker']]) };
