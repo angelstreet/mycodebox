@@ -1538,8 +1538,10 @@ async function parkFacts(name) {
   // Dead session: the agent exited or crashed and the pane is a bare shell (bash/zsh/sh). Still parkable — its last
   // conversation id comes from the resolver (Claude's own project transcripts) and there is nothing to /exit.
   const dead = !!pane && !claude && !minimax && !agentFromTree(pane.pid, table) && SHELLS.has(pane.cmd);
-  let sessionId = null;
-  if (dead) { try { sessionId = await resolveClaudeSessionId({ name, cwd: pane?.cwd || null }); } catch { sessionId = null; } }
+  let sessionId = null, sessionCwd = null;
+  // The transcript's own directory: a dead pane is often not in it any more (shell back at $HOME, deleted worktree), and
+  // parking that cwd would resume the conversation in the wrong place.
+  if (dead) { try { const hit = await resolveClaudeSessionId({ name, cwd: pane?.cwd || null }); sessionId = hit?.sessionId || null; sessionCwd = hit?.cwd || null; } catch { sessionId = null; } }
   const sess = (await listSessions()).find((x) => x.name === name);
   const st = (latest && latest.status[name]) || null;
   const lz = await getLeases(true);
@@ -1550,7 +1552,7 @@ async function parkFacts(name) {
   if (agentPid) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(agentPid)])).stdout.trim()) / 1024); } catch {} }
   const rw = reporter.detail(name);
   return {
-    claude, minimax, dead, cwd: pane?.cwd || null, sessionId,
+    claude, minimax, dead, cwd: sessionCwd || pane?.cwd || null, sessionId,
     state: st?.state || null, attached: !!sess?.attached, reporterWaiting: !!(rw && reporter.waitingNow(name, 0)),
     backgroundWork: rw?.lastTurn?.backgroundWork || 0,
     busy: claude ? busyChildren(claude.pid, table) : (minimax ? busyChildren(minimax.pid, table) : []),

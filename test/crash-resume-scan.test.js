@@ -38,6 +38,23 @@ const BARE_CORE = ['Aborted (core dumped)', 'user@host:~/virtualpytest$'];
 const BARE_THEN_OUTPUT = ['Aborted', 'the report was written to disk', 'user@host:~/virtualpytest$'];
 const st = (lines, extra = {}) => ({ name: 'pane', tmuxName: 'pane', cwd: '/home/user/virtualpytest', base, model: null, claudeSessionId: 'sid', shellForeground: true, agent: null, scriptBusy: false, input: '', lines, ...extra });
 const dec = (s) => decideCrashResume({ state: s, consecutiveNoAgent: 2 });
+const NOW = 1780000000000;
+// A fake ~/.claude/projects tree: { '<projectsDir>/<encoded cwd>': { '<id>.jsonl': { mtime, tail } } }. No real paths.
+const fakeProjects = (tree, onRead = () => {}) => ({
+  readdir: async (dir) => {
+    if (dir === '/p') return Object.keys(tree).filter((d) => d.slice(0, d.lastIndexOf('/')) === dir).map((d) => d.slice(d.lastIndexOf('/') + 1));
+    const entries = tree[dir];
+    if (!entries) throw Object.assign(new Error(`ENOENT: ${dir}`), { code: 'ENOENT' });
+    return Object.keys(entries);
+  },
+  stat: async (file) => ({ mtimeMs: fakeEntry(tree, file).mtime }),
+  readTail: async (file) => { onRead(file); return fakeEntry(tree, file).tail; },
+});
+function fakeEntry(tree, file) {
+  const i = file.lastIndexOf('/'), e = tree[file.slice(0, i)]?.[file.slice(i + 1)];
+  if (!e) throw Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' });
+  return e;
+}
 
 test('wrapped job line + trailing banner noise + getcwd error: parsed, but cwd gone is not resumed', () => {
   const scan = scanCrash(T129);
@@ -104,11 +121,51 @@ test('missing session id is looked up from transcripts', async () => {
     stat: async (f) => ({ mtimeMs: f.endsWith('b.jsonl') ? 2 : 1 }),
     readTail: async (f) => (f.endsWith('a.jsonl') ? '{"agentName":"game-report-ai-usage"}' : '{"agentName":"other"}'),
   };
-  assert.equal(await findClaudeSessionId({ name: 'game-report-ai-usage', cwd: '/home/user/virtualpytest', projectsDir: '/p', fs }), 'a');
+  assert.deepEqual(await findClaudeSessionId({ name: 'game-report-ai-usage', cwd: '/home/user/virtualpytest', projectsDir: '/p', fs }), { sessionId: 'a', cwd: '/home/user/virtualpytest' });
   const calls = [];
   const r = createCrashResumer({ getState: async () => st(GAME, { claudeSessionId: null }), sendText: async (...x) => calls.push(x), sendEnter: async () => {}, record: async () => {}, resolveSessionId: async () => 'found-id' });
   await r.tick(['pane']); await r.tick(['pane']);
   assert.match(calls[0][1], /--resume found-id$/);
+});
+
+test('the resumer takes the session id out of the resolver object', async () => {
+  const calls = [];
+  const r = createCrashResumer({ getState: async () => st(GAME, { claudeSessionId: null }), sendText: async (...x) => calls.push(x), sendEnter: async () => {}, record: async () => {},
+    resolveSessionId: async () => ({ sessionId: 'sid-from-elsewhere', cwd: '/srv/evolai' }) });
+  await r.tick(['pane']); await r.tick(['pane']);
+  assert.match(calls[0][1], /--resume sid-from-elsewhere$/);
+});
+
+test('a dead pane outside the conversation dir finds its session id and its own cwd', async () => {
+  const tree = {
+    '/p/-home-user': {},                                   // the shell went back to $HOME: no transcript here
+    '/p/-srv-codebox-evolai': { 'sid-evolai.jsonl': { mtime: NOW - 1000, tail: '{"cwd":"/srv/codebox/evolai","agentName":"evolai"}' } },
+  };
+  assert.deepEqual(await findClaudeSessionId({ name: 'evolai', cwd: '/home/user', projectsDir: '/p', fs: fakeProjects(tree), now: NOW }),
+    { sessionId: 'sid-evolai', cwd: '/srv/codebox/evolai' });
+});
+
+test('no match in any project dir -> null, and transcripts older than the lookback window are not read', async () => {
+  const tree = {
+    '/p/-home-user': {},
+    '/p/-srv-other': { 'other.jsonl': { mtime: NOW - 1000, tail: '{"cwd":"/srv/other","agentName":"someone-else"}' } },
+    '/p/-srv-ancient': { 'ancient.jsonl': { mtime: NOW - 15 * 86400000, tail: '{"cwd":"/srv/ancient","agentName":"evolai"}' } },
+  };
+  let read = 0;
+  const fs = fakeProjects(tree, () => read++);
+  assert.equal(await findClaudeSessionId({ name: 'evolai', cwd: '/home/user', projectsDir: '/p', fs, now: NOW }), null);
+  assert.equal(read, 1);                                   // only the recent one was read, the 15-day-old transcript was not
+  assert.equal(await findClaudeSessionId({ name: 'evolai', cwd: '/home/user', projectsDir: '/missing', fs, now: NOW }), null);
+});
+
+test('the newest match across the other project dirs wins, by mtime', async () => {
+  const tree = {
+    '/p/-home-user': {},
+    '/p/-srv-middle': { 'mid.jsonl': { mtime: NOW - 5000, tail: '{"cwd":"/srv/middle","customTitle":"evolai"}' } },
+    '/p/-srv-new': { 'new.jsonl': { mtime: NOW - 1000, tail: '{"cwd":"/srv/new","agentName":"evolai","cwd":"/srv/new"}' } },
+  };
+  assert.deepEqual(await findClaudeSessionId({ name: 'evolai', cwd: '/home/user', projectsDir: '/p', fs: fakeProjects(tree), now: NOW }),
+    { sessionId: 'new', cwd: '/srv/new' });              // and the transcript's last cwd field, not its first
 });
 
 test('bare abort lines resume; real agent output after one is not a crash', () => {
