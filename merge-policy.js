@@ -158,28 +158,108 @@ export async function repoNames(repo, remote = 'origin') {
 }
 
 // ---- migrations by effect (Q199, owner 2026-10-20) ----
-// A migration merges when it only ADDS objects (CREATE TABLE / CREATE INDEX / ALTER TABLE ... ADD COLUMN): the lane cannot read the
-// target DB, so the manager attests with --migration-applied that those objects are already there. Anything that removes, rewrites or
-// writes data is destructive and stays with the owner; anything we cannot read is not additive.
+// A migration merges when it only ADDS objects (CREATE TABLE / CREATE INDEX / ALTER TABLE ... ADD COLUMN) or does the session, policy
+// and grant bookkeeping a real migration carries (BEGIN/COMMIT, SET search_path, COMMENT ON, GRANT, CREATE POLICY, RLS): the lane
+// cannot read the target DB, so the manager attests with --migration-applied that those objects are already there. Anything that
+// removes, rewrites or writes data is destructive and stays with the owner; anything we cannot read is not additive.
 const MIG_LINE_CAP = 4000;
-const SQL_CREATE_TABLE = /^create\s+(?:temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)?table\b/;
-const SQL_CREATE_INDEX = /^create\s+(?:unique\s+|fulltext\s+|spatial\s+)?index\b/;
-const SQL_ADD_COLUMN = /^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?[`"'\w.$]+(?:\s*\.\s*[`"'\w.$]+)?\s+add\s+(?:if\s+not\s+exists\s+)?column\b/;
+// Additive statement heads, checked in order. OR REPLACE is deliberately absent: it rewrites an object that may already exist
+// (the reason names it), so CREATE OR REPLACE FUNCTION / VIEW is refused even though a plain CREATE FUNCTION is additive.
+const SQL_ADDITIVE = [
+  /^(?:begin|start\s+transaction|commit|end)\b/,                                          // the transaction wrapper
+  /^set\s+(?!session\s+(?:role|authorization)\b)(?!role\b)(?!authorization\b)\S/,          // SET LOCAL / SET search_path, never a role change
+  /^comment\s+on\b/,                                                                    // COMMENT ON TABLE x IS '...'
+  /^grant\b/,                                                                           // GRANT SELECT ON t TO app
+  /^create\s+policy\b/,                                                                 // CREATE POLICY "p" ON t
+  /^create\s+function\b/,                                                                // the body is not read (CREATE OR REPLACE is refused below)
+  /^create\s+(?:unique\s+|fulltext\s+|spatial\s+|concurrently\s+|temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)*(?:table|index|sequence|view|type|extension|schema)\b/,
+];
+// ALTER TABLE is additive action by action (ADD COLUMN / ADD CONSTRAINT / ENABLE|FORCE ROW LEVEL SECURITY), so a mixed
+// ALTER TABLE t ADD COLUMN c int, DROP COLUMN d is refused on the DROP.
+const SQL_ALTER_TABLE = /^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?[`"'\w.$]+(?:\s*\.\s*[`"'\w.$]+)?\s+(.*)$/;
+const SQL_ALTER_ADDITIVE = /^(?:add\b|(?:enable|force)\s+row\s+level\s+security\b)/;
 // The destructive shape, most specific first, so the reason names what it found ("DROP COLUMN in db/migrations/x.sql").
 const SQL_DESTRUCTIVE = [
-  [/\bdrop\s+(column|table|index|constraint|view|schema|function|type|trigger|sequence|database|extension)\b/, (m) => `DROP ${m[1].toUpperCase()}`],
+  [/\bdrop\s+(column|table|index|constraint|view|schema|function|type|trigger|sequence|database|extension|policy|role|user)\b/, (m) => `DROP ${m[1].toUpperCase()}`],
   [/\btruncate\b/, () => 'TRUNCATE'],
   [/\bdelete\s+from\b/, () => 'DELETE'],
   [/\bupdate\s+(?!or\s+roll\s+back\s+on\s+no\s+data\s+found)[\w"'`.[\]]+\s+set\b/, () => 'UPDATE'],
   [/\binsert\s+into\b/, () => 'INSERT'],
+  [/\brevoke\b/, () => 'REVOKE'],
+  [/\bset\s+(?:session\s+)?(?:role|authorization)\b/, () => 'SET ROLE'],
   [/\btype\s+\w+/, () => 'ALTER ... TYPE'],
-  [/\brename\s+(to|column|constraint)\b/, () => 'RENAME'],
+  [/\brename\s+(to|column|constraint|index|table)\b/, () => 'RENAME'],
   [/\balter\s+(table|column)\b[\s\S]*\bset\s+default\b/, () => 'ALTER ... SET DEFAULT'],
+  [/\balter\s+(table|column)\b[\s\S]*\bset\s+not\s+null\b/, () => 'ALTER ... SET NOT NULL'],
+  [/\bowner\s+to\b/, () => 'ALTER ... OWNER TO'],
+  [/\bcreate\s+or\s+replace\b/, () => 'replaces an existing object'],
 ];
+// The re-create pattern: DROP POLICY "p" ON t is additive only when a LATER statement in the same file CREATEs "p" on t again.
+const SQL_DROP_POLICY = /^drop\s+policy\s+(?:if\s+exists\s+)?("[^"]+"|[^\s]+)\s+on\s+("[^"]+"|[^\s]+)/;
+const SQL_CREATE_POLICY = /^create\s+policy\s+(?:if\s+not\s+exists\s+)?("[^"]+"|[^\s]+)\s+on\s+("[^"]+"|[^\s]+)/;
+const policyParts = (sql) => { const m = SQL_CREATE_POLICY.exec(sql) || SQL_DROP_POLICY.exec(sql); return m ? [m[1], m[2]] : null; };
+const policyKey = ([name, table]) => `${String(name).replace(/["'`]/g, '').toLowerCase()} on ${String(table).replace(/["'`]/g, '').toLowerCase()}`;
 // An alembic (or any non-SQL) revision: only the three additive ops, module boilerplate around them ignored.
 const PY_ADDITIVE = /^op\.(create_table|create_index|add_column)\s*\(/;
 const PY_BOILERPLATE = /^(?:from\s+\S+\s+import\b|import\s+\S+|\w+\s*=\s*(?:sa\.)?(?:sqlalchemy\.)?Column|revision\b|down_revision\b|branch_labels\b|depends_on\b|def\s+\w+\s*\(|"""|'''|#)/;
 const PY_DESTRUCTIVE = /^op\.(drop_\w+|alter_column|batch_alter_table|execute|bulk_insert)\s*\(/;
+// Split SQL into whole statements: a statement may span lines, and a ';' inside a string literal or a dollar-quoted body (CREATE
+// FUNCTION) does not end it. Comments go, but a quote inside a comment cannot open a literal and a marker inside a literal cannot
+// hide a statement. A dollar-quoted body is kept as the placeholder $body$: its text is data the caller never ran here, and CREATE
+// FUNCTION / CREATE OR REPLACE FUNCTION are told apart by their head, not by what the body says.
+// -> { stmts } | { error }
+function splitSql(lines) {
+  const src = lines.map((l) => l.replace(/\\[ \t]*$/, '')).join('\n');   // a trailing backslash is psql's line continuation
+  const stmts = [];
+  let cur = '', i = 0;
+  const flush = () => { const s = cur.replace(/\s+/g, ' ').trim(); if (s) stmts.push(s); cur = ''; };
+  while (i < src.length) {
+    const c = src[i], d = src[i + 1];
+    if (c === '-' && d === '-') { const e = src.indexOf('\n', i); i = e < 0 ? src.length : e; cur += ' '; continue; }
+    if (c === '/' && d === '*') {
+      let depth = 1, j = i + 2;
+      while (j < src.length && depth) {
+        if (src[j] === '/' && src[j + 1] === '*') { depth++; j += 2; } else if (src[j] === '*' && src[j + 1] === '/') { depth--; j += 2; } else j++;
+      }
+      if (depth) return { error: 'unterminated comment' };
+      cur += ' '; i = j; continue;
+    }
+    if (c === "'" || c === '"') {                                     // a literal, '' / "" escapes
+      let j = i + 1, closed = false;
+      while (j < src.length) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === c) { if (src[j + 1] === c) { j += 2; continue; } closed = true; break; }
+        j++;
+      }
+      if (!closed) return { error: 'unbalanced quote' };
+      cur += src.slice(i, j + 1); i = j + 1; continue;
+    }
+    if (c === '$') {                                                 // a dollar-quoted body, $$ or $tag$
+      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 40));
+      if (tag) {
+        const e = src.indexOf(tag[0], i + tag[0].length);
+        if (e < 0) return { error: 'unbalanced dollar quote' };
+        cur += '$body$'; i = e + tag[0].length; continue;
+      }
+    }
+    if (c === ';') { flush(); i++; continue; }
+    cur += c; i++;
+  }
+  flush();
+  return { stmts };
+}
+// One SQL statement of the file -> true (additive) | null (a policy drop the caller judges against the later statements) |
+// { reason } naming what it found.
+function sqlAdditive(s) {
+  const head = s.toLowerCase().replace(/;+\s*$/, '').replace(/^[^a-z$]*/, '');
+  if (head.startsWith('\\')) return { reason: 'a psql meta-command' };
+  for (const re of SQL_ADDITIVE) if (re.test(head)) return true;
+  if (SQL_DROP_POLICY.test(head)) return null;   // additive only as the re-create pattern, the caller has the later statements
+  const alter = SQL_ALTER_TABLE.exec(head);
+  if (alter && alter[1].split(/,\s*(?=add\b|drop\b|alter\b|rename\b|set\b|owner\b)/).every((c) => SQL_ALTER_ADDITIVE.test(c.trim()))) return true;
+  for (const [re, name] of SQL_DESTRUCTIVE) { const m = re.exec(head); if (m) return { reason: name(m) }; }
+  return { reason: `not additive: ${head.slice(0, 80)}` };
+}
 // Join a statement spread over several lines (a CREATE TABLE body, an op.create_table( block) into one logical line. A trailing
 // backslash is psql's line continuation.
 function joinStatements(lines) {
@@ -204,23 +284,36 @@ const isPy = (file) => /\.(?:py|rb|js|ts|go|java)$/i.test(file || '');
 export function migrationAdditive(file, addedLines) {
   if (!Array.isArray(addedLines)) return { additive: false, reason: 'unreadable diff' };
   const py = isPy(file);
+  if (!py) {
+    const cut = splitSql(addedLines.filter((l) => !/^\s*$/.test(l)));
+    if (cut.error) return { additive: false, reason: cut.error };
+    if (!cut.stmts.length) return { additive: true, empty: true };
+    const heads = cut.stmts.map((s) => s.toLowerCase());
+    // the re-create pattern: DROP POLICY "p" ON t is additive only when a LATER statement CREATEs "p" on t again
+    const recreated = (i) => {
+      const k = policyKey(policyParts(heads[i]));
+      return heads.some((h, j) => j > i && SQL_CREATE_POLICY.test(h) && policyKey(policyParts(h)) === k);
+    };
+    for (let i = 0; i < heads.length; i++) {
+      const r = sqlAdditive(cut.stmts[i]);
+      if (r === true) continue;
+      if (r === null && recreated(i)) continue;   // the dropped policy is created again later in this file
+      return { additive: false, reason: r ? r.reason : `DROP POLICY in "${heads[i].slice(0, 80)}"` };
+    }
+    return { additive: true };
+  }
   const stmts = joinStatements(addedLines.filter((l) => !/^\s*$/.test(l)))
-    .map((s) => (py ? s.replace(/#.*$/, '') : s.replace(/--.*$/, '').replace(/\/\*[\s\S]*?\*\//g, ' ')))
+    .map((s) => s.replace(/#.*$/, ''))
     .map((s) => norm(s))
-    .filter((s) => s.length && !/^(--|#)/.test(s));
+    .filter((s) => s.length && !/^#/.test(s));
   if (!stmts.length) return { additive: true, empty: true };
   for (const s of stmts) {
     const head = s.replace(/^[^a-z]*/, '');
-    if (py) {
-      if (PY_ADDITIVE.test(head)) continue;
-      if (PY_BOILERPLATE.test(head)) continue;   // module boilerplate around the ops says nothing about their effect
-      const op = /^op\.(\w+)/.exec(head);
-      if (op && PY_DESTRUCTIVE.test(head)) return { additive: false, reason: op[1] };
-      return { additive: false, reason: op ? `not additive: ${head.slice(0, 80)}` : `unreadable statement: ${head.slice(0, 80)}` };
-    }
-    if (SQL_CREATE_TABLE.test(head) || SQL_CREATE_INDEX.test(head) || SQL_ADD_COLUMN.test(head)) continue;
-    for (const [re, name] of SQL_DESTRUCTIVE) { const m = re.exec(s); if (m) return { additive: false, reason: name(m) }; }
-    return { additive: false, reason: `not additive: ${head.slice(0, 80)}` };
+    if (PY_ADDITIVE.test(head)) continue;
+    if (PY_BOILERPLATE.test(head)) continue;   // module boilerplate around the ops says nothing about their effect
+    const op = /^op\.(\w+)/.exec(head);
+    if (op && PY_DESTRUCTIVE.test(head)) return { additive: false, reason: op[1] };
+    return { additive: false, reason: op ? `not additive: ${head.slice(0, 80)}` : `unreadable statement: ${head.slice(0, 80)}` };
   }
   return { additive: true };
 }
