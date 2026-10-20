@@ -159,3 +159,51 @@ test('the real restart command runs safe-restart.sh in the live checkout and rec
   const text = readFileSync(log, 'utf8');
   assert.match(text, /args: --wait 7/); assert.match(text, /cwd: .*live dir/); assert.match(text, /NOT restarting: fake guard/);
 });
+
+// ---- one restart waiter ----
+const waiterRestart = (alive) => (o) => { mkdirSync(join(o.pid, '..'), { recursive: true }); writeFileSync(o.pid, '4242\n'); return { ok: true }; };
+async function deployTwo(a, w) {
+  const id1 = a.lane.enqueue({ repo: 'me', branch: 'feat' }).id; await a.lane.wait(id1, 120000);
+  w.branch('feat2', { 'two.js': 'y\n' });
+  const id2 = a.lane.enqueue({ repo: 'me', branch: 'feat2' }).id; const r2 = await a.lane.wait(id2, 120000); await until(() => a.launches.length);
+  return { id1, id2, r2 };
+}
+test('a pending safe-restart waiter is not joined by a second one: the new deploy is coalesced with it', async () => {
+  const w = world(); w.branch('feat', { 'new.js': 'x\n' });
+  const a = mk(w, { restart: waiterRestart(), lane: { pidAlive: () => true } });
+  const { id1, id2, r2 } = await deployTwo(a, w);
+  assert.equal(a.launches.length, 1, 'only the first request launched a waiter'); assert.match(a.launches[0].pid, new RegExp(`${id1}\\.pid$`));
+  assert.equal(r2.state, 'deployed'); assert.equal(r2.selfDeploy.restart, 'coalesced'); assert.equal(r2.selfDeploy.restartWaiter, id1);
+  assert.equal(r2.selfDeploy.expectedSha, w.main()); assert.equal(w.liveHead(), w.main(), 'the latest sha is what the pending waiter restarts into');
+  assert.match(integrationText(r2), new RegExp(`restart pending \\(coalesced with ${id1}\\)`));
+  assert.equal(lastRecord(a.stateDir, id2).selfDeploy.restartWaiter, id1);
+});
+test('a waiter that exited or whose process is gone does not block a new launch', async () => {
+  for (const mode of ['dead', 'exited']) {
+    const w = world(); w.branch('feat', { 'new.js': 'x\n' });
+    let alive = true;
+    const a = mk(w, { restart: waiterRestart(), lane: { pidAlive: () => alive } });
+    const id1 = a.lane.enqueue({ repo: 'me', branch: 'feat' }).id; await a.lane.wait(id1, 120000); await until(() => a.launches.length);
+    if (mode === 'dead') alive = false; else writeFileSync(a.launches[0].exit, '0\n');
+    w.branch('feat2', { 'two.js': 'y\n' });
+    const id2 = a.lane.enqueue({ repo: 'me', branch: 'feat2' }).id; const r2 = await a.lane.wait(id2, 120000); await until(() => a.launches.length > 1);
+    assert.equal(a.launches.length, 2, mode); assert.equal(r2.selfDeploy.restart, 'scheduled', mode); assert.equal(r2.selfDeploy.restartWaiter, undefined);
+  }
+});
+test('the pending waiter survives a lane restart (read from the persisted requests)', async () => {
+  const w = world(); w.branch('feat', { 'new.js': 'x\n' });
+  const a = mk(w, { restart: waiterRestart(), lane: { pidAlive: () => true } });
+  const id1 = a.lane.enqueue({ repo: 'me', branch: 'feat' }).id; await a.lane.wait(id1, 120000);
+  a.lane.stop(); await a.lane.idle();
+  const b = mk(w, { stateDir: a.stateDir, restart: waiterRestart(), lane: { pidAlive: () => true } });
+  w.branch('feat2', { 'two.js': 'y\n' });
+  const id2 = b.lane.enqueue({ repo: 'me', branch: 'feat2' }).id; const r2 = await b.lane.wait(id2, 120000); await tick();
+  assert.equal(b.launches.length, 0); assert.equal(r2.selfDeploy.restartWaiter, id1);
+});
+test('the restart command records the waiter pid', () => {
+  const root = mkdtempSync(join(tmpdir(), 'lane-restart-')); const live = join(root, 'live'); mkdirSync(join(live, 'scripts'), { recursive: true });
+  writeFileSync(join(live, 'scripts', 'safe-restart.sh'), '#!/bin/sh\nexit 0\n'); chmodSync(join(live, 'scripts', 'safe-restart.sh'), 0o755);
+  const pid = join(root, 'w.pid'), exit = join(root, 'w.exit');
+  execFileSync('sh', ['-c', restartCommand({ cwd: live, waitMin: 1, log: join(root, 'w.log'), exit, pid })]);
+  assert.match(readFileSync(pid, 'utf8'), /^\d+\n$/); assert.equal(readFileSync(exit, 'utf8'), '0\n');
+});

@@ -2,9 +2,9 @@
 // own evaluation, the lane revert, no redeploy of an already-merged branch, the self deploy pinned to the tested merge.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { createIntegrationLane, createDefaultGit } from '../integration-lane.js';
 import { makeWorld } from './helpers-lane.js';
 import { git } from './helpers-git.js';
@@ -69,11 +69,14 @@ test('finding 22: a lane revert undoes the merge commit through the lane (no ses
 test('finding 24: re-requesting an already-merged branch does not redeploy unless --deploy is explicit', async () => {
   const w = selfWorld(); w.branch('feat', { 'a.js': 'x\n' });
   const m = mk(w, { key: 'me', cfg: selfCfg(w) });
-  assert.equal((await m.go({ branch: 'feat' })).state, 'deployed');
+  const first = await m.go({ branch: 'feat' });
+  assert.equal(first.state, 'deployed');
   await until(() => m.launches.length === 1);
   const again = await m.go({ branch: 'feat' });
   assert.equal(again.state, 'merged', JSON.stringify(again)); assert.equal(again.alreadyMerged, true); await new Promise((r) => setTimeout(r, 100)); assert.equal(m.launches.length, 1, 'no second restart');
   assert.equal(m.journal.filter((j) => j.kind === 'deploy').length, 1);
+  // the first restart has finished (else the forced deploy coalesces onto it): then --deploy launches a new one
+  mkdirSync(dirname(first.selfDeploy.exit), { recursive: true }); writeFileSync(first.selfDeploy.exit, '0\n');
   const forced = await m.go({ branch: 'feat', deploy: true });
   assert.equal(forced.state, 'deployed'); await until(() => m.launches.length === 2);
 });

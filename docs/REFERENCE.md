@@ -1208,6 +1208,8 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 - **Rule:** Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then `STATUS: waiting: integration <id>`. A session that stops on a merge or PR decision anyway (`STATUS: waiting/blocked/needs-owner` naming a merge or PR) is classified `merge_wait`: the manager queues the branch with the lane and tells the session the integration id; with no lane repo it runs the merge evaluation. A failure is a manager item of kind `merge`; only a hard-floor word (force-push, secrets) reaches the owner.
 
+- **Self-deploy restart (one waiter).** For `deploy.kind: 'self'` the lane launches one `safe-restart` waiter (files `<state>/integration/restart/<id>.{log,exit,pid}`). While it is alive (no `.exit`, pid file names a live safe-restart shell; a dead or recycled pid does not count) a later self-deploy pulls and checks as usual but launches no second waiter: `selfDeploy.restart: 'coalesced'`, `restartWaiter: <id>`, notice "restart pending (coalesced with <id>)". The pending waiter restarts into whatever the live checkout holds then, so the latest pulled sha goes live. Read from the persisted requests, so it survives a lane restart.
+
 - **Config** `<state>/integration.json`: `{ repos: { <key>: { clone, remote: 'origin', target: 'main', test: '<cmd>'|null, testTimeoutMin: 30,
   ci: 'github'|null, ciTimeoutMin: 60, deploy: { env, defaultScope }|null, conventions: ['VERSION.txt'], conventionResolver: 'take-target'|'max-plus-one' } } }`.
 - **API** (loopback + reporter token; remote clients with the `integrate` token flag): `POST /api/integration/requests { repo?, branch, session?, deploy?, note? }`
