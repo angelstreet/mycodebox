@@ -280,8 +280,7 @@ test('SKIPPED_HOSTS: recorded on the deploy and a catch-up host request is queue
   assert.deepEqual([cu.scope, cu.ref, cu.hosts], ['host', 'main', ['labox-dongle']]);
   assert.match(cu.purpose, /^catch-up: hosts skipped by 1 \(leased\): labox-dongle$/);
   assert.ok(reg.calls.some((c) => /deploy request node1-vpt --scope host --ref main --agent manager:deploy --approved --hosts labox-dongle/.test(c)));
-  // the done alert follows the registry's finish: wait for it rather than racing it
-  await until(() => alerts.some(([k, t]) => k === 'deploy:1:done' && /1 host\(s\) skipped/.test(t)));
+  assert.ok(alerts.some(([k, t]) => k === 'deploy:1:done' && /1 host\(s\) skipped/.test(t)));
 });
 
 test('one catch-up per (env, host set): an equal-ref one is kept, an older queued one is replaced, an older running one does not block', () => {
