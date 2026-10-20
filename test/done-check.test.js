@@ -75,11 +75,11 @@ test('tick: a working session, a busy host and dry mode tell nobody; off checks 
 });
 
 test('namedRefs: branches and worktree paths in a closing text, main/master skipped', () => {
-  const r = namedRefs('STATUS: done — merged task59-frontend-ui-rules; left origin/feat/x and ~/vpt-task59, main is green.', '/home/u');
+  const r = namedRefs('STATUS: done — merged task59-frontend-ui-rules; left origin/feat/x and ~/vpt-task59, main is green.', '/home/user');
   assert.ok(r.branches.includes('task59-frontend-ui-rules'));
   assert.ok(r.branches.includes('feat/x'));
   assert.ok(!r.branches.includes('main'));
-  assert.deepEqual(r.paths, ['/home/u/vpt-task59']);
+  assert.deepEqual(r.paths, ['/home/user/vpt-task59']);
 });
 
 test('tick: a session on main whose STATUS names a branch with unmerged commits is caught (TASK59, 2026-10-15)', async (t) => {

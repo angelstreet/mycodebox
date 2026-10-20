@@ -110,16 +110,16 @@ test('findTestLeftovers: orphaned test runs older than the limit, with their who
   const H = 3600;
   const procs = [
     // 2026-10-15: manager-fresh.sh orphan whose children are the fake git/tmux of a test fixture
-    { pid: 10, ppid: 1, etimes: 90 * H, mine: true, args: '/bin/bash /home/u/repo-wt/scripts/manager-fresh.sh' },
+    { pid: 10, ppid: 1, etimes: 90 * H, mine: true, args: '/bin/bash /home/user/repo-wt/scripts/manager-fresh.sh' },
     { pid: 11, ppid: 10, etimes: 90 * H, mine: true, args: '/usr/local/bin/node /tmp/rv2-fresh-y0SA70/bin/git -C /tmp/x fetch -q origin' },
     { pid: 20, ppid: 1, etimes: 11 * H, mine: true, args: 'node --import ./checks/freeze-assert.mjs test/report.test.js' },
-    { pid: 30, ppid: 1, etimes: 13 * H, mine: true, args: 'node /home/u/app/node_modules/.pnpm/tinypool@1.1.1/node_modules/tinypool/dist/entry/process.js' },
+    { pid: 30, ppid: 1, etimes: 13 * H, mine: true, args: 'node /home/user/app/node_modules/.pnpm/tinypool@1.1.1/node_modules/tinypool/dist/entry/process.js' },
     // not leftovers: a test run with a live parent, a young orphan, an orphan that is not a test, someone else's
     { pid: 40, ppid: 400, etimes: 20 * H, mine: true, args: 'node --test test/a.test.js' },
     { pid: 50, ppid: 1, etimes: 10 * 60, mine: true, args: 'node --test test/b.test.js' },
     { pid: 60, ppid: 1, etimes: 50 * H, mine: true, args: 'python3 work/rangeserver.py site 8901' },
     { pid: 70, ppid: 1, etimes: 50 * H, mine: false, args: 'node --test test/c.test.js' },
-    { pid: 80, ppid: 1, etimes: 50 * H, mine: true, args: 'node /home/u/ghosty-sessions/server.js' },
+    { pid: 80, ppid: 1, etimes: 50 * H, mine: true, args: 'node /home/user/ghosty-sessions/server.js' },
   ];
   const got = findTestLeftovers(procs, 60);
   assert.deepEqual(got.map((l) => [l.pid, l.pids.sort((a, b) => a - b)]), [[10, [10, 11]], [20, [20]], [30, [30]]]);
