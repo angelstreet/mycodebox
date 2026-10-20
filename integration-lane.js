@@ -21,6 +21,12 @@ export const STATES = Object.freeze(['queued', 'running', ...FINAL]);
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SCOPES = new Set(['frontend', 'server', 'host', 'full']);   // the deploy queue's scopes
+// How wide a deploy scope reaches, so a coalesce keeps the wider of two (`--deploy frontend` then `--deploy full` deploys).
+const SCOPE_WIDTH = Object.freeze({ frontend: 1, server: 2, host: 3, full: 4 });
+// A queued request waits this long without changing before the lane picks it: a session that pushes commit after commit and
+// re-requests must not restart the target's CI once per commit (2026-10-20: three merges of one branch in three minutes).
+export const DEFAULT_SETTLE_MS = 60_000;
+const MAX_SETTLE_MS = 3_600_000;
 const MAX_PUSH_TRIES = 3;
 const MIGRATION_REASON = /^touches a migration: /;   // the path-based floor line the effect-based migration reasons replace
 export const INSTALL_CMD = 'npm ci --no-audit --no-fund';
@@ -44,9 +50,18 @@ export function testFailure(text, chars = 6000) {
 }
 
 // ---- config ------------------------------------------------------------------------------------------------------------
-// -> { repos: {key: normalized}, errors: [] }. Unknown keys are ignored; an invalid repo is dropped and reported.
+// `settleMs`: whole milliseconds from 0 to an hour, or null when absent/invalid. 0 means "pick a queued request at once".
+export function parseSettleMs(v) {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 && n <= MAX_SETTLE_MS ? n : null;
+}
+// -> { repos: {key: normalized}, settleMs, errors: [] }. Unknown keys are ignored; an invalid repo is dropped and reported.
+// The global settleMs (top level) is the fallback for every repo without its own.
 export function validateConfig(raw) {
   const repos = {}, errors = [];
+  const globalSettle = parseSettleMs(raw?.settleMs);
+  if (raw?.settleMs != null && globalSettle == null) errors.push(`settleMs: must be an integer from 0 to ${MAX_SETTLE_MS} ms`);
   for (const [key, c] of Object.entries(raw?.repos && typeof raw.repos === 'object' ? raw.repos : {})) {
     const bad = (m) => errors.push(`${key}: ${m}`);
     if (!KEY_RE.test(key)) { bad('invalid repo key'); continue; }
@@ -95,13 +110,19 @@ export function validateConfig(raw) {
       }
     }
     const mins = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
+    let settle = null;
+    if (c.settleMs != null) {
+      settle = parseSettleMs(c.settleMs);
+      if (settle == null) { bad(`settleMs must be an integer from 0 to ${MAX_SETTLE_MS} ms`); continue; }
+    }
     repos[key] = { key, clone: c.clone, remote, target, test: c.test ? c.test.trim() : null, testTimeoutMin: mins(c.testTimeoutMin, 30),
-      ci: c.ci ?? null, ciTimeoutMin: mins(c.ciTimeoutMin, 60), deploy, conventions, conventionResolver, unionFiles, regenerate };
+      ci: c.ci ?? null, ciTimeoutMin: mins(c.ciTimeoutMin, 60), deploy, conventions, conventionResolver, unionFiles, regenerate,
+      ...(settle == null ? {} : { settleMs: settle }) };
   }
-  return { repos, errors };
+  return { repos, settleMs: globalSettle, errors };
 }
 export function loadConfig(stateDir) {
-  try { return validateConfig(JSON.parse(fs.readFileSync(path.join(stateDir, 'integration.json'), 'utf8'))); } catch { return { repos: {}, errors: [] }; }
+  try { return validateConfig(JSON.parse(fs.readFileSync(path.join(stateDir, 'integration.json'), 'utf8'))); } catch { return { repos: {}, settleMs: null, errors: [] }; }
 }
 
 // Normalized remote identity so https/ssh/credentialed spellings of one repository compare equal.
@@ -248,10 +269,13 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   const live = new Map();          // id -> { step, tail } (memory only: the running step's output)
   const waiters = new Map();       // id -> Set<fn>
   const workers = new Map();       // repo -> Promise
+  const settleTimers = new Map();  // repo -> timer that wakes the picker when a settle window ends
   let stopped = false, started = false;
 
   const cfgAll = () => (config ? validateConfig(typeof config === 'function' ? config() : config) : loadConfig(stateDir));
   const repoCfg = (key) => cfgAll().repos[key] || null;
+  // The repo's own settleMs, else the global one, else the default. 0 means "no settle window".
+  const settleOf = (key) => { const all = cfgAll(); const r = all.repos[key]; return (r && r.settleMs != null ? r.settleMs : (all.settleMs != null ? all.settleMs : DEFAULT_SETTLE_MS)); };
   const iso = () => new Date(now()).toISOString();
   const persist = (r) => { try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.appendFileSync(file, `${JSON.stringify(r)}\n`, { mode: 0o600 }); } catch (e) { log('persist failed', e.message); } };
   let lastTold = Promise.resolve();   // the latest notify call, so a self deploy can let the notice out before its restart
@@ -266,6 +290,28 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   }
   const ahead = (r) => [...reqs.values()].filter((x) => x.repo === r.repo && (x.state === 'running' || (x.state === 'queued' && x.seq < r.seq))).length;
   const wake = (id) => { for (const f of waiters.get(id) || []) f(); };
+
+  // ---- settle window (owner 2026-10-20) ------------------------------------------------------
+  // A queued request may only be picked once it has sat unchanged for its repo's settleMs. `settleUntil` is the moment the
+  // window ends (ISO), set at enqueue and pushed back by every coalesce. Absent = an older record or settleMs 0: pick at once.
+  const settleUntilOf = (repo) => { const ms = settleOf(repo); return ms > 0 ? new Date(now() + ms).toISOString() : null; };
+  const settleLeft = (r) => (r.settleUntil ? Math.max(0, Date.parse(r.settleUntil) - now()) : 0);
+  const settled = (r) => settleLeft(r) <= 0;
+  // The lane is serial per repo (one worker), so a queued request behind a running one already waits for it; this is only the
+  // mark that says so, and it survives a restart.
+  const markBehind = (r) => {
+    const run = [...reqs.values()].find((x) => x.repo === r.repo && x.state === 'running');
+    r.afterId = run ? run.id : null;
+  };
+  // Wake the picker for a repo in `ms`, replacing any timer already armed for it (a coalesce moves the window).
+  function armSettle(repo, ms) {
+    const old = settleTimers.get(repo);
+    if (old) { clearTimeout(old); settleTimers.delete(repo); }
+    if (!(ms > 0) || stopped) return;
+    const t = setTimeout(() => { settleTimers.delete(repo); if (!stopped) kick(repo); }, ms);
+    t.unref?.();
+    settleTimers.set(repo, t);
+  }
 
   function load() {
     reqs.clear();
@@ -821,7 +867,46 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     }
   }
 
-  function nextQueued(repo) { return [...reqs.values()].find((x) => x.repo === repo && x.state === 'queued') || null; }
+  // A second request for a branch whose request is still queued updates that entry: same id, same queue position, the newest tip,
+  // the notes appended, the widest deploy scope and the newest manager flags. A coalesce restarts the settle window.
+  function coalesce(r, input, v) {
+    const note = input.note ? String(input.note).slice(0, 500) : null;
+    if (note) {
+      const parts = [r.note, note].filter(Boolean).flatMap((n) => String(n).split('\n')).map((l) => l.trim()).filter(Boolean);
+      const merged = [...new Set(parts)].join('\n');
+      r.note = merged.length > 500 ? `…${merged.slice(merged.length - 499)}` : merged;
+    }
+    if (v.explicit || !r.deployScope) { r.deployScope = v.deployScope; r.deployExplicit = r.deployExplicit || v.explicit; }
+    else if (v.deployScope && (SCOPE_WIDTH[v.deployScope] ?? 0) > (SCOPE_WIDTH[r.deployScope] ?? 0)) r.deployScope = v.deployScope;   // the wider scope wins
+    // --approved-by / --migration-applied attest to a request; the newest one wins, and a request that no longer carries one loses it.
+    if (v.session && !r.session) r.session = v.session;
+    if (v.worktree && !r.worktree) r.worktree = v.worktree;
+    const wasApproved = r.approvedBy;
+    if (input.approvedBy) { r.approvedBy = String(input.approvedBy).slice(0, 80); r.approvedAt = iso(); } else delete r.approvedBy;
+    if (input.migrationApplied) { r.migrationApplied = true; r.migrationAppliedBy = input.approvedBy ? String(input.approvedBy).slice(0, 80) : null; r.migrationAppliedAt = iso(); } else delete r.migrationApplied;
+    r.head = /^[0-9a-f]{7,64}$/.test(String(input.sha || '')) ? String(input.sha) : null;   // the caller's tip; the lane re-reads it from the remote
+    r.settleUntil = settleUntilOf(v.key);
+    markBehind(r);
+    r.coalesced = (r.coalesced || 0) + 1;
+    r.updatedAt = iso();
+    persist(r);
+    emit(r, { kind: 'coalesced', state: 'queued', final: false, coalesced: true, position: ahead(r) + 1 });
+    if (input.approvedBy && input.approvedBy !== wasApproved) { try { journalApproval(r, v); } catch (e) { log('journal failed', e?.message); } }
+    armSettle(v.key, settleLeft(r));
+    kick(v.key);
+    return { id: r.id, position: ahead(r) + 1, repo: v.key, coalesced: true, duplicate: true };
+  }
+  // The approval decision record for --approved-by (OWNER_DECISIONS §15); enqueue and a coalesce both write one.
+  function journalApproval(r, v) {
+    journal({ kind: 'merge', decision_id: `merge-approval-${r.id}`, ts: r.approvedAt, source: 'integration-lane', question: `Approve the infra-path floor reason for ${v.branch} into ${v.target}?`,
+      chosen: 'approve', approvedBy: r.approvedBy, approvedAt: r.approvedAt, rationale: 'a manager approval skips only the CI/deploy/infra-path floor reason; secrets, migrations, sudoers, units, red tests and conflicts still return the request',
+      request: r.id, repo: v.key, branch: v.branch, target: v.target });
+  }
+
+  // The next queued request for a repo whose settle window has ended; null while the head one is still settling.
+  function nextQueued(repo) { return [...reqs.values()].find((x) => x.repo === repo && x.state === 'queued' && settled(x)) || null; }
+  // How long until the head queued request for a repo may be picked (0 when one is ready).
+  const settleWait = (repo) => { const head = [...reqs.values()].find((x) => x.repo === repo && x.state === 'queued'); return head ? settleLeft(head) : 0; };
   function kick(repo) {
     if (stopped || !started || workers.has(repo)) return;
     const p = (async () => {
@@ -829,11 +914,11 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       for (;;) {
         if (stopped) return;
         const r = [...reqs.values()].find((x) => x.repo === repo && x.state === 'running') || nextQueued(repo);
-        if (!r) return;
+        if (!r) { const wait = settleWait(repo); if (wait > 0) armSettle(repo, wait); return; }   // a queued request is still settling
         await processRequest(r);
         if (stopped && !FINAL.includes(r.state)) return;
       }
-    })().catch((e) => log('worker died', repo, e?.message)).finally(() => { workers.delete(repo); if (!stopped && (nextQueued(repo))) kick(repo); });
+    })().catch((e) => log('worker died', repo, e?.message)).finally(() => { workers.delete(repo); if (!stopped && (settleWait(repo) <= 0 && nextQueued(repo))) kick(repo); });
     workers.set(repo, p);
   }
 
@@ -846,7 +931,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       return this;
     },
     // Stop taking work. Does not wait for a step in flight (a hung test must not hang shutdown): await idle() for that.
-    stop() { stopped = true; },
+    stop() { stopped = true; for (const t of settleTimers.values()) clearTimeout(t); settleTimers.clear(); },
     // Resolves when every worker has gone idle (tests, graceful shutdown).
     async idle() { while (workers.size) await Promise.allSettled([...workers.values()]); },
     config: () => cfgAll(),
@@ -869,13 +954,17 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
       const worktree = typeof input.worktree === 'string' && path.isAbsolute(input.worktree) ? input.worktree.slice(0, 500) : null;
-      const dup = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.session === session && x.deployScope === deployScope && !x.deployExplicit === !input.deploy && !x.revertOf && !x.approvedBy === !input.approvedBy && !!x.migrationApplied === !!input.migrationApplied);
-      if (dup) return { id: dup.id, position: ahead(dup) + 1, repo: key, duplicate: true };
+      // Coalesce (2026-10-20): a second request for a branch whose first is still QUEUED updates that entry instead of queueing a
+      // second merge of the same branch (one branch merged 3 times in 3 minutes restarted the target CI three times). Same repo +
+      // branch + target only, and never a revert (it merges a different commit by construction).
+      const open = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.target === c.target && !x.revertOf);
+      if (open) return coalesce(open, input, { key, branch, target: c.target, session, worktree, deployScope, explicit: !!input.deploy });
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
       const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
         deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
+        settleUntil: settleUntilOf(key), afterId: null,
         ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}),
         // --migration-applied: the manager attests the additive migration's objects already exist in the target DB (Q199); only ever read with --approved-by
         ...(input.migrationApplied ? { migrationApplied: true, migrationAppliedBy: input.approvedBy ? String(input.approvedBy).slice(0, 80) : null, migrationAppliedAt: iso() } : {}) };
@@ -883,8 +972,8 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         const prev = Math.max(0, ...[...reqs.values()].filter((x) => session && x.session === session).map((x) => Date.parse(x.createdAt) || 0));
         const to = now(); r.usage = usage({ stateDir, session, worktree: r.worktree, from: Math.max(prev, to - 864e5), to });
       } catch (e) { log('usage attribution failed', e?.message); }
-      reqs.set(r.id, r); persist(r);
-      if (r.approvedBy) { try { journal({ kind: 'merge', decision_id: `merge-approval-${r.id}`, ts: r.approvedAt, source: 'integration-lane', question: `Approve the infra-path floor reason for ${branch} into ${c.target}?`, chosen: 'approve', approvedBy: r.approvedBy, approvedAt: r.approvedAt, rationale: 'a manager approval skips only the CI/deploy/infra-path floor reason; secrets, migrations, sudoers, units, red tests and conflicts still return the request', request: r.id, repo: key, branch, target: c.target }); } catch (e) { log('journal failed', e?.message); } }
+      reqs.set(r.id, r); markBehind(r); persist(r);
+      if (r.approvedBy) { try { journalApproval(r, { key, branch, target: c.target }); } catch (e) { log('journal failed', e?.message); } }
       emit(r, { kind: 'queued', state: 'queued', final: false });
       const out = { id: r.id, position: ahead(r) + 1, repo: key };
       kick(key);
