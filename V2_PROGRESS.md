@@ -1,15 +1,82 @@
-STATUS: IN PROGRESS: rounds 11 and 15 DONE (round 15 is shadow routing only). Rounds 12/12a: (a) DONE (`update_core.sh` queues behind the holder since the round 13 rollout; a request awaiting approval with the runner off is now a manager item), (b) built, Mac hook channel is an owner/Mac follow-up, (c) TTL/heartbeat/codebox liveness built, Mac holder liveness waits for the Mac hook (owner action list), (d) DONE and checked end to end (`test/v2-owner-never-asked-e2e.test.js`); 12a DONE (lease shadow seed is moot after the cut-over). Branch v2/r12-finish.
+STATUS: DELIVERED 343063f2f7e8 (main, via the integration lane; the lane replaced the draft-PR step of §9). Final report below; gate detail in docs/v2/DELIVERY-GATES.md; owner actions at the end of the report.
 
 # V2 progress
 
 Coordinator: Opus (Claude Code), unattended. Integration branch `v2/integration`, base `origin/main` `dccab06`.
 Worker worktrees: `~/mycodebox-v2-wt/<branch-suffix>`. Contract: `docs/v2/ARCHITECTURE.md`.
 
-## Next action
+## Final report (2026-10-20, OWNER_DECISIONS §9 / Section 10)
 
-**First goal of V2 (owner, 2026-10-18; OWNER_DECISIONS §19): the owner never answers about leases or deployments.**
-Lease cut-over: the central lease service runs on the registry host (manager decision), shadow window 09:17-10:17 UTC,
-then central after telling the manager. Then build the missing parts of Round 12 (ship first, test at the end).
+Baseline: `dccab06` (V2 start `d93bb37`). Delivery SHA gated: `343063f2f7e8` (main, lane request int-mvgge2xpf2f6a5, already deployed live). Detail of every gate: `docs/v2/DELIVERY-GATES.md`.
+
+### Verdict
+
+Delivered on the evidence below: all 54 T/GL gates pass (T20 after a check-script fix), both Node versions green, leak scan clean; the owner items are at the end.
+
+### Delivered per round
+
+| Round | Delivered |
+|---|---|
+| 1-2 | V2 task engine: task contract, policy, store, adapters (Claude, Codex, MiniMax, OpenCode stub), worktrees, routing, budget, goal loop, integration controller, system ops; acceptance matrix T01-T40 / GL01-GL14; verification doc and leak-free repo (OWNER_DECISIONS §10) |
+| 3-4 | Engine wired into the server behind `GHOSTY_V2=1`; benchmarks; per-model run limits, faster no-progress stop, token/time/quality routing, MiniMax M3 only |
+| 5-6b | Tasks view (T20), session history, ledger backfill, History view, usage attribution |
+| 7-8 | Manager decides merges after an evaluation floor; autonomy by default with a hard floor (§14, §15) |
+| 9-10 | Harness-review actions, approved-action and unmarked-menu handling (§17); central lease service design with FIFO tickets, pins, matrix (§16) |
+| 11 | Lease cut-over as `central-through-ssh` (client forwards every call to the registry host) |
+| 12, 12a | Owner never asked about leases or deployments: queued deploys, lease nudge, manager items; Legacy pages group in the UI |
+| 13 | Integration lane (`integrate request`): merge evaluation, own-clone merge, test run, CAS push, CI wait, deploy through the queue, self-deploy with restart last |
+| 14, 14b, 15 | Read-only scoring ledger and attribution; shadow routing (never changes a choice) |
+| Review fixes | Fable delivery-gate review, findings 1-26 (below), plus test hardening branches |
+
+### Gate summary (343063f2f7e8)
+
+- T/GL matrix: 54 PASS, 0 blocked/manual, 0 not applicable, 0 FAIL. T20 first failed 65/67 on the hardcoded `ghosty-shell-v149` in `scripts/v2-ui-check.js` (the shell is `v150`); the check now reads the cache name from `public/sw.js` (v2/final-report) and passes 67/67.
+- 22 single test files, 372/372 pass on Node 24.21 (no full-suite rerun by this gate).
+- Leak scan `d93bb37^...343063f2f7e8`: clean. Reporter plugin suite: 25/25.
+- Node 23.6 (lane full suite on the producing merge): 2646/2646, 0 fail.
+- Node 24.21 full suite: 2646/2646 pass, 0 fail, 0 cancelled/skipped, 211/211 test files, 447 s (locked run, TEST_SCOPE=full, Node v24.21.0, at 343063f2f7e8).
+
+### Review findings 1-26 (all merged on main unless noted)
+
+| # | Status | Fix |
+|---|---|---|
+| 1, 2 | fixed | v2/fix-floor, `92d1363`, merge `01e4d3a` (plan is not a menu; continue floor reads the whole closing) |
+| 3, 4, 15 | fixed | v2/fix-approval-auth, `ab682ba` + `5e22c06`, merge `0938e1f` (V2 writes gated by caller, task-branch merges by grant, standing deploy approval by requester) |
+| 5, 6 | fixed | v2/fix-lane-decisions, `a8354a9`/`c83c81d`/`79824b4`, merge `84d18bb` (lane verdicts journaled and in "Decided for you", opt-out and switches honoured) |
+| 7, 8, 9 | fixed | `01e4d3a` (push of main, hard topics stay with the owner, deploy-bypass escalation) |
+| 10 | OPEN (owner) | per-machine lease identity under central-through-ssh |
+| 11, 12, 13, 14 | fixed | v2/fix-leases, `3c546ab`, merge `35df177` (non-authority reads refused, tickets kept, run renews and detects loss; idle-to-pin liveness stated/forwarded per commit) |
+| 16, 17, 18, 25, 26 | fixed | v2/fix-scoring-docs, `f0e1360`, merge `24120c0` (routing.history switch, unknown cost stays unknown, protected CI/deploy globs, minors, stale docs) |
+| 19 | fixed | v2/fix-leak-fixtures, `48063b1`, merge `2cea6d4`; scan clean above |
+| 20 | done | this gate run on the exact SHA |
+| 21 | fixed | `a8354a9`/`84d18bb` (decided merges go through the lane); constant Jev-less confidence is a known limit |
+| 22 | partly | lane revert route built in `c83c81d` (`84d18bb`); lane-only revert needs owner confirmation |
+| 23 | fixed | migration detection widened in `01e4d3a`; labEnvs SQL refuses `CREATE TABLE ... AS` and `CREATE OR REPLACE VIEW` (`decide-policy.js:280,283`) |
+| 24 | fixed | pinned self deploy `84d18bb`; single restart waiter v2/restart-single-waiter `9839b7d`/`f4aad14`, merge `1ccfd01` |
+
+Extra hardening merged: v2/test-history-race `c0740e1`, v2/tmp-autoclean `91cc563` (health-watch sweeps leaked test temp dirs, inode alert), v2/test-tmp-cleanup `343063f` (suites stop leaking temp dirs).
+
+### Known limits
+
+- OpenCode only contract-tested against a stub; all matrix evidence is synthetic (fake runtimes, stub CLIs, disposable remotes).
+- Lane `review` evidence is the merge floor, not an independent reviewer. Without Jev, merge confidence is a constant.
+- Mac holders: no server-side liveness; Mac sessions bypass ghosty's stall classification.
+- Device hosts have no route to the lease service (BLOCKED since round 11).
+- The router has 3 open wake cases (escalated waits); they need a `stall.js` fix.
+
+### Owner-action list
+
+1. Finding 10, per-machine lease identity under central-through-ssh. Choose (a) per-machine ssh keys with a `ForceCommand` wrapper that selects the token file per key, or (b) forward the caller's token in the ssh environment. Until then any machine's session can release/renew/narrow any lease.
+2. Confirm the lane-only revert (the typed-instruction revert replaced by a lane revert route).
+3. Change `scripts/safe-restart.sh` so lease-blocked queued deploys do not count as pending work (agents are permission-denied on that script).
+4. Mac: install the Stop hook with a heartbeat to the intake (nudges and Mac liveness; Mac sessions bypass ghosty's classifier); update the Mac copy of the deploy skill; set the Mac `vpt-lease` client config (`central-through-ssh` plus the ssh wrapper, with a dated backup).
+5. Point the device hosts' lease route at the registry host (`central-through-ssh` + ssh target) (the registry host already runs the current `vpt-lease`, installed 2026-10-20).
+6. Codebox disk at about 80-91%: clean docker images and build cache, the `/tmp` `*-pg-*` dirs and Trash.
+
+### Next work (manager, not owner)
+
+- Router: `stall.js` fix for the 3 open wake cases (escalated waits on a lease/deploy ticket).
+- Convert the remaining ~150 leaking test temp prefixes to `test/helpers-tmp.js` (health-watch sweeps them meanwhile).
 
 ## Round 15 (2026-10-19): scoring into routing, shadow only
 
