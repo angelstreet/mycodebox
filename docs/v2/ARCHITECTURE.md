@@ -23,7 +23,8 @@ signatures; a change needs a coordinator decision recorded in `V2_PROGRESS.md`. 
   `E_ILLEGAL_TRANSITION`, never silently corrected.
 - Persistence: append-only JSONL plus atomic snapshots (write temp, `fsync`, `rename`, `fsync` dir). Persist **before**
   acknowledging. Recovery tolerates a torn last line (drop it, record `recovered_torn_tail`).
-- Machine-readable traces for E2E go under the test's temp dir; synthetic data only.
+- Machine-readable traces for E2E go under the test's temp dir; synthetic data only. Temp dirs come from `tmp()` in
+  `test/helpers-tmp.js` and are removed when the test file ends.
 
 ## 1. Task contract — `orchestration/task-contract.js`
 

@@ -1,8 +1,8 @@
 // Real throwaway git repos for the merge-policy tests (temp dirs, fake identities, no network).
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmp } from './helpers-tmp.js';
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.invalid', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'pack.threads', GIT_CONFIG_VALUE_0: '1' };   // one pack thread: a loaded box refuses to fork many
 export const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -16,7 +16,7 @@ export function commit(repo, files, msg = 'change') {
 
 // A repo on main with a base commit; branch `feat` (checked out unless opts.stay) carries `files`; main moves on with `mainFiles`.
 export function makeRepo({ files = { 'src.js': 'export const a = 1;\n' }, mainFiles = null, base = { 'src.js': 'export const a = 0;\n', 'VERSION.txt': '1\n' }, branch = 'feat', name = 'proj' } = {}) {
-  const repo = join(mkdtempSync(join(tmpdir(), 'merge-pol-')), name);
+  const repo = join(tmp('merge-pol-'), name);
   mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'main');
   commit(repo, base, 'base');

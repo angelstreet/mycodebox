@@ -30,7 +30,7 @@ const SCRIPT = new URL('../scripts/v2-score.js', import.meta.url).pathname;
 const LOOP_REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
   capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };
 const loopOver = (store) => createGoalLoop({ store, registry: createRegistry(LOOP_REGISTRY), adapters: {}, worktrees: {},
-  worktreeRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), verifier: {}, reviewRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), allowFake: true });
+  worktreeRoot: tmp('v2-loop-'), verifier: {}, reviewRoot: tmp('v2-loop-'), allowFake: true });
 const ROOT = new URL('..', import.meta.url).pathname;
 const T0 = Date.parse('2026-01-01T00:00:00Z');
 const NOW = () => Date.parse('2026-10-11T00:00:00Z');

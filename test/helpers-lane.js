@@ -1,11 +1,11 @@
 // Fixtures for the integration lane tests: a bare "remote", a developer clone and the lane's own clone, all in temp dirs.
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git, commit } from './helpers-git.js';
+import { tmp } from './helpers-tmp.js';
 
 export function makeWorld({ name = 'demo-repo', base = { 'src.js': 'export const a = 0;\n', 'VERSION.txt': '1\n' } } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'lane-'));
+  const root = tmp('lane-');
   const remote = join(root, `${name}.git`), dev = join(root, 'dev'), lane = join(root, 'lane');
   mkdirSync(remote);
   git(remote, 'init', '-q', '--bare', '-b', 'main');

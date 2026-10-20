@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp as mkTmp } from './helpers-tmp.js';
 import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, remoteLeaseCmd, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS, isCatchUp, coveringCatchUps, catchUpPlan } from '../deploy-runner.js';
 
 // In-memory registry that mimics `vpt-lease deploy ...` (start = atomic check against leases + one running per env).
@@ -50,7 +50,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(pred, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return; await sleep(10); } throw new Error('timeout'); }
 
 function make(reg, { enabled = true, run, envs, managerItem } = {}) {
-  const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-dep-'));
+  const stateDir = mkTmp('ghosty-dep-');
   const alerts = [], ran = [];
   const runner = createDeployRunner({
     stateDir, registry: reg.fn, isEnabled: () => enabled, managerItem, alert: (k, p) => alerts.push([k, p.title]), log: { error() {} },
@@ -245,7 +245,7 @@ test('snapshot carries the deployed-now ledger; an old registry without it keeps
 test('onChange fires when only the deployed map changes', async () => {
   const reg = fakeRegistry();
   const changes = [];
-  const runner = createDeployRunner({ stateDir: mkdtempSync(join(tmpdir(), 'ghosty-dep-')), registry: reg.fn, isEnabled: () => false, alert() {}, log: { error() {} }, onChange: (s) => changes.push(s), run: async () => ({ code: 0 }) });
+  const runner = createDeployRunner({ stateDir: mkTmp('ghosty-dep-'), registry: reg.fn, isEnabled: () => false, alert() {}, log: { error() {} }, onChange: (s) => changes.push(s), run: async () => ({ code: 0 }) });
   await runner.tick();
   const n = changes.length;
   await runner.tick(); assert.equal(changes.length, n);      // nothing changed
@@ -465,7 +465,7 @@ test('orphan: poll failure does nothing (no finish, no alert)', async () => {
     return { code: 0, stdout: '{}', stderr: '' };
   } };
   const alerts = [];
-  const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-dep-'));
+  const stateDir = mkTmp('ghosty-dep-');
   const runner = createDeployRunner({ stateDir, registry: reg.fn, isEnabled: () => false, alert: (k, p) => alerts.push([k, p.title]), log: { error() {} }, run: async () => ({ code: 0 }) });
   await runner.tick();
   assert.equal(calls.some((c) => c === 'deploy list --json'), true);
@@ -478,7 +478,7 @@ test('orphan: poll failure does nothing (no finish, no alert)', async () => {
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 const mkAdopt = (reg) => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-adopt-'));
+  const stateDir = mkTmp('ghosty-adopt-');
   const dir = join(stateDir, 'deploys'); mkdirSync(dir, { recursive: true });
   const alerts = [];
   const runner = createDeployRunner({ stateDir, registry: reg.fn, isEnabled: () => true, alert: (k) => alerts.push(k), log: { error() {} }, followPollMs: 30,
@@ -543,7 +543,7 @@ test('adopt: a running deploy of another runner is untouched', async () => {
 
 test('real detached run: output through the file, exit file and pid file written', async () => {
   const reg = fakeRegistry({ deploys: [dep('11')] });
-  const stateDir = mkdtempSync(join(tmpdir(), 'ghosty-real-'));
+  const stateDir = mkTmp('ghosty-real-');
   const { writeFileSync: wf } = await import('node:fs');
   wf(join(stateDir, 'deploy-envs.json'), JSON.stringify({ 'node1-vpt': { argv: ['sh', '-c', 'echo hello; echo VERSION 9.9.9; exit 0'] } }));
   const runner = createDeployRunner({ stateDir, registry: reg.fn, isEnabled: () => true, log: { error() {} }, followPollMs: 30 });
@@ -595,7 +595,7 @@ test('remoteLeaseCmd: only approve uses the owner token file', () => {
 test('a failed auto-approve is logged with its exit and stderr, and the approval alert still fires', async () => {
   const reg = fakeRegistry({ deploys: [dep('1', { state: 'awaiting-approval' })] });
   const inner = reg.fn; const errs = []; const alerts = [];
-  const r = createDeployRunner({ stateDir: mkdtempSync(join(tmpdir(), 'dr-')), isEnabled: () => true, catchUp: false,
+  const r = createDeployRunner({ stateDir: mkTmp('dr-'), isEnabled: () => true, catchUp: false,
     registry: async (a, o) => (a[1] === 'approve' ? { code: 1, stdout: '', stderr: 'E_AUTH: this route needs an owner client' } : inner(a, o)),
     alert: (k) => alerts.push(k), log: { info() {}, error: (m) => errs.push(m) } });
   await r.tick(); await r.tick();

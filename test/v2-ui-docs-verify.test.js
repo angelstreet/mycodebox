@@ -2,8 +2,7 @@
 // renderers, v2-score.js math, and server.js V2 wiring (static). Defects it found were fixed in the same package (formerly todo).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, appendFileSync, chmodSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync, appendFileSync, chmodSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
 import { createIntake } from '../orchestration/intake.js';
@@ -13,18 +12,19 @@ import { createRegistry } from '../orchestration/model-registry.js';
 import { listHtml, detailHtml, badgeOf } from '../public/tasks-view.js';
 import { scoreStore } from '../scripts/v2-score.js';
 import { spec, clock, SHA_A, SHA_B } from './fixtures/v2-task.js';
+import { tmp } from './helpers-tmp.js';
 // D-020: approve/deny are recorded by the goal loop; the smallest loop the factory accepts (never steps here).
 const REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
   capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };
 const loopOver = (store) => createGoalLoop({ store, registry: createRegistry(REGISTRY), adapters: {}, worktrees: {},
-  worktreeRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), verifier: {}, reviewRoot: mkdtempSync(join(tmpdir(), 'v2-loop-')), allowFake: true });
+  worktreeRoot: tmp('v2-loop-'), verifier: {}, reviewRoot: tmp('v2-loop-'), allowFake: true });
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const DEV = { role: 'developer', id: 'claude:dev-model' };
 const REV = { role: 'verifier', id: 'codex:rev-model' };
 const POLICY = { ok: true, policy: { project_id: 'fixture-project', test_command: ['npm', 'test'] } };
 
-function setup(dir = mkdtempSync(join(tmpdir(), 'v2-verify06-'))) {
+function setup(dir = tmp('v2-verify06-')) {
   const store = createTaskStore({ dir, ...clock() });
   const intake = createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A });
   const api = createV2Http({ store, intake, loop: loopOver(store) });
@@ -237,7 +237,7 @@ async function failedWith(st, id, who, usd) {
 }
 
 test('scoring math: even-count median, rate, cost per verified, unknown makes cost null', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
+  const dir = tmp('v2-score-v-');
   const st = timedStore(dir);
   let i = 0;
   for (const ms of [1000, 2000, 3000, 4000]) await acceptedAt(st, `a${i++}`, 'claude:m', { done: ms, usd: [0.1, 0.1] });
@@ -258,7 +258,7 @@ test('scoring math: even-count median, rate, cost per verified, unknown makes co
 });
 
 test('scoring: incomplete usage records make the cost unknown', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
+  const dir = tmp('v2-score-v-');
   const st = timedStore(dir);
   await acceptedAt(st, 'p0', 'minimax:m', { done: 1000, usd: [0.01], incomplete: true });
   const g = scoreStore(dir).by_model.find((x) => x.key === 'minimax:m');
@@ -266,7 +266,7 @@ test('scoring: incomplete usage records make the cost unknown', async () => {
 });
 
 test('scoring: spend on failed tasks counts toward cost per verified completion', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
+  const dir = tmp('v2-score-v-');
   const st = timedStore(dir);
   await acceptedAt(st, 'ok', 'claude:cheap', { done: 1000, usd: [0.1] });
   for (let i = 0; i < 4; i++) await failedWith(st, `f${i}`, 'claude:cheap', 1);
@@ -275,14 +275,14 @@ test('scoring: spend on failed tasks counts toward cost per verified completion'
 });
 
 test('scoring: a head set by worktree revalidation (external:worktree) is not exported as a router model', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
+  const dir = tmp('v2-score-v-');
   const st = timedStore(dir);
   await acceptedAt(st, 'x', 'external:worktree', { done: 1000 });
   assert.equal(scoreStore(dir).router_history['external:worktree'], undefined);
 });
 
 test('scoring: a torn tail appended after scoring started is tolerated and nothing is written', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'v2-score-v-'));
+  const dir = tmp('v2-score-v-');
   const st = timedStore(dir);
   await acceptedAt(st, 't0', 'claude:m', { done: 1000 });
   const log = join(dir, 'tasks', 't0', 'events.jsonl');

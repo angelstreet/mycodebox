@@ -4,7 +4,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createTaskStore } from '../orchestration/store.js';
 import { createIntake } from '../orchestration/intake.js';
@@ -14,18 +13,18 @@ import { createRegistry } from '../orchestration/model-registry.js';
 import { createLeaseAuthority, fileBackend } from '../orchestration/lease-authority.js';
 import { ownerAnswerOf, effectiveGrants } from '../orchestration/task-contract.js';
 import { spec, clock, SHA_A } from './fixtures/v2-task.js';
+import { tmp } from './helpers-tmp.js';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'v2-grants-'));
 const POLICY = { ok: true, policy: { project_id: 'fixture-project', test_command: ['npm', 'test'] } };
 const REGISTRY = { version: 1, as_of: '2026-10-11', models: [{ runtime: 'fake', provider: 'fake', model: 'dev-a', tier: 'strong',
   capabilities: ['text', 'code', 'tools'], efforts: ['low'], context_tokens: 1000, latency_ms: 1, test_only: true }] };
 const RESOURCE = 'service:local:goal-loop';
 // The smallest loop the factory accepts (worktrees/verifier are never reached by approve/deny).
-const loopOver = (store, over = {}) => createGoalLoop({ store, registry: createRegistry(REGISTRY), adapters: {}, worktrees: {}, worktreeRoot: tmp(),
-  verifier: {}, reviewRoot: tmp(), allowFake: true, ...over });
+const loopOver = (store, over = {}) => createGoalLoop({ store, registry: createRegistry(REGISTRY), adapters: {}, worktrees: {}, worktreeRoot: tmp('v2-grants-'),
+  verifier: {}, reviewRoot: tmp('v2-grants-'), allowFake: true, ...over });
 
 function setup({ withLoop = true, loopOpts = {} } = {}) {
-  const dir = tmp();
+  const dir = tmp('v2-grants-');
   const store = createTaskStore({ dir, ...clock() });
   const loop = withLoop ? loopOver(store, loopOpts) : null;
   const api = createV2Http({ store, intake: createIntake({ store, loadPolicy: () => POLICY, resolveSha: () => SHA_A }), loop, log: () => {} });
@@ -105,7 +104,7 @@ test('no loop in this process: approve/deny fail closed with a clear error and w
 });
 
 test('grant while another live controller holds the lease fails closed; once it is gone the grant goes through', async () => {
-  const dir = tmp();
+  const dir = tmp('v2-grants-');
   const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(dir, 'leases') }) });
   // Another controller instance (another host): holds the controller lease with a fresh heartbeat.
   const storeDir = path.join(dir, 'v2');
@@ -144,7 +143,7 @@ test('grant while another live controller holds the lease fails closed; once it 
 // instance is refused rather than taking it over; an instance that only answered releases the lease; run() waits out
 // a live holder's TTL instead of returning.
 function leasedWorld() {
-  const dir = tmp();
+  const dir = tmp('v2-grants-');
   const storeDir = path.join(dir, 'v2');
   const leases = createLeaseAuthority({ backend: fileBackend({ dir: path.join(dir, 'leases') }) });
   const make = () => {
@@ -222,7 +221,7 @@ test('a grant and a denial on the same request authorize nothing: loop grant key
   assert.deepEqual(effectiveGrants([deny, grant({ budget_policy: { max_usd: 99 } })]), []);
   // delivery's approvals.check reads the same rule
   const { createDelivery, approvalKey } = await import('../orchestration/delivery.js');
-  const dir = tmp();
+  const dir = tmp('v2-grants-');
   const store = createTaskStore({ dir, ...clock() });
   const { task_id: id } = await store.createTask(spec());
   const key = approvalKey({ action: 'merge', repo: 'demo', target: 'main', sha: 'abc1234' });
@@ -235,7 +234,7 @@ test('a grant and a denial on the same request authorize nothing: loop grant key
 });
 
 test('owner action with the lease backend down: 503 E_LEASE_UNAVAILABLE, not a held controller', async () => {
-  const dir = tmp();
+  const dir = tmp('v2-grants-');
   const store = createTaskStore({ dir, ...clock() });
   const down = { acquire: async () => { throw new Error('backend down'); }, validate: async () => ({ ok: false, code: 'E_UNAVAILABLE' }),
     renew: async () => ({ ok: false }), release: async () => ({ ok: true }), adopt: async () => ({ ok: false }) };
@@ -249,7 +248,7 @@ test('owner action with the lease backend down: 503 E_LEASE_UNAVAILABLE, not a h
 });
 
 test('recover() keeps the controller lease while it runs: an owner action finishing meanwhile does not release it', async () => {
-  const dir = tmp();
+  const dir = tmp('v2-grants-');
   const storeDir = path.join(dir, 'v2');
   const real = createLeaseAuthority({ backend: fileBackend({ dir: path.join(dir, 'leases') }) });
   const log = [];
