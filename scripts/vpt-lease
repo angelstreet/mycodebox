@@ -1026,20 +1026,68 @@ def ssh_call(args, capture=False, stdin=None, interruptible=False):
 
 
 class SshHeartbeat(HeartbeatThread):
-    """run's heartbeat over ssh: the registry host's `heartbeat <id> --active`. Exit 1/3 = refused (lease gone or fenced);
-    5 (ssh down) is not a lost lease: keep going and retry."""
+    """run's heartbeat over ssh: the registry host's `heartbeat <id> --active`, then `renew` so a run longer than the ttl keeps
+    its lease (a heartbeat does not extend expires). Exit 1/3 = refused (lease gone or fenced). 5 (ssh down) is retried, but only for
+    `lost_after` seconds without one success: the service expires a lease after 3 missed heartbeats and hands the device to the next
+    ticket, so past that the lease is treated as lost (exit 6 / --on-fence kill)."""
+
+    def __init__(self, lease_id, every, on_fence=None, renew_ttl=None, lost_after=None):
+        super().__init__(lease_id, every, on_fence)
+        self.renew_ttl, self.lost_after = renew_ttl, lost_after or 3 * every
+
+    def lose(self, why):
+        self.fenced = why
+        eprint("vpt-lease: LEASE LOST: %s. Stop mutating the resource; the next protected step must not run." % why)
+        if self.on_fence:
+            self.on_fence()
 
     def run(self):
+        last_ok = time.monotonic()
         while not self.stop.wait(self.every):
             code, _ = ssh_call(["heartbeat", self.lease_id, "--active"], capture=True, stdin=subprocess.DEVNULL)
             if code in (1, 3):
-                self.fenced = "heartbeat refused (exit %d)" % code
-                eprint("vpt-lease: LEASE LOST: %s. Stop mutating the resource; the next protected step must not run." % self.fenced)
-                if self.on_fence:
-                    self.on_fence()
-                return
-            if code != 0:
-                eprint("vpt-lease: heartbeat failed (exit %d); keep going and retrying" % code)
+                return self.lose("heartbeat refused (exit %d)" % code)
+            if code == 0:
+                last_ok = time.monotonic()
+                if self.renew_ttl:
+                    rcode, _ = ssh_call(["renew", self.lease_id, "--ttl", str(self.renew_ttl)], capture=True, stdin=subprocess.DEVNULL)
+                    if rcode != 0:
+                        eprint("vpt-lease: renew failed (exit %d); keep going" % rcode)
+                continue
+            if time.monotonic() - last_ok >= self.lost_after:
+                return self.lose("no successful heartbeat for %d s, the service has expired the lease" % (time.monotonic() - last_ok))
+            eprint("vpt-lease: heartbeat failed (exit %d); keep going and retrying" % code)
+
+
+def cancel_stale_tickets(a):
+    """After an ssh drop the remote `claim --wait` may have left a ticket of ours: cancel our queued tickets for this claim
+    (best effort) so the re-claim does not queue behind its own ghost."""
+    code, out = ssh_call(["list", "--json"], capture=True, stdin=subprocess.DEVNULL)
+    if code != 0:
+        return
+    try:
+        tickets = json.loads(out).get("tickets") or []
+    except ValueError:
+        return
+    want = sorted(legacy_res(x.lower(), a.env.lower()) for x in a.resources)
+    for t in tickets:
+        env = t.get("env", "")
+        if t.get("agent") == a.agent and env == a.env.lower() and sorted(legacy_res(x, env) for x in t.get("resources") or []) == want:
+            code, _ = ssh_call(["ticket", str(t.get("id")), "--cancel"], capture=True, stdin=subprocess.DEVNULL)
+            eprint("vpt-lease: cancelled stale ticket %s after the ssh connection dropped" % t.get("id") if code == 0 else
+                   "vpt-lease: could not cancel stale ticket %s (exit %d)" % (t.get("id"), code))
+
+
+def ssh_claim_wait(a, args, capture):
+    """A forwarded `claim --wait`: an ssh drop (255) is not an answer. Back off, cancel the ticket the dropped call left behind and
+    queue again, like the central client waits out an unreachable service. Any other code (and a signal) returns."""
+    state = {}
+    while True:
+        code, out = ssh_call(args, capture=capture, stdin=subprocess.DEVNULL if capture else None, interruptible=True)
+        if code != UNAVAILABLE:
+            return code, out
+        backoff_sleep(state, "ssh to the registry host is down during claim --wait")
+        cancel_stale_tickets(a)
 
 
 def remote_claim_args(a):
@@ -1075,7 +1123,7 @@ def cmd_run(a, command):
             with contextlib.suppress(OSError):
                 child[0].send_signal(sig)
     if remote:
-        code, out = ssh_call(remote_claim_args(a), capture=True, stdin=subprocess.DEVNULL, interruptible=True)
+        code, out = ssh_claim_wait(a, remote_claim_args(a), True)
         if code != 0:
             sys.stdout.write(out)
             return code
@@ -1085,7 +1133,7 @@ def cmd_run(a, command):
             return 1
         every = 0.2 if FAST else 300.0
         eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
-        hb = SshHeartbeat(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None)
+        hb = SshHeartbeat(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None, renew_ttl=a.ttl)
         hb.start()
     elif central:
         res = claim_wait(a)
@@ -1380,6 +1428,8 @@ def main(argv=None):
         if os.environ.get("VPT_LEASE_FORWARDED"):
             eprint("vpt-lease: this call was already forwarded; refusing to forward again (the registry host must run VPT_LEASE_MODE=central)")
             return 1
+        if argv[:1] == ["claim"] and "--wait" in argv:
+            return ssh_claim_wait(build_parser().parse_args(argv), argv, False)[0]
         if argv[:1] != ["run"]:
             return ssh_call(argv)[0]
     if mode == "legacy" and argv[:1] != ["run"]:

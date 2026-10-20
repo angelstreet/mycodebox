@@ -760,9 +760,9 @@ const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USA
 // Read once at boot: switching needs a restart, so one process never has two authorities.
 const leaseCfg = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')); } catch { return {}; } })();
 const leaseAuthority = normAuthority(leaseCfg.leaseAuthority);   // 'legacy' | 'central-through-ssh' (same behaviour, other label) | 'central'
-// The in-process service is the authority only for 'central', or when manager.json `leaseServiceClaims: true` says so explicitly; otherwise it
-// refuses claims (E_NOT_AUTHORITY) and every view labels it as not the authority. Shadow reports and reads stay open.
-const leaseServiceIsAuthority = leaseAuthority === 'central' || leaseCfg.leaseServiceClaims === true;
+// The in-process service is the authority only for 'central'; otherwise it refuses claims and reads (E_NOT_AUTHORITY) and every view labels it as
+// not the authority. Shadow reports stay open.
+const leaseServiceIsAuthority = leaseAuthority === 'central';
 // Liveness for the service: true / false for a codebox tmux session, undefined (never releases anything) when unknown: a failed tmux listing,
 // no poll yet, or an agent that is not a codebox session. A re-created name is handled by the session tracker (sessionGone, immediate).
 const leaseLiveness = createLiveness({ ready: () => listOk && !!latest?.status, resolve: (s) => agentSession(s, Object.keys(latest?.status || {}), MACHINES),

@@ -62,7 +62,8 @@ export function legacyRows(leases) {
 export function fromLegacyRows(rows) {
   const by = new Map();
   for (const r of rows || []) {
-    const e = by.get(r.id) || { id: String(r.id), env: r.env || '', resources: [], mode: 'exclusive', kind: r.kind || 'host', agent: r.agent || '', session: '', purpose: r.purpose || '', sinceMs: null, ttlLeftMin: r.ttlLeftMin ?? null, lastHeartbeatMs: null, idleMin: null, heartbeatS: null };
+    const e = by.get(r.id) || { id: String(r.id), env: r.env || '', resources: [], mode: r.mode || 'exclusive', kind: r.kind || 'host', agent: r.agent || '', session: r.session || '', purpose: r.purpose || '', deployId: r.deploy_id || null, sinceMs: tms(r.since), ttlLeftMin: r.ttlLeftMin ?? null,
+      lastHeartbeatMs: tms(r.lastHeartbeatAt), idleMin: Number.isFinite(r.idleMin) ? r.idleMin : null, heartbeatS: r.heartbeat_s ?? null, expectMin: Number.isFinite(r.expect_min) ? r.expect_min : null };
     e.resources.push(r.resource || '*'); by.set(r.id, e);
   }
   return [...by.values()];
@@ -177,6 +178,7 @@ export function createLeaseSource({ authority = 'legacy', legacy = {}, getServic
     try { const s = await getService()?.shadow?.list?.({}); shadowLast = Array.isArray(s) ? s : s?.reports || s?.items || []; } catch { shadowLast = []; }
     return shadowLast;
   }
+  const tickets = (v) => (v.tickets || []).map((x) => normTicket(x, now()));   // the registry client's `tickets` (live mode)
   const asLegacyShape = (v) => (v.ok ? { ok: true, leases: legacyRows(v.leases), waiters: v.waiters || [] } : { ok: false, error: v.error });
 
   return {
@@ -197,12 +199,12 @@ export function createLeaseSource({ authority = 'legacy', legacy = {}, getServic
       if (auth() === 'central') { last = await central(); return last; }
       const v = await legacy.store.get(force);
       if (!v.ok) return { ok: false, error: v.error, authority: label() };
-      return { ok: true, authority: label(), at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: await shadowReports(), ...svcNote() };
+      return { ok: true, authority: label(), at: now(), leases: fromLegacyRows(v.leases), tickets: tickets(v), deploys: [], waiters: v.waiters || [], shadow: await shadowReports(), ...svcNote() };
     },
     peekView() {
       if (auth() === 'central') return last;
       const v = legacy.store.peek();
-      return v ? (v.ok ? { ok: true, authority: label(), at: now(), leases: fromLegacyRows(v.leases), tickets: [], deploys: [], waiters: v.waiters || [], shadow: shadowLast, ...svcNote() } : { ok: false, error: v.error, authority: label() }) : null;
+      return v ? (v.ok ? { ok: true, authority: label(), at: now(), leases: fromLegacyRows(v.leases), tickets: tickets(v), deploys: [], waiters: v.waiters || [], shadow: shadowLast, ...svcNote() } : { ok: false, error: v.error, authority: label() }) : null;
     },
     // deploy-runner: argv -> {code, stdout, stderr}
     deployRegistry() { return auth() === 'central' ? centralRegistry(getService, { now }) : legacy.registry; },

@@ -1159,15 +1159,16 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   };
 
   // config.notAuthority = { authority: '<name of the real authority>' }: this store is not the authority (the registry host service is, reached
-  // through the ssh wrapper), so every write is refused with a clear error. Reads, tick, the deploy list/wait/last reads and the shadow store stay open.
+  // through the ssh wrapper), so every write AND read (an empty store would answer "free") is refused with a clear error. Only status, tick, sessionGone/Status/activity and the shadow store stay open.
   const na = cfg.notAuthority;
   const refuse = () => fail('E_NOT_AUTHORITY', `this in-process lease service is not the authority; ${na.authority || 'the registry host service'} is: claim there (vpt-lease through the ssh wrapper)`, { status: 409 });
   const guard = (f) => (na ? async () => refuse() : f);
   const guarded = na ? {
     claim: guard(claim), ticket: guard(ticket), cancelTicket: guard(cancelTicket), release: guard(release), renew: guard(renew), heartbeat: guard(heartbeat),
     narrow: guard(narrow), setMode: guard(setMode), ownerRelease: guard(ownerRelease), importLegacy: guard(importLegacy),
+    get: guard(get), list: guard(list), check: guard(check), events: guard(events),
   } : {};
-  const deployApi = na ? { ...deploy, request: guard(), approve: guard(), cancel: guard(), start: guard(), finish: guard(), record: guard() } : deploy;
+  const deployApi = na ? { ...deploy, request: guard(), approve: guard(), cancel: guard(), start: guard(), finish: guard(), record: guard(), list: guard(), wait: guard(), last: guard() } : deploy;
 
   return {
     claim, ticket, cancelTicket, get, release, renew, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, activity, tick,
