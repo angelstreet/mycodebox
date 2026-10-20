@@ -111,6 +111,7 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
     bName = c; facts.branch = c;
   }
   dName = dName || bName; facts.dest = dName;
+  if ((/^(?:main|master)$/.test(bName) || bName === await defaultTarget(repo)) && !afterMerge) return esc(`push of ${bName} to origin/${dName} without a merge decided in this reply: use the merge evaluation`);
   if (dName !== bName) return esc(`push to another ref (${bName} -> origin/${dName}): use the merge evaluation`);
   const bRef = `refs/heads/${bName}`;
   if (!(await resolves(repo, bRef))) return esc(`branch ${bName} not found`);
@@ -193,9 +194,9 @@ function leaseBlockers(leases, { env, scope, hosts = [], session }) {
   return out;
 }
 const TARGETS = { full: ['frontend', 'server', 'host'], frontend: ['frontend'], server: ['server'], host: ['host'] };
-export const MIGRATION_RE = /(^|\/)migrations\/|\.sql$/i;
+export const MIGRATION_RE = /(^|\/)(?:migrations?|migrate|alembic|flyway|liquibase)\/|(^|\/)alembic\.ini$|(^|\/)db\/(?:migrate|migrations?|schema\.rb|structure\.sql)|\.sql$/i;
 
-// Additive SQL only (round 9, item 4): CREATE TABLE / INDEX / VIEW (OR REPLACE), ALTER TABLE ... ADD [COLUMN], INSERT. Anything else (DROP, DELETE,
+// Additive SQL only (round 9, item 4): CREATE TABLE / INDEX / VIEW (not CREATE TABLE AS, not OR REPLACE), ALTER TABLE ... ADD [COLUMN], INSERT. Anything else (DROP, DELETE,
 // TRUNCATE, RENAME, ALTER ... DROP / TYPE / ALTER COLUMN, UPDATE, a statement this does not recognise) is destructive or unknown: not additive.
 // -> { additive: boolean, why: string|null }.
 // One pass over the text, so a comment marker inside a literal cannot hide a statement and a quote inside a comment cannot open a literal:
@@ -275,8 +276,12 @@ export function analyzeMigrationSql(sql) {
       if (/\bSELECT\b/i.test(s)) return { additive: false, why: `INSERT ... SELECT in "${raw.slice(0, 60)}"` };
       continue;
     }
-    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s)) continue;
-    if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s)) continue;
+    if (/^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b/i.test(s)) {
+      if (/\bTABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\S+\s+AS\b|\)\s*AS\s+(?:SELECT|WITH|TABLE|VALUES)\b/i.test(s)) return { additive: false, why: `CREATE TABLE ... AS (copies data) in "${raw.slice(0, 60)}"` };
+      continue;
+    }
+    if (/^CREATE\s+OR\s+REPLACE\s+(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s)) return { additive: false, why: `CREATE OR REPLACE VIEW (changes an existing object) in "${raw.slice(0, 60)}"` };
+    if (/^CREATE\s+(?:TEMP(?:ORARY)?\s+)?VIEW\b/i.test(s)) continue;
     const alter = /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\S+\s+(.*)$/i.exec(s);
     if (alter) {
       const clauses = alter[1].split(/,\s*(?=ADD\b|ALTER\b|DROP\b|RENAME\b|SET\b|OWNER\b)/i);
@@ -318,6 +323,15 @@ export const rollbackText = (env, scope, last) => {
     : `Rollback: the previous release is unknown for ${env} (${scope}): ask the owner before deploying anything else.`;
 };
 
+// The proposed procedure itself: --force / --skip-leased / VPT_DEPLOY_NO_QUEUE / "directly" / "bypass", or a session running update_core.sh by hand, are not a queued deploy.
+export function deployBypass(text) {
+  const t = String(text || '');
+  const m = /--force\b|--skip-leased\b|VPT_DEPLOY_NO_QUEUE|\b(?:directly|bypass\w*|no[- ]queue|(?:skip|skipping|without|outside)\s+(?:the\s+)?(?:deploy\s+)?queue)\b/i.exec(t);
+  if (m) return m[0];
+  const run = /\b(?:run|runs|running|execute|executing|invoke|invoking|launch)\s+(?:the\s+)?(?:\.\/|bash\s+|sh\s+)?(?:\S*\/)?update_core(?:\.sh)?\b|(?:^|[\s`])(?:\.\/|bash\s+|sh\s+)(?:\S*\/)?update_core(?:\.sh)?\b/i.exec(t);
+  return run && !/\bvpt-lease deploy (?:request|start)\b|\bdeploy queue\b/i.test(t) ? run[0].trim() : null;
+}
+
 // -> { verdict: 'deploy'|'escalate', reasons, rationale, question, facts, tests, decision, rollback }
 export async function evaluateDeploy({ session = null, text, cwd, config = {}, deploys = null, leases = null, envs = [], jev = null, evidenceText = null, tests: testsGiven = null, afterMerge = null, env: envGiven = null, scope: scopeGiven = null, ref: refGiven = null, branch: branchGiven = null } = {}) {
   const cfg = { ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...config };
@@ -348,6 +362,8 @@ export async function evaluateDeploy({ session = null, text, cwd, config = {}, d
   if (!facts.env) return esc(names.length ? 'which environment?' : 'no deploy environments are configured');
   if (names.length && !names.includes(facts.env)) return esc(`unknown environment ${facts.env}`);
   if (!['full', 'frontend', 'server', 'host'].includes(facts.scope)) return esc(`unknown scope ${facts.scope}`);
+  const bypass = deployBypass(t);
+  if (bypass) return esc(`the proposed procedure bypasses the deploy queue or its checks (${bypass}): a deploy goes through the queue`);
   if (!deploys || deploys.ok === false) return esc('deploy queue state unavailable');
   if (!leases || leases.ok === false) return esc('deploy queue state unavailable (lease registry unreachable)');
   if (!cwd) return esc('no working directory');

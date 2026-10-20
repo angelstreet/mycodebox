@@ -290,7 +290,7 @@ test('R8-r3-5: push <ref> to <other remote> escalates', async () => {
 // ---- round 9 item 4: lab vs customer database -----------------------------------------------------------------------
 const mig = (sql, extra = {}) => makeRepo({ files: { 'supabase/migrations/002_add.sql': sql, 'src.js': 'export const a = 1;\n', ...extra } });
 const migArgs = (repo, o = {}) => dargs(repo, { ref: 'feat', deploys: SNAP({ deployed: { 'env-a': { server: { ref: 'main', commit: git(repo, 'rev-parse', 'main').trim() } } } }), ...o });
-const ADD = 'CREATE TABLE notes (id int primary key, body text, owner_id int REFERENCES users(id) ON DELETE CASCADE);\nCREATE INDEX notes_owner ON notes (owner_id);\nALTER TABLE users ADD COLUMN IF NOT EXISTS nickname text;\nCREATE OR REPLACE VIEW v_notes AS SELECT * FROM notes;\nINSERT INTO settings (k, v) VALUES (\'a\', \'b\') ON CONFLICT DO NOTHING; -- seed\n';
+const ADD = 'CREATE TABLE notes (id int primary key, body text, owner_id int REFERENCES users(id) ON DELETE CASCADE);\nCREATE INDEX notes_owner ON notes (owner_id);\nALTER TABLE users ADD COLUMN IF NOT EXISTS nickname text;\nCREATE VIEW v_notes AS SELECT * FROM notes;\nINSERT INTO settings (k, v) VALUES (\'a\', \'b\') ON CONFLICT DO NOTHING; -- seed\n';
 
 test('analyzeMigrationSql: additive statements only', async () => {
   const { analyzeMigrationSql } = await import('../decide-policy.js');
@@ -327,4 +327,34 @@ test('deploy: an additive migration on a lab env is a deploy step and the reply 
   git(del, 'rm', '-q', 'db/migrations/001.sql'); git(del, 'commit', '-q', '-m', 'drop migration');
   const gone = await evaluateDeploy(migArgs(del, { config: { ...dcfg, labEnvs: ['env-a'] } }));
   assert.equal(gone.verdict, 'escalate'); assert.match(gone.reasons[0], /deleted or unreadable/);
+});
+
+// ---- review fixes (floor): push of main, deploy bypass, migration detection ----
+test('push: main -> origin/main without a merge decided in the reply escalates; a branch push and an after-merge push still pass', async () => {
+  const repo = withOrigin(); git(repo, 'checkout', '-q', 'main'); more(repo);
+  const ev = await evaluatePush({ cwd: repo, text: `Tests: 1826/1826 pass on main.\n\nShall I push main to origin/main?`, branch: 'main' });
+  assert.equal(ev.verdict, 'escalate'); assert.match(ev.reasons[0], /without a merge decided/);
+  const cur = await evaluatePush({ cwd: repo, text: `Tests: 1826/1826 pass on main.\n\nShall I push?` });
+  assert.equal(cur.verdict, 'escalate', 'the current branch is main');
+});
+test('deploy: --force / --skip-leased / VPT_DEPLOY_NO_QUEUE / directly / a self-run update_core escalate', async () => {
+  const repo = makeRepo();
+  for (const t of ['run update_core.sh --force', 'update_core --skip-leased', 'VPT_DEPLOY_NO_QUEUE=1 bash update_core.sh', 'deploy it directly', 'bypass the queue', 'I will run update_core.sh on env-a myself']) {
+    const ev = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nDeploy to env-a: ${t}?` }));
+    assert.equal(ev.verdict, 'escalate', t); assert.match(ev.reasons[0], /bypasses the deploy queue/, t);
+  }
+  const ok = await evaluateDeploy(dargs(repo, { ref: 'feat', text: `${GREEN}\n\nDeploy to env-a through the deploy queue (vpt-lease deploy request)?`, deploys: SNAP({ deployed: { 'env-a': { server: { ref: 'main', commit: git(repo, 'rev-parse', 'main').trim() } } } }) }));
+  assert.equal(ok.verdict, 'deploy', JSON.stringify(ok.reasons));
+});
+test('migrations: alembic / db/migrate and CTAS / OR REPLACE VIEW are not additive', async () => {
+  const { MIGRATION_RE, analyzeMigrationSql } = await import('../decide-policy.js');
+  const { sensitivePath } = await import('../merge-policy.js');
+  for (const f of ['alembic/versions/001_x.py', 'app/alembic.ini', 'db/migrate/20260101_add.rb', 'db/migrations/1.go', 'backend/migrate/up.js']) {
+    assert.ok(MIGRATION_RE.test(f), f); assert.equal(sensitivePath(f), 'migration', f);
+  }
+  assert.equal(analyzeMigrationSql('CREATE TABLE y AS SELECT * FROM x;').additive, false);
+  assert.equal(analyzeMigrationSql('CREATE OR REPLACE VIEW v AS SELECT 1;').additive, false);
+  const repo = makeRepo({ files: { 'alembic/versions/001.py': 'op.drop_table("t")\n', 'src.js': 'export const a = 1;\n' } });
+  const ev = await evaluateDeploy(dargs(repo, { ref: 'feat', config: { ...dcfg, labEnvs: ['env-a'] } }));
+  assert.equal(ev.verdict, 'escalate'); assert.match(ev.reasons[0], /database migration/);
 });
