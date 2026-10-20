@@ -1,4 +1,4 @@
-STATUS: DELIVERED 343063f2f7e8 (main, via the integration lane; the lane replaced the draft-PR step of §9). Final report below; gate detail in docs/v2/DELIVERY-GATES.md; owner actions at the end of the report.
+STATUS: DELIVERED 343063f2f7e8 (main, via the integration lane; the lane replaced the draft-PR step of §9). Final report below; gate detail in docs/v2/DELIVERY-GATES.md; owner actions (§15 floors only) at the end of the report.
 
 # V2 progress
 
@@ -64,17 +64,18 @@ Extra hardening merged: v2/test-history-race `c0740e1`, v2/tmp-autoclean `91cc56
 - Device hosts have no route to the lease service (BLOCKED since round 11).
 - The router has 3 open wake cases (escalated waits); they need a `stall.js` fix.
 
-### Owner-action list
+### Owner-action list (only items under an OWNER_DECISIONS §15 floor)
 
-1. Finding 10, per-machine lease identity under central-through-ssh. Choose (a) per-machine ssh keys with a `ForceCommand` wrapper that selects the token file per key, or (b) forward the caller's token in the ssh environment. Until then any machine's session can release/renew/narrow any lease.
-2. Confirm the lane-only revert (the typed-instruction revert replaced by a lane revert route).
-3. Change `scripts/safe-restart.sh` so lease-blocked queued deploys do not count as pending work (agents are permission-denied on that script).
-4. Mac: install the Stop hook with a heartbeat to the intake (nudges and Mac liveness; Mac sessions bypass ghosty's classifier); update the Mac copy of the deploy skill; set the Mac `vpt-lease` client config (`central-through-ssh` plus the ssh wrapper, with a dated backup).
-5. Point the device hosts' lease route at the registry host (`central-through-ssh` + ssh target) (the registry host already runs the current `vpt-lease`, installed 2026-10-20).
-6. Codebox disk at about 80-91%: clean docker images and build cache, the `/tmp` `*-pg-*` dirs and Trash.
+1. [§15 floor: credentials and secrets] Finding 10, per-machine lease identity under central-through-ssh. Choose (a) per-machine ssh keys with a `ForceCommand` wrapper that selects the token file per key, or (b) forward the caller's token in the ssh environment. Until then any machine's session can release/renew/narrow any lease.
+2. [§15 floor: credentials and secrets] Mac `vpt-lease` client config (`central-through-ssh` plus the ssh wrapper, with a dated backup): it needs the Mac's ssh key/token for the registry host (depends on item 1).
+3. [§15 floor: deletions of data] Codebox disk at about 80-91%: clean docker images and build cache, the `/tmp` `*-pg-*` dirs and Trash.
 
-### Next work (manager, not owner)
+### Next work (manager, not owner; no §15 floor, §19)
 
+- Confirm the lane-only revert (the typed-instruction revert replaced by a lane revert route).
+- Change `scripts/safe-restart.sh` so lease-blocked queued deploys do not count as pending work (the coordinator and its workers are permission-denied on that script; the manager decides who may edit it).
+- Mac: install the Stop hook with a heartbeat to the intake (nudges and Mac liveness) and update the Mac copy of the deploy skill.
+- Point the device hosts' lease route at the registry host (`central-through-ssh` + ssh target); the registry host already runs the current `vpt-lease`, installed 2026-10-20.
 - Router: `stall.js` fix for the 3 open wake cases (escalated waits on a lease/deploy ticket).
 - Convert the remaining ~150 leaking test temp prefixes to `test/helpers-tmp.js` (health-watch sweeps them meanwhile).
 
