@@ -9,7 +9,7 @@ const NOW = 1791201600000;
 const snapshot = (patch = {}) => ({
   ok: true, error: '', at: NOW, deploys: [], enabled: false, running: {}, envs: ['test'], ...patch,
 });
-const deploy = (state) => ({ id: 'test-deploy', env: 'test', state });
+const deploy = (state, o = {}) => ({ id: 'test-deploy', env: 'test', state, ...o });
 
 function invoke(t, responses, args = [], sudoCode = 0) {
   const dir = mkdtempSync(join(tmpdir(), 'mycodebox-restart-'));
@@ -209,4 +209,61 @@ test('F5: an approved deploy is busy (exit 1, waitable) whether or not the runne
   const waited = invoke(t, [response(snapshot({ deploys: [deploy('approved')] })), response()], ['--wait', '1']);
   assert.equal(waited.status, 0, waited.stderr);
   assert.equal(waited.calls.filter(([c]) => c === 'sleep').length, 1);
+});
+
+// ---- Q199 (owner 2026-10-20): a deploy blocked by a lease or a ticket cannot start before the restart: not pending ----
+test('Q199: a blocked queued deploy does not block the restart, with the runner on or off', (t) => {
+  for (const enabled of [false, true]) {
+    const body = snapshot({ enabled, deploys: [deploy('queued', { blocked: true })] });
+    const r = invoke(t, [response(body), response(body)]);
+    assert.equal(r.status, 0, `enabled=${enabled}: ${r.stderr}`);
+    assert.equal(r.calls.filter(([c]) => c === 'curl').length, 2);
+    assert.deepEqual(restarts(r), [['sudo', '-n', 'systemctl', 'restart', 'ghosty-sessions']]);
+  }
+});
+
+test('Q199: an unblocked queued deploy with the runner on is still busy', (t) => {
+  for (const blocked of [false, undefined]) {
+    const r = invoke(t, [response(snapshot({ enabled: true, deploys: [deploy('queued', blocked === undefined ? {} : { blocked })] }))]);
+    assert.equal(r.status, 1, `blocked=${blocked}`);
+    assert.match(r.stderr, /deploy work is running or can start automatically/);
+    assert.equal(restarts(r).length, 0);
+  }
+});
+
+test('Q199: a blocked approved deploy does not block the restart; an unblocked one does', (t) => {
+  for (const enabled of [false, true]) {
+    const r = invoke(t, [response(snapshot({ enabled, deploys: [deploy('approved', { blocked: true })] }))]);
+    assert.equal(r.status, 0, `enabled=${enabled}: ${r.stderr}`);
+    assert.equal(restarts(r).length, 1);
+  }
+  for (const enabled of [false, true]) {
+    const r = invoke(t, [response(snapshot({ enabled, deploys: [deploy('approved', { blocked: false })] }))]);
+    assert.equal(r.status, 1, `enabled=${enabled}`);
+    assert.equal(restarts(r).length, 0);
+  }
+});
+
+test('Q199: a running deploy is busy even when it carries blocked', (t) => {
+  const r = invoke(t, [response(snapshot({ enabled: true, deploys: [deploy('running', { blocked: true })] }))]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /deploy work is running or can start automatically/);
+  assert.equal(restarts(r).length, 0);
+});
+
+test('Q199: a non-boolean blocked is an invalid snapshot (exit 2), never read as idle', (t) => {
+  for (const blocked of ['true', 1, 0, null, [], {}, '']) {
+    for (const state of ['queued', 'approved', 'done']) {
+      const r = invoke(t, [response(snapshot({ enabled: true, deploys: [deploy(state, { blocked })] }))]);
+      assert.equal(r.status, 2, `${JSON.stringify(blocked)} on ${state}`);
+      assert.match(r.stderr, /NOT restarting: invalid, unsuccessful, or stale deploy snapshot/);
+      assert.equal(restarts(r).length, 0);
+    }
+  }
+});
+
+test('Q199: one blocked queued deploy beside a running one is still refused', (t) => {
+  const r = invoke(t, [response(snapshot({ enabled: true, deploys: [deploy('queued', { id: 'a', blocked: true }), deploy('running', { id: 'b' })] }))]);
+  assert.equal(r.status, 1);
+  assert.equal(restarts(r).length, 0);
 });

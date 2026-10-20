@@ -587,6 +587,51 @@ test('lease freed: a host-kind lease that a full deploy skips is never tracked',
   assert.ok(!alerts.some(([k]) => k.includes('lease-freed')));
 });
 
+test('snapshot blocked: a lease-blocked start attempt marks the deploy blocked, and clears when it starts', async () => {
+  const reg = fakeRegistry({
+    deploys: [dep('31')],
+    leases: [{ id: 'cc31', env: 'node1-vpt', resource: '*', agent: 'codebox:t1', kind: 'server' }],
+  });
+  const { runner } = make(reg);
+  await runner.tick(); await sleep(30);
+  const waited = runner.snapshot().deploys.find((d) => d.id === '31');
+  assert.equal(reg.deploys[0].state, 'queued');
+  assert.equal(waited.blocked, true, 'the runner refused its start: leases hold it, so a restart need not wait for it');
+  reg.leases.length = 0;                                  // the lease is released
+  await runner.tick();
+  assert.equal(runner.snapshot().deploys.find((d) => d.id === '31').blocked, false, 'it started: not blocked any more');
+  await until(() => reg.deploys[0].state === 'done');
+  assert.equal(runner.snapshot().deploys.find((d) => d.id === '31').blocked, false);
+});
+
+test('snapshot blocked: cleared when the deploy leaves the queue, and always a strict boolean', async () => {
+  const reg = fakeRegistry({
+    deploys: [dep('32')],
+    leases: [{ id: 'cc32', env: 'node1-vpt', resource: '*', agent: 'codebox:t1', kind: 'server' }],
+  });
+  const { runner } = make(reg);
+  await runner.tick(); await sleep(30);
+  assert.equal(runner.snapshot().deploys[0].blocked, true);
+  reg.deploys[0].state = 'cancelled';                      // the owner cancels it while it waits
+  await runner.tick();
+  const gone = runner.snapshot().deploys.find((d) => d.id === '32');
+  assert.equal(gone.state, 'cancelled');
+  assert.equal(gone.blocked, false, 'a deploy that left the queue is not blocked');
+  for (const d of runner.snapshot().deploys) assert.equal(typeof d.blocked, 'boolean');
+  const free = fakeRegistry({ deploys: [dep('33', { state: 'done' })] });
+  const m = make(free, { enabled: false });
+  await m.runner.tick();
+  assert.equal(m.runner.snapshot().deploys[0].blocked, false, 'never blocked is false, not undefined');
+});
+
+test('runner off: a queued deploy is never blocked (nothing attempted a start)', async () => {
+  const reg = fakeRegistry({ deploys: [dep('34')], leases: [{ id: 'cc34', env: 'node1-vpt', resource: '*', agent: 'codebox:t1' }] });
+  const { runner } = make(reg, { enabled: false });
+  await runner.tick(); await sleep(30);
+  assert.equal(runner.snapshot().deploys[0].blocked, false);
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy start')));
+});
+
 test('remoteLeaseCmd: only approve uses the owner token file', () => {
   assert.equal(remoteLeaseCmd(['deploy', 'approve', 'ab12']), 'VPT_LEASE_TOKEN_FILE=~/.config/vpt-lease/owner-token ~/bin/vpt-lease deploy approve ab12');
   for (const a of [['deploy', 'list', '--json'], ['deploy', 'start', 'ab12'], ['deploy', 'cancel', 'ab12'], ['deploy', 'finish', 'ab12']]) assert.ok(!remoteLeaseCmd(a).includes('owner-token'), a.join(' '));
