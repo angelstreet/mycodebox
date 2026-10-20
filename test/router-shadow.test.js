@@ -156,6 +156,30 @@ test('a hanging Jev never blocks the stop flow', async () => {
   mode = 'ok';
 });
 
+test('a queued deploy-ticket wait is NOT escalated (2026-10-20), and the escalation target rides on the record', async () => {
+  mode = 'ok';
+  // a queued wait: the session is in a line (ticket), nothing an agent can do moves it
+  const { st } = await stop('q1', 'Tests pass.\nSTATUS: waiting: the deploy ticket t-4c1 is not free yet');
+  assert.equal(st.case, 'waiting_deploy');
+  const rr = await until((r) => r.type === 'router' && r.id === st.id);
+  assert.equal(rr.escalated, false, 'a queued wait is not an escalation, so the router must not wake Opus');
+  assert.equal(rr.rule_case, 'waiting_deploy');
+  assert.ok('escalated_to' in rr, 'the record names who holds the escalation');
+  await sleep(100);
+  const live = m.stallOf('q1');
+  assert.equal(live.queued, true, 'the live stall exposes the queued wait');
+  assert.ok(['manager', 'owner'].includes(live.escalatedTo), `the live stall names the escalation target, got ${live.escalatedTo}`);
+
+  // a plain needs-owner ask: still escalated; the shadow is taken before escalate() runs, so the target is
+  // only known once the stop is settled -- the live stall (stallOf) is where it is read.
+  const own = await stop('o1', T.decision);
+  const ro = await until((r) => r.type === 'router' && r.id === own.st.id);
+  assert.equal(ro.escalated, true);
+  assert.equal(ro.escalated_to, null, 'not escalated yet when the shadow record is taken');
+  await sleep(100);
+  assert.equal(m.stallOf('o1').escalatedTo, 'owner', 'a needs-owner ask is parked with the owner, not an Opus wake');
+});
+
 test('shadow retry: first post rejects with a network error, second succeeds -> parsed answers, no error', async () => {
   const seen = [];
   const post = async (body) => {

@@ -24,6 +24,10 @@ const quotaAtOrAbove = (quota, threshold) => {
   for (const v of Object.values(quota)) if (typeof v === 'number' && v >= threshold) return true;
   return false;
 };
+// An escalated event nothing an agent can move: it is already with the owner (escalated_to 'owner'), it names a
+// hard-floor topic only the owner may decide, or it is a queued wait (a lease / deploy ticket, a queue position).
+// Opus is woken for the escalations the manager owns.
+const parkedForOwner = (ev) => ev.escalated_to === 'owner' || !!ev.hard_topic || ev.queued === true;
 
 // ---- wake ----
 // Whether anything needs to be woken at all (and how strong).
@@ -56,9 +60,12 @@ const wake = {
   // p0_blocked / failed deploy are "already broken" (the wake_opus criterion), so they take Opus like an escalation;
   // disk/quota-only hot states clamp to wake_cheap. A forbidden topic removes rules_handle, and the old fall-through
   // to the first allowed option picked 'ignore' for it: someone must look, so default to wake_cheap.
+  // An escalation the manager does NOT own is not an Opus wake either: it is already parked (escalated_to 'owner',
+  // a hard-floor topic, or a queued wait on a ticket / queue position), so nothing an agent starts moves it.
   ruleDefault(facts) {
     const ev = facts?.event || {};
-    if (ev.escalated || ev.p0_blocked || (ev.kind === 'deploy' && facts?.deploy?.state === 'failed')) return 'wake_opus';
+    if (ev.escalated) return parkedForOwner(ev) ? 'rules_handle' : 'wake_opus';
+    if (ev.p0_blocked || (ev.kind === 'deploy' && facts?.deploy?.state === 'failed')) return 'wake_opus';
     return ev.forbidden_topic ? 'wake_cheap' : 'rules_handle';
   },
 };

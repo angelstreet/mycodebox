@@ -56,6 +56,27 @@ test('wake: p0_blocked and failed deploy default to wake_opus (already broken); 
 test('wake: a forbidden topic is never ignored by default (wake_cheap, not the first-allowed fallthrough)', () => {
   assert.equal(ruleDefault('wake', { event: { kind: 'stall', forbidden_topic: true }, disk_pct: 50, quota: { claude: 30 } }), 'wake_cheap');
 });
+// An escalated stop the manager does not own is parked, not an Opus wake (the 3 open real-event cases, 2026-10-20).
+test('wake: an owner escalation is parked (rules_handle), not wake_opus', () => {
+  const f = { event: { kind: 'asks', escalated: true, escalated_to: 'owner', stall_case: 'owner_decision' }, disk_pct: 30, quota: { claude: 30 } };
+  assert.equal(ruleDefault('wake', f), 'rules_handle');
+  assert.ok(floor('wake', f).allowed.includes('rules_handle'));
+});
+test('wake: a hard-floor topic parks an escalation too (only the owner may decide it)', () => {
+  assert.equal(ruleDefault('wake', { event: { kind: 'asks', escalated: true, hard_topic: 'money' }, disk_pct: 30, quota: { claude: 30 } }), 'rules_handle');
+});
+test('wake: a queued wait (lease / deploy ticket, queue position) is parked, not wake_opus', () => {
+  for (const extra of [{ queued: true }, { queued: true, escalated_to: 'owner' }]) {
+    const f = { event: { kind: 'asks', stall_case: 'waiting_deploy', ...extra }, disk_pct: 30, quota: { claude: 30 } };
+    assert.equal(ruleDefault('wake', f), 'rules_handle', JSON.stringify(extra));
+  }
+  // even when the escalated flag is still set (older records), a queued wait is parked
+  assert.equal(ruleDefault('wake', { event: { kind: 'asks', escalated: true, queued: true, stall_case: 'waiting_deploy' }, disk_pct: 30, quota: { claude: 30 } }), 'rules_handle');
+});
+test('wake: an escalation the manager owns still wakes Opus', () => {
+  assert.equal(ruleDefault('wake', { event: { kind: 'asks', escalated: true, escalated_to: 'manager' }, disk_pct: 30, quota: { claude: 30 } }), 'wake_opus');
+  assert.equal(ruleDefault('wake', { event: { kind: 'asks', escalated: true }, disk_pct: 30, quota: { claude: 30 } }), 'wake_opus', 'unknown target keeps the old rule');
+});
 
 // ---- builder ----
 test('builder: floor keeps all four when touches are app-only on a private repo', () => {
@@ -406,13 +427,18 @@ test('pick: confidence is the probability of the chosen option when probabilitie
 });
 
 // ---- wake: real manager events (sanitized, 2026-10-18/19) ----
-test('wake: real-event fixtures: rule default agrees except the documented open cases', async () => {
+test('wake: real-event fixtures: the rule default agrees with every entry (the 3 open cases of 2026-10-19 closed)', async () => {
   const { readFileSync } = await import('node:fs');
   const fx = JSON.parse(readFileSync(new URL('./fixtures/router-states-real-events.json', import.meta.url), 'utf8'));
   assert.ok(fx.length >= 20);
   const text = JSON.stringify(fx);
   assert.ok(!/\d+\.\d+\.\d+\.\d+|@|https?:|\/home\/|vpt-|host-clone|mac-wt/i.test(text), 'fixtures must stay sanitized');
   const missed = fx.filter((s) => !s.expect_any.includes(ruleDefault('wake', s.facts)));
-  assert.ok(missed.every((s) => s.open), 'every disagreement must be a documented open case: ' + missed.filter((s) => !s.open).map((s) => s.label));
-  assert.equal(fx.length - missed.length, 21);
+  assert.deepEqual(missed.map((s) => s.label), [], 'no disagreement may be left undocumented: ' + missed.map((s) => `${s.label} (${ruleDefault('wake', s.facts)})`).join('; '));
+  assert.equal(fx.length - missed.length, 24);
+  // the three closed cases still carry the fact that closed them
+  const queued = fx.filter((s) => s.facts.event.queued === true);
+  assert.equal(queued.length, 2, 'the lease-ticket and deploy-ticket waits are recorded as queued');
+  assert.ok(queued.every((s) => s.facts.event.escalated === false), 'a queued wait is no longer recorded as escalated');
+  assert.equal(fx.filter((s) => s.facts.event.escalated_to === 'owner').length, 1, 'the parked needs-owner ask keeps its owner target');
 });

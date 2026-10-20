@@ -178,6 +178,11 @@ const DECISION_Q = /^which\b|\bwhich (?:one|option|approach|do you|would you|sho
 // an explicit stop or an offer ("if you want") is not a stop for no reason.
 const SHORT_RE = /\b(?:I'?ll|I will|I'?m going to|I am going to)\s+(?:now\s+|next\s+|then\s+|also\s+)?(?!wait\b|stop\b|leave\b|hold\b|pause\b|not\b|need\b)[a-z]+|\bnext(?: improvement| up)?\s*:|\bnext,? I'?ll\b|\bonce\b[^.\n]{0,60},? I'?ll\b/i;
 const SHORT_BLOCK_RE = /\bblocked\b|\bcannot\b|\bcan'?t\b|\bwaiting\b|\bI'?ll wait\b|\bwill wait\b|\bI'?m stopping\b|\bstopping here\b|\bI'?ll stop\b|\bI'?ll leave\b|\bpausing\b|\bneed(?:s)? (?:your|you|a |an )|\buntil you\b|\bonce you\b|\blet me know\b|\bif you(?:'d)? (?:want|like|prefer)\b|\bbefore (?:deploy|pushing|merging)|\bsay the word\b|\bas soon as you\b|\b(?:send|tell|give|paste) me\b|\bI'?ll (?:report|resume|let you know|review)\b|\b(?:still )?running\b|\bin the background\b|\b(?:finishes|completes|goes through)\b|\bwhen it\b/i;
+// A queued wait is not an escalation: the session is in a line (a lease / deploy ticket, a queue position,
+// `claim --wait`, a deploy already queued or awaiting approval) and no agent makes that line move faster.
+// Only the wait text decides: a deploy hint alone (a scope or ref) is not a queue position.
+const QUEUED_RE = /\bt-[\w-]{2,}\b|\btickets?\b|\bqueued\b|\bqueueing\b|\bposition\s+(?:#?\d|one|two|three|first|last)\b|--wait\b|\bawaiting\b|\bin (?:the )?(?:deploy )?queue\b/i;
+const queuedWait = (text) => QUEUED_RE.test(String(text || ''));
 // waiting_deploy: waiting on leases, live runs, a deploy, or the owner's go-ahead for one.
 const WAIT_DEPLOY_RE = /\b(?:may|can|shall|should) I (?:queue|deploy|restart)\b[^.\n]{0,60}\?|\bwaiting (?:on|for)\b[^.\n]{0,80}(?:go-ahead|approval|approve|leases?|deploy|restart|live runs?)|\bgo-ahead (?:to|for)\b[^.\n]{0,60}(?:deploy|restart|update_core)|\bwait(?:ing)? (?:for|on) your (?:answer|ok|go-ahead|approval)\b[^.\n]{0,40}(?:deploy|restart)|\bupdate_core(?:\.sh)?\b[^.\n]{0,40}(?:go-ahead|approv|waiting)|\bblocked by\b[^.\n]{0,40}(?:live )?(?:runs?|leases?)|\b(?:once|when|after)\b[^.\n]{0,40}\bleases? (?:clear|release|free|expire)|\bnot deployed yet\b|\bneeds a (?:server |host |frontend )?restart\b/i;
 // Sentences that mention a restart / deploy only to say none was needed (or that it already happened).
@@ -641,7 +646,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     // Without a concrete reference the old case stands ("waiting for the CI run" may be someone else's); `jobNoun` lets the manager upgrade it when the agent has a live child process.
     else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind) && hasRef(jobRefs(st.text))) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text); out.answer = null; out.autoCase = undefined; }
     else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; if (waitsOnOwnJob(st.text, st.kind)) out.jobNoun = true; }
-    else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; }
+    else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; if (queuedWait(st.text)) out.queued = true; }
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
     else out.case = 'done';
     return finish(out);
@@ -680,6 +685,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
   if (wait) {
     out.case = 'waiting_deploy';
     out.deployHint = deployHint(waitText);
+    if (queuedWait(waitText)) out.queued = true;
   } else if (act) {
     out.case = 'owner_action';
     out.action = actionOf(act, tailText);

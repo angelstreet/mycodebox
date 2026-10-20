@@ -27,6 +27,10 @@ export function wakeFacts({ cls, event = {}, priority = null, stall = null, agen
       ev.stall_case = stall.case || null;
       ev.forbidden_topic = stall.forbidden || null;
       ev.escalated = !!stall.escalated;
+      // Who holds this escalation (owner / manager) and whether it is a queued wait (ticket, queue position):
+      // both are the wake point's "nothing an agent can move" facts, so the rule default parks it instead of Opus.
+      if (stall.escalatedTo) ev.escalated_to = stall.escalatedTo;
+      if (stall.queued) ev.queued = true;
     }
     ev.p0_blocked = priority === 'P0' && blockedKind;
   }

@@ -401,6 +401,8 @@ export const isManagerSession = (name) => { try { return (managerSessionsOf() ||
 const stopWall = new Map();   // stop id -> wall-clock ms of the stop (the owner-asks ledger is wall-clock; observe()'s `now` may not be)
 const escalatedStops = new Set();   // stop ids the rules escalated (to the owner or to the manager; the wake shadow's `escalated` fact)
 const managerStops = new Set();    // the subset escalated to the manager: a lease or deploy stop (ops-ask.js), never pushed, not in NEEDS YOU
+// Who this stop id was escalated to: 'manager' for an ops stop (lease / deploy), 'owner' for an owner item, null when it was not escalated yet.
+const escalatedTargetOf = (id) => (id == null ? null : managerStops.has(id) ? 'manager' : escalatedStops.has(id) ? 'owner' : null);
 // A merge or push in the stop keeps it with the owner when the policy escalated it; a deploy (queue, approval, lease) goes to the manager.
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
@@ -897,13 +899,13 @@ async function jev(stall, ctx = {}) {
 // One Jev call per new distinct stop (3 questions), after the rules classified it. SHADOW ONLY: the answers are logged
 // ({type:'router'}) and graded later; nothing here is awaited by, or feeds into, the reply / escalation / push / hold flow.
 const routerStops = new Map();   // stop id -> { decision_id, done, outcome, posted }
-function shadowRoute({ id, session, agent, final, stall, escalated }) {
+function shadowRoute({ id, session, agent, final, stall, escalated, escalatedTo = null }) {
   try {
     if (config.routerShadow === false || routerStops.has(id) || !JEV_URL || !JEV_API_KEY) return;
     const st = { decision_id: null, done: false, outcome: null, posted: false };
     routerStops.set(id, st); if (routerStops.size > 500) routerStops.delete(routerStops.keys().next().value);
     (async () => {
-      const rec = { type: 'router', id, session, rule_case: final.case, escalated };
+      const rec = { type: 'router', id, session, rule_case: final.case, escalated, escalated_to: escalatedTo };
       const skip = (why) => { st.done = true; return logLater({ ...rec, router: { skipped: why } }); };
       if (jevSwitch.off()) return skip(DISABLED);
       if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
@@ -1488,7 +1490,8 @@ export function observe(s) {
     // a decided topic that was escalated (merge / push / deploy) must not ride on an automatic "Yes, continue."
     if (partial.mergeWhy && ws.send && !menu?.ok) ws = { send: null, why: 'owner' };
     const block = ws.send ? autoBlock(s.name, final, confidence) : null;
-    shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' && final.case !== 'own_job_wait' });   // shadow: fire and forget, never awaited
+    // A queued wait (a lease / deploy ticket, a queue position) is not an escalation: the session is in a line and no agent moves it.
+    shadowRoute({ id, session: s.name, agent: s.agent, final, stall, escalatedTo: escalatedTargetOf(id), escalated: !isManagerSession(s.name) && !(ws.send && !block) && final.case !== 'done' && final.case !== 'background_wait' && final.case !== 'own_job_wait' && !(final.case === 'waiting_deploy' && final.queued) });   // shadow: fire and forget, never awaited
     if (ws.send && !block) {   // the existing auto-answer handles this one
       const pending = { id, hash: h, answer: ws.send, case: final.autoCase || final.case, source: final.source, confidence, ...(menu?.ok ? { override: true, recText: menu.recText, kinds: menu.kinds } : {}), ...(menuPick(final) ? { menu: menuPick(final) } : {}) };
       const pol = policyOf(s.name, s.agent);
@@ -1541,7 +1544,7 @@ export function stallOf(name) {
   return { case: st.case, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
     id: w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null,   // the previous stop's id never rides on a new stop's content
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
-    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), escalatedTo: (() => { const sid = w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null; return managerStops.has(sid) ? 'manager' : escalatedStops.has(sid) ? 'owner' : null; })(), draft: !!(w.cls?.draft), jev: st.jev || null };
+    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), escalatedTo: escalatedTargetOf(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), queued: st.queued === true, draft: !!(w.cls?.draft), jev: st.jev || null };
 }
 
 // The AI reviewer's view for the UI: { id, state: pending|done|skipped|error, ai?, skipped?, error?, ... } for the current stop, or null.
