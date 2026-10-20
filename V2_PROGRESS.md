@@ -372,7 +372,7 @@ Phase 1: IN PROGRESS in isolated worktrees. Phases 2–7 and lease/integration/s
 
 ## Checkpoint: baseline failures classified
 
-Inventory and evidence recorded in `docs/v2/`. Main suite 839/858 passes; 19 failures share stale October 1 date fixtures. Reporter 25/25 passes. Router dry-run wake agreement 6/10 requires investigation, not a PASS badge.
+Inventory and evidence recorded in `docs/v2/`. Main suite 839/858 passes; 19 failures share stale October 1 date fixtures. Reporter 25/25 passes. Router dry-run wake agreement 6/10 requires investigation, not a PASS badge. Update 2026-10-19: diagnosed as rule defects and fixed, now 10/10; on 24 sanitized real events of 2026-10-18/19 it is 21/24 with three documented open cases (`docs/v2/ROUTER_DRYRUN.md`).
 
 | Task | Parent | Owner | Branch | State |
 |---|---|---|---|---|
