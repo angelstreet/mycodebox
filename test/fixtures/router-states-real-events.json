@@ -1,0 +1,579 @@
+[
+  {
+    "point": "wake",
+    "label": "session asks the owner (needs-owner, escalated), acted on",
+    "facts": {
+      "event": {
+        "kind": "asks",
+        "title": "session asks the owner (needs-owner, escalated), acted on",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": true,
+        "p0_blocked": false
+      }
+    },
+    "expect": "wake_cheap|wake_opus",
+    "expect_any": [
+      "wake_cheap",
+      "wake_opus"
+    ],
+    "expect_source": "observed",
+    "reason": "A person/manager answered within 15 min.",
+    "observed": "needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "session asks the owner (needs-owner, escalated), nobody acted in 15 min",
+    "facts": {
+      "event": {
+        "kind": "asks",
+        "title": "session asks the owner (needs-owner, escalated), nobody acted in 15 min",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": true,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: the question was parked until the owner was back; waking an agent would not have helped. Conflicts with the escalated rule: open case.",
+    "open": true,
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "session waiting on the manager (escalated), acted on",
+    "facts": {
+      "event": {
+        "kind": "asks",
+        "title": "session waiting on the manager (escalated), acted on",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": true,
+        "p0_blocked": false
+      }
+    },
+    "expect": "wake_cheap|wake_opus",
+    "expect_any": [
+      "wake_cheap",
+      "wake_opus"
+    ],
+    "expect_source": "observed",
+    "reason": "The manager resubmitted the branch within 15 min.",
+    "observed": "needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "session waiting on a device lease ticket (escalated flag set)",
+    "facts": {
+      "event": {
+        "kind": "asks",
+        "title": "session waiting on a device lease ticket (escalated flag set)",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": true,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: a queued lease claim is not a question; nothing to answer. Open case: the escalated flag comes from the stall classifier.",
+    "open": true,
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "session waiting on a deploy ticket (escalated flag set)",
+    "facts": {
+      "event": {
+        "kind": "asks",
+        "title": "session waiting on a deploy ticket (escalated flag set)",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": true,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: waiting for the deploy queue is not a question. Open case, same as the lease ticket.",
+    "open": true,
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "permission-style confirm prompt (kind waiting, not escalated)",
+    "facts": {
+      "event": {
+        "kind": "waiting",
+        "title": "permission-style confirm prompt (kind waiting, not escalated)",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "rules_handle|wake_cheap",
+    "expect_any": [
+      "rules_handle",
+      "wake_cheap"
+    ],
+    "expect_source": "judged",
+    "reason": "Observed needed, but the wake label counts any send, including the rules-only auto-answer, so rules_handle is as right as a wake. First labelled wake-only; relabelled after reading how observedNeed counts (fixture defect).",
+    "observed": "needed",
+    "day": "2026-10-18"
+  },
+  {
+    "point": "wake",
+    "label": "deploy failed: update_core timeout after 11 min",
+    "facts": {
+      "event": {
+        "kind": "deploy",
+        "title": "deploy failed: update_core timeout after 11 min",
+        "priority": "high"
+      },
+      "deploy": {
+        "id": "deploy-x",
+        "state": "failed"
+      }
+    },
+    "expect": "wake_cheap|wake_opus",
+    "expect_any": [
+      "wake_cheap",
+      "wake_opus"
+    ],
+    "expect_source": "judged",
+    "reason": "Judged: observed label is not_needed (the label only sees a manager-agent alert), but a killed update_core is already broken and needs a look.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "deploy failed: update_core exit 255",
+    "facts": {
+      "event": {
+        "kind": "deploy",
+        "title": "deploy failed: update_core exit 255",
+        "priority": "high"
+      },
+      "deploy": {
+        "id": "deploy-x",
+        "state": "failed"
+      }
+    },
+    "expect": "wake_cheap|wake_opus",
+    "expect_any": [
+      "wake_cheap",
+      "wake_opus"
+    ],
+    "expect_source": "judged",
+    "reason": "Judged, same reason as the timeout.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "deploy needs approval (requested by the manager, CI green)",
+    "facts": {
+      "event": {
+        "kind": "deploy",
+        "title": "deploy needs approval (requested by the manager, CI green)",
+        "priority": "high"
+      },
+      "deploy": {
+        "id": "deploy-x",
+        "state": "approve"
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: the deploy queue and the autonomy rules handle approvals.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "deploy stop for the manager (session waits on a CI dispatch)",
+    "facts": {
+      "event": {
+        "kind": "deploy",
+        "title": "deploy stop for the manager (session waits on a CI dispatch)",
+        "priority": "default"
+      },
+      "deploy": {
+        "id": "deploy-x",
+        "state": "manager-item"
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-18"
+  },
+  {
+    "point": "wake",
+    "label": "CI fixer stuck after 4 attempts",
+    "facts": {
+      "event": {
+        "kind": "stuck",
+        "title": "CI fixer stuck after 4 attempts",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: the owner is pushed directly. Jev leans wake_cheap: open case.",
+    "open": true,
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "CI red on main, fixer idle",
+    "facts": {
+      "event": {
+        "kind": "red",
+        "title": "CI red on main, fixer idle",
+        "priority": "default",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "host health: disk 85 percent, nothing safe to clean",
+    "facts": {
+      "event": {
+        "kind": "disk",
+        "title": "host health: disk 85 percent, nothing safe to clean",
+        "priority": "default",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      },
+      "disk_pct": 85
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: below the 95 percent hot threshold.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "host health: runaway process",
+    "facts": {
+      "event": {
+        "kind": "runaway",
+        "title": "host health: runaway process",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: the health fixer owns it.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "host health: load above 1 per core for 10 min",
+    "facts": {
+      "event": {
+        "kind": "load",
+        "title": "host health: load above 1 per core for 10 min",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "daily CI failure digest",
+    "facts": {
+      "event": {
+        "kind": "ci",
+        "title": "daily CI failure digest",
+        "priority": "high",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed: a report, not an event.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "Jev credit limit nearly reached",
+    "facts": {
+      "event": {
+        "kind": "credits",
+        "title": "Jev credit limit nearly reached",
+        "priority": "high"
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-06"
+  },
+  {
+    "point": "wake",
+    "label": "plan quota at 96 percent",
+    "facts": {
+      "event": {
+        "kind": "quota",
+        "title": "plan quota at 96 percent",
+        "priority": "high"
+      },
+      "quota": {
+        "plan:5h": 96
+      }
+    },
+    "expect": "wake_cheap|wake_opus",
+    "expect_any": [
+      "wake_cheap",
+      "wake_opus"
+    ],
+    "expect_source": "judged",
+    "reason": "Rule floor: critical quota is hot, someone must look (no manager action recorded; kept as the floor demands).",
+    "observed": "not_needed",
+    "day": "2026-10-06"
+  },
+  {
+    "point": "wake",
+    "label": "plan quota warning, manager alerted",
+    "facts": {
+      "event": {
+        "kind": "quota",
+        "title": "plan quota warning, manager alerted",
+        "priority": "high"
+      },
+      "quota": {}
+    },
+    "expect": "ignore|rules_handle|wake_cheap|wake_opus",
+    "expect_any": [
+      "ignore",
+      "rules_handle",
+      "wake_cheap",
+      "wake_opus"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed needed; the facts carry no percent, so either class is acceptable here.",
+    "observed": "needed",
+    "day": "2026-10-09"
+  },
+  {
+    "point": "wake",
+    "label": "lease released (never pushed)",
+    "facts": {
+      "event": {
+        "kind": "lease",
+        "title": "lease released (never pushed)",
+        "priority": "default"
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "lease expired",
+    "facts": {
+      "event": {
+        "kind": "lease",
+        "title": "lease expired",
+        "priority": "default"
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "sessions told to re-read AGENTS.md",
+    "facts": {
+      "event": {
+        "kind": "told",
+        "title": "sessions told to re-read AGENTS.md",
+        "priority": "default",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-15"
+  },
+  {
+    "point": "wake",
+    "label": "integration merged",
+    "facts": {
+      "event": {
+        "kind": "int-mvej1afy7f203f",
+        "title": "integration merged",
+        "priority": "default",
+        "session": "session-a",
+        "stall_case": null,
+        "forbidden_topic": null,
+        "escalated": false,
+        "p0_blocked": false
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-19"
+  },
+  {
+    "point": "wake",
+    "label": "Jev circuit breaker down",
+    "facts": {
+      "event": {
+        "kind": "jev",
+        "title": "Jev circuit breaker down",
+        "priority": "default"
+      }
+    },
+    "expect": "ignore|rules_handle",
+    "expect_any": [
+      "ignore",
+      "rules_handle"
+    ],
+    "expect_source": "observed",
+    "reason": "Observed not_needed.",
+    "observed": "not_needed",
+    "day": "2026-10-09"
+  }
+]

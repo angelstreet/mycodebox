@@ -8,6 +8,7 @@ const SHELL_FILES = [
   '/style.css',
   '/app.js',
   '/prio.js',
+  '/sent-echo.js',
   '/policy.js',
   '/usage.js',
   '/review.js',
