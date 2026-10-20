@@ -91,7 +91,15 @@ Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (H
 `<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:
 `node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state
 (`merged`, `deployed`, `returned`, `merged_ci_red`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
-transition; `event.kind` is `queued | running | step | resumed | state | final`, `event.final` is true on a final state.
+transition; `event.kind` is `queued | running | step | resumed | state | coalesced | final`, `event.final` is true on a final state.
+
+**Coalescing and the settle window** (2026-10-20). One branch merged three times in three minutes, restarting the target CI each
+time, so a request for a repo + branch + target whose request is still `queued` updates that entry instead of adding a second one:
+same id and queue position, the newest tip, the notes appended, the widest `--deploy` scope, the newest `--approved-by` /
+`--migration-applied`, and a restarted settle window (`coalesced` counter, `event.kind: 'coalesced'`). A request whose predecessor
+is `running` is queued as a second entry and marked `afterId`; the lane is serial per repo, so it starts only after that one ends.
+A queued request is picked once it has sat unchanged for `settleMs` (top level in `integration.json`, or per repo; default 60 s,
+0 disables). The request records `settleUntil` (ISO); a coalesce pushes it back.
 
 ## Infra paths and manager approval
 

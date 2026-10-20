@@ -119,7 +119,11 @@ case "$cmd" in
     api POST "/api/integration/requests?format=kv" "$BODY"
     [ "$CODE" = 200 ] || fail_http
     ID=$(val id)
-    printf 'Integration %s queued for %s (position %s).\n' "$ID" "$(val repo)" "$(val position)"
+    if [ "$(val coalesced)" = 1 ]; then
+      printf 'Integration %s updated (coalesced with the queued request)\n' "$ID"
+    else
+      printf 'Integration %s queued for %s (position %s).\n' "$ID" "$(val repo)" "$(val position)"
+    fi
     if [ "$WAIT" = 1 ]; then do_wait "$ID" 60; fi
     printf 'End your turn with: STATUS: waiting: integration %s\n' "$ID" ;;
   status)
