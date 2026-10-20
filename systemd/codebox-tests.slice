@@ -1,8 +1,9 @@
 # npm test / npm ci / node --test / pytest runs from any session: not essential, so they hit their own cap first
-# and yield CPU to the agents.
+# and yield CPU to the agents. CPUQuota keeps half the cores for agents even when 5 full suites run at once.
 [Unit]
 Description=codebox test runs
 
 [Slice]
 TasksMax=1024
 CPUWeight=25
+CPUQuota=300%
