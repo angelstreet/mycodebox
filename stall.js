@@ -554,6 +554,32 @@ export function menuOptions(lines) {
   return opts;
 }
 
+// ---- the text the forbidden-topic filter reads: the agent's own prose, never the pane furniture -----------
+// The scan input is everything the agent WROTE in its closing turn -- its text paragraphs, the STATUS line, the
+// question and the option labels -- because a `continue` / `stopped_short` stop announces the risky step ABOVE the
+// question ("Next I'll push to main and deploy the server. Shall I continue?") and the auto-answer approves the whole
+// paragraph, not just the sentence that ends on "?". Scanning only the question would let it approve a deploy.
+// The pane furniture around those words is chrome and never the ask, so it is dropped: tool-call lines and their result
+// rows (⎿ / ├ / └ / │), `$ ` command lines, "Ran ..." / "Running ..." summaries, background-task and shell listings
+// ("Background work is running", "shell · ..."), status bars and box-drawing rules. A stop is never forbidden because of
+// one (a pane held an `ssh ... sudo -n ...` command and a background shell named "...Deploy..." above a plain question).
+const TOOL_ROW_RE = /^\s*[⎿├└┌┐┘│┃▏▕]/;   // a tool result row, a deeper-indented continuation and a box border
+const SHELL_ROW_RE = /^\s*\$\s+\S/;   // "$ npm run deploy:watch"
+const BOX_RULE_RE = /^\s*[─━═╭╮╰╯╔╗╚╝]{2,}/;
+// A command echo is a summary, not a sentence: a full stop or comma ("Ran the deploy last night.") makes it the
+// agent's own prose and keeps it in the scan.
+const TOOL_SUMMARY_RE = /^\s*(?:[⏺●•]\s*)?(?:Ran|Running|Executed|Started)\b[^,.!?]*$/i;
+const BACKGROUND_ROW_RE = /^\s*(?:Background work is running|Background (?:task|shell|command)s?\b[^.?]*$|(?:shell|process|task|job)s?\s*·)/i;
+const STATUS_BAR_RE = /^\s*(?:[✻✶✳✢✽⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|.*\bbypass permissions\b|\/rc\s*$|.*\bfor shortcuts\b)/;
+const isChrome = (l) => TOOL_CALL_RE.test(l) || TOOL_ROW_RE.test(l) || SHELL_ROW_RE.test(l) || BOX_RULE_RE.test(l)
+  || TOOL_SUMMARY_RE.test(l) || BACKGROUND_ROW_RE.test(l) || STATUS_BAR_RE.test(l) || RULE_LINE.test(l);
+const ownProse = (lines) => lines.map((l) => String(l).replace(/\s+$/, '')).filter((l) => l.trim() && !isChrome(l));
+
+function askText(out, opts = [], lines = [], question = out.question) {
+  const labels = [...new Set([...opts, ...(out.options || [])].map((o) => o.text || ''))];
+  return [...new Set([question, ...ownProse(lines), ...labels].map((s) => String(s || '').replace(/\s+$/, '')).filter((s) => s.trim()))].join('\n');
+}
+
 // Unmarked menus (round 9, item 3): no "(recommended)" tag, but option 1 is a safe, reversible default. Only a clean 1..N list counts, and option 1
 // must not be a way out ("skip", "cancel", "do nothing") nor carry a hard topic or a merge / push / deploy.
 const OUT_OPTION_RE = /^\W*(?:skip|cancel|abort|stop|quit|exit|do nothing|nothing|leave (?:it|them|this)|no\b|none\b|not now|later|wait\b|don'?t|dismiss|decline|keep (?:it )?as is|ignore|something else|other\b|type something|chat about)/i;
@@ -629,7 +655,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     else if (rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2)) { out.case = 'menu_recommended'; out.answer = { key: String(rec.n) }; }
     else if (!rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2) && unmarkedFirst(opts, block)) { out.case = 'menu_recommended'; out.answer = { key: String(opts[0].n) }; out.source = 'unmarked-first'; }
     else out.case = 'owner_decision';
-    out.forbiddenText = block.join('\n');
+    // The whole block's prose, not just the question line: a permission prompt does not end on "?", and the risky step
+    // an auto-answer would approve can sit above the menu ("Next I'll deploy the server." + "Run this command?").
+    out.forbiddenText = askText(out, opts, block);
     if (opts.length >= 2) out.options = opts.map((o) => ({ n: o.n, text: o.text, recommended: RECOMMENDED_RE.test(o.text) || (out.source === 'unmarked-first' && o.n === opts[0].n), ...(out.source === 'unmarked-first' && o.n === opts[0].n ? { unmarked: true } : {}), forbidden: forbiddenMatch(o.text) }));
     return finish(out);
   }
@@ -643,11 +671,10 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     out.question = st.text || last.slice(0, 300);
     out.source = 'rule';
     out.no_status = false;
-    out.forbiddenText = closing;   // the whole closing text: a step announced above the last lines is still approved by the answer
     // "STATUS: needs-manager: <what the manager must do>" hands the next step to the AI manager, not to the owner.
     // Checked before the merge-wait rules below: "request branch x with --approved-by manager" reads like a merge ask and the
     // merge lane would swallow it. Never auto-answered, never a needs-you (2026-10-20: TASK142 waited ~20 min for the owner).
-    if (st.kind === 'needs-manager') { out.case = 'needs_manager'; out.answer = null; out.autoCase = undefined; out.managerAsk = st.text; return finish(out); }
+    if (st.kind === 'needs-manager') { out.case = 'needs_manager'; out.answer = null; out.autoCase = undefined; out.managerAsk = st.text; out.forbiddenText = askText(out, [], close); return finish(out); }
     const mw = ['needs-owner', 'blocked', 'waiting'].includes(st.kind) && !((waitsOnOwnJob(st.text, st.kind) || /\b(?:finish(?:es|ed)?|completes?|ends?)\b/i.test(st.text)) && !/\bPR\s*#?\d|pull request|decision/i.test(st.text)) ? mergeWaitOf(st.text) : null;   // "the nightly job must finish before I can merge" waits on a job, not on a merge decision
     if (mw) { out.case = 'merge_wait'; out.mergeAsk = mw; out.answer = null; }
     else if (st.kind === 'needs-owner') { out.case = 'owner_decision'; const o = menuOptions(close); if (o.length >= 2) out.options = o.map((x) => ({ n: x.n, text: x.text, recommended: RECOMMENDED_RE.test(x.text), forbidden: forbiddenMatch(x.text) })); }
@@ -658,6 +685,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; if (queuedWait(st.text)) out.queued = true; }
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
     else out.case = 'done';
+    out.forbiddenText = askText(out, [], close);   // the STATUS line's own text, the option labels and the closing prose around them: the ask the owner answers
     return finish(out);
   }
   out.question = tailSentences(last, 300);
@@ -665,7 +693,6 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
   let asks = /\?(?:["')\]]|\s|$)/.test(last.replace(/https?:\S+/g, ''));
   const opts = menuOptions(close);
   const rec = opts.find((o) => RECOMMENDED_RE.test(o.text)) || (/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' ')) && { n: Number(/\bI(?:'d| would)? recommend (?:option )?(\d)\b/i.exec(close.join(' '))[1]) });
-  out.forbiddenText = closing;
   // The agent's own words: lines after the last tool-output line (its "5 passed" is not a status report).
   const toolEnd = close.reduce((k, l, i) => (/^\s*[⎿└]/.test(l) ? i : k), -1);
   const msg = close.slice(toolEnd + 1).length ? close.slice(toolEnd + 1) : close;
@@ -716,6 +743,7 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
   if (fyi) out.fyi = fyi;
   out.no_status = !asks && !fyi && !['waiting_deploy', 'owner_action'].includes(out.case) && !STATUS_RE.test(tailText);
   if (out.no_status && out.case === 'done') { out.answer = { text: ASK_STATUS_TEXT }; out.autoCase = 'ask_status'; }
+  out.forbiddenText = askText(out, opts, close);   // the closing prose (minus chrome) carries the step a "Yes, continue." would approve
   return finish(out);
 }
 
