@@ -41,11 +41,13 @@ by its key; a session's checkout is recognised from its `origin` URL.
 
 ## What it reuses
 
-The durable integration queue (`orchestration/integration-queue.js`), the git runner and merge-in-a-fresh-worktree
-logic and the compare-and-swap push of `orchestration/integration-controller.js`, the CI status gate
-(`orchestration/ci-gates.js`), the merge evaluation floor (`merge-policy.js`), the deploy queue on the central lease
-service, the own-job wake (`own-jobs.js`). The owner's per-merge approval of the V2 controller is replaced by the merge
-evaluation (OWNER_DECISIONS §14, §19).
+The lane is its own module (`integration-lane.js`) with its own durable request log, git steps, compare-and-swap push and CI
+wait. From the V2 engine it imports only the merge evaluation floor (`merge-policy.js`) and the usage attribution window
+(`usage-window.js`); it also uses the deploy queue on the central lease service and the own-job wake (`own-jobs.js`).
+`orchestration/integration-controller.js`, `integration-queue.js`, `ci-gates.js` and `delivery.js` belong to the opt-in V2
+task engine and are not used by the lane. The owner's per-merge approval of the V2 controller is replaced by the merge
+evaluation (OWNER_DECISIONS §14, §19). The request's `review` field is that evaluation (the merge floor, or the merge
+decision's source), not an independent reviewer.
 
 ## Rollout
 

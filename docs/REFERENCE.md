@@ -1149,7 +1149,7 @@ each holder (live / ended / remote / unknown / system) and the planned action. T
 - **What happens.** `escalate()` logs `{type:'escalated', target:'manager', kind}`, calls `onManagerItem` (server.js: one `manager-events.jsonl` line, key
   `lease:manager-item` or `deploy:<stop id>:manager-item`, for the `manager` session to read) and does not call the owner push. `stallOf()` exposes
   `escalatedTo: 'owner'|'manager'`; `isOwnersTurn` (`public/ask-model.js`) and the NEEDS YOU strip skip `'manager'` stops. Switch: `manager.json`
-  `opsToManager: false` restores the old routing. Not covered: the raw `waiting` push of a live terminal menu fires before the manager has classified the stop.
+  `opsToManager: false` restores the old routing (accepted by `POST /api/manager/config`). Not covered: the raw `waiting` push of a live terminal menu fires before the manager has classified the stop.
 - **The orchestrator asks the holder** (`lease-nudge.js`, every 2 min). For a queued deploy (the runner's `blocking`) or a ticket waiting more than 10 min,
   each blocking holder is asked once per (holder, lease) per 30 min when its lease is past its own `expect_min`, idle (no finished turn for 20 min, the
   lease-watch signal) or broader than its purpose (env-wide or server-kind lease whose purpose names one host, device or the frontend). A codebox session stopped

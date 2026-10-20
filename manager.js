@@ -200,7 +200,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { aiFallback, aiFallbackDailyCalls, jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure } = b;
+  const { aiFallback, aiFallbackDailyCalls, jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure, opsToManager } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -261,6 +261,7 @@ export async function setManagerConfig(b = {}) {
   }
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
   if (typeof deployRunner === 'boolean') config.deployRunner = deployRunner;
+  if (typeof opsToManager === 'boolean') config.opsToManager = opsToManager;
   if (typeof routerShadow === 'boolean') config.routerShadow = routerShadow;
   if (typeof wakeShadow === 'boolean') config.wakeShadow = wakeShadow;
   if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');

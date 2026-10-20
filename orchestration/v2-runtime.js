@@ -58,6 +58,7 @@ export function v2Config(env, { stateDir, repoRoot }) {
     const pol = loadPolicy(rp);
     // Kept on the list either way: the loop re-reads the policy before every run (T01: invalid -> owner clarification).
     if (!pol.ok) warnings.push(`GHOSTY_V2_REPOS: ${r} has no valid .ai/project.json (${pol.code}): its tasks wait for an owner clarification`);
+    else for (const w of pol.warnings || []) warnings.push(`GHOSTY_V2_REPOS: ${r} policy ${w.path}: ${w.message}`);
     if (!repos.includes(rp)) repos.push(rp);
   }
   if (!repos.length) warnings.push('GHOSTY_V2_REPOS lists no usable repository: every task creation is refused');

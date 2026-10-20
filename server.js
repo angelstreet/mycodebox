@@ -613,6 +613,7 @@ const shortHash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 8);
 
 const META_TTL_MS = 10000;
 const metaCache = new Map(); // session -> { at, cwd, repo, branch, dirty, busy }
+const digestCache = new Map();  // since -> { at, body } for GET /api/manager/score-digest
 
 async function gitInfo(cwd) {
   try {
@@ -2251,7 +2252,8 @@ async function handleHttp(req, res) {
     try { return json(res, 200, await wakesView(url.searchParams.get('day') || '')); } catch (e) { return json(res, 500, { error: String(e.message || e) }); }
   }
   if (req.method === 'GET' && p === '/api/manager/score-digest') {   // Round 15: read-only daily score digest (scripts/v2-ledger.js --digest)
-    try { const { buildDigest, parseSince } = await import('./scripts/v2-ledger.js'); const sn = url.searchParams.get('since'); return json(res, 200, buildDigest({ stateDir: STATE_DIR, since: sn ? parseSince(sn) : undefined })); }
+    try { const { buildDigest, parseSince } = await import('./scripts/v2-ledger.js'); const sn = url.searchParams.get('since'); const key = sn || '', hit = digestCache.get(key); if (hit && Date.now() - hit.at < 60_000) return json(res, 200, hit.body);   // the ledger parse is synchronous: cache 60 s per `since`
+      const body = buildDigest({ stateDir: STATE_DIR, since: sn ? parseSince(sn) : undefined }); if (digestCache.size > 20) digestCache.clear(); digestCache.set(key, { at: Date.now(), body }); return json(res, 200, body); }
     catch (e) { return json(res, /needs a date/.test(e.message) ? 400 : 500, { ok: false, error: String(e.message || e) }); }
   }
   if (req.method === 'GET' && p === '/api/manager/scorecard') {
