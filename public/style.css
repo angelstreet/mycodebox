@@ -895,6 +895,9 @@ body{ display:flex; flex-direction:column; }
 /* QF-02: while the "N need you" pill is on screen, push the per-card jump
    arrows up so they don't sit under the pill. (chat-raised 2026-10-09) */
 body.has-ask-pill .cell .jump{ bottom:84px; }
+/* the delivery pill (sent / failed · retry) floats over the card's bottom-right corner too */
+body.has-dstat .cell .jump{ bottom:60px; }
+body.has-dstat.has-ask-pill .cell .jump{ bottom:134px; }
 .cell:hover .jump, .cell.focus .jump, .cell .jump:focus-within{ opacity:1; }
 .cell .jump button{
   width:34px; height:34px; border-radius:9px; padding:0;

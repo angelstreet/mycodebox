@@ -8,6 +8,7 @@ import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
+import { stripSentEcho } from '/sent-echo.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
@@ -3861,6 +3862,7 @@ async function dispatch(text, targets, isRetry) {
   } catch (err) {
     if (dock.pending !== p) return false;
     p.phase = 'error'; p.failed = targets.slice(); p.err = err.message;
+    console.warn('[send] failed:', targets.join(','), err.message);
   }
   if (p.phase !== 'error' && !isRetry) pushHist(text);
   renderDockStatus();
@@ -3870,7 +3872,9 @@ async function dispatch(text, targets, isRetry) {
 
 // Mobile keyboards (IME/autocorrect) can re-commit the composed word right after value = '',
 // so the sent text stayed in the box; clear again on the next tick if it came back unchanged.
+let lastSent = { text: '', at: 0 };
 function clearSendInput(sent) {
+  lastSent = { text: sent, at: Date.now() };
   els.sendInput.value = '';
   autoGrow();
   setTimeout(() => { if (els.sendInput.value === sent) { els.sendInput.value = ''; autoGrow(); } }, 80);
@@ -3928,6 +3932,7 @@ function checkDelivery() {
 function renderDockStatus() {
   const p = dock.pending;
   const el = dk.stat;
+  document.body.classList.toggle('has-dstat', !!p);
   if (!p) { el.className = 'dstat'; el.textContent = ''; return; }
   const multi = p.targets.length > 1;
   let t = '';
@@ -3939,6 +3944,7 @@ function renderDockStatus() {
   const cls = `dstat on ${p.phase}`;
   if (el.className !== cls) el.className = cls;
   if (el.textContent !== t) el.textContent = t;
+  el.title = p.phase === 'error' && p.err ? `${p.err} (tap to retry)` : '';
 }
 dk.stat.onclick = () => {
   const p = dock.pending;
@@ -4743,7 +4749,13 @@ els.micBtn.onclick = () => {
   if (voice.busy) return;
   if (voice.rec) voice.rec.stop(); else voiceStart();
 };
-els.sendInput.oninput = autoGrow;
+// The keyboard may re-commit the sent text much later than the 80 ms re-clear above (3rd send in a row): strip it on any input.
+els.sendInput.oninput = (e) => {
+  const v = els.sendInput.value;
+  const w = stripSentEcho(v, lastSent.text, lastSent.at, Date.now(), e && e.inputType);
+  if (w !== v) els.sendInput.value = w;
+  autoGrow();
+};
 
 // ----- image attach: button, paste or drop -> /api/upload (saved on the codebox) -> "@path" added to the message -----
 // uploadOne (in /upload.js) handles transient-error retry + timeout; see that
