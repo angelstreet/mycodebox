@@ -1,7 +1,7 @@
 // manager-wait.sh cursor: events appended while the manager is "busy" (no wait running) are all delivered by the next call.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,4 +87,38 @@ test('custom filter-command argument keeps the legacy behaviour (no cursor)', ()
   assert.equal(r.status, 0);
   assert.equal(r.stdout, 'one\ntwo\n');
   assert.equal(existsSync(s.cursor), false);
+});
+
+test('a second wait while one is running exits 3 and names the pid holding the lock', async () => {
+  const s = setup();                                                       // no events: the first wait just blocks, holding the lock
+  const first = spawn('bash', [SH], { env: s.env, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  const closed = new Promise((r) => first.on('close', r));
+  await new Promise((r) => setTimeout(r, 700));                             // let it take the lock
+  try {
+    assert.equal(Number(readFileSync(join(s.dir, 'manager-wait.lock'), 'utf8').trim()), first.pid);
+    const second = spawnSync('bash', [SH], { env: s.env, encoding: 'utf8', timeout: 20000 });
+    assert.equal(second.status, 3);
+    assert.match(second.stderr, new RegExp(`another manager-wait is running \\(pid ${first.pid}\\)`));
+    assert.equal(second.stdout, '');                                        // never any events: the loser waits for nothing
+  } finally {
+    try { process.kill(-first.pid, 'SIGTERM'); } catch {}
+    await closed;
+  }
+  const free = async () => {                                                // the filter child holds the lock until it drains, give it a moment
+    for (let i = 0; i < 20; i++) {
+      if (spawnSync('bash', [SH, 'sleep 0.1'], { env: s.env, timeout: 20000 }).status === 0) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  };
+  assert.equal(await free(), true);                                          // lock is free again once the first one is gone
+});
+
+test('the cursor is written through a pid-suffixed temp file, never a shared .cursor.tmp', () => {
+  const s = setup();
+  writeFileSync(s.events, ev(1) + ev(2));
+  writeFileSync(s.cursor, '0\n');
+  assert.equal(run(s).status, 0);
+  assert.deepEqual(readdirSync(join(s.dir, 'manager-reports')).filter((f) => f.startsWith('.cursor.tmp')), []);
+  assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
 });
