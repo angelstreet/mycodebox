@@ -99,22 +99,58 @@ export function decideCrashResume({ state, consecutiveNoAgent = 0, managerSessio
   return command ? { ok: true, command, crash, bare } : { ok: false, reason: 'missing-resume-data', crash, bare };
 }
 
+const TRANSCRIPT_RE = /^[A-Za-z0-9-]+\.jsonl$/;
+const TAIL_BYTES = 262144;
+const DIR_FILES = 40;         // newest transcripts read in the pane's own project dir
+const LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+const LOOKBACK_FILES = 400;   // newest transcripts read across every other project dir
+// The directory the conversation really ran in, last occurrence: Claude rewrites cwd when the session moves.
+const lastCwd = (tail) => { let m, last = null; for (const x of tail.matchAll(/"cwd":"([^"]*)"/g)) last = x[1]; return last || null; };
+
 // Claude Code session id of a crashed job, from its transcripts: newest *.jsonl under ~/.claude/projects/<cwd with / and . as ->
 // whose tail names the session (agentName/customTitle). The crashed pid's own session file is deleted on abort.
-export async function findClaudeSessionId({ name, cwd, projectsDir, fs }) {
-  if (!name || !cwd || !projectsDir || !fs) return null;
-  const dir = `${projectsDir}/${String(cwd).replace(/ \(deleted\)$/, '').replace(/[/.]/g, '-')}`;
-  let files;
-  try {
-    files = await Promise.all((await fs.readdir(dir)).filter((f) => /^[A-Za-z0-9-]+\.jsonl$/.test(f)).map(async (f) => ({ f, t: (await fs.stat(`${dir}/${f}`)).mtimeMs })));
-  } catch { return null; }
-  files.sort((a, b) => b.t - a.t);
+// A dead pane is often not in that directory any more (the shell went back to $HOME, the worktree was deleted), so when
+// the pane's dir has nothing, the other project dirs are searched too, newest first, transcripts of the last 14 days.
+// Returns { sessionId, cwd } with the transcript's own cwd, so parking records the real directory and resumes there.
+export async function findClaudeSessionId({ name, cwd, projectsDir, fs, now = Date.now() }) {
+  if (!name || !projectsDir || !fs) return null;
   const needle = [`"agentName":"${name}"`, `"customTitle":"${name}"`];
-  for (const { f } of files.slice(0, 40)) {
+  const strip = (d) => String(d).replace(/ \(deleted\)$/, '');
+  const enc = (d) => strip(d).replace(/[/.]/g, '-');
+  const here = cwd ? `${projectsDir}/${enc(cwd)}` : null;
+  const newestIn = async (dir) => {
+    let files;
+    try { files = (await fs.readdir(dir)).filter((f) => TRANSCRIPT_RE.test(f)); } catch { return []; }
+    const out = [];
+    for (const f of files) {
+      try { out.push({ f, t: (await fs.stat(`${dir}/${f}`)).mtimeMs }); } catch { /* unreadable: next */ }
+    }
+    return out.sort((a, b) => b.t - a.t);
+  };
+  // Returns the matching tail, or null. Only the tail is read: the naming fields are at the end of a transcript.
+  const match = async (path) => {
     try {
-      const tail = await fs.readTail(`${dir}/${f}`, 262144);
-      if (needle.some((n) => tail.includes(n))) return f.replace(/\.jsonl$/, '');
-    } catch { /* unreadable: next */ }
+      const tail = await fs.readTail(path, TAIL_BYTES);
+      return needle.some((n) => tail.includes(n)) ? tail : null;
+    } catch { return null; } // unreadable: next
+  };
+  if (here) for (const { f } of (await newestIn(here)).slice(0, DIR_FILES)) {
+    const tail = await match(`${here}/${f}`);
+    if (tail) return { sessionId: f.replace(/\.jsonl$/, ''), cwd: lastCwd(tail) || strip(cwd) };
+  }
+  // The pane is not where the conversation ran: scan the other project dirs. Bounded (a few hundred tails), and only
+  // once the pane's own dir came up empty, so the common case stays a handful of reads.
+  let dirs;
+  try { dirs = await fs.readdir(projectsDir); } catch { return null; }
+  const all = [];
+  for (const d of dirs) {
+    if (`${projectsDir}/${d}` === here) continue;
+    for (const { f, t } of await newestIn(`${projectsDir}/${d}`)) if (now - t <= LOOKBACK_MS) all.push({ f: `${d}/${f}`, t });
+  }
+  all.sort((a, b) => b.t - a.t);
+  for (const { f } of all.slice(0, LOOKBACK_FILES)) {
+    const tail = await match(`${projectsDir}/${f}`);
+    if (tail) return { sessionId: f.replace(/^.*\//, '').replace(/\.jsonl$/, ''), cwd: lastCwd(tail) };
   }
   return null;
 }
@@ -136,7 +172,8 @@ export function createCrashResumer({ getState, sendText, sendEnter, record, mana
       const args = { state, consecutiveNoAgent: n, managerSessions: managerSessions(), closed: closed.has(name), lastResumeAt: resumed.get(name), now: now(), intervalMs };
       let d = decideCrashResume(args);
       if (!d.ok && d.reason === 'missing-resume-data' && resolveSessionId && !state.claudeSessionId) {
-        const sid = await resolveSessionId({ name: d.crash?.name || name, cwd: state.cwd }).catch(() => null);
+        const found = await resolveSessionId({ name: d.crash?.name || name, cwd: state.cwd }).catch(() => null);
+        const sid = typeof found === 'string' ? found : found?.sessionId; // the resolver also reports the cwd it found
         if (sid) d = decideCrashResume({ ...args, state: { ...state, claudeSessionId: sid } });
       }
       // A bare abort line repeats across crashes, so it is handled once per resume (new key after every resume).
