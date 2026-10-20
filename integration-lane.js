@@ -334,6 +334,30 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     return true;
   }
 
+  // A clean merge carries a convention file the branch changed straight into the target, so main ends up with the branch's
+  // label (twice on 2026-10-20, virtualpytest); the pre-push hook does not see the lane's push. After the merge commit
+  // exists, restore every convention file the branch changed to the target's version and amend. max-plus-one keeps its
+  // conflict-only rule (there is nothing to bump against without a conflict).
+  async function enforceConventions(r, c, wt, { branchSha, targetSha, msg }) {
+    if (c.conventionResolver !== 'take-target') return { ok: true, files: [] };
+    const b = await git(['merge-base', targetSha, branchSha], { cwd: wt });
+    if (b.code !== 0) return { ok: true, files: [] };   // no common ancestor: leave the merge alone
+    const base = b.out.trim();
+    const files = [];
+    for (const f of c.conventions) {
+      const [merged, atBase, atTarget] = await Promise.all([git(['show', `HEAD:${f}`], { cwd: wt }),
+        git(['show', `${base}:${f}`], { cwd: wt }), git(['show', `${targetSha}:${f}`], { cwd: wt })]);
+      if (merged.code !== 0 || atBase.code !== 0 || atTarget.code !== 0) continue;              // no such file in the merge, the base or the target
+      if (merged.out === atBase.out || merged.out === atTarget.out) continue;                   // the branch left it alone, or it already is the target's
+      if ((await git(['checkout', targetSha, '--', f], { cwd: wt })).code !== 0) continue;
+      if ((await git(['add', '--', f], { cwd: wt })).code !== 0) continue;
+      files.push(f);
+    }
+    if (!files.length) return { ok: true, files: [] };
+    const a = await git([...ident, 'commit', '--amend', '--no-edit', '-m', `${msg}; resolved ${files.join(', ')} (${c.conventionResolver})`], { cwd: wt });
+    return a.code === 0 ? { ok: true, files } : { ok: false, files, tail: a.err || a.out };
+  }
+
   const optOutList = () => { try { return mergeOptOut() || []; } catch { return []; } };
   // OWNER_DECISIONS §15: every lane verdict and self-deploy is a decision record (merge-decisions.jsonl) for "Decided for you".
   // `request` joins it to the lane request (a revert finds the merge commit there); a retry on a moved target gets its own id.
@@ -400,19 +424,28 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
             return { ok: y.code === 0, tail: y.err || y.out, info: { error: true } };
           }
           const x = await git([...ident, 'merge', '--no-ff', '--no-edit', '-m', msg, branchSha], { cwd: wt, timeoutMs: 120_000 });
-          if (x.code === 0) return { ok: true, info: { conflicts: [] } };
+          if (x.code === 0) {
+            const e = await enforceConventions(r, c, wt, { branchSha, targetSha, msg });
+            if (!e.ok) return { ok: false, tail: e.tail, info: { error: true, convention: e.files } };
+            return { ok: true, info: { conflicts: [], fixed: e.files, resolved: e.files.length ? c.conventionResolver : null } };
+          }
           const u = await git(['diff', '--name-only', '--diff-filter=U', '-z'], { cwd: wt });
           const files = u.out.split('\0').filter(Boolean);
           if (!files.length) { await git(['merge', '--abort'], { cwd: wt }); return { ok: false, tail: x.err || x.out, info: { error: true } }; }
           if (files.every((f) => isConvention(f, c.conventions))) {
             if (await resolveConventions(r, c, wt, files)
-              && (await git([...ident, 'commit', '--no-edit', '-m', `${msg}; resolved ${files.join(', ')} (${c.conventionResolver})`], { cwd: wt })).code === 0) return { ok: true, info: { conflicts: files, resolved: c.conventionResolver } };
+              && (await git([...ident, 'commit', '--no-edit', '-m', `${msg}; resolved ${files.join(', ')} (${c.conventionResolver})`], { cwd: wt })).code === 0) {
+                const e = await enforceConventions(r, c, wt, { branchSha, targetSha, msg });   // a second convention file may have merged cleanly
+                if (!e.ok) return { ok: false, tail: e.tail, info: { error: true, convention: e.files } };
+                return { ok: true, info: { conflicts: files, resolved: c.conventionResolver, fixed: e.files } };
+              }
           }
           await git(['merge', '--abort'], { cwd: wt });
           return { ok: false, tail: files.join('\n'), info: { conflicts: files } };
         });
         if (!m.ok) {
           const files = m.info?.conflicts || [];
+          if (m.info?.convention) throw new Ret(`could not restore ${m.info.convention.join(', ')} to the target's version`, m.tail, { conflicts: m.info.convention });
           if (m.info?.error) throw new Ret(r.revertOf ? 'revert failed' : 'merge failed', m.tail);
           throw new Ret(`merge conflict outside convention files: ${files.join(', ')}`, m.tail, { conflicts: files });
         }
