@@ -274,9 +274,9 @@ export function eventRecord(ev) {
   const kind = String(ev?.kind || ev?.event || '').toLowerCase().replace(/_/g, '-');
   if (!kind || kind === 'granted' || kind === 'ticket') return null;
   const w = where(ev);
-  const title = kind === 'released' ? `lease released: ${w} (${ev.agent || '?'})` : kind === 'expired' ? `lease expired: ${w} (${ev.agent || '?'})`
-    : kind === 'downgraded' ? `lease became a pin: ${w} (${ev.agent || '?'})` : kind === 'forced' ? `lease force-released: ${w} (${ev.agent || '?'})`
-    : kind === 'narrowed' ? `lease narrowed to host: ${w} (${ev.agent || '?'})` : kind === 'yield' ? `lease:yield ${ev.priority || 'P2'} holder must release: ${w} (${ev.agent || '?'})` : `lease ${kind}: ${w} (${ev.agent || '?'})`;
+  const title = kind === 'released' ? `lease released: ${w} (agent ${ev.agent || '?'})` : kind === 'expired' ? `lease expired: ${w} (agent ${ev.agent || '?'})`
+    : kind === 'downgraded' ? `lease became a pin: ${w} (agent ${ev.agent || '?'})` : kind === 'forced' ? `lease force-released: ${w} (agent ${ev.agent || '?'})`
+    : kind === 'narrowed' ? `lease narrowed to host: ${w} (agent ${ev.agent || '?'})` : kind === 'yield' ? `lease:yield ${ev.priority || 'P2'} holder must release: ${w} (agent ${ev.agent || '?'})` : `lease ${kind}: ${w} (agent ${ev.agent || '?'})`;
   const key = kind === 'pin-overlap' ? 'lease:pin-overlap' : `lease:${kind}`;
   return { key, title, body: `lease ${ev.id || ev.lease || '?'}${ev.by ? ` by ${ev.by}` : ''}${ev.reason ? ` (${ev.reason})` : ''}; purpose: ${ev.purpose || '-'}`, url: '/?leases=1', priority: 'default',
     at: new Date(tms(ev.at) || Date.now()).toISOString(), leaseId: ev.id || ev.lease, agent: ev.agent, env: ev.env, resources: asList(ev.resources ?? ev.resource) };

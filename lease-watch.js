@@ -81,7 +81,7 @@ export function createLeaseWatch({
       const TITLES = { released: 'lease released', expired: 'lease expired', forced: 'lease released by the owner', narrowed: `lease narrowed${e.kind ? ` to ${e.kind}` : ''}`,
         downgraded: `lease downgraded to ${e.to || 'pin'}` };   // the service's own reclaims are released / expired with the reason (ttl, no-heartbeat, session-gone)
       if (!TITLES[e.event]) continue;
-      const title = `${TITLES[e.event]}: ${where} (${e.agent})`;
+      const title = `${TITLES[e.event]}: ${where} (agent ${e.agent})`;   // "agent": a holder named "…-error" read as a failure (Jev 0.46, 2026-10-21)
       const body = `lease ${e.id}${e.by ? ` by ${e.by}` : ''}${e.reason ? ` (${e.reason})` : ''}; purpose: ${e.purpose || '-'}`;
       await record({ key: `lease:${e.event}`, title, body, url: '/?platforms=1', priority: 'default', at: new Date((e.ts || 0) * 1000).toISOString(), leaseId: e.id, agent: e.agent, env: e.env, resources: e.resources || [] });
     }
