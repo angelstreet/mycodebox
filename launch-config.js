@@ -42,6 +42,8 @@ export function launchWarnings(env = process.env) {
   return warnings;
 }
 
+// The manager runs on Sonnet (owner 2026-10-21); MANAGER_MODEL overrides (a model alias or id: letters, digits, . _ - [ ] only).
 export function managerCommand(env = process.env) {
-  return `${launchConfig(env).commands.claude} --model opus --remote-control manager -n manager`;
+  const model = /^[\w.\-\[\]]+$/.test(env.MANAGER_MODEL || '') ? env.MANAGER_MODEL : 'sonnet';
+  return `${launchConfig(env).commands.claude} --model ${model} --remote-control manager -n manager`;
 }
