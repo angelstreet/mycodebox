@@ -53,6 +53,43 @@ test('askStats: an answer line before its ask line does not close it, answered:t
   assert.equal(r.open, 1, 'b1 is still open');
 });
 
+test('askStats: a superseded ask is closed, the newer question it was replaced by is the open one', () => {
+  const r = askStats([
+    line({ at: ago(3600000), id: 's1', question: 'old?', state: 'open' }),
+    line({ at: ago(3000000), id: 's1', state: 'superseded', by: 's2' }),
+    line({ at: ago(2400000), id: 's2', question: 'replacement?' }),
+  ], win);
+  assert.equal(r.asked, 2, 's1 and s2');
+  assert.equal(r.answered, 0);
+  assert.equal(r.superseded, 1, 's1 was replaced by s2');
+  assert.equal(r.open, 1, 'only the replacement still waits for the owner');
+});
+
+test('askStats: an ask answered then superseded is counted once, as answered', () => {
+  const r = askStats([
+    line({ at: ago(3600000), id: 'd1', question: 'floor?' }),
+    line({ at: ago(3400000), id: 'd1', state: 'answered' }),
+    line({ at: ago(3200000), id: 'd1', state: 'superseded', by: 'd2' }),
+    line({ at: ago(3100000), id: 'd1', answered: true }),                  // a repeated resolution never double counts
+  ], win);
+  assert.equal(r.asked, 1);
+  assert.equal(r.answered, 1);
+  assert.equal(r.superseded, 0, 'answering wins over superseding, so asked = answered + superseded');
+  assert.equal(r.open, 0);
+});
+
+test('askStats: a resolution line before its question line does not close it', () => {
+  const r = askStats([
+    line({ at: ago(3600000), id: 'e1', state: 'superseded', by: 'e0' }),   // belongs to an earlier question
+    line({ at: ago(3400000), id: 'e1', state: 'answered' }),
+    line({ at: ago(3000000), id: 'e1', question: 'q?' }),
+  ], win);
+  assert.equal(r.asked, 1);
+  assert.equal(r.answered, 0, 'no line after the ask resolves it');
+  assert.equal(r.superseded, 0);
+  assert.equal(r.open, 1, 'e1 stays open until a LATER line closes it');
+});
+
 // ---- lane --------------------------------------------------------------------------------------------------------
 test('laneStats: latest record per id wins and only its final state counts', () => {
   const r = laneStats([

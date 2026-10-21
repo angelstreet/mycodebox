@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Daily check (scripts/daily-checks.js protocol): the harness' own numbers for the last 24 h.
 // The owner only sees a harness regression when he asks for it, so this writes the day's numbers as ONE line in
-// <stateDir>/harness-health.jsonl and flags what got worse: new owner asks and how many were answered, decisions the
-// manager took for the owner, the integration lane's final states, CI red minutes, box load / RAM / disk, and live
-// sessions with a needs-you state.
+// <stateDir>/harness-health.jsonl and flags what got worse: new owner asks and how many were answered or superseded,
+// decisions the manager took for the owner, the integration lane's final states, CI red minutes, box load / RAM / disk,
+// and live sessions with a needs-you state.
 //
 // Read-only on the state dir except the appended harness-health.jsonl line. A missing or malformed file counts as 0 and
 // is listed in the report as "not found": a silent zero would read as a healthy day. Nothing here throws; a check that
 // crashes is itself a finding (daily:check-broken:harness-health).
 //
 // Sources (all under GHOSTY_STATE_DIR, default ~/.local/state/ghosty):
-//   manager-owner-asks.jsonl  {at,id,question} per ask, {id,state|answered} per resolution
+//   manager-owner-asks.jsonl  {at,id,question} per ask, {id,state:"answered"|"superseded"} or {id,answered:true} per resolution
 //   manager-decisions.jsonl   one line per decision the manager took for the owner
 //   integration/requests.jsonl one line per state change; latest record per id wins
 //   ci-watch.jsonl            {at,type,red?} per tick; type 'green' closes a red streak
@@ -41,22 +41,33 @@ const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 export const inWindow = (at, now, hours = HOURS) => { const t = Date.parse(at); return Number.isFinite(t) && t >= now - hours * 3600000 && t <= now; };
 
 // ---- owner asks (pure) ---------------------------------------------------------------------------------------------
-// A new ask is a line carrying the question itself. It counts as answered when a LATER line of the same id resolves it;
-// owner-asks.js writes {id,state:"answered"}, an operator script may write {id,answered:true}, both close the ask.
+// A new ask is a line carrying the question itself. It counts as closed when a LATER line of the same id resolves it;
+// owner-asks.js writes {id,state:"answered"} for an answer and {id,state:"superseded",by:<newId>} when a newer question
+// replaced it, an operator script may write {id,answered:true}. All three close the ask: a superseded ask is closed,
+// not waiting, so counting only answers left every replaced question reading as open. A resolution line that arrives
+// BEFORE its ask line does not close it (it belongs to an earlier question), and answering wins over superseding, so an
+// ask answered and later superseded is counted once, as answered.
 export function askStats(lines, { now, hours = HOURS }) {
-  const asks = new Map(); // id -> {at, answered}
-  let asked = 0, answered = 0;
+  const asks = new Map(); // id -> {answered, superseded}
+  let asked = 0;
   for (const line of lines) {
     let r; try { r = JSON.parse(line); } catch { continue; }
     if (!r || typeof r !== 'object') continue;
     if (r.question && inWindow(r.at, now, hours)) {
-      if (!asks.has(r.id)) { asks.set(r.id, { answered: false }); asked++; }
+      if (!asks.has(r.id)) { asks.set(r.id, { answered: false, superseded: false }); asked++; }
       continue;
     }
     const prev = asks.get(r.id);
-    if (prev && !prev.answered && (r.answered === true || r.state === 'answered')) { prev.answered = true; answered++; }
+    if (!prev) continue;
+    if (r.answered === true || r.state === 'answered') prev.answered = true;
+    else if (r.state === 'superseded') prev.superseded = true;
   }
-  return { asked, answered, open: asked - answered };
+  let answered = 0, superseded = 0;
+  for (const a of asks.values()) {
+    if (a.answered) answered++;
+    else if (a.superseded) superseded++;
+  }
+  return { asked, answered, superseded, open: asked - answered - superseded };
 }
 
 // ---- integration lane (pure) ---------------------------------------------------------------------------------------
@@ -179,7 +190,10 @@ export function summarize(today, prev) {
     + `CI red ${today.ci?.redMinutes || 0} min, disk ${n(today.box?.diskPct)} %`;
   const findings = [];
   const add = (key, title, body) => findings.push({ key: `harness-health:${key}`, title, body: body.slice(0, 300), priority: 'normal' });
-  if ((today.asked || 0) > ASKS_MAX) add('owner-asks', `${today.asked} new owner asks in 24 h`, `${today.asked} new asks (limit ${ASKS_MAX}), ${today.answered || 0} answered, ${today.open || 0} still open. A day above the limit usually means a session stopped waiting for the manager.`);
+  // A superseded ask is closed, so the bucket is only named when the day actually has one (today.superseded is undefined
+  // for a ledger line written before this check learned about superseding).
+  const sup = (today.superseded || 0) > 0 ? `, ${today.superseded} superseded` : '';
+  if ((today.asked || 0) > ASKS_MAX) add('owner-asks', `${today.asked} new owner asks in 24 h`, `${today.asked} new asks (limit ${ASKS_MAX}), ${today.answered || 0} answered${sup}, ${today.open || 0} still open. A day above the limit usually means a session stopped waiting for the manager.`);
   if ((today.states?.returned || 0) > LANE_RETURNED_MAX) add('lane-returned', `${today.states.returned} integration requests returned`, `${today.states.returned} of ${today.total || 0} lane requests came back to the requester (limit ${LANE_RETURNED_MAX}). Repeated returns point at a branch that needs a hand.`);
   if ((today.ci?.redMinutes || 0) > CI_RED_MIN_MAX) add('ci-red', `CI red ${today.ci.redMinutes} min in 24 h`, `${today.ci.redTransitions || 0} red tick(s), ${today.ci.greenTransitions || 0} green. Above ${CI_RED_MIN_MAX} min main was unusable for sessions waiting on a deploy.`);
   if (today.box?.diskPct != null && today.box.diskPct > DISK_PCT_MAX) add('disk', `root disk ${today.box.diskPct} %`, `Above ${DISK_PCT_MAX} % on /. health-watch cleans its share; the rest is worktrees, tmp and caches.`);
@@ -188,7 +202,7 @@ export function summarize(today, prev) {
 
   const p = prev || null;
   const rows = [
-    ['owner asks', `${today.asked} (${today.answered} answered, ${today.open} open)`, p ? `${n(p.asked)} (${n(p.answered)} answered)` : 'n/a'],
+    ['owner asks', `${today.asked} (${today.answered} answered${sup}, ${today.open} open)`, p ? `${n(p.asked)} (${n(p.answered)} answered)` : 'n/a'],
     ['decisions for owner', `${today.decisions}`, p ? n(p.decisions) : 'n/a'],
     ['lane merged / deployed', `${today.states.merged} / ${today.states.deployed}`, p ? `${n(p.states?.merged)} / ${n(p.states?.deployed)}` : 'n/a'],
     ['lane returned', `${today.states.returned}`, p ? n(p.states?.returned) : 'n/a'],
