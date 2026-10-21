@@ -72,7 +72,9 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       if (pids.length) { job.kind = 'tree'; job.pids = pids.slice(0, 20); job.label = refs.run ? `run ${refs.run}` : 'job'; if (tb && pids.some((p) => DETACHED_RE.test(String(tb.args.get(p) || '')))) job.detached = true; }
     }
     // a harness-owned task is never detached, even if the pane text happens to contain an ampersand or "tmux new-session -d"
-    job.detached = job.harnessOwned ? false : (detached || job.detached || false);
+    // a lane request is told to the session by the lane itself (integration-notify.js): the words nohup / setsid / "&" in the pane (or in a
+    // reply that merely discusses them) do not make it a detached job
+    job.detached = job.harnessOwned || job.kind === 'integration' ? false : (detached || job.detached || false);
     return job;
   }
 
