@@ -203,7 +203,7 @@ const pausedOf = (n) => !!state.status[n]?.paused;
 const filterStateOf = (n) => (pausedOf(n) ? 'paused' : displayStateOf(n, state.status));
 const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held || null);   // the manager's quota hold
 // Pill text for the owner's pause or the manager's hold, '' when neither.
-const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? 'held: quota' : '');
+const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? `held: ${String(heldOf(n).reason || 'quota').slice(0, 48)}` : '');   // the reason is on the pill, so a stopped session says why
 // round 9: a ready window ("ready for N minutes", item 8) and the Remote Control link of a Mac session (item 1) ride next to the priority badge
 const readyChipHtml = (n) => {
   const st = state.status[n] || {}, r = st.ready, rc = st.remote?.remoteControlUrl;
