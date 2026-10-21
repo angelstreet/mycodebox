@@ -37,6 +37,9 @@ const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 // deps: { now, procRoot, table: () => ps table, agentPid: (session) => pid|null, deployState: (id) => { state, finished }|null,
 //         integrationState: async (id) => lane request { state, ... } | null (GET /api/integration/requests/:id),
 //         stillWaiting: (session, stopAt) => bool, send: (session, text) => Promise, record: (event) => Promise, log: (rec) => void }
+// Queue-backed kinds: watched by API state (lane request / deploy queue), never by pid or log, so "detached" is meaningless for them.
+const QUEUE_KINDS = new Set(['integration', 'deploy']);
+
 export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', table = async () => ({ children: new Map(), args: new Map() }), agentPid = async () => null,
   deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
   const watched = new Map();   // session -> { job, stopAt, since, ... }
@@ -72,9 +75,9 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       if (pids.length) { job.kind = 'tree'; job.pids = pids.slice(0, 20); job.label = refs.run ? `run ${refs.run}` : 'job'; if (tb && pids.some((p) => DETACHED_RE.test(String(tb.args.get(p) || '')))) job.detached = true; }
     }
     // a harness-owned task is never detached, even if the pane text happens to contain an ampersand or "tmux new-session -d"
-    // a lane request is told to the session by the lane itself (integration-notify.js): the words nohup / setsid / "&" in the pane (or in a
-    // reply that merely discusses them) do not make it a detached job
-    job.detached = job.harnessOwned || job.kind === 'integration' ? false : (detached || job.detached || false);
+    // a lane request or a deploy is a queue entry watched by API state, with no process to detach: the words nohup / setsid / "&" in the pane
+    // (or in a reply that merely discusses them) do not make it a detached job
+    job.detached = job.harnessOwned || QUEUE_KINDS.has(job.kind) ? false : (detached || job.detached || false);
     return job;
   }
 
