@@ -1975,7 +1975,6 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .parkbox .ph{ font-weight:700; color:var(--ink); margin-bottom:4px; }
 .parkbox .prow{ display:flex; align-items:center; gap:8px; padding:3px 0; }
 .parkbox .prow .pn{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); }
-.parkbox .prow .pm{ color:var(--ink-3); white-space:nowrap; }
 .parkbox .prow .pman{ color:var(--ink-3); font-style:italic; }
 .session-list li .edit.park{ opacity:0; } .session-list li:hover .edit.park{ opacity:1; }
 .tipbox{ position:fixed; z-index:9999; display:none; max-width:320px; padding:5px 9px; font-size:12px; line-height:1.35; color:var(--ink); background:var(--bg-2); border:1px solid var(--ink-3); border-radius:7px; box-shadow:0 4px 14px rgba(0,0,0,.45); pointer-events:none; white-space:pre-wrap; }
