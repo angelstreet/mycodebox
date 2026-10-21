@@ -533,6 +533,10 @@ test('gitFacts: only supabase-style calls and qualified SQL in code are read', a
     'uses table "public.other_sql" that no schema or migration creates', 'uses table "public.sql_thing" that no schema or migration creates',
     'uses table "py_thing" that no schema or migration creates'].sort());   // one object, one reason: a name is reported as the code wrote it
 });
+test('gitFacts: Buffer.from / Array.from with a string literal is not a table', async () => {
+  const facts = await gitFacts({ cwd: schemaRepo({ 'src.js': "const b = Buffer.from('ready'); const a = Array.from('abc'); const c = Uint8Array.from('x');\n" }), branch: 'feat' });
+  assert.deepEqual(facts.tableUses, []);
+});
 test('gitFacts: test files and docs never contribute a table', async () => {
   const files = { 'test/a.test.js': USE_JS, 'tests/b.py': "sb.table('py_thing')\n", 'lib/c_test.py': "sb.table('x')\n",
     'd.spec.ts': USE_JS, 'docs/notes.md': "`.from('doc_thing')`\n", '__tests__/e.js': USE_JS };

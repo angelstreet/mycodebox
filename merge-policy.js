@@ -363,7 +363,7 @@ const SCHEMA_USE_EXT = /\.(?:m?[jt]sx?|py)$/i;
 const SCHEMA_SKIP_FILE = /(?:^|\/)(?:tests?|__tests__)\/|(?:_test\.py|\.(?:test|spec)\.[cm]?[jt]sx?)$/i;
 // .table('x') / .from("x"), and SQL inside a code string only when schema-qualified: an unqualified FROM in prose or in a JS
 // `from` clause is far too common to read as a table (import x from 'a.b' included).
-const USE_CALL = /\.(?:table|from)\s*\(\s*(['"])([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\1/g;
+const USE_CALL = /(?<!\b(?:Buffer|Array|Uint\d+Array|Int\d+Array|Float\d+Array|Object|Observable|Symbol)\s*)\.(?:table|from)\s*\(\s*(['"])([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\1/g;
 const USE_SQL = /\b(?:from|into|update|join)\s+([A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*)/gi;
 // "users" and "public.users" are one object; any other schema is not this repo's (auth.users, storage.objects live outside it).
 const tableKey = (name) => {
