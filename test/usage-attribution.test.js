@@ -159,3 +159,28 @@ test('init compaction keeps ledger rows older than the backfill window, deduped 
   assert.equal(rows.find((r) => r.id === 'o1').usage.output, 5, 'last line for an id wins');
   assert.ok(!ing.ledger.has('o1'), 'old rows are kept on disk, not loaded into the live window');
 });
+
+test('label: a live Claude session is labelled with its own tmux session (from ~/.claude/sessions), not the nearest pane in the same folder; a wrong sticky label is corrected', async () => {
+  const { dir, cfg, stateDir } = await setup();
+  cfg.claudeSessionsDir = join(dir, 'sessions');
+  await fs.mkdir(join(cfg.claudeDir, 'p'), { recursive: true }); await fs.mkdir(cfg.claudeSessionsDir, { recursive: true });
+  const sid = '11111111-2222-3333-4444-555555555555';
+  const row = (id, ts) => JSON.stringify({ type: 'assistant', sessionId: sid, cwd: '/work/shared', timestamp: new Date(ts).toISOString(),
+    message: { id, model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 }, content: [] } }) + '\n';
+  await fs.writeFile(join(cfg.claudeDir, 'p', `${sid}.jsonl`), row('msg_1', NOW - 60000));
+  await fs.writeFile(join(cfg.claudeSessionsDir, '42.json'), JSON.stringify({ pid: 42, sessionId: sid, cwd: '/work/shared', tmux: 'manager:@6.%6' }));
+  await fs.writeFile(join(cfg.claudeSessionsDir, 'half.json'), '{"pid":');
+  // two panes share the folder; the helper pane's activity is the nearest to the row, the real one is further away
+  const panes = [{ name: 'manager-restart', cwd: '/work/shared', activity: NOW - 59000 }, { name: 'manager', cwd: '/work/shared', activity: NOW - 600000 }];
+  const ing = createIngester(cfg, { ...hooks, tmuxPanes: async () => panes }); await ing.init(false);
+  await ing.tick();
+  assert.equal((await ledger(cfg))[0].label, 'manager');
+  // a trace that already carries the wrong sticky tmux label is corrected on its next row
+  const st = JSON.parse(await fs.readFile(cfg.offsetsFile, 'utf8')); st.traceLabel = Object.fromEntries(Object.keys(st.traceLabel).map((k) => [k, { label: 'manager-restart', tmux: true }]));
+  await fs.writeFile(cfg.offsetsFile, JSON.stringify(st));
+  const ing2 = createIngester(cfg, { ...hooks, tmuxPanes: async () => panes }); await ing2.init(false);
+  await fs.appendFile(join(cfg.claudeDir, 'p', `${sid}.jsonl`), row('msg_2', NOW - 30000));
+  await ing2.tick();
+  const rows = await ledger(cfg);
+  assert.equal(rows[rows.length - 1].label, 'manager');
+});

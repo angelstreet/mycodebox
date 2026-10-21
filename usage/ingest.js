@@ -32,6 +32,7 @@ export function defaults(env = process.env) {
     publicKey: env.LANGFUSE_PUBLIC_KEY || '',
     secretKey: env.LANGFUSE_SECRET_KEY || '',
     claudeDir: env.CLAUDE_PROJECTS_DIR || join(home, '.claude/projects'),
+    claudeSessionsDir: env.CLAUDE_SESSIONS_DIR || join(home, '.claude/sessions'),
     codexDir: env.CODEX_SESSIONS_DIR || join(home, '.codex/sessions'),
     minimaxDb: env.MINIMAX_DB || join(home, '.minimax/v2/sqlite/runtime-state.sqlite'),
     minimaxModel: env.MINIMAX_DEFAULT_MODEL || 'MiniMax-M3',   // the runtime table stores no model; this is its configured default
@@ -199,6 +200,23 @@ export async function gitProject(cwd) {
     const worktree = gitDir && commonDir && gitDir !== commonDir;
     return project || basename(worktree ? dirname(commonDir) : top);
   } catch { return null; }
+}
+
+// The tmux session a live Claude session runs in, read from the `tmux` field ("name:@win.%pane") of ~/.claude/sessions/<pid>.json:
+// exact, unlike the folder guess below (several sessions share one folder). Map of sessionId -> tmux session name.
+export async function claudeTmuxSessions(dir) {
+  const out = new Map();
+  let names = [];
+  try { names = await fs.readdir(dir); } catch { return out; }
+  for (const n of names) {
+    if (!n.endsWith('.json')) continue;
+    try {
+      const j = JSON.parse(await fs.readFile(join(dir, n), 'utf8'));
+      const name = typeof j.tmux === 'string' ? j.tmux.split(':')[0] : '';
+      if (j.sessionId && name) out.set(j.sessionId, name);
+    } catch { /* half-written or gone */ }
+  }
+  return out;
 }
 
 async function tmuxPanes() {
@@ -569,9 +587,14 @@ export function createIngester(cfg, hooks = {}) {
     // tmux session names: only for traces with a live record; closest pane activity wins when several share a cwd
     const newest = new Map();
     for (const r of fresh) if (!newest.get(r.trace) || r.ts > newest.get(r.trace).ts) newest.set(r.trace, r);
-    let panes = null;
+    let panes = null, exact = null;
     for (const [trace, r] of newest) {
       if (r.agent === 'manager') { nextState.traceLabel[trace] = { label: r.session, tmux: true }; continue; }
+      if (r.agent === 'claude' && cfg.now() - r.ts < LIVE_MS) {   // a live Claude session names its own tmux session: wins over the folder guess, even a sticky wrong one
+        exact = exact || await claudeTmuxSessions(cfg.claudeSessionsDir);
+        const name = exact.get(r.session);
+        if (name) { nextState.traceLabel[trace] = { label: name, tmux: true }; continue; }
+      }
       if (nextState.traceLabel[trace] && nextState.traceLabel[trace].tmux) continue;
       if (cfg.now() - r.ts < LIVE_MS && r.cwd) {
         panes = panes || await panesOf();
