@@ -17,9 +17,9 @@
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/sessions          → {name, agent, cwd, priority?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
-//   POST /api/sessions/:name/park   → record the Claude conversation, /exit, kill the tmux session (refuses when not idle / lease held / job running)
+//   POST /api/sessions/:name/park   → record the conversation (Claude id / Codex id / MiniMax cwd), quit the agent (/exit, /quit), kill the tmux session (refuses when not idle / lease held / job running)
 //   (auto) a Claude session archived in the Claude app (Remote Control code 4090 in its transcript, no bridge) is parked every 30 s when done and lease-free; manager.json autoParkArchived:false turns it off
-//   POST /api/sessions/:name/resume → recreate the tmux session in the same folder and run `claude --resume <id>`
+//   POST /api/sessions/:name/resume → recreate the tmux session in the same folder and run `claude --resume <id>` / `codex resume <id>` / `mcode -c`
 //   GET  /api/parking               → { cap, live, over, candidates[], parked[], manual[], ramSavedMb } (manual notes read from <STATE_DIR>/parked.json, never counted in ramSavedMb or in parked)
 //   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
 //   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
@@ -132,7 +132,7 @@ import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
-import { createClaudeIndex, claudeOfPane, minimaxOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { createSendQueue, planSend, MAX_PER_SESSION as SEND_QUEUE_MAX } from './send-queue.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
@@ -1510,9 +1510,11 @@ async function killSession(name, confirm) {
 }
 
 // ---------------------------------------------------------------------------
-// Session cap + parking (parking.js): park = record the Claude conversation, /exit, kill tmux; resume = new tmux + claude --resume.
+// Session cap + parking (parking.js): park = record the conversation, quit the agent, kill tmux; resume = new tmux + the agent's resume command.
 // ---------------------------------------------------------------------------
 const claudeIndex = createClaudeIndex({ dir: process.env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions') });
+// Codex keeps one rollout per session under ~/.codex/sessions/YYYY/MM/DD (no per-pane file); CODEX_SESSIONS_DIR overrides the root.
+const codexSessionsDir = process.env.CODEX_SESSIONS_DIR || join(homedir(), '.codex', 'sessions');
 const parking = createParking({
   file: join(STATE_DIR, 'parked-sessions.json'),
   tmux: {
@@ -1533,11 +1535,14 @@ async function parkFacts(name) {
   const idx = await claudeIndex.get(true);
   const pane = panes.get(name);
   const claude = claudeOfPane(pane?.pid || 0, table, idx);
-  // MiniMax (minimax-code / mcode) is the other agent we park; no session file, so cwd comes from the pane.
-  const minimax = claude ? null : minimaxOfPane(pane?.pid || 0, table, pane?.cwd || HOME);
+  // MiniMax (minimax-code / mcode) and Codex (`codex`) have no per-pane session file: cwd comes from the pane, and Codex's
+  // conversation id from its newest rollout whose session meta names that cwd (both async lookups, so a file read cannot
+  // fail the poll loop).
+  const codex = claude ? null : await codexOfPane(pane?.pid || 0, table, pane?.cwd || HOME, codexSessionsDir).catch(() => null);
+  const minimax = (claude || codex) ? null : minimaxOfPane(pane?.pid || 0, table, pane?.cwd || HOME);
   // Dead session: the agent exited or crashed and the pane is a bare shell (bash/zsh/sh). Still parkable — its last
   // conversation id comes from the resolver (Claude's own project transcripts) and there is nothing to /exit.
-  const dead = !!pane && !claude && !minimax && !agentFromTree(pane.pid, table) && SHELLS.has(pane.cmd);
+  const dead = !!pane && !claude && !minimax && !codex && !agentFromTree(pane.pid, table) && SHELLS.has(pane.cmd);
   let sessionId = null, sessionCwd = null;
   // The transcript's own directory: a dead pane is often not in it any more (shell back at $HOME, deleted worktree), and
   // parking that cwd would resume the conversation in the wrong place.
@@ -1548,14 +1553,14 @@ async function parkFacts(name) {
   let leases = null;
   if (lz?.ok) leases = leasesOfSession(lz.leases, [name, claude?.info?.name || '']);
   let rssMb = null;
-  const agentPid = claude?.pid || minimax?.pid || (dead ? pane?.pid : null);
+  const agentPid = claude?.pid || codex?.pid || minimax?.pid || (dead ? pane?.pid : null);
   if (agentPid) { try { rssMb = Math.round(Number((await exec('ps', ['-o', 'rss=', '-p', String(agentPid)])).stdout.trim()) / 1024); } catch {} }
   const rw = reporter.detail(name);
   return {
-    claude, minimax, dead, cwd: sessionCwd || pane?.cwd || null, sessionId,
+    claude, minimax, codex, dead, cwd: sessionCwd || pane?.cwd || null, sessionId,
     state: st?.state || null, attached: !!sess?.attached, reporterWaiting: !!(rw && reporter.waitingNow(name, 0)),
     backgroundWork: rw?.lastTurn?.backgroundWork || 0,
-    busy: claude ? busyChildren(claude.pid, table) : (minimax ? busyChildren(minimax.pid, table) : []),
+    busy: claude ? busyChildren(claude.pid, table) : (codex ? busyChildren(codex.pid, table) : (minimax ? busyChildren(minimax.pid, table) : [])),
     leases, rssMb, priority: sessionMeta.priority(name),
   };
 }
@@ -1595,10 +1600,10 @@ async function autoParkTick() {
 async function resumeSession(name) {
   const rec = await parking.get(name);
   if (!rec) throw httpError(404, 'not parked');
-  // Claude entries have no `agent` field (legacy); MiniMax entries store agent: 'minimax'. Dispatch on that.
-  const isMinimax = rec.agent === 'minimax';
-  const base = isMinimax ? AGENT_CMDS.minimax : AGENT_CMDS.claude;
-  const trustAgent = isMinimax ? 'minimax' : 'claude';
+  // Claude entries have no `agent` field (legacy); MiniMax entries store agent:'minimax', Codex agent:'codex'. Dispatch on that.
+  const agent = rec.agent === 'minimax' || rec.agent === 'codex' ? rec.agent : 'claude';
+  const base = AGENT_CMDS[agent];
+  const trustAgent = agent;
   const out = await parking.resume(name, {
     base,
     validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
 
 import { join } from 'node:path';
-import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes, isWatcher, rcArchivedInTail, transcriptFile, autoParkArchived } from '../parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, codexOfPane, codexPidsUnder, codexMetaOf, findCodexSessionId, codexResumeCommand, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes, isWatcher, rcArchivedInTail, transcriptFile, autoParkArchived } from '../parking.js';
 import { tmp } from './helpers-tmp.js';
 
 const table = (rows) => { // rows: [pid, ppid, args]
@@ -160,7 +160,7 @@ test('dead park keeps the other refusals: lease held, busy children, no lease re
   assert.match(h.p.checks({ ...dead, busy: [{ pid: 1, args: 'sleep 9' }] })[0], /child process/);
   assert.match(h.p.checks({ ...dead, leases: null })[0], /vpt-lease/);
   assert.match(h.p.checks({ ...dead, attached: true })[0], /attached/);
-  assert.match(h.p.checks({ claude: null, minimax: null })[0], /no Claude or MiniMax/);   // no dead flag -> unchanged refusal
+  assert.match(h.p.checks({ claude: null, minimax: null })[0], /no Claude, Codex or MiniMax/);   // no dead flag -> unchanged refusal
   await assert.rejects(h.p.park('D', { ...dead, leases: [{ id: 'L' }] }, { claudeAlive: h.isAlive }), (e) => e.status === 409);
   assert.deepEqual(h.log, []);
 });
@@ -234,7 +234,7 @@ test('checks for a minimax session: busy / lease / attached / reporter refusals;
   const { p, facts } = mmHarness();
   assert.deepEqual(p.checks(facts), []);
   const bad = (patch) => p.checks({ ...facts, ...patch });
-  assert.match(bad({ minimax: null })[0], /no Claude or MiniMax/);
+  assert.match(bad({ minimax: null })[0], /no Claude, Codex or MiniMax/);
   assert.match(bad({ state: 'working' })[0], /board state/);
   assert.match(bad({ attached: true })[0], /attached/);
   assert.match(bad({ reporterWaiting: true })[0], /pending/);
@@ -384,4 +384,136 @@ test('exit menu with a real child: sends 3 (Stay), reports the reason, does not 
   await assert.rejects(h.p.park('s', h.facts, h.opts), (e) => e.status === 409 && /npm test/.test(e.reasons[0]));
   assert.deepEqual(h.sent.filter((x) => x !== '/exit'), ['3']);
   assert.equal(await h.p.get('s'), null);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Codex: the pane is found through the process tree, the conversation through its rollout file.
+// ---------------------------------------------------------------------------------------------
+// A temp ~/.codex/sessions tree: `rollouts` writes rollout-<name>.jsonl under <dir>/YYYY/MM/DD with a first line
+// holding the session meta, and an explicit mtime so "newest wins" is deterministic (no sleeping in tests).
+function rollout(sessionsDir, { day = '2026/10/20', id, cwd, at = 1000, tail = '', flat = false } = {}) {
+  const dir = join(sessionsDir, day);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `rollout-2026-10-20T10-00-00-${id}.jsonl`);
+  const meta = { id, cwd, originator: 'codex_cli_rs', cli_version: '0.0.0' };
+  const line = flat ? JSON.stringify({ sessionId: id, cwd }) : JSON.stringify({ timestamp: '2026-10-20T10:00:00.000Z', type: 'session_meta', payload: meta });
+  writeFileSync(file, line + '\n' + tail);
+  utimesSync(file, at / 1000, at / 1000);
+  return file;
+}
+
+test('codexMetaOf reads the session meta off the first line (payload or flat record), ignores junk', () => {
+  assert.deepEqual(codexMetaOf('{"type":"session_meta","payload":{"id":"abc","cwd":"/w"}}'), { sessionId: 'abc', cwd: '/w' });
+  assert.deepEqual(codexMetaOf('{"sessionId":"old","cwd":"/w"}'), { sessionId: 'old', cwd: '/w' });   // older layout
+  assert.equal(codexMetaOf('{not json'), null);
+  assert.equal(codexMetaOf('{"type":"session_meta","payload":{"cwd":"/w"}}'), null);                  // no id
+});
+
+test('codexPidsUnder finds the codex binary, skips a `bash -c codex` wrapper, and nothing else matches', () => {
+  const t = table([[10, 1, 'tmux pane shell'], [11, 10, 'bash -c codex; exec bash -l'], [12, 11, '/home/u/.local/bin/codex --dangerously-bypass-approvals-and-sandbox']]);
+  assert.deepEqual(codexPidsUnder(10, t), [12]);                       // pid 11 is the wrapper: parking waits on the real agent
+  assert.deepEqual(codexPidsUnder(10, table([[10, 1, 'tmux pane'], [11, 10, 'codex --dangerously-bypass-approvals-and-sandbox']])), [11]);
+  assert.deepEqual(codexPidsUnder(10, table([[10, 1, 'bash'], [11, 10, 'claude --dangerously-skip-permissions']])), []);
+});
+
+test('findCodexSessionId picks the newest rollout of the pane cwd; another cwd is ignored', async () => {
+  const dir = tmp('cx-sessions-');
+  rollout(dir, { id: 'other-newer', cwd: '/w/other', at: 9000 });
+  rollout(dir, { id: 'ours-old', cwd: '/w', at: 1000 });
+  rollout(dir, { id: 'ours-new', cwd: '/w', at: 5000 });
+  assert.equal((await findCodexSessionId({ sessionsDir: dir, cwd: '/w' })).sessionId, 'ours-new');
+  assert.equal((await findCodexSessionId({ sessionsDir: dir, cwd: '/w/other' })).sessionId, 'other-newer');
+  assert.equal(await findCodexSessionId({ sessionsDir: dir, cwd: '/w/unknown' }), null);       // nothing for this pane
+  assert.equal(await findCodexSessionId({ sessionsDir: join(dir, 'nope'), cwd: '/w' }), null);  // missing tree
+  // Only the first line is read: a huge conversation body does not matter, and a cwd later in the file cannot win over the meta.
+  rollout(dir, { id: 'ours-big', cwd: '/w', at: 7000, tail: ('{"type":"event_msg","payload":{"cwd":"/elsewhere"}}\n').repeat(5000) });
+  assert.equal((await findCodexSessionId({ sessionsDir: dir, cwd: '/w' })).sessionId, 'ours-big');
+  assert.equal(await findCodexSessionId({ sessionsDir: dir, cwd: '/elsewhere' }), null);        // the body cwd never counts
+});
+
+test('codexOfPane: a codex pid in the tree + the id from the sessions tree; no codex or no id', async () => {
+  const dir = tmp('cx-pane-');
+  rollout(dir, { id: 'sid-1', cwd: '/w' });
+  const t = table([[10, 1, 'tmux pane shell'], [11, 10, 'bash -c codex; exec bash -l'], [12, 11, '/usr/local/bin/codex --dangerously-bypass-approvals-and-sandbox']]);
+  const found = await codexOfPane(10, t, '/w', dir);
+  assert.equal(found.pid, 12);
+  assert.equal(found.sessionId, 'sid-1');
+  assert.equal(found.cwd, '/w');
+  assert.equal(found.args, '/usr/local/bin/codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(await codexOfPane(10, table([[10, 1, 'bash']]), '/w', dir), null);            // no codex process
+  assert.equal((await codexOfPane(10, t, '/w/elsewhere', dir)).sessionId, null);            // codex, but no rollout for this cwd
+  const missing = await codexOfPane(10, t, '/w', join(dir, 'missing'));                     // no sessions tree: process found, nothing to resume
+  assert.equal(missing.pid, 12);
+  assert.equal(missing.sessionId, null);
+});
+
+// Codex harness: same shape as mmHarness(), the pane's agent is `codex` and the conversation id is known.
+function cxHarness({ exits = true, sessionId = 'cx-sid', hasCtrlC = true } = {}) {
+  const dir = tmp('pk-cx-');
+  const log = [];
+  let alive = true, exists = true;
+  const tmux = {
+    exists: async () => exists,
+    kill: async (n) => { log.push('kill ' + n); exists = false; },
+    sendText: async (n, t) => log.push('text ' + t),
+    sendEnter: async () => { log.push('enter'); if (exits) alive = false; },
+    ...(hasCtrlC ? { sendCtrlC: async () => log.push('ctrlc') } : {}),
+    create: async (n, cwd) => { log.push('create ' + cwd); exists = true; },
+  };
+  const p = createParking({ file: join(dir, 'parked.json'), tmux, exitWaitMs: 50, pollMs: 5, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) });
+  const facts = { codex: { pid: 12, cwd: '/w', args: 'codex --dangerously-bypass-approvals-and-sandbox', sessionId }, state: 'idle', attached: false, reporterWaiting: false, backgroundWork: 0, busy: [], leases: [], rssMb: 180, priority: 'P1' };
+  return { p, log, facts, file: join(dir, 'parked.json'), isAlive: async () => alive };
+}
+
+test('checks for a codex session: ok when it has an id; a busy child, a held lease, a missing id all refuse', () => {
+  const { p, facts } = cxHarness();
+  assert.deepEqual(p.checks(facts), []);
+  const bad = (patch) => p.checks({ ...facts, ...patch });
+  assert.match(bad({ codex: null })[0], /no Claude, Codex or MiniMax/);
+  assert.match(bad({ codex: { ...facts.codex, sessionId: null } })[0], /no resumable codex session id/);
+  assert.match(bad({ state: 'working' })[0], /board state/);
+  assert.match(bad({ attached: true })[0], /attached/);
+  assert.match(bad({ busy: [{ pid: 1, args: 'sleep 9' }] })[0], /child process/);
+  assert.match(bad({ leases: null })[0], /vpt-lease/);
+  assert.match(bad({ leases: [{ id: 'L' }] })[0], /holds vpt-lease: L/);
+});
+
+test('codex park refuses a busy pane and does not touch tmux', async () => {
+  const h = cxHarness();
+  await assert.rejects(h.p.park('S', { ...h.facts, busy: [{ pid: 30, args: 'npm run build' }] }, { claudeAlive: h.isAlive }),
+    (e) => e.status === 409 && /running child process: npm run build/.test(e.reasons[0]));
+  assert.deepEqual(h.log, []);
+  assert.ok(!existsSync(h.file));
+});
+
+test('codex park: records agent + sessionId, /quit, kills tmux; resume runs `codex resume <id>` in the recorded cwd', async () => {
+  const h = cxHarness();
+  const rec = await h.p.park('S', h.facts, { claudeAlive: h.isAlive });
+  assert.equal(rec.agent, 'codex');
+  assert.equal(rec.sessionId, 'cx-sid');
+  assert.equal(rec.cwd, '/w');
+  assert.deepEqual(h.log, ['text /quit', 'enter', 'kill S']);            // Codex quits on /quit, not /exit
+  const stored = JSON.parse(readFileSync(h.file, 'utf8')).parked.S;
+  assert.equal(stored.agent, 'codex');
+  assert.equal(stored.sessionId, 'cx-sid');
+  const started = [];
+  const out = await h.p.resume('S', { base: 'codex --dangerously-bypass-approvals-and-sandbox', start: async (n, r, cmd) => started.push([n, r.cwd, cmd]) });
+  assert.deepEqual(started, [['S', '/w', 'codex --dangerously-bypass-approvals-and-sandbox resume cx-sid']]);
+  assert.deepEqual(h.log, ['text /quit', 'enter', 'kill S', 'create /w']);
+  assert.equal(out.cmd, 'codex --dangerously-bypass-approvals-and-sandbox resume cx-sid');
+  assert.deepEqual(JSON.parse(readFileSync(h.file, 'utf8')).parked, {});
+});
+
+test('codex park: /quit did not take -> Ctrl-C twice then kill tmux anyway', async () => {
+  const h = cxHarness({ exits: false });
+  const rec = await h.p.park('S', h.facts, { claudeAlive: h.isAlive });
+  assert.equal(rec.agent, 'codex');
+  assert.deepEqual(h.log, ['text /quit', 'enter', 'ctrlc', 'ctrlc', 'kill S']);
+});
+
+test('codexResumeCommand keeps the launch flags and refuses a tampered id', () => {
+  assert.equal(codexResumeCommand({ base: 'codex --dangerously-bypass-approvals-and-sandbox', sessionId: 'abc-123' }), 'codex --dangerously-bypass-approvals-and-sandbox resume abc-123');
+  assert.equal(codexResumeCommand({ base: 'codex', sessionId: 's' }), 'codex resume s');
+  assert.throws(() => codexResumeCommand({ base: 'codex', sessionId: 'x; rm -rf /' }), /invalid resume session id/);
+  assert.throws(() => codexResumeCommand({ base: 'codex', sessionId: null }), /invalid resume session id/);
 });

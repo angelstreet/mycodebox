@@ -9,8 +9,13 @@
 // MiniMax uses `mcode` (AGENT_CMDS.minimax in server.js: `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode`).
 // There's no per-pane session file for MiniMax, so parking records only the cwd / agent / args / priority; resume reuses
 // `mcode -c` to continue the most recent session in that cwd.
+//
+// Codex (`codex`) has no per-pane file either: the pane is found through the process tree (codexPidsUnder) and the
+// conversation through its rollout file under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl — the newest one whose session
+// meta (first line) records the pane's cwd. `sessionsDir` is injected so tests point it at a temp tree. It quits on
+// `/quit` and resumes with `codex resume <sessionId>`.
 
-import { readdir, readFile, writeFile, rename, mkdir } from 'node:fs/promises';
+import { readdir, readFile, writeFile, rename, mkdir, open, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { isPriority } from './public/prio.js';
 
@@ -94,9 +99,104 @@ export function claudeOfPane(panePid, table, index) {
   return null;
 }
 
+// Pids under `root` (breadth first, depth <= 8) whose args look like the codex CLI.
+export function codexPidsUnder(root, table) {
+  const out = [];
+  const seen = new Set();
+  let level = [root];
+  for (let d = 0; level.length && d < 8; d++) {
+    const next = [];
+    for (const p of level) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      const a = table.args.get(p) || '';
+      if (/(?:^|\/)codex(?:\s|$)/.test(a)) out.push(p);
+      next.push(...(table.children.get(p) || []));
+    }
+    level = next;
+  }
+  return out;
+}
+
+// First line of a file, read with a bounded buffer: a rollout is megabytes, its session meta is on line 1.
+async function firstLine(path, maxBytes = 65536) {
+  let h;
+  try { h = await open(path, 'r'); } catch { return ''; }
+  try {
+    const b = Buffer.alloc(maxBytes);
+    const { bytesRead } = await h.read(b, 0, maxBytes, 0);
+    const nl = b.subarray(0, bytesRead).indexOf(0x0a);
+    return b.subarray(0, nl < 0 ? bytesRead : nl).toString('utf8').trim();
+  } catch { return ''; } finally { await h.close().catch(() => {}); }
+}
+
+// Session meta of one rollout file's first line: { sessionId, cwd } or null.
+export function codexMetaOf(line) {
+  let j;
+  try { j = JSON.parse(line); } catch { return null; }
+  const p = j?.payload || j;                       // {type:'session_meta', payload:{...}}; tolerate a flat record
+  const id = p?.id ?? p?.session_id ?? p?.sessionId;
+  if (typeof id !== 'string' || !id) return null;
+  return { sessionId: id, cwd: typeof p?.cwd === 'string' ? p.cwd : null };
+}
+
+// Newest file under <sessionsDir>/YYYY/MM/DD (depth <= 4), newest first by mtime.
+async function rolloutFilesNewestFirst(dir, depth = 0) {
+  if (depth > 4) return [];
+  let names;
+  try { names = await readdir(dir); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    const p = join(dir, n);
+    if (CODEX_ROLLOUT_RE.test(n)) { try { out.push({ p, at: (await stat(p)).mtimeMs }); } catch { /* gone */ } }
+    // The date folders are numeric segments (2026 / 10 / 20, or one dashed 2026-10-20); anything else is not a session day.
+    else if (/^(?:\d{4}|\d{2}|\d{4}-\d{2}-\d{2})$/.test(n)) out.push(...await rolloutFilesNewestFirst(p, depth + 1));
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
+
+// The Codex conversation id of a pane: the newest rollout under `sessionsDir` whose session meta records `cwd`.
+// Returns { sessionId, cwd } (the rollout's own cwd, so a pane that moved still resumes where it ran) or null.
+export async function findCodexSessionId({ sessionsDir, cwd, maxFiles = 40 }) {
+  if (!sessionsDir) return null;
+  const want = cwd ? stripDeleted(cwd) : null;
+  for (const f of (await rolloutFilesNewestFirst(sessionsDir)).slice(0, maxFiles)) {
+    const meta = codexMetaOf(await firstLine(f.p));
+    if (!meta) continue;
+    if (want && (!meta.cwd || stripDeleted(meta.cwd) !== want)) continue;   // another pane's conversation
+    return meta;
+  }
+  return null;
+}
+
+// The Codex of a pane: the first codex pid in its tree plus the conversation that ran in the pane's cwd.
+// sessionId null = a codex process with no rollout we can resume (park then refuses, like a Claude without an id).
+export async function codexOfPane(panePid, table, cwd, sessionsDir) {
+  const pid = codexPidsUnder(panePid, table)[0];
+  if (!pid) return null;
+  const hit = await findCodexSessionId({ sessionsDir, cwd }).catch(() => null);
+  return { pid, cwd: hit?.cwd || cwd || null, args: table.args.get(pid) || '', sessionId: hit?.sessionId || null };
+}
+
 // mcode keeps its own helper as a child of every MiniMax session: `node --input-type=module --eval` with an inline
 // `import { spawn } from "node:child_process"`. Counted as work, it made every MiniMax park fail (2026-10-15).
 const MCODE_HELPER_RE = /--input-type=module --eval\s+import \{ spawn \} from "node:child_process"/;
+// A pane whose cwd no longer exists (deleted worktree) keeps that marker in the path.
+const stripDeleted = (p) => String(p || '').replace(/ \(deleted\)$/, '');
+
+// Codex (the `codex` CLI) keeps one rollout file per session under ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl,
+// like Claude's per-pane session file but with no pid in it: the pane is matched through the process tree, the conversation
+// through its recorded cwd. Only the first line is read (the session meta: {type:'session_meta', payload:{id, cwd, ...}}).
+export const CODEX_ROLLOUT_RE = /^rollout-[^/\\]*\.jsonl$/;
+
+// Codex resume takes the session id as a plain positional argument after its own launch flags. A tampered stored id is
+// refused here (400) rather than run, the same guard as resumeCommand's.
+export function codexResumeCommand({ base, sessionId }) {
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) {
+    throw Object.assign(new Error('invalid resume session id'), { status: 400 });
+  }
+  return `${base} resume ${sessionId}`;
+}
 // Child processes of the agent pid that are not MCP servers or the agent's own helper: a running background command / job.
 export function busyChildren(pid, table) {
   return (table.children.get(pid) || []).map((c) => ({ pid: c, args: table.args.get(c) || '' }))
@@ -213,16 +313,16 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
   return {
     async list() { await load(); return Object.values(data.parked).sort((a, b) => b.parkedAt - a.parkedAt); },
     async get(name) { await load(); return Object.hasOwn(data.parked, name) ? data.parked[name] : null; },
-    // facts = { claude: {pid, info, args}|null, minimax: {pid, cwd, args}|null, state, attached, reporterWaiting, backgroundWork, busy[], leases[]|null, rssMb, priority }
-    // Exactly one of facts.claude / facts.minimax is set; either way, the same idle / busy / lease checks apply. Returns the list of reasons
+    // facts = { claude: {pid, info, args}|null, minimax: {pid, cwd, args}|null, codex: {pid, cwd, args, sessionId}|null, state, attached, reporterWaiting, backgroundWork, busy[], leases[]|null, rssMb, priority }
+    // Exactly one of facts.claude / facts.minimax / facts.codex is set; either way, the same idle / busy / lease checks apply. Returns the list of reasons
     // the session may not be parked (empty = ok).
     checks(facts) {
       const r = [];
-      const agent = facts.claude ? 'claude' : facts.minimax ? 'minimax' : null;
+      const agent = facts.claude ? 'claude' : facts.codex ? 'codex' : facts.minimax ? 'minimax' : null;
       // Dead session: no agent process left in the pane (it exited or crashed, the pane is a bare shell). Parkable
       // only when the caller says so with facts.dead — a pane we know nothing about is still refused.
-      if (!agent && !facts.dead) return ['no Claude or MiniMax process in this pane'];
-      // Per-agent prerequisite checks (Claude only knows its own idle / sessionId; MiniMax is idle by the board's `state`).
+      if (!agent && !facts.dead) return ['no Claude, Codex or MiniMax process in this pane'];
+      // Per-agent prerequisite checks (Claude and Codex know their own idle / sessionId; MiniMax is idle by the board's `state`).
       // "shell" = the turn is over and only background shells are left; they count below, so only watchers are forgiven.
       const work = (facts.busy || []).filter((c) => !(agent === 'claude' && isWatcher(c.args)));
       if (agent === 'claude') {
@@ -230,6 +330,8 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
         if (st !== 'idle' && !(st === 'shell' && !work.length)) r.push(`Claude status is "${st}", not idle`);
         if (!facts.claude.info.sessionId) r.push('no resumable session id');
       }
+      // Codex has no idle stamp of its own (the board's `state` covers it), but resume needs its conversation id.
+      if (agent === 'codex' && !facts.codex.sessionId) r.push('no resumable codex session id');
       // Shared checks (busy children / lease held / not idle).
       if (facts.state && !['idle', 'done'].includes(facts.state)) r.push(`board state is ${facts.state}`);
       if (facts.attached) r.push('a terminal is attached');
@@ -250,7 +352,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       // Dead session: the agent is already gone, so there is nothing to /exit and nothing to wait for. Record the
       // same shape as a Claude park (so resume is unchanged: new tmux + `claude --resume <id>`) with dead:true, then
       // kill the bare-shell pane. sessionId may be null when no conversation was found; resume then refuses.
-      if (facts.dead && !facts.claude && !facts.minimax) {
+      if (facts.dead && !facts.claude && !facts.minimax && !facts.codex) {
         const rec = { session: name, cwd: facts.cwd || null, sessionId: facts.sessionId || null, claudeName: name, args: '', priority: facts.priority || null, rssMb: facts.rssMb ?? null, lastActivity: null, parkedAt: now(), dead: true };
         data.parked[name] = rec;
         await save();
@@ -293,12 +395,14 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
         }
         await tmux.kill(name);
       } else {
-        // MiniMax: park = record {agent:'minimax', cwd, args, priority, rssMb, parkedAt}; /exit; wait; Ctrl-C fallback; kill tmux.
-        const m = facts.minimax;
-        rec = { session: name, agent: 'minimax', cwd: m.cwd || null, args: (m.args || '').slice(0, 400), priority: facts.priority || null, rssMb: facts.rssMb ?? null, parkedAt: now() };
+        // MiniMax and Codex: park = record {agent, cwd, args, priority, rssMb, parkedAt} (+ sessionId for Codex, which
+        // resumes with `codex resume <id>`); the exit keystroke, the wait, the Ctrl-C fallback and the kill are the same.
+        const m = facts.codex || facts.minimax;
+        const agent = facts.codex ? 'codex' : 'minimax';
+        rec = { session: name, agent, cwd: m.cwd || null, ...(facts.codex ? { sessionId: m.sessionId } : {}), args: (m.args || '').slice(0, 400), priority: facts.priority || null, rssMb: facts.rssMb ?? null, parkedAt: now() };
         data.parked[name] = rec;
         await save();
-        await tmux.sendText(name, '/exit');
+        await tmux.sendText(name, agent === 'codex' ? '/quit' : '/exit');   // Codex quits on /quit, Claude on /exit
         await sleep(300);
         await tmux.sendEnter(name);
         const t0 = now();
@@ -317,6 +421,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
     },
     // Recreates the tmux session in the recorded folder and starts the agent. Claude: resumeCommand(base, rec.args, rec.claudeName, rec.sessionId).
     // MiniMax: `${base} -c` (reuses AGENT_CMDS.minimax + ' -c' to continue the latest session in the recorded cwd).
+    // Codex: `${base} resume <sessionId>` (codexResumeCommand: its launch flags, then the conversation id).
     async resume(name, { base, start, validate = async () => {} }) {
       await load();
       if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,40}$/.test(name)) throw err(400, 'invalid session name');
@@ -328,6 +433,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       if (await tmux.exists(name)) throw err(409, 'a tmux session with that name already exists');
       let cmd;
       if (rec.agent === 'minimax') cmd = `${base} -c`;
+      else if (rec.agent === 'codex') cmd = codexResumeCommand({ base, sessionId: rec.sessionId });
       else if (!rec.sessionId) throw err(400, 'this parked session has no conversation id to resume (the agent had already died); start a new session in its folder instead');
       else cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId });
       await tmux.create(name, rec.cwd);
