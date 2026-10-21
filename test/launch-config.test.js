@@ -11,7 +11,9 @@ test('listener and create/manager/resume command defaults skip permission prompt
   assert.equal(commands.claude, 'claude --dangerously-skip-permissions');
   assert.equal(commands.codex, 'codex --dangerously-bypass-approvals-and-sandbox');
   assert.equal(commands.minimax, 'PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode');
-  assert.equal(managerCommand({}), 'claude --dangerously-skip-permissions --model opus --remote-control manager -n manager');
+  assert.equal(managerCommand({}), 'claude --dangerously-skip-permissions --model sonnet --remote-control manager -n manager');
+  assert.equal(managerCommand({ MANAGER_MODEL: 'opus' }), 'claude --dangerously-skip-permissions --model opus --remote-control manager -n manager', 'MANAGER_MODEL overrides');
+  assert.match(managerCommand({ MANAGER_MODEL: 'x; rm -rf /' }), /--model sonnet /, 'an unsafe value falls back to sonnet');
   // recorded process args never add a second bypass flag
   assert.equal(resumeCommand({ base: commands.claude, args: 'claude --dangerously-skip-permissions --permission-mode bypassPermissions --model opus', sessionId: 'fake-id' }), 'claude --dangerously-skip-permissions --model opus --resume fake-id');
   assert.deepEqual(launchWarnings({}), []);
@@ -31,12 +33,12 @@ test('explicit overrides win verbatim and only HOST draws a warning', () => {
   assert.equal(launchConfig({ AGENT_CMD_CLAUDE: '' }).commands.claude, '');
   assert.equal(launchConfig({ AGENT_CMD_CODEX: '' }).commands.codex, '');
   assert.equal(launchConfig({ AGENT_CMD_CODEX: 'codex' }).commands.codex, 'codex');
-  assert.equal(managerCommand({ AGENT_CMD_CLAUDE: 'claude' }), 'claude --model opus --remote-control manager -n manager');
+  assert.equal(managerCommand({ AGENT_CMD_CLAUDE: 'claude' }), 'claude --model sonnet --remote-control manager -n manager');
 });
 
 test('manager script command helper uses configured CLI without live operations', () => {
   const output = execFileSync(process.execPath, ['scripts/manager-command.js'], { env: { AGENT_CMD_CLAUDE: '/fake/claude' }, encoding: 'utf8' });
-  assert.equal(output, '/fake/claude --model opus --remote-control manager -n manager');
+  assert.equal(output, '/fake/claude --model sonnet --remote-control manager -n manager');
 });
 
 test('server create/resume use the launch config and pre-accept folder trust (best effort)', () => {

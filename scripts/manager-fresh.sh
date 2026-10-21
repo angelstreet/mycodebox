@@ -2,7 +2,7 @@
 # Restart the manager agent in a FRESH Claude session (short context = cheap wakes). Its state lives in files
 # (manager.json, manager-actions.jsonl, manager-events.jsonl + its last-seen, MANAGER.md), so nothing that matters is lost.
 # The relaunch reuses AGENT_CMD_CLAUDE (default skips permission prompts: owner decision 2026-10-11) and pre-accepts folder trust.
-# Waits (up to 60 min) until the manager is idle with no draft, /exit, relaunch on Opus, send the restart kickoff.
+# Waits (up to 60 min) until the manager is idle with no draft, /exit, relaunch on Sonnet (MANAGER_MODEL overrides), send the restart kickoff.
 #   scripts/manager-fresh.sh            (cron: nightly)
 #   scripts/manager-fresh.sh --now      (manager-watch.sh: relaunch a dead manager without the wait and without /exit)
 set -euo pipefail

@@ -165,13 +165,13 @@ test('T03: the manager command helper keeps an explicit override verbatim and it
   const run = (env) => spawnSync(process.execPath, ['scripts/manager-command.js'], { cwd: new URL('.', ROOT).pathname, env, encoding: 'utf8' });
   const clean = run({});
   assert.equal(clean.status, 0);
-  assert.equal(clean.stdout, 'claude --dangerously-skip-permissions --model opus --remote-control manager -n manager');
+  assert.equal(clean.stdout, 'claude --dangerously-skip-permissions --model sonnet --remote-control manager -n manager');
   assert.equal(clean.stderr, '');
   const marker = 'synthetic-private-value-9f2a';
   const override = `/opt/wrap/claude --dangerously-skip-permissions --token ${marker}`;
   const r = run({ AGENT_CMD_CLAUDE: override, HOST: '192.0.2.10' });
   assert.equal(r.status, 0);
-  assert.equal(r.stdout, `${override} --model opus --remote-control manager -n manager`);   // the owner's choice stands
+  assert.equal(r.stdout, `${override} --model sonnet --remote-control manager -n manager`);   // the owner's choice stands
   assert.doesNotMatch(r.stderr, /AGENT_CMD_CLAUDE/);   // bypass flags no longer draw a warning
   assert.match(r.stderr, /HOST/);
   assert.ok(!r.stderr.includes(marker) && !r.stderr.includes('192.0.2.10') && !r.stderr.includes('/opt/wrap'), 'diagnostics never carry values');
