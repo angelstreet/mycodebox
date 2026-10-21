@@ -906,7 +906,7 @@ function renderParking() {
         h += `<div class="pnote">${pk.over} over the limit. Park the idlest to free memory:</div>`;
         for (const c of pk.candidates) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">idle ${idleText(c.idleMin)}</span></div>`;
       }
-      for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)}">${escapeHtml(p.session)}</span><span class="pm">${p.rssMb || '?'} MB</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
+      for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)} · ${p.rssMb || '?'} MB">${escapeHtml(p.session)}</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
     }
   }
   if (pk.manual && pk.manual.length) {
