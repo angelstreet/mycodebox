@@ -204,10 +204,13 @@ export async function managerSessionLabels(stateDir) {
 }
 
 // The manager's transcripts: the usage ledger labels every row with its tmux session name, so the Claude session ids whose
-// (non-subagent) rows carry a label from managerSessions are the manager's; each is `<claudeDir>/<project dir>/<id>.jsonl`.
+// (non-subagent) rows carry a label from managerSessions (or `<name>-<suffix>`) are the manager's; each is `<claudeDir>/<project dir>/<id>.jsonl`.
 // Fallback (no ledger): none. Returns [{ session, file }].
 export async function findManagerTranscripts({ stateDir = stateDirDefault(), claudeDir = claudeDirDefault(), labels = null } = {}) {
-  const want = new Set(labels || await managerSessionLabels(stateDir));
+  const wantList = labels || await managerSessionLabels(stateDir);
+  // A relaunched or restarted manager runs in its own tmux session ("manager-restart", "manager-sonnet"): the ledger label is
+  // that name, so match the configured names and their "<name>-<suffix>" variants, or its turns never reach the wakes log.
+  const want = { has: (label) => typeof label === 'string' && wantList.some((w) => label === w || label.startsWith(`${w}-`)) };
   const ids = new Set();
   let text = '';
   try { text = await readFile(join(stateDir, 'usage-ledger.jsonl'), 'utf8'); } catch { return []; }

@@ -126,3 +126,17 @@ test('writeWakesFile with a day keeps other days; startWakesLogger refreshes tod
   await lg.run(); lg.stop();
   assert.deepEqual(readFileSync(join(dir, 'manager-wakes.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).n), [1, 3]);
 });
+
+test('a manager relaunched in its own tmux session (manager-restart) is still the manager: its turns reach the wakes log', async () => {
+  const root = tmp('ghosty-wakes-label-');
+  const stateDir = join(root, 'state'), claudeDir = join(root, 'projects');
+  const a = 'aaaaaaaa-2222-3333-4444-555555555555', b = 'bbbbbbbb-2222-3333-4444-555555555555', c = 'cccccccc-2222-3333-4444-555555555555', d = 'dddddddd-2222-3333-4444-555555555555';
+  mkdirSync(stateDir); mkdirSync(join(claudeDir, '-proj'), { recursive: true });
+  writeFileSync(join(stateDir, 'usage-ledger.jsonl'), [
+    { agent: 'claude', session: a, label: 'manager-restart', subagent: false }, { agent: 'claude', session: b, label: 'manager-sonnet', subagent: false },
+    { agent: 'claude', session: c, label: 'managerial', subagent: false }, { agent: 'claude', session: d, label: 'atlas-faq', subagent: false },
+  ].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  for (const id of [a, b, c, d]) writeFileSync(join(claudeDir, '-proj', `${id}.jsonl`), '');
+  const got = (await findManagerTranscripts({ stateDir, claudeDir })).map((x) => x.session).sort();
+  assert.deepEqual(got, [a, b].sort(), 'manager-<suffix> counts; "managerial" and other sessions do not');
+});
