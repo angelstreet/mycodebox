@@ -176,3 +176,59 @@ test('review: never-seen pid is unseeable (flagged, never woken); seen-then-gone
   const h4 = harness({ table: async () => ({ children: new Map([[10, [11]]]), args: new Map([[11, 'sleep 5']]) }) });
   assert.equal(await h4.jobs.hasLiveChild('x', { text: 'sleep 5' }), false);
 });
+
+// Regression 2026-10-21: three `atlas-faq` alerts said "waits on a job the harness cannot see — its job runs
+// detached (nohup / setsid / disown / &)". Every one was wrong. A `bg_<id>` handle is the agent harness's OWN
+// background task; the harness owns it and wakes the session, so ghosty must neither flag it nor try to watch it.
+// The pane text also matched DETACHED_RE incidentally (the pane echoes commands that contain `&` / `tmux new-session -d`),
+// which is why the message blamed detachment.
+const BG_LINES = [
+  'smoke check atlas_chat run (task bg_147d1f4b-c747-47fc-a5ba-e7ff71c79432, log: smoke one FAQ question — won\'t poll; harness will wake me when done.',
+  'smoke check v2 (atlas_chat on patched deploy; task bg_8e48277d-ba6e-4a4f-94de-41411ef0b9fe).',
+  'STATUS: waiting: integration patch feat/task-152-faq-impl (task bg_c4673138-959d-4ded-aaeb-fbaea62761e8).',
+];
+test('a harness bg_ task is recognised as its own job kind and never flagged as unseen', async () => {
+  for (const text of BG_LINES) {
+    const h = harness();
+    const r = await h.jobs.watch('atlas-faq', { text, stopAt: 's' });
+    assert.equal(r.kind, 'task', text);
+    assert.equal(r.harnessOwned, true, text);
+    assert.equal(r.detached, false, text);          // not detached: the harness owns it
+    assert.equal(r.unseen, false, text);
+    assert.equal(h.feed.length, 0, `no "cannot see" alert for: ${text}`);
+    assert.ok(h.logs.some((l) => l.type === 'own_job_watch' && l.harnessOwned === true), 'logged as harness-owned');
+  }
+});
+test('a harness task is never woken or typed into: the agent\'s own harness does that', async () => {
+  const h = harness();
+  await h.jobs.watch('atlas-faq', { text: BG_LINES[1], stopAt: 's' });
+  h.advance(60 * 60 * 1000);
+  assert.deepEqual(await h.jobs.tick(), [], 'no wake');
+  assert.equal(h.sent.length, 0, 'nothing typed into the session');
+});
+test('detachment in the PANE text does not condemn a harness task (the pane echoes commands with & )', async () => {
+  const h = harness();
+  const pane = '$ tmux new-session -d -s helper sleep 600\n$ python3 run.py & disown';
+  const r = await h.jobs.watch('atlas-faq', { text: BG_LINES[2], stopAt: 's', paneText: pane });
+  assert.equal(r.kind, 'task');
+  assert.equal(r.detached, false, 'DETACHED_RE matched the pane text, not the job');
+  assert.equal(h.feed.length, 0);
+});
+test('a genuinely detached job is still flagged (the fix does not weaken the real rule)', async () => {
+  const h = harness();
+  const r = await h.jobs.watch('sess-det', { text: 'waiting: nohup python3 run.py & (pid 777)', stopAt: 's' });
+  assert.equal(r.detached, true);
+  assert.equal(h.feed.length, 1);
+  assert.match(h.feed[0].title, /sess-det waits on a job the harness cannot see/);
+  // and an unidentified wait is still flagged too
+  const h2 = harness();
+  const u = await h2.jobs.watch('sess-unknown', { text: 'waiting on the nightly run', stopAt: 's' });
+  assert.equal(u.kind, null); assert.equal(h2.feed.length, 1);
+});
+test('a bg_ task is not mistaken for a run id, and an integration id still wins when both are named', async () => {
+  assert.equal(jobRefs(BG_LINES[1]).run, null, 'bg_ is a task handle, not a GitHub run id');
+  assert.equal(jobRefs('integration int-abc123 (task bg_147d1f4b)').integration, 'int-abc123');
+  const h = harness();
+  const r = await h.jobs.watch('sess-int', { text: 'integration int-abc123 (task bg_147d1f4b)', stopAt: 's' });
+  assert.equal(r.kind, 'integration', 'the lane request is what ghosty can actually watch');
+});

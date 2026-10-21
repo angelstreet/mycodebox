@@ -53,6 +53,10 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const detached = refs.detached || DETACHED_RE.test(String(paneText));
     if (refs.integration) { job.kind = 'integration'; job.id = refs.integration; job.label = `integration ${refs.integration}`; }
     else if (refs.deploy) { job.kind = 'deploy'; job.id = refs.deploy; job.label = `deploy ${refs.deploy}`; }
+    // A bg_<id> handle is the agent harness's OWN background task (mcode "Tasks", claude bg_ jobs). The harness that
+    // started it wakes the session when it ends, so ghosty has neither a pid nor a log to watch and must not flag it:
+    // "the harness cannot see it" was wrong, it is the harness that owns it. Recognised here so the flag is not raised.
+    else if (refs.watcher) { job.kind = 'task'; job.id = refs.watcher; job.harnessOwned = true; job.label = `harness task ${refs.watcher}`; job.detached = false; }
     else if (refs.pid) { job.kind = 'pid'; job.pids = [refs.pid]; job.label = `job (pid ${refs.pid})`; }
     else if (refs.path) {
       const abs = isAbsolute(refs.path) ? refs.path : refs.path.startsWith('~/') ? resolve(homedir(), refs.path.slice(2)) : resolve(cwd || '.', refs.path);
@@ -67,7 +71,8 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       if (refs.run && tb) { const named = pids.filter((p) => String(tb.args.get(p) || '').includes(refs.run)); if (named.length) pids = named; }
       if (pids.length) { job.kind = 'tree'; job.pids = pids.slice(0, 20); job.label = refs.run ? `run ${refs.run}` : 'job'; if (tb && pids.some((p) => DETACHED_RE.test(String(tb.args.get(p) || '')))) job.detached = true; }
     }
-    job.detached = detached || job.detached || false;
+    // a harness-owned task is never detached, even if the pane text happens to contain an ampersand or "tmux new-session -d"
+    job.detached = job.harnessOwned ? false : (detached || job.detached || false);
     return job;
   }
 
@@ -78,13 +83,14 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     if (job.kind === 'pid' || job.kind === 'tree') { w.seenRunning = job.pids.some((p) => alive(p)); if (!w.seenRunning) { job.unseen = true; } }
     watched.set(session, w);
     if (job.kind === 'log') await stateOf(w);   // remembers the mtime now: quiet time counts from the stop, not from the first tick
-    if (!job.kind || job.detached || job.unseen) {
+    // a harness-owned task is not flaggable: the agent's own harness wakes it, and ghosty cannot see it either way
+    if ((!job.kind || job.detached || job.unseen) && !job.harnessOwned) {
       w.flagged = true;
       await record({ key: `job:unseen:${session}`, title: `${session} waits on a job the harness cannot see`,
         body: job.detached ? `its job runs detached (nohup / setsid / disown / &), so the manager cannot tell when it ends: ${job.text}` : job.unseen ? `the pid named in its STATUS is not running on this host, so the manager cannot tell when the job ends: ${job.text}` : `STATUS names no pid, log or run id and the agent has no child process: ${job.text}`, url: `/?s=${encodeURIComponent(session)}`, priority: 'default' }).catch(() => {});
     }
-    log({ type: 'own_job_watch', session, job: job.kind || 'unknown', label: job.label, detached: !!job.detached });
-    return { kind: job.kind, label: job.label, detached: !!job.detached, unseen: !!job.unseen, pid: job.pids?.[0] ?? null };
+    log({ type: 'own_job_watch', session, job: job.kind || 'unknown', label: job.label, detached: !!job.detached, harnessOwned: !!job.harnessOwned });
+    return { kind: job.kind, label: job.label, detached: !!job.detached, unseen: !!job.unseen, harnessOwned: !!job.harnessOwned, pid: job.pids?.[0] ?? null };
   }
   const forget = (session) => { watched.delete(session); };
   const jobOf = (session) => watched.get(session)?.job || null;
@@ -129,6 +135,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     for (const [session, w] of [...watched]) {
       if (!stillWaiting(session, w.stopAt)) { watched.delete(session); continue; }
       if (!w.job.kind || w.job.unseen) continue;
+      if (w.job.harnessOwned) continue;   // the agent's own harness wakes it; ghosty has nothing to watch and must not type into it
       if (!canSend(session)) continue;   // a draft in the input box, a paused session: try again next tick
       if (now() - w.since > maxAgeH * 3600e3) { watched.delete(session); log({ type: 'own_job_giveup', session, job: w.job.label }); continue; }
       const s = await stateOf(w);
