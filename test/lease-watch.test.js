@@ -130,7 +130,7 @@ test('central events (post cut-over): only lease lifecycle is recorded, with the
   await w.load?.();
   await w.poll(); await w.poll();
   assert.deepEqual(f.recorded.map((e) => e.key), ['lease:released', 'lease:narrowed', 'lease:forced', 'lease:downgraded', 'lease:expired']);
-  assert.match(f.recorded[0].title, /^lease released: env-a\/\* \(mac:task-1\)/);
+  assert.match(f.recorded[0].title, /^lease released: env-a\/\* \(agent mac:task-1\)/);
   assert.match(f.recorded[0].body, /purpose: update_core main/);
   assert.match(f.recorded[1].title, /^lease narrowed to host:/);
   assert.match(f.recorded[2].title, /released by the owner/);
