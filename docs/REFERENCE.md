@@ -336,6 +336,23 @@ key via `daily-checks-state.json` (same text inside the window is not repeated; 
 `--dry-run` (report only, no event, no state), `--only <id>`. Keep repository names, term lists and customer names in the
 private config and check scripts, never in this repo.
 
+**Harness health check (`scripts/harness-health-check.js`, owner asked 2026-10-21).** The owner only sees a harness
+regression when he asks for it, so this daily check measures the harness itself over the last 24 h and writes the numbers
+as ONE line (`{date, ...}`) to `<stateDir>/harness-health.jsonl`, then compares with the previous line. It reads local state
+only, read-only, except that appended line: new owner asks and how many were answered (`manager-owner-asks.jsonl`: a line
+with a `question` in the window is an ask, a later line of the same id closes it), decisions taken for the owner
+(`manager-decisions.jsonl`), the lane (`integration/requests.jsonl`: the last record per id, counted by final state, plus
+`approvalRefused`), CI (`ci-watch.jsonl`: red minutes from a red record to the next green, clipped to the window, so a
+streak opened before it is not a day-long outage), the box (`/proc/loadavg`, `MemAvailable` from `/proc/meminfo`, `/`
+disk use as `df` computes it: used / (used + available)) and live sessions (`GET /api/sessions`, best effort: any fetch
+error leaves `sessions: null`, never a fabricated 0). A missing or malformed source counts as 0 and is listed in the
+report as "not found" — a silent zero would read as a healthy day. Findings are only real regressions: owner asks > 3,
+lane returned > 5, CI red > 120 min, disk > 90 %, MemAvailable < 2 GB, any `approvalRefused`. `summary` is one plain line,
+`report` a markdown table today vs previous. The pure parts (`askStats`, `laneStats`, `ciStats`, `summarize`, `prevLine`)
+are tested in `test/harness-health-check.test.js` with fixture files in a temp state dir and an injected sessions fetch.
+It is registered by the manager in the private `daily-checks.json` (id `harness-health`) after review; this repo never
+edits that file.
+
 Fix levels (`fixLevel`, only acted on when the disk check trips): `report` = no fixes; `cleanup` (default) = delete
 `/tmp/claude-1000/<project>/<session-id>/` scratch dirs whose session is not live and older than 2 days, `journalctl
 --user --vacuum-time=7d` (skipped without rights), `npm cache clean --force` when `~/.npm` > 1 GB; `cleanup+orphans`
