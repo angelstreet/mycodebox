@@ -2511,3 +2511,133 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .lv-acts{ flex:1 1 100%; display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; } .lv-auth{ margin-bottom:8px; }
 
 .iv-tail{ flex:1 1 100%; margin:6px 0 0; padding:7px 9px; background:var(--bg-2, var(--bg-3)); border:1px solid var(--line-2); border-radius:8px; font:11px/1.35 ui-monospace, monospace; white-space:pre-wrap; overflow-wrap:anywhere; max-height:200px; overflow:auto; }
+
+/* ----- Usage & cost page (public/usage-view.js, owner request 2026-10-21) -----
+   Full-width tab replacing the cramped usage sheet. Same palette and type scale as the rest of the
+   app; only the layout is new: tiles at the top, real table columns, sections stacked in reading order. */
+.uv-root{ padding:10px 12px 28px; max-width:1100px; margin:0 auto; font-variant-numeric:tabular-nums; }
+.uv-empty{ padding:28px 6px; color:var(--ink-3); }
+
+.uv-head{ position:sticky; top:0; z-index:5; background:var(--bg); padding:8px 0 10px; border-bottom:1px solid var(--line-2); margin-bottom:12px; }
+.uv-head .grow{ flex:1; }
+.uv-tabs{ display:flex; gap:8px; margin-bottom:8px; }
+.uv-tab{ flex:1; height:38px; background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:10px; font:inherit; font-size:14px; }
+.uv-tab.on{ border-color:var(--accent); color:var(--accent); }
+.uv-nav{ display:flex; gap:4px; flex-wrap:wrap; }
+.uv-navb{ background:transparent; color:var(--ink-3); border:0; border-bottom:2px solid transparent; padding:6px 10px; font:inherit; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
+.uv-navb.on{ color:var(--accent); border-bottom-color:var(--accent); }
+.uv-lf{ color:var(--ink-2); font-size:11px; text-decoration:none; align-self:center; }
+.uv-lf:hover{ color:var(--accent); }
+
+.uv-filters{ display:flex; gap:8px; margin:0 0 14px; flex-wrap:wrap; }
+.uv-filters select{ flex:1 1 160px; min-width:0; height:36px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:9px; padding:0 10px; font:inherit; font-size:13px; }
+
+/* headline tiles */
+.uv-tiles{ display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-bottom:20px; }
+.uv-t{ display:flex; flex-direction:column; gap:3px; padding:12px 14px; background:var(--bg-2); border:1px solid var(--line); border-radius:12px; }
+.uv-l{ font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); }
+.uv-v{ font-size:24px; line-height:1.2; color:var(--ink); }
+.uv-s{ font-size:11px; color:var(--ink-2); display:flex; gap:6px; flex-wrap:wrap; align-items:baseline; }
+.uv-d{ font-size:11px; } .uv-d.up{ color:var(--waiting); } .uv-d.dn{ color:var(--working); }
+.uvvp{ color:var(--accent); }
+
+/* sections */
+.uv-sec{ margin:0 0 26px; }
+.uv-sec h2{ display:flex; align-items:baseline; gap:10px; margin:0 0 10px; font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-2); }
+.uv-sec h2 .dim{ font-weight:400; letter-spacing:0; text-transform:none; }
+.uv-note{ font-size:11px; color:var(--ink-3); padding:4px 2px; }
+
+/* quality */
+.uv-quality{ display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px; align-items:stretch; margin-bottom:8px; }
+.uv-q{ display:flex; flex-direction:column; gap:2px; padding:10px 12px; background:var(--bg-2); border:1px solid var(--line); border-radius:10px; }
+.uv-q b{ font-size:18px; }
+.uv-qscore{ display:flex; flex-direction:column; justify-content:center; gap:2px; padding:10px 14px; background:var(--bg-2); border:1px solid var(--line); border-radius:10px; }
+.uv-qscore b{ font-size:28px; color:var(--accent); }
+.uv-qbars{ display:flex; align-items:flex-end; gap:2px; height:34px; margin-top:6px; }
+.uv-qb{ flex:1; background:var(--ink-3); opacity:.5; border-radius:1px; } .uv-qb.last{ background:var(--accent); opacity:1; }
+
+/* tables: agent / session rows */
+.uv-th, .uv-tr{ display:grid; grid-template-columns:minmax(0,1fr) 84px 64px 64px 64px 64px 90px; align-items:center; gap:8px; }
+.uv-th{ padding:6px 8px; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); border-bottom:1px solid var(--line-2); }
+.uv-th .uv-c, .uv-tr .uv-c{ text-align:right; }
+.uv-tr{ padding:9px 8px; border-bottom:1px solid var(--line); cursor:default; }
+.uv-tr[data-agent], .uv-tr.go{ cursor:pointer; }
+.uv-tr[data-agent]:hover, .uv-tr.go:hover{ background:var(--bg-2); }
+.uv-tr.out{ box-shadow:inset 3px 0 0 var(--waiting); }
+.uv-name{ display:flex; align-items:center; gap:8px; min-width:0; }
+.uv-name b{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.uv-name .dim{ font-size:10px; white-space:nowrap; }
+.uv-tr .tk{ color:var(--ink); }
+.uv-out{ grid-column:1 / -1; font-size:11px; color:var(--waiting); }
+.uv-models{ grid-column:1 / -1; background:var(--bg-2); border-radius:8px; padding:4px 6px; margin:6px 0; }
+.uv-tr.sub{ padding:6px 8px; border-bottom:1px solid var(--line); grid-template-columns:minmax(0,1fr) 84px 64px 64px 64px 64px 90px; }
+.uv-tr.sub:last-child{ border-bottom:0; }
+
+/* projects */
+.uv-pr{ padding:10px 8px; border-bottom:1px solid var(--line); }
+.uv-prl{ display:flex; align-items:center; gap:10px; }
+.uv-prl b:first-child{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.uv-bar{ height:5px; background:var(--bg-3); border-radius:3px; margin:6px 0 4px; overflow:hidden; }
+.uv-bar i{ display:block; height:100%; border-radius:3px; }
+.uv-prs{ font-size:11px; color:var(--ink-3); }
+
+/* over time chart. The axis labels sit inside the plot on the left, so the plot needs room above the chips
+   (the top gridline must not collide with the control row) and the x label lives below the bar, not on it. */
+.uv-ctrl{ display:flex; gap:6px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+.uv-ctrl .grow{ flex:1; }
+.uv-chip{ background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2); border-radius:999px; padding:4px 12px; font:inherit; font-size:11px; }
+.uv-chip.on{ border-color:var(--accent); color:var(--accent); }
+.uv-plot{ position:relative; height:190px; margin:0 0 10px; padding-left:52px; }
+.uv-grid{ position:absolute; inset:6px 0 20px 0; }
+.uv-grid span{ position:absolute; left:0; transform:translateY(-50%); font-size:10px; color:var(--ink-3); }
+.uv-bars{ position:absolute; inset:6px 0 0 52px; display:flex; align-items:flex-end; gap:4px; }
+.uv-col{ flex:1; height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; background:transparent; border:0; padding:0; cursor:pointer; }
+.uv-stack{ width:100%; max-width:34px; display:flex; flex-direction:column-reverse; border-radius:3px; overflow:hidden; margin-top:auto; }
+.uv-stack i{ display:block; width:100%; }
+.uv-col.sel .uv-stack{ outline:1px solid var(--accent); }
+.uv-x{ font-size:9px; color:var(--ink-3); height:18px; line-height:18px; text-align:center; }
+.uv-legend{ display:flex; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--ink-2); margin-bottom:10px; }
+.uv-lg{ display:inline-flex; align-items:center; gap:5px; } .uv-lg i{ width:9px; height:9px; border-radius:2px; }
+.uv-panel{ background:var(--bg-2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+.uv-ph{ display:flex; align-items:baseline; gap:10px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+.uv-leg{ display:flex; align-items:center; gap:8px; padding:4px 0; font-size:12px; }
+.uv-leg i{ width:9px; height:9px; border-radius:2px; } .uv-leg .grow{ flex:1; }
+
+/* trending */
+.uv-trow{ display:grid; grid-template-columns:10px minmax(0,1fr) 124px 96px; align-items:center; gap:10px; padding:9px 4px; border-bottom:1px solid var(--line); }
+.uv-tn{ display:flex; flex-direction:column; min-width:0; }
+.uv-tn b{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.uv-tn .dim{ font-size:10px; }
+.uv-tv{ display:flex; flex-direction:column; align-items:flex-end; }
+.uv-tv .up{ color:var(--waiting); } .uv-tv .dn{ color:var(--working); } .uv-tv .dim{ font-size:10px; }
+
+/* quota */
+.uv-plan{ padding:10px 12px; background:var(--bg-2); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; }
+.uv-qh{ display:flex; align-items:center; gap:8px; margin-bottom:8px; } .uv-qh .grow{ flex:1; } .uv-qh .dim{ font-size:10px; }
+.uv-qrow{ display:grid; grid-template-columns:70px minmax(60px,1fr) 48px minmax(120px,auto); align-items:center; gap:10px; padding:5px 0; font-size:12px; }
+.uv-qbar{ height:6px; background:var(--bg-3); border-radius:3px; overflow:hidden; }
+.uv-qbar i{ display:block; height:100%; background:var(--working); } .uv-qbar i.warn{ background:var(--accent); } .uv-qbar i.crit{ background:var(--waiting); }
+.uv-qrow .dim{ font-size:10px; text-align:right; }
+
+@media (max-width:720px){
+  /* The agent table is 7 columns on desktop; on a phone the numbers must not wrap into a 2x3 cluster.
+     The name goes on its own line, and the figures become a labelled strip underneath. */
+  .uv-th{ display:none; }
+  .uv-tr{ display:block; padding:10px 8px; }
+  .uv-tr .uv-td{ display:inline-block; text-align:left; padding:1px 0; }
+  .uv-tr .uv-name{ display:flex; width:100%; margin-bottom:5px; }
+  .uv-tr .uv-c{ text-align:left; margin-right:14px; }
+  .uv-tr .uv-c[data-l]::before{ content:attr(data-l) " "; color:var(--ink-3); font-size:10px; }
+  .uv-tr.out .uv-name{ margin-bottom:5px; }
+  .uv-out{ display:block; }
+  .uv-qrow{ grid-template-columns:60px minmax(40px,1fr) 44px; }
+  .uv-qrow .dim{ grid-column:1 / -1; text-align:left; }
+  .uv-trow{ grid-template-columns:10px minmax(0,1fr) 84px; }
+  .uv-trow .uv-tv{ grid-column:2 / -1; align-items:flex-start; }
+  .uv-plot{ height:150px; }
+}
+
+/* the session table has 4 columns: give "in / out" room so it stays on one line */
+.uv-th-s, .uv-tr-s{ grid-template-columns:minmax(0,1fr) minmax(90px,150px) 78px 150px; }
+.uv-tr.sub.uv-tr-s{ grid-template-columns:minmax(0,1fr) minmax(90px,150px) 78px 150px; }
+@media (max-width:720px){ .uv-th-s, .uv-tr-s{ display:block; } }

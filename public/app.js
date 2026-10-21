@@ -3432,6 +3432,102 @@ function openUsage() {
   });
 }
 els.usageBtn.onclick = openUsage;
+document.getElementById('usagePageBtn').onclick = openUsagePage;
+
+// ----- Usage & cost page (/?usage=1): public/usage-view.js is loaded on first use.
+// The sheet above stays as it was; this is the readable full-width version (owner request 2026-10-21: "usage and cost is too small").
+async function openUsagePage() {
+  let uv;
+  try { uv = await import('/usage-view.js'); } catch { toast('usage page unavailable', 2500); return; }
+  openSheet('Usage & cost', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('usage', 'uv-sheet');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+
+    // ui is the page's own view state; tab/view survive a reload through localStorage like the sheet's
+    const ui = {
+      view: lsGet('ghosty.usageView', 'overview'),
+      dim: lsGet('ghosty.usageDim', 'model'),
+      range: Number(lsGet('ghosty.usageRange', '7')) || 7,
+      selDay: null,
+      f: { agent: '', project: '', q: '' },
+      openAgents: new Set(),
+    };
+    let tab = lsGet('ghosty.usageTab', 'today') === '14d' ? '14d' : 'today';
+    const v = { usage: null, score: null, jev: null, quota: state.quota, rows: [], poll: null, armed: false };
+
+    const live = (name) => !!state.status?.[name];
+    const rows = () => (v.usage ? sessionRows(v.usage, tab) : []);
+    const sortRows = (rs) => rs.sort((x, y) => (!!y.outlier - !!x.outlier) || (y.tokens - x.tokens));
+
+    const fillOptions = () => {
+      const rs = rows();
+      for (const sel of body.querySelectorAll('[data-f]')) {
+        const key = sel.dataset.f;
+        const vals = [...new Set(rs.map((r) => (key === 'q' ? r.session : r[key])))].sort();
+        const cur = ui.f[key];
+        if (cur && !vals.includes(cur)) vals.push(cur);
+        sel.innerHTML = `<option value="">all ${key === 'agent' ? 'agents' : key === 'project' ? 'projects' : 'sessions'}</option>`
+          + vals.map((x) => `<option value="${escapeHtml(x)}"${x === cur ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('');
+      }
+    };
+
+    const paint = () => {
+      if (!v.usage) { body.innerHTML = '<div class="uv-empty">loading…</div>'; return; }
+      const r = sortRows(rows().filter((x) => (!ui.f.agent || x.agent === ui.f.agent) && (!ui.f.project || x.project === ui.f.project) && (!ui.f.q || x.session === ui.f.q)));
+      body.innerHTML = uv.pageHtml({
+        usage: v.usage, tab, score: v.score, jev: v.jev, quota: v.quota,
+        ui, rows: r, live, links: state.links || {},
+      });
+      fillOptions();
+    };
+
+    const load = async () => {
+      try {
+        const r = await fetch('/api/usage');
+        v.usage = r.ok ? await r.json() : null;
+        if (!r.ok) v.usage = null;
+      } catch { v.usage = null; }
+      // the scorecard and the Jev tab feed the tiles and the quality row; either may be missing, so neither blocks the page
+      await Promise.all([
+        fetch('/api/manager/scorecard?days=14').then((r) => (r.ok ? r.json() : null)).then((j) => { v.score = j; }).catch(() => {}),
+        fetch('/api/jev-ai').then((r) => (r.ok ? r.json() : null)).then((j) => { v.jev = j; }).catch(() => {}),
+      ]);
+      v.quota = state.quota;
+      if (body.isConnected) paint();
+    };
+
+    foot.onclick = (e) => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (a === 'close') { clearInterval(v.poll); close(); } else if (a === 'refresh') load();
+    };
+
+    body.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-tab]');
+      if (t) { tab = t.dataset.tab; lsSet('ghosty.usageTab', tab); ui.selDay = null; paint(); return; }
+      const vw = e.target.closest('[data-view]');
+      if (vw) { ui.view = vw.dataset.view; lsSet('ghosty.usageView', ui.view); paint(); return; }
+      const cd = e.target.closest('[data-cday]');
+      if (cd) { ui.selDay = ui.selDay === cd.dataset.cday ? null : cd.dataset.cday; paint(); return; }
+      const dmn = e.target.closest('[data-dim]');
+      if (dmn) { ui.dim = dmn.dataset.dim; lsSet('ghosty.usageDim', ui.dim); paint(); return; }
+      const rg = e.target.closest('[data-range]');
+      if (rg) { ui.range = Number(rg.dataset.range); lsSet('ghosty.usageRange', String(ui.range)); paint(); return; }
+      const ag = e.target.closest('.uv-tr[data-agent]');
+      if (ag) { const n = ag.dataset.agent; if (!ui.openAgents.delete(n)) ui.openAgents.add(n); paint(); return; }
+      const o = e.target.closest('[data-open]');
+      if (o) { clearInterval(v.poll); close(); focusSession(o.dataset.open); openCard(o.dataset.open); }
+    });
+    body.addEventListener('change', (e) => {
+      const f = e.target.closest('[data-f]');
+      if (f) { ui.f[f.dataset.f] = f.value; paint(); }
+    });
+
+    paint();
+    load();
+    v.poll = setInterval(() => { if (!body.isConnected) clearInterval(v.poll); else load(); }, 30000);
+  });
+}
 
 // ----- Jev decisions page (⋮ menu, /?decisions=1) -----
 function openDecisions() {
@@ -5057,6 +5153,7 @@ if ('serviceWorker' in navigator) {
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
   if (new URLSearchParams(location.search).get('decided')) openDecidedView();
   if (new URLSearchParams(location.search).get('leases')) openLeasesView();
+  if (new URLSearchParams(location.search).get('usage-page')) openUsagePage();
   if (new URLSearchParams(location.search).get('integration')) openIntegrationView();
   if (new URLSearchParams(location.search).get('voice')) openVoiceMode();
   const openPlat = ['platforms', 'deploys'].some((k) => new URLSearchParams(location.search).get(k));
