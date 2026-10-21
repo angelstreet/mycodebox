@@ -1482,7 +1482,7 @@ export function observe(s) {
       try { if (await ownJobs.hasLiveChild(s.name, { text: String(final.question || ''), turnStart: s.rep?.turnStart?.() ?? null })) final = { ...final, case: 'own_job_wait', answer: null, autoCase: undefined, ownJob: {} }; } catch (e) { console.error('[manager] live child', e.message); }
     }
     if (ownJobs && !isManagerSession(s.name) && !isRemoteSession(s.name) && (final.case === 'own_job_wait' || (final.case === 'waiting_deploy' && final.deployHint?.id && /^waiting$/i.test(final.status || '')))) {
-      try { const r = await ownJobs.watch(s.name, { text: final.case === 'waiting_deploy' ? `deploy ${final.deployHint.id}` : String(final.question || ''), cwd: s.cwd || null, stopAt: id, paneText: stall.excerpt || '' }); logLater({ type: 'own_job', id, session: s.name, job: r.kind || 'unknown', label: r.label || null, detached: !!r.detached });
+      try { const r = await ownJobs.watch(s.name, { text: final.case === 'waiting_deploy' ? `deploy ${final.deployHint.id}` : String(final.question || ''), cwd: s.cwd || null, stopAt: id, paneText: stall.excerpt || '', agent: s.agent || null }); logLater({ type: 'own_job', id, session: s.name, job: r.kind || 'unknown', label: r.label || null, detached: !!r.detached });
         // a pid that is not running on this host cannot be watched: the owner hears about it instead of the session waiting for ever
         if (r.unseen && final.case === 'own_job_wait') { final = { ...final, case: 'owner_decision' }; escalate(s.name, s.state, final, id, `pid ${r.pid} is not running on this host`); return; } } catch (e) { console.error('[manager] own job', e.message); }
     }

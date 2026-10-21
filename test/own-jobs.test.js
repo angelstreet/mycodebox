@@ -176,3 +176,18 @@ test('review: never-seen pid is unseeable (flagged, never woken); seen-then-gone
   const h4 = harness({ table: async () => ({ children: new Map([[10, [11]]]), args: new Map([[11, 'sleep 5']]) }) });
   assert.equal(await h4.jobs.hasLiveChild('x', { text: 'sleep 5' }), false);
 });
+
+test('a MiniMax session waiting on an mcode background task (bg_<uuid>) is tracked: no feed event, no wake from here; other cases are unchanged', async () => {
+  const id = 'bg_0e7f9ab8-3db9-49f3-84ff-155979b30501';
+  const h = harness();
+  assert.equal(waitsOnOwnJob(`waiting: ${id}`, 'waiting'), true);
+  const r = await h.jobs.watch('atlas-faq', { text: `waiting: ${id} (data load)`, stopAt: 's', agent: 'minimax', paneText: 'nohup python3 x.py &' });
+  assert.equal(r.kind, 'tracked'); assert.equal(r.detached, false); assert.equal(r.unseen, false);
+  assert.equal(h.feed.length, 0, 'no unseen event for an mcode task');
+  assert.equal((await h.jobs.tick()).length, 0); assert.equal(h.sent.length, 0, 'mcode wakes its own session');
+  // a Claude session naming the same text is still unidentified and flagged; a nohup in the STATUS itself stays flagged for minimax too
+  await h.jobs.watch('sess-claude', { text: `waiting: ${id}`, stopAt: 's', agent: 'claude' });
+  assert.equal(h.feed.length, 1);
+  await h.jobs.watch('sess-nohup', { text: `waiting: nohup ./run.sh & ${id}`, stopAt: 's', agent: 'minimax' });
+  assert.equal(h.feed.length, 2);
+});

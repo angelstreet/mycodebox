@@ -11,9 +11,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, sep, isAbsolute } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { sensitivePath } from './merge-policy.js';
-import { jobRefs, hasRef, waitsOnOwnJob, DETACHED_RE } from './job-refs.js';
+import { jobRefs, hasRef, waitsOnOwnJob, mcodeTaskId, DETACHED_RE } from './job-refs.js';
 import { integrationText, isFinal, normRequest } from './integration-notify.js';
-export { jobRefs, hasRef, waitsOnOwnJob };
+export { jobRefs, hasRef, waitsOnOwnJob, mcodeTaskId };
 
 // Descendants of `pid` in a ps table { children: Map<ppid, pid[]>, args: Map<pid, string> }, nearest first, the agent itself excluded.
 export function descendants(pid, table, limit = 40) {
@@ -47,9 +47,13 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     return !(m && (m[1] === 'Z' || m[1] === 'X'));
   };
 
-  async function identify(session, { text, cwd, stopAt, paneText = '' }) {
+  async function identify(session, { text, cwd, stopAt, paneText = '', agent = null }) {
     const refs = jobRefs(text);
     const job = { text: String(text || '').slice(0, 200), refs, kind: null, pids: [], path: null, id: null, label: null };
+    // a MiniMax session waiting on an mcode background task (bg_<uuid>): mcode tracks and wakes it itself. Not detached, not unseen, no event
+    // (unless the STATUS itself says nohup / setsid / &).
+    const bgTask = agent === 'minimax' && !refs.detached ? mcodeTaskId(text) : null;
+    if (bgTask) { job.kind = 'tracked'; job.id = bgTask; job.label = `mcode task ${bgTask}`; return job; }
     const detached = refs.detached || DETACHED_RE.test(String(paneText));
     if (refs.integration) { job.kind = 'integration'; job.id = refs.integration; job.label = `integration ${refs.integration}`; }
     else if (refs.deploy) { job.kind = 'deploy'; job.id = refs.deploy; job.label = `deploy ${refs.deploy}`; }
@@ -71,8 +75,8 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     return job;
   }
 
-  async function watch(session, { text, cwd = null, stopAt = now(), paneText = '' } = {}) {
-    const job = await identify(session, { text, cwd, stopAt, paneText });
+  async function watch(session, { text, cwd = null, stopAt = now(), paneText = '', agent = null } = {}) {
+    const job = await identify(session, { text, cwd, stopAt, paneText, agent });
     const w = { job, stopAt, since: now(), seenRunning: false, lastMtime: null, stableSince: null, flagged: false };
     // a pid or a process tree counts as ended only after it was seen running: a pid that is not alive here (another host, already gone) is unseeable
     if (job.kind === 'pid' || job.kind === 'tree') { w.seenRunning = job.pids.some((p) => alive(p)); if (!w.seenRunning) { job.unseen = true; } }
@@ -128,7 +132,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const woke = [];
     for (const [session, w] of [...watched]) {
       if (!stillWaiting(session, w.stopAt)) { watched.delete(session); continue; }
-      if (!w.job.kind || w.job.unseen) continue;
+      if (!w.job.kind || w.job.unseen || w.job.kind === 'tracked') continue;   // a tracked mcode task wakes its own session
       if (!canSend(session)) continue;   // a draft in the input box, a paused session: try again next tick
       if (now() - w.since > maxAgeH * 3600e3) { watched.delete(session); log({ type: 'own_job_giveup', session, job: w.job.label }); continue; }
       const s = await stateOf(w);

@@ -75,6 +75,9 @@ export function jobRefs(text) {
     detached: DETACHED_RE.test(t),
   };
 }
+// mcode (MiniMax) background tasks: ids bg_<uuid>. mcode tracks and wakes the session on them itself, so they are no detached job.
+const MCODE_TASK_RE = /\bbg_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i;
+export const mcodeTaskId = (text) => { const m = MCODE_TASK_RE.exec(String(text ?? '')); return m ? m[0].toLowerCase() : null; };
 export const hasRef = (r) => !!(r && (r.deploy || r.integration || r.pid || r.path || r.run || r.watcher));
 
 // Does a STATUS blocked / waiting text wait on a job of the session's own (not on the owner)?
@@ -82,6 +85,7 @@ export function waitsOnOwnJob(text, kind = null) {
   const t = String(text ?? '').replace(/\s+/g, ' ').trim();
   if (!t || /\?/.test(t) || OWNER_WORDS.test(t)) return false;
   const r = jobRefs(t);
+  if (mcodeTaskId(t)) return true;   // a named mcode background task is the session's own job
   if (r.deploy) return true;   // "deploy <id>" is the deploy runner's job
   if (r.integration) return true;   // "integration <id>" is the lane's job (own-jobs.js watches the request)
   return (kind === 'waiting' || END_WORDS.test(t)) && (hasRef(r) || JOB_NOUN.test(t));
