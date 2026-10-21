@@ -1073,8 +1073,15 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   .cell .h .pp,
   .cell .h .pz,
   .cell .h .rd{ display:none; }
-  /* QF-12: keep the lock control on the card header on phones — the owner needs it
-     to pin a card while they poke the side list on a phone-sized viewport. */
+  /* Chat-raised 2026-10-21 (chat 1792615165829-f41fbb): on phones there is no
+     grid view, so the lock has nothing to pin against. Drop it and let the
+     fullscreen / open button take its slot — owner uses it to jump from the
+     list row straight into the focused card. */
+  .cell .h .lk, .card-pane .cell .h .lk { display:none !important; }
+  /* The fullscreen / open button is hidden by default inside .card-pane (the
+     card is already fullscreen there); expose it on phones so it remains
+     available regardless of where the user tapped in from. */
+  .card-pane .cell .h .open { display:inline-flex !important; }
   /* Focused card fullscreen: make the .open button a chunky touch target so the owner can
      one-tap into the fullscreen card for better reading (chat-raised 2026-10-08).
      Filled background, 18px icon, 36x36 hit area, accent-colored so it stands out. */
