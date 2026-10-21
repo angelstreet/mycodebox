@@ -146,3 +146,14 @@ test('prune: returns removed=0 when cacheDir is missing (no crash on first boot)
   const r = await t.prune();
   assert.equal(r.removed, 0);
 });
+test('parseRange: byte ranges for iOS audio playback', async () => {
+  const { parseRange } = await import('../tts.js');
+  assert.deepEqual(parseRange('bytes=0-99', 1000), { start: 0, end: 99 });
+  assert.deepEqual(parseRange('bytes=0-', 1000), { start: 0, end: 999 });
+  assert.deepEqual(parseRange('bytes=900-5000', 1000), { start: 900, end: 999 });
+  assert.deepEqual(parseRange('bytes=-100', 1000), { start: 900, end: 999 });
+  assert.equal(parseRange('bytes=2000-', 1000), 'bad');
+  assert.equal(parseRange('bytes=5-2', 1000), 'bad');
+  assert.equal(parseRange(undefined, 1000), null);
+  assert.equal(parseRange('items=0-1', 1000), null);
+});

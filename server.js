@@ -122,7 +122,7 @@ import { createUsage, usageFile } from './usage-view.js';
 import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
-import { createTts } from './tts.js';
+import { createTts, parseRange } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
 import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds, stillStopped, canType, countSent, roundtripsView, noteAnswerer } from './manager.js';
@@ -1897,8 +1897,12 @@ async function handleHttp(req, res) {
     if (!/^[0-9a-f]{16,64}$/i.test(hash)) return json(res, 400, { ok: false, error: 'bad hash' });
     const out = tts.cachePath(hash);
     if (!existsSync(out)) return json(res, 404, { ok: false, error: 'not rendered yet' });
-    res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': statSync(out).size, 'cache-control': 'public, max-age=86400' });
-    createReadStream(out).on('error', () => { try { res.end(); } catch {} }).pipe(res);
+    const size = statSync(out).size, base = { 'content-type': 'audio/wav', 'accept-ranges': 'bytes', 'cache-control': 'public, max-age=86400' };
+    const rg = parseRange(req.headers.range, size);   // iOS Safari needs 206 to play audio
+    if (rg === 'bad') { res.writeHead(416, { ...base, 'content-range': `bytes */${size}` }); return res.end(); }
+    if (rg) res.writeHead(206, { ...base, 'content-length': rg.end - rg.start + 1, 'content-range': `bytes ${rg.start}-${rg.end}/${size}` });
+    else res.writeHead(200, { ...base, 'content-length': size });
+    createReadStream(out, rg ? { start: rg.start, end: rg.end } : undefined).on('error', () => { try { res.end(); } catch {} }).pipe(res);
     return;
   }
   // --- session history (session-history.js): cbsession reports its start here (loopback + reporter token); the rest is read-only ---
