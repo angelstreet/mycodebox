@@ -5,7 +5,7 @@
 
 import { icon, hydrateIcons } from '/icons.js';
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
-import { suggestAgent } from '/policy.js';
+import { suggestAgent, limitStopNote } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
@@ -203,7 +203,7 @@ const pausedOf = (n) => !!state.status[n]?.paused;
 const filterStateOf = (n) => (pausedOf(n) ? 'paused' : displayStateOf(n, state.status));
 const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held || null);   // the manager's quota hold
 // Pill text for the owner's pause or the manager's hold, '' when neither.
-const holdPill = (n) => (pausedOf(n) ? 'paused' : heldOf(n) ? `held: ${String(heldOf(n).reason || 'quota').slice(0, 48)}` : '');   // the reason is on the pill, so a stopped session says why
+const holdPill = (n) => (pausedOf(n) ? 'paused' : limitStopNote(state.status[n]?.stall) || (heldOf(n) ? `held: ${String(heldOf(n).reason || 'quota').slice(0, 48)}` : ''));   // the reason is on the pill, so a stopped session says why
 // round 9: a ready window ("ready for N minutes", item 8) and the Remote Control link of a Mac session (item 1) ride next to the priority badge
 const readyChipHtml = (n) => {
   const st = state.status[n] || {}, r = st.ready, rc = st.remote?.remoteControlUrl;
@@ -2684,7 +2684,7 @@ function syncPill(pp, n) {
   const t = holdPill(n);
   pp.classList.toggle('hidden', !t);
   if (t && pp.textContent !== t) pp.textContent = t;
-  pp.title = heldOf(n) ? `held by the manager: ${heldOf(n).reason} (click to resume)` : 'Paused (click to resume, sends "continue")';
+  pp.title = !pausedOf(n) && !heldOf(n) && limitStopNote(state.status[n]?.stall) ? String(state.status[n].stall.question || '') : heldOf(n) ? `held by the manager: ${heldOf(n).reason} (click to resume)` : 'Paused (click to resume, sends "continue")';
   pp.dataset.pause = n;   // the badge is a resume button: the delegated click handler toggles the pause
 }
 function syncPrioPause(el, n) {
