@@ -111,6 +111,14 @@ resubmits with `integrate request <branch> --approved-by manager`; only the loop
 `merge-decisions.jsonl` and skips only the infra-path reason: secrets, sudoers, systemd units, conflicts and red tests still return it
 (a migration is its own rule, below).
 
+**Approval identity** (2026-10-20). A working session approved its own `update_core` change by passing `--approved-by manager`, so the
+lane checks the requesting `session` against `manager.json` `managerSessions`: an approval (`--approved-by`, and with it
+`--migration-applied`) is honoured **only** when that session is a manager session. Otherwise the request is still queued and
+evaluated as if no approval was given — a floor still returns it — the attempt is stored as
+`approvalRefused: { by, session, at }`, and the manager gets one event `lane:self-approval:<request id>`
+(`<session> passed --approved-by on <branch>`). A coalesce follows the same rule, and repeating the same claim on one request raises
+one event only. Without the `managerSessions` lane option (tests, older wiring) every caller keeps the old behaviour.
+
 ## Migrations merge by effect (Q199, owner 2026-10-20)
 
 The migration floor used to be a path check, so every migration returned the request. It is now read by **effect**. The lane
