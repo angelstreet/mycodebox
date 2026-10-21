@@ -233,12 +233,16 @@ test('a bg_ task is not mistaken for a run id, and an integration id still wins 
   assert.equal(r.kind, 'integration', 'the lane request is what ghosty can actually watch');
 });
 
-test('STATUS waiting on integration <id> is never flagged as detached, even when the pane text mentions nohup / setsid / &', async () => {
+test('STATUS waiting on integration <id> or deploy <id> is never flagged as detached, even when the pane text mentions nohup / setsid / &', async () => {
   const h = harness();
   const pane = 'A nohup, setsid or & in the STATUS line still flags: tmux new-session -d';
   const r = await h.jobs.watch('sess-lane', { text: 'integration int-mvij4wgiaf120b', stopAt: 's', paneText: pane });
   assert.equal(r.kind, 'integration'); assert.equal(r.detached, false);
   assert.equal(h.feed.length, 0, 'no job:unseen event for a lane request');
+  const dep = await h.jobs.watch('sess-dep', { text: 'deploy 3f9a', stopAt: 's', paneText: pane });
+  assert.equal(dep.kind, 'deploy'); assert.equal(dep.detached, false); assert.equal(h.feed.length, 0, 'no event for a deploy-queue entry either');
   const d = await h.jobs.watch('sess-nohup', { text: 'waiting: nohup ./run.sh & (pid 777)', stopAt: 's', paneText: pane });
   assert.equal(d.detached, true); assert.equal(h.feed.length, 1, 'a real detached job still flags');
+  const u = await h.jobs.watch('sess-noref', { text: 'waiting on the nightly run', stopAt: 's', paneText: pane });
+  assert.equal(u.kind, null); assert.equal(h.feed.length, 2, 'no reference at all still flags');
 });
