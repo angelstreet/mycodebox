@@ -133,7 +133,7 @@ test('forbidden filter wins even when Jev says continue (round 13: FORBIDDEN_RE 
   for (const q of ['Should I delete the old branches?', 'OK to copy the new .env to the VM?',
     'Shall I rotate the API key now?', 'Should I add credit to the account?', 'Should I send this to the customer?',
     'Should I drop the old test table from the DB?',
-    'Can I run update_core main --host?', 'Shall I force-push the branch?', 'Ready to apply the migration?']) {
+    'Can I run update_core main --host?', 'Shall I force-push the branch?', 'Ready to apply the destructive migration?']) {
     const s = applyJev(classify(claude(`Everything else is ready.\n${q}`)), 'continue');
     assert.equal(wouldSend(s).send, null, q);
     assert.ok(s.forbidden, q);
@@ -384,12 +384,12 @@ test('a todo panel without a STATUS line above it changes nothing', () => {
 // sudo / systemctl, infra config and tests/CI are manager items and route to the manager, never the owner. The five
 // representative cases:
 test('round 13 case 1: "apply migration 0018 to Neon" -- FORBIDDEN_RE catches it (safety filter); OWNER_FLOOR does not (routing = manager)', () => {
-  const s = classify(claude('All reviews are in.\nShould I apply migration 0018 to Neon?'));
+  const s = classify(claude('All reviews are in.\nShould I apply the destructive migration 0018 to Neon?'));
   assert.equal(s.case, 'owner_decision', 'plain yes/no question is an owner_decision, not a menu');
   // The safety filter (FORBIDDEN_RE) catches migration -- it is never auto-answered.
   assert.ok(s.forbidden, 'migration IS in FORBIDDEN_RE (the safety filter) -- never auto-answered');
   // But the routing floor (OWNER_FLOOR) does NOT match migration -- it routes to the manager, not the owner.
-  assert.equal(ownerFloorMatch('Should I apply migration 0018 to Neon?'), null, 'migration is NOT in OWNER_FLOOR -- routing treats it as a manager item');
+  assert.equal(ownerFloorMatch('Should I apply the destructive migration 0018 to Neon?'), null, 'migration is NOT in OWNER_FLOOR -- routing treats it as a manager item');
   assert.equal(wouldSend(s).send, null);
 });
 
@@ -431,7 +431,7 @@ test('round 13 case 5: a needs-manager STATUS line is the needs_manager case, no
 
 // ---- round 13 regression: FORBIDDEN_RE still catches push-to-main / update_core / sudo / migration -------------
 test('round 13 regression: FORBIDDEN_RE (the safety filter) still matches "push to main", "update_core", "sudo", "migration"', () => {
-  for (const q of ['push to main now', 'git push origin main', 'update_core main --host', 'force-push the branch', 'run sudo apt install', 'apply the migration', 'drop the test table']) {
+  for (const q of ['push to main now', 'git push origin main', 'update_core main --host', 'force-push the branch', 'run sudo apt install', 'apply the destructive migration', 'drop the test table']) {
     assert.ok(forbiddenMatch(q), `FORBIDDEN_RE must catch "${q}" (the safety filter blocks auto-answering)`);
     assert.ok(FORBIDDEN_RE.test(q), `FORBIDDEN_RE.test must catch "${q}"`);
   }

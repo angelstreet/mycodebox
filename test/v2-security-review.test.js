@@ -276,7 +276,7 @@ const FORBIDDEN_QUESTIONS = [
   'Shall I continue and push this to main?', 'Shall I continue and merge the branch into main?', 'Shall I continue and git push?',
   'Shall I continue and force-push?', 'Shall I continue and reset --hard?', 'Shall I continue and delete the old rows?',
   'Shall I continue and remove the folder?', 'Shall I continue and rm -rf dist?', 'Shall I continue and truncate the table?',
-  'Shall I continue and prune the images?', 'Shall I continue and run the migration?', 'Shall I continue and edit .env?',
+  'Shall I continue and prune the images?', 'Shall I continue and run the destructive migration?', 'Shall I continue and edit .env?',
   'Shall I continue and rotate the credentials?', 'Shall I continue and use the password?', 'Shall I continue and read the secret?',
   'Shall I continue and send the bearer header?', 'Shall I continue and paste the API key?', 'Shall I continue and add the ssh key?',
   'Shall I continue and pay the invoice?', 'Shall I continue and buy the domain?', 'Shall I continue and update billing?',

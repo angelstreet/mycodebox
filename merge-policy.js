@@ -339,16 +339,15 @@ export function migrationAdditive(file, addedLines) {
   }
   return { additive: true };
 }
-// The migration floor of a diff (Q199): every migration file in `facts.sensitive` must read additive, and an additive migration needs
-// the manager's approval plus the --migration-applied attestation. -> [] (it may merge) | [reasons].
+// The migration floor of a diff (Q199, narrowed by the owner 2026-10-21): every migration file in `facts.sensitive` must read additive;
+// an additive migration merges with no approval or attestation (the session applies it itself first). Destructive or unreadable
+// ones are returned. approvedBy / migrationApplied are still accepted and ignored. -> [] (it may merge) | [reasons].
 export function migrationReasons(facts, { approvedBy = false, migrationApplied = false } = {}) {
   const files = (facts?.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file);
   if (!files.length) return [];
   const adds = facts?.migrationAdds || {};
   const bad = files.map((file) => [file, migrationAdditive(file, adds[file])]).filter(([, v]) => !v.additive);
   if (bad.length) return bad.map(([file, v]) => `migration is destructive: ${v.reason} in ${file}`);
-  if (!approvedBy) return ['additive migration needs --approved-by manager --migration-applied (objects already in the target DB)'];
-  if (!migrationApplied) return ['additive migration needs --migration-applied (the manager attests the objects already exist in the target DB)'];
   return [];
 }
 const MIGRATION_REASON = /^touches a migration: /;

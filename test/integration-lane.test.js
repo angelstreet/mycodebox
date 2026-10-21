@@ -487,23 +487,25 @@ test('floor: a manager approval skips only the infra reason, is recorded and jou
   assert.equal((await go(red.lane, { branch: 'red', approvedBy: 'manager' })).state, 'returned');
 });
 
-test('floor: an additive migration merges with --approved-by manager --migration-applied, and is journaled', async () => {
+test('floor: an additive migration merges with no flags (owner 2026-10-21), is journaled as migrationAdditive; the flags are still accepted', async () => {
   const w = makeWorld();
   w.branch('add-mig', { 'db/migrations/002.sql': 'CREATE TABLE tasks (id serial PRIMARY KEY);\n', 'new.js': 'x\n' });
   const journal = [];
   const { lane } = mk(w, { lane: { mergeEval: undefined, journal: (j) => journal.push(j) } });
-  const r = await go(lane, { branch: 'add-mig', approvedBy: 'manager', migrationApplied: true });
+  const r = await go(lane, { branch: 'add-mig' });
   assert.equal(r.state, 'merged', JSON.stringify(r));
   assert.equal(w.main(), r.sha);
-  assert.equal(r.migrationApplied, true); assert.ok(r.migrationAppliedAt);
   const mig = journal.filter((j) => j.decision_id === `lane-migration-${r.id}`);
   assert.equal(mig.length, 1, JSON.stringify(journal.map((j) => j.decision_id)));
-  assert.equal(mig[0].kind, 'merge'); assert.equal(mig[0].chosen, 'approve'); assert.equal(mig[0].migrationApplied, true);
-  assert.match(mig[0].question, /Merge additive migration db\/migrations\/002\.sql already applied in the target DB\?/);
-  assert.match(mig[0].rationale, /Q199/); assert.match(mig[0].rationale, /--migration-applied/);
+  assert.equal(mig[0].kind, 'merge'); assert.equal(mig[0].chosen, 'approve'); assert.equal(mig[0].migrationAdditive, true); assert.equal(mig[0].migrationApplied, undefined);
+  assert.match(mig[0].question, /Merge additive migration db\/migrations\/002\.sql\?/);
+  assert.match(mig[0].rationale, /Q199/);
+  const w2 = makeWorld(); w2.branch('add-mig2', { 'db/migrations/002.sql': 'CREATE TABLE t2 (id int);\n' });
+  const flagged = await go(mk(w2, { lane: { mergeEval: undefined } }).lane, { branch: 'add-mig2', approvedBy: 'manager', migrationApplied: true });
+  assert.equal(flagged.state, 'merged', 'the old flags are still accepted');
 });
 
-test('floor: an additive migration without the attestation, and a destructive one with it, both return', async () => {
+test('floor: a destructive or unreadable migration returns, whatever the flags (an additive one merges without them)', async () => {
   const w = makeWorld();
   w.branch('add-noatt', { 'db/migrations/002.sql': 'CREATE TABLE tasks (id serial PRIMARY KEY);\n' });
   w.branch('add-plain', { 'db/migrations/003.sql': 'CREATE TABLE tasks2 (id int);\n' });
@@ -514,15 +516,8 @@ test('floor: an additive migration without the attestation, and a destructive on
   w.branch('alembic', { 'alembic/versions/008.py': 'op.add_column("tasks", sa.Column("n", sa.Integer()))\nop.drop_column("tasks", "old")\n' });
   const { lane } = mk(w, { lane: { mergeEval: undefined } });
   const before = w.main();
-  // approved, but the manager never attested that the objects are already in the target DB
-  const noAtt = await go(lane, { branch: 'add-noatt', approvedBy: 'manager' });
-  assert.equal(noAtt.state, 'returned');
-  assert.match(noAtt.reason, /additive migration needs --migration-applied/);
-  // neither approval nor attestation
-  const plain = await go(lane, { branch: 'add-plain' });
-  assert.equal(plain.state, 'returned');
-  assert.match(plain.reason, /additive migration needs --approved-by manager --migration-applied/);
-  assert.notEqual(plain.outcome, 'needs_approval');
+  // additive, no approval and no attestation: merges (owner 2026-10-21)
+  for (const name of ['add-noatt', 'add-plain']) assert.equal((await go(lane, { branch: name })).state, 'merged', name);
   // destructive: the attestation does not help, and the reason names what it found
   for (const [name, why] of [['drop', /migration is destructive: DROP COLUMN in db\/migrations\/004\.sql/], ['alter-type', /migration is destructive: ALTER \.\.\. TYPE in db\/migrations\/005\.sql/],
     ['upd', /migration is destructive: UPDATE in db\/migrations\/006\.sql/], ['del', /migration is destructive: DELETE in db\/migrations\/007\.sql/], ['alembic', /migration is destructive: drop_column in alembic\/versions\/008\.py/]]) {
@@ -530,7 +525,7 @@ test('floor: an additive migration without the attestation, and a destructive on
     assert.equal(x.state, 'returned', name);
     assert.match(x.reason, why, name);
   }
-  assert.equal(w.main(), before);
+  assert.notEqual(w.main(), before);   // only the two additive branches landed
 });
 
 test('a v2/task/<id> branch merges only with the owner grant for its exact SHA (taskGrant)', async () => {

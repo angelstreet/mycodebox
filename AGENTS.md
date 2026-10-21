@@ -72,9 +72,12 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 - Autonomy by default (owner, 2026-10-14, OWNER_DECISIONS §15): the AI manager decides merges, pushes, deploys and the
   recommended option itself after an evaluation, records each decision and shows it to the owner, who corrects afterwards.
   It must never answer on the owner's behalf about deletions of data, credentials and secrets, money, customers, sudoers
-  or units on hosts, production database migrations, force-push or history rewrites, pushing tags or publishing a
+  or units on hosts, destructive or unreadable database migrations (additive ones are not a floor, owner 2026-10-21, below), force-push or history rewrites, pushing tags or publishing a
   package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
-  those. Merges are an evaluated manager decision (owner, 2026-10-14): the
+  those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, RLS and
+  policies) can always be applied and merged without asking: the session applies it itself, then `integrate request`
+  merges it with no `--approved-by` / `--migration-applied` (still accepted, ignored) and journals `migrationAdditive: true`;
+  only a destructive or unreadable migration is returned to the owner. Merges are an evaluated manager decision (owner, 2026-10-14): the
   manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the
   session reports its tests green on that branch (or the change is docs-only; test code needs the green report), the diff touches no secrets,
   migrations, sudoers or units, and Jev (or the manager's own reasoning when Jev is unavailable) rates it safe at or
