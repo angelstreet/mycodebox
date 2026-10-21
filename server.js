@@ -2429,6 +2429,8 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 // final state: merged, deployed, returned, merged_ci_red, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
 const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut: () => managerConfig().mergeOptOut,
+  // only a manager session may pass --approved-by / --migration-applied; any other session's claim is ignored (2026-10-20)
+  managerSessions: loadManagerSessions,
   // a v2/task/<id> branch merges only at a SHA the owner granted an `integration:merge:*:<sha>` key for in the V2 store
   // GHOSTY_V2 off: no V2 store, so no grant and the V2 module is never imported
   taskGrant: async (id, sha) => { if (!V2_ON || !v2) return false; const { effectiveGrants } = await import('./orchestration/task-contract.js');

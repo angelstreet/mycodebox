@@ -261,6 +261,10 @@ const TASK_BRANCH_RE = /^v2\/task\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/;
 
 export function createIntegrationLane({ stateDir, config = null, git = createDefaultGit(), run = createDefaultRun(), ci = null,
   taskGrant = null, deploys = null, mergeEval = defaultMergeEval, usage = sessionUsage, notify = () => {}, managerItem = () => {}, journal = () => {}, mergeOptOut = () => [], now = () => Date.now(), log = () => {},
+  // Approval identity (2026-10-20): only a manager session may pass --approved-by / --migration-applied. `managerSessions` is a
+  // function returning the current manager session names (server.js passes loadManagerSessions). Absent = older wiring / tests:
+  // every caller keeps today's behaviour, so an un-wired lane is never suddenly stricter.
+  managerSessions = null,
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), pidAlive = waiterAlive } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
@@ -867,6 +871,53 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     }
   }
 
+  // Approval identity (2026-10-20): only a manager session may claim an approval. A working session once approved its own
+  // update_core change by passing `--approved-by manager`; the claim is now checked against the requesting session's name.
+  // Without `managerSessions` (tests, older wiring) every caller is treated as the manager: today's behaviour, unchanged.
+  const isManagerSession = (session) => {
+    if (!managerSessions) return true;
+    let names; try { names = managerSessions(); } catch { return false; }
+    return Array.isArray(names) && !!session && names.includes(session);
+  };
+  // Tell the manager once that a session tried to approve for it. One event per request id: a re-request that repeats the same
+  // claim (a coalesce while queued) must not fill the feed.
+  function managerItemRefusal(r, refused) {
+    const who = refused.session || 'an unnamed session';
+    try {
+      Promise.resolve(managerItem({ key: `lane:self-approval:${r.id}`,
+        title: `${who} passed --approved-by on ${r.branch}`,
+        body: `${who} asked for the merge floor to be skipped (approval: ${refused.by}), but only a manager session may approve. The approval was ignored: the request is queued and evaluated as if none was given, so an infra-path or migration floor still returns it. Ask the manager to approve it from a manager session.`,
+        priority: 'high', url: '/?integration=1' })).catch((e) => log('manager item failed', e?.message));
+    } catch (e) { log('manager item failed', e?.message); }
+  }
+  // Apply one approval claim (--approved-by / --migration-applied) to a request: honoured -> approvedBy / migrationApplied are
+  // written, refused -> they are left unset (so a floor still returns the request) and the attempt is stored as approvalRefused.
+  // A request that no longer carries a claim loses the one it had, exactly as before. `claim` is the session making this claim
+  // (null when the caller named none): the gate reads it, not the session stored on an earlier request, so a session-less
+  // caller cannot ride on the manager's name.
+  // -> { honoured: boolean, refused: boolean }
+  function applyApproval(r, input, claim) {
+    const who = claim == null ? null : String(claim);
+    const by = input.approvedBy ? String(input.approvedBy).slice(0, 80) : null;
+    const wantsMigration = !!input.migrationApplied;
+    if (!by && !wantsMigration) {
+      delete r.approvedBy; delete r.approvedAt; delete r.migrationApplied; delete r.migrationAppliedBy; delete r.migrationAppliedAt; delete r.approvalRefused;
+      return { honoured: false, refused: false };
+    }
+    if (!isManagerSession(who)) {
+      delete r.approvedBy; delete r.approvedAt; delete r.migrationApplied; delete r.migrationAppliedBy; delete r.migrationAppliedAt;
+      const same = r.approvalRefused && r.approvalRefused.by === (by || 'migration-applied') && r.approvalRefused.session === who;
+      r.approvalRefused = { by: by || 'migration-applied', session: who, at: iso() };
+      if (!same) managerItemRefusal(r, r.approvalRefused);
+      return { honoured: false, refused: true };
+    }
+    delete r.approvalRefused;
+    if (by) { r.approvedBy = by; r.approvedAt = iso(); } else delete r.approvedBy;
+    if (wantsMigration) { r.migrationApplied = true; r.migrationAppliedBy = by; r.migrationAppliedAt = iso(); }
+    else delete r.migrationApplied;
+    return { honoured: !!by, refused: false };
+  }
+
   // A second request for a branch whose request is still queued updates that entry: same id, same queue position, the newest tip,
   // the notes appended, the widest deploy scope and the newest manager flags. A coalesce restarts the settle window.
   function coalesce(r, input, v) {
@@ -882,8 +933,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     if (v.session && !r.session) r.session = v.session;
     if (v.worktree && !r.worktree) r.worktree = v.worktree;
     const wasApproved = r.approvedBy;
-    if (input.approvedBy) { r.approvedBy = String(input.approvedBy).slice(0, 80); r.approvedAt = iso(); } else delete r.approvedBy;
-    if (input.migrationApplied) { r.migrationApplied = true; r.migrationAppliedBy = input.approvedBy ? String(input.approvedBy).slice(0, 80) : null; r.migrationAppliedAt = iso(); } else delete r.migrationApplied;
+    const ap = applyApproval(r, input, input.session);
     r.head = /^[0-9a-f]{7,64}$/.test(String(input.sha || '')) ? String(input.sha) : null;   // the caller's tip; the lane re-reads it from the remote
     r.settleUntil = settleUntilOf(v.key);
     markBehind(r);
@@ -891,10 +941,10 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     r.updatedAt = iso();
     persist(r);
     emit(r, { kind: 'coalesced', state: 'queued', final: false, coalesced: true, position: ahead(r) + 1 });
-    if (input.approvedBy && input.approvedBy !== wasApproved) { try { journalApproval(r, v); } catch (e) { log('journal failed', e?.message); } }
+    if (ap.honoured && r.approvedBy !== wasApproved) { try { journalApproval(r, v); } catch (e) { log('journal failed', e?.message); } }
     armSettle(v.key, settleLeft(r));
     kick(v.key);
-    return { id: r.id, position: ahead(r) + 1, repo: v.key, coalesced: true, duplicate: true };
+    return { id: r.id, position: ahead(r) + 1, repo: v.key, coalesced: true, duplicate: true, ...(ap.refused ? { approvalIgnored: true, approvalRefused: r.approvalRefused } : {}) };
   }
   // The approval decision record for --approved-by (OWNER_DECISIONS §15); enqueue and a coalesce both write one.
   function journalApproval(r, v) {
@@ -964,18 +1014,18 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
-        settleUntil: settleUntilOf(key), afterId: null,
-        ...(input.approvedBy ? { approvedBy: String(input.approvedBy).slice(0, 80), approvedAt: iso() } : {}),
-        // --migration-applied: the manager attests the additive migration's objects already exist in the target DB (Q199); only ever read with --approved-by
-        ...(input.migrationApplied ? { migrationApplied: true, migrationAppliedBy: input.approvedBy ? String(input.approvedBy).slice(0, 80) : null, migrationAppliedAt: iso() } : {}) };
+        settleUntil: settleUntilOf(key), afterId: null };
+      // --approved-by / --migration-applied: honoured only when the requesting session is a manager session (2026-10-20); a claim from
+      // any other session is ignored and the request is evaluated as if none was given.
+      const ap = applyApproval(r, input, session);
       try {
         const prev = Math.max(0, ...[...reqs.values()].filter((x) => session && x.session === session).map((x) => Date.parse(x.createdAt) || 0));
         const to = now(); r.usage = usage({ stateDir, session, worktree: r.worktree, from: Math.max(prev, to - 864e5), to });
       } catch (e) { log('usage attribution failed', e?.message); }
       reqs.set(r.id, r); markBehind(r); persist(r);
-      if (r.approvedBy) { try { journalApproval(r, { key, branch, target: c.target }); } catch (e) { log('journal failed', e?.message); } }
+      if (ap.honoured) { try { journalApproval(r, { key, branch, target: c.target }); } catch (e) { log('journal failed', e?.message); } }
       emit(r, { kind: 'queued', state: 'queued', final: false });
-      const out = { id: r.id, position: ahead(r) + 1, repo: key };
+      const out = { id: r.id, position: ahead(r) + 1, repo: key, ...(ap.refused ? { approvalIgnored: true, approvalRefused: r.approvalRefused } : {}) };
       kick(key);
       return out;
     },

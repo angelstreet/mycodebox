@@ -124,7 +124,7 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         // A remote (client:*) caller's session name is the Mac's: it resolves to ONE registered `mac:` session of that same client (exact or by slug prefix), else null; never a local tmux one.
         const session = who.by.startsWith('client:') ? (typeof body.session === 'string' ? remoteResolve(body.session, who.client) : null) : body.session;
         const out = lane.enqueue({ repo, branch: body.branch, session, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
-        send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, ...(out.coalesced ? { coalesced: 1 } : {}) } }, fmt);
+        send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, ...(out.coalesced ? { coalesced: 1 } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;
         const requests = lane.list({ repo: q.get('repo') || undefined, state: q.get('state') || undefined, limit: q.get('limit') || 50 });

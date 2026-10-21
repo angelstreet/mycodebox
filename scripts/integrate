@@ -1,7 +1,7 @@
 #!/bin/sh
 # integrate: hand a pushed branch to the mycodebox integration lane (docs/v2/INTEGRATION-LANE.md). POSIX sh + curl; codebox and Mac.
 #   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait]   queue the branch (default: the current branch)
-#                                                                                        --approved-by: manager only; skips ONLY the infra-path floor reason
+#                                                                                        --approved-by: manager session only; skips ONLY the infra-path floor reason (another session's claim is ignored)
 #                                                                                        --migration-applied: manager only, with --approved-by; attests an ADDITIVE migration's objects already exist in the target DB (Q199)
 #   integrate status [<id>]                                                              one request, or the latest ten
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
@@ -123,6 +123,10 @@ case "$cmd" in
       printf 'Integration %s updated (coalesced with the queued request)\n' "$ID"
     else
       printf 'Integration %s queued for %s (position %s).\n' "$ID" "$(val repo)" "$(val position)"
+    fi
+    if [ "$(val approvalIgnored)" = 1 ]; then
+      printf 'approval ignored: only the manager can approve\n'
+      printf 'The request is queued without an approval; a floor that needed it will return it.\n'
     fi
     if [ "$WAIT" = 1 ]; then do_wait "$ID" 60; fi
     printf 'End your turn with: STATUS: waiting: integration %s\n' "$ID" ;;
