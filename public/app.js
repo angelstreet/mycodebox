@@ -1653,10 +1653,10 @@ function buildSideRow(s) {
   return li;
 }
 // A pane with no agent in it (agent 'bash': the agent exited or crashed, only a shell is left) is a dead session:
-// still parkable. Live claude/minimax panes are parkable (codex/opencode are not); the server re-checks the pane before parking.
+// still parkable. Live claude/codex/minimax panes are parkable; the server re-checks the pane before parking.
 function parkable(n) {
   const ag = (state.status[n] || {}).agent;
-  return ag === 'claude' || ag === 'minimax' || ag === 'bash';
+  return ag === 'claude' || ag === 'codex' || ag === 'minimax' || ag === 'bash';
 }
 function syncSide() {
   // which sessions are on screen right now: the focused one always; in the grid, every visible card
