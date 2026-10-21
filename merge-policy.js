@@ -9,7 +9,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { buildRequest } from './router.js';
 import { hardMatch } from './stall.js';
 
-export const MERGE_DEFAULTS = { mergeDecisions: true, mergeMinConfidence: 0.85, mergeOptOut: [], mergeConventionFiles: ['VERSION.txt'], infoAnswers: true, infoRoots: [] };
+export const MERGE_DEFAULTS = { mergeDecisions: true, mergeMinConfidence: 0.85, mergeOptOut: [], mergeConventionFiles: ['VERSION.txt'], schemaPaths: ['setup/db/schema', 'setup/db/migrations', 'supabase/migrations', 'migrations'], schemaIgnore: [], infoAnswers: true, infoRoots: [] };
 
 const WORD_SKIP = new Set(['it', 'this', 'that', 'them', 'these', 'the', 'a', 'an', 'my', 'our', 'your', 'its', 'branch', 'pr', 'pull', 'request', 'work', 'changes', 'change', 'into', 'to', 'onto', 'in', 'and', 'then', 'now', 'first', 'or', 'with', 'after', 'before', 'once', 'when', 'if', 'whether', 'yes', 'no', 'all', 'everything', 'conflicts', 'conflict', 'commit', 'commits']);
 const REF_TOKEN = String.raw`[\w][\w./@+-]*`;
@@ -353,11 +353,88 @@ export function migrationReasons(facts, { approvedBy = false, migrationApplied =
 }
 const MIGRATION_REASON = /^touches a migration: /;
 
+// ---- tables: a table the added code reads that no schema or migration creates ----
+// Code that reads or writes a table can merge before any migration creates it, then fail at runtime on a DB that lacks it. The scan
+// reads the table names the ADDED lines use and the names the repo's schema / migration files CREATE at the branch tip: nothing else.
+const SCHEMA_MAX_FILES = 300, SCHEMA_MAX_BYTES = 2 * 1024 * 1024, SCHEMA_MAX_FILE = 1024 * 1024;
+const SCHEMA_REASON_CAP = 5;   // at most this many tables are named, so a big diff cannot flood the reason list
+// only JS/TS/Python carry a supabase-style call; tests and docs only talk about tables, they never read one.
+const SCHEMA_USE_EXT = /\.(?:m?[jt]sx?|py)$/i;
+const SCHEMA_SKIP_FILE = /(?:^|\/)(?:tests?|__tests__)\/|(?:_test\.py|\.(?:test|spec)\.[cm]?[jt]sx?)$/i;
+// .table('x') / .from("x"), and SQL inside a code string only when schema-qualified: an unqualified FROM in prose or in a JS
+// `from` clause is far too common to read as a table (import x from 'a.b' included).
+const USE_CALL = /(?<!\b(?:Buffer|Array|Uint\d+Array|Int\d+Array|Float\d+Array|Object|Observable|Symbol)\s*)\.(?:table|from)\s*\(\s*(['"])([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\1/g;
+const USE_SQL = /\b(?:from|into|update|join)\s+([A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*)/gi;
+// "users" and "public.users" are one object; any other schema is not this repo's (auth.users, storage.objects live outside it).
+const tableKey = (name) => {
+  const p = String(name || '').replace(/["'`]/g, '').toLowerCase().split('.').map((s) => s.trim()).filter(Boolean);
+  if (!p.length) return null;
+  if (p.length === 1) return `public.${p[0]}`;
+  return p[0] === 'public' ? `public.${p.slice(1).join('.')}` : null;
+};
+// The table names one added line of code reads or writes -> [names as written].
+export function usedTables(line) {
+  const s = String(line || '');
+  const calls = [...s.matchAll(USE_CALL)].map((m) => m[2].replace(/\s+/g, ''));
+  const sql = [...s.matchAll(USE_SQL)].map((m) => m[1].replace(/\s+/g, ''));
+  return [...new Set([...calls, ...sql])];
+}
+// CREATE TABLE [IF NOT EXISTS] [schema.]name and CREATE [OR REPLACE] [MATERIALIZED] VIEW [IF NOT EXISTS] [schema.]name; a commented-out
+// line creates nothing.
+const CREATE_OBJECT = /^\s*create\s+(?:or\s+replace\s+)?(?:(?:temp(?:orary)?|unlogged|global|local|materialized)\s+)*(?:table|view)\s+(?:if\s+not\s+exists\s+)?([^\s(]+)/i;
+export function createdTables(sql) {
+  const names = new Set();
+  for (const line of String(sql || '').split('\n')) {
+    const m = CREATE_OBJECT.exec(line.replace(/\/\*.*?\*\//g, ' ').replace(/--.*$/, ''));
+    if (m) names.add(m[1]);
+  }
+  return [...names];
+}
+// The tables the repo's schema and migration files create, read at <sha> with ls-tree / show so nothing is checked out. A schema path
+// that has no file in that tree is not a schema path.
+// -> { dirs, tables }
+async function schemaTables(repo, sha, paths) {
+  const dirs = [], tables = new Set();
+  if (!sha) return { dirs, tables: [] };
+  let budget = SCHEMA_MAX_BYTES;
+  for (const p of Array.isArray(paths) ? paths : []) {
+    const ls = await git(repo, ['ls-tree', '-r', '--name-only', sha, '--', p]);
+    const files = (ls.code === 0 ? ls.out.split('\n') : []).filter((f) => f && /\.sql$/i.test(f));
+    if (!files.length) continue;
+    dirs.push(p);
+    for (const f of files.slice(0, SCHEMA_MAX_FILES)) {
+      if (budget <= 0) break;
+      const show = await git(repo, ['show', `${sha}:${f}`], { max: Math.min(budget, SCHEMA_MAX_FILE) });
+      if (show.code !== 0 || show.truncated || show.timedOut) continue;
+      budget -= show.out.length;
+      for (const n of createdTables(show.out)) tables.add(n);
+    }
+  }
+  return { dirs, tables: [...tables] };
+}
+// A table the added code uses that nothing in the repo creates -> reasons. [] when the repo has none of the schemaPaths (most repos:
+// the check does not apply), and a non-public schema (auth.users, storage.objects) is never this repo's table to require.
+export function schemaReasons(facts, { schemaIgnore = [] } = {}) {
+  if (!facts?.schemaDirs?.length) return [];
+  const ignore = new Set((Array.isArray(schemaIgnore) ? schemaIgnore : []).map(tableKey).filter(Boolean));
+  const known = new Set((facts.knownTables || []).map(tableKey).filter(Boolean));
+  const said = new Set();
+  const reasons = [];
+  for (const name of facts.tableUses || []) {
+    const key = tableKey(name);
+    if (!key || known.has(key) || ignore.has(key) || said.has(key)) continue;
+    said.add(key);
+    reasons.push(`uses table "${name}" that no schema or migration creates`);
+    if (reasons.length >= SCHEMA_REASON_CAP) break;
+  }
+  return reasons;
+}
+
 // Files, docs-only, sensitive paths / content and binaries of a diff spec ("a...b"). -> { error } | { facts }. A scan that cannot
 // read the whole diff sets scanError (fails closed in the floors). Migration files keep their ADDED lines (migrationAdds) so the
 // lane can classify them by effect instead of by path (Q199).
 export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles) {
-  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {} };
+  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {}, tableUses: [] };
   const names2 = await git(repo, ['diff', '--name-only', '-z', spec]);
   if (names2.code !== 0) return { error: `git diff failed: ${names2.err || 'unknown'}` };
   out.files = names2.out.split('\0').filter(Boolean);
@@ -367,9 +444,10 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
   // added lines only, capped at 2 MB; an unreadable, timed-out or truncated scan fails closed (mergeFloor)
   const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec], { max: 2 * 1024 * 1024 });
   if (diff.code !== 0 || diff.truncated || diff.timedOut) out.scanError = diff.truncated ? 'larger than 2 MB' : diff.err || 'unreadable';
-  let file = null;
+  let file = null, codeFile = false;
+  const uses = new Set();
   for (const line of diff.out.split('\n')) {
-    if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); continue; }
+    if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); codeFile = !!(file && SCHEMA_USE_EXT.test(file) && !isDocFile(file) && !SCHEMA_SKIP_FILE.test(file)); continue; }
     const bin = /^Binary files (.*) and (.*) differ$/.exec(line);
     if (bin) { if (bin[1] === '/dev/null') { const nf = bin[2].replace(/^b\//, ''); if (!DOC_IMAGE.test(nf)) out.binary.push(nf); } continue; }
     if (!line.startsWith('+')) continue;
@@ -379,15 +457,17 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
       // a migration file with more added lines than we read is treated as unreadable, never as additive
       if (lines.length < MIG_LINE_CAP) lines.push(added); else out.migrationAdds[file] = null;
     }
+    if (codeFile) for (const n of usedTables(added)) uses.add(n);
     for (const [re, label] of SENSITIVE_CONTENT) {
       if (re.test(line) && !out.sensitive.some((s) => s.file === file && s.why === 'secret-content')) out.sensitive.push({ file, why: 'secret-content', what: label });
     }
   }
+  out.tableUses = [...uses];
   return { facts: out };
 }
 
-export async function gitFacts({ cwd, branch, branchSha = null, target, remote = 'origin', conventionFiles = MERGE_DEFAULTS.mergeConventionFiles } = {}) {
-  const fail = (error) => ({ ok: false, error, repo: null, repoName: null, repoNames: [], branch: branch || null, target: target || null, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] });
+export async function gitFacts({ cwd, branch, branchSha = null, target, remote = 'origin', conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, schemaPaths = MERGE_DEFAULTS.schemaPaths } = {}) {
+  const fail = (error) => ({ ok: false, error, repo: null, repoName: null, repoNames: [], branch: branch || null, target: target || null, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], tableUses: [], schemaDirs: [], knownTables: [] });
   if (!cwd) return fail('no working directory');
   const top = await git(cwd, ['rev-parse', '--show-toplevel']);
   if (top.code !== 0) return fail('not a git repository');
@@ -415,7 +495,7 @@ export async function gitFacts({ cwd, branch, branchSha = null, target, remote =
   const oRef = (await resolves(`refs/remotes/${remote}/${tName}`)) ? `refs/remotes/${remote}/${tName}` : null;
   const lRef = (await resolves(`refs/heads/${tName}`)) ? `refs/heads/${tName}` : null;
   const tRef = oRef || lRef;
-  const base = { ok: true, repo, repoName, repoNames: names, branch: bName, target: tName, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [] };
+  const base = { ok: true, repo, repoName, repoNames: names, branch: bName, target: tName, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], tableUses: [], schemaDirs: [], knownTables: [] };
   if (!bRef || bName === tName) return { ...base, ok: false, error: 'branch not found' };
   if (!tRef) return { ...base, ok: false, error: `target ${tName} not found` };
   const sha = async (r) => (await git(repo, ['rev-parse', r])).out.trim();
@@ -435,12 +515,16 @@ export async function gitFacts({ cwd, branch, branchSha = null, target, remote =
   const sc = await scanRange(repo, `${tRef}...${bRef}`, conventionFiles);
   if (sc.error) return { ...out, ok: false, error: sc.error };
   Object.assign(out, sc.facts);
+  // what the repo creates, read at the branch tip (the tree those files have once the branch merges): ls-tree / show, no checkout
+  const sch = await schemaTables(repo, out.branchSha, schemaPaths);
+  out.schemaDirs = sch.dirs;
+  out.knownTables = sch.tables;
   return out;
 }
 
 export const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', deploy: 'a CI/deploy/infra path', 'secret-content': 'secret-looking content' };
 // Reasons to escalate; empty = the manager may proceed.
-export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, approveInfra = false } = {}) {
+export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, approveInfra = false, schemaIgnore = [] } = {}) {
   if (!facts) return ['not a git repository or git error'];
   const reasons = [];
   const out = (optOut || []).map(String);
@@ -455,6 +539,7 @@ export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEF
   for (const s of facts.sensitive || []) if (!(approveInfra && s.why === 'deploy')) reasons.push(`touches ${SENS_TEXT[s.why] || 'a sensitive path'}: ${s.file}`);
   if (facts.scanError) reasons.push('diff too large or unreadable to scan');
   for (const f of facts.binary || []) reasons.push(`adds a binary file: ${f}`);
+  for (const r of schemaReasons(facts, { schemaIgnore })) reasons.push(r);
   return reasons;
 }
 
@@ -480,11 +565,11 @@ export async function evaluateMerge({ cwd, text, session = null, config = {}, je
   const cfg = { ...MERGE_DEFAULTS, ...config };
   const parsed = parseMergeAsk(text);
   const ask = { branch: branch || parsed.branch, target: target || parsed.target };   // explicit names (the CLI) win over the text
-  const facts = await gitFacts({ cwd, branch: ask.branch, target: ask.target, conventionFiles: cfg.mergeConventionFiles });
+  const facts = await gitFacts({ cwd, branch: ask.branch, target: ask.target, conventionFiles: cfg.mergeConventionFiles, schemaPaths: cfg.schemaPaths });
   // test evidence comes from the session's closing text (a question reports nothing); a given value is vouched for by the caller (merge-eval.js --tests)
   const tests = testsGiven || testEvidence(evidenceText ?? text, { branch: facts.branch });
   const question = `Merge ${facts.branch || ask.branch || 'the branch'} into ${facts.target || ask.target || 'the target'}?`;
-  const reasons = mergeFloor(facts, tests, { optOut: cfg.mergeOptOut, conventionFiles: cfg.mergeConventionFiles });
+  const reasons = mergeFloor(facts, tests, { optOut: cfg.mergeOptOut, conventionFiles: cfg.mergeConventionFiles, schemaIgnore: cfg.schemaIgnore });
   const done = (verdict, why, decision) => ({ verdict, reasons: verdict === 'merge' ? [] : why, rationale: verdict === 'merge' ? summarize(facts, tests) : why.join('; '), question, facts, tests, decision });
   if (reasons.length) return done('escalate', reasons, { source: 'floor', choice: 'escalate', confidence: 1, decision_id: null });
   const min = cfg.mergeMinConfidence;
