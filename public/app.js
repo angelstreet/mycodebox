@@ -16,6 +16,7 @@ import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { uploadOne } from '/upload.js';
 import { renderMd } from '/md.js';
+import { decideReaderPaint } from '/reader-paint.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
@@ -2205,13 +2206,13 @@ function paintReader(cell, n) {
     ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${audioChipHtml({ text: audioText, label: 'Read reply aloud' })}</div>`
     : '';
   const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${body}${actions}`;
-  if (el.dataset.h === html) return;
-  // never swap the content under a finger / a fling: that cancels touch scrolling. Retry once it settles.
-  if (el._busyUntil && Date.now() < el._busyUntil) {
-    clearTimeout(el._retry);
-    el._retry = setTimeout(() => paintReader(cell, n), el._busyUntil - Date.now() + 50);
-    return;
-  }
+  // The freshest payload wins: when a previous paint was deferred because the
+  // user is mid-scroll, dataset.pending carries the latest html and the pending
+  // is what we want to keep around (and what we'd paint if the user next lands
+  // at the bottom). Use it as the effective payload so a later paint-with-the-
+  // same-fresh-html isn't treated as a no-op.
+  const effective = el.dataset.pending || html;
+  if (el.dataset.h === effective && !el.dataset.pending) return;
   if (!el._wired) {
     el._wired = true;
     el.addEventListener('click', async (e) => {
@@ -2222,22 +2223,60 @@ function paintReader(cell, n) {
       if (!cc) return;
       if (b.dataset.act === 'more') { await loadTranscript(n, cc); } else { cc.full = null; }
       el.dataset.h = '';
+      el.dataset.pending = '';
       paintReader(cell, n);
       el.scrollTop = b.dataset.act === 'more' ? el.scrollHeight : 0;
     });
     const busy = () => { el._busyUntil = Date.now() + 1200; };
-    for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, busy, { passive: true });
+    // Chat 1792615055496-11750f: when the user was mid-scroll, the reader was
+    // still rebuilding on every new reply fetch, flashing the prose under their
+    // thumb. paintReader now defers those rebuilds; the scroll handler below
+    // drains the deferred update the moment they reach the bottom again.
+    const flushPending = () => {
+      if (!el.dataset.pending) return;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      if (!atBottom) return;
+      const target = el.dataset.pending; el.dataset.pending = '';
+      el.dataset.h = target;
+      el.innerHTML = target;
+      if (!el._chipsWired) { wireAudioChips(el); el._chipsWired = true; }
+      el.scrollTop = el.scrollHeight;
+    };
+    for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, (e) => {
+      busy();
+      if (e.type === 'scroll') flushPending();
+    }, { passive: true });
   }
-  const first = el.dataset.h === undefined;
-  const top = el.scrollTop;
-  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  el.dataset.h = html; el.innerHTML = html;
+  const decision = decideReaderPaint({
+    scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight,
+    isFirst: el.dataset.h === undefined, htmlChanged: effective !== el.dataset.h,
+    busyUntil: el._busyUntil,
+  });
+  if (decision.action === 'skip') return;
+  if (decision.action === 'defer' && decision.until != null) {
+    // mid-touch: existing retry so we don't swap under a finger
+    clearTimeout(el._retry);
+    el._retry = setTimeout(() => paintReader(cell, n), decision.until - Date.now() + 50);
+    return;
+  }
+  if (decision.action === 'defer') {
+    // user is reading away from the bottom: stash the freshest html and bail.
+    // The scroll handler above will apply it the next time they land at the
+    // bottom, so the prose they're reading stays put.
+    el.dataset.pending = effective;
+    return;
+  }
+  // action === 'rebuild'
+  el.dataset.pending = '';
+  el.dataset.h = effective;
+  el.innerHTML = effective;
   // Wire the freshly-painted audio chip. `wireAudioChips` is idempotent
   // (it tags each chip with `data-wired`); re-running on every paint is
   // harmless but pointless, so just call it once on first render.
   if (!el._chipsWired) { wireAudioChips(el); el._chipsWired = true; }
-  // newest content is at the bottom: land there on first paint, then stick only if already there
-  el.scrollTop = first || atBottom ? el.scrollHeight : top;
+  // newest content is at the bottom: jump there after each rebuild (the user
+  // is at the bottom when we got here, see decideReaderPaint)
+  el.scrollTop = el.scrollHeight;
 }
 function inlineMd(t) {
   return escapeHtml(t)
