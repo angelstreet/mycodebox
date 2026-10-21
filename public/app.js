@@ -1840,6 +1840,15 @@ function buildCell(s) {
   cell.addEventListener('touchmove', () => {
     if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; cell.dataset.scrolled = '1'; }
   }, { capture: true, passive: true });
+  // Touch scrolling is reported as pointer movement by some browsers. Cancel the
+  // delayed keyboard focus there too; otherwise it can steal the gesture after the
+  // user has already started scrolling the selected card.
+  cell.addEventListener('pointermove', () => {
+    if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; cell.dataset.scrolled = '1'; }
+  }, { capture: true, passive: true });
+  cell.addEventListener('pointercancel', () => {
+    if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; }
+  }, { capture: true, passive: true });
   cell.addEventListener('wheel', () => {
     if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; cell.dataset.scrolled = '1'; }
   }, { capture: true, passive: true });
@@ -1930,6 +1939,7 @@ function wireTap(el, onSingle, onDouble) {
     lastUp = now;
     onSingle();
   }, true);
+  el.addEventListener('pointercancel', () => { down = null; }, true);
 }
 
 // ---------- answer popup (TASK-44 phase 11) ----------
