@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDecision } from '../orchestration/task-contract.js';
-import { MERGE_DEFAULTS, parseMergeAsk, testEvidence, gitFacts, mergeFloor, reasoningDecision, evaluateMerge, journalRecord, composeReply, migrationAdditive, migrationReasons } from '../merge-policy.js';
+import { MERGE_DEFAULTS, parseMergeAsk, testEvidence, gitFacts, mergeFloor, reasoningDecision, evaluateMerge, journalRecord, composeReply, migrationAdditive, migrationReasons, schemaReasons } from '../merge-policy.js';
 import { hardMatch } from '../stall.js';
 import { makeRepo, commit, git } from './helpers-git.js';
 
@@ -363,7 +363,8 @@ test('composeReply: a line that trips the hard floor is dropped, never reworded'
 });
 
 test('defaults are exported', () => {
-  assert.deepEqual(MERGE_DEFAULTS, { mergeDecisions: true, mergeMinConfidence: 0.85, mergeOptOut: [], mergeConventionFiles: ['VERSION.txt'], infoAnswers: true, infoRoots: [] });
+  assert.deepEqual(MERGE_DEFAULTS, { mergeDecisions: true, mergeMinConfidence: 0.85, mergeOptOut: [], mergeConventionFiles: ['VERSION.txt'],
+    schemaPaths: ['setup/db/schema', 'setup/db/migrations', 'supabase/migrations', 'migrations'], schemaIgnore: [], infoAnswers: true, infoRoots: [] });
 });
 
 // ---- round 7 review fixes ----
@@ -468,4 +469,104 @@ test('infra paths: an explicit allowlist, tests and docs never count', async () 
   const r = mergeFloor(facts, { state: 'green' }, { approveInfra: true });
   assert.equal(r.length, 2); assert.ok(r.every((x) => !/deploy\.sh/.test(x)));
   assert.equal(mergeFloor(facts, { state: 'green' }).length, 3);
+});
+
+// ---- tables the added code uses that no schema or migration creates ----
+const USE_JS = "const { data } = await sb.from('new_thing').select('*');\n";
+const MIG = 'CREATE TABLE IF NOT EXISTS public.new_thing (id bigserial PRIMARY KEY);\n';
+// A repo whose schema path exists on the branch: the check then applies.
+const schemaRepo = (files) => makeRepo({ files: { 'setup/db/migrations/001_seed.sql': 'CREATE TABLE IF NOT EXISTS seeded (id int);\n', ...files } });
+const reasonsOf = async (repo, opts) => schemaReasons(await gitFacts({ cwd: repo, branch: 'feat' }), opts);
+// the floor reasons of a green branch, without the seed migration's own one (a migration needs its attestation)
+const floor = (f, opts) => mergeFloor(f, testEvidence(GREEN), opts).filter((x) => !/^touches a migration/.test(x));
+
+test('gitFacts: a table the added code uses and no schema creates', async () => {
+  const facts = await gitFacts({ cwd: schemaRepo({ 'src.js': USE_JS }), branch: 'feat' });
+  assert.deepEqual(facts.schemaDirs, ['setup/db/migrations']);   // the path that exists, only
+  assert.deepEqual(facts.tableUses, ['new_thing']);
+  assert.ok(facts.knownTables.includes('seeded'));
+  assert.deepEqual(schemaReasons(facts), ['uses table "new_thing" that no schema or migration creates']);
+  // the reason reaches the floor, and one table is named once
+  assert.deepEqual(floor(facts, {}), ['uses table "new_thing" that no schema or migration creates']);
+  const twice = await gitFacts({ cwd: schemaRepo({ 'src.js': `${USE_JS}${USE_JS}const x = sb.table("new_thing");\n` }), branch: 'feat' });
+  assert.equal(schemaReasons(twice).length, 1);
+});
+test('gitFacts: a migration or view that creates the table clears the reason', async () => {
+  assert.deepEqual(await reasonsOf(schemaRepo({ 'src.js': USE_JS, 'setup/db/migrations/002_thing.sql': MIG })), []);
+  // a plain CREATE TABLE is the same object as public.new_thing
+  assert.deepEqual(await reasonsOf(schemaRepo({ 'src.js': USE_JS, 'setup/db/schema/schema.sql': 'CREATE TABLE new_thing (id int);\n' })), []);
+  // quoted, case-free, IF NOT EXISTS, a view and a materialized view are all created tables
+  for (const sql of ['CREATE TABLE IF NOT EXISTS "public"."NEW_THING" (id int);\n', 'CREATE VIEW daily_stats AS SELECT 1;\n',
+    'CREATE OR REPLACE VIEW public.daily_stats AS SELECT 1;\n', 'CREATE MATERIALIZED VIEW IF NOT EXISTS public.daily_stats AS SELECT 1;\n',
+    '-- CREATE TABLE new_thing (id int);\nCREATE TEMP TABLE new_thing (id int);\n']) {
+    const code = sql.includes('daily_stats') ? "const d = await sb.from('daily_stats').select('*');\n" : USE_JS;
+    assert.deepEqual(await reasonsOf(schemaRepo({ 'src.js': code, 'setup/db/schema/schema.sql': sql })), [], sql);
+  }
+  // a table the repo never creates is still reported
+  const other = await reasonsOf(schemaRepo({ 'src.js': "const d = await sb.from('seeded').select('*');\n", 'setup/db/schema/x.sql': 'CREATE VIEW other AS SELECT 1;\n' }));
+  assert.deepEqual(other, []);   // 'seeded' comes from the seed migration, so nothing is missing here
+  assert.deepEqual(await reasonsOf(schemaRepo({ 'src.js': "const d = await sb.from('not_in_the_repo').select('*');\n" })), ['uses table "not_in_the_repo" that no schema or migration creates']);
+});
+test('gitFacts: a repo without a schema path skips the check', async () => {
+  const facts = await gitFacts({ cwd: makeRepo({ files: { 'src.js': USE_JS } }), branch: 'feat' });
+  assert.deepEqual(facts.schemaDirs, []);
+  assert.deepEqual(facts.tableUses, ['new_thing']);   // the use is still read, there is simply nothing to check it against
+  assert.deepEqual(schemaReasons(facts), []);
+  assert.deepEqual(mergeFloor(facts, testEvidence(GREEN), {}), []);
+  // a schema path that does not exist in this tree does not count either
+  const other = await gitFacts({ cwd: makeRepo({ files: { 'src.js': USE_JS, 'db/migrations/001.sql': MIG } }), branch: 'feat' });
+  assert.deepEqual(other.schemaDirs, []);
+  assert.deepEqual(schemaReasons(other), []);
+});
+test('gitFacts: only supabase-style calls and qualified SQL in code are read', async () => {
+  const files = {
+    'src.js': `${USE_JS}const a = sb.table("other_thing"); import x from './mod';\n`,
+    'q.sql.txt': 'SELECT * FROM unqualified_table;\n',
+    'svc.py': "rows = sb.table('py_thing').select('*')\nq = sb.from('public.sql_thing')\ncur.execute('SELECT * FROM public.other_sql')\n",
+  };
+  const facts = await gitFacts({ cwd: schemaRepo(files), branch: 'feat' });
+  assert.deepEqual(facts.tableUses.sort(), ['new_thing', 'other_thing', 'public.other_sql', 'public.sql_thing', 'py_thing'].sort());
+  assert.ok(!facts.tableUses.includes('unqualified_table'), 'unqualified SQL in code is not parsed');
+  assert.ok(!facts.tableUses.includes('mod'), 'an import source is not a table');
+  const all = schemaReasons(facts);
+  assert.deepEqual(all.sort(), ['uses table "new_thing" that no schema or migration creates', 'uses table "other_thing" that no schema or migration creates',
+    'uses table "public.other_sql" that no schema or migration creates', 'uses table "public.sql_thing" that no schema or migration creates',
+    'uses table "py_thing" that no schema or migration creates'].sort());   // one object, one reason: a name is reported as the code wrote it
+});
+test('gitFacts: test files and docs never contribute a table', async () => {
+  const files = { 'test/a.test.js': USE_JS, 'tests/b.py': "sb.table('py_thing')\n", 'lib/c_test.py': "sb.table('x')\n",
+    'd.spec.ts': USE_JS, 'docs/notes.md': "`.from('doc_thing')`\n", '__tests__/e.js': USE_JS };
+  const facts = await gitFacts({ cwd: schemaRepo(files), branch: 'feat' });
+  assert.deepEqual(facts.tableUses, []);
+  assert.deepEqual(schemaReasons(facts), []);
+});
+test('schemaReasons: schemaIgnore and a non-public schema are never reported', async () => {
+  const repo = schemaRepo({ 'src.js': `${USE_JS}await sb.from('auth.users').select('*'); await sb.from('storage.objects').select('*'); await sb.from('public.new_thing').select('*');\n` });
+  const facts = await gitFacts({ cwd: repo, branch: 'feat' });
+  assert.deepEqual(facts.tableUses, ['new_thing', 'auth.users', 'storage.objects', 'public.new_thing']);
+  assert.deepEqual(schemaReasons(facts), ['uses table "new_thing" that no schema or migration creates']);   // one reason for one object
+  assert.deepEqual(schemaReasons(facts, { schemaIgnore: ['new_thing'] }), []);
+  assert.deepEqual(schemaReasons(facts, { schemaIgnore: ['public.new_thing'] }), []);   // the ignore list is read as an object too
+  assert.deepEqual(floor(facts, { schemaIgnore: ['new_thing'] }), []);
+});
+test('schemaReasons: at most five tables are named', async () => {
+  const code = Array.from({ length: 8 }, (_, i) => `await sb.table('t${i}');\n`).join('');
+  const r = await reasonsOf(schemaRepo({ 'src.js': code }));
+  assert.equal(r.length, 5);
+  assert.deepEqual(r, [0, 1, 2, 3, 4].map((i) => `uses table "t${i}" that no schema or migration creates`));
+});
+test('evaluateMerge: a table nothing creates escalates the merge; the config keys turn the check off or move it', async () => {
+  const has = (r) => r.reasons.some((x) => /no schema or migration creates/.test(x));
+  const r = await ev(schemaRepo({ 'src.js': USE_JS }), `merge feat. ${GREEN}`);
+  assert.equal(r.verdict, 'escalate');
+  assert.ok(r.reasons.includes('uses table "new_thing" that no schema or migration creates'), r.reasons.join('; '));
+  // with the migration that creates it, only the migration's own reason is left
+  const ok = await ev(schemaRepo({ 'src.js': USE_JS, 'setup/db/migrations/002_thing.sql': MIG }), `merge feat. ${GREEN}`);
+  assert.equal(ok.verdict, 'escalate');
+  assert.ok(!has(ok), ok.reasons.join('; '));
+  assert.ok(ok.reasons.some((x) => /^touches a migration/.test(x)), ok.reasons.join('; '));
+  const ignored = await ev(schemaRepo({ 'src.js': USE_JS }), `merge feat. ${GREEN}`, { config: { schemaIgnore: ['new_thing'] } });
+  assert.ok(!has(ignored), ignored.reasons.join('; '));
+  const custom = await ev(schemaRepo({ 'src.js': USE_JS, 'db/mytables/001.sql': MIG }), `merge feat. ${GREEN}`, { config: { schemaPaths: ['db/mytables'] } });
+  assert.ok(!has(custom), custom.reasons.join('; '));
 });

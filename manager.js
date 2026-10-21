@@ -200,7 +200,7 @@ const num = (v, lo, hi, name) => {
 };
 
 export async function setManagerConfig(b = {}) {
-  const { aiFallback, aiFallbackDailyCalls, jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure, opsToManager } = b;
+  const { aiFallback, aiFallbackDailyCalls, jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, schemaPaths, schemaIgnore, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure, opsToManager } = b;
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -254,6 +254,14 @@ export async function setManagerConfig(b = {}) {
   if (mergeConventionFiles !== undefined) {
     if (!Array.isArray(mergeConventionFiles) || mergeConventionFiles.length > 50 || mergeConventionFiles.some((x) => typeof x !== 'string' || !x.trim())) throw bad('mergeConventionFiles must be a list of file names');
     config.mergeConventionFiles = [...new Set(mergeConventionFiles.map((x) => x.trim()))];
+  }
+  if (schemaPaths !== undefined) {
+    if (!Array.isArray(schemaPaths) || schemaPaths.length > 20 || schemaPaths.some((x) => typeof x !== 'string' || !x.trim())) throw bad('schemaPaths must be a list of repo-relative directories');
+    config.schemaPaths = [...new Set(schemaPaths.map((x) => x.trim().replace(/^\/+|\/+$/g, '')))];
+  }
+  if (schemaIgnore !== undefined) {
+    if (!Array.isArray(schemaIgnore) || schemaIgnore.length > 200 || schemaIgnore.some((x) => typeof x !== 'string' || !x.trim())) throw bad('schemaIgnore must be a list of table names');
+    config.schemaIgnore = [...new Set(schemaIgnore.map((x) => x.trim().toLowerCase()))];
   }
   if (infoRoots !== undefined) {
     if (!Array.isArray(infoRoots) || infoRoots.length > 20 || infoRoots.some((x) => typeof x !== 'string' || !x.startsWith('/'))) throw bad('infoRoots must be a list of absolute paths');
