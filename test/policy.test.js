@@ -130,3 +130,13 @@ test('suggest P1: most headroom among known plans, Claude on ties', () => {
   assert.equal(sg('P1', q()), 'claude');
   assert.match(suggestAgent('P1', q(claude(50), cx(20))).reason, /Codex 5h 20%/);
 });
+
+test('limitStopNote: a Claude limit stop says when it resets, other stops say nothing', async () => {
+  const { limitStopNote } = await import('../public/policy.js');
+  assert.equal(limitStopNote({ case: 'error', question: "You've hit your limit · resets 2pm (UTC)" }), 'stopped: Claude limit, resets 2pm (UTC)');
+  assert.equal(limitStopNote({ case: 'error', question: 'Claude usage limit reached | resets Oct 24, 2pm' }), 'stopped: Claude limit, resets Oct 24, 2pm');
+  assert.equal(limitStopNote({ case: 'error', question: "You've hit your limit" }), 'stopped: Claude limit');
+  assert.equal(limitStopNote({ case: 'error', question: 'API Error: 500' }), '');
+  assert.equal(limitStopNote({ case: 'continue', question: "You've hit your limit" }), '');
+  assert.equal(limitStopNote(null), '');
+});

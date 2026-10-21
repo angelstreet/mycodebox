@@ -89,3 +89,13 @@ export function suggestAgent(priority, quota, config) {
   const o = best([by.claude, by.codex]);
   return o ? pick(o, 'MiniMax is under pressure, most headroom') : pick(by.minimax, 'P2 prefers MiniMax');
 }
+
+// A session stopped on Claude's own usage limit ("You've hit your limit · resets 2pm"): the card says so and when it resets.
+// No hold, no typing: the stall's error line already carries the reset time, so it is only read back here.
+export function limitStopNote(stall) {
+  if (!stall || stall.case !== 'error') return '';
+  const q = String(stall.question || '');
+  if (!/\b(?:hit your|usage) limit|\blimit reached\b/i.test(q)) return '';
+  const m = q.match(/resets?\s+(?:at\s+)?([^()\n]+?)(?:\s*\(([^)]+)\))?\s*$/i);
+  return m ? `stopped: Claude limit, resets ${m[1].trim()}${m[2] ? ` (${m[2]})` : ''}` : 'stopped: Claude limit';
+}
