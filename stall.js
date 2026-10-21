@@ -202,7 +202,8 @@ const MERGE_MAIN = String.raw`\bmerge\b[^.\n]{0,30}\bmain\b`;
 const REBASE_MAIN = String.raw`\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`;
 const GIT_PUSH = String.raw`\bgit push\b`;
 const HARD_GIT = String.raw`force[- ]?push|reset --hard|\bhard[- ]?reset\b`;
-const MIGRATE = String.raw`\bmigrat(?:e|ion)`;
+// Owner 2026-10-21: only a DESTRUCTIVE migration is a floor; an additive one (CREATE TABLE / INDEX, ADD COLUMN) is applied and merged by the session.
+const MIGRATE = String.raw`\b(?:destructive|irreversible|drop(?:s|ping)?|truncat\w*|delet\w*)\b[^.\n]{0,30}\bmigrat(?:e|ion)|\bmigrat(?:e|ion)\w*\b[^.\n]{0,30}\b(?:drop(?:s|ping)?|truncat\w*|delete|destructive|irreversible)\b`;
 const FORBIDDEN_PARTS = [
   // deploys and service control
   String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
@@ -264,7 +265,6 @@ const hardParts = ({ mergePresent = false, pushPresent = false, deployPresent = 
   if (deployPresent) { drop.add(DEPLOY_WORDS); drop.add(DEPLOY_SHIP); drop.add(RESTART_ANY); }
   let parts = [...FORBIDDEN_PARTS.filter((p) => !drop.has(p)), ...HARD_EXTRA.filter((p) => p !== PUSH_COLON)];
   if (deployPresent) parts.push(RESTART_HARD);
-  if (migrationsOk) parts.push(String.raw`\bmigrat(?:e|es|ed|ing)\b`);
   return parts;
 };
 const HARD_RES = new Map();

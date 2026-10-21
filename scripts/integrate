@@ -2,7 +2,7 @@
 # integrate: hand a pushed branch to the mycodebox integration lane (docs/v2/INTEGRATION-LANE.md). POSIX sh + curl; codebox and Mac.
 #   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait]   queue the branch (default: the current branch)
 #                                                                                        --approved-by: manager session only; skips ONLY the infra-path floor reason (another session's claim is ignored)
-#                                                                                        --migration-applied: manager only, with --approved-by; attests an ADDITIVE migration's objects already exist in the target DB (Q199)
+#                                                                                        --migration-applied: accepted and ignored since 2026-10-21 (additive migrations need no flag); it used to attest an ADDITIVE migration's objects already exist in the target DB (Q199)
 #   integrate status [<id>]                                                              one request, or the latest ten
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
 #                                                                                        an unreachable service is retried until the timeout

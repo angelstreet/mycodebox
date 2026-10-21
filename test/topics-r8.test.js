@@ -34,7 +34,7 @@ test('deploy hard parts: systemctl / pm2, unit files, publishing, terraform, kil
 });
 
 test('hard floor without merge / push / deploy: deletes, credentials, money, customers, migrations', () => {
-  for (const x of ['delete the old branch', 'rotate the api key', 'use the password', 'pay the invoice', 'email the customer', 'run the migration', 'drop the table', 'wipe the cache']) {
+  for (const x of ['delete the old branch', 'rotate the api key', 'use the password', 'pay the invoice', 'email the customer', 'run the destructive migration', 'drop the table', 'wipe the cache']) {
     assert.ok(topicSplit(x).hard, x);
     assert.ok(topicSplit(`merge X, push and deploy to env-a, and ${x}`).hard, `mixed: ${x}`);
   }
@@ -81,8 +81,8 @@ test('round 3: FORBIDDEN_RE (the safety filter) still matches push-to-main / upd
     'git push origin main',
     'update_core main --host',
     'sudo apt install foo',
-    'apply the migration',
-    'run the migration on the db',
+    'apply the destructive migration',
+    'run the destructive migration on the db',
     'systemctl restart vpt-server',
     'systemctl stop nginx',
     'pm2 restart api',

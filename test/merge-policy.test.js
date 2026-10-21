@@ -240,14 +240,15 @@ test('migrationAdditive: a non-SQL migration is additive only with the three ops
   assert.deepEqual(migrationAdditive(f, ['op.execute("UPDATE tasks SET n = 0")']), { additive: false, reason: 'execute' });
   assert.equal(migrationAdditive(f, ['whatever()']).additive, false);
 });
-test('migrationReasons: additive needs the approval and the attestation; destructive never merges', async () => {
+test('migrationReasons: additive merges with no approval or attestation (owner 2026-10-21); destructive never merges', async () => {
   const sql = 'CREATE TABLE tasks (id serial PRIMARY KEY);';
   const facts = (file, adds) => ({ sensitive: [{ file, why: 'migration' }], migrationAdds: { [file]: adds } });
   assert.deepEqual(migrationReasons({ sensitive: [] }), [], 'no migration, no reason');
   const add = facts('db/migrations/002.sql', [sql]);
-  assert.deepEqual(migrationReasons(add), ['additive migration needs --approved-by manager --migration-applied (objects already in the target DB)']);
-  assert.deepEqual(migrationReasons(add, { approvedBy: true }), ['additive migration needs --migration-applied (the manager attests the objects already exist in the target DB)']);
-  assert.deepEqual(migrationReasons(add, { approvedBy: true, migrationApplied: true }), []);
+  assert.deepEqual(migrationReasons(add), [], 'additive: no flags needed');
+  assert.deepEqual(migrationReasons(add, { approvedBy: true, migrationApplied: true }), [], 'the flags are still accepted');
+  const drop0 = facts('db/migrations/002.sql', ['ALTER TABLE tasks DROP COLUMN name;']);
+  assert.deepEqual(migrationReasons(drop0), ['migration is destructive: DROP COLUMN in db/migrations/002.sql'], 'destructive: returned without any flag');
   const drop = facts('db/migrations/002.sql', ['ALTER TABLE tasks DROP COLUMN name;']);
   const why = migrationReasons(drop, { approvedBy: true, migrationApplied: true });
   assert.deepEqual(why, ['migration is destructive: DROP COLUMN in db/migrations/002.sql']);

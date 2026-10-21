@@ -514,10 +514,10 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     const m = e?.migration;
     if (!m?.allowed || !m.files?.length) return;
     jr({ decision_id: `lane-migration-${r.id}${r.attempt > 1 ? `-${r.attempt}` : ''}`, kind: 'merge', ts: iso(),
-      question: `Merge additive migration ${m.files.join(', ')} already applied in the target DB?`, chosen: 'approve',
-      rationale: `Q199 (owner 2026-10-20): the lane cannot read the target DB, so the migration floor goes by effect. These files only add objects (CREATE TABLE / CREATE INDEX / ADD COLUMN), and the manager attested with --migration-applied that they already exist in the target DB; a destructive migration still returns to the owner`,
-      evidence: [`migration files: ${m.files.join(', ')}`, 'effect: additive only (no DROP, ALTER ... TYPE/RENAME, or data writes)', `attestation: migrationApplied (${r.migrationAppliedBy || r.approvedBy || 'manager'})`],
-      confidence: null, reversible: true, migrationApplied: true, migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
+      question: `Merge additive migration ${m.files.join(', ')}?`, chosen: 'approve',
+      rationale: `Q199 (owner 2026-10-20, narrowed 2026-10-21): the migration floor goes by effect. These files only add objects (CREATE TABLE / CREATE INDEX / ADD COLUMN), which can always be applied and merged; the session applies them itself. A destructive or unreadable migration still returns to the owner`,
+      evidence: [`migration files: ${m.files.join(', ')}`, 'effect: additive only (no DROP, ALTER ... TYPE/RENAME, or data writes)', ...(r.migrationApplied ? [`attestation (not required): migrationApplied (${r.migrationAppliedBy || r.approvedBy || 'manager'})`] : [])],
+      confidence: null, reversible: true, migrationAdditive: true, ...(r.migrationApplied ? { migrationApplied: true } : {}), migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
       approvedBy: r.approvedBy, session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id });
   }
 

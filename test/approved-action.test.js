@@ -21,8 +21,8 @@ test('approvedAction: a specific option is the action; description narrative is 
   assert.equal(forbiddenMatch([a.text, ...a.commands].join('\n')), null);
 });
 test('approvedAction: the option text itself still counts, and so do its backticked / $ commands', () => {
-  const options = [{ n: 1, text: 'Apply database migrations from the page (recommended)', recommended: true }];
-  assert.ok(forbiddenMatch(approvedAction({ closing: '1. Apply database migrations from the page (recommended)', options }).text));
+  const options = [{ n: 1, text: 'Apply destructive database migrations from the page (recommended)', recommended: true }];
+  assert.ok(forbiddenMatch(approvedAction({ closing: '1. Apply destructive database migrations from the page (recommended)', options }).text));
   const o2 = [{ n: 1, text: 'Clean up (recommended)', recommended: true }];
   const a = approvedAction({ closing: '1. Clean up (recommended)\n   runs `rm -rf build`\n   $ ls', options: o2 });
   assert.deepEqual(a.commands, ['rm -rf build', 'ls']);
@@ -107,7 +107,7 @@ const GREEN = 'Tests: 1826/1826 pass on feat.';
 test('review examples: description narrative is answered, the approved option naming migrations is escalated', async () => {
   const a = await stop('r1', makeRepo(), 'The skill differs from the installed copy.\nWhat next?\n ❯ 1. Sync the skill (recommended)\n      Copies the skill; overwrites its older SKILL.md in the target.\n   2. Leave it\n' + MENU_TAIL, 'waiting');
   assert.deepEqual(a.keys, ['1']); assert.equal(a.esc, undefined);
-  const b = await stop('r2', makeRepo(), 'What next?\n ❯ 1. Apply database migrations from the page (recommended)\n   2. Leave it\n' + MENU_TAIL, 'waiting');
+  const b = await stop('r2', makeRepo(), 'What next?\n ❯ 1. Apply destructive database migrations from the page (recommended)\n   2. Leave it\n' + MENU_TAIL, 'waiting');
   assert.deepEqual(b.keys, []); assert.ok(b.esc);
   const c = await stop('r3', makeRepo(), 'I removed the debug log earlier. The old script overwrote the cache yesterday.\nShall I continue?');
   assert.deepEqual(c.typed, ['Yes, continue.']); assert.equal(c.esc, undefined);

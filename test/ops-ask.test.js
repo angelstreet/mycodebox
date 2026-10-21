@@ -35,9 +35,9 @@ test('detection: lease and deploy asks, owner floor (round 13: only owner list),
   assert.equal(opsAsk({ case: 'waiting_deploy', question: 'waits for a deploy; also delete the old branch' }), null, 'delete the old branch is shared_data_delete: owner item');
   assert.equal(opsAsk(od('Should I deploy with sudo?')), null, 'sudo is a §15 hard topic: it stays with the owner (review finding 8)');
   assert.equal(opsAsk(od('Deploy and use the api key from the vault?')), null, 'third-party api key IS in OWNER_FLOOR (owner-held credential)');
-  assert.equal(opsAsk(od('Run the migrations on deploy?')), null, 'a migration is a §15 hard topic: owner');
+  assert.equal(opsAsk(od('Run the destructive migrations on deploy?')), null, 'a migration is a §15 hard topic: owner');
   assert.equal(opsAsk(od('Should I restart the ghosty service?')), null, 'a service unit is a §15 hard topic: owner');
-  for (const q of ['Deploy main to env-a and force-push the release tag?', 'Deploy and run the production migration?', 'Deploy and edit /etc/sudoers?', 'Deploy and publish the npm package?']) {
+  for (const q of ['Deploy main to env-a and force-push the release tag?', 'Deploy and run the destructive production migration?', 'Deploy and edit /etc/sudoers?', 'Deploy and publish the npm package?']) {
     assert.equal(opsAsk(od(q)), null, q);
     assert.equal(opsAsk(od(q, { topics: { hard: 'x' } })), null, `${q} (topics given)`);
   }
@@ -102,13 +102,13 @@ test('round 13 case 1: "apply migration 0018 to Neon" -- FORBIDDEN_RE catches it
   // ops-ask still needs a lease or deploy topic to mark it as a manager item; the manager item routing is what
   // the deploy evaluation handles in production. In the unit test we verify the ROUTING floor no longer escalates
   // it to the owner (OWNER_FLOOR does not match migration).
-  assert.equal(opsAsk(od('Apply migration 0018 to Neon now?', { status: 'needs-owner' })), null,
+  assert.equal(opsAsk(od('Apply the destructive migration 0018 to Neon now?', { status: 'needs-owner' })), null,
     'migration alone is not lease / deploy; the manager item routing comes from the deploy evaluation in production');
   // The routing floor (OWNER_FLOOR) does not reject it (migration is not an owner topic):
-  assert.equal(ownerFloorForTest('Apply migration 0018 to Neon now?'), null,
+  assert.equal(ownerFloorForTest('Apply the destructive migration 0018 to Neon now?'), null,
     'migration is NOT in OWNER_FLOOR (round 13) -- routing treats it as a manager item');
   // But the safety filter (FORBIDDEN_RE) DOES catch it -- never auto-answered.
-  assert.ok(safetyFloorForTest('Apply migration 0018 to Neon now?'),
+  assert.ok(safetyFloorForTest('Apply the destructive migration 0018 to Neon now?'),
     'migration IS in FORBIDDEN_RE (the safety filter) -- never auto-answered');
 });
 
