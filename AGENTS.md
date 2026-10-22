@@ -54,6 +54,12 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   End the turn with `STATUS: waiting: integration <id>`; a returned request is fixed on your branch and requested again.
   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then `STATUS: waiting: integration <id>`.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
+- Owner-reported bug queues are drained, not negotiated (owner, 2026-10-21): work every reported problem through to
+  shipped without stopping to ask "which one next?". Rank them yourself and take them one fix at a time. Ask only on a
+  hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous to act on.
+  `STATUS: done` is only honest when the queue is empty. See [quickfix.md](quickfix.md) §0.
+- Never write work-in-progress into the live checkout (`~/ghosty-sessions`), including doc edits. It blocks deploys and
+  risks committing secrets. Every change, docs included, goes in a worktree.
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.
 
