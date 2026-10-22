@@ -135,6 +135,9 @@ export function sensitivePath(f) {
   if (/^\.env/.test(base) || /^(?:\.netrc|\.npmrc|\.pypirc|authorized_keys)$/.test(base)) return 'secret';
   if (/\.(?:pem|key|p12|pfx|jks)$/i.test(base) || /^id_(?:rsa|ed25519|ecdsa|dsa)/.test(base)) return 'secret';
   if (segs.some((s) => /secret|credential|password/i.test(s))) return 'secret';
+  // The runner skips <name>_rollback.sql in a migrations dir (platform_update/migrations.py, upgrade_notes.py: "do not apply"), so the file
+  // is never run on a database by the pipeline. Only that exact suffix: _down.sql is NOT skipped by the runner and stays a migration.
+  if (/(^|\/)migrations?\/(?:[^/]+\/)*[^/]+_rollback\.sql$/.test(lower)) return null;
   if (/(^|\/)(?:migrations?|migrate|alembic|flyway|liquibase)\//.test(lower) || /(^|\/)alembic\.ini$/.test(lower) || /(^|\/)db\/(?:migrate|migrations?|schema\.rb|structure\.sql)/.test(lower) || /\.sql$/.test(lower)) return 'migration';
   if (/sudoers/.test(lower)) return 'sudoers';
   if (/\.(service|timer|socket)$/.test(lower) || /(^|\/)systemd\//.test(lower)) return 'systemd';
@@ -171,7 +174,8 @@ const SQL_ADDITIVE = [
   /^comment\s+on\b/,                                                                    // COMMENT ON TABLE x IS '...'
   /^grant\b/,                                                                           // GRANT SELECT ON t TO app
   /^create\s+policy\b/,                                                                 // CREATE POLICY "p" ON t
-  /^create\s+function\b/,                                                                // the body is not read (CREATE OR REPLACE is refused below)
+  /^create\s+(?:or\s+replace\s+)?function\b/,                                              // the body is not read ($body$); OR REPLACE of a function is how a file stays re-runnable
+  /^create\s+(?:constraint\s+)?trigger\b/,                                                // a plain CREATE TRIGGER (an existing one fails, it never rewrites)
   /^create\s+(?:unique\s+|fulltext\s+|spatial\s+|concurrently\s+|temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)*(?:table|index|sequence|view|type|extension|schema)\b/,
 ];
 // ALTER TABLE is additive action by action (ADD COLUMN / ADD CONSTRAINT / ENABLE|FORCE ROW LEVEL SECURITY), so a mixed
@@ -198,6 +202,11 @@ const SQL_DESTRUCTIVE = [
 const SQL_DROP_POLICY = /^drop\s+policy\s+(?:if\s+exists\s+)?("[^"]+"|[^\s]+)\s+on\s+("[^"]+"|[^\s]+)/;
 const SQL_CREATE_POLICY = /^create\s+policy\s+(?:if\s+not\s+exists\s+)?("[^"]+"|[^\s]+)\s+on\s+("[^"]+"|[^\s]+)/;
 const policyParts = (sql) => { const m = SQL_CREATE_POLICY.exec(sql) || SQL_DROP_POLICY.exec(sql); return m ? [m[1], m[2]] : null; };
+// The same pattern for triggers: DROP TRIGGER [IF EXISTS] t ON tbl is additive only when a LATER CREATE TRIGGER t ... ON tbl follows.
+// A bare drop (nothing creates it again) removes a trigger and stays destructive.
+const SQL_DROP_TRIGGER = /^drop\s+trigger\s+(?:if\s+exists\s+)?("[^"]+"|[^\s]+)\s+on\s+("[^"]+"|[^\s]+)/;
+const SQL_CREATE_TRIGGER = /^create\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+("[^"]+"|[^\s]+)\s[\s\S]*?\bon\s+("[^"]+"|[^\s]+)/;
+const triggerParts = (sql) => { const m = SQL_CREATE_TRIGGER.exec(sql) || SQL_DROP_TRIGGER.exec(sql); return m ? [m[1], m[2]] : null; };
 const policyKey = ([name, table]) => `${String(name).replace(/["'`]/g, '').toLowerCase()} on ${String(table).replace(/["'`]/g, '').toLowerCase()}`;
 // The default-grant rule: REVOKE <privs> ON [TABLE] <obj>[, <obj>...] FROM <roles> is additive only when EVERY object it names is
 // CREATEd as a table EARLIER in the same file. It then strips the default grants of a table this file adds, so by effect it removes
@@ -206,10 +215,41 @@ const policyKey = ([name, table]) => `${String(name).replace(/["'`]/g, '').toLow
 const SQL_REVOKE_ON = /^revoke\b[\s\S]*?\bon\s+(.+?)\s+from\b/;
 // the created table's name is read whole: a dotted path whose segments may be quoted (public.ai_benchmarks, "public"."ai_benchmarks")
 const SQL_CREATE_TABLE = /^create\s+table\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|[\w$]+)(?:\s*\.\s*(?:"[^"]+"|[\w$]+))*)/;
+// The same rule for the other objects a file creates and then locks down: REVOKE/GRANT ON SEQUENCE s (a serial/identity column's
+// <table>_<col>_seq, or a CREATE SEQUENCE) and REVOKE ON FUNCTION f(...) (a CREATE [OR REPLACE] FUNCTION f(...) earlier).
+const SQL_CREATE_SEQUENCE = /^create\s+(?:temp(?:orary)?\s+|unlogged\s+)?sequence\s+(?:if\s+not\s+exists\s+)?((?:"[^"]+"|[\w$]+)(?:\s*\.\s*(?:"[^"]+"|[\w$]+))*)/;
+const SQL_CREATE_FUNCTION = /^create\s+(?:or\s+replace\s+)?function\s+((?:"[^"]+"|[\w$]+)(?:\s*\.\s*(?:"[^"]+"|[\w$]+))*)\s*\(/;
+// Split on commas outside parentheses: a function's argument list has commas of its own.
+const splitTop = (text) => {
+  const out = []; let depth = 0, cur = '';
+  for (const c of text) {
+    if (c === '(') depth++; else if (c === ')') depth--;
+    if (c === ',' && depth <= 0) { out.push(cur.trim()); cur = ''; } else cur += c;
+  }
+  out.push(cur.trim());
+  return out.filter(Boolean);
+};
 // The object list, one entry per comma: REVOKE ALL ON TABLE t FROM app and REVOKE ALL ON t, t2 FROM app name the same objects.
+// -> { kind: 'table'|'sequence'|'function', objs } | null
 const revokeObjects = (sql) => {
   const m = SQL_REVOKE_ON.exec(sql);
-  return m ? m[1].replace(/^table\s+/, '').split(',').map((o) => o.trim()).filter(Boolean) : null;
+  if (!m) return null;
+  const k = /^(table|sequence|function)\s+/.exec(m[1]);
+  return { kind: k ? k[1] : 'table', objs: splitTop(k ? m[1].slice(k[0].length) : m[1]) };
+};
+// "public.f(a int, b text) returns ..." -> key of f plus its argument count, so an overload the file did not create does not pass.
+const fnKey = (text) => {
+  const i = text.indexOf('(');
+  if (i < 0) return `${objectKey(text)}/0`;
+  let depth = 0, j = i;
+  for (; j < text.length; j++) { if (text[j] === '(') depth++; else if (text[j] === ')' && --depth === 0) break; }
+  return `${objectKey(text.slice(0, i))}/${splitTop(text.slice(i + 1, j)).length}`;
+};
+// The sequences a CREATE TABLE makes: <table>_<col>_seq for every serial / identity column (id -> <table>_id_seq).
+const tableSequences = (sql, key) => {
+  const body = sql.slice(sql.indexOf('(') + 1);
+  const cols = [...body.matchAll(/(?:^|[(,])\s*("[^"]+"|\w+)\s+(?:(?:big|small)?serial\b|\w+\s+generated\s+(?:always|by\s+default)\s+as\s+identity\b)/g)];
+  return cols.map((c) => `${key}_${c[1].replace(/"/g, '')}_seq`);
 };
 // A bare name is public, so "x" and "public.x" are the same object; "other.x" is not. Quotes and case never matter.
 const objectKey = (name) => { const p = String(name).replace(/["'`]/g, '').toLowerCase().split('.').map((s) => s.trim()).filter(Boolean); return p.length > 1 ? p.join('.') : `public.${p[0] || ''}`; };
@@ -268,7 +308,7 @@ function sqlAdditive(s) {
   const head = s.toLowerCase().replace(/;+\s*$/, '').replace(/^[^a-z$]*/, '');
   if (head.startsWith('\\')) return { reason: 'a psql meta-command' };
   for (const re of SQL_ADDITIVE) if (re.test(head)) return true;
-  if (SQL_DROP_POLICY.test(head)) return null;   // additive only as the re-create pattern, the caller has the later statements
+  if (SQL_DROP_POLICY.test(head) || SQL_DROP_TRIGGER.test(head)) return null;   // additive only as the re-create pattern, the caller has the later statements
   if (SQL_REVOKE_ON.test(head)) return null;      // additive only on tables this file CREATEs earlier, the caller has the earlier statements
   const alter = SQL_ALTER_TABLE.exec(head);
   if (alter && alter[1].split(/,\s*(?=add\b|drop\b|alter\b|rename\b|set\b|owner\b)/).every((c) => SQL_ALTER_ADDITIVE.test(c.trim()))) return true;
@@ -310,17 +350,35 @@ export function migrationAdditive(file, addedLines) {
       return heads.some((h, j) => j > i && SQL_CREATE_POLICY.test(h) && policyKey(policyParts(h)) === k);
     };
     // the default-grant pattern: REVOKE ... ON t is additive only when every object it names is CREATEd as a table EARLIER in this file
+    // (also a sequence of a table or CREATE SEQUENCE earlier, and a function CREATEd earlier)
     const ownTables = (i) => {
-      const objs = revokeObjects(heads[i]);
-      if (!objs) return false;
-      return objs.every((o) => heads.some((h, j) => j < i && SQL_CREATE_TABLE.test(h) && objectKey(SQL_CREATE_TABLE.exec(h)[1]) === objectKey(o)));
+      const r = revokeObjects(heads[i]);
+      if (!r) return false;
+      const earlier = heads.slice(0, i);
+      if (r.kind === 'function') {
+        const made = earlier.filter((h) => SQL_CREATE_FUNCTION.test(h)).map((h) => fnKey(h.replace(/^create\s+(?:or\s+replace\s+)?function\s+/, '')));
+        return r.objs.every((o) => made.includes(fnKey(o)));
+      }
+      if (r.kind === 'sequence') {
+        const made = earlier.flatMap((h) => {
+          const t = SQL_CREATE_TABLE.exec(h), q = SQL_CREATE_SEQUENCE.exec(h);
+          return t ? tableSequences(h, objectKey(t[1])) : q ? [objectKey(q[1])] : [];
+        });
+        return r.objs.every((o) => made.includes(objectKey(o)));
+      }
+      return r.objs.every((o) => earlier.some((h) => SQL_CREATE_TABLE.test(h) && objectKey(SQL_CREATE_TABLE.exec(h)[1]) === objectKey(o)));
+    };
+    // the trigger pattern: DROP TRIGGER t ON tbl is additive only when a LATER statement CREATEs trigger t on tbl again
+    const triggerRecreated = (i) => {
+      const k = policyKey(triggerParts(heads[i]));
+      return heads.some((h, j) => j > i && SQL_CREATE_TRIGGER.test(h) && policyKey(triggerParts(h)) === k);
     };
     for (let i = 0; i < heads.length; i++) {
       const r = sqlAdditive(cut.stmts[i]);
       if (r === true) continue;
       // a null verdict is a statement the file itself redeems: a policy created again later, a REVOKE on tables created earlier
-      if (r === null && (SQL_DROP_POLICY.test(heads[i]) ? recreated(i) : ownTables(i))) continue;
-      return { additive: false, reason: r ? r.reason : SQL_REVOKE_ON.test(heads[i]) ? 'REVOKE' : `DROP POLICY in "${heads[i].slice(0, 80)}"` };
+      if (r === null && (SQL_DROP_POLICY.test(heads[i]) ? recreated(i) : SQL_DROP_TRIGGER.test(heads[i]) ? triggerRecreated(i) : ownTables(i))) continue;
+      return { additive: false, reason: r ? r.reason : SQL_REVOKE_ON.test(heads[i]) ? 'REVOKE' : SQL_DROP_TRIGGER.test(heads[i]) ? 'DROP TRIGGER' : `DROP POLICY in "${heads[i].slice(0, 80)}"` };
     }
     return { additive: true };
   }
