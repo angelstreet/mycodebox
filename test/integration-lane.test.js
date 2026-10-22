@@ -505,21 +505,6 @@ test('floor: an additive migration merges with no flags (owner 2026-10-21), is j
   assert.equal(flagged.state, 'merged', 'the old flags are still accepted');
 });
 
-test('floor: an ADD CONSTRAINT CHECK migration merges only with --migration-applied, and the journal says attestedCheck', async () => {
-  const w = makeWorld();
-  const sql = 'ALTER TABLE tasks ADD CONSTRAINT tasks_shape CHECK (a > 0);\n';
-  w.branch('chk', { 'db/migrations/005.sql': sql });
-  const before = w.main();
-  const no = await go(mk(w, { lane: { mergeEval: undefined } }).lane, { branch: 'chk' });
-  assert.equal(no.state, 'returned'); assert.equal(w.main(), before);
-  assert.match(JSON.stringify(no), /ADD CONSTRAINT/);
-  const journal = [];
-  const yes = await go(mk(w, { lane: { mergeEval: undefined, journal: (j) => journal.push(j) } }).lane, { branch: 'chk', approvedBy: 'manager', migrationApplied: true });
-  assert.equal(yes.state, 'merged', JSON.stringify(yes));
-  const mig = journal.filter((j) => j.decision_id === `lane-migration-${yes.id}`);
-  assert.equal(mig.length, 1); assert.equal(mig[0].migrationAdditive, true); assert.equal(mig[0].attestedCheck, true);
-});
-
 test('floor: a destructive or unreadable migration returns, whatever the flags (an additive one merges without them)', async () => {
   const w = makeWorld();
   w.branch('add-noatt', { 'db/migrations/002.sql': 'CREATE TABLE tasks (id serial PRIMARY KEY);\n' });

@@ -13,7 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
-import { gitFacts, mergeFloor, isConvention, migrationReasons, migrationAttestedCheck } from './merge-policy.js';
+import { gitFacts, mergeFloor, isConvention, migrationReasons } from './merge-policy.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
 
 export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled']);
@@ -237,7 +237,7 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
   const mig = migrationReasons(facts, { approvedBy: approveInfra, migrationApplied });
   const reasons = base.filter((x) => !MIGRATION_REASON.test(x)).concat(mig);
   return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts, infra: { files, only: !approveInfra && files.length > 0 && rest.length === 0 },
-    migration: { files: (facts.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file), allowed: mig.length === 0 && base.length > 0, applied: !!migrationApplied, attestedCheck: migrationAttestedCheck(facts, { migrationApplied }) } };
+    migration: { files: (facts.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file), allowed: mig.length === 0 && base.length > 0, applied: !!migrationApplied } };
 }
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
@@ -516,8 +516,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     jr({ decision_id: `lane-migration-${r.id}${r.attempt > 1 ? `-${r.attempt}` : ''}`, kind: 'merge', ts: iso(),
       question: `Merge additive migration ${m.files.join(', ')}?`, chosen: 'approve',
       rationale: `Q199 (owner 2026-10-20, narrowed 2026-10-21): the migration floor goes by effect. These files only add objects (CREATE TABLE / CREATE INDEX / ADD COLUMN), which can always be applied and merged; the session applies them itself. A destructive or unreadable migration still returns to the owner`,
-      evidence: [`migration files: ${m.files.join(', ')}`, 'effect: additive only (no DROP, ALTER ... TYPE/RENAME, or data writes)', ...(m.attestedCheck ? ['ALTER TABLE ... ADD CONSTRAINT ... CHECK read as additive only because the request attests migrationApplied'] : []), ...(r.migrationApplied ? [`attestation (not required): migrationApplied (${r.migrationAppliedBy || r.approvedBy || 'manager'})`] : [])],
-      confidence: null, reversible: true, migrationAdditive: true, ...(r.migrationApplied ? { migrationApplied: true } : {}), ...(m.attestedCheck ? { attestedCheck: true } : {}), migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
+      evidence: [`migration files: ${m.files.join(', ')}`, 'effect: additive only (no DROP, ALTER ... TYPE/RENAME, or data writes)', ...(r.migrationApplied ? [`attestation (not required): migrationApplied (${r.migrationAppliedBy || r.approvedBy || 'manager'})`] : [])],
+      confidence: null, reversible: true, migrationAdditive: true, ...(r.migrationApplied ? { migrationApplied: true } : {}), migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
       approvedBy: r.approvedBy, session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id });
   }
 

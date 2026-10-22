@@ -83,8 +83,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, RLS and
   policies) can always be applied and merged without asking: the session applies it itself, then `integrate request`
   merges it with no `--approved-by` / `--migration-applied` (still accepted, ignored) and journals `migrationAdditive: true`;
-  only a destructive or unreadable migration is returned to the owner (one readable exception: `ALTER TABLE ... ADD CONSTRAINT ... CHECK (...)`
-  already applied on the target DB is additive only with `integrate request --migration-applied`, journaled `attestedCheck: true`). Merges are an evaluated manager decision (owner, 2026-10-14): the
+  only a destructive or unreadable migration is returned to the owner. Merges are an evaluated manager decision (owner, 2026-10-14): the
   manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the
   session reports its tests green on that branch (or the change is docs-only; test code needs the green report), the diff touches no secrets,
   migrations, sudoers or units, and Jev (or the manager's own reasoning when Jev is unavailable) rates it safe at or
