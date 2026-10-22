@@ -11,6 +11,7 @@ import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
+import { fitAction } from '/fit-policy.js';
 import { registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
@@ -453,19 +454,21 @@ async function sendFit(session) {
   const cols = Math.max(20, Math.min(400, entry.fitCols)), rows = Math.max(5, Math.min(200, entry.fitRows));
   const key = `${cols}x${rows}`;
   const curC = entry.paneCols || st.cols, curR = entry.paneRows || st.rows;   // the live size from the pane stream beats the 1 s status poll
-  if (cols === curC && rows === curR) { entry.reqKey = key; entry.reclaims = 0; return; }
-  if (entry.reqKey === key) {
-    // we already asked for this size but the pane is not at it: another client (a phone in a small grid, a re-attach)
-    // took the window back. Ask again, but only from a focused page, at most every 3 s, and give up after 4 tries.
-    const taken = Math.abs((curC || 0) - cols) > 1;
-    if (!taken || !document.hasFocus() || Date.now() - (entry.reqAt || 0) < 3000 || (entry.reclaims || 0) >= 4) return;
-    entry.reclaims = (entry.reclaims || 0) + 1;
-  } else entry.reclaims = 0;
-  entry.reqKey = key; entry.reqAt = Date.now();
+  if (cols === curC && rows === curR) { entry.reqKey = key; return; }
+  // the server may grant a bit more than asked (it keeps a 60-column minimum): the pane at what it granted is not "taken"
+  if (entry.reqKey === key && entry.granted && entry.granted.cols === curC && entry.granted.rows === curR) return;
+  // One window, many clients: claim the size once, then fight for it only while the user is using this client (fit-policy.js).
+  const act = fitAction({ now: Date.now(), lastInput: lastInputAt, asked: !!entry.asked, askedSame: entry.reqKey === key,
+    taken: Math.abs((curC || 0) - cols) > 1, hasFocus: document.hasFocus(), reqAt: entry.reqAt || 0, reclaims: entry.reclaims || 0 });
+  if (act === 'wait') return;
+  if (act === 'reclaim') entry.reclaims = (entry.reclaims || 0) + 1; else entry.reclaims = 0;
+  entry.asked = true;
+  entry.reqKey = key; entry.reqAt = Date.now(); entry.granted = null;
   try {
     const res = await fetch(`/api/resize/${encodeURIComponent(session)}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cols, rows }),
     });
+    if (res.ok) { const g = await res.json().catch(() => null); if (g && g.ok) entry.granted = { cols: g.cols, rows: g.rows }; }
     if (res.status === 409) entry.noFit = true;
     else if (!res.ok) setTimeout(() => { if (entry.reqKey === key) entry.reqKey = ''; }, 15000);
   } catch { entry.reqKey = ''; }
@@ -475,6 +478,9 @@ async function sendFit(session) {
 // asks once per size, so a later resize from elsewhere would stick. Re-claim
 // the size whenever the user actually interacts with this client: window
 // focus, coming back to the tab, or touching a card.
+// The user's last input in this page: only a client in use may take the shared window's size back (fit-policy.js).
+let lastInputAt = 0;
+for (const ev of ['pointerdown', 'touchstart', 'keydown', 'wheel']) document.addEventListener(ev, () => { lastInputAt = Date.now(); }, { capture: true, passive: true });
 function refit(name) {
   const e = state.terms.get(name);
   if (!e) return;
@@ -482,8 +488,8 @@ function refit(name) {
   scheduleFit(name);
 }
 function refitVisible() { for (const name of state.terms.keys()) refit(name); }
-window.addEventListener('focus', refitVisible);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refitVisible(); });
+window.addEventListener('focus', () => { lastInputAt = Date.now(); refitVisible(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { lastInputAt = Date.now(); refitVisible(); } });
 document.addEventListener('pointerdown', (e) => {
   const cell = e.target.closest?.('.cell[data-session]');
   if (cell) refit(cell.dataset.session);
