@@ -17,9 +17,17 @@ import { needsOwner, parseQuestionForm, parseMultiReply, formatMultiAnswer, clip
 
 // Same predicate renderAttention() (NEEDS YOU strip) uses: a waiting session, or a finished one whose
 // closing question the AI reviewer sent to the owner (triage done / skipped / error, not pending).
+// The manager's own routine stops (manager.json managerSessions): a deploy wait, "continue?", a finished step. A real owner question
+// (owner_decision, permission, owner_action) or any stop with a forbidden topic stays the owner's even in the manager's session.
+const MANAGER_OPERATIONAL = ['waiting_deploy', 'merge_wait', 'continue', 'stopped_short', 'done', 'background_wait', 'own_job_wait', 'menu_recommended'];
+export function isManagerOperationalStop(st) {
+  if (!st?.managerSession) return false;
+  const c = st.stall?.case || st.triage?.case;
+  return MANAGER_OPERATIONAL.includes(c) && !st.stall?.forbidden;
+}
 export function isOwnersTurn(st) {
   if (!st) return false;
-  if (st.managerSession) return false;   // the manager agent's own stops are never the owner's (manager.json managerSessions)
+  if (isManagerOperationalStop(st)) return false;
   if (st.stall?.escalatedTo === 'manager') return false;   // a lease or deploy stop is the manager's, never the owner's (ops-ask.js)
   if (st.state === 'waiting') return true;
   return st.state === 'done' && needsOwner(st) && !!st.triage && st.triage.state !== 'pending';
