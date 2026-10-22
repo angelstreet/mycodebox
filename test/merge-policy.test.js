@@ -214,8 +214,8 @@ test('migrationAdditive: a statement is read whole, whatever its markers', () =>
   assert.equal(migrationAdditive(f, ['-- DROP TABLE y', 'CREATE TABLE x (id int);']).additive, true);
   assert.equal(migrationAdditive(f, ["INSERT INTO t VALUES ('DROP TABLE y');"]).additive, false);
   assert.equal(migrationAdditive(f, ['/* nothing */ CREATE TABLE x (id int); DROP TABLE y;']).additive, false);
-  // OR REPLACE rewrites an object that may already exist, so it is not additive even when it is a FUNCTION
-  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION f() RETURNS void AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: false, reason: 'replaces an existing object' });
+  // OR REPLACE of a FUNCTION is additive (how a file stays re-runnable); of a VIEW it rewrites an object that may exist
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION f() RETURNS void AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE VIEW v AS SELECT 1;']), { additive: false, reason: 'replaces an existing object' });
   // a statement we cannot read is not additive
   assert.deepEqual(migrationAdditive(f, ["INSERT INTO t VALUES ('unterminated);"]), { additive: false, reason: 'unbalanced quote' });
@@ -574,4 +574,80 @@ test('evaluateMerge: a table nothing creates escalates the merge; the config key
   assert.ok(!has(ignored), ignored.reasons.join('; '));
   const custom = await ev(schemaRepo({ 'src.js': USE_JS, 'db/mytables/001.sql': MIG }), `merge feat. ${GREEN}`, { config: { schemaPaths: ['db/mytables'] } });
   assert.ok(!has(custom), custom.reasons.join('; '));
+});
+
+// The gaps the audit-trail migration hit (REVOKE on a sequence / function it creates, DROP TRIGGER re-created, a rollback file).
+test('migrationAdditive: REVOKE on a sequence or function the file creates is additive', () => {
+  const f = 'db/migrations/001.sql';
+  const T = 'CREATE TABLE IF NOT EXISTS public.events (id BIGSERIAL PRIMARY KEY, n int GENERATED ALWAYS AS IDENTITY, other int);';
+  for (const sql of ['REVOKE ALL ON SEQUENCE public.events_id_seq FROM anon;', 'REVOKE ALL ON SEQUENCE events_id_seq FROM anon, authenticated;',
+    'REVOKE ALL ON SEQUENCE public.events_n_seq FROM anon;', 'GRANT USAGE, SELECT ON SEQUENCE public.events_id_seq TO svc;']) {
+    assert.deepEqual(migrationAdditive(f, [T, sql]), { additive: true }, sql);
+  }
+  assert.deepEqual(migrationAdditive(f, ['CREATE SEQUENCE public.s1;', 'REVOKE ALL ON SEQUENCE s1 FROM anon;']), { additive: true });
+  // not created here, a non-serial column, created after the REVOKE, another schema
+  for (const list of [['REVOKE ALL ON SEQUENCE public.events_id_seq FROM anon;'], [T, 'REVOKE ALL ON SEQUENCE public.events_other_seq FROM anon;'],
+    ['REVOKE ALL ON SEQUENCE public.events_id_seq FROM anon;', T], [T, 'REVOKE ALL ON SEQUENCE other.events_id_seq FROM anon;'],
+    [T, 'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon;']]) {
+    assert.deepEqual(migrationAdditive(f, list), { additive: false, reason: 'REVOKE' }, list.join(' '));
+  }
+  const fn = 'CREATE OR REPLACE FUNCTION public.log_it() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; EXCEPTION WHEN OTHERS THEN RETURN NEW; END $$;';
+  assert.deepEqual(migrationAdditive(f, [fn, 'REVOKE ALL ON FUNCTION public.log_it() FROM PUBLIC, anon, authenticated;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['CREATE FUNCTION add2(a int, b int) RETURNS int AS $$ SELECT a + b $$ LANGUAGE sql;', 'REVOKE ALL ON FUNCTION add2(int, int) FROM anon;']), { additive: true });
+  for (const list of [['REVOKE ALL ON FUNCTION public.log_it() FROM anon;'], ['REVOKE ALL ON FUNCTION public.log_it() FROM anon;', fn], [fn, 'REVOKE ALL ON FUNCTION public.other_fn() FROM anon;'],
+    [fn, 'REVOKE ALL ON FUNCTION public.log_it(int) FROM anon;'], [fn, 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon;']]) {
+    assert.deepEqual(migrationAdditive(f, list), { additive: false, reason: 'REVOKE' }, list.join(' '));
+  }
+});
+test('migrationAdditive: DROP TRIGGER is additive only as the re-create pattern', () => {
+  const f = 'db/migrations/001.sql';
+  const create = 'CREATE TRIGGER trg AFTER UPDATE OF seen_at ON auth.accounts FOR EACH ROW EXECUTE FUNCTION public.log_it();';
+  assert.deepEqual(migrationAdditive(f, ['DROP TRIGGER IF EXISTS trg ON auth.accounts;', create]), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['DROP TRIGGER IF EXISTS "trg" ON auth.accounts;', create]), { additive: true });
+  assert.deepEqual(migrationAdditive(f, [create]), { additive: true });
+  // a bare drop, a different trigger or table, a create BEFORE the drop
+  assert.deepEqual(migrationAdditive(f, ['DROP TRIGGER IF EXISTS trg ON auth.accounts;']), { additive: false, reason: 'DROP TRIGGER' });
+  assert.deepEqual(migrationAdditive(f, ['DROP TRIGGER trg ON auth.accounts;']), { additive: false, reason: 'DROP TRIGGER' });
+  assert.equal(migrationAdditive(f, ['DROP TRIGGER IF EXISTS other ON auth.accounts;', create]).additive, false);
+  assert.equal(migrationAdditive(f, ['DROP TRIGGER IF EXISTS trg ON auth.other;', create]).additive, false);
+  assert.equal(migrationAdditive(f, [create, 'DROP TRIGGER IF EXISTS trg ON auth.accounts;']).additive, false);
+});
+test('migrationAdditive: the audit-trail migration (inline copy of its statements) reads additive; destructive neighbours do not', () => {
+  const f = 'setup/db/migrations/20261022a_x.sql';
+  const file = [
+    '-- header; with a semicolon', 'BEGIN;',
+    'CREATE TABLE IF NOT EXISTS public.audit_x (', '  id BIGSERIAL PRIMARY KEY,', "  kind TEXT NOT NULL DEFAULT 'a' CHECK (kind IN ('a','b')),", "  meta JSONB NOT NULL DEFAULT '{}'::jsonb", ');',
+    'CREATE INDEX IF NOT EXISTS idx_audit_x_kind ON public.audit_x (kind);',
+    "COMMENT ON TABLE public.audit_x IS 'append-only; service role only';",
+    'ALTER TABLE public.audit_x ENABLE ROW LEVEL SECURITY;',
+    'DROP POLICY IF EXISTS "p_all" ON public.audit_x;', 'CREATE POLICY "p_all" ON public.audit_x', '    FOR ALL TO service_role USING (true) WITH CHECK (true);',
+    'REVOKE ALL ON public.audit_x FROM anon, authenticated;', 'REVOKE ALL ON SEQUENCE public.audit_x_id_seq FROM anon, authenticated;',
+    'GRANT ALL ON public.audit_x TO service_role;', 'GRANT USAGE, SELECT ON SEQUENCE public.audit_x_id_seq TO service_role;',
+    'CREATE OR REPLACE FUNCTION public.audit_x_log() RETURNS trigger', 'LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$', 'BEGIN',
+    "    INSERT INTO public.audit_x (kind) VALUES ('a');", '    RETURN NEW;', 'EXCEPTION WHEN OTHERS THEN', '    RETURN NEW;  -- never block', 'END $$;',
+    'REVOKE ALL ON FUNCTION public.audit_x_log() FROM PUBLIC, anon, authenticated;',
+    'DROP TRIGGER IF EXISTS audit_x_login ON auth.accounts;',
+    'CREATE TRIGGER audit_x_login AFTER UPDATE OF seen_at ON auth.accounts', '    FOR EACH ROW EXECUTE FUNCTION public.audit_x_log();', 'COMMIT;',
+  ];
+  assert.deepEqual(migrationAdditive(f, file), { additive: true });
+  assert.deepEqual(migrationAdditive('setup/db/schema/079_x.sql', file), { additive: true });
+  // destructive statements stay destructive even beside all of that
+  for (const [sql, why] of [['DROP TABLE public.audit_x;', 'DROP TABLE'], ['ALTER TABLE public.audit_x DROP COLUMN kind;', 'DROP COLUMN'], ['TRUNCATE public.audit_x;', 'TRUNCATE'],
+    ['DELETE FROM public.audit_x;', 'DELETE'], ['DROP FUNCTION IF EXISTS public.audit_x_log() CASCADE;', 'DROP FUNCTION'], ['DROP TRIGGER IF EXISTS gone ON auth.accounts;', 'DROP TRIGGER'],
+    ['REVOKE ALL ON public.existing_table FROM anon;', 'REVOKE']]) {
+    assert.deepEqual(migrationAdditive(f, [...file, sql]), { additive: false, reason: why }, sql);
+  }
+});
+test('rollback files: *_rollback.sql under a migrations dir is not a migration; elsewhere, and _down.sql, still are', async () => {
+  const { sensitivePath } = await import('../merge-policy.js');
+  assert.equal(sensitivePath('setup/db/migrations/20261022a_x_rollback.sql'), null);
+  assert.equal(sensitivePath('db/migrations/sub/001_rollback.sql'), null);
+  assert.equal(sensitivePath('setup/db/migrations/20261022a_x.sql'), 'migration');
+  assert.equal(sensitivePath('setup/db/migrations/20261022a_x_down.sql'), 'migration');   // the runner does not skip _down
+  assert.equal(sensitivePath('setup/db/schema/079_x_rollback.sql'), 'migration');
+  assert.equal(sensitivePath('tools/x_rollback.sql'), 'migration');
+  const facts = (file, lines) => ({ sensitive: [{ file, why: sensitivePath(file) }].filter((s) => s.why), migrationAdds: { [file]: lines } });
+  assert.deepEqual(migrationReasons(facts('db/migrations/001_rollback.sql', ['DROP TABLE x;'])), []);
+  assert.equal(migrationReasons(facts('tools/001_rollback.sql', ['DROP TABLE x;'])).length, 1);
+  assert.equal(migrationReasons(facts('db/migrations/001_down.sql', ['DROP TABLE x;'])).length, 1);
 });
