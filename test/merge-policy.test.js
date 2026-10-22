@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDecision } from '../orchestration/task-contract.js';
-import { MERGE_DEFAULTS, parseMergeAsk, testEvidence, gitFacts, mergeFloor, reasoningDecision, evaluateMerge, journalRecord, composeReply, migrationAdditive, migrationReasons, schemaReasons } from '../merge-policy.js';
+import { MERGE_DEFAULTS, parseMergeAsk, testEvidence, gitFacts, mergeFloor, reasoningDecision, evaluateMerge, journalRecord, composeReply, migrationAdditive, migrationReasons, migrationAttestedCheck, schemaReasons } from '../merge-policy.js';
 import { hardMatch } from '../stall.js';
 import { makeRepo, commit, git } from './helpers-git.js';
 
@@ -235,7 +235,7 @@ test('migrationAdditive: a statement is read whole, whatever its markers', () =>
   assert.equal(migrationAdditive(f, ['\\i /tmp/evil.sql']).additive, false);
   // ALTER TABLE is additive action by action
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN c int NOT NULL DEFAULT 0;']), { additive: true });
-  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);']), { additive: false, reason: 'ADD CONSTRAINT' });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t FORCE ROW LEVEL SECURITY;']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN c int, DROP COLUMN d;']), { additive: false, reason: 'DROP COLUMN' });
 });
@@ -664,4 +664,54 @@ test('rollback files: *_rollback.sql under a migrations dir is not a migration; 
   assert.deepEqual(migrationReasons(facts('db/migrations/001_rollback.sql', ['DROP TABLE x;'])), []);
   assert.equal(migrationReasons(facts('tools/001_rollback.sql', ['DROP TABLE x;'])).length, 1);
   assert.equal(migrationReasons(facts('db/migrations/001_down.sql', ['DROP TABLE x;'])).length, 1);
+});
+
+test('migrationAdditive: ADD CONSTRAINT ... CHECK is additive only with the migrationApplied attestation', () => {
+  const f = 'db/migrations/x.sql', yes = { migrationApplied: true };
+  const chk = 'ALTER TABLE public.t ADD CONSTRAINT c CHECK (live = TRUE OR last_reviewed_at IS NULL);';
+  assert.deepEqual(migrationAdditive(f, [chk]), { additive: false, reason: 'ADD CONSTRAINT' });
+  assert.deepEqual(migrationAdditive(f, [chk], yes), { additive: true, attestedCheck: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD CONSTRAINT "c" CHECK (a > 0);'], yes), { additive: true, attestedCheck: true });
+  // other constraint kinds stay refused, attested or not
+  for (const sql of ['ALTER TABLE t ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES u(id);', 'ALTER TABLE t ADD CONSTRAINT u UNIQUE (a);',
+    'ALTER TABLE t ADD UNIQUE (a);', 'ALTER TABLE t ADD PRIMARY KEY (a);', 'ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0), ADD CONSTRAINT u UNIQUE (a);']) {
+    assert.deepEqual(migrationAdditive(f, [sql], yes), { additive: false, reason: 'ADD CONSTRAINT' }, sql);
+  }
+  for (const [sql, why] of [['ALTER TABLE t ALTER COLUMN a TYPE bigint;', 'ALTER ... TYPE'], ['ALTER TABLE t ALTER COLUMN a SET NOT NULL;', 'ALTER ... SET NOT NULL'],
+    ['ALTER TABLE t DROP CONSTRAINT c;', 'DROP CONSTRAINT'], ['ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0), DROP COLUMN d;', 'DROP COLUMN']]) {
+    assert.deepEqual(migrationAdditive(f, [sql], yes), { additive: false, reason: why }, sql);
+  }
+  // the facts-level floor: refused without the attestation, free with it
+  const facts = { sensitive: [{ file: f, why: 'migration' }], migrationAdds: { [f]: [chk] } };
+  assert.match(migrationReasons(facts)[0], /migration is destructive: ADD CONSTRAINT in db\/migrations\/x\.sql/);
+  assert.deepEqual(migrationReasons(facts, { migrationApplied: true }), []);
+  assert.equal(migrationAttestedCheck(facts, { migrationApplied: true }), true);
+  assert.equal(migrationAttestedCheck(facts), false);
+});
+test('migrationAdditive: the prepared-FAQ migration (plain CREATE FUNCTION + CHECK) reads additive with the attestation', () => {
+  const f = 'setup/db/migrations/20261022e_agent_faq_count_fn.sql';
+  const sql = `-- ALTER TABLE ... ADD CONSTRAINT is mentioned in a comment
+BEGIN;
+CREATE FUNCTION public.atlas_faq_bump(p_faq_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $fn$
+DECLARE
+    new_count BIGINT;
+BEGIN
+    UPDATE public.agent_faq SET count = count + 1 WHERE id = p_faq_id AND live RETURNING count INTO new_count;
+    RETURN COALESCE(new_count, 0)::INTEGER;
+END;
+$fn$;
+COMMENT ON FUNCTION public.atlas_faq_bump(UUID) IS 'Atomically bump agent_faq.count.';
+REVOKE ALL ON FUNCTION public.atlas_faq_bump(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.atlas_faq_bump(UUID) TO service_role;
+ALTER TABLE public.agent_faq ADD CONSTRAINT agent_faq_proposed_shape CHECK (
+    live = TRUE OR last_reviewed_at IS NULL
+);
+COMMIT;`.split('\n');
+  assert.deepEqual(migrationAdditive(f, sql), { additive: false, reason: 'ADD CONSTRAINT' });
+  assert.deepEqual(migrationAdditive(f, sql, { migrationApplied: true }), { additive: true, attestedCheck: true });
 });
