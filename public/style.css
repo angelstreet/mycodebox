@@ -911,7 +911,15 @@ body.has-ask-pill .cell .jump{ bottom:84px; }
   font-size:16px; line-height:1; display:flex; align-items:center; justify-content:center;
   box-shadow:0 2px 8px rgba(0,0,0,.45);
 }
-.cell .jump button:hover{ color:var(--accent); border-color:var(--accent); }
+/* Sticky hover on touch: a tap latches :hover and no mouse-out ever fires, so the
+   arrow stayed orange after the press (chat-raised 2026-10-22, chat
+   1792648990963-313079: 'why is the icon page down staying highlighted after a press
+   bottom right'). Only paint the hover affordance where there is a hovering pointer;
+   touch devices keep the resting style and get :active instead. */
+@media (hover: hover) and (pointer: fine){
+  .cell .jump button:hover{ color:var(--accent); border-color:var(--accent); }
+}
+.cell .jump button:active{ color:var(--accent); border-color:var(--accent); }
 /* small grid cards: keep it out of the way */
 .grid-pane.size-6 .cell .jump, .grid-pane.size-8 .cell .jump, .grid-pane.size-16 .cell .jump{ right:6px; bottom:6px; gap:4px; }
 .grid-pane.size-6 .cell .jump button, .grid-pane.size-8 .cell .jump button, .grid-pane.size-16 .cell .jump button{ width:26px; height:26px; font-size:13px; }
