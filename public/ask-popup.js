@@ -9,6 +9,7 @@
 
 import { icon } from './icons.js';
 import { audioChipHtml, wireAudioChips } from './audio-chip.js';
+import { askOptions, looseRecommendation, answerText } from './manager-ask.js';
 import { renderMd } from './md.js';
 import { copyPromptButtonHtml } from './copy-prompt.js';
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane, parseManagerItems, extractRecommendation } from './buttons.js';
@@ -234,8 +235,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     document.body.classList.toggle('has-ask-pill', minimised && !pill.classList.contains('hidden'));
     el.classList.toggle('hidden', minimised);
     el.classList.toggle('ap-big', expanded);
-    const opts = Array.isArray(a.options) ? a.options : [];
-    const text = [a.question, opts.length ? opts.map((o, i) => `${i + 1}. ${o}`).join('\n') : '', a.recommendation ? `Recommends: ${a.recommendation}` : ''].filter(Boolean).join('\n');
+    const mopts = askOptions(a), loose = looseRecommendation(a);
+    const text = [a.question, mopts.length ? mopts.map((o) => `${o.n}. ${o.label}${o.rec ? ' (recommended)' : ''}`).join('\n') : '', loose ? `Recommends: ${loose}` : ''].filter(Boolean).join('\n');
     body.innerHTML = `<div class="ap-head">
         <span class="ap-prio P2">manager</span>
         <span class="ap-name">${esc(a.id || 'question')}</span>
@@ -246,11 +247,21 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         <button class="ap-x" data-act="dismiss" aria-label="Dismiss">${icon('x', 16)}</button>
       </div>
       <div class="ap-q mdbody">${copyPromptButtonHtml({ text, label: 'Copy question' })}${renderMd(String(a.question || ''))}</div>
-      ${opts.length ? `<ol class="ap-opts">${opts.map((o) => `<li>${esc(o)}</li>`).join('')}</ol>` : ''}
-      ${a.recommendation ? `<div class="ap-tldr"><div class="ap-tldr-what">Recommends: ${esc(a.recommendation)}</div></div>` : ''}
-      <div class="ap-meta">Answer in: tell the manager</div>`;
+      ${mopts.length ? `<div class="ap-btns op">${mopts.map((o, i) => `<button type="button" class="ap-b op${o.rec ? ' hl isrec' : ''}" data-mopt="${i}"${o.why ? ` title="${esc(o.why)}"` : ''}><span class="n">${esc(o.n)}</span><span class="t">${esc(o.label)}</span>${o.rec ? '<i class="star">\u2605</i>' : ''}</button>`).join('')}</div>` : ''}
+      ${loose ? `<div class="ap-tldr"><div class="ap-tldr-what">Recommends: ${esc(loose)}</div></div>` : ''}
+      <div class="ap-meta">${mopts.length ? 'Tap an answer: it is sent to the manager' : 'Answer in: tell the manager'}</div>`;
     renderedKey = '';
     if (!r.added.length) el.classList.remove('ap-anim');
+  }
+
+  // A tap on a manager question's option: type the answer to the manager session, then drop the question from the popup.
+  function answerManagerAsk(btn) {
+    const item = cur(); const a = item?.ask; if (!a) return;
+    const opt = askOptions(a)[Number(btn.dataset.mopt)]; if (!opt) return;
+    const target = a.session && state.status?.[a.session] ? a.session : (state.status?.manager ? 'manager' : null);
+    if (!target) { btn.classList.add('muted'); btn.title = 'The manager session is not running'; return; }
+    for (const b of body.querySelectorAll('[data-mopt]')) b.disabled = true;
+    Promise.resolve(askSend(target, a.id, { text: answerText(a, opt) }, null)).then(() => { dismissed.add(item.key); saveDismissed(); curKey = null; render(true); });
   }
 
   function render(force) {
@@ -403,6 +414,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       return render(true);
     }
     const t = e.target.closest('button'); if (!t) return;
+    if (t.dataset.mopt != null) return answerManagerAsk(t);
     if (t.dataset.q) {   // a chip: one pick per question (tap again to clear)
       const k = curKey; const pk = { ...(picks.get(k) || {}) };
       if (pk[t.dataset.q] === t.dataset.o) delete pk[t.dataset.q]; else pk[t.dataset.q] = t.dataset.o;
