@@ -138,6 +138,7 @@ import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgent
 import { createSendQueue, planSend, MAX_PER_SESSION as SEND_QUEUE_MAX } from './send-queue.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
+import { createFailoverState, standbyNames, standbyFlags, STANDBY_DEFAULT } from './standby-manager.js';
 import { createVptLockStore } from './vpt-locks.js';
 import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret.js';
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
@@ -716,6 +717,12 @@ const loadManagerSessions = () => {
   } catch {}
   return MANAGER_SESSIONS_DEFAULT;
 };
+// Standby manager (mm-manager): hidden from the owner while the failover state is `claude` (standby-manager.js).
+const failoverState = createFailoverState();
+const loadStandbyNames = () => { try { return standbyNames(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return STANDBY_DEFAULT; } };
+const standbyFlagsOf = (name) => standbyFlags(name, loadStandbyNames(), failoverState());
+// manager sessions plus the standby ones that are hidden right now: what the push and voice guards exclude.
+const loadOwnerHiddenSessions = () => [...loadManagerSessions(), ...loadStandbyNames().filter((n) => standbyFlagsOf(n).hidden)];
 // Jev's wake opinion on each event line (TASK-47 G10, shadow): the facts ghosty knows at that moment.
 const wakeAnnotateEvent = (event, cls) => {
   const snap = deployRunner.snapshot();
@@ -752,7 +759,7 @@ const crashResumeEnabled = () => { try { return JSON.parse(readFileSync(managerC
 // Knobs in manager.json: pushDigestMinutes (30), pushAwakeFrom ("07:00"), pushAwakeTo ("23:00"), pushTimezone ("Europe/Zurich"), pushInterruptPct (95).
 const pushTierConfig = () => { try { return tierConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return tierConfig({}); } };
 const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS,
-  tiering: { config: pushTierConfig, managerSessions: loadManagerSessions, file: join(STATE_DIR, 'push-digest.json') }, onFired: (e) => {
+  tiering: { config: pushTierConfig, managerSessions: loadOwnerHiddenSessions, file: join(STATE_DIR, 'push-digest.json') }, onFired: (e) => {
     // The manager agent's own alerts are not fed back to it, but they are what the wake outcome looks for.
     if (classifyKey(e.key).kind === 'agent-skip') logEvent({ type: 'agent-alert', key: e.key, title: String(e.title || '').slice(0, 120), body: String(e.body || '').slice(0, 300) });
     managerEvents.record(e).catch((err) => console.error('[manager-events]', err.message));
@@ -1018,12 +1025,12 @@ const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quo
 function voiceItemOf(session, kind, stateHint = null) {
   try {
     const state = stateHint ?? latest?.status?.[session]?.state ?? (kind === 'waiting' ? 'waiting' : 'done');
-    return voiceStopItem(session, { state, stall: stallOf(session), triage: triageOf(session), auto: autoOf(session), lastActivitySec: 0 }, { mgrs: new Set(loadManagerSessions()), isPaused: (n) => sessionMeta.isPaused(n) });
+    return voiceStopItem(session, { state, stall: stallOf(session), triage: triageOf(session), auto: autoOf(session), lastActivitySec: 0 }, { mgrs: new Set(loadOwnerHiddenSessions()), isPaused: (n) => sessionMeta.isPaused(n) });
   } catch { return null; }
 }
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
 function notifySession(session, kind, body, meta, stateHint = null) {
-  if ((kind === 'waiting' || kind === 'asks') && loadManagerSessions().includes(session)) return;   // the manager's own session never pushes the owner
+  if ((kind === 'waiting' || kind === 'asks') && loadOwnerHiddenSessions().includes(session)) return;   // the manager's own session (and the shadow standby) never pushes the owner
   const waiting = kind === 'waiting' || kind === 'asks';
   // The agent's STATUS verdict + what the turn took (elapsed, tokens) + its own info, first in the body so every cut keeps it.
   const lt = turnMeter.get(session);
@@ -1221,7 +1228,7 @@ async function pollOnce() {
 
     status[s.name] = {
       state, agent, agentCmd, waitReason,
-      managerSession: loadManagerSessions().includes(s.name),   // the UI never lists its stops as NEEDS YOU
+      ...(() => { const f = standbyFlagsOf(s.name); return { managerSession: loadManagerSessions().includes(s.name) || f.standby, standby: f.standby, hidden: f.hidden }; })(),   // operational manager stops are not NEEDS YOU; a standby in shadow is hidden entirely
       stall: stallOf(s.name),
       triage: triageOf(s.name),
       auto: autoOf(s.name),
@@ -2417,7 +2424,7 @@ const readyStore = createReadyStore({ file: join(STATE_DIR, 'ready-windows.json'
 const voice = createVoice({
   status: async () => ((latest && Date.now() - latest.at < 1500) ? latest : await poll()).status,
   ownerAsks: () => readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')),
-  managerSessions: loadManagerSessions,
+  managerSessions: loadOwnerHiddenSessions,
   isPaused: (n) => sessionMeta.isPaused(n),
   priority: (n) => sessionMeta.priority(n),
   send: async ({ session, answer, by }) => {

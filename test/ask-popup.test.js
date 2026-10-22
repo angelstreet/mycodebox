@@ -270,3 +270,13 @@ test('managerSession: operational stops are not the owner\'s; an owner question 
   const q = buildQueue(statuses, {}, [{ name: 'manager' }, { name: 'w1' }]);
   assert.deepEqual(q.map((i) => i.name), ['w1']);
 });
+
+test('standby manager in shadow (hidden) is never the owner\'s turn; shown by the narrowed manager rule once active', () => {
+  const od = { case: 'owner_decision', id: 's9' };
+  assert.equal(isOwnersTurn({ state: 'waiting', stall: od, managerSession: true, standby: true, hidden: true }), false);
+  assert.equal(isOwnersTurn({ state: 'done', stall: od, triage: { state: 'done' }, managerSession: true, standby: true, hidden: true }), false);
+  assert.equal(isOwnersTurn({ state: 'waiting', stall: od, managerSession: true, standby: true, hidden: false }), true);
+  assert.equal(isOwnersTurn({ state: 'waiting', stall: { case: 'continue', id: 's1' }, managerSession: true, standby: true, hidden: false }), false);
+  assert.equal(isOwnersTurn({ state: 'waiting', stall: od, managerSession: true }), true);   // `manager` unchanged
+  assert.equal(isOwnersTurn({ state: 'waiting', stall: od }), true);                          // normal session unchanged
+});
