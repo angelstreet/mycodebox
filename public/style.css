@@ -2117,6 +2117,11 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
   .grid-pane{ touch-action:pan-y; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
   /* Unlike hidden, clip does not make the hit-tested card a scroll container. */
   .grid-pane .cell:not(.focus){ overflow:clip; touch-action:pan-y; }
+  /* Scrolling a card's terminal by touch is xterm's own JS (it sets the viewport's scrollTop on every touchmove). Left to the browser, the
+     first move starts a native pan that has nothing to scroll (the rows sit over the viewport, not in it), the browser sends pointercancel and
+     stops the touch stream, and the card sticks after one row. none: every touch move reaches xterm. */
+  .cell.focus .xterm-screen{ touch-action:none; }
+  .cell .xterm-rows, .cell .xterm-rows *{ pointer-events:none; }
   /* Keep xterm's cancelling touch handlers out of the event path; taps still select the cell. */
   .grid-pane .cell:not(.focus) :is(.b, .reader, .docview),
   .grid-pane .cell:not(.focus) :is(.b, .reader, .docview) *{ pointer-events:none; }
