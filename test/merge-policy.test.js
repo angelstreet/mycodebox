@@ -214,8 +214,13 @@ test('migrationAdditive: a statement is read whole, whatever its markers', () =>
   assert.equal(migrationAdditive(f, ['-- DROP TABLE y', 'CREATE TABLE x (id int);']).additive, true);
   assert.equal(migrationAdditive(f, ["INSERT INTO t VALUES ('DROP TABLE y');"]).additive, false);
   assert.equal(migrationAdditive(f, ['/* nothing */ CREATE TABLE x (id int); DROP TABLE y;']).additive, false);
-  // OR REPLACE of a FUNCTION is additive (how a file stays re-runnable); of a VIEW it rewrites an object that may exist
-  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION f() RETURNS void AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: true });
+  // OR REPLACE of a FUNCTION may swap a deployed body (an auth/RLS helper): refused unless a trigger created in the file uses it
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.authorize() RETURNS boolean AS $body$ SELECT true; $body$ LANGUAGE sql;']), { additive: false, reason: 'CREATE OR REPLACE FUNCTION' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.tf() RETURNS trigger AS $body$ BEGIN RETURN NEW; END $body$ LANGUAGE plpgsql;']), { additive: false, reason: 'CREATE OR REPLACE FUNCTION' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.tf() RETURNS trigger AS $body$ BEGIN RETURN NEW; END $body$ LANGUAGE plpgsql;', 'CREATE TRIGGER t AFTER INSERT ON x FOR EACH ROW EXECUTE FUNCTION tf();']), { additive: true });
+  // a trigger that runs another function does not redeem it
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.authorize() RETURNS trigger AS $body$ SELECT 1; $body$ LANGUAGE sql;', 'CREATE TRIGGER t AFTER INSERT ON x FOR EACH ROW EXECUTE FUNCTION other_fn();']), { additive: false, reason: 'CREATE OR REPLACE FUNCTION' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE FUNCTION public.brand_new() RETURNS int AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE VIEW v AS SELECT 1;']), { additive: false, reason: 'replaces an existing object' });
   // a statement we cannot read is not additive
   assert.deepEqual(migrationAdditive(f, ["INSERT INTO t VALUES ('unterminated);"]), { additive: false, reason: 'unbalanced quote' });
@@ -592,11 +597,12 @@ test('migrationAdditive: REVOKE on a sequence or function the file creates is ad
     assert.deepEqual(migrationAdditive(f, list), { additive: false, reason: 'REVOKE' }, list.join(' '));
   }
   const fn = 'CREATE OR REPLACE FUNCTION public.log_it() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; EXCEPTION WHEN OTHERS THEN RETURN NEW; END $$;';
-  assert.deepEqual(migrationAdditive(f, [fn, 'REVOKE ALL ON FUNCTION public.log_it() FROM PUBLIC, anon, authenticated;']), { additive: true });
+  const trg = 'CREATE TRIGGER log_t AFTER UPDATE ON t FOR EACH ROW EXECUTE FUNCTION public.log_it();';
+  assert.deepEqual(migrationAdditive(f, [fn, 'REVOKE ALL ON FUNCTION public.log_it() FROM PUBLIC, anon, authenticated;', trg]), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['CREATE FUNCTION add2(a int, b int) RETURNS int AS $$ SELECT a + b $$ LANGUAGE sql;', 'REVOKE ALL ON FUNCTION add2(int, int) FROM anon;']), { additive: true });
   for (const list of [['REVOKE ALL ON FUNCTION public.log_it() FROM anon;'], ['REVOKE ALL ON FUNCTION public.log_it() FROM anon;', fn], [fn, 'REVOKE ALL ON FUNCTION public.other_fn() FROM anon;'],
     [fn, 'REVOKE ALL ON FUNCTION public.log_it(int) FROM anon;'], [fn, 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon;']]) {
-    assert.deepEqual(migrationAdditive(f, list), { additive: false, reason: 'REVOKE' }, list.join(' '));
+    assert.deepEqual(migrationAdditive(f, [...list, trg]), { additive: false, reason: 'REVOKE' }, list.join(' '));
   }
 });
 test('migrationAdditive: DROP TRIGGER is additive only as the re-create pattern', () => {

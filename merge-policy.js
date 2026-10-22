@@ -174,7 +174,7 @@ const SQL_ADDITIVE = [
   /^comment\s+on\b/,                                                                    // COMMENT ON TABLE x IS '...'
   /^grant\b/,                                                                           // GRANT SELECT ON t TO app
   /^create\s+policy\b/,                                                                 // CREATE POLICY "p" ON t
-  /^create\s+(?:or\s+replace\s+)?function\b/,                                              // the body is not read ($body$); OR REPLACE of a function is how a file stays re-runnable
+  /^create\s+(?:or\s+replace\s+)?function\b/,                                              // the body is not read ($body$); OR REPLACE is gated in migrationAdditive (trigger functions only)
   /^create\s+(?:constraint\s+)?trigger\b/,                                                // a plain CREATE TRIGGER (an existing one fails, it never rewrites)
   /^create\s+(?:unique\s+|fulltext\s+|spatial\s+|concurrently\s+|temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)*(?:table|index|sequence|view|type|extension|schema)\b/,
 ];
@@ -373,7 +373,20 @@ export function migrationAdditive(file, addedLines) {
       const k = policyKey(triggerParts(heads[i]));
       return heads.some((h, j) => j > i && SQL_CREATE_TRIGGER.test(h) && policyKey(triggerParts(h)) === k);
     };
+    // CREATE OR REPLACE FUNCTION may swap the body of a deployed function (an auth/RLS helper): additive only for a function this
+    // file wires to a trigger it creates (a trigger function, re-runnable); a plain CREATE FUNCTION fails on an existing name.
+    const usedByTrigger = (i) => {
+      const m = SQL_CREATE_FUNCTION.exec(heads[i]);
+      if (!m) return false;
+      const key = objectKey(m[1]);
+      return heads.some((h) => {
+        if (!SQL_CREATE_TRIGGER.test(h)) return false;
+        const e = /\bexecute\s+(?:function|procedure)\s+((?:"[^"]+"|[\w$]+)(?:\s*\.\s*(?:"[^"]+"|[\w$]+))*)/.exec(h);
+        return !!e && objectKey(e[1]) === key;
+      });
+    };
     for (let i = 0; i < heads.length; i++) {
+      if (/^\s*create\s+or\s+replace\s+function\b/.test(heads[i]) && !usedByTrigger(i)) return { additive: false, reason: 'CREATE OR REPLACE FUNCTION' };
       const r = sqlAdditive(cut.stmts[i]);
       if (r === true) continue;
       // a null verdict is a statement the file itself redeems: a policy created again later, a REVOKE on tables created earlier
