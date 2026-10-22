@@ -10,6 +10,7 @@ import { needsOwner } from '/buttons.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
+import { planPaint } from '/term-paint.js';
 import { registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
@@ -565,8 +566,16 @@ function paintTerm(session, force) {
   const buf = term.buffer.active;
   const atBottom = buf.viewportY >= buf.baseY;
   const fromBottom = buf.baseY - buf.viewportY;
-  let text = entry.lastPane.replace(/\n+$/, '');
-  term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + closeBgAtNewlines(text), () => {
+  const text = closeBgAtNewlines(entry.lastPane.replace(/\n+$/, ''));
+  // Only rows of the visible screen changed (the usual tick of a live session): overwrite them in place, no clear, no blink, scroll untouched.
+  // A resize, a changed history line or a changed line count is a full repaint; so is every 60th paint, as a cheap guard against drift.
+  const grid = `${term.cols}x${term.rows}`;
+  const painted = entry.painted && entry.painted.grid === grid && entry.painted.n < 60 ? entry.painted : null;
+  const plan = force ? { mode: 'full' } : planPaint(painted && painted.text, text, term.rows);
+  if (plan.mode === 'skip') return;
+  if (plan.mode === 'inplace') { term.write(plan.data); entry.painted = { grid, text, n: painted.n + 1 }; return; }
+  entry.painted = { grid, text, n: 0 };
+  term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + text, () => {
     const b = term.buffer.active;
     if (atBottom) term.scrollToBottom();
     else term.scrollToLine(Math.max(0, b.baseY - fromBottom));
