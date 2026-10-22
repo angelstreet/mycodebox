@@ -76,6 +76,11 @@ test('gitFacts: docs-only, sensitive paths and content', async () => {
   const fake = 'AKIA' + 'A'.repeat(16);
   const c = await gitFacts({ cwd: makeRepo({ files: { 'src.js': `const k = "${fake}";\n` } }), branch: 'feat' });
   assert.ok(c.sensitive.some((s) => s.why === 'secret-content'));
+  // an env template is not a secret path, but a secret-looking value in it still is flagged
+  const tpl = await gitFacts({ cwd: makeRepo({ files: { 'vm/.env.server.example': 'A=1\n' } }), branch: 'feat' });
+  assert.deepEqual(tpl.sensitive, []);
+  const tplSecret = await gitFacts({ cwd: makeRepo({ files: { 'vm/.env.server.example': `K=${fake}\n` } }), branch: 'feat' });
+  assert.deepEqual(tplSecret.sensitive.map((x) => x.why), ['secret-content']);
 });
 
 // ---- floor ----
@@ -214,8 +219,13 @@ test('migrationAdditive: a statement is read whole, whatever its markers', () =>
   assert.equal(migrationAdditive(f, ['-- DROP TABLE y', 'CREATE TABLE x (id int);']).additive, true);
   assert.equal(migrationAdditive(f, ["INSERT INTO t VALUES ('DROP TABLE y');"]).additive, false);
   assert.equal(migrationAdditive(f, ['/* nothing */ CREATE TABLE x (id int); DROP TABLE y;']).additive, false);
-  // OR REPLACE of a FUNCTION is additive (how a file stays re-runnable); of a VIEW it rewrites an object that may exist
-  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION f() RETURNS void AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: true });
+  // OR REPLACE of a FUNCTION may swap a deployed body (an auth/RLS helper): refused unless a trigger created in the file uses it
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.authorize() RETURNS boolean AS $body$ SELECT true; $body$ LANGUAGE sql;']), { additive: false, reason: 'CREATE OR REPLACE FUNCTION' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.tf() RETURNS trigger AS $body$ BEGIN RETURN NEW; END $body$ LANGUAGE plpgsql;']), { additive: false, reason: 'CREATE OR REPLACE FUNCTION' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.tf() RETURNS trigger AS $body$ BEGIN RETURN NEW; END $body$ LANGUAGE plpgsql;', 'CREATE TRIGGER t AFTER INSERT ON x FOR EACH ROW EXECUTE FUNCTION tf();']), { additive: true });
+  // a trigger that runs another function does not redeem it
+  assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE FUNCTION public.authorize() RETURNS trigger AS $body$ SELECT 1; $body$ LANGUAGE sql;', 'CREATE TRIGGER t AFTER INSERT ON x FOR EACH ROW EXECUTE FUNCTION other_fn();']), { additive: false, reason: 'CREATE OR REPLACE FUNCTION' });
+  assert.deepEqual(migrationAdditive(f, ['CREATE FUNCTION public.brand_new() RETURNS int AS $body$ SELECT 1; $body$ LANGUAGE sql;']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['CREATE OR REPLACE VIEW v AS SELECT 1;']), { additive: false, reason: 'replaces an existing object' });
   // a statement we cannot read is not additive
   assert.deepEqual(migrationAdditive(f, ["INSERT INTO t VALUES ('unterminated);"]), { additive: false, reason: 'unbalanced quote' });
@@ -418,6 +428,9 @@ test('M7: CI / deploy / infra and more secret file names are sensitive', async (
   const { sensitivePath } = await import('../merge-policy.js');
   for (const f of ['.github/workflows/ci.yml', '.gitlab-ci.yml', 'Jenkinsfile', '.circleci/config.yml', 'scripts/deploy.sh', 'scripts/safe-restart.sh', 'Dockerfile', 'docker-compose.yml', 'infra/main.tf', 'terraform/a.json', 'ansible/site.yml', 'k8s/app.yaml', 'helm/values.yaml', 'update_core.sh']) assert.equal(sensitivePath(f), 'deploy', f);
   for (const f of ['id_ed25519', 'keys/id_ecdsa', 'a.p12', 'a.pfx', 'a.jks', '.netrc', '.npmrc', '.pypirc', 'authorized_keys']) assert.equal(sensitivePath(f), 'secret', f);
+  // env templates are not secrets by name; real env files and key files are
+  for (const f of ['setup/proxmox/vm/backend-server/.env.server.example', '.env.example', 'a/.env.sample', '.env.template', 'x/.env.local.example']) assert.equal(sensitivePath(f), null, f);
+  for (const f of ['.env', '.env.local', 'a/.env.production', 'certs/a.pem', 'k/server.key']) assert.equal(sensitivePath(f), 'secret', f);
   assert.equal(sensitivePath('docs/deploy-notes.md'), null);
   assert.equal(sensitivePath('src/app.js'), null);
 });
@@ -592,11 +605,12 @@ test('migrationAdditive: REVOKE on a sequence or function the file creates is ad
     assert.deepEqual(migrationAdditive(f, list), { additive: false, reason: 'REVOKE' }, list.join(' '));
   }
   const fn = 'CREATE OR REPLACE FUNCTION public.log_it() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; EXCEPTION WHEN OTHERS THEN RETURN NEW; END $$;';
-  assert.deepEqual(migrationAdditive(f, [fn, 'REVOKE ALL ON FUNCTION public.log_it() FROM PUBLIC, anon, authenticated;']), { additive: true });
+  const trg = 'CREATE TRIGGER log_t AFTER UPDATE ON t FOR EACH ROW EXECUTE FUNCTION public.log_it();';
+  assert.deepEqual(migrationAdditive(f, [fn, 'REVOKE ALL ON FUNCTION public.log_it() FROM PUBLIC, anon, authenticated;', trg]), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['CREATE FUNCTION add2(a int, b int) RETURNS int AS $$ SELECT a + b $$ LANGUAGE sql;', 'REVOKE ALL ON FUNCTION add2(int, int) FROM anon;']), { additive: true });
   for (const list of [['REVOKE ALL ON FUNCTION public.log_it() FROM anon;'], ['REVOKE ALL ON FUNCTION public.log_it() FROM anon;', fn], [fn, 'REVOKE ALL ON FUNCTION public.other_fn() FROM anon;'],
     [fn, 'REVOKE ALL ON FUNCTION public.log_it(int) FROM anon;'], [fn, 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon;']]) {
-    assert.deepEqual(migrationAdditive(f, list), { additive: false, reason: 'REVOKE' }, list.join(' '));
+    assert.deepEqual(migrationAdditive(f, [...list, trg]), { additive: false, reason: 'REVOKE' }, list.join(' '));
   }
 });
 test('migrationAdditive: DROP TRIGGER is additive only as the re-create pattern', () => {

@@ -23,7 +23,7 @@ for a in "$@"; do case "$a" in --once) ONCE=1;; --dry) DRY=1; ONCE=1;; *) echo "
 note() { echo "$(date -u '+%F %H:%M') $*"; [ "$DRY" = 1 ] || { mkdir -p "$(dirname "$LOG")"; echo "- $(date -u '+%F %H:%M') failover: $*" >> "$LOG"; }; }
 say() { tmux send-keys -t "=$1:0" -l "$2" && sleep 1 && tmux send-keys -t "=$1:0" C-m; }
 busy() { tmux capture-pane -p -t "=$1:0" 2>/dev/null | tail -8 | grep -q -i "esc to interrupt"; }  # never type into a working session
-setstate() { [ "$DRY" = 1 ] || { mkdir -p "$(dirname "$STATE")"; echo "$1" > "$STATE"; }; }
+setstate() { [ "$DRY" = 1 ] || { mkdir -p "$(dirname "$STATE")"; echo "$1" > "$STATE.tmp.$$" && mv -f "$STATE.tmp.$$" "$STATE"; }; }   # atomic: a reader never sees a half-written state
 
 quota() {  # prints "<5h%> <week%> <reset epoch>" or "? ? ?" (missing, unreadable or stale file)
   python3 - "$RL" "$STALE_RL_S" "$LIMIT_PCT" <<'PY' 2>/dev/null || echo "? ? ?"
@@ -56,8 +56,13 @@ pass() {
   { [ "$H" -ge "$LIMIT_PCT" ] || [ "$W" -ge "$LIMIT_PCT" ] || [ "$pane_limited" = 1 ]; } && limited=1
   [ "$H" -lt "$BACK_PCT" ] && [ "$W" -lt "$BACK_PCT" ] && [ "$pane_limited" = 0 ] && back=1
   # a stale "minimax" (set long ago, e.g. before a restart) is a leftover: back to claude, no handback; if still limited the next pass takes over
+  # ...unless the standby pane shows it is still working: then it is not a leftover, and a reset would promote it a second time
   if [ "$cur" = minimax ] && [ -f "$STATE" ] && [ $(( $(date +%s) - $(stat -c %Y "$STATE") )) -gt $((STALE_STATE_H*3600)) ]; then
-    setstate claude; cur=claude; note "state was minimax for over ${STALE_STATE_H}h (5h ${H}%, week ${W}%): reset to claude, no handback"
+    if [ "$DRY" = 0 ] && busy "$STANDBY"; then
+      touch "$STATE"; note "state was minimax for over ${STALE_STATE_H}h but ${STANDBY} is still working: kept minimax"
+    else
+      setstate claude; cur=claude; note "state was minimax for over ${STALE_STATE_H}h (5h ${H}%, week ${W}%): reset to claude, no handback"
+    fi
   fi
   if [ "$limited" = 1 ] && [ "$cur" = claude ]; then
     resets=$([ "${RESET:-0}" -gt 0 ] && date -u -d "@$RESET" '+%F %H:%M UTC' || echo unknown)
@@ -86,6 +91,12 @@ pass() {
   fi
 }
 
+# one watcher per state file: a second instance (duplicated unit, overlapping restart) would promote the standby twice
+if [ "$DRY" = 0 ]; then
+  mkdir -p "$(dirname "$STATE")"
+  exec 9>"$STATE.lock"
+  flock -n 9 || { echo "$(date -u '+%F %H:%M') another watcher holds ${STATE}.lock: exiting"; exit 0; }
+fi
 [ "$DRY" = 1 ] || { [ -f "$STATE" ] || { mkdir -p "$(dirname "$STATE")"; echo claude > "$STATE"; }; }
 [ "$ONCE" = 1 ] || note "watcher started (poll ${POLL}s, limit ${LIMIT_PCT}%, back ${BACK_PCT}%)"
 while true; do

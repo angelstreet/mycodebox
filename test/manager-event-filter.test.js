@@ -89,3 +89,14 @@ test('the deploy runner\'s own lease releases (agent manager:deploy, deploy-fini
   assert.match(r.stdout, /codebox:run/);
   assert.doesNotMatch(r.stdout, /deploy-finished/);
 });
+
+test('residual-risk pin: beside a dropped runner release, a blocked or orphan deploy event of the same deploy still wakes the manager', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const own = ev({ key: 'lease:released', kind: 'lease', state: 'released', title: 'lease released: e/host-a (agent manager:deploy)', body: 'lease 1 by manager:deploy (deploy-finished); purpose: deploy abc' });
+  const blocked = ev({ key: 'deploy:abc:start', kind: 'deploy', state: 'start', blockedBy: ['lease 9'], body: 'blocked' });
+  const orphan = ev({ key: 'deploy:abc:orphan', kind: 'deploy', state: 'orphan', body: 'runner gone' });
+  const r = run(env, own + blocked + orphan);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(kinds(r).sort(), ['deploy', 'deploy']);
+});

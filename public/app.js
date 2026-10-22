@@ -25,7 +25,7 @@ import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
-import { isOwnersTurn, unattachedAsks } from '/ask-model.js';
+import { isOwnersTurn, isManagerOperationalStop, unattachedAsks } from '/ask-model.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 import * as hv from '/history-view.js';
@@ -1163,7 +1163,7 @@ if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markAttentio
 function renderAttention() {
   // waiting sessions, plus finished ones whose closing question the AI reviewer sent to the owner
   const aiAsk = (n) => { const st = state.status[n]; return st && st.state === 'done' && needsOwner(st) && st.triage && st.triage.state !== 'pending'; };
-  const waiting = state.sessions.filter((s) => !state.status[s.name]?.managerSession && state.status[s.name]?.stall?.escalatedTo !== 'manager' && (stateOf(s.name) === 'waiting' || aiAsk(s.name)))   // a lease or deploy stop, or the manager's own session, is never the owner's item
+  const waiting = state.sessions.filter((s) => !isManagerOperationalStop(state.status[s.name]) && state.status[s.name]?.stall?.escalatedTo !== 'manager' && (stateOf(s.name) === 'waiting' || aiAsk(s.name)))   // a lease or deploy stop, or the manager's own routine stop, is never the owner's item
     .sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
   // the manager's open questions (ledger), grouped by the session they are about
   const groups = new Map();
