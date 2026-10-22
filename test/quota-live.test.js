@@ -2,8 +2,11 @@
 // Nothing here touches the real codex binary, the network or any auth file.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createQuota, readCodex, readMinimax, parseMinimaxRemains, askCodex, POLL_MS } from '../quota.js';
+import { tmp } from './helpers-tmp.js';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-codex-app-server.mjs', import.meta.url));
 const fakeCmd = () => ({ file: process.execPath, args: [FAKE] });
@@ -138,6 +141,31 @@ test('minimax: HTTP 401 and network errors keep the last good value as stale', a
 test('minimax: the token never ends up in the reading', async () => {
   const m = await readMinimax(mmCfg(mockFetch()), MM_NOW);
   assert.ok(!JSON.stringify(m).includes(TOKEN));
+});
+
+// scripts/orchestrator-failover has no other source for the standby's headroom: this snapshot is what it reads.
+test('minimax: a fresh reading is mirrored to disk; a failed one never re-stamps it', async () => {
+  const dir = tmp('mm-snap-');
+  const file = path.join(dir, 'sub', 'minimax-rate-limits.json');
+  const cfg = { ...mmCfg(mockFetch()), minimaxFile: file };
+  await readMinimax(cfg, MM_NOW);
+  const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(snap.at, MM_NOW);
+  assert.deepEqual(snap.rate_limits, {
+    five_hour: { used_percentage: 2, resets_at: 1791072000 },
+    seven_day: { used_percentage: 0, resets_at: 1791158400 } });   // an unlimited week imposes no limit
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'sub')), ['minimax-rate-limits.json'], 'no temp file left behind');
+  cfg.fetch = mockFetch({ quotaStatus: 401 });
+  await readMinimax(cfg, MM_NOW + POLL_MS + 1);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).at, MM_NOW, 'the old value keeps its old timestamp, so it reads back as stale');
+});
+
+test('a MiniMax snapshot write failure never disturbs the poll', async () => {
+  const dir = tmp('mm-nowrite-');
+  const blocker = path.join(dir, 'a-file'); fs.writeFileSync(blocker, 'not a directory');
+  const m = await readMinimax({ ...mmCfg(mockFetch()), minimaxFile: path.join(blocker, 'quota.json') }, MM_NOW);
+  assert.equal(m.stale, false);
+  assert.equal(m.windows[0].usedPercent, 2);
 });
 
 test('createQuota polls all three plans; claude stays file-based', async () => {

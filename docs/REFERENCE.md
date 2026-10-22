@@ -322,9 +322,12 @@ today" block of the AI manager panel.
 weekly) or a usage-limit message in the `manager` pane it starts or wakes `mm-manager` with a standby message (act as manager per
 TASK-44, same hard floors, never type into a working session, no Esc/Ctrl-C) and sets `~/handovers/notes/.failover-state` to
 `minimax`; under 90 % it asks `mm-manager` for a handback note and tells `manager` to read it (state `claude`). A missing or stale
-(> 30 min) quota file is unknown: no action. A `minimax` state older than 12 h is a leftover and is reset to `claude` silently (no handback; if Claude is still limited the next pass takes over). `--once` runs one
+(> 30 min) quota file is unknown: no action. The standby is promoted only when its **own** windows still have headroom: before
+handing over it reads `$GHOSTY_STATE_DIR/minimax-rate-limits.json`, which `quota.js` mirrors from each fresh MiniMax reading (the live
+reading is otherwise memory-only), and it stays at Claude if that file is unknown (missing, broken, stale) or at >= 97 % on the 5 h or
+weekly window — a Claude-limited system with no seat left is an operator problem, so both cases are written to the log. A `minimax` state older than 12 h is a leftover and is reset to `claude` silently (no handback; if Claude is still limited the next pass takes over). `--once` runs one
 pass; `--dry` (implies `--once`) prints what it would do and touches no tmux session, state or log. Overrides: `POLL`, `LIMIT_PCT`,
-`BACK_PCT`, `FAILOVER_RL`, `FAILOVER_STATE`, `FAILOVER_LOG`, `FAILOVER_MANAGER`, `FAILOVER_STANDBY`. Test: `test/manager-failover.test.js`.
+`BACK_PCT`, `FAILOVER_RL`, `FAILOVER_STANDBY_RL`, `FAILOVER_STATE`, `FAILOVER_LOG`, `FAILOVER_MANAGER`, `FAILOVER_STANDBY`. Test: `test/manager-failover.test.js`.
 
 **Standby visibility.** `manager.json` `standbyManagerSessions` (default `["mm-manager"]`) names the standby manager sessions. While the failover state is `claude` (a missing or unreadable state file counts as `claude`; read at most every 5 s, `FAILOVER_STATE` overrides the path) such a session is `hidden` in the status: not in the NEEDS YOU strip, the ask popup, the needs-you push, the decision count or the voice list. Its stops are still logged to `stalls.jsonl` and the scorecard. While the state is `minimax` it is a normal manager session (`managerSession`, so only owner questions and forbidden topics show). Code: `standby-manager.js`. Tests: `test/standby-manager.test.js`, `test/ask-popup.test.js`.
 

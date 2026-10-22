@@ -10,7 +10,7 @@
 // A failed read keeps the last good value with stale:true and an error. Never types into a session.
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
@@ -28,6 +28,7 @@ export function defaults(env = process.env) {
   return {
     codexCmd: { file: env.CODEX_BIN || join(home, '.local/bin/codex'), args: ['app-server'] },
     minimaxAuthFile: env.MINIMAX_AUTH_FILE || join(home, '.minimax/auth/prod/en/mcode-public/auth.json'),
+    minimaxFile: env.MINIMAX_RATE_LIMITS_FILE || join(stateDir, 'minimax-rate-limits.json'),
     claudeFile: env.CLAUDE_RATE_LIMITS_FILE || join(stateDir, 'claude-rate-limits.json'),
     fetch: (...a) => fetch(...a),
     now: () => Date.now(),
@@ -184,6 +185,27 @@ export function parseMinimaxRemains(body) {
   return [minimaxWindow(e, '5h', 'interval'), minimaxWindow(e, 'week', 'weekly')];
 }
 
+// Mirror the MiniMax windows to disk in the same shape as claude-rate-limits.json, so scripts/orchestrator-failover
+// can read the standby's own headroom before handing it the manager role (it has no other source: the live reading
+// below is memory-only). Atomic, and best-effort: a failed write must not disturb the poll. An unlimited window
+// imposes no limit, so it is recorded as 0 %; a window we could not parse is left out, which reads back as "unknown".
+async function writeMinimaxSnapshot(file, plan) {
+  if (!file) return;
+  const key = { '5h': 'five_hour', week: 'seven_day' };
+  const rate_limits = {};
+  for (const w of plan.windows || []) {
+    if (!(w.name in key)) continue;
+    if (w.usedPercent == null && !w.unlimited) continue;
+    rate_limits[key[w.name]] = { used_percentage: w.usedPercent == null ? 0 : w.usedPercent, resets_at: w.resetsAt ?? null };
+  }
+  const tmp = `${file}.tmp.${process.pid}`;
+  try {
+    await fs.mkdir(dirname(file), { recursive: true });
+    await fs.writeFile(tmp, JSON.stringify({ at: plan.at, rate_limits }));
+    await fs.rename(tmp, file);
+  } catch { await fs.rm(tmp, { force: true }).catch(() => {}); }
+}
+
 export async function readMinimax(cfg, now) {
   const base = { plan: 'minimax', label: 'MiniMax', price: '40 EUR/month (Token Plan)', windows: [], source: 'minimax coding_plan/remains', at: null, stale: true };
   return cachedRead(cfg, 'minimax', now, base, async () => {
@@ -192,7 +214,11 @@ export async function readMinimax(cfg, now) {
     if (login.expiresAtMs && login.expiresAtMs <= now) throw new Error('mcode login expired — open mcode once');
     const body = await httpJson(cfg, MM_QUOTA_URL, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${login.accessToken}` } });
     return { ...base, windows: parseMinimaxRemains(body), at: now, stale: false };
-  }).then((out) => ({ ...out, windows: out.windows.map((w) => finishWindow(w, now)) }));
+  }).then(async (out) => {
+    const done = { ...out, windows: out.windows.map((w) => finishWindow(w, now)) };
+    if (!done.stale && done.at) await writeMinimaxSnapshot(cfg.minimaxFile, done);   // a stale reading keeps its old `at`: never re-stamp it
+    return done;
+  });
 }
 
 // Edge-triggered alerts: one when a window crosses WARN_PCT, re-armed only after it is back under

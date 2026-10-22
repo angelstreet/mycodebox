@@ -3,7 +3,9 @@
 # Every POLL seconds: if Claude is limited (5 h or weekly quota >= LIMIT_PCT, or the manager pane shows a usage-limit
 # message), start or wake the MiniMax standby `mm-manager` with a standby message; when Claude is back under BACK_PCT,
 # ask the standby for a handback note and tell the Claude manager to read it. Both agents log to LOG.
-# A missing, unreadable or stale quota file means "unknown": no action. Hard floors stay owner-only for the standby too.
+# The standby is only promoted when its OWN windows still have headroom: handing the manager role to a seat that is out of
+# quota too leaves nobody managing. A missing, unreadable or stale quota file means "unknown", for Claude and for the
+# standby: no action. Hard floors stay owner-only for the standby too.
 #   --once   one pass, then exit      --dry   print what would happen; touches no tmux session, writes no state or log
 set -u
 POLL=${POLL:-300}; LIMIT_PCT=${LIMIT_PCT:-97}; BACK_PCT=${BACK_PCT:-90}
@@ -11,6 +13,7 @@ STALE_RL_S=${STALE_RL_S:-1800}          # quota reading older than this is unkno
 STALE_STATE_H=${STALE_STATE_H:-12}      # a "minimax" state older than this, with Claude fine, is a leftover: reset silently
 SD=${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}
 RL=${FAILOVER_RL:-$SD/claude-rate-limits.json}
+MRL=${FAILOVER_STANDBY_RL:-$SD/minimax-rate-limits.json}   # the standby's own windows (quota.js writes it); the gate for promotion
 LOG=${FAILOVER_LOG:-$HOME/handovers/notes/orchestrator-log.md}
 STATE=${FAILOVER_STATE:-$HOME/handovers/notes/.failover-state}   # "claude" or "minimax"
 MANAGER=${FAILOVER_MANAGER:-manager}; STANDBY=${FAILOVER_STANDBY:-mm-manager}
@@ -25,8 +28,8 @@ say() { tmux send-keys -t "=$1:0" -l "$2" && sleep 1 && tmux send-keys -t "=$1:0
 busy() { tmux capture-pane -p -t "=$1:0" 2>/dev/null | tail -8 | grep -q -i "esc to interrupt"; }  # never type into a working session
 setstate() { [ "$DRY" = 1 ] || { mkdir -p "$(dirname "$STATE")"; echo "$1" > "$STATE.tmp.$$" && mv -f "$STATE.tmp.$$" "$STATE"; }; }   # atomic: a reader never sees a half-written state
 
-quota() {  # prints "<5h%> <week%> <reset epoch>" or "? ? ?" (missing, unreadable or stale file)
-  python3 - "$RL" "$STALE_RL_S" "$LIMIT_PCT" <<'PY' 2>/dev/null || echo "? ? ?"
+quota() {  # $1 file to read (default: Claude's); prints "<5h%> <week%> <reset epoch>" or "? ? ?" (missing, unreadable or stale file)
+  python3 - "${1:-$RL}" "$STALE_RL_S" "$LIMIT_PCT" <<'PY' 2>/dev/null || echo "? ? ?"
 import json,sys,time
 p,stale,lim=sys.argv[1],int(sys.argv[2]),int(sys.argv[3])
 j=json.load(open(p)); d=j["rate_limits"]
@@ -45,7 +48,7 @@ standby_msg() {  # $1 5h  $2 week  $3 resets
 }
 
 pass() {
-  local H W RESET cur limited=0 back=0 pane_limited=0 resets
+  local H W RESET cur limited=0 back=0 pane_limited=0 resets SH SW
   read -r H W RESET <<<"$(quota)"
   [ -f "$STATE" ] && cur=$(cat "$STATE") || cur=claude
   [ "$cur" = minimax ] || cur=claude
@@ -65,8 +68,16 @@ pass() {
     fi
   fi
   if [ "$limited" = 1 ] && [ "$cur" = claude ]; then
+    # the standby must have somewhere to go: Claude being out of quota says nothing about MiniMax. Unknown is not healthy.
+    read -r SH SW _ <<<"$(quota "$MRL")"
+    if [ "$SH" = "?" ]; then
+      note "Claude limited (5h ${H}%, week ${W}%) but ${STANDBY} quota unknown (missing or stale ${MRL##*/}): not promoting; retry next poll"; return
+    fi
+    if [ "$SH" -ge "$LIMIT_PCT" ] || [ "$SW" -ge "$LIMIT_PCT" ]; then
+      note "Claude limited (5h ${H}%, week ${W}%) and ${STANDBY} is out of quota too (5h ${SH}%, week ${SW}%): no seat left to hand over to; operator needed"; return
+    fi
     resets=$([ "${RESET:-0}" -gt 0 ] && date -u -d "@$RESET" '+%F %H:%M UTC' || echo unknown)
-    if [ "$DRY" = 1 ]; then note "DRY: would start/wake ${STANDBY} and send the standby message (5h ${H}%, week ${W}%, resets ${resets}); state claude -> minimax"; standby_msg "$H" "$W" "$resets"; return; fi
+    if [ "$DRY" = 1 ]; then note "DRY: would start/wake ${STANDBY} and send the standby message (5h ${H}%, week ${W}%, resets ${resets}); state claude -> minimax (${STANDBY} at 5h ${SH}%, week ${SW}%)"; standby_msg "$H" "$W" "$resets"; return; fi
     if ! tmux has-session -t "=${STANDBY}" 2>/dev/null; then
       "$ENSURE" >/dev/null 2>&1; sleep 20
       [ -f "$STANDBY_BRIEF" ] && { tmux load-buffer -b mmbrief "$STANDBY_BRIEF"; tmux paste-buffer -b mmbrief -t "${STANDBY}" -d; sleep 2; tmux send-keys -t "${STANDBY}" C-m; sleep 60; }
@@ -74,7 +85,7 @@ pass() {
     if ! tmux has-session -t "=${STANDBY}" 2>/dev/null; then note "Claude limited but ${STANDBY} could not be started: retry next poll"; return; fi
     if busy "$STANDBY"; then echo "$(date -u '+%F %H:%M') ${STANDBY} is working: standby message deferred"; return; fi
     say "$STANDBY" "$(standby_msg "$H" "$W" "$resets")"
-    setstate minimax; note "Claude limited (5h ${H}%, week ${W}%, pane ${pane_limited}) -> ${STANDBY} standby active"
+    setstate minimax; note "Claude limited (5h ${H}%, week ${W}%, pane ${pane_limited}) -> ${STANDBY} standby active (${STANDBY} at 5h ${SH}%, week ${SW}%)"
   elif [ "$back" = 1 ] && [ "$cur" = minimax ]; then
     if [ "$DRY" = 1 ]; then note "DRY: would ask ${STANDBY} for a handback note and tell ${MANAGER} to read it (5h ${H}%, week ${W}%); state minimax -> claude"; return; fi
     if tmux has-session -t "=${STANDBY}" 2>/dev/null && ! busy "$STANDBY"; then
