@@ -2670,3 +2670,6 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .uv-th-s, .uv-tr-s{ grid-template-columns:minmax(0,1fr) minmax(90px,150px) 78px 150px; }
 .uv-tr.sub.uv-tr-s{ grid-template-columns:minmax(0,1fr) minmax(90px,150px) 78px 150px; }
 @media (max-width:720px){ .uv-th-s, .uv-tr-s{ display:block; } }
+
+/* Read full screen (the card's expand button): the card fills the screen; its header stays, so the same button leaves it. */
+body.reading #topbar, body.reading #health, body.reading #filterBar, body.reading #quickRow, body.reading #alertRow, body.reading #tabs, body.reading #dock{ display:none !important; }

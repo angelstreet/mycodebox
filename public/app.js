@@ -12,6 +12,7 @@ import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
 import { fitAction } from '/fit-policy.js';
+import { fitFont } from '/fit-font.js';
 import { registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
@@ -337,6 +338,7 @@ function lastLine(paneText) {
 const FONT_MIN = 8, FONT_MAX = 20;
 const FONT_FAMILY = "'JetBrains Mono', monospace";
 const LS_FONT = 'ghosty.font', LS_FIT = 'ghosty.fit', LS_CTRL = 'ghosty.cardctl';
+const MIN_FIT_FONT = 8;   // the smallest text a card shrinks to so that a wide pane fits without sideways scrolling
 const clampFont = (n) => Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(n)));
 state.font = clampFont(Number(lsGet(LS_FONT, 0)) || (matchMedia('(max-width: 720px)').matches ? 11 : 12));
 state.fit = lsGet(LS_FIT, '1') !== '0';
@@ -415,14 +417,26 @@ function layoutTerm(session) {
   const { term, fit, host } = entry;
   const w = host.clientWidth, h = host.clientHeight;
   if (w < 20 || h < 20) return false;
-  if (term.options.fontSize !== state.font) term.options.fontSize = state.font;
-  let p = null;
-  try { p = fit.proposeDimensions(); } catch {}
+  const propose = () => { try { return fit.proposeDimensions(); } catch { return null; } };
+  let p = propose();
   const cols = entry.paneCols || state.status?.[session]?.cols || (p && p.cols) || 80;
+  // The pane can be wider than the card (the server keeps a 60-column minimum, another client may have set more): shrink the font in small
+  // steps until the whole pane fits, down to MIN_FIT_FONT, instead of cropping the right edge or scrolling sideways. Recomputed only when the
+  // pane width, the card width or the chosen text size changes, so the font does not flicker on every status tick.
+  const fontKey = `${cols}|${w}|${state.font}`;
+  if (entry.fontKey !== fontKey) {
+    entry.fontKey = fontKey;
+    if (term.options.fontSize !== state.font) term.options.fontSize = state.font;
+    const q0 = propose();
+    entry.colsAtBase = q0 ? q0.cols : 0;   // what a request to the server should ask for: the width that fits at the normal text size
+    const f = fitFont({ cols, base: state.font, min: MIN_FIT_FONT, colsAt: (fs) => { if (term.options.fontSize !== fs) term.options.fontSize = fs; const q = propose(); return q ? q.cols : cols; } });
+    if (term.options.fontSize !== f) term.options.fontSize = f;
+    p = propose() || p;
+  }
   const scrollX = !!(p && cols > p.cols);
   // a horizontal scrollbar eats one row of the host
   const rows = Math.max(2, ((p && p.rows) || term.rows) - (scrollX ? 1 : 0));
-  entry.fitCols = p ? p.cols : 0; entry.fitRows = p ? p.rows : 0;
+  entry.fitCols = entry.colsAtBase || (p ? p.cols : 0); entry.fitRows = p ? p.rows : 0;
   host.style.overflowY = 'hidden';
   host.style.overflowX = scrollX ? 'auto' : 'hidden';
   scheduleFit(session);
@@ -1868,7 +1882,8 @@ function buildCell(s) {
   cell.addEventListener('wheel', () => {
     if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; cell.dataset.scrolled = '1'; }
   }, { capture: true, passive: true });
-  cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); openCard(s.name); };
+  // In a grid or list the button opens the card; in the card it reads the card full screen (hides the bars) and the same button leaves it.
+  cell.querySelector('.open').onclick = (e) => { e.stopPropagation(); if (state.mode === 'card') setReading(!state.reading); else openCard(s.name); };
   for (const b of cell.querySelectorAll('.mv button')) {
     b.onclick = (e) => { e.stopPropagation(); moveSession(s.name, b.dataset.dir); };
   }
@@ -2031,6 +2046,11 @@ function syncCell(cell) {
   const inCard = cell.parentElement === els.cardPane;
   const docOn = cell.classList.contains('doc-on');   // the task document can be open in a grid card too
   cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
+  const ob = cell.querySelector('.open');   // expand in a grid / list (opens the card); in the card: expand = read full screen, shrink = leave it
+  if (ob) {
+    const ic = inCard && state.reading ? 'shrink' : 'expand';
+    if (ob.dataset.ic !== ic) { ob.dataset.ic = ic; ob.innerHTML = icon(ic, 14); const t = inCard ? (state.reading ? 'Leave full screen' : 'Read full screen') : 'Open card'; ob.title = t; ob.setAttribute('aria-label', t); }
+  }
   probeTaskDoc(cell, n);
   const ag = agentBadgeHtml(n);
   const agEl = cell.querySelector('.ag');
@@ -2617,6 +2637,23 @@ function focusSession(name) {
   syncAll();
 }
 
+// Read full screen: hide the top bar, strips, tabs and the composer so the card fills the screen (and ask the browser for real fullscreen where it
+// allows it). Card mode only; leaving card mode, or leaving browser fullscreen, ends it.
+state.reading = false;
+function setReading(on) {
+  on = !!on && state.mode === 'card';
+  if (state.reading === on) return;
+  state.reading = on;
+  document.body.classList.toggle('reading', on);
+  try {
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+    else if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  } catch { /* no fullscreen API: the in-page mode is enough */ }
+  syncAll();
+  const a = state.active;
+  if (a) { relayoutTerm(a); setTimeout(() => relayoutTerm(a), 120); }
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && state.reading) setReading(false); });
 function openCard(name) {
   focusSession(name);
   setMode('card');
@@ -2642,7 +2679,7 @@ function setLock(name) {
 
 // ---------- mode switching ----------
 function setMode(mode) {
-  if (mode !== 'card') state.prevMode = mode;
+  if (mode !== 'card') { state.prevMode = mode; if (state.reading) setReading(false); }
   state.mode = mode;
   lsSet(LS_MODE, mode);
   els.main.classList.remove('view-card','view-grid','view-list');
