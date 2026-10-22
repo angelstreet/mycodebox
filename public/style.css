@@ -798,7 +798,10 @@ body{ display:flex; flex-direction:column; }
   background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line);
   font-size:10px; line-height:1; display:flex; align-items:center; justify-content:center;
 }
-.cell .h .mv button:hover{ color:var(--accent); border-color:var(--accent); }
+@media (hover:hover) and (pointer:fine){
+  .cell .h .mv button:hover{ color:var(--accent); border-color:var(--accent); }
+}
+.cell .h .mv button:active{ color:var(--accent); border-color:var(--accent); }
 @media (pointer: coarse){ .cell .h .mv button{ width:34px; height:34px; font-size:12px; } }
 .grid-pane .cell .h{ cursor:grab; }
 .grid-pane .cell.dragging{ opacity:.4; }
@@ -916,7 +919,7 @@ body.has-ask-pill .cell .jump{ bottom:84px; }
    1792648990963-313079: 'why is the icon page down staying highlighted after a press
    bottom right'). Only paint the hover affordance where there is a hovering pointer;
    touch devices keep the resting style and get :active instead. */
-@media (hover: hover) and (pointer: fine){
+@media (hover:hover) and (pointer:fine){
   .cell .jump button:hover{ color:var(--accent); border-color:var(--accent); }
 }
 .cell .jump button:active{ color:var(--accent); border-color:var(--accent); }
@@ -1107,7 +1110,7 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
     padding:0; display:inline-flex; align-items:center; justify-content:center;
     box-shadow:0 1px 3px rgba(0,0,0,.35);
   }
-  .cell .h .open:hover{ background:var(--accent); opacity:.9; }
+  .cell .h .open:active{ background:var(--accent); opacity:.9; }
   .cell .h .open svg{ width:18px; height:18px; }
   /* Hide the red/orange alert row when every signal inside it is empty (chat-raised 2026-10-08).
      syncAlertRowVisibility() toggles .alert-empty based on NEEDS YOU + leases + deploy banner
@@ -1127,8 +1130,12 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   width:26px; height:22px; border-radius:6px; border:1px solid var(--line-2);
   background:var(--bg-2); color:var(--ink-2);
 }
-.audio-chip > .ac-play:hover:not(:disabled),
-.audio-chip > .ac-download:hover{ background:var(--bg-3); color:var(--ink); }
+@media (hover:hover) and (pointer:fine){
+  .audio-chip > .ac-play:hover:not(:disabled),
+  .audio-chip > .ac-download:hover{ background:var(--bg-3); color:var(--ink); }
+}
+.audio-chip > .ac-play:active:not(:disabled),
+.audio-chip > .ac-download:active{ background:var(--bg-3); color:var(--ink); }
 .audio-chip > .ac-play:disabled,
 .audio-chip > .ac-download.disabled,
 .audio-chip.failed > .ac-play{ opacity:0.45; cursor:not-allowed; }
@@ -1166,7 +1173,10 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
   cursor:pointer; flex-shrink:0;
   transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
-.copy-prompt:hover{ color:var(--accent); border-color:var(--accent); }
+@media (hover:hover) and (pointer:fine){
+  .copy-prompt:hover{ color:var(--accent); border-color:var(--accent); }
+}
+.copy-prompt:active{ color:var(--accent); border-color:var(--accent); }
 .copy-prompt.done{ color:var(--working); border-color:var(--working); }
 .mdbody > .copy-prompt{ float:right; margin:0 0 6px 8px; }
 .mdbar > .copy-prompt{ margin-left:auto; }
@@ -1217,7 +1227,10 @@ button.prio{ cursor:pointer; }
   background:var(--bg-3); color:var(--ink-2); border:1px solid var(--line-2);
   font-size:12px; line-height:1; cursor:pointer;
 }
-.card-pane .cell .h .lk:hover{ color:var(--accent); border-color:var(--accent); }
+@media (hover:hover) and (pointer:fine){
+  .card-pane .cell .h .lk:hover{ color:var(--accent); border-color:var(--accent); }
+}
+.card-pane .cell .h .lk:active{ color:var(--accent); border-color:var(--accent); }
 .card-pane .cell .h .lk.on{
   color:var(--accent); border-color:var(--accent);
   background:rgba(232,154,74,0.12);
@@ -1383,7 +1396,10 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 .morepop .legacy-sum .ml{ font-size:13px; }
 .morepop .legacy-group[open] .legacy-sum{ color:var(--ink); }
 .morepop .legacy-group .icon-btn{ padding-left:22px; opacity:.85; }
-.morepop .icon-btn:hover{ background:var(--bg-3); }
+@media (hover:hover) and (pointer:fine){
+  .morepop .icon-btn:hover{ background:var(--bg-3); }
+}
+.morepop .icon-btn:active{ background:var(--bg-3); }
 .morepop .mrow-font{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 10px; color:var(--ink); }
 .morepop .mrow-font .ml{ font-size:13px; }
 .morepop .fontbox{ background:var(--bg-3); }
@@ -1676,7 +1692,10 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   background: transparent; border: 0; color: var(--ink-2); cursor: pointer;
   min-width: 28px; min-height: 28px; font-size: 16px; line-height: 1; padding: 0;
 }
-#askPopup .ap-nav:hover, #askPopup .ap-x:hover { color: var(--ink); }
+@media (hover:hover) and (pointer:fine){
+  #askPopup .ap-nav:hover, #askPopup .ap-x:hover { color: var(--ink); }
+}
+#askPopup .ap-nav:active, #askPopup .ap-x:active { color: var(--ink); }
 #askPopup .ap-q { font-size: 13px; color: var(--ink); line-height: 1.4; max-height: 14em; overflow-y: auto; overflow-wrap: anywhere; }
 #askPopup .ap-btns { display: flex; flex-wrap: wrap; gap: 6px; }
 #askPopup .ap-b {
@@ -1713,12 +1732,18 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   color: var(--ink-3); font-size: 13px; line-height: 1; cursor: pointer;
   user-select: none; -webkit-user-select: none;
 }
-#askPopup .ap-ex:hover { background: var(--line-2); color: var(--ink); }
+@media (hover:hover) and (pointer:fine){
+  #askPopup .ap-ex:hover { background: var(--line-2); color: var(--ink); }
+}
+#askPopup .ap-ex:active { background: var(--line-2); color: var(--ink); }
 #askPopup .ap-b.yn.has-ex .ap-ex { color: var(--ink-3); }
 #askPopup .ap-b.hl.has-ex .ap-ex { color: rgba(4,23,11,0.7); }
 #askPopup .ap-desc { font-size: 12px; line-height: 1.4; color: var(--ink-2); padding: 0 4px 2px 8px; overflow-wrap: anywhere; }
 #askPopup .ap-det { align-self: flex-start; background: none; border: 0; padding: 2px 0; min-height: 28px; font-size: 11px; color: var(--ink-3); cursor: pointer; }
-#askPopup .ap-det:hover { color: var(--ink-2); }
+@media (hover:hover) and (pointer:fine){
+  #askPopup .ap-det:hover { color: var(--ink-2); }
+}
+#askPopup .ap-det:active { color: var(--ink-2); }
 #askPopup .ap-det-t { margin: 0; padding: 6px 8px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 6px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; width: 100%; box-sizing: border-box; }
 #askPopup .ap-b.arm { background: var(--accent); color: #1a0d00; border-color: var(--accent); font-weight: 700; }
 #askPopup .ap-b:active { transform: translateY(1px); }
@@ -1728,7 +1753,10 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   text-align: left; cursor: pointer; white-space: pre-wrap; overflow-wrap: anywhere;
   display: flex; align-items: baseline; gap: 6px;
 }
-#askPopup .ap-meta:hover { color: var(--ink-2); }
+@media (hover:hover) and (pointer:fine){
+  #askPopup .ap-meta:hover { color: var(--ink-2); }
+}
+#askPopup .ap-meta:active { color: var(--ink-2); }
 #askPopup .ap-meta[aria-expanded="true"] { color: var(--ink-2); }
 #askPopup .ap-toggle { color: var(--ink-3); font-size: 10px; flex: 0 0 auto; }
 #askPopup .ap-why {
@@ -1840,14 +1868,20 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   border: 1px solid rgba(255,95,95,0.5); border-radius: 999px;
   font-size: 10.5px; font-weight: 700; cursor: pointer;
 }
-.cell .askchip:hover { background: rgba(255,95,95,0.28); }
+@media (hover:hover) and (pointer:fine){
+  .cell .askchip:hover { background: rgba(255,95,95,0.28); }
+}
+.cell .askchip:active { background: rgba(255,95,95,0.28); }
 .cell .askchip .ai-star { color: var(--working); }
 
 /* rename in place: pencil next to the session name on card headers and board rows */
 .cell .h .nmr{ display:flex; align-items:center; gap:4px; min-width:0; }
 .cell .h .nmr .name{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .rn{ flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; padding:2px; background:none; border:0; color:var(--ink-3); cursor:pointer; opacity:.55; border-radius:4px; }
-.rn:hover{ opacity:1; color:var(--ink); background:var(--bg-3); }
+@media (hover:hover) and (pointer:fine){
+  .rn:hover{ opacity:1; color:var(--ink); background:var(--bg-3); }
+}
+.rn:active{ opacity:1; color:var(--ink); background:var(--bg-3); }
 @media (hover:hover){ .rn{ opacity:0; } .cell .h:hover .rn, .row-item:hover .rn, .rn:focus-visible{ opacity:.7; } }
 .name .name-input{ font:inherit; color:inherit; background:var(--bg-3); border:1px solid var(--accent); border-radius:4px; padding:1px 5px; width:min(240px, 100%); outline:none; }
 /* board row: the pencil hugs the name; it takes over the name's job of pushing status + pause right */
@@ -2016,7 +2050,10 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 #askPopup{ border:1.5px solid var(--ink-3); box-shadow:0 0 0 1px rgba(0,0,0,.6), 0 8px 28px rgba(0,0,0,.65); }
 #askPopup .ap-nav, #askPopup .ap-x{ border:1px solid var(--ink-3); border-radius:7px; min-width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; }
 #askPopup .ap-b{ border-color:var(--ink-3); }
-#askPopup .ap-b:hover{ border-color:var(--ink-2); }
+@media (hover:hover) and (pointer:fine){
+  #askPopup .ap-b:hover{ border-color:var(--ink-2); }
+}
+#askPopup .ap-b:active{ border-color:var(--ink-2); }
 #askPopup .ap-b.hl{ border-color:var(--working); }
 #askPopup .ap-det, #askPopup .ap-sug, #askPopup .ap-chips .ap-ch{ border-color:var(--ink-3); }
 /* agent-recommended option: accent border + soft tint (selected / AI pick keeps its green fill) */
@@ -2159,7 +2196,10 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .dot.paused{ background:var(--accent); }
 
 .pp{ cursor:pointer; }
-.pp:hover{ background:var(--accent); color:#1a1206; }   /* the PAUSED badge is a resume button */
+@media (hover:hover) and (pointer:fine){
+  .pp:hover{ background:var(--accent); color:#1a1206; }
+}
+.pp:active{ background:var(--accent); color:#1a1206; }   /* the PAUSED badge is a resume button */
 
 /* Manager panel: status and review first, settings and history in readable sections. */
 .sheet.manager-sheet{ width:min(100%, 820px); max-width:820px; max-height:94dvh; height:min(94dvh, 920px); }
@@ -2186,7 +2226,10 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
 .mgr-section > summary small{ color:var(--ink-2); font-size:13px; font-weight:400; }
 .mgr-section > summary::after{ content:'⌄'; color:var(--ink-2); font-size:20px; line-height:1; transition:transform .15s; }
 .mgr-section[open] > summary::after{ transform:rotate(180deg); }
-.mgr-section > summary:hover, .mgr-section > summary:focus-visible{ background:rgba(255,255,255,.04); }
+@media (hover:hover) and (pointer:fine){
+  .mgr-section > summary:hover{ background:rgba(255,255,255,.04); }
+}
+.mgr-section > summary:focus-visible{ background:rgba(255,255,255,.04); }
 .mgr-section-body{ display:flex; flex-direction:column; gap:10px; padding:0 16px 16px; border-top:1px solid var(--line); }
 .mgr-section-body h3{ margin:10px 0 0; font-size:14px; }
 .mgr-section .mswitch{ width:100%; justify-content:flex-start; margin-top:12px; padding:12px 14px; font-size:15px; text-align:left; }
@@ -2304,8 +2347,14 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 .afc{ display:inline-flex; align-items:center; gap:5px; flex-shrink:0; padding:3px 9px; border-radius:999px; font-size:11px; background:rgba(232,154,74,.10); color:var(--ink); border:1px solid var(--accent); white-space:nowrap; }
 .afc .agent{ padding:1px 4px; }
 .afc .x{ color:var(--ink-3); margin-left:2px; }
-.afc:hover{ background:rgba(232,154,74,.22); }
-.afc:hover .x{ color:var(--accent); }
+@media (hover:hover) and (pointer:fine){
+  .afc:hover{ background:rgba(232,154,74,.22); }
+}
+.afc:active{ background:rgba(232,154,74,.22); }
+@media (hover:hover) and (pointer:fine){
+  .afc:hover .x{ color:var(--accent); }
+}
+.afc:active .x{ color:var(--accent); }
 /* Phones: keep the active-filters row visible (was display:none until chat-raised 2026-10-08 —
    with fTask on by default, hiding the row made the filter invisible and impossible to clear
    from the top bar; the user had to open the filter popover and find the per-group 'all' chip
@@ -2322,7 +2371,10 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 .fgrp{ display:flex; align-items:center; gap:4px; flex:0 1 auto; min-width:0; padding:2px 4px; border:1px solid var(--line-2); border-radius:10px; background:var(--bg-2); }
 .fgrp .icon-btn{ flex-shrink:0; }
 .afclear{ flex-shrink:0; padding:3px 9px; border-radius:999px; font-size:11px; background:none; color:var(--accent); border:1px dashed rgba(232,154,74,.55); white-space:nowrap; }
-.afclear:hover{ background:rgba(232,154,74,.15); }
+@media (hover:hover) and (pointer:fine){
+  .afclear:hover{ background:rgba(232,154,74,.15); }
+}
+.afclear:active{ background:rgba(232,154,74,.15); }
 
 /* web: the message row is a compact, centred strip so Send and the mic are a short mouse move from the box (it used to run the full window width) */
 @media (min-width: 721px){
@@ -2404,7 +2456,10 @@ body:not(.res-hidden) .fgrp{ display:none; }
 
 /* the manager's open questions in the NEEDS YOU strip */
 .attention .qask{ background:none; color:var(--accent); border:1px solid var(--accent); border-radius:999px; padding:3px 10px; font-size:11px; font-weight:700; white-space:nowrap; flex-shrink:0; }
-.attention .qask:hover{ background:rgba(232,154,74,.15); }
+@media (hover:hover) and (pointer:fine){
+  .attention .qask:hover{ background:rgba(232,154,74,.15); }
+}
+.attention .qask:active{ background:rgba(232,154,74,.15); }
 .attnpop.qpop{ max-width:min(430px, calc(100vw - 16px)); max-height:60vh; overflow-y:auto; gap:10px; }
 .qpop .qrow1{ font-size:12px; line-height:1.45; color:var(--ink); }
 .qpop .qrow1 b{ color:var(--accent); margin-right:4px; }
@@ -2556,7 +2611,10 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .uv-navb{ background:transparent; color:var(--ink-3); border:0; border-bottom:2px solid transparent; padding:6px 10px; font:inherit; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
 .uv-navb.on{ color:var(--accent); border-bottom-color:var(--accent); }
 .uv-lf{ color:var(--ink-2); font-size:11px; text-decoration:none; align-self:center; }
-.uv-lf:hover{ color:var(--accent); }
+@media (hover:hover) and (pointer:fine){
+  .uv-lf:hover{ color:var(--accent); }
+}
+.uv-lf:active{ color:var(--accent); }
 
 .uv-filters{ display:flex; gap:8px; margin:0 0 14px; flex-wrap:wrap; }
 .uv-filters select{ flex:1 1 160px; min-width:0; height:36px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:9px; padding:0 10px; font:inherit; font-size:13px; }
