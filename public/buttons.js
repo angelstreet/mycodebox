@@ -105,7 +105,10 @@ function stripUiLine(line) {
 //   '│'  — end of a table row
 const HARD_END_RE = /[?:!\u2502](?:["')\]]?)\s*$/;
 const LIST_PREFIX_RE2 = /^\s*(?:[-*\u2022]\s+|\d+[.)]\s+|[A-Z][.)]\s+)/;
-const TABLE_PREFIX_RE = /^\s*\u2502/;
+// A table row: the box-drawing │ an agent prints, or the ASCII | markdown tables use.
+// Only the box-drawing one was recognised, so a markdown table was joined up as prose and
+// rendered with every pipe visible (chat 1792615004567-bd7c32).
+const TABLE_PREFIX_RE = /^\s*(?:\u2502|\|)/;
 
 export function reflowPane(text) {
   const src = String(text || '').replace(/\r/g, '');
