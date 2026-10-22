@@ -1211,6 +1211,7 @@ async function pollOnce() {
 
     status[s.name] = {
       state, agent, agentCmd, waitReason,
+      managerSession: loadManagerSessions().includes(s.name),   // the UI never lists its stops as NEEDS YOU
       stall: stallOf(s.name),
       triage: triageOf(s.name),
       auto: autoOf(s.name),
