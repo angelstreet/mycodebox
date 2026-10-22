@@ -30,3 +30,21 @@ test('card read-full-screen: the bars are hidden by body.reading, and the card h
   for (const id of ['#topbar', '#health', '#alertRow', '#tabs', '#dock']) assert.ok(rule[0].includes(`body.reading ${id}`), `${id} hidden`);
   assert.ok(!/body\.reading[^{]*\.cell \.h|body\.reading[^{]*\.card-pane/.test(css), 'the card and its header stay');
 });
+
+import { canShrinkFont, isSettling } from '../public/fit-font.js';
+
+test('canShrinkFont: not while our resize request is still on its way; yes once the server granted the pane width, or when we cannot resize', () => {
+  assert.equal(canShrinkFont({ askable: true, granted: null, cols: 190 }), false, 'the pane is about to change width: no 8 px interim');
+  assert.equal(canShrinkFont({ askable: true, granted: { cols: 60 }, cols: 60 }), true, 'the server could not go below 60: shrink to fit');
+  assert.equal(canShrinkFont({ askable: true, granted: { cols: 53 }, cols: 190 }), false, 'the pane has not caught up with the grant yet');
+  assert.equal(canShrinkFont({ askable: false, granted: null, cols: 190 }), true, 'attached or fit off: nothing will resize it, shrink');
+});
+
+test('isSettling: a card at the wrong width, or waiting for the repainted pane, stays hidden for at most 1.8 s', () => {
+  assert.equal(isSettling({ askable: true, cols: 190, target: 111, ageMs: 300 }), true);
+  assert.equal(isSettling({ askable: true, cols: 111, target: 111, ageMs: 300 }), false, 'already at the width');
+  assert.equal(isSettling({ askable: true, cols: 110, target: 111, ageMs: 300 }), false, 'one column off is fine');
+  assert.equal(isSettling({ askable: true, cols: 60, target: 60, awaitPane: true, ageMs: 300 }), true, 'granted, repaint pending');
+  assert.equal(isSettling({ askable: true, cols: 190, target: 111, ageMs: 1800 }), false, 'never hidden longer than 1.8 s');
+  assert.equal(isSettling({ askable: false, cols: 190, target: 111, ageMs: 100 }), false, 'a client that cannot resize shows what it has');
+});

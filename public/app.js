@@ -12,7 +12,7 @@ import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
 import { fitAction } from '/fit-policy.js';
-import { fitFont } from '/fit-font.js';
+import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
@@ -423,16 +423,30 @@ function layoutTerm(session) {
   // The pane can be wider than the card (the server keeps a 60-column minimum, another client may have set more): shrink the font in small
   // steps until the whole pane fits, down to MIN_FIT_FONT, instead of cropping the right edge or scrolling sideways. Recomputed only when the
   // pane width, the card width or the chosen text size changes, so the font does not flicker on every status tick.
-  const fontKey = `${cols}|${w}|${state.font}`;
+  // Only shrink once the server has had its say: while our own resize request is still on its way, the pane is about to change width and a
+  // shrunk interim (8 px text, then a jump to 12 px) is exactly the ugly load. It also shrinks when this client cannot resize the window at all.
+  const st0 = state.status?.[session];
+  const askable = state.fit && !entry.noFit && !(st0 && st0.attached);
+  const canShrink = canShrinkFont({ askable, granted: entry.granted, cols });
+  const fontKey = `${cols}|${w}|${state.font}|${canShrink ? 1 : 0}`;
   if (entry.fontKey !== fontKey) {
     entry.fontKey = fontKey;
     if (term.options.fontSize !== state.font) term.options.fontSize = state.font;
     const q0 = propose();
     entry.colsAtBase = q0 ? q0.cols : 0;   // what a request to the server should ask for: the width that fits at the normal text size
-    const f = fitFont({ cols, base: state.font, min: MIN_FIT_FONT, colsAt: (fs) => { if (term.options.fontSize !== fs) term.options.fontSize = fs; const q = propose(); return q ? q.cols : cols; } });
-    if (term.options.fontSize !== f) term.options.fontSize = f;
+    if (canShrink) {
+      const f = fitFont({ cols, base: state.font, min: MIN_FIT_FONT, colsAt: (fs) => { if (term.options.fontSize !== fs) term.options.fontSize = fs; const q = propose(); return q ? q.cols : cols; } });
+      if (term.options.fontSize !== f) term.options.fontSize = f;
+    }
     p = propose() || p;
   }
+  // A freshly opened card whose pane is not at the card's width yet (we are about to resize it): keep it invisible for that moment (at most
+  // 1.8 s) instead of showing the old width, then re-wrapping. Fades in once the size is settled.
+  if (!entry.mountedAt) { entry.mountedAt = Date.now(); host.style.transition = 'opacity .12s'; }
+  const target = entry.granted ? entry.granted.cols : (entry.colsAtBase || cols);   // the width we asked for, or what the server gave
+  const settling = isSettling({ askable, cols, target, awaitPane: entry.awaitPane, ageMs: Date.now() - entry.mountedAt });
+  host.style.opacity = settling ? '0' : '';
+  const cellEl = host.closest('.cell'); if (cellEl) cellEl.dataset.settling = settling ? '1' : '';   // a data attribute: syncCell rewrites the cell's classes
   const scrollX = !!(p && cols > p.cols);
   // a horizontal scrollbar eats one row of the host
   const rows = Math.max(2, ((p && p.rows) || term.rows) - (scrollX ? 1 : 0));
@@ -453,7 +467,7 @@ function scheduleFit(session) {
   if (!entry) return;
   clearTimeout(entry.reqTimer);
   if (!state.fit || entry.noFit) return;
-  entry.reqTimer = setTimeout(() => sendFit(session), 400);
+  entry.reqTimer = setTimeout(() => sendFit(session), entry.asked ? 400 : 60);   // the first ask of a card goes out at once: it is what the owner waits for
 }
 async function sendFit(session) {
   const entry = state.terms.get(session);
@@ -483,6 +497,21 @@ async function sendFit(session) {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cols, rows }),
     });
     if (res.ok) { const g = await res.json().catch(() => null); if (g && g.ok) entry.granted = { cols: g.cols, rows: g.rows }; }
+    // The server's pane stream only reports the new width on its next tick (up to a second away): take the grant at its word and fetch the
+    // repainted pane ourselves once the agent has had a moment to redraw at the new size. The card stays hidden until then (entry.awaitPane).
+    const g = entry.granted;
+    if (g && !entry.noFit) {
+      entry.awaitPane = true;
+      setTimeout(async () => {
+        try {
+          const pr = await fetch(`/api/pane/${encodeURIComponent(session)}?lines=${Math.max(1000, entry.historyLines || 1000)}`);
+          const d = pr.ok ? await pr.json() : null;
+          if (d && typeof d.pane === 'string') writeToTerm(session, d.pane, { cols: g.cols, rows: g.rows });
+        } catch { /* the pane stream will deliver it */ }
+        entry.awaitPane = false; relayoutTerm(session);
+      }, 220);
+    }
+    relayoutTerm(session);   // the grant decides whether the text may shrink and whether the card may show
     if (res.status === 409) entry.noFit = true;
     else if (!res.ok) setTimeout(() => { if (entry.reqKey === key) entry.reqKey = ''; }, 15000);
   } catch { entry.reqKey = ''; }
