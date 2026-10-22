@@ -309,6 +309,32 @@ day. The transcript is found through the usage ledger: Claude session ids whose 
 -> `~/.claude/projects/<project dir>/<id>.jsonl`. `GET /api/manager/wakes?day=` (UTC day, cached 60 s) feeds the "Wakes
 today" block of the AI manager panel.
 
+**Manager failover (standby `mm-manager`).** `scripts/orchestrator-failover` (name kept) runs as `systemd/ghosty-manager-failover.service`
+(`Type=simple`, `Restart=on-failure`). The repo does not track the unit file because the integration lane refuses unit paths; create
+`/etc/systemd/system/ghosty-manager-failover.service` from the snippet below (replace `<user>`), then `sudo systemctl daemon-reload` and
+`sudo systemctl enable --now ghosty-manager-failover`. Every 300 s it reads `$GHOSTY_STATE_DIR/claude-rate-limits.json`: at >= 97 % (5 h or
+weekly) or a usage-limit message in the `manager` pane it starts or wakes `mm-manager` with a standby message (act as manager per
+TASK-44, same hard floors, never type into a working session, no Esc/Ctrl-C) and sets `~/handovers/notes/.failover-state` to
+`minimax`; under 90 % it asks `mm-manager` for a handback note and tells `manager` to read it (state `claude`). A missing or stale
+(> 30 min) quota file is unknown: no action. A `minimax` state older than 12 h with Claude fine is reset silently. `--once` runs one
+pass; `--dry` (implies `--once`) prints what it would do and touches no tmux session, state or log. Overrides: `POLL`, `LIMIT_PCT`,
+`BACK_PCT`, `FAILOVER_RL`, `FAILOVER_STATE`, `FAILOVER_LOG`, `FAILOVER_MANAGER`, `FAILOVER_STANDBY`. Test: `test/manager-failover.test.js`.
+
+```ini
+[Unit]
+Description=Ghosty: wake the MiniMax standby manager when the Claude manager runs out of quota, hand back when it is back
+After=ghosty-sessions.service
+
+[Service]
+Type=simple
+User=<user>
+Environment=HOME=/home/<user>
+ExecStart=/home/<user>/ghosty-sessions/scripts/orchestrator-failover
+Restart=on-failure
+RestartSec=30
+Nice=10
+```
+
 **Health watchdog (zero tokens unless a problem remains).** `scripts/health-watch.js` (no deps, no AI calls) runs every
 5 minutes from `systemd/ghosty-health-watch.timer` (`.service`: oneshot, `User=<service-user>`; install with `sudo cp` to
 `/etc/systemd/system`, `daemon-reload`, `enable --now ghosty-health-watch.timer`). It checks disk % of `/`, load vs
