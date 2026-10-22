@@ -320,6 +320,8 @@ TASK-44, same hard floors, never type into a working session, no Esc/Ctrl-C) and
 pass; `--dry` (implies `--once`) prints what it would do and touches no tmux session, state or log. Overrides: `POLL`, `LIMIT_PCT`,
 `BACK_PCT`, `FAILOVER_RL`, `FAILOVER_STATE`, `FAILOVER_LOG`, `FAILOVER_MANAGER`, `FAILOVER_STANDBY`. Test: `test/manager-failover.test.js`.
 
+**Standby visibility.** `manager.json` `standbyManagerSessions` (default `["mm-manager"]`) names the standby manager sessions. While the failover state is `claude` (a missing or unreadable state file counts as `claude`; read at most every 5 s, `FAILOVER_STATE` overrides the path) such a session is `hidden` in the status: not in the NEEDS YOU strip, the ask popup, the needs-you push, the decision count or the voice list. Its stops are still logged to `stalls.jsonl` and the scorecard. While the state is `minimax` it is a normal manager session (`managerSession`, so only owner questions and forbidden topics show). Code: `standby-manager.js`. Tests: `test/standby-manager.test.js`, `test/ask-popup.test.js`.
+
 ```ini
 [Unit]
 Description=Ghosty: wake the MiniMax standby manager when the Claude manager runs out of quota, hand back when it is back

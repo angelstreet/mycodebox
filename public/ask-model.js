@@ -26,7 +26,7 @@ export function isManagerOperationalStop(st) {
   return MANAGER_OPERATIONAL.includes(c) && !st.stall?.forbidden;
 }
 export function isOwnersTurn(st) {
-  if (!st) return false;
+  if (!st || st.hidden) return false;   // a standby manager in shadow (failover state claude) is invisible
   if (isManagerOperationalStop(st)) return false;
   if (st.stall?.escalatedTo === 'manager') return false;   // a lease or deploy stop is the manager's, never the owner's (ops-ask.js)
   if (st.state === 'waiting') return true;
