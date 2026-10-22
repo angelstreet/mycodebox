@@ -78,3 +78,14 @@ test('seen-keys: an entry within the 6 h window is kept and suppresses the same 
   const lines = readFileSync(seenPath(dir), 'utf8').trim().split('\n').filter(Boolean);
   assert.equal(lines.length, 1);
 });
+test('the deploy runner\'s own lease releases (agent manager:deploy, deploy-finished) are dropped; other lease events and failed deploys pass', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const own = ev({ key: 'lease:released', kind: 'lease', state: 'released', title: 'lease released: e/host-a (agent manager:deploy)', body: 'lease 1 by manager:deploy (deploy-finished); purpose: deploy abc' });
+  const other = ev({ key: 'lease:released', kind: 'lease', state: 'released', title: 'lease released: e/host-a (agent codebox:run)', body: 'lease 2 by codebox:run (released); purpose: run' });
+  const r = run(env, own + other + deployLine);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(kinds(r).sort(), ['deploy', 'lease']);
+  assert.match(r.stdout, /codebox:run/);
+  assert.doesNotMatch(r.stdout, /deploy-finished/);
+});

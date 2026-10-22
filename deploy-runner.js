@@ -56,6 +56,14 @@ export const catchUpPlan = (existing, d) => {
   const held = existing.filter((x) => x.ref === d.ref);
   return { queue: held.length === 0, held, cancel: existing.filter((x) => x.state === 'queued' && x.ref !== d.ref) };
 };
+// A catch-up for the same (env, ref, host) is tried at most CATCHUP_CAP times; each skip again backs that host off
+// (BACKOFF_BASE_MS doubling, capped) so a host held by something the lease registry does not show (a running execution)
+// is not re-dispatched every poll. Counted from the in-memory tries and from the finished catch-ups the registry still lists.
+export const CATCHUP_CAP = 3;
+export const BACKOFF_BASE_MS = 60000, BACKOFF_MAX_MS = 30 * 60000;
+export const backoffMs = (tries) => Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, tries - 1));
+export const finishedCatchUps = (deploys, d, host) => (deploys || []).filter((x) => x.id !== d.id && x.env === d.env && x.ref === d.ref && isCatchUp(x)
+  && (x.state === 'done' || x.state === 'failed') && (x.skippedHosts || []).includes(host)).length;
 export const VERSION_RE = /\bversion\s*[:=]?\s*(v?\d+\.\d+\.\d+[\w.+-]*)/i;
 
 // Central lease service: approving a deploy needs an OWNER client (E_AUTH "approving a deploy needs an owner client",
@@ -198,6 +206,8 @@ export function createDeployRunner({
   let envs = {};
   let snap = { ok: false, error: 'not polled yet', deploys: [], lastRef: {}, deployed: {}, at: 0 };
   const running = new Map();          // env -> deploy id this process is running
+  const catchUpTries = new Map();     // `${env}|${ref}|${host}` -> { n, until }: catch-ups that skipped the host again
+  const triesOf = (d, h, deploys) => Math.max(catchUpTries.get(`${d.env}|${d.ref}|${h}`)?.n || 0, finishedCatchUps(deploys, d, h));
   const seenAwaiting = new Set();
   let liveLeases = null;                // leases of the last good poll (`deploy list --json` carries them)
   const everBlocked = new Set();        // deploy ids that were ever held back by a lease: their start/done are worth a manager event
@@ -363,9 +373,17 @@ export function createDeployRunner({
     await new Promise((r) => out.end(r));
     const tail = lines.slice(-40).join('\n');
     const fin = await reg(['deploy', 'finish', d.id, '--status', status, ...(version ? ['--version', version] : []),
-      ...(skipped.length ? ['--skipped-hosts', skipped.join(',')] : []), '--tail-stdin'], { stdin: tail });
+      // never for a catch-up: the registry answers --skipped-hosts with a catch-up of its own, which skipped again would chain forever
+      ...(skipped.length && !isCatchUp(d) ? ['--skipped-hosts', skipped.join(',')] : []), '--tail-stdin'], { stdin: tail });
     if (fin.code !== 0) log.error?.(`[deploy] finish ${d.id} failed: ${fin.stderr}`);
     for (const m of merged) await reg(['deploy', 'finish', m.id, '--status', status, '--coalesced-into', d.id, ...(version ? ['--version', version] : []), '--tail-stdin'], { stdin: tail });
+    if (isCatchUp(d)) {
+      for (const h of d.hosts || []) {
+        const k = `${d.env}|${d.ref}|${h}`;
+        if (skipped.includes(h)) { const n = (catchUpTries.get(k)?.n || 0) + 1; catchUpTries.set(k, { n, until: Date.now() + backoffMs(n) }); }
+        else catchUpTries.delete(k);
+      }
+    }
     if (skipped.length && catchUp) {
       const say = async (l) => { onLine(l); await note(d.id, l); };   // the run's log stream is closed by now: note() appends
       if (isCatchUp(d)) {
@@ -374,18 +392,22 @@ export function createDeployRunner({
       } else {
         // one catch-up per (env, host set): what the queue already holds for these hosts decides, so several deploys that
         // skip the same leased hosts cannot pile up duplicates (or an older ref that would roll the hosts back).
-        const plan = catchUpPlan(coveringCatchUps(await listDeploys(deploys), d.env, skipped), d);
+        const capped = skipped.filter((h) => triesOf(d, h, deploys) >= CATCHUP_CAP);
+        if (capped.length) await say(`# catch-up for ${capped.join(',')} not requested: ${CATCHUP_CAP} catch-ups at ${d.ref} already skipped it`);
+        const want = skipped.filter((h) => !capped.includes(h));
+        const plan = want.length ? catchUpPlan(coveringCatchUps(await listDeploys(deploys), d.env, want), d) : { queue: false, held: [], cancel: [] };
         for (const x of plan.cancel) {
           const c = await reg(['deploy', 'cancel', x.id]);
           if (c.code !== 0) log.error?.(`[deploy] catch-up replace: cancel ${x.id} failed: ${c.stderr}`);
           else await say(`# catch-up ${x.id} (ref ${x.ref}) cancelled: superseded by ${d.id} at ${d.ref}`);
         }
-        if (!plan.queue) await say(`# catch-up for ${skipped.join(',')} already covered by ${plan.held.map((x) => `${x.id} (${x.state}, ${x.ref})`).join(', ')}: no new request`);
+        if (!want.length) { /* all capped */ }
+        else if (!plan.queue) await say(`# catch-up for ${want.join(',')} already covered by ${plan.held.map((x) => `${x.id} (${x.state}, ${x.ref})`).join(', ')}: no new request`);
         else {
           const q = await reg(['deploy', 'request', d.env, '--scope', 'host', '--ref', d.ref, '--agent', RUNNER_AGENT, '--approved',
-            '--hosts', skipped.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${skipped.join(',')}`]);
+            '--hosts', want.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${want.join(',')}`]);
           if (q.code !== 0) log.error?.(`[deploy] catch-up request for ${d.id} failed: ${q.stderr}`);
-          else await say(`# catch-up request ${q.stdout.trim()} for ${skipped.join(',')}`);
+          else await say(`# catch-up request ${q.stdout.trim()} for ${want.join(',')}`);
         }
       }
     }
@@ -452,6 +474,15 @@ export function createDeployRunner({
             if (running.has(env) || deploys.some((d) => d.env === env && d.state === 'running')) continue;
             const queue = deploys.filter((d) => d.env === env && d.state === 'queued' && flagsFor(d.scope)).sort((a, b) => a.created - b.created);
             for (const d of queue) {
+              if (isCatchUp(d) && d.hosts?.length) {
+                const ent = d.hosts.map((h) => ({ h, e: catchUpTries.get(`${d.env}|${d.ref}|${h}`), n: triesOf(d, h, deploys) }));
+                if (ent.some((x) => x.n >= CATCHUP_CAP)) {   // tried enough: cancel instead of re-dispatching for ever
+                  const c = await reg(['deploy', 'cancel', d.id]);
+                  if (c.code === 0) { d.state = 'canceled'; try { await note(d.id, `# catch-up cancelled: ${CATCHUP_CAP} catch-ups at ${d.ref} already skipped ${ent.filter((x) => x.n >= CATCHUP_CAP).map((x) => x.h).join(',')}; the next deploy of these hosts covers it`); } catch {} }
+                  continue;
+                }
+                if (ent.every((x) => x.e && x.e.until > Date.now())) continue;   // back off: wait for the host's hold to clear
+              }
               const r = await reg(['deploy', 'start', d.id, ...(skipsLeased(d) ? ['--skip-leased'] : [])]);
               if (r.code === 3) {
                 const b = blockersOf(d);
