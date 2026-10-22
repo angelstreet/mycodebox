@@ -132,7 +132,8 @@ const INFRA_PATHS = [
 ];
 export function sensitivePath(f) {
   const segs = f.split('/'), base = segs[segs.length - 1], lower = f.toLowerCase();
-  if (/^\.env/.test(base) || /^(?:\.netrc|\.npmrc|\.pypirc|authorized_keys)$/.test(base)) return 'secret';
+  const template = /\.(?:example|sample|template)$/i.test(base);   // .env.server.example is a template: not a secret by name (content is still scanned)
+  if ((/^\.env/.test(base) && !template) || /^(?:\.netrc|\.npmrc|\.pypirc|authorized_keys)$/.test(base)) return 'secret';
   if (/\.(?:pem|key|p12|pfx|jks)$/i.test(base) || /^id_(?:rsa|ed25519|ecdsa|dsa)/.test(base)) return 'secret';
   if (segs.some((s) => /secret|credential|password/i.test(s))) return 'secret';
   // The runner skips <name>_rollback.sql in a migrations dir (platform_update/migrations.py, upgrade_notes.py: "do not apply"), so the file
