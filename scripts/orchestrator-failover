@@ -1,53 +1,95 @@
 #!/usr/bin/env bash
-# orchestrator-failover — keeps the orchestrator role alive when Claude runs out of quota.
-# Every POLL seconds: if Claude is limited (5 h or weekly quota >= LIMIT_PCT, or the orchestrator pane shows a usage-limit
-# message), start or wake the MiniMax M3 standby `mm-manager` with the same brief; when Claude is back under
-# BACK_PCT, ask the standby for a handback note and tell the Claude orchestrator to read it. Both agents log to LOG.
+# orchestrator-failover — keeps the manager role alive when the Claude manager runs out of quota (name kept for old references).
+# Every POLL seconds: if Claude is limited (5 h or weekly quota >= LIMIT_PCT, or the manager pane shows a usage-limit
+# message), start or wake the MiniMax standby `mm-manager` with a standby message; when Claude is back under BACK_PCT,
+# ask the standby for a handback note and tell the Claude manager to read it. Both agents log to LOG.
+# A missing, unreadable or stale quota file means "unknown": no action. Hard floors stay owner-only for the standby too.
+#   --once   one pass, then exit      --dry   print what would happen; touches no tmux session, writes no state or log
 set -u
 POLL=${POLL:-300}; LIMIT_PCT=${LIMIT_PCT:-97}; BACK_PCT=${BACK_PCT:-90}
-RL="$HOME/.local/state/ghosty/claude-rate-limits.json"
-BRIEF="$HOME/handovers/orchestrator.brief.md"
-LOG="$HOME/handovers/notes/orchestrator-log.md"
-STATE="$HOME/handovers/notes/.failover-state"   # "claude" or "minimax"
-mkdir -p "$(dirname "$LOG")"; [ -f "$STATE" ] || echo claude > "$STATE"
-note() { echo "- $(date -u '+%F %H:%M') failover: $*" >> "$LOG"; echo "$(date -u '+%F %H:%M') $*"; }
-say() { tmux send-keys -t "=$1:0" -l "$2"; sleep 1; tmux send-keys -t "=$1:0" C-m; }
+STALE_RL_S=${STALE_RL_S:-1800}          # quota reading older than this is unknown
+STALE_STATE_H=${STALE_STATE_H:-12}      # a "minimax" state older than this, with Claude fine, is a leftover: reset silently
+SD=${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}
+RL=${FAILOVER_RL:-$SD/claude-rate-limits.json}
+LOG=${FAILOVER_LOG:-$HOME/handovers/notes/orchestrator-log.md}
+STATE=${FAILOVER_STATE:-$HOME/handovers/notes/.failover-state}   # "claude" or "minimax"
+MANAGER=${FAILOVER_MANAGER:-manager}; STANDBY=${FAILOVER_STANDBY:-mm-manager}
+STANDBY_BRIEF=${FAILOVER_STANDBY_BRIEF:-$SD/briefs/mm-manager.txt}
+MANUAL=${FAILOVER_MANUAL:-$HOME/vpt-manager/docs/tasks/TASK-44-MANAGER.md}
+ENSURE=${FAILOVER_ENSURE:-$HOME/bin/ensure-mm-manager-tmux.sh}
+ONCE=0; DRY=0
+for a in "$@"; do case "$a" in --once) ONCE=1;; --dry) DRY=1; ONCE=1;; *) echo "usage: $0 [--once] [--dry]" >&2; exit 2;; esac; done
 
-quota() {  # prints "<5h%> <week%> <reset epoch>" or "? ? ?"
-  python3 - "$RL" <<'EOF' 2>/dev/null || echo "? ? ?"
-import json,sys
-d=json.load(open(sys.argv[1]))["rate_limits"]
-f,w=d.get("five_hour",{}),d.get("seven_day",{})
-r=max(f.get("resets_at",0) if f.get("used_percentage",0)>=97 else 0, w.get("resets_at",0) if w.get("used_percentage",0)>=97 else 0)
-print(int(f.get("used_percentage",0)), int(w.get("used_percentage",0)), r)
-EOF
+note() { echo "$(date -u '+%F %H:%M') $*"; [ "$DRY" = 1 ] || { mkdir -p "$(dirname "$LOG")"; echo "- $(date -u '+%F %H:%M') failover: $*" >> "$LOG"; }; }
+say() { tmux send-keys -t "=$1:0" -l "$2" && sleep 1 && tmux send-keys -t "=$1:0" C-m; }
+busy() { tmux capture-pane -p -t "=$1:0" 2>/dev/null | tail -8 | grep -q -i "esc to interrupt"; }  # never type into a working session
+setstate() { [ "$DRY" = 1 ] || { mkdir -p "$(dirname "$STATE")"; echo "$1" > "$STATE"; }; }
+
+quota() {  # prints "<5h%> <week%> <reset epoch>" or "? ? ?" (missing, unreadable or stale file)
+  python3 - "$RL" "$STALE_RL_S" "$LIMIT_PCT" <<'PY' 2>/dev/null || echo "? ? ?"
+import json,sys,time
+p,stale,lim=sys.argv[1],int(sys.argv[2]),int(sys.argv[3])
+j=json.load(open(p)); d=j["rate_limits"]
+at=j.get("at") or 0
+at=at/1000 if at>1e11 else at
+if not at or time.time()-at>stale: raise SystemExit(1)
+f,w=d["five_hour"],d["seven_day"]
+h,wk=int(f["used_percentage"]),int(w["used_percentage"])
+r=max(f.get("resets_at",0) if h>=lim else 0, w.get("resets_at",0) if wk>=lim else 0)
+print(h,wk,int(r))
+PY
 }
 
-note "watcher started (poll ${POLL}s, limit ${LIMIT_PCT}%, back ${BACK_PCT}%)"
-while true; do
+standby_msg() {  # $1 5h  $2 week  $3 resets
+  echo "STANDBY MODE: the Claude manager (tmux session ${MANAGER}) is out of quota (5h ${1}%, week ${2}%, resets ${3}). You are now the acting manager. Ignore the 'standby orchestrator' paragraph in your brief and ~/handovers/orchestrator.brief.md (old role); follow ${MANUAL} (authority, loop, decision table, escalation): wake on events via scripts/manager-wait.sh plus an hourly sweep. Same limits as the Claude manager: hard floors (deploys, merges to main, deletions, credentials, money, customers, sudoers/units, force-push, destructive migrations) stay owner-only; merges and pushes go through the integration lane. Never type into a working session, never send Esc or Ctrl-C. Append every action as one line to ${LOG}. When you are told Claude is back, write a handback summary to that log and stop."
+}
+
+pass() {
+  local H W RESET cur limited=0 back=0 pane_limited=0 resets
   read -r H W RESET <<<"$(quota)"
-  pane_limited=0
-  tmux capture-pane -p -t "=orchestrator:0" 2>/dev/null | tail -15 | grep -q -i -E "usage limit|limit reached|out of (extra )?usage|rate.?limited" && pane_limited=1
-  limited=0
-  [ "$pane_limited" = 1 ] && limited=1
-  [ "$H" != "?" ] && { [ "$H" -ge "$LIMIT_PCT" ] || [ "$W" -ge "$LIMIT_PCT" ]; } && limited=1
-  back=0
-  [ "$H" != "?" ] && [ "$H" -lt "$BACK_PCT" ] && [ "$W" -lt "$BACK_PCT" ] && [ "$pane_limited" = 0 ] && back=1
-  cur=$(cat "$STATE")
-  if [ "$limited" = 1 ] && [ "$cur" = claude ]; then
-    resets=$([ "${RESET:-0}" -gt 0 ] 2>/dev/null && date -u -d "@$RESET" '+%F %H:%M UTC' || echo unknown)
-    msg="STANDBY MODE: the Claude orchestrator is out of quota (5h ${H}%, week ${W}%, resets ${resets}). You are now the standby orchestrator: run the loop in ~/handovers/orchestrator.brief.md now and keep running it every 30 minutes. Append every action (merge, restart, answer, session started) as one line to ${LOG}. When you are told Claude is back, write a handback summary to that log and stop."
-    if ! tmux has-session -t "=mm-manager" 2>/dev/null; then
-      "$HOME/bin/ensure-mm-manager-tmux.sh" >/dev/null 2>&1; sleep 20
-      tmux load-buffer -b mmbrief "$HOME/.local/state/ghosty/briefs/mm-manager.txt"; tmux paste-buffer -b mmbrief -t mm-manager -d; sleep 2; tmux send-keys -t mm-manager C-m; sleep 60
-    fi
-    say mm-manager "$msg"
-    echo minimax > "$STATE"; note "Claude limited (5h ${H}%, week ${W}%, pane ${pane_limited}) -> mm-manager standby active"
-  elif [ "$back" = 1 ] && [ "$cur" = minimax ]; then
-    tmux has-session -t "=mm-manager" 2>/dev/null && say mm-manager "Claude is back. Write a handback summary to ${LOG} (what you merged, restarted, answered, started, and anything pending), then return to your manager role."
-    sleep 120
-    say orchestrator "mm-manager (MiniMax M3) ran your loop while you were out of quota. Read the last entries of ${LOG}, then continue your loop from there."
-    echo claude > "$STATE"; note "Claude back (5h ${H}%, week ${W}%) -> handback to the Claude orchestrator"
+  [ -f "$STATE" ] && cur=$(cat "$STATE") || cur=claude
+  [ "$cur" = minimax ] || cur=claude
+  if [ "$H" = "?" ]; then echo "$(date -u '+%F %H:%M') quota unknown (missing or stale ${RL##*/}): no action (state $cur)"; return; fi
+  if [ "$DRY" = 0 ]; then
+    tmux capture-pane -p -t "=${MANAGER}:0" 2>/dev/null | tail -15 | grep -q -i -E "usage limit reached|you've hit your .*limit|out of (extra )?usage" && pane_limited=1
   fi
+  { [ "$H" -ge "$LIMIT_PCT" ] || [ "$W" -ge "$LIMIT_PCT" ] || [ "$pane_limited" = 1 ]; } && limited=1
+  [ "$H" -lt "$BACK_PCT" ] && [ "$W" -lt "$BACK_PCT" ] && [ "$pane_limited" = 0 ] && back=1
+  # a stale "minimax" (nobody took over lately, Claude fine) must not trigger a bogus handback
+  if [ "$cur" = minimax ] && [ "$back" = 1 ] && [ -f "$STATE" ] && [ $(( $(date +%s) - $(stat -c %Y "$STATE") )) -gt $((STALE_STATE_H*3600)) ]; then
+    setstate claude; note "state was minimax for over ${STALE_STATE_H}h with Claude fine (5h ${H}%, week ${W}%): reset to claude, no handback"; return
+  fi
+  if [ "$limited" = 1 ] && [ "$cur" = claude ]; then
+    resets=$([ "${RESET:-0}" -gt 0 ] && date -u -d "@$RESET" '+%F %H:%M UTC' || echo unknown)
+    if [ "$DRY" = 1 ]; then note "DRY: would start/wake ${STANDBY} and send the standby message (5h ${H}%, week ${W}%, resets ${resets}); state claude -> minimax"; standby_msg "$H" "$W" "$resets"; return; fi
+    if ! tmux has-session -t "=${STANDBY}" 2>/dev/null; then
+      "$ENSURE" >/dev/null 2>&1; sleep 20
+      [ -f "$STANDBY_BRIEF" ] && { tmux load-buffer -b mmbrief "$STANDBY_BRIEF"; tmux paste-buffer -b mmbrief -t "${STANDBY}" -d; sleep 2; tmux send-keys -t "${STANDBY}" C-m; sleep 60; }
+    fi
+    if ! tmux has-session -t "=${STANDBY}" 2>/dev/null; then note "Claude limited but ${STANDBY} could not be started: retry next poll"; return; fi
+    if busy "$STANDBY"; then echo "$(date -u '+%F %H:%M') ${STANDBY} is working: standby message deferred"; return; fi
+    say "$STANDBY" "$(standby_msg "$H" "$W" "$resets")"
+    setstate minimax; note "Claude limited (5h ${H}%, week ${W}%, pane ${pane_limited}) -> ${STANDBY} standby active"
+  elif [ "$back" = 1 ] && [ "$cur" = minimax ]; then
+    if [ "$DRY" = 1 ]; then note "DRY: would ask ${STANDBY} for a handback note and tell ${MANAGER} to read it (5h ${H}%, week ${W}%); state minimax -> claude"; return; fi
+    if tmux has-session -t "=${STANDBY}" 2>/dev/null && ! busy "$STANDBY"; then
+      say "$STANDBY" "Claude is back. Write a handback summary to ${LOG} (what you merged, restarted, answered, started, and anything pending), then return to your normal role. Do not act as manager any more."
+      sleep 120
+    fi
+    if tmux has-session -t "=${MANAGER}" 2>/dev/null; then
+      busy "$MANAGER" && { echo "$(date -u '+%F %H:%M') ${MANAGER} is working: handback message deferred"; return; }
+      say "$MANAGER" "${STANDBY} (MiniMax) acted as manager while you were out of quota. Read the last entries of ${LOG}, then continue your loop from there."
+    fi
+    setstate claude; note "Claude back (5h ${H}%, week ${W}%) -> handback to ${MANAGER}"
+  else
+    echo "$(date -u '+%F %H:%M') no action (5h ${H}%, week ${W}%, state ${cur})"
+  fi
+}
+
+[ "$DRY" = 1 ] || { [ -f "$STATE" ] || { mkdir -p "$(dirname "$STATE")"; echo claude > "$STATE"; }; }
+[ "$ONCE" = 1 ] || note "watcher started (poll ${POLL}s, limit ${LIMIT_PCT}%, back ${BACK_PCT}%)"
+while true; do
+  pass
+  [ "$ONCE" = 1 ] && exit 0
   sleep "$POLL"
 done
