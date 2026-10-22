@@ -55,9 +55,9 @@ pass() {
   fi
   { [ "$H" -ge "$LIMIT_PCT" ] || [ "$W" -ge "$LIMIT_PCT" ] || [ "$pane_limited" = 1 ]; } && limited=1
   [ "$H" -lt "$BACK_PCT" ] && [ "$W" -lt "$BACK_PCT" ] && [ "$pane_limited" = 0 ] && back=1
-  # a stale "minimax" (nobody took over lately, Claude fine) must not trigger a bogus handback
-  if [ "$cur" = minimax ] && [ "$back" = 1 ] && [ -f "$STATE" ] && [ $(( $(date +%s) - $(stat -c %Y "$STATE") )) -gt $((STALE_STATE_H*3600)) ]; then
-    setstate claude; note "state was minimax for over ${STALE_STATE_H}h with Claude fine (5h ${H}%, week ${W}%): reset to claude, no handback"; return
+  # a stale "minimax" (set long ago, e.g. before a restart) is a leftover: back to claude, no handback; if still limited the next pass takes over
+  if [ "$cur" = minimax ] && [ -f "$STATE" ] && [ $(( $(date +%s) - $(stat -c %Y "$STATE") )) -gt $((STALE_STATE_H*3600)) ]; then
+    setstate claude; cur=claude; note "state was minimax for over ${STALE_STATE_H}h (5h ${H}%, week ${W}%): reset to claude, no handback"
   fi
   if [ "$limited" = 1 ] && [ "$cur" = claude ]; then
     resets=$([ "${RESET:-0}" -gt 0 ] && date -u -d "@$RESET" '+%F %H:%M UTC' || echo unknown)
