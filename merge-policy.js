@@ -183,10 +183,6 @@ const SQL_ADDITIVE = [
 // ALTER TABLE t ADD COLUMN c int, DROP COLUMN d is refused on the DROP.
 const SQL_ALTER_TABLE = /^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?[`"'\w.$]+(?:\s*\.\s*[`"'\w.$]+)?\s+(.*)$/;
 const SQL_ALTER_ADDITIVE = /^(?:add\b|(?:enable|force)\s+row\s+level\s+security\b)/;
-// ADD CONSTRAINT (and a bare ADD CHECK / UNIQUE / PRIMARY KEY / FOREIGN KEY) can fail or lock on existing rows. A CHECK is the one
-// readable case: additive only when the request attests it is already applied (--migration-applied); the rest stay refused.
-const SQL_ALTER_CONSTRAINT = /^add\s+(?:constraint\b|check\b|unique\b|primary\s+key\b|foreign\s+key\b|exclude\b)/;
-const SQL_ALTER_CHECK = /^add\s+(?:constraint\s+(?:"[^"]+"|\S+)\s+)?check\s*\(/;
 // The destructive shape, most specific first, so the reason names what it found ("DROP COLUMN in db/migrations/x.sql").
 const SQL_DESTRUCTIVE = [
   [/\bdrop\s+(column|table|index|constraint|view|schema|function|type|trigger|sequence|database|extension|policy|role|user)\b/, (m) => `DROP ${m[1].toUpperCase()}`],
@@ -309,22 +305,14 @@ function splitSql(lines) {
 }
 // One SQL statement of the file -> true (additive) | null (a statement the caller judges against the file's other statements) |
 // { reason } naming what it found.
-function sqlAdditive(s, { migrationApplied = false } = {}) {
+function sqlAdditive(s) {
   const head = s.toLowerCase().replace(/;+\s*$/, '').replace(/^[^a-z$]*/, '');
   if (head.startsWith('\\')) return { reason: 'a psql meta-command' };
   for (const re of SQL_ADDITIVE) if (re.test(head)) return true;
   if (SQL_DROP_POLICY.test(head) || SQL_DROP_TRIGGER.test(head)) return null;   // additive only as the re-create pattern, the caller has the later statements
   if (SQL_REVOKE_ON.test(head)) return null;      // additive only on tables this file CREATEs earlier, the caller has the earlier statements
   const alter = SQL_ALTER_TABLE.exec(head);
-  if (alter) {
-    const clauses = alter[1].split(/,\s*(?=add\b|drop\b|alter\b|rename\b|set\b|owner\b)/).map((c) => c.trim());
-    const cons = clauses.filter((c) => SQL_ALTER_CONSTRAINT.test(c));
-    if (cons.length && clauses.every((c) => SQL_ALTER_ADDITIVE.test(c))) {
-      if (!migrationApplied || !cons.every((c) => SQL_ALTER_CHECK.test(c))) return { reason: 'ADD CONSTRAINT' };
-      return { attestedCheck: true };
-    }
-    if (clauses.every((c) => SQL_ALTER_ADDITIVE.test(c))) return true;
-  }
+  if (alter && alter[1].split(/,\s*(?=add\b|drop\b|alter\b|rename\b|set\b|owner\b)/).every((c) => SQL_ALTER_ADDITIVE.test(c.trim()))) return true;
   for (const [re, name] of SQL_DESTRUCTIVE) { const m = re.exec(head); if (m) return { reason: name(m) }; }
   return { reason: `not additive: ${head.slice(0, 80)}` };
 }
@@ -349,7 +337,7 @@ const norm = (s) => s.replace(/;+\s*$/, '').replace(/\s+/g, ' ').trim().toLowerC
 const isPy = (file) => /\.(?:py|rb|js|ts|go|java)$/i.test(file || '');
 // The added lines of ONE migration file -> { additive: true } | { additive: false, reason }. Comments and blank lines are ignored;
 // anything not read as an additive statement (including a statement we only half read) is not additive.
-export function migrationAdditive(file, addedLines, { migrationApplied = false } = {}) {
+export function migrationAdditive(file, addedLines) {
   if (!Array.isArray(addedLines)) return { additive: false, reason: 'unreadable diff' };
   const py = isPy(file);
   if (!py) {
@@ -398,17 +386,15 @@ export function migrationAdditive(file, addedLines, { migrationApplied = false }
         return !!e && objectKey(e[1]) === key;
       });
     };
-    let attestedCheck = false;
     for (let i = 0; i < heads.length; i++) {
       if (/^\s*create\s+or\s+replace\s+function\b/.test(heads[i]) && !usedByTrigger(i)) return { additive: false, reason: 'CREATE OR REPLACE FUNCTION' };
-      const r = sqlAdditive(cut.stmts[i], { migrationApplied });
+      const r = sqlAdditive(cut.stmts[i]);
       if (r === true) continue;
-      if (r?.attestedCheck) { attestedCheck = true; continue; }
       // a null verdict is a statement the file itself redeems: a policy created again later, a REVOKE on tables created earlier
       if (r === null && (SQL_DROP_POLICY.test(heads[i]) ? recreated(i) : SQL_DROP_TRIGGER.test(heads[i]) ? triggerRecreated(i) : ownTables(i))) continue;
       return { additive: false, reason: r ? r.reason : SQL_REVOKE_ON.test(heads[i]) ? 'REVOKE' : SQL_DROP_TRIGGER.test(heads[i]) ? 'DROP TRIGGER' : `DROP POLICY in "${heads[i].slice(0, 80)}"` };
     }
-    return attestedCheck ? { additive: true, attestedCheck: true } : { additive: true };
+    return { additive: true };
   }
   const stmts = joinStatements(addedLines.filter((l) => !/^\s*$/.test(l)))
     .map((s) => s.replace(/#.*$/, ''))
@@ -432,15 +418,9 @@ export function migrationReasons(facts, { approvedBy = false, migrationApplied =
   const files = (facts?.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file);
   if (!files.length) return [];
   const adds = facts?.migrationAdds || {};
-  const bad = files.map((file) => [file, migrationAdditive(file, adds[file], { migrationApplied })]).filter(([, v]) => !v.additive);
+  const bad = files.map((file) => [file, migrationAdditive(file, adds[file])]).filter(([, v]) => !v.additive);
   if (bad.length) return bad.map(([file, v]) => `migration is destructive: ${v.reason} in ${file}`);
   return [];
-}
-// True when a migration of the diff is additive only because of the attestation (an ALTER TABLE ... ADD CONSTRAINT ... CHECK already applied).
-export function migrationAttestedCheck(facts, { migrationApplied = false } = {}) {
-  if (!migrationApplied) return false;
-  const adds = facts?.migrationAdds || {};
-  return (facts?.sensitive || []).filter((x) => x.why === 'migration').some((x) => migrationAdditive(x.file, adds[x.file], { migrationApplied }).attestedCheck);
 }
 const MIGRATION_REASON = /^touches a migration: /;
 
