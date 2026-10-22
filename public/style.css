@@ -2336,10 +2336,11 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 body:not(.res-hidden) .fgrp{ display:none; }
 @media (max-width: 720px){ .fgrp{ display:none !important; } }
 
-/* phones: the swipe row of quick filter chips under the top bar */
+/* phones: the second row of filter chips (all / status / agent / project) was too much on a small screen (owner 2026-10-22): hidden. The status dots
+   in the top bar still filter by state. The row is still built (renderQuickRow); to bring it back, make this display:flex again. */
 .qrow{ display:none; }
 @media (max-width: 720px){
-  .qrow{ display:flex; gap:6px; padding:6px 10px; overflow-x:auto; scrollbar-width:none; border-bottom:1px solid var(--line); flex-shrink:0; background:var(--bg); }
+  .qrow{ display:none; }
   .qrow::-webkit-scrollbar{ display:none; }
   .qchip{ display:inline-flex; align-items:center; gap:5px; flex-shrink:0; padding:4px 10px; border-radius:999px; font-size:12px; min-height:30px; background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line); white-space:nowrap; }
   .qchip .n{ color:var(--ink-3); font-variant-numeric:tabular-nums; }
