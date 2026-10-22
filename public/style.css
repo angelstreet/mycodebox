@@ -1078,6 +1078,14 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
      fullscreen / open button take its slot — owner uses it to jump from the
      list row straight into the focused card. */
   .cell .h .lk, .card-pane .cell .h .lk { display:none !important; }
+  /* Chat-raised 2026-10-21 (chat 1792614614185-0c230c): 'phone i should be able to
+     read without scrolling horizontal'. A reply with a fenced code block, a long
+     inline `code` span or a wide table pushed the paragraph sideways on a phone
+     and the owner had to swipe to finish a line. Wrap instead of scroll here;
+     the base rules keep the horizontal scrollbar, which is still the better
+     trade on a wide screen. */
+  .reader pre{ white-space:pre-wrap; overflow-wrap:anywhere; overflow-x:hidden; word-break:break-word; }
+  .reader code{ overflow-wrap:anywhere; word-break:break-word; }
   /* The fullscreen / open button is hidden by default inside .card-pane (the
      card is already fullscreen there); expose it on phones so it remains
      available regardless of where the user tapped in from. */
