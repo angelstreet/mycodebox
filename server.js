@@ -101,7 +101,8 @@ import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
 import { createDoneCheck } from './done-check.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
-import { statusLine } from './stall.js';
+import { statusLine, inputBox } from './stall.js';
+import { verifyDelivered } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -387,6 +388,15 @@ async function sendKeys(session, keys, enter = true) {
   if (enter) {
     await new Promise((r) => setTimeout(r, lines.length > 1 || text.length > 200 ? 400 : 80));
     await exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
+    // The agent may swallow that Enter while it is still processing the paste (an image path becomes an attachment): the text then sits in the
+    // prompt as a draft. Check, and press Enter again if so; in the background, the reply does not wait for it.
+    void verifyDelivered({
+      text,
+      draftNow: async () => { try { return inputBox((await capturePane(session, 30)).split('\n')).draft; } catch { return null; } },
+      pressEnter: () => exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      onRetry: (n) => logEvent({ type: 'send-enter-retry', session, attempt: n }),
+    }).catch(() => {});
   }
   lastSendAt.set(session, Date.now());
   lastSendText.set(session, String(keys || ''));
