@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp as mkTmp } from './helpers-tmp.js';
-import { createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, remoteLeaseCmd, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS, isCatchUp, coveringCatchUps, catchUpPlan } from '../deploy-runner.js';
+import { CATCHUP_CAP, backoffMs, createDeployRunner, flagsFor, covers, parseSkipped, extraFlagsFor, mergeable, remoteLeaseCmd, RUNNER_AGENT, DEFAULT_ORPHAN_IDLE_MS, isCatchUp, coveringCatchUps, catchUpPlan } from '../deploy-runner.js';
 
 // In-memory registry that mimics `vpt-lease deploy ...` (start = atomic check against leases + one running per env).
 function fakeRegistry({ leases = [], deploys = [] } = {}) {
@@ -344,7 +344,8 @@ test('a catch-up whose hosts are leased again queues no new catch-up (no chain)'
   const { runner, stateDir } = make(reg, { run: async (env, o) => { o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
   await runner.tick();
   await until(() => reg.deploys[0].state === 'done'); await sleep(60);
-  assert.deepEqual(reg.deploys[0].skippedHosts, ['host-a']);                           // the skip is still recorded
+  assert.equal(reg.deploys[0].skippedHosts, undefined);                               // not passed on: the registry would queue a catch-up of its own (the 2026-10-22 loop)
+  assert.ok(!reg.calls.some((c) => /deploy finish 5 .*--skipped-hosts/.test(c)));
   assert.equal(reg.calls.filter((c) => c.startsWith('deploy request')).length, 0);
   assert.equal(reg.deploys.filter((d) => isCatchUp(d)).length, 1);
   const log = readFileSync(join(stateDir, 'deploys', '5.log'), 'utf8');
@@ -726,4 +727,47 @@ test('runner on: by default a request through the central registry client is aut
   assert.ok(reg.calls.includes('deploy approve 4'));
   assert.ok(!reg.calls.includes('deploy approve 5'));
   assert.equal(reg.deploys[1].state, 'awaiting-approval');
+});
+
+// 2026-10-22 loop: catch-ups for a host held by a running execution (no lease) re-dispatched every ~11 s, each finish
+// with --skipped-hosts made the registry queue the next one. The self-lease case: only the deploy's own lease exists.
+test('self-lease case: a catch-up that skips its host and finishes queues no further catch-up (runner or registry)', async () => {
+  const reg = fakeRegistry({ deploys: [catchUp('5')], leases: [{ id: 'L5', env: 'node1-vpt', resource: 'host-a', agent: 'manager:deploy', deploy_id: '5' }] });
+  const { runner } = make(reg, { run: async (env, o) => { o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done'); await sleep(60);
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy request')));
+  assert.ok(!reg.calls.some((c) => c.includes('--skipped-hosts')));
+  assert.equal(reg.deploys.length, 1);
+});
+
+test('back-off: a catch-up that skipped its host is not started again at once', async () => {
+  const reg = fakeRegistry({ deploys: [catchUp('5')] });
+  const { runner, ran } = make(reg, { run: async (env, o) => { o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => reg.deploys[0].state === 'done'); await sleep(60);
+  reg.deploys.push(catchUp('6'));                       // the registry queues another one
+  await runner.tick(); await sleep(60);
+  assert.equal(reg.deploys.find((d) => d.id === '6').state, 'queued');
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy start 6')));
+  assert.ok(backoffMs(1) < backoffMs(2) && backoffMs(99) <= 30 * 60000);
+});
+
+test('cap: after 3 catch-ups at the same ref skipped the host, the next queued one is cancelled, not run', async () => {
+  const done = (id) => catchUp(id, { state: 'done', skippedHosts: ['host-a'] });
+  const reg = fakeRegistry({ deploys: [done('1'), done('2'), done('3'), catchUp('4')] });
+  const { runner, ran } = make(reg);
+  await runner.tick(); await sleep(60);
+  assert.equal(CATCHUP_CAP, 3);
+  assert.equal(reg.deploys.find((d) => d.id === '4').state, 'canceled');
+  assert.equal(ran.length, 0);
+});
+
+test('cap: a deploy that skips a host already tried 3 times queues no catch-up', async () => {
+  const done = (id) => catchUp(id, { state: 'done', skippedHosts: ['host-a'] });
+  const reg = fakeRegistry({ deploys: [done('1'), done('2'), done('3'), dep('9', { scope: 'full', ref: 'main' })] });
+  const { runner, alerts } = make(reg, { run: async (env, o) => { o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  await runner.tick();
+  await until(() => alerts.some(([k]) => k === 'deploy:9:done'));
+  assert.ok(!reg.calls.some((c) => c.startsWith('deploy request')));
 });
