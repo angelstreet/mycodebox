@@ -67,3 +67,10 @@ test('stale minimax state with Claude fine is reset, not handed back', () => {
   assert.match(run().stdout, /reset to claude, no handback/);
   noTmux();
 });
+
+test('stale minimax state with the week at 90 % (not yet back) is still reset', () => {
+  reading(1, 90); fs.writeFileSync(state, 'minimax\n');
+  const old = new Date(Date.now() - 48 * 3600e3); fs.utimesSync(state, old, old);
+  assert.match(run().stdout, /reset to claude, no handback/);
+  noTmux();
+});

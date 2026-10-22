@@ -316,7 +316,7 @@ today" block of the AI manager panel.
 weekly) or a usage-limit message in the `manager` pane it starts or wakes `mm-manager` with a standby message (act as manager per
 TASK-44, same hard floors, never type into a working session, no Esc/Ctrl-C) and sets `~/handovers/notes/.failover-state` to
 `minimax`; under 90 % it asks `mm-manager` for a handback note and tells `manager` to read it (state `claude`). A missing or stale
-(> 30 min) quota file is unknown: no action. A `minimax` state older than 12 h with Claude fine is reset silently. `--once` runs one
+(> 30 min) quota file is unknown: no action. A `minimax` state older than 12 h is a leftover and is reset to `claude` silently (no handback; if Claude is still limited the next pass takes over). `--once` runs one
 pass; `--dry` (implies `--once`) prints what it would do and touches no tmux session, state or log. Overrides: `POLL`, `LIMIT_PCT`,
 `BACK_PCT`, `FAILOVER_RL`, `FAILOVER_STATE`, `FAILOVER_LOG`, `FAILOVER_MANAGER`, `FAILOVER_STANDBY`. Test: `test/manager-failover.test.js`.
 
