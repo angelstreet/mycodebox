@@ -2,6 +2,10 @@
 # manager event filter (owner-approved 2026-10-04), reads manager-events.jsonl lines on STDIN (manager-wait.sh feeds it from the cursor):
 # drops routine deploy start/done, the deploy runner's own lease releases (manager:deploy), deploy events and lease releases Jev says "ignore" at >= 0.9 (the runner starts a waiting deploy on release itself)
 # (never for asks/waiting/hold/quota/disk/credits or failed/orphan deploys), and repeats of the same stop (per run).
+# Residual risk (Codex review 2026-10-22 s4, kept on purpose): the runner's own lease release is dropped even if the runner then crashes,
+# so the release alone is not a wake-up. A safe "failed/blocked event of the same deploy in this batch" rule needs the whole batch
+# (a streaming jq cannot see a later event), so it is not done here; the wake-up for a dead runner is the deploy's failed / orphan /
+# blockedBy event (never dropped, tested) and the manager's hourly sweep.
 # The key drops the STATUS meter ("· 1m 09s · 832k tok") so a re-fired stop (no meter) matches the original; first 80 chars.
 # When the body has a "needs-owner:" STATUS, the key is that question only (up to its [options]): ghosty re-cuts the body differently on re-fire.
 # Across runs (separate manager-wait invocations), asks / waiting / lease are also deduped for 6 h — a stop that ghosty re-emits
