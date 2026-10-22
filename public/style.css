@@ -401,8 +401,9 @@ body{ display:flex; flex-direction:column; }
    phones are narrow by definition. The card chrome and header stay full-bleed, like
    Claude's top bar; only the text is measured. */
 @media (min-width: 1100px){
+  /* not .reader: it centres its own text column with side padding (.cell.rd-on .reader), so capping the box as well centred it twice
+     and squeezed the text to a sliver on a wide window */
   .view-card .card-pane .cell > .b,
-  .view-card .card-pane .cell > .reader,
   .view-card .card-pane .cell > .docview{ max-width:var(--measure); margin-inline:auto; width:100%; }
   /* .jump is absolutely positioned against the card, so pin it to the column's edge
      instead of letting it drift to the far right of a wide window. */
