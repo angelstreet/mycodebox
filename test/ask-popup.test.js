@@ -249,3 +249,16 @@ test('manager asks: a waiting session + 2 asks -> 3; an ask about the waiting se
   assert.equal(unattachedAsks(attached, statuses, sessions).length, 2);
   assert.equal(buildQueue(statuses, {}, sessions, attached).length, 3);
 });
+
+// ---- the manager's own session is never the owner's turn ----
+test('managerSession: waiting_deploy / owner_decision stops are not the owner\'s; a normal session with the same stall is', () => {
+  for (const c of ['waiting_deploy', 'owner_decision']) {
+    const stall = { case: c, question: 'Continue with the deploy?', id: 's1' };
+    assert.equal(isOwnersTurn({ state: 'waiting', stall, managerSession: true }), false, c);
+    assert.equal(isOwnersTurn({ state: 'done', stall, triage: { state: 'done' }, managerSession: true }), false, c);
+    assert.equal(isOwnersTurn({ state: 'waiting', stall, managerSession: false }), true, c);
+  }
+  const statuses = { manager: { state: 'waiting', managerSession: true, stall: { id: 'a' } }, w1: { state: 'waiting', stall: { id: 'b' } } };
+  const q = buildQueue(statuses, {}, [{ name: 'manager' }, { name: 'w1' }]);
+  assert.deepEqual(q.map((i) => i.name), ['w1']);
+});
