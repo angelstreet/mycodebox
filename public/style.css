@@ -2750,3 +2750,7 @@ body:not(.res-hidden) .fgrp{ display:none; }
 
 /* Read full screen (the card's expand button): the card fills the screen; its header stays, so the same button leaves it. */
 body.reading #topbar, body.reading #health, body.reading #filterBar, body.reading #quickRow, body.reading #alertRow, body.reading #tabs, body.reading #dock{ display:none !important; }
+
+/* a card that is being fitted to its window (hidden for a moment, see layoutTerm): say so instead of showing an empty box */
+.cell[data-settling="1"] .b{ position:relative; }
+.cell[data-settling="1"] .b::before{ content:'opening\2026'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink-3); font-size:12px; letter-spacing:.04em; pointer-events:none; }
