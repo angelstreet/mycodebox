@@ -145,6 +145,7 @@ import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
+import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createIntegrationNotify } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
@@ -771,6 +772,13 @@ const mockups = createMockups({
   send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); noteAnswerer(session, by, 'mockup'); },   // the same guarded send as every other owner send
 });
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
+// safety net for manager questions that were typed in chat but never filed (ask-guard.js)
+const askGuard = createAskGuard({
+  ledgerFile: join(STATE_DIR, 'manager-owner-asks.jsonl'), alertsFile: join(STATE_DIR, 'manager-ask-alerts.jsonl'),
+  alert: ({ title, body, tag }) => alert(`manager-agent:${tag}`, { title, body, url: '/', tag, priority: 'high', ntfyTags: 'robot' }),
+  log: (e) => logEvent(e),
+});
+const askGuardSeen = new Map();   // manager session -> reply hash already checked
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const history = createSessionHistory({ file: join(STATE_DIR, 'session-history.jsonl'), missMs: 2 * Number(process.env.TICK_MS || 1000) });   // start/end log of sessions; open instances are rebuilt from the file at boot
 const historyView = createHistoryView({ history, ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });
@@ -1207,6 +1215,10 @@ async function pollOnce() {
     if (!offline && isAgent && (paneChanged || changed || t.replyHash == null)) {
       t.reply = replyOf(plain, end);
       t.replyHash = t.reply ? shortHash(t.reply) : null;
+      if (t.reply && loadManagerSessions().includes(s.name) && askGuardSeen.get(s.name) !== t.replyHash) {
+        askGuardSeen.set(s.name, t.replyHash);
+        askGuard.checkReply(s.name, t.reply).catch((e) => console.error('[ask-guard]', e.message));
+      }
     } else if (!isAgent || offline) { t.reply = null; t.replyHash = null; }
 
     const foot = offline ? { contextLeft: null, model: null } : footerInfo(plain.filter((l) => l.trim()));
@@ -2706,6 +2718,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(leaseTick, 15000);
   setInterval(() => autoParkTick().catch((e) => console.error('[auto-park]', e.message)), 30000).unref?.();
   setInterval(() => leaseService.tick().catch((e) => console.error('[lease-service] tick', e.message)), 5000).unref?.();
+  setInterval(() => askGuard.sweep().catch((e) => console.error('[ask-guard] sweep', e.message)), 30000).unref?.();
   setInterval(digestTick, 60000);   // digest tier: one push per 30 min while the owner is awake
   setInterval(() => decidedDigestTick().catch((e) => console.error('[decided-digest]', e.message)), 60000).unref?.();   // "Decided for you today", once a day
   healthTick();

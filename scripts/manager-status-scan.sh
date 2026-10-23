@@ -25,4 +25,6 @@ if as_json: print(json.dumps(hits))
 else:
     for h in hits: print(f"{h['session']}: {h['status']}")
 PY
+# open owner asks with no alert in the push feed (manager-ask-scan.sh); not in --json output
+[ "$JSON" = 0 ] && "$(dirname "$0")/manager-ask-scan.sh"
 exit 0
