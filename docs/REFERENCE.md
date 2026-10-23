@@ -726,6 +726,8 @@ curl -s -XPOST localhost:7777/api/manager -H 'content-type: application/json' \
 curl -s -XPOST localhost:7777/api/manager/cancel/task05 -H 'content-type: application/json' -d '{}'
 ```
 
+**Jev technical gate (2026-10-23).** The stop decision records `technical: "yes"|"no"` and a one-line `why` before the answer/escalation pick. A `yes` is a contained engineering choice (including a dedicated least-privilege credential for our own CI) and routes an escalation to the manager. Money, customers, physical actions, personal/shared/third-party credentials, and other hard floors remain `technical: "no"` and owner-routed; the field never bypasses a floor. `scripts/jev-ask.js --help` shows the extended JSON shape.
+
 **MiniMax shadow manager (experiment, TASK-47 G11).** A parallel loop (`scripts/mm-manager.sh`)
 that follows the same `manager-events.jsonl` and proposes what the manager should do for each event —
 running it through MiniMax, calling `scripts/jev-ask.js` when in doubt, and Sonnet only when Jev was

@@ -48,6 +48,7 @@ import { isHardwareAsk, readyReply } from './ready-window.js';
 import { createFallbackDecider, FALLBACK_MODES, FALLBACK_SOURCE } from './minimax-fallback.js';
 import { createRoundtrips, roundtripRecord, summarizeRoundtrips, FILE_NAME as ROUNDTRIPS_FILE } from './roundtrips.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
+import { technicalStop } from './router.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const CONFIG_FILE = join(STATE_DIR, 'manager.json');
@@ -417,16 +418,17 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   const firstEscalation = !escalatedStops.has(id);
   // "STATUS: needs-manager: <what the manager must do>": the agent addressed the manager itself, so this is always its item --
   // no topic guard (a push/merge word in the ask must not hand it back to the owner), and no owner fallback at all.
-  const opsKind = final.case === 'needs_manager' ? 'manager-item'
+  const tech = technicalStop(final);
+  const opsKind = tech.technical === 'yes' ? 'technical-item' : final.case === 'needs_manager' ? 'manager-item'
     : config.opsToManager !== false && (!final.topics?.merge || final.case === 'merge_wait') && !final.topics?.push ? opsAsk(final) : null;
   if (opsKind) {
     managerStops.add(id); if (managerStops.size > 500) managerStops.delete(managerStops.values().next().value);
     escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
     if (isRemoteSession(name)) hookSafe(remoteHooks.escalated, name, id, reason, final);
-    logLater({ type: 'escalated', id, session: name, case: final.case, reason, target: 'manager', kind: opsKind });
+    logLater({ type: 'escalated', id, session: name, case: final.case, reason, target: 'manager', kind: opsKind, technical: tech.technical, technicalWhy: tech.why });
     if (firstEscalation) {
       supersedeOlder(ownerAsksFile, name, id, { before: stopWall.get(id) ?? Date.now() }).catch(() => {});
-      try { managerItemHook({ session: name, id, kind: opsKind, case: final.case, question: String(final.question || '').slice(0, 300), reason }); } catch (e) { console.error('[manager] manager item', e.message); }
+      try { managerItemHook({ session: name, id, kind: opsKind, case: final.case, question: String(final.question || '').slice(0, 300), reason, technical: tech.technical, technicalWhy: tech.why }); } catch (e) { console.error('[manager] manager item', e.message); }
     }
     return;
   }
@@ -917,7 +919,8 @@ function shadowRoute({ id, session, agent, final, stall, escalated, escalatedTo 
     const st = { decision_id: null, done: false, outcome: null, posted: false };
     routerStops.set(id, st); if (routerStops.size > 500) routerStops.delete(routerStops.keys().next().value);
     (async () => {
-      const rec = { type: 'router', id, session, rule_case: final.case, escalated, escalated_to: escalatedTo };
+      const tech = technicalStop(final);
+      const rec = { type: 'router', id, session, rule_case: final.case, escalated, escalated_to: escalatedTo, technical: tech.technical, technicalWhy: tech.why };
       const skip = (why) => { st.done = true; return logLater({ ...rec, router: { skipped: why } }); };
       if (jevSwitch.off()) return skip(DISABLED);
       if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
