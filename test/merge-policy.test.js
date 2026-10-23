@@ -434,6 +434,29 @@ test('M7: CI / deploy / infra and more secret file names are sensitive', async (
   assert.equal(sensitivePath('docs/deploy-notes.md'), null);
   assert.equal(sensitivePath('src/app.js'), null);
 });
+test('secret floor by artefact kind: source files are judged by their added lines, not by what the name spells', async () => {
+  const { sensitivePath } = await import('../merge-policy.js');
+  // ordinary auth code under a password-named path; the name rule blocked a real merge (int-mvk2yoqw1888e1, evolai
+  // feat/simple-admin-home: "touches a secret/credential path: apps/web/src/app/set-password/actions.ts")
+  for (const f of ['apps/web/src/app/set-password/actions.ts', 'apps/web/src/app/forgot-password/actions.ts', 'apps/web/src/components/auth/PasswordField.tsx', 'apps/web/src/lib/password.ts', 'apps/web/src/app/reset-password/actions.ts', 'apps/web/src/lib/password.test.ts']) assert.equal(sensitivePath(f), null, f);
+  // same for source under a secret-/credential-named directory, in any extension the scan reads
+  for (const f of ['lib/secrets/load.ts', 'lib/credentials/fetch.js', 'services/secret-manager/main.py', 'cmd/password-reset/main.go', 'src/credential-store.rb', 'scripts/rotate-password.sh', 'app/password_form.php']) assert.equal(sensitivePath(f), null, f);
+  // a literal secret inside one of them is still a secret: the added-line scan (SENSITIVE_CONTENT -> 'secret-content') owns it
+  const fake = 'AKIA' + 'A'.repeat(16);
+  const code = await gitFacts({ cwd: makeRepo({ files: { 'apps/web/src/lib/password.ts': `export const k = "${fake}";\n` } }), branch: 'feat' });
+  assert.deepEqual(code.sensitive.map((s) => s.why), ['secret-content']);
+  // the artefact kinds that DO store a secret keep the floor: env files, credential dotfiles, keys and non-source data
+  for (const f of ['.env', 'a/.env.production', '.npmrc', '.netrc', 'authorized_keys', 'certs/server.pem', 'id_ed25519', 'secrets.json', 'deploy/credentials.yaml', 'my-secrets/a.txt', 'config/passwords.ini']) assert.equal(sensitivePath(f), 'secret', f);
+  // env templates stay exempt by name (e295f704), and the added-line scan still reads them
+  for (const f of ['.env.server.example', '.env.example', 'a/.env.sample', '.env.template', 'x/.env.local.example', 'vm/.env.server.example']) assert.equal(sensitivePath(f), null, f);
+  const tpl = await gitFacts({ cwd: makeRepo({ files: { 'vm/.env.server.example': `K=${fake}\n` } }), branch: 'feat' });
+  assert.deepEqual(tpl.sensitive.map((s) => s.why), ['secret-content']);
+  // the other floors are unchanged
+  assert.equal(sensitivePath('db/migrations/001_x.sql'), 'migration');
+  assert.equal(sensitivePath('etc/sudoers.d/ghosty'), 'sudoers');
+  assert.equal(sensitivePath('systemd/ghosty.service'), 'systemd');
+  assert.equal(sensitivePath('scripts/deploy.sh'), 'deploy');
+});
 test('M10: git facts are async', () => {
   assert.ok(gitFacts({ cwd: '/nonexistent-dir-xyz' }) instanceof Promise);
 });

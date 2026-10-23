@@ -130,12 +130,21 @@ const INFRA_PATHS = [
   /(?:^|\/)deploy-runner\.js$/,
   /(?:^|\/)(?:safe-restart|deploy)\.(?:sh|ya?ml)$/,
 ];
+// Source files are code, not a place a secret is kept. A name that spells secret/credential/password describes the FEATURE
+// (apps/web/src/app/set-password/actions.ts, forgot-password/actions.ts, components/auth/PasswordField.tsx, lib/password.ts are
+// ordinary auth code), and flagging those by name blocked real merges (integration int-mvk2yoqw1888e1, evolai
+// feat/simple-admin-home). A literal secret inside a source file is caught by the diff scan instead: SENSITIVE_CONTENT over the
+// added lines of scanRange (why 'secret-content'), so nothing is judged on its name alone. Extensions, not directories: a key
+// or .pem file keeps the floor above whatever it is called.
+const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|mts|cts|py|go|rs|java|rb|php|pl|sh|bash|zsh|ps1|psm1|bat|cmd|c|cc|cpp|cxx|h|hpp|cs|kt|kts|swift|scala|vue|svelte|dart|ex|exs|erl|hs|lua|r)$/i;
 export function sensitivePath(f) {
   const segs = f.split('/'), base = segs[segs.length - 1], lower = f.toLowerCase();
   const template = /\.(?:example|sample|template)$/i.test(base);   // .env.server.example is a template: not a secret by name (content is still scanned)
   if ((/^\.env/.test(base) && !template) || /^(?:\.netrc|\.npmrc|\.pypirc|authorized_keys)$/.test(base)) return 'secret';
   if (/\.(?:pem|key|p12|pfx|jks)$/i.test(base) || /^id_(?:rsa|ed25519|ecdsa|dsa)/.test(base)) return 'secret';
-  if (segs.some((s) => /secret|credential|password/i.test(s))) return 'secret';
+  // Data artefacts keep the name rule: a secrets.json, credentials.yaml or my-secrets/a.txt STORES the credential, and unlike
+  // a source file there is no code to scan. Everything below this line (migration, sudoers, systemd, deploy) is untouched.
+  if (!SOURCE_EXT.test(base) && segs.some((s) => /secret|credential|password/i.test(s))) return 'secret';
   // The runner skips <name>_rollback.sql in a migrations dir (platform_update/migrations.py, upgrade_notes.py: "do not apply"), so the file
   // is never run on a database by the pipeline. Only that exact suffix: _down.sql is NOT skipped by the runner and stays a migration.
   if (/(^|\/)migrations?\/(?:[^/]+\/)*[^/]+_rollback\.sql$/.test(lower)) return null;
