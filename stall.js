@@ -387,6 +387,12 @@ const globalRe = (re) => {
   if (!g) { g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`); GLOBAL_RES.set(re, g); }
   return g;
 };
+// Is this hit a drop-family word that is a metric (a number that went down) rather than a topic? The single place
+// the relief is decided, so every caller of the matcher reads the same rules (E43).
+const isMetricDrop = (v, m, leet) => {
+  const d = m[0].match(DROP_WORD_RE);
+  return !!d && metricDropAt(v, m.index + d.index, leet, true);
+};
 // Like matchWith, but a drop-family word that is a metric (a number that went down) is not a topic. The relief is
 // per occurrence and runs over every spelling, never inside the per-variant loop: a disguised destructive drop
 // still blocks, and one metric drop in the text does not hide a destructive one.
@@ -396,8 +402,7 @@ function matchWithRelief(re, text, extra = null) {
     const hits = [...v.matchAll(globalRe(re))];
     if (hits.length) {
       for (const m of hits) {
-        const d = m[0].match(DROP_WORD_RE);
-        if (d && metricDropAt(v, m.index + d.index, leet, true)) continue;   // a metric drop is not the topic
+        if (isMetricDrop(v, m, leet)) continue;   // a metric drop is not the topic
         return m[0];
       }
       return null;                                                          // every drop here is a metric
@@ -416,6 +421,29 @@ function matchWithRelief(re, text, extra = null) {
 }
 
 export const forbiddenMatch = (text) => matchWithRelief(FORBIDDEN_RE, text, forbiddenExtra);
+// Every restricted topic the text names, with the metric-drop relief applied per occurrence: a number that went down
+// is not a topic, a disguised deletion still is. The hits are the matched words, so a caller can map them to its own
+// classes (the policy does). Every spelling of the text is read with its own reading of a number, so a leet spelling
+// of a metric drop ("40" -> "ao") is a metric too. `spellings: false` reads the text as written, for a text that is
+// already an in-context join.
+export function forbiddenTopics(text, { spellings = true } = {}) {
+  const raw = String(text);
+  const out = [];
+  const scan = (v, leet) => {
+    for (const m of v.matchAll(globalRe(FORBIDDEN_RE))) {
+      if (isMetricDrop(v, m, leet)) continue;   // a metric drop is not the topic
+      if (!out.includes(m[0])) out.push(m[0]);   // the same topic in several spellings is one topic
+    }
+  };
+  scan(raw, false);
+  if (spellings) {
+    // a spelling can only add a match, never remove one
+    for (const v of variantsWithKinds(raw)) { if (v.t === raw) continue; scan(v.t, v.leet); }
+    // the private extra list (customer names, ...): a topic of its own, and only when nothing else matched
+    if (!out.length && forbiddenExtra) { const first = matchWithRelief(FORBIDDEN_RE, raw, forbiddenExtra); if (first) out.push(first); }
+  }
+  return out;
+}
 // Like a deploy or a push, a merge counts as a topic only when the text asks to perform it ("Should I merge ..."), not for a noun ("the merge policy page").
 export const mergeMatch = (text) => requested(text, MERGE_RE);
 // The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any

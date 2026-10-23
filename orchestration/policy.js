@@ -3,7 +3,7 @@
 // actions, approval classes and the manager's forbidden-topic matcher win over task text and model output.
 import * as realFs from 'node:fs';
 import { join } from 'node:path';
-import { forbiddenMatch, FORBIDDEN_RE, textVariants, windowJoins, HOMOGLYPH } from '../stall.js';
+import { forbiddenTopics, textVariants, windowJoins, HOMOGLYPH } from '../stall.js';
 import { MANDATORY_APPROVAL, RISK_CLASSES, CHECK_TIMEOUT_MS, TASK_CLASS_RE, checkListErrors } from './task-contract.js';
 import { validateRunLimits } from './run-limits.js';
 import { RUNTIME_EFFORTS } from './model-registry.js';
@@ -143,12 +143,9 @@ const TOPIC_CLASS = [
 // -> [{ topic, class }] for every restricted topic named in the text, under any variant spelling.
 // protectedBranches: the policy's protected_branches, added to main/master/trunk.
 // Every hit counts, not only the first: "deploy the token from .env" needs both a deploy and a credentials grant.
-const ALL_HITS = new RegExp(FORBIDDEN_RE.source, 'gi');
-const hitsOf = (t) => {
-  const hits = [...String(t).matchAll(ALL_HITS)].map((x) => x[0]);
-  const extra = forbiddenMatch(t);   // also covers the private GHOSTY_FORBIDDEN_EXTRA list
-  return extra && !hits.includes(extra) ? [...hits, extra] : hits;
-};
+// The hits come from the manager's matcher (stall.js), so the metric-drop relief (E43) applies here too: a number that
+// went down is not a destructive topic.
+const hitsOf = (t) => forbiddenTopics(t);
 const classOf = (m) => TOPIC_CLASS.find(([re]) => re.test(m))?.[1] ?? 'forbidden_topic';
 
 export function restrictedTopics(text, { protectedBranches } = {}) {
@@ -160,19 +157,22 @@ export function restrictedTopics(text, { protectedBranches } = {}) {
   }
   // Same in-context joins as the manager filter ("merge into ma in", "push to mas ter"): never fewer classes than it.
   for (const w of windowJoins(text)) {
-    for (const m of [...String(w).matchAll(ALL_HITS)].map((x) => x[0])) {
+    // The window is already a joined text: read it as written, with the same metric-drop relief.
+    for (const m of forbiddenTopics(w, { spellings: false })) {
       const cls = classOf(m);
       if (!out.has(cls)) out.set(cls, { topic: m, class: cls });
       if (cls === 'push_shared' && /\bmain\b/i.test(m) && !out.has('merge_protected')) out.set('merge_protected', { topic: m, class: 'merge_protected' });
     }
     for (const [re, cls] of extra) { const x = w.match(re); if (x && !out.has(cls)) out.set(cls, { topic: x[0], class: cls }); }
   }
+  // The topics of the text and of every spelling of it, read by the manager's matcher (stall.js): the metric-drop
+  // relief (E43) applies here too, and each spelling keeps its own reading of a number ("40" -> "ao").
+  for (const m of hitsOf(text)) {
+    const cls = classOf(m);
+    out.set(cls, { topic: m, class: cls });
+    if (cls === 'push_shared' && /\bmain\b/i.test(m)) out.set('merge_protected', { topic: m, class: 'merge_protected' });
+  }
   for (const v of variants) {
-    for (const m of hitsOf(v)) {
-      const cls = classOf(m);
-      out.set(cls, { topic: m, class: cls });
-      if (cls === 'push_shared' && /\bmain\b/i.test(m)) out.set('merge_protected', { topic: m, class: 'merge_protected' });
-    }
     for (const [re, cls] of extra) { const x = v.match(re); if (x && !out.has(cls)) out.set(cls, { topic: x[0], class: cls }); }
   }
   return [...out.values()];
