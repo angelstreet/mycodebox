@@ -2,12 +2,13 @@
 // Runs the real CLI in a child process with GHOSTY_STATE_DIR in a temp dir: the live state dir is never touched.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { decidedItems } from '../decided.js';
+import { appendRecord, openAsks, readOpenAsks, readOpenAsksReport, supersedeOlder } from '../owner-asks.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'scripts', 'owner-ask.js');
@@ -145,4 +146,159 @@ test('help lists the floors', async () => {
 test('the live state dir is only the fallback', async () => {
   const src = await readFile(CLI, 'utf8');
   assert.match(src, /process\.env\.GHOSTY_STATE_DIR \|\| join\(homedir\(\), '\.local', 'state', 'ghosty'\)/);
+});
+
+// ---- resilience of the ledger itself ----
+// The ledger is the evidence of which owner questions are still open. A damaged line (a crash mid-write, two
+// records appended on one line) must cost at most the damaged record: it may never hide the rest of the file, and
+// it may never pass silently. Fixtures here are invented text in temp files; the live ledger is never read.
+
+const askRec = (n, { at = `2026-10-2${n}T10:0${n}:00.000Z`, session = `manager:s${n}`, state = 'open' } = {}) => ({
+  at, id: `Q${n}`, session, question: `Synthetic question ${n}?`, options: ['first thing', 'second thing'],
+  recommendation: '1', floor: 'money', what: 'Synthetic what.', why: 'Synthetic why.', state,
+});
+
+const ledgerIn = async (tag, lines) => {
+  const file = join(await mkdtemp(join(tmpdir(), `owner-ask-${tag}-`)), 'manager-owner-asks.jsonl');
+  await writeFile(file, lines.join('\n') + '\n');
+  return file;
+};
+
+const parseable = (text) => text.split('\n').filter(Boolean).filter((l) => { try { JSON.parse(l); return true; } catch { return false; } });
+
+// 1 + 3: the damage found in the live ledger - a truncated line, a line holding two concatenated records and
+// short fragments. Every question that can still be read must still come back.
+test('a damaged line does not hide the open asks around it', async () => {
+  const file = await ledgerIn('damaged', [
+    JSON.stringify(askRec(1)),
+    JSON.stringify(askRec(2)),
+    JSON.stringify(askRec(3)).slice(0, 90),                                    // truncated mid-write
+    JSON.stringify(askRec(4)) + JSON.stringify(askRec(5)),                      // two records on one line
+    '{"at":"2026-10',                                                           // fragment
+    '20T10:06:00.000Z","id":"Q6"',                                              // fragment
+    '{"id":"Q7","state":"answered"',
+    JSON.stringify(askRec(8)),
+  ]);
+  const ids = (await readOpenAsks(file)).map((a) => a.id);
+  // every record that is whole on the line is returned, including both halves of the concatenated line
+  for (const id of ['Q1', 'Q2', 'Q4', 'Q5', 'Q8']) assert.ok(ids.includes(id), `${id} must survive the damage (got ${ids.join(',')})`);
+  // only what is genuinely unrecoverable is missing
+  assert.ok(!ids.includes('Q3'), 'the truncated record cannot be read');
+  assert.ok(!ids.includes('Q6'), 'a fragment is not a record');
+});
+
+test('a line holding two concatenated records recovers both, in order', async () => {
+  const whole = await ledgerIn('concat-whole', [JSON.stringify(askRec(1)) + JSON.stringify(askRec(2))]);
+  assert.deepEqual(openAsks([(await readFile(whole, 'utf8')).trim()]).map((a) => a.id), ['Q2', 'Q1']);
+
+  // a truncated tail on the same line: the complete record is still recovered, the fragment is reported as lost
+  const torn = await ledgerIn('concat-torn', [JSON.stringify(askRec(1)) + JSON.stringify(askRec(2)).slice(0, 60)]);
+  const rep = await readOpenAsksReport(torn);
+  assert.deepEqual(rep.asks.map((a) => a.id), ['Q1']);
+  assert.equal(rep.damaged.length, 1);
+  assert.equal(rep.damaged[0].recovered, 1, 'the complete object is recovered');
+  assert.equal(rep.damaged[0].lost, 1, 'the truncated fragment is reported as lost');
+
+  // a `}` inside a quoted value must not be mistaken for the end of the record
+  const braced = await ledgerIn('concat-brace', [JSON.stringify(askRec(1, { session: 'manager:brace{}' }))]);
+  assert.deepEqual((await readOpenAsks(braced)).map((a) => a.id), ['Q1']);
+});
+
+// 2: damage is counted and located, never swallowed and never echoed. A ledger line is the owner's own wording.
+test('damaged lines are surfaced with a count and line numbers, not their content', async () => {
+  const file = await ledgerIn('surface', [
+    JSON.stringify(askRec(1)),
+    '{"at":"2026-10',
+    JSON.stringify(askRec(2)),
+    'not json at all',
+    JSON.stringify(askRec(3)),
+  ]);
+  // the operator is told once per distinct damage, and never what the owner wrote in it
+  const logged = [];
+  const real = console.error; console.error = (m) => logged.push(String(m));
+  let rep;
+  try { rep = await readOpenAsksReport(file); await readOpenAsks(file); await readOpenAsks(file); } finally { console.error = real; }
+  assert.equal(logged.length, 1, 'the damage is logged once while it stays the same');
+  assert.match(logged[0], /ledger damaged: 2 unusable line\(s\) at line 2,4/);
+  assert.ok(!logged[0].includes('Synthetic question'), 'no ledger text in the log line');
+  assert.deepEqual(rep.asks.map((a) => a.id).sort(), ['Q1', 'Q2', 'Q3'], 'every whole record is still returned');
+  assert.deepEqual(rep.damaged.map((d) => d.line), [2, 4], 'the damaged line numbers are reported');
+  assert.equal(rep.readError, null);
+  assert.ok(rep.damaged.every((d) => d.why === 'unparseable' && d.recovered === 0 && d.lost >= 1));
+  // the report says how damaged the file is, never what the owner wrote in it
+  assert.ok(!JSON.stringify(rep.damaged).includes('Synthetic question'), 'no ledger text in the damage report');
+});
+
+test('an unreadable ledger is reported, not mistaken for an empty one', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'owner-ask-unreadable-'));
+  const file = join(dir, 'manager-owner-asks.jsonl');
+  await writeFile(file, JSON.stringify(askRec(1)) + '\n');
+  const { chmod } = await import('node:fs/promises');
+  await chmod(file, 0o000);
+  const rep = await readOpenAsksReport(file);
+  await chmod(file, 0o600);
+  assert.deepEqual(rep.asks, [], 'nothing is readable');
+  assert.match(String(rep.readError), /EACCES/, 'the failure is surfaced instead of passing for "no open questions"');
+});
+
+// 4: several records written back to back each land on their own line, and the file stays parseable.
+test('supersedeOlder writes one record per line and the file stays parseable', async () => {
+  const file = await ledgerIn('supersede', [1, 2, 3].map((n) => JSON.stringify(askRec(n, { session: 'manager:busy' }))));
+  const ids = await supersedeOlder(file, 'manager:busy', 'Q9', { now: new Date('2026-10-22T11:00:00.000Z') });
+  assert.deepEqual(ids.sort(), ['Q1', 'Q2', 'Q3']);
+
+  const text = await readFile(file, 'utf8');
+  const lines = text.split('\n').filter(Boolean);
+  assert.equal(lines.length, 6, '3 asks + 3 supersede records, one record per line');
+  assert.equal(parseable(text).length, 6, 'every line parses');
+  assert.ok(!lines.some((l) => l.includes('}{')), 'no two records share a line');
+  for (const l of lines.slice(3)) assert.deepEqual(Object.keys(JSON.parse(l)).sort(), ['at', 'by', 'id', 'state']);
+
+  // and the ledger still reads correctly after the supersede
+  assert.deepEqual((await readOpenAsks(file)).map((a) => a.id), [], 'all three asks of that session are now superseded');
+});
+
+// 5: two writers in flight at once still leave a file where every line parses. Serialised per file path, so one
+// record cannot be cut in half by another record's write.
+test('concurrent writes leave a file where every line parses', async () => {
+  const file = await ledgerIn('concurrent', []);
+  await Promise.all(Array.from({ length: 40 }, (_, i) => appendRecord(file, { at: new Date().toISOString(), id: `d${i}`, kind: 'decision' })));
+  const text = await readFile(file, 'utf8');
+  const lines = text.split('\n').filter(Boolean);
+  assert.equal(lines.length, 40);
+  assert.equal(parseable(text).length, 40, 'no torn or joined line');
+  const ids = lines.map((l) => JSON.parse(l).id);
+  assert.equal(new Set(ids).size, 40, 'every record is whole');
+
+  // the same through the public writer, two asks in flight at once
+  const two = join(await mkdtemp(join(tmpdir(), 'owner-ask-pair-')), 'manager-owner-asks.jsonl');
+  const { fileAsk } = await import('../owner-asks.js');
+  const ask = { question: 'Pay the synthetic invoice or cancel the synthetic subscription?', what: 'Synthetic what.', options: ['1 pay it now', '2 cancel it'], recommend: '1', floor: 'money', why: 'It spends the owner money.' };
+  await Promise.all([fileAsk(two, { ...ask, session: 'manager:a' }), fileAsk(two, { ...ask, session: 'manager:b' })]);
+  const pair = await readFile(two, 'utf8');
+  assert.equal(parseable(pair).length, 2, 'both records are whole');
+  assert.deepEqual((await readOpenAsks(two)).map((a) => a.session).sort(), ['manager:a', 'manager:b'], 'and both asks read back');
+});
+
+// 6: unchanged happy path and unchanged missing-file behaviour.
+test('happy path: newest open ask per session, newest first', async () => {
+  const file = await ledgerIn('happy', [
+    JSON.stringify(askRec(1, { session: 'manager:a', at: '2026-10-20T10:00:00.000Z' })),
+    JSON.stringify(askRec(2, { session: 'manager:a', at: '2026-10-20T11:00:00.000Z' })),   // same session, newer
+    JSON.stringify(askRec(3, { session: 'manager:b', at: '2026-10-20T09:00:00.000Z' })),
+    JSON.stringify({ at: '2026-10-20T12:00:00.000Z', id: 'Q3', state: 'answered' }),        // closes Q3
+  ]);
+  const asks = await readOpenAsks(file);
+  assert.deepEqual(asks.map((a) => a.id), ['Q2'], 'only the newest open ask per session, answered ones gone');
+  assert.equal(asks[0].session, 'manager:a');
+  assert.deepEqual(asks[0].options, ['first thing', 'second thing']);
+});
+
+test('a missing ledger returns no asks instead of throwing', async () => {
+  const missing = join(await mkdtemp(join(tmpdir(), 'owner-ask-missing-')), 'manager-owner-asks.jsonl');
+  assert.deepEqual(await readOpenAsks(missing), []);
+  const rep = await readOpenAsksReport(missing);
+  assert.deepEqual(rep.asks, []);
+  assert.deepEqual(rep.damaged, [], 'a ledger that was never written is not damaged');
+  assert.equal(rep.readError, null, 'and its absence is not a read error');
 });
