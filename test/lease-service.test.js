@@ -411,6 +411,9 @@ test('deploy queue: request, approve, start (atomic claim), skip-leased, catch-u
   assert.equal((await h.svc.list()).leases.some((l) => l.deployId), false, 'the deploy lease is released on finish');
   const last = (await d.last({ env: 'env-a' })).envs['env-a'];
   assert.equal(last.frontend.version, 'v1'); assert.equal(last.server.status, 'done');
+  assert.equal(last['host-1'].status, 'synced', 'the skipped host is synced, not deployed: its service was not restarted');
+  assert.equal(last['host-1'].version, 'v1'); assert.equal(last['host-1'].deployId, r1.id, 'the provenance of the sync');
+  assert.match(last['host-1'].reason, /restart deferred: host leased by dev/);
   const w = await d.wait({ id: r1.id });
   assert.equal(w.final, true); assert.equal(w.success, true);
 });
@@ -424,6 +427,13 @@ test('deploy last: only done moves "deployed now", a failure is kept as lastAtte
   assert.equal(again.already, true);
   const fe = (await d.last({ env: 'env-a' })).envs['env-a'].frontend;
   assert.equal(fe.version, 'v1'); assert.equal(fe.lastAttempt.version, 'v2'); assert.equal(fe.commit, 'abc', 'blank fields filled');
+  // a host whose code was synced but whose restart was deferred is NOT done: it is recorded as synced, with the reason
+  await d.record({ env: 'env-a', scope: 'host', hosts: ['host-a'], agent: 'u', status: 'done', ref: 'r3', version: 'v3', deploy_id: 'x3', skipped_hosts: 'host-a' });
+  const ha = (await d.last({ env: 'env-a' })).envs['env-a']['host-a'];
+  assert.equal(ha.status, 'synced', 'not done: the service was never restarted into this version');
+  assert.equal(ha.version, 'v3'); assert.equal(ha.deployId, 'x3', 'the provenance of the sync');
+  assert.match(ha.reason, /restart deferred/);
+  assert.equal(ha.lastAttempt, undefined, 'a synced host is not a failed one');
 });
 
 test('pending deploys block new claims only inside the typed matrix; exempt agents pass; wait gets a ticket behind the deploy', async () => {
