@@ -166,7 +166,7 @@ test('forbidden topics are never auto-answered, even when Jev says continue with
   assert.equal(sentTo('f1').length + sentTo('f2').length, 0);
   const r = rec('stall', 'f1')[0];
   assert.equal(r.source, 'jev'); assert.equal(r.jev.choice, 'continue'); assert.match(r.why, /forbidden/);
-  assert.match(pushes.filter((x) => x[0] === 'f1').at(-1)[2], /deploy question/);
+  assert.match(pushes.filter((x) => x[0] === 'f1').at(-1)[2], /the topic is "deploy" — needs you/);
   jevProb = 0.95;
 });
 

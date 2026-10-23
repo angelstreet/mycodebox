@@ -308,7 +308,7 @@ function humanWhy(final, ws) {
   if (final.case === 'merge_wait') return 'merge decision — the manager decides, not the owner';
   if (final.case === 'waiting_deploy') return 'deploy waiting — queue it (Phase 7)';
   if (final.case === 'owner_action') return `needs you: ${final.action || 'a manual step'}`;
-  if (w.startsWith('forbidden: ')) return `${w.slice(11)} question — needs you`;
+  if (w.startsWith('forbidden: ')) return `the topic is "${w.slice(11)}" — needs you`;
   if (w.includes('draft')) return 'you have a draft in the input box';
   if (final.case === 'error') return 'agent hit an error or limit — needs you';
   if (final.case === 'permission') return 'permission prompt — needs you';
