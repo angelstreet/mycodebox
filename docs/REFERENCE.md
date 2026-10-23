@@ -1285,6 +1285,13 @@ repository, run by the server in its own clone, one request at a time per repo (
 - **Steps** of a request: fetch, branch check, merge evaluation floor (sensitive files, conflicts), fresh worktree from `<remote>/<target>`, `git merge --no-ff`
   (convention files resolved by the repo's rule), the repo's test command, compare-and-swap push (target moved: re-merge, at most 3 times), CI on that
   commit, deploy (approved request, agent `integration:<id>`, through the deploy registry; `integration-deploys.js`).
+- **Convention files are restamped, never copied.** A convention file (default `VERSION.txt`) that the branch changed is resolved by the repo's rule
+  (`conventionResolver`: `take-target` keeps the target's side, `max-plus-one` takes the higher number) and then carries a **fresh build number**: one
+  above every number either side used (the target's and the branch's). A merge must never reuse a build number: the deployed version has to move on
+  (`take-target` used to copy the target's number into the merge, so two merges on 2026-10-23, virtualpytest, deployed as their parent's build and
+  had to be restamped by hand). The build number is the last number of the file's build line (the `current:` / `version:` marker line, else the first
+  bare version line); a convention file without one (a lockfile, a changelog) keeps the target's version as it is. The rest of the file (the label, the
+  repo's own history line) stays the target's: the repo's own stamp tool owns that.
 - **Telling the session** (`integration-notify.js`, `notify(request, event)`): on a final state a feed notice (`kind: integration`) and a manager event;
   a codebox session that is stopped (done, no draft, no menu) also gets one line through the guarded send (`by: 'integration'`):
   `Integration <id>: merged <branch> into <target> at <sha12>[, deployed <version> to <env>].` or

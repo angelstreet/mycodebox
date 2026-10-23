@@ -125,6 +125,41 @@ export function loadConfig(stateDir) {
   try { return validateConfig(JSON.parse(fs.readFileSync(path.join(stateDir, 'integration.json'), 'utf8'))); } catch { return { repos: {}, settleMs: null, errors: [] }; }
 }
 
+// ---- convention files: the build number -----------------------------------------------------------------------------------
+// A convention file (VERSION.txt and friends) carries a build number: the last number of its build line. The build
+// line is the file's `current:` / `version:` marker line, else its first bare version line (1, 1.2.3, v2). A
+// convention file without a build number (a lockfile, a changelog) has none: the lane leaves such a file alone.
+// -> { value, index, len } | null   (the number's value and its position in the text)
+export function buildNumber(text) {
+  const s = String(text ?? '');
+  let off = 0, start = -1, end = -1;
+  for (const line of s.split('\n')) {
+    const at = off; off += line.length + 1;
+    if (/^(current|version)\s*[:=]/i.test(line.trim())) { start = at; end = at + line.length; break; }   // the marker line wins
+    if (start < 0 && /^\s*v?\d[\d.+_-]*\s*$/i.test(line)) { start = at; end = at + line.length; }          // else a bare version line
+  }
+  if (start < 0) return null;
+  const nums = [...s.slice(start, end).matchAll(/\d+/g)];
+  if (!nums.length) return null;
+  const m = nums.at(-1);
+  return { value: Number(m[0]), index: start + m.index, len: m[0].length };
+}
+
+// The take-target resolution of a convention file: the target's side (main's label), with a build number above
+// every number either side used. The merge must never reuse a build number: the deployed version has to move on
+// (take-target used to copy main's number into the merge, so the merge deployed as its parent's build). The rest
+// of the file (the label, the repo's own history line) stays the target's: the repo's own stamp tool owns that.
+// -> the new content | null   (no build number: the caller keeps the file as it is)
+export function restamp(target, sides = []) {
+  const mine = buildNumber(target);
+  if (!mine) return null;
+  let next = mine.value;
+  for (const s of sides) { const b = buildNumber(s); if (b && b.value > next) next = b.value; }
+  next += 1;
+  const t = String(target);
+  return t.slice(0, mine.index) + String(next) + t.slice(mine.index + mine.len);
+}
+
 // Normalized remote identity so https/ssh/credentialed spellings of one repository compare equal.
 export function normalizeRemoteUrl(u) {
   let s = String(u || '').trim();
@@ -394,8 +429,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   async function resolveConventions(r, c, wt, files) {
     for (const f of files) {
       let ok = false;
+      const ours = await git(['show', `:2:${f}`], { cwd: wt }), theirs = await git(['show', `:3:${f}`], { cwd: wt });
       if (c.conventionResolver === 'max-plus-one') {
-        const ours = await git(['show', `:2:${f}`], { cwd: wt }), theirs = await git(['show', `:3:${f}`], { cwd: wt });
         const num = (t) => /(\d+)(\s*)$/.exec(t.out);
         const a = ours.code === 0 ? num(ours) : null, b = theirs.code === 0 ? num(theirs) : null;
         if (a && b) {
@@ -404,7 +439,11 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
           ok = true;
         }
       } else {
-        ok = (await git(['checkout', '--ours', '--', f], { cwd: wt })).code === 0;
+        // take-target: the target's side, restamped with a build number above both sides' (the merge must not
+        // reuse the target's build number). A file without a build number keeps the target's version as it is.
+        const next = ours.code === 0 ? restamp(ours.out, [theirs.out]) : null;
+        if (next != null) { fs.writeFileSync(path.join(wt, f), next); ok = true; }
+        else ok = (await git(['checkout', '--ours', '--', f], { cwd: wt })).code === 0;
       }
       if (!ok || (await git(['add', '--', f], { cwd: wt })).code !== 0) return false;
     }
@@ -469,8 +508,9 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
 
   // A clean merge carries a convention file the branch changed straight into the target, so main ends up with the branch's
   // label (twice on 2026-10-20, virtualpytest); the pre-push hook does not see the lane's push. After the merge commit
-  // exists, restore every convention file the branch changed to the target's version and amend. max-plus-one keeps its
-  // conflict-only rule (there is nothing to bump against without a conflict).
+  // exists, restore every convention file the branch changed to the target's version, restamp it (a fresh build
+  // number: taking the target's file as it is made the merge reuse the target's build number) and amend.
+  // max-plus-one keeps its conflict-only rule (there is nothing to bump against without a conflict).
   async function enforceConventions(r, c, wt, { branchSha, targetSha, msg }) {
     if (c.conventionResolver !== 'take-target') return { ok: true, files: [] };
     const b = await git(['merge-base', targetSha, branchSha], { cwd: wt });
@@ -478,11 +518,18 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     const base = b.out.trim();
     const files = [];
     for (const f of c.conventions) {
-      const [merged, atBase, atTarget] = await Promise.all([git(['show', `HEAD:${f}`], { cwd: wt }),
-        git(['show', `${base}:${f}`], { cwd: wt }), git(['show', `${targetSha}:${f}`], { cwd: wt })]);
+      const [merged, atBase, atTarget, atBranch] = await Promise.all([git(['show', `HEAD:${f}`], { cwd: wt }),
+        git(['show', `${base}:${f}`], { cwd: wt }), git(['show', `${targetSha}:${f}`], { cwd: wt }),
+        git(['show', `${branchSha}:${f}`], { cwd: wt })]);
       if (merged.code !== 0 || atBase.code !== 0 || atTarget.code !== 0) continue;              // no such file in the merge, the base or the target
       if (merged.out === atBase.out || merged.out === atTarget.out) continue;                   // the branch left it alone, or it already is the target's
       if ((await git(['checkout', targetSha, '--', f], { cwd: wt })).code !== 0) continue;
+      // Restamp: the target's side with a build number above the target's and the branch's. Taking the target's
+      // file as it is made the merge reuse the target's build number, so the merge deployed as its parent's
+      // build (two merges on 2026-10-23, virtualpytest). The two sides only: the merged file's number is one of
+      // them, so the second pass (a conflict the merge step already resolved) lands on the same number.
+      const next = restamp(atTarget.out, [atBranch.code === 0 ? atBranch.out : '']);
+      if (next != null) fs.writeFileSync(path.join(wt, f), next);
       if ((await git(['add', '--', f], { cwd: wt })).code !== 0) continue;
       files.push(f);
     }
