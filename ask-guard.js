@@ -34,10 +34,10 @@ export function parseWaiting(reply) {
 export function createAskGuard({ ledgerFile, alertsFile, alert, log = () => {}, now = Date.now } = {}) {
   const alerted = new Map();   // id -> at
   const firstSeen = new Map(); // id -> first time an open ask was seen without an alert
-  let loaded = false;
-  const load = async () => {
-    if (loaded) return;
-    loaded = true;
+  // The shared alert record: ask-guard.js and scripts/manager-ask.js both write it. Re-read it on every use
+  // (it only grows), so an alert the other writer sent is seen at once. It used to be read once at boot, and
+  // the guard then alerted a second time for a question manager-ask.js had already alerted (2026-10-23).
+  const refresh = async () => {
     try {
       for (const l of (await readFile(alertsFile, 'utf8')).split('\n')) {
         try { const r = JSON.parse(l); if (r?.id) alerted.set(r.id, r.at); } catch {}
@@ -57,7 +57,7 @@ export function createAskGuard({ ledgerFile, alertsFile, alert, log = () => {}, 
 
   // reply: the manager session's last reply. -> actions taken (for tests).
   async function checkReply(session, reply) {
-    await load();
+    await refresh();
     const { items, unchanged } = parseWaiting(reply);
     if (!items.length && !unchanged.length) return [];
     const { records } = await readLedger(ledgerFile);
@@ -83,7 +83,7 @@ export function createAskGuard({ ledgerFile, alertsFile, alert, log = () => {}, 
 
   // alert every open ledger ask that has had none for ALERT_AFTER_MS
   async function sweep() {
-    await load();
+    await refresh();
     const { records } = await readLedger(ledgerFile);
     const t = now(), done = [];
     const open = openAsksFromRecords(records);

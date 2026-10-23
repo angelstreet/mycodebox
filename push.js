@@ -171,14 +171,18 @@ const P0_RE = /\bP0\b|\bblocked\b|credential|secret|api[ _-]?key|password|custom
 // Pure. 'interrupt' | 'digest' for an alert. An explicit opts.tier wins; otherwise by key:
 // disk:* and deploy failed/approve are interrupts, a stop that names P0 / blocked / credentials / customer is,
 // urgent priority is, everything else (done, holds, plain asks, quota < interruptPct, credits) is digest.
+// An owner question (ask-Q<n>, the tag ask-guard.js and manager-ask.js use) is always an interrupt: the owner
+// must see it alone, never buried in a digest (2026-10-23: real questions drowned in merge notices).
 export function defaultTier(key, opts = {}, cfg = TIER_DEFAULTS) {
   if (opts.tier === 'interrupt' || opts.tier === 'digest') return opts.tier;
   if (opts.priority === 'urgent') return 'interrupt';
   const head = String(key).split(':')[0];
+  const rest = String(key).slice(head.length + 1);
   if (head === 'disk') return 'interrupt';
   if (head === 'deploy') return /^(failed|orphan|approve)/.test(String(key).split(':')[2] || '') ? 'interrupt' : 'digest';
   if (head === 'quota') return Number(opts.pct) >= cfg.interruptPct ? 'interrupt' : 'digest';
-  if (/^(asks|waiting)$/.test(String(key).slice(head.length + 1))) return P0_RE.test(`${opts.title || ''}\n${opts.body || ''}`) ? 'interrupt' : 'digest';
+  if (/^ask-Q\d+$/.test(rest)) return 'interrupt';
+  if (/^(asks|waiting)$/.test(rest)) return P0_RE.test(`${opts.title || ''}\n${opts.body || ''}`) ? 'interrupt' : 'digest';
   return 'digest';
 }
 
@@ -241,6 +245,17 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
     return true;
   }
 
+  // Queue an item for the next digest WITHOUT firing an alert: no owner push now, no manager event
+  // (the caller already reported it where it belongs). Used by the integration lane: a merge or a deploy
+  // notice is routine and must not take a slot in the owner's feed (2026-10-23).
+  function queueDigest(key, { title, body = '', url = '/', meta = null } = {}) {
+    const t = now();
+    pending = pending.filter((p) => p.key !== key);
+    pending.push({ key, at: t, title: String(title || ''), body: String(body || title || '').slice(0, 500), url, ...(meta || {}) });
+    saveDigest();
+    return true;
+  }
+
   // Called on a timer. Sends ONE push with every pending item when awake and digestMs has passed since the last one.
   function digestTick() {
     if (!tiering || !pending.length) return false;
@@ -254,5 +269,5 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
     deliver({ title: `${n} item${n === 1 ? '' : 's'} for you`, text: items.map(digestLine).join('\n'), url: '/', tag: 'ghosty-digest', priority: 'default', ntfyTags: 'inbox_tray', ...one });
     return true;
   }
-  return { alert, resetDebounce: (key) => last.delete(key), digestTick, pendingDigest: () => pending.slice() };
+  return { alert, queueDigest, resetDebounce: (key) => last.delete(key), digestTick, pendingDigest: () => pending.slice() };
 }

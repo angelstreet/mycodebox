@@ -275,6 +275,14 @@ phone even with the app closed.
 - Routes: `GET /api/push/key`, `GET /api/push/feed`, `POST /api/push/subscribe|unsubscribe|test`.
 - Test: `curl -XPOST -H 'content-type: application/json' -d '{}' https://<host>:<port>/api/push/test`
 - ntfy is now optional; with `NTFY_TOPIC` set, every alert is also sent there (same debounce).
+- **Two tiers.** `push.js` `createAlerts()` splits alerts: an *interrupt* is pushed at once, everything else is
+  collected and sent as **one digest push** per `pushDigestMinutes` while the owner is awake (nothing in quiet hours).
+  `manager.json` `pushDigestMinutes` (30), `pushAwakeFrom` ("07:00"), `pushAwakeTo` ("23:00"), `pushTimezone`
+  ("Europe/Zurich"), `pushInterruptPct` (95). Interrupts: a disk at the limit, a failed/orphaned/approval deploy,
+  a quota above the percentage, an urgent alert, and **an owner question** (`ask-Q<n>`: it is always pushed on its
+  own, with its tag, never inside a digest). A digest is one feed entry with the tag `ghosty-digest`.
+- **The feed is a 50-item ring**, so a routine notice that takes a slot evicts an older alert. Routine integration
+  notices therefore do not go into it (see the integration lane below); only the alert the owner must act on does.
 - Code: `push.js` (VAPID, subscriptions, feed, `createAlerts().alert()` fan-out), `public/sw.js`, bell in `public/app.js`.
 
 ## AI manager
@@ -336,6 +344,15 @@ Loopback peers only, with the reporter token header (`x-ghosty-reporter-token`);
 through the normal `alert()` (same debounce per `tag` or title, notification feed, Web Push, ntfy): the answer is
 `{ok:true, sent:true}` or `{ok:true, sent:false, debounced:true}`. `title` 1..120, `body` 1..1000, `url` starts with
 `/` or `http(s)://`, `priority` one of `min|low|default|high|urgent`. At most 10 calls per hour (429 beyond).
+
+**Owner questions** (`scripts/manager-ask.js`, `ask-guard.js`, owner 2026-10-23). A question the owner must answer is filed in
+`<state>/manager-owner-asks.jsonl` (`Q<n>`), pushed to the owner with the tag `ask-<n>` and written to the shared alert record
+`<state>/manager-ask-alerts.jsonl` (`{id, at, via}`; `via` is `manager-ask`, `autoregistered` or `late`). The record is the
+**one** truth about "this question was alerted": the ask-guard reads it before every sweep (it only grows), so a question is never
+alerted twice, and `scripts/manager-ask-scan.sh` reports `!! ask-not-alerted <id>` only when neither the record nor the push feed
+(tag `ask-<id>`) holds an alert. The scan used to read the push feed alone, which is a 50-item ring: a real alert scrolled out of it
+and the scan printed a false alarm (2026-10-23). An owner question is an **interrupt** alert: it is pushed on its own, with its tag,
+never inside a digest and never evicted by a routine notice.
 
 **Manager event feed.** Every alert that actually fires (not debounced) is appended as one JSON line to
 `~/.local/state/ghosty/manager-events.jsonl` for the AI manager agent to follow, so it wakes only when something
@@ -1354,6 +1371,12 @@ repository, run by the server in its own clone, one request at a time per repo (
   `Integration <id>: merged <branch> into <target> at <sha12>[, deployed <version> to <env>].` or
   `Integration <id> returned: <reason>. Fix it on your branch and run integrate request again.` plus the first lines of the failing output.
   A `mac:` session gets the feed notice and the manager event only (the Mac hook channel answers stops).
+- **Routine notices stay out of the owner's feed (owner 2026-10-23).** The push feed keeps 50 items and every integration event took one, so ~40
+  events in 3 h buried the one alert that mattered. A **merged** or **deployed** request therefore takes **no feed slot**: it waits for the periodic
+  digest (one `ghosty-digest` entry, tag `ghosty-digest`). `returned`, `merged_ci_red`, `deploy_failed` and `cancelled` stay individual feed entries
+  (they need the owner). `manager-events.jsonl` is unchanged: the manager still wakes on every one of them (`integration:<id>:<state>`).
+  Switch: `manager.json` `integrationDigest` (default **on**; `false` restores one feed entry per event). The Integration view (`/?integration=1`)
+  stays the full history of every request.
 - **Own-job wake**: `STATUS: waiting: integration <id>` is the session's own job (`job-refs.js`, never a needs-you stop); `own-jobs.js` reads the request
   from the lane and types the same text when it reaches a final state.
 - **View**: More menu "Integration" (`/?integration=1`, `public/integration-view.js`): per repo the queue (position, branch, session, requested deploy), the
