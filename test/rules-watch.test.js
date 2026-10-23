@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { plan, message, createRulesWatch } from '../rules-watch.js';
+import { plan, message, stamp, createRulesWatch } from '../rules-watch.js';
 
 const H = 'a'.repeat(40), H2 = 'b'.repeat(40);
 const T = Date.parse('2026-10-14T12:00:00Z');
+const RULES = { hash: H, at: T, subject: 'docs: autonomy' };   // what the harness git mock reports for AGENTS.md
 
 test('plan: only sessions whose agent started before the AGENTS.md change, idle, not told this hash, not script-busy', () => {
   const rules = new Map([['/r/.git', { hash: H, at: T, subject: 'docs: autonomy' }]]);
@@ -73,7 +74,7 @@ function harness(t, { targets, mode = 'live' }) {
     },
     listTargets: async () => targets(),
     send: async (n, text) => { sent.push([n, text]); },
-    record: async (e) => { events.push(e.key); },
+    record: async (e) => { events.push(e); },
   });
   return { w, dir, sent, events, gitCalls, logs };
 }
@@ -84,7 +85,7 @@ test('tick: tells a stale idle session once, fetches each repo once, records one
   await h.w.tick();
   assert.deepEqual(h.sent.map((s) => s[0]), ['old', 'old2']);
   assert.equal(h.gitCalls.filter((c) => c === 'fetch').length, 1);
-  assert.deepEqual(h.events, ['rules-watch:told']);
+  assert.deepEqual(h.events.map((e) => e.key), ['rules-watch:told']);
   await h.w.tick();
   assert.equal(h.sent.length, 2, 'not told twice');
   targets = [targets[0]];
@@ -99,7 +100,7 @@ test('tick: a working session waits for a later tick; dry mode only journals; of
   working = false; await h.w.tick(); assert.equal(h.sent.length, 1);
   const dry = harness(t, { targets: () => [{ name: 's', cwd: '/w', startedAt: T - 1, working: false, scriptBusy: false }], mode: 'dry' });
   await dry.w.tick();
-  assert.equal(dry.sent.length, 0); assert.deepEqual(dry.events, []);
+  assert.equal(dry.sent.length, 0); assert.deepEqual(dry.events.map((e) => e.key), []);
   assert.match(readFileSync(join(dry.dir, 'rules-watch.jsonl'), 'utf8'), /"dry":true.*"session":"s"/);
   const off = harness(t, { targets: () => { throw new Error('must not list'); }, mode: 'off' });
   assert.equal((await off.w.tick()).mode, 'off');
@@ -141,4 +142,66 @@ test('tick: a script-busy session is skipped, logged as "skipped: script pane", 
   // the scripted session is NOT in the `told` map, so a later tick can still tell it once the script ends
   const told = JSON.parse(readFileSync(join(h.dir, 'rules-watch.json'), 'utf8')).told;
   assert.deepEqual(Object.keys(told), ['plain']);
+});
+
+// 2026-10-23: AGENTS.md had not been edited for a day, yet the feed fired dozens of times, each time naming a
+// different rotating pair of sessions, because the title said "AGENTS.md changed". The owner read it as a fresh
+// edit and went looking, every time. The title now states the relation that is actually true and cites the commit.
+test('tick: the feed title never claims a change, and cites the commit in the message() shape', async (t) => {
+  const h = harness(t, { targets: () => [{ name: 'old', cwd: '/w/a', startedAt: T - 1e6, working: false, scriptBusy: false }] });
+  await h.w.tick();
+  const e = h.events.at(-1);
+  assert.equal(e.key, 'rules-watch:told');
+  assert.ok(!/\bchang/i.test(e.title), `title must not claim a change happened: ${e.title}`);
+  assert.ok(!/newer rules|updated rules|commit [0-9a-f]/.test(e.title), e.title);
+  assert.equal(e.title, `AGENTS.md is newer than 1 session(s) - told to re-read (${stamp(RULES)})`);
+  assert.equal(e.body, 'old');                                    // body is still exactly the session names
+  // the same stamp the session itself reads, so title and message never disagree
+  assert.ok(e.title.includes(H.slice(0, 9)), 'short hash in the title');
+  assert.ok(h.sent[0][1].includes(stamp(RULES)), 'same stamp in the message');
+});
+
+test('tick: the same unchanged commit re-delivered to a restarted pair is a byte-identical title', async (t) => {
+  const stale = (names) => names.map((n, i) => ({ name: n, cwd: `/w/${i}`, startedAt: T - 1e6, working: false, scriptBusy: false }));
+  let targets = stale(['a1', 'a2']);
+  const h = harness(t, { targets: () => targets });
+  await h.w.tick();
+  targets = stale(['b1', 'b2']);                                  // the pair restarted; AGENTS.md itself did not
+  await h.w.tick();
+  assert.deepEqual(h.sent.map((s) => s[0]), ['a1', 'a2', 'b1', 'b2']);
+  assert.equal(h.events.length, 2);
+  assert.equal(h.events[1].title, h.events[0].title, 'same commit + same count -> a reader sees a repeat, not an edit');
+  assert.notEqual(h.events[1].body, h.events[0].body, 'the body still names this tick\'s own sessions');
+});
+
+test('tick: two repos with two different AGENTS.md commits cite both, one entry each', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'rules-watch-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const repos = {
+    '/w/a': { key: '/r1/.git', rules: { hash: H, at: T, subject: 'docs: one' } },
+    '/w/b': { key: '/r2/.git', rules: { hash: H2, at: T - 86400e3, subject: 'docs: two' } },
+  };
+  const events = [];
+  const w = createRulesWatch({
+    stateDir: dir, log: { error() {} },
+    git: async (cwd, args) => args[0] === 'rev-parse' ? `${repos[cwd].key}\n`
+      : args[0] === 'log' ? `${repos[cwd].rules.hash}\t${repos[cwd].rules.at / 1000}\t${repos[cwd].rules.subject}\n` : '',
+    listTargets: async () => Object.keys(repos).map((cwd, i) => ({ name: `s${i}`, cwd, startedAt: T - 7 * 86400e3, working: false, scriptBusy: false })),
+    send: async () => {}, record: async (e) => { events.push(e); },
+  });
+  await w.tick();
+  const e = events.at(-1);
+  assert.equal(e.body, 's0, s1');
+  assert.match(e.title, /is newer than 2 session\(s\)/);
+  for (const r of Object.values(repos).map((x) => x.rules)) assert.ok(e.title.includes(stamp(r)), stamp(r));
+});
+
+test('tick: the body names exactly the sessions told, and MAX_SENDS_PER_TICK still caps the event', async (t) => {
+  const targets = Array.from({ length: 3 }, (_, i) => ({ name: `s${i}`, cwd: '/w', startedAt: T - 1e6, working: false, scriptBusy: false }));
+  const h = harness(t, { targets: () => targets });
+  await h.w.tick();
+  const e = h.events.at(-1);
+  assert.deepEqual(h.sent.map((s) => s[0]), ['s0', 's1']);
+  assert.equal(e.body, h.sent.map((s) => s[0]).join(', '));
+  assert.match(e.title, /is newer than 2 session\(s\)/);
 });

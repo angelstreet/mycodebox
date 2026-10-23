@@ -29,9 +29,15 @@ export function plan({ targets, rules, repoOf, told }) {
   return { send: send.slice(0, MAX_SENDS_PER_TICK), skipScript };
 }
 
+// One shape for the cited commit, shared by the message and the feed title: short hash, ISO minute, subject.
+// The owner must be able to see at a glance that today's line cites the same commit as yesterday's.
+export function stamp(r) {
+  return `${r.hash.slice(0, 9)}, ${new Date(r.at).toISOString().slice(0, 16)}Z: ${r.subject}`;
+}
+
 export function message(r) {
   return [
-    `AGENTS.md on origin/main changed after this session started (${r.hash.slice(0, 9)}, ${new Date(r.at).toISOString().slice(0, 16)}Z: ${r.subject}).`,
+    `AGENTS.md on origin/main changed after this session started (${stamp(r)}).`,
     'Its dated owner rules win over your task doc, handover and brief where they differ. For example, since 2026-10-14 you commit, push, merge your own tested work and deploy by the normal procedure yourself, and you never hand the owner commands to run.',
     'Read it now (git show origin/main:AGENTS.md). If you were idle with nothing pending, start nothing new because of this message: reply only with a STATUS line. Otherwise adjust what you are doing and continue. End with a STATUS line.',
   ].join(' ');
@@ -91,7 +97,14 @@ export function createRulesWatch({ stateDir, git, listTargets, send, record = as
         } catch (e) { log.error?.('[rules-watch] send', p.name, e.message); }
       }
       await save(st);
-      if (sent.length) await record({ key: 'rules-watch:told', title: `AGENTS.md changed: ${sent.length} session(s) told to re-read it`, body: sent.join(', '), url: '/', priority: 'default' });
+      if (sent.length) {
+        // The title must not claim a change happened: the same unchanged commit is re-delivered every time a
+        // session restarts, and "AGENTS.md changed" made the owner go looking for an edit that never came (2026-10-23).
+        const cited = new Map();                       // sent sessions only, one entry per distinct commit
+        for (const p of todo) if (sent.includes(p.name)) cited.set(p.rules.hash, p.rules);
+        const where = [...cited.values()].map(stamp).join('; ');
+        await record({ key: 'rules-watch:told', title: `AGENTS.md is newer than ${sent.length} session(s) - told to re-read (${where})`, body: sent.join(', '), url: '/', priority: 'default' });
+      }
       return (last = { at: now(), mode: m, stale: todo.map((p) => p.name), sent, skipped: skipScript });
     } catch (e) {
       log.error?.('[rules-watch]', e.message);
