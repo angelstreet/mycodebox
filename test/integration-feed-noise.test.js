@@ -25,7 +25,7 @@ function rig({ digest = true } = {}) {
     status: () => undefined, isRemote: () => false, canSend: () => false, send: async () => {},
     feed: (item) => push.record(item),
     digest: (item) => alerts.queueDigest(`integration:${item.requestId}:${item.state}`,
-      { title: item.title, body: item.body, url: item.url, meta: { session: item.session || 'lane', case: 'integration' } }),
+      { title: item.title, body: item.body, url: item.url, meta: { session: item.session || 'lane', case: item.state, question: `${item.branch} -> ${item.target}` } }),
     quiet: (state) => digest && isQuietState(state),
     managerEvent: async (e) => { events.push(e); },
     log: () => {},
@@ -46,6 +46,8 @@ test('a merged or deployed notice takes no slot in the owner feed: it waits for 
   assert.equal(feed.length, 1, 'one digest entry, not one per event');
   assert.equal(feed[0].tag, 'ghosty-digest');
   assert.match(feed[0].body, /feat\/x/);
+  // the digest line is short: the feed entry keeps 500 chars and the owner reads it on a phone
+  assert.deepEqual(feed[0].body.split('\n'), ['w1 · merged · feat/x -> main · -', 'w1 · deployed · feat/x -> main · -']);
 });
 
 test('the manager still wakes on a quiet event: manager-events.jsonl is unchanged', async () => {

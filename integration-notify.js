@@ -103,7 +103,8 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
       const session = request.session ? String(request.session) : '';
       const n = integrationNotice(request);
       const url = session ? `/?s=${encodeURIComponent(session)}` : '/?integration=1';
-      const item = { title: n.title, body: n.body, url: '/?integration=1', tag: `integration-${request.id}`, priority: n.priority, kind: 'integration', state: request.state, requestId: request.id, session };
+      const item = { title: n.title, body: n.body, url: '/?integration=1', tag: `integration-${request.id}`, priority: n.priority, kind: 'integration', state: request.state, requestId: request.id, session,
+  branch: one(request.branch) || '?', target: one(request.target) || '?' };
       try {
         // a quiet state (merged, deployed) waits for the digest: it must not take a slot in the owner's feed
         if (quiet(request.state)) digest(item); else feed(item);
