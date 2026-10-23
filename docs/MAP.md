@@ -28,7 +28,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 |---|---|---|
 | HTTP routes, WebSockets, tmux, static files | `server.js`; route inventory at its top, handlers below | `test/send-guard.test.js`, `test/state.test.js` |
 | Browser views, reader, input, icons | `public/app.js`, `public/index.html`, `public/style.css`, `public/icons.js`, `public/disk-banner.js` (the disk banner's text) | `test/buttons.test.js`, `test/ask-popup.test.js`, `test/disk-banner.test.js` |
-| PWA cache and push | `public/sw.js`, `public/sw-update.js`, `push.js` | `test/push.test.js`, `test/push-tiers.test.js` |
+| PWA cache and push | `public/sw.js`, `public/sw-update.js`, `push.js` | `test/push.test.js`, `test/push-tiers.test.js`, `test/integration-feed-noise.test.js` |
 | Stop classification and safe automation | `stall.js`, `manager.js`, `triage.js`, `router.js`, `jev-breaker.js` | `test/stall.test.js`, `test/auto.test.js`, `test/manager.test.js` |
 | Separate page mockups | `public/page-preview.html`, `public/page-preview.css`, `public/page-preview.js` | Sample data only; linked from the More menu |
 | Reporter intake and local alerts | `reporter.js`, `api-extras.js`, `claude-plugin/ghosty-reporter/` | `test/reporter.test.js`, `test/manager-fixes.test.js`; plugin tests separate |
@@ -41,6 +41,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Central lease service (one writer of leases and the deploy queue; `/api/lease/v1`; design in `docs/v2/LEASES-CENTRAL.md`) | `lease-service.js`, `lease-routes.js`, `scripts/lease-token.js`, `scripts/lease-import.js`, `scripts/lease-export.js` | `test/lease-service.test.js`, `test/lease-routes.test.js` |
 | Remote stops (Mac Stop hook intake, `/api/remote/v1`; install in `docs/MAC-HOOK.md`) | `remote-stops.js`, `scripts/mac-stop-hook.sh`, `manager.js` (marked remote hook block) | `test/remote-stops.test.js`, `test/mac-hook.test.js` |
 | Manager owner questions (command, server safety net, alert scan) | `scripts/manager-ask.js`, `ask-guard.js`, `scripts/manager-ask-scan.sh`, `owner-asks.js` | `test/manager-ask-enforce.test.js`, `test/owner-asks.test.js` |
+| Integration lane notices (owner feed, manager event, session line) | `integration-notify.js` | `test/integration-feed-noise.test.js`, `test/integration-sessions.test.js` |
 | Owner round-trip ledger (`owner-roundtrips.jsonl`, `GET /api/manager/roundtrips`) | `roundtrips.js`, `manager.js` (`settleRoundtrip`) | `test/roundtrips.test.js` |
 | V2 task contract, store, policy, intake | `orchestration/task-contract.js`, `store.js`, `policy.js`, `intake.js`, `events.js` | `test/v2-task-core*.test.js`, `test/v2-store*.test.js`, `test/v2-policy.test.js` |
 | V2 goal loop and verifier | `orchestration/goal-loop.js`, `verifier.js`, `roles.js` | `test/v2-goal-loop.test.js` |

@@ -118,10 +118,41 @@ test('guard sweep: open ask without alert is alerted after 2 min; alerted ones a
   assert.equal(alerts.length, 1);
 });
 
-test('ask-scan: open ask without a feed alert is reported', async () => {
+test('guard sweep: an ask the other writer already alerted is not alerted a second time', async () => {
+  const dir = tmp('guard-');
+  const t = { v: Date.now() };
+  await writeFile(join(dir, 'l.jsonl'), JSON.stringify({ at: new Date(t.v).toISOString(), id: 'Q9', session: 'w', question: 'c?', state: 'open' }) + '\n');
+  await writeFile(join(dir, 'a.jsonl'), JSON.stringify({ id: 'Q9', at: t.v, via: 'manager-ask' }) + '\n');
+  const { g, alerts } = guard(dir, t);
+  t.v += 121000;
+  assert.equal((await g.sweep()).length, 0, 'the shared record already holds the alert');
+  assert.equal(alerts.length, 0);
+});
+
+const scan = (dir) => execFileSync('bash', [join(ROOT, 'scripts', 'manager-ask-scan.sh')], { env: { ...process.env, GHOSTY_STATE_DIR: dir } }).toString().trim();
+
+test('ask-scan: an open ask alerted in the shared record is not reported, even when the feed scrolled past it', async () => {
   const dir = tmp('scan-');
-  await writeFile(join(dir, 'manager-owner-asks.jsonl'), ['Q1', 'Q2'].map((id) => JSON.stringify({ id, session: 'w', question: 'x?', state: 'open' })).join('\n') + '\n');
-  await writeFile(join(dir, 'push-feed.json'), JSON.stringify([{ id: 1, tag: 'ask-Q1' }]));
-  const out = execFileSync('bash', [join(ROOT, 'scripts', 'manager-ask-scan.sh')], { env: { ...process.env, GHOSTY_STATE_DIR: dir } }).toString();
-  assert.equal(out.trim(), '!! ask-not-alerted Q2');
+  await writeFile(join(dir, 'manager-owner-asks.jsonl'), JSON.stringify({ id: 'Q219', session: 'w', question: 'x?', state: 'open' }) + '\n');
+  await writeFile(join(dir, 'manager-ask-alerts.jsonl'), JSON.stringify({ id: 'Q219', at: Date.now(), via: 'manager-ask' }) + '\n');
+  await writeFile(join(dir, 'push-feed.json'), JSON.stringify([{ id: 1, tag: 'integration-int-1' }]));   // the feed no longer holds the ask
+  assert.equal(scan(dir), '');
+});
+
+test('ask-scan: an open ask with no alert at all is reported', async () => {
+  const dir = tmp('scan-');
+  await writeFile(join(dir, 'manager-owner-asks.jsonl'), JSON.stringify({ id: 'Q7', session: 'w', question: 'x?', state: 'open' }) + '\n');
+  assert.equal(scan(dir), '!! ask-not-alerted Q7');
+});
+
+test('ask-scan: the feed tag is a second source; an answered ask is never reported', async () => {
+  const dir = tmp('scan-');
+  await writeFile(join(dir, 'manager-owner-asks.jsonl'), [
+    JSON.stringify({ id: 'Q1', session: 'w', question: 'x?', state: 'open' }),
+    JSON.stringify({ id: 'Q2', session: 'w', question: 'x?', state: 'open' }),
+    JSON.stringify({ id: 'Q3', session: 'w', question: 'x?', state: 'open' }),
+    JSON.stringify({ id: 'Q3', state: 'answered', answer: 'yes' }),
+  ].join('\n') + '\n');
+  await writeFile(join(dir, 'push-feed.json'), JSON.stringify([{ id: 1, tag: 'ask-Q1' }]));   // Q1 alerted in the feed only
+  assert.equal(scan(dir), '!! ask-not-alerted Q2', 'Q1 is alerted, Q3 is answered');
 });

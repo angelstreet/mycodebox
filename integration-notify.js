@@ -9,6 +9,17 @@
 export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled'];
 export const isFinal = (state) => FINAL_STATES.includes(state);
 
+// Integration notices that must NOT take a slot in the owner's push feed: a merge or a deploy is routine.
+// (owner 2026-10-23: ~40 integration events in 3 h filled the 50-item feed and buried the one alert that
+// mattered.) These two wait for the periodic digest instead. Everything else stays an individual alert:
+// returned, deploy_failed, merged_ci_red and cancelled all need the owner.
+export const QUIET_STATES = ['merged', 'deployed'];
+export const isQuietState = (state) => QUIET_STATES.includes(String(state || ''));
+
+// Pure: the manager.json switch. `integrationDigest` (default true) = the quiet states go into the digest
+// instead of the owner's feed; false restores one feed entry per integration event.
+export const integrationDigestEnabled = (cfg = {}) => cfg.integrationDigest !== false;
+
 const one = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const sha12 = (sha) => String(sha || '').slice(0, 12);
 const toMs = (s) => { const n = Date.parse(String(s || '')); return Number.isFinite(n) ? n : null; };
@@ -77,8 +88,10 @@ export function integrationNotice(r) {
 }
 
 // deps: { status: (session) => { state, stall } | undefined, isRemote: (session) => bool, canSend: (status) => bool, send: (session, text) => Promise,
-//         feed: (item) => void, managerEvent: (event) => Promise, afterSend: (session, request) => void, log }
-export function createIntegrationNotify({ status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, managerEvent = async () => {}, afterSend = () => {}, log = () => {} } = {}) {
+//         feed: (item) => void, digest: (item) => void, quiet: (state) => bool, managerEvent: (event) => Promise, afterSend: (session, request) => void, log }
+// feed: the owner's push feed (one item, one bell slot). digest: the periodic digest (no slot now).
+// quiet: the server decides which states are quiet (manager.json integrationDigest, default on).
+export function createIntegrationNotify({ status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, digest = () => {}, quiet = () => false, managerEvent = async () => {}, afterSend = () => {}, log = () => {} } = {}) {
   const done = new Set();   // `${id}:${state}`: a transition is told once per process
   return async function notify(request, event = {}) {
     try {
@@ -90,7 +103,11 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
       const session = request.session ? String(request.session) : '';
       const n = integrationNotice(request);
       const url = session ? `/?s=${encodeURIComponent(session)}` : '/?integration=1';
-      try { feed({ title: n.title, body: n.body, url: '/?integration=1', tag: `integration-${request.id}`, priority: n.priority, kind: 'integration' }); } catch (e) { log({ type: 'integration_feed_failed', id: request.id, error: e.message }); }
+      const item = { title: n.title, body: n.body, url: '/?integration=1', tag: `integration-${request.id}`, priority: n.priority, kind: 'integration', state: request.state, requestId: request.id, session };
+      try {
+        // a quiet state (merged, deployed) waits for the digest: it must not take a slot in the owner's feed
+        if (quiet(request.state)) digest(item); else feed(item);
+      } catch (e) { log({ type: 'integration_feed_failed', id: request.id, error: e.message }); }
       await Promise.resolve(managerEvent({ key: `integration:${request.id}:${request.state}`, title: n.title, body: n.body, url, priority: n.priority, ...(session ? { session } : {}) })).catch((e) => log({ type: 'integration_event_failed', id: request.id, error: e.message }));
       let sent = false, why = 'no session';
       if (request.state === 'cancelled') why = 'cancelled (the session asked for it)';

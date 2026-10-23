@@ -150,7 +150,7 @@ import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks } from './owner-asks.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
-import { createIntegrationNotify } from './integration-notify.js';
+import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createMockups } from './mockups.js';
@@ -772,7 +772,11 @@ const crashResumeEnabled = () => { try { return JSON.parse(readFileSync(managerC
 // Two-tier push (MANAGER.md section 6): interrupts at once, the rest as one digest per pushDigestMinutes while awake.
 // Knobs in manager.json: pushDigestMinutes (30), pushAwakeFrom ("07:00"), pushAwakeTo ("23:00"), pushTimezone ("Europe/Zurich"), pushInterruptPct (95).
 const pushTierConfig = () => { try { return tierConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return tierConfig({}); } };
-const { alert, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS,
+// Integration lane notices (owner 2026-10-23): a merged/deployed notice waits for the periodic digest instead
+// of taking a slot in the owner's feed (~40 integration events in 3 h filled the 50-item feed and buried the one
+// alert that mattered). manager.json `integrationDigest` (default true); false = one feed entry per event, as before.
+const integrationDigestOn = () => { try { return integrationDigestEnabled(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return true; } };
+const { alert, queueDigest, resetDebounce, digestTick } = createAlerts({ push, ntfyTopic: NTFY_TOPIC, ntfyUrl: NTFY_URL, publicUrl: PUBLIC_URL, defaultDebounceMs: NTFY_DEBOUNCE_MS,
   tiering: { config: pushTierConfig, managerSessions: loadOwnerHiddenSessions, file: join(STATE_DIR, 'push-digest.json') }, onFired: (e) => {
     // The manager agent's own alerts are not fed back to it, but they are what the wake outcome looks for.
     if (classifyKey(e.key).kind === 'agent-skip') logEvent({ type: 'agent-alert', key: e.key, title: String(e.title || '').slice(0, 120), body: String(e.body || '').slice(0, 300) });
@@ -2538,6 +2542,9 @@ const integrationNotify = createIntegrationNotify({
   canSend: noteAllowed,   // stopped on a finished turn, no draft, no menu
   send: async (session, text) => { await assertAgentPane(session, 'integration'); await sendKeys(session, text, true); logSend(session, 'integration', { keys: text }); },
   feed: (item) => push.record(item),
+  // a quiet state (merged, deployed) waits for the digest: it must not take a slot in the owner's feed
+  digest: (item) => queueDigest(`integration:${item.requestId}:${item.state}`, { title: item.title, body: item.body, url: item.url, meta: { session: item.session || 'lane', case: 'integration' } }),
+  quiet: (state) => integrationDigestOn() && isQuietState(state),
   managerEvent: (e) => managerEvents.record(e),
   afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
   log: (r) => logEvent(r),
