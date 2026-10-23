@@ -72,7 +72,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 - Autonomy by default (owner, 2026-10-14, OWNER_DECISIONS §15): the AI manager decides merges, pushes, deploys and the
   recommended option itself after an evaluation, records each decision and shows it to the owner, who corrects afterwards.
   It must never answer on the owner's behalf about deletions of data, credentials and secrets, money, customers, sudoers
-  or units on hosts, production database migrations, force-push or history rewrites, pushing tags or publishing a
+  on hosts (systemd units on lab hosts go to the manager and Jev first, owner 2026-10-23), production database migrations, force-push or history rewrites, pushing tags or publishing a
   package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
   those. Merges are an evaluated manager decision (owner, 2026-10-14): the
   manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the

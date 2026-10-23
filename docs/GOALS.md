@@ -23,7 +23,7 @@ no lease or deploy question reaches the owner (a session's lease or deploy "need
 
 Sessions do not stop for routine confirmations. Merge, push, deploy and "the recommended option" are decided by the
 manager with an evaluation and recorded; the owner corrects afterwards. Waiting for the owner is the exception, reserved
-for the remaining hard floors: deletions of data, credentials and secrets, money, customers, sudoers and units on hosts,
+for the remaining hard floors: deletions of data, credentials and secrets, money, customers, sudoers on hosts (systemd units on lab hosts are manager items, Jev triages first, 2026-10-23),
 production database migrations (plus force-push / history rewrites, tag pushes and publishing; the full list is in
 [REFERENCE](REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)).
 

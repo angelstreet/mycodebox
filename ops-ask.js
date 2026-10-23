@@ -19,6 +19,9 @@ const DEPLOY_TOPIC = /\bdeploy(?:s|ed|ing|ment|ments)?\b|\bredeploy\w*|\bupdate_
 // a yes/no "fix <your own defect> now?": the session found a defect in its own work and asks leave to fix it. Never an owner question
 // (AGENTS: fix own defects, never ask); a manager item that the manager answers "yes, fix it". Floor topics are excluded before this runs.
 const OWN_FIX = /^(?:(?:should|shall|may|can|do you want me to|ok to|okay to)\s+(?:i|we)\s+)?(?:fix|patch|repair|correct)\b[^?]{0,80}\bnow\s*\?$/i;
+// a systemd unit / timer on a lab host: a technical choice, so the manager and Jev triage it first; the owner is asked only if they rate it
+// an owner item (owner, 2026-10-23). sudoers, sudo, reboot, force-push, tags, publish and migrations are NOT covered: they stay hard.
+const HOST_UNIT = /\b(?:systemd|systemctl\s+(?:enable|disable|daemon-reload|start|stop|restart)|unit files?|\w[\w@.-]*\.(?:service|timer))\b|\b(?:install|enable|create|add)\w*\b[^.?\n]{0,40}\b(?:unit|timer)\b|\b(?:unit|timer)\b[^.?\n]{0,30}\b(?:install|enable)\w*/i;
 const NOT_OPS = /\b(?:deploy(?:ment)? (?:docs?|documentation|diagram|tests?|script (?:name|file)))\b/i;
 
 // -> 'lease' | 'deploy' | null  (any non-null value signals: this stop is a manager item)
@@ -37,7 +40,8 @@ export function opsAsk(final) {
   // evaluation owns them).
   if (ownerFloorMatch(`${text} ${final.blocked || ''}`)) return null;
   if (final.forbidden && ownerFloorMatch(String(final.forbidden))) return null;
-  if (hardMatch(`${text} ${final.blocked || ''}`, { mergePresent: true, pushPresent: true, deployPresent: true })) return null;   // OWNER_DECISIONS §15 hard floor (force-push, tags, publish, sudoers, units, migrations): never a manager item; the deploy / push / merge words themselves are the manager's
+  const hostText = `${text} ${final.blocked || ''}`.replace(new RegExp(HOST_UNIT.source, 'gi'), ' ');   // unit words are the manager's; any other hard word left still decides
+  if (hardMatch(hostText, { mergePresent: true, pushPresent: true, deployPresent: true })) return null;   // OWNER_DECISIONS §15 hard floor (force-push, tags, publish, sudoers, units, migrations): never a manager item; the deploy / push / merge words themselves are the manager's
   if (c === 'merge_wait') return final.topics?.hard ? null : 'merge';   // never the owner's: a hard word (force-push, secrets) keeps it with the owner
   if (stopKind === 'waiting_deploy') return leaseTopic(text) || leaseAsk(text).lease ? 'lease' : 'deploy';
   if (!text) return null;
@@ -48,6 +52,7 @@ export function opsAsk(final) {
   for (const s of parts) {
     const lease = leaseAsk(s).lease || leaseTopic(s);
     const deploy = DEPLOY_TOPIC.test(s) && !NOT_OPS.test(s);
+    if (!lease && !deploy && HOST_UNIT.test(s)) { kind = kind || 'host'; continue; }
     if (!lease && !deploy && OWN_FIX.test(s) && parts.length === 1) return 'fix';
     if (!lease && !deploy) return null;
     kind = kind === 'deploy' || (deploy && !lease) ? 'deploy' : 'lease';

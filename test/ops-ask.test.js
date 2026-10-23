@@ -37,6 +37,8 @@ test('detection: lease and deploy asks, owner floor (round 13: only owner list),
   assert.equal(opsAsk(od('Deploy and use the api key from the vault?')), null, 'third-party api key IS in OWNER_FLOOR (owner-held credential)');
   assert.equal(opsAsk(od('Run the migrations on deploy?')), null, 'a migration is a §15 hard topic: owner');
   assert.equal(opsAsk(od('Should I restart the ghosty service?')), null, 'a service unit is a §15 hard topic: owner');
+  assert.equal(opsAsk(od('Install the game-dispatch systemd unit on codebox so the play loop restarts? [1 yes 2 no]')), 'host', 'a lab-host systemd unit is a manager item (Jev triages)');
+  assert.equal(opsAsk(od('Install the systemd unit and add it to sudoers?')), null, 'sudoers stays hard');
   for (const q of ['Deploy main to env-a and force-push the release tag?', 'Deploy and run the production migration?', 'Deploy and edit /etc/sudoers?', 'Deploy and publish the npm package?']) {
     assert.equal(opsAsk(od(q)), null, q);
     assert.equal(opsAsk(od(q, { topics: { hard: 'x' } })), null, `${q} (topics given)`);
