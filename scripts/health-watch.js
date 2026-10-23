@@ -12,11 +12,11 @@
 //        --dry-run delete nothing, write no event (report + state sample are still written)
 // No dependencies, no AI calls.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, lstatSync, statfsSync, rmSync, opendirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, lstatSync, statfsSync, rmSync, opendirSync, realpathSync, readlinkSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { homedir, cpus, loadavg, tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join, basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_CONFIG = {
@@ -34,6 +34,12 @@ export const DEFAULT_CONFIG = {
   npmCacheMB: 1024,       // npm cache is cleaned only above this size
   debounceHours: 6,       // same issue key is written to the manager feed at most once per this
   fixLevel: 'cleanup',    // report | cleanup | cleanup+orphans | cleanup+worktrees | cleanup+all (orphans and worktrees are separate opt-ins)
+  // Which repos' REGISTERED worktrees may be considered, and where such a worktree may live.
+  // Both live in the state-dir config (never in this tracked file): worktreeRepos = { label: '/abs/path/to/repo' },
+  // worktreeRoots = ['/abs/root', ...]. No repo and no root => nothing is a candidate. The deletion criteria
+  // (clean, merged, no live session) do not change; this only says WHICH paths are looked at.
+  worktreeRepos: {},     // { label: '/abs/path/to/repo' } - only these repos' registered worktrees are candidates
+  worktreeRoots: [],     // allowed roots: a candidate worktree must live under one of them
 };
 export const FIX_LEVELS = ['report', 'cleanup', 'cleanup+orphans', 'cleanup+worktrees', 'cleanup+all'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -143,13 +149,63 @@ export function scratchEligible(entry, liveIds, now, maxAgeDays) {
   return { ok: true, why: 'dead session, old' };
 }
 
-// Worktree classification. info: {isWorktree, clean, merged, liveSession}
+// Worktree classification. info: {isWorktree, clean, merged, liveSession, ignoredFiles?}
+// The three deletion conditions stay exactly as they were (clean, merged, no live session). ignoredFiles is a
+// safety guard on top: `git worktree remove` silently deletes ignored files, so a worktree whose only content is
+// ignored files is reported, never removed behind the owner's back.
 export function classifyWorktree(info) {
   if (!info.isWorktree) return 'not-worktree';
   if (info.liveSession) return 'live-session';
   if (!info.clean) return 'dirty';
+  if (info.ignoredFiles) return 'ignored-files';
   if (!info.merged) return 'unmerged';
   return 'removable';
+}
+
+// tmux (and /proc/<pid>/cwd) append " (deleted)" to the cwd of a session whose directory was deleted and recreated
+// under it: the session is alive, but the plain path comparison misses it (2026-10-23, ui-sunrise).
+export const DELETED_SUFFIX = ' (deleted)';
+export function stripDeletedSuffix(p) { return String(p || '').trim().replace(/ \(deleted\)$/, ''); }
+export function safeRealpath(p) { try { return realpathSync(p); } catch { return null; } }
+// p is inside dir (dir itself or a sub-directory of it); '/' is the root of everything.
+export function pathInside(dir, p) {
+  if (!dir || !p) return false;
+  const d = resolve(dir), q = resolve(p);
+  return d === '/' ? q.startsWith('/') : (q === d || q.startsWith(d + '/'));
+}
+export function underRoots(dir, roots, realpath = safeRealpath) {
+  const d = resolve(dir), dr = realpath(d) || d;
+  return (roots || []).some((r) => {
+    const root = resolve(r), rootR = realpath(root) || root;
+    return pathInside(root, d) || pathInside(rootR, d) || pathInside(root, dr) || pathInside(rootR, dr);
+  });
+}
+
+// Is a session alive inside this worktree? A pane cwd, a Claude session cwd or ANY live process whose /proc cwd is
+// inside the worktree counts. The " (deleted)" suffix is stripped and both sides are compared through realpath, so a
+// re-spelled path or a symlink does not hide a live session.
+export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [] } = {}) {
+  const hit = (raw) => {
+    if (!raw) return false;
+    const p = stripDeletedSuffix(raw);
+    if (!p) return false;
+    if (pathInside(dir, p)) return true;
+    const rp = safeRealpath(p);
+    return !!rp && pathInside(safeRealpath(dir) || dir, rp);
+  };
+  return panes.some((p) => hit(p.path))
+    || claude.some((c) => c.alive && hit(c.cwd))
+    || procCwds.some((c) => hit(c.cwd));
+}
+
+// The cwd of every own process: a session that cd'd elsewhere still holds the worktree open.
+export function readProcCwds(procs, readlink = readlinkSync) {
+  const out = [];
+  for (const p of procs || []) {
+    if (!p.mine) continue;
+    try { const cwd = readlink(`/proc/${p.pid}/cwd`); if (cwd) out.push({ pid: p.pid, cwd }); } catch {}
+  }
+  return out;
 }
 
 // Debounce: write when never written, or older than the window, or the severity worsened by its step.
@@ -349,22 +405,133 @@ function topProcs(procs, owners, by, n = 15) {
   return ['| pid | %CPU | RSS MB | elapsed | owner | command |', '|---|---|---|---|---|---|', ...rows].join('\n');
 }
 
-export function worktreeInfos(home, panes, claude) {
+// ---------------------------------------------------------------- worktree scan
+//
+// The watcher used to look at ~/vpt-* and ~/ghosty-* only, so it never saw the worktrees that hold the space
+// (~/virtualpytest-*, ~/evolai-*, ~/wt/*, ~/mycodebox-v2-wt/*, /tmp/*): it reported "0 removable" on a nearly full
+// disk. The eligible set is now the REGISTERED worktrees of the repos the owner configured (state-dir config:
+// worktreeRepos + worktreeRoots), deduped by path and bounded by the configured roots. The deletion CRITERIA do not
+// change (clean, merged, no live session); only the set of paths that can be classified grows.
+
+export function configRepos(cfg) {
+  const raw = cfg?.worktreeRepos;
   const out = [];
-  let names = [];
-  try { names = readdirSync(home).filter((n) => /^(vpt-|ghosty-)/.test(n)); } catch {}
-  for (const n of names) {
-    const dir = join(home, n);
-    let st; try { st = lstatSync(join(dir, '.git')); } catch { continue; }
-    const isWorktree = st.isFile();
-    const porcelain = sh('git', ['-C', dir, 'status', '--porcelain']);
-    const clean = porcelain !== null && porcelain.trim() === '';
-    const merged = sh('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', 'main']) !== null;
-    const live = panes.some((p) => p.path === dir || p.path.startsWith(dir + '/')) || claude.some((c) => c.alive && (c.cwd === dir || c.cwd.startsWith(dir + '/')));
-    const branch = (sh('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']) || '').trim();
-    out.push({ name: n, dir, branch, isWorktree, clean, merged, liveSession: live, kind: classifyWorktree({ isWorktree, clean, merged, liveSession: live }) });
+  if (Array.isArray(raw)) raw.forEach((p, i) => out.push({ key: `repo-${i + 1}`, path: String(p || '') }));
+  else if (raw && typeof raw === 'object') for (const [k, v] of Object.entries(raw)) out.push({ key: String(k), path: String(v || '') });
+  return out.filter((r) => r.path.startsWith('/'));   // absolute paths only: a relative repo path is ambiguous
+}
+export function configRoots(cfg) {
+  const raw = cfg?.worktreeRoots;
+  return (Array.isArray(raw) ? raw : []).map((r) => String(r || '')).filter((r) => r.startsWith('/'));
+}
+
+// `git worktree list --porcelain`: one block per worktree, the first one is the repo's main worktree.
+export function parseWorktreePorcelain(text) {
+  const out = [];
+  let cur = null;
+  for (const line of String(text || '').split('\n')) {
+    if (line.startsWith('worktree ')) { if (cur) out.push(cur); cur = { path: line.slice('worktree '.length).trim(), branch: '', detached: false }; }
+    else if (line.startsWith('branch ') && cur) cur.branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '');
+    else if (line.startsWith('detached') && cur) cur.detached = true;
   }
+  if (cur) out.push(cur);
   return out;
+}
+
+// The merge target: the repo's own origin/main when it exists, else the local main. The name is reported.
+export function mergeTarget(run, path) {
+  if (run('git', ['-C', path, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main']) !== null) return { name: 'origin/main', ref: 'refs/remotes/origin/main' };
+  if (run('git', ['-C', path, 'rev-parse', '--verify', '--quiet', 'refs/heads/main']) !== null) return { name: 'main', ref: 'refs/heads/main' };
+  return null;
+}
+
+// Scan the configured repos. run() is injectable so the tests can drive the git calls without a real repo.
+export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], run = sh, realpath = safeRealpath, stat = lstatSync } = {}) {
+  const roots = configRoots(cfg);
+  const repos = [], candidates = [], notConsidered = [];
+  const seenCommon = new Map(), seenPaths = new Map();
+  let entriesDropped = 0, reposDropped = 0, missing = 0, registered = 0;
+
+  for (const { key, path } of configRepos(cfg)) {
+    const commonOut = run('git', ['-C', path, 'rev-parse', '--git-common-dir']);
+    if (commonOut === null) { repos.push({ key, path, error: 'not a git repository' }); continue; }
+    const common = resolve(path, commonOut.trim());
+    if (seenCommon.has(common)) {           // the same repo twice (e.g. a main checkout and one of its worktrees)
+      reposDropped++;
+      repos.push({ key, path, common, skipped: `same git common dir as ${seenCommon.get(common)}` });
+      continue;
+    }
+    seenCommon.set(common, key);
+    const listOut = run('git', ['-C', path, 'worktree', 'list', '--porcelain']);
+    if (listOut === null) { repos.push({ key, path, common, error: 'git worktree list failed' }); continue; }
+    const entries = parseWorktreePorcelain(listOut);
+    const mergeRef = mergeTarget(run, path);
+    const repo = { key, path, common, entries: entries.length, mergeRef: mergeRef ? mergeRef.name : null, candidates: 0, notConsidered: 0 };
+    repos.push(repo);
+    registered += entries.length;
+
+    for (const [i, e] of entries.entries()) {
+      const dir = resolve(e.path);
+      const id = realpath(dir) || dir;
+      if (seenPaths.has(id)) { entriesDropped++; continue; }   // dedupe by path: the same worktree listed twice
+      seenPaths.set(id, key);
+      if (!existsSync(dir)) { missing++; repo.missing = (repo.missing || 0) + 1; continue; }
+      // git lists the main worktree of a repo first: that is the checkout itself, never a candidate. (The git common
+      // dir cannot tell them apart - every linked worktree of a repo has the same one.)
+      if (i === 0) {
+        notConsidered.push({ name: basename(dir), dir, repo: key, reason: 'main worktree of the repo' });
+        repo.notConsidered++;
+        continue;
+      }
+      if (!underRoots(dir, roots, realpath)) {
+        notConsidered.push({ name: basename(dir), dir, repo: key, reason: 'outside the allowed roots' });
+        repo.notConsidered++;
+        continue;
+      }
+      let st = null;
+      try { st = stat(join(dir, '.git')); } catch {}
+      const isWorktree = !!st && st.isFile();      // a linked worktree has a .git FILE, a clone has a .git DIRECTORY
+      const status = run('git', ['-C', dir, 'status', '--porcelain', '--ignored']);
+      const lines = status === null ? [] : status.split('\n').filter(Boolean);
+      const ignoredFiles = lines.filter((l) => l.startsWith('!!')).length;
+      const clean = status !== null && lines.every((l) => l.startsWith('!!'));
+      const merged = mergeRef ? run('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', mergeRef.ref]) !== null : false;
+      const branch = (run('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']) || '').trim();
+      const liveSession = worktreeIsLive(dir, { panes, claude, procCwds });
+      const info = { name: basename(dir), dir, branch, repo: key, isWorktree, clean, merged,
+        mergedRef: mergeRef ? mergeRef.name : null, ignoredFiles, liveSession };
+      info.kind = classifyWorktree(info);
+      candidates.push(info);
+      repo.candidates++;
+    }
+  }
+  return { candidates, notConsidered, repos, roots, registered,
+    dedupe: { entriesDropped, reposDropped }, missing };
+}
+
+// The worktree section of the report: every candidate, and the blind spot (registered worktrees NOT considered).
+export function worktreeReport(scan, { du = duR } = {}) {
+  const L = [];
+  const repos = scan?.repos || [];
+  const nc = scan?.notConsidered || [];
+  const ncKB = nc.reduce((n, x) => n + du(x.dir), 0);
+  L.push('## Worktrees (registered worktrees of the configured repos)', '');
+  const repoDesc = repos.map((r) => r.error ? `${r.key}: ${r.error}`
+    : r.skipped ? `${r.key}: skipped (${r.skipped})`
+    : `${r.key}: merge target ${r.mergeRef || 'none'}`);
+  L.push(`- repos scanned: ${repos.length}${repos.length ? ' (' + repoDesc.join('; ') + ')' : ''}`);
+  L.push(`- registered worktrees: ${scan?.registered || 0} (${scan?.dedupe?.entriesDropped || 0} duplicate entries dropped, ${scan?.dedupe?.reposDropped || 0} repo(s) skipped as the same git common dir, ${scan?.missing || 0} missing on disk)`);
+  L.push(`- not considered: ${nc.length} worktrees, ${human(ncKB)} (a repo main worktree, or outside the allowed roots)`);
+  L.push(`- allowed roots: ${(scan?.roots || []).join(', ') || 'none configured'}`);
+  L.push('', '| dir | repo | branch | size | git worktree | clean | ignored files | merged into | merged | live session | class |', '|---|---|---|---|---|---|---|---|---|---|---|');
+  for (const w of scan?.candidates || []) {
+    L.push(`| ${w.dir} | ${w.repo} | ${w.branch} | ${human(du(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.ignoredFiles || 0} | ${w.mergedRef || 'n/a'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} |`);
+  }
+  if (nc.length) {
+    L.push('', '| not considered | repo | reason | size |', '|---|---|---|---|');
+    for (const x of nc) L.push(`| ${x.dir} | ${x.repo} | ${x.reason} | ${human(du(x.dir))} |`);
+  }
+  return L.join('\n');
 }
 
 function scratchEntries(root) {
@@ -384,7 +551,7 @@ function scratchEntries(root) {
 }
 
 function investigate(ctx) {
-  const { home, procs, owners, panes, claude, wts } = ctx;
+  const { home, procs, owners, wtScan } = ctx;
   const L = [];
   L.push('## Top 15 processes by CPU', '', topProcs(procs, owners, 'cpu'), '', '## Top 15 processes by RSS', '', topProcs(procs, owners, 'rss'), '');
   L.push('## Disk use of the usual suspects', '');
@@ -404,9 +571,7 @@ function investigate(ctx) {
   L.push(`- ~/.claude: ${human(duR(join(home, '.claude')))}`, `- ~/.npm: ${human(duR(join(home, '.npm')))}`, `- ~/.local/state/ghosty: ${human(duR(join(home, '.local/state/ghosty')))}`);
   const jd = sh('journalctl', ['--user', '--disk-usage']) || sh('journalctl', ['--disk-usage']);
   L.push(`- journal: ${jd ? jd.trim() : 'n/a'}`, '');
-  L.push('## Worktrees (~/vpt-*, ~/ghosty-*)', '', '| dir | branch | size | git worktree | clean | merged into main | live session | class |', '|---|---|---|---|---|---|---|---|');
-  for (const w of wts) L.push(`| ${w.name} | ${w.branch} | ${human(duR(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} |`);
-  L.push('');
+  L.push(worktreeReport(wtScan), '');
   const dk = sh('docker', ['system', 'df']);
   L.push('## Docker', '', dk ? '```\n' + dk.trim() + '\n```' : 'skipped (docker not usable without sudo)', '');
   return L.join('\n');
@@ -451,7 +616,7 @@ function runFixes(ctx) {
   return freedKB;
 }
 
-function runOptionalFixes(ctx, issues) {
+export function runOptionalFixes(ctx, issues) {
   const { cfg, dryRun, wts, log } = ctx;
   const verb = dryRun ? 'WOULD' : 'did';
   if (cfg.fixLevel !== 'report') {   // an orphaned test run is never someone's work: killed at every cleanup level
@@ -540,13 +705,14 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const reportPath = join(reportsDir, `${iso}.md`);
   const duPath = join(stateDir, 'health-du-cache.json');
   try { duCache = Object.fromEntries(Object.entries(JSON.parse(readFileSync(duPath, 'utf8'))).filter(([, e]) => now - e.at < DU_TTL_MS)); } catch { duCache = {}; }
-  const wts = worktreeInfos(home, panes, claude);
-  const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, log: [] };
+  const wtScan = scanWorktrees({ cfg, panes, claude, procCwds: readProcCwds(procs) });
+  const wts = wtScan.candidates;
+  const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, wtScan, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];
   R.push('## Checks', '', `- disk /: ${disk.pct}% (${disk.freeGB} GB free), limit ${cfg.diskPct}%`, `- inodes /: ${inodes.pct}% used (${inodes.free} free), limit ${cfg.inodePct}%`, `- load: ${l1.toFixed(2)} / ${load5.toFixed(2)} on ${cores} cores (limit ${cfg.loadPerCore}/core for ${cfg.loadMinutes} min, sustained: ${loadTrip})`,
     `- RAM available: ${metrics.ramAvailPct.toFixed(1)}%, limit ${cfg.ramAvailPct}%`, `- runaways: ${metrics.runaways.length}, stuck node --test: ${metrics.stuck.length}, orphaned test runs: ${metrics.leftovers.length}, defunct: ${metrics.defunct}`, '',
     '**Tripped:** ' + (issues.length ? issues.map((i) => i.title).join('; ') : 'none (forced run)'), '');
-  R.push(investigate({ home, procs, owners, panes, claude, wts }));
+  R.push(investigate({ home, procs, owners, panes, claude, wtScan }));
   try { writeFileSync(duPath, JSON.stringify(duCache)); } catch {}
 
   // SAFE AUTO-FIX
