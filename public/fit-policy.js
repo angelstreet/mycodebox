@@ -15,3 +15,14 @@ export function fitAction({ now, lastInput = 0, asked = false, askedSame = false
   if (!taken || !hasFocus || now - reqAt < GAP_MS || reclaims >= MAX_RECLAIMS) return 'wait';
   return 'reclaim';
 }
+
+// Is the pane already as good as a resize request could make it? (so a touch, a focus event or the address bar sliding in and out does not
+// resize the shared tmux window again, which reflowed the TUI and made the card flash)
+//   - the pane is at our width and within ROW_SLACK rows of what fits (an address bar is ~4 rows), or
+//   - the server already gave us all it can for this width (it keeps a 60-column minimum): we asked for `askedCols`, it granted `cols`,
+//     the pane is still at that width and about that tall.
+export const ROW_SLACK = 6;
+export function fitSatisfied({ cols, rows, curC, curR, granted = null }) {
+  if (cols === curC && Math.abs(rows - curR) <= ROW_SLACK) return true;
+  return !!granted && granted.askedCols === cols && granted.cols === curC && Math.abs(granted.rows - curR) <= ROW_SLACK && Math.abs(granted.askedRows - rows) <= ROW_SLACK;
+}

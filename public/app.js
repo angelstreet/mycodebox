@@ -11,7 +11,7 @@ import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
-import { fitAction } from '/fit-policy.js';
+import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
@@ -482,21 +482,21 @@ async function sendFit(session) {
   const cols = Math.max(20, Math.min(400, entry.fitCols)), rows = Math.max(5, Math.min(200, entry.fitRows));
   const key = `${cols}x${rows}`;
   const curC = entry.paneCols || st.cols, curR = entry.paneRows || st.rows;   // the live size from the pane stream beats the 1 s status poll
-  if (cols === curC && rows === curR) { entry.reqKey = key; return; }
-  // the server may grant a bit more than asked (it keeps a 60-column minimum): the pane at what it granted is not "taken"
-  if (entry.reqKey === key && entry.granted && entry.granted.cols === curC && entry.granted.rows === curR) return;
+  // Already as good as a request can make it (at our width, about our height, or at what the server granted): no request. A touch on the card
+  // or the address bar sliding in and out used to resize the window again each time and the card flashed.
+  if (fitSatisfied({ cols, rows, curC, curR, granted: entry.granted })) { entry.reqKey = key; return; }
   // One window, many clients: claim the size once, then fight for it only while the user is using this client (fit-policy.js).
   const act = fitAction({ now: Date.now(), lastInput: lastInputAt, asked: !!entry.asked, askedSame: entry.reqKey === key,
     taken: Math.abs((curC || 0) - cols) > 1, hasFocus: document.hasFocus(), reqAt: entry.reqAt || 0, reclaims: entry.reclaims || 0 });
   if (act === 'wait') return;
   if (act === 'reclaim') entry.reclaims = (entry.reclaims || 0) + 1; else entry.reclaims = 0;
   entry.asked = true;
-  entry.reqKey = key; entry.reqAt = Date.now(); entry.granted = null;
+  entry.reqKey = key; entry.reqAt = Date.now();   // the previous grant stays until the new answer: the text must not jump back to full size meanwhile
   try {
     const res = await fetch(`/api/resize/${encodeURIComponent(session)}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cols, rows }),
     });
-    if (res.ok) { const g = await res.json().catch(() => null); if (g && g.ok) entry.granted = { cols: g.cols, rows: g.rows }; }
+    if (res.ok) { const g = await res.json().catch(() => null); if (g && g.ok) entry.granted = { cols: g.cols, rows: g.rows, askedCols: cols, askedRows: rows }; }
     // The server's pane stream only reports the new width on its next tick (up to a second away): take the grant at its word and fetch the
     // repainted pane ourselves once the agent has had a moment to redraw at the new size. The card stays hidden until then (entry.awaitPane).
     const g = entry.granted;
