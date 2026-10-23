@@ -1,7 +1,7 @@
 // Pure parts of scripts/health-watch.js: thresholds, owner resolution, scratch eligibility, worktree class, debounce, event shape.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs } from '../scripts/health-watch.js';
+import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs, scanWorktrees, worktreeIsLive, worktreeReport, runOptionalFixes, stripDeletedSuffix, readProcCwds, mergeTarget, parseWorktreePorcelain, configRepos, configRoots } from '../scripts/health-watch.js';
 
 const cfg = DEFAULT_CONFIG;
 const base = { diskPct: 50, diskFreeGB: 30, load1: 0.5, load5: 0.5, cores: 6, ramAvailPct: 50, runaways: [], stuck: [], defunct: 0 };
@@ -214,4 +214,171 @@ test('cachedSize: a report size is walked once per DU_TTL_MS, then again after i
   assert.equal(cachedSize('du:/x', walk, 1000 + DU_TTL_MS - 1, cache), 1);
   assert.equal(cachedSize('du:/x', walk, 1000 + DU_TTL_MS, cache), 2);
   assert.equal(cachedSize('du:/y', walk, 0, null), 3);   // no cache: always fresh
+});
+
+// ---- worktree scan: which paths may be removed at all, and the guards that keep a live session alive
+// The scan used to walk ~/vpt-* and ~/ghosty-* only, so it never saw the worktrees that hold the space. It now walks
+// the REGISTERED worktrees of the repos the owner configured (state-dir config), bounded by the allowed roots.
+import { tmp } from './helpers-tmp.js';
+
+// A fake git: one entry per path, so the tests drive the scan without a real repository.
+function fakeGit(spec) {
+  const calls = [];
+  const run = (cmd, args) => {
+    calls.push(args.slice());
+    const i = args.indexOf('-C');
+    if (i < 0) return null;
+    const e = spec[args[i + 1]], rest = args.slice(i + 2);
+    if (!e) return null;
+    if (rest[0] === 'rev-parse') {
+      if (rest[1] === '--git-common-dir') return e.common;
+      if (rest[1] === '--verify') return e.refs?.has(rest[3]) ? 'deadbeef' : null;
+      if (rest[1] === '--abbrev-ref') return e.branch || 'HEAD';
+    }
+    if (rest[0] === 'worktree' && rest[1] === 'list') return e.list;
+    if (rest[0] === 'status') return e.status;
+    if (rest[0] === 'merge-base') return e.mergedRefs?.has(rest[3]) ? '' : null;
+    return null;
+  };
+  run.calls = calls;
+  return run;
+}
+
+// A repo with a main worktree (a .git DIRECTORY) and linked worktrees (a .git FILE).
+function makeRepo(root, name, worktrees = [], opts = {}) {
+  const main = join(root, name), common = join(root, '.git', name);
+  const refs = new Set(opts.refs || ['refs/remotes/origin/main']);
+  const mergedRefs = new Set(opts.mergedRefs || ['refs/remotes/origin/main']);
+  mkdirSync(join(main, '.git'), { recursive: true });
+  const list = [`worktree ${main}\nHEAD aaa\nbranch refs/heads/main`];
+  const spec = { [main]: { common, list: '', refs, mergedRefs, status: '', branch: 'main' } };
+  for (const w of worktrees) {
+    const p = join(main, w.name);
+    mkdirSync(p, { recursive: true });
+    writeFileSync(join(p, '.git'), `gitdir: ${common}/worktrees/${w.name}\n`);
+    const branch = w.branch || 'feature';
+    list.push(`worktree ${p}\nHEAD bbb\nbranch refs/heads/${branch}`);
+    spec[p] = { common: `${common}/worktrees/${w.name}`, status: w.status ?? '', branch,
+      refs, mergedRefs: new Set(w.mergedRefs ?? mergedRefs) };
+  }
+  spec[main].list = list.join('\n\n') + '\n';
+  return { main, common, spec, paths: worktrees.map((w) => join(main, w.name)) };
+}
+const scanOf = (repos, cfg) => scanWorktrees({ cfg, run: fakeGit(Object.assign({}, ...repos.map((r) => r.spec))) });
+
+test('T1 scan: a registered worktree whose name does not match the old ~/vpt-* ~/ghosty-* glob is found', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'virtualpytest-ui-sunrise' }]);
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  assert.ok(!/^(vpt-|ghosty-)/.test('virtualpytest-ui-sunrise'), 'the old glob never visited this name');
+  assert.deepEqual(scan.candidates.map((w) => w.dir), [join(a.main, 'virtualpytest-ui-sunrise')]);
+});
+
+test('T2 live: exact match, sub-directory and a pane path ending in " (deleted)" all count as live', () => {
+  const root = tmp('hw-wt-');
+  const dir = join(root, 'wt-live');
+  mkdirSync(dir, { recursive: true });
+  assert.equal(worktreeIsLive(dir, { panes: [{ path: dir }] }), true, 'exact match');
+  assert.equal(worktreeIsLive(dir, { panes: [{ path: join(dir, 'sub') }] }), true, 'sub-directory');
+  assert.equal(worktreeIsLive(dir, { panes: [{ path: dir + ' (deleted)' }] }), true,
+    'tmux appends " (deleted)" to the cwd of a session whose directory was deleted and recreated under it');
+  assert.equal(worktreeIsLive(dir, { panes: [{ path: join(root, 'other') }] }), false);
+  assert.equal(worktreeIsLive(dir, { panes: [{ path: dir + '-sibling' }] }), false, 'a name prefix is not inside it');
+  assert.equal(worktreeIsLive(dir, { claude: [{ alive: true, cwd: dir + ' (deleted)' }] }), true);
+  assert.equal(worktreeIsLive(dir, { claude: [{ alive: false, cwd: dir }] }), false, 'a dead session is not live');
+  assert.equal(worktreeIsLive(dir, { procCwds: [{ pid: 1, cwd: join(dir, 'sub') }] }), true,
+    'any live process whose /proc cwd is inside the worktree');
+  assert.equal(stripDeletedSuffix('/x/y (deleted)'), '/x/y');
+});
+
+test('T2 scan: a worktree whose pane path ends in " (deleted)" is live-session, never removable', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-live' }]);
+  const dir = join(a.main, 'wt-live');
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  assert.equal(scan.candidates[0].kind, 'removable', 'without a session it is removable');
+  const live = scanWorktrees({ cfg: { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] },
+    panes: [{ name: 'sess', pid: 1, path: dir + ' (deleted)' }], run: fakeGit(a.spec) });
+  assert.equal(live.candidates[0].kind, 'live-session', 'the running session keeps the directory');
+  assert.equal(live.candidates[0].liveSession, true);
+});
+
+test('T3 scope: a repo that is not configured is never enumerated, and a path outside the allowed roots is never a candidate', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-inside' }]);
+  const b = makeRepo(root, 'beta', [{ name: 'wt-other' }]);
+  const only = scanOf([a, b], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  assert.deepEqual(only.candidates.map((w) => w.name), ['wt-inside']);
+  assert.ok(!only.notConsidered.some((x) => x.name === 'wt-other'), 'an unconfigured repo is never enumerated');
+  const both = scanOf([a, b], { worktreeRepos: { alpha: a.main, beta: b.main }, worktreeRoots: [join(root, 'alpha')] });
+  assert.deepEqual(both.candidates.map((w) => w.name), ['wt-inside'], 'outside the allowed roots is never a candidate');
+  assert.ok(both.notConsidered.some((x) => x.name === 'wt-other' && /outside the allowed roots/.test(x.reason)));
+  assert.equal(configRepos({ worktreeRepos: { alpha: 'relative/path' } }).length, 0, 'only absolute repo paths');
+  assert.deepEqual(configRoots({ worktreeRoots: ['/a', 'relative'] }), ['/a']);
+});
+
+test('T4 the main worktree of a repo is never removable', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-a' }]);
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  assert.ok(!scan.candidates.some((w) => w.dir === a.main), 'the main worktree is not a candidate');
+  assert.ok(scan.notConsidered.some((x) => x.dir === a.main && /main worktree/.test(x.reason)));
+});
+
+test('T5 merge target: origin/main when the repo has it, the local main otherwise, and the ref is reported', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [
+    { name: 'wt-merged', mergedRefs: ['refs/remotes/origin/main'] },   // merged upstream, stale local main
+    { name: 'wt-unmerged', mergedRefs: [] },
+  ], { refs: ['refs/remotes/origin/main', 'refs/heads/main'] });
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  const by = Object.fromEntries(scan.candidates.map((w) => [w.name, w]));
+  assert.equal(by['wt-merged'].kind, 'removable', 'merged into origin/main, not into the stale local main');
+  assert.equal(by['wt-merged'].mergedRef, 'origin/main');
+  assert.equal(by['wt-unmerged'].kind, 'unmerged');
+  const b = makeRepo(root, 'beta', [{ name: 'wt-local', mergedRefs: ['refs/heads/main'] }],
+    { refs: ['refs/heads/main'], mergedRefs: ['refs/heads/main'] });
+  const scan2 = scanOf([b], { worktreeRepos: { beta: b.main }, worktreeRoots: [root] });
+  assert.equal(scan2.candidates[0].kind, 'removable', 'no origin/main: the local main is the fallback');
+  assert.equal(scan2.candidates[0].mergedRef, 'main');
+  const report = worktreeReport(scan2, { du: () => 1024 });
+  assert.match(report, /beta: merge target main/, 'the report says which ref was used');
+  assert.match(report, /\| main \| yes \|/, 'the table says which ref was used');
+  assert.equal(mergeTarget(fakeGit(b.spec), b.main).name, 'main');
+});
+
+test('T6 dry run: nothing is removed and the report states the not-considered count and bytes', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-a' }]);
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  assert.equal(scan.candidates.filter((w) => w.kind === 'removable').length, 1);
+  const log = [];
+  runOptionalFixes({ cfg: { fixLevel: 'cleanup+worktrees' }, dryRun: true, wts: scan.candidates, log }, []);
+  assert.match(log.join('\n'), /WOULD remove worktree/, 'the dry run only reports');
+  assert.ok(existsSync(join(a.main, 'wt-a')), 'the dry run removed nothing');
+  const report = worktreeReport(scan, { du: () => 4096 });
+  assert.match(report, /not considered: 1 worktrees, 4 MB/, 'the blind spot is visible: count and bytes');
+  assert.match(report, /not considered \| repo \| reason \| size/);
+});
+
+test('T7 a worktree whose only content is ignored files is not removable, and the report says so', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-ignored', status: '!! build/\n' }]);
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  const w = scan.candidates[0];
+  assert.equal(w.clean, true, 'nothing tracked or untracked is modified');
+  assert.equal(w.ignoredFiles, 1);
+  assert.equal(w.kind, 'ignored-files', 'git worktree remove would delete ignored files silently');
+  assert.notEqual(w.kind, 'removable');
+  const report = worktreeReport(scan, { du: () => 1 });
+  assert.match(report, /ignored-files/);
+  assert.match(report, /\| 1 \| origin\/main \| yes \| no \| ignored-files \|/, 'the ignored file count is in the table');
+});
+
+test('helpers: worktree porcelain, proc cwds and the deleted suffix', () => {
+  const list = parseWorktreePorcelain('worktree /a\nHEAD x\nbranch refs/heads/main\n\nworktree /b\nHEAD y\ndetached\n');
+  assert.deepEqual(list, [{ path: '/a', branch: 'main', detached: false }, { path: '/b', branch: '', detached: true }]);
+  const cwds = readProcCwds([{ pid: 7, mine: true }, { pid: 8, mine: false }],
+    (p) => (p === '/proc/7/cwd' ? '/x/y (deleted)' : '/x/y'));
+  assert.deepEqual(cwds, [{ pid: 7, cwd: '/x/y (deleted)' }], 'only own processes');
 });
