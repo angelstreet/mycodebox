@@ -918,6 +918,21 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
 
   // ---- deploy queue (registry semantics, vpt-lease deploy ...) -----------------------------------------------------
   const hostList = (v) => listOf(v).map((h) => String(h).toLowerCase());
+  // Why a host was left out of the deploy: its restart was deferred because the host was leased. The holder is the provenance
+  // of the deferral (the code was synced, the service was not restarted into it).
+  const skipReason = (env, hosts) => {
+    if (!hosts.length) return '';
+    const holders = [];
+    for (const l of Object.values(S.leases)) {
+      if (l.env !== env || l.mode !== 'exclusive') continue;
+      for (const c of l.resources || []) {
+        const r = P(c);
+        const who = l.agent || '?';
+        if ((r.type === 'host' || r.type === 'device') && hosts.includes(r.host) && !holders.includes(who)) holders.push(who);
+      }
+    }
+    return holders.length ? `restart deferred: host leased by ${holders.join(', ')}` : 'restart deferred: host leased';
+  };
   const findDeploy = (id) => S.deploys.find((d) => d.id === id);
   const depNew = () => newId((x) => S.deploys.some((d) => d.id === x));
   // start / finish / cancel: the runner client (exempt), an owner, the client that requested the deploy, or an in-process caller.
@@ -1004,13 +1019,14 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (a.coalesced_into) nd.coalescedInto = String(a.coalesced_into).slice(0, 64);
         const skipped = hostList(a.skipped_hosts);
         if (skipped.length) nd.skippedHosts = skipped;
+        const failTargets = hostList(a.fail_targets);
         if (typeof a.tail === 'string') nd.tail = a.tail.slice(-6000);
         emit({ t: 'dep_set', deploy: nd, event: 'finish', at: t });
         const own = Object.values(S.leases).filter((l) => l.deployId === d.id && l.system).map((l) => l.id);
         if (own.length) emit({ t: 'release', ids: own, why: 'released', by: nd.runner || RUNNER, reason: 'deploy-finished', at: t });
         let recorded = null;
         if (!nd.coalescedInto) {
-          recorded = ledgerRecord(emit, { env: nd.env, scope: nd.scope, hosts: nd.hosts || [], ref: nd.ref, version: nd.version || '', agent: nd.agent, status: a.status, started: secs(nd.started), deployId: nd.id });
+          recorded = ledgerRecord(emit, { env: nd.env, scope: nd.scope, hosts: nd.hosts || [], ref: nd.ref, version: nd.version || '', agent: nd.agent, status: a.status, started: secs(nd.started), deployId: nd.id, failTargets, skipped, skipReason: skipReason(nd.env, skipped) });
         }
         // hosts left out because they were leased: queue the catch-up deploy (the runner used to do this from SKIPPED_HOSTS)
         let catchup = null;
@@ -1112,8 +1128,16 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       else if (s === 'full') { add('frontend'); add('server'); (r.hosts.length ? r.hosts : [...known, ...('hosts' in map ? ['hosts'] : [])]).forEach(add); }
     }
     const failed = new Set(r.failTargets || []);
+    const skipped = new Set(r.skipped || []);
+    for (const h of skipped) add(h);        // a skipped host is a target too: its code was synced, only the restart was deferred
     for (const tg of targets) {
       const ent = map[tg] || (map[tg] = {});
+      if (skipped.has(tg)) {
+        // synced but not restarted (the host was leased): NOT deployed, with the reason and the provenance of the sync
+        for (const k of Object.keys(ent)) delete ent[k];
+        Object.assign(ent, base, { status: 'synced', reason: r.skipReason || 'restart deferred: host leased' });
+        continue;
+      }
       const ok = r.status === 'done' || (failed.size > 0 && !failed.has(tg) && !(tg === 'hosts' && r.hosts.some((h) => failed.has(h))));
       if (ok) { for (const k of Object.keys(ent)) delete ent[k]; Object.assign(ent, base, { status: 'done' }); } else ent.lastAttempt = { ...base };
     }
