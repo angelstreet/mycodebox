@@ -3,15 +3,18 @@
 // {id,state:"answered|superseded|partial|amended"} or {action:"ledger-close|ledger-amend|log_intent"}. The open ones are what
 // the owner still has to answer; the page shows them in the NEEDS YOU strip.
 import { readFile, appendFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 const CLOSED = new Set(['answered', 'superseded', 'closed', 'resolved', 'withdrawn']);
 
-export function openAsks(lines) {
+// ---- tolerant ledger reads ----
+// The ledger is the evidence of which owner questions are still open, so one damaged line must never hide the
+// rest of the file: a line that does not parse is skipped, never allowed to abort the read, and never passed on
+// silently. Damage is counted and located (line numbers only, never the text: a ledger line is owner wording).
+export function openAsksFromRecords(records) {
   const byId = new Map();
-  for (const line of lines) {
-    let r; try { r = JSON.parse(line); } catch { continue; }
-    if (!r || !r.id) continue;
+  for (const r of records) {
+    if (!r || typeof r !== 'object' || Array.isArray(r) || !r.id) continue;
     const prev = byId.get(r.id) || { id: r.id, open: false };
     if (r.action === 'ledger-close' || CLOSED.has(r.state)) { prev.open = false; byId.set(r.id, prev); continue; }
     if (r.state === 'open' || r.action === 'log_intent' || r.action === 'ledger-amend' || r.state === 'partial' || r.state === 'amended') {
@@ -31,19 +34,133 @@ export function newestPerSession(asks) {
   return asks.filter((a) => { if (!a.session) return true; if (seen.has(a.session)) return false; seen.add(a.session); return true; });
 }
 
+// A line that holds two appended records on one line (two objects written back to back, no newline between them)
+// is split and both objects are recovered, in order. The split is brace-depth and string aware, so a `}` inside a
+// quoted value does not cut a record in half. -> { parts, dangling }: the complete objects, and whatever text
+// after them does not close into one (a truncated tail, or leading garbage) - content that cannot be recovered.
+function splitConcatenated(line) {
+  const parts = [];
+  let depth = 0, start = -1, end = 0, inStr = false, esc = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{') { if (depth === 0) start = i; depth++; continue; }
+    if (c === '}') { depth = Math.max(0, depth - 1); if (depth === 0 && start >= 0) { parts.push(line.slice(start, i + 1)); start = -1; end = i + 1; } }
+  }
+  return { parts, dangling: line.slice(end).trim() };
+}
+
+// Parse the whole ledger text, line by line. -> { records, damaged }.
+// `records` are the objects that could be read, in file order. `damaged` describes every line that was not one
+// clean JSON record, with its 1-based line number and length only - never its content. A missing, empty or
+// unreadable file is handled by the caller (readLedger); this never throws.
+export function parseLedgerText(text) {
+  const records = [], damaged = [];
+  const lines = String(text == null ? '' : text).replace(/^\uFEFF/, '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let r = null;
+    try { r = JSON.parse(line); } catch { r = null; }
+    if (r && typeof r === 'object' && !Array.isArray(r)) { records.push(r); continue; }
+    // Not one whole record: either two records written back to back on the line, or a truncated fragment.
+    const { parts, dangling } = splitConcatenated(line);
+    const good = [];
+    let lost = dangling ? 1 : 0;
+    for (const p of parts) {
+      let o = null;
+      try { o = JSON.parse(p); } catch { o = null; }
+      if (o && typeof o === 'object' && !Array.isArray(o)) good.push(o); else lost++;
+    }
+    if (good.length) { records.push(...good); damaged.push({ line: i + 1, chars: line.length, recovered: good.length, lost, why: 'concatenated' }); }
+    else damaged.push({ line: i + 1, chars: line.length, recovered: 0, lost: Math.max(1, lost), why: 'unparseable' });
+  }
+  return { records, damaged };
+}
+
+// One appendFile per record, serialised per file path (the promise chain, as session-history.js does it): a record
+// that the kernel splits across writes can then not interleave with another writer's record in this process.
+// Two *processes* writing the same ledger are still only as safe as the filesystem's O_APPEND: cross-process
+// serialisation is not guaranteed here, and is not claimed.
+const writeChains = new Map();
+export function withFileLock(file, fn) {
+  const key = resolve(file);
+  const prev = writeChains.get(key) || Promise.resolve();
+  const run = prev.then(async () => { await mkdir(dirname(file), { recursive: true }); return fn(); });
+  const chain = run.then(() => {}, () => {});
+  writeChains.set(key, chain);
+  // drop the entry once this writer is the last one, so a long-lived process does not keep a chain per file
+  chain.then(() => { if (writeChains.get(key) === chain) writeChains.delete(key); });
+  return run;
+}
+
+export function appendRecord(file, record) {
+  return withFileLock(file, () => appendFile(file, JSON.stringify(record) + '\n'));
+}
+
+// reportDamage: one line per distinct damage signature, so a polled dashboard does not repeat itself, and never
+// the ledger text itself.
+const damageSeen = new Map();
+export function reportDamage(file, damaged, readError = null) {
+  const key = resolve(file);
+  const sig = readError ? `err:${readError}` : `${damaged.length}:${damaged.map((d) => `${d.line}x${d.lost}`).join(',')}`;
+  if (damageSeen.get(key) === sig) return;
+  damageSeen.set(key, sig);
+  if (readError) { console.error(`[owner-asks] ledger unreadable (${readError}): ${key} - open asks reported as none`); return; }
+  if (!damaged.length) return;
+  const where = damaged.map((d) => d.line).join(',');
+  const lost = damaged.reduce((n, d) => n + (d.lost || 0), 0);
+  console.error(`[owner-asks] ledger damaged: ${damaged.length} unusable line(s) at line ${where}, ${lost} record(s) lost - the file needs repair`);
+}
+
+// readLedger: the whole file, damage included. -> { records, damaged, readError }. Never throws: a missing file
+// and a read failure both degrade to an empty read, but a read failure is reported as readError so it is not
+// mistaken for "no questions are open".
+export async function readLedger(file) {
+  let text;
+  try { text = await readFile(file, 'utf8'); } catch (e) {
+    const code = e && e.code === 'ENOENT' ? null : String((e && e.code) || (e && e.message) || e);
+    return { records: [], damaged: [], readError: code };
+  }
+  const { records, damaged } = parseLedgerText(text);
+  return { records, damaged, readError: null };
+}
+
+// The open asks plus what was unreadable, for a caller (or a test) that must see the damage.
+// -> { asks, damaged, readError }. The damage is logged once per distinct signature.
+export async function readOpenAsksReport(file) {
+  const { records, damaged, readError } = await readLedger(file);
+  reportDamage(file, damaged, readError);
+  return { asks: newestPerSession(openAsksFromRecords(records)), damaged, readError };
+}
+
 export async function readOpenAsks(file) {
-  try { return newestPerSession(openAsks((await readFile(file, 'utf8')).split('\n').filter(Boolean))); } catch { return []; }
+  return (await readOpenAsksReport(file)).asks;
+}
+
+// openAsks(lines): the open asks of a ledger already split into lines. Damaged lines are skipped, never fatal.
+export function openAsks(lines) {
+  const list = Array.isArray(lines) ? lines : String(lines == null ? '' : lines).split('\n');
+  return openAsksFromRecords(parseLedgerText(list.join('\n')).records);
 }
 
 // A session escalated a new ask: every older open ask of that session is marked superseded by it (appended to the ledger, never edited).
 // -> the superseded ids. A missing ledger is not created.
 export async function supersedeOlder(file, session, newId, { now = new Date(), before = null } = {}) {
   if (!session || !newId) return [];
-  let lines; try { lines = (await readFile(file, 'utf8')).split('\n').filter(Boolean); } catch { return []; }
+  const { records } = await readLedger(file);
   // `before` (ms): only asks written before the stop that raised the new one; an ask with no readable time is left alone
-  const older = openAsks(lines).filter((a) => a.session === session && a.id !== newId && (before == null || Date.parse(a.at) < before));
+  const older = openAsksFromRecords(records).filter((a) => a.session === session && a.id !== newId && (before == null || Date.parse(a.at) < before));
   if (!older.length) return [];
-  await appendFile(file, older.map((a) => JSON.stringify({ at: now.toISOString(), id: a.id, state: 'superseded', by: newId })).join('\n') + '\n');
+  // one appendFile per record: a single write of N lines can be chunked by the kernel, and a chunk boundary inside
+  // one write is how a line ends up half-written. One record per write keeps the damage to one record.
+  for (const a of older) await appendRecord(file, { at: now.toISOString(), id: a.id, state: 'superseded', by: newId });
   return older.map((a) => a.id);
 }
 
@@ -101,10 +218,12 @@ export function checkAsk({ question, what, options, recommend, floor, why } = {}
 }
 
 // The ledger id of the next ask: Q<n> after the highest one already in the ledger (the strip's own numbering).
+// Read tolerantly: a damaged line must not make the numbering reuse an id that the ledger already holds.
 async function nextAskId(file) {
-  let lines = []; try { lines = (await readFile(file, 'utf8')).split('\n').filter(Boolean); } catch { return 'Q1'; }
+  const { records, readError } = await readLedger(file);
+  if (readError) return 'Q1';
   let max = 0;
-  for (const l of lines) { let r; try { r = JSON.parse(l); } catch { continue; } const m = /^Q(\d+)$/.exec(String(r?.id || '')); if (m) max = Math.max(max, Number(m[1])); }
+  for (const r of records) { const m = /^Q(\d+)$/.exec(String(r?.id || '')); if (m) max = Math.max(max, Number(m[1])); }
   return `Q${max + 1}`;
 }
 
@@ -113,15 +232,18 @@ async function nextAskId(file) {
 export async function fileAsk(file, ask, { now = new Date() } = {}) {
   const check = checkAsk(ask);
   if (!check.ok) return check;
-  const id = await nextAskId(file);
-  const record = {
-    at: now.toISOString(), id, session: String(ask.session || '').trim(), question: String(ask.question).trim(),
-    options: ask.options.map((o) => String(o).trim()), recommendation: String(ask.recommend),
-    floor: ask.floor, what: String(ask.what).trim(), why: String(ask.why).trim(), state: 'open',
-  };
-  await mkdir(dirname(file), { recursive: true });
-  await appendFile(file, JSON.stringify(record) + '\n');
-  return { ok: true, id, record };
+  // the next id is read and the record written under one lock: two asks in flight at once must not both read the
+  // same "next" id and write two records under it, which would drop one of the questions from the open set
+  return withFileLock(file, async () => {
+    const id = await nextAskId(file);
+    const record = {
+      at: now.toISOString(), id, session: String(ask.session || '').trim(), question: String(ask.question).trim(),
+      options: ask.options.map((o) => String(o).trim()), recommendation: String(ask.recommend),
+      floor: ask.floor, what: String(ask.what).trim(), why: String(ask.why).trim(), state: 'open',
+    };
+    await appendFile(file, JSON.stringify(record) + '\n');
+    return { ok: true, id, record };
+  });
 }
 
 // The "Decided for you" journal record (manager-decisions.jsonl, the file manager.js appendJournal writes and
@@ -144,7 +266,6 @@ export async function fileDecision(file, { session = '', decision, why, undo, at
   if (!y) return { ok: false, why: '--why is empty: give the reason the owner sees' };
   if (!u) return { ok: false, why: '--undo is empty: say how to revert it, one line' };
   const record = ownerDecisionRecord({ id: id || `d${Date.parse(at) || Date.now()}`, session, decision: d, why: y, undo: u, at });
-  await mkdir(dirname(file), { recursive: true });
-  await appendFile(file, JSON.stringify(record) + '\n');
+  await appendRecord(file, record);
   return { ok: true, id: record.decision_id, record };
 }
