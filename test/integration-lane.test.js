@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createIntegrationLane, validateConfig, normalizeRemoteUrl, FINAL } from '../integration-lane.js';
+import { createIntegrationLane, validateConfig, normalizeRemoteUrl, buildNumber, restamp, FINAL } from '../integration-lane.js';
 import { makeWorld } from './helpers-lane.js';
 import { git, commit } from './helpers-git.js';
 import { tmp } from './helpers-tmp.js';
@@ -18,6 +18,22 @@ const mk = (w, o = {}) => {
   return { lane, stateDir, events };
 };
 const go = async (lane, input, ms = 30000) => { const q = lane.enqueue({ repo: 'env-a', ...input }); return lane.wait(q.id, ms); };
+
+test('buildNumber: the build line of a version stamp; nothing in a file that has no number to move', () => {
+  assert.equal(buildNumber('current:main-2026.10.23-89724\nprevious:main-2026.10.23-89723-01d9a70\n').value, 89724);
+  assert.equal(buildNumber('3\n').value, 3);
+  assert.equal(buildNumber('v1.2.3\n').value, 3);
+  assert.equal(buildNumber('# Changelog\n- 2026: nothing\n'), null);
+  assert.equal(buildNumber(''), null);
+});
+
+test('restamp: the target label with a build number above every side, the rest of the file untouched', () => {
+  assert.equal(restamp('current:main-2026.10.23-89724\nprevious:x\n', ['current:feat-2026.10.23-89730\n']),
+    'current:main-2026.10.23-89731\nprevious:x\n');
+  assert.equal(restamp('current:main-2026.10.23-89724\n', ['current:feat-2026.10.23-89730\n', 'current:main-2026.10.23-89724\n']),
+    'current:main-2026.10.23-89731\n');
+  assert.equal(restamp('# Changelog\n', ['1\n']), null);   // no build number: the caller keeps the file as it is
+});
 
 test('clean merge: merged, pushed to the bare remote, every transition notified', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
@@ -64,16 +80,50 @@ test('conflict outside convention files: returned with the file list (floor and 
   assert.equal(w.main(), before);
 });
 
-test('VERSION.txt conflict: take-target keeps the target file, max-plus-one bumps', async () => {
-  for (const [resolver, want] of [['take-target', '3\n'], ['max-plus-one', '4\n']]) {
-    const w = makeWorld(); w.branch('feat', { 'VERSION.txt': '2\n', 'new.js': 'n\n' }); w.moveMain({ 'VERSION.txt': '3\n' });
-    const { lane } = mk(w, { cfg: { conventionResolver: resolver } });
-    const r = await go(lane, { branch: 'feat' });
-    assert.equal(r.state, 'merged', `${resolver}: ${JSON.stringify(r)}`);
-    assert.equal(w.show('main', 'VERSION.txt'), want, resolver);
-    assert.equal(w.show('main', 'new.js'), 'n\n');
-    assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), new RegExp(`; resolved VERSION\\.txt \\(${resolver}\\)$`), resolver);
-  }
+test('VERSION.txt conflict: take-target keeps the target label and gives main a fresh build number', async () => {
+  const w = makeWorld(); w.branch('feat', { 'VERSION.txt': '2\n', 'new.js': 'n\n' }); w.moveMain({ 'VERSION.txt': '3\n' });
+  const { lane } = mk(w, { cfg: { conventionResolver: 'take-target' } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(w.show('main', 'VERSION.txt'), '4\n');   // above both sides (3 and 2), never the target's own number
+  assert.equal(w.show('main', 'new.js'), 'n\n');
+  assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved VERSION\.txt \(take-target\)$/);
+});
+
+test('VERSION.txt conflict: max-plus-one bumps the number', async () => {
+  const w = makeWorld(); w.branch('feat', { 'VERSION.txt': '2\n', 'new.js': 'n\n' }); w.moveMain({ 'VERSION.txt': '3\n' });
+  const { lane } = mk(w, { cfg: { conventionResolver: 'max-plus-one' } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(w.show('main', 'VERSION.txt'), '4\n');
+  assert.equal(w.show('main', 'new.js'), 'n\n');
+  assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved VERSION\.txt \(max-plus-one\)$/);
+});
+
+// The bug (2026-10-23, virtualpytest): take-target copied main's build number into the merge, so the merge
+// deployed as its parent's build and the branch's stamp was lost.
+test('a conflicting VERSION.txt: the merge gets a build number above main\'s and the branch\'s', async () => {
+  const base = { 'src.js': 'export const a = 0;\n', 'VERSION.txt': 'current:main-2026.10.23-89724\nprevious:main-2026.10.23-89723-01d9a70\n' };
+  const w = makeWorld({ base });
+  w.branch('feat', { 'VERSION.txt': 'current:feat/x-2026.10.23-89725\nprevious:main-2026.10.23-89724-3835904\n', 'new.js': 'n\n' });
+  w.moveMain({ 'VERSION.txt': 'current:main-2026.10.23-89731\nprevious:main-2026.10.23-89730-3f96a82\n' });
+  const { lane } = mk(w);
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(w.show('main', 'VERSION.txt'), 'current:main-2026.10.23-89732\nprevious:main-2026.10.23-89730-3f96a82\n');
+});
+
+test('a clean merge of a changed VERSION.txt: the target label, a build number above both sides, still a merge', async () => {
+  const base = { 'src.js': 'export const a = 0;\n', 'VERSION.txt': 'current:main-2026.10.23-89724\nprevious:main-2026.10.23-89723-01d9a70\n' };
+  const w = makeWorld({ base });
+  w.branch('feat', { 'VERSION.txt': 'current:feat/x-2026.10.23-89725\nprevious:main-2026.10.23-89724-3835904\n', 'new.js': 'x\n' });
+  const { lane } = mk(w);
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(w.show('main', 'VERSION.txt'), 'current:main-2026.10.23-89726\nprevious:main-2026.10.23-89723-01d9a70\n');
+  assert.equal(w.show('main', 'new.js'), 'x\n');
+  assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved VERSION\.txt \(take-target\)$/);
+  assert.equal(git(w.remote, 'rev-list', '--parents', '-n', '1', r.sha).trim().split(' ').length, 3);   // amended, still a merge
 });
 
 test('clean merge of a changed VERSION.txt: main keeps the target file, the merge still has two parents', async () => {
@@ -81,7 +131,7 @@ test('clean merge of a changed VERSION.txt: main keeps the target file, the merg
   const { lane } = mk(w);
   const r = await go(lane, { branch: 'feat' });
   assert.equal(r.state, 'merged', JSON.stringify(r));
-  assert.equal(w.show('main', 'VERSION.txt'), '1\n');       // the target's label, never the branch's
+  assert.equal(w.show('main', 'VERSION.txt'), '2\n');       // the target's label, never the branch's, and a fresh number
   assert.equal(w.show('main', 'new.js'), 'x\n');
   assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved VERSION\.txt \(take-target\)$/);
   assert.equal(git(w.remote, 'rev-list', '--parents', '-n', '1', r.sha).trim().split(' ').length, 3);   // amended, still a merge

@@ -21,7 +21,8 @@ One **integration lane per repository**, run by the mycodebox server, fed by eve
 2. **The lane integrates, one request at a time per repo**, in its own clone (never a session's checkout):
    fetch -> merge evaluation floor (round 7: clean or convention-only conflicts, nothing sensitive) -> merge the branch
    into the current remote target in a fresh worktree (convention files such as `VERSION.txt` resolved by the repo's
-   rule) -> run the repo's test command itself (the lane is the independent tester) -> push the target with a
+   rule and restamped with a fresh build number, so the merge never reuses the target's build number) -> run the repo's
+   test command itself (the lane is the independent tester) -> push the target with a
    compare-and-swap (the target moved: re-merge from the new target, never force) -> wait for remote CI on that exact
    commit (when the repo has CI) -> when the request asked for a deploy and CI is green: queue the deploy (approved) and
    wait for it. Same-scope deploys coalesce in the deploy queue.
