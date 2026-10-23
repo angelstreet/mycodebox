@@ -265,7 +265,7 @@ function readDisk() {
 // mkdtemp prefix (join of tmpdir and a literal) in test/ and scripts/; test/health-watch.test.js asserts the list stays complete.
 export const TMP_PREFIXES = ['owner-ask-', 'owner-ask-2-', 'owner-ask-badfloor-', 'owner-ask-d-', 'owner-ask-ok-', 
   'full-suite-', 'full-suite-state-', 'gtr-',
-  'appr-origin-', 'auto-origin-', 'cbs-', 'ci-watch-', 'cs-', 'daily-', 'dec-origin-', 'done-check-', 'dr-',
+  'appr-origin-', 'auto-origin-', 'cbs-', 'ci-watch-', 'cs-', 'daily-', 'dec-origin-', 'diskguard-', 'done-check-', 'dr-',
   'fake-proc-', 'fake-run-', 'fallback-', 'fallback-node-', 'g8-', 'g8-daily-', 'ghosty-adopt-', 'ghosty-al-',
   'ghosty-approved-', 'ghosty-auto-', 'ghosty-autonomy-', 'ghosty-dedupe-', 'ghosty-dep-', 'ghosty-ds-',
   'ghosty-ds-cli-', 'ghosty-fb-', 'ghosty-filt-', 'ghosty-fixes-', 'ghosty-form-', 'ghosty-hold-', 'ghosty-jevb-',

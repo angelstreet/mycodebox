@@ -7,6 +7,7 @@ import { icon, hydrateIcons } from '/icons.js';
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { suggestAgent, limitStopNote } from '/policy.js';
 import { needsOwner } from '/buttons.js';
+import { diskBannerView, diskDetailNote } from '/disk-banner.js';
 import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
@@ -95,6 +96,7 @@ const state = {
   sentAt:    {},                // session -> ms epoch of last send from this device
   prevState: {},                // session -> last seen state (for transition alerts)
   leases:    null,
+  disk:      null,              // the disk-space policy reading (reason code disk_low)
   deploys:   null,              // {ok, error, enabled, deploys[], running, lastRef} from the registry via the runner
   notify:    false,
   pushOn:    false,
@@ -726,6 +728,8 @@ function connectStatus() {
         onDeploys(msg.deploys);
       } else if (msg.type === 'health') {
         onHealth(msg.health);
+      } else if (msg.type === 'disk') {
+        onDisk(msg.disk);
       } else if (msg.type === 'quota') {
         onQuota(msg.quota);
       } else if (msg.type === 'credits') {
@@ -804,6 +808,48 @@ function renderDeployBanner() {
   }).join('') + (blockers.length ? `<span class="dblk" title="${escapeHtml(blockers.join(', '))}">${icon('lock', 12)}blocked by: <b>${escapeHtml(blockers.join(', '))}</b></span>` : '');
   for (const b of el.querySelectorAll('[data-dep-open]')) b.onclick = () => openPlatforms({ deploy: b.dataset.depOpen });
   syncAlertRowVisibility();
+}
+
+// ---------- disk banner: the disk-space safety policy (reason code disk_low) ----------
+// Amber while the volume is only warned about, red while new work is refused. Running sessions are never blocked.
+const diskGb = (b) => `${(Number(b || 0) / 2 ** 30).toFixed(Number(b || 0) < 10 * 2 ** 30 ? 1 : 0)} GB`;
+
+function onDisk(d) {
+  state.disk = d || null;
+  renderDiskBanner();
+}
+
+function renderDiskBanner() {
+  const el = $('#diskBanner');
+  if (!el) return;
+  const v = diskBannerView(state.disk);
+  if (!v.show) { el.classList.add('hidden'); el.dataset.key = ''; el.dataset.reason = ''; el.innerHTML = ''; return; }
+  if (el.dataset.key === v.key) return;
+  el.dataset.key = v.key;
+  el.dataset.reason = v.reason;
+  el.className = `diskan ${v.hold ? 'hold' : 'warn'}`;
+  el.innerHTML = `<span class="dicon">${icon('alert', 14)}</span>`
+    + `<span class="dlbl">${v.label}</span>`
+    + `<span class="dtxt" title="${escapeHtml(v.text)}">${escapeHtml(v.text)}</span>`
+    + `<span class="dmore" title="What is using the space">${icon('chevron-right', 13)}</span>`;
+  el.onclick = () => openDiskDetail();
+}
+
+async function openDiskDetail() {
+  // The detail (top consumers) is read live; the banner itself never waits for it.
+  try {
+    const r = await fetch('/api/disk');
+    if (r.ok) onDisk(await r.json());
+  } catch { /* the cached reading stays */ }
+  const d = state.disk || {};
+  openSheet('Disk space', (api) => {
+    const pct = (x) => (x && x.pct != null ? `${Math.round(x.pct)}%` : '–');
+    const vol = (d.disks || []).map((x) => `<div class="dk-row"><span class="dk-k">${escapeHtml(x.path)}</span><b>${pct(x)}</b><i>${x.free != null ? `${diskGb(x.free)} free` : ''}</i></div>`).join('');
+    const top = (d.top || []).map((t) => `<div class="dk-row"><span class="dk-k" title="${escapeHtml(t.path)}">${escapeHtml(t.path)}</span><b>${diskGb(t.bytes)}</b><i>${escapeHtml(t.label || '')}</i></div>`).join('');
+    api.body.innerHTML = `<p class="dk-note">${escapeHtml(diskDetailNote(d))}</p>`
+      + `<div class="dk-sec">Volumes</div>${vol || '<div class="sheet-empty">no reading</div>'}`
+      + `<div class="dk-sec">Biggest folders</div>${top || '<div class="sheet-empty">nothing measured yet</div>'}`;
+  });
 }
 
 // ---------- deploy queue (TASK-44 phase 7) ----------
@@ -935,6 +981,7 @@ async function fetchInitial() {
   }
   fetchLeases();
   fetch('/api/deploys').then((r) => r.json()).then(onDeploys).catch(() => {});
+  fetch('/api/disk').then((r) => r.ok ? r.json() : null).then(onDisk).catch(() => {});
 }
 
 // ----- session cap + parked sessions -----

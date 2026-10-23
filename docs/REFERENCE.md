@@ -130,6 +130,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `HEALTH_MS`   | `5000`  | host health sample cadence (CPU, load, RAM, disk) |
 | `HEALTH_DISKS`| `/`     | comma-separated mount points shown in the health strip |
 | `HEALTH_WARN_PCT` / `HEALTH_CRIT_PCT` | `85` / `95` | amber / red thresholds for CPU, RAM and disk; disk at critical pushes to ntfy. Load is amber at 1x cores, red at 2x |
+| `GHOSTY_DISK_GUARD` / `GHOSTY_DISK_HOLD_PCT` / `GHOSTY_DISK_WARN_PCT` / `GHOSTY_DISK_OVERRIDE` / `GHOSTY_DISK_PATHS` | on / `90` / `85` / off / the state dir and the V2 work root | the disk-space safety policy: from 85 % a banner shows, at 90 % new work is refused with the reason code `disk_low`. See [Disk-space safety policy](#disk-space-safety-policy) |
 | `JEV_URL` / `JEV_API_KEY` | unset | AI manager: the VPT server's `POST /server/ai/decide` and its `API_KEY` (Jev for ambiguous stalls). Unset = rules only |
 | `VPT_TEAM_ID` | unset | team of the VPT server's decision log (`<team-uuid>`, shown by the server's `/server/health`). With it the manager's Jev calls are written to the product's decision log (`log:true`, `team_id`, `refs`), outcomes are written back, and the Jev & AI tab / decisions page can read the server. Unset = Jev calls are not logged, those pages use ghosty's own log |
 | `JEV_DAILY_USD` / `JEV_DAILY_CALLS` | `0.25` / `2000` | Jev budget per UTC day; over it, ambiguous stalls stay with the owner |
@@ -190,6 +191,62 @@ Langfuse 3.x observations; validate compatibility against your installed version
   future v4 evaluator).
 - **Panel**: manager panel -> "Langfuse" links (scores, dataset, evaluator, prompt) from `LANGFUSE_PUBLIC_URL` (else
   `LANGFUSE_URL`) and `LANGFUSE_PROJECT` (default `codebox-usage`).
+
+
+## Disk-space safety policy
+
+`disk-guard.js` turns a full disk from a report into a rule. Before, the dashboard only *showed* that the disk was
+getting full (the health strip and the ntfy push). Now the product refuses **new work** with a reason code, the way
+Cloudroom does, and the owner sees a persistent banner while it applies.
+
+**The rule**
+
+| state | when | what happens |
+|---|---|---|
+| ok | below 85 % used | nothing |
+| warn | 85 % or more used | a persistent banner shows with the reason code `disk_low`; new work still starts |
+| hold | 90 % or more used | the banner shows (red) **and** new work is refused with HTTP 409 and the reason code `disk_low` |
+
+**What the hold refuses** (the only things):
+
+- `POST /api/sessions` — starting a new dashboard session;
+- `POST /api/sessions/:name/resume` — resuming a parked session (it starts an agent and writes more to the disk);
+- `POST /api/v2/tasks` — creating a new V2 task;
+- a new V2 task worktree: the goal loop waits with the reason `disk_low` instead of creating one.
+
+**What the hold never blocks**: sessions that are already running, sends, deploys, the integration lane, the AI
+manager, parking a session (that frees space) and every read-only endpoint. An unreadable volume produces no reading
+and no decision: a failed reading never stops work.
+
+**The switch** — the policy is ON by default. The owner's setting in `$GHOSTY_STATE_DIR/manager.json` wins over the
+environment, and both are read fresh, so a change applies without a restart:
+
+```json
+{ "diskGuard": { "enabled": true, "holdPct": 90, "warnPct": 85, "override": false, "paths": ["/"] } }
+```
+
+| key / var | default | meaning |
+|---|---|---|
+| `diskGuard.enabled` / `GHOSTY_DISK_GUARD` | on | the whole policy: banner and refusal. `false` / `0` turns it off |
+| `diskGuard.holdPct` / `GHOSTY_DISK_HOLD_PCT` | `90` | used % at which new work is refused. `0` refuses always |
+| `diskGuard.warnPct` / `GHOSTY_DISK_WARN_PCT` | `85` | used % at which the banner shows |
+| `diskGuard.override` / `GHOSTY_DISK_OVERRIDE` | off | the owner's explicit override: the hold is lifted, the banner stays (the disk is still low) |
+| `diskGuard.paths` / `GHOSTY_DISK_PATHS` | the state dir and the V2 work root | the volumes to watch; the same volume twice is watched once |
+
+**The volumes**: the state dir (`$GHOSTY_STATE_DIR`) and the V2 work root (`GHOSTY_V2_WORK_ROOT`) when it is set.
+**The top consumers**: the banner's detail (`GET /api/disk`) lists the biggest folders of the state dir, the V2 work
+root and the git worktrees (`du`, read-only, cached for 5 minutes). Nothing is ever deleted by the policy.
+
+**The owner-visible text** (plain words, no jargon):
+
+> The disk is 91% full on / (2.0 GB free). Starting a new session is paused until it drops below 90%. Sessions that
+> are already running are not affected — free some space and try again.
+
+The 409 body carries `{"ok": false, "error": "<that text>", "reason": "disk_low"}`. The dashboard banner shows the
+same thing in one line; tapping it opens the detail with the volumes and the biggest folders.
+
+`GET /api/disk` returns the whole reading: `{ok, reason, level, hold, blocked, enabled, override, holdPct, warnPct,
+disks[], worst, top[]}`. The reading is also pushed on `/ws/status` as `{type:'disk', disk}` every health tick.
 
 
 ## Voice mode (hands-free)

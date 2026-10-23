@@ -27,7 +27,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Concern | Entry points | Tests |
 |---|---|---|
 | HTTP routes, WebSockets, tmux, static files | `server.js`; route inventory at its top, handlers below | `test/send-guard.test.js`, `test/state.test.js` |
-| Browser views, reader, input, icons | `public/app.js`, `public/index.html`, `public/style.css`, `public/icons.js` | `test/buttons.test.js`, `test/ask-popup.test.js` |
+| Browser views, reader, input, icons | `public/app.js`, `public/index.html`, `public/style.css`, `public/icons.js`, `public/disk-banner.js` (the disk banner's text) | `test/buttons.test.js`, `test/ask-popup.test.js`, `test/disk-banner.test.js` |
 | PWA cache and push | `public/sw.js`, `public/sw-update.js`, `push.js` | `test/push.test.js`, `test/push-tiers.test.js` |
 | Stop classification and safe automation | `stall.js`, `manager.js`, `triage.js`, `router.js`, `jev-breaker.js` | `test/stall.test.js`, `test/auto.test.js`, `test/manager.test.js` |
 | Separate page mockups | `public/page-preview.html`, `public/page-preview.css`, `public/page-preview.js` | Sample data only; linked from the More menu |
@@ -36,6 +36,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Session history (start/end log, `GET /api/history`) | `session-history.js`, `history-view.js`, `scripts/cbsession`; UI: `public/history-view.js` (More menu > History, `openSessionHistory` in `public/app.js`) | `test/session-history.test.js`, `test/history-view.test.js`, `test/history-ui.test.js`, `test/cbsession.test.js`, `test/v2-server-wiring.test.js` (history) |
 | Voice mode (hands-free queue, spoken answer matching, spoken digest, notification buttons) | `voice.js` (`/api/voice/*`), `push.js` (`voiceId`, `actions`); UI: `public/voice-view.js` (More menu > Voice mode, `/?voice=1`), `public/sw.js` (notification actions) | `test/voice.test.js`, `test/voice-view.test.js`, `test/voice-sw.test.js` |
 | Usage, quota, health | `usage/`, `usage-view.js`, `quota.js`, `health.js`, `turn-meter.js` | `test/usage.test.js`, `test/quota-live.test.js`, `test/turn-meter.test.js` |
+| Disk-space safety policy (banner, 409 `disk_low`, top consumers) | `disk-guard.js`, `server.js` (`GET /api/disk`, the start/resume refusals), `orchestration/worktrees.js` (`admission`), `orchestration/goal-loop.js` (the `disk_low` wait) | `test/disk-guard.test.js`, `test/disk-guard-server.test.js` |
 | Optional platform operations | `deploy-runner.js`, `leases.js`, `lease-watch.js`, `handoffs.js`, `vpt-locks.js`, `ci-watch.js`, `rules-watch.js`, `done-check.js` | `test/deploy-runner.test.js`, `test/lease-watch.test.js`, `test/handoffs.test.js`, `test/ci-watch.test.js`, `test/rules-watch.test.js`, `test/done-check.test.js` |
 | Central lease service (one writer of leases and the deploy queue; `/api/lease/v1`; design in `docs/v2/LEASES-CENTRAL.md`) | `lease-service.js`, `lease-routes.js`, `scripts/lease-token.js`, `scripts/lease-import.js`, `scripts/lease-export.js` | `test/lease-service.test.js`, `test/lease-routes.test.js` |
 | Remote stops (Mac Stop hook intake, `/api/remote/v1`; install in `docs/MAC-HOOK.md`) | `remote-stops.js`, `scripts/mac-stop-hook.sh`, `manager.js` (marked remote hook block) | `test/remote-stops.test.js`, `test/mac-hook.test.js` |

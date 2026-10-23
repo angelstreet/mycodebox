@@ -193,3 +193,25 @@ test('ignored files block removal (they would be deleted with the tree)', async 
   await rejects(s.wt.remove(a.path, { retain: false, owner: 'o' }), 'E_IGNORED');
   assert.ok(fs.existsSync(path.join(a.path, 'x.local')));
 });
+
+test('the disk-space policy refuses a new worktree and leaves nothing behind', async () => {
+  const s = setup('r12');
+  const asked = [];
+  const wt = createWorktrees({
+    root: s.root, repoAllowlist: [s.dir], leases: s.leases,
+    admission: async (info) => { asked.push(info.task_id); return { ok: false, code: 'E_DISK_LOW', message: 'The disk is 93% full. New work is paused.' }; },
+  });
+  await rejects(wt.create({ repo: s.dir, task_id: 'task-disk', base_sha: s.sha, owner: 'o' }), 'E_DISK_LOW');
+  assert.deepEqual(asked, ['task-disk']);
+  assert.ok(!fs.existsSync(path.join(s.root, 'task-disk')), 'no worktree was created');
+  const branch = (() => { try { return sh(s.dir, 'rev-parse', '--verify', '--quiet', 'refs/heads/v2/task/task-disk'); } catch { return null; } })();
+  assert.equal(branch, null, 'no branch was created');
+  // The lease is free again: the refusal happened before anything was taken.
+  assert.equal(await isHeld(s, 'task-disk'), false);
+});
+
+test('no admission hook means no change: worktrees are created as before', async () => {
+  const s = setup('r13');
+  const a = await s.wt.create({ repo: s.dir, task_id: 'task-plain', base_sha: s.sha, owner: 'o' });
+  assert.ok(fs.existsSync(a.path));
+});
