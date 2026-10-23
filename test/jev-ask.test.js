@@ -369,3 +369,20 @@ test('stop round 12 case 5: STATUS: needs-manager stops are manager items (no to
     assert.equal(JSON.parse(stdout).pick, 'answer', 'recommended+reversible -> manager answers');
   } finally { await rm(stateDir, { recursive: true, force: true }); }
 });
+
+test('stop technical gate records yes for a scoped CI credential and no for a drone slot or floor item', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    for (const [facts, expected] of [
+      [{ touches: ['credentials'], purpose_scoped_credential: true, recommended: true, reversible: true }, 'yes'],
+      [{ touches: ['physical'], recommended: true, reversible: true }, 'no'],
+      [{ touches: ['money'], recommended: true, reversible: true }, 'no'],
+      [{ touches: ['credentials'], purpose_scoped_credential: true, forbidden_topic: true, recommended: true, reversible: true }, 'no'],
+    ]) {
+      const out = await runCli(['stop', '--facts', JSON.stringify(facts)], { env });
+      assert.equal(out.code, 0, out.stderr);
+      assert.equal(JSON.parse(out.stdout).technical, expected);
+    }
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});

@@ -2,7 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { POINTS, STOP_V1, STOP_FLOOR_TOPICS, floor, ruleDefault, buildRequest, pick, decide } from '../router.js';
+import { POINTS, STOP_V1, STOP_FLOOR_TOPICS, floor, ruleDefault, buildRequest, pick, decide, technicalStop } from '../router.js';
+
+test('stop technical gate: own CI credential is technical, physical and money/customer are not', () => {
+  const ci = technicalStop({ touches: ['credentials'], purpose_scoped_credential: true, recommended: true, reversible: true });
+  assert.deepEqual(ci, { technical: 'yes', why: 'a dedicated, least-privilege credential for our own CI is contained and reversible' });
+  assert.equal(technicalStop({ touches: ['physical'], recommended: true, reversible: true }).technical, 'no');
+  assert.equal(technicalStop({ touches: ['money'], recommended: true, reversible: true }).technical, 'no');
+  assert.equal(technicalStop({ touches: ['customers'], recommended: true, reversible: true }).technical, 'no');
+  assert.equal(technicalStop({ touches: ['infra'], recommended: true, reversible: true }).technical, 'yes');
+});
 
 // ---- floors forced (no call) for every touches entry ----
 for (const topic of STOP_FLOOR_TOPICS) {

@@ -13,7 +13,7 @@
 // When unset, values fall back to KEY=VALUE lines in <repoRoot>/.env (resolved relative to this script's
 // own directory: ~/ghosty-sessions/.env when run there). No external dependency.
 //
-// stdout: exactly ONE JSON line: { point, pick, confidence, source, ruleDefault, allowed, decision_id }
+// stdout: exactly ONE JSON line: { point, pick, technical, why, confidence, source, ruleDefault, allowed, decision_id }
 // stderr: one-line error on bad usage (exit 2)
 // Side effect: appends one line per call to <state dir>/manager-asks.jsonl
 //
@@ -74,7 +74,7 @@ const EXAMPLES = {
   retry: { reject: { round: 1, reason: 'tests failed' } },
   model: { work: { touches: ['app'], repo_public: false, size: 'small' } },
   merge: { repo: 'demo', branch: 'feature/x', target: 'main', conflicts: [], tests: 'green', docs_only: false, files: 3, floor_reasons: [] },
-  stop: { session: 's1', agent: 'claude', case: 'menu_recommended', priority: 'P1', forbidden_topic: false, closing_text: 'I recommend option B (smaller scope, can be reverted).', proposed_reply: 'Pick B.', recommended: true, reversible: true, delegated: true },
+  stop: { session: 's1', agent: 'claude', case: 'owner_decision', touches: ['credentials'], purpose_scoped_credential: true, closing_text: 'Use a dedicated forced-command key for our own CI.', recommended: true, reversible: true },
 };
 function help() {
   const examples = Object.keys(POINTS).map((p) => {
@@ -199,6 +199,7 @@ async function main() {
     source: out.source,
     ruleDefault: out.ruleDefault,
     allowed: out.allowed,
+    ...(out.technical ? { technical: out.technical, why: out.why } : {}),
     decision_id: out.decision_id || null,
     ...(out.source === 'error' ? { error: out.error } : {}),
     ...(jevDisabled && out.source !== 'forced' ? { jev: 'disabled' } : {}),
@@ -218,6 +219,7 @@ async function main() {
       confidence: out.confidence,
       source: out.source,
       ruleDefault: out.ruleDefault,
+      ...(out.technical ? { technical: out.technical, why: out.why } : {}),
       decision_id: out.decision_id || null,
       ...(jevDisabled && out.source !== 'forced' ? { skipped: 'jev_disabled' } : {}),
       ...(args.flags.task ? { task: String(args.flags.task).slice(0, 500) } : {}),

@@ -194,6 +194,23 @@ const retry = {
 // and physical actions on a device force escalation to the owner. Migrations, merge/push, deploys/restarts,
 // generated app secrets, infra config and technical choices are manager decisions, not owner items.
 const STOP_FLOOR_TOPICS = ['money', 'credentials', 'customers', 'shared_data_delete', 'physical'];
+// Decide this before the answer/escalation pick. A purpose-scoped credential for our own CI is
+// engineering wiring, while personal/shared/third-party credentials remain a hard floor.
+export function technicalStop(facts = {}) {
+  const touches = Array.isArray(facts.touches) ? facts.touches : [];
+  const ownCiCredential = touches.includes('credentials') &&
+    (facts.credential_scope === 'own_ci' || facts.purpose_scoped_credential === true);
+  const hard = facts.forbidden_topic || ['permission', 'owner_action', 'waiting_deploy'].includes(facts.case) ||
+    touches.some((t) => STOP_FLOOR_TOPICS.includes(t) && !(t === 'credentials' && ownCiCredential));
+  if (hard) return { technical: 'no', why: 'a hard-floor topic requires the owner, even when the question is technical' };
+  if (facts.physical_action === true || touches.includes('physical')) return { technical: 'no', why: 'a physical-world action requires the owner to be present' };
+  if (ownCiCredential) return { technical: 'yes', why: 'a dedicated, least-privilege credential for our own CI is contained and reversible' };
+  if (facts.recommended === true || facts.reversible === true || facts.delegated === true ||
+      touches.some((t) => ['app', 'ci', 'infra', 'migration', 'deploy', 'tests'].includes(t))) {
+    return { technical: 'yes', why: 'this is a contained engineering choice with a manager-owned path' };
+  }
+  return { technical: 'no', why: 'no contained engineering choice or reversible recommendation was established' };
+}
 const stop = {
   usage: 'text.decision.manager',
   options: {
@@ -370,7 +387,7 @@ export function pick(point, facts, jevJson, { threshold = 0.7 } = {}) {
   const rulePick = f.allowed.includes(rd) ? rd : (f.allowed[0] || null);
 
   if (f.forced) {
-    return { choice: f.forced, source: 'forced', confidence: 1, ruleDefault: rulePick, allowed: f.allowed };
+    return { choice: f.forced, source: 'forced', confidence: 1, ruleDefault: rulePick, allowed: f.allowed, ...(point === 'stop' ? technicalStop(facts) : {}) };
   }
   const a = jevJson && jevJson.answers && jevJson.answers.choice;
   const ok = !!(jevJson && jevJson.success !== false && a);
@@ -379,9 +396,9 @@ export function pick(point, facts, jevJson, { threshold = 0.7 } = {}) {
   const confidence = Number.isFinite(confidenceRaw) ? confidenceRaw : null;
   const allowed = f.allowed;
   if (ok && choice != null && allowed.includes(choice) && confidence != null && confidence >= threshold) {
-    return { choice, source: 'jev', confidence, ruleDefault: rulePick, allowed };
+    return { choice, source: 'jev', confidence, ruleDefault: rulePick, allowed, ...(point === 'stop' ? technicalStop(facts) : {}) };
   }
-  return { choice: rulePick, source: 'rule', confidence: confidence ?? 0, ruleDefault: rulePick, allowed };
+  return { choice: rulePick, source: 'rule', confidence: confidence ?? 0, ruleDefault: rulePick, allowed, ...(point === 'stop' ? technicalStop(facts) : {}) };
 }
 
 // ---- end-to-end: floor -> buildRequest -> post -> pick ----
@@ -394,7 +411,7 @@ export async function decide(point, facts, { post, teamId, refs, threshold } = {
   if (f.forced) {
     const rd = p.ruleDefault(facts, f.allowed);
     const rulePick = f.allowed.includes(rd) ? rd : (f.allowed[0] || null);
-    return { choice: f.forced, source: 'forced', confidence: 1, ruleDefault: rulePick, allowed: f.allowed };
+    return { choice: f.forced, source: 'forced', confidence: 1, ruleDefault: rulePick, allowed: f.allowed, ...(point === 'stop' ? technicalStop(facts) : {}) };
   }
   if (typeof post !== 'function') return pick(point, facts, null, { threshold });
   const body = buildRequest(point, facts, { teamId, refs });
