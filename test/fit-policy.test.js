@@ -40,3 +40,21 @@ test('fitAction: two clients cannot ping-pong: simulate a phone in use and an id
   assert.ok(flips <= MAX_RECLAIMS + 1, `${flips} flips in two minutes`);
   assert.equal(size, 'phone', 'the client in use ends up with the size');
 });
+
+import { fitSatisfied, ROW_SLACK } from '../public/fit-policy.js';
+
+test('fitSatisfied: at our width and about our height is good enough (an address bar sliding in and out is not a reason to resize the window)', () => {
+  assert.equal(fitSatisfied({ cols: 53, rows: 30, curC: 53, curR: 30 }), true);
+  assert.equal(fitSatisfied({ cols: 53, rows: 30, curC: 53, curR: 30 - ROW_SLACK }), true, 'a few rows off: still fine');
+  assert.equal(fitSatisfied({ cols: 53, rows: 30, curC: 53, curR: 30 - ROW_SLACK - 1 }), false, 'a real height change asks again');
+  assert.equal(fitSatisfied({ cols: 53, rows: 30, curC: 188, curR: 30 }), false, 'another client widened it: not satisfied');
+});
+
+test('fitSatisfied: the 60-column minimum: asked 53, granted 60, the pane is at 60 -> satisfied, so a touch does not ask again', () => {
+  const granted = { cols: 60, rows: 30, askedCols: 53, askedRows: 30 };
+  assert.equal(fitSatisfied({ cols: 53, rows: 30, curC: 60, curR: 30, granted }), true);
+  assert.equal(fitSatisfied({ cols: 53, rows: 34, curC: 60, curR: 31, granted }), true, 'address bar: rows moved a little');
+  assert.equal(fitSatisfied({ cols: 49, rows: 30, curC: 60, curR: 30, granted }), false, 'we want another width now');
+  assert.equal(fitSatisfied({ cols: 53, rows: 30, curC: 188, curR: 30, granted }), false, 'the pane is no longer at what the server granted');
+  assert.equal(fitSatisfied({ cols: 53, rows: 30, curC: 60, curR: 30, granted: null }), false, 'no grant to lean on');
+});
