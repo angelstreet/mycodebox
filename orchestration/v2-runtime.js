@@ -198,7 +198,7 @@ const RUNTIMES = { claude: 'claude.js', codex: 'codex.js', minimax: 'minimax.js'
 // mcode models (the adapter qualifies them as minimax/<model>); "default" means mcode's own default.
 const passModel = (runtime, model) => !!model && (runtime === 'claude' || (runtime === 'minimax' && model !== 'default') || (runtime === 'opencode' && model.includes('/')));
 
-export async function createV2Runtime({ stateDir, env = process.env, repoRoot, log = (m) => console.log(m), safetyMs = 60_000, retryMs = 15_000, onRun = null } = {}) {   // onRun: optional history hook ({event:'start'|'end', name, provider, model, cwd, role}); a failure there never touches a run
+export async function createV2Runtime({ stateDir, env = process.env, repoRoot, log = (m) => console.log(m), safetyMs = 60_000, retryMs = 15_000, onRun = null, admission = null } = {}) {   // onRun: optional history hook ({event:'start'|'end', name, provider, model, cwd, role}); a failure there never touches a run
   if (!stateDir || !repoRoot) throw new Error('v2 runtime: stateDir and repoRoot required');
   const v2dir = path.join(stateDir, 'v2');
   const store = createTaskStore({ dir: v2dir });   // the one store handle of this process (D-017)
@@ -290,7 +290,7 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
     // A claude run may spend up to its own --max-budget-usd (the same bound start() passes), so never estimate it lower:
     // otherwise a task could overspend its cap by up to one run. Other runtimes: null = the loop's default (measured mean / registry figure).
     const estimateRun = ({ task, entry }) => claudeRunEstimate(entry, cfg.claudeRunUsd, info.get(task?.task_id)?.capLeft);
-    const loop = createGoalLoop({ store, registry, adapters, estimateRun, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases }),
+    const loop = createGoalLoop({ store, registry, adapters, estimateRun, worktrees: createWorktrees({ root: wtRoot, repoAllowlist: cfg.repos, leases, admission }),
       worktreeRoot: roots[0], reviewRoot: roots[1], verifier: createVerifier({ tmpRoot: path.join(cfg.workRoot, 'vtmp'), artifactRoot: path.join(cfg.workRoot, 'artifacts') }),
       leases, route: withHistory(pinnedRoute(realRoute), historyProvider({ store, registry, log })), allowFake, hostId: HOST_ID, integrate: createServerIntegrate({ git, pushRemote: cfg.pushRemote }),
       opsRequester: requester, incidents, shadow: env.GHOSTY_ROUTING_SHADOW === '0' ? null : createRoutingShadow({ stateDir, env }), ...(cfg.runTimeoutMs ? { runTimeoutMs: cfg.runTimeoutMs } : {}) });

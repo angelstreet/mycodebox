@@ -815,6 +815,12 @@ export function createGoalLoop({
             return decide(ctx, decision('lease_unavailable', 'Worktree lease held with no worktree recorded: proceed?', [alt('wait for the lease to lapse', 'never two holders', 'delay'), alt('steal it', 'progress', 'unfenced')],
               'wait for the lease to lapse', { evidence: [`holder ${e.holder?.owner ?? 'unknown'}`], expected_effect: 'retry create after expiry', rationale: 'Fail closed on an existing lease.' }),
             { patch: { wait: { reason: 'lease_held', until_ms: until, resume_to: 'clarified' } }, to: 'waiting', reason: 'worktree lease held' });
+          }
+          else if (e.code === 'E_DISK_LOW') {
+            // The disk-space policy refused the worktree: no new work until there is room again. Wait, do not fail.
+            return decide(ctx, decision('disk_low', 'New work is refused while the disk is full: proceed?', [alt('wait until the disk has room', 'no new work on a full disk', 'delay'), alt('proceed anyway', 'progress', 'the worktree may fail to be written')],
+              'wait until the disk has room', { evidence: [String(e.message || e.code).slice(0, 300)], expected_effect: 'retry create in 5 minutes', rationale: 'Disk-space safety policy (disk_low).' }),
+            { patch: { wait: { reason: 'disk_low', until_ms: now() + 5 * 60_000, resume_to: 'clarified', diagnosis: String(e.message || e.code).slice(0, 300), next_action: 'free disk space, then resume the task' } }, to: 'waiting', reason: 'disk low' });
           } else throw e;
         }
       }

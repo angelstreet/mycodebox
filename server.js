@@ -72,6 +72,8 @@
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
 //   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
+//   GET  /api/disk              → the disk-space policy: level, thresholds and the top consumers (also pushed on /ws/status)
+//                                 at 90 % used, starting new work is refused with 409 and the reason code `disk_low`
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
 //   GET|PUT /api/layout         → the session list's order / pins / groups ({order,pins,groups,groupNames,collapsed}); PUT merges the keys it carries
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
@@ -109,6 +111,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
+import { createDiskGuard } from './disk-guard.js';
 import { createPush, createAlerts, tierConfig, isQuietHours } from './push.js';
 import { launchConfig, launchWarnings } from './launch-config.js';
 import { trustFolder } from './trust.js';
@@ -711,6 +714,16 @@ loadAssetlinks(process.env, STATE_DIR).then((a) => {
 // manager.json key `managerSessions` (default ['manager']) — same source the scorecard reads.
 const MANAGER_SESSIONS_DEFAULT = ['manager'];
 const managerConfigFile = join(STATE_DIR, 'manager.json');
+// Disk-space safety policy (disk-guard.js): the state dir and the work root are watched; at 90 % used new work is
+// refused with 409 `disk_low`, from 85 % a banner shows. Running sessions, sends, deploys and the manager are never blocked.
+const diskGuard = createDiskGuard({
+  configFile: managerConfigFile,
+  defaultPaths: [STATE_DIR, ...(process.env.GHOSTY_V2_WORK_ROOT ? [process.env.GHOSTY_V2_WORK_ROOT] : [])],
+  stateDir: STATE_DIR,
+  workRoot: process.env.GHOSTY_V2_WORK_ROOT || null,
+  repoRoot: dirname(fileURLToPath(import.meta.url)),
+  log: (...m) => console.error(...m),
+});
 const loadManagerSessions = () => {
   try {
     const j = JSON.parse(readFileSync(managerConfigFile, 'utf8'));
@@ -1086,6 +1099,9 @@ async function healthTick() {
     } else diskCrit.delete(d.path);
   }
   broadcastStatus({ type: 'health', health });
+  // The disk-space policy travels with it: the dashboard banner follows this (reason code `disk_low`).
+  try { broadcastStatus({ type: 'disk', disk: await diskGuard.status() }); }
+  catch (err) { console.error('[disk-guard]', err.message); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1447,6 +1463,7 @@ let v2 = null;
 if (V2_ON) {
   const { createV2Runtime } = await import('./orchestration/v2-runtime.js');
   v2 = await createV2Runtime({ stateDir: STATE_DIR, env: process.env, repoRoot: dirname(fileURLToPath(import.meta.url)),
+    admission: () => diskGuard.admit(),   // the disk-space policy refuses a new worktree while the disk is low
     onRun: (r) => historyLog(r.event === 'start'
       ? { kind: 'session.started', name: r.name, provider: r.provider, model: r.model, cwd: r.cwd, started_by: 'v2', prompt_ref: null, handover_ref: null }
       : { kind: 'session.ended', name: r.name, reason: 'exited' }) });
@@ -1838,6 +1855,12 @@ async function handleHttp(req, res) {
     const write = req.method !== 'GET' && req.method !== 'HEAD';
     const caller = write ? integrationRoutes.callerOf(req) : undefined;
     if (write && !caller) return json(res, 403, { ok: false, error: 'V2 writes need the dashboard (same origin), a manager client or the loopback reporter token' });
+    // Disk low: a new task creates a worktree and writes to the disk, so it is refused (409 `disk_low`).
+    // Approvals, cancels and denials are not new work and stay allowed.
+    if (req.method === 'POST' && p === '/api/v2/tasks') {
+      try { await diskGuard.assertStart('Starting a new task'); }
+      catch (err) { return json(res, err.status || 500, { ok: false, error: err.message, reason: err.reason }); }
+    }
     const r = await v2.http.handle({ method: req.method, pathname: p, readBody: () => readJsonBody(req), ...(caller ? { caller } : {}) });
     if (r) return json(res, r.status, r.body);
     return json(res, 404, { ok: false, error: 'not found' });
@@ -2140,8 +2163,12 @@ async function handleHttp(req, res) {
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/sessions') {
-    try { return json(res, 200, await createSession(await readJsonBody(req))); }
-    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+    try {
+      // Disk low: refuse to start new work (409 `disk_low`). Running sessions are not affected.
+      await diskGuard.assertStart('Starting a new session');
+      return json(res, 200, await createSession(await readJsonBody(req)));
+    }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message, ...(err.reason ? { reason: err.reason } : {}) }); }
   }
   // Write a long prompt to a file and return its absolute path. The client
   // sends "Read /path" instead of pasting the whole body, so the chat log
@@ -2169,8 +2196,12 @@ async function handleHttp(req, res) {
     const m = req.method === 'POST' && /^\/api\/sessions\/([^/]+)\/(park|resume)$/.exec(p);
     if (m) {
       const name = decodeURIComponent(m[1]);
-      try { return json(res, 200, m[2] === 'park' ? await parkSession(name) : await resumeSession(name)); }
-      catch (err) { return json(res, err.status || 500, { ok: false, error: err.message, reasons: err.reasons }); }
+      try {
+        // A resume starts a new agent and writes more to the disk: it is refused while the disk is low. Parking frees space.
+        if (m[2] === 'resume') await diskGuard.assertStart('Resuming a session');
+        return json(res, 200, m[2] === 'park' ? await parkSession(name) : await resumeSession(name));
+      }
+      catch (err) { return json(res, err.status || 500, { ok: false, error: err.message, reasons: err.reasons, ...(err.reason ? { reason: err.reason } : {}) }); }
     }
   }
   if (req.method === 'DELETE' && p.startsWith('/api/sessions/')) {
@@ -2395,6 +2426,10 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/vm') {
     return json(res, 200, health || await sampleHealth(HEALTH_DISKS));
+  }
+  // Disk-space safety policy: the banner's detail (levels, thresholds and the top consumers of the watched volumes).
+  if (req.method === 'GET' && p === '/api/disk') {
+    return json(res, 200, await diskGuard.detail());
   }
   if (req.method === 'GET' && p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });

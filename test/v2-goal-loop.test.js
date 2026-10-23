@@ -897,3 +897,18 @@ test('R15 shadow: the live runtime choice is identical with no shadow, a recordi
   assert.ok(calls.some((c) => c.role === 'developer' && c.entry.id === base.dev[0]), 'developer choice was noted');
   assert.ok(calls.some((c) => c.role !== 'developer' && c.entry.id === base.rev[0]), 'reviewer choice was noted');
 });
+
+// ---- the disk-space safety policy (disk-guard.js) ---------------------------------------------------
+test('the disk-space policy: a refused worktree leaves the task waiting, not failed', async () => {
+  const env = world({ dev: [GOOD] });
+  env.worktrees.create = async () => { throw Object.assign(new Error('The disk is 93% full. New work is paused.'), { code: 'E_DISK_LOW' }); };
+  const task = await env.submit();
+  const r = await env.loop.run(task.task_id, { until: ['waiting'] });
+  assert.equal(r.state, 'waiting', 'the task waits for room on the disk');
+  const v = await env.view(task.task_id);
+  const wait = loopDecisions(v).map((d) => d.loop.patch.wait).filter(Boolean).at(-1);
+  assert.equal(wait.reason, 'disk_low');
+  assert.match(wait.diagnosis, /93% full/, 'the owner reads why');
+  assert.ok(!fs.existsSync(env.wt(task.task_id)), 'no worktree was created');
+  assert.equal(env.devStarts(), 0, 'no agent run without a worktree');
+});

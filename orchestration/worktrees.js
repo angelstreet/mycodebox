@@ -19,7 +19,7 @@ export function defaultGit(args, { cwd } = {}) {
   });
 }
 
-export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllowlist = [], leases, ttl_ms = 6 * 3600_000, mergeTargets = null }) {
+export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllowlist = [], leases, ttl_ms = 6 * 3600_000, mergeTargets = null, admission = null }) {
   if (!root) throw coded('E_CONFIG', 'root required');
   if (!leases) throw coded('E_CONFIG', 'lease authority required');
   fs.mkdirSync(root, { recursive: true });
@@ -120,6 +120,13 @@ export function createWorktrees({ git = defaultGit, fs = nodeFs, root, repoAllow
     const target = path.join(realRoot, task_id);
     if (!within(realRoot, target)) throw coded('E_PATH', 'path escapes root');
     const who2 = who || task_id;
+
+    // Disk-space policy (disk-guard.js): a worktree is new work on the disk. Checked before any lease or git state
+    // is written, so a refusal leaves nothing behind.
+    if (admission) {
+      const verdict = await admission({ task_id, repo: realRepo });
+      if (verdict && verdict.ok === false) throw coded(verdict.code || 'E_DISK_LOW', verdict.message || 'new work is refused');
+    }
 
     // A crash after a previous create's acquire (before its meta) left our own intent: adopt that lease if still live.
     const prev = readIntent(task_id);
