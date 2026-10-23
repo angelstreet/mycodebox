@@ -2542,8 +2542,10 @@ const integrationNotify = createIntegrationNotify({
   canSend: noteAllowed,   // stopped on a finished turn, no draft, no menu
   send: async (session, text) => { await assertAgentPane(session, 'integration'); await sendKeys(session, text, true); logSend(session, 'integration', { keys: text }); },
   feed: (item) => push.record(item),
-  // a quiet state (merged, deployed) waits for the digest: it must not take a slot in the owner's feed
-  digest: (item) => queueDigest(`integration:${item.requestId}:${item.state}`, { title: item.title, body: item.body, url: item.url, meta: { session: item.session || 'lane', case: 'integration' } }),
+  // a quiet state (merged, deployed) waits for the digest: it must not take a slot in the owner's feed.
+  // The digest line is short ("w1 · merged · feat/x -> main · -"): the feed entry keeps 500 chars, and the
+  // owner reads it on a phone.
+  digest: (item) => queueDigest(`integration:${item.requestId}:${item.state}`, { title: item.title, body: item.body, url: item.url, meta: { session: item.session || 'lane', case: item.state, question: `${item.branch} -> ${item.target}` } }),
   quiet: (state) => integrationDigestOn() && isQuietState(state),
   managerEvent: (e) => managerEvents.record(e),
   afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
