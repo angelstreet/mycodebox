@@ -346,7 +346,9 @@ export function* windowJoins(text) {
   }
 }
 
-export function textVariants(text) {
+// The same spellings, each flagged as plain or leet: the leet ones mangle the digits ("12" -> "i2"), so only
+// there may a number be read out of letters.
+function variantsWithKinds(text) {
   const nfkc = String(text ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/[^\x00-\x7F]/g, (c) => CONFUSABLE[c.toLowerCase()] ?? c);
   const base = baseForm(text);
   const spaced = base.replace(/\b(?:[A-Za-z0-9][^A-Za-z0-9\n\r]{1,3}){2,}[A-Za-z0-9]\b/g, (m) => m.replace(/[^A-Za-z0-9]/g, ''));   // d e p l o y, d,e,p,l,o,y
@@ -354,7 +356,16 @@ export function textVariants(text) {
   const leetI = joined.replace(/[013457@$]/g, (c) => LEET[c]);                                                                       // d3pl0y
   const leetL = joined.replace(/[013457@$]/g, (c) => (c === '1' ? 'l' : LEET[c]));                                                   // dep1oy
   const digitless = joined.replace(/([A-Za-z])[0-9]+(?=[A-Za-z])/g, '$1');                                                          // de2ploy
-  return [...new Set([nfkc, base, spaced, joined, leetI, leetL, digitless, normalizeSplits(text), normalizeSplits(leetI), normalizeSplits(leetL)])];
+  const list = [
+    { t: nfkc, leet: false }, { t: base, leet: false }, { t: spaced, leet: false }, { t: joined, leet: false },
+    { t: leetI, leet: true }, { t: leetL, leet: true }, { t: digitless, leet: false },
+    { t: normalizeSplits(text), leet: false }, { t: normalizeSplits(leetI), leet: true }, { t: normalizeSplits(leetL), leet: true },
+  ];
+  const seen = new Set();
+  return list.filter((v) => !seen.has(v.t) && seen.add(v.t));   // the first spelling of a text wins, as before
+}
+export function textVariants(text) {
+  return variantsWithKinds(text).map((v) => v.t);
 }
 
 // First match of `re` (or the extra pattern) in the text or any disguised spelling of it; null when none.
@@ -369,14 +380,49 @@ function matchWith(re, text, extra = null) {
   return null;
 }
 
-export const forbiddenMatch = (text) => matchWith(FORBIDDEN_RE, text, forbiddenExtra);
+// A global copy of a regex, for the occurrence scan.
+const GLOBAL_RES = new WeakMap();
+const globalRe = (re) => {
+  let g = GLOBAL_RES.get(re);
+  if (!g) { g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`); GLOBAL_RES.set(re, g); }
+  return g;
+};
+// Like matchWith, but a drop-family word that is a metric (a number that went down) is not a topic. The relief is
+// per occurrence and runs over every spelling, never inside the per-variant loop: a disguised destructive drop
+// still blocks, and one metric drop in the text does not hide a destructive one.
+function matchWithRelief(re, text, extra = null) {
+  const raw = String(text);
+  const scan = (v, leet) => {
+    const hits = [...v.matchAll(globalRe(re))];
+    if (hits.length) {
+      for (const m of hits) {
+        const d = m[0].match(DROP_WORD_RE);
+        if (d && metricDropAt(v, m.index + d.index, leet, true)) continue;   // a metric drop is not the topic
+        return m[0];
+      }
+      return null;                                                          // every drop here is a metric
+    }
+    const e = extra && v.match(extra);
+    return e ? e[0] : null;
+  };
+  const m = scan(raw, false);
+  if (m) return m;
+  // The forbidden-topic filter always wins: a disguised spelling is still the topic.
+  for (const v of variantsWithKinds(raw)) { if (v.t === raw) continue; const k = scan(v.t, v.leet); if (k) return k; }
+  for (const w of windowJoins(raw)) { const k = scan(w, false); if (k) return k; }
+  // every drop was a metric: the extra pattern (a customer name) still counts
+  if (extra) for (const v of [raw, ...variantsWithKinds(raw).map((x) => x.t), ...windowJoins(raw)]) { const e = v.match(extra); if (e) return e[0]; }
+  return null;
+}
+
+export const forbiddenMatch = (text) => matchWithRelief(FORBIDDEN_RE, text, forbiddenExtra);
 // Like a deploy or a push, a merge counts as a topic only when the text asks to perform it ("Should I merge ..."), not for a noun ("the merge policy page").
 export const mergeMatch = (text) => requested(text, MERGE_RE);
 // The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any
 // plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent, migrationsOk } (a bare boolean = mergePresent); migrationsOk: the noun "migration" is covered by a deploy evaluation of additive lab migrations.
 export function hardMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
-  const hit = matchWith(hardRe(o), text, forbiddenExtra) || colonHit(text);
+  const hit = matchWithRelief(hardRe(o), text, forbiddenExtra) || colonHit(text);
   if (hit) return hit;
   if (o.mergePresent && !o.pushPresent) for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_OTHER_RE); if (k) return k[0]; }
   return null;
@@ -479,7 +525,58 @@ const NARR_ACTIVE = new RegExp(String.raw`^(?:(?:i|we|it|they|the \w+(?: \w+)?) 
 const NARR_FIRST = new RegExp(String.raw`^(?:earlier|yesterday|previously) (?:(?:i|we|it|they|the \w+(?: \w+)?) )?(?:(?:already|have|had) )?(${PAST_VERB}) (${OBJ_WORDS})\.?$`, 'i');
 const NARR_PASSIVE = new RegExp(String.raw`^(?:the )?(${OBJ_WORDS}) (?:was|were|had been|has been|have been) (?:already )?(${PAST_VERB}) ${TIME_MARK}\.?$`, 'i');
 const NARR_BANNED = /[,;:—–]|\b(?:and|then|also|plus|same|as well|too|for the rest|rest of|everything|all)\b/i;
-const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|data|volumes?|buckets?|backups?|prod(?:uction)?|customers?|user data|rows?|records?|uploads?|secrets?|keys?|tokens?|passwords?|credentials?|accounts?|users?|sessions?|recordings?)\b|\.env\b/i;
+const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|data|volumes?|buckets?|backups?|prod(?:uction)?|customers?|user data|rows?|records?|uploads?|secrets?|keys?|tokens?|passwords?|credentials?|accounts?|users?|sessions?|recordings?|leases?|index(?:es)?|columns?|views?|functions?)\b|\.env\b/i;
+
+// ---- the metric drop (E43) -------------------------------------------------------------------------------------------
+// A bare "drop" is in the destructive word list, so every number that went down tripped the guard and woke the
+// owner (2026-10-23: a finished session was escalated as "drop question - needs you"). A drop-family word is a
+// metric, not a verb, when a preposition and a number follow it, the sentence names no data object, the word is
+// not the verb of an imperative list item, and the sentence carries a metric noun or a unit.
+const DROP_WORD_RE = /\bdrop(?:s|ped|ping)?\b/i;
+const METRIC_PREP_RE = /^\s*(?:from|to|by|down|below|under)\s+/i;
+const METRIC_NOUN_RE = /\b(?:latency|cost|error rate|throughput|settle|p95|duration|memory|size)\b/i;
+const METRIC_UNIT_RE = /(?:\bms\b|\bs\b|\brps\b|\bGB\b|\bMB\b|\bper second\b|\bper minute\b|%)/i;
+// The digits of a leet spelling, read back ("i2" -> "12", "a.i" -> "4.1"); the leet spellings differ on the 1
+// ("i" and "l"), so both are read.
+const LEET_BACK = [{ o: '0', i: '1', e: '3', a: '4', s: '5', t: '7' }, { o: '0', l: '1', e: '3', a: '4', s: '5', t: '7' }];
+// A number: a token with a digit, or in a leet spelling the digits are letters.
+const isNumberToken = (tok, leet) => {
+  const t = String(tok || '');
+  if (!t) return false;
+  if (!leet) return /\d/.test(t);
+  return LEET_BACK.some((map) => {
+    const back = [...t].map((c) => map[c.toLowerCase()] ?? c).join('');
+    return /\d/.test(back) && /^[0-9.,%~<>]+$/.test(back);
+  });
+};
+// The sentence the word sits in (a period ends it, a line ends it). A period followed by a capital also ends it:
+// a window join glues the two words of a sentence boundary ("released.The"), and the sentence before must not
+// decide the word after it.
+const sentenceSpan = (text, index) => {
+  let start = 0, end = text.length;
+  for (const m of text.matchAll(/[.!?](?=\s|$|\p{Lu})|\n+/gu)) {
+    if (m.index + m[0].length <= index) start = m.index + m[0].length;
+    else if (m.index >= index) { end = m.index; break; }
+  }
+  return [start, end];
+};
+// Is the drop-family word at `index` a number that went down rather than a verb that deletes something?
+const metricDropAt = (v, index, leet, presentOnly) => {
+  const word = v.slice(index).match(/^drop(?:s|ped|ping)?\b/i)?.[0] || '';
+  if (!word) return false;
+  if (presentOnly && !/^drops?$/i.test(word)) return false;      // the relief is for the present tense
+  const rest = v.slice(index + word.length);
+  const prep = rest.match(METRIC_PREP_RE);
+  if (!prep) return false;                                     // "drop the table" is not a number
+  const token = rest.slice(prep[0].length).match(/^\S+/)?.[0] || '';
+  if (!isNumberToken(token, leet)) return false;                // "drop 500 rows" is a count, not a metric
+  const [s0, s1] = sentenceSpan(v, index);
+  const sentence = v.slice(s0, s1);
+  if (OBJ_DATA.test(sentence)) return false;                   // "drop from 500 rows to 100" deletes rows
+  const lineStart = v.lastIndexOf('\n', index - 1) + 1;
+  if (/^\s*(?:[-*•]|\d+[.)])\s*$/.test(v.slice(lineStart, index))) return false;   // the verb of an imperative list item
+  return METRIC_NOUN_RE.test(sentence) || METRIC_UNIT_RE.test(sentence);
+};
 const narrativeShape = (t) => {
   const m = NARR_ACTIVE.exec(t) || NARR_FIRST.exec(t) || NARR_PASSIVE.exec(t);
   if (!m) return false;
@@ -489,10 +586,11 @@ const narrativeShape = (t) => {
   return true;
 };
 // every spelling (textVariants, windowJoins) may hold only past-tense destructive words and nothing else forbidden
+// (a metric drop is no verb at all: "the settle dropped from 20 s to 3 s" is a number, not a deletion)
 const pastOnly = (v) => {
   if (matchWith(NONDESTRUCTIVE_RE, v, forbiddenExtra)) return false;
   DESTRUCTIVE_WORDS.lastIndex = 0;
-  for (const m of v.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0])) return false;
+  for (const m of v.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0]) && !metricDropAt(v, m.index, false, false)) return false;
   return !/\bmigrat/i.test(v);
 };
 export function isPastNarrative(sentence) {
@@ -847,5 +945,5 @@ export const OWNER_FLOOR_RE = new RegExp(OWNER_FLOOR_PARTS.join('|'), 'i');
 export function ownerFloorMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : {};
   if (o.generatedSecretOk === undefined) o.generatedSecretOk = GENERATED_SECRET_RE.test(String(text || ''));
-  return matchWith(ownerFloorRe(o), text, forbiddenExtra);
+  return matchWithRelief(ownerFloorRe(o), text, forbiddenExtra);
 }
