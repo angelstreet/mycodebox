@@ -90,27 +90,32 @@ test('the manager-ask command replaces the session\'s older question with the ne
 // 4: the safety net. The hourly scan and the server-side guard both report the superseded asks: the one whose
 // replacement is still open (the older question is still waiting) and the one whose replacement is not a
 // question (it was dropped with no replacement: the E22 case).
-const NET_ROWS = (now) => [
-  JSON.stringify(ask(1, { session: 'S' })),                                    // Q1: open, replaced by Q2
-  JSON.stringify(ask(2, { session: 'S' })),                                    // Q2: open, the replacement
-  JSON.stringify({ at: '2026-10-22T10:00:00.000Z', id: 'Q1', state: 'superseded', by: 'Q2' }),
-  JSON.stringify(ask(3, { session: 'T' })),                                    // Q3: open, replaced by a stop id
-  JSON.stringify({ at: '2026-10-22T10:00:00.000Z', id: 'Q3', state: 'superseded', by: STOP_ID }),
-  JSON.stringify(ask(4, { session: 'U' })),                                    // Q4: open, dropped just now
-  JSON.stringify({ at: now, id: 'Q4', state: 'superseded', by: STOP_ID }),
-  JSON.stringify(ask(5, { session: 'V' })),                                    // Q5: replaced by a question the owner answered
-  JSON.stringify(ask(6, { session: 'V' })),
-  JSON.stringify({ at: '2026-10-22T10:00:00.000Z', id: 'Q5', state: 'superseded', by: 'Q6' }),
-  JSON.stringify({ at: '2026-10-22T10:00:00.000Z', id: 'Q6', state: 'answered', answer: 'yes' }),
-];
+// two hours old: older than the guard's push window (the drop is reported, not pushed) and inside the scan's
+// window (it is still a drop the scan has to name)
+const NET_ROWS = (now) => {
+  const old = new Date(Date.parse(now) - 2 * 3600e3).toISOString();
+  return [
+    JSON.stringify(ask(1, { session: 'S' })),                                    // Q1: open, replaced by Q2
+    JSON.stringify(ask(2, { session: 'S' })),                                    // Q2: open, the replacement
+    JSON.stringify({ at: old, id: 'Q1', state: 'superseded', by: 'Q2' }),
+    JSON.stringify(ask(3, { session: 'T' })),                                    // Q3: open, replaced by a stop id
+    JSON.stringify({ at: old, id: 'Q3', state: 'superseded', by: STOP_ID }),
+    JSON.stringify(ask(4, { session: 'U' })),                                    // Q4: open, dropped just now
+    JSON.stringify({ at: now, id: 'Q4', state: 'superseded', by: STOP_ID }),
+    JSON.stringify(ask(5, { session: 'V' })),                                    // Q5: replaced by a question the owner answered
+    JSON.stringify(ask(6, { session: 'V' })),
+    JSON.stringify({ at: old, id: 'Q5', state: 'superseded', by: 'Q6' }),
+    JSON.stringify({ at: old, id: 'Q6', state: 'answered', answer: 'yes' }),
+  ];
+};
 
 test('the hourly scan reports both superseded cases, one line each', async () => {
   const dir = tmp('e22-scan-');
   await writeFile(join(dir, 'manager-owner-asks.jsonl'), NET_ROWS(new Date().toISOString()).join('\n') + '\n');
   const out = execFileSync('bash', [SCAN], { env: { ...process.env, GHOSTY_STATE_DIR: dir } }).toString().trim().split('\n');
-  assert.ok(out.includes('!! ask-superseded-open Q1 Q2'), out.join(' | '));
-  assert.ok(out.includes(`!! ask-superseded-dropped Q3 ${STOP_ID}`), out.join(' | '));
-  assert.ok(out.includes(`!! ask-superseded-dropped Q4 ${STOP_ID}`), out.join(' | '));
+  assert.ok(out.includes('!! ask-superseded-open Q1 Q2 "Synthetic question 2?"'), out.join(' | '));
+  assert.ok(out.includes(`!! ask-superseded-dropped Q3 ${STOP_ID} (not a question in the ledger)`), out.join(' | '));
+  assert.ok(out.includes(`!! ask-superseded-dropped Q4 ${STOP_ID} (not a question in the ledger)`), out.join(' | '));
   assert.ok(out.includes('!! ask-not-alerted Q2'), 'the existing line is unchanged');
   assert.ok(!out.some((l) => l.includes('Q5')), 'a question the owner answered is not reported');
 });

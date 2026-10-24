@@ -105,7 +105,7 @@ import { createDoneCheck } from './done-check.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
 import { verifyDelivered } from './send-verify.js';
-import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates } from './public/platforms.js';
+import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -848,7 +848,7 @@ const leaseWatch = createLeaseWatch({
 const leaseNudge = createLeaseNudge({
   stateDir: STATE_DIR,
   getInputs: async () => ({ deploys: deployRunner.snapshot().deploys || [], view: await leaseSource.view(false) }),
-  sessionOf: (agent) => agentSession(agent, Object.keys(latest?.status || {}), MACHINES),
+  sessionOf: (agent) => holderSession(agent, Object.keys(latest?.status || {}), MACHINES),
   // the same signal as lease-watch: minutes since the session's last finished turn; a working session is never idle
   idleMinOf: (l, session) => {
     if (!session) return l.idleMin ?? null;
@@ -2666,7 +2666,7 @@ async function leaseActivityTick() {
   const names = Object.keys(latest?.status || {});
   const view = leaseSource.peekView();
   if (!view?.ok) return;
-  const by = activeHolds({ leases: view.leases, sessionOf: (l) => agentSession(l.session || l.agent, names, MACHINES) || agentSession(l.agent, names, MACHINES), activityOf: (n) => reporter.activityOf(n), now: Date.now() });
+  const by = activeHolds({ leases: view.leases, sessionOf: (l) => holderSession(l.session || l.agent, names, MACHINES) || holderSession(l.agent, names, MACHINES), activityOf: (n) => reporter.activityOf(n), now: Date.now() });
   for (const session of by.keys()) await leaseSource.activity(session);   // the lease's own session string
 }
 async function leaseTick() {
