@@ -191,7 +191,10 @@ export function underRoots(dir, roots, realpath = safeRealpath) {
 // Is a session alive inside this worktree? A pane cwd, a Claude session cwd or ANY live process whose /proc cwd is
 // inside the worktree counts. The " (deleted)" suffix is stripped and both sides are compared through realpath, so a
 // re-spelled path or a symlink does not hide a live session.
-export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [] } = {}) {
+// Two more traces of an agent that works in a worktree from ANOTHER directory (E51: a task-spawned worker runs
+// `git -C <dir>` while its own cwd is the parent directory): its command line names the worktree, or it holds a file
+// of the worktree open.
+export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [], procArgs = [], procFds = [] } = {}) {
   const hit = (raw) => {
     if (!raw) return false;
     const p = stripDeletedSuffix(raw);
@@ -200,9 +203,18 @@ export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [] } =
     const rp = safeRealpath(p);
     return !!rp && pathInside(safeRealpath(dir) || dir, rp);
   };
+  const inArgs = (args) => String(args || '').split(/\s+/).some((tok) => {
+    const t = tok.replace(/^["']|["']$/g, '');
+    if (!t) return false;
+    if (hit(t)) return true;
+    const i = t.indexOf('=');       // --cwd=<dir>
+    return i > 0 && hit(t.slice(i + 1));
+  });
   return panes.some((p) => hit(p.path))
     || claude.some((c) => c.alive && hit(c.cwd))
-    || procCwds.some((c) => hit(c.cwd));
+    || procCwds.some((c) => hit(c.cwd))
+    || procArgs.some((p) => inArgs(p.args))
+    || procFds.some((f) => hit(f.path));
 }
 
 // The cwd of every own process: a session that cd'd elsewhere still holds the worktree open.
@@ -211,6 +223,21 @@ export function readProcCwds(procs, readlink = readlinkSync) {
   for (const p of procs || []) {
     if (!p.mine) continue;
     try { const cwd = readlink(`/proc/${p.pid}/cwd`); if (cwd) out.push({ pid: p.pid, cwd }); } catch {}
+  }
+  return out;
+}
+
+// The files every own process holds open: a process with a file of the worktree open is working on it, whatever its
+// cwd is. Bounded per process: the list is a liveness hint, not an inventory.
+export function readProcFds(procs, readlink = readlinkSync, readdir = readdirSync, maxPerProc = 64) {
+  const out = [];
+  for (const p of procs || []) {
+    if (!p.mine) continue;
+    let fds = [];
+    try { fds = readdir(`/proc/${p.pid}/fd`); } catch { continue; }
+    for (const fd of fds.slice(0, maxPerProc)) {
+      try { const path = readlink(`/proc/${p.pid}/fd/${fd}`); if (path) out.push({ pid: p.pid, fd, path }); } catch {}
+    }
   }
   return out;
 }
@@ -492,7 +519,7 @@ export function worktreeGitState(gitDir, { stat = lstatSync } = {}) {
 }
 
 // Scan the configured repos. run() is injectable so the tests can drive the git calls without a real repo.
-export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], run = sh, realpath = safeRealpath, stat = lstatSync, readFile = readFileSync, now = Date.now() } = {}) {
+export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], procArgs = [], procFds = [], run = sh, realpath = safeRealpath, stat = lstatSync, readFile = readFileSync, now = Date.now() } = {}) {
   const roots = configRoots(cfg);
   const repos = [], candidates = [], notConsidered = [];
   const seenCommon = new Map(), seenPaths = new Map();
@@ -556,17 +583,34 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], run
       const activityAt = Math.max(state.at, lastCommitAt);
       const activeMin = Number(cfg.worktreeActiveMin ?? DEFAULT_CONFIG.worktreeActiveMin);
       const recentActivity = activityAt > 0 && now - activityAt < activeMin * 60000;
-      const liveSession = worktreeIsLive(dir, { panes, claude, procCwds });
+      const liveSession = worktreeIsLive(dir, { panes, claude, procCwds, procArgs, procFds });
       const info = { name: basename(dir), dir, branch, repo: key, isWorktree, clean, merged, unstarted,
         mergedRef: mergeRef ? mergeRef.name : null, ignoredFiles, liveSession, recentActivity, activeMin,
-        activityAt, activitySource: state.source || (lastCommitAt ? 'last commit' : null) };
+        activityAt, activityAgeMin: activityAt ? Math.max(0, Math.round((now - activityAt) / 60000)) : null,
+        activitySource: state.source || (lastCommitAt ? 'last commit' : null) };
       info.kind = classifyWorktree(info);
+      info.why = classifyWhy(info);
       candidates.push(info);
       repo.candidates++;
     }
   }
   return { candidates, notConsidered, repos, roots, registered,
     dedupe: { entriesDropped, reposDropped }, missing };
+}
+
+// Which criterion kept the worktree, in words: the operator must be able to tell an abandoned worktree from a live
+// one without reading the source (E51: the report only said "live session: no" and "merged: yes").
+export function classifyWhy(info) {
+  switch (info.kind) {
+    case 'not-worktree': return 'not a linked worktree';
+    case 'live-session': return 'a live session is using it';
+    case 'dirty': return 'tracked or untracked changes';
+    case 'ignored-files': return 'ignored files would be deleted';
+    case 'recent-activity': return `git state changed ${info.activityAgeMin ?? 0} min ago`;
+    case 'unstarted': return 'the branch has no commits of its own';
+    case 'unmerged': return `commits are not in ${info.mergedRef || 'the merge target'}`;
+    default: return 'clean, merged, no session';
+  }
 }
 
 // The worktree section of the report: every candidate, and the blind spot (registered worktrees NOT considered).
@@ -583,9 +627,9 @@ export function worktreeReport(scan, { du = duR } = {}) {
   L.push(`- registered worktrees: ${scan?.registered || 0} (${scan?.dedupe?.entriesDropped || 0} duplicate entries dropped, ${scan?.dedupe?.reposDropped || 0} repo(s) skipped as the same git common dir, ${scan?.missing || 0} missing on disk)`);
   L.push(`- not considered: ${nc.length} worktrees, ${human(ncKB)} (a repo main worktree, or outside the allowed roots)`);
   L.push(`- allowed roots: ${(scan?.roots || []).join(', ') || 'none configured'}`);
-  L.push('', '| dir | repo | branch | size | git worktree | clean | ignored files | merged into | merged | live session | class |', '|---|---|---|---|---|---|---|---|---|---|---|');
+  L.push('', '| dir | repo | branch | size | git worktree | clean | ignored files | merged into | merged | live session | class | why |', '|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const w of scan?.candidates || []) {
-    L.push(`| ${w.dir} | ${w.repo} | ${w.branch} | ${human(du(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.ignoredFiles || 0} | ${w.mergedRef || 'n/a'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} |`);
+    L.push(`| ${w.dir} | ${w.repo} | ${w.branch} | ${human(du(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.ignoredFiles || 0} | ${w.mergedRef || 'n/a'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} | ${w.why} |`);
   }
   if (nc.length) {
     L.push('', '| not considered | repo | reason | size |', '|---|---|---|---|');
@@ -765,7 +809,9 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const reportPath = join(reportsDir, `${iso}.md`);
   const duPath = join(stateDir, 'health-du-cache.json');
   try { duCache = Object.fromEntries(Object.entries(JSON.parse(readFileSync(duPath, 'utf8'))).filter(([, e]) => now - e.at < DU_TTL_MS)); } catch { duCache = {}; }
-  const wtScan = scanWorktrees({ cfg, panes, claude, procCwds: readProcCwds(procs) });
+  const wtScan = scanWorktrees({ cfg, panes, claude, procCwds: readProcCwds(procs), now,
+    procArgs: procs.filter((p) => p.mine).map((p) => ({ pid: p.pid, args: p.args })),
+    procFds: readProcFds(procs) });
   const wts = wtScan.candidates;
   const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, wtScan, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];

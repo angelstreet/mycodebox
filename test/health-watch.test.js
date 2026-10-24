@@ -1,7 +1,7 @@
 // Pure parts of scripts/health-watch.js: thresholds, owner resolution, scratch eligibility, worktree class, debounce, event shape.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs, scanWorktrees, worktreeIsLive, worktreeReport, runOptionalFixes, stripDeletedSuffix, readProcCwds, mergeTarget, parseWorktreePorcelain, configRepos, configRoots } from '../scripts/health-watch.js';
+import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs, scanWorktrees, worktreeIsLive, worktreeReport, runOptionalFixes, stripDeletedSuffix, readProcCwds, readProcFds, mergeTarget, parseWorktreePorcelain, configRepos, configRoots } from '../scripts/health-watch.js';
 
 const cfg = DEFAULT_CONFIG;
 const base = { diskPct: 50, diskFreeGB: 30, load1: 0.5, load5: 0.5, cores: 6, ramAvailPct: 50, runaways: [], stuck: [], defunct: 0 };
@@ -426,10 +426,51 @@ test('T9 a worktree with recent activity is never removable, even when it is cle
   assert.ok(DEFAULT_CONFIG.worktreeActiveMin > 0, 'the default lives in the repo, not only in the state-dir config');
 });
 
+test('T10 live: an agent that works in a worktree from another directory is live', () => {
+  const root = tmp('hw-wt-');
+  const dir = join(root, 'wt-agent');
+  mkdirSync(dir, { recursive: true });
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'git -C ' + dir + ' status' }] }), true,
+    'a running git command against the worktree');
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'mcode exec --cwd ' + dir }] }), true,
+    'an agent started in the worktree');
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'mcode exec --cwd=' + dir }] }), true,
+    'the same, as --cwd=<dir>');
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'node --test' }] }), false);
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'git -C ' + dir + '-other status' }] }), false,
+    'a sibling directory is not this worktree');
+  assert.equal(worktreeIsLive(dir, { procFds: [{ pid: 6, fd: '3', path: join(dir, 'src/app.js') }] }), true,
+    'a process holds a file of the worktree open');
+  assert.equal(worktreeIsLive(dir, { procFds: [{ pid: 6, fd: '3', path: join(root, 'other/x') }] }), false);
+});
+
+test('T10 scan: a worktree an agent works in from another directory is live-session, never removable', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-agent' }]);
+  const dir = join(a.main, 'wt-agent');
+  const scan = scanWorktrees({ cfg: { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] },
+    procArgs: [{ pid: 7, args: 'git -C ' + dir + ' status --porcelain' }], run: fakeGit(a.spec) });
+  assert.equal(scan.candidates[0].liveSession, true);
+  assert.equal(scan.candidates[0].kind, 'live-session');
+  assert.equal(scan.candidates[0].why, 'a live session is using it');
+});
+
+test('T11 the report names the criterion that kept a worktree', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-unstarted', reflog: 'bbb\n' }]);
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  const report = worktreeReport(scan, { du: () => 1024 });
+  assert.match(report, /\| unstarted \| the branch has no commits of its own \|/,
+    'the operator sees WHICH criterion failed, not only the flags');
+});
+
 test('helpers: worktree porcelain, proc cwds and the deleted suffix', () => {
   const list = parseWorktreePorcelain('worktree /a\nHEAD x\nbranch refs/heads/main\n\nworktree /b\nHEAD y\ndetached\n');
   assert.deepEqual(list, [{ path: '/a', branch: 'main', detached: false }, { path: '/b', branch: '', detached: true }]);
   const cwds = readProcCwds([{ pid: 7, mine: true }, { pid: 8, mine: false }],
     (p) => (p === '/proc/7/cwd' ? '/x/y (deleted)' : '/x/y'));
   assert.deepEqual(cwds, [{ pid: 7, cwd: '/x/y (deleted)' }], 'only own processes');
+  const fds = readProcFds([{ pid: 7, mine: true }, { pid: 8, mine: false }],
+    (p) => '/x/y', (p) => (p === '/proc/7/fd' ? ['3', '4'] : []));
+  assert.deepEqual(fds, [{ pid: 7, fd: '3', path: '/x/y' }, { pid: 7, fd: '4', path: '/x/y' }], 'only own processes');
 });
