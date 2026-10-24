@@ -158,6 +158,7 @@ export function classifyWorktree(info) {
   if (info.liveSession) return 'live-session';
   if (!info.clean) return 'dirty';
   if (info.ignoredFiles) return 'ignored-files';
+  if (info.unstarted) return 'unstarted';
   if (!info.merged) return 'unmerged';
   return 'removable';
 }
@@ -445,6 +446,26 @@ export function mergeTarget(run, path) {
   return null;
 }
 
+// The commit a branch was created from: the OLDEST entry of its reflog ("branch: Created from ..."). git's own
+// merge-base --fork-point wants the reflog of the merge TARGET, which a fresh clone may not have.
+export function branchForkPoint(run, dir, branch) {
+  if (!branch || branch === 'HEAD') return '';
+  const out = run('git', ['-C', dir, 'reflog', 'show', '--format=%H', branch]);
+  if (!out) return '';
+  const lines = String(out).split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : '';
+}
+
+// A branch that was created from the merge target and never committed on it is UNSTARTED, not merged: its HEAD is
+// the fork point, which is trivially an ancestor of the merge target, so "is HEAD an ancestor of origin/main" said
+// yes for a branch with no work at all (E51, 2026-10-23: the watcher removed a live worktree twice). Without a
+// reflog the branch counts as unstarted only when its HEAD is the merge target's own tip.
+export function isUnstarted({ headSha = '', targetSha = '', forkPoint = '' } = {}) {
+  if (!headSha) return false;
+  if (forkPoint) return headSha === forkPoint;
+  return headSha === targetSha;
+}
+
 // Scan the configured repos. run() is injectable so the tests can drive the git calls without a real repo.
 export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], run = sh, realpath = safeRealpath, stat = lstatSync } = {}) {
   const roots = configRoots(cfg);
@@ -495,10 +516,14 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], run
       const lines = status === null ? [] : status.split('\n').filter(Boolean);
       const ignoredFiles = lines.filter((l) => l.startsWith('!!')).length;
       const clean = status !== null && lines.every((l) => l.startsWith('!!'));
-      const merged = mergeRef ? run('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', mergeRef.ref]) !== null : false;
       const branch = (run('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']) || '').trim();
+      const headSha = (run('git', ['-C', dir, 'rev-parse', 'HEAD']) || '').trim();
+      const targetSha = mergeRef ? (run('git', ['-C', dir, 'rev-parse', mergeRef.ref]) || '').trim() : '';
+      const ancestor = mergeRef ? run('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', mergeRef.ref]) !== null : false;
+      const unstarted = isUnstarted({ headSha, targetSha, forkPoint: branchForkPoint(run, dir, branch) });
+      const merged = ancestor && !unstarted;   // an unstarted branch has no work of its own to be merged
       const liveSession = worktreeIsLive(dir, { panes, claude, procCwds });
-      const info = { name: basename(dir), dir, branch, repo: key, isWorktree, clean, merged,
+      const info = { name: basename(dir), dir, branch, repo: key, isWorktree, clean, merged, unstarted,
         mergedRef: mergeRef ? mergeRef.name : null, ignoredFiles, liveSession };
       info.kind = classifyWorktree(info);
       candidates.push(info);
