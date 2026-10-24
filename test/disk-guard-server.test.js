@@ -1,7 +1,8 @@
 // The disk-space safety policy in the REAL server.js: the banner's endpoint, the 409 refusal of new work and the
 // guarantee that running work is not blocked. The server is booted as a child process (never imported here) on a
 // free loopback port, with a temp state dir, a temp HOME and a private tmux socket: no live state is touched.
-// The disk itself is the real one; the policy is switched on with a hold threshold of 0 %, so every volume is "full".
+// The disk itself is the real one, so its fill level is this host's business, not the test's: every expectation
+// here follows the reading the endpoint reports, or a policy configured on purpose, never the host's free space.
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -62,6 +63,26 @@ async function boot({ diskGuard }) {
   return { api, home, log: () => log };
 }
 
+// The level the policy gives a volume, re-derived here from the numbers the endpoint reports: the expectation
+// follows the reading, so the test holds on a full disk and on a healthy one.
+const levelOf = (pct, holdPct, warnPct) => {
+  if (pct == null || !Number.isFinite(Number(pct))) return 'unknown';
+  const p = Number(pct);
+  if (p >= holdPct) return 'hold';
+  if (p >= warnPct) return 'warn';
+  return 'ok';
+};
+const RANK = { unknown: 0, ok: 1, warn: 2, hold: 3 };
+// The worst volume decides, the way the policy decides it: the highest level wins, the first one on a tie.
+const worstOf = (disks, holdPct, warnPct) => {
+  let worst = null;
+  for (const d of disks) {
+    const level = levelOf(d.pct, holdPct, warnPct);
+    if (worst == null || RANK[level] > RANK[worst.level]) worst = { ...d, level };
+  }
+  return worst;
+};
+
 test('the disk endpoint: the banner reading and the thresholds', async () => {
   const s = await boot({});
   const r = await s.api('GET', '/api/disk');
@@ -72,9 +93,45 @@ test('the disk endpoint: the banner reading and the thresholds', async () => {
   assert.equal(r.body.warnPct, 85);
   assert.ok(Array.isArray(r.body.disks));
   assert.ok(Array.isArray(r.body.top), 'the detail carries the top consumers');
-  // A healthy disk: no reason code, nothing refused.
-  assert.equal(r.body.reason, null);
-  assert.equal(r.body.blocked, false);
+  // The reading decides, not this host's free space: every volume gets the level its own usage gives it against
+  // the thresholds the endpoint was given, and the banner and the refusal follow that level.
+  for (const d of r.body.disks) {
+    assert.equal(d.level, levelOf(d.pct, r.body.holdPct, r.body.warnPct), `the level of ${d.path}`);
+  }
+  const worst = worstOf(r.body.disks, r.body.holdPct, r.body.warnPct);
+  const level = worst ? worst.level : 'unknown';
+  assert.equal(r.body.level, level, 'the worst volume decides the level');
+  assert.equal(r.body.worst?.path, worst?.path, 'the worst volume is the one the banner quotes');
+  assert.equal(r.body.reason, level === 'warn' || level === 'hold' ? 'disk_low' : null,
+    'the banner shows from the warn threshold');
+  assert.equal(r.body.hold, level === 'hold');
+  assert.equal(r.body.blocked, level === 'hold', 'only the hold refuses new work');
+});
+
+test('the disk endpoint: a disk at the warn threshold shows the banner and still lets work start', async () => {
+  // The policy warns from 0 % and holds at 100 %: the disk is at warn *by configuration*, whatever this host's
+  // free space happens to be.
+  const s = await boot({ diskGuard: { holdPct: 100, warnPct: 0 } });
+  const d = await s.api('GET', '/api/disk');
+  assert.equal(d.body.holdPct, 100, 'the configured thresholds are the ones the endpoint reports');
+  assert.equal(d.body.warnPct, 0);
+  assert.equal(d.body.level, 'warn');
+  assert.equal(d.body.reason, 'disk_low', 'the banner shows');
+  assert.equal(d.body.blocked, false, 'a warning does not refuse new work');
+  const start = await s.api('POST', '/api/sessions', { name: 'allowed-warn', agent: 'bash', cwd: s.home });
+  assert.equal(start.status, 200, 'new work still starts while the disk warns');
+});
+
+test('the disk endpoint: with the policy off nothing is refused, whatever the disk shows', async () => {
+  // The policy would hold every volume (holdPct 0), but the owner turned it off: no reason code, nothing refused.
+  const s = await boot({ diskGuard: { enabled: false, holdPct: 0 } });
+  const d = await s.api('GET', '/api/disk');
+  assert.equal(d.body.enabled, false);
+  assert.equal(d.body.level, 'hold', 'the disk would be full');
+  assert.equal(d.body.reason, null, 'no reason code, no banner');
+  assert.equal(d.body.blocked, false, 'nothing is refused');
+  const start = await s.api('POST', '/api/sessions', { name: 'allowed-switch-off', agent: 'bash', cwd: s.home });
+  assert.equal(start.status, 200, 'the switch is what lifts the refusal');
 });
 
 test('the hold: new sessions and resumes are refused with 409 disk_low, running work is not', async () => {
