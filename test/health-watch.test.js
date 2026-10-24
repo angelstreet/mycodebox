@@ -397,6 +397,35 @@ test('T8 an unstarted branch is not merged: a branch with no commits of its own 
   assert.equal(by['wt-no-reflog'].kind, 'unstarted');
 });
 
+test('T9 a worktree with recent activity is never removable, even when it is clean and merged', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-fresh' }]);
+  // the worktree's own git metadata exists and was just written: its owner has not written a file yet
+  const gd = join(a.common, 'worktrees', 'wt-fresh');
+  mkdirSync(gd, { recursive: true });
+  writeFileSync(join(gd, 'HEAD'), 'ref: refs/heads/feature\n');
+  writeFileSync(join(gd, 'index'), '');
+  const cfg = { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] };
+  const w = scanOf([a], cfg).candidates[0];
+  assert.equal(w.clean, true, 'nothing tracked is modified');
+  assert.equal(w.merged, true, 'clean and merged: only the activity rule can stop it');
+  assert.equal(w.recentActivity, true);
+  assert.equal(w.kind, 'recent-activity');
+  assert.notEqual(w.kind, 'removable', 'the E51 case: a live agent had not written its first file');
+  // an abandoned worktree is still reclaimed: the window is a delay, not a reaper shutdown
+  const old = new Date(Date.now() - 60 * 60000);
+  utimesSync(join(gd, 'index'), old, old);
+  utimesSync(join(gd, 'HEAD'), old, old);
+  const stale = scanOf([a], cfg).candidates[0];
+  assert.equal(stale.recentActivity, false, 'no activity for an hour');
+  assert.equal(stale.kind, 'removable', 'an abandoned worktree is still reclaimed');
+  // the window is configurable next to diskPct/fixLevel
+  const zero = scanOf([a], { ...cfg, worktreeActiveMin: 0 }).candidates[0];
+  assert.equal(zero.recentActivity, false, 'a window of 0 protects nothing');
+  assert.equal(zero.kind, 'removable');
+  assert.ok(DEFAULT_CONFIG.worktreeActiveMin > 0, 'the default lives in the repo, not only in the state-dir config');
+});
+
 test('helpers: worktree porcelain, proc cwds and the deleted suffix', () => {
   const list = parseWorktreePorcelain('worktree /a\nHEAD x\nbranch refs/heads/main\n\nworktree /b\nHEAD y\ndetached\n');
   assert.deepEqual(list, [{ path: '/a', branch: 'main', detached: false }, { path: '/b', branch: '', detached: true }]);
