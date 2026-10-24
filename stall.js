@@ -391,7 +391,7 @@ const globalRe = (re) => {
 // the relief is decided, so every caller of the matcher reads the same rules (E43).
 const isMetricDrop = (v, m, leet) => {
   const d = m[0].match(DROP_WORD_RE);
-  return !!d && metricDropAt(v, m.index + d.index, leet, true);
+  return !!d && metricDropAt(v, m.index + d.index, leet);
 };
 // Like matchWith, but a drop-family word that is a metric (a number that went down) is not a topic. The relief is
 // per occurrence and runs over every spelling, never inside the per-variant loop: a disguised destructive drop
@@ -555,15 +555,24 @@ const NARR_PASSIVE = new RegExp(String.raw`^(?:the )?(${OBJ_WORDS}) (?:was|were|
 const NARR_BANNED = /[,;:—–]|\b(?:and|then|also|plus|same|as well|too|for the rest|rest of|everything|all)\b/i;
 const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|data|volumes?|buckets?|backups?|prod(?:uction)?|customers?|user data|rows?|records?|uploads?|secrets?|keys?|tokens?|passwords?|credentials?|accounts?|users?|sessions?|recordings?|leases?|index(?:es)?|columns?|views?|functions?)\b|\.env\b/i;
 
-// ---- the metric drop (E43) -------------------------------------------------------------------------------------------
+// ---- the metric drop (E43, extended in E53) --------------------------------------------------------------------------
 // A bare "drop" is in the destructive word list, so every number that went down tripped the guard and woke the
 // owner (2026-10-23: a finished session was escalated as "drop question - needs you"). A drop-family word is a
-// metric, not a verb, when a preposition and a number follow it, the sentence names no data object, the word is
-// not the verb of an imperative list item, and the sentence carries a metric noun or a unit.
+// metric, not a verb, in two shapes: a verb with a preposition and a number after it ("the cost drop to 12 ms",
+// "the latency dropped by 40 percent") and a noun with the number before it ("a 3 percent drop in throughput").
+// Both shapes keep the same guards: the sentence names no data object, the word is not the verb of an imperative
+// list item, and the sentence carries a metric noun or a unit. A count that went down is a deletion, not a
+// metric ("the row count dropped by 500"), so the data-object guard stays in front of the relief.
 const DROP_WORD_RE = /\bdrop(?:s|ped|ping)?\b/i;
 const METRIC_PREP_RE = /^\s*(?:from|to|by|down|below|under)\s+/i;
 const METRIC_NOUN_RE = /\b(?:latency|cost|error rate|throughput|settle|p95|duration|memory|size)\b/i;
 const METRIC_UNIT_RE = /(?:\bms\b|\bs\b|\brps\b|\bGB\b|\bMB\b|\bper second\b|\bper minute\b|%)/i;
+// The unit of a noun-form quantity ("a 3 percent drop"): the number sits before the word, so the unit is what
+// tells a quantity from a data object ("a 500 row drop" is rows, not a number that went down).
+const NOUN_UNIT_RE = /^(?:percent|pct|ms|s|sec|secs|second|seconds|min|mins|minute|minutes|hr|hrs|hour|hours|rps|qps|bps|gb|mb|kb|tb)$/i;
+// The word is a noun, not a verb: what follows is a preposition ("a 12 ms drop in latency") or the end of the
+// clause. "5 s drop the branch" is a command, not a number that went down.
+const NOUN_TAIL_RE = /^\s*(?:$|[.,;:!?)\]]|\b(?:in|of|to|from|by|on|over|under|across|within|after|since|during|for|at|and|or)\b)/i;
 // The digits of a leet spelling, read back ("i2" -> "12", "a.i" -> "4.1"); the leet spellings differ on the 1
 // ("i" and "l"), so both are read.
 const LEET_BACK = [{ o: '0', i: '1', e: '3', a: '4', s: '5', t: '7' }, { o: '0', l: '1', e: '3', a: '4', s: '5', t: '7' }];
@@ -588,22 +597,38 @@ const sentenceSpan = (text, index) => {
   }
   return [start, end];
 };
+// A number, read in the leet spelling too: every spelling of the text is read on its own (E43), and a joined
+// text glues the number to the word ("3%drop"), where the digits may be spelled in the leet way ("e%drop").
+const isMetricNumber = (tok, leet) => isNumberToken(tok, leet) || isNumberToken(tok, true);
+// The quantity of a noun-form metric, right before the word: the number alone ("a 3% drop") or the number and
+// its unit ("a 3 percent drop", "a 12 ms drop").
+const metricQuantity = (before, leet) => {
+  const toks = before.trim().split(/\s+/).filter(Boolean);
+  const last = toks[toks.length - 1] || '';
+  if (isMetricNumber(last, leet)) return true;                  // "a 3% drop"
+  const unit = last.replace(/[^\w]+$/, '');                     // the unit may carry a comma or a bracket
+  const prev = toks[toks.length - 2] || '';
+  return !!prev && isMetricNumber(prev, leet) && NOUN_UNIT_RE.test(unit);
+};
 // Is the drop-family word at `index` a number that went down rather than a verb that deletes something?
-const metricDropAt = (v, index, leet, presentOnly) => {
+const metricDropAt = (v, index, leet) => {
   const word = v.slice(index).match(/^drop(?:s|ped|ping)?\b/i)?.[0] || '';
   if (!word) return false;
-  if (presentOnly && !/^drops?$/i.test(word)) return false;      // the relief is for the present tense
-  const rest = v.slice(index + word.length);
-  const prep = rest.match(METRIC_PREP_RE);
-  if (!prep) return false;                                     // "drop the table" is not a number
-  const token = rest.slice(prep[0].length).match(/^\S+/)?.[0] || '';
-  if (!isNumberToken(token, leet)) return false;                // "drop 500 rows" is a count, not a metric
   const [s0, s1] = sentenceSpan(v, index);
   const sentence = v.slice(s0, s1);
   if (OBJ_DATA.test(sentence)) return false;                   // "drop from 500 rows to 100" deletes rows
   const lineStart = v.lastIndexOf('\n', index - 1) + 1;
   if (/^\s*(?:[-*•]|\d+[.)])\s*$/.test(v.slice(lineStart, index))) return false;   // the verb of an imperative list item
-  return METRIC_NOUN_RE.test(sentence) || METRIC_UNIT_RE.test(sentence);
+  if (!METRIC_NOUN_RE.test(sentence) && !METRIC_UNIT_RE.test(sentence)) return false;   // the sentence must be about a number
+  const rest = v.slice(index + word.length);
+  // the verb shape: a preposition and a number after the word ("the cost drop to 12 ms", "the latency dropped by 40 percent")
+  const prep = rest.match(METRIC_PREP_RE);
+  if (prep) {
+    const token = rest.slice(prep[0].length).match(/^\S+/)?.[0] || '';
+    if (isNumberToken(token, leet)) return true;               // "drop 500 rows" is a count, not a metric
+  }
+  // the noun shape: the number and the unit sit before the word ("a 3 percent drop in throughput")
+  return /^drop$/i.test(word) && metricQuantity(v.slice(s0, index), leet) && NOUN_TAIL_RE.test(rest);
 };
 const narrativeShape = (t) => {
   const m = NARR_ACTIVE.exec(t) || NARR_FIRST.exec(t) || NARR_PASSIVE.exec(t);
@@ -618,7 +643,7 @@ const narrativeShape = (t) => {
 const pastOnly = (v) => {
   if (matchWith(NONDESTRUCTIVE_RE, v, forbiddenExtra)) return false;
   DESTRUCTIVE_WORDS.lastIndex = 0;
-  for (const m of v.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0]) && !metricDropAt(v, m.index, false, false)) return false;
+  for (const m of v.matchAll(DESTRUCTIVE_WORDS)) if (!HARD_PAST.test(m[0]) && !metricDropAt(v, m.index, false)) return false;
   return !/\bmigrat/i.test(v);
 };
 export function isPastNarrative(sentence) {
