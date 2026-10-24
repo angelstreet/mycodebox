@@ -51,7 +51,8 @@ test('E43: a metric drop in a disguised spelling is still a metric, a disguised 
 
 test('E43: the past tense is a metric too (E53) and the narrative relief still works', () => {
   // E43 pinned the past tense as unrelieved; E53 extended the relief to it ("the latency dropped by 40 percent").
-  assert.equal(forbiddenMatch('dropped from 20 s to 3 s'), null, 'a past-tense metric drop is a metric too');
+  assert.equal(forbiddenMatch('the settle dropped from 20 s to 3 s'), null, 'a past-tense metric drop is a metric too');
+  assert.ok(forbiddenMatch('dropped from 20 s to 3 s'), 'a clause that starts with the verb is a command, not a report');
   assert.ok(forbiddenMatch('the table dropped by 500 rows'), 'a past-tense deletion still blocks');
   assert.equal(isPastNarrative('the settle dropped from 20 s to 3 s earlier'), true, 'a past narrative is still a narrative');
 });
