@@ -370,11 +370,14 @@ test('T6 dry run: nothing is removed and the report states the not-considered co
 
 test('T7 a worktree whose only content is ignored files is not removable, and the report says so', () => {
   const root = tmp('hw-wt-');
-  const a = makeRepo(root, 'alpha', [{ name: 'wt-ignored', status: '!! build/\n' }]);
+  // E37: the guard is about the CONTENT, not the mere presence of an ignored file. A note or a .env is not
+  // build output and keeps the worktree; build output alone does not (test/health-watch-reclaim.test.js).
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-ignored', status: '!! notes.md\n' }]);
   const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
   const w = scan.candidates[0];
   assert.equal(w.clean, true, 'nothing tracked or untracked is modified');
   assert.equal(w.ignoredFiles, 1);
+  assert.equal(w.ignoredOnlyBuildArtifacts, false);
   assert.equal(w.kind, 'ignored-files', 'git worktree remove would delete ignored files silently');
   assert.notEqual(w.kind, 'removable');
   const report = worktreeReport(scan, { du: () => 1 });
