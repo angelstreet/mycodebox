@@ -434,7 +434,9 @@ owning tmux / Claude session, disk use of `/tmp`, `~/.cache`, `~/.claude`, `~/.n
 and every registered worktree of the configured repos with its worktree / clean / ignored-files / merged / live-session
 status and a `why` column that names the criterion that kept it (E51, 2026-10-23: the watcher removed a running agent's
 worktree twice, because "clean" only means "no tracked file is modified" and "merged" was true for a branch with no
-commits of its own). Which repos and which roots are in scope is configured, never hard-coded: `worktreeRepos` (a map of
+commits of its own), and the plain clones under the same roots with the same columns (E37, 2026-10-24: the candidate set
+came from `git worktree list`, so a `git clone` was invisible and the owner's reclaim freed 0 KB on every run). Which
+repos and which roots are in scope is configured, never hard-coded: `worktreeRepos` (a map of
 `{ label: '/abs/path/to/repo' }`) and `worktreeRoots` (a list of allowed roots) in the state-dir config below; with no
 repo and no root no worktree is a candidate. A repo's main worktree is never a candidate, the paths are deduped by
 path, and the report states the worktrees that were NOT considered (count and bytes) so the blind spot stays visible.
@@ -481,7 +483,18 @@ Fix levels (`fixLevel`, only acted on when the disk check trips): `report` = no 
 into `main` and have no live session (no orphan kills); `cleanup+all` = both. A worktree is also kept when it has
 recent activity (its own git metadata or last commit moved within `worktreeActiveMin` minutes), when its branch has no
 commits of its own (unstarted), or when a process names it in its command line or holds one of its files open - an
-agent that works in a worktree from another directory is invisible to a cwd-only check (E51). These are destructive
+agent that works in a worktree from another directory is invisible to a cwd-only check (E51). Ignored files keep a
+worktree only when they are NOT build artifacts: `git worktree remove` deletes ignored files silently, so the only
+ignored files that may go with a worktree are the ones on the `BUILD_ARTIFACT_NAMES` allowlist in
+`scripts/health-watch.js` (`node_modules`, `__pycache__`, `dist`, `build`, `target`, `*.pyc`, `*.egg-info`, the tool
+caches, ...); a `.env`, a note or a downloaded dataset is not on it and keeps the worktree alive (E37, 2026-10-24: the
+guard blocked 9 merged worktrees / 2.2 GB that held nothing but build output, so the configured reclaim freed 0 KB).
+The same level also removes a **plain clone** under an allowed root when it is a scratch copy of a configured repo:
+its `origin` is that repo (or the repo's own upstream), its tree is clean, its `HEAD` is an ancestor of the remote's
+default branch (no commits of its own), no live session or process holds it, and its git state has not moved within
+`worktreeActiveMin` minutes. The main checkout of a configured repo, its registered worktrees and a clone of any other
+repo are never candidates. Every removal - worktree or clone - is in the report with its directory, its size and the
+reason it was removable. These are destructive
 optional modes;
 configure only within the owner's authorization. Historical deployment choices are not default permissions. Never touched: anything under a live session, any other worktree, anything
 outside `/tmp/claude-1000` for the scratch cleanup. Every deletion and its size goes in the report.
