@@ -46,7 +46,7 @@
 //   GET  /api/manager/wakes?day=YYYY-MM-DD → {summary, wakes} per wake of the manager agent, from its Claude transcript (manager-wakes.js, cached 60 s)
 //   GET  /api/leases/view       → the Leases view data: authority (legacy|central-through-ssh|central), leases (mode, holder, ttl, idle, heartbeat), tickets, deploys, shadow
 //   POST /api/leases/owner/release | /owner/mode  {id[, mode:'pin']} → owner force-release / downgrade (central only; legacy: 409); logged with the owner's identity
-//   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|unknown|system, plan}, unknown count
+//   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|platform|unknown|system, plan}, unknown count
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
@@ -2379,7 +2379,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/worker-auto-close') return json(res, 200, workerAutoClose.snapshot());   // sessions the worker auto-closed (or skipped) in the last tick
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
   if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
-  if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / unknown) + planned actions
+  if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / platform / unknown) + planned actions
   if (req.method === 'GET' && p === '/api/handoffs') {
     const q = url.searchParams;
     return json(res, 200, { handoffs: handoffs.list({ state: q.get('state') || undefined, session: q.get('session') || undefined }) });

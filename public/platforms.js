@@ -1,7 +1,8 @@
 // Platforms view model (TASK-44): who holds which lease, deploy-wait signals, chip text. Pure: used by server.js and the page.
-// A lease belongs to a session iff its agent is `<machine>:<tmux session name>` (case- and punctuation-insensitive, or a unique
-// long prefix), where <machine> is `codebox` or this machine's hostname. Agents should use
-// AGENT="codebox:$(tmux display-message -p '#S')" (see the deploy skill).
+// A lease belongs to a session iff its agent names one (case- and punctuation-insensitive, or a unique long prefix): the usual
+// form is `<machine>:<tmux session name>`, where <machine> is `codebox` or this machine's hostname. Agents should use
+// AGENT="codebox:$(tmux display-message -p '#S')" (see the deploy skill). A holder that names a session without the machine
+// prefix is a session too (holderSession): vpt-lease accepts that (it warns, it does not refuse).
 
 const PENDING = ['awaiting-approval', 'queued'];            // a deploy waiting for the platform; `running` already owns it
 const ACTIVE = ['awaiting-approval', 'queued', 'running'];
@@ -25,11 +26,9 @@ export function agentLocalName(agent, machines) {
   return a.slice(i + 1) || null;
 }
 
-// session name for an agent id, or null. Exact (case-insensitive) first, then the same name ignoring punctuation,
+// The session a name means: exact (case-insensitive) first, then the same name ignoring punctuation,
 // then a unique prefix match either way (the shorter side >= 8 characters, so `qualiai` does not match `qualiai-pipeline`).
-export function agentSession(agent, sessionNames, machines) {
-  const rest = agentLocalName(agent, machines);
-  if (!rest) return null;
+function matchSession(rest, sessionNames) {
   const want = rest.toLowerCase();
   const exact = sessionNames.find((n) => n === rest) ?? sessionNames.find((n) => n.toLowerCase() === want);
   if (exact) return exact;
@@ -40,6 +39,22 @@ export function agentSession(agent, sessionNames, machines) {
   if (same.length > 1) return null;
   const pre = sessionNames.filter((n) => { const x = normName(n); return x && Math.min(x.length, w.length) >= PREFIX_MIN && (x.startsWith(w) || w.startsWith(x)); });
   return pre.length === 1 ? pre[0] : null;
+}
+
+// session name for an agent id of one of our machines (`<machine>:<session>`), or null.
+export function agentSession(agent, sessionNames, machines) {
+  const rest = agentLocalName(agent, machines);
+  if (!rest) return null;
+  return matchSession(rest, sessionNames);
+}
+
+// The session a lease holder names: `codebox:<session>` (our machines) or a bare session name. Another machine's
+// prefix (`mac:`, another host) is never a session here.
+export function holderSession(agent, sessionNames, machines) {
+  const a = String(agent || '');
+  if (a.indexOf(':') <= 0) return matchSession(a, sessionNames);   // no machine prefix: the whole id is the name
+  const local = agentLocalName(a, machines);
+  return local ? matchSession(local, sessionNames) : null;
 }
 
 // Every session name the agent could mean (exact, normalised or by prefix): more than one is ambiguous, not "none".

@@ -1,7 +1,7 @@
 // Lease / deploy-wait measures for the daily report (TASK-58 C1). Pure except loadLeaseStats().
 //   deploy request -> start: minutes from "ready" (approved request, or its approve event) to the runner's start; p95 target < 10 min.
 //   blocked-deploy minutes: the same wait, summed over the deploys a lease held back (manager-events: deploy start/done with blockedBy).
-//   unknown holders: leases whose agent ghosty cannot link to a session (lease-watch.json days[date]); target 0.
+//   unknown holders: leases whose agent ghosty cannot identify (neither a session nor a platform agent; lease-watch.json days[date]); target 0.
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -39,7 +39,7 @@ export function leaseLines(w1, w7, unknown) {
   const f = (n) => (n == null ? 'n/a' : `${Math.round(n * 10) / 10}`);
   const row = (label, w) => `- ${label}: ${w.deploys} deploys started, request -> start p95 ${f(w.p95Min)} min (target < ${P95_TARGET_MIN}), held back by a lease: ${w.blockedCount} deploys / ${w.blockedMinutes} min`;
   return ['## Leases (TASK-58 C1)', '', row('last 24 h', w1), row('last 7 days', w7),
-    `- unknown-holder leases (agent ghosty cannot link to a session; target 0): now ${unknown?.last ?? 'n/a'}, max today ${unknown?.unknownMax ?? 'n/a'}`, ''];
+    `- unknown-holder leases (agent ghosty cannot identify: neither a session nor a platform agent; target 0): now ${unknown?.last ?? 'n/a'}, max today ${unknown?.unknownMax ?? 'n/a'}`, ''];
 }
 
 const jsonl = (txt) => String(txt || '').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
