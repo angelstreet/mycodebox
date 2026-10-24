@@ -1280,11 +1280,14 @@ with a feed line `rules-watch:told` per check and a journal `rules-watch.jsonl`.
 ## Lease binding (TASK-58 C1)
 
 `lease-watch.js` polls the configured external `vpt-lease` registry every 30 s: it writes `lease:released|expired|narrowed` to manager-events.jsonl (never pushed),
-releases a lease whose recognized `<machine>:<session>` holder is gone (seen in tmux before, missing on two polls in a row), and narrows a `kind=server`
-lease to `host` when the holder had no finished turn for 30 min (never releases an idle holder). Everything automatic is logged with
+releases a lease whose recognized holder session is gone (seen in tmux before, missing on two polls in a row), and narrows a `kind=server`
+lease to `host` when the holder had no finished turn for 30 min (never releases an idle holder). A holder is recognized as a session by its
+agent id: `<machine>:<session>` (our machines) or a bare session name (`vpt-lease` accepts that too; it only warns). The platform's own
+workers (`PLATFORM_AGENTS`, e.g. the capture agent) have a status of their own. Everything automatic is logged with
 `by:"TASK58-C1"` in `lease-actions.jsonl`. `manager.json` `leaseBind`: `"dry"` (log only) or `"off"`; default live. `GET /api/leases/watch` shows
-each holder (live / ended / remote / unknown / system) and the planned action. The reporter plugin releases a session's leases on SessionEnd
-(not on /clear or resume). Daily report: `lease-stats.js` (deploy request -> start p95, minutes held back by a lease, unknown holders).
+each holder (live / ended / remote / platform / system / unknown) with its name and the planned action. The reporter plugin releases a session's
+leases on SessionEnd (not on /clear or resume). Daily report: `lease-stats.js` (deploy request -> start p95, minutes held back by a lease, unknown
+holders: the holders that are neither a session nor a platform agent).
 
 ### Leases and deploys never reach the owner (round 12, OWNER_DECISIONS section 19)
 
