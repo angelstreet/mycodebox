@@ -1,7 +1,7 @@
 // Pure parts of scripts/health-watch.js: thresholds, owner resolution, scratch eligibility, worktree class, debounce, event shape.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs, scanWorktrees, worktreeIsLive, worktreeReport, runOptionalFixes, stripDeletedSuffix, readProcCwds, mergeTarget, parseWorktreePorcelain, configRepos, configRoots } from '../scripts/health-watch.js';
+import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs, scanWorktrees, worktreeIsLive, worktreeReport, runOptionalFixes, stripDeletedSuffix, readProcCwds, readProcFds, mergeTarget, parseWorktreePorcelain, configRepos, configRoots } from '../scripts/health-watch.js';
 
 const cfg = DEFAULT_CONFIG;
 const base = { diskPct: 50, diskFreeGB: 30, load1: 0.5, load5: 0.5, cores: 6, ramAvailPct: 50, runaways: [], stuck: [], defunct: 0 };
@@ -97,6 +97,9 @@ test('classifyWorktree: only clean+merged+no session+worktree is removable', () 
   assert.equal(classifyWorktree({ ...ok, liveSession: true }), 'live-session');
   assert.equal(classifyWorktree({ ...ok, clean: false }), 'dirty');
   assert.equal(classifyWorktree({ ...ok, merged: false }), 'unmerged');
+  // E51: two more reasons to keep a worktree, both added without touching the criteria above
+  assert.equal(classifyWorktree({ ...ok, recentActivity: true }), 'recent-activity');
+  assert.equal(classifyWorktree({ ...ok, unstarted: true }), 'unstarted');
 });
 
 test('shouldWake: debounce 6 h, worsened disk bypasses it', () => {
@@ -234,10 +237,13 @@ function fakeGit(spec) {
       if (rest[1] === '--git-common-dir') return e.common;
       if (rest[1] === '--verify') return e.refs?.has(rest[3]) ? 'deadbeef' : null;
       if (rest[1] === '--abbrev-ref') return e.branch || 'HEAD';
+      if (rest[1] === 'HEAD') return e.head || null;                     // the branch tip
+      if (rest[1] && e.refs?.has(rest[1])) return e.target || null;      // the merge target's tip
     }
     if (rest[0] === 'worktree' && rest[1] === 'list') return e.list;
     if (rest[0] === 'status') return e.status;
     if (rest[0] === 'merge-base') return e.mergedRefs?.has(rest[3]) ? '' : null;
+    if (rest[0] === 'reflog') return e.reflog || null;                   // branch reflog, newest entry first
     return null;
   };
   run.calls = calls;
@@ -251,7 +257,7 @@ function makeRepo(root, name, worktrees = [], opts = {}) {
   const mergedRefs = new Set(opts.mergedRefs || ['refs/remotes/origin/main']);
   mkdirSync(join(main, '.git'), { recursive: true });
   const list = [`worktree ${main}\nHEAD aaa\nbranch refs/heads/main`];
-  const spec = { [main]: { common, list: '', refs, mergedRefs, status: '', branch: 'main' } };
+  const spec = { [main]: { common, list: '', refs, mergedRefs, status: '', branch: 'main', head: 'aaa', target: 'aaa' } };
   for (const w of worktrees) {
     const p = join(main, w.name);
     mkdirSync(p, { recursive: true });
@@ -259,6 +265,7 @@ function makeRepo(root, name, worktrees = [], opts = {}) {
     const branch = w.branch || 'feature';
     list.push(`worktree ${p}\nHEAD bbb\nbranch refs/heads/${branch}`);
     spec[p] = { common: `${common}/worktrees/${w.name}`, status: w.status ?? '', branch,
+      head: w.head || 'bbb', target: w.target || 'aaa', reflog: w.reflog || null,
       refs, mergedRefs: new Set(w.mergedRefs ?? mergedRefs) };
   }
   spec[main].list = list.join('\n\n') + '\n';
@@ -375,10 +382,98 @@ test('T7 a worktree whose only content is ignored files is not removable, and th
   assert.match(report, /\| 1 \| origin\/main \| yes \| no \| ignored-files \|/, 'the ignored file count is in the table');
 });
 
+test('T8 an unstarted branch is not merged: a branch with no commits of its own is never removable', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [
+    { name: 'wt-unstarted', reflog: 'bbb\n' },      // created from main, never committed: HEAD is the fork point
+    { name: 'wt-started', reflog: 'bbb\naaa\n' },   // created from main, one commit of its own, already in origin/main
+    { name: 'wt-no-reflog', head: 'aaa' },          // no reflog: HEAD is the merge target's own tip
+  ]);
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  const by = Object.fromEntries(scan.candidates.map((w) => [w.name, w]));
+  assert.equal(by['wt-unstarted'].merged, false, 'a branch with no commits of its own is unstarted, not merged');
+  assert.equal(by['wt-unstarted'].kind, 'unstarted');
+  assert.notEqual(by['wt-unstarted'].kind, 'removable', 'the E51 case: clean + ancestor of origin/main is not enough');
+  assert.equal(by['wt-started'].merged, true, 'a branch with a commit of its own, already in origin/main, is merged');
+  assert.equal(by['wt-started'].kind, 'removable', 'a merged branch with work of its own is still reclaimed');
+  assert.equal(by['wt-no-reflog'].merged, false, 'without a reflog, HEAD == the merge target tip is unstarted too');
+  assert.equal(by['wt-no-reflog'].kind, 'unstarted');
+});
+
+test('T9 a worktree with recent activity is never removable, even when it is clean and merged', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-fresh' }]);
+  // the worktree's own git metadata exists and was just written: its owner has not written a file yet
+  const gd = join(a.common, 'worktrees', 'wt-fresh');
+  mkdirSync(gd, { recursive: true });
+  writeFileSync(join(gd, 'HEAD'), 'ref: refs/heads/feature\n');
+  writeFileSync(join(gd, 'index'), '');
+  const cfg = { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] };
+  const w = scanOf([a], cfg).candidates[0];
+  assert.equal(w.clean, true, 'nothing tracked is modified');
+  assert.equal(w.merged, true, 'clean and merged: only the activity rule can stop it');
+  assert.equal(w.recentActivity, true);
+  assert.equal(w.kind, 'recent-activity');
+  assert.notEqual(w.kind, 'removable', 'the E51 case: a live agent had not written its first file');
+  // an abandoned worktree is still reclaimed: the window is a delay, not a reaper shutdown
+  const old = new Date(Date.now() - 60 * 60000);
+  utimesSync(join(gd, 'index'), old, old);
+  utimesSync(join(gd, 'HEAD'), old, old);
+  const stale = scanOf([a], cfg).candidates[0];
+  assert.equal(stale.recentActivity, false, 'no activity for an hour');
+  assert.equal(stale.kind, 'removable', 'an abandoned worktree is still reclaimed');
+  // the window is configurable next to diskPct/fixLevel
+  const zero = scanOf([a], { ...cfg, worktreeActiveMin: 0 }).candidates[0];
+  assert.equal(zero.recentActivity, false, 'a window of 0 protects nothing');
+  assert.equal(zero.kind, 'removable');
+  assert.ok(DEFAULT_CONFIG.worktreeActiveMin > 0, 'the default lives in the repo, not only in the state-dir config');
+});
+
+test('T10 live: an agent that works in a worktree from another directory is live', () => {
+  const root = tmp('hw-wt-');
+  const dir = join(root, 'wt-agent');
+  mkdirSync(dir, { recursive: true });
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'git -C ' + dir + ' status' }] }), true,
+    'a running git command against the worktree');
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'mcode exec --cwd ' + dir }] }), true,
+    'an agent started in the worktree');
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'mcode exec --cwd=' + dir }] }), true,
+    'the same, as --cwd=<dir>');
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'node --test' }] }), false);
+  assert.equal(worktreeIsLive(dir, { procArgs: [{ pid: 5, args: 'git -C ' + dir + '-other status' }] }), false,
+    'a sibling directory is not this worktree');
+  assert.equal(worktreeIsLive(dir, { procFds: [{ pid: 6, fd: '3', path: join(dir, 'src/app.js') }] }), true,
+    'a process holds a file of the worktree open');
+  assert.equal(worktreeIsLive(dir, { procFds: [{ pid: 6, fd: '3', path: join(root, 'other/x') }] }), false);
+});
+
+test('T10 scan: a worktree an agent works in from another directory is live-session, never removable', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-agent' }]);
+  const dir = join(a.main, 'wt-agent');
+  const scan = scanWorktrees({ cfg: { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] },
+    procArgs: [{ pid: 7, args: 'git -C ' + dir + ' status --porcelain' }], run: fakeGit(a.spec) });
+  assert.equal(scan.candidates[0].liveSession, true);
+  assert.equal(scan.candidates[0].kind, 'live-session');
+  assert.equal(scan.candidates[0].why, 'a live session is using it');
+});
+
+test('T11 the report names the criterion that kept a worktree', () => {
+  const root = tmp('hw-wt-');
+  const a = makeRepo(root, 'alpha', [{ name: 'wt-unstarted', reflog: 'bbb\n' }]);
+  const scan = scanOf([a], { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] });
+  const report = worktreeReport(scan, { du: () => 1024 });
+  assert.match(report, /\| unstarted \| the branch has no commits of its own \|/,
+    'the operator sees WHICH criterion failed, not only the flags');
+});
+
 test('helpers: worktree porcelain, proc cwds and the deleted suffix', () => {
   const list = parseWorktreePorcelain('worktree /a\nHEAD x\nbranch refs/heads/main\n\nworktree /b\nHEAD y\ndetached\n');
   assert.deepEqual(list, [{ path: '/a', branch: 'main', detached: false }, { path: '/b', branch: '', detached: true }]);
   const cwds = readProcCwds([{ pid: 7, mine: true }, { pid: 8, mine: false }],
     (p) => (p === '/proc/7/cwd' ? '/x/y (deleted)' : '/x/y'));
   assert.deepEqual(cwds, [{ pid: 7, cwd: '/x/y (deleted)' }], 'only own processes');
+  const fds = readProcFds([{ pid: 7, mine: true }, { pid: 8, mine: false }],
+    (p) => '/x/y', (p) => (p === '/proc/7/fd' ? ['3', '4'] : []));
+  assert.deepEqual(fds, [{ pid: 7, fd: '3', path: '/x/y' }, { pid: 7, fd: '4', path: '/x/y' }], 'only own processes');
 });

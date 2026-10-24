@@ -34,6 +34,10 @@ export const DEFAULT_CONFIG = {
   npmCacheMB: 1024,       // npm cache is cleaned only above this size
   debounceHours: 6,       // same issue key is written to the manager feed at most once per this
   fixLevel: 'cleanup',    // report | cleanup | cleanup+orphans | cleanup+worktrees | cleanup+all (orphans and worktrees are separate opt-ins)
+  // A worktree whose git state changed within this many minutes is never removed: an agent that just created it has
+  // not written a file yet, so "clean" says nothing about whether anyone is working there (E51, 2026-10-23). The
+  // timer runs every ~5 min, so 30 min (six ticks) still reclaims an abandoned worktree quickly.
+  worktreeActiveMin: 30,
   // Which repos' REGISTERED worktrees may be considered, and where such a worktree may live.
   // Both live in the state-dir config (never in this tracked file): worktreeRepos = { label: '/abs/path/to/repo' },
   // worktreeRoots = ['/abs/root', ...]. No repo and no root => nothing is a candidate. The deletion criteria
@@ -149,15 +153,18 @@ export function scratchEligible(entry, liveIds, now, maxAgeDays) {
   return { ok: true, why: 'dead session, old' };
 }
 
-// Worktree classification. info: {isWorktree, clean, merged, liveSession, ignoredFiles?}
+// Worktree classification. info: {isWorktree, clean, merged, liveSession, ignoredFiles?, recentActivity?, unstarted?}
 // The three deletion conditions stay exactly as they were (clean, merged, no live session). ignoredFiles is a
 // safety guard on top: `git worktree remove` silently deletes ignored files, so a worktree whose only content is
-// ignored files is reported, never removed behind the owner's back.
+// ignored files is reported, never removed behind the owner's back. recentActivity (the worktree's git state moved
+// in the last N minutes) and unstarted (the branch has no commits of its own) keep live work out of the reaper's way.
 export function classifyWorktree(info) {
   if (!info.isWorktree) return 'not-worktree';
   if (info.liveSession) return 'live-session';
   if (!info.clean) return 'dirty';
   if (info.ignoredFiles) return 'ignored-files';
+  if (info.recentActivity) return 'recent-activity';
+  if (info.unstarted) return 'unstarted';
   if (!info.merged) return 'unmerged';
   return 'removable';
 }
@@ -184,7 +191,10 @@ export function underRoots(dir, roots, realpath = safeRealpath) {
 // Is a session alive inside this worktree? A pane cwd, a Claude session cwd or ANY live process whose /proc cwd is
 // inside the worktree counts. The " (deleted)" suffix is stripped and both sides are compared through realpath, so a
 // re-spelled path or a symlink does not hide a live session.
-export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [] } = {}) {
+// Two more traces of an agent that works in a worktree from ANOTHER directory (E51: a task-spawned worker runs
+// `git -C <dir>` while its own cwd is the parent directory): its command line names the worktree, or it holds a file
+// of the worktree open.
+export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [], procArgs = [], procFds = [] } = {}) {
   const hit = (raw) => {
     if (!raw) return false;
     const p = stripDeletedSuffix(raw);
@@ -193,9 +203,18 @@ export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [] } =
     const rp = safeRealpath(p);
     return !!rp && pathInside(safeRealpath(dir) || dir, rp);
   };
+  const inArgs = (args) => String(args || '').split(/\s+/).some((tok) => {
+    const t = tok.replace(/^["']|["']$/g, '');
+    if (!t) return false;
+    if (hit(t)) return true;
+    const i = t.indexOf('=');       // --cwd=<dir>
+    return i > 0 && hit(t.slice(i + 1));
+  });
   return panes.some((p) => hit(p.path))
     || claude.some((c) => c.alive && hit(c.cwd))
-    || procCwds.some((c) => hit(c.cwd));
+    || procCwds.some((c) => hit(c.cwd))
+    || procArgs.some((p) => inArgs(p.args))
+    || procFds.some((f) => hit(f.path));
 }
 
 // The cwd of every own process: a session that cd'd elsewhere still holds the worktree open.
@@ -204,6 +223,21 @@ export function readProcCwds(procs, readlink = readlinkSync) {
   for (const p of procs || []) {
     if (!p.mine) continue;
     try { const cwd = readlink(`/proc/${p.pid}/cwd`); if (cwd) out.push({ pid: p.pid, cwd }); } catch {}
+  }
+  return out;
+}
+
+// The files every own process holds open: a process with a file of the worktree open is working on it, whatever its
+// cwd is. Bounded per process: the list is a liveness hint, not an inventory.
+export function readProcFds(procs, readlink = readlinkSync, readdir = readdirSync, maxPerProc = 64) {
+  const out = [];
+  for (const p of procs || []) {
+    if (!p.mine) continue;
+    let fds = [];
+    try { fds = readdir(`/proc/${p.pid}/fd`); } catch { continue; }
+    for (const fd of fds.slice(0, maxPerProc)) {
+      try { const path = readlink(`/proc/${p.pid}/fd/${fd}`); if (path) out.push({ pid: p.pid, fd, path }); } catch {}
+    }
   }
   return out;
 }
@@ -445,8 +479,47 @@ export function mergeTarget(run, path) {
   return null;
 }
 
+// The commit a branch was created from: the OLDEST entry of its reflog ("branch: Created from ..."). git's own
+// merge-base --fork-point wants the reflog of the merge TARGET, which a fresh clone may not have.
+export function branchForkPoint(run, dir, branch) {
+  if (!branch || branch === 'HEAD') return '';
+  const out = run('git', ['-C', dir, 'reflog', 'show', '--format=%H', branch]);
+  if (!out) return '';
+  const lines = String(out).split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : '';
+}
+
+// A branch that was created from the merge target and never committed on it is UNSTARTED, not merged: its HEAD is
+// the fork point, which is trivially an ancestor of the merge target, so "is HEAD an ancestor of origin/main" said
+// yes for a branch with no work at all (E51, 2026-10-23: the watcher removed a live worktree twice). Without a
+// reflog the branch counts as unstarted only when its HEAD is the merge target's own tip.
+export function isUnstarted({ headSha = '', targetSha = '', forkPoint = '' } = {}) {
+  if (!headSha) return false;
+  if (forkPoint) return headSha === forkPoint;
+  return headSha === targetSha;
+}
+
+// A linked worktree's .git is a FILE that names its own metadata dir (under the repo's common dir).
+export function worktreeGitDir(dir, readFile = readFileSync) {
+  try {
+    const m = /^gitdir:\s*(.+)\s*$/m.exec(readFile(join(dir, '.git'), 'utf8'));
+    return m ? resolve(dir, m[1].trim()) : null;
+  } catch { return null; }
+}
+
+// The files git writes in that metadata dir: a checkout, a commit, an index refresh. Their mtime is the last sign of
+// life of a worktree whose owner has not written a file yet.
+const GIT_STATE_FILES = ['HEAD', 'index', 'logs/HEAD', 'ORIG_HEAD'];
+export function worktreeGitState(gitDir, { stat = lstatSync } = {}) {
+  let at = 0, source = null;
+  for (const f of GIT_STATE_FILES) {
+    try { const st = stat(join(gitDir, f)); if (st && st.mtimeMs > at) { at = st.mtimeMs; source = f; } } catch {}
+  }
+  return { at, source };
+}
+
 // Scan the configured repos. run() is injectable so the tests can drive the git calls without a real repo.
-export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], run = sh, realpath = safeRealpath, stat = lstatSync } = {}) {
+export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], procArgs = [], procFds = [], run = sh, realpath = safeRealpath, stat = lstatSync, readFile = readFileSync, now = Date.now() } = {}) {
   const roots = configRoots(cfg);
   const repos = [], candidates = [], notConsidered = [];
   const seenCommon = new Map(), seenPaths = new Map();
@@ -491,22 +564,53 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], run
       let st = null;
       try { st = stat(join(dir, '.git')); } catch {}
       const isWorktree = !!st && st.isFile();      // a linked worktree has a .git FILE, a clone has a .git DIRECTORY
-      const status = run('git', ['-C', dir, 'status', '--porcelain', '--ignored']);
+      // --no-optional-locks: the watcher must not rewrite the index itself, or every worktree would look active.
+      const status = run('git', ['--no-optional-locks', '-C', dir, 'status', '--porcelain', '--ignored']);
       const lines = status === null ? [] : status.split('\n').filter(Boolean);
       const ignoredFiles = lines.filter((l) => l.startsWith('!!')).length;
       const clean = status !== null && lines.every((l) => l.startsWith('!!'));
-      const merged = mergeRef ? run('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', mergeRef.ref]) !== null : false;
       const branch = (run('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']) || '').trim();
-      const liveSession = worktreeIsLive(dir, { panes, claude, procCwds });
-      const info = { name: basename(dir), dir, branch, repo: key, isWorktree, clean, merged,
-        mergedRef: mergeRef ? mergeRef.name : null, ignoredFiles, liveSession };
+      const headSha = (run('git', ['-C', dir, 'rev-parse', 'HEAD']) || '').trim();
+      const targetSha = mergeRef ? (run('git', ['-C', dir, 'rev-parse', mergeRef.ref]) || '').trim() : '';
+      const ancestor = mergeRef ? run('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', mergeRef.ref]) !== null : false;
+      const unstarted = isUnstarted({ headSha, targetSha, forkPoint: branchForkPoint(run, dir, branch) });
+      const merged = ancestor && !unstarted;   // an unstarted branch has no work of its own to be merged
+      // Recent activity: the worktree's own git metadata, or its last commit. "clean" only means "no tracked file is
+      // modified", so a worktree whose owner has not written anything yet is still work in progress (E51).
+      const gitDir = isWorktree ? worktreeGitDir(dir, readFile) : null;
+      const state = gitDir ? worktreeGitState(gitDir, { stat }) : { at: 0, source: null };
+      const lastCommitAt = Number((run('git', ['-C', dir, 'log', '-1', '--format=%ct', 'HEAD']) || '').trim()) * 1000 || 0;
+      const activityAt = Math.max(state.at, lastCommitAt);
+      const activeMin = Number(cfg.worktreeActiveMin ?? DEFAULT_CONFIG.worktreeActiveMin);
+      const recentActivity = activityAt > 0 && now - activityAt < activeMin * 60000;
+      const liveSession = worktreeIsLive(dir, { panes, claude, procCwds, procArgs, procFds });
+      const info = { name: basename(dir), dir, branch, repo: key, isWorktree, clean, merged, unstarted,
+        mergedRef: mergeRef ? mergeRef.name : null, ignoredFiles, liveSession, recentActivity, activeMin,
+        activityAt, activityAgeMin: activityAt ? Math.max(0, Math.round((now - activityAt) / 60000)) : null,
+        activitySource: state.source || (lastCommitAt ? 'last commit' : null) };
       info.kind = classifyWorktree(info);
+      info.why = classifyWhy(info);
       candidates.push(info);
       repo.candidates++;
     }
   }
   return { candidates, notConsidered, repos, roots, registered,
     dedupe: { entriesDropped, reposDropped }, missing };
+}
+
+// Which criterion kept the worktree, in words: the operator must be able to tell an abandoned worktree from a live
+// one without reading the source (E51: the report only said "live session: no" and "merged: yes").
+export function classifyWhy(info) {
+  switch (info.kind) {
+    case 'not-worktree': return 'not a linked worktree';
+    case 'live-session': return 'a live session is using it';
+    case 'dirty': return 'tracked or untracked changes';
+    case 'ignored-files': return 'ignored files would be deleted';
+    case 'recent-activity': return `git state changed ${info.activityAgeMin ?? 0} min ago`;
+    case 'unstarted': return 'the branch has no commits of its own';
+    case 'unmerged': return `commits are not in ${info.mergedRef || 'the merge target'}`;
+    default: return 'clean, merged, no session';
+  }
 }
 
 // The worktree section of the report: every candidate, and the blind spot (registered worktrees NOT considered).
@@ -523,9 +627,9 @@ export function worktreeReport(scan, { du = duR } = {}) {
   L.push(`- registered worktrees: ${scan?.registered || 0} (${scan?.dedupe?.entriesDropped || 0} duplicate entries dropped, ${scan?.dedupe?.reposDropped || 0} repo(s) skipped as the same git common dir, ${scan?.missing || 0} missing on disk)`);
   L.push(`- not considered: ${nc.length} worktrees, ${human(ncKB)} (a repo main worktree, or outside the allowed roots)`);
   L.push(`- allowed roots: ${(scan?.roots || []).join(', ') || 'none configured'}`);
-  L.push('', '| dir | repo | branch | size | git worktree | clean | ignored files | merged into | merged | live session | class |', '|---|---|---|---|---|---|---|---|---|---|---|');
+  L.push('', '| dir | repo | branch | size | git worktree | clean | ignored files | merged into | merged | live session | class | why |', '|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const w of scan?.candidates || []) {
-    L.push(`| ${w.dir} | ${w.repo} | ${w.branch} | ${human(du(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.ignoredFiles || 0} | ${w.mergedRef || 'n/a'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} |`);
+    L.push(`| ${w.dir} | ${w.repo} | ${w.branch} | ${human(du(w.dir))} | ${w.isWorktree ? 'yes' : 'no (main clone)'} | ${w.clean ? 'yes' : 'NO'} | ${w.ignoredFiles || 0} | ${w.mergedRef || 'n/a'} | ${w.merged ? 'yes' : 'NO'} | ${w.liveSession ? 'YES' : 'no'} | ${w.kind} | ${w.why} |`);
   }
   if (nc.length) {
     L.push('', '| not considered | repo | reason | size |', '|---|---|---|---|');
@@ -705,7 +809,9 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const reportPath = join(reportsDir, `${iso}.md`);
   const duPath = join(stateDir, 'health-du-cache.json');
   try { duCache = Object.fromEntries(Object.entries(JSON.parse(readFileSync(duPath, 'utf8'))).filter(([, e]) => now - e.at < DU_TTL_MS)); } catch { duCache = {}; }
-  const wtScan = scanWorktrees({ cfg, panes, claude, procCwds: readProcCwds(procs) });
+  const wtScan = scanWorktrees({ cfg, panes, claude, procCwds: readProcCwds(procs), now,
+    procArgs: procs.filter((p) => p.mine).map((p) => ({ pid: p.pid, args: p.args })),
+    procFds: readProcFds(procs) });
   const wts = wtScan.candidates;
   const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, wtScan, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];
