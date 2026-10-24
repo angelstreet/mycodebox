@@ -153,16 +153,54 @@ export function scratchEligible(entry, liveIds, now, maxAgeDays) {
   return { ok: true, why: 'dead session, old' };
 }
 
-// Worktree classification. info: {isWorktree, clean, merged, liveSession, ignoredFiles?, recentActivity?, unstarted?}
+// ---------------------------------------------------------------- build artifacts
+//
+// `git worktree remove` (and rm -rf on a plain clone) deletes ignored files SILENTLY, so the only ignored files
+// that may go with a removed worktree are build artifacts: directories and files a build tool writes and nobody
+// edits by hand. A .env, a note or a downloaded dataset is not on the list and keeps its worktree alive (E37:
+// the ignored-files guard blocked 9 merged worktrees / 2.2 GB that held nothing but build output, so the owner's
+// configured reclaim freed 0 KB). The list is deliberately short: every entry is a name a build tool owns end
+// to end, and nothing else.
+export const BUILD_ARTIFACT_NAMES = new Set([
+  'node_modules',   // npm / yarn / pnpm install output
+  '__pycache__',    // python bytecode
+  '.venv', 'venv',  // python virtualenvs
+  'dist', 'build',  // js and python build output
+  'target',         // rust and java build output
+  '.next',          // next.js build
+  'coverage',       // coverage report
+  '.pytest_cache', '.ruff_cache', '.mypy_cache', '.tox',   // test and lint tool caches
+  '.turbo', '.svelte-kit',                                 // frontend build caches
+]);
+// Build artifacts whose name carries a prefix: the compiled file and the packaging metadata.
+export const BUILD_ARTIFACT_PATTERNS = ['*.pyc', '*.pyo', '*.egg-info'];
+const BUILD_ARTIFACT_RES = BUILD_ARTIFACT_PATTERNS.map((p) =>
+  new RegExp('^' + p.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
+
+// Is this file or directory name a build artifact?
+export function isBuildArtifactName(name) {
+  if (!name) return false;
+  if (BUILD_ARTIFACT_NAMES.has(name)) return true;
+  return BUILD_ARTIFACT_RES.some((re) => re.test(name));
+}
+// An ignored path is a build artifact when it IS one (node_modules) or sits inside one (build/out.js).
+export function isBuildArtifactPath(p) {
+  return String(p || '').split('/').filter(Boolean).some(isBuildArtifactName);
+}
+
+// Worktree classification. info: {isWorktree, clean, merged, liveSession, ignoredFiles?, ignoredOnlyBuildArtifacts?,
+// recentActivity?, unstarted?}
 // The three deletion conditions stay exactly as they were (clean, merged, no live session). ignoredFiles is a
 // safety guard on top: `git worktree remove` silently deletes ignored files, so a worktree whose only content is
-// ignored files is reported, never removed behind the owner's back. recentActivity (the worktree's git state moved
-// in the last N minutes) and unstarted (the branch has no commits of its own) keep live work out of the reaper's way.
+// ignored files is reported, never removed behind the owner's back - unless every ignored file is a build
+// artifact, which is what a merged, dead, clean worktree of a build-heavy repo holds (E37). recentActivity (the
+// worktree's git state moved in the last N minutes) and unstarted (the branch has no commits of its own) keep
+// live work out of the reaper's way.
 export function classifyWorktree(info) {
   if (!info.isWorktree) return 'not-worktree';
   if (info.liveSession) return 'live-session';
   if (!info.clean) return 'dirty';
-  if (info.ignoredFiles) return 'ignored-files';
+  if (info.ignoredFiles && !info.ignoredOnlyBuildArtifacts) return 'ignored-files';
   if (info.recentActivity) return 'recent-activity';
   if (info.unstarted) return 'unstarted';
   if (!info.merged) return 'unmerged';
@@ -510,9 +548,11 @@ export function worktreeGitDir(dir, readFile = readFileSync) {
 // The files git writes in that metadata dir: a checkout, a commit, an index refresh. Their mtime is the last sign of
 // life of a worktree whose owner has not written a file yet.
 const GIT_STATE_FILES = ['HEAD', 'index', 'logs/HEAD', 'ORIG_HEAD'];
-export function worktreeGitState(gitDir, { stat = lstatSync } = {}) {
+// A clone keeps its own metadata in .git: a fetch there rewrites FETCH_HEAD, so it counts as activity too.
+const CLONE_STATE_FILES = [...GIT_STATE_FILES, 'FETCH_HEAD'];
+export function worktreeGitState(gitDir, { stat = lstatSync, files = GIT_STATE_FILES } = {}) {
   let at = 0, source = null;
-  for (const f of GIT_STATE_FILES) {
+  for (const f of files) {
     try { const st = stat(join(gitDir, f)); if (st && st.mtimeMs > at) { at = st.mtimeMs; source = f; } } catch {}
   }
   return { at, source };
@@ -539,7 +579,8 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], pro
     if (listOut === null) { repos.push({ key, path, common, error: 'git worktree list failed' }); continue; }
     const entries = parseWorktreePorcelain(listOut);
     const mergeRef = mergeTarget(run, path);
-    const repo = { key, path, common, entries: entries.length, mergeRef: mergeRef ? mergeRef.name : null, candidates: 0, notConsidered: 0 };
+    const repo = { key, path, common, entries: entries.length, mergeRef: mergeRef ? mergeRef.name : null, candidates: 0, notConsidered: 0,
+      worktreePaths: entries.map((e) => resolve(e.path)) };
     repos.push(repo);
     registered += entries.length;
 
@@ -567,7 +608,10 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], pro
       // --no-optional-locks: the watcher must not rewrite the index itself, or every worktree would look active.
       const status = run('git', ['--no-optional-locks', '-C', dir, 'status', '--porcelain', '--ignored']);
       const lines = status === null ? [] : status.split('\n').filter(Boolean);
-      const ignoredFiles = lines.filter((l) => l.startsWith('!!')).length;
+      const ignoredPaths = lines.filter((l) => l.startsWith('!!')).map((l) => l.slice(2).trim());
+      const ignoredFiles = ignoredPaths.length;
+      // Only build artifacts may go with the worktree: one unknown ignored file (.env, a note) keeps it alive.
+      const unknownIgnored = ignoredPaths.filter((p) => !isBuildArtifactPath(p));
       const clean = status !== null && lines.every((l) => l.startsWith('!!'));
       const branch = (run('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']) || '').trim();
       const headSha = (run('git', ['-C', dir, 'rev-parse', 'HEAD']) || '').trim();
@@ -585,7 +629,8 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], pro
       const recentActivity = activityAt > 0 && now - activityAt < activeMin * 60000;
       const liveSession = worktreeIsLive(dir, { panes, claude, procCwds, procArgs, procFds });
       const info = { name: basename(dir), dir, branch, repo: key, isWorktree, clean, merged, unstarted,
-        mergedRef: mergeRef ? mergeRef.name : null, ignoredFiles, liveSession, recentActivity, activeMin,
+        mergedRef: mergeRef ? mergeRef.name : null, ignoredFiles, ignoredOnlyBuildArtifacts: ignoredFiles > 0 && unknownIgnored.length === 0,
+        unknownIgnored, liveSession, recentActivity, activeMin,
         activityAt, activityAgeMin: activityAt ? Math.max(0, Math.round((now - activityAt) / 60000)) : null,
         activitySource: state.source || (lastCommitAt ? 'last commit' : null) };
       info.kind = classifyWorktree(info);
@@ -598,6 +643,162 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], pro
     dedupe: { entriesDropped, reposDropped }, missing };
 }
 
+// ---------------------------------------------------------------- plain clones
+//
+// A plain `git clone` is not a REGISTERED worktree, so `git worktree list` never shows it and the reclaim never
+// saw it: /tmp/vp-clone (547 MB) and /tmp/main-check (501 MB) were invisible to a reclaim that freed 0 KB
+// (E37, 2026-10-24). A clone is a candidate only when it is a scratch copy of a repo this product manages:
+// its origin is a configured repo (or that repo's own upstream), its tree is clean, it has no commits of its
+// own, nobody works in it and its git state has not moved within the activity window.
+export const CLONE_MAX_DEPTH = 2;    // the allowed roots and their direct children
+export const CLONE_MAX_DIRS = 2000;   // the walk is bounded: a root may hold thousands of directories
+
+// The directories under the allowed roots that may hold a clone. Symlinked directories are not followed and the
+// walk stops at CLONE_MAX_DIRS, so a root full of data cannot turn the scan into a full disk walk.
+export function findCloneDirs({ roots = [], excluded = new Set(), realpath = safeRealpath, readdir = readdirSync,
+  maxDepth = CLONE_MAX_DEPTH, maxDirs = CLONE_MAX_DIRS } = {}) {
+  const out = [];
+  let visited = 0;
+  const walk = (dir, depth) => {
+    if (depth > maxDepth) return;
+    let entries = [];
+    try { entries = readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === '.git') continue;   // a symlinked directory is not followed
+      const p = join(dir, e.name);
+      if (visited >= maxDirs) return;
+      visited++;
+      const id = realpath(p) || p;
+      if (excluded.has(id)) continue;    // a configured repo or one of its registered worktrees
+      out.push(p);
+      walk(p, depth + 1);
+    }
+  };
+  for (const r of roots) walk(r, 1);
+  return out;
+}
+
+// A remote url and a local path are written in different ways for the same repo: file:///p, /p, /p/.git.
+export function normalizeRepoUrl(u) {
+  return String(u || '').trim().replace(/^file:\/\//, '').replace(/\.git$/, '').replace(/\/+$/, '');
+}
+
+// Which configured repo a clone's origin points at: the repo's own path, or the repo's own upstream (a clone made
+// from the remote). null = a repo this product does not manage, which is never a candidate.
+export function matchOriginRepo(origin, repos = [], realpath = safeRealpath) {
+  const o = normalizeRepoUrl(origin);
+  if (!o) return null;
+  for (const r of repos) {
+    const p = normalizeRepoUrl(r.path);
+    if (!p) continue;
+    if (p === o) return r.key;
+    if (o.startsWith('/') && (realpath(o) || o) === (realpath(p) || p)) return r.key;
+  }
+  for (const r of repos) {
+    const up = normalizeRepoUrl(r.origin);
+    if (up && up === o) return r.key;
+  }
+  return null;
+}
+
+// The default branch of the clone's own remote: origin/HEAD when the clone has it, else origin/main, else
+// origin/master. A clone without one cannot be compared with the remote, so it is not a candidate.
+export function cloneRemoteRef(run, dir) {
+  for (const ref of ['refs/remotes/origin/HEAD', 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
+    if (run('git', ['-C', dir, 'rev-parse', '--verify', '--quiet', ref]) !== null) return ref;
+  }
+  return null;
+}
+
+// The clone criteria, in the order the report names them. Every one of them must hold: a clone that fails any of
+// them is reported, never removed.
+export function classifyClone(info) {
+  if (!info.isClone) return 'not-clone';
+  if (!info.repo || info.repo === 'unknown') return 'clone-unknown-repo';
+  if (info.liveSession) return 'clone-live-session';
+  if (!info.clean) return 'clone-dirty';
+  if (info.unknownIgnored?.length) return 'clone-ignored-files';
+  if (info.recentActivity) return 'clone-recent-activity';
+  if (!info.merged) return 'clone-unmerged';
+  return 'removable';
+}
+
+// Scan the allowed roots for plain clones of the configured repos. run() is injectable, like scanWorktrees.
+export function scanClones({ cfg, repos = [], panes = [], claude = [], procCwds = [], procArgs = [], procFds = [],
+  run = sh, realpath = safeRealpath, stat = lstatSync, readdir = readdirSync, now = Date.now(),
+  uid = process.getuid?.(), maxDepth = CLONE_MAX_DEPTH, maxDirs = CLONE_MAX_DIRS } = {}) {
+  const roots = configRoots(cfg);
+  const managed = repos.filter((r) => !r.error && !r.skipped && r.path);
+  // No configured repo means no clone is a candidate: do not walk the roots for nothing (same rule as the
+  // worktree scan: no repo and no root, nothing is a candidate).
+  if (!managed.length) return { candidates: [], notConsidered: [], roots };
+  // The main checkout and the registered worktrees of a configured repo are never clones of it.
+  const excluded = new Set();
+  for (const r of managed) {
+    for (const p of [r.path, ...(r.worktreePaths || [])]) {
+      const abs = resolve(p);
+      excluded.add(realpath(abs) || abs);
+    }
+  }
+  const known = managed.map((r) => ({ key: r.key, path: r.path,
+    origin: (run('git', ['-C', r.path, 'remote', 'get-url', 'origin']) || '').trim() }));
+  const candidates = [], notConsidered = [];
+  for (const dir of findCloneDirs({ roots, excluded, realpath, readdir, maxDepth, maxDirs })) {
+    let gitSt = null, dirSt = null;
+    try { gitSt = stat(join(dir, '.git')); } catch {}
+    try { dirSt = stat(dir); } catch {}
+    if (!gitSt) continue;                                  // not a checkout at all
+    if (!gitSt.isDirectory()) { notConsidered.push({ dir, reason: 'linked worktree, not a clone' }); continue; }
+    if (uid != null && dirSt && dirSt.uid !== uid) { notConsidered.push({ dir, reason: 'not owned by this user' }); continue; }
+    const origin = (run('git', ['-C', dir, 'remote', 'get-url', 'origin']) || '').trim();
+    const repoKey = matchOriginRepo(origin, known, realpath);
+    // The git state is read BEFORE the status call: an index rewritten by that call would make every clone look
+    // like it moved (--no-optional-locks keeps git from writing it).
+    const state = worktreeGitState(join(dir, '.git'), { stat, files: CLONE_STATE_FILES });
+    const activityAt = Math.max(state.at, dirSt?.mtimeMs || 0);
+    const activeMin = Number(cfg.worktreeActiveMin ?? DEFAULT_CONFIG.worktreeActiveMin);
+    const recentActivity = activityAt > 0 && now - activityAt < activeMin * 60000;
+    const status = run('git', ['--no-optional-locks', '-C', dir, 'status', '--porcelain', '--ignored']);
+    const lines = status === null ? [] : status.split('\n').filter(Boolean);
+    const ignoredPaths = lines.filter((l) => l.startsWith('!!')).map((l) => l.slice(2).trim());
+    const unknownIgnored = ignoredPaths.filter((p) => !isBuildArtifactPath(p));
+    const clean = status !== null && lines.every((l) => l.startsWith('!!'));
+    const branch = (run('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']) || '').trim();
+    const remoteRef = cloneRemoteRef(run, dir);
+    // No unique local commits: HEAD is an ancestor of the default branch the clone has of its own origin.
+    const merged = !!remoteRef && run('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', remoteRef]) !== null;
+    const liveSession = worktreeIsLive(dir, { panes, claude, procCwds, procArgs, procFds });
+    const info = { name: basename(dir), dir, branch, repo: repoKey || 'unknown', isClone: true, isWorktree: false,
+      origin, clean, merged, mergedRef: remoteRef ? remoteRef.replace('refs/remotes/', '') : null,
+      ignoredFiles: ignoredPaths.length, unknownIgnored, liveSession, recentActivity, activeMin, activityAt,
+      activityAgeMin: activityAt ? Math.max(0, Math.round((now - activityAt) / 60000)) : null,
+      activitySource: state.source || 'directory mtime' };
+    info.kind = classifyClone(info);
+    info.why = classifyWhy(info);
+    candidates.push(info);
+  }
+  return { candidates, notConsidered, roots };
+}
+
+// The clone section of the report: every candidate and the reason it was (not) removable.
+export function cloneReport(scan, { du = duR } = {}) {
+  const L = [];
+  const cands = scan?.candidates || [];
+  L.push('## Plain clones (git clones under the allowed roots)', '');
+  L.push(`- clones found: ${cands.length} (${cands.filter((c) => c.kind === 'removable').length} removable)`);
+  L.push(`- allowed roots: ${(scan?.roots || []).join(', ') || 'none configured'}`);
+  L.push('', '| dir | repo | origin | size | clean | ignored files | merged into | merged | live session | class | why |', '|---|---|---|---|---|---|---|---|---|---|---|');
+  for (const c of cands) {
+    L.push(`| ${c.dir} | ${c.repo} | ${c.origin || 'n/a'} | ${human(du(c.dir))} | ${c.clean ? 'yes' : 'NO'} | ${c.ignoredFiles || 0} | ${c.mergedRef || 'n/a'} | ${c.merged ? 'yes' : 'NO'} | ${c.liveSession ? 'YES' : 'no'} | ${c.kind} | ${c.why} |`);
+  }
+  const nc = scan?.notConsidered || [];
+  if (nc.length) {
+    L.push('', '| not considered | reason | size |', '|---|---|---|');
+    for (const x of nc) L.push(`| ${x.dir} | ${x.reason} | ${human(du(x.dir))} |`);
+  }
+  return L.join('\n');
+}
+
 // Which criterion kept the worktree, in words: the operator must be able to tell an abandoned worktree from a live
 // one without reading the source (E51: the report only said "live session: no" and "merged: yes").
 export function classifyWhy(info) {
@@ -605,11 +806,17 @@ export function classifyWhy(info) {
     case 'not-worktree': return 'not a linked worktree';
     case 'live-session': return 'a live session is using it';
     case 'dirty': return 'tracked or untracked changes';
-    case 'ignored-files': return 'ignored files would be deleted';
+    case 'ignored-files': return 'ignored files would be deleted (not build artifacts)';
     case 'recent-activity': return `git state changed ${info.activityAgeMin ?? 0} min ago`;
     case 'unstarted': return 'the branch has no commits of its own';
     case 'unmerged': return `commits are not in ${info.mergedRef || 'the merge target'}`;
-    default: return 'clean, merged, no session';
+    case 'clone-unknown-repo': return 'not a copy of a repo this product manages';
+    case 'clone-live-session': return 'a live session is using it';
+    case 'clone-dirty': return 'tracked or untracked changes';
+    case 'clone-ignored-files': return 'ignored files would be deleted (not build artifacts)';
+    case 'clone-recent-activity': return `git state changed ${info.activityAgeMin ?? 0} min ago`;
+    case 'clone-unmerged': return 'the clone has commits of its own';
+    default: return info.isClone ? 'scratch clone: clean, no commits of its own' : 'clean, merged, no session';
   }
 }
 
@@ -655,7 +862,7 @@ function scratchEntries(root) {
 }
 
 function investigate(ctx) {
-  const { home, procs, owners, wtScan } = ctx;
+  const { home, procs, owners, wtScan, cloneScan } = ctx;
   const L = [];
   L.push('## Top 15 processes by CPU', '', topProcs(procs, owners, 'cpu'), '', '## Top 15 processes by RSS', '', topProcs(procs, owners, 'rss'), '');
   L.push('## Disk use of the usual suspects', '');
@@ -676,6 +883,7 @@ function investigate(ctx) {
   const jd = sh('journalctl', ['--user', '--disk-usage']) || sh('journalctl', ['--disk-usage']);
   L.push(`- journal: ${jd ? jd.trim() : 'n/a'}`, '');
   L.push(worktreeReport(wtScan), '');
+  L.push(cloneReport(cloneScan), '');
   const dk = sh('docker', ['system', 'df']);
   L.push('## Docker', '', dk ? '```\n' + dk.trim() + '\n```' : 'skipped (docker not usable without sudo)', '');
   return L.join('\n');
@@ -723,6 +931,7 @@ function runFixes(ctx) {
 export function runOptionalFixes(ctx, issues) {
   const { cfg, dryRun, wts, log } = ctx;
   const verb = dryRun ? 'WOULD' : 'did';
+  let freedKB = 0;
   if (cfg.fixLevel !== 'report') {   // an orphaned test run is never someone's work: killed at every cleanup level
     for (const i of issues.filter((x) => x.type === 'test-leftover')) {
       const pids = i.leftovers.flatMap((l) => l.pids);
@@ -746,12 +955,24 @@ export function runOptionalFixes(ctx, issues) {
   }
   if (cfg.fixLevel === 'cleanup+worktrees' || cfg.fixLevel === 'cleanup+all') {
     for (const w of wts.filter((x) => x.kind === 'removable')) {
-      if (!dryRun) {
-        const o = sh('git', ['-C', w.dir, 'worktree', 'remove', w.dir], 120000);
-        log.push(o === null ? `- FAILED to remove worktree ${w.dir}` : `- removed worktree ${w.dir} (clean, merged, no session)`);
-      } else log.push(`- WOULD remove worktree ${w.dir} (clean, merged, no session)`);
+      const kb = duKB(w.dir);
+      if (w.isClone) {
+        // A plain clone is in no worktree registry: the scratch directory itself is what goes.
+        let st = null;
+        try { st = lstatSync(w.dir); } catch {}
+        if (!st || !st.isDirectory() || st.isSymbolicLink()) { log.push(`- FAILED to remove clone ${w.dir}: not a plain directory`); continue; }
+        if (!dryRun) { try { rmSync(w.dir, { recursive: true, force: true }); } catch (err) { log.push(`- FAILED to remove clone ${w.dir}: ${err.message}`); continue; } }
+        freedKB += kb;
+        log.push(`- ${dryRun ? 'WOULD delete' : 'deleted'} clone ${w.dir} (${human(kb)}, scratch copy of ${w.repo}: clean, no commits of its own)`);
+        continue;
+      }
+      const o = dryRun ? '' : sh('git', ['-C', w.dir, 'worktree', 'remove', w.dir], 120000);
+      if (!dryRun && o === null) { log.push(`- FAILED to remove worktree ${w.dir}`); continue; }
+      freedKB += kb;
+      log.push(`- ${dryRun ? 'WOULD remove' : 'removed'} worktree ${w.dir} (${human(kb)}, clean, merged, no session)`);
     }
   }
+  return freedKB;
 }
 
 // ---------------------------------------------------------------- main
@@ -809,16 +1030,19 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const reportPath = join(reportsDir, `${iso}.md`);
   const duPath = join(stateDir, 'health-du-cache.json');
   try { duCache = Object.fromEntries(Object.entries(JSON.parse(readFileSync(duPath, 'utf8'))).filter(([, e]) => now - e.at < DU_TTL_MS)); } catch { duCache = {}; }
-  const wtScan = scanWorktrees({ cfg, panes, claude, procCwds: readProcCwds(procs), now,
-    procArgs: procs.filter((p) => p.mine).map((p) => ({ pid: p.pid, args: p.args })),
-    procFds: readProcFds(procs) });
-  const wts = wtScan.candidates;
-  const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, wtScan, log: [] };
+  const procCwds = readProcCwds(procs);
+  const procArgs = procs.filter((p) => p.mine).map((p) => ({ pid: p.pid, args: p.args }));
+  const procFds = readProcFds(procs);
+  const wtScan = scanWorktrees({ cfg, panes, claude, procCwds, procArgs, procFds, now });
+  // A plain clone is not a registered worktree: without this scan the reclaim never sees it (E37).
+  const cloneScan = scanClones({ cfg, repos: wtScan.repos, panes, claude, procCwds, procArgs, procFds, now });
+  const wts = [...wtScan.candidates, ...cloneScan.candidates];
+  const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, wtScan, cloneScan, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];
   R.push('## Checks', '', `- disk /: ${disk.pct}% (${disk.freeGB} GB free), limit ${cfg.diskPct}%`, `- inodes /: ${inodes.pct}% used (${inodes.free} free), limit ${cfg.inodePct}%`, `- load: ${l1.toFixed(2)} / ${load5.toFixed(2)} on ${cores} cores (limit ${cfg.loadPerCore}/core for ${cfg.loadMinutes} min, sustained: ${loadTrip})`,
     `- RAM available: ${metrics.ramAvailPct.toFixed(1)}%, limit ${cfg.ramAvailPct}%`, `- runaways: ${metrics.runaways.length}, stuck node --test: ${metrics.stuck.length}, orphaned test runs: ${metrics.leftovers.length}, defunct: ${metrics.defunct}`, '',
     '**Tripped:** ' + (issues.length ? issues.map((i) => i.title).join('; ') : 'none (forced run)'), '');
-  R.push(investigate({ home, procs, owners, panes, claude, wtScan }));
+  R.push(investigate({ home, procs, owners, panes, claude, wtScan, cloneScan }));
   try { writeFileSync(duPath, JSON.stringify(duCache)); } catch {}
 
   // SAFE AUTO-FIX
@@ -827,7 +1051,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   R.push(`## Auto-fix (fixLevel "${cfg.fixLevel}"${dryRun ? ', dry run' : ''})`, '');
   if (diskIssue) freedKB = runFixes(ctx);
   else ctx.log.push('- disk check not tripped: no cleanup');
-  runOptionalFixes(ctx, issues);
+  freedKB += runOptionalFixes(ctx, issues) || 0;   // the removed worktrees and clones count as freed too
   R.push(...ctx.log, '', `Freed${dryRun ? ' (would free)' : ''}: ${human(freedKB)}`, '');
 
   // RE-CHECK
