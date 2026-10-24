@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmp } from './helpers-tmp.js';
+import { readMinimax } from '../quota.js';
 
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'orchestrator-failover');
 const home = tmp('mfo-');
@@ -100,6 +101,44 @@ test('the standby with the weekly window left out: its headroom is read, so the 
   assert.doesNotMatch(r.stdout, /quota unknown/);
   standby(4, 0);
   noTmux();
+});
+
+// ---- a window that is there but unusable is unknown, not 0 % headroom ----
+test('the standby with a weekly window that is present but unusable: unknown, so the seat is not handed over', () => {
+  reading(99, 90); fs.writeFileSync(state, 'claude\n');
+  fs.writeFileSync(mrl, JSON.stringify({ at: Date.now(), rate_limits: {
+    five_hour: { used_percentage: 12, resets_at: 1792684800 },
+    seven_day: { used_percentage: null, resets_at: 1792850400 } } }));
+  const r = run();
+  assert.match(r.stdout, /mm-manager quota unknown.*not promoting/);
+  assert.doesNotMatch(r.stdout, /standby message|claude -> minimax/, 'the seat is never handed over');
+  assert.equal(fs.readFileSync(state, 'utf8'), 'claude\n');
+  noTmux();
+  standby(4, 0);
+});
+
+// The standby's file comes from quota.js: a weekly window the API did not report must not look like headroom.
+// The writer records it as present but unusable, so the watcher reads "unknown" and keeps the role with Claude.
+test('the standby with a weekly window the API did not report: the writer leaves it unusable, so the seat is not handed over', async () => {
+  reading(99, 90); fs.writeFileSync(state, 'claude\n');
+  const now = Date.now();
+  const cfg = {
+    minimaxFile: mrl,
+    minimaxLogin: async () => ({ accessToken: 'synthetic-token-for-tests', expiresAtMs: now + 3600e3 }),
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({
+      model_remains: [{ model_name: 'general', end_time: now + 3600e3, weekly_end_time: now + 7 * 24 * 3600e3,
+        current_interval_status: 1, current_interval_remaining_percent: 98,
+        current_weekly_status: 1, current_weekly_remaining_percent: undefined, current_weekly_total_count: 0, current_weekly_usage_count: 0 }],
+      base_resp: { status_code: 0, status_msg: 'success' } }) }),
+  };
+  await readMinimax(cfg, now);
+  const r = run();
+  assert.match(r.stdout, /mm-manager quota unknown.*not promoting/);
+  assert.doesNotMatch(r.stdout, /standby message|claude -> minimax/, 'the seat is never handed over');
+  assert.equal(fs.readFileSync(state, 'utf8'), 'claude\n');
+  assert.equal(JSON.parse(fs.readFileSync(mrl, 'utf8')).rate_limits.seven_day.used_percentage, null, 'the weekly window is present but unusable');
+  noTmux();
+  standby(4, 0);
 });
 
 // ---- the standby gate: Claude being out of quota says nothing about the seat we would hand over to ----
