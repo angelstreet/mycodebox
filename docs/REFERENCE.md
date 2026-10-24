@@ -493,7 +493,11 @@ The same level also removes a **plain clone** under an allowed root when it is a
 its `origin` is that repo (or the repo's own upstream), its tree is clean, its `HEAD` is an ancestor of the remote's
 default branch (no commits of its own), no live session or process holds it, and its git state has not moved within
 `worktreeActiveMin` minutes. The main checkout of a configured repo, its registered worktrees and a clone of any other
-repo are never candidates. Every removal - worktree or clone - is in the report with its directory, its size and the
+repo are never candidates. The **integration lane's** own clones are never candidates either: the lane fetches, merges
+and tests in exactly the directory `<state dir>/integration.json` names and never re-clones it, so the whole lane
+directory is out of bounds (a clone the lane no longer lists is still the lane's). The allowed roots are walked with a
+directory budget **per root**, so a root with thousands of directories cannot starve the next one. Every removal -
+worktree or clone - is in the report with its directory, its size and the
 reason it was removable. These are destructive
 optional modes;
 configure only within the owner's authorization. Historical deployment choices are not default permissions. Never touched: anything under a live session, any other worktree, anything
