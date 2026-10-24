@@ -187,16 +187,18 @@ export function parseMinimaxRemains(body) {
 
 // Mirror the MiniMax windows to disk in the same shape as claude-rate-limits.json, so scripts/orchestrator-failover
 // can read the standby's own headroom before handing it the manager role (it has no other source: the live reading
-// below is memory-only). Atomic, and best-effort: a failed write must not disturb the poll. An unlimited window
-// imposes no limit, so it is recorded as 0 %; a window we could not parse is left out, which reads back as "unknown".
+// below is memory-only). Atomic, and best-effort: a failed write must not disturb the poll. One rule, both files: a
+// window left out of a reading means no limit is in effect for it (0 % used), a window that is there but unusable
+// means "unknown". So an unlimited window is recorded as 0 %, and a window we could not parse is recorded as null
+// (present but unusable), not left out: left out, the failover would read it as 0 % and hand the manager role to a
+// seat whose headroom is exactly what we could not confirm.
 async function writeMinimaxSnapshot(file, plan) {
   if (!file) return;
   const key = { '5h': 'five_hour', week: 'seven_day' };
   const rate_limits = {};
   for (const w of plan.windows || []) {
     if (!(w.name in key)) continue;
-    if (w.usedPercent == null && !w.unlimited) continue;
-    rate_limits[key[w.name]] = { used_percentage: w.usedPercent == null ? 0 : w.usedPercent, resets_at: w.resetsAt ?? null };
+    rate_limits[key[w.name]] = { used_percentage: w.unlimited ? 0 : (w.usedPercent ?? null), resets_at: w.resetsAt ?? null };
   }
   const tmp = `${file}.tmp.${process.pid}`;
   try {

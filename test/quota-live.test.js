@@ -160,6 +160,21 @@ test('minimax: a fresh reading is mirrored to disk; a failed one never re-stamps
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).at, MM_NOW, 'the old value keeps its old timestamp, so it reads back as stale');
 });
 
+// The standby's own file is the only source for its headroom: a window we could not parse must read back as
+// "unknown" (present but unusable), never as 0 % headroom.
+test('minimax: a weekly window we could not parse is mirrored as present but unusable, not left out', async () => {
+  const dir = tmp('mm-unknown-');
+  const file = path.join(dir, 'minimax-rate-limits.json');
+  const unreadable = body({ current_weekly_status: 1, current_weekly_remaining_percent: undefined, current_weekly_total_count: 0, current_weekly_usage_count: 0 });
+  const cfg = { ...mmCfg(mockFetch({ quotaBody: unreadable })), minimaxFile: file };
+  const m = await readMinimax(cfg, MM_NOW);
+  assert.equal(m.windows.find((w) => w.name === 'week').usedPercent, null, 'the reading does not know the weekly usage');
+  const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok('seven_day' in snap.rate_limits, 'the weekly window is not left out: an absent window reads as 0 %');
+  assert.equal(snap.rate_limits.seven_day.used_percentage, null, 'present but unusable: unknown, not headroom');
+  assert.deepEqual(snap.rate_limits.five_hour, { used_percentage: 2, resets_at: 1791072000 });
+});
+
 test('a MiniMax snapshot write failure never disturbs the poll', async () => {
   const dir = tmp('mm-nowrite-');
   const blocker = path.join(dir, 'a-file'); fs.writeFileSync(blocker, 'not a directory');

@@ -423,7 +423,10 @@ TASK-44, same hard floors, never type into a working session, no Esc/Ctrl-C) and
 (> 30 min) quota file is unknown: no action. The standby is promoted only when its **own** windows still have headroom: before
 handing over it reads `$GHOSTY_STATE_DIR/minimax-rate-limits.json`, which `quota.js` mirrors from each fresh MiniMax reading (the live
 reading is otherwise memory-only), and it stays at Claude if that file is unknown (missing, broken, stale) or at >= 97 % on the 5 h or
-weekly window — a Claude-limited system with no seat left is an operator problem, so both cases are written to the log. A `minimax` state older than 12 h is a leftover and is reset to `claude` silently (no handback; if Claude is still limited the next pass takes over). `--once` runs one
+weekly window — a Claude-limited system with no seat left is an operator problem, so both cases are written to the log. In both quota files
+a window left out of a reading means no limit is in effect for it (0 % used), and a window that is there but unusable means unknown:
+`quota.js` records a MiniMax window it could not parse as `used_percentage: null` (present but unusable), never leaves it out, so the
+standby's headroom is never guessed. A `minimax` state older than 12 h is a leftover and is reset to `claude` silently (no handback; if Claude is still limited the next pass takes over). `--once` runs one
 pass; `--dry` (implies `--once`) prints what it would do and touches no tmux session, state or log. Overrides: `POLL`, `LIMIT_PCT`,
 `BACK_PCT`, `FAILOVER_RL`, `FAILOVER_STANDBY_RL`, `FAILOVER_STATE`, `FAILOVER_LOG`, `FAILOVER_MANAGER`, `FAILOVER_STANDBY`. Test: `test/manager-failover.test.js`.
 

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmp } from './helpers-tmp.js';
+import { readMinimax } from '../quota.js';
 
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'orchestrator-failover');
 const home = tmp('mfo-');
@@ -14,6 +15,14 @@ const bin = path.join(home, 'bin'); fs.mkdirSync(bin);
 const calls = path.join(home, 'tmux-calls');
 fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "$@" >> ${calls}\nexit 1\n`, { mode: 0o755 });
 const reading = (h, w, at = Date.now()) => fs.writeFileSync(rl, JSON.stringify({ at, rate_limits: { five_hour: { used_percentage: h, resets_at: 1792684800 }, seven_day: { used_percentage: w, resets_at: 1792850400 } } }));
+// a reading with a window left out: Claude Code omits a window when no limit is in effect for it (the weekly one
+// right after its reset). null for a window omits it.
+const partial = (h, w, at = Date.now()) => {
+  const rate_limits = {};
+  if (h !== null) rate_limits.five_hour = { used_percentage: h, resets_at: 1792684800 };
+  if (w !== null) rate_limits.seven_day = { used_percentage: w, resets_at: 1792850400 };
+  fs.writeFileSync(rl, JSON.stringify({ at, rate_limits }));
+};
 // the standby's own quota file (quota.js writes it), in the same shape; an unlimited window is recorded as 0 %
 const mrl = path.join(home, 'mm-rl.json');
 const standby = (h, w, at = Date.now()) => fs.writeFileSync(mrl, JSON.stringify({ at, rate_limits: { five_hour: { used_percentage: h, resets_at: 1792684800 }, seven_day: { used_percentage: w, resets_at: 1792850400 } } }));
@@ -55,6 +64,81 @@ test('missing, stale or broken quota file: unknown, no action', () => {
   fs.writeFileSync(rl, '{nope');
   assert.match(run().stdout, /quota unknown.*no action/);
   noTmux();
+});
+
+// ---- a window left out of a reading is 0 % used, not a broken reading: the watcher must not go blind ----
+test('the weekly window left out (right after the weekly reset): a healthy reading, not unknown', () => {
+  partial(0, null); fs.writeFileSync(state, 'claude\n');
+  const r = run(); assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /no action \(5h 0%, week 0%, state claude\)/);
+  assert.doesNotMatch(r.stdout, /quota unknown/);
+  noTmux();
+});
+
+test('the weekly window left out while minimax: Claude is back, so the seat is handed back', () => {
+  partial(0, null); fs.writeFileSync(state, 'minimax\n');
+  const r = run();
+  assert.match(r.stdout, /DRY: would ask mm-manager for a handback note and tell manager to read it/);
+  assert.doesNotMatch(r.stdout, /quota unknown/);
+  noTmux();
+});
+
+test('the 5 h window left out: same, no crash and no unknown', () => {
+  partial(null, 40); fs.writeFileSync(state, 'claude\n');
+  const r = run(); assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /no action \(5h 0%, week 40%, state claude\)/);
+  assert.doesNotMatch(r.stdout, /quota unknown/);
+  partial(null, 40); fs.writeFileSync(state, 'minimax\n');
+  assert.match(run().stdout, /DRY: would ask mm-manager for a handback note and tell manager to read it/);
+  noTmux();
+});
+
+test('the standby with the weekly window left out: its headroom is read, so the seat can be handed over', () => {
+  reading(99, 90); fs.writeFileSync(state, 'claude\n');
+  fs.writeFileSync(mrl, JSON.stringify({ at: Date.now(), rate_limits: { five_hour: { used_percentage: 12, resets_at: 1792684800 } } }));
+  const r = run();
+  assert.match(r.stdout, /DRY: would start\/wake mm-manager.*claude -> minimax \(mm-manager at 5h 12%, week 0%\)/);
+  assert.doesNotMatch(r.stdout, /quota unknown/);
+  standby(4, 0);
+  noTmux();
+});
+
+// ---- a window that is there but unusable is unknown, not 0 % headroom ----
+test('the standby with a weekly window that is present but unusable: unknown, so the seat is not handed over', () => {
+  reading(99, 90); fs.writeFileSync(state, 'claude\n');
+  fs.writeFileSync(mrl, JSON.stringify({ at: Date.now(), rate_limits: {
+    five_hour: { used_percentage: 12, resets_at: 1792684800 },
+    seven_day: { used_percentage: null, resets_at: 1792850400 } } }));
+  const r = run();
+  assert.match(r.stdout, /mm-manager quota unknown.*not promoting/);
+  assert.doesNotMatch(r.stdout, /standby message|claude -> minimax/, 'the seat is never handed over');
+  assert.equal(fs.readFileSync(state, 'utf8'), 'claude\n');
+  noTmux();
+  standby(4, 0);
+});
+
+// The standby's file comes from quota.js: a weekly window the API did not report must not look like headroom.
+// The writer records it as present but unusable, so the watcher reads "unknown" and keeps the role with Claude.
+test('the standby with a weekly window the API did not report: the writer leaves it unusable, so the seat is not handed over', async () => {
+  reading(99, 90); fs.writeFileSync(state, 'claude\n');
+  const now = Date.now();
+  const cfg = {
+    minimaxFile: mrl,
+    minimaxLogin: async () => ({ accessToken: 'synthetic-token-for-tests', expiresAtMs: now + 3600e3 }),
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({
+      model_remains: [{ model_name: 'general', end_time: now + 3600e3, weekly_end_time: now + 7 * 24 * 3600e3,
+        current_interval_status: 1, current_interval_remaining_percent: 98,
+        current_weekly_status: 1, current_weekly_remaining_percent: undefined, current_weekly_total_count: 0, current_weekly_usage_count: 0 }],
+      base_resp: { status_code: 0, status_msg: 'success' } }) }),
+  };
+  await readMinimax(cfg, now);
+  const r = run();
+  assert.match(r.stdout, /mm-manager quota unknown.*not promoting/);
+  assert.doesNotMatch(r.stdout, /standby message|claude -> minimax/, 'the seat is never handed over');
+  assert.equal(fs.readFileSync(state, 'utf8'), 'claude\n');
+  assert.equal(JSON.parse(fs.readFileSync(mrl, 'utf8')).rate_limits.seven_day.used_percentage, null, 'the weekly window is present but unusable');
+  noTmux();
+  standby(4, 0);
 });
 
 // ---- the standby gate: Claude being out of quota says nothing about the seat we would hand over to ----

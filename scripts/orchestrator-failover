@@ -5,7 +5,8 @@
 # ask the standby for a handback note and tell the Claude manager to read it. Both agents log to LOG.
 # The standby is only promoted when its OWN windows still have headroom: handing the manager role to a seat that is out of
 # quota too leaves nobody managing. A missing, unreadable or stale quota file means "unknown", for Claude and for the
-# standby: no action. Hard floors stay owner-only for the standby too.
+# standby: no action. A window left out of a reading means no limit is in effect for it: 0 % used.
+# Hard floors stay owner-only for the standby too.
 #   --once   one pass, then exit      --dry   print what would happen; touches no tmux session, writes no state or log
 set -u
 POLL=${POLL:-300}; LIMIT_PCT=${LIMIT_PCT:-97}; BACK_PCT=${BACK_PCT:-90}
@@ -36,9 +37,14 @@ j=json.load(open(p)); d=j["rate_limits"]
 at=j.get("at") or 0
 at=at/1000 if at>1e11 else at
 if not at or time.time()-at>stale: raise SystemExit(1)
-f,w=d["five_hour"],d["seven_day"]
-h,wk=int(f["used_percentage"]),int(w["used_percentage"])
-r=max(f.get("resets_at",0) if h>=lim else 0, w.get("resets_at",0) if wk>=lim else 0)
+def win(k):
+    # Claude Code omits a window when no limit is in effect for it (the weekly one right after its reset):
+    # an absent window is 0 % used with no reset time, not a broken reading. A window that is there but
+    # malformed still reads as unknown.
+    v=d.get(k)
+    return (0,0) if v is None else (int(v["used_percentage"]), v.get("resets_at") or 0)
+(h,r1),(wk,r2)=win("five_hour"),win("seven_day")
+r=max(r1 if h>=lim else 0, r2 if wk>=lim else 0)
 print(h,wk,int(r))
 PY
 }
