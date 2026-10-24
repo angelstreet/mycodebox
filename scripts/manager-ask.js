@@ -9,7 +9,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, appendFile } from 'node:fs/promises';
-import { readLedger, openAsksFromRecords, withFileLock, appendRecord } from '../owner-asks.js';
+import { readLedger, openAsksFromRecords, withFileLock, appendRecord, supersedeOlder } from '../owner-asks.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const BASE = (process.env.GHOSTY_URL || `http://127.0.0.1:${process.env.PORT || 7777}`).replace(/\/$/, '');
@@ -53,6 +53,9 @@ async function ask(f) {
     await appendFile(LEDGER, JSON.stringify({ at: new Date().toISOString(), id: nid, session, question, options, recommendation: String(f.recommendation || ''), ...(f.jev ? { jev: f.jev } : {}), state: 'open' }) + '\n');
     return nid;
   });
+  // A second question for a session replaces the session's older open questions (round 9, item 5): the older
+  // ones are closed by this question, never by a stop id (E22). The lock is released before this runs.
+  await supersedeOlder(LEDGER, session, id);
   let alertErr = null;
   try {
     const alerted = (await readFile(ALERTS, 'utf8').catch(() => '')).split('\n').some((l) => { try { return JSON.parse(l).id === id; } catch { return false; } });

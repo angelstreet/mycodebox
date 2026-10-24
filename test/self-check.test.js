@@ -50,13 +50,14 @@ test('answerFile: stat inside the roots only; never outside, never a secret path
 const L = (...o) => o.map((x) => JSON.stringify(x));
 test('owner-asks: newest open ask per session; supersedeOlder appends {id, state: superseded, by}', async () => {
   const lines = L({ at: '2026-10-15T01:00:00Z', id: 'Q1', session: 'A', question: 'old?', state: 'open' }, { at: '2026-10-15T02:00:00Z', id: 'Q2', session: 'A', question: 'newer?', state: 'open' }, { at: '2026-10-15T03:00:00Z', id: 'Q3', session: 'B', question: 'other?', state: 'open' });
-  assert.deepEqual(newestPerSession(openAsks(lines)).map((a) => a.id), ['Q3', 'Q2']);
+  // the owner's rule: the newest of a session stands, and the older one is hidden only while its replacement is listed
+  assert.deepEqual(newestPerSession(openAsks(lines), new Map([['Q1', 'Q2']])).map((a) => a.id), ['Q3', 'Q2']);
   const f = join(dir, 'asks-test.jsonl');
   writeFileSync(f, lines.join('\n') + '\n');
-  assert.deepEqual(await supersedeOlder(f, 'A', 'NEW'), ['Q2', 'Q1']);
+  assert.deepEqual(await supersedeOlder(f, 'A', 'Q2'), ['Q1']);   // only a question of the ledger replaces a question
   const recs = readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.deepEqual(recs.filter((r) => r.state === 'superseded').map((r) => [r.id, r.by]), [['Q2', 'NEW'], ['Q1', 'NEW']]);
-  assert.deepEqual((await readOpenAsks(f)).map((a) => a.id), ['Q3']);
+  assert.deepEqual(recs.filter((r) => r.state === 'superseded').map((r) => [r.id, r.by]), [['Q1', 'Q2']]);
+  assert.deepEqual((await readOpenAsks(f)).map((a) => a.id), ['Q3', 'Q2']);
   assert.deepEqual(await supersedeOlder(join(dir, 'nope.jsonl'), 'A', 'N'), []);   // a missing ledger is not created
   assert.equal(existsSync(join(dir, 'nope.jsonl')), false);
 });
@@ -71,7 +72,7 @@ await m.initManager({
   onMergeDecision: () => {}, policy: () => ({ action: 'allow', reason: 'ok' }), heldStore: { get: () => null, set: () => {} },
   decideContext: () => ({ deploys: { ok: true, deploys: [], deployed: { 'env-a': { server: { ref: 'main', commit: 'abcdef0123456789', version: 'main-12' } } }, envs: ['env-a'] }, leases: { ok: true, leases: [], waiters: [] }, envs: ['env-a'] }),
   onDigest: () => {}, mergeJev: async () => ({ skipped: 'not configured' }),
-  ownJobs: { progressOf: async () => progress.text, watch: async () => ({}), forget: () => {} }, ownerAsksFile: ledger,
+  ownJobs: { progressOf: async () => progress.text, watch: async () => ({}), forget: () => {} },
 });
 await m.setManagerConfig({ aiTriage: 'off', routerShadow: false, wakeShadow: false, delayMs: 30, deployRunner: true });
 const RULE = '─'.repeat(40);
@@ -106,15 +107,13 @@ test('manager: version, file and progress questions are answered from the regist
   assert.match(known.typed[0], /Progress: job \(pid 4242\) is still running/); assert.equal(known.esc, undefined);
   progress.text = null;
 });
-test('manager: a new escalation supersedes the same session\'s older open asks in the ledger', async () => {
+test('manager: an escalation closes no owner question: a stop is not a question', async () => {
   writeFileSync(ledger, L({ at: '2026-10-15T01:00:00Z', id: 'OLD1', session: 'sc6', question: 'older?', state: 'open' }, { at: '2026-10-15T01:00:00Z', id: 'KEEP', session: 'other', question: 'unrelated?', state: 'open' }).join('\n') + '\n');
   const r = await stop('sc6', makeRepo(), 'Tests are green.\n\nShould I rotate the API key now?');
   assert.ok(r.esc);
-  await until(() => lines(ledger).some((x) => x.state === 'superseded'));
-  const sup = lines(ledger).filter((x) => x.state === 'superseded');
-  assert.deepEqual(sup.map((x) => [x.id, x.by]), [['OLD1', r.esc.id]]);
-  assert.deepEqual((await readOpenAsks(ledger)).map((a) => a.id), ['KEEP']);
-  assert.ok(stalls().some((x) => x.type === 'asks_superseded' && x.session === 'sc6'));
+  await wait(300);
+  assert.deepEqual(lines(ledger).filter((x) => x.state === 'superseded'), [], 'the stop closed no question (E22)');
+  assert.deepEqual((await readOpenAsks(ledger)).map((a) => a.id), ['OLD1', 'KEEP'], 'the session\'s question is still open');
 });
 test('manager: an own_job_wait stop is never an escalation and starts the watcher; moving on forgets it', async () => {
   const calls = [];
@@ -172,15 +171,17 @@ test('review: a words-only job STATUS is the session\'s own only when the agent 
   await m.setManagerConfig({ autoSend: saved.autoSend });
 });
 
-test('review: a new ask supersedes only asks older than this stop, and never again on a re-escalation', async () => {
+test('review: only a question of the ledger replaces a question, and only the asks older than it', async () => {
   const t0 = Date.now() - 60000;
   writeFileSync(ledger, L({ at: new Date(t0).toISOString(), id: 'OLDER', session: 'sc10', question: 'old?', state: 'open' }, { at: new Date(Date.now() + 3600e3).toISOString(), id: 'NEWER', session: 'sc10', question: 'later?', state: 'open' }).join('\n') + '\n');
   const r = await stop('sc10', makeRepo(), 'Tests are green.\n\nShould I rotate the API key now?');
   assert.ok(r.esc);
-  await until(() => lines(ledger).some((x) => x.state === 'superseded'));
-  assert.deepEqual(lines(ledger).filter((x) => x.state === 'superseded').map((x) => x.id), ['OLDER']);
+  await wait(300);
+  assert.deepEqual(lines(ledger).filter((x) => x.state === 'superseded'), [], 'the escalation closed nothing (E22)');
+  // the newer question of the session replaces the older one, and only the asks written before it
+  assert.deepEqual(await supersedeOlder(ledger, 'sc10', 'NEWER', { before: Date.now() + 3600e3 }), ['OLDER']);
   appendFileSync(ledger, JSON.stringify({ at: new Date(t0 - 1000).toISOString(), id: 'LATE', session: 'sc10', question: 'again?', state: 'open' }) + '\n');
-  const p = await supersedeOlder(ledger, 'sc10', 'x', { before: t0 });
+  const p = await supersedeOlder(ledger, 'sc10', 'NEWER', { before: t0 });
   assert.deepEqual(p, ['LATE']);
 });
 
