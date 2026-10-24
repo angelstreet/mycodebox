@@ -28,10 +28,56 @@ export function openAsksFromRecords(records) {
     .sort((x, y) => String(y.at || '').localeCompare(String(x.at || '')));
 }
 
-// One open ask per session (round 9, item 5): the newest of a session stands, the older ones are shown no more. `asks` is newest first.
-export function newestPerSession(asks) {
+// A row of the ledger that is itself a question: it carries the owner's wording. A resolution, a supersede
+// record or a stop id is not a question and must never stand in for one: a question may only be closed by
+// another question that really exists (E22: a stop closed the session's questions and named a stop id as the
+// replacement, so the question was gone with nothing in its place).
+const isAskRow = (r) => !!(r && typeof r === 'object' && !Array.isArray(r) && r.id && typeof r.question === 'string' && r.question.trim());
+
+// One view of the ledger, for everything that has to see more than the open set: the open asks, the ids that
+// are questions, the ids the owner answered, and every superseded ask with the id that replaced it.
+// The safety net needs the last part: a dropped question is closed, so the open set cannot show it (E24).
+export function ledgerView(records) {
+  const askRows = new Map(), answeredIds = new Set(), superseded = [];
+  for (const r of records) {
+    if (!r || typeof r !== 'object' || Array.isArray(r)) continue;
+    if (isAskRow(r)) askRows.set(r.id, { session: String(r.session || ''), question: String(r.question) });
+    if (r.state === 'answered') answeredIds.add(r.id);
+    if (r.state === 'superseded' && r.by) superseded.push({ id: String(r.id), by: String(r.by), at: String(r.at || '') });
+  }
+  const open = openAsksFromRecords(records);
+  return {
+    open, openIds: new Set(open.map((a) => a.id)), askRows, askIds: new Set(askRows.keys()), answeredIds, superseded,
+    supersededBy: new Map(superseded.map((s) => [s.id, s.by])),
+  };
+}
+
+// What a superseded ask means for the owner: the replacement is still open (the older question is still
+// waiting), the replacement was answered (the owner answered it, nothing is lost), or the replacement is not a
+// question in the ledger (the question was dropped with no replacement: the E22 case).
+export function supersededState(s, view) {
+  if (view.openIds.has(s.by)) return 'open';
+  if (view.answeredIds.has(s.by)) return 'answered';
+  return 'dropped';
+}
+
+// One open ask per session (round 9, item 5): the newest of a session stands, the older ones are shown no more.
+// `asks` is newest first; `supersededBy` maps an ask id to the id that replaced it.
+// An older ask is hidden only when its replacement is itself listed: a question whose replacement is missing or
+// closed is still waiting for the owner and must stay visible (E22: a stop closed the question and named no
+// replacement, so the question was gone from the owner's list with nothing in its place).
+export function newestPerSession(asks, supersededBy = new Map()) {
+  const listed = new Set(asks.map((a) => a.id));
   const seen = new Set();
-  return asks.filter((a) => { if (!a.session) return true; if (seen.has(a.session)) return false; seen.add(a.session); return true; });
+  const out = [];
+  for (const a of asks) {
+    if (!a.session) { out.push(a); continue; }
+    if (!seen.has(a.session)) { seen.add(a.session); out.push(a); continue; }   // the newest of the session stands
+    const by = supersededBy.get(a.id);
+    if (by && listed.has(by)) continue;    // replaced by a question the owner can see
+    out.push(a);                            // no visible replacement: the question stays visible
+  }
+  return out;
 }
 
 // A line that holds two appended records on one line (two objects written back to back, no newline between them)
@@ -137,7 +183,8 @@ export async function readLedger(file) {
 export async function readOpenAsksReport(file) {
   const { records, damaged, readError } = await readLedger(file);
   reportDamage(file, damaged, readError);
-  return { asks: newestPerSession(openAsksFromRecords(records)), damaged, readError };
+  const view = ledgerView(records);
+  return { asks: newestPerSession(view.open, view.supersededBy), damaged, readError };
 }
 
 export async function readOpenAsks(file) {
@@ -150,12 +197,27 @@ export function openAsks(lines) {
   return openAsksFromRecords(parseLedgerText(list.join('\n')).records);
 }
 
-// A session escalated a new ask: every older open ask of that session is marked superseded by it (appended to the ledger, never edited).
+// A refused supersede says so: one line on stderr (ids only, never owner wording) and the caller's report.
+const refuse = (report, msg) => {
+  console.error(`[owner-asks] ${msg}`);
+  if (typeof report === 'function') { try { report(msg); } catch { /* a broken reporter must not break the ledger */ } }
+  return [];
+};
+
+// A session filed a second question: every older open ask of that session is marked superseded by it (appended to the ledger, never edited).
 // -> the superseded ids. A missing ledger is not created.
-export async function supersedeOlder(file, session, newId, { now = new Date(), before = null } = {}) {
+// The replacement must be a question that exists in the ledger, for the same session: a stop id is not a
+// question, so a stop that carries no owner question closes nothing (E22). A missing ledger, an unknown id or
+// an id that is not a question closes nothing and is reported.
+export async function supersedeOlder(file, session, newId, { now = new Date(), before = null, report = null } = {}) {
   if (!session || !newId) return [];
-  const { records } = await readLedger(file);
-  // `before` (ms): only asks written before the stop that raised the new one; an ask with no readable time is left alone
+  const { records, readError } = await readLedger(file);
+  if (readError) return refuse(report, `ledger unreadable (${readError}): nothing superseded`);
+  const replacement = records.find((r) => r && typeof r === 'object' && !Array.isArray(r) && r.id === newId);
+  if (!replacement) return refuse(report, `${newId} is not in the ledger: nothing superseded`);
+  if (!isAskRow(replacement)) return refuse(report, `${newId} is not a question in the ledger: nothing superseded`);
+  if (String(replacement.session || '').trim() !== String(session).trim()) return refuse(report, `${newId} is a question of another session: nothing superseded`);
+  // `before` (ms): only asks written before that moment; an ask with no readable time is left alone
   const older = openAsksFromRecords(records).filter((a) => a.session === session && a.id !== newId && (before == null || Date.parse(a.at) < before));
   if (!older.length) return [];
   // one appendFile per record: a single write of N lines can be chunked by the kernel, and a chunk boundary inside
@@ -234,7 +296,7 @@ export async function fileAsk(file, ask, { now = new Date() } = {}) {
   if (!check.ok) return check;
   // the next id is read and the record written under one lock: two asks in flight at once must not both read the
   // same "next" id and write two records under it, which would drop one of the questions from the open set
-  return withFileLock(file, async () => {
+  const written = await withFileLock(file, async () => {
     const id = await nextAskId(file);
     const record = {
       at: now.toISOString(), id, session: String(ask.session || '').trim(), question: String(ask.question).trim(),
@@ -242,8 +304,12 @@ export async function fileAsk(file, ask, { now = new Date() } = {}) {
       floor: ask.floor, what: String(ask.what).trim(), why: String(ask.why).trim(), state: 'open',
     };
     await appendFile(file, JSON.stringify(record) + '\n');
-    return { ok: true, id, record };
+    return { id, record };
   });
+  // A second question for a session replaces the session's older open questions (round 9, item 5): the older
+  // ones are closed by this question, never by a stop id (E22). The lock is released before this runs.
+  await supersedeOlder(file, written.record.session, written.id, { now });
+  return { ok: true, id: written.id, record: written.record };
 }
 
 // The "Decided for you" journal record (manager-decisions.jsonl, the file manager.js appendJournal writes and

@@ -242,20 +242,21 @@ test('an unreadable ledger is reported, not mistaken for an empty one', async ()
 });
 
 // 4: several records written back to back each land on their own line, and the file stays parseable.
+// The replacement must be a question that exists in the ledger (E22): Q9 is the new question of the session.
 test('supersedeOlder writes one record per line and the file stays parseable', async () => {
-  const file = await ledgerIn('supersede', [1, 2, 3].map((n) => JSON.stringify(askRec(n, { session: 'manager:busy' }))));
+  const file = await ledgerIn('supersede', [1, 2, 3, 9].map((n) => JSON.stringify(askRec(n, { session: 'manager:busy' }))));
   const ids = await supersedeOlder(file, 'manager:busy', 'Q9', { now: new Date('2026-10-22T11:00:00.000Z') });
   assert.deepEqual(ids.sort(), ['Q1', 'Q2', 'Q3']);
 
   const text = await readFile(file, 'utf8');
   const lines = text.split('\n').filter(Boolean);
-  assert.equal(lines.length, 6, '3 asks + 3 supersede records, one record per line');
-  assert.equal(parseable(text).length, 6, 'every line parses');
+  assert.equal(lines.length, 7, '4 asks + 3 supersede records, one record per line');
+  assert.equal(parseable(text).length, 7, 'every line parses');
   assert.ok(!lines.some((l) => l.includes('}{')), 'no two records share a line');
-  for (const l of lines.slice(3)) assert.deepEqual(Object.keys(JSON.parse(l)).sort(), ['at', 'by', 'id', 'state']);
+  for (const l of lines.slice(4)) assert.deepEqual(Object.keys(JSON.parse(l)).sort(), ['at', 'by', 'id', 'state']);
 
   // and the ledger still reads correctly after the supersede
-  assert.deepEqual((await readOpenAsks(file)).map((a) => a.id), [], 'all three asks of that session are now superseded');
+  assert.deepEqual((await readOpenAsks(file)).map((a) => a.id), ['Q9'], 'the three older asks are superseded, the replacement stands');
 });
 
 // 5: two writers in flight at once still leave a file where every line parses. Serialised per file path, so one
@@ -281,7 +282,7 @@ test('concurrent writes leave a file where every line parses', async () => {
 });
 
 // 6: unchanged happy path and unchanged missing-file behaviour.
-test('happy path: newest open ask per session, newest first', async () => {
+test('happy path: the newest open ask of a session stands, an ask that was never replaced stays visible', async () => {
   const file = await ledgerIn('happy', [
     JSON.stringify(askRec(1, { session: 'manager:a', at: '2026-10-20T10:00:00.000Z' })),
     JSON.stringify(askRec(2, { session: 'manager:a', at: '2026-10-20T11:00:00.000Z' })),   // same session, newer
@@ -289,7 +290,8 @@ test('happy path: newest open ask per session, newest first', async () => {
     JSON.stringify({ at: '2026-10-20T12:00:00.000Z', id: 'Q3', state: 'answered' }),        // closes Q3
   ]);
   const asks = await readOpenAsks(file);
-  assert.deepEqual(asks.map((a) => a.id), ['Q2'], 'only the newest open ask per session, answered ones gone');
+  // Q1 was never replaced by another question, so it stays visible: only a replaced ask is hidden (E22)
+  assert.deepEqual(asks.map((a) => a.id), ['Q2', 'Q1'], 'the newest ask of the session stands, the unreplaced one is not hidden');
   assert.equal(asks[0].session, 'manager:a');
   assert.deepEqual(asks[0].options, ['first thing', 'second thing']);
 });

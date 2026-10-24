@@ -347,12 +347,28 @@ through the normal `alert()` (same debounce per `tag` or title, notification fee
 
 **Owner questions** (`scripts/manager-ask.js`, `ask-guard.js`, owner 2026-10-23). A question the owner must answer is filed in
 `<state>/manager-owner-asks.jsonl` (`Q<n>`), pushed to the owner with the tag `ask-<n>` and written to the shared alert record
-`<state>/manager-ask-alerts.jsonl` (`{id, at, via}`; `via` is `manager-ask`, `autoregistered` or `late`). The record is the
+`<state>/manager-ask-alerts.jsonl` (`{id, at, via}`; `via` is `manager-ask`, `autoregistered`, `late` or `dropped`). The record is the
 **one** truth about "this question was alerted": the ask-guard reads it before every sweep (it only grows), so a question is never
 alerted twice, and `scripts/manager-ask-scan.sh` reports `!! ask-not-alerted <id>` only when neither the record nor the push feed
 (tag `ask-<id>`) holds an alert. The scan used to read the push feed alone, which is a 50-item ring: a real alert scrolled out of it
 and the scan printed a false alarm (2026-10-23). An owner question is an **interrupt** alert: it is pushed on its own, with its tag,
 never inside a digest and never evicted by a routine notice.
+
+**A question is closed only by another question** (`owner-asks.js` `supersedeOlder`). A question may only be marked `superseded` when the
+`by` id is a question that exists in the ledger, for the same session: a stop id, an unknown id or an id of another session closes
+nothing and is reported. A session's older open questions are therefore closed when the next question for that session is filed
+(`scripts/owner-ask.js`, `scripts/manager-ask.js`, the guard's auto-registration), never by a stop. An escalation to the owner or to
+the manager closes nothing: a stop carries no owner question, and a question closed by a stop id is a question the owner never
+answers (E22, 2026-10-24). The NEEDS YOU strip hides an open question only while its replacement is listed: a question whose
+replacement is gone stays visible.
+
+**A closed question is still reported** (`ask-guard.js`, `scripts/manager-ask-scan.sh`). The safety net reads the whole ledger, not
+only the open asks: a closed question is in no open set, so a question dropped with no replacement used to be invisible (E24). Both
+nets report the superseded asks, one line each: `!! ask-superseded-open <id> <replacement>` (the replacement is still open, so the
+older question is still waiting) and `!! ask-superseded-dropped <id> <replacement>` (the replacement is not a question in the ledger:
+the question was dropped). The guard logs both as `ask-superseded-open` / `ask-superseded-dropped` and pushes a dropped question to
+the owner when the drop is less than an hour old (an older drop is reported in the log and by the hourly scan, not pushed, so a
+backlog of old drops cannot bury the owner's feed).
 
 **Manager event feed.** Every alert that actually fires (not debounced) is appended as one JSON line to
 `~/.local/state/ghosty/manager-events.jsonl` for the AI manager agent to follow, so it wakes only when something
@@ -1338,8 +1354,9 @@ holders: the holders that are neither a session nor a platform agent).
   and the procedure (`migrationProcedure[repo]`, else the deploy queue). OWNER_DECISIONS §17.
 - **Self-checks** (`self-check.js`, `selfChecks` switch, default on): before escalating, the manager answers "what version is deployed on X?" from the
   deploy ledger, "is the run finished?" from the session's own job, and "does <path> exist?" (stat only, inside the repo or `infoRoots`, no symlink
-  escapes, secret-looking paths refused). **One open ask per session**: a new escalation supersedes the session's older open asks in the owner-asks
-  ledger; the NEEDS YOU strip shows the newest only.
+  escapes, secret-looking paths refused). **One open ask per session**: the next question a session files replaces the session's older
+  open asks in the owner-asks ledger (a question replaces a question, never a stop); the NEEDS YOU strip shows the newest, and hides an
+  older one only while its replacement is listed.
 - **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
   `kind: mockup` with a link and a deadline; a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
   "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."
