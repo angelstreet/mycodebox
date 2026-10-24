@@ -49,8 +49,10 @@ test('E43: a metric drop in a disguised spelling is still a metric, a disguised 
   assert.ok(forbiddenMatch('drop fr0m 500 rows to 100'), 'leet spelling of a row deletion');
 });
 
-test('E43: the past tense keeps its behaviour and the narrative relief still works', () => {
-  assert.ok(forbiddenMatch('dropped from 20 s to 3 s'), 'a past-tense drop is not relieved by the metric rule');
+test('E43: the past tense is a metric too (E53) and the narrative relief still works', () => {
+  // E43 pinned the past tense as unrelieved; E53 extended the relief to it ("the latency dropped by 40 percent").
+  assert.equal(forbiddenMatch('dropped from 20 s to 3 s'), null, 'a past-tense metric drop is a metric too');
+  assert.ok(forbiddenMatch('the table dropped by 500 rows'), 'a past-tense deletion still blocks');
   assert.equal(isPastNarrative('the settle dropped from 20 s to 3 s earlier'), true, 'a past narrative is still a narrative');
 });
 
