@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSy
 import { appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { homedir, cpus, loadavg, tmpdir } from 'node:os';
-import { join, basename, resolve } from 'node:path';
+import { join, basename, resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_CONFIG = {
@@ -651,30 +651,57 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], pro
 // its origin is a configured repo (or that repo's own upstream), its tree is clean, it has no commits of its
 // own, nobody works in it and its git state has not moved within the activity window.
 export const CLONE_MAX_DEPTH = 2;    // the allowed roots and their direct children
-export const CLONE_MAX_DIRS = 2000;   // the walk is bounded: a root may hold thousands of directories
+// The directory budget is PER ROOT: one root must not consume the walk before the next one is looked at (E37:
+// the home root held 5.3 k directories at depth 2 and starved /tmp, so the scratch clones the brief named were
+// never reached). 6000 covers today's roots (5.3 k and 2.2 k) and a full walk of both costs about 0.2 s.
+export const CLONE_MAX_DIRS = 6000;
 
 // The directories under the allowed roots that may hold a clone. Symlinked directories are not followed and the
-// walk stops at CLONE_MAX_DIRS, so a root full of data cannot turn the scan into a full disk walk.
+// walk stops at CLONE_MAX_DIRS per root, so a root full of data cannot turn the scan into a full disk walk.
 export function findCloneDirs({ roots = [], excluded = new Set(), realpath = safeRealpath, readdir = readdirSync,
   maxDepth = CLONE_MAX_DEPTH, maxDirs = CLONE_MAX_DIRS } = {}) {
   const out = [];
-  let visited = 0;
-  const walk = (dir, depth) => {
-    if (depth > maxDepth) return;
-    let entries = [];
-    try { entries = readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name === '.git') continue;   // a symlinked directory is not followed
-      const p = join(dir, e.name);
-      if (visited >= maxDirs) return;
-      visited++;
-      const id = realpath(p) || p;
-      if (excluded.has(id)) continue;    // a configured repo or one of its registered worktrees
-      out.push(p);
-      walk(p, depth + 1);
+  for (const r of roots) {
+    let visited = 0;      // the budget is per root, so a big root cannot starve the next one
+    const walk = (dir, depth) => {
+      if (depth > maxDepth) return;
+      let entries = [];
+      try { entries = readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name === '.git') continue;   // a symlinked directory is not followed
+        const p = join(dir, e.name);
+        if (visited >= maxDirs) return;
+        visited++;
+        const id = realpath(p) || p;
+        if (excluded.has(id)) continue;    // a configured repo, one of its worktrees, or the lane's own directory
+        out.push(p);
+        walk(p, depth + 1);
+      }
+    };
+    walk(r, 1);
+  }
+  return out;
+}
+
+// The integration lane's clones are machinery, not scratch: the lane fetches, merges and tests in exactly the
+// directory the state-dir config names, and it never re-clones it (there is no `git clone` in integration-lane.js),
+// so deleting one breaks every merge in the fleet. The lane's WHOLE directory is excluded, not only the configured
+// clones: a clone the lane no longer lists is still the lane's (E37).
+export function laneExclusions(stateDirs = [], { roots = [], repoPaths = [] } = {}) {
+  const out = new Set();
+  for (const stateDir of stateDirs || []) {
+    let repos = {};
+    try { repos = JSON.parse(readFileSync(join(stateDir, 'integration.json'), 'utf8'))?.repos || {}; } catch { continue; }
+    for (const c of Object.values(repos || {})) {
+      const clone = typeof c?.clone === 'string' ? resolve(c.clone) : null;
+      if (!clone || !clone.startsWith('/')) continue;
+      out.add(clone);                                    // the clone itself
+      const dir = dirname(clone);                        // and the lane's own directory around it
+      if (roots.some((r) => resolve(r) === dir)) continue;      // never exclude a whole allowed root
+      if (repoPaths.some((p) => resolve(p) === dir)) continue;  // nor a configured repo checkout
+      out.add(dir);
     }
-  };
-  for (const r of roots) walk(r, 1);
+  }
   return out;
 }
 
@@ -711,20 +738,21 @@ export function cloneRemoteRef(run, dir) {
 }
 
 // The clone criteria, in the order the report names them. Every one of them must hold: a clone that fails any of
-// them is reported, never removed.
+// them is reported, never removed. The protections come first: "it has uncommitted changes" says more to the owner
+// than "it is not one of our repos", and both keep the clone alive.
 export function classifyClone(info) {
   if (!info.isClone) return 'not-clone';
-  if (!info.repo || info.repo === 'unknown') return 'clone-unknown-repo';
   if (info.liveSession) return 'clone-live-session';
   if (!info.clean) return 'clone-dirty';
   if (info.unknownIgnored?.length) return 'clone-ignored-files';
   if (info.recentActivity) return 'clone-recent-activity';
   if (!info.merged) return 'clone-unmerged';
+  if (!info.repo || info.repo === 'unknown') return 'clone-unknown-repo';
   return 'removable';
 }
 
 // Scan the allowed roots for plain clones of the configured repos. run() is injectable, like scanWorktrees.
-export function scanClones({ cfg, repos = [], panes = [], claude = [], procCwds = [], procArgs = [], procFds = [],
+export function scanClones({ cfg, repos = [], stateDirs = [], panes = [], claude = [], procCwds = [], procArgs = [], procFds = [],
   run = sh, realpath = safeRealpath, stat = lstatSync, readdir = readdirSync, now = Date.now(),
   uid = process.getuid?.(), maxDepth = CLONE_MAX_DEPTH, maxDirs = CLONE_MAX_DIRS } = {}) {
   const roots = configRoots(cfg);
@@ -739,6 +767,13 @@ export function scanClones({ cfg, repos = [], panes = [], claude = [], procCwds 
       const abs = resolve(p);
       excluded.add(realpath(abs) || abs);
     }
+  }
+  // The integration lane's own clones: machinery, not scratch (E37).
+  const lane = [...laneExclusions(stateDirs, { roots, repoPaths: managed.map((r) => r.path) })];
+  for (const p of lane) {
+    const abs = resolve(p);
+    excluded.add(abs);
+    excluded.add(realpath(abs) || abs);
   }
   const known = managed.map((r) => ({ key: r.key, path: r.path,
     origin: (run('git', ['-C', r.path, 'remote', 'get-url', 'origin']) || '').trim() }));
@@ -777,7 +812,7 @@ export function scanClones({ cfg, repos = [], panes = [], claude = [], procCwds 
     info.why = classifyWhy(info);
     candidates.push(info);
   }
-  return { candidates, notConsidered, roots };
+  return { candidates, notConsidered, roots, laneExcluded: lane };
 }
 
 // The clone section of the report: every candidate and the reason it was (not) removable.
@@ -787,6 +822,9 @@ export function cloneReport(scan, { du = duR } = {}) {
   L.push('## Plain clones (git clones under the allowed roots)', '');
   L.push(`- clones found: ${cands.length} (${cands.filter((c) => c.kind === 'removable').length} removable)`);
   L.push(`- allowed roots: ${(scan?.roots || []).join(', ') || 'none configured'}`);
+  if ((scan?.laneExcluded || []).length) {
+    L.push(`- excluded: the integration lane's own clones (${scan.laneExcluded.join(', ')}) - the lane works in them and never re-clones them`);
+  }
   L.push('', '| dir | repo | origin | size | clean | ignored files | merged into | merged | live session | class | why |', '|---|---|---|---|---|---|---|---|---|---|---|');
   for (const c of cands) {
     L.push(`| ${c.dir} | ${c.repo} | ${c.origin || 'n/a'} | ${human(du(c.dir))} | ${c.clean ? 'yes' : 'NO'} | ${c.ignoredFiles || 0} | ${c.mergedRef || 'n/a'} | ${c.merged ? 'yes' : 'NO'} | ${c.liveSession ? 'YES' : 'no'} | ${c.kind} | ${c.why} |`);
@@ -1035,7 +1073,9 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   const procFds = readProcFds(procs);
   const wtScan = scanWorktrees({ cfg, panes, claude, procCwds, procArgs, procFds, now });
   // A plain clone is not a registered worktree: without this scan the reclaim never sees it (E37).
-  const cloneScan = scanClones({ cfg, repos: wtScan.repos, panes, claude, procCwds, procArgs, procFds, now });
+  // The state dirs are searched for the lane's config: its clones are machinery, not scratch.
+  const stateDirs = [...new Set([stateDir, process.env.GHOSTY_STATE_DIR].filter(Boolean))];
+  const cloneScan = scanClones({ cfg, repos: wtScan.repos, stateDirs, panes, claude, procCwds, procArgs, procFds, now });
   const wts = [...wtScan.candidates, ...cloneScan.candidates];
   const ctx = { cfg, dryRun, home, claude, now, procs, owners, panes, wts, wtScan, cloneScan, log: [] };
   const R = [`# Codebox health report ${new Date(now).toISOString()}${dryRun ? ' (DRY RUN)' : ''}${force ? ' (forced)' : ''}`, ''];

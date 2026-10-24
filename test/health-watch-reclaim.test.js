@@ -152,12 +152,15 @@ test('E37-3 a dirty clone, a clone with a local commit, a live clone and a clone
   const ahead = makeClone(a0, 'clone-ahead', { origin: a.main, merged: false });
   // a repo this product does not manage
   const other = makeClone(a0, 'clone-other', { origin: '/somewhere/else' });
-  const { cs } = scanBoth([a], [dirty, ahead, other], cfg);
+  // dirty AND not ours: the report names the protection, not only the scope
+  const otherDirty = makeClone(a0, 'clone-other-dirty', { origin: '/somewhere/else', status: ' M src/app.js\n' });
+  const { cs } = scanBoth([a], [dirty, ahead, other, otherDirty], cfg);
   const by = Object.fromEntries(cs.candidates.map((c) => [c.name, c]));
   assert.equal(by['clone-dirty'].kind, 'clone-dirty');
   assert.equal(by['clone-ahead'].kind, 'clone-unmerged', 'a clone with work of its own is not scratch');
   assert.equal(by['clone-other'].kind, 'clone-unknown-repo', 'somebody else\'s data is never a candidate');
-  for (const k of ['clone-dirty', 'clone-ahead', 'clone-other']) assert.notEqual(by[k].kind, 'removable', k);
+  assert.equal(by['clone-other-dirty'].kind, 'clone-dirty', 'the report names the protection that keeps it alive');
+  for (const k of ['clone-dirty', 'clone-ahead', 'clone-other', 'clone-other-dirty']) assert.notEqual(by[k].kind, 'removable', k);
   // a live session holds it
   const r1 = tmp('hw-reclaim-');
   const b1 = makeRepo(r1, 'alpha');
@@ -245,4 +248,51 @@ test('E37-8 a clone whose origin is the configured repo\'s own upstream is a can
   assert.equal(cs.candidates.length, 1);
   assert.equal(cs.candidates[0].repo, 'alpha', 'the clone came from the same upstream');
   assert.equal(cs.candidates[0].kind, 'removable');
+});
+
+test('E37-9 a root that fills the directory budget does not starve the next root', () => {
+  const root = tmp('hw-reclaim-');
+  const big = join(root, 'big'), small = join(root, 'small');
+  mkdirSync(big, { recursive: true });
+  mkdirSync(small, { recursive: true });
+  for (let i = 0; i < 8; i++) mkdirSync(join(big, `d${i}`), { recursive: true });
+  const a = makeRepo(root, 'alpha');
+  const c = makeClone(small, 'scratch-clone', { origin: a.main });
+  // 'big' fills its own budget, 'small' still gets one: the budget is per root (E37: the home root held 5.3 k
+  // directories and starved /tmp, so the scratch clones the brief named were never reached).
+  const { cs } = scanBoth([a], [c], { worktreeRepos: { alpha: a.main }, worktreeRoots: [big, small] }, { maxDirs: 3 });
+  assert.ok(cs.candidates.some((x) => x.dir === c.dir), 'the second root is scanned even when the first filled the budget');
+  // the same, with the roots the other way round
+  const { cs: cs2 } = scanBoth([a], [c], { worktreeRepos: { alpha: a.main }, worktreeRoots: [small, big] }, { maxDirs: 3 });
+  assert.ok(cs2.candidates.some((x) => x.dir === c.dir));
+});
+
+test('E37-10 the integration lane\'s clones are never candidates, whatever their size and age', () => {
+  const root = tmp('hw-reclaim-');
+  const state = tmp('hw-reclaim-state-');
+  const a = makeRepo(root, 'alpha');
+  const laneClone = makeClone(join(root, 'lane'), 'alpha', { origin: a.main });     // the clone the config names
+  const laneOther = makeClone(join(root, 'lane'), 'evolai', { origin: a.main });  // a clone the config dropped
+  writeFileSync(join(state, 'integration.json'), JSON.stringify({ repos: { alpha: { clone: laneClone.dir } } }));
+  const cfg = { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] };
+  const { cs } = scanBoth([a], [laneClone, laneOther], cfg, { stateDirs: [state] });
+  assert.ok(!cs.candidates.some((x) => x.dir === laneClone.dir), 'the lane clone is never a candidate');
+  assert.ok(!cs.candidates.some((x) => x.dir === laneOther.dir), 'the whole lane directory is out of bounds');
+  assert.ok(cs.laneExcluded.includes(laneClone.dir), 'the report says what was excluded and why');
+  // the same clone without the lane config is a plain scratch copy: the exclusion is what blocks it
+  const { cs: cs2 } = scanBoth([a], [laneClone], cfg, { stateDirs: [] });
+  assert.ok(cs2.candidates.some((x) => x.dir === laneClone.dir), 'without a lane claim it is an ordinary candidate');
+});
+
+test('E37-11 the lane exclusion never swallows an allowed root or a configured repo checkout', () => {
+  const root = tmp('hw-reclaim-');
+  const state = tmp('hw-reclaim-state-');
+  const a = makeRepo(root, 'alpha');
+  // a clone configured directly in the root: the root itself must not be excluded, only the clone
+  const direct = makeClone(root, 'lane-alpha', { origin: a.main });
+  writeFileSync(join(state, 'integration.json'), JSON.stringify({ repos: { alpha: { clone: direct.dir } } }));
+  const cfg = { worktreeRepos: { alpha: a.main }, worktreeRoots: [root] };
+  const { cs } = scanBoth([a], [direct], cfg, { stateDirs: [state] });
+  assert.ok(!cs.candidates.some((x) => x.dir === direct.dir), 'the configured clone itself is still out');
+  assert.ok(!cs.candidates.some((x) => x.dir === root), 'the allowed root itself is not a candidate');
 });
