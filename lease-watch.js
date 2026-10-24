@@ -2,12 +2,13 @@
 //  1. turns the registry's release / expiry / narrow lines (`vpt-lease events`) into `lease:*` manager events (no push),
 //  2. releases a lease whose holder session has ENDED (owner decision 2026-10-05: allowed),
 //  3. narrows a kind=server lease whose holder has had no finished turn for 30 min to kind=host (NEVER releases an idle holder),
-//  4. counts "unknown holders" (agents ghosty cannot map to a session) for the daily report.
-// Nothing else is ever touched: mac:* holders, unknown names, update_core:* and the deploy runner are left alone.
+//  4. counts "unknown holders" (holders ghosty cannot identify: neither a session nor a platform agent) for the daily report.
+// Nothing else is ever touched: mac:* holders, unknown names, update_core:*, the platform's own agents and the deploy runner
+// are left alone.
 // Every automatic action is appended to <stateDir>/lease-actions.jsonl with by:"TASK58-C1" (and shows up as a lease:* event).
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentLocalName, agentSession, normName } from './public/platforms.js';
+import { holderSession } from './public/platforms.js';
 
 export const BY = 'TASK58-C1';
 export const IDLE_MS = 30 * 60 * 1000;
@@ -15,9 +16,14 @@ const GRACE_MS = 2 * 60 * 1000;        // a lease younger than this is never tou
 const MAX_ACTIONS_PER_POLL = 3;        // circuit breaker
 const SYSTEM_RE = /^(manager:deploy|update_core:)/;
 
+// The platform's own workers, not tmux sessions: they hold a lease under their own name and are left alone
+// (never released, never narrowed). They are identifiable, so they are not unknown holders either.
+export const PLATFORM_AGENTS = ['running-execution', 'platform-update'];
+export const isPlatformAgent = (agent) => PLATFORM_AGENTS.includes(String(agent || '').toLowerCase());
+
 // Pure. Group lease rows by id and say what is going on with each holder.
-// status: system | remote (mac:*, not observable from here) | unknown (free-form name, or a codebox name no session ever had)
-//       | live | ended (its session existed before and is gone)
+// status: system | platform (the platform's own worker) | remote (mac:*, not observable from here)
+//       | unknown (free-form name: neither a session nor a platform agent) | live | ended (its session existed before and is gone)
 export function classifyHolders({ leases, sessionNames, knownNames = [], machines, activity = () => null, now, idleMs = IDLE_MS }) {
   const byId = new Map();
   for (const l of leases || []) { const e = byId.get(l.id) || { id: l.id, agent: l.agent || '', env: l.env, rows: [] }; e.rows.push(l); byId.set(l.id, e); }
@@ -30,8 +36,8 @@ export function classifyHolders({ leases, sessionNames, knownNames = [], machine
     if (SYSTEM_RE.test(h.agent)) { out.push({ ...base, status: 'system' }); continue; }
     const m = h.agent.indexOf(':') > 0 ? h.agent.slice(0, h.agent.indexOf(':')).toLowerCase() : '';
     if (m === 'mac') { out.push({ ...base, status: 'remote' }); continue; }
-    if (!agentLocalName(h.agent, machines)) { out.push(base); continue; }
-    const session = agentSession(h.agent, sessionNames, machines);
+    if (isPlatformAgent(h.agent)) { out.push({ ...base, status: 'platform' }); continue; }   // our own worker: never released, never narrowed
+    const session = holderSession(h.agent, sessionNames, machines);
     if (session) {
       const act = activity(session);
       const at = act ? Math.max(act.turnAt || 0, act.promptAt || 0) : 0;
@@ -40,7 +46,7 @@ export function classifyHolders({ leases, sessionNames, knownNames = [], machine
       if (kind === 'server' && act && !act.working && idleMs_ != null && idleMs_ > idleMs && now - since > GRACE_MS) r.plan = { type: 'narrow', reason: `idle ${r.idleMin} min (no finished turn)` };
       out.push(r); continue;
     }
-    const was = agentSession(h.agent, gone, machines);
+    const was = holderSession(h.agent, gone, machines);
     if (was) {
       const r = { ...base, status: 'ended', session: was };
       if (now - since > GRACE_MS) r.plan = { type: 'release', reason: 'session-ended' };
@@ -136,6 +142,7 @@ export function createLeaseWatch({
       for (const k of Object.keys(st.days).sort().slice(0, -30)) delete st.days[k];
       await save();
       snap = { ok: true, at: t, mode: obs ? 'central' : m, leases: holders.length, unknown, remote: holders.filter((h) => h.status === 'remote').length,
+        // `agent` is the holder's name and every lease carries one, so the dashboard never has to print "unknown" for a holder it can name
         holders: holders.map(({ id, agent, env, resources, kind, status, session, idleMin, plan }) => ({ id, agent, env, resources, kind, status, session, idleMin, plan })), planned: planned.map((h) => ({ id: h.id, ...h.plan })) };
       onChange(snap);
       return snap;
