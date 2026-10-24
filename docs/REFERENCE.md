@@ -432,14 +432,16 @@ Those are killed with their whole subtree at every fix level except `report` (20
 report to `~/.local/state/ghosty/health-reports/<ISO>.md` (kept 7 days): top 15 processes by CPU and RSS with their
 owning tmux / Claude session, disk use of `/tmp`, `~/.cache`, `~/.claude`, `~/.npm`, the journal, docker (if usable),
 and every registered worktree of the configured repos with its worktree / clean / ignored-files / merged / live-session
-status. Which repos and which roots are in scope is configured, never hard-coded: `worktreeRepos` (a map of
+status and a `why` column that names the criterion that kept it (E51, 2026-10-23: the watcher removed a running agent's
+worktree twice, because "clean" only means "no tracked file is modified" and "merged" was true for a branch with no
+commits of its own). Which repos and which roots are in scope is configured, never hard-coded: `worktreeRepos` (a map of
 `{ label: '/abs/path/to/repo' }`) and `worktreeRoots` (a list of allowed roots) in the state-dir config below; with no
 repo and no root no worktree is a candidate. A repo's main worktree is never a candidate, the paths are deduped by
 path, and the report states the worktrees that were NOT considered (count and bytes) so the blind spot stays visible.
 Thresholds live in
 `~/.local/state/ghosty/health-watch.json` (created with defaults: `diskPct` 85, `loadPerCore` 1.0 for `loadMinutes` 10,
 `ramAvailPct` 10, `runawayHours` 2, `runawayRssMB` 1024, `runawayCpu` 80, `fixLevel`, `inodePct` 85, `fixLevel`,
-`worktreeRepos`, `worktreeRoots`).
+`worktreeActiveMin` 30, `worktreeRepos`, `worktreeRoots`).
 Every tick (also healthy ones) it first removes stale test leftovers: directories directly in `os.tmpdir()` owned by the service uid, named with one of `TMP_PREFIXES` (every test/script `mkdtemp` prefix; `test/health-watch.test.js` fails when a new one is missing), `lstat`-checked (symlinks never followed) and with mtime older than 2 h, at most 2000 per tick and 20 s (the backlog goes on next tick); it never throws and logs one line with the count when it removed something. Next to the disk check it reads inode use of `/` (`statfs` files/ffree) and trips an `inode` issue at `inodePct` (85 %) with the same report / debounce / manager-wake path (2026-10-20: 186k leaked tmp dirs exhausted the inodes).
 
 **Daily checks (zero tokens unless something is wrong).** `scripts/daily-checks.js` (no deps, no AI calls) runs once a day at
@@ -476,7 +478,11 @@ Fix levels (`fixLevel`, only acted on when the disk check trips): `report` = no 
 --user --vacuum-time=7d` (skipped without rights), `npm cache clean --force` when `~/.npm` > 1 GB; `cleanup+orphans`
 (OFF by default) also SIGTERMs runaway / bare `node --test` processes that belong to no live tmux or Claude session;
 `cleanup+worktrees` also runs `git worktree remove` (never forced) on worktrees that are clean, merged
-into `main` and have no live session (no orphan kills); `cleanup+all` = both. These are destructive optional modes;
+into `main` and have no live session (no orphan kills); `cleanup+all` = both. A worktree is also kept when it has
+recent activity (its own git metadata or last commit moved within `worktreeActiveMin` minutes), when its branch has no
+commits of its own (unstarted), or when a process names it in its command line or holds one of its files open - an
+agent that works in a worktree from another directory is invisible to a cwd-only check (E51). These are destructive
+optional modes;
 configure only within the owner's authorization. Historical deployment choices are not default permissions. Never touched: anything under a live session, any other worktree, anything
 outside `/tmp/claude-1000` for the scratch cleanup. Every deletion and its size goes in the report.
 

@@ -97,6 +97,9 @@ test('classifyWorktree: only clean+merged+no session+worktree is removable', () 
   assert.equal(classifyWorktree({ ...ok, liveSession: true }), 'live-session');
   assert.equal(classifyWorktree({ ...ok, clean: false }), 'dirty');
   assert.equal(classifyWorktree({ ...ok, merged: false }), 'unmerged');
+  // E51: two more reasons to keep a worktree, both added without touching the criteria above
+  assert.equal(classifyWorktree({ ...ok, recentActivity: true }), 'recent-activity');
+  assert.equal(classifyWorktree({ ...ok, unstarted: true }), 'unstarted');
 });
 
 test('shouldWake: debounce 6 h, worsened disk bypasses it', () => {
