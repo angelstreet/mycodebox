@@ -366,9 +366,17 @@ replacement is gone stays visible.
 only the open asks: a closed question is in no open set, so a question dropped with no replacement used to be invisible (E24). Both
 nets report the superseded asks, one line each: `!! ask-superseded-open <id> <replacement>` (the replacement is still open, so the
 older question is still waiting) and `!! ask-superseded-dropped <id> <replacement>` (the replacement is not a question in the ledger:
-the question was dropped). The guard logs both as `ask-superseded-open` / `ask-superseded-dropped` and pushes a dropped question to
-the owner when the drop is less than an hour old (an older drop is reported in the log and by the hourly scan, not pushed, so a
-backlog of old drops cannot bury the owner's feed).
+the question was dropped). The replacement is named, not a bare id: a replacement that is a question is printed with its id and its
+wording, a replacement that is not a question says so plainly. The guard logs both as `ask-superseded-open` / `ask-superseded-dropped`
+and pushes a dropped question to the owner when the drop is less than an hour old (an older drop is reported in the log and by the
+hourly scan, not pushed, so a backlog of old drops cannot bury the owner's feed).
+
+**A drop is an event, not a state** (`scripts/manager-ask-scan.sh`, E58 2026-10-24). The ledger holds a backlog of old drops (the E22
+defect wrote a stop id as the replacement) and the scan reprinted all of them every hour: 22 identical lines that buried a new drop. The
+scan reports a drop **once**, by the first scan that sees it, and keeps `<state>/manager-ask-scan.json` (when it last ran, which drops it
+has already reported). A drop is new when it is newer than the last run, so a scan that was off for a day still sees the drops of that day;
+on the very first run only the drops of the last `GHOSTY_ASK_SCAN_WINDOW_H` hours (default 24) count, so the old backlog is not dumped.
+A superseded ask whose replacement is still open is still reported on every scan: that question is still waiting.
 
 **Manager event feed.** Every alert that actually fires (not debounced) is appended as one JSON line to
 `~/.local/state/ghosty/manager-events.jsonl` for the AI manager agent to follow, so it wakes only when something
