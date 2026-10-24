@@ -562,20 +562,48 @@ const OBJ_DATA = /\b(?:databases?|db|tables?|schemas?|data dir(?:ectory)?|data|v
 // "the latency dropped by 40 percent") and a noun with the number before it ("a 3 percent drop in throughput").
 // Both shapes keep the same guards: the sentence names no data object, the word is not the verb of an imperative
 // list item, and the sentence carries a metric noun or a unit. A count that went down is a deletion, not a
-// metric ("the row count dropped by 500"), so the data-object guard stays in front of the relief. A clause that
-// starts with the drop word is a command, not a report: it names what it drops after the number ("drop by 40%
-// the branch"), and there the relief is withheld.
+// metric ("the row count dropped by 500"), so the data-object guard stays in front of the relief. The metric must
+// be in the head of the phrase: a clause that names an object after the number is a command ("drop by 40% the
+// tenant", "we must drop by 40 percent the tenant"), wherever the verb sits, and there the relief is withheld.
 const DROP_WORD_RE = /\bdrop(?:s|ped|ping)?\b/i;
 const METRIC_PREP_RE = /^\s*(?:from|to|by|down|below|under)\s+/i;
 const METRIC_NOUN_RE = /\b(?:latency|cost|error rate|throughput|settle|p95|duration|memory|size)\b/i;
 // The units a metric may be counted in. One list, for the sentence ("the sentence carries a metric noun or a
 // unit") and for the noun form ("a 3 percent drop"); a rate ("requests per second") is a unit too.
 const METRIC_UNITS = String.raw`percent|pct|ms|s|sec|secs|second|seconds|min|mins|minute|minutes|hr|hrs|hour|hours|rps|qps|bps|gb|mb|kb|tb`;
-const METRIC_UNIT_RE = new RegExp(String.raw`(?:\b(?:${METRIC_UNITS})\b|%|per\s+(?:${METRIC_UNITS})\b)`, 'i');
+// A unit word with its word boundaries: the list is an alternation, so the boundary has to sit outside it.
+const METRIC_UNIT = String.raw`(?:\b(?:${METRIC_UNITS})\b)`;
+const METRIC_UNIT_RE = new RegExp(String.raw`(?:${METRIC_UNIT}|%|per\s+${METRIC_UNIT})`, 'i');
 const NOUN_UNIT_RE = new RegExp(String.raw`^(?:${METRIC_UNITS}|%)$`, 'i');
 // The noun form is a report when the word is followed by a preposition ("a 12 ms drop in latency") and a command
 // when it is followed by its object ("a 12 ms drop the branch").
 const NOUN_TAIL_RE = /^\s*(?:$|[.,;:!?)\]]|\b(?:in|from|to)\b)/i;
+// The unit of a metric, read as a phrase: a unit word, or a count with its rate ("requests per second"). It is
+// consumed as a phrase, not word by word, so "throughput drop to 55 requests per second" is a number that went
+// down and not a count with an object behind it.
+const METRIC_RATE = String.raw`(?:${METRIC_UNIT}|%|per\s+${METRIC_UNIT}|\w+\s+per\s+${METRIC_UNIT})`;
+// A tail led by a preposition is an adjunct, not an object ("after the fix", "per call", "on every box").
+const METRIC_ADJUNCT = String.raw`(?:from|to|by|after|before|on|per|during|since|under|over|across|within|at|for|in|into|onto|with|against|about|around|than|as|when|while|through|without|upon)`;
+// A window join glues the words of the tail into one token ("mspercall"): the same reading, with the words read
+// as prefixes. The long prepositions only, so a short one ("in") does not swallow an object that starts like
+// one ("index").
+const METRIC_ADJUNCT_GLUED = String.raw`(?:per|into|onto|from|with|over|under|after|before|during|since|across|within|against|about|around|without|upon)`;
+const METRIC_RATE_RE = new RegExp(String.raw`^${METRIC_RATE}`, 'i');
+const METRIC_RATE_GLUED_RE = new RegExp(String.raw`^(?:${METRIC_UNITS}|%|\w+\s*per\s*(?:${METRIC_UNITS}))`, 'i');
+const METRIC_ADJUNCT_RE = new RegExp(String.raw`^${METRIC_ADJUNCT}\b`, 'i');
+const METRIC_ADJUNCT_GLUED_RE = new RegExp(String.raw`^${METRIC_ADJUNCT_GLUED}`, 'i');
+// Is the tail after the number an adjunct ("after the fix", "per call", "requests per second") and not the object
+// of a command ("the tenant")? The unit of the number is read as a phrase; what is left must be empty or led by
+// a preposition. A bare noun phrase is an object, and there the relief is withheld: the metric must be in the
+// head of the phrase, wherever the verb sits.
+const metricTailOk = (tail) => {
+  const t = tail.trim();
+  if (!t) return true;                                        // the number is the last thing in the clause
+  const rate = t.match(METRIC_RATE_RE) || t.match(METRIC_RATE_GLUED_RE);
+  const rest = (rate ? t.slice(rate[0].length) : t).trim();
+  if (!rest) return true;                                      // the unit is the whole tail ("requests per second")
+  return METRIC_ADJUNCT_RE.test(rest) || METRIC_ADJUNCT_GLUED_RE.test(rest);
+};
 // The digits of a leet spelling, read back ("i2" -> "12", "a.i" -> "4.1"); the leet spellings differ on the 1
 // ("i" and "l"), so both are read.
 const LEET_BACK = [{ o: '0', i: '1', e: '3', a: '4', s: '5', t: '7' }, { o: '0', l: '1', e: '3', a: '4', s: '5', t: '7' }];
@@ -651,10 +679,14 @@ const metricDropAt = (v, index, leet) => {
   if (prep) {
     const token = rest.slice(prep[0].length).match(/^\S+/)?.[0] || '';
     if (isNumberToken(token, leet)) {                           // "drop 500 rows" is a count, not a metric
-      // A clause that starts with the verb is a command and names what it drops after the number
-      // ("drop by 40% the branch"); a report puts the subject first ("the latency dropped by 40 percent").
-      const after = rest.slice(prep[0].length + token.length).replace(/[.,;:!?)\]]*$/, '').trim();
-      if (after && CLAUSE_LEAD_RE.test(clause.lead)) return false;
+      // The metric must be in the head of the phrase: a tail that names an object is a command, wherever the
+      // verb sits ("drop by 40% the tenant", "we must drop by 40 percent the tenant"). What follows the number
+      // is a unit phrase ("requests per second") or a preposition-led adjunct ("after the fix") when it is a
+      // report; a bare noun phrase is the object of the command, and the relief is withheld there.
+      const tail = rest.slice(prep[0].length + token.length);
+      if (!metricTailOk(tail)) return false;
+      // A clause that starts with the verb is a command too, even when it names nothing after the number.
+      if (tail.trim() && CLAUSE_LEAD_RE.test(clause.lead)) return false;
       return true;
     }
   }

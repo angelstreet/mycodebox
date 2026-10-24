@@ -25,6 +25,9 @@ const METRIC = [
   'a 3 percent drop in throughput', 'a 12 ms drop in latency', 'a 3% drop in the error rate',   // the noun form (E53)
   'the branch dropped by 40%',   // a report about a branch that shrank, not a command
   'a 5 second drop in revenue',   // the noun form with a unit word the sentence-level list must know
+  'the tree settle drop from 20 s to ~3 s', 'latency drop by 40 percent after the fix',
+  'the cost drop to 12 ms per call', 'error rate drop from 4.1 to 0.3 on every box',
+  'throughput drop to 55 requests per second',   // the unit is a phrase: a count with its rate
 ];
 // A deletion: still a topic, in any of the three shapes.
 const DESTRUCTIVE = [
@@ -33,12 +36,18 @@ const DESTRUCTIVE = [
   'a 500 row drop',   // the noun form naming a data object is a deletion, not a number
   'drop to 12 tables',   // the object follows the number
 ];
-// A command that names what it drops after the number: a clause that starts with the verb is not a report.
+// A command that names what it drops after the number: the metric must be in the head of the phrase.
 const COMMAND = [
   'drop by 40% the branch', 'drop by 3 ms the branch', 'drop by 40 percent the branch',
   'dropped by 40% the branch', 'dropping by 40% the branch',
   'drop by 2 seconds the stream', 'drop by 3 hours the queue',
   'drop the table by 3 percent', 'a 12 ms drop the branch', 'a 3 percent drop of the users table',
+  // the same command with a subject or an auxiliary in front: the object is named after the number, wherever
+  // the verb sits.
+  'we must drop by 40 percent the tenant', 'we should drop by 40 percent the tenant',
+  'can you drop by 40 percent the tenant', 'we need to drop by 30% the images',
+  'the team dropped by 40% the tenant', 'the queue dropped by 40% the stream',
+  'in production, drop by 40% the tenant', 'urgent: we must drop by 40 percent the images',
 ];
 
 test('E53: a number that went down is not a topic, in any of the three shapes', () => {
@@ -62,6 +71,12 @@ test('E53: a command that names what it drops after the number still blocks', ()
     assert.equal(r.needs_approval, true, `${q}: ${r.reason}`);
     assert.ok(r.classes.includes('destructive'), `${q}: ${JSON.stringify(r.classes)}`);
   }
+});
+
+test('E53: the unit is a phrase: a count with its rate is a metric, not an object', () => {
+  // "requests per second" belongs to the number; the object would be a bare noun phrase after it.
+  assert.equal(forbiddenMatch('throughput drop to 55 requests per second'), null);
+  assert.ok(forbiddenMatch('throughput drop to 55 requests per second the stream'));
 });
 
 test('E53: the V2 policy follows: a metric goal does not ask the owner', () => {
