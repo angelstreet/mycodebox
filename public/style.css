@@ -2407,17 +2407,14 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 body:not(.res-hidden) .fgrp{ display:none; }
 @media (max-width: 720px){ .fgrp{ display:none !important; } }
 
-/* phones: the second row of filter chips (all / status / agent / project) was too much on a small screen (owner 2026-10-22): hidden. The status dots
-   in the top bar still filter by state. The row is still built (renderQuickRow); to bring it back, make this display:flex again. */
-.qrow{ display:none; }
-@media (max-width: 720px){
-  .qrow{ display:none; }
-  .qrow::-webkit-scrollbar{ display:none; }
-  .qchip{ display:inline-flex; align-items:center; gap:5px; flex-shrink:0; padding:4px 10px; border-radius:999px; font-size:12px; min-height:30px; background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line); white-space:nowrap; }
-  .qchip .n{ color:var(--ink-3); font-variant-numeric:tabular-nums; }
-  .qchip .agent{ padding:1px 4px; }
-  .qchip.on{ border-color:var(--accent); color:var(--ink); background:rgba(232,154,74,.12); }
-}
+/* the row of filter chips (all / status / agent / project) under the top bar: shown on the web, hidden on phones (owner 2026-10-22: too much on a small screen; the status dots in the top bar still filter there) */
+.qrow{ display:flex; gap:6px; padding:6px 10px; overflow-x:auto; scrollbar-width:none; border-bottom:1px solid var(--line); flex-shrink:0; background:var(--bg); }
+.qrow::-webkit-scrollbar{ display:none; }
+.qchip{ display:inline-flex; align-items:center; gap:5px; flex-shrink:0; padding:4px 10px; border-radius:999px; font-size:12px; min-height:30px; background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line); white-space:nowrap; }
+.qchip .n{ color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.qchip .agent{ padding:1px 4px; }
+.qchip.on{ border-color:var(--accent); color:var(--ink); background:rgba(232,154,74,.12); }
+@media (max-width: 720px){ .qrow{ display:none; } }
 
 /* web grid: a card whose task has a .md shows the MD button at the top right too (it used to be single-card only) */
 @media (min-width: 721px){
