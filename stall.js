@@ -25,6 +25,7 @@
 // unsent draft in the input box always means owner, whatever the rules or Jev said.
 
 import { waitsOnOwnJob, jobRefs, hasRef } from './job-refs.js';
+import { neutralizeRoutineHostUnit } from './host-unit-routine.js';
 
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
@@ -450,6 +451,7 @@ export const mergeMatch = (text) => requested(text, MERGE_RE);
 // plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent, migrationsOk } (a bare boolean = mergePresent); migrationsOk: the noun "migration" is covered by a deploy evaluation of additive lab migrations.
 export function hardMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
+  text = neutralizeRoutineHostUnit(text, textVariants);   // the narrow host_units exception (owner 2026-10-25): only the unit words go, the rest of the floor still reads the text
   const hit = matchWithRelief(hardRe(o), text, forbiddenExtra) || colonHit(text);
   if (hit) return hit;
   if (o.mergePresent && !o.pushPresent) for (const v of [String(text), ...textVariants(text)]) { const k = v.match(PUSH_OTHER_RE); if (k) return k[0]; }
