@@ -86,7 +86,16 @@ case $PROV in
   claude)   CMD="env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN $(q "$HOME")/.local/bin/claude${CS} --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   codex)    CMD="$(q "$HOME")/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   minimax)  M=${MODEL:-MiniMax-M3}; [[ $M == */* ]] || M="minimax/$M"
-            CMD="PATH=$(q "${MCODE_NODE_DIR:-$HOME/.local/node-v24.21.0-linux-x64/bin}"):\$PATH mcode -m $(q "$M") \"\$(cat $(q "$P"))\"";;
+            # MCODE_NODE_DIR wins; else the newest ~/.local/node-v24* (an upgrade replaces the dir, so no version is hardcoded).
+            ND=${MCODE_NODE_DIR:-$(ls -d "$HOME"/.local/node-v24*/bin 2>/dev/null | sort -V | tail -n 1)}
+            MPATH="${ND:+$ND:}$HOME/.local/bin"
+            # A launch that cannot find mcode says so and exits 127; it never leaves a bare shell that looks started.
+            CMD="export PATH=$(q "$MPATH"):\$PATH
+command -v mcode >/dev/null || { echo \"cbsession: mcode not found (PATH=\$PATH); set MCODE_NODE_DIR to the node bin dir\" >&2; exit 127; }
+mcode -m $(q "$M") \"\$(cat $(q "$P"))\""
+            if [ "$DRY" != 1 ] && ! PATH="$MPATH:$PATH" command -v mcode >/dev/null; then
+              echo "cbsession: mcode not found in $MPATH or PATH; set MCODE_NODE_DIR to the node bin dir" >&2; exit 1
+            fi;;
   opencode) CMD="$(q "$HOME")/.local/bin/opencode${MODEL:+ -m $(q "$MODEL")} --prompt \"\$(cat $(q "$P"))\" $(q "$DIR")";;
   *) echo "cbsession: -p must be claude|codex|minimax|opencode" >&2; exit 2;;
 esac
