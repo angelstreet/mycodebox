@@ -90,6 +90,34 @@ test('askStats: a resolution line before its question line does not close it', (
   assert.equal(r.open, 1, 'e1 stays open until a LATER line closes it');
 });
 
+// ---- owner asks: the limit is a per-session budget -------------------------------------------------------------
+test('askStats: the ask limit is per session, parallel topic sessions do not share one budget', () => {
+  const sessions = ['topic-1', 'topic-2', 'topic-3', 'topic-4', 'topic-5', 'topic-6'];
+  const r = askStats(Array.from({ length: 8 }, (_, i) =>
+    line({ at: ago(3600000), id: `p${i}`, session: sessions[i % sessions.length], question: 'ok?' })), win);
+  assert.equal(r.asked, 8, 'the fleet total is still the fleet total');
+  assert.equal(r.worstSession.count, 2, 'no session asked more than twice');
+  assert.equal(r.bySession['topic-1'], 2);
+  const s = summarize({ ...base, asked: r.asked, answered: r.answered, open: r.open, bySession: r.bySession, worstSession: r.worstSession }, null);
+  assert.deepEqual(s.findings.map((f) => f.key), [], '8 asks from 6 sessions is no session over the limit');
+  assert.match(s.summary, /8 owner asks/, 'the fleet total stays in the summary line');
+  assert.match(s.report, /\| owner asks \| 8 \(0 answered, 8 open\) \|/, 'and in the table row');
+});
+
+test('summarize: one session over the ask limit is a finding that names the session and its count', () => {
+  const r = askStats(Array.from({ length: 4 }, (_, i) =>
+    line({ at: ago(3600000), id: `q${i}`, session: 'topic-busy', question: 'ok?' })), win);
+  assert.equal(r.worstSession.session, 'topic-busy');
+  assert.equal(r.worstSession.count, 4);
+  const s = summarize({ ...base, asked: r.asked, answered: r.answered, open: r.open, bySession: r.bySession, worstSession: r.worstSession }, null);
+  const f = s.findings.find((x) => x.key === 'harness-health:owner-asks');
+  assert.ok(f, 'the finding fires');
+  assert.match(f.title, /4 new owner asks in 24 h from session topic-busy/);
+  assert.match(f.body, /4 of them from session topic-busy/);
+  assert.match(f.body, /a session stopped waiting/, 'the wording of the single-session case stays');
+  assert.match(s.report, /\| owner asks \| 4 \(0 answered, 4 open\) \|/, 'the fleet total stays in the table row');
+});
+
 // ---- lane --------------------------------------------------------------------------------------------------------
 test('laneStats: latest record per id wins and only its final state counts', () => {
   const r = laneStats([
@@ -109,6 +137,36 @@ test('laneStats: latest record per id wins and only its final state counts', () 
   assert.equal(r.approvalRefused, 1);
   assert.equal(r.merges, 2, 'merged + deployed');
   assert.deepEqual(Object.keys(r.states), [...FINAL_STATES]);
+});
+
+// ---- lane: a return that was re-requested and landed is resolved ------------------------------------------------
+test('laneStats: a return that the requester re-requested and that landed is resolved, not counted', () => {
+  const r = laneStats([
+    line({ id: 'j1', repo: 'fake-repo', branch: 'feature/x', state: 'returned', createdAt: ago(6 * 3600000), updatedAt: ago(6 * 3600000) }),
+    line({ id: 'j2', repo: 'fake-repo', branch: 'feature/x', state: 'merged', createdAt: ago(4 * 3600000), updatedAt: ago(3 * 3600000) }),
+  ], win);
+  assert.equal(r.states.returned, 0, 'the later request landed, so the return needs no hand');
+  assert.equal(r.returnedResolved, 1);
+  assert.equal(r.states.merged, 1, 'the landed request is still a merge');
+  assert.equal(r.total, 2);
+});
+
+test('laneStats: a return with no later request for the same branch is counted', () => {
+  const r = laneStats([
+    line({ id: 'k1', repo: 'fake-repo', branch: 'feature/y', state: 'returned', createdAt: ago(6 * 3600000), updatedAt: ago(6 * 3600000) }),
+    line({ id: 'k2', repo: 'fake-repo', branch: 'feature/other', state: 'merged', createdAt: ago(4 * 3600000), updatedAt: ago(3 * 3600000) }),
+  ], win);
+  assert.equal(r.states.returned, 1, 'a merge of another branch does not resolve the return');
+  assert.equal(r.returnedResolved, 0);
+});
+
+test('laneStats: a merge that predates the return does not resolve it', () => {
+  const r = laneStats([
+    line({ id: 'l1', repo: 'fake-repo', branch: 'feature/z', state: 'merged', createdAt: ago(9 * 3600000), updatedAt: ago(8 * 3600000) }),
+    line({ id: 'l2', repo: 'fake-repo', branch: 'feature/z', state: 'returned', createdAt: ago(6 * 3600000), updatedAt: ago(6 * 3600000) }),
+  ], win);
+  assert.equal(r.states.returned, 1, 'only a LATER request can resolve a return');
+  assert.equal(r.returnedResolved, 0);
 });
 
 // ---- CI ----------------------------------------------------------------------------------------------------------
@@ -172,7 +230,8 @@ test('fetchSessions: an error, a non-200 or a changed shape gives null, never a 
 
 // ---- summarize (pure) ----------------------------------------------------------------------------------------------
 const base = { date: '2026-10-21', asked: 0, answered: 0, open: 0, decisions: 0,
-  states: Object.fromEntries(FINAL_STATES.map((s) => [s, 0])), total: 0, approvalRefused: 0, merges: 0,
+  bySession: {}, worstSession: null,
+  states: Object.fromEntries(FINAL_STATES.map((s) => [s, 0])), total: 0, approvalRefused: 0, returnedResolved: 0, merges: 0,
   ci: { redTransitions: 0, greenTransitions: 0, redMinutes: 0 },
   box: { load1: 0.5, load5: 0.5, load15: 0.5, memAvailableMb: 8192, diskPct: 83 }, sessions: 4, needsYou: 0, notFound: [] };
 
@@ -186,7 +245,7 @@ test('summarize: a healthy day is one line, a markdown table and no finding', ()
 });
 
 test('summarize: every threshold raises exactly one normal finding', () => {
-  const over = { ...base, asked: 4, approvalRefused: 1,
+  const over = { ...base, asked: 4, worstSession: { session: 'topic-busy', count: 4 }, approvalRefused: 1,
     states: { ...base.states, returned: 6 },
     ci: { redTransitions: 2, greenTransitions: 1, redMinutes: 121 },
     box: { ...base.box, diskPct: 91, memAvailableMb: MEM_MIN_MB - 1 } };
@@ -197,13 +256,23 @@ test('summarize: every threshold raises exactly one normal finding', () => {
 });
 
 test('summarize: at the threshold is still healthy, missing box numbers raise nothing', () => {
-  const at = summarize({ ...base, asked: 3, states: { ...base.states, returned: 5 },
+  const at = summarize({ ...base, asked: 3, worstSession: { session: 'topic-1', count: 3 },
+    states: { ...base.states, returned: 5 },
     ci: { redTransitions: 0, greenTransitions: 0, redMinutes: 120 },
     box: { ...base.box, diskPct: 90, memAvailableMb: MEM_MIN_MB } }, null);
   assert.deepEqual(at.findings, [], 'the limits are strict: only above them');
   const unknown = summarize({ ...base, box: { load1: null, memAvailableMb: null, diskPct: null } }, null);
   assert.deepEqual(unknown.findings, [], 'n/a is not a regression');
   assert.match(unknown.summary, /disk n\/a %/);
+});
+
+test('summarize: the lane row shows the resolved count and the finding counts only unresolved returns', () => {
+  const at = summarize({ ...base, states: { ...base.states, returned: 5 }, returnedResolved: 3 }, null);
+  assert.deepEqual(at.findings.map((f) => f.key), [], '5 unresolved returns is at the limit');
+  assert.match(at.report, /\| lane returned \| 5 returned, 3 resolved \|/);
+  const over = summarize({ ...base, states: { ...base.states, returned: 6 }, returnedResolved: 8 }, null);
+  assert.deepEqual(over.findings.map((f) => f.key), ['harness-health:lane-returned']);
+  assert.match(over.findings[0].body, /were not re-landed/);
 });
 
 test('summarize: the report compares against the previous day and names the missing sources', () => {
