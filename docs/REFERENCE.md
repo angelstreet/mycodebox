@@ -733,6 +733,18 @@ The interactive manager uses the same evaluation from its shell:
 `node scripts/merge-eval.js --repo <checkout> --branch <b> [--target main] --text "<closing text>" --session <s> --journal`
 prints one JSON line `{verdict, reasons, rationale, ...}`.
 
+### Routine host-unit installs (owner, 2026-10-25)
+
+`host-unit-routine.js` `routineHostUnit(text, variants)` is the one predicate for the narrow exception to the host_units floor.
+Routine means the text says all of: an install / add / update of a unit, timer or script; a reviewed and merged repo change; a
+CI runner VM or other non-production helper VM as target; the previous file kept as a backup; a rollback line. Any of sudoers,
+production / customer-facing, `ghosty-sessions` / codebox, reboot, credentials, or a removal / mask / disable that is not a
+replacement (also in a spelling variant) cancels it. `stall.js` `hardMatch` replaces only the unit words (`.service`, `.timer`,
+`unit file`, `/etc/systemd/system`, `systemctl enable|daemon-reload`, `sudo`) in a routine text, so the rest of the floor still
+reads it; `owner-asks.js` `checkAsk` refuses a `host_units` ask that is routine (decide it with `owner-ask.js decide`).
+`FORBIDDEN_RE` (the auto-answer filter) and the frozen `router.js` `stop_v1_floor` are unchanged. `merge-policy.js` still treats a
+file named `*.service` / `*.timer` as a systemd path; repo units ship as `.tmpl`, which the installer renders.
+
 ### Autonomy by default: push, deploy and recommended options (owner, 2026-10-14)
 
 OWNER_DECISIONS §15 ("yes merge, yes push, yes deploy, yes do the recommended one ... the correction can come at the

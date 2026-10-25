@@ -458,3 +458,15 @@ Concretely, for the central lease service on the registry host:
 
 Technical choices about leases, deploys, the network and design inside the V2 scope go to the manager, not the owner
 (manager decision, 2026-10-18).
+
+## 20. Routine unit installs on CI runner VMs are not a floor item (2026-10-25)
+
+Owner, in chat to the manager: "it is technical, there is no risk of adding that system unit". Answered Q232 yes: the fixed
+runner-retention script and its timers go on both CI runner VMs.
+
+- **Routine (the session or manager decides, journals it in "Decided for you"):** adding or updating a unit, timer or script that
+  is in a reviewed and merged repo change, on a CI runner VM or other non-production helper VM, with the previous file kept as a
+  backup and a rollback line.
+- **Still floor (owner):** sudoers; units or timers on production or customer-facing hosts, or on codebox's own `ghosty-sessions`
+  service; reboots; removing, masking or disabling a unit that is not a replacement; credential changes.
+- One predicate, `host-unit-routine.js` (`routineHostUnit`); `stall.js` `hardMatch` and `owner-asks.js` `checkAsk` use it.

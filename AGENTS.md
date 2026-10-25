@@ -78,7 +78,8 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 - Autonomy by default (owner, 2026-10-14, OWNER_DECISIONS §15): the AI manager decides merges, pushes, deploys and the
   recommended option itself after an evaluation, records each decision and shows it to the owner, who corrects afterwards.
   It must never answer on the owner's behalf about deletions of data, credentials and secrets, money, customers, sudoers
-  or units on hosts, destructive or unreadable database migrations (additive ones are not a floor, owner 2026-10-21, below), force-push or history rewrites, pushing tags or publishing a
+  or units on hosts (except a routine, reviewed and merged unit/timer/script install with backup and rollback on a CI runner or
+  other non-production helper VM, owner 2026-10-25, `host-unit-routine.js`), destructive or unreadable database migrations (additive ones are not a floor, owner 2026-10-21, below), force-push or history rewrites, pushing tags or publishing a
   package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
   those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, RLS and
   policies) can always be applied and merged without asking: the session applies it itself, then `integrate request`

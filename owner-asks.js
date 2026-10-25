@@ -4,6 +4,7 @@
 // the owner still has to answer; the page shows them in the NEEDS YOU strip.
 import { readFile, appendFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { routineHostUnit } from './host-unit-routine.js';
 
 const CLOSED = new Set(['answered', 'superseded', 'closed', 'resolved', 'withdrawn']);
 
@@ -275,6 +276,10 @@ export function checkAsk({ question, what, options, recommend, floor, why } = {}
   if (!Number.isInteger(n) || n < 1 || n > opts.length) return { ok: false, why: `--recommend must be an option number 1-${opts.length} (got "${recommend}")` };
   const ids = [...bareInternalIds(q), ...bareInternalIds(w)];
   if (ids.length) return { ok: false, why: `internal id without an explanation (${ids.join(', ')}): name the thing in plain words, and quote the id only where you explain it` };
+  if (floor === 'host_units') {
+    const r = routineHostUnit(`${q} ${w} ${y} ${opts.join(' ')}`);
+    if (r.routine) return { ok: false, why: `a routine unit / timer install is not a floor item (owner 2026-10-25): decide it yourself and journal it with "owner-ask.js decide" (${r.why})` };
+  }
   if (!FLOOR_HINT[floor].test(`${q} ${w} ${y}`)) return { ok: false, why: `--why does not show why the "${floor}" floor applies: say in one line what makes this a hard-floor item` };
   return { ok: true };
 }
