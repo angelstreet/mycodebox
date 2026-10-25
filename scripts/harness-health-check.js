@@ -10,15 +10,16 @@
 // crashes is itself a finding (daily:check-broken:harness-health).
 //
 // Sources (all under GHOSTY_STATE_DIR, default ~/.local/state/ghosty):
-//   manager-owner-asks.jsonl  {at,id,question} per ask, {id,state:"answered"|"superseded"} or {id,answered:true} per resolution
+//   manager-owner-asks.jsonl  {at,id,session,question} per ask, {id,state:"answered"|"superseded"} or {id,answered:true} per resolution
 //   manager-decisions.jsonl   one line per decision the manager took for the owner
 //   integration/requests.jsonl one line per state change; latest record per id wins
 //   ci-watch.jsonl            {at,type,red?} per tick; type 'green' closes a red streak
 //   /proc/loadavg, /proc/meminfo, statfs('/')  box
 //   GET ${GHOSTY_URL:-http://127.0.0.1:7777}/api/sessions  {sessions[], status{name:{state}}}, best effort
 //
-// Thresholds (a finding only above them): owner asks > 3, lane returned > 5, CI red > 120 min, disk > 90 %,
-// MemAvailable < 2 GB, any approvalRefused.
+// Thresholds (a finding only above them): ONE session's owner asks > 3 (the limit is a per-session budget, so parallel
+// topic sessions each get their own), lane returned > 5 (a return that a later request for the same repo+branch landed is
+// resolved and does not count), CI red > 120 min, disk > 90 %, MemAvailable < 2 GB, any approvalRefused.
 // Registered by the manager in the private <stateDir>/daily-checks.json (id "harness-health"); this repo never edits it.
 import { readFileSync, statfsSync } from 'node:fs';
 import { appendFileSync } from 'node:fs';
@@ -48,13 +49,13 @@ export const inWindow = (at, now, hours = HOURS) => { const t = Date.parse(at); 
 // BEFORE its ask line does not close it (it belongs to an earlier question), and answering wins over superseding, so an
 // ask answered and later superseded is counted once, as answered.
 export function askStats(lines, { now, hours = HOURS }) {
-  const asks = new Map(); // id -> {answered, superseded}
+  const asks = new Map(); // id -> {answered, superseded, session}
   let asked = 0;
   for (const line of lines) {
     let r; try { r = JSON.parse(line); } catch { continue; }
     if (!r || typeof r !== 'object') continue;
     if (r.question && inWindow(r.at, now, hours)) {
-      if (!asks.has(r.id)) { asks.set(r.id, { answered: false, superseded: false }); asked++; }
+      if (!asks.has(r.id)) { asks.set(r.id, { answered: false, superseded: false, session: String(r.session || '') }); asked++; }
       continue;
     }
     const prev = asks.get(r.id);
@@ -67,12 +68,34 @@ export function askStats(lines, { now, hours = HOURS }) {
     if (a.answered) answered++;
     else if (a.superseded) superseded++;
   }
-  return { asked, answered, superseded, open: asked - answered - superseded };
+  // ASKS_MAX is a per-session budget: parallel topic sessions (each with its own session name) each get their own budget,
+  // so only ONE session asking over the limit is a regression. The fleet total stays the fleet total. An ask without a
+  // session name cannot be attributed to a session, so it counts in the total only.
+  const perSession = new Map();
+  for (const a of asks.values()) {
+    if (!a.session) continue;
+    perSession.set(a.session, (perSession.get(a.session) || 0) + 1);
+  }
+  const worst = [...perSession.entries()].sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))[0] || null;
+  return {
+    asked, answered, superseded, open: asked - answered - superseded,
+    bySession: Object.fromEntries(perSession),
+    worstSession: worst ? { session: worst[0], count: worst[1] } : null,
+  };
 }
 
 // ---- integration lane (pure) ---------------------------------------------------------------------------------------
 // One line per state change, so the last line per id is the current record; only records whose last update is in the
 // window count, so a request that finished yesterday is not counted again today.
+// A returned request that the requester re-requested (same repo + same branch) and that later reached merged or deployed
+// is resolved by the mechanism working: only the returns that never came back as a merge need a hand. Data only, no git.
+const branchKey = (r) => {
+  const repo = typeof r?.repo === 'string' ? r.repo.trim() : '';
+  const branch = typeof r?.branch === 'string' ? r.branch.trim() : '';
+  return repo && branch ? `${repo}\u0000${branch}` : null;   // a request without a repo/branch cannot be matched
+};
+const tsOf = (v) => { const t = Date.parse(v || ''); return Number.isFinite(t) ? t : 0; };
+
 export function laneStats(lines, { now, hours = HOURS }) {
   const latest = new Map();
   for (const line of lines) {
@@ -80,15 +103,32 @@ export function laneStats(lines, { now, hours = HOURS }) {
     if (!r || typeof r !== 'object' || !r.id) continue;
     latest.set(r.id, r);
   }
+  // The latest request time of every request that landed merged or deployed, per repo+branch.
+  const landed = new Map();
+  for (const r of latest.values()) {
+    if (r.state !== 'merged' && r.state !== 'deployed') continue;
+    const k = branchKey(r);
+    const t = tsOf(r.createdAt);
+    if (!k || !t) continue;
+    if (!landed.has(k) || landed.get(k) < t) landed.set(k, t);
+  }
   const states = Object.fromEntries(FINAL_STATES.map((s) => [s, 0]));
-  let total = 0, approvalRefused = 0;
+  let total = 0, approvalRefused = 0, returnedResolved = 0;
   for (const r of latest.values()) {
     if (!inWindow(r.updatedAt, now, hours)) continue;
     total++;
-    if (FINAL_STATES.includes(r.state)) states[r.state]++;
     if (r.approvalRefused) approvalRefused++;
+    if (r.state === 'returned') {
+      // Resolved only by a LATER request for the same branch: a merge that predates the return is a different request.
+      const k = branchKey(r);
+      const later = k ? landed.get(k) || 0 : 0;
+      if (later && later > tsOf(r.endedAt || r.updatedAt)) { returnedResolved++; continue; }
+      states.returned++;
+      continue;
+    }
+    if (FINAL_STATES.includes(r.state)) states[r.state]++;
   }
-  return { states, total, approvalRefused, merges: states.merged + states.deployed };
+  return { states, total, approvalRefused, returnedResolved, merges: states.merged + states.deployed };
 }
 
 // ---- CI (pure) ------------------------------------------------------------------------------------------------------
@@ -193,8 +233,18 @@ export function summarize(today, prev) {
   // A superseded ask is closed, so the bucket is only named when the day actually has one (today.superseded is undefined
   // for a ledger line written before this check learned about superseding).
   const sup = (today.superseded || 0) > 0 ? `, ${today.superseded} superseded` : '';
-  if ((today.asked || 0) > ASKS_MAX) add('owner-asks', `${today.asked} new owner asks in 24 h`, `${today.asked} new asks (limit ${ASKS_MAX}), ${today.answered || 0} answered${sup}, ${today.open || 0} still open. A day above the limit usually means a session stopped waiting for the manager.`);
-  if ((today.states?.returned || 0) > LANE_RETURNED_MAX) add('lane-returned', `${today.states.returned} integration requests returned`, `${today.states.returned} of ${today.total || 0} lane requests came back to the requester (limit ${LANE_RETURNED_MAX}). Repeated returns point at a branch that needs a hand.`);
+  // ASKS_MAX is a per-session budget: only a session that asked over the limit is a regression. The fleet total stays in
+  // the summary line and the table row, it is information and not a finding.
+  const worst = today.worstSession || null;
+  if (worst && worst.count > ASKS_MAX) {
+    const name = String(worst.session).slice(0, 40);
+    const over = Object.values(today.bySession || {}).filter((c) => c > ASKS_MAX).length;
+    add('owner-asks', `${worst.count} new owner asks in 24 h from session ${name}`,
+      `${today.asked || 0} new asks in total (limit ${ASKS_MAX} per session), ${worst.count} of them from session ${name}.`
+      + `${over > 1 ? ` ${over} sessions are above the limit.` : ''} ${today.answered || 0} answered${sup}, ${today.open || 0} still open.`
+      + ' A day above the limit usually means a session stopped waiting for the manager.');
+  }
+  if ((today.states?.returned || 0) > LANE_RETURNED_MAX) add('lane-returned', `${today.states.returned} integration requests returned`, `${today.states.returned} of ${today.total || 0} lane requests came back to the requester and were not re-landed (limit ${LANE_RETURNED_MAX}). ${today.returnedResolved || 0} more were re-requested and landed merged or deployed. Repeated returns point at a branch that needs a hand.`);
   if ((today.ci?.redMinutes || 0) > CI_RED_MIN_MAX) add('ci-red', `CI red ${today.ci.redMinutes} min in 24 h`, `${today.ci.redTransitions || 0} red tick(s), ${today.ci.greenTransitions || 0} green. Above ${CI_RED_MIN_MAX} min main was unusable for sessions waiting on a deploy.`);
   if (today.box?.diskPct != null && today.box.diskPct > DISK_PCT_MAX) add('disk', `root disk ${today.box.diskPct} %`, `Above ${DISK_PCT_MAX} % on /. health-watch cleans its share; the rest is worktrees, tmp and caches.`);
   if (today.box?.memAvailableMb != null && today.box.memAvailableMb < MEM_MIN_MB) add('memory', `${today.box.memAvailableMb} MB MemAvailable`, `Below ${MEM_MIN_MB} MB. New sessions and parking both need headroom; load 1 min was ${n(today.box?.load1)}.`);
@@ -205,7 +255,7 @@ export function summarize(today, prev) {
     ['owner asks', `${today.asked} (${today.answered} answered${sup}, ${today.open} open)`, p ? `${n(p.asked)} (${n(p.answered)} answered)` : 'n/a'],
     ['decisions for owner', `${today.decisions}`, p ? n(p.decisions) : 'n/a'],
     ['lane merged / deployed', `${today.states.merged} / ${today.states.deployed}`, p ? `${n(p.states?.merged)} / ${n(p.states?.deployed)}` : 'n/a'],
-    ['lane returned', `${today.states.returned}`, p ? n(p.states?.returned) : 'n/a'],
+    ['lane returned', `${today.states.returned} returned, ${today.returnedResolved || 0} resolved`, p ? n(p.states?.returned) : 'n/a'],
     ['lane merged_ci_red / deploy_failed', `${today.states.merged_ci_red} / ${today.states.deploy_failed}`, p ? `${n(p.states?.merged_ci_red)} / ${n(p.states?.deploy_failed)}` : 'n/a'],
     ['lane approvalRefused', `${today.approvalRefused}`, p ? n(p.approvalRefused) : 'n/a'],
     ['CI red', `${today.ci.redMinutes} min (${today.ci.redTransitions} red / ${today.ci.greenTransitions} green)`, p ? `${n(p.ci?.redMinutes)} min` : 'n/a'],
