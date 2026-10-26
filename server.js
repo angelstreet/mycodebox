@@ -138,6 +138,7 @@ import { createIntegrationLane, createTmuxRestart } from './integration-lane.js'
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
+import { gitCleanOf } from './git-facts.js';
 import { createSendQueue, planSend, MAX_PER_SESSION as SEND_QUEUE_MAX } from './send-queue.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
@@ -952,20 +953,8 @@ const doneCheck = createDoneCheck({
 });
 
 // Reuse done-check's git facts for a single session's cwd, without telling it / nudging: returns true when git is clean.
-async function gitCleanOf(name, cwd) {
-  if (!cwd) return true;
-  let st; try { st = await exec('git', ['-C', cwd, 'status', '--porcelain', '--untracked-files=no'], { timeout: 30000 }).stdout; } catch { return true; }
-  if (st.trim()) return false;   // uncommitted in a worktree: blame it
-  try {
-    const head = (await exec('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 30000 }).stdout).trim();
-    if (!head || head === 'HEAD') return true;   // detached / no branch: don't block
-    const base = (await exec('git', ['-C', cwd, 'rev-parse', '-q', '--verify', 'origin/main'], { timeout: 30000 }).stdout).trim();
-    if (!base) return true;
-    const ahead = (await exec('git', ['-C', cwd, ['log', '--format=%h', '--no-merges', '--cherry-pick', '--right-only', `origin/main...HEAD`].flat().join(' ')], { timeout: 30000 }).stdout).trim();
-    if (ahead) return false;
-    return true;
-  } catch { return true; }
-}
+// The helper lives in git-facts.js (injectable exec): it used to live here and read `await exec(...).stdout`,
+// which is undefined, so the whole worker-auto-close scan died every tick (2026-10-26).
 
 // Worker auto-close (worker-auto-close.js): a session that another session started and that is done + idle + git-clean
 // for >= workerIdleMin minutes is closed politely. manager.json `workerAutoClose`: true (default) | false;
@@ -996,7 +985,7 @@ const workerAutoClose = createWorkerAutoClose({
       const idleMs = Date.now() - (lastChange || st?.doneAt || Date.now());
       const pri = sessionMeta.priority(name);
       // Reuse done-check's factsOf (no send, no nudge) by reading the git state through the same helper it would.
-      const clean = await gitCleanOf(name, p.cwd);
+      const clean = await gitCleanOf(p.cwd, { exec });
       const agent = st?.agent || 'claude';
       out.push({ name, startedBy: sb, priority: pri, lastStatusKind: 'done', lastStatusText: sl?.text || null,
         idleMs, working, scriptBusy, backgroundWork, draft, doneCheckClean: clean, agent,
