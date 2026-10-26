@@ -781,6 +781,10 @@ money, customers, deleting data, destructive migrations, history rewrites (`stal
 `router.js` `stop_v1_floor` are unchanged. `merge-policy.js` still treats a file named `*.service` / `*.timer` as a systemd path;
 repo units ship as `.tmpl`, which the installer renders.
 
+**Migrations made re-runnable (2026-10-26, Q238).** `merge-policy.js` `migrationAdditive(file, added, removed)`: a `CREATE OR REPLACE FUNCTION` is additive
+when the same diff removes that file's own plain `CREATE FUNCTION` of the same name (`facts.migrationRemoved`); an OR REPLACE of any other function
+still swaps a deployed body and is returned.
+
 **Supersede (2026-10-26).** A new ask closes an older open ask of the same session only when it is the same question reworded or
 `--supersedes Q12,Q13` names it (`owner-ask.js ask`, `manager-ask.js`). A different question stays open (Q237 had closed Q236).
 
