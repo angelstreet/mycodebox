@@ -786,6 +786,8 @@ a unit on a host is the routine unit class above.
 when the same diff removes that file's own plain `CREATE FUNCTION` of the same name (`facts.migrationRemoved`); an OR REPLACE of any other function
 still swaps a deployed body and is returned.
 
+**Jev stop floor (2026-10-26).** `router.js` `routineStop(facts)`: `facts.routine_change` = `unit` | `safer` | `perm` with `rollback: true` (and `backup: true` for `unit`, no `prod_host`) makes the stop an `answer`; only `perm` with `contents_unread: true` may carry a `credentials` touch. `STOP_FLOOR_TOPICS` now also names `sudoers`, `history_rewrite` and `destructive_migration`; money, customers, `shared_data_delete` and `physical` are unchanged and no routine fact excuses them. `scripts/jev-ask.js stop --facts` passes these facts through.
+
 **Supersede (2026-10-26).** A new ask closes an older open ask of the same session only when it is the same question reworded or
 `--supersedes Q12,Q13` names it (`owner-ask.js ask`, `manager-ask.js`). A different question stays open (Q237 had closed Q236).
 

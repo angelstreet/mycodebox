@@ -182,6 +182,7 @@ const retry = {
 //   - touches (string[], optional): floor topics the stop touches. Any one of
 //     'money', 'credentials', 'customers', 'shared_data_delete', 'migration', 'merge_main',
 //     'deploy_restart' -> forced 'escalate'.
+//   - routine_change ('unit'|'safer'|'perm', optional) + rollback / backup / contents_unread / prod_host: see routineStop (2026-10-26).
 //   - delegated (bool, optional): the manager already judged this stop to be inside the
 //     owner's delegation (e.g. a menu with a recommended option it can pick). When true,
 //     the rule default leans 'answer' unless a floor applies.
@@ -193,7 +194,24 @@ const retry = {
 // Round 12 narrowing (2026-10-18, owner rule): only money/payments, customers, shared_data_delete, owner-held credentials,
 // and physical actions on a device force escalation to the owner. Migrations, merge/push, deploys/restarts,
 // generated app secrets, infra config and technical choices are manager decisions, not owner items.
-const STOP_FLOOR_TOPICS = ['money', 'credentials', 'customers', 'shared_data_delete', 'physical'];
+// 2026-10-26 (owner: unit / safer / permission-fix changes are decided by the manager): sudoers, history rewrites and destructive
+// migrations are named floor topics too, so a routine_change fact can never excuse them (host-unit-routine.js is the text twin).
+const STOP_FLOOR_TOPICS = ['money', 'credentials', 'customers', 'shared_data_delete', 'physical', 'sudoers', 'history_rewrite', 'destructive_migration'];
+// A routine change (host-unit-routine.js routineChange): facts.routine_change = 'unit' | 'safer' | 'perm', with facts.rollback === true
+// (a rollback line) and, for 'unit', facts.backup === true; never on a production / customer-facing host (facts.prod_host). Only the
+// 'perm' class may carry a credentials touch, and only with the file's contents unread (facts.contents_unread === true): it fixes who can
+// read a settings file, it never reads, changes or hands out the credential. Every other floor topic still forces escalate.
+export function routineStop(facts = {}) {
+  const k = facts.routine_change;
+  if (!['unit', 'safer', 'perm'].includes(k) || facts.rollback !== true || facts.prod_host === true) return false;
+  if (k === 'unit' && facts.backup !== true) return false;
+  return true;
+}
+const floorTouches = (facts) => {
+  const touches = Array.isArray(facts?.touches) ? facts.touches : [];
+  const routine = routineStop(facts);
+  return touches.filter((t) => STOP_FLOOR_TOPICS.includes(t) && !(routine && t === 'credentials' && facts.routine_change === 'perm' && facts.contents_unread === true));
+};
 // Decide this before the answer/escalation pick. A purpose-scoped credential for our own CI is
 // engineering wiring, while personal/shared/third-party credentials remain a hard floor.
 export function technicalStop(facts = {}) {
@@ -201,10 +219,11 @@ export function technicalStop(facts = {}) {
   const ownCiCredential = touches.includes('credentials') &&
     (facts.credential_scope === 'own_ci' || facts.purpose_scoped_credential === true);
   const hard = facts.forbidden_topic || ['permission', 'owner_action', 'waiting_deploy'].includes(facts.case) ||
-    touches.some((t) => STOP_FLOOR_TOPICS.includes(t) && !(t === 'credentials' && ownCiCredential));
+    floorTouches(facts).some((t) => !(t === 'credentials' && ownCiCredential));
   if (hard) return { technical: 'no', why: 'a hard-floor topic requires the owner, even when the question is technical' };
   if (facts.physical_action === true || touches.includes('physical')) return { technical: 'no', why: 'a physical-world action requires the owner to be present' };
   if (ownCiCredential) return { technical: 'yes', why: 'a dedicated, least-privilege credential for our own CI is contained and reversible' };
+  if (routineStop(facts)) return { technical: 'yes', why: 'a routine unit / safer / permission-fix change with a rollback line is a manager decision (owner, 2026-10-26)' };
   if (facts.recommended === true || facts.reversible === true || facts.delegated === true ||
       touches.some((t) => ['app', 'ci', 'infra', 'migration', 'deploy', 'tests'].includes(t))) {
     return { technical: 'yes', why: 'this is a contained engineering choice with a manager-owned path' };
@@ -228,7 +247,7 @@ const stop = {
     if (facts?.forbidden_topic) { forced = 'escalate'; reasons.push('forbidden topic: the manager must not answer'); }
     else if (['permission', 'owner_action', 'waiting_deploy'].includes(c)) { forced = 'escalate'; reasons.push(`case "${c}": only the owner can answer`); }
     else {
-      const touches = Array.isArray(facts?.touches) ? facts.touches.filter((t) => STOP_FLOOR_TOPICS.includes(t)) : [];
+      const touches = floorTouches(facts);
       if (touches.length) { forced = 'escalate'; reasons.push(`touches owner-only topic: ${touches.join(', ')}`); }
     }
     return { allowed: ['answer', 'escalate'], forced, reasons };
@@ -236,6 +255,7 @@ const stop = {
   ruleDefault(facts) {
     if (facts?.own_cleanup === true) return 'answer';
     if (facts?.delegated === true) return 'answer';
+    if (routineStop(facts)) return 'answer';
     if (facts?.recommended === true && facts?.reversible === true) return 'answer';
     return facts?.case === 'continue' ? 'answer' : 'escalate';
   },

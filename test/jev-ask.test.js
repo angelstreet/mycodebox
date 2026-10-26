@@ -386,3 +386,45 @@ test('stop technical gate records yes for a scoped CI credential and no for a dr
     }
   } finally { await rm(stateDir, { recursive: true, force: true }); }
 });
+
+// ---- owner 2026-10-26: routine unit / safer / permission-fix changes are not floors ----
+const stopPick = async (facts) => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'jev-ask-'));
+  try {
+    const env = { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KEY: '', GHOSTY_ENV_FILE: join(stateDir, 'none.env') };
+    const { code, stdout } = await runCli(['stop', '--facts', JSON.stringify({ case: 'owner_decision', ...facts })], { env });
+    assert.equal(code, 0);
+    return JSON.parse(stdout);
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+};
+
+test('stop 2026-10-26: a routine unit / safer / permission-fix change with a rollback line is answered, not escalated', async () => {
+  for (const facts of [
+    { routine_change: 'unit', backup: true, rollback: true, touches: ['infra'] },
+    { routine_change: 'safer', rollback: true, touches: ['migration'] },
+    { routine_change: 'perm', rollback: true, contents_unread: true, touches: ['credentials'] },
+  ]) {
+    const rec = await stopPick(facts);
+    assert.equal(rec.pick, 'answer', JSON.stringify(facts));
+    assert.notEqual(rec.source, 'forced', JSON.stringify(facts));
+  }
+});
+
+test('stop 2026-10-26: what is still a floor still forces escalate, routine or not', async () => {
+  const routine = { routine_change: 'perm', rollback: true, contents_unread: true };
+  for (const facts of [
+    { ...routine, touches: ['credentials', 'money'] }, { ...routine, touches: ['customers'] }, { ...routine, touches: ['shared_data_delete'] },
+    { ...routine, touches: ['destructive_migration'] }, { ...routine, touches: ['sudoers'] }, { ...routine, touches: ['history_rewrite'] },
+    { ...routine, touches: ['physical'] },
+    { ...routine, contents_unread: false, touches: ['credentials'] },                       // the contents may be read: credentials
+    { routine_change: 'safer', rollback: true, touches: ['credentials'] },                  // credentials only excused for the perm class
+    { routine_change: 'unit', backup: true, rollback: true, prod_host: true, touches: ['credentials'] },
+    { routine_change: 'unit', backup: true, touches: ['credentials'] },                     // no rollback line
+  ]) {
+    const rec = await stopPick(facts);
+    assert.equal(rec.pick, 'escalate', JSON.stringify(facts));
+    assert.equal(rec.source, 'forced', JSON.stringify(facts));
+  }
+  // without the routine facts the rule default is unchanged
+  assert.equal((await stopPick({ touches: ['infra'] })).pick, 'escalate');
+});
