@@ -470,6 +470,9 @@ runner-retention script and its timers go on both CI runner VMs.
 - **Still floor (owner):** sudoers; units or timers on production or customer-facing hosts, or on codebox's own `ghosty-sessions`
   service; reboots; removing, masking or disabling a unit that is not a replacement; credential changes.
 - One predicate, `host-unit-routine.js` (`routineHostUnit`); `stall.js` `hardMatch` and `owner-asks.js` `checkAsk` use it.
+- **Widened 2026-10-26** (Q234, Q235, Q238: "pure technical change, change the harness so that you can answer that"; "making something more
+  safe should be allowed"): also codebox and database / helper hosts; changes that only make something safer or idempotent; permission
+  fixes so a service reads its own settings file (contents never read). Predicate `routineChange`; see REFERENCE.md.
 
 ## 21. The ask gate: one gate on every route, and a question that changes nothing is not a question (2026-10-25)
 

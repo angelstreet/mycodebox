@@ -10,7 +10,8 @@
 //   node scripts/manager-ask.js --session S --question "<plain words>" \
 //     --what "<2-4 lines: what it is, where, what each option does>" \
 //     --options "1 ...|2 ..." --recommendation "1 - <your view, one line>" \
-//     --floor <floor> --why "<why you: what could be lost, exposed or restarted>" [--jev "..."]
+//     --floor <floor> --why "<why you: what could be lost, exposed or restarted>" [--jev "..."] \
+//     [--supersedes Q12,Q13]     (only these, or the same question reworded, are closed; other open asks stay open)
 //   node scripts/manager-ask.js --resolve Q12 --answer "..."
 //
 // Floors (the only reasons a question may reach the owner, AGENTS.md autonomy by default):
@@ -21,7 +22,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, appendFile } from 'node:fs/promises';
-import { readLedger, openAsksFromRecords, withFileLock, appendRecord, supersedeOlder, fileAsk } from '../owner-asks.js';
+import { readLedger, openAsksFromRecords, withFileLock, appendRecord, fileAsk } from '../owner-asks.js';
 import { askLine } from '../public/manager-ask.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -64,13 +65,11 @@ async function ask(f) {
   const filed = await fileAsk(LEDGER, {
     session, question, what: f.what, options,
     recommend: f.recommend || f.recommendation, recommendation: f.recommendation || f.recommend,
-    floor: f.floor, why: f.why, jev: f.jev,
+    floor: f.floor, why: f.why, jev: f.jev, supersedes: f.supersedes,
   });
   if (!filed.ok) die(2, filed.why);
   const id = filed.id;
-  // A second question for a session replaces the session's older open questions (round 9, item 5): the older
-  // ones are closed by this question, never by a stop id (E22). The lock is released before this runs.
-  await supersedeOlder(LEDGER, session, id);
+  // fileAsk closed the session's older open asks only when this is the same question or --supersedes names them
   let alertErr = null;
   try {
     const alerted = (await readFile(ALERTS, 'utf8').catch(() => '')).split('\n').some((l) => { try { return JSON.parse(l).id === id; } catch { return false; } });
@@ -99,5 +98,5 @@ async function resolve(f) {
 }
 
 const f = flags(process.argv.slice(2));
-if (f.help) { console.log('usage: manager-ask --session S --question Q --what W --options "1 ..|2 .." --recommendation "1 - why" --floor F --why "why you" [--jev J] | --resolve Q<n> --answer A'); process.exit(0); }
+if (f.help) { console.log('usage: manager-ask --session S --question Q --what W --options "1 ..|2 .." --recommendation "1 - why" --floor F --why "why you" [--jev J] [--supersedes Q1,Q2] | --resolve Q<n> --answer A'); process.exit(0); }
 await (f.resolve ? resolve(f) : ask(f));

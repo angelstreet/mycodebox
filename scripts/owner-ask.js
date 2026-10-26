@@ -104,7 +104,7 @@ async function main() {
     const r = await fileAsk(ASKS_FILE, {
       session: f.session, question: f.question, what: f.what, options: opts(f),
       recommend: f.recommend || f.recommendation, recommendation: f.recommendation || f.recommend,
-      floor: f.floor, why: f.why,
+      floor: f.floor, why: f.why, supersedes: f.supersedes,
     });
     if (!r.ok) fail(r.why);
     process.stdout.write(r.id + '\n');
