@@ -22,6 +22,9 @@ const ask = (n, { at = `2026-10-2${n}T10:00:00.000Z`, session = 'S', state = 'op
   at, id: `Q${n}`, session, question: `Synthetic question ${n}?`, options: ['first thing', 'second thing'],
   recommendation: '1', floor: 'money', what: 'Synthetic what.', why: 'Synthetic why.', state,
 });
+// the gate flags every filed question carries (owner, 2026-10-25): no floor, no question for the owner
+const ASK_FLAGS = ['--what', 'Synthetic what.', '--options', '1 first thing|2 second thing', '--recommend', '1',
+  '--floor', 'money', '--why', "It spends the owner's money, so it is the owner's decision."];
 const ledgerIn = async (tag, lines) => {
   const file = join(tmp(`e22-${tag}-`), 'manager-owner-asks.jsonl');
   await writeFile(file, lines.join('\n') + '\n');
@@ -77,9 +80,9 @@ test('the manager-ask command replaces the session\'s older question with the ne
   const run = (args) => new Promise((res) => execFile(process.execPath, [CLI, ...args],
     { env: { ...process.env, GHOSTY_STATE_DIR: dir, GHOSTY_URL: url } }, (e, so, se) => res({ code: e ? e.code ?? 1 : 0, stdout: so.trim(), stderr: se.trim() })));
   try {
-    const first = await run(['--session', 'S', '--question', 'Synthetic first question?']);
+    const first = await run(['--session', 'S', '--question', 'Synthetic first question?', ...ASK_FLAGS]);
     assert.equal(first.code, 0, first.stderr);
-    const second = await run(['--session', 'S', '--question', 'Synthetic second question?']);
+    const second = await run(['--session', 'S', '--question', 'Synthetic second question?', ...ASK_FLAGS]);
     assert.equal(second.code, 0, second.stderr);
     assert.notEqual(second.stdout, first.stdout, 'a second question gets its own id');
     const sup = (await recordsOf(ledger)).filter((r) => r.state === 'superseded');

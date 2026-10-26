@@ -9,7 +9,7 @@
 
 import { icon } from './icons.js';
 import { audioChipHtml, wireAudioChips } from './audio-chip.js';
-import { askOptions, looseRecommendation, answerText } from './manager-ask.js';
+import { askOptions, looseRecommendation, answerText, askSummary } from './manager-ask.js';
 import { renderMd } from './md.js';
 import { copyPromptButtonHtml } from './copy-prompt.js';
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane, parseManagerItems, extractRecommendation } from './buttons.js';
@@ -236,7 +236,10 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     el.classList.toggle('hidden', minimised);
     el.classList.toggle('ap-big', expanded);
     const mopts = askOptions(a), loose = looseRecommendation(a);
-    const text = [a.question, mopts.length ? mopts.map((o) => `${o.n}. ${o.label}${o.rec ? ' (recommended)' : ''}`).join('\n') : '', loose ? `Recommends: ${loose}` : ''].filter(Boolean).join('\n');
+    // What the owner reads, in the order he asked for (2026-10-25): the id, the one-line what, why it is his,
+    // the recommendation. The options below them are how he answers.
+    const s = askSummary(a);
+    const text = [a.question, s.what, s.why ? `Why you: ${s.why}` : '', mopts.length ? mopts.map((o) => `${o.n}. ${o.label}${o.rec ? ' (recommended)' : ''}`).join('\n') : '', loose ? `Recommends: ${loose}` : ''].filter(Boolean).join('\n');
     body.innerHTML = `<div class="ap-head">
         <span class="ap-prio P2">manager</span>
         <span class="ap-name">${esc(a.id || 'question')}</span>
@@ -246,7 +249,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         ${expanded ? '' : `<button class="ap-x" data-act="min" aria-label="Hide">${icon('chevron-down', 16)}</button>`}
         <button class="ap-x" data-act="dismiss" aria-label="Dismiss">${icon('x', 16)}</button>
       </div>
-      <div class="ap-q mdbody">${copyPromptButtonHtml({ text, label: 'Copy question' })}${renderMd(String(a.question || ''))}</div>
+      <div class="ap-q mdbody">${copyPromptButtonHtml({ text, label: 'Copy question' })}${renderMd(s.what || String(a.question || ''))}${s.why ? `<div class="ap-tldr"><div class="ap-tldr-what">Why you: ${esc(s.why)}</div></div>` : ''}</div>
       ${mopts.length ? `<div class="ap-btns op">${mopts.map((o, i) => `<button type="button" class="ap-b op${o.rec ? ' hl isrec' : ''}" data-mopt="${i}"${o.why ? ` title="${esc(o.why)}"` : ''}><span class="n">${esc(o.n)}</span><span class="t">${esc(o.label)}</span>${o.rec ? '<i class="star">\u2605</i>' : ''}</button>`).join('')}</div>` : ''}
       ${loose ? `<div class="ap-tldr"><div class="ap-tldr-what">Recommends: ${esc(loose)}</div></div>` : ''}
       <div class="ap-meta">${mopts.length ? 'Tap an answer: it is sent to the manager' : 'Answer in: tell the manager'}</div>`;

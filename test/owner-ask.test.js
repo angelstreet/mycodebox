@@ -74,6 +74,72 @@ test('bare internal id in the question -> refused', async () => {
   assert.equal(r.stdout, '');
 });
 
+// The no-op rule (owner, 2026-10-25): a recommended option that changes nothing is not a decision, so the ask
+// never reaches the owner. The manager decides it and journals it with `owner-ask.js decide`.
+test('a recommended option that changes nothing -> refused', async () => {
+  for (const [option, rec] of [['1 keep it as it is|2 pay the invoice now', '1'],
+    ['1 change nothing|2 pay the invoice now', '1'],
+    ['1 leave it as is|2 pay the invoice now', '1'],
+    ['1 no change|2 pay the invoice now', '1'],
+    ['1 do nothing|2 pay the invoice now', '1'],
+    ['1 pay the invoice now|2 keep as it is', '2']]) {
+    const dir = await mkdtemp(join(tmpdir(), 'owner-ask-noop-'));
+    const r = await run(['ask', '--session', 'manager:test', ...Object.entries({ ...GOOD, '--options': option, '--recommend': rec }).flat()], dir);
+    assert.equal(r.code, 2, `${option} -> ${r.stderr}`);
+    assert.match(r.stderr, /changes nothing/);
+    assert.equal(r.stdout, '');
+    await assert.rejects(readFile(join(dir, 'manager-owner-asks.jsonl'), 'utf8'), 'a refused ask writes no ledger');
+  }
+});
+
+// A recommendation that is free text ("2 - pay it now, because ...") still points at an option, and a free-text
+// recommendation that changes nothing is refused as well.
+test('a free-text recommendation is read as the option it points at', async () => {
+  const without = (o, k) => Object.fromEntries(Object.entries(o).filter(([x]) => x !== k));
+  const dir = await mkdtemp(join(tmpdir(), 'owner-ask-rec-'));
+  const ok = await run(['ask', '--session', 'manager:test', ...Object.entries(without(GOOD, '--recommend')).flat(),
+    '--recommendation', '1 - pay it now, the account stays alive'], dir);
+  assert.equal(ok.code, 0, ok.stderr);
+  const rec = (await ledgerOf(dir))[0];
+  assert.equal(rec.recommendation, '1 - pay it now, the account stays alive');
+
+  const dir2 = await mkdtemp(join(tmpdir(), 'owner-ask-rec2-'));
+  const noop = await run(['ask', '--session', 'manager:test', ...Object.entries(without(GOOD, '--recommend')).flat(),
+    '--recommendation', '1 - I would keep it as it is'], dir2);
+  assert.equal(noop.code, 2, noop.stderr);
+  assert.match(noop.stderr, /changes nothing/);
+});
+
+// The "why you" (owner, 2026-10-25): one line, in plain words, naming the risk of the floor. A list of technical
+// terms names nothing, so the owner cannot tell why the question is his.
+test('a why that is a bare technical term list -> refused', async () => {
+  const r = await run(['ask', '--session', 'manager:test', ...Object.entries({ ...GOOD, '--why': 'credentials, production migration, customer data' }).flat()]);
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, /list of technical terms/);
+  assert.equal(r.stdout, '');
+});
+
+test('a why that does not name the floor risk -> refused', async () => {
+  const r = await run(['ask', '--session', 'manager:test', ...Object.entries({ ...GOOD, '--why': 'The manager should ask the owner about this.' }).flat()]);
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, /does not name the "money" risk/);
+  assert.equal(r.stdout, '');
+});
+
+test('a why of more than one line -> refused', async () => {
+  const r = await run(['ask', '--session', 'manager:test', ...Object.entries({ ...GOOD, '--why': 'It spends the owner money.\nAnd here is more text.' }).flat()]);
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, /--why must be one line/);
+  assert.equal(r.stdout, '');
+});
+
+test('a why that names the risk in plain words -> accepted', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'owner-ask-why-'));
+  const r = await run(['ask', '--session', 'manager:test', ...Object.entries({ ...GOOD, '--why': "Paying spends the owner's money, so the account could be suspended and the work stops." }).flat()], dir);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^Q1$/);
+});
+
 test('valid ask -> one ledger line with floor, what and why', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'owner-ask-ok-'));
   const r = await run(['ask', '--session', 'manager:runner', ...Object.entries(GOOD).flat()], dir);

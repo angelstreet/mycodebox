@@ -347,12 +347,36 @@ through the normal `alert()` (same debounce per `tag` or title, notification fee
 
 **Owner questions** (`scripts/manager-ask.js`, `ask-guard.js`, owner 2026-10-23). A question the owner must answer is filed in
 `<state>/manager-owner-asks.jsonl` (`Q<n>`), pushed to the owner with the tag `ask-<n>` and written to the shared alert record
-`<state>/manager-ask-alerts.jsonl` (`{id, at, via}`; `via` is `manager-ask`, `autoregistered`, `late` or `dropped`). The record is the
+`<state>/manager-ask-alerts.jsonl` (`{id, at, via}`; `via` is `manager-ask`, `defect`, `late` or `dropped`). The record is the
 **one** truth about "this question was alerted": the ask-guard reads it before every sweep (it only grows), so a question is never
 alerted twice, and `scripts/manager-ask-scan.sh` reports `!! ask-not-alerted <id>` only when neither the record nor the push feed
 (tag `ask-<id>`) holds an alert. The scan used to read the push feed alone, which is a 50-item ring: a real alert scrolled out of it
 and the scan printed a false alarm (2026-10-23). An owner question is an **interrupt** alert: it is pushed on its own, with its tag,
 never inside a digest and never evicted by a routine notice.
+
+**One gate on every route (owner, 2026-10-25).** A question reaches the owner only through `owner-asks.js` `checkAsk`: a
+question, a plain "what it is / where / what each option does", at least two options, a recommendation that points at one of
+them, a floor from `FLOORS` (`money`, `credentials`, `customers`, `deleting_data`, `host_units`, `production_migration`,
+`history_rewrite`, `owner_fact`) and a one-line "why you" in plain words that names the risk of that floor (what could be
+lost, exposed or restarted). The gate refuses a `--why` that is a bare list of technical terms ("credentials, production
+migration, customer data"), a `--why` of more than one line, a bare internal id in the wording, and a **recommendation that
+changes nothing** ("keep it as it is", "change nothing", "leave as is", "no change", "do nothing"): there is nothing for the
+owner to decide, so the manager decides it and journals it with `owner-ask.js decide`. Every route into the ledger runs it:
+`scripts/owner-ask.js ask`, `scripts/manager-ask.js ask` (the same flags: `--what`, `--options`, `--recommend` or
+`--recommendation`, `--floor`, `--why`), and the guard's auto-registration. A refused ask writes nothing and exits 2.
+
+**A record without a valid floor is a defect, never a question for the owner.** The floor in the line is the evidence that
+the ask passed the gate, so a record that never passed it (a hand-written line, an older writer, a question the manager only
+printed in chat) is never shown: `readOpenAsks` / `GET /api/owner-asks` list only the asks that passed, and the rest is
+reported as a defect - one `ask-defect` event in `manager-events.jsonl` (the manager wakes on it), one `ask-defect` line in
+`stalls.jsonl`, and `!! ask-defect <id> <session>` in the hourly `scripts/manager-ask-scan.sh`. A defect never closes a
+question the owner is waiting for (`supersedeOlder` refuses a replacement that never passed the gate), and the harness health
+check counts it as no ask of the day. The manager fixes it by filing the question properly or by deciding it.
+
+**What the owner reads (owner, 2026-10-25).** The ask id, a one-line "what it is", why it is his, the recommendation - in
+that order - in the NEEDS YOU strip, the answer popup, the push and the voice (`public/manager-ask.js` `askSummary`,
+`askLine`). The options come after: they are how he answers. The manager's own report of the open asks is a table with the
+same four columns: `Ask | What it is | Why it reached you | My view/recommendation`.
 
 **A question is closed only by another question** (`owner-asks.js` `supersedeOlder`). A question may only be marked `superseded` when the
 `by` id is a question that exists in the ledger, for the same session: a stop id, an unknown id or an id of another session closes
