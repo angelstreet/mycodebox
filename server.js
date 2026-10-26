@@ -581,7 +581,7 @@ async function taskDocFiles(session) {
   const add = (dir, name) => { const path = join(dir, name); if (!seen.has(name)) { seen.add(name); out.push({ name, path }); } };
   let cwd = '';
   try { cwd = (await exec(TMUX, ['display-message', '-p', '-t', tgt(session), '#{pane_current_path}'])).stdout.trim(); } catch { return out; }
-  const m = /^task0*(\d+)/i.exec(session);
+  const m = /(?:^|[-_])task0*(\d+)/i.exec(session);   // task164, mm-task164
   const dirs = [cwd, join(cwd, 'docs', 'tasks'), join(HOME, 'virtualpytest', 'docs', 'tasks')];
   try { const top = (await exec('git', ['-C', cwd, 'rev-parse', '--show-toplevel'])).stdout.trim(); if (top) dirs.splice(1, 0, join(top, 'docs', 'tasks')); } catch { /* not a repo */ }
   for (const d of dirs) {
