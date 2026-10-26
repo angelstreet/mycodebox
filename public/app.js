@@ -1481,7 +1481,7 @@ function probeTaskDoc(cell, n) {
   const btn = cell.querySelector('.td');
   if (!btn) return;
   let d = state.taskDocs.get(n);
-  if (!/^task\d+/i.test(n)) { btn.classList.add('hidden'); return; }
+  if (!/(?:^|[-_])task\d+/i.test(n)) { btn.classList.add('hidden'); return; }
   if (!d || (!d.busy && Date.now() - d.at > 120000)) {
     d = d || { files: [], at: 0 };
     d.busy = true; state.taskDocs.set(n, d);

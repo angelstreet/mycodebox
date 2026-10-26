@@ -15,3 +15,9 @@ test('docked on the web, the chip row and the disk banner start right of the ses
   assert.match(css, /body\.side-docked > :is\([^)]*#quickRow[^)]*\)\{ margin-left:var\(--sidew\); \}/);
   assert.match(css, /body\.side-docked > :is\([^)]*#diskBanner[^)]*\)\{ margin-left:var\(--sidew\); \}/);
 });
+
+test('the MD button also matches a prefixed task session (mm-task168), in the card and on the server', () => {
+  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'), srv = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(app, /\(\?:\^\|\[-_\]\)task\\d\+\/i\.test\(n\)/);
+  assert.match(srv, /const m = \/\(\?:\^\|\[-_\]\)task0\*\(\\d\+\)\/i\.exec\(session\)/);
+});
