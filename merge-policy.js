@@ -348,7 +348,7 @@ const norm = (s) => s.replace(/;+\s*$/, '').replace(/\s+/g, ' ').trim().toLowerC
 const isPy = (file) => /\.(?:py|rb|js|ts|go|java)$/i.test(file || '');
 // The added lines of ONE migration file -> { additive: true } | { additive: false, reason }. Comments and blank lines are ignored;
 // anything not read as an additive statement (including a statement we only half read) is not additive.
-export function migrationAdditive(file, addedLines) {
+export function migrationAdditive(file, addedLines, removedLines = []) {
   if (!Array.isArray(addedLines)) return { additive: false, reason: 'unreadable diff' };
   const py = isPy(file);
   if (!py) {
@@ -397,8 +397,12 @@ export function migrationAdditive(file, addedLines) {
         return !!e && objectKey(e[1]) === key;
       });
     };
+    // Making a file re-runnable (owner 2026-10-26, Q238: "making something more safe should be allowed"): the same diff removes this
+    // file's own plain CREATE FUNCTION of that name and signature head, so OR REPLACE re-creates what the file already created.
+    const ownFunctions = new Set((Array.isArray(removedLines) ? removedLines : []).map((l) => SQL_CREATE_FUNCTION.exec(String(l).trim().toLowerCase().replace(/\s+/g, ' '))).filter((m) => m && !/^create or replace/.test(m[0])).map((m) => objectKey(m[1])));
+    const ownReplace = (i) => { const m = SQL_CREATE_FUNCTION.exec(heads[i]); return !!m && ownFunctions.has(objectKey(m[1])); };
     for (let i = 0; i < heads.length; i++) {
-      if (/^\s*create\s+or\s+replace\s+function\b/.test(heads[i]) && !usedByTrigger(i)) return { additive: false, reason: 'CREATE OR REPLACE FUNCTION' };
+      if (/^\s*create\s+or\s+replace\s+function\b/.test(heads[i]) && !usedByTrigger(i) && !ownReplace(i)) return { additive: false, reason: 'CREATE OR REPLACE FUNCTION' };
       const r = sqlAdditive(cut.stmts[i]);
       if (r === true) continue;
       // a null verdict is a statement the file itself redeems: a policy created again later, a REVOKE on tables created earlier
@@ -429,7 +433,8 @@ export function migrationReasons(facts, { approvedBy = false, migrationApplied =
   const files = (facts?.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file);
   if (!files.length) return [];
   const adds = facts?.migrationAdds || {};
-  const bad = files.map((file) => [file, migrationAdditive(file, adds[file])]).filter(([, v]) => !v.additive);
+  const removed = facts?.migrationRemoved || {};
+  const bad = files.map((file) => [file, migrationAdditive(file, adds[file], removed[file])]).filter(([, v]) => !v.additive);
   if (bad.length) return bad.map(([file, v]) => `migration is destructive: ${v.reason} in ${file}`);
   return [];
 }
@@ -516,7 +521,7 @@ export function schemaReasons(facts, { schemaIgnore = [] } = {}) {
 // read the whole diff sets scanError (fails closed in the floors). Migration files keep their ADDED lines (migrationAdds) so the
 // lane can classify them by effect instead of by path (Q199).
 export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles) {
-  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {}, tableUses: [] };
+  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {}, migrationRemoved: {}, tableUses: [] };
   const names2 = await git(repo, ['diff', '--name-only', '-z', spec]);
   if (names2.code !== 0) return { error: `git diff failed: ${names2.err || 'unknown'}` };
   out.files = names2.out.split('\0').filter(Boolean);
@@ -532,6 +537,11 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
     if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); codeFile = !!(file && SCHEMA_USE_EXT.test(file) && !isDocFile(file) && !SCHEMA_SKIP_FILE.test(file)); continue; }
     const bin = /^Binary files (.*) and (.*) differ$/.exec(line);
     if (bin) { if (bin[1] === '/dev/null') { const nf = bin[2].replace(/^b\//, ''); if (!DOC_IMAGE.test(nf)) out.binary.push(nf); } continue; }
+    if (line.startsWith('-') && !line.startsWith('--- ') && file && sensitivePath(file) === 'migration') {
+      const rl = out.migrationRemoved[file] || (out.migrationRemoved[file] = []);
+      if (rl.length < MIG_LINE_CAP) rl.push(line.slice(1));
+      continue;
+    }
     if (!line.startsWith('+')) continue;
     const added = line.slice(1);
     if (file && sensitivePath(file) === 'migration') {

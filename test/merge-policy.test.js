@@ -689,3 +689,27 @@ test('rollback files: *_rollback.sql under a migrations dir is not a migration; 
   assert.equal(migrationReasons(facts('tools/001_rollback.sql', ['DROP TABLE x;'])).length, 1);
   assert.equal(migrationReasons(facts('db/migrations/001_down.sql', ['DROP TABLE x;'])).length, 1);
 });
+
+// owner 2026-10-26 (Q238): a migration made re-runnable is safer, not destructive
+test('migrationAdditive: CREATE OR REPLACE FUNCTION passes when the same diff removes the file\'s own plain CREATE FUNCTION', async () => {
+  const { migrationAdditive } = await import('../merge-policy.js');
+  const added = ['CREATE OR REPLACE FUNCTION public.bump(p_id uuid)', 'RETURNS integer LANGUAGE plpgsql AS $fn$ BEGIN RETURN 1; END; $fn$;'];
+  const own = migrationAdditive('db/migrations/1.sql', added, ['CREATE FUNCTION public.bump(p_id uuid)']);
+  assert.equal(own.additive, true, JSON.stringify(own));
+  // an unrelated function, or no removal at all, still swaps a deployed body
+  assert.equal(migrationAdditive('db/migrations/1.sql', added, ['CREATE FUNCTION public.other(p_id uuid)']).additive, false);
+  assert.equal(migrationAdditive('db/migrations/1.sql', added, []).additive, false);
+  assert.equal(migrationAdditive('db/migrations/1.sql', added).additive, false);
+  // the removal does not excuse a destructive statement
+  assert.equal(migrationAdditive('db/migrations/1.sql', [...added, 'DROP TABLE t;'], ['CREATE FUNCTION public.bump(p_id uuid)']).additive, false);
+});
+
+test('migrationAdditive: the added lines of a real re-runnable diff (function head + guarded ADD CONSTRAINT) read additive', async () => {
+  const { migrationAdditive } = await import('../merge-policy.js');
+  // -U0 keeps only the changed lines: the function head, then the guard that replaces the bare ADD CONSTRAINT
+  const adds = ['CREATE OR REPLACE FUNCTION public.bump(p_id uuid)', '-- guarded so the file can be re-run', 'DO $guard$', 'BEGIN',
+    "    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'c' AND conrelid = 'public.t'::regclass) THEN",
+    '        ALTER TABLE public.t ADD CONSTRAINT c CHECK (live = TRUE);', '    END IF;', 'END', '$guard$;'];
+  const r = migrationAdditive('db/migrations/2.sql', adds, ['CREATE FUNCTION public.bump(p_id uuid)', 'ALTER TABLE public.t ADD CONSTRAINT c CHECK (live = TRUE);']);
+  assert.equal(r.additive, true, JSON.stringify(r));
+});
