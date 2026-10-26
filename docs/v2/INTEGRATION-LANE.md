@@ -73,6 +73,16 @@ When the merged tree has a `package-lock.json` and a test command is set, the la
 first (step `install`). Commands run with an allowlisted environment (PATH, HOME, locale, TMPDIR, `NODE_*`, CI and a
 temp `GHOSTY_STATE_DIR`), never the service's own keys and tokens.
 
+**The virtualpytest repo runs the repo's own bug-id check as its lane test** (`bash scripts/docs/check_bug_ids.sh &&
+bash -n .githooks/pre-push`). It used to be a no-op, and that is how a duplicate bug number reached `main` three times
+in one day (2026-10-26): the check reads the working tree, so each session saw its own number as free and the clash
+only existed in the MERGED tree, where the check could finally see it - after the merge, with `main` red for everyone
+until somebody renumbered a file. The lane now sees the merged tree before it pushes, so a clash is returned to the
+branch that caused it. The repository also refuses such a push in the first place
+(`scripts/docs/bug_id_gate.sh`, wired into `.githooks/pre-push`, BUG-0939): it compares the numbers the push adds with
+the numbers `origin/main` already carries. The two together close the gap from both ends, and the lane test is the one
+that still holds when a session pushes straight to `main` without the hook.
+
 **Self deploy** (the mycodebox repo itself): `"deploy": { "kind": "self", "liveCheckout": "~/ghosty-sessions",
 "restartWaitMin": 10 }`. Every merge (no `--deploy` needed; a re-request of a branch already on the target is not redeployed unless `--deploy` is explicit) is followed by: `node --check server.js` on the merge before
 the push (step `precheck`; a failure returns the request); then in the live checkout: refuse when tracked files have
