@@ -69,7 +69,7 @@ test('gitFacts: conflicts, convention-only conflicts, already merged', async () 
 test('gitFacts: docs-only, sensitive paths and content', async () => {
   const docs = makeRepo({ files: { 'docs/a.md': 'x\n', 'README.md': 'y\n', 'VERSION.txt': '2\n' } });
   assert.equal((await gitFacts({ cwd: docs, branch: 'feat' })).docsOnly, true);
-  for (const [file, why] of [['.env', 'secret'], ['.env.local', 'secret'], ['config/server.pem', 'secret'], ['my-secrets/a.txt', 'secret'], ['db/migrations/001.up', 'migration'], ['x/y.sql', 'migration'], ['etc/sudoers.d/x', 'sudoers'], ['deploy/app.service', 'systemd'], ['systemd/x', 'systemd']]) {
+  for (const [file, why] of [['.env', 'secret'], ['.env.local', 'secret'], ['config/server.pem', 'secret'], ['my-secrets/a.txt', 'secret'], ['db/migrations/001.up', 'migration'], ['x/y.sql', 'migration'], ['etc/sudoers.d/x', 'sudoers'], ['deploy/ghosty-sessions.service', 'systemd'], ['systemd/ghosty-manager.service', 'systemd']]) {
     const f = await gitFacts({ cwd: makeRepo({ files: { [file]: 'a\n' } }), branch: 'feat' });
     assert.ok(f.sensitive.some((s) => s.why === why && s.file === file), `${file} -> ${why}: ${JSON.stringify(f.sensitive)}`);
   }
@@ -317,7 +317,7 @@ test('evaluateMerge: conflicts', async () => {
   assert.equal(ver.verdict, 'merge');
 });
 test('evaluateMerge: sensitive changes and an opted-out repo escalate', async () => {
-  for (const file of ['.env', 'migrations/x.sql', 'systemd/x.service']) {
+  for (const file of ['.env', 'migrations/x.sql', 'systemd/ghosty-sessions.service']) {
     const r = await ev(makeRepo({ files: { [file]: 'a\n' } }), `merge feat. ${GREEN}`);
     assert.equal(r.verdict, 'escalate', file);
     assert.match(r.reasons.join(' '), /touches/, file);
@@ -454,7 +454,7 @@ test('secret floor by artefact kind: source files are judged by their added line
   // the other floors are unchanged
   assert.equal(sensitivePath('db/migrations/001_x.sql'), 'migration');
   assert.equal(sensitivePath('etc/sudoers.d/ghosty'), 'sudoers');
-  assert.equal(sensitivePath('systemd/ghosty.service'), 'systemd');
+  assert.equal(sensitivePath('systemd/ghosty-sessions.service'), 'systemd');
   assert.equal(sensitivePath('scripts/deploy.sh'), 'deploy');
 });
 test('M10: git facts are async', () => {
@@ -500,9 +500,10 @@ test('infra paths: an explicit allowlist, tests and docs never count', async () 
   const { sensitivePath, mergeFloor } = await import('../merge-policy.js');
   for (const f of ['test/foo-deploy.test.js', 'test/integration-self-deploy.test.js', 'docs/deploy.md', 'docs/v2/DEPLOY-NOTES.txt', 'README-deploy.md', 'integration-deploys.js', 'public/deployed.js', 'test/fixtures/Dockerfile', 'test/safe-restart.test.js', 'scripts/render-deploy-skill.md']) assert.equal(sensitivePath(f), null, f);
   for (const f of ['.github/workflows/ci.yml', 'scripts/deploy.sh', 'scripts/deploy-host.sh', 'scripts/safe-restart.sh', 'update_core.sh', 'deploy-runner.js', 'Dockerfile']) assert.equal(sensitivePath(f), 'deploy', f);
-  for (const f of ['systemd/ghosty.service', 'x.timer', 'systemd/a.conf']) assert.equal(sensitivePath(f), 'systemd', f);
+  for (const f of ['systemd/ghosty-sessions.service', 'systemd/ghosty-manager.service']) assert.equal(sensitivePath(f), 'systemd', f);
+  for (const f of ['x.timer', 'systemd/a.conf', 'scripts/agent/systemd/vpt-flash-games.service', 'scripts/agent/systemd/pokemon-dispatch.timer']) assert.equal(sensitivePath(f), null, f);   // repo-side units of other products (owner 2026-10-26)
   // approveInfra drops only the infra reason
-  const facts = { ok: true, branch: 'b', target: 'main', conflicts: [], docsOnly: false, files: [], binary: [], sensitive: [{ file: 'scripts/deploy.sh', why: 'deploy' }, { file: '.env', why: 'secret' }, { file: 'systemd/a.service', why: 'systemd' }] };
+  const facts = { ok: true, branch: 'b', target: 'main', conflicts: [], docsOnly: false, files: [], binary: [], sensitive: [{ file: 'scripts/deploy.sh', why: 'deploy' }, { file: '.env', why: 'secret' }, { file: 'systemd/ghosty-sessions.service', why: 'systemd' }] };
   const r = mergeFloor(facts, { state: 'green' }, { approveInfra: true });
   assert.equal(r.length, 2); assert.ok(r.every((x) => !/deploy\.sh/.test(x)));
   assert.equal(mergeFloor(facts, { state: 'green' }).length, 3);
