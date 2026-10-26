@@ -1913,7 +1913,7 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   :root{ --sidew: 290px; }
   body.side-dockable .dock-only{ display:inline-flex; }
   body.side-docked #side{ transform:none; top:calc(var(--top-h) + env(safe-area-inset-top)); width:var(--sidew); max-width:none; padding-top:0; z-index:8; box-shadow:none; }
-  body.side-docked > :is(#quota, #alertRow, #tabs, #main, #dock){ margin-left:var(--sidew); }
+  body.side-docked > :is(#quota, #quickRow, #diskBanner, #alertRow, #tabs, #main, #dock){ margin-left:var(--sidew); }
   body.side-docked .side-back, body.side-docked #edgeSwipe{ display:none !important; }
   body.side-docked #menuBtn{ color:var(--accent); }
 }
