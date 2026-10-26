@@ -46,6 +46,15 @@ export function normLease(l, now) {
     expectMin: Number.isFinite(l.expect_min) ? l.expect_min : null,   // the holder's own stated hold time (lease-nudge.js)
   };
 }
+// The registry's idle clock resets only on activity it can observe: a codebox session the dashboard reports, or an active
+// heartbeat. A holder it cannot observe (a script, a bot) renews its lease instead, and the registry then reports the time
+// since the claim as "idle" - that is not idleness. For such a holder the honest number is the time since its last renewal.
+// null when the lease was never renewed after the claim: the registry's own number then stands (a stale lease really is idle).
+export function renewalIdleMin(l, now = Date.now()) {
+  const hb = l.lastHeartbeatMs, since = l.sinceMs;
+  if (!Number.isFinite(hb) || !Number.isFinite(since) || hb <= since + 60000) return null;
+  return Math.max(0, Math.floor((now - hb) / 60000));
+}
 export function normTicket(t, now) {
   const env = t.env || '';
   return {

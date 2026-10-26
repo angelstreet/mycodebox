@@ -8,7 +8,7 @@
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { effectiveBlockers } from './public/platforms-view.js';
-import { normLease } from './lease-source.js';
+import { normLease, renewalIdleMin } from './lease-source.js';
 
 export const WAIT_MS = 10 * 60 * 1000;      // a deploy or ticket waits this long before its holders are asked
 export const IDLE_MIN = 20;                 // no finished turn for this long = idle
@@ -64,7 +64,10 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
       if (out.has(key) || now - (last.get(key) || 0) < cooldownMs) continue;
       if (w.deploy && narrowlyScoped(l)) continue;
       const session = /^mac:/i.test(l.agent) ? null : sessionOf(l.agent);
-      const reasons = reasonsOf(l, { now, idleMin: idleMinOf(l, session) });
+      // A holder with no session cannot be observed: the registry then reports the time since the claim as "idle". A lease
+      // renewed after the claim proves its holder is alive, so the time since the last renewal is the honest idle number.
+      const honest = session ? null : renewalIdleMin(l, now);
+      const reasons = reasonsOf(l, { now, idleMin: honest ?? idleMinOf(l, session) });
       if (!reasons.length) continue;
       const waitedMin = mins(w.waitedMs);
       const text = `Your lease ${l.id} on ${clean(l.env, 20)}/${resText(l)} blocks ${w.what} (waiting ${waitedMin} min). Release it if you are done (vpt-lease release ${l.id}), or narrow it to what you use (vpt-lease narrow ${l.id} --resource <host/device> --kind host).`;

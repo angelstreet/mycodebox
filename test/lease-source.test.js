@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { pinOverrideNote, createLiveness, requestIdentity, createLeaseSource, centralRegistry, createSessionTracker, normLease, normTicket, legacyRows, fromLegacyRows, legacyResource, summarize, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, parseArgs, exitOf, LEGACY_REFUSAL } from '../lease-source.js';
+import { pinOverrideNote, createLiveness, requestIdentity, createLeaseSource, centralRegistry, createSessionTracker, normLease, normTicket, legacyRows, fromLegacyRows, legacyResource, summarize, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, parseArgs, exitOf, renewalIdleMin, LEGACY_REFUSAL } from '../lease-source.js';
 import { createLeaseWatch } from '../lease-watch.js';
 
 const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
@@ -46,6 +46,13 @@ test('shapes: typed resources map to the legacy spelling; rows are exclusive-onl
   assert.deepEqual(Object.keys(r[0]).sort(), ['agent', 'env', 'id', 'kind', 'purpose', 'resource', 'ttlLeftMin']);
   assert.equal(fromLegacyRows(rows)[0].mode, 'exclusive');
   assert.equal(normTicket({ id: 't', env: 'e', resources: ['e/frontend'], eta: 2 }, NOW).etaMs, NOW + 120000);
+});
+
+test('renewalIdleMin: the honest idle of a holder the dashboard cannot observe', () => {
+  assert.equal(renewalIdleMin({ sinceMs: NOW - 33 * 60000, lastHeartbeatMs: NOW - 2 * 60000 }, NOW), 2);   // renewed: alive
+  assert.equal(renewalIdleMin({ sinceMs: NOW - 33 * 60000, lastHeartbeatMs: NOW - 33 * 60000 }, NOW), null);   // never renewed: the registry's number stands
+  assert.equal(renewalIdleMin({ sinceMs: NOW - 33 * 60000, lastHeartbeatMs: NOW - 33 * 60000 + 30000 }, NOW), null);   // renewed inside the first minute
+  assert.equal(renewalIdleMin({}, NOW), null);
 });
 
 test('legacy authority: everything is the store, nothing touches a service', async () => {
