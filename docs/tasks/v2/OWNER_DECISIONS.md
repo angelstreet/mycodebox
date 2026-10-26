@@ -470,3 +470,24 @@ runner-retention script and its timers go on both CI runner VMs.
 - **Still floor (owner):** sudoers; units or timers on production or customer-facing hosts, or on codebox's own `ghosty-sessions`
   service; reboots; removing, masking or disabling a unit that is not a replacement; credential changes.
 - One predicate, `host-unit-routine.js` (`routineHostUnit`); `stall.js` `hardMatch` and `owner-asks.js` `checkAsk` use it.
+
+## 21. The ask gate: one gate on every route, and a question that changes nothing is not a question (2026-10-25)
+
+Owner, after Q226 and Q231 reached him: "how to ensure you don't ask again". Neither should have: Q226 filed a `host_units`
+floor whose recommended option was "keep as is / change nothing" — nothing to decide; Q231 was filed without a floor at all (the
+ledger shows `floor: -`), so it came in through a route that skipped the gate and the owner could not tell why it was his. Q227,
+Q230 and Q233 were wordy and technical: the owner could not tell why they were his.
+
+- **One gate on every route.** `owner-asks.js` `checkAsk` runs on every route into `manager-owner-asks.jsonl`:
+  `scripts/owner-ask.js ask`, `scripts/manager-ask.js ask` and the safety net's auto-registration. A refused ask writes nothing
+  and exits 2 with the reason.
+- **The floor in the ledger line is the evidence that the ask passed the gate.** A record with no valid floor is never shown to
+  the owner; it is a defect, reported to the manager (`ask-defect` in `manager-events.jsonl`, `!! ask-defect` in the hourly
+  scan) until it is filed properly or decided. A defect never closes a question the owner is waiting for.
+- **A recommended option that changes nothing is not a question** ("keep it as it is", "change nothing", "leave as is",
+  "no change", "do nothing"). The manager decides it and journals it with `owner-ask.js decide`.
+- **The "why you" is one plain line that names the risk** — what could be lost, exposed or restarted. A list of technical terms
+  is refused: the owner has to read why it is his.
+- **What the owner reads, in this order:** the ask id, a one-line "what it is", why it reached him, the recommendation. The
+  manager's report of the open asks is a table with exactly those four columns
+  (`Ask | What it is | Why it reached you | My view/recommendation`) and nothing else.

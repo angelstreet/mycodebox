@@ -147,7 +147,7 @@ import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
-import { readOpenAsks } from './owner-asks.js';
+import { readOpenAsks, readOpenAsksReport } from './owner-asks.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
@@ -794,6 +794,13 @@ const askGuard = createAskGuard({
   ledgerFile: join(STATE_DIR, 'manager-owner-asks.jsonl'), alertsFile: join(STATE_DIR, 'manager-ask-alerts.jsonl'),
   alert: ({ title, body, tag }) => alert(`manager-agent:${tag}`, { title, body, url: '/', tag, priority: 'high', ntfyTags: 'robot' }),
   log: (e) => logEvent(e),
+  // A question that never passed the ask gate is never shown to the owner; the manager gets the event instead
+  // (owner, 2026-10-25). The key is not a session name, so the feed keeps it (a manager session's own events are skipped).
+  onDefect: (d) => managerEvents.record({
+    key: `ask-defect:${d.id}`, title: `Ask ${d.id} never passed the ask gate`,
+    body: `${d.id}${d.session ? ` (${d.session})` : ''}: ${d.why}. The owner does not see it. File it with scripts/owner-ask.js or decide it with scripts/owner-ask.js decide.`,
+    url: '/', priority: 'high',
+  }).catch((e) => console.error('[manager-events]', e.message)),
 });
 const askGuardSeen = new Map();   // manager session -> reply hash already checked
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
@@ -2031,7 +2038,10 @@ async function handleHttp(req, res) {
     if (r) return json(res, r.status, r.body);
   }
   if (req.method === 'GET' && p === '/api/owner-asks') {   // the manager's open questions for the owner (NEEDS YOU strip)
-    return json(res, 200, { asks: await readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl')) });
+    // only the asks that passed the gate are listed here; the defects (a record with no valid floor) are reported
+    // to the manager through the event feed, never to the owner (owner, 2026-10-25)
+    const rep = await readOpenAsksReport(join(STATE_DIR, 'manager-owner-asks.jsonl'));
+    return json(res, 200, { asks: rep.asks, defects: rep.defects });
   }
   if (req.method === 'GET' && (p.startsWith('/api/taskdocs/') || p.startsWith('/api/taskdoc/'))) {
     const one = p.startsWith('/api/taskdoc/');

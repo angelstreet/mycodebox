@@ -25,6 +25,7 @@ import { readFileSync, statfsSync } from 'node:fs';
 import { appendFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { FLOORS } from '../owner-asks.js';
 
 export const HOURS = 24;
 export const ASKS_MAX = 3;
@@ -48,13 +49,15 @@ export const inWindow = (at, now, hours = HOURS) => { const t = Date.parse(at); 
 // not waiting, so counting only answers left every replaced question reading as open. A resolution line that arrives
 // BEFORE its ask line does not close it (it belongs to an earlier question), and answering wins over superseding, so an
 // ask answered and later superseded is counted once, as answered.
+// Only an ask that passed the gate counts: a record with no valid floor never reached the owner (owner, 2026-10-25),
+// so it is a defect for the manager, not an ask of the day.
 export function askStats(lines, { now, hours = HOURS }) {
   const asks = new Map(); // id -> {answered, superseded, session}
   let asked = 0;
   for (const line of lines) {
     let r; try { r = JSON.parse(line); } catch { continue; }
     if (!r || typeof r !== 'object') continue;
-    if (r.question && inWindow(r.at, now, hours)) {
+    if (r.question && FLOORS.includes(String(r.floor || '').trim()) && inWindow(r.at, now, hours)) {
       if (!asks.has(r.id)) { asks.set(r.id, { answered: false, superseded: false, session: String(r.session || '') }); asked++; }
       continue;
     }

@@ -2,14 +2,27 @@
 // manager-ask: the one command that makes a manager question real (owner, 2026-10-23). It allocates the next Q<n>,
 // appends the ledger line the NEEDS YOU strip reads, POSTs /api/alert, and checks both landed (GET /api/owner-asks).
 // Non-zero exit when either did not land. Idempotent: the same session+question while still open returns the same id.
-//   node scripts/manager-ask.js --session S --question "..." [--options "1 ...|2 ..."] [--recommendation "..."] [--jev "..."]
+//
+// Every ask passes the same gate as scripts/owner-ask.js (owner-asks.js checkAsk), so a question that skips it can
+// never reach the owner: a refused ask writes nothing and prints why (owner, 2026-10-25: Q231 reached the owner
+// because this command wrote the ledger line without the gate).
+//
+//   node scripts/manager-ask.js --session S --question "<plain words>" \
+//     --what "<2-4 lines: what it is, where, what each option does>" \
+//     --options "1 ...|2 ..." --recommendation "1 - <your view, one line>" \
+//     --floor <floor> --why "<why you: what could be lost, exposed or restarted>" [--jev "..."]
 //   node scripts/manager-ask.js --resolve Q12 --answer "..."
+//
+// Floors (the only reasons a question may reach the owner, AGENTS.md autonomy by default):
+//   money | credentials | customers | deleting_data | host_units | production_migration | history_rewrite | owner_fact
+//
 // Env: GHOSTY_STATE_DIR (ledger, reporter.token), GHOSTY_URL (default http://127.0.0.1:7777).
-// Exit: 0 landed, 1 not verified (ledger or alert), 2 bad usage.
+// Exit: 0 landed, 1 not verified (ledger or alert), 2 refused by the gate / bad usage.
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, appendFile } from 'node:fs/promises';
-import { readLedger, openAsksFromRecords, withFileLock, appendRecord, supersedeOlder } from '../owner-asks.js';
+import { readLedger, openAsksFromRecords, withFileLock, appendRecord, supersedeOlder, fileAsk } from '../owner-asks.js';
+import { askLine } from '../public/manager-ask.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const BASE = (process.env.GHOSTY_URL || `http://127.0.0.1:${process.env.PORT || 7777}`).replace(/\/$/, '');
@@ -43,16 +56,18 @@ async function ask(f) {
   const session = String(f.session || '').trim(), question = String(f.question || '').trim();
   if (!session || !question) die(2, '--session and --question are required');
   const options = String(f.options || '').split('|').map((s) => s.trim()).filter(Boolean);
-  const id = await withFileLock(LEDGER, async () => {
-    const { records } = await readLedger(LEDGER);
-    const same = openAsksFromRecords(records).find((a) => a.session === session && a.question === question);
-    if (same) return same.id;
-    let max = 0;
-    for (const r of records) { const m = /^Q(\d+)$/.exec(String(r?.id || '')); if (m) max = Math.max(max, Number(m[1])); }
-    const nid = `Q${max + 1}`;
-    await appendFile(LEDGER, JSON.stringify({ at: new Date().toISOString(), id: nid, session, question, options, recommendation: String(f.recommendation || ''), ...(f.jev ? { jev: f.jev } : {}), state: 'open' }) + '\n');
-    return nid;
+  // the same ask (session + question) while it is still open: the same id, no second question
+  const { records } = await readLedger(LEDGER);
+  const same = openAsksFromRecords(records).find((a) => a.session === session && a.question === question);
+  if (same) { console.log(same.id); return; }
+  // the gate (owner-asks.js checkAsk): a refused ask writes nothing and prints why
+  const filed = await fileAsk(LEDGER, {
+    session, question, what: f.what, options,
+    recommend: f.recommend || f.recommendation, recommendation: f.recommendation || f.recommend,
+    floor: f.floor, why: f.why, jev: f.jev,
   });
+  if (!filed.ok) die(2, filed.why);
+  const id = filed.id;
   // A second question for a session replaces the session's older open questions (round 9, item 5): the older
   // ones are closed by this question, never by a stop id (E22). The lock is released before this runs.
   await supersedeOlder(LEDGER, session, id);
@@ -60,7 +75,7 @@ async function ask(f) {
   try {
     const alerted = (await readFile(ALERTS, 'utf8').catch(() => '')).split('\n').some((l) => { try { return JSON.parse(l).id === id; } catch { return false; } });
     if (!alerted) {
-      const a = await postAlert(`Needs you: ${id}`, `${question} (answer in /?s=${session})`, `ask-${id}`);
+      const a = await postAlert(`Needs you: ${id}`, `${askLine(filed.record)} (answer in /?s=${session})`, `ask-${id}`);
       if (!a.ok) alertErr = `alert not accepted (${a.status} ${a.error || ''})`;
       else { await withFileLock(ALERTS, () => appendFile(ALERTS, JSON.stringify({ id, at: Date.now(), via: 'manager-ask' }) + '\n')); }
     }
@@ -84,5 +99,5 @@ async function resolve(f) {
 }
 
 const f = flags(process.argv.slice(2));
-if (f.help) { console.log('usage: manager-ask --session S --question Q [--options "1 ..|2 .."] [--recommendation R] [--jev J] | --resolve Q<n> --answer A'); process.exit(0); }
+if (f.help) { console.log('usage: manager-ask --session S --question Q --what W --options "1 ..|2 .." --recommendation "1 - why" --floor F --why "why you" [--jev J] | --resolve Q<n> --answer A'); process.exit(0); }
 await (f.resolve ? resolve(f) : ask(f));

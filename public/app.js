@@ -27,6 +27,7 @@ import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, manager
 import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn, isManagerOperationalStop, unattachedAsks } from '/ask-model.js';
+import { askSummary, askLine } from '/manager-ask.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 import * as hv from '/history-view.js';
@@ -1244,7 +1245,7 @@ function renderAttention() {
   // Strip is one-line overview; audio chip lives on the dialog popup (showOwnerAsks below) —
   // chat-raised 2026-10-08: 'keep that on the dialogue not the alert top not enough space'.
   const chip = (k) => `<button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>`;
-  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('') + (mgrAsks.length ? `<button data-mgr="1" title="${escapeHtml(mgrAsks.map((q) => `${q.id}: ${q.question}`).join('\n'))}">manager \u00b7 ${mgrAsks.length} question${mgrAsks.length === 1 ? '' : 's'}</button>` : '');
+  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('') + (mgrAsks.length ? `<button data-mgr="1" title="${escapeHtml(mgrAsks.map((q) => askLine(q)).join('\n'))}">manager \u00b7 ${mgrAsks.length} question${mgrAsks.length === 1 ? '' : 's'}</button>` : '');
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = (e) => {
@@ -1254,7 +1255,7 @@ function renderAttention() {
     };
   }
   const mb = els.attention.querySelector('button[data-mgr]');
-  if (mb) mb.onclick = (e) => { e.stopPropagation(); showOwnerAsks(mb, 'manager', mgrAsks, `The manager has ${mgrAsks.length} open question${mgrAsks.length === 1 ? '' : 's'} for you. ${mgrAsks.map((q) => q.question).join('. ')}`); };
+  if (mb) mb.onclick = (e) => { e.stopPropagation(); showOwnerAsks(mb, 'manager', mgrAsks, `The manager has ${mgrAsks.length} open question${mgrAsks.length === 1 ? '' : 's'} for you. ${mgrAsks.map((q) => { const s = askSummary(q); return `${s.id}: ${s.what}${s.why ? ` Why you: ${s.why}` : ''}${s.rec ? ` My view: ${s.rec}` : ''}`; }).join('. ')}`); };
   markAttentionOverflow();
   syncAlertRowVisibility();
 }
@@ -1285,13 +1286,15 @@ function showOwnerAsks(anchor, sess, qs, presetAudioText) {
   // visually; the audio just says the question + the recommendation so the owner can decide
   // without staring at the phone. presetAudioText comes from the strip (if any) and uses the
   // AI-pick wording; fall back to the dialog-local Q+A text otherwise.
-  const audioText = presetAudioText || `${displayName(sess)} needs you. ${qs.map((q) => `${q.id}: ${q.question}${q.recommendation ? ` Recommends ${q.recommendation}.` : ''}`).join(' ')}`;
+  const audioText = presetAudioText || `${displayName(sess)} needs you. ${qs.map((q) => { const s = askSummary(q); return `${s.id}: ${s.what}${s.why ? ` Why you: ${s.why}` : ''}${s.rec ? ` My view: ${s.rec}` : ''}`; }).join(' ')}`;
   // Each question row carries a copy icon (see public/copy-prompt.js): tap it to copy the
   // full question + numbered options + recommendation as plain text. The source is
   // computed here so the visual HTML (md-rendered) and the copied text stay in sync.
-  const qsrcs = qs.map((q) => [q.id, q.question, q.options?.length ? q.options.map((o, i) => `${i + 1}. ${o}`).join('\n') : null, q.recommendation ? `Recommends: ${q.recommendation}` : null].filter(Boolean).join('\n'));
+  const qsrcs = qs.map((q) => [q.id, q.question, q.what, q.why, q.options?.length ? q.options.map((o, i) => `${i + 1}. ${o}`).join('\n') : null, q.recommendation ? `Recommends: ${q.recommendation}` : null].filter(Boolean).join('\n'));
+  // What the owner reads, in the order he asked for (2026-10-25): the id, the one-line what, why it is his,
+  // the recommendation. The options come after: they are how he answers.
   pop.innerHTML = `<div class="qrow-audio">${audioChipHtml({ text: audioText, label: `Read ${displayName(sess)} questions aloud` })}</div>`
-    + qs.map((q, qi) => `<div class="qrow1 mdbody">${copyPromptButtonHtml({ text: qsrcs[qi], label: `Copy question ${escapeHtml(q.id)}` })}<b>${escapeHtml(q.id)}</b> ${renderMd(q.question)}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}${q.recommendation ? `<div class="qrec">Recommends: ${escapeHtml(q.recommendation)}</div>` : ''}</div>`).join('')
+    + qs.map((q, qi) => { const s = askSummary(q); return `<div class="qrow1 mdbody">${copyPromptButtonHtml({ text: qsrcs[qi], label: `Copy question ${escapeHtml(q.id)}` })}<b>${escapeHtml(q.id)}</b> ${renderMd(s.what)}${s.why ? `<div class="qwhy">Why you: ${escapeHtml(s.why)}</div>` : ''}${s.rec ? `<div class="qrec">My view: ${escapeHtml(s.rec)}</div>` : ''}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}</div>`; }).join('')
     + (exists ? `<button class="qgo" data-session="${escapeHtml(sess)}">Open ${escapeHtml(displayName(sess))}</button>` : '');
   const r = anchor.getBoundingClientRect();
   pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 440))}px`;

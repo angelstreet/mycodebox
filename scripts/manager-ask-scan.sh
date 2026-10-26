@@ -7,6 +7,9 @@
 # false "!! ask-not-alerted Q219" while the alert was in the record).
 # Prints "!! ask-not-alerted <id>" for each open ask with no alert. Read-only apart from the scan marker below;
 # exit 0 always.
+# A record with no valid floor never passed the ask gate, so it is never shown to the owner (owner, 2026-10-25):
+# the scan prints it as a defect for the manager instead of an ask that has to be alerted:
+#   "!! ask-defect <id> <session> (no valid floor: this ask never passed the ask gate)"
 # A closed ask is in no open set, so a question that was dropped with no replacement was invisible (E24).
 # The scan reports the superseded asks too, one line each:
 #   "!! ask-superseded-open <id> <replacement>"    the replacement is still open: the older question is still waiting
@@ -42,11 +45,14 @@ def at_of(v):
         return datetime.fromisoformat(s[:-1] + '+00:00' if s.endswith('Z') else s).timestamp()
     except Exception: return None
 now = time.time()
+FLOORS = ('money','credentials','customers','deleting_data','host_units','production_migration','history_rewrite','owner_fact')
 state = {}       # id -> open?
 asked = set()    # ids that are questions (a row with the owner's wording)
 answered = set() # ids the owner answered
 sup = {}         # id -> (the id that replaced it, when)
 questions = {}   # id -> the wording of the question
+floors = {}      # id -> the floor of the question record (the evidence that it passed the ask gate)
+sessions = {}    # id -> the session of the question record
 for r in jl(os.path.join(st, 'manager-owner-asks.jsonl')):
     i = r.get('id')
     if not i: continue
@@ -55,6 +61,10 @@ for r in jl(os.path.join(st, 'manager-owner-asks.jsonl')):
     q = r.get('question')
     if isinstance(q, str) and q.strip():
         asked.add(i); questions[i] = q.strip()
+    fl = r.get('floor')
+    if isinstance(fl, str) and fl.strip() in FLOORS: floors[i] = fl.strip()
+    ss = r.get('session')
+    if isinstance(ss, str) and ss.strip(): sessions[i] = ss.strip()
     if r.get('state') == 'answered': answered.add(i)
     if r.get('state') == 'superseded' and r.get('by'): sup[i] = (str(r.get('by')), r.get('at'))
 # what the scan already knows: when it last ran and which drops it has already reported
@@ -76,7 +86,13 @@ def replacement(by, dropped=False):
     if q: return f'{by} "{one(q)}"' + (' (the replacement is closed)' if dropped else '')
     return f'{by} (not a question in the ledger)'
 for i, o in state.items():
-    if o and i not in alerted and f'ask-{i}' not in tags: print(f'!! ask-not-alerted {i}')
+    if not o: continue
+    # a record with no valid floor never passed the ask gate: it is never shown to the owner, so it is a defect
+    # for the manager, not an ask that has to be alerted (owner, 2026-10-25)
+    if i not in floors:
+        print(f'!! ask-defect {i} {sessions.get(i, "-")} (no valid floor: this ask never passed the ask gate)')
+        continue
+    if i not in alerted and f'ask-{i}' not in tags: print(f'!! ask-not-alerted {i}')
 for i, (by, at) in sup.items():
     if state.get(by) is True and by in asked: print(f'!! ask-superseded-open {i} {replacement(by)}'); continue   # the older question is still waiting
     if by in answered: continue    # the owner answered the replacement: nothing was lost

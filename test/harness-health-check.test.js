@@ -28,12 +28,12 @@ test('inWindow: inside, older, newer and unreadable timestamps', () => {
 // ---- owner asks --------------------------------------------------------------------------------------------------
 test('askStats: only lines with a question are new asks, a later line with the same id answers them', () => {
   const r = askStats([
-    line({ at: ago(3600000), id: 'a1', question: 'floor?', state: 'open' }),
+    line({ at: ago(3600000), id: 'a1', question: 'floor?', floor: 'money', state: 'open' }),
     line({ at: ago(3400000), id: 'a1', state: 'answered' }),
-    line({ at: ago(3000000), id: 'a2', question: 'money?' }),          // still open
-    line({ at: ago(30 * 3600000), id: 'a3', question: 'old?' }),          // outside the window
-    line({ at: ago(1800000), id: 'a4', question: 'newer?', state: 'superseded' }),
-    line({ at: ago(60 * 3600000), id: 'a5', question: 'ancient?' }),     // way out
+    line({ at: ago(3000000), id: 'a2', question: 'money?', floor: 'money' }),          // still open
+    line({ at: ago(30 * 3600000), id: 'a3', question: 'old?', floor: 'money' }),          // outside the window
+    line({ at: ago(1800000), id: 'a4', question: 'newer?', floor: 'money', state: 'superseded' }),
+    line({ at: ago(60 * 3600000), id: 'a5', question: 'ancient?', floor: 'money' }),     // way out
     'not json',
   ], win);
   assert.equal(r.asked, 3, 'a1, a2, a4');
@@ -44,8 +44,8 @@ test('askStats: only lines with a question are new asks, a later line with the s
 test('askStats: an answer line before its ask line does not close it, answered:true closes it too', () => {
   const r = askStats([
     line({ at: ago(3000000), id: 'b1', state: 'answered' }),           // resolution before the ask
-    line({ at: ago(2000000), id: 'b1', question: 'q?' }),
-    line({ at: ago(3000000), id: 'b2', question: 'q?' }),
+    line({ at: ago(2000000), id: 'b1', question: 'q?', floor: 'money' }),
+    line({ at: ago(3000000), id: 'b2', question: 'q?', floor: 'money' }),
     line({ at: ago(2000000), id: 'b2', answered: true }),               // after the ask -> closes it
   ], win);
   assert.equal(r.asked, 2);
@@ -55,9 +55,9 @@ test('askStats: an answer line before its ask line does not close it, answered:t
 
 test('askStats: a superseded ask is closed, the newer question it was replaced by is the open one', () => {
   const r = askStats([
-    line({ at: ago(3600000), id: 's1', question: 'old?', state: 'open' }),
+    line({ at: ago(3600000), id: 's1', question: 'old?', floor: 'money', state: 'open' }),
     line({ at: ago(3000000), id: 's1', state: 'superseded', by: 's2' }),
-    line({ at: ago(2400000), id: 's2', question: 'replacement?' }),
+    line({ at: ago(2400000), id: 's2', question: 'replacement?', floor: 'money' }),
   ], win);
   assert.equal(r.asked, 2, 's1 and s2');
   assert.equal(r.answered, 0);
@@ -67,7 +67,7 @@ test('askStats: a superseded ask is closed, the newer question it was replaced b
 
 test('askStats: an ask answered then superseded is counted once, as answered', () => {
   const r = askStats([
-    line({ at: ago(3600000), id: 'd1', question: 'floor?' }),
+    line({ at: ago(3600000), id: 'd1', question: 'floor?', floor: 'money' }),
     line({ at: ago(3400000), id: 'd1', state: 'answered' }),
     line({ at: ago(3200000), id: 'd1', state: 'superseded', by: 'd2' }),
     line({ at: ago(3100000), id: 'd1', answered: true }),                  // a repeated resolution never double counts
@@ -82,7 +82,7 @@ test('askStats: a resolution line before its question line does not close it', (
   const r = askStats([
     line({ at: ago(3600000), id: 'e1', state: 'superseded', by: 'e0' }),   // belongs to an earlier question
     line({ at: ago(3400000), id: 'e1', state: 'answered' }),
-    line({ at: ago(3000000), id: 'e1', question: 'q?' }),
+    line({ at: ago(3000000), id: 'e1', question: 'q?', floor: 'money' }),
   ], win);
   assert.equal(r.asked, 1);
   assert.equal(r.answered, 0, 'no line after the ask resolves it');
@@ -94,7 +94,7 @@ test('askStats: a resolution line before its question line does not close it', (
 test('askStats: the ask limit is per session, parallel topic sessions do not share one budget', () => {
   const sessions = ['topic-1', 'topic-2', 'topic-3', 'topic-4', 'topic-5', 'topic-6'];
   const r = askStats(Array.from({ length: 8 }, (_, i) =>
-    line({ at: ago(3600000), id: `p${i}`, session: sessions[i % sessions.length], question: 'ok?' })), win);
+    line({ at: ago(3600000), id: `p${i}`, session: sessions[i % sessions.length], question: 'ok?', floor: 'money' })), win);
   assert.equal(r.asked, 8, 'the fleet total is still the fleet total');
   assert.equal(r.worstSession.count, 2, 'no session asked more than twice');
   assert.equal(r.bySession['topic-1'], 2);
@@ -106,7 +106,7 @@ test('askStats: the ask limit is per session, parallel topic sessions do not sha
 
 test('summarize: one session over the ask limit is a finding that names the session and its count', () => {
   const r = askStats(Array.from({ length: 4 }, (_, i) =>
-    line({ at: ago(3600000), id: `q${i}`, session: 'topic-busy', question: 'ok?' })), win);
+    line({ at: ago(3600000), id: `q${i}`, session: 'topic-busy', question: 'ok?', floor: 'money' })), win);
   assert.equal(r.worstSession.session, 'topic-busy');
   assert.equal(r.worstSession.count, 4);
   const s = summarize({ ...base, asked: r.asked, answered: r.answered, open: r.open, bySession: r.bySession, worstSession: r.worstSession }, null);
@@ -294,7 +294,7 @@ test('run: reads a fixture state dir, appends one line a day and compares with t
   const write = (now, { asks = 0, returned = 0, ci = false, refused = false } = {}) => {
     const at = (ms) => new Date(now - ms).toISOString();
     if (asks) writeFileSync(join(dir, 'manager-owner-asks.jsonl'),
-      Array.from({ length: asks }, (_, i) => line({ at: at(3600000), id: `q${i}`, question: 'money?' })).join('\n') + '\n');
+      Array.from({ length: asks }, (_, i) => line({ at: at(3600000), id: `q${i}`, question: 'money?', floor: 'money' })).join('\n') + '\n');
     writeFileSync(join(dir, 'manager-decisions.jsonl'),
       Array.from({ length: 2 }, (_, i) => line({ at: at(3600000), id: `d${i}` })).join('\n') + '\n');
     if (returned) writeFileSync(join(dir, 'integration/requests.jsonl'),

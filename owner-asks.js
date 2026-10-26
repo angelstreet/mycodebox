@@ -20,7 +20,9 @@ export function openAsksFromRecords(records) {
     if (r.action === 'ledger-close' || CLOSED.has(r.state)) { prev.open = false; byId.set(r.id, prev); continue; }
     if (r.state === 'open' || r.action === 'log_intent' || r.action === 'ledger-amend' || r.state === 'partial' || r.state === 'amended') {
       prev.open = true;
-      for (const k of ['at', 'session', 'question', 'recommendation']) if (r[k]) prev[k] = r[k];
+      // floor, what and why travel with the ask: the floor is the evidence that the ask passed the gate
+      // (a record without one is a defect, never shown to the owner) and the owner reads what and why.
+      for (const k of ['at', 'session', 'question', 'recommendation', 'floor', 'what', 'why', 'jev']) if (r[k]) prev[k] = r[k];
       if (Array.isArray(r.options) && r.options.length) prev.options = r.options;
     }
     byId.set(r.id, prev);
@@ -34,6 +36,32 @@ export function openAsksFromRecords(records) {
 // another question that really exists (E22: a stop closed the session's questions and named a stop id as the
 // replacement, so the question was gone with nothing in its place).
 const isAskRow = (r) => !!(r && typeof r === 'object' && !Array.isArray(r) && r.id && typeof r.question === 'string' && r.question.trim());
+
+// ---- the floor is the evidence that the ask passed the gate ----
+// Every route into the ledger runs checkAsk (owner-asks.js) before it writes, and only a record that passed
+// gets a floor. A record without a valid floor reached the ledger some other way - a hand-written line, an
+// older writer, a script that skipped the gate - so it is never shown to the owner (Q231 reached the owner
+// exactly that way, 2026-10-25). It is reported to the manager as a defect instead.
+export function floorOf(record) {
+  const f = String((record && record.floor) || '').trim();
+  return FLOORS.includes(f) ? f : null;
+}
+
+// A record the owner may see: it has a question and a valid floor, so it passed the gate.
+export function showable(record) {
+  return !!(record && typeof record.question === 'string' && record.question.trim() && floorOf(record));
+}
+
+// The open asks the owner may see, newest first.
+export function showableAsks(records) {
+  return openAsksFromRecords(records).filter(showable);
+}
+
+// The open asks that never passed the gate: never shown to the owner, reported to the manager instead.
+export function defectAsks(records) {
+  return openAsksFromRecords(records).filter((a) => !showable(a))
+    .map((a) => ({ id: a.id, session: a.session || '', at: a.at || '', why: 'no valid floor: this ask never passed the gate (owner-ask.js)' }));
+}
 
 // One view of the ledger, for everything that has to see more than the open set: the open asks, the ids that
 // are questions, the ids the owner answered, and every superseded ask with the id that replaced it.
@@ -180,12 +208,15 @@ export async function readLedger(file) {
 }
 
 // The open asks plus what was unreadable, for a caller (or a test) that must see the damage.
-// -> { asks, damaged, readError }. The damage is logged once per distinct signature.
+// -> { asks, defects, damaged, readError }. The damage is logged once per distinct signature.
+// `asks` holds only the asks the owner may see: a record with no valid floor never passed the gate, so it is
+// a defect (reported to the manager) and never reaches the owner (owner, 2026-10-25).
 export async function readOpenAsksReport(file) {
   const { records, damaged, readError } = await readLedger(file);
   reportDamage(file, damaged, readError);
   const view = ledgerView(records);
-  return { asks: newestPerSession(view.open, view.supersededBy), damaged, readError };
+  const asks = newestPerSession(view.open.filter(showable), view.supersededBy);
+  return { asks, defects: defectAsks(records), damaged, readError };
 }
 
 export async function readOpenAsks(file) {
@@ -193,9 +224,10 @@ export async function readOpenAsks(file) {
 }
 
 // openAsks(lines): the open asks of a ledger already split into lines. Damaged lines are skipped, never fatal.
+// Only the asks the owner may see: a record with no valid floor is a defect, not a question for the owner.
 export function openAsks(lines) {
   const list = Array.isArray(lines) ? lines : String(lines == null ? '' : lines).split('\n');
-  return openAsksFromRecords(parseLedgerText(list.join('\n')).records);
+  return showableAsks(parseLedgerText(list.join('\n')).records);
 }
 
 // A refused supersede says so: one line on stderr (ids only, never owner wording) and the caller's report.
@@ -217,6 +249,9 @@ export async function supersedeOlder(file, session, newId, { now = new Date(), b
   const replacement = records.find((r) => r && typeof r === 'object' && !Array.isArray(r) && r.id === newId);
   if (!replacement) return refuse(report, `${newId} is not in the ledger: nothing superseded`);
   if (!isAskRow(replacement)) return refuse(report, `${newId} is not a question in the ledger: nothing superseded`);
+  // a question that never passed the gate (no valid floor) closes nothing: the owner never saw it, so it must
+  // not hide a question the owner is still waiting for (owner, 2026-10-25)
+  if (!showable(replacement)) return refuse(report, `${newId} never passed the ask gate: nothing superseded`);
   if (String(replacement.session || '').trim() !== String(session).trim()) return refuse(report, `${newId} is a question of another session: nothing superseded`);
   // `before` (ms): only asks written before that moment; an ask with no readable time is left alone
   const older = openAsksFromRecords(records).filter((a) => a.session === session && a.id !== newId && (before == null || Date.parse(a.at) < before));
@@ -260,9 +295,64 @@ const FLOOR_HINT = {
   owner_fact: /\b(?:owner|only you|nobody else|you decided|your decision|preference|personal)\b/i,
 };
 
+// The risk each floor carries, per floor: what could be lost, exposed or restarted (owner, 2026-10-25). The
+// "Why you" line must name one of them: a why that only repeats the floor's name ("it is a credentials
+// question") tells the owner nothing about what is at stake, so it is refused.
+const FLOOR_RISK = {
+  money: /\b(?:pay|paid|paying|payment|spend|spent|spends|charge|charged|bill|billed|billing|invoice|subscription|lapse|lapsed|suspend|suspended|cost|money|funds|refund|price|pricing)\b/i,
+  credentials: /\b(?:credential|credentials|secret|secrets|password|passphrase|api[_ -]?key|token|tokens|key|keys|cert|certificate|login|sudoers?|expose|exposed|exposes|leak|leaked|leaks|stolen|revoked|rotated|readable|published)\b/i,
+  customers: /\b(?:customer|customers|client|clients|user account|tenant|subscriber|subscribers|paying|data|lost|gone|deleted|affected|visible|exposed|notified|down)\b/i,
+  deleting_data: /\b(?:delete|deleting|deleted|remove|removed|destroy|destroyed|drop|dropped|wipe|wiped|purge|purged|erase|erased|prune|pruned|truncate|truncated|shared data|database|db|table|row|rows|record|records|lost|gone|unrecoverable|permanent|permanently)\b/i,
+  host_units: /\b(?:sudoers?|systemd|units?|service|services|daemon|crontab|sudo|root|host|restart|restarted|reboot|rebooted|stopped|down|offline|unreachable|removed|disabled)\b/i,
+  production_migration: /\b(?:migration|migrate|migrating|schema change|production database|prod db|locked|broken|rolled back|unrecoverable|lost|down)\b/i,
+  history_rewrite: /\b(?:force[- ]?push|history rewrite|rewritten|rewriting|rebase|amend|rewrit\w*|tag|tags|publish|published|package|lost|unreachable|irrecoverable)\b/i,
+  owner_fact: /\b(?:owner|only you|nobody else|you decided|your decision|preference|personal)\b/i,
+};
+
+// A recommended option that changes nothing is not a decision: there is nothing for the owner to answer
+// (Q226, 2026-10-25: the recommended option was "keep as is / change nothing"). Such an ask must be decided by
+// the manager itself and journaled with `owner-ask.js decide`.
+const NOOP_RES = [
+  /^(?:change nothing|do nothing|do not change|don't change|nothing changes|no changes?|no-op|status quo|nothing to decide)\b/i,
+  /\b(?:keep|leave|stay|remain)\b[^.;|]{0,40}\b(?:as is|as it is|as-is|the same|unchanged|untouched)\b/i,
+  /^\s*(?:keep|leave it|leave things|stay)\b\s*[.!]?\s*$/i,
+];
+// The option text without its number ("1 keep as is" -> "keep as is").
+const optionLabel = (o) => String(o || '').replace(/^\s*\d+\s*[.):\-]?\s+/, '').trim();
+export function isNoopOption(text) {
+  const s = optionLabel(text);
+  if (!s) return false;
+  return NOOP_RES.some((re) => re.test(s));
+}
+
+// The words that name a consequence: what could be lost, exposed, restarted, paid or stopped.
+const CONSEQUENCE_RE = /\b(?:could|would|might|may|lose|loses|lost|expose|exposed|exposes|leak|leaked|leaks|restart|restarted|reboot|delete|deleted|deleting|wipe|wiped|remove|removed|paid|pay|spend|spends|spent|charge|charged|bill|billed|suspend|suspended|revoke|revoked|rotate|rotated|publish|published|push|pushed|stop|stopped|down|offline|unreachable|irrecoverable|permanent|permanently|gone|break|breaks|broken|blocked|visible|readable)\b/i;
+
+// A "Why you" that is only a list of technical words ("credentials, production migration, customer data")
+// names no risk at all, so the owner cannot tell why the question is his (owner, 2026-10-25). Such a why is
+// refused: the line must say in plain words what could be lost, exposed or restarted.
+export function isBareTermList(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  const parts = s.split(/[,;/|]|\band\b|\bor\b/i).map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return false;                                  // one phrase is a sentence, not a list
+  return parts.every((p) => p.split(/\s+/).length <= 4 && !CONSEQUENCE_RE.test(p));
+}
+
+// The recommendation: an option number ("2") or a text that starts with one ("2 - pay it now, because ...").
+// The text after the number is the manager's own view, the owner sees it as the recommendation.
+export function recommendOf(recommend) {
+  const s = String(recommend == null ? '' : recommend).trim();
+  if (!s) return { n: null, text: '' };
+  const m = /^(\d+)\b/.exec(s);
+  if (!m) return { n: null, text: s };
+  return { n: Number(m[1]), text: s.slice(m[0].length).replace(/^[\s\-–—:.)]+/, '').trim() };
+}
+
 // checkAsk: the gate. -> { ok: true } | { ok: false, why }. Pure, so the CLI, a test and any future caller share it.
 // Requires: a question, a plain "what it is / where / what each option does", the options and a recommendation, a floor
-// from FLOORS, and a why that says why that floor applies. Refuses bare internal ids in the owner's wording.
+// from FLOORS, and a one-line "why you" in plain words that names the floor's risk. Refuses bare internal ids in the
+// owner's wording and a recommendation that changes nothing (owner, 2026-10-25).
 export function checkAsk({ question, what, options, recommend, floor, why } = {}) {
   const q = String(question || '').trim(), w = String(what || '').trim(), y = String(why || '').trim();
   const opts = Array.isArray(options) ? options.map((o) => String(o).trim()).filter(Boolean) : [];
@@ -272,14 +362,27 @@ export function checkAsk({ question, what, options, recommend, floor, why } = {}
   if (!floor) return { ok: false, why: `--floor is required: one of ${FLOORS.join(', ')}` };
   if (!FLOORS.includes(floor)) return { ok: false, why: `--floor must be one of ${FLOORS.join(', ')} (got "${floor}")` };
   if (opts.length < 2) return { ok: false, why: '--options needs at least two options: "1 what it does|2 what it does"' };
-  const n = Number(recommend);
-  if (!Number.isInteger(n) || n < 1 || n > opts.length) return { ok: false, why: `--recommend must be an option number 1-${opts.length} (got "${recommend}")` };
+  const rec = recommendOf(recommend);
+  if (rec.n === null || !Number.isInteger(rec.n) || rec.n < 1 || rec.n > opts.length) {
+    return { ok: false, why: `--recommend must be an option number 1-${opts.length} (got "${recommend}")` };
+  }
+  // a recommendation that changes nothing is not a question for the owner: decide it yourself (owner, 2026-10-25)
+  const noopLabel = isNoopOption(opts[rec.n - 1]);
+  const noopText = !noopLabel && rec.text ? isNoopOption(rec.text) : false;
+  if (noopLabel || noopText) {
+    const what = noopLabel ? `"${optionLabel(opts[rec.n - 1])}"` : `the recommendation "${rec.text}"`;
+    return { ok: false, why: `the recommended option (${rec.n}) changes nothing (${what}): there is nothing for the owner to decide - decide it yourself and journal it with "owner-ask.js decide"` };
+  }
   const ids = [...bareInternalIds(q), ...bareInternalIds(w)];
   if (ids.length) return { ok: false, why: `internal id without an explanation (${ids.join(', ')}): name the thing in plain words, and quote the id only where you explain it` };
   if (floor === 'host_units') {
     const r = routineHostUnit(`${q} ${w} ${y} ${opts.join(' ')}`);
     if (r.routine) return { ok: false, why: `a routine unit / timer install is not a floor item (owner 2026-10-25): decide it yourself and journal it with "owner-ask.js decide" (${r.why})` };
   }
+  // the "why you" is one line, in plain words, and it names the risk of this floor (owner, 2026-10-25)
+  if (/[\r\n]/.test(y)) return { ok: false, why: '--why must be one line: the "why you" line says in plain words what could be lost, exposed or restarted' };
+  if (isBareTermList(y)) return { ok: false, why: '--why is a list of technical terms: say in one plain line what could be lost, exposed or restarted (why it is yours)' };
+  if (!FLOOR_RISK[floor].test(y)) return { ok: false, why: `--why does not name the "${floor}" risk: say in one plain line what could be lost, exposed or restarted` };
   if (!FLOOR_HINT[floor].test(`${q} ${w} ${y}`)) return { ok: false, why: `--why does not show why the "${floor}" floor applies: say in one line what makes this a hard-floor item` };
   return { ok: true };
 }
@@ -296,6 +399,8 @@ async function nextAskId(file) {
 
 // fileAsk: the gate, then one ledger line {at,id,session,question,options,recommendation,floor,what,why,state:"open"}.
 // -> { ok: true, id, record } | { ok: false, why } (nothing is written when refused).
+// The floor in the line is the evidence that the ask passed the gate: a record without one never reaches the
+// owner (owner-asks.js showable()).
 export async function fileAsk(file, ask, { now = new Date() } = {}) {
   const check = checkAsk(ask);
   if (!check.ok) return check;
@@ -305,9 +410,10 @@ export async function fileAsk(file, ask, { now = new Date() } = {}) {
     const id = await nextAskId(file);
     const record = {
       at: now.toISOString(), id, session: String(ask.session || '').trim(), question: String(ask.question).trim(),
-      options: ask.options.map((o) => String(o).trim()), recommendation: String(ask.recommend),
+      options: ask.options.map((o) => String(o).trim()), recommendation: String(ask.recommendation || ask.recommend),
       floor: ask.floor, what: String(ask.what).trim(), why: String(ask.why).trim(), state: 'open',
     };
+    if (ask.jev) record.jev = String(ask.jev).slice(0, 400);
     await appendFile(file, JSON.stringify(record) + '\n');
     return { id, record };
   });

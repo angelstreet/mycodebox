@@ -16,7 +16,7 @@ const HOUR = 3600 * 1000;
 
 const scan = (dir) => execFileSync('bash', [SCAN], { env: { ...process.env, GHOSTY_STATE_DIR: dir } })
   .toString().trim().split('\n').filter(Boolean);
-const ask = (n, o = {}) => ({ at: OLD, id: `Q${n}`, session: `S${n}`, question: `Synthetic question ${n}?`, state: 'open', ...o });
+const ask = (n, o = {}) => ({ at: OLD, id: `Q${n}`, session: `S${n}`, question: `Synthetic question ${n}?`, floor: 'money', state: 'open', ...o });
 const seed = (dir, rows, alerts = []) => {
   writeFileSync(join(dir, 'manager-owner-asks.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
   if (alerts.length) writeFileSync(join(dir, 'manager-ask-alerts.jsonl'), alerts.map((r) => JSON.stringify(r)).join('\n') + '\n');
