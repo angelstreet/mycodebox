@@ -120,7 +120,7 @@ test('docs-only change without a test report merges; sensitive paths and an opte
   const n = typed.length, o = owner.length;
   await stop('d1', makeRepo({ files: { 'docs/N.md': 'x\n' } }), 'Updated the notes.\n\nShould I merge feat into main?');
   assert.equal(typed.length, n + 1);
-  for (const [i, file] of ['.env', 'migrations/x.sql', 'systemd/x.service'].entries()) {
+  for (const [i, file] of ['.env', 'migrations/x.sql', 'systemd/ghosty-sessions.service'].entries()) {
     await stop(`sens${i}`, makeRepo({ files: { [file]: 'a\n' } }), `${GREEN}\n\nShould I merge feat into main?`);
   }
   assert.equal(typed.length, n + 1);

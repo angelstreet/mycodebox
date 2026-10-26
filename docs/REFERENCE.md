@@ -778,8 +778,9 @@ money, customers, deleting data, destructive migrations, history rewrites (`stal
 `stall.js` `hardMatch` replaces only the unit words (`.service`, `.timer`, `unit file`, `/etc/systemd/system`,
 `systemctl enable|daemon-reload`, `sudo`) in a routine text; `owner-asks.js` `checkAsk` refuses a routine ask filed under
 `host_units`, `production_migration`, `credentials` or `deleting_data`. `FORBIDDEN_RE` (the auto-answer filter) and the frozen
-`router.js` `stop_v1_floor` are unchanged. `merge-policy.js` still treats a file named `*.service` / `*.timer` as a systemd path;
-repo units ship as `.tmpl`, which the installer renders.
+`router.js` `stop_v1_floor` are unchanged. `merge-policy.js` `sensitivePath` no longer treats a repo `*.service` / `*.timer` / `systemd/` file as a floor (owner 2026-10-26, Q235:
+merging a unit file installs nothing); only this product's own `ghosty-sessions*` / `ghosty-manager*` units still escalate. Installing
+a unit on a host is the routine unit class above.
 
 **Supersede (2026-10-26).** A new ask closes an older open ask of the same session only when it is the same question reworded or
 `--supersedes Q12,Q13` names it (`owner-ask.js ask`, `manager-ask.js`). A different question stays open (Q237 had closed Q236).

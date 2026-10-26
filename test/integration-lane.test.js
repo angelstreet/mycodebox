@@ -527,7 +527,7 @@ test('floor: a manager approval skips only the infra reason, is recorded and jou
   assert.equal(r.approvedBy, 'manager'); assert.ok(r.approvedAt);
   const appr = journal.filter((j) => j.approvedBy); assert.equal(appr.length, 1); assert.equal(appr[0].kind, 'merge'); assert.equal(appr[0].request, r.id);
   // never a secret, a unit or red tests
-  for (const [name, files] of [['sec', { 'scripts/deploy.sh': 'a\n', '.env': 'K=1\n' }], ['unit', { 'scripts/deploy.sh': 'a\n', 'systemd/x.service': '[Unit]\n' }], ['mig', { 'scripts/deploy.sh': 'a\n', 'migrations/1.sql': 'select 1;\n' }]]) {
+  for (const [name, files] of [['sec', { 'scripts/deploy.sh': 'a\n', '.env': 'K=1\n' }], ['unit', { 'scripts/deploy.sh': 'a\n', 'systemd/ghosty-sessions.service': '[Unit]\n' }], ['mig', { 'scripts/deploy.sh': 'a\n', 'migrations/1.sql': 'select 1;\n' }]]) {
     w.branch(name, files); const m = w.main();
     const x = await go(lane, { branch: name, approvedBy: 'manager' });
     assert.equal(x.state, 'returned', name); assert.notEqual(x.outcome, 'needs_approval', name); assert.equal(w.main(), m);

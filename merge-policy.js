@@ -150,7 +150,9 @@ export function sensitivePath(f) {
   if (/(^|\/)migrations?\/(?:[^/]+\/)*[^/]+_rollback\.sql$/.test(lower)) return null;
   if (/(^|\/)(?:migrations?|migrate|alembic|flyway|liquibase)\//.test(lower) || /(^|\/)alembic\.ini$/.test(lower) || /(^|\/)db\/(?:migrate|migrations?|schema\.rb|structure\.sql)/.test(lower) || /\.sql$/.test(lower)) return 'migration';
   if (/sudoers/.test(lower)) return 'sudoers';
-  if (/\.(service|timer|socket)$/.test(lower) || /(^|\/)systemd\//.test(lower)) return 'systemd';
+  // A unit / timer file in a repo is text: the merge installs nothing (installing is the routine host-unit class, owner 2026-10-26,
+  // host-unit-routine.js). Only this product's own service and manager units stay a floor: they have their own restart procedure.
+  if (/\.(service|timer|socket)$/.test(lower) || /(^|\/)systemd\//.test(lower)) return /^ghosty-(?:sessions|manager)/.test(base) ? 'systemd' : null;
   if (!DOC_OR_TEST.test(lower) && (/^\.github\/workflows\//.test(lower) || /(^|\/)(?:\.gitlab-ci\.yml|jenkinsfile)$/.test(lower) || /^\.circleci\//.test(lower)
     || /^dockerfile|^docker-compose/.test(base.toLowerCase()) || /\.tf$/.test(lower) || /(^|\/)(?:terraform|ansible|helm|k8s|kubernetes)\//.test(lower))) return 'deploy';
   if (DOC_OR_TEST.test(lower)) return null;   // tests and docs only describe infra (test/foo-deploy.test.js, docs/deploy.md), they never change it
