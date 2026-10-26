@@ -51,16 +51,29 @@ test('a stop id closes nothing: the question stays open and no supersede record 
 
 // 2: the case that really means "replaced": a second question for the session closes the older one and the
 // ledger names that question as the replacement.
-test('a second question for the session replaces the older one and names it', async () => {
+test('a question that names the older one (supersedes) replaces it and names it', async () => {
   const file = await ledgerIn('replace', [JSON.stringify(ask(1, { session: 'S' }))]);
   const filed = await fileAsk(file, {
     session: 'S', question: 'Synthetic second question?', what: 'Synthetic what.',
-    options: ['1 do it', '2 do not'], recommend: '1', floor: 'money', why: 'It spends the owner money.',
+    options: ['1 do it', '2 do not'], recommend: '1', floor: 'money', why: 'It spends the owner money.', supersedes: ['Q1'],
   });
   assert.equal(filed.ok, true, JSON.stringify(filed));
   const sup = (await recordsOf(file)).filter((r) => r.state === 'superseded');
   assert.deepEqual(sup.map((r) => [r.id, r.by]), [['Q1', filed.id]], 'the older ask is closed by the new question');
   assert.deepEqual((await readOpenAsks(file)).map((a) => a.id), [filed.id], 'only the replacement is open');
+});
+
+// 2b (owner, 2026-10-26: Q237 closed Q236, a different question): a different question of the same session leaves the
+// older one open; the same question reworded closes it.
+test('a different question of the same session does not close the older one; the same question reworded does', async () => {
+  const file = await ledgerIn('different', [JSON.stringify(ask(1, { session: 'S' }))]);
+  const base = { session: 'S', what: 'Synthetic what.', options: ['1 do it', '2 do not'], recommend: '1', floor: 'money', why: 'It spends the owner money.' };
+  const other = await fileAsk(file, { ...base, question: 'A completely different question?' });
+  assert.equal(other.ok, true, JSON.stringify(other));
+  assert.deepEqual((await readOpenAsks(file)).map((a) => a.id).sort(), ['Q1', other.id].sort(), 'both stay open');
+  const again = await fileAsk(file, { ...base, question: 'synthetic QUESTION 1' });
+  assert.equal(again.ok, true);
+  assert.deepEqual((await readOpenAsks(file)).map((a) => a.id).sort(), [other.id, again.id].sort(), 'only the reworded one is closed');
 });
 
 // 3: the same through the command the manager session uses (scripts/manager-ask.js).
@@ -85,8 +98,11 @@ test('the manager-ask command replaces the session\'s older question with the ne
     const second = await run(['--session', 'S', '--question', 'Synthetic second question?', ...ASK_FLAGS]);
     assert.equal(second.code, 0, second.stderr);
     assert.notEqual(second.stdout, first.stdout, 'a second question gets its own id');
+    assert.deepEqual((await recordsOf(ledger)).filter((r) => r.state === 'superseded'), [], 'a different question closes nothing');
+    const third = await run(['--session', 'S', '--question', 'Synthetic third question?', '--supersedes', `Q1,${first.stdout}`, ...ASK_FLAGS]);
+    assert.equal(third.code, 0, third.stderr);
     const sup = (await recordsOf(ledger)).filter((r) => r.state === 'superseded');
-    assert.deepEqual(sup.map((r) => [r.id, r.by]), [['Q1', first.stdout], [first.stdout, second.stdout]], 'each question replaces the older one of the session');
+    assert.deepEqual(sup.map((r) => [r.id, r.by]).sort(), [['Q1', third.stdout], [first.stdout, third.stdout]].sort(), '--supersedes closes exactly the named asks; the second stays open');
   } finally { srv.close(); }
 });
 

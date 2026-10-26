@@ -4,7 +4,7 @@
 // the owner still has to answer; the page shows them in the NEEDS YOU strip.
 import { readFile, appendFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { routineHostUnit } from './host-unit-routine.js';
+import { routineChange } from './host-unit-routine.js';
 
 const CLOSED = new Set(['answered', 'superseded', 'closed', 'resolved', 'withdrawn']);
 
@@ -242,7 +242,7 @@ const refuse = (report, msg) => {
 // The replacement must be a question that exists in the ledger, for the same session: a stop id is not a
 // question, so a stop that carries no owner question closes nothing (E22). A missing ledger, an unknown id or
 // an id that is not a question closes nothing and is reported.
-export async function supersedeOlder(file, session, newId, { now = new Date(), before = null, report = null } = {}) {
+export async function supersedeOlder(file, session, newId, { now = new Date(), before = null, report = null, match = null } = {}) {
   if (!session || !newId) return [];
   const { records, readError } = await readLedger(file);
   if (readError) return refuse(report, `ledger unreadable (${readError}): nothing superseded`);
@@ -254,7 +254,7 @@ export async function supersedeOlder(file, session, newId, { now = new Date(), b
   if (!showable(replacement)) return refuse(report, `${newId} never passed the ask gate: nothing superseded`);
   if (String(replacement.session || '').trim() !== String(session).trim()) return refuse(report, `${newId} is a question of another session: nothing superseded`);
   // `before` (ms): only asks written before that moment; an ask with no readable time is left alone
-  const older = openAsksFromRecords(records).filter((a) => a.session === session && a.id !== newId && (before == null || Date.parse(a.at) < before));
+  const older = openAsksFromRecords(records).filter((a) => a.session === session && a.id !== newId && (before == null || Date.parse(a.at) < before) && (!match || match(a)));
   if (!older.length) return [];
   // one appendFile per record: a single write of N lines can be chunked by the kernel, and a chunk boundary inside
   // one write is how a line ends up half-written. One record per write keeps the damage to one record.
@@ -265,6 +265,8 @@ export async function supersedeOlder(file, session, newId, { now = new Date(), b
 // ---- the ask gate (owner rule 2026-10-20): a question reaches the owner only when it touches the hard floor ----
 // The manager files owner questions through scripts/owner-ask.js only; this is the check it runs, so a script call, a
 // hand-written ledger line and a test all agree on what counts as a floor question.
+// floors a routine change may be filed under by mistake (a unit install, a migration made re-runnable, a permission fix)
+const ROUTINE_FLOORS = ['host_units', 'production_migration', 'credentials', 'deleting_data'];
 export const FLOORS = ['money', 'credentials', 'customers', 'deleting_data', 'host_units', 'production_migration', 'history_rewrite', 'owner_fact'];
 
 // A bare internal identifier in the owner's wording: a session/integration id (int-a1b2c3d4), a commit sha
@@ -375,9 +377,11 @@ export function checkAsk({ question, what, options, recommend, floor, why } = {}
   }
   const ids = [...bareInternalIds(q), ...bareInternalIds(w)];
   if (ids.length) return { ok: false, why: `internal id without an explanation (${ids.join(', ')}): name the thing in plain words, and quote the id only where you explain it` };
-  if (floor === 'host_units') {
-    const r = routineHostUnit(`${q} ${w} ${y} ${opts.join(' ')}`);
-    if (r.routine) return { ok: false, why: `a routine unit / timer install is not a floor item (owner 2026-10-25): decide it yourself and journal it with "owner-ask.js decide" (${r.why})` };
+  // the routine-change exceptions (owner 2026-10-25 / 2026-10-26): a reviewed unit / timer install, a change that only makes
+  // something safer, a permission fix on a settings file are decided and journaled by the manager, whatever floor was named
+  if (ROUTINE_FLOORS.includes(floor)) {
+    const r = routineChange(`${q} ${w} ${y} ${opts.join(' ')}`);
+    if (r.routine) return { ok: false, why: `a routine ${r.kind} change is not a floor item (owner 2026-10-25 / 2026-10-26): decide it yourself and journal it with "owner-ask.js decide" (${r.why})` };
   }
   // the "why you" is one line, in plain words, and it names the risk of this floor (owner, 2026-10-25)
   if (/[\r\n]/.test(y)) return { ok: false, why: '--why must be one line: the "why you" line says in plain words what could be lost, exposed or restarted' };
@@ -417,9 +421,13 @@ export async function fileAsk(file, ask, { now = new Date() } = {}) {
     await appendFile(file, JSON.stringify(record) + '\n');
     return { id, record };
   });
-  // A second question for a session replaces the session's older open questions (round 9, item 5): the older
+  // A new question closes an older open one of the same session only when it is the same question reworded or the caller
+  // names it (ask.supersedes: ids). A different question stays open (owner, 2026-10-26: Q237 had closed Q236). The older
   // ones are closed by this question, never by a stop id (E22). The lock is released before this runs.
-  await supersedeOlder(file, written.record.session, written.id, { now });
+  const ids = [].concat(ask.supersedes || []).flatMap((x) => String(x).split(',')).map((x) => x.trim()).filter(Boolean);
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const sameQuestion = (a) => norm(a.question) === norm(written.record.question);
+  await supersedeOlder(file, written.record.session, written.id, { now, match: (a) => ids.includes(a.id) || sameQuestion(a) });
   return { ok: true, id: written.id, record: written.record };
 }
 

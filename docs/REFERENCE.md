@@ -757,17 +757,32 @@ The interactive manager uses the same evaluation from its shell:
 `node scripts/merge-eval.js --repo <checkout> --branch <b> [--target main] --text "<closing text>" --session <s> --journal`
 prints one JSON line `{verdict, reasons, rationale, ...}`.
 
-### Routine host-unit installs (owner, 2026-10-25)
+### Routine host-unit installs, safer changes and permission fixes (owner, 2026-10-25, widened 2026-10-26)
 
-`host-unit-routine.js` `routineHostUnit(text, variants)` is the one predicate for the narrow exception to the host_units floor.
-Routine means the text says all of: an install / add / update of a unit, timer or script; a reviewed and merged repo change; a
-CI runner VM or other non-production helper VM as target; the previous file kept as a backup; a rollback line. Any of sudoers,
-production / customer-facing, `ghosty-sessions` / codebox, reboot, credentials, or a removal / mask / disable that is not a
-replacement (also in a spelling variant) cancels it. `stall.js` `hardMatch` replaces only the unit words (`.service`, `.timer`,
-`unit file`, `/etc/systemd/system`, `systemctl enable|daemon-reload`, `sudo`) in a routine text, so the rest of the floor still
-reads it; `owner-asks.js` `checkAsk` refuses a `host_units` ask that is routine (decide it with `owner-ask.js decide`).
-`FORBIDDEN_RE` (the auto-answer filter) and the frozen `router.js` `stop_v1_floor` are unchanged. `merge-policy.js` still treats a
-file named `*.service` / `*.timer` as a systemd path; repo units ship as `.tmpl`, which the installer renders.
+`host-unit-routine.js` `routineChange(text, variants)` -> `{ routine, kind: unit|safer|perm, why }` is the one predicate for the
+exceptions to the host_units floor (`routineHostUnit` is its unit class). Each is decided and journaled by the manager
+("Decided for you", `owner-ask.js decide`), never asked. Owner 2026-10-26: "pure technical change, change the harness so that you
+can answer that"; "making something more safe should be allowed".
+
+- **unit**: install / add / update of a unit, timer or script; a reviewed and merged repo change; target codebox, a CI runner VM or
+  another non-production helper or database host; previous file kept as a backup; a rollback line.
+- **safer**: a change that only makes something safer or idempotent (migration made re-runnable with `CREATE OR REPLACE` or
+  `IF NOT EXISTS`, a guard added, permissions tightened) with a rollback line. Any drop / truncate / delete / destructive word
+  cancels it. Like additive migrations (2026-10-21) it is not a floor.
+- **perm**: a chmod / chown / ACL fix so a service can read its own settings file; the text must say the contents are not read or
+  printed and give a rollback line (old mode and owner); no credential change, print or rotation.
+
+Still floor in every class: sudoers; production or customer-facing app hosts; the `ghosty-sessions` service itself (own restart and
+deploy procedure); reboots; removing / masking / disabling a unit that is not a replacement; new, rotated or revoked credentials;
+money, customers, deleting data, destructive migrations, history rewrites (`stall.js` `hardMatch` still reads the text).
+`stall.js` `hardMatch` replaces only the unit words (`.service`, `.timer`, `unit file`, `/etc/systemd/system`,
+`systemctl enable|daemon-reload`, `sudo`) in a routine text; `owner-asks.js` `checkAsk` refuses a routine ask filed under
+`host_units`, `production_migration`, `credentials` or `deleting_data`. `FORBIDDEN_RE` (the auto-answer filter) and the frozen
+`router.js` `stop_v1_floor` are unchanged. `merge-policy.js` still treats a file named `*.service` / `*.timer` as a systemd path;
+repo units ship as `.tmpl`, which the installer renders.
+
+**Supersede (2026-10-26).** A new ask closes an older open ask of the same session only when it is the same question reworded or
+`--supersedes Q12,Q13` names it (`owner-ask.js ask`, `manager-ask.js`). A different question stays open (Q237 had closed Q236).
 
 ### Autonomy by default: push, deploy and recommended options (owner, 2026-10-14)
 
