@@ -37,6 +37,15 @@ test('reasons: past expect_min, idle, broader than its purpose', () => {
   assert.deepEqual(reasonsOf(lease({ resources: ['host-1'], kind: 'host', purpose: 'host-1 run' }), { now: NOW }), []);
   assert.deepEqual(reasonsOf(lease({ resources: ['*'], purpose: 'full server and frontend run' }), { now: NOW }), []);
 });
+test('a holder with no session that renews its lease is alive, not idle: the registry reports the time since the claim', () => {
+  // the live case: a timer-driven bot holds a host lease, renews it every 3 min and is not idle at all
+  const bot = lease({ id: 'LB', agent: 'codebox:pokemon-dispatch', kind: 'host', resources: ['host-1'], purpose: 'run on host-1', sinceMs: NOW - 33 * MIN, lastHeartbeatMs: NOW - 2 * MIN, idleMin: 33 });
+  const t = { id: 'T9', env: 'env-a', resources: ['host-1'], agent: 'codebox:pokemon-stall', holders: ['codebox:pokemon-dispatch'], holderIds: ['LB'], createdMs: NOW - 12 * MIN };
+  const plan = (l) => planNudges(base({ deploys: [], view: view([l], [t]), sessionOf: () => null, idleMinOf: (x) => x.idleMin ?? null }));
+  assert.equal(plan(bot).length, 0);                                   // renewed 2 min ago: alive, nothing to ask
+  assert.deepEqual(plan(lease({ ...bot, lastHeartbeatMs: NOW - 25 * MIN }))[0].reasons, ['idle 25 min']);   // the renewal stopped: stuck
+  assert.deepEqual(plan(lease({ ...bot, lastHeartbeatMs: NOW - 33 * MIN }))[0].reasons, ['idle 33 min']);   // never renewed: a stale lease
+});
 test('a waiting ticket nudges its holders (matched by lease id)', () => {
   const t = { id: 'T9', env: 'env-a', resources: ['server'], agent: 'codebox:other', holders: ['codebox:worker'], holderIds: ['L1'], createdMs: NOW - 12 * MIN };
   const [n] = planNudges(base({ deploys: [], view: view([lease()], [t]) }));

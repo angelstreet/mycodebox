@@ -97,7 +97,7 @@ import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
 import * as managerApi from './manager.js';
 import { createReadyStore } from './ready-window.js';
-import { normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds } from './lease-source.js';
+import { normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, renewalIdleMin } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
@@ -852,19 +852,21 @@ const leaseWatch = createLeaseWatch({
 });
 // The orchestrator asks a holder to release or narrow (lease-nudge.js): every 2 min, for a queued deploy or ticket that waits > 10 min.
 // manager.json key `leaseNudge`: "live" (default) | "dry" | "off". Never releases or narrows by itself.
+// minutes since the holder's last activity, as the dashboard sees it (a working session is never idle); null when the
+// reporter never reported this session (then nobody may act on idleness)
+const sessionIdleMin = (session, now = Date.now()) => {
+  const act = reporter.activityOf(session);
+  if (!act) return null;
+  if (act.working) return 0;
+  const at = Math.max(act.turnAt || 0, act.promptAt || 0);
+  return at ? Math.floor((now - at) / 60000) : null;
+};
 const leaseNudge = createLeaseNudge({
   stateDir: STATE_DIR,
   getInputs: async () => ({ deploys: deployRunner.snapshot().deploys || [], view: await leaseSource.view(false) }),
   sessionOf: (agent) => holderSession(agent, Object.keys(latest?.status || {}), MACHINES),
   // the same signal as lease-watch: minutes since the session's last finished turn; a working session is never idle
-  idleMinOf: (l, session) => {
-    if (!session) return l.idleMin ?? null;
-    const act = reporter.activityOf(session);
-    if (!act) return null;
-    if (act.working) return 0;
-    const at = Math.max(act.turnAt || 0, act.promptAt || 0);
-    return at ? Math.floor((Date.now() - at) / 60000) : null;
-  },
+  idleMinOf: (l, session) => (session ? sessionIdleMin(session) : l.idleMin ?? null),
   canSend: (session) => noteAllowed(latest?.status?.[session]),   // stopped on a finished turn, no draft, no menu
   send: async (session, text) => { await assertAgentPane(session, 'lease-nudge'); await sendKeys(session, text, true); logSend(session, 'lease-nudge', { keys: text }); },
   record: (e) => managerEvents.record(e),
@@ -2090,7 +2092,14 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/leases/view') {   // the Leases view: authority, held leases (mode, holder, ttl, idle), tickets, deploy queue, shadow disagreements
     const v = await leaseSource.view(true);
     const sessionNames = Object.keys(latest?.status || {});
-    return json(res, 200, v.ok ? { ...v, hostname: hostname(), leases: v.leases.map((l) => ({ ...l, holderSession: agentSession(l.session || l.agent, sessionNames, MACHINES) || agentSession(l.agent, sessionNames, MACHINES) || null })), deploys: deployRunner.snapshot().deploys || v.deploys } : { ...v, authority: leaseSource.label() });
+    const t = Date.now();
+    return json(res, 200, v.ok ? { ...v, hostname: hostname(), leases: v.leases.map((l) => {
+      const holderSession = agentSession(l.session || l.agent, sessionNames, MACHINES) || agentSession(l.agent, sessionNames, MACHINES) || null;
+      // The registry's idle number is the time since the claim for a holder it cannot observe (a script, a bot): the time since
+      // its last renewal is the honest one. A holder the dashboard resolves is judged by its own activity.
+      const idleMin = holderSession ? (sessionIdleMin(holderSession, t) ?? l.idleMin ?? null) : (renewalIdleMin(l, t) ?? l.idleMin ?? null);
+      return { ...l, holderSession, idleMin };
+    }), deploys: deployRunner.snapshot().deploys || v.deploys } : { ...v, authority: leaseSource.label() });
   }
   if (req.method === 'POST' && (p === '/api/leases/owner/release' || p === '/api/leases/owner/mode')) {   // owner actions, central only (second tap is client-side); always by 'owner'
     let b;

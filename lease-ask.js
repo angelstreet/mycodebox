@@ -2,6 +2,7 @@
 // lease source with a fixed template and the rule "wait, never ask". Pure: detection, parts, the template, the idle-hold flag.
 // stall.js FORBIDDEN_RE is untouched; hardMatch is only used to keep the typed answer free of words the hard floor would block.
 import { hardMatch } from './stall.js';
+import { renewalIdleMin } from './lease-source.js';
 
 export const LEASE_RULE = 'Wait with `vpt-lease claim ... --wait` (or `vpt-lease run ... -- <cmd>`); never ask the owner about a lease.';
 
@@ -88,7 +89,8 @@ export function answerLeaseAsk({ ask, view, session = '', now = Date.now() } = {
       for (const l of rel.slice(0, 3)) {
         const since = l.sinceMs ? `, since ${mins(now - l.sinceMs)} min ago` : '';
         const left = l.ttlLeftMin != null ? `, ${l.ttlLeftMin} min left` : '';
-        const idle = l.idleMin != null && l.idleMin > 0 ? `, idle ${l.idleMin} min` : '';
+        const idleMin = renewalIdleMin(l, now) ?? l.idleMin;   // a renewing holder the dashboard cannot see is not idle
+        const idle = idleMin != null && idleMin > 0 ? `, idle ${idleMin} min` : '';
         const purpose = withPurpose && l.purpose ? ` for "${clean(l.purpose, 80)}"` : '';
         parts.push(`${l.resources.map((r) => shortRes(l.env, r)).join(', ')} is held by ${clean(l.agent, 60) || 'an unknown agent'} (${l.mode})${purpose}${since}${left}${idle}.`);
       }

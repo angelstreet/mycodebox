@@ -1412,6 +1412,11 @@ holders: the holders that are neither a session nor a platform agent).
   on a finished turn with no draft and no menu gets one line through the guarded send (`by: 'lease-nudge'`); any other holder (Mac, scripts) gets a
   `lease:nudge` manager event with the same text. It never releases or narrows. Audit: `lease-nudges.jsonl`; cooldowns: `lease-nudge.json`.
   `manager.json` `leaseNudge`: `"live"` (default) | `"dry"` (log only) | `"off"`.
+- **A renewing holder is not idle.** The registry's idle clock resets only on activity it can observe (a session the dashboard reports, an active
+  heartbeat); a holder it cannot observe (a script, a bot) renews its lease instead, and the registry then reports the time since the claim as
+  "idle". A lease renewed after its claim is judged by the time since its last renewal (`renewalIdleMin`, lease-source.js): a bot that renews every
+  3 min is not idle for 30 min, and a lease that was never renewed keeps the registry's number (a stale lease really is idle). The same number is
+  shown in the Leases view and in the lease answer.
 
 ## Round 9: other machines, ledgers, credit fallback, ready window
 
