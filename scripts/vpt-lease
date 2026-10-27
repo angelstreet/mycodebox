@@ -27,7 +27,7 @@ Exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 UNAVAILABLE (
 `validate ID --agent A` (central only): 0 when the lease is held, exclusive and A's; 3 otherwise (the reason is printed);
 5 when the service is unavailable. Call it right before each protected step (a restart, a deploy step).
 """
-import argparse, contextlib, io, json, os, shlex, signal, socket, subprocess, sys, threading, time, uuid
+import argparse, contextlib, io, json, os, re, shlex, signal, socket, subprocess, sys, threading, time, uuid
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
@@ -39,7 +39,7 @@ KIND_ALIASES = {"run": "server", "maintenance": "host"}
 MODES = ("exclusive", "observe", "pin")
 FAST = os.environ.get("VPT_LEASE_TEST_FAST") == "1"
 LONG_TTL_MIN = 240
-NEW_FLAGS_WITH_VALUE = ("--mode", "--expect", "--deploy-id", "--priority")
+NEW_FLAGS_WITH_VALUE = ("--mode", "--expect", "--deploy-id", "--priority", "--holder-pid", "--holder-host")
 NEW_FLAGS = ("--wait", "--ticket")
 
 
@@ -403,6 +403,12 @@ def claim_body(a, wait=None):
         body["heartbeat_s"] = a.heartbeat_s      # declares the interval: the service enforces heartbeats only for leases that do
     if getattr(a, "priority_since", None):
         body["priority_since"] = a.priority_since
+    hp = getattr(a, "holder_pid", None) or int(os.environ.get("VPT_HOLDER_PID") or 0)
+    if hp > 1:       # the service releases the lease when this pid (on holder_host) is gone; only sent when the caller names a long-lived pid
+        body["holder_pid"] = hp
+        body["holder_host"] = getattr(a, "holder_host", None) or socket.gethostname()
+    elif re.match(r"^codebox:.+-\d{2,9}$", a.agent):
+        body["holder_host"] = getattr(a, "holder_host", None) or socket.gethostname()   # the -<pid> of the agent name belongs to the caller's host
     if not CFG.shadow:
         body["request_id"] = request_id(body)
     return body, wanted, kind
@@ -1300,6 +1306,8 @@ def build_parser():
         c.add_argument("--mode", choices=MODES, default="exclusive", help="exclusive (default), observe (read archives), pin (keep this state)")
         c.add_argument("--expect", type=int, default=0, help="expected hold in minutes (improves the queue ETA)")
         c.add_argument("--priority", choices=PRIORITIES, default=None, help="holder priority P0 (highest) .. P3 (background: scheduled bots); default: the session's own, else P1. A P2 or P3 lease is capped at 10 min per claim and cannot be renewed while a claim of higher priority waits")
+        c.add_argument("--holder-pid", type=int, default=None, help="pid of the long-lived process that owns this claim (e.g. a dispatcher; default $VPT_HOLDER_PID): the lease is released if it dies. Never the pid of a shell that exits after the claim")
+        c.add_argument("--holder-host", default=None, help=argparse.SUPPRESS)   # added when forwarded: the pid belongs to this host
         c.add_argument("--deploy-id", default="", help="join the lease of this running deploy (default $VPT_DEPLOY_ID)")
     c = sub.add_parser("claim"); claim_args(c)
     c.add_argument("--wait", action="store_true", help="queue and block until granted (retries while the service is unreachable)")
@@ -1387,7 +1395,7 @@ def strip_new_flags(argv):
             skip = False
         elif x in NEW_FLAGS_WITH_VALUE:
             skip = True
-        elif x in NEW_FLAGS or x.startswith(("--mode=", "--expect=", "--deploy-id=", "--priority=")):
+        elif x in NEW_FLAGS or x.startswith(("--mode=", "--expect=", "--deploy-id=", "--priority=", "--holder-pid=", "--holder-host=")):
             pass
         else:
             out.append(x)
@@ -1481,6 +1489,22 @@ def re_deploy_id(argv):
     return any(x == "--deploy-id" or x.startswith("--deploy-id=") for x in argv)
 
 
+def with_holder_host(argv):
+    """A forwarded claim runs on the registry host: say which host the --holder-pid belongs to (or the service would check the wrong machine)."""
+    if argv[:1] not in (["claim"], ["run"]) or any(x == "--holder-host" or x.startswith("--holder-host=") for x in argv):
+        return argv
+    named = any(x == "--holder-pid" or x.startswith("--holder-pid=") for x in argv) or os.environ.get("VPT_HOLDER_PID")
+    agent = argv[argv.index("--agent") + 1] if "--agent" in argv[:-1] else ""
+    if not named and re.match(r"^codebox:.+-\d{2,9}$", agent):
+        i = argv.index("--") if "--" in argv else len(argv)
+        return argv[:i] + ["--holder-host", socket.gethostname()] + argv[i:]
+    if not named:
+        return argv
+    i = argv.index("--") if "--" in argv else len(argv)
+    pid = [] if any(x == "--holder-pid" or x.startswith("--holder-pid=") for x in argv) else ["--holder-pid", os.environ["VPT_HOLDER_PID"]]
+    return argv[:i] + pid + ["--holder-host", socket.gethostname()] + argv[i:]
+
+
 def with_priority(argv):
     """A forwarded claim runs on the registry host, which cannot read this machine's session priorities: add --priority here."""
     if argv[:1] != ["claim"] or any(x == "--priority" or x.startswith("--priority=") for x in argv):
@@ -1507,6 +1531,7 @@ def main(argv=None):
             eprint("vpt-lease: this call was already forwarded; refusing to forward again (the registry host must run VPT_LEASE_MODE=central)")
             return 1
         argv = with_priority(argv)
+        argv = with_holder_host(argv)
         if argv[:1] == ["claim"] and "--wait" in argv:
             return ssh_claim_wait(build_parser().parse_args(argv), argv, False)[0]
         if argv[:1] != ["run"]:

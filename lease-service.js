@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import os from 'node:os';
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Resources and the conflict matrix (design section 3)
@@ -110,6 +111,10 @@ const med = (xs) => { const s = [...xs].sort((a, b) => a - b); const m = s.lengt
 const freshState = () => ({ seq: 0, leases: {}, gens: {}, tickets: {}, deploys: [], deployed: {}, recorded: [], events: [], evN: 0, stats: [], requests: {} });
 const newId = (taken) => { for (;;) { const id = randomBytes(4).toString('hex'); if (!taken(id)) return id; } };
 
+// Start time (clock ticks since boot) of a local pid, or null when it is gone: pid + start time identifies a process even after the pid is reused.
+export function procStartOf(pid) {
+  try { const st = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return st.slice(st.lastIndexOf(')') + 2).split(' ')[19] || null; } catch { return null; }
+}
 const defaultIo = {
   async append(path, data, sync) {
     const fh = await fs.promises.open(path, 'a', 0o600);
@@ -122,7 +127,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const now = () => { const t = nowIn(); if (!Number.isFinite(t)) throw new Error('wall clock is not finite'); return t; };   // wall clock: TTL and display only
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
-    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, ticketIdleMs: 2 * MIN, goneGraceMs: 2 * MIN,
+    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 2 * MIN, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
@@ -188,7 +193,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
           }
           delete S.leases[id];
           clk.delete(id);
-          ev(f.why, l, f.at, { by: f.by, reason: f.reason, held_min: Math.round((f.at - l.since) / MIN) });
+          ev(f.why, l, f.at, { by: f.by, reason: f.reason, ...(f.detail ? { detail: f.detail } : {}), held_min: Math.round((f.at - l.since) / MIN) });
         }
         break;
       }
@@ -351,7 +356,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       kind: l.kind, kinds: l.resKinds || null, agent: l.agent, client: l.client || null, session: l.session || null, purpose: l.purpose || '', provider: l.provider || '',
       shared: !!l.shared, since: iso(l.since), expires_at: iso(l.expires), ttl_min: l.ttlMin, ttlLeftMin: Math.floor((l.expires - t) / MIN),
       long: l.ttlMin > 240, idleMin: Math.floor((mono() - (clk.get(l.id)?.act ?? mono())) / MIN), lastHeartbeatAt: iso(l.lastHb), generation: l.generation, gens: l.gens,
-      heartbeat_s: l.heartbeatS ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
+      heartbeat_s: l.heartbeatS ?? null, holder_pid: l.holderPid ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
       priority: prioOf(l), priority_source: l.prioritySrc || 'default', ttl_clamped_from: l.ttlClampedFrom ?? null, yield_required: yieldWaiters(l).length > 0,
     };
   }
@@ -456,6 +461,8 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   }
 
   // ---- housekeeping (called inside every locked operation) ---------------------------------------------------------
+  const procStart = config.procStart || procStartOf;
+  const sessionAlive = (s) => { try { return sessions?.isAlive?.(s); } catch { return undefined; } };
   function housekeeping(emit) {
     const t = now();
     if (sessions?.isAlive) {
@@ -486,6 +493,15 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (l.deployId && l.system && !S.deploys.some((d) => d.id === l.deployId && d.state === 'running')) { rel('released', 'deploy-ended'); continue; }
       // heartbeat enforcement is opt-in: only leases that declared heartbeat_s
       if (l.mode === 'exclusive' && l.heartbeatS > 0 && m - c.hb >= cfg.missFactor * l.heartbeatS * 1000) { rel('expired', 'no-heartbeat'); continue; }
+      // holder death (owner 2026-10-27): a local holder pid (claim holder_pid, or the -<pid> of a codebox:<name>-<pid> agent) that is gone, or now
+      // another process (start time differs), for holderDeadChecks consecutive checks holderCheckMs apart. No pid recorded = TTL behaviour as before.
+      if (l.holderPid && l.mode === 'exclusive' && !l.system && !l.deployId && !(l.holderSrc === 'agent-name' && l.session && sessionAlive(l.session) === true)) {
+        if (c.pAt == null || m - c.pAt >= cfg.holderCheckMs) {
+          c.pAt = m;
+          c.pDead = procStart(l.holderPid) === l.holderStart ? 0 : (c.pDead || 0) + 1;
+        }
+        if ((c.pDead || 0) >= cfg.holderDeadChecks) { emit({ t: 'release', ids: [l.id], why: 'released', reason: 'holder-gone', detail: `released stale lease ${l.id}: holder pid ${l.holderPid} is gone`, by: 'system', at: t }); continue; }
+      }
       if (l.goneAt && t - l.goneAt >= cfg.goneGraceMs) { rel('released', 'session-gone'); continue; }
       // idle -> pin only where activity can be observed: a declared heartbeat, or a session the dashboard resolves. Plain claims from other machines keep TTL only.
       let observable = l.heartbeatS != null;
@@ -535,7 +551,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return {
       id, env: req.env, resources: req.resources, mode: req.mode, kind: req.kind, agent: req.agent, client: req.client || null, session: req.session || null,
       purpose: req.purpose || '', provider: req.provider || '', shared: !!req.shared, since: t, expires: t + req.ttlMin * MIN, ttlMin: req.ttlMin,
-      heartbeatS: req.heartbeatS ?? null, system: !!req.system, deployId: req.deployId || null, lastHb: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, requestId: req.requestId || null, priority: req.priority || null, prioritySrc: req.prioritySrc || null, ttlClampedFrom: req.ttlClampedFrom ?? null,
+      heartbeatS: req.heartbeatS ?? null, holderPid: req.holderPid ?? null, holderStart: req.holderStart ?? null, holderSrc: req.holderSrc ?? null, system: !!req.system, deployId: req.deployId || null, lastHb: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, requestId: req.requestId || null, priority: req.priority || null, prioritySrc: req.prioritySrc || null, ttlClampedFrom: req.ttlClampedFrom ?? null,
       gens, generation: Math.max(...Object.values(gens)), ...extra,
     };
   }
@@ -613,6 +629,15 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     }
     if (!priority) { priority = cfg.defaultPriority; prioritySrc = 'default'; }
     const system = a.exempt === true;
+    // holder liveness: an explicit local holder_pid (holder_host, when given, must be this host's name), else the -<pid> of a codebox:<name>-<pid> agent.
+    // Tracked only while the pid is alive now; its start time is recorded so a reused pid counts as dead.
+    if (a.holder_pid != null && (!Number.isInteger(a.holder_pid) || a.holder_pid < 2)) return fail('E_INVALID', 'holder_pid must be an integer > 1');
+    if (a.holder_host != null && !isStr(a.holder_host, 255)) return fail('E_INVALID', 'bad holder_host');
+    let holderPid = null, holderSrc = null;
+    if (a.holder_pid != null) { if (a.holder_host == null || a.holder_host === os.hostname()) { holderPid = a.holder_pid; holderSrc = 'claim'; } }
+    else { const nm = /^codebox:.+-(\d{2,9})$/.exec(a.agent); if (nm && Number(nm[1]) > 1 && (a.holder_host == null || a.holder_host === os.hostname())) { holderPid = Number(nm[1]); holderSrc = 'agent-name'; } }
+    const holderStart = holderPid ? procStart(holderPid) : null;
+    if (!holderStart) { holderPid = null; holderSrc = null; }
     let ttlClampedFrom = null;
     if (!system && !a.deploy_id && ttlMin > cfg.maxClaimMin) {
       ttlClampedFrom = ttlMin; ttlMin = cfg.maxClaimMin;
@@ -626,7 +651,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       ok: true, wait,
       req: { env: a.env.toLowerCase(), resources: rs.resources, mode, kind, agent: a.agent, client, session,
         purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', provider: typeof a.provider === 'string' ? a.provider.slice(0, 80) : '', shared: !!a.shared,
-        ttlMin, heartbeatS, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
+        ttlMin, heartbeatS, holderPid, holderStart, holderSrc, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
         system,                         // set by the caller's token (clients.json exemptAgents) or in-process, never by the request body
         deployId: a.deploy_id || null, requestId: a.request_id || null, prioritySince, warnings, priority, prioritySrc, ttlClampedFrom },
     };
