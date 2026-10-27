@@ -49,7 +49,7 @@ test('a reused pid (different start time) counts as dead', async () => {
 
 test('agent codebox:<name>-<pid> is tracked without holder_pid', async () => {
   const h = harness();
-  await h.claim('codebox:TASK-168-4242', 'device:host-1/device4');
+  await h.claim('codebox:TASK-168-4242', 'device:host-1/device4', { holder_host: os.hostname() });
   h.procs.delete(4242);
   await h.advance(31 * SEC); await h.advance(31 * SEC);
   assert.equal(await held(h), 0);
@@ -96,4 +96,20 @@ test('an agent-name pid from another host (holder_host differs) is not tracked',
   h.procs.delete(4242);
   await h.advance(31 * SEC); await h.advance(31 * SEC); await h.advance(31 * SEC);
   assert.equal(await held(h), 1);
+});
+
+test('a pid on another host is recorded with its host but never probed by the service', async () => {
+  const h = harness();
+  await h.claim('codebox:disp', 'device:host-1/device4', { holder_pid: 4242, holder_host: 'codebox-elsewhere' });
+  h.procs.delete(4242);
+  await h.advance(31 * SEC); await h.advance(31 * SEC); await h.advance(31 * SEC);
+  const l = (await h.svc.list({})).leases;
+  assert.equal(l.length, 1);
+  assert.equal(l[0].holder_pid, 4242); assert.equal(l[0].holder_host, 'codebox-elsewhere');
+});
+
+test('an agent-name pid with no host is not tracked (the service cannot know where to look)', async () => {
+  const h = harness();
+  const r = await h.claim('codebox:TASK-168-4242', 'device:host-1/device4');
+  assert.equal(r.lease.holder_pid, null);
 });

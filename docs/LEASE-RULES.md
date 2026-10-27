@@ -49,7 +49,13 @@ or `mac:<name>`.
   another start time (reuse), on 2 consecutive checks 30 s apart, the lease is released with reason `holder-gone`, journaled in the lease events
   and the owner feed ("released stale lease X: holder pid N is gone"). Only exclusive, non-system, non-deploy leases; a pid that was not alive at
   claim time, a pid from another host, `pin`/`observe` leases and leases without a pid keep TTL behaviour. `mac:*` agents are on another
-  machine: they rely on `heartbeat_s` (`vpt-lease run`) and TTL only. Never release another holder's lease by hand: this does it. A heartbeating or dashboard-tracked (codebox session) exclusive lease with no activity
+  machine: they rely on `heartbeat_s` (`vpt-lease run`) and TTL only. Never release another holder's lease by hand: this does it.
+  **Who checks:** the registry host cannot see the pids of processes on other machines, so on codebox the dashboard's `lease-holder-reaper.js` does the
+  check every 30 s (holder_pid + holder_host == this host, else the `-<pid>` of a `codebox:<name>-<pid>` agent, which counts only after it was
+  seen alive once and never while a dashboard session of that name exists) and releases with `--by lease-holder-reaper --reason "holder-gone: ..."`.
+  Reuse is detected by start time: a process that started after the lease was granted is not its holder. The service itself probes only pids
+  on its own host. `GHOSTY_HOLDER_REAPER=off` disables the reaper. A dispatcher that exits between ticks (game_dispatch, pokemon_dispatch) must not
+  pass `--holder-pid`. A heartbeating or dashboard-tracked (codebox session) exclusive lease with no activity
   for 20 minutes becomes a pin.
 - Release as soon as the work is done: `vpt-lease release <id>`. Do not park a lease "for later".
 - A session whose STATUS is `waiting` or `blocked` never keeps an exclusive lease: release it first, claim again when
