@@ -928,6 +928,21 @@ curl -s -XPOST localhost:7777/api/manager/cancel/task05 -H 'content-type: applic
 
 **Jev technical gate (2026-10-23).** The stop decision records `technical: "yes"|"no"` and a one-line `why` before the answer/escalation pick. A `yes` is a contained engineering choice (including a dedicated least-privilege credential for our own CI) and routes an escalation to the manager. Money, customers, physical actions, personal/shared/third-party credentials, and other hard floors remain `technical: "no"` and owner-routed; the field never bypasses a floor. `scripts/jev-ask.js --help` shows the extended JSON shape.
 
+**mm-manager standby gate (owner, 2026-10-27).** `mm-manager` costs MiniMax calls only while the failover state is `minimax`.
+Both event followers re-read the state file (`FAILOVER_STATE`, default `~/handovers/notes/.failover-state`; missing,
+unreadable or anything but `minimax` = `claude`) on every batch: `scripts/mm-manager-wake.py` (types the wake line into the
+`mm-manager` session) and `scripts/mm-manager.sh` tail mode (shadow loop, one `mcode exec` per batch). In `claude` the batch
+is consumed and dropped (no tmux typing, no model call, the filter's dedupe untouched); the waker logs one "standing by"
+line per hour. The other paths that touch `mm-manager` are state-driven already: `scripts/orchestrator-failover` starts or
+wakes it only on the flip to `minimax`, and `ensure-mm-manager-tmux.sh` only creates the tmux session (no prompt).
+Start the waker (the manager decides when; after a reboot it stays down until started; never run an un-gated copy):
+
+```bash
+tmux new -d -s mm-manager-wake 'python3 ~/ghosty-sessions/scripts/mm-manager-wake.py'
+```
+
+Tests: `test/mm-manager-wake.test.js`.
+
 **MiniMax shadow manager (experiment, TASK-47 G11).** A parallel loop (`scripts/mm-manager.sh`)
 that follows the same `manager-events.jsonl` and proposes what the manager should do for each event —
 running it through MiniMax, calling `scripts/jev-ask.js` when in doubt, and Sonnet only when Jev was

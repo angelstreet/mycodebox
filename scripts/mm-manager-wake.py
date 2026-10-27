@@ -6,7 +6,11 @@ own dedupe file under <state>/mm/, so the Claude manager's dedupe is untouched),
 then types ONE line into the session (default `mm-manager`) once it is not working and has no draft.
 
   scripts/mm-manager-wake.py            run forever
-Env: GHOSTY_STATE_DIR, GHOSTY_PORT (7777), MM_SESSION (mm-manager), BATCH_S (60)
+Standby gate (owner, 2026-10-27): mm-manager is a standby. Every batch re-reads the failover state (FAILOVER_STATE,
+default ~/handovers/notes/.failover-state; same rule as standby-manager.js: missing/unreadable = claude). In `claude`
+the batch is consumed and dropped (no tmux typing, no model call; one "standing by" log line per hour); only `minimax`
+wakes the session.
+Env: GHOSTY_STATE_DIR, GHOSTY_PORT (7777), MM_SESSION (mm-manager), BATCH_S (60), FAILOVER_STATE
 """
 import json, os, subprocess, sys, time, urllib.request
 
@@ -14,10 +18,29 @@ STATE = os.environ.get('GHOSTY_STATE_DIR') or os.path.expanduser('~/.local/state
 PORT = os.environ.get('GHOSTY_PORT', '7777')
 SESSION = os.environ.get('MM_SESSION', 'mm-manager')
 BATCH_S = float(os.environ.get('BATCH_S', '60'))
+FAILOVER_STATE = os.environ.get('FAILOVER_STATE') or os.path.expanduser('~/handovers/notes/.failover-state')
 EVENTS = os.path.join(STATE, 'manager-events.jsonl')
 FILTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manager-event-filter.sh')
 FILTER_ENV = dict(os.environ, GHOSTY_STATE_DIR=os.path.join(STATE, 'mm'))
 BASE = f'http://127.0.0.1:{PORT}'
+
+
+def failover_state():
+    # 'claude' | 'minimax'; anything else, or a missing/unreadable file, is 'claude'.
+    try:
+        with open(FAILOVER_STATE) as f:
+            return 'minimax' if f.read().strip() == 'minimax' else 'claude'
+    except OSError:
+        return 'claude'
+
+
+_last_standby_log = [0.0]
+
+
+def standing_by(n):
+    if time.time() - _last_standby_log[0] >= 3600:
+        _last_standby_log[0] = time.time()
+        print(f'mm-wake: failover state is claude, standing by (dropped {n} raw events; logged hourly)', flush=True)
 
 
 def api(path, body=None):
@@ -91,6 +114,15 @@ def deliver(items):
         time.sleep(15)
 
 
+def handle_batch(batch):
+    if failover_state() != 'minimax':  # re-checked every batch; dropped before the filter so its dedupe stays untouched
+        standing_by(len(batch))
+        return
+    items = [summary(l) for l in filtered([l for l in batch if not self_session(l)])]
+    if items:
+        deliver(items)
+
+
 def main():
     f = open(EVENTS)
     f.seek(0, os.SEEK_END)
@@ -104,11 +136,8 @@ def main():
         if os.path.getsize(EVENTS) < f.tell():  # rotated / truncated
             f.close(); f = open(EVENTS)
         if pending and time.time() - first >= BATCH_S:
-            kept = [l for l in pending if not self_session(l)]
-            pending, first = [], None
-            items = [summary(l) for l in filtered(kept)]
-            if items:
-                deliver(items)
+            batch, pending, first = pending, [], None
+            handle_batch(batch)
         time.sleep(1)
 
 
