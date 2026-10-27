@@ -9,7 +9,7 @@
 #   integrate cancel <id>                                                                only while it is still queued
 # Where: URL and token from ~/.config/mycodebox/config (url = ...) and ~/.config/mycodebox/token (a client added with
 # `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
-# Exit: 0 merged / deployed, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
+# Exit: 0 merged / deployed / CI superseded, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }

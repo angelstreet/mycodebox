@@ -1,6 +1,6 @@
 // The owner's feed must not drown in integration notices (owner, 2026-10-23): ~40 integration events in 3 h
 // filled the 50-item push feed and buried the one alert that mattered (a real question).
-// A merged/deployed notice waits for the periodic digest; returned / CI red / deploy failed / cancelled stay
+// A merged/deployed/superseded notice waits for the periodic digest; returned / CI red / deploy failed / cancelled stay
 // individual alerts; an owner question is always pushed on its own, with its tag.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -68,6 +68,14 @@ test('a returned, CI-red, deploy-failed or cancelled request stays an individual
   assert.equal(r.alerts.pendingDigest().length, 0, 'a failed request is never a digest item');
 });
 
+test('a superseded CI run needs nobody: it waits for the digest, like a merge', async () => {
+  const r = rig();
+  await r.notify(request({ id: 'int-1', state: 'merged_ci_superseded' }));
+  assert.equal(r.push.feedSince(0).length, 0, 'no feed slot for a superseded run');
+  assert.equal(r.alerts.pendingDigest().length, 1);
+  assert.equal(r.events.length, 1, 'the manager still wakes on it');
+});
+
 test('an owner question is pushed on its own, with its tag, and survives 100 integration notices', async () => {
   const r = rig();
   // the key the ask-guard and scripts/manager-ask.js use
@@ -84,7 +92,7 @@ test('the switch: manager.json integrationDigest (default on) can restore one fe
   assert.equal(integrationDigestEnabled({}), true);
   assert.equal(integrationDigestEnabled({ integrationDigest: true }), true);
   assert.equal(integrationDigestEnabled({ integrationDigest: false }), false);
-  assert.deepEqual(QUIET_STATES, ['merged', 'deployed']);
+  assert.deepEqual(QUIET_STATES, ['merged', 'deployed', 'merged_ci_superseded']);
   const r = rig({ digest: false });
   await r.notify(request({ id: 'int-1', state: 'merged' }));
   assert.equal(r.push.feedSince(0).length, 1);

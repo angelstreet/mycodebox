@@ -1494,9 +1494,17 @@ repository, run by the server in its own clone, one request at a time per repo (
   `POST /api/integration/requests/:id/cancel` (only while queued). A `v2/task/<id>` branch is merged only when the V2 store holds the owner's `integration:merge:*:<sha>` grant for the branch's exact SHA (otherwise the request is returned). `--approved-by` is accepted from a `manager` client or, by default, the loopback reporter token; `INTEGRATION_MANAGER_CLIENT_ONLY=1` removes the reporter-token path (the manager then needs a client token in its `~/.config/mycodebox/token`). `--migration-applied` (`migrationApplied`) needs the same gate.
 - **Migrations merge by effect (Q199, owner 2026-10-20; additive ones are free, owner 2026-10-21).** The migration floor reads what the diff ADDS, not the path: the lane classifies the added lines of every migration file (comments and blank lines ignored) and calls it **additive** only when they are `CREATE TABLE`, `CREATE INDEX` and `ALTER TABLE ... ADD COLUMN` (a non-SQL migration such as an alembic `.py` only when its operations are `op.create_table`, `op.create_index`, `op.add_column`); anything unreadable is not additive. An additive migration can always be applied and merged: the session applies it itself, then `integrate request <branch>` merges it with no `--approved-by` / `--migration-applied` (both still accepted, ignored) and journals a `merge` decision with `migrationAdditive: true` in the owner's "Decided for you" feed. Otherwise the request returns with `migration is destructive: DROP COLUMN in db/migrations/x.sql` (also `DROP TABLE`, `ALTER ... TYPE`, `RENAME`, `UPDATE`/`DELETE`/`INSERT`, `TRUNCATE`, `op.drop_*`). Destructive and unreadable migrations stay the owner's, as do secrets, sudoers, units, red tests and conflicts; the text filter matches a migration only when it is described as destructive.
 - **CLI** `scripts/integrate`: `request <branch> [--repo k] [--deploy scope] [--note t] [--approved-by who] [--migration-applied] [--wait]`, `status [<id>]`, `wait <id> [--timeout min]`, `cancel <id>`.
-  Exit codes: 0 merged / deployed, 1 error, 3 returned (reason printed), 4 merged but CI red or deploy failed, 5 service unreachable.
+  Exit codes: 0 merged / deployed / CI superseded, 1 error, 3 returned (reason printed), 4 merged but CI red or deploy failed, 5 service unreachable.
 - **States**: `queued`, `running`, then final `merged`, `deployed`, `returned` (reason + output tail; fix on the branch, request again), `merged_ci_red`
-  (already on the target, never reverted automatically; the manager decides), `deploy_failed`, `cancelled`.
+  (already on the target, never reverted automatically; the manager decides), `merged_ci_superseded`, `deploy_failed`, `cancelled`.
+- **CI superseded is not CI red** (`merged_ci_superseded`). A GitHub check run is CANCELLED when a newer commit lands on the same ref: the run says
+  nothing about the commit it ran on. When the merge commit is **no longer the target tip** (a newer commit exists on the target), the lane reports
+  `merged_ci_superseded` instead of `merged_ci_red`, and the session is told "your commit was superseded by `<sha>`; CI runs on the newer tip, nothing to
+  fix, do not branch again" (the reason carries the newer sha, the request keeps `supersededBy`). A cancelled run on the **current tip**, a failure, a
+  timeout, an `action_required`: the current red behaviour, unchanged.
+  The conservative half stays: a cancelled run means that commit was never verified green, so **a deploy stays held**. The deploy gate waits for the
+  newer tip's CI instead of calling this red: when the tip is green it carries the merge, so the deploy goes to the tip (`deploySha`); when the tip is
+  not green the request ends `merged_ci_superseded` with `deployHeld` and the deploy waits for the newer tip's CI.
 - **Steps** of a request: fetch, branch check, merge evaluation floor (sensitive files, conflicts), fresh worktree from `<remote>/<target>`, `git merge --no-ff`
   (convention files resolved by the repo's rule), the repo's test command, compare-and-swap push (target moved: re-merge, at most 3 times), CI on that
   commit, deploy (approved request, agent `integration:<id>`, through the deploy registry; `integration-deploys.js`).
@@ -1515,7 +1523,7 @@ repository, run by the server in its own clone, one request at a time per repo (
 - **Routine notices stay out of the owner's feed (owner 2026-10-23).** The push feed keeps 50 items and every integration event took one, so ~40
   events in 3 h buried the one alert that mattered. A **merged** or **deployed** request therefore takes **no feed slot**: it waits for the periodic
   digest (one `ghosty-digest` entry, tag `ghosty-digest`). `returned`, `merged_ci_red`, `deploy_failed` and `cancelled` stay individual feed entries
-  (they need the owner). `manager-events.jsonl` is unchanged: the manager still wakes on every one of them (`integration:<id>:<state>`).
+  (they need the owner). `merged_ci_superseded` needs nobody (the merge is on the target and CI runs on the newer tip), so it waits for the digest too. `manager-events.jsonl` is unchanged: the manager still wakes on every one of them (`integration:<id>:<state>`).
   Switch: `manager.json` `integrationDigest` (default **on**; `false` restores one feed entry per event). The Integration view (`/?integration=1`)
   stays the full history of every request.
 - **Own-job wake**: `STATUS: waiting: integration <id>` is the session's own job (`job-refs.js`, never a needs-you stop); `own-jobs.js` reads the request

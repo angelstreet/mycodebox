@@ -17,7 +17,7 @@ import { integrationText } from './integration-notify.js';
 export const PREFIX = '/api/integration';
 export const MAX_WAIT_S = 30;
 const STATUS = { E_INVALID: 400, E_NOT_FOUND: 404, E_STATE: 409 };
-export const EXIT = { merged: 0, deployed: 0, returned: 3, cancelled: 3, merged_ci_red: 4, deploy_failed: 4 };
+export const EXIT = { merged: 0, deployed: 0, returned: 3, cancelled: 3, merged_ci_red: 4, merged_ci_superseded: 0, deploy_failed: 4 };
 
 // One line for a session / the CLI: the notify path's own wording (integrationText) for a final state.
 export function describe(r) {

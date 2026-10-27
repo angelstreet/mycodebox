@@ -2526,7 +2526,7 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 // ===== INTEGRATION BLOCK (round 13, docs/v2/INTEGRATION-LANE.md; integration-lane.js, integration-routes.js) =====
 // Sessions hand a pushed branch to the lane (scripts/integrate); it merges, tests, pushes, waits for CI and deploys.
 // `integrationHooks` is the seam for the rest of the wiring: notify(request, event) fires on every transition (event.final is true on a
-// final state: merged, deployed, returned, merged_ci_red, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
+// final state: merged, deployed, returned, merged_ci_red, merged_ci_superseded, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
 const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut: () => managerConfig().mergeOptOut,
   // only a manager session may pass --approved-by / --migration-applied; any other session's claim is ignored (2026-10-20)

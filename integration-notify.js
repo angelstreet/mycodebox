@@ -6,14 +6,15 @@
 // request (lane): { id, repo, branch, target, session, deployScope, deployed { id, version, env, scope }, state, sha, reason, tail,
 //                    endedAt (ISO, on final), createdAt/startedAt/updatedAt (ISO), live { step, tail } (while running) };
 // the session side reads different names — `normRequest(r)` maps the lane shape onto the names below.
-export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled'];
+export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled'];
 export const isFinal = (state) => FINAL_STATES.includes(state);
 
 // Integration notices that must NOT take a slot in the owner's push feed: a merge or a deploy is routine.
 // (owner 2026-10-23: ~40 integration events in 3 h filled the 50-item feed and buried the one alert that
-// mattered.) These two wait for the periodic digest instead. Everything else stays an individual alert:
+// mattered.) These wait for the periodic digest instead. Everything else stays an individual alert:
 // returned, deploy_failed, merged_ci_red and cancelled all need the owner.
-export const QUIET_STATES = ['merged', 'deployed'];
+// merged_ci_superseded needs nobody: the commit is on the target and CI runs on the newer tip. It waits for the digest too.
+export const QUIET_STATES = ['merged', 'deployed', 'merged_ci_superseded'];
 export const isQuietState = (state) => QUIET_STATES.includes(String(state || ''));
 
 // Pure: the manager.json switch. `integrationDigest` (default true) = the quiet states go into the digest
@@ -59,15 +60,18 @@ export function integrationText(r) {
   const reason = one(n.reason) || 'no reason recorded';
   const rollback = n.rollback ? ` Rollback: ${one(n.rollback)}` : '';
   const sd = n.selfDeploy && typeof n.selfDeploy === 'object' ? n.selfDeploy : null;
+  // a merge whose CI run was cancelled by a newer commit on the target: the session must not chase it again
+  const sup = n.supersededBy ? ` Your commit was superseded by ${sha12(n.supersededBy)}; CI runs on the newer tip, nothing to fix, do not branch again.` : '';
   switch (n.state) {
-    case 'merged': return `Integration ${id}: merged ${where(n)}.`;
-    case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)})${sd.note ? `, ${one(sd.note)}` : ''}.${rollback}`;
-      return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}.`;
+    case 'merged': return `Integration ${id}: merged ${where(n)}.${sup}`;
+    case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)})${sd.note ? `, ${one(sd.note)}` : ''}.${rollback}${sup}`;
+      return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}.${sup}`;
     case 'returned': {
       const t = tailLines(n.tail);
       return `Integration ${id} returned: ${reason.replace(/[.\s]+$/, '')}. Fix it on your branch and run integrate request again.${t ? `\n${t}` : ''}`;
     }
     case 'merged_ci_red': return `Integration ${id}: merged ${where(n)} but CI is red (${reason.replace(/[.\s]+$/, '')}). The merge stays on ${one(n.target) || 'the target'}; the manager decides, do not revert it yourself.`;
+    case 'merged_ci_superseded': return `Integration ${id}: merged ${where(n)}, but its CI run was superseded by ${sha12(n.supersededBy) || 'a newer commit'} on ${one(n.target) || 'the target'}. CI runs on the newer tip: nothing to fix, do not branch again.${n.deployHeld ? ' The deploy you asked for waits for the newer tip CI.' : ''}`;
     case 'deploy_failed': return `Integration ${id}: merged ${where(n)} but the ${sd ? 'live ghosty ' : ''}deploy failed (${reason.replace(/[.\s]+$/, '')}). The manager decides what happens next.${rollback}`;
     case 'cancelled': return `Integration ${id} cancelled.`;
     default: return null;
@@ -80,7 +84,7 @@ export function integrationNotice(r) {
   const id = one(n.id), what = `${one(n.branch) || '?'} -> ${one(n.target) || '?'}`;
   const title = {
     merged: `Integration ${id} merged: ${what}`, deployed: `Integration ${id} deployed: ${what}`, returned: `Integration ${id} returned: ${what}`,
-    merged_ci_red: `Integration ${id} merged, CI red: ${what}`, deploy_failed: `Integration ${id} merged, deploy failed: ${what}`, cancelled: `Integration ${id} cancelled: ${what}`,
+    merged_ci_red: `Integration ${id} merged, CI red: ${what}`, merged_ci_superseded: `Integration ${id} merged, CI superseded: ${what}`, deploy_failed: `Integration ${id} merged, deploy failed: ${what}`, cancelled: `Integration ${id} cancelled: ${what}`,
   }[n.state] || `Integration ${id}: ${n.state}`;
   const t = n.state === 'returned' ? tailLines(n.tail, { lines: 3, chars: 240 }) : '';
   const body = [integrationText(r)?.split('\n')[0], t].filter(Boolean).join('\n').slice(0, 600);
