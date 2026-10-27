@@ -2781,3 +2781,8 @@ body.reading #topbar, body.reading #health, body.reading #filterBar, body.readin
 /* reading (full screen card) hides the operator strips; the disk banner is one of them */
 body.reading #diskBanner{ display:none !important; }
 .dk-note{ margin:0; font-size:13px; color:var(--ink-2); line-height:1.45; }
+
+.uv-bar{ height:8px; border-radius:4px; background:var(--bg-3); overflow:hidden; margin:4px 0; }
+.uv-bar>i{ display:block; height:100%; background:var(--accent); }
+.uv-bar.sm{ height:4px; }
+.chip-m.late{ color:#ffc24d; background:rgba(255,194,77,0.16); }
