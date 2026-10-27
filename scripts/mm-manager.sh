@@ -19,6 +19,7 @@
 #   MCODE              ~/.local/bin/mcode
 #   NODE_BIN           ~/.local/node-v24.21.0-linux-x64/bin
 #   MCODE_TIMEOUT      10m
+#   FAILOVER_STATE     ~/handovers/notes/.failover-state  (tail mode drops batches unless it says `minimax`)
 
 set -u
 
@@ -549,6 +550,10 @@ while [ "$stopping" -eq 0 ]; do
     [ -z "$extra" ] && continue
     events+=("$extra")
   done
+  # Standby gate (owner, 2026-10-27): no model call unless the failover state is `minimax` (missing/unreadable = claude).
+  if [ "$(tr -d '[:space:]' < "${FAILOVER_STATE:-$HOME/handovers/notes/.failover-state}" 2>/dev/null)" != "minimax" ]; then
+    events=(); continue
+  fi
   batch_id=$(gen_batch_id)
   # A failed batch must never kill the loop.
   process_batch "$batch_id" "${events[@]}" || echo "mm-manager: batch $batch_id failed" >&2
