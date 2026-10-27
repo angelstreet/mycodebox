@@ -11,7 +11,7 @@ function harness(cfg = {}, extra = {}) {
   const clock = { t: Date.UTC(2026, 9, 14, 12, 0, 0), m: 5000 };
   const dir = tmp('lease-svc-');
   const events = [];
-  const open = (more = {}) => createLeaseService({ dir, now: () => clock.t, onEvent: (e) => events.push(e), ...extra, ...more, config: { mono: () => clock.m, envs: ['env-a', 'env-b'], ...cfg, ...(more.config || {}) } });
+  const open = (more = {}) => createLeaseService({ dir, now: () => clock.t, onEvent: (e) => events.push(e), ...extra, ...more, config: { mono: () => clock.m, envs: ['env-a', 'env-b'], maxClaimMin: 1e6, ...cfg, ...(more.config || {}) } });
   const h = { clock, dir, events, open, svc: open() };
   h.advance = async (ms) => { clock.t += ms; clock.m += ms; await h.svc.tick(); };
   h.claim = (agent, resources, o = {}) => h.svc.claim({ env: 'env-a', resources: [].concat(resources), agent, ...o });

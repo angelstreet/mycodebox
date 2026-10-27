@@ -158,7 +158,7 @@ There is exactly one implementation of these rules, in
 
 ## 5. No ghost holds
 
-- **TTL plus heartbeat.** A lease has a TTL (default 120 min, cap 8 h; a longer one needs `--ttl` and is shown in
+- **TTL plus heartbeat.** A lease has a TTL (default 120 min, cap 8 h; since 2026-10-27 a hard 60 min per claim for non-system leases, see docs/LEASE-RULES.md; formerly a longer one needed `--ttl` and was shown in
   amber). Heartbeats are opt-in: a lease that declares a heartbeat interval (as `vpt-lease run` does) is released and
   logged when three heartbeats are missed; a plain `claim; work; release` (the legacy pattern, and every imported lease)
   keeps the TTL and the idle rule below as its only reclaimers, so existing scripts keep working.

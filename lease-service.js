@@ -126,7 +126,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
-    defaultPriority: 'P1', lowPriority: 'P2', lowPriorityMaxTtlMin: 10, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
+    defaultPriority: 'P1', lowPriority: 'P2', lowPriorityMaxTtlMin: 10,
+    // Hard cap (owner 2026-10-27): no claim or renewal of a non-system lease gets more than `maxClaimMin`, and while anyone waits the continuous hold
+    // (since the claim began) may not pass it either. System leases (deploy runner, `exempt`) keep their own limits.
+    maxClaimMin: 60, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
   };
@@ -503,6 +506,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     if (!l || l.mode !== 'exclusive' || !isLow(l)) return [];
     return waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && prioRank(prioOf(tk)) < prioRank(prioOf(l)) && leasesConflict(tk, l));
   }
+  // Anyone waiting on this lease: a ticket (any priority) or a queued deploy that it blocks. Drives the continuous-hold limit.
+  function holdWaiters(l) {
+    const w = waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && leasesConflict(tk, l)).map((tk) => tk.agent);
+    for (const d of S.deploys) if (d.env === l.env && (d.state === 'queued' || d.state === 'awaiting-approval') && deployBlockers(d).blockers.some((b) => b.id === l.id)) w.push(`deploy ${d.id}`);
+    return w;
+  }
   const yieldFail = (l, ws) => fail('E_YIELD_REQUIRED', `yield_required: a ${prioOf(ws[0])} claim (${ws.map((w) => w.agent).slice(0, 3).join(', ')}) waits on ${l.env}/${l.resources.join(',')} and this ${prioOf(l)} lease may not be extended: stop at the next turn boundary and release (vpt-lease release ${l.id})`,
     { reason: 'yield_required', lease: l.id, priority: prioOf(l), waiting: ws.map((w) => ({ id: w.id, agent: w.agent, priority: prioOf(w) })) });
   // once per lease: tell the holder (event kind `yield`) as soon as a claim that outranks it waits; cleared again when none waits
@@ -600,8 +609,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     if (!priority) { priority = cfg.defaultPriority; prioritySrc = 'default'; }
     const system = a.exempt === true;
     let ttlClampedFrom = null;
+    if (!system && !a.deploy_id && ttlMin > cfg.maxClaimMin) {
+      ttlClampedFrom = ttlMin; ttlMin = cfg.maxClaimMin;
+      warnings = [`ttl clamped from ${ttlClampedFrom} to ${ttlMin} min: max ${cfg.maxClaimMin} min per claim, release when your step is done and re-queue for the next step`];
+    }
     if (!system && !a.deploy_id && prioRank(priority) >= prioRank(cfg.lowPriority) && ttlMin > cfg.lowPriorityMaxTtlMin) {
-      ttlClampedFrom = ttlMin; ttlMin = cfg.lowPriorityMaxTtlMin;
+      ttlClampedFrom = ttlClampedFrom ?? ttlMin; ttlMin = cfg.lowPriorityMaxTtlMin;
       warnings = [`ttl clamped from ${ttlClampedFrom} to ${ttlMin} min: a ${priority} lease is capped at ${cfg.lowPriorityMaxTtlMin} min per claim and cannot be renewed while a claim of higher priority waits`];
     }
     return {
@@ -767,6 +780,18 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (ws.length) return yieldFail(l, ws);                // the yield event itself was emitted by yieldSweep
       if (isLow(l) && tt.ttl > cfg.lowPriorityMaxTtlMin) { tt.warnings = [`ttl clamped from ${tt.ttl} to ${cfg.lowPriorityMaxTtlMin} min (${prioOf(l)} lease)`]; tt.ttl = cfg.lowPriorityMaxTtlMin; }
       const t = now();
+      if (!l.system && !l.deployId) {
+        if (tt.ttl > cfg.maxClaimMin) { tt.warnings = [...tt.warnings, `ttl clamped from ${tt.ttl} to ${cfg.maxClaimMin} min: max ${cfg.maxClaimMin} min per claim`]; tt.ttl = cfg.maxClaimMin; }
+        // continuous hold <= maxClaimMin when anyone waits (fair rotation); a lease older than that (incl. pre-cap 240 min ones) is not shortened, just not extended
+        if (l.mode === 'exclusive') {
+          const hw = holdWaiters(l);
+          if (hw.length) {
+            const left = Math.floor((l.since + cfg.maxClaimMin * MIN - t) / MIN);
+            if (left <= 0) return fail('E_HOLD_CAP', `hold cap: ${hw.slice(0, 3).join(', ')} waits and this lease has been held over ${cfg.maxClaimMin} min: release (vpt-lease release ${l.id}) and queue again for the next step`, { reason: 'hold_cap', lease: l.id, waiting: hw.slice(0, 5) });
+            if (tt.ttl > left) { tt.warnings = [...tt.warnings, `ttl clamped from ${tt.ttl} to ${left} min: someone waits, continuous hold is capped at ${cfg.maxClaimMin} min`]; tt.ttl = left; }
+          }
+        }
+      }
       emit({ t: 'renew', id: l.id, expires: t + tt.ttl * MIN, ttlMin: tt.ttl, at: t });
       return { ok: true, lease: leaseView(S.leases[l.id]), ...(tt.warnings.length ? { warnings: tt.warnings } : {}) };
     });
