@@ -15,6 +15,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Look up settings and behavior | [Technical reference](REFERENCE.md) | Environment settings, feature APIs and implementation details |
 | Work hands-free (phone, car, gym) | [Voice](VOICE.md) | Voice mode page, spoken digest, notification buttons, headset controls and platform limits |
 | Put a Mac's Claude Code sessions under the manager | [Mac Stop hook](MAC-HOOK.md) | Hook install, token, answer channel, privacy and how to disable |
+| Install the Mac desktop app | [Desktop app](DESKTOP.md) | Electron wrapper, unsigned .dmg build, first-run address, certificate and notification behaviour |
 | Configure native HTTPS | [Certificates](../certs/README.md) | Certificate files, trust and renewal |
 | Try or upgrade to V2 (opt-in task engine) | [README roadmap](../README.md#current-capabilities--v2-roadmap), [Migration](v2/MIGRATION.md), [Scoring](v2/SCORING.md) | What is shipped vs planned, upgrade and rollback notes, per-model scoring report |
 - [Harness review 2026-10-14](v2/reviews/HARNESS-REVIEW-2026-10-14.md): where the owner was stopped, how long sessions waited, ranked fixes (input to V2 rounds 8 and 9).

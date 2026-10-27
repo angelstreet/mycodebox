@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>mycodebox</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+  body{margin:0;height:100vh;display:grid;place-items:center;background:#0f1014;color:#e6e6ea;font:15px -apple-system,system-ui,sans-serif}
+  main{width:min(460px,90vw)} h1{font-size:20px;margin:0 0 8px} p{color:#9a9aa6;line-height:1.45}
+  input{width:100%;box-sizing:border-box;padding:10px 12px;font-size:15px;border-radius:8px;border:1px solid #33343d;background:#181920;color:inherit}
+  button{margin-top:12px;padding:9px 18px;font-size:15px;border:0;border-radius:8px;background:#5b8cff;color:#fff;cursor:pointer}
+  #err{color:#ff7a7a;min-height:1.4em;margin-top:8px}
+</style></head><body><main>
+<h1>Connect to your mycodebox</h1>
+<p>Enter the address of your dashboard on your tailnet, for example <code>https://your-host.your-tailnet.ts.net:7443</code>. It is stored on this Mac only.</p>
+<form id="f"><input id="a" autofocus spellcheck="false" placeholder="https://&lt;tailscale-host&gt;:7443"><button>Connect</button></form>
+<div id="err"></div>
+</main><script>
+const a = document.getElementById('a'), err = document.getElementById('err');
+window.desktop.current().then((c) => { if (c) a.value = c; });
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault(); err.textContent = '';
+  const r = await window.desktop.save(a.value);
+  if (r && r.error) err.textContent = r.error;
+});
+</script></body></html>

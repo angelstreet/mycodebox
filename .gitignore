@@ -10,3 +10,6 @@ public/codebox.apk
 .certs-bak/
 .manager-s4.md
 __pycache__/
+
+desktop/node_modules/
+desktop/dist/

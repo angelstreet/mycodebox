@@ -9,7 +9,8 @@
     <a href="#features"><b>Features</b></a> •
     <a href="#current-capabilities--v2-roadmap"><b>V2 roadmap</b></a> •
     <a href="docs/INSTALL.md"><b>Install (with an AI agent)</b></a> •
-    <a href="docs/REFERENCE.md"><b>Reference</b></a>
+    <a href="docs/REFERENCE.md"><b>Reference</b></a> •
+    <a href="docs/DESKTOP.md"><b>Mac desktop app</b></a>
   </p>
 </div>
 
