@@ -42,7 +42,14 @@ or `mac:<name>`.
 
 - Heartbeat: `run` does it for you; otherwise `vpt-lease heartbeat <id> --active` while you use the resource. Only `run` and
   other heartbeating leases (those that declared a heartbeat interval) are released when their heartbeats stop; a plain
-  `claim; work; release` keeps working and is bounded by its TTL. A heartbeating or dashboard-tracked (codebox session) exclusive lease with no activity
+  `claim; work; release` keeps working and is bounded by its TTL.
+- **Holder death (owner 2026-10-27):** a dead holder never blocks a device. The service records a local holder pid with its start time: the
+  claim's `holder_pid` (`vpt-lease claim ... --holder-pid <pid>` or `$VPT_HOLDER_PID`; pass the pid of the long-lived dispatcher/script, never
+  of a shell that exits after the claim) or the `-<pid>` of an agent named `codebox:<name>-<pid>`. If that process is gone, or the pid now has
+  another start time (reuse), on 2 consecutive checks 30 s apart, the lease is released with reason `holder-gone`, journaled in the lease events
+  and the owner feed ("released stale lease X: holder pid N is gone"). Only exclusive, non-system, non-deploy leases; a pid that was not alive at
+  claim time, a pid from another host, `pin`/`observe` leases and leases without a pid keep TTL behaviour. `mac:*` agents are on another
+  machine: they rely on `heartbeat_s` (`vpt-lease run`) and TTL only. Never release another holder's lease by hand: this does it. A heartbeating or dashboard-tracked (codebox session) exclusive lease with no activity
   for 20 minutes becomes a pin.
 - Release as soon as the work is done: `vpt-lease release <id>`. Do not park a lease "for later".
 - A session whose STATUS is `waiting` or `blocked` never keeps an exclusive lease: release it first, claim again when
