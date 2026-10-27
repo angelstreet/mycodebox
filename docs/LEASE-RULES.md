@@ -48,6 +48,19 @@ or `mac:<name>`.
   you can work. Downgrade to a pin with `vpt-lease mode <id> pin` if you only need the state kept.
 - Narrow, do not hold broad: `vpt-lease narrow <id> --kind host` once a server restart no longer matters.
 
+## No lease over 60 minutes (owner, 2026-10-27)
+
+- **Cap:** a claim or renewal never gets a TTL above **60 minutes**, for every kind (device, host, server, env-wide, pin). A longer `--ttl` is
+  clamped; the response carries `ttl_clamped_from` and `vpt-lease` prints "max 60 min per claim: release when your step is done and re-queue
+  for the next step". The lower of this cap and the priority cap (10 min for P2/P3) wins. Deploy runner leases are system leases and keep
+  their own limits.
+- **Renewal:** allowed while you heartbeat and nobody waits. When anyone waits (a ticket, a queued deploy) the continuous hold, counted from the
+  claim, may not pass 60 minutes: `renew` is clamped to that point, then refused (`hold_cap`, exit 7 like `yield_required`): release and queue
+  again (fair rotation).
+- **Long work** (a 3 h walk) is split into steps that each claim, run, release, re-queue.
+- **Leases that exist at the change** are not shortened or killed. They just cannot be renewed past 60 minutes of continuous hold while
+  someone waits; a renewal without a waiter is clamped to 60 minutes from now.
+
 ## Priority: P2 and P3 leases are short, and yield to a higher priority
 
 Every lease and ticket carries the holder's priority P0 (highest) to P3 (background): `--priority P0|P1|P2|P3` on `claim` and `run`, else the

@@ -32,7 +32,7 @@ import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
 BUSY, PENDING, UNAVAILABLE = 3, 4, 5
-YIELD = 7        # renew refused: a claim of higher priority waits on a P2 lease (service code E_YIELD_REQUIRED)
+YIELD = 7        # renew refused: a claim of higher priority waits on a P2 lease (service codes E_YIELD_REQUIRED, E_HOLD_CAP)
 SCOPES = ("frontend", "host", "server", "full")
 KINDS = ("server", "host", "run", "maintenance")
 KIND_ALIASES = {"run": "server", "maintenance": "host"}
@@ -414,8 +414,10 @@ def granted(a, r, wanted, kind):
     for w in claim_warnings(a.env.lower(), wanted, kind, a.ttl, bool(lease.get("long"))):
         eprint(w)
     if lease.get("ttl_clamped_from"):
-        eprint("⚠ --ttl %s min clamped to %s min: this is a %s lease (max 10 min per claim; it cannot be renewed while a claim of "
-               "higher priority waits)" % (lease["ttl_clamped_from"], lease.get("ttl_min"), lease.get("priority")))
+        eprint("⚠ --ttl %s min clamped to %s min: max 60 min per claim: release when your step is done and re-queue for the next step"
+               % (lease["ttl_clamped_from"], lease.get("ttl_min")))
+        if lease.get("ttl_min") is not None and lease["ttl_min"] < 60:
+            eprint("  (this is a %s lease: max %s min per claim; it cannot be renewed while a claim of higher priority waits)" % (lease.get("priority"), lease.get("ttl_min")))
     if not a.agent.startswith(("codebox:", "mac:")) and a.agent != "manager:deploy" and not a.agent.startswith("update_core:"):
         eprint("⚠ agent %r is not codebox:<tmux session> or mac:<name>: the dashboard cannot link this lease to a "
                "session (it counts as an unknown holder); use AGENT=\"codebox:$(tmux display-message -p '#S')\"" % a.agent)
@@ -585,7 +587,7 @@ def cmd_renew(a):
     r = api("POST", "/renew", {"id": a.lease_id, "ttl_min": a.ttl})
     if not r.get("ok"):
         rc = fail(r, "no such active lease")
-        return YIELD if r.get("code") == "E_YIELD_REQUIRED" else rc
+        return YIELD if r.get("code") in ("E_YIELD_REQUIRED", "E_HOLD_CAP") else rc
     exp = to_epoch((r.get("lease") or {}).get("expires_at")) or now() + a.ttl * 60
     print("renewed until %s" % fmt(exp))
     return 0
@@ -1013,7 +1015,7 @@ class HeartbeatThread(threading.Thread):
                     # a heartbeat does not extend expires: renew like the ssh path, so a run outlives its ttl (a P2 lease is
                     # capped at 10 min by the service and refused while a claim of higher priority waits)
                     rr = api("POST", "/renew", {"id": self.lease_id, "ttl_min": self.renew_ttl}, timeout=10)
-                    if rr.get("code") == "E_YIELD_REQUIRED":
+                    if rr.get("code") in ("E_YIELD_REQUIRED", "E_HOLD_CAP"):
                         self.say_yield()
                     elif not rr.get("ok"):
                         eprint("vpt-lease: renew failed (%s); keep going" % rr.get("code"))
@@ -1291,7 +1293,7 @@ def build_parser():
     def claim_args(c):
         c.add_argument("env"); c.add_argument("resources", nargs="+")
         c.add_argument("--agent", required=True); c.add_argument("--purpose", default="")
-        c.add_argument("--ttl", type=int, default=120, help="minutes (default 120)")
+        c.add_argument("--ttl", type=int, default=120, help="minutes (default 120, clamped to max 60 per claim: release when the step is done and re-queue)")
         c.add_argument("--provider", default="")
         c.add_argument("--kind", choices=KINDS, default=None)
         c.add_argument("--shared", action="store_true")
