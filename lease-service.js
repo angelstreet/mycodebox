@@ -129,7 +129,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     defaultPriority: 'P1', lowPriority: 'P2', lowPriorityMaxTtlMin: 10,
     // Hard cap (owner 2026-10-27): no claim or renewal of a non-system lease gets more than `maxClaimMin`, and while anyone waits the continuous hold
     // (since the claim began) may not pass it either. System leases (deploy runner, `exempt`) keep their own limits.
-    maxClaimMin: 60, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
+    maxClaimMin: 60, overCapGraceMs: 10 * MIN, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
   };
@@ -192,7 +192,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         }
         break;
       }
-      case 'renew': { const l = S.leases[f.id]; if (l) { l.expires = f.expires; l.ttlMin = f.ttlMin; l.lastHb = f.at; } break; }
+      case 'renew': { const l = S.leases[f.id]; if (l) { l.expires = f.expires; l.ttlMin = f.ttlMin; l.lastHb = f.lastHb ?? f.at; } break; }
       case 'hb': { const l = S.leases[f.id]; if (l) { l.lastHb = f.at; l.reservedUntil = null; const c = clk.get(l.id); if (c) { c.hb = mono(); if (f.active) c.act = mono(); } } break; }
       case 'yield': { const l = S.leases[f.id]; if (l) { if (f.clear) delete l.yieldAt; else { l.yieldAt = f.at; ev('yield', l, f.at, { priority: prioOf(l), waiting: f.waiting, reason: 'a claim of higher priority is waiting: stop at the next turn boundary and release' }); } } break; }
       case 'collect': { const l = S.leases[f.id]; if (l) l.reservedUntil = null; break; }
@@ -471,6 +471,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     for (const l of Object.values({ ...S.leases })) {
       const rel = (why, reason, by = 'system') => emit({ t: 'release', ids: [l.id], why, reason, by, at: t });
       if (l.expires <= t) { rel('expired', 'ttl'); continue; }
+      // owner 2026-10-27 ("never 240 min"): a lease from before the cap is cut back to claim + maxClaimMin (graceMs to wrap up if that is past)
+      if (!l.system && !l.deployId && l.expires > t + cfg.maxClaimMin * MIN) {
+        const to = Math.max(l.since + cfg.maxClaimMin * MIN, t + cfg.overCapGraceMs);
+        if (to < l.expires) emit({ t: 'renew', id: l.id, expires: to, ttlMin: Math.min(l.ttlMin, cfg.maxClaimMin), at: t, lastHb: l.lastHb });
+      }
       const c = clk.get(l.id) || (clk.set(l.id, { hb: mono(), act: mono() }), clk.get(l.id));
       const m = mono();
       if (l.reservedUntil && l.reservedUntil <= t) {                       // a ticket grant nobody collected
