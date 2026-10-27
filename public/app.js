@@ -16,6 +16,7 @@ import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
+import { anthropicChips } from '/anthropic-chips.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { uploadOne } from '/upload.js';
@@ -733,6 +734,8 @@ function connectStatus() {
         onDisk(msg.disk);
       } else if (msg.type === 'quota') {
         onQuota(msg.quota);
+      } else if (msg.type === 'anthropic') {
+        state.anthropic = msg.anthropic; onQuota(state.quota);
       } else if (msg.type === 'credits') {
         state.credits = msg.credits; onQuota(state.quota);
       }
@@ -2921,7 +2924,7 @@ const winShort = (n) => (n === 'week' ? 'wk' : n === 'month' ? 'mo' : n);
 function onQuota(q) {
   state.quota = q;
   const el = els.quota;
-  const chip = creditChip(state.credits);
+  const chip = [creditChip(state.credits), anthropicChips(state.anthropic)].filter(Boolean).join('<i class="sep">&middot;</i>');
   if (!q || !q.plans?.length) { if (chip) { el.className = `quota ok${el.classList.contains('inbar') ? ' inbar' : ''}`; el.innerHTML = chip; } else el.classList.add('hidden'); return; }
   const parts = q.plans.map((p) => {
     const short = p.plan;

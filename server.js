@@ -122,6 +122,7 @@ import { createSessionHistory } from './session-history.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota } from './quota.js';
 import { createCredits } from './credits.js';
+import { createAnthropicSpend } from './anthropic-spend.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
@@ -1055,6 +1056,7 @@ const rulesWatch = createRulesWatch({
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
+const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, adminKey: process.env.ANTHROPIC_ADMIN_KEY || '', teamCreditUsd: Number(process.env.ANTHROPIC_TEAM_CREDIT_USD || 1000), teamSince: process.env.ANTHROPIC_TEAM_CREDIT_SINCE || '', onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
@@ -2332,6 +2334,7 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/jev-ai') return json(res, 200, { ...await jevAiTab(), credits: await credits.get() });
   if (req.method === 'GET' && p === '/api/credits') return json(res, 200, await credits.get());
+  if (req.method === 'GET' && p === '/api/anthropic-spend') return json(res, 200, await anthropicSpend.get() || { ok: false });
   if (req.method === 'GET' && p === '/api/decisions') {
     const q = url.searchParams;
     return json(res, 200, await decisionsView({ usage: q.get('usage') || '', ok: q.get('ok') || '', hasOutcome: q.get('has_outcome') || '', minConf: q.get('min_conf') || '',
@@ -2606,6 +2609,7 @@ server.on('upgrade', (req, socket, head) => {
       if (health) ws.send(JSON.stringify({ type: 'health', health }));
       ws.send(JSON.stringify({ type: 'deploys', deploys: deployRunner.snapshot() }));
       if (credits.peek()) ws.send(JSON.stringify({ type: 'credits', credits: credits.peek() }));
+      if (anthropicSpend.peek()) ws.send(JSON.stringify({ type: 'anthropic', anthropic: anthropicSpend.peek() }));
       if (quota.get().at) ws.send(JSON.stringify({ type: 'quota', quota: quota.get() }));
       ws.on('close', () => statusSubs.delete(ws));
       ws.on('message', () => {}); // no-op
@@ -2805,6 +2809,7 @@ server.listen(PORT, HOST, async () => {
   workerAutoClose.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
+  anthropicSpend.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:
   // ONE alert (digest tier) + the jev:down event (the alert feeds the manager feed), and a jev:up event when it closes.
   const jevBreakerTick = () => jevBreaker.announce(({ kind, state }) => {

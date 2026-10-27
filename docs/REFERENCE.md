@@ -1203,6 +1203,8 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
 | `CLAUDE_PROJECTS_DIR` / `CODEX_SESSIONS_DIR` / `MINIMAX_DB` | under `$HOME` | source locations |
 | `MINIMAX_DEFAULT_MODEL` | `MiniMax-M3` | MiniMax model used only when session-history knows no launch for that cwd/ts |
 | `OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode sqlite; only the `message` table is read (read-only, scalar columns via `json_extract`, never text) |
+| `ANTHROPIC_ADMIN_KEY` | unset | an `sk-ant-admin` key (put it in `.env` yourself): turns on the team-credit chip (`team $N left`) from the Admin API cost report. Never logged or sent anywhere else |
+| `ANTHROPIC_TEAM_CREDIT_USD` / `ANTHROPIC_TEAM_CREDIT_SINCE` | `1000` / unset | the Console credit given to the team and the date it was granted (`2026-10-01`); the chip shows credit minus spend since then. No date, no chip |
 | `OPENCODE_METERED_PROVIDERS` | `openrouter,anthropic,openai,google,xai` | providers whose OpenCode `cost` is recorded; others stay unknown (null) |
 | `USAGE_PRICES` | `usage/prices.json` | price table |
 
@@ -1530,3 +1532,7 @@ repository, run by the server in its own clone, one request at a time per repo (
   from the lane and types the same text when it reaches a final state.
 - **View**: More menu "Integration" (`/?integration=1`, `public/integration-view.js`): per repo the queue (position, branch, session, requested deploy), the
   running request with its step and live output tail, recent results; a queued request is cancelled with a second tap.
+
+### Anthropic money chips (owner, 2026-10-27)
+
+`anthropic-spend.js` pulls at most once an hour (the disk cache `anthropic-spend.json` survives a restart): the Claude Max account's monthly extra-usage budget (`extra €180 left`, from `api.anthropic.com/api/oauth/usage` with the Claude Code login token, read in the server only) and, with `ANTHROPIC_ADMIN_KEY`, the team credit (`team $750 left`). `GET /api/anthropic-spend` returns the cached reading; a failed pull keeps the last good one, marked stale; an expired Claude login shows no chip.
