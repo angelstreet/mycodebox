@@ -1,8 +1,6 @@
-// Anthropic money, read at most once an hour (owner, 2026-10-27), cached on disk so a restart never refetches early:
-//  - extra: the Claude Max account's monthly extra-usage limit and what is used (the same figures /usage shows), from
+// The Claude Max extra-usage budget, read at most once an hour (owner, 2026-10-27), cached on disk so a restart never refetches early:
+// The Claude Max account's monthly extra-usage limit and what is used (the same figures /usage shows), from
 //    GET api.anthropic.com/api/oauth/usage with the Claude Code login token (read here, never logged or sent anywhere else);
-//  - team: the Console credit given to a team (e.g. $1000), as credit - spend since the grant, from the Admin API cost
-//    report. Only with ANTHROPIC_ADMIN_KEY (an sk-ant-admin key the owner puts in .env) and ANTHROPIC_TEAM_CREDIT_SINCE.
 import { promises as fs } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -19,15 +17,8 @@ export function normalizeExtra(j) {
   return { limit: limit / k, used: used / k, left: (limit - used) / k, currency: String(e.currency || 'USD'), enabled: e.is_enabled !== false, reason: e.disabled_reason || null };
 }
 
-// cost_report pages: data[].results[].amount is a decimal string in cents
-export function sumCostReport(pages) {
-  let cents = 0;
-  for (const p of pages) for (const b of p?.data || []) for (const r of b.results || []) cents += num(r.amount) || 0;
-  return cents / 100;
-}
-
 export function createAnthropicSpend({
-  stateDir, credentialsFile = join(homedir(), '.claude', '.credentials.json'), adminKey = '', teamCreditUsd = 1000, teamSince = '',
+  stateDir, credentialsFile = join(homedir(), '.claude', '.credentials.json'),
   fetchFn = (...a) => fetch(...a), now = () => Date.now(), ttlMs = HOUR, onChange = () => {},
 } = {}) {
   const ttl = Math.max(HOUR, ttlMs);   // never more than one pull an hour
@@ -49,30 +40,12 @@ export function createAnthropicSpend({
       return v ? { value: v } : { error: 'no extra-usage figure' };
     } catch (e) { return { error: e.message }; }
   }
-  async function loadTeam() {
-    if (!adminKey || !teamSince) return null;   // not configured: no chip
-    try {
-      const pages = []; let next = null;
-      for (let i = 0; i < 12; i++) {
-        const q = new URLSearchParams({ starting_at: new Date(teamSince).toISOString(), bucket_width: '1d', limit: '31' });
-        if (next) q.set('page', next);
-        const r = await fetchFn(`https://api.anthropic.com/v1/organizations/cost_report?${q}`, { headers: { 'x-api-key': adminKey, 'anthropic-version': '2023-06-01' }, signal: AbortSignal.timeout(20000) });
-        if (!r.ok) return { error: `http ${r.status}` };
-        const j = await r.json(); pages.push(j);
-        if (!j.has_more || !j.next_page) break;
-        next = j.next_page;
-      }
-      const spent = sumCostReport(pages);
-      return { value: { credit: teamCreditUsd, spent, left: teamCreditUsd - spent, since: teamSince } };
-    } catch (e) { return { error: e.message }; }
-  }
-
   async function load() {
-    const [x, t] = await Promise.all([loadExtra(), loadTeam()]);
+    const x = await loadExtra();
     const prev = cached;
     // a failed pull keeps the last good value, marked stale; the clock still advances so a failure is not retried in a loop
-    const keep = (nw, old) => (nw?.value ? { ...nw.value } : old ? { ...old, stale: nw?.error } : nw ? { error: nw.error } : null);
-    cached = { ok: true, at: now(), extra: keep(x, prev?.extra), team: keep(t, prev?.team) };
+    const keep = (nw, old) => (nw.value ? { ...nw.value } : old ? { ...old, stale: nw.error } : { error: nw.error });
+    cached = { ok: true, at: now(), extra: keep(x, prev?.extra) };
     if (file) { try { await fs.mkdir(dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(cached)); } catch { /* cache only */ } }
     if (JSON.stringify(prev) !== JSON.stringify(cached)) onChange(cached);
     return cached;
