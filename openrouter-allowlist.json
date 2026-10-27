@@ -1,4 +1,4 @@
 {
   "_comment": "The only model ids that may be sent to OpenRouter (owner, 2026-10-27). Claude and MiniMax run on their subscriptions. Glob patterns, lowercase; '*' matches any run of characters.",
-  "models": ["openai/o4-mini", "o4-mini", "qwen/qwen3-vl-8b-instruct", "typesafe/jev-1.13", "typesafe/jev-router"]
+  "models": ["openai/o4-mini", "openai/o4-mini-high", "o4-mini", "qwen/qwen3-vl-8b-instruct", "typesafe/jev-1.13", "typesafe/jev-router"]
 }

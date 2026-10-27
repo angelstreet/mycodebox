@@ -16,8 +16,10 @@ import { checkOpenRouterModel } from '../openrouter-guard.js';
 export const JUDGE_NAME = 'ai_proposal_judge';
 // Judge model for the Langfuse evaluator seed (the live judge in usage/judge.js rides the VPT server's
 // text.plan route, so this constant is only the label and the seeded evaluator's model).
-// openai/o4-mini answers HTTP 404 on our OpenRouter key ("the model o4-mini-2025-04-16 does not exist or
-// you do not have access to it"), so it is not usable; qwen3-vl-8b-instruct answers and is on the allowlist.
+// The whole o4-mini family is unreachable from our OpenRouter key: openai/o4-mini, the bare o4-mini and
+// openai/o4-mini-high all answer HTTP 404 with the provider message "the model o4-mini-2025-04-16 does
+// not exist or you do not have access to it" (model_not_found). qwen3-vl-8b-instruct answers (HTTP 200)
+// and is already on the allowlist.
 export const JUDGE_MODEL = 'qwen/qwen3-vl-8b-instruct';   // via OpenRouter (allowlist: openrouter-allowlist.json)
 export const JUDGE_PROMPT = [
   'You supervise an AI "reviewer" that proposes a short reply for a developer to type into a stopped coding-agent session, or says the developer is needed.',
