@@ -58,8 +58,8 @@ or `mac:<name>`.
   claim, may not pass 60 minutes: `renew` is clamped to that point, then refused (`hold_cap`, exit 7 like `yield_required`): release and queue
   again (fair rotation).
 - **Long work** (a 3 h walk) is split into steps that each claim, run, release, re-queue.
-- **Leases that exist at the change** are not shortened or killed. They just cannot be renewed past 60 minutes of continuous hold while
-  someone waits; a renewal without a waiter is clamped to 60 minutes from now.
+- **Leases from before the cap** (owner, 2026-10-27: "never 240 min"): the service cuts them back to claim time + 60 minutes; one already
+  held longer gets 10 minutes to wrap up, then ends. A long lease does not survive the change.
 
 ## Priority: P2 and P3 leases are short, and yield to a higher priority
 

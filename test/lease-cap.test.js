@@ -69,16 +69,29 @@ test('renew with a waiter: clamped to the 60 min since the claim (refusal: pre-c
   assert.equal(r.lease.ttl_min, 20);
 });
 
-test('a pre-cap 240-minute lease is not shortened; it cannot be extended past 60 min of hold when someone waits', async () => {
+test('a pre-cap 240-minute lease is cut back to claim + 60 min (10 min grace if already past); journal replay keeps it', async () => {
   const h = harness({ maxClaimMin: 1000 });
   const { lease } = await h.claim('mac:fp-only', 'device:host-1/device4', { ttl_min: 240 });
   assert.equal(lease.ttl_min, 240);
   h.svc = h.open({ maxClaimMin: 60 });                        // restart with the cap on: state is replayed from the journal
-  await h.advance(90 * MIN);
-  const live = (await h.svc.renew({ id: lease.id, ttl_min: 5 }));
-  assert.equal(live.ok, true);                                // no waiter: renewal allowed (clamped), lease was not killed at 60
-  await h.claim('codebox:b', 'device:host-1/device4', { wait: 'ticket' });
-  const r = await h.svc.renew({ id: lease.id, ttl_min: 60 });
-  assert.equal(r.ok, false);
-  assert.equal(r.code, 'E_HOLD_CAP');
+  await h.advance(20 * MIN);
+  assert.equal((await h.claim('codebox:c', 'device:host-1/device4')).ok, false);   // still held, not dropped by the cut
+  const cut = harness({ maxClaimMin: 1000 });
+  await cut.claim('mac:x', 'device:host-1/device4', { ttl_min: 240 });
+  cut.svc = cut.open({ maxClaimMin: 60 });
+  await cut.advance(1 * MIN);                                 // housekeeping cuts expires to claim + 60
+  await cut.advance(59 * MIN);                                // t = claim + 60: gone
+  const again = await cut.claim('codebox:d', 'device:host-1/device4');
+  assert.equal(again.ok, true);
+});
+
+test('an over-cap lease already past 60 min of hold gets a 10 min grace, then ends', async () => {
+  const h = harness({ maxClaimMin: 1000 });
+  await h.claim('mac:fp-only', 'device:host-1/device4', { ttl_min: 240 });
+  await h.advance(100 * MIN);
+  h.svc = h.open({ maxClaimMin: 60 });
+  await h.advance(1 * MIN);
+  assert.equal((await h.claim('codebox:b', 'device:host-1/device4')).ok, false);
+  await h.advance(10 * MIN);
+  assert.equal((await h.claim('codebox:b', 'device:host-1/device4')).ok, true);
 });
