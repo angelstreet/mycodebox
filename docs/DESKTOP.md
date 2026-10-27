@@ -10,7 +10,9 @@ The server address is not in the repository. You enter it on first run and it is
 
 The app is built on a macOS runner, not on the Linux host.
 
-Build it on a Mac (Node 20+); a CI workflow for a macOS runner is pending manager approval:
+- **From GitHub Actions:** run the workflow *Desktop app (mac)* (`.github/workflows/desktop-mac.yml`, manual
+  `workflow_dispatch`), then download the `mycodebox-desktop-dmg` artifact from the finished run.
+- **On a Mac yourself** (Node 20+):
 
   ```sh
   cd desktop
