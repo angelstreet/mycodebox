@@ -1,0 +1,30 @@
+{
+  "name": "mycodebox-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron wrapper for the mycodebox dashboard",
+  "main": "main.cjs",
+  "author": "mycodebox",
+  "scripts": {
+    "start": "electron .",
+    "icons": "node scripts/make-icns.mjs",
+    "dist": "npm run icons && electron-builder --mac --universal --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.mycodebox.desktop",
+    "productName": "mycodebox",
+    "files": ["main.cjs", "preload.cjs", "lib/**", "pages/**", "build/icon.png"],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "identity": null,
+      "target": [{ "target": "dmg", "arch": ["universal"] }]
+    },
+    "dmg": { "title": "mycodebox" },
+    "artifactName": "mycodebox-${version}-${arch}.${ext}"
+  }
+}
