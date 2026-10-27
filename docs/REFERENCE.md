@@ -333,6 +333,14 @@ the UI means). The manager agent passes `by: "manager-agent"`. It is logged in `
 'pause'|'resume'|'priority'|'deploy_action', by}`, and `by` on `label` records) and shown on the lines of the manager
 panel log.
 
+**Long sends settle before the Enter (2026-10-27).** A text over 200 chars or with several lines is pasted in ~165-char chunks, and an
+Enter right after the last chunk could land while the TUI was still flushing it, leaving the text unsubmitted in the composer. Now
+`sendKeys` waits until the pane has stopped changing (250 ms quiet, bounded at `400 + 300 ms x chunks`, max 8 s), presses Enter, then
+checks the composer and presses Enter once more if our text is still there (`send-verify.js`). The reply waits for that check and says
+so: `{ok, sent:<lines>, submitted:true}`, or `{ok, sent:true, submitted:false}` when the text never left the composer (event
+`send-unsubmitted`). Short text keeps the old 80 ms path with a background check and no `submitted` field. A draft that is not ours is never
+touched; Esc/Ctrl-C (`key`) sends are unchanged.
+
 **Non-owner sends are gated on a live agent.** Any sender other than `owner` (`POST /api/send/:session`,
 `/api/send-many`, `/api/session-meta/:session`) gets a 409 when the pane has no claude / codex / minimax process —
 the guard looks at the live process tree, never at the pane text, so a `sleep` shell with old MiniMax JSON in its

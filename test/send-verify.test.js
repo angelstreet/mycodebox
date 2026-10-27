@@ -41,3 +41,39 @@ test('verifyDelivered: the owner\'s own unrelated draft is left alone', async ()
   const r = await run({ drafts: ['half a sentence the owner is typing'] });
   assert.equal(r.pressed, 0); assert.equal(r.enters, 0);
 });
+
+import { waitSettled, confirmDelivered, settleBudgetMs, pasteChunks } from '../send-verify.js';
+
+// A fake clock: sleep advances it, so the tests take no real time.
+const clock = () => { let t = 0; return { now: () => t, sleep: async (ms) => { t += ms; } }; };
+
+test('chunks: a 1315-char text is 8 chunks and the settle budget scales, capped', () => {
+  assert.equal(pasteChunks('x'.repeat(1315)), 8);
+  assert.ok(settleBudgetMs('x'.repeat(1315)) > settleBudgetMs('x'.repeat(300)));
+  assert.equal(settleBudgetMs('x'.repeat(1_000_000)), 8000);
+});
+
+test('waitSettled: a slow-redraw pane is waited out, the Enter comes only after it stops changing', async () => {
+  const c = clock(); const stopAt = 1500;
+  const settled = await waitSettled({ ...c, budgetMs: 5000, capture: async () => (c.now() < stopAt ? `frame${c.now()}` : 'final') });
+  assert.equal(settled, true);
+  assert.ok(c.now() >= stopAt, 'did not return while the pane was still redrawing');
+});
+
+test('waitSettled: a pane that never settles gives up at the budget', async () => {
+  const c = clock();
+  assert.equal(await waitSettled({ ...c, budgetMs: 1000, capture: async () => `f${c.now()}` }), false);
+  assert.ok(c.now() <= 1200);
+});
+
+const confirm = async (drafts, retries = 1) => {
+  let i = 0, enters = 0; const c = clock();
+  const r = await confirmDelivered({ text: TEXT, retries, sleep: c.sleep, draftNow: async () => drafts[Math.min(i++, drafts.length - 1)], pressEnter: async () => { enters++; } });
+  return { ...r, enters };
+};
+
+test('confirmDelivered: submitted at once -> no retry', async () => assert.deepEqual(await confirm(['']), { pressed: 0, submitted: true, enters: 0 }));
+test('confirmDelivered: swallowed once -> one retry Enter, then submitted', async () => assert.deepEqual(await confirm([TEXT, '']), { pressed: 1, submitted: true, enters: 1 }));
+test('confirmDelivered: never clears -> exactly one retry, honest submitted:false', async () => assert.deepEqual(await confirm([TEXT]), { pressed: 1, submitted: false, enters: 1 }));
+test('confirmDelivered: unreadable prompt -> submitted:null, no Enter', async () => assert.deepEqual(await confirm([null]), { pressed: 0, submitted: null, enters: 0 }));
+test('confirmDelivered: a human draft that is not ours is left alone', async () => assert.deepEqual(await confirm(['owner typing something else']), { pressed: 0, submitted: true, enters: 0 }));

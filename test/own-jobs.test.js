@@ -149,7 +149,7 @@ test('detached jobs and unidentified jobs are flagged in the feed; the session m
 test('the send is the guarded two-call sendKeys of server.js (paste, then Enter): own-jobs only calls it once with the text', () => {
   const src = (p) => import('node:fs').then((fs) => fs.readFileSync(new URL(p, import.meta.url), 'utf8'));
   return src('../server.js').then((s) => {
-    assert.match(s, /paste-buffer[\s\S]{0,200}if \(enter\)[\s\S]{0,200}'send-keys', '-t', tgt\(session\), 'Enter'/);
+    assert.match(s, /paste-buffer[\s\S]{0,200}if \(enter\)[\s\S]{0,1200}'send-keys', '-t', tgt\(session\), 'Enter'/);
     assert.match(s, /send: async \(name, text\) => \{ await guardSendKeys\(name, text, true\); countSent\(name\); \}/);
   });
 });
