@@ -153,6 +153,7 @@ import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
+import { createQuotaResumer } from './quota-resume.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
@@ -770,6 +771,19 @@ const crashResumer = createCrashResumer({
   resolveSessionId: resolveClaudeSessionId,
 });
 const crashResumeEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).crashResume !== false; } catch { return true; } };
+// A session stopped on a provider usage limit gets one Enter once the plan's window has reset (quota-resume.js).
+// manager.json `quotaResume` (default on); a manager session only with `quotaResumeManagers: true`.
+const quotaResumer = createQuotaResumer({
+  getState: async (name) => crashResumeStates.get(name) || null,
+  getQuota: () => quota.get(),
+  sendEnter: async (name) => { await assertAgentPane(name, 'quota-resume'); await sendKey(name, 'Enter'); logSend(name, 'quota-resume', { key: 'Enter' }); },
+  managerSessions: loadManagerSessions,
+  allowManager: () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).quotaResumeManagers === true; } catch { return false; } },
+  isPaused: (n) => sessionMeta.isPaused(n),
+  isHeld: (n) => !!heldOf(n),
+  record: (e) => managerEvents.record(e),
+});
+const quotaResumeEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).quotaResume !== false; } catch { return true; } };
 // Two-tier push (MANAGER.md section 6): interrupts at once, the rest as one digest per pushDigestMinutes while awake.
 // Knobs in manager.json: pushDigestMinutes (30), pushAwakeFrom ("07:00"), pushAwakeTo ("23:00"), pushTimezone ("Europe/Zurich"), pushInterruptPct (95).
 const pushTierConfig = () => { try { return tierConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return tierConfig({}); } };
@@ -2636,6 +2650,7 @@ async function tick() {
   try {
     const { status, changedSessions } = await poll();
     if (crashResumeEnabled()) await crashResumer.tick(Object.keys(status));
+    if (quotaResumeEnabled()) await quotaResumer.tick(Object.keys(status)).catch((e) => console.error('[quota-resume]', e.message));
     await sendQueueTick(status);
     for (const name of changedSessions) {
       const c = lastSnapshots.get(name);

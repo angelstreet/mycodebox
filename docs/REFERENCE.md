@@ -1117,6 +1117,20 @@ reading after a restart only seeds, it does not alert).
 A failed read keeps the last good value with `stale:true` and an `error` (the quota sheet shows it); a stale plan
 never holds a session. The quota sheet shows each plan's subscription and "unlimited" weekly windows.
 
+**Usage-limit resume (`quota-resume.js`, owner 2026-10-27).** A session stopped on a provider usage limit (MiniMax
+`× Error  Usage limit reached. Code: 42212 ... Your prompt is preserved.`, the prompt left in the input box) gets ONE
+Enter once its plan's window has reset. Every poll tick, for each session whose pane tail ends on that error with the
+"prompt is preserved" line: the pane agent maps to its plan (`minimax` for mcode, `claude`, `codex`) and the plan must be
+readable (not `stale`, read within 15 min) with every window under 95 % or already reset. The Enter goes through the
+guarded send path (`by: 'quota-resume'`). Not resumed: a manager session (unless `quotaResumeManagers: true`), a paused or
+held session, a draft typed after the stop (the preserved prompt itself is not a draft), a closed session.
+Caps: one resume per session per window (the key is the window's `resetsAt`, else the 5 h bucket of the first sighting);
+a limit that comes back within 10 min of a resume backs off to the next reset and is not retried before it.
+`Sign in to MiniMax ... /login` is a credentials stop and is never answered: it is recorded once as a feed item.
+Journal and feed: `health:session-quota-resumed:<session>`, `health:session-quota-backoff:<session>`,
+`health:session-login-stop:<session>` through the manager events, like crash resumes. Switch: `quotaResume` in
+`manager.json` (default on). Tests: `test/quota-resume.test.js`.
+
 Env: `CODEX_BIN` (default `~/.local/bin/codex`), `MINIMAX_AUTH_FILE` (mcode login file, default the `en`/prod one),
 `CLAUDE_RATE_LIMITS_FILE` override the paths.
 
