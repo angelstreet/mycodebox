@@ -68,6 +68,12 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 - Leases (deploys, restarts, test devices): follow [docs/LEASE-RULES.md](docs/LEASE-RULES.md). Never ask the owner about a
   lease: wait with `vpt-lease claim ... --wait` or `vpt-lease run ... -- <cmd>`; never poll, never `--force`.
 
+- Routine device-side restart (owner, 2026-10-27): `systemctl restart <unit>` of an allowlisted vpt-* device/host service on a
+  lab host the session leases is a routine step, not a forbidden topic or an owner question; it needs the host lease only.
+  Allowlist: `GHOSTY_RESTART_UNITS` (default `vpt-monitor-img,vpt-host,vpt-stream*,vpt-grabber*`). stop, start-only, enable,
+  disable, mask, daemon-reload, unit files, sudoers, `ghosty-sessions`, other units and production hosts stay floor
+  ([REFERENCE](docs/REFERENCE.md), `routine-restart.js`).
+
 - The server has no login; Tailscale policy is the only user-access gate. Do not expose it publicly.
   The source defaults to loopback (`127.0.0.1`); follow INSTALL for private Tailscale access.
 - Owner's chosen default (2026-10-11): dashboard-created and resumed Claude/Codex sessions and the manager start with permission
