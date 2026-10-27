@@ -5,6 +5,7 @@ const URL_AT = /https?:\/\/[^\s│┃|<>"'`]+/g;
 const TRAIL = /[.,;:!?)\]}>]+$/;
 const BORDER = /^\s*[│┃|]/;
 const MAX_ROWS = 12;
+const WRAP_SLACK = 8;
 
 // "report (https://...)": the agent prints a link as a label plus the URL in parentheses. In a table cell the label sits on
 // the row above, in the URL's column. Returns the label's segment {row, x1, x2}, or null.
@@ -27,8 +28,9 @@ export function urlChains(lines, row, cols) {
   for (const m of line.matchAll(URL_AT)) {
     const segs = [{ row, x1: m.index, x2: m.index + m[0].length }];
     let text = m[0];
-    // a segment is "full" when it ends at the cell border (" │") or at the right edge of the terminal
-    const full = (l, x2) => BORDER.test(l.slice(x2)) || x2 >= cols - 1;
+    // a segment is "full" when it ends at the cell border (" │") or near the right edge of the terminal: the agent wraps a few
+    // cells short of the edge (a margin, or a hanging indent under a tool result), so the edge itself is too strict
+    const full = (l, x2) => BORDER.test(l.slice(x2)) || (x2 >= cols - WRAP_SLACK && !l.slice(x2).trim());
     let tok = m.index;   // the wrapped continuation starts under the token's first cell, e.g. under the "(" before the URL
     while (tok > 0 && !/[\s│┃|]/.test(line[tok - 1])) tok--;
     let cur = row, curLine = line, end = m.index + m[0].length, col = tok;
