@@ -87,7 +87,9 @@ export function createLeaseWatch({
       const TITLES = { released: 'lease released', expired: 'lease expired', forced: 'lease released by the owner', narrowed: `lease narrowed${e.kind ? ` to ${e.kind}` : ''}`,
         downgraded: `lease downgraded to ${e.to || 'pin'}` };   // the service's own reclaims are released / expired with the reason (ttl, no-heartbeat, session-gone)
       if (!TITLES[e.event]) continue;
-      const title = e.detail ? `${e.detail} (${where}, agent ${e.agent})` : `${TITLES[e.event]}: ${where} (agent ${e.agent})`;   // holder-gone reaping: "released stale lease X: holder pid N is gone"   // "agent": a holder named "…-error" read as a failure (Jev 0.46, 2026-10-21)
+      // holder-gone reaping reads "released stale lease X: holder pid N is gone"
+      const stale = e.detail || (/^holder-gone: /.test(e.reason || '') ? e.reason.slice(12) : '');
+      const title = stale ? `${stale} (${where}, agent ${e.agent})` : `${TITLES[e.event]}: ${where} (agent ${e.agent})`;   // "agent": a holder named "…-error" read as a failure (Jev 0.46, 2026-10-21)
       const body = `lease ${e.id}${e.by ? ` by ${e.by}` : ''}${e.reason ? ` (${e.reason})` : ''}; purpose: ${e.purpose || '-'}`;
       await record({ key: `lease:${e.event}`, title, body, url: '/?platforms=1', priority: 'default', at: new Date((e.ts || 0) * 1000).toISOString(), leaseId: e.id, agent: e.agent, env: e.env, resources: e.resources || [] });
     }

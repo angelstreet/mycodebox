@@ -92,6 +92,7 @@ import { appendFile, existsSync, readFileSync, statSync, createReadStream } from
 import { homedir, hostname, loadavg, cpus } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
+import { createHolderReaper } from './lease-holder-reaper.js';
 import { createLeaseNudge } from './lease-nudge.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
@@ -876,6 +877,8 @@ const leaseWatch = createLeaseWatch({
   onChange: (snap) => { handoffs.onHolders(snap.holders).catch((err) => console.error('[handoffs] holders', err.message)); },
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseBind; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
+// A lease whose holder process on this host is gone is released (lease-holder-reaper.js; the registry on proxmox cannot probe codebox pids).
+const holderReaper = createHolderReaper({ stateDir: STATE_DIR, run: leaseRun, listSessionNames: async () => (await listSessions()).map((x) => x.name) });
 // The orchestrator asks a holder to release or narrow (lease-nudge.js): every 2 min, for a queued deploy or ticket that waits > 10 min.
 // manager.json key `leaseNudge`: "live" (default) | "dry" | "off". Never releases or narrows by itself.
 // minutes since the holder's last activity, as the dashboard sees it (a working session is never idle); null when the
@@ -2816,6 +2819,7 @@ server.listen(PORT, HOST, async () => {
   deployRunner.start();
   await handoffs.load();
   leaseWatch.start();
+  holderReaper.start();
   leaseNudge.start();
   ciWatch.start();
   rulesWatch.start();

@@ -356,7 +356,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       kind: l.kind, kinds: l.resKinds || null, agent: l.agent, client: l.client || null, session: l.session || null, purpose: l.purpose || '', provider: l.provider || '',
       shared: !!l.shared, since: iso(l.since), expires_at: iso(l.expires), ttl_min: l.ttlMin, ttlLeftMin: Math.floor((l.expires - t) / MIN),
       long: l.ttlMin > 240, idleMin: Math.floor((mono() - (clk.get(l.id)?.act ?? mono())) / MIN), lastHeartbeatAt: iso(l.lastHb), generation: l.generation, gens: l.gens,
-      heartbeat_s: l.heartbeatS ?? null, holder_pid: l.holderPid ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
+      heartbeat_s: l.heartbeatS ?? null, holder_pid: l.holderPid ?? null, holder_host: l.holderHost ?? null, holder_src: l.holderSrc ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
       priority: prioOf(l), priority_source: l.prioritySrc || 'default', ttl_clamped_from: l.ttlClampedFrom ?? null, yield_required: yieldWaiters(l).length > 0,
     };
   }
@@ -495,7 +495,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (l.mode === 'exclusive' && l.heartbeatS > 0 && m - c.hb >= cfg.missFactor * l.heartbeatS * 1000) { rel('expired', 'no-heartbeat'); continue; }
       // holder death (owner 2026-10-27): a local holder pid (claim holder_pid, or the -<pid> of a codebox:<name>-<pid> agent) that is gone, or now
       // another process (start time differs), for holderDeadChecks consecutive checks holderCheckMs apart. No pid recorded = TTL behaviour as before.
-      if (l.holderPid && l.mode === 'exclusive' && !l.system && !l.deployId && !(l.holderSrc === 'agent-name' && l.session && sessionAlive(l.session) === true)) {
+      if (l.holderPid && l.holderStart && l.mode === 'exclusive' && !l.system && !l.deployId && !(l.holderSrc === 'agent-name' && l.session && sessionAlive(l.session) === true)) {
         if (c.pAt == null || m - c.pAt >= cfg.holderCheckMs) {
           c.pAt = m;
           c.pDead = procStart(l.holderPid) === l.holderStart ? 0 : (c.pDead || 0) + 1;
@@ -551,7 +551,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     return {
       id, env: req.env, resources: req.resources, mode: req.mode, kind: req.kind, agent: req.agent, client: req.client || null, session: req.session || null,
       purpose: req.purpose || '', provider: req.provider || '', shared: !!req.shared, since: t, expires: t + req.ttlMin * MIN, ttlMin: req.ttlMin,
-      heartbeatS: req.heartbeatS ?? null, holderPid: req.holderPid ?? null, holderStart: req.holderStart ?? null, holderSrc: req.holderSrc ?? null, system: !!req.system, deployId: req.deployId || null, lastHb: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, requestId: req.requestId || null, priority: req.priority || null, prioritySrc: req.prioritySrc || null, ttlClampedFrom: req.ttlClampedFrom ?? null,
+      heartbeatS: req.heartbeatS ?? null, holderPid: req.holderPid ?? null, holderHost: req.holderHost ?? null, holderStart: req.holderStart ?? null, holderSrc: req.holderSrc ?? null, system: !!req.system, deployId: req.deployId || null, lastHb: t, expectMin: req.expectMin ?? null, idleMin: req.idleMin ?? null, requestId: req.requestId || null, priority: req.priority || null, prioritySrc: req.prioritySrc || null, ttlClampedFrom: req.ttlClampedFrom ?? null,
       gens, generation: Math.max(...Object.values(gens)), ...extra,
     };
   }
@@ -633,11 +633,16 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     // Tracked only while the pid is alive now; its start time is recorded so a reused pid counts as dead.
     if (a.holder_pid != null && (!Number.isInteger(a.holder_pid) || a.holder_pid < 2)) return fail('E_INVALID', 'holder_pid must be an integer > 1');
     if (a.holder_host != null && !isStr(a.holder_host, 255)) return fail('E_INVALID', 'bad holder_host');
+    // A pid on ANOTHER host (the registry runs on proxmox, the dispatchers on codebox) cannot be probed here: it is recorded with its host and the
+    // lease-holder-reaper on that host releases the lease. Only a pid on this host is probed by housekeeping.
     let holderPid = null, holderSrc = null;
-    if (a.holder_pid != null) { if (a.holder_host == null || a.holder_host === os.hostname()) { holderPid = a.holder_pid; holderSrc = 'claim'; } }
-    else { const nm = /^codebox:.+-(\d{2,9})$/.exec(a.agent); if (nm && Number(nm[1]) > 1 && (a.holder_host == null || a.holder_host === os.hostname())) { holderPid = Number(nm[1]); holderSrc = 'agent-name'; } }
-    const holderStart = holderPid ? procStart(holderPid) : null;
-    if (!holderStart) { holderPid = null; holderSrc = null; }
+    const holderHost = a.holder_host ?? null;
+    if (a.holder_pid != null) { holderPid = a.holder_pid; holderSrc = 'claim'; }
+    else { const nm = /^codebox:.+-(\d{2,9})$/.exec(a.agent); if (nm && Number(nm[1]) > 1) { holderPid = Number(nm[1]); holderSrc = 'agent-name'; } }
+    const local = holderSrc === 'agent-name' ? holderHost === os.hostname() : (holderHost == null || holderHost === os.hostname());   // an agent-name pid is probed here only when the client said it is this host's
+    const holderStart = holderPid && local ? procStart(holderPid) : null;
+    if (holderPid && !local && holderSrc === 'agent-name' && holderHost == null) { holderPid = null; holderSrc = null; }   // host unknown: the reaper cannot know where to look
+    if (holderPid && local && !holderStart) { holderPid = null; holderSrc = null; }
     let ttlClampedFrom = null;
     if (!system && !a.deploy_id && ttlMin > cfg.maxClaimMin) {
       ttlClampedFrom = ttlMin; ttlMin = cfg.maxClaimMin;
@@ -651,7 +656,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       ok: true, wait,
       req: { env: a.env.toLowerCase(), resources: rs.resources, mode, kind, agent: a.agent, client, session,
         purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', provider: typeof a.provider === 'string' ? a.provider.slice(0, 80) : '', shared: !!a.shared,
-        ttlMin, heartbeatS, holderPid, holderStart, holderSrc, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
+        ttlMin, heartbeatS, holderPid, holderHost, holderStart, holderSrc, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
         system,                         // set by the caller's token (clients.json exemptAgents) or in-process, never by the request body
         deployId: a.deploy_id || null, requestId: a.request_id || null, prioritySince, warnings, priority, prioritySrc, ttlClampedFrom },
     };
