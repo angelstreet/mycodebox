@@ -1056,7 +1056,7 @@ const rulesWatch = createRulesWatch({
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
-const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, adminKey: process.env.ANTHROPIC_ADMIN_KEY || '', teamCreditUsd: Number(process.env.ANTHROPIC_TEAM_CREDIT_USD || 1000), teamSince: process.env.ANTHROPIC_TEAM_CREDIT_SINCE || '', onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
+const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
 
