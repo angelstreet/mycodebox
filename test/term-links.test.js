@@ -51,3 +51,12 @@ test('a label above is found when the other columns hold text', () => {
   assert.equal(c.url, 'https://ex.test/a/report.html');
   assert.deepEqual(c.label, { row: 0, x1: 34, x2: 40 });
 });
+test('a URL the agent wrapped a few cells short of the edge still continues (hanging indent under a tool result)', () => {
+  const rows = ['  ⎿      https://account.test/oauth?user_code=AB&client_surface=tui&downloa', '     d_source=mcode-internal', '         Code: AR77-25GS'];
+  const [c] = urlChains(rows, 0, rows[0].length + 5);
+  assert.equal(c.url, 'https://account.test/oauth?user_code=AB&client_surface=tui&download_source=mcode-internal');
+  assert.deepEqual(c.segs.map((s) => s.row), [0, 1]);
+});
+test('a short URL line is not joined to the next row', () => {
+  assert.equal(urlChains(['see https://example.test/a', 'Code: AB12'], 0, 103)[0].url, 'https://example.test/a');
+});
