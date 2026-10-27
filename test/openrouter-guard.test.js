@@ -6,7 +6,7 @@ import { JUDGE_MODEL, ensureJudge } from '../scripts/lf-setup.js';
 const quiet = { log: () => {} };
 
 test('allowed: o4 Mini, Qwen3 VL 8B Instruct, Jev', () => {
-  for (const m of ['openai/o4-mini', 'o4-mini', 'qwen/qwen3-vl-8b-instruct', 'typesafe/jev-1.13', 'typesafe/jev-router']) {
+  for (const m of ['openai/o4-mini', 'openai/o4-mini-high', 'o4-mini', 'qwen/qwen3-vl-8b-instruct', 'typesafe/jev-1.13', 'typesafe/jev-router']) {
     checkOpenRouterModel(m, quiet);
   }
 });
