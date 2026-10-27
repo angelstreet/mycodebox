@@ -273,6 +273,59 @@ test('CI red: merged_ci_red, no deploy, merge stays on the target', async () => 
   assert.equal(events.at(-1).state, 'merged_ci_red');
 });
 
+// A cancelled check run says nothing about the commit it ran on: GitHub cancels it when a newer commit lands on the same ref
+// (2026-10-27: the evolai merge of docs/task-ah-state was reported merged_ci_red and its session chased a non-failure).
+test('a cancelled CI run on a superseded commit: merged_ci_superseded, not red; nothing to fix', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  let moved = false;
+  const { lane, events } = mk(w, { cfg: { ci: 'github' }, lane: { ci: { status: async () => { if (!moved) { moved = true; w.moveMain({ 'other.js': 'o\n' }); } return 'cancelled'; } } } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged_ci_superseded', JSON.stringify(r));
+  assert.match(r.reason, /superseded by/);
+  assert.equal(r.supersededBy, w.main());            // the newer tip that carries the CI
+  assert.notEqual(r.supersededBy, r.sha);
+  assert.equal(events.at(-1).state, 'merged_ci_superseded');
+  assert.equal(events.at(-1).final, true);
+});
+
+test('a cancelled CI run on the CURRENT tip: merged_ci_red (the current behaviour)', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const { lane } = mk(w, { cfg: { ci: 'github' }, lane: { ci: { status: async () => 'cancelled' } } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged_ci_red', JSON.stringify(r));
+});
+
+test('a FAILED CI run on a superseded commit: merged_ci_red (a failure is never a supersede)', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  let moved = false;
+  const { lane } = mk(w, { cfg: { ci: 'github' }, lane: { ci: { status: async () => { if (!moved) { moved = true; w.moveMain({ 'other.js': 'o\n' }); } return 'failure'; } } } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged_ci_red', JSON.stringify(r));
+});
+
+test('a superseded merge with a deploy: the deploy stays held until the newer tip CI is green', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  let moved = false, asked = 0;
+  const deploys = { request: async () => { asked++; return { id: 'd1' }; }, wait: async () => ({ ok: true, version: 'v1' }) };
+  const { lane } = mk(w, { cfg: { ci: 'github', deploy: { env: 'env-a', defaultScope: 'server' } }, lane: { ci: { status: async () => { if (!moved) { moved = true; w.moveMain({ 'other.js': 'o\n' }); } return 'cancelled'; } }, deploys } });
+  const r = await go(lane, { branch: 'feat', deploy: 'server' });
+  assert.equal(r.state, 'merged_ci_superseded', JSON.stringify(r));
+  assert.equal(r.deployHeld, true);
+  assert.equal(asked, 0, 'the deploy stays held: the merge commit was never verified green');
+});
+
+test('a superseded merge whose newer tip is green: the deploy goes to the tip that carries it', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  let moved = false; const reqs = [];
+  const deploys = { request: async (o) => { reqs.push(o); return { id: 'd2' }; }, wait: async () => ({ ok: true, version: 'v2' }) };
+  const { lane } = mk(w, { cfg: { ci: 'github', deploy: { env: 'env-a', defaultScope: 'server' } }, lane: { ci: { status: async () => { if (!moved) { moved = true; w.moveMain({ 'other.js': 'o\n' }); return 'cancelled'; } return 'success'; } }, deploys } });
+  const r = await go(lane, { branch: 'feat', deploy: 'server' });
+  assert.equal(r.state, 'deployed', JSON.stringify(r));
+  assert.equal(r.deployed.version, 'v2');
+  assert.equal(reqs[0].sha, r.supersededBy, 'the green tip carries the merge, so the tip is deployed');
+  assert.equal(reqs[0].agent, `integration:${r.id}`);
+});
+
 test('CI pending then green + deploy requested: deployed with the version; argv shape', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
   const seq = ['missing', 'pending', 'success']; const asked = [], reqs = [];

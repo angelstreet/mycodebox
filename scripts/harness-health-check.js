@@ -33,7 +33,7 @@ export const LANE_RETURNED_MAX = 5;
 export const CI_RED_MIN_MAX = 120;
 export const DISK_PCT_MAX = 90;
 export const MEM_MIN_MB = 2048;
-export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled'];
+export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled'];
 
 export const stateDir = () => process.env.GHOSTY_STATE_DIR || join(homedir(), '.local/state/ghosty');
 export const sessionsUrl = () => `${process.env.GHOSTY_URL || 'http://127.0.0.1:7777'}/api/sessions`;
@@ -260,6 +260,7 @@ export function summarize(today, prev) {
     ['lane merged / deployed', `${today.states.merged} / ${today.states.deployed}`, p ? `${n(p.states?.merged)} / ${n(p.states?.deployed)}` : 'n/a'],
     ['lane returned', `${today.states.returned} returned, ${today.returnedResolved || 0} resolved`, p ? n(p.states?.returned) : 'n/a'],
     ['lane merged_ci_red / deploy_failed', `${today.states.merged_ci_red} / ${today.states.deploy_failed}`, p ? `${n(p.states?.merged_ci_red)} / ${n(p.states?.deploy_failed)}` : 'n/a'],
+    ['lane CI superseded', `${today.states.merged_ci_superseded}`, p ? `${n(p.states?.merged_ci_superseded)}` : 'n/a'],
     ['lane approvalRefused', `${today.approvalRefused}`, p ? n(p.approvalRefused) : 'n/a'],
     ['CI red', `${today.ci.redMinutes} min (${today.ci.redTransitions} red / ${today.ci.greenTransitions} green)`, p ? `${n(p.ci?.redMinutes)} min` : 'n/a'],
     ['load 1 / 5 min', `${n(today.box.load1)} / ${n(today.box.load15)}`, p ? n(p.box?.load1) : 'n/a'],

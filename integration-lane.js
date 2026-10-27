@@ -3,8 +3,10 @@
 // pushes with a compare-and-swap, waits for CI on that exact commit and queues the deploy when asked. Every transition goes
 // to notify(request, event). Everything outside (git, the shell, CI, the deploy queue, the merge floor) is injected.
 //
-// Final states: merged | deployed | returned (reason + tail) | merged_ci_red | deploy_failed | cancelled.
+// Final states: merged | deployed | returned (reason + tail) | merged_ci_red | merged_ci_superseded | deploy_failed | cancelled.
 // A merge that reached the target is never reverted here: CI red / deploy failed are reported and the manager decides.
+// merged_ci_superseded is the other half of "CI red": the run was CANCELLED because a newer commit landed on the target, so
+// CI runs on that newer tip and this commit was never verified on its own. Nothing to fix, and the session must not branch again.
 // Durable: <state>/integration/requests.jsonl, one full snapshot per line (last wins). A request found `running` at start is
 // resumed from its recorded progress: fetch / merge / test are idempotent (fresh worktree), the push is re-checked by reading
 // the remote, CI and the deploy continue where they were.
@@ -16,7 +18,7 @@ import { spawn, execFile } from 'node:child_process';
 import { gitFacts, mergeFloor, isConvention, migrationReasons } from './merge-policy.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
 
-export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'deploy_failed', 'cancelled']);
+export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled']);
 export const STATES = Object.freeze(['queued', 'running', ...FINAL]);
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -201,7 +203,7 @@ export function createDefaultRun() {
     child.on('close', (code) => { clearTimeout(t); resolve({ code: code ?? -1, out, timedOut }); });
   });
 }
-// 'github' CI: check-runs of the exact commit through `gh api`. status(sha, { clone, remote }) -> success|failure|pending|missing|unknown
+// 'github' CI: check-runs of the exact commit through `gh api`. status(sha, { clone, remote }) -> success|failure|cancelled|pending|missing|unknown
 export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
   const c = spawn(argv[0], argv.slice(1), { cwd: o?.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '', err = ''; c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
@@ -219,8 +221,10 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
       let j; try { j = JSON.parse(r.out); } catch { return 'unknown'; }
       const runs = Array.isArray(j.check_runs) ? j.check_runs : [];
       if (!runs.length) return 'missing';
-      if (runs.some((x) => ['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure'].includes(x.conclusion))) return 'failure';
-      if (runs.some((x) => x.status !== 'completed')) return 'pending';
+      if (runs.some((x) => ['failure', 'timed_out', 'action_required', 'startup_failure'].includes(x.conclusion))) return 'failure';
+      if (runs.some((x) => x.status !== 'completed')) return 'pending';   // a re-run in flight: the conclusion is not final yet
+      // GitHub cancels the running check when a newer push lands on the same ref: that is a supersede, not a failure.
+      if (runs.some((x) => x.conclusion === 'cancelled')) return 'cancelled';
       return 'success';
     },
   };
@@ -416,6 +420,14 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       await sleep(pollMs);
     }
   };
+  // The target tip when the merge commit was superseded by a newer commit: the merge must still be inside that tip
+  // (a rewound or rewritten target is not a supersede). -> sha | null
+  const supersedeTip = async (r, c, sha) => {
+    const tip = await remoteTip(r, c);
+    if (!tip || tip === sha) return null;
+    try { await fetch(r, c); } catch { return null; }   // cannot tell: keep the conservative red behaviour
+    return (await contains(r, c, sha)) ? tip : null;
+  };
 
   function wtPath(r) { return path.join(dir, 'wt', r.id); }
   async function dropWorktree(r, c) {
@@ -551,9 +563,11 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id, ...(ok ? {} : { reasons }) });
   }
   function journalDeploy(r, c, o) {
-    jr({ decision_id: `lane-deploy-${r.id}`, kind: 'deploy', ts: iso(), question: `Deploy ${r.branch} (${String(r.sha || '').slice(0, 12)}) to ${o.env}?`, chosen: 'deploy',
-      rationale: `the merge ${String(r.sha || '').slice(0, 12)} passed the lane's tests${r.ci === 'success' ? ' and CI' : ''}; this repo deploys every merge`, evidence: [`env ${o.env} scope ${o.scope} ref ${c.target}@${String(r.sha || '').slice(0, 12)}`],
-      confidence: null, rollback: o.rollback || 'deploy the previous release', session: r.session, repo: r.repo, branch: r.branch, env: o.env, scope: o.scope, ref: c.target, sha: r.sha, request: r.id });
+    const dsha = r.deploySha || r.sha;   // a superseded merge deploys the green tip that carries it
+    const sup = r.supersededBy ? String(r.supersededBy).slice(0, 12) : null;
+    jr({ decision_id: `lane-deploy-${r.id}`, kind: 'deploy', ts: iso(), question: `Deploy ${r.branch} (${String(dsha || '').slice(0, 12)}) to ${o.env}?`, chosen: 'deploy',
+      rationale: `the merge ${String(r.sha || '').slice(0, 12)} passed the lane's tests${r.ci === 'success' || sup ? ' and CI' : ''}${sup ? ` (its own run was superseded by ${sup}, whose CI is green)` : ''}; this repo deploys every merge`, evidence: [`env ${o.env} scope ${o.scope} ref ${c.target}@${String(dsha || '').slice(0, 12)}`],
+      confidence: null, rollback: o.rollback || 'deploy the previous release', session: r.session, repo: r.repo, branch: r.branch, env: o.env, scope: o.scope, ref: c.target, sha: dsha, request: r.id });
   }
 
   // Q199: the additive-migration merge the manager attested is a decision of its own, in the owner's "Decided for you" feed.
@@ -708,15 +722,17 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     throw new Ret('target keeps moving: gave up after 3 attempts');
   }
 
-  async function waitCi(r, c) {
+  // Wait for the CI of one commit. The merge commit by default; the deploy gate also watches a newer tip (see processRequest).
+  // `record` writes the status onto the request (only the merge commit's own CI belongs there).
+  async function waitCi(r, c, sha = r.sha, { name = 'ci', record = true } = {}) {
     const impl = ci || createGithubCi({ git });
     const deadline = now() + c.ciTimeoutMin * 60_000;
-    const res = await step(r, 'ci', async () => {
+    const res = await step(r, name, async () => {
       let last = 'unknown';
       for (;;) {
-        let s; try { const v = await impl.status(r.sha, { repo: r.repo, clone: c.clone, remote: c.remote }); s = typeof v === 'string' ? v : v?.status; } catch { s = 'unknown'; }
-        if (s !== last) { last = s; r.ci = s; persist(r); }
-        if (s === 'success' || s === 'failure') return { ok: s === 'success', info: { status: s }, tail: `CI ${s} for ${r.sha.slice(0, 12)}` };
+        let s; try { const v = await impl.status(sha, { repo: r.repo, clone: c.clone, remote: c.remote }); s = typeof v === 'string' ? v : v?.status; } catch { s = 'unknown'; }
+        if (s !== last) { last = s; if (record) { r.ci = s; persist(r); } }
+        if (s === 'success' || s === 'failure' || s === 'cancelled') return { ok: s === 'success', info: { status: s }, tail: `CI ${s} for ${sha.slice(0, 12)}` };
         if (stopped) throw new Ret('lane stopped');
         if (now() >= deadline) return { ok: false, info: { status: last, timedOut: true }, tail: `CI still ${last} after ${c.ciTimeoutMin} min` };
         await sleep(pollMs);
@@ -732,7 +748,8 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         // a crash between the request and the saved id would re-request: look the deploy up by its agent first
         if (!r.deployId && deploys.find) { const id = await deploys.find({ agent: `integration:${r.id}` }).catch(() => null); if (id) { r.deployId = id; persist(r); } }
         if (!r.deployId) {
-          const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: r.sha || c.target, sha: r.sha, agent: `integration:${r.id}` });
+          const dsha = r.deploySha || r.sha;   // a superseded merge deploys the green tip that carries it
+          const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: dsha || c.target, sha: dsha, agent: `integration:${r.id}` });
           if (!q?.id) return { ok: false, tail: q?.error ?? q?.reason ?? 'deploy request refused' };
           r.deployId = q.id; persist(r);
         }
@@ -779,6 +796,8 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
   async function selfDeploy(r, c) {
     const live = c.deploy.liveCheckout;
     const L = (args, o) => git(args, { cwd: live, timeoutMs: 120_000, ...o });
+    // a superseded merge deploys the green tip that carries it; otherwise exactly the tested merge
+    const dsha = r.deploySha || r.sha;
     const prior = r.selfDeploy?.prevSha || null;   // resumed mid-deploy: the service still runs the sha seen first
     const sd = r.selfDeploy = { phase: 'checking', live, prevSha: null, newSha: null, expectedSha: null, outcome: null, rollback: null };
     persist(r);
@@ -800,18 +819,19 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     persist(r);
 
     const pull = await step(r, 'deploy-pull', async () => {
-      // exactly the tested merge: never whatever the target is now (it may carry commits nobody tested)
-      if (!r.sha) return { ok: false, tail: 'the request has no merge sha' };
+      // exactly the tested merge: never whatever the target is now (it may carry commits nobody tested).
+      // The one exception is a superseded merge: the newer tip was green, so the tip is what gets deployed.
+      if (!dsha) return { ok: false, tail: 'the request has no merge sha' };
       const f = await L(['fetch', '-q', c.remote], { timeoutMs: 180_000 });
       if (f.code !== 0) return { ok: false, tail: f.err || f.out };
-      if ((await L(['merge-base', '--is-ancestor', r.sha, `${c.remote}/${c.target}`])).code !== 0) return { ok: false, tail: `${c.remote}/${c.target} no longer contains the tested merge ${short(r.sha)} (rewound or rewritten)` };
-      const x = await L(['merge', '--ff-only', '-q', r.sha], { timeoutMs: 180_000 });
+      if ((await L(['merge-base', '--is-ancestor', dsha, `${c.remote}/${c.target}`])).code !== 0) return { ok: false, tail: `${c.remote}/${c.target} no longer contains the tested merge ${short(dsha)} (rewound or rewritten)` };
+      const x = await L(['merge', '--ff-only', '-q', dsha], { timeoutMs: 180_000 });
       return { ok: x.code === 0, tail: x.err || x.out };
     });
-    if (!pull.ok) return selfFail(r, 'deploy_refused', `deploy refused: could not fast-forward ${live} to the tested merge ${short(r.sha)}`, pull.tail);
+    if (!pull.ok) return selfFail(r, 'deploy_refused', `deploy refused: could not fast-forward ${live} to the tested merge ${short(dsha)}`, pull.tail);
     sd.newSha = await rev(r, c, 'HEAD', live); persist(r);
-    if (r.sha && (await L(['merge-base', '--is-ancestor', r.sha, 'HEAD'])).code !== 0) {
-      return selfFail(r, 'deploy_failed', `the live checkout pulled ${short(sd.newSha)}, which does not contain the merge ${short(r.sha)}: not restarted`);
+    if (dsha && (await L(['merge-base', '--is-ancestor', dsha, 'HEAD'])).code !== 0) {
+      return selfFail(r, 'deploy_failed', `the live checkout pulled ${short(sd.newSha)}, which does not contain the merge ${short(dsha)}: not restarted`);
     }
 
     if (sd.newSha !== sd.prevSha && (await L(['diff', '--name-only', sd.prevSha, sd.newSha, '--', 'package-lock.json'])).out.trim()) {
@@ -893,7 +913,25 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       // from here the merge is on the target: nothing below returns the request or reverts anything
       if (c.ci && !(r.ci === 'success')) {
         const ciRes = await waitCi(r, c);
-        if (!ciRes.ok) { transition(r, 'merged_ci_red', { reason: ciRes.info?.timedOut ? `CI did not finish: ${ciRes.tail}` : 'CI red on the merge commit', tail: ciRes.tail }); return; }
+        if (!ciRes.ok) {
+          // A CANCELLED run on a commit that is no longer the target tip was SUPERSEDED: a newer commit landed on the target
+          // and GitHub cancelled this run. CI runs on that newer tip, so this is not red and the session has nothing to fix.
+          // A cancelled run on the CURRENT tip, a failure, a timeout: the current red behaviour.
+          const tip = ciRes.info?.status === 'cancelled' ? await supersedeTip(r, c, r.sha) : null;
+          if (!tip) { transition(r, 'merged_ci_red', { reason: ciRes.info?.timedOut ? `CI did not finish: ${ciRes.tail}` : 'CI red on the merge commit', tail: ciRes.tail }); return; }
+          r.supersededBy = tip; persist(r);
+          // The deploy gate waits for the newer tip's CI: the tip carries this merge, so the tip is what gets deployed.
+          const wantsDeploy = !!r.deployScope || (c.deploy?.kind === 'self' && !(r.alreadyMerged && !r.deployExplicit));
+          const tipRes = wantsDeploy
+            ? await waitCi(r, c, tip, { name: 'ci-tip', record: false })
+            : { ok: false, info: { status: 'not-watched' }, tail: `CI on the newer tip ${tip.slice(0, 12)} carries the verification` };
+          if (!tipRes.ok) {
+            if (wantsDeploy) r.deployHeld = true;   // the deploy asked for waits for the newer tip's CI
+            transition(r, 'merged_ci_superseded', { reason: `superseded by ${tip.slice(0, 12)}${wantsDeploy ? `: the newer tip's CI is ${tipRes.info?.status || 'not green'}` : ': CI runs on the newer tip'}`, tail: tipRes.tail });
+            return;
+          }
+          r.deploySha = tip;   // the green tip carries this merge: the deploy goes to the tip, not to the cancelled commit
+        }
       }
       // a re-request of a branch that was already on the target changes nothing: it does not restart the service unless --deploy was explicit
       if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: null }); return; }

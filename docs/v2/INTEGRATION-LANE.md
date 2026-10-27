@@ -26,6 +26,9 @@ One **integration lane per repository**, run by the mycodebox server, fed by eve
    compare-and-swap (the target moved: re-merge from the new target, never force) -> wait for remote CI on that exact
    commit (when the repo has CI) -> when the request asked for a deploy and CI is green: queue the deploy (approved) and
    wait for it. Same-scope deploys coalesce in the deploy queue.
+   A CI run CANCELLED because a newer commit landed on the target is not a red: the lane reports `merged_ci_superseded`
+   (the newer tip carries the CI), tells the session "nothing to fix, do not branch again", and holds the deploy until
+   the newer tip's CI is green.
 3. **The session is told the outcome.** Merged at `<sha>`, deployed `<version>`; or the exact reason it was returned
    (merge conflict outside convention files, red tests with the failing output tail, red CI, deploy failed) so the
    session fixes it on its branch and requests again. A codebox session gets one line through the guarded send when it
@@ -101,7 +104,7 @@ One waiter at a time: the launch writes the waiter shell's pid to `<id>.pid`. If
 Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (HTTP), `scripts/integrate` (CLI). The queue is
 `<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:
 `node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state
-(`merged`, `deployed`, `returned`, `merged_ci_red`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
+(`merged`, `deployed`, `returned`, `merged_ci_red`, `merged_ci_superseded`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
 transition; `event.kind` is `queued | running | step | resumed | state | coalesced | final`, `event.final` is true on a final state.
 
 **Coalescing and the settle window** (2026-10-20). One branch merged three times in three minutes, restarting the target CI each

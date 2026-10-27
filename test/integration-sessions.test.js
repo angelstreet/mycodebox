@@ -27,6 +27,13 @@ test('texts: merged, deployed, returned (+ tail), ci red, deploy failed', () => 
   const r = integrationText(req({ state: 'returned', reason: 'tests are red', tail: 'FAIL a\n\n  at b\nx\ny\nz\nw' }));
   assert.match(r, /^Integration int-7f3a returned: tests are red\. Fix it on your branch and run integrate request again\.\nFAIL a\n  at b\nx\ny\nz$/);
   assert.match(integrationText(req({ state: 'merged_ci_red', reason: 'unit failed' })), /CI is red.*manager decides/);
+  assert.match(integrationText(req({ state: 'merged_ci_superseded', reason: 'superseded by bbbbbbbbbbbb', supersededBy: 'b'.repeat(40) })),
+    /superseded by bbbbbbbbbbbb.*CI runs on the newer tip: nothing to fix, do not branch again/);
+  assert.match(integrationText(req({ state: 'merged_ci_superseded', supersededBy: 'b'.repeat(40), deployHeld: true })), /The deploy you asked for waits for the newer tip CI/);
+  // a merge that was superseded still says so when it went on to be deployed
+  assert.match(integrationText(req({ state: 'deployed', deployed: { id: 'd-1', version: '1.2.3', env: 'env-a', scope: 'full' }, supersededBy: 'b'.repeat(40) })),
+    /Your commit was superseded by bbbbbbbbbbbb.*nothing to fix, do not branch again/);
+  assert.equal(integrationNotice(req({ state: 'merged_ci_superseded' })).priority, 'default');
   assert.match(integrationText(req({ state: 'deploy_failed', reason: 'health check' })), /deploy failed/);
   assert.equal(integrationText(req({ state: 'running' })), null);
   assert.equal(tailLines('a\nb\nc', { lines: 2 }), 'a\nb');
