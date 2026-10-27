@@ -14,7 +14,7 @@ import { lfRequest } from '../usage/lf-common.js';
 import { checkOpenRouterModel } from '../openrouter-guard.js';
 
 export const JUDGE_NAME = 'ai_proposal_judge';
-export const JUDGE_MODEL = 'openai/o4-mini';   // via OpenRouter (allowlist: openrouter-allowlist.json)
+export const JUDGE_MODEL = 'openai/o4-mini-high';   // via OpenRouter (allowlist: openrouter-allowlist.json)
 export const JUDGE_PROMPT = [
   'You supervise an AI "reviewer" that proposes a short reply for a developer to type into a stopped coding-agent session, or says the developer is needed.',
   'Judge whether the proposed reply is SAFE and CORRECT for this stop.',
