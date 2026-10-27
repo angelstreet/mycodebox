@@ -301,11 +301,31 @@ export function quotaHtml(quota, jev) {
   return `<section class="uv-sec"><h2>Quota &amp; pace</h2>${body}${creditRow}</section>`;
 }
 
+
+// ---------- MiniMax usage (owner 2026-10-27): who is eating the 5h window ----------
+const callsFmt = (n) => String(Math.round(num(n)));
+const modelLine = (e) => `M3 ${callsFmt(e.byModel.m3.calls)} &middot; Flash ${callsFmt(e.byModel.flash.calls)}${e.byModel.other.calls ? ` &middot; other ${callsFmt(e.byModel.other.calls)}` : ''}`;
+// mm = /api/usage `minimax` (minimax-meter.js snapshot). Sessions are ranked by calls this window: the plan appears to count calls, not tokens.
+export function minimaxHtml(mm) {
+  if (!mm) return '<div class="uv-empty">no MiniMax meter yet</div>';
+  const w = mm.window, pct = mm.plan?.usedPercent;
+  const bar = pct == null ? '<div class="uv-note dim">plan 5h reading unavailable</div>'
+    : `<div class="uv-qh"><b>Plan 5h window</b><span class="grow"></span><b>${Math.round(pct)}%</b></div><div class="uv-bar"><i style="width:${Math.min(100, Math.max(0, pct))}%"></i></div>`;
+  const reset = mm.plan?.resetsAt ? `resets ${esc(new Date(mm.plan.resetsAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }))}` : '';
+  const rows = (mm.sessions || []).filter((s) => s.window.calls || s.h24.calls).map((s) => `<div class="urow${s.top ? ' out' : ''}">
+      <div class="u1">${s.top ? `<span class="uw" title="top consumer this window">${icon('alert', 12)}</span>` : ''}<b>${esc(s.name)}</b>${s.manager ? ' <span class="dim" title="manager session">manager</span>' : ''}${s.pollLoop ? ' <span class="chip-m late" title="many calls with almost no new tokens: a tight status-poll loop">possible poll loop</span>' : ''}<span class="grow"></span><b class="tk">${callsFmt(s.window.calls)} calls &middot; ${s.share}%</b></div>
+      <div class="uv-bar sm"><i style="width:${Math.min(100, s.share)}%"></i></div>
+      <div class="u2">${modelLine(s.window)} &middot; new ${fmtTok(s.window.newTokens)} &middot; cache r ${fmtTok(s.window.cacheRead)} &middot; 24h ${callsFmt(s.h24.calls)} calls (${modelLine(s.h24)})</div></div>`).join('');
+  return `<section class="uv-sec"><h2>MiniMax usage</h2>${bar}<div class="uv-note dim">${callsFmt(w.calls)} calls this window ${reset ? `&middot; ${reset} ` : ''}&middot; ${callsFmt(mm.h24.calls)} in 24 h</div>
+    ${rows || '<div class="dim">no MiniMax calls in the last 24 h</div>'}
+    <div class="uv-note dim">${esc(mm.note || '')}</div></section>`;
+}
+
 // ---------- the page ----------
 
 // ui = { tab, view, dim, range, selDay, f: {agent, project, q}, openAgents: Set, langfuse }
 export function pageHtml({ usage, tab = 'today', score = null, jev = null, quota = null, ui = {}, rows = [], live = () => false, links = {} }) {
-  const today = tab === 'today';
+  const today = tab === 'today' && (ui.view || 'overview') !== 'minimax';
   if (today && !usage) return '<div class="uv-empty">loading…</div>';
   if (today && usage && !summaryFresh(usage, Date.now())) return '<div class="uv-empty">no usage today yet — the summary is from an earlier day</div>';
   if (today && usage && !usage.today) return '<div class="uv-empty">today needs the updated ghosty-usage tailer (restart the unit)</div>';
@@ -313,7 +333,7 @@ export function pageHtml({ usage, tab = 'today', score = null, jev = null, quota
   const view = ui.view || 'overview';
   const head = `<div class="uv-head">
     <div class="uv-tabs">${[['today', 'Today'], ['14d', '14 days']].map(([k, l]) => `<button class="uv-tab${tab === k ? ' on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
-    <div class="uv-nav">${[['overview', 'Overview'], ['time', 'Over time'], ['trend', 'Trending'], ['sessions', 'Sessions']].map(([k, l]) => `<button class="uv-navb${view === k ? ' on' : ''}" data-view="${k}">${l}</button>`).join('')}</div>
+    <div class="uv-nav">${[['overview', 'Overview'], ['time', 'Over time'], ['trend', 'Trending'], ['sessions', 'Sessions'], ['minimax', 'MiniMax']].map(([k, l]) => `<button class="uv-navb${view === k ? ' on' : ''}" data-view="${k}">${l}</button>`).join('')}</div>
     <span class="grow"></span>
     ${links.langfuse ? `<a class="uv-lf" href="${esc(links.langfuse)}" target="_blank" rel="noopener">Langfuse ↗</a>` : ''}
   </div>`;
@@ -325,7 +345,8 @@ export function pageHtml({ usage, tab = 'today', score = null, jev = null, quota
   </div>` : '';
 
   let bodyHtml;
-  if (view === 'time') bodyHtml = overTimeHtml(usage, tab, ui, rows);
+  if (view === 'minimax') bodyHtml = minimaxHtml(usage?.minimax);
+  else if (view === 'time') bodyHtml = overTimeHtml(usage, tab, ui, rows);
   else if (view === 'trend') bodyHtml = trendHtml(usage);
   else if (view === 'sessions') bodyHtml = projectsHtml(usage, tab, rows, ui) + sessionsHtml(rows, ui, live);
   else bodyHtml = tilesHtml(usage, tab, score, rows)

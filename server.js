@@ -69,6 +69,7 @@
 //   POST /api/alert             → {title, body, url?, priority?, tag?} the manager agent's alert; loopback + reporter token, max 10/h
 //   POST /api/reporter/event    → ghosty-reporter plugin events; loopback peers + x-ghosty-reporter-token (state dir reporter.token) only
 //   GET  /api/reporter/:session → latest reported turn / prompt / waiting / agents of a session
+//   GET  /api/usage also carries `minimax` (per-session calls this 5h window / 24 h, minimax-meter.js)
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
 //   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
@@ -121,6 +122,7 @@ import { createSessionMeta } from './session-meta.js';
 import { createSessionHistory } from './session-history.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota } from './quota.js';
+import { createMinimaxMeter, meterConfig, newShareAlerts } from './minimax-meter.js';
 import { createCredits } from './credits.js';
 import { createAnthropicSpend } from './anthropic-spend.js';
 import { createUsage, usageFile } from './usage-view.js';
@@ -1067,6 +1069,10 @@ const rulesWatch = createRulesWatch({
 const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
+// Per-session MiniMax calls in the plan's 5h window and the last 24 h, from the ledger (minimax-meter.js); read-only.
+const minimaxMeterConfig = () => { try { return meterConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return meterConfig({}); } };
+const minimaxMeter = createMinimaxMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl'), quota: () => quota.get(), config: minimaxMeterConfig, isManager: (n) => loadOwnerHiddenSessions().includes(n) });
+const minimaxToldShare = new Set();
 
 // The voice item of a session's open stop right now (voice.js), or null. Reads the manager's live view, not `latest` (notifySession runs mid-poll).
 function voiceItemOf(session, kind, stateHint = null) {
@@ -1340,7 +1346,7 @@ async function pollOnce() {
   }
   Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)
   for (const [k, v] of Object.entries(status)) { const rw = readyStore.chipFor(k, `${v.stall?.question || ''}\n${v.stall?.excerpt || ''}`); v.ready = rw && (rw.scope === 'session' || v.stall) ? rw : null; }   // round 9 item 8: the window covering this session, for the chip
-  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
+  for (const [k, v] of Object.entries(status)) { v.priority = sessionMeta.priority(k); v.paused = sessionMeta.isPaused(k); v.held = heldOf(k); v.usage = usage.forSession(k); v.minimax = v.agent === 'minimax' ? minimaxMeter.forSession(k) : null; v.reporter = v.agent === 'claude' ? reporter.summary(k) : null; }
   return { sessions, status, changedSessions };
 }
 
@@ -2294,7 +2300,7 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/usage') {
     const b = await usage.body(Object.keys(latest?.status || {}));
-    return b ? json(res, 200, b) : json(res, 404, { error: 'no usage summary yet' });
+    return b ? json(res, 200, { ...b, minimax: minimaxMeter.snapshot() }) : json(res, 404, { error: 'no usage summary yet' });
   }
   if (req.method === 'GET' && p === '/api/deploys') return json(res, 200, deployRunner.snapshot());
   const dm = p.match(/^\/api\/deploys\/([0-9a-f]+)\/(approve|cancel|log)$/);
@@ -2828,6 +2834,14 @@ server.listen(PORT, HOST, async () => {
   startWakesLogger({ stateDir: STATE_DIR });   // keeps manager-wakes.jsonl current (it silently stopped 2026-10-04)
   setInterval(() => wakeOutcomeTick().catch((e) => console.error('[wake-outcome]', e.message)), 60000).unref?.();
   setInterval(quotaTick, 60000);
+  setInterval(() => {   // tell the owner before the window is gone: one session past sharePct of the window's calls
+    try {
+      const snap = minimaxMeter.snapshot();
+      for (const x of newShareAlerts(snap, minimaxMeterConfig(), minimaxToldShare)) {
+        alert(`minimax:share:${x.name}`, { title: `MiniMax: ${x.name} has ${Math.round(x.share)}% of the 5h window`, body: `${x.name} made ${x.window.calls} of ${snap.window.calls} model calls this window (${Math.round(x.share)}%)${snap.plan?.usedPercent != null ? `; the plan is ${Math.round(snap.plan.usedPercent)}% used` : ''}.${x.pollLoop ? ' It looks like a poll loop.' : ''}`, url: '/', tier: 'interrupt' }, 3600000);
+      }
+    } catch (e) { console.error('[minimax-meter]', e.message); }
+  }, 60000).unref?.();
 });
 
 // Optional TLS listener — required for PWA install on most browsers.

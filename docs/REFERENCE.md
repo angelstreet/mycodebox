@@ -1161,6 +1161,22 @@ Claude status line: in `~/.claude/settings.json` set
 `"statusLine": {"type": "command", "command": "/home/<user>/ghosty-sessions/scripts/claude-statusline-ratelimits.sh"}`
 (needs `jq`). It reads only the JSON on stdin and prints `model 5h NN% wk NN%`.
 
+### MiniMax usage per session (owner 2026-10-27)
+
+`minimax-meter.js` reads the MiniMax rows of `usage-ledger.jsonl` (tail, cached 20 s) and answers "who is eating the 5h window".
+Read-only: no session's behaviour changes. The plan window appears to count model **calls**, not tokens (each call carries ~3K new
+tokens but re-reads ~200K of cached context), so sessions are ranked by calls; new tokens (input+output) and cache reads sit beside.
+
+- `GET /api/usage` carries `minimax`: `{ window: {start, calls, newTokens, cacheRead, byModel}, h24, sessions[], plan: {usedPercent, resetsAt}, note }`.
+  The window is `(plan 5h resetsAt - 5 h, now]` (`now - 5 h` when the plan reading is missing or stale). Per session (name = ledger `label`, else the session id):
+  `window` / `h24` with `byModel` `m3` | `flash` | `other` (a row without a model field is `other`), `share` (% of the window's calls),
+  `top`, `manager`, `pollLoop`.
+- Status payload: `minimax: {calls, share, pollLoop, top}` on MiniMax sessions; the card shows a "N calls" chip (amber "possible poll loop").
+- Usage page (`/?usage=1`) has a **MiniMax** view: the plan's 5h bar, sessions ranked by call share, manager sessions marked, top consumer highlighted.
+- **Poll loop**: at least `minimaxPollLoopCalls` (40) calls in the last `minimaxPollLoopMinutes` (10) with fewer than `minimaxPollLoopMaxNewTokens` (300) new tokens per call on average.
+- **Share push**: once per session and window, when one session has more than `minimaxSharePct` (40) % of the window's calls and the window has at least
+  `minimaxShareMinCalls` (50) calls: an interrupt push. All five keys live in `manager.json`.
+
 ## Usage (Langfuse)
 
 The tailer, `usage/ingest.js`, produces token usage and API-equivalent cost per session, project, agent, model and day.

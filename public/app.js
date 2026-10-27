@@ -2256,6 +2256,8 @@ function rowChipsHtml(n) {
   if (loc) chips.push(`<span class="chip-m">${escapeHtml(loc)}</span>`);
   const c = ctxHtml(st);
   if (c) chips.push(c.replace('class="ctx', 'class="chip-m ctx'));
+  const mm = st.minimax;
+  if (mm && mm.calls) chips.push(`<span class="chip-m${mm.pollLoop ? ' late' : ''}" title="MiniMax model calls this 5h window (${mm.share}% of all sessions)${mm.top ? ', top consumer' : ''}">${mm.calls} calls${mm.pollLoop ? ' &middot; possible poll loop' : ''}</span>`);
   return chips.join('');
 }
 
