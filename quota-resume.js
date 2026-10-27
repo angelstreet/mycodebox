@@ -3,12 +3,14 @@
 // one Enter resends it. Pure decision function plus a tick with injected IO (the pattern of crash-resume.js).
 // A login stop ("Sign in to MiniMax ... /login") is a credentials problem: never auto-handled, only escalated.
 
-const PLANS = { minimax: 'minimax', claude: 'claude', codex: 'codex' };   // pane agent -> quota plan
+// pane agent -> quota plan. Only mcode prints the limit / login stops this module reads; a claude or codex pane that merely
+// quotes those phrases (a manager's own output) must never match, so the agent field gates every scan.
+const PLANS = { minimax: 'minimax' };
 export const LIMIT_PCT = 95;                  // a window at or above this is still full (quota.js CRIT_PCT)
 export const QUOTA_MAX_AGE_MS = 15 * 60e3;    // quota.js polls every 5 min: three missed polls = stale
 export const REPEAT_MS = 10 * 60e3;           // a limit hit again this soon after a resume backs off to the next reset
 const WINDOW_MS = 5 * 3600e3;
-const TAIL = 15;
+const TAIL = 8;    // the stop sits right above the input box; older output may quote the phrases
 const LIMIT_RE = /\busage limit reached\b/i;
 const PRESERVED_RE = /prompt is preserved/i;
 const LOGIN_RE = /Sign in to MiniMax|Run \/login\b/i;
@@ -65,7 +67,7 @@ export function createQuotaResumer({ getState, getQuota, sendEnter, record, mana
     for (const name of names || []) {
       const state = await getState(name);
       if (!state) continue;
-      const t = now(), plan = planOf(q, state.agent), scan = scanLimit(state.lines);
+      const t = now(), plan = planOf(q, state.agent), scan = PLANS[state.agent] ? scanLimit(state.lines) : { kind: null, preserved: false };
       if (scan.kind !== 'limit') {   // the stop is over (or never was): the next one is a new sighting
         sightings.delete(name);
       }

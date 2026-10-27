@@ -105,3 +105,19 @@ test('tick: a login stop is escalated once and never answered', async () => {
   assert.equal(h.sent.length, 0);
   assert.equal(h.recs.filter((e) => /login-stop/.test(e.key)).length, 1);
 });
+
+test('regression: a claude pane that quotes both phrases is never scanned, escalated or resumed', async () => {
+  const quoted = ['I saw "Sign in to MiniMax to use Agent features. Run /login" on s2', 'and "× Error  Usage limit reached. Code: 42212 ... Your prompt is preserved."', '> '];
+  assert.equal(dec({ state: st(quoted, { agent: 'claude', name: 'manager' }) }).reason, 'no-plan');
+  const h = harness();
+  h.s.state = st(quoted, { agent: 'claude', name: 'manager' });
+  await h.r.tick(['manager']); await h.r.tick(['manager']);
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.recs.length, 0);
+});
+
+test('an old quoted phrase far above the input box is not a stop on an mcode pane', () => {
+  const old = [...LOGIN, ...Array.from({ length: 10 }, (_, i) => `output ${i}`), '> '];
+  assert.equal(scanLimit(old).kind, null);
+  assert.equal(scanLimit([...LOGIN, 'x', '> ']).kind, 'login');
+});

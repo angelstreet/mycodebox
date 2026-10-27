@@ -1120,7 +1120,7 @@ never holds a session. The quota sheet shows each plan's subscription and "unlim
 **Usage-limit resume (`quota-resume.js`, owner 2026-10-27).** A session stopped on a provider usage limit (MiniMax
 `× Error  Usage limit reached. Code: 42212 ... Your prompt is preserved.`, the prompt left in the input box) gets ONE
 Enter once its plan's window has reset. Every poll tick, for each session whose pane tail ends on that error with the
-"prompt is preserved" line: the pane agent maps to its plan (`minimax` for mcode, `claude`, `codex`) and the plan must be
+"prompt is preserved" line: only panes whose agent field is mcode/minimax are read (a claude pane quoting the phrases never matches; only the last 8 non-empty lines count), mapped to the `minimax` plan, and the plan must be
 readable (not `stale`, read within 15 min) with every window under 95 % or already reset. The Enter goes through the
 guarded send path (`by: 'quota-resume'`). Not resumed: a manager session (unless `quotaResumeManagers: true`), a paused or
 held session, a draft typed after the stop (the preserved prompt itself is not a draft), a closed session.
