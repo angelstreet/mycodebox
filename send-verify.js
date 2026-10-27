@@ -25,3 +25,38 @@ export async function verifyDelivered({ text, draftNow, pressEnter, sleep, onRet
   }
   return pressed;
 }
+
+// Chunked-paste race (2026-10-27): tmux feeds a long paste to the TUI in ~165-char chunks, and an Enter right after the last chunk can land
+// while the TUI is still flushing it, so the text stays in the composer. Before the Enter, wait until the pane has stopped changing.
+export const pasteChunks = (text) => Math.max(1, Math.ceil(String(text || '').length / 165));
+export const settleBudgetMs = (text) => Math.min(8000, 400 + pasteChunks(text) * 300);
+
+// deps: capture() -> pane text, sleep(ms), now() -> ms. Resolves true when the pane was unchanged for quietMs, false at the budget.
+export async function waitSettled({ capture, sleep, now = Date.now, budgetMs, quietMs = 250, pollMs = 100 }) {
+  const t0 = now();
+  let last = null, since = t0;
+  for (;;) {
+    let cur; try { cur = await capture(); } catch { return false; }
+    const t = now();
+    if (cur !== last) { last = cur; since = t; }
+    else if (t - since >= quietMs) return true;
+    if (t - t0 >= budgetMs) return false;
+    await sleep(pollMs);
+  }
+}
+
+// Like verifyDelivered, but awaited and honest: { pressed, submitted }. submitted is false when our text is still in the prompt after
+// the last retry; null when the prompt could not be read.
+export async function confirmDelivered({ text, draftNow, pressEnter, sleep, onRetry = () => {}, retries = 1, waitMs = 650 }) {
+  let pressed = 0;
+  for (let i = 0; i <= retries; i++) {
+    await sleep(waitMs);
+    const d = await draftNow();
+    if (d === null) return { pressed, submitted: null };
+    if (!isOurDraft(d, text)) return { pressed, submitted: true };
+    if (i === retries) break;
+    pressed++; onRetry(pressed);
+    await pressEnter();
+  }
+  return { pressed, submitted: false };
+}

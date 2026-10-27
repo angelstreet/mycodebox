@@ -104,7 +104,7 @@ import { createRulesWatch } from './rules-watch.js';
 import { createDoneCheck } from './done-check.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
-import { verifyDelivered } from './send-verify.js';
+import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -393,22 +393,30 @@ async function sendKeys(session, keys, enter = true) {
     await exec(TMUX, ['set-buffer', '-b', buf, '--', text]);
     await exec(TMUX, ['paste-buffer', '-p', '-d', '-b', buf, '-t', tgt(session)]);
   }
+  let submitted;
   if (enter) {
-    await new Promise((r) => setTimeout(r, lines.length > 1 || text.length > 200 ? 400 : 80));
-    await exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
-    // The agent may swallow that Enter while it is still processing the paste (an image path becomes an attachment): the text then sits in the
-    // prompt as a draft. Check, and press Enter again if so; in the background, the reply does not wait for it.
-    void verifyDelivered({
-      text,
-      draftNow: async () => { try { return inputBox((await capturePane(session, 30)).split('\n')).draft; } catch { return null; } },
-      pressEnter: () => exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']),
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      onRetry: (n) => logEvent({ type: 'send-enter-retry', session, attempt: n }),
-    }).catch(() => {});
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const long = lines.length > 1 || text.length > 200;
+    const draftNow = async () => { try { return inputBox((await capturePane(session, 30)).split('\n')).draft; } catch { return null; } };
+    const pressEnter = () => exec(TMUX, ['send-keys', '-t', tgt(session), 'Enter']);
+    // A long paste arrives in chunks: wait until the pane stops changing (bounded by the chunk count) before the Enter. Short text: as before.
+    if (long) { await sleep(400); await waitSettled({ capture: () => capturePane(session, 30), sleep, budgetMs: settleBudgetMs(text) }); }
+    else await sleep(80);
+    await pressEnter();
+    if (long) {
+      // Awaited and honest: the Enter may still have been swallowed; press it once more, and report submitted:false if the text stays.
+      const r = await confirmDelivered({ text, draftNow, pressEnter, sleep, onRetry: (n) => logEvent({ type: 'send-enter-retry', session, attempt: n }) });
+      submitted = r.submitted;
+    } else {
+      // The agent may swallow that Enter while it is still processing the paste (an image path becomes an attachment): the text then sits in the
+      // prompt as a draft. Check, and press Enter again if so; in the background, the reply does not wait for it.
+      void verifyDelivered({ text, draftNow, pressEnter, sleep, onRetry: (n) => logEvent({ type: 'send-enter-retry', session, attempt: n }) }).catch(() => {});
+    }
   }
   lastSendAt.set(session, Date.now());
   lastSendText.set(session, String(keys || ''));
-  return { ok: true, sent: lines.length };
+  if (submitted === false) { logEvent({ type: 'send-unsubmitted', session }); return { ok: true, sent: true, submitted: false }; }
+  return submitted === true ? { ok: true, sent: lines.length, submitted: true } : { ok: true, sent: lines.length };
 }
 
 // ---------------------------------------------------------------------------
