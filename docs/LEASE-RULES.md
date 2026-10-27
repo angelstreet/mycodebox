@@ -20,6 +20,7 @@ or `mac:<name>`.
 
 - Add `--kind host` when only a restart of your own host breaks you; leave the default when a server restart breaks you
   (runs started through the server API, the UI, MCP or take-control).
+- A routine restart of a vpt-* service on a lab host (`systemctl restart <unit>`) needs that host's lease (`--kind host`) only, never the server or an env-wide lease, and does not wait for the owner.
 - A frontend change never needs a backend or device lease, and a run on one device never blocks another device.
 - Deploys go through the queue: `vpt-lease deploy request ...`, then `vpt-lease deploy wait ...`. Never run a deploy
   script by hand around the queue.

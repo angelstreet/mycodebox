@@ -30,6 +30,7 @@ import { decidedItems, decidedSummary, failedCount } from './decided.js';
 import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
 import { leaseAsk, answerLeaseAsk } from './lease-ask.js';
+import { routineRestart, answerRoutineRestart, setRoutineRestartUnits } from './routine-restart.js';
 import { opsAsk } from './ops-ask.js';
 import { selfAsk, answerSelf } from './self-check.js';
 import { mockupRule, WINDOW_DEFAULT_MIN } from './mockups.js';
@@ -77,6 +78,7 @@ export const CASES = ['continue', 'menu_recommended', 'permission', 'owner_decis
 export const LABELS = ['no_reason', 'legit', 'wrong_case'];
 
 setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
+setRoutineRestartUnits(process.env.GHOSTY_RESTART_UNITS || null);   // allowlist of routine device-side restarts (owner 2026-10-27)
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
 let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true, selfChecks: true, mockupFirst: true, mockupWindowMin: WINDOW_DEFAULT_MIN,
@@ -1199,7 +1201,8 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   // A question about a lease is never an owner question (design sections 4 and 7): it is answered from the lease source.
   // Only a PURE lease part is answered: the hard floor runs on it with no exemptions (a deploy or restart word in it makes it an owner / deploy
   // question). The deploy / hard topics of the whole question stay in force below: they escalate, only the pure lease part is answered.
-  const markLease = (p) => (config.leaseAnswers && leaseAsk(p.text).lease && !hardMatch(p.text, {}) ? { ...p, kind: 'info', lease: true } : p);
+  const markLease = (p) => (config.leaseAnswers && leaseAsk(p.text).lease && !hardMatch(p.text, {}) ? { ...p, kind: 'info', lease: true }
+    : config.leaseAnswers && isAsk(p.text) && routineRestart(p.text).routine && !hardMatch(p.text, {}) ? { ...p, kind: 'info', lease: true, restart: true } : p);   // a routine device-side restart is answered from the lease source (owner 2026-10-27)
   let all = leaseViewOf ? splitAsk(final.question || '').map(markLease) : splitAsk(final.question || '');
   if (leaseViewOf && !all.some((p) => p.lease)) { const whole = markLease({ text: String(final.question || '').trim(), kind: 'other' }); if (whole.lease) all = [whole]; }   // the ask only reads as a lease question as a whole
   // Self-check (round 9, item 5): version / progress / "does this file exist" are settled from the registry and the hosts. Same floor as the lease part:
@@ -1226,7 +1229,7 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   if (leaseHit) {
     let lv = null; try { lv = await leaseViewOf(name); } catch { lv = { ok: false }; }   // unreachable source = busy, never free
     for (const p of parts.filter((x) => x.lease)) {
-      const a = answerLeaseAsk({ ask: p.text, view: lv || { ok: false }, session: name, now: s.now });
+      const a = p.restart ? answerRoutineRestart({ text: p.text, view: lv || { ok: false }, session: name }) : answerLeaseAsk({ ask: p.text, view: lv || { ok: false }, session: name, now: s.now });
       if (a) info.push({ part: p.text, label: 'Lease', answer: a.text, source: '' });
     }
   }

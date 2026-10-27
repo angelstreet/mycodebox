@@ -813,6 +813,17 @@ pushes and publishing a package. Round 8 added the sudo, unit-file, reboot and m
 too, which only makes every other caller stricter: a button or a voice answer whose text says "graceful shutdown" or
 `user.service.ts` now asks for a confirm too.
 
+**Routine device-side restart (owner, 2026-10-27).** `systemctl restart <unit>` (optionally followed by `is-active` / `status` of
+the same unit, with or without `sudo -n`, or the prose "restart <unit> on <lab-host>") of an allowlisted unit is not a forbidden
+topic and not an owner question; `routine-restart.js` neutralizes only those fragments before `forbiddenMatch`, `hardMatch`,
+`forbiddenTopics` and `ownerFloorMatch` read the text, so the rest of the floor still applies. Allowlist: `GHOSTY_RESTART_UNITS`
+(comma separated globs, `*` = any characters; default `vpt-monitor-img,vpt-host,vpt-stream*,vpt-grabber*`); set it to extend or narrow.
+Still forbidden exactly as before: `stop`, a bare `start`, `enable`, `disable`, `mask`, `daemon-reload`, unit files, sudoers, a
+restart of anything outside the allowlist or of a second unit riding along, `ghosty-sessions` / the server unit, production or
+customer hosts, reboots and credentials (one such word anywhere cancels the relief). The manager answers such a question from the lease
+source (`answerRoutineRestart`): "yes, go ahead" when the session holds an exclusive lease that covers the host, else "claim the host
+lease first (`--kind host --wait`)". A restart needs the host lease only, never the server or an env-wide lease. Tests: `test/routine-restart.test.js`.
+
 For a finished turn without a live menu, the manager evaluates every decidable topic present (merge, then push, then
 deploy), answers the passing ones in one reply and escalates the rest with what was already answered:
 

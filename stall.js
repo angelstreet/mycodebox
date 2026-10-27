@@ -26,6 +26,7 @@
 
 import { waitsOnOwnJob, jobRefs, hasRef } from './job-refs.js';
 import { neutralizeRoutineHostUnit } from './host-unit-routine.js';
+import { neutralizeRoutineRestart } from './routine-restart.js';
 
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
@@ -421,14 +422,15 @@ function matchWithRelief(re, text, extra = null) {
   return null;
 }
 
-export const forbiddenMatch = (text) => matchWithRelief(FORBIDDEN_RE, text, forbiddenExtra);
+// A routine device-side restart (routine-restart.js, owner 2026-10-27) is not a topic: only its fragments are neutralized, the rest of the floor still reads the text.
+export const forbiddenMatch = (text) => matchWithRelief(FORBIDDEN_RE, neutralizeRoutineRestart(text, textVariants), forbiddenExtra);
 // Every restricted topic the text names, with the metric-drop relief applied per occurrence: a number that went down
 // is not a topic, a disguised deletion still is. The hits are the matched words, so a caller can map them to its own
 // classes (the policy does). Every spelling of the text is read with its own reading of a number, so a leet spelling
 // of a metric drop ("40" -> "ao") is a metric too. `spellings: false` reads the text as written, for a text that is
 // already an in-context join.
 export function forbiddenTopics(text, { spellings = true } = {}) {
-  const raw = String(text);
+  const raw = neutralizeRoutineRestart(String(text), spellings ? textVariants : null);
   const out = [];
   const scan = (v, leet) => {
     for (const m of v.matchAll(globalRe(FORBIDDEN_RE))) {
@@ -451,6 +453,7 @@ export const mergeMatch = (text) => requested(text, MERGE_RE);
 // plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent, migrationsOk } (a bare boolean = mergePresent); migrationsOk: the noun "migration" is covered by a deploy evaluation of additive lab migrations.
 export function hardMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
+  text = neutralizeRoutineRestart(text, textVariants);   // routine device-side restart (owner 2026-10-27)
   text = neutralizeRoutineHostUnit(text, textVariants);   // the narrow host_units exception (owner 2026-10-25): only the unit words go, the rest of the floor still reads the text
   const hit = matchWithRelief(hardRe(o), text, forbiddenExtra) || colonHit(text);
   if (hit) return hit;
@@ -1063,5 +1066,5 @@ export const OWNER_FLOOR_RE = new RegExp(OWNER_FLOOR_PARTS.join('|'), 'i');
 export function ownerFloorMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : {};
   if (o.generatedSecretOk === undefined) o.generatedSecretOk = GENERATED_SECRET_RE.test(String(text || ''));
-  return matchWithRelief(ownerFloorRe(o), text, forbiddenExtra);
+  return matchWithRelief(ownerFloorRe(o), neutralizeRoutineRestart(text, textVariants), forbiddenExtra);
 }
