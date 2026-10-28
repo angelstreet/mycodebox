@@ -1421,6 +1421,9 @@ After 4 dispatches in one red streak it stops and pushes the owner once (`ci-wat
 Feed events: `ci-watch:red`, `ci-watch:fixer-started`, `ci-watch:fixer-nudged`, `ci-watch:green`. Journal: `ci-watch.jsonl`.
 Config: `<stateDir>/ci-watch.json` `{ "repo": "<owner/name>", "workflow": "<file.yml>", "cwd": "<checkout>", "branch": "main", "session": "ci-fix-main",
 "provider": "claude|minimax|codex|opencode", "model": "<optional, cbsession -m>" }`. Without it the watch stays idle. `manager.json` `ciWatch`: `"dry"` (journal only) or `"off"`; default live.
+Optional `"fixWindow": {"from": 1, "to": 6, "tz": "Europe/Zurich"}` (owner, 2026-10-28): the fixer is only started or nudged when the local hour is in
+[from, to) (from > to wraps midnight). Outside it a red is still detected and fed once (`ci-watch:red`), but nothing is dispatched or counted and the verdict says
+"fixer waits for 01:00"; the red gets its dispatch on the first tick inside the window. A running fixer keeps working past the end. Missing or `null` = always on.
 `GET /api/ci-watch` shows the last verdict, the action and the red streak.
 
 ## Done check (owner/manager, 2026-10-15)

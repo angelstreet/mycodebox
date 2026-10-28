@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { verdictRun, decide, brief, createCiWatch, mergePlatformVerdict, MAX_ATTEMPTS } from '../ci-watch.js';
+import { inFixWindow, verdictRun, decide, brief, createCiWatch, mergePlatformVerdict, MAX_ATTEMPTS } from '../ci-watch.js';
 
 const T0 = Date.parse('2026-10-15T06:00:00Z');
 const at = (min) => new Date(T0 + min * 60000).toISOString();
@@ -63,10 +63,10 @@ test('mergePlatformVerdict: success + platform failures -> failure (with the job
   assert.equal(mergePlatformVerdict(null, ['x']), null);
 });
 
-function harness(t, { runs, jobs = ['Frontend Lint'], fixer = { exists: false, alive: false, working: false }, mode = 'live', cfg = true, platformJobs = [], platformError = null, log = { error() {} } }) {
+function harness(t, { runs, jobs = ['Frontend Lint'], fixer = { exists: false, alive: false, working: false }, mode = 'live', cfg = true, fixWindow, platformJobs = [], platformError = null, log = { error() {} } }) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-watch-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  if (cfg) writeFileSync(join(dir, 'ci-watch.json'), JSON.stringify({ repo: 'org/fake', workflow: 'ci.yml', cwd: '/w/fake' }));
+  if (cfg) writeFileSync(join(dir, 'ci-watch.json'), JSON.stringify({ repo: 'org/fake', workflow: 'ci.yml', cwd: '/w/fake', ...(fixWindow !== undefined ? { fixWindow } : {}) }));
   const calls = { started: [], sent: [], events: [], alerts: [], platformQueries: [] };
   let clock = T0 + 60 * 60000;
   const w = createCiWatch({
@@ -199,4 +199,43 @@ test('tick: a gh-failure run is not queried in the platform store (gh already sa
   await h.w.tick();
   assert.equal(h.calls.platformQueries.length, 0);
   assert.equal(h.calls.started.length, 1);
+});
+
+const ZRH = { from: 1, to: 6, tz: 'Europe/Zurich' };
+
+test('inFixWindow: inside, outside, midnight wrap, missing config', () => {
+  const utc = (iso) => Date.parse(iso);   // 2026-10-15 is CEST (UTC+2)
+  assert.equal(inFixWindow(ZRH, utc('2026-10-15T00:00:00Z')), true);    // 02:00 local
+  assert.equal(inFixWindow(ZRH, utc('2026-10-14T23:00:00Z')), true);    // 01:00 local, inclusive
+  assert.equal(inFixWindow(ZRH, utc('2026-10-15T04:00:00Z')), false);   // 06:00 local, exclusive
+  assert.equal(inFixWindow(ZRH, utc('2026-10-15T07:00:00Z')), false);
+  const wrap = { from: 22, to: 4, tz: 'Europe/Zurich' };
+  assert.equal(inFixWindow(wrap, utc('2026-10-15T21:00:00Z')), true);   // 23:00
+  assert.equal(inFixWindow(wrap, utc('2026-10-15T00:30:00Z')), true);   // 02:30
+  assert.equal(inFixWindow(wrap, utc('2026-10-15T10:00:00Z')), false);
+  assert.equal(inFixWindow(undefined, 0), true); assert.equal(inFixWindow(null, 0), true);
+});
+
+test('tick: red outside the fix window is fed once, dispatches nothing, counts no attempt, says why; inside it dispatches', async (t) => {
+  const h = harness(t, { runs: () => [r(2, 'failure', 20)], fixWindow: ZRH });   // harness clock: 09:00 Zurich
+  await h.w.tick(); await h.w.tick();
+  assert.deepEqual(h.calls.events, ['ci-watch:red']);
+  assert.equal(h.calls.started.length, 0);
+  assert.match(h.w.snapshot().verdict, /fixer waits for 01:00/);
+  assert.match(h.w.snapshot().action.reason, /fixer waits for 01:00/);
+  assert.equal(h.w.snapshot().streak.attempts, 0);
+  h.advance(17 * 60);   // 02:00 next day
+  await h.w.tick();
+  assert.deepEqual(h.calls.events, ['ci-watch:red', 'ci-watch:fixer-started']);
+  assert.equal(h.calls.started.length, 1);
+});
+
+test('tick: an idle fixer is not nudged outside the window; a missing or null fixWindow keeps the old behaviour', async (t) => {
+  const idle = { exists: true, alive: true, working: false };
+  const out = harness(t, { runs: () => [r(2, 'failure', 20)], fixer: idle, fixWindow: ZRH });
+  await out.w.tick(); assert.equal(out.calls.sent.length, 0);
+  const nul = harness(t, { runs: () => [r(2, 'failure', 20)], fixWindow: null });
+  await nul.w.tick(); assert.equal(nul.calls.started.length, 1);
+  const none = harness(t, { runs: () => [r(2, 'failure', 20)] });
+  await none.w.tick(); assert.equal(none.calls.started.length, 1);
 });
