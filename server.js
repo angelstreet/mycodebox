@@ -51,6 +51,7 @@
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
 //   GET|POST|DELETE /api/bugs    → found-bug channel: list + counts / file a bug / remove a test report (loopback; found-bugs.js, scripts/found-bug)
+//   GET  /api/unfinished        → task docs with open rows joined with sessions: orphaned (no live session), covered, other (unfinished.js; scripts/resume-task)
 //   GET  /api/leftovers         → leftovers / owner-push watcher snapshot: last scan, sessions found with kind and items (done-leftovers.js, owner-push.js)
 //   GET  /api/worker-auto-close → worker-auto-close snapshot: sessions the worker auto-close tick closed or skipped (worker-auto-close.js)
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
@@ -108,6 +109,7 @@ import { createRulesWatch } from './rules-watch.js';
 import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
+import { scanTaskDocs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
@@ -1001,6 +1003,7 @@ const foundBugsRecent = new Set();   // sessions with a found-bug record in the 
 const leftovers = createLeftovers({
   listIdle: async () => {
     foundBugsRecent.clear();
+    try { coveredTasks = (await unfinishedNow()).covered; } catch { coveredTasks = []; }
     for (const b of await foundBugs.list({ limit: 500 })) if (Date.now() - Date.parse(b.at) < 3600 * 1000) foundBugsRecent.add(b.session);
     const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
     for (const [name, p] of panes) {
@@ -1020,12 +1023,30 @@ const leftovers = createLeftovers({
     if (ub && !foundBugsRecent.has(name)) return { kind: 'bug-unreported', items: [ub.sentence], title: 'bug mentioned, not reported' };
     const items = pushableItems(text);
     if (items) return { kind: 'leftovers', items, title: 'done with leftovers' };
+    const dl = docLeftoversFor(name, text, coveredTasks);   // closing text lists nothing, but the task doc still has open rows
+    if (dl) return { kind: 'leftovers', items: dl.items, title: `done, ${dl.task} doc has open rows` };
     const p = ownerPushOn() ? pushOf(text) : null;
     return p && { kind: 'push', items: p.items, title: `push (${p.kind})`, pushKind: p.kind, reply: replyFor(p) };
   },
   record: (e) => managerEvents.record(e),
   mode: () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).leftovers === 'off' ? 'off' : 'live'; } catch { return 'live'; } },
 });
+
+// Unfinished work (unfinished.js): task docs with open rows and no live session -> feed kind `orphaned-task`, GET /api/unfinished.
+// The scan of the docs is cached 60 s; the join with live sessions and history is recomputed on each call.
+let taskDocsCache = { at: 0, docs: [] };
+async function unfinishedNow() {
+  if (Date.now() - taskDocsCache.at > 60000) taskDocsCache = { at: Date.now(), docs: await scanTaskDocs(await collectDirs()) };
+  const live = new Set([...(await listPanes()).entries()].filter(([, p]) => !p.dead).map(([n]) => n));
+  return computeUnfinished({ docs: taskDocsCache.docs, instances: history.instances(), live });
+}
+const unfinished = createUnfinished({
+  compute: unfinishedNow,
+  record: (e) => managerEvents.record(e),
+  stateDir: STATE_DIR,
+  mode: () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).unfinished === 'off' ? 'off' : 'live'; } catch { return 'live'; } },
+});
+let coveredTasks = [];   // refreshed by each leftovers scan: live sessions whose task doc still has open rows
 
 // Reuse done-check's git facts for a single session's cwd, without telling it / nudging: returns true when git is clean.
 // The helper lives in git-facts.js (injectable exec): it used to live here and read `await exec(...).stdout`,
@@ -2473,6 +2494,7 @@ async function handleHttp(req, res) {
       if (req.method === 'DELETE' && p.startsWith('/api/bugs/')) { const r = await foundBugs.remove(decodeURIComponent(p.slice('/api/bugs/'.length))); return json(res, r.ok ? 200 : 404, r); }
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
+  if (req.method === 'GET' && p === '/api/unfinished') { try { return json(res, 200, { ok: true, ...(await unfinishedNow()), watcher: unfinished.snapshot() }); } catch (err) { return json(res, 500, { ok: false, error: err.message }); } }
   if (req.method === 'GET' && p === '/api/leftovers') return json(res, 200, leftovers.snapshot());   // the leftovers / push watcher's last scan
   if (req.method === 'GET' && p === '/api/worker-auto-close') return json(res, 200, workerAutoClose.snapshot());   // sessions the worker auto-closed (or skipped) in the last tick
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
@@ -2881,6 +2903,7 @@ server.listen(PORT, HOST, async () => {
   rulesWatch.start();
   doneCheck.start();
   leftovers.start();
+  unfinished.start();
   workerAutoClose.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();

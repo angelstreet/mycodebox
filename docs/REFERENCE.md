@@ -1560,6 +1560,18 @@ holders: the holders that are neither a session nor a platform agent).
   device until HH:MM: retry the step yourself; stop after 2 failures." through the normal manager gates; the third ask in the window escalates.
   The decided-for-you view lists these as kind `ready`. A chip "ready HH:MM" shows beside the priority badge.
 
+## Unfinished work (owner, 2026-10-28)
+
+A task session that ended (closed, crashed, killed) with open rows in its task doc used to go unnoticed: the manager only watched live sessions. `unfinished.js` keeps a registry. It scans `docs/tasks/TASK-*.md` in every project dir (the dirs list, worktrees included; the same file name in several worktrees is one entry, the newest copy wins), reads the first table with a `State`/`Status` column and keeps rows whose state starts with `open`, `in progress`, `blocked` or `todo`. A row whose state says owner-only (`owner-only`, `needs-owner`, `owner must/has to/supplies`, `waiting for the owner`) is listed separately and never resumed. It joins the docs with session history (instances whose name, `prompt_ref` or `handover_ref` mention `TASK-NN`) and the live tmux sessions.
+
+A task is **orphaned** when it has at least one open/in-progress row the session can do, no live session mentions it, and the last session that did ended more than 30 min ago (and less than 14 days ago; older ones are listed under `other` with `stale: true`, tasks no session ever mentioned under `other` too). `GET /api/unfinished` returns `{orphaned, covered, other}`; each entry has `task`, `doc`, `title`, `open`, `ownerOnly`, `blocked` (rows `{n, goal, state, kind}`), `liveSessions`, `lastSession` `{name, provider, model, cwd, endedAt, reason}` and `why`.
+
+- **Feed:** the watcher (10 min poll, `manager.json` `unfinished`: `live` default | `off`) records `TASK-NN:orphaned-task` (kind `orphaned-task`, `items` = open rows, `task` = `{id, doc, lastSession, ownerOnly}`) once per task per day (`<state dir>/unfinished-told.json`). `scripts/manager-status-scan.sh` prints `TASK-NN: orphaned-task: rows ...`.
+- **Cheaper case:** a live session whose last STATUS is `done`, with no leftovers in its closing text but a task doc that still lists open rows it can do, raises the existing `leftovers` event (title "done, TASK-NN doc has open rows"; items `TASK-NN row N: goal`) through the done-leftovers watcher.
+- **Resume:** `scripts/resume-task TASK-NN [--dry-run] [--force] [--name NAME]` (the manager runs it; ghosty never starts a session itself). It refuses a task that is not orphaned (live session, quiet period, only owner-only/blocked rows) unless `--force`, starts `cbsession` with the last session's provider, model and cwd and a handover (`~/handovers/resume-taskNN.md`) naming the doc, the open rows, the owner-only rows to skip, and what the old session left behind (a checked-out non-main branch with its unmerged commits, uncommitted changes, leases still named for it), then appends the start to `manager-children.jsonl`. Exit codes: 2 usage, 3 refused, 4 no directory, 5 service unreachable, 6 cbsession failed.
+- The manager manual row is in `docs/tasks/TASK-44-MANAGER.md` (virtualpytest, branch `task44-ai-manager`), event `orphaned-task`.
+- Limit: the last STATUS of an ended session is not stored, so "ended with an owner-only STATUS" is approximated by "every open row is owner-only".
+
 ## Integration lane (round 13, owner 2026-10-18)
 
 Design: [docs/v2/INTEGRATION-LANE.md](v2/INTEGRATION-LANE.md). Sessions are developers: they push a branch and ask the lane to integrate it. One lane per
