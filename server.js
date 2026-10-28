@@ -106,7 +106,7 @@ import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
 import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
-import { createDoneCheck } from './done-check.js';
+import { createDoneCheck, DEFAULT_IGNORE_BRANCHES } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
@@ -972,6 +972,7 @@ function hostPressure() {
 // uncommitted files); a mismatch is told once to the session and the feed. manager.json `doneCheck`: live | dry | off.
 const doneCheck = createDoneCheck({
   stateDir: STATE_DIR,
+  ignoreBranches: () => { try { const l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheckIgnoreBranches; return Array.isArray(l) ? l.map(String) : DEFAULT_IGNORE_BRANCHES; } catch { return DEFAULT_IGNORE_BRANCHES; } },
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 })).stdout,
   listDone: async () => {
     const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
