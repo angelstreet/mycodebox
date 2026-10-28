@@ -35,6 +35,26 @@ export function namedRefs(text, home = '') {
   return { paths, branches: words.map((w) => w.replace(/^origin\//, '')) };
 }
 
+// (A) Found-bugs enforcement (owner, 2026-10-28): a `STATUS: done` line carries `bugs: none | fixed <what> | reported <id>`.
+// Pure. text: the closing text. -> { value } when the last STATUS is a literal done (aliases such as "acknowledged" are not
+// checked) and carries the field (value: none | fixed | reported), { missing: true } when it does not, null when the last
+// STATUS is not done. Pane-wrapped continuation lines (indented) belong to the STATUS line.
+export function bugsFieldOf(text) {
+  const lines = String(text || '').split('\n');
+  let at = -1;
+  lines.forEach((l, i) => { if (/^\W*STATUS:/i.test(l.trim())) at = i; });
+  if (at < 0) return null;
+  let line = lines[at].trim();
+  for (let j = at + 1; j < lines.length && /^\s{2,}\S/.test(lines[j]) && !/^\W*STATUS:/i.test(lines[j].trim()); j++) line += ' ' + lines[j].trim();
+  if (!/^\W*STATUS:[*_`]*\s*done\b/i.test(line)) return null;
+  const m = /\bbugs\s*[:=]\s*[*_`]*(none|fixed|reported)\b/i.exec(line);
+  return m ? { value: m[1].toLowerCase() } : { missing: true };
+}
+export const BUGS_COOLDOWN_MS = 12 * 3600 * 1000;   // one automatic push per session per 12 h, whatever the next STATUS line looks like
+export function bugsMessage() {
+  return 'Done check: your STATUS: done line has no bugs field. Add `bugs: none | fixed <what> | reported <id>` to it (for example `STATUS: done — branch x merged; bugs: none`). If you saw anything outside your scope that errored, misbehaved or that you worked around, fix it or run `found-bug --title ... --error ...` first. End with a STATUS line.';
+}
+
 export function message(f) {
   return `Done check: your STATUS says done, but git disagrees: ${f.text}. Finish it the normal way (commit, merge to main when the merge evaluation passes, push, deploy if needed), or reply with one line saying why it stays as is. End with a STATUS line.`;
 }
@@ -144,8 +164,22 @@ export function createDoneCheck({
           await record({ key: `done-check:${f.name}`, title: `${f.name} said done, git disagrees`, body: f.text, url: '/', priority: 'default' });
         } catch (e) { log.error?.('[done-check] send', f.name, e.message); }
       }
+      // (A) a done STATUS without the bugs field gets one push (while idle, host not busy)
+      st.toldBugs ||= {};
+      for (const n of Object.keys(st.toldBugs)) if (!live.has(n)) delete st.toldBugs[n];
+      const missing = [];
+      for (const s of sessions) {
+        const b = bugsFieldOf(s.text);
+        if (!b?.missing || s.working || findings.some((f) => f.name === s.name)) continue;
+        if (now() - (st.toldBugs[s.name] || 0) < BUGS_COOLDOWN_MS) continue;
+        missing.push(s.name);
+        if (m === 'dry') { await note({ dry: true, session: s.name, bugsField: 'missing' }); continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, bugsMessage()); st.toldBugs[s.name] = now(); nudged++; await note({ session: s.name, bugsField: 'missing' }); }
+        catch (e) { log.error?.('[done-check] send bugs', s.name, e.message); }
+      }
       await save(st);
-      return (last = { at: now(), mode: m, checked: sessions.length, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
+      return (last = { at: now(), mode: m, checked: sessions.length, missingBugsField: missing, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
     } catch (e) {
       log.error?.('[done-check]', e.message);
       return (last = { ...last, at: now(), error: e.message });

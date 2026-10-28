@@ -60,19 +60,23 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
    Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run \`integrate request\`, then \`STATUS: waiting: integration <id>\`.
    VirtualPyTest: a new script is a virtual script or a simple test case, never a file under test_scripts/ (deprecated
    2026-10-28; the commit/push/CI guard refuses one).
-   Bug outside your scope (owner, 2026-10-28): fix it in a worktree, or run \`scripts/found-bug --title ... --repro ... --error ...
-   --blocking yes|no\` in ~/ghosty-sessions; never leave it in a closing line. The manager sends a worker.
+   Bug outside your scope (owner, 2026-10-28): fix it in a worktree, or run \`found-bug --title ... --repro ... --error ...
+   --blocking yes|no\`; never leave it in a closing line. The manager sends a worker.
    This brief and the repo's AGENTS.md win over older task docs and handovers that say "no push / no merge / no
    deploy" or "the owner merges". Never hand the owner commands to run: run them yourself.
 4. Ask the owner only for: deleting data, credentials or secrets, money, customers, sudoers or system units on hosts,
    production database migrations, or a physical action only the owner can do.
-End every turn with one STATUS line: done / needs-owner (only for step 4) / blocked.
+End every turn with one STATUS line: done / needs-owner (only for step 4) / blocked. A done line ends with
+\`bugs: none | fixed <what> | reported <id>\` (without it ghosty pushes once).
 EOF
   [ "$WAIT" = 1 ] && printf '\nReview only (owner asked): after step 2, propose the next step and stop; do not start step 3.\n' >> "$P"
   [ -n "$TEXT" ] && printf '\nExtra instruction from the owner: %s\n' "$TEXT" >> "$P"
-elif [ -n "$PFILE" ]; then cp "$PFILE" "$P"
-elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"
+elif [ -n "$PFILE" ]; then cp "$PFILE" "$P"; BUGRULE=1
+elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"; BUGRULE=1
 else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; fi
+
+# -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)
+[ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it in a worktree, or run `found-bug --title ... --repro ... --error ... --blocking yes|no`; never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
 
 q() { printf '%q' "$1"; }
 # -b NAME: settings file with an apiKeyHelper that reads the key file at launch (the key never lands in a file here).
@@ -91,7 +95,7 @@ case $PROV in
   codex)    CMD="$(q "$HOME")/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   minimax)  M=${MODEL:-MiniMax-M3}; [[ $M == */* ]] || M="minimax/$M"
             # MCODE_NODE_DIR wins; else the newest ~/.local/node-v24* (an upgrade replaces the dir, so no version is hardcoded).
-            ND=${MCODE_NODE_DIR:-$(ls -d "$HOME"/.local/node-v24*/bin 2>/dev/null | sort -V | tail -n 1)}
+            ND=${MCODE_NODE_DIR:-$({ ls -d "$HOME"/.local/node-v24*/bin 2>/dev/null || true; } | sort -V | tail -n 1)}
             MPATH="${ND:+$ND:}$HOME/.local/bin"
             # A launch that cannot find mcode says so and exits 127; it never leaves a bare shell that looks started.
             CMD="export PATH=$(q "$MPATH"):\$PATH

@@ -67,9 +67,13 @@ export function developerPrompt({ task, strategy = {}, feedback = null, summary 
   if (strategy.harness === 'focused') parts.push('HARNESS: focused. First reproduce the failing check with the smallest test, then fix the cause. Full failing output is included below.');
   if (strategy.compact && summary) parts.push(`CONTEXT SUMMARY (fresh run, earlier context compacted):\n${clip(summary, 4000)}`);
   if (feedback) parts.push(`STRUCTURED FEEDBACK FROM THE LAST ITERATION (fix the cause, not the symptom):\n${clip(JSON.stringify(feedback, null, 1), strategy.harness === 'focused' ? 16000 : 6000)}`);
-  parts.push(IMPOSSIBLE_NOTE);
+  parts.push(BUG_NOTE, IMPOSSIBLE_NOTE);
   return parts.join('\n\n');
 }
+
+// Found bugs (owner, 2026-10-28), in every worker brief: a bug outside the task's scope is reported, not fixed in this diff and not ignored.
+export const BUG_NOTE = 'BUGS OUTSIDE YOUR SCOPE: do not fix them in this change and do not ignore them. Run `found-bug --title "<what>" --endpoint "<where>" --repro "<steps>" --error "<exact text>" --workaround "<if any>" --blocking yes|no` '
+  + '(the manager sends a worker) and mention the bug id in your answer; if the command is unavailable, put a "Found bug:" line with the same fields in your answer.';
 
 // A developer that finds the requirements contradictory says so instead of spending its whole run (OWNER_DECISIONS §12.2).
 // The claim is never proof: an independent reviewer judges it on failing checks (goal loop feasibility review).
@@ -89,6 +93,7 @@ export function reviewerPrompt({ task, sha, diff, evidence = [], rubric = REVIEW
     EVIDENCE_NOTE,
     `RUBRIC:\n${list(rubric.map((r) => `${r.id}: ${r.text}`))}`,
     `DIFF (base..candidate):\n${clip(diff, 20000)}`,
+    BUG_NOTE,
     'ANSWER with exactly one JSON object on the last line: {"verdict":"approve"|"reject","findings":[{"id":"<rubric id>","severity":"blocker"|"minor","message":"..."}]}\n'
       + 'If the requirements themselves are contradictory or impossible to meet, answer {"verdict":"reject","impossible":true,"diagnosis":"<why>","findings":[...]}.',
     ...(strict ? ['STRICT FORMAT: earlier answers had no parseable verdict. Output ONLY that JSON object, nothing else. A reject needs at least one finding.'] : []),
