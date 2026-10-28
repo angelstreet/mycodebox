@@ -16,6 +16,7 @@
 //   <session>:bug                            → kind = 'bug', bug {id,title,endpoint,blocking,...} (found-bugs.js: a session filed a bug outside its scope; the manager sends a worker)
 //   <session>:bug-unreported                 → kind = 'bug-unreported', items [sentence] (found-bugs.js detector: closing text mentions a failure but no found-bug record)
 //   <TASK-NN>:orphaned-task                  → kind = 'orphaned-task', items [open rows], task {id,doc,lastSession,ownerOnly} (unfinished.js: open task rows, no live session; the manager runs scripts/resume-task)
+//   <a>+<b>:overlap                          → kind = 'overlap', items [paths], overlap {pair,paths,destructive,firstSeen} (overlap-guard.js: two sessions change the same file; the manager picks the area owner)
 //   openrouter:credits                           → kind = 'credits'
 //   manager-agent:<tag|title>                    → skipped (the agent's own POST /api/alert)
 //   anything else                                → kind = 'other'
@@ -129,9 +130,10 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     if (cls.kind === 'quota') rec.quotaKey = cls.quotaKey;
     if (cls.kind === 'disk') rec.diskPath = cls.diskPath;
     if (cls.kind === 'credits') rec.creditsKey = cls.creditsKey;
-    if ((cls.kind === 'leftovers' || cls.kind === 'push' || cls.kind === 'bug-unreported' || cls.kind === 'orphaned-task') && Array.isArray(event.items)) rec.items = event.items.slice(0, 8).map((x) => String(x).slice(0, 200));
+    if ((cls.kind === 'leftovers' || cls.kind === 'push' || cls.kind === 'bug-unreported' || cls.kind === 'orphaned-task' || cls.kind === 'overlap') && Array.isArray(event.items)) rec.items = event.items.slice(0, 8).map((x) => String(x).slice(0, 200));
     if (cls.kind === 'push') { if (typeof event.pushKind === 'string') rec.pushKind = event.pushKind; if (typeof event.reply === 'string') rec.reply = event.reply.slice(0, 600); }
     if (cls.kind === 'orphaned-task' && event.task && typeof event.task === 'object') rec.task = event.task;
+    if (cls.kind === 'overlap' && event.overlap && typeof event.overlap === 'object') rec.overlap = event.overlap;
     if (cls.kind === 'bug' && event.bug && typeof event.bug === 'object') rec.bug = event.bug;
     rec.title = typeof event.title === 'string' ? event.title : '';
     rec.body = typeof event.body === 'string' ? event.body.slice(0, 300) : '';
