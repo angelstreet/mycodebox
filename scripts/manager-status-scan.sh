@@ -4,7 +4,7 @@
 # but the closing text lists work the session can do itself (same rules as done-leftovers.js; owner-only items do not count). A session whose last STATUS is one of these is never "idle".
 #   scripts/manager-status-scan.sh [--json]      (exit code 0 always)
 # Also lists `<TASK-NN>: orphaned-task: ...` for task docs with open rows and no live session (GET /api/unfinished).
-# Also lists `<a>+<b>: overlap: <paths>` for two sessions changing the same file (GET /api/overlaps).
+# Also lists `<checkout>: shared-checkout-dirty: <paths>` (GET /api/shared-checkouts) and `<a>+<b>: overlap: <paths>` for two sessions changing the same file (GET /api/overlaps).
 # --json prints [{"session": ..., "status": ...}, ...]. Only reads panes (tmux capture-pane), never types into one.
 JSON=0; [ "$1" = "--json" ] && JSON=1
 LINES_BACK="${STATUS_SCAN_LINES:-300}"
@@ -61,6 +61,13 @@ try:
     o = json.load(urllib.request.urlopen('http://127.0.0.1:%s/api/overlaps' % os.environ.get('PORT', '7777'), timeout=5))
     for x in o.get('overlaps', []):
         hits.append({'session': x['key'], 'status': 'overlap: %s (older %s, first seen %s)' % (', '.join(p['path'] for p in x['paths'][:4]), x['pair'][0], x.get('firstSeen', '?'))})
+except Exception: pass
+# shared checkouts that are dirty / off main / ahead of origin/main (shared-checkout-guard.js)
+try:
+    c = json.load(urllib.request.urlopen('http://127.0.0.1:%s/api/shared-checkouts' % os.environ.get('PORT', '7777'), timeout=5))
+    for x in c.get('checkouts', []):
+        if not x.get('clean', True) and x.get('confirmed'):
+            hits.append({'session': os.path.basename(x['checkout']), 'status': 'shared-checkout-dirty: %s (%s; sessions %s)' % (', '.join(f['path'] for f in x['files'][:4]), '; '.join(x['reasons']), ','.join(x['sessions']) or 'none active')})
 except Exception: pass
 # unresolved found-bugs (found-bugs.js; resolve with `found-bug --resolve <id> --commit <sha>`)
 try:
