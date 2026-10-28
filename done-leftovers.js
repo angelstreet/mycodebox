@@ -9,7 +9,7 @@ export const MAX_PER_HOUR = 4;
 export const POLL_MS = 2 * 60 * 1000;
 
 // Text that only the owner can act on: names the owner, an account, a purchase, a physical action, money, credentials.
-const OWNER_ONLY = /\b(?:owner|jev|you must|needs? you|account|purchase|buy|bought|pay(?:ment)?|invoice|money|budget|credentials?|secrets?|tokens?|password|api[- ]?key|re-?\s?plug|unplug|plug(?:ged)? in|press(?:ing)? the|power[- ]?cycle|physical(?:ly)?|sudoers?|customer)\b/i;
+const OWNER_ONLY = /^\W*hardware\b|\bblocked \((?:hardware|owner)\)|\b(?:owner|hardware)[- ]blocked\b|\b(?:owner|jev|you must|needs? you|account|purchase|buy|bought|pay(?:ment)?|invoice|money|budget|credentials?|secrets?|tokens?|password|api[- ]?key|re-?\s?plug|unplug|plug(?:ged)? in|press(?:ing)? the|power[- ]?cycle|physical(?:ly)?|sudoers?|customer)\b/i;
 const HEADER = /^\s*(?:[-*#>•]+\s*)*\**\s*(?:left to do|leftovers?|remaining(?: work| items| steps)?|still (?:to do|open)|todo|to do|next steps?|open(?: items)?)(?:,[^:\n]*)?\s*\**\s*:?\s*\**\s*(.*)$/i;
 const BULLET = /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/;
 const STATUS = /^\W*STATUS:\s*([a-z-]+)\s*(.*)$/i;

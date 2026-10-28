@@ -438,6 +438,7 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   // replacement, so the session's open questions vanished with no question in their place). A session's older
   // open questions are closed by the next question the manager files for that session (owner-asks.js fileAsk).
   if (isPaused(name)) return;   // the owner holds this session on purpose: no pings
+  if (final.case === 'error' && /\b(?:usage|rate|session|weekly) limit\b|\blimit reached\b/i.test(final.question || '')) return;   // a limit banner is an error, not an ask: quota / hold handle it (2026-10-28: "× Error  Usage limit reached." woke the manager)
   if (state === 'done' && final.case !== 'done') notify(name, aiLine ? { ...final, aiLine } : final, reason, state);
   // a live menu was already announced as "waiting" before it settled (no stop id yet, so no buttons): once settled and escalated, the "asks" alert
   // carries the stop id, the voice item and the notification actions. The alert's own debounce keeps it to one extra per stop.

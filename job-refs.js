@@ -18,6 +18,15 @@ const ACTIONS_RUN = /\/actions\/runs\/(\d{6,20})(?!\d)/;
 const WATCHER_ID = /\bwatcher\s*(?:id\s*[:#=]?\s*)?((?:bg|watch|wt|task)_[0-9a-z]{3,32}|[0-9a-f]{4,32})(?![0-9a-z-])|\b(bg_[0-9a-f]{3,32})\b/i;
 const LOG_RE = /`([^`\s]+\.(?:log|out|jsonl))`|(?:^|[\s(=:])((?:~?\/|\.{1,2}\/)?[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:log|out|jsonl))\b/i;
 
+// A harness background task / poll id ("task bopcjbp73", "ledger poll b4mriuil9"): b + 8 alphanumerics with a digit, behind a plain space.
+const BG_TASK = /\b(?:task|poll|run)\s+(b[0-9a-z]{8})(?![0-9a-z-])/gi;
+// "periodic stream wall deployments on vpt-wise1 (6d113ec6)": scheduled deployments tracked by their hex id in parentheses.
+const DEPLOYMENTS_PAREN = /\bdeployments?\b[^()\n]{0,80}\(([0-9a-f]{8})\)/i;
+// "owner-only rows", "(owner)", "owner-blocked": labels on leftovers, not a request to the owner.
+const OWNER_LABELS = /\bowner[- ](?:only|blocked|held|rows?|items?)\b|\([^)]{0,60}\b(?:owner|hardware)\b[^)]{0,40}\)|\bhardware[- ]blocked\b/gi;
+const HIDDEN_ASK = /\bneeds?[- ](?:owner|manager)\b|\bsecrets?\b|\bcredentials?\b|\bpasswords?\b/i;
+const STRONG_ASK = /\b(?:approve|approval|go-ahead|permission|sign[- ]?off|your)\b/i;
+
 // An id carries a digit (or is a full 8-char sha); "facade" / "decade" spell an ordinary word.
 const idLike = (s) => /\d/.test(s) || s.length >= 8;
 // 202610202319: a compact date-time, not a run id.
@@ -56,20 +65,25 @@ function runId(t) {
   return bareRun(t);
 }
 
+function bgTask(t) {
+  for (const m of t.matchAll(BG_TASK)) if (/\d/.test(m[1])) return m[1];
+  return null;
+}
+
 function integrationId(t) {
   const m = INTEGRATION_ID.exec(t); INTEGRATION_ID.lastIndex = 0;
   return m ? m[1] : null;
 }
 
 // -> { deploy, pid, path, run, watcher, integration, detached }; every field null/false when not named
-export function jobRefs(text) {
+export function jobRefs(text, kind = null) {
   const t = String(text ?? '');
   const d = DEPLOY_ID.exec(t), p = PID_RE.exec(t), l = LOG_RE.exec(t), w = WATCHER_ID.exec(t);
   return {
-    deploy: d ? d[1] : null,
+    deploy: d ? d[1] : (kind === 'waiting' ? DEPLOYMENTS_PAREN.exec(t)?.[1] ?? null : null),
     pid: p ? Number(p[1]) : null,
     path: l ? (l[1] || l[2]).replace(/[.,;:)]+$/, '') : null,
-    run: runId(t),
+    run: runId(t) || bgTask(t),
     watcher: w ? (w[1] && idLike(w[1]) ? w[1] : w[2] || null) : null,
     integration: integrationId(t),
     detached: DETACHED_RE.test(t),
@@ -80,8 +94,12 @@ export const hasRef = (r) => !!(r && (r.deploy || r.integration || r.pid || r.pa
 // Does a STATUS blocked / waiting text wait on a job of the session's own (not on the owner)?
 export function waitsOnOwnJob(text, kind = null) {
   const t = String(text ?? '').replace(/\s+/g, ' ').trim();
-  if (!t || /\?/.test(t) || OWNER_WORDS.test(t)) return false;
-  const r = jobRefs(t);
+  if (!t || /\?/.test(t)) return false;
+  const r = jobRefs(t, kind);
+  // a tracked deploy / integration id is the strong signal: "the owner-only rows are what's left" or a bug name with "answer" in it do not make it a question
+  if (HIDDEN_ASK.test(t)) return false;   // "integration int-x (also needs-owner: add secrets ...)": the wait carries a real owner ask
+  if (kind === 'waiting' && (r.deploy || r.integration) && !STRONG_ASK.test(t)) return true;
+  if (OWNER_WORDS.test(t.replace(OWNER_LABELS, (m) => (STRONG_ASK.test(m) ? m : ' ')))) return false;
   if (r.deploy) return true;   // "deploy <id>" is the deploy runner's job
   if (r.integration) return true;   // "integration <id>" is the lane's job (own-jobs.js watches the request)
   return (kind === 'waiting' || END_WORDS.test(t)) && (hasRef(r) || JOB_NOUN.test(t));
