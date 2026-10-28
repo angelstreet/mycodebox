@@ -73,3 +73,27 @@ test('tick: mode off sends nothing', async () => {
   await h.w.tick();
   assert.equal(h.events.length, 0);
 });
+
+// Shape of the real ft-revise stall (2026-10-28): numbered "Left to do" list with pane-wrapped lines, comma-separated `open:`
+// list on the STATUS line where one item is tagged "(owner)" and a physical item wraps mid-phrase. Sanitised: no real names.
+const WRAPPED = `Left to do, in your order:
+  1. rerun the web builds on the remaining
+     nodes
+  2. FT-02 replay-pause check
+  3. device IR replug (owner)
+
+STATUS: done — revise shipped; open: device IR re
+  plug and Sauce plan (owner), account for web/mobile, remaining node builds on web/btel/mobile, FT-02 replay-pause check`;
+
+test('leftoversOf: wrapped numbered list, comma-separated open list, (owner) tags only its own item', () => {
+  const r = leftoversOf(WRAPPED);
+  assert.ok(r.actionable.includes('rerun the web builds on the remaining nodes'));
+  assert.ok(r.actionable.includes('remaining node builds on web/btel/mobile'));
+  assert.ok(r.actionable.includes('FT-02 replay-pause check'));
+  assert.ok(r.ownerOnly.some((x) => /IR re ?plug/.test(x)), 'the wrapped physical item is owner-only');
+  assert.ok(!r.actionable.some((x) => /replug|re plug|Sauce|account for/i.test(x)));
+});
+
+test('leftoversOf: a physical item alone, cut by the wrap, is not pushable', () => {
+  assert.equal(pushableItems('STATUS: done — open: stb3 IR re\n  plug'), null);
+});
