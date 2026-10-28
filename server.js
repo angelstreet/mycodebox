@@ -49,6 +49,7 @@
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|platform|unknown|system, plan}, unknown count
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/overlaps          → sessions that change the same file(s) vs origin/main (overlap-guard.js)
+//   GET  /api/shared-checkouts  → shared checkouts that are dirty, off main or ahead of origin/main (shared-checkout-guard.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
 //   GET|POST|DELETE /api/bugs    → found-bug channel: list + counts / file a bug / remove a test report (loopback; found-bugs.js, scripts/found-bug)
@@ -108,6 +109,7 @@ import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
+import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
@@ -1153,6 +1155,19 @@ const overlapGuard = createOverlapGuard({
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).overlapGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
   ignoreList: () => { try { const l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).overlapIgnore; return Array.isArray(l) ? l.map(String) : DEFAULT_IGNORE; } catch { return DEFAULT_IGNORE; } },
+});
+// Shared-checkout guard (shared-checkout-guard.js): a dirty / off-main / ahead shared checkout -> GET /api/shared-checkouts, a manager
+// event and one silent message to the sessions that started there. manager.json: `sharedCheckoutGuard` "live" (default) | "dry" | "off";
+// `sharedCheckouts` (list of paths, ~ allowed; default ~/ghosty-sessions and ~/virtualpytest).
+const sharedCheckoutGuard = createSharedCheckoutGuard({
+  stateDir: STATE_DIR,
+  git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
+  listCheckouts: async () => { let l; try { l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).sharedCheckouts; } catch {} return (Array.isArray(l) ? l.map(String) : ['~/ghosty-sessions', '~/virtualpytest']).map((p) => expandHome(p, HOME)); },
+  listTargets: () => rulesWatchTargets(),
+  send: (name, text) => sendKeys(name, text),
+  pressure: hostPressure,
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).sharedCheckoutGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
@@ -2519,6 +2534,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/leftovers') return json(res, 200, leftovers.snapshot());   // the leftovers / push watcher's last scan
   if (req.method === 'GET' && p === '/api/worker-auto-close') return json(res, 200, workerAutoClose.snapshot());   // sessions the worker auto-closed (or skipped) in the last tick
   if (req.method === 'GET' && p === '/api/overlaps') return json(res, 200, overlapGuard.snapshot());   // sessions changing the same file
+  if (req.method === 'GET' && p === '/api/shared-checkouts') return json(res, 200, sharedCheckoutGuard.snapshot());   // dirty / off-main / ahead shared checkouts
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
   if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / platform / unknown) + planned actions
@@ -2924,6 +2940,7 @@ server.listen(PORT, HOST, async () => {
   ciWatch.start();
   rulesWatch.start();
   overlapGuard.start();
+  sharedCheckoutGuard.start();
   doneCheck.start();
   leftovers.start();
   unfinished.start();

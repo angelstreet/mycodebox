@@ -1646,6 +1646,16 @@ A bug a session finds outside its scope is fixed or filed, never left in a closi
 
 `manager.json` `doneCheckIgnoreBranches` (default `["task44-ai-manager"]`; `[]` judges every branch) lists branches the done-check never counts as "not on main": a session sitting on one of them (or on a detached HEAD that belongs to it) is not judged on it, and a closing text that names one does not pull it in. The session's own branch and worktree are still checked.
 
+## Shared-checkout guard (owner, 2026-10-28)
+"One agent = one worktree" is enforced by a detector, not only written. `shared-checkout-guard.js` runs every minute (first check 1 min after start) over the shared checkouts (`manager.json` `sharedCheckouts`, `~` allowed; default `~/ghosty-sessions` and `~/virtualpytest`) and flags a checkout that has uncommitted paths (`git status --porcelain`), a branch other than `main` checked out, or commits on HEAD that `origin/main` lacks. Read-only: it never cleans, resets, stashes or switches a checkout.
+
+- **Confirmation.** A change set (branch, ahead count, paths) must be seen on two consecutive ticks, so the lane's own short ff-merge or a deploy snapshot does not raise it.
+- **Surface.** `GET /api/shared-checkouts` (`checkouts: [{checkout, clean, reasons, branch, ahead, sig, files:[{path,status,mtime}], sessions, confirmed}]`); a manager event `<checkout>:shared-checkout-dirty` (kind `shared-checkout-dirty`, `items` the paths, `sharedCheckout` object) once per change set; `scripts/manager-status-scan.sh` prints `<checkout>: shared-checkout-dirty: <paths>`.
+- **Who.** `sessions` are the live agent sessions whose launch cwd is that checkout and that started before the newest changed-file mtime. Each is told once per change set, while idle, in silent form (`[shared-checkout-guard: no reply needed]`): use a worktree, move your change there, do not clean the checkout for others.
+- **Switch.** `manager.json` `sharedCheckoutGuard`: `"live"` (default) | `"dry"` | `"off"`. State `shared-checkout-guard.json`, journal `shared-checkout-guard.jsonl`.
+- **Wording.** `scripts/cbsession` prompts (handover, `-f`, `-t`) and every V2 worker brief (`WORKTREE_NOTE` in `orchestration/roles.js`) start with "first command: `git worktree list`; create or reuse your worktree; work only there".
+- **Manager.** TASK-44 manual: on `shared-checkout-dirty` identify the session from `sessions`, tell it, verify the checkout is clean afterwards.
+
 ## Overlap guard (owner, 2026-10-28)
 
 Two sessions changing the same file cost hours on 2026-10-28 (script-naming, migration-virtual and task168-resume all edited `scripts/agent/vod_radio_*.py`; the integrations came back `conflicts outside convention`). `overlap-guard.js` runs every minute (first check 1 min after start): for each live agent session (same target list as rules-watch) it takes the paths changed vs origin/main, names only (`git diff --name-status -M origin/main...HEAD` plus `git status --porcelain`), and finds paths changed by two sessions of the same repo in different checkouts. A delete or a rename in one and an edit in the other counts (`destructive: true`); a rename is a delete of the old path plus an add of the new one.

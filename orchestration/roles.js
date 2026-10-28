@@ -67,9 +67,12 @@ export function developerPrompt({ task, strategy = {}, feedback = null, summary 
   if (strategy.harness === 'focused') parts.push('HARNESS: focused. First reproduce the failing check with the smallest test, then fix the cause. Full failing output is included below.');
   if (strategy.compact && summary) parts.push(`CONTEXT SUMMARY (fresh run, earlier context compacted):\n${clip(summary, 4000)}`);
   if (feedback) parts.push(`STRUCTURED FEEDBACK FROM THE LAST ITERATION (fix the cause, not the symptom):\n${clip(JSON.stringify(feedback, null, 1), strategy.harness === 'focused' ? 16000 : 6000)}`);
-  parts.push(BUG_NOTE, IMPOSSIBLE_NOTE);
+  parts.push(WORKTREE_NOTE, BUG_NOTE, IMPOSSIBLE_NOTE);
   return parts.join('\n\n');
 }
+
+// One agent = one worktree (owner, 2026-10-28), first lines of every worker brief; shared-checkout-guard.js flags a dirty shared checkout.
+export const WORKTREE_NOTE = 'FIRST COMMAND: `git worktree list`; create or reuse your worktree (`git worktree add <dir> -b <branch> origin/main`) and work only there. Never edit, stash, reset or commit in a shared checkout.';
 
 // Found bugs (owner, 2026-10-28), in every worker brief: a bug outside the task's scope is reported, not fixed in this diff and not ignored.
 export const BUG_NOTE = 'BUGS OUTSIDE YOUR SCOPE: do not fix them in this change and do not ignore them. Run `found-bug --title "<what>" --endpoint "<where>" --repro "<steps>" --error "<exact text>" --workaround "<if any>" --blocking yes|no` '

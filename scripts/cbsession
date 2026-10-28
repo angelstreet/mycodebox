@@ -43,6 +43,8 @@ if [ -n "$HANDOVER" ]; then
   # which silently ran the integration commands and emptied them out of the prompt (2026-10-20).
   cat > "$P" <<EOF
 You are picking up work in a fresh session on this host. Working directory: $DIR.
+0. First command: \`git worktree list\`; create or reuse your worktree (\`git worktree add <dir> -b <branch> origin/main\`) and
+   work only there, never in a shared checkout (~/ghosty-sessions, ~/virtualpytest): a guard reports edits made there.
 1. Read the handover: $HANDOVER, then the files it links as needed.
 2. Write a short summary of the current state and the open items in priority order.
 3. Then do the work, most important item first, and keep going until it is done or truly blocked. Owner rule
@@ -76,6 +78,7 @@ elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"; BUGRULE=1
 else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; fi
 
 # -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)
+[ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it in a worktree, or run `found-bug --title ... --repro ... --error ... --blocking yes|no`; never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
 
 q() { printf '%q' "$1"; }
