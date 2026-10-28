@@ -107,3 +107,18 @@ test('store: fixed marks a report, keeps it listed with fixed: true and leaves t
   assert.equal((await fb.fixed('bug-00000000')).ok, false);
   assert.equal((await fb.add({ title: 'next one', session: 'manager' })).ok, true);
 });
+
+test('store: resolve records state, commit, who and when; unresolved filter and counts drop it; bad state / missing commit fail', async () => {
+  const fb = createFoundBugs({ stateDir: tmp('ghosty-fb-resolve-') });
+  const a = (await fb.add({ title: 'one', session: 's' })).bug, b = (await fb.add({ title: 'two', session: 's' })).bug;
+  assert.equal((await fb.resolve(a.id, { state: 'fixed' })).ok, false);
+  assert.equal((await fb.resolve(a.id, { state: 'nope', commit: 'abc1234' })).ok, false);
+  assert.equal((await fb.resolve('bug-00000000', { state: 'wontfix' })).ok, false);
+  assert.equal((await fb.resolve(a.id, { state: 'fixed', commit: 'abc1234', note: 'token=sekret123 done', by: 'sweep' })).ok, true);
+  assert.equal((await fb.resolve(b.id, { state: 'doc-only', note: 'rule in docs', by: 'sweep' })).ok, true);
+  const l = await fb.list();
+  assert.equal(l[0].state, 'fixed'); assert.equal(l[0].fixed, true); assert.equal(l[0].commit, 'abc1234'); assert.equal(l[0].resolvedBy, 'sweep'); assert.doesNotMatch(l[0].resolvedNote, /sekret123/);
+  assert.equal(l[1].state, 'doc-only'); assert.notEqual(l[1].fixed, true);
+  assert.equal((await fb.list({ unresolved: true })).length, 0);
+  assert.deepEqual(await fb.counts(), { total: 0, blocking: 0, last24h: 0 });
+});

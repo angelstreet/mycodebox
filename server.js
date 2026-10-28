@@ -2510,6 +2510,8 @@ async function handleHttp(req, res) {
       if (req.method === 'POST' && p === '/api/bugs') { const r = await foundBugs.add(await readJsonBody(req)); return json(res, r.ok ? 200 : 400, r); }
       const fm = p.match(/^\/api\/bugs\/([^/]+)\/fixed$/);
       if (fm && req.method === 'POST') { const r = await foundBugs.fixed(decodeURIComponent(fm[1]), (await readJsonBody(req)).note); return json(res, r.ok ? 200 : 404, r); }
+      const rm = p.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
+      if (rm && req.method === 'POST') { const b = await readJsonBody(req); const r = await foundBugs.resolve(decodeURIComponent(rm[1]), b); return json(res, r.ok ? 200 : r.error === 'no such bug' ? 404 : 400, r); }
       if (req.method === 'DELETE' && p.startsWith('/api/bugs/')) { const r = await foundBugs.remove(decodeURIComponent(p.slice('/api/bugs/'.length))); return json(res, r.ok ? 200 : 404, r); }
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }

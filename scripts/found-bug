@@ -2,6 +2,7 @@
 // found-bug: file a bug you found outside your scope (owner, 2026-10-28) instead of leaving it in a closing line.
 //   found-bug --title "REST list of virtual scripts errors" [--endpoint GET /api/x] [--repro "..."] [--error "exact text"]
 //             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
+//   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text] [--session NAME]
 //   found-bug list | found-bug fixed <id> [note] | found-bug remove <id>   (remove: test reports only)
 // Session defaults to the tmux session you run in. Posts to loopback POST /api/bugs (PORT or 7777); secrets are redacted server-side.
 import { execFileSync } from 'node:child_process';
@@ -14,10 +15,23 @@ async function api(method, path, body) {
     return { status: r.status, body: await r.json().catch(() => ({})) };
   } catch (e) { die(`service unreachable (${e.message})`, 5); }
 }
-if (cmd === 'list') { const r = await api('GET', '/api/bugs'); for (const b of r.body.bugs || []) console.log(`${b.id}  ${b.fixed ? '[fixed] ' : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`); process.exit(0); }
+if (cmd === 'list') { const r = await api('GET', '/api/bugs'); for (const b of r.body.bugs || []) console.log(`${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`); process.exit(0); }
 if (cmd === 'fixed') { if (!rest[0]) die('usage: found-bug fixed <id> [note]'); const r = await api('POST', `/api/bugs/${encodeURIComponent(rest[0])}/fixed`, { note: rest.slice(1).join(' ') }); console.log(r.body.ok ? 'marked fixed' : r.body.error); process.exit(r.body.ok ? 0 : 1); }
 if (cmd === 'remove') { if (!rest[0]) die('usage: found-bug remove <id>'); const r = await api('DELETE', '/api/bugs/' + encodeURIComponent(rest[0])); console.log(r.body.ok ? 'removed' : r.body.error); process.exit(r.body.ok ? 0 : 1); }
 const args = process.argv.slice(2), o = {};
+if (args.includes('--resolve')) {
+  const v = {}; let id;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--resolve') id = args[++i];
+    else if (/^--(commit|state|note|session)$/.test(a)) { if (i + 1 >= args.length) die(`${a} needs a value`); v[a.slice(2)] = args[++i]; }
+    else die(`unknown argument ${a} (found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text])`);
+  }
+  if (!id) die('--resolve needs a bug id');
+  if (!v.session) { try { v.session = execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { v.session = 'unknown'; } }
+  const r = await api('POST', `/api/bugs/${encodeURIComponent(id)}/resolve`, { state: v.state || 'fixed', commit: v.commit, note: v.note, by: v.session });
+  console.log(r.body.ok ? `resolved ${id} (${v.state || 'fixed'})` : r.body.error || `HTTP ${r.status}`); process.exit(r.body.ok ? 0 : 1);
+}
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === '--test') o.test = true;

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 export const FILE_NAME = 'found-bugs.jsonl';
+export const STATES = ['fixed', 'wontfix', 'doc-only'];
 export const DEDUPE_MS = 24 * 3600 * 1000;
 export const REPORTED_MS = 3600 * 1000;   // a session that filed a bug in the last hour is not asked again
 
@@ -80,19 +81,36 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     await appendFile(file, JSON.stringify({ id, fixed: true, note: redact(note).slice(0, 300), at: new Date(now()).toISOString() }) + '\n');
     return { ok: true };
   }
-  async function list({ limit = 100 } = {}) {
-    const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id)), done = new Map(rows.filter((r) => r.fixed).map((r) => [r.id, r]));
-    return rows.filter((r) => r.title && !r.removed && !gone.has(r.id)).map((r) => (done.has(r.id) ? { ...r, fixed: true, fixedNote: done.get(r.id).note, fixedAt: done.get(r.id).at } : r)).slice(-Math.max(1, Math.min(500, limit)));
+  // resolve(id, { state, commit, note, by }): state fixed | wontfix | doc-only. Marker line; the last one wins.
+  async function resolve(id, { state = 'fixed', commit = '', note = '', by = '' } = {}) {
+    if (!STATES.includes(state)) return { ok: false, error: `state must be one of ${STATES.join(', ')}` };
+    const b = (await all()).find((x) => x.id === id && x.title);
+    if (!b) return { ok: false, error: 'no such bug' };
+    const clean = (v, n) => redact(v).replace(/\s+/g, ' ').trim().slice(0, n);
+    if (state === 'fixed' && !clean(commit, 80)) return { ok: false, error: 'commit (sha or integration id) required for state fixed' };
+    await appendFile(file, JSON.stringify({ id, resolved: true, state, commit: clean(commit, 80), note: clean(note, 300), by: clean(by, 80) || 'unknown', at: new Date(now()).toISOString() }) + '\n');
+    return { ok: true };
+  }
+  async function list({ limit = 100, unresolved = false } = {}) {
+    const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id));
+    const done = new Map(rows.filter((r) => r.fixed).map((r) => [r.id, r])), res = new Map(rows.filter((r) => r.resolved).map((r) => [r.id, r]));
+    const out = rows.filter((r) => r.title && !r.removed && !gone.has(r.id)).map((r) => {
+      const v = res.get(r.id), f = done.get(r.id);
+      if (v) return { ...r, state: v.state, resolved: true, ...(v.state === 'fixed' ? { fixed: true } : {}), commit: v.commit, resolvedNote: v.note, resolvedBy: v.by, resolvedAt: v.at };
+      if (f) return { ...r, state: 'fixed', resolved: true, fixed: true, fixedNote: f.note, fixedAt: f.at };
+      return { ...r, state: 'open' };
+    });
+    return (unresolved ? out.filter((r) => !r.resolved) : out).slice(-Math.max(1, Math.min(500, limit)));
   }
   async function counts() {
     const rows = await list({ limit: 500 }), day = now() - DEDUPE_MS;
-    const real = rows.filter((b) => !b.test && !b.fixed);
+    const real = rows.filter((b) => !b.test && !b.resolved);
     return { total: real.length, blocking: real.filter((b) => b.blocking).length, last24h: real.filter((b) => Date.parse(b.at) >= day).length };
   }
   async function recentBy(session, ms = REPORTED_MS) {
     return (await list({ limit: 500 })).some((b) => b.session === session && now() - Date.parse(b.at) < ms);
   }
-  return { add, remove, fixed, list, counts, recentBy, file };
+  return { add, remove, fixed, resolve, list, counts, recentBy, file };
 }
 
 // Detector: closing text that mentions a failure, an unrelated/pre-existing problem or a workaround but never filed it.
