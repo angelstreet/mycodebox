@@ -1437,6 +1437,17 @@ check, and none while the session works or the host is busy (load above 1.5 per 
 `manager.json` `doneCheck`: `"dry"` (journal `done-check.jsonl` only) or `"off"`; default live. `GET /api/done-check`
 shows the last check and its findings.
 
+## Done with leftovers (owner, 2026-10-28)
+
+A session that ends `STATUS: done` but lists work it can do itself ("Left to do", "Remaining", `open: ...` on the STATUS line)
+used to sit idle until the owner typed "continue". `done-leftovers.js` parses the closing text (`leftoversOf`, pure); items
+that name the owner, an account, a purchase, money, credentials or a physical action (replug, press) are owner-only and
+do not count. When a done session has been idle more than 10 min with actionable items, ghosty writes one manager-feed
+event `<session>:leftovers` (kind `leftovers`, `items`: up to 8) per session turn. Gates: no draft, not working, not paused or
+held, not a manager session, at most 4 events per session per hour. Nothing is typed: the manager decides and sends the push.
+`scripts/manager-status-scan.sh` prints `<session>: done-with-leftovers: <first item>` for the same sessions.
+`manager.json` `leftovers`: `"off"` disables the event (default live).
+
 ## Rules watch (owner, 2026-10-15)
 
 A session reads AGENTS.md once, at start. `rules-watch.js` checks every 10 min (first check 3 min after start): for each

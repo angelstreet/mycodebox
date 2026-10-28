@@ -104,6 +104,7 @@ import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
 import { createDoneCheck } from './done-check.js';
+import { createLeftovers } from './done-leftovers.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
 import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs } from './send-verify.js';
@@ -978,6 +979,25 @@ const doneCheck = createDoneCheck({
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheck; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
+
+// Done with leftovers (done-leftovers.js): an idle `STATUS: done` session whose closing text lists work it can do itself
+// wakes the manager (feed kind `leftovers`); nothing is typed. manager.json `leftovers`: live (default) | off.
+const leftovers = createLeftovers({
+  listIdle: async () => {
+    const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
+    for (const [name, p] of panes) {
+      if (p.dead) continue;
+      const st = latest?.status?.[name], ex = st?.stall?.excerpt;
+      if (!ex || statusLine(String(ex).split('\n'))?.kind !== 'done') continue;
+      out.push({ name, text: String(ex).slice(-3000), manager: mgrs.has(name), paused: sessionMeta.isPaused(name), held: !!heldOf(name),
+        draft: !!st?.stall?.draft, working: st.state === 'working' || !!reporter.activityOf(name)?.working,
+        idleMs: Date.now() - (st?.changeAt || st?.doneAt || Date.now()), turnAt: st?.doneAt || null });
+    }
+    return out;
+  },
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).leftovers === 'off' ? 'off' : 'live'; } catch { return 'live'; } },
 });
 
 // Reuse done-check's git facts for a single session's cwd, without telling it / nudging: returns true when git is clean.
@@ -2824,6 +2844,7 @@ server.listen(PORT, HOST, async () => {
   ciWatch.start();
   rulesWatch.start();
   doneCheck.start();
+  leftovers.start();
   workerAutoClose.start();
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
