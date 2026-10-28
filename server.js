@@ -48,6 +48,7 @@
 //   POST /api/leases/owner/release | /owner/mode  {id[, mode:'pin']} → owner force-release / downgrade (central only; legacy: 409); logged with the owner's identity
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|platform|unknown|system, plan}, unknown count
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
+//   GET  /api/overlaps          → sessions that change the same file(s) vs origin/main (overlap-guard.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
 //   GET|POST|DELETE /api/bugs    → found-bug channel: list + counts / file a bug / remove a test report (loopback; found-bugs.js, scripts/found-bug)
@@ -106,6 +107,7 @@ import { normAuthority, createLeaseSource, createSessionTracker, summarize as le
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
+import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
@@ -1105,37 +1107,52 @@ const workerAutoClose = createWorkerAutoClose({
   config: () => { try { const j = JSON.parse(readFileSync(managerConfigFile, 'utf8')); return { workerAutoClose: j.workerAutoClose !== false, workerIdleMin: Number(j.workerIdleMin) > 0 ? Number(j.workerIdleMin) : 20, managerSessions: loadManagerSessions() }; } catch { return { workerAutoClose: true, workerIdleMin: 20, managerSessions: loadManagerSessions() }; } },
 });
 
+// Live agent sessions (not managers, paused or dead) with their cwd, agent start time and busy flags; shared by rules-watch and overlap-guard.
+async function rulesWatchTargets() {
+  const panes = await listPanes(), table = await processTable(), mgrs = new Set(loadManagerSessions());
+  const pids = [...panes.values()].map((p) => agentPidFromTree(p.pid, table)).filter(Boolean);
+  const age = new Map();
+  if (pids.length) {
+    try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const m = l.trim().split(/\s+/); if (m.length === 2) age.set(Number(m[0]), Number(m[1])); } } catch {}
+  }
+  const out = [];
+  for (const [name, p] of panes) {
+    if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead || / \(deleted\)$/.test(p.cwd)) continue;
+    const pid = agentPidFromTree(p.pid, table);
+    if (!pid || !age.has(pid)) continue;
+    out.push({ name, cwd: p.cwd, startedAt: Date.now() - age.get(pid) * 1000,
+      working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working'),
+      // scriptBusy: a script is driving a claude -p / mcode exec / sleep under bash in the pane, AND there is
+      // no interactive agent TUI in the same tree; skip so the long rules-change message doesn't land in the
+      // terminal input and get read by bash as commands. An interactive REPL that launched its own background
+      // helpers (mcode exec workers, sleep) stays messageable.
+      scriptBusy: scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table) });
+  }
+  return out;
+}
+
 // Rules watch (rules-watch.js): a session started before AGENTS.md last changed on its repo's origin/main is told once,
 // while idle, to re-read it. manager.json key `rulesWatch`: "live" (default) | "dry" | "off".
 const rulesWatch = createRulesWatch({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000 })).stdout,
-  listTargets: async () => {
-    const panes = await listPanes(), table = await processTable(), mgrs = new Set(loadManagerSessions());
-    const pids = [...panes.values()].map((p) => agentPidFromTree(p.pid, table)).filter(Boolean);
-    const age = new Map();
-    if (pids.length) {
-      try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const m = l.trim().split(/\s+/); if (m.length === 2) age.set(Number(m[0]), Number(m[1])); } } catch {}
-    }
-    const out = [];
-    for (const [name, p] of panes) {
-      if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead || / \(deleted\)$/.test(p.cwd)) continue;
-      const pid = agentPidFromTree(p.pid, table);
-      if (!pid || !age.has(pid)) continue;
-      out.push({ name, cwd: p.cwd, startedAt: Date.now() - age.get(pid) * 1000,
-        working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working'),
-        // scriptBusy: a script is driving a claude -p / mcode exec / sleep under bash in the pane, AND there is
-        // no interactive agent TUI in the same tree; skip so the long rules-change message doesn't land in the
-        // terminal input and get read by bash as commands. An interactive REPL that launched its own background
-        // helpers (mcode exec workers, sleep) stays messageable.
-        scriptBusy: scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table) });
-    }
-    return out;
-  },
+  listTargets: () => rulesWatchTargets(),
   send: (name, text) => sendKeys(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
+// Overlap guard (overlap-guard.js): two sessions changing the same file vs origin/main -> GET /api/overlaps, a manager
+// event and one silent message to each session. manager.json `overlapGuard`: "live" (default) | "dry" | "off"; `overlapIgnore`: globs.
+const overlapGuard = createOverlapGuard({
+  stateDir: STATE_DIR,
+  git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
+  listTargets: () => rulesWatchTargets(),
+  send: (name, text) => sendKeys(name, text),
+  pressure: hostPressure,
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).overlapGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+  ignoreList: () => { try { const l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).overlapIgnore; return Array.isArray(l) ? l.map(String) : DEFAULT_IGNORE; } catch { return DEFAULT_IGNORE; } },
 });
 const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
@@ -2497,6 +2514,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/unfinished') { try { return json(res, 200, { ok: true, ...(await unfinishedNow()), watcher: unfinished.snapshot() }); } catch (err) { return json(res, 500, { ok: false, error: err.message }); } }
   if (req.method === 'GET' && p === '/api/leftovers') return json(res, 200, leftovers.snapshot());   // the leftovers / push watcher's last scan
   if (req.method === 'GET' && p === '/api/worker-auto-close') return json(res, 200, workerAutoClose.snapshot());   // sessions the worker auto-closed (or skipped) in the last tick
+  if (req.method === 'GET' && p === '/api/overlaps') return json(res, 200, overlapGuard.snapshot());   // sessions changing the same file
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
   if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
   if (req.method === 'GET' && p === '/api/leases/watch') return json(res, 200, leaseWatch.snapshot());   // holders classified (live / ended / remote / platform / unknown) + planned actions
@@ -2901,6 +2919,7 @@ server.listen(PORT, HOST, async () => {
   leaseNudge.start();
   ciWatch.start();
   rulesWatch.start();
+  overlapGuard.start();
   doneCheck.start();
   leftovers.start();
   unfinished.start();

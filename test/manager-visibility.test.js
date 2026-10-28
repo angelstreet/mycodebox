@@ -19,7 +19,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
 const pane = (n, text) => fs.writeFileSync(path.join(panes, n), text);
-const env = { PATH: `${bin}:${process.env.PATH}`, HOME: home };
+const env = { PATH: `${bin}:${process.env.PATH}`, HOME: home, PORT: '1' };
 pane('worker-a', 'work\nSTATUS: needs-manager: merge decision for fix/x\n$ \n');
 pane('worker-b', 'STATUS: needs-manager: old question\nmore\nSTATUS: working: tests\n');          // a later STATUS wins: not flagged
 pane('worker-c', 'STATUS: blocked: waiting for lease\n');
@@ -47,7 +47,7 @@ test('status scan --json: a JSON array; no tmux server still exits 0 with []', (
   assert.match(a[0].status, /needs-manager/);
   const empty = path.join(home, 'bin-empty'); fs.mkdirSync(empty);
   fs.writeFileSync(path.join(empty, 'tmux'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });      // "no server running"
-  const none = spawnSync('bash', [path.join(SC, 'manager-status-scan.sh'), '--json'], { env: { PATH: `${empty}:/usr/bin:/bin`, HOME: home }, encoding: 'utf8' });
+  const none = spawnSync('bash', [path.join(SC, 'manager-status-scan.sh'), '--json'], { env: { PATH: `${empty}:/usr/bin:/bin`, HOME: home, PORT: '1' }, encoding: 'utf8' });
   assert.equal(none.status, 0); assert.deepEqual(JSON.parse(none.stdout), []);
 });
 

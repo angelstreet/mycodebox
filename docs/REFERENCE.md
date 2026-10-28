@@ -1643,3 +1643,14 @@ A bug a session finds outside its scope is fixed or filed, never left in a closi
 ### Done-check ignores long-lived branches (owner, 2026-10-28)
 
 `manager.json` `doneCheckIgnoreBranches` (default `["task44-ai-manager"]`; `[]` judges every branch) lists branches the done-check never counts as "not on main": a session sitting on one of them (or on a detached HEAD that belongs to it) is not judged on it, and a closing text that names one does not pull it in. The session's own branch and worktree are still checked.
+
+## Overlap guard (owner, 2026-10-28)
+
+Two sessions changing the same file cost hours on 2026-10-28 (script-naming, migration-virtual and task168-resume all edited `scripts/agent/vod_radio_*.py`; the integrations came back `conflicts outside convention`). `overlap-guard.js` runs every minute (first check 1 min after start): for each live agent session (same target list as rules-watch) it takes the paths changed vs origin/main, names only (`git diff --name-status -M origin/main...HEAD` plus `git status --porcelain`), and finds paths changed by two sessions of the same repo in different checkouts. A delete or a rename in one and an edit in the other counts (`destructive: true`); a rename is a delete of the old path plus an add of the new one.
+
+- **Ignored paths.** `DEFAULT_IGNORE`: `VERSION.txt`, `docs/REFERENCE.md`, `package-lock.json`, release-note files, `generated/` dirs, `*.min.js`, `__pycache__`. `manager.json` `overlapIgnore` (list of globs, `*` within a segment, `**` across) replaces it.
+- **Surface.** `GET /api/overlaps` (`overlaps: [{key, pair:[older,newer], paths:[{path, by:{session: M|A|D}, destructive}], firstSeen}]`); a manager event `<older>+<newer>:overlap` (kind `overlap`, `items` the paths, `overlap` object) once per pair per UTC day; `scripts/manager-status-scan.sh` prints `<a>+<b>: overlap: <paths>`.
+- **Tell the sessions.** Each session of the pair gets one silent-form message per day (`[overlap-guard: no reply needed]`): "<other> also changes <paths>; coordinate with it (one message) before your next commit; the one that started later waits or takes a different slice". Only an idle, messageable pane is told (a working or script-busy pane is retried next minute) and nothing is told while the host is busy. It never blocks, pauses or kills.
+- **Switch.** `manager.json` `overlapGuard`: `"live"` (default) | `"dry"` (detect and journal only) | `"off"`. State `overlap-guard.json`, journal `overlap-guard.jsonl` in the state dir.
+- **Manager.** TASK-44 manual §3 `overlap`: the manager picks the area owner (older / wider task), tells the other session in one message to hand over its slice, and records `areaOwner` in `manager-actions.jsonl`.
+- **Tests.** `test/overlap-guard.test.js`: the real pair (script-naming vs migration-virtual on `vod_radio_offline_check.py`, delete vs edit), a no-overlap case, ignored files, other repo, same checkout, once-per-day, dry mode, busy session retried.
