@@ -461,7 +461,7 @@ test('reviewer prompt: recorded exits come from the controller; sandbox check er
   // Nothing else changed: the rubric and its items are as before, and only one section was added.
   assert.deepEqual(REVIEW_RUBRIC.map((r) => r.id), ['meets_goal', 'no_test_gaming', 'in_scope', 'evidence_matches', 'safe']);
   for (const r of REVIEW_RUBRIC) assert.ok(sections[at + 1].includes(`${r.id}: ${r.text}`));
-  assert.deepEqual(sections.filter((x) => x !== EVIDENCE_NOTE).map((x) => x.split('\n')[0].split(':')[0]).slice(-5), ['CANDIDATE SHA', 'EVIDENCE ON THIS SHA', 'RUBRIC', 'DIFF (base..candidate)', 'ANSWER with exactly one JSON object on the last line']);
+  assert.deepEqual(sections.filter((x) => x !== EVIDENCE_NOTE).map((x) => x.split('\n')[0].split(':')[0]).slice(-5), ['EVIDENCE ON THIS SHA', 'RUBRIC', 'DIFF (base..candidate)', 'BUGS OUTSIDE YOUR SCOPE', 'ANSWER with exactly one JSON object on the last line']);
 });
 
 test('verifier: a check error (exit 2) is a failing check, never a pass', async () => {

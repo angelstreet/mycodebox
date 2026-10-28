@@ -40,6 +40,14 @@ export const FILE_NAME_OLD = 'manager-events.jsonl.1';
 //   { kind: 'credits', creditsKey }                                  for openrouter:<...>
 //   { kind, session }                                                for <session>:<kind>
 //   { kind: 'other' }                                                 otherwise
+// A stop whose whole text is the acknowledgement of a rules-watch re-read notice (rules-watch.js TAG): not worth a wake.
+// Short, no question, names the re-read of AGENTS.md or the notice's tag, and carries no needs-owner / blocked question.
+export function isRulesAck(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t || t.length > 400 || /\?/.test(t) || /\bSTATUS:\s*(?:needs-owner|needs-manager|blocked)\b/i.test(t)) return false;
+  return /rules-watch|\b(?:re-?read|re-?reading|read|reread)\b[^.]{0,60}\bAGENTS\.md|\bAGENTS\.md\b[^.]{0,80}\b(?:re-?read|acknowledg|noted|up to date)/i.test(t);
+}
+
 export function classifyKey(key) {
   if (typeof key !== 'string' || !key) return { kind: 'other' };
   const colon = key.indexOf(':');
@@ -106,6 +114,7 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     const cls = classifyKey(event.key);
     if (cls.kind === 'agent-skip') return null;
     if (cls.kind === 'done') return null;
+    if ((cls.kind === 'asks' || cls.kind === 'waiting') && isRulesAck(`${event.body || ''} ${event.title || ''}`)) return null;
     // routine deploy start/done (69 % of the feed) are not events: kept only when a lease blocked the deploy; failed/orphan/approve/lease-freed pass.
     if (cls.kind === 'deploy' && (cls.state === 'start' || cls.state === 'done') && !(Array.isArray(event.blockedBy) && event.blockedBy.length)) return null;
     const sessions = managerSessions() || [];
