@@ -104,7 +104,8 @@ import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
 import { createDoneCheck } from './done-check.js';
-import { createLeftovers } from './done-leftovers.js';
+import { createLeftovers, pushableItems } from './done-leftovers.js';
+import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
 import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs } from './send-verify.js';
@@ -983,18 +984,29 @@ const doneCheck = createDoneCheck({
 
 // Done with leftovers (done-leftovers.js): an idle `STATUS: done` session whose closing text lists work it can do itself
 // wakes the manager (feed kind `leftovers`); nothing is typed. manager.json `leftovers`: live (default) | off.
+// Owner pushes (owner-push.js, owner 2026-10-28): the same watcher also reads done / needs-owner / needs-manager / blocked /
+// waiting stops for the pushes the owner used to type (feed kind `push` with pushKind + the reply). manager.json `ownerPush`: live | off.
+const PUSH_STATUSES = new Set(['done', 'needs-owner', 'needs-manager', 'blocked', 'waiting']);
+const ownerPushOn = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).ownerPush !== 'off'; } catch { return true; } };
 const leftovers = createLeftovers({
   listIdle: async () => {
     const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
     for (const [name, p] of panes) {
       if (p.dead) continue;
       const st = latest?.status?.[name], ex = st?.stall?.excerpt;
-      if (!ex || statusLine(String(ex).split('\n'))?.kind !== 'done') continue;
+      const kind = ex && statusLine(String(ex).split('\n'))?.kind;
+      if (!kind || !(kind === 'done' || (PUSH_STATUSES.has(kind) && ownerPushOn()))) continue;
       out.push({ name, text: String(ex).slice(-3000), manager: mgrs.has(name), paused: sessionMeta.isPaused(name), held: !!heldOf(name),
         draft: !!st?.stall?.draft, working: st.state === 'working' || !!reporter.activityOf(name)?.working,
         idleMs: Date.now() - (st?.changeAt || st?.doneAt || Date.now()), turnAt: st?.doneAt || null });
     }
     return out;
+  },
+  classify: (text) => {
+    const items = pushableItems(text);
+    if (items) return { kind: 'leftovers', items, title: 'done with leftovers' };
+    const p = ownerPushOn() ? pushOf(text) : null;
+    return p && { kind: 'push', items: p.items, title: `push (${p.kind})`, pushKind: p.kind, reply: replyFor(p) };
   },
   record: (e) => managerEvents.record(e),
   mode: () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).leftovers === 'off' ? 'off' : 'live'; } catch { return 'live'; } },

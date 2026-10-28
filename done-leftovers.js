@@ -71,7 +71,10 @@ export function summary(items) { return items.slice(0, 3).join(' | ').slice(0, 2
 // Watcher. listIdle: async () => [{ name, text, idleMs, working, draft, paused, held, manager, turnAt }] (the server filters nothing
 // but supplies the facts); record: manager feed. Gates: no draft, not working, not paused/held, not a manager session,
 // idle > IDLE_MS, once per session turn (signature of the items), at most MAX_PER_HOUR events per session.
-export function createLeftovers({ listIdle, record, mode = () => 'live', now = Date.now, pollMs = POLL_MS, log = console } = {}) {
+// classify(text) -> { kind, items, title?, ...extra } | null picks what a stop is; the default is done-with-leftovers. The server
+// passes one that also reads owner-push.js (kind 'push': suggestions / routine-ask / blocked-host, extra = pushKind + reply).
+const leftoversKind = (text) => { const items = pushableItems(text); return items && { kind: 'leftovers', items, title: 'done with leftovers' }; };
+export function createLeftovers({ listIdle, record, classify = leftoversKind, mode = () => 'live', now = Date.now, pollMs = POLL_MS, log = console } = {}) {
   const told = new Map();    // session -> signature already reported
   const sent = new Map();    // session -> [ms]
   let timer = null, busy = false, last = { at: 0, found: [] };
@@ -84,16 +87,17 @@ export function createLeftovers({ listIdle, record, mode = () => 'live', now = D
       const found = [];
       for (const s of await listIdle()) {
         if (s.manager || s.paused || s.held || s.draft || s.working || s.idleMs < IDLE_MS) continue;
-        const items = pushableItems(s.text);
-        if (!items) { told.delete(s.name); continue; }
+        const c = classify(s.text);
+        if (!c || !c.items?.length) { told.delete(s.name); continue; }
+        const { kind, items, title, ...extra } = c;
         const sig = createHash('sha1').update(s.name + '\0' + (s.turnAt || '') + '\0' + items.join('\0')).digest('hex').slice(0, 12);
-        found.push({ name: s.name, items });
+        found.push({ name: s.name, kind, items });
         if (told.get(s.name) === sig) continue;
         const recent = (sent.get(s.name) || []).filter((t) => now() - t < 3600 * 1000);
         if (recent.length >= MAX_PER_HOUR) continue;
         told.set(s.name, sig); sent.set(s.name, [...recent, now()]);
         try {
-          await record({ key: `${s.name}:leftovers`, title: `${s.name}: done with leftovers`, body: summary(items), items, url: `/?s=${encodeURIComponent(s.name)}`, priority: 'default', at: new Date(now()).toISOString() });
+          await record({ key: `${s.name}:${kind}`, title: `${s.name}: ${title || kind}`, body: summary(items), items, ...extra, url: `/?s=${encodeURIComponent(s.name)}`, priority: 'default', at: new Date(now()).toISOString() });
         } catch (e) { log.error?.('[leftovers] record', s.name, e.message); }
       }
       return (last = { at: now(), found });

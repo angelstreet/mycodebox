@@ -391,7 +391,7 @@ function readDisk() {
 // ---------------------------------------------------------------- tmp auto-clean + inodes
 // Test suites leak mkdtemp dirs in os.tmpdir() (2026-10-20: 186k entries ate every inode). Names of every
 // mkdtemp prefix (join of tmpdir and a literal) in test/ and scripts/; test/health-watch.test.js asserts the list stays complete.
-export const TMP_PREFIXES = ['owner-ask-', 'owner-ask-2-', 'owner-ask-badfloor-', 'owner-ask-d-', 'owner-ask-ok-', 
+export const TMP_PREFIXES = ['owner-ask-', 'owner-ask-2-', 'owner-ask-badfloor-', 'owner-ask-d-', 'owner-ask-ok-', 'owner-push-', 
   'desktop-cfg-', 'full-suite-', 'full-suite-state-', 'gtr-',
   'appr-origin-', 'auto-origin-', 'cbs-', 'ci-watch-', 'cs-', 'daily-', 'dec-origin-', 'diskguard-', 'done-check-', 'dr-',
   'fake-proc-', 'fake-run-', 'fallback-', 'fallback-node-', 'g8-', 'g8-daily-', 'ghosty-adopt-', 'ghosty-al-',
