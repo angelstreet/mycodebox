@@ -87,7 +87,7 @@ export function createLeftovers({ listIdle, record, classify = leftoversKind, mo
       const found = [];
       for (const s of await listIdle()) {
         if (s.manager || s.paused || s.held || s.draft || s.working || s.idleMs < IDLE_MS) continue;
-        const c = classify(s.text);
+        const c = classify(s.text, s.name);
         if (!c || !c.items?.length) { told.delete(s.name); continue; }
         const { kind, items, title, ...extra } = c;
         const sig = createHash('sha1').update(s.name + '\0' + (s.turnAt || '') + '\0' + items.join('\0')).digest('hex').slice(0, 12);

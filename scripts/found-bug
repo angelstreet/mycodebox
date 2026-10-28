@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+// found-bug: file a bug you found outside your scope (owner, 2026-10-28) instead of leaving it in a closing line.
+//   found-bug --title "REST list of virtual scripts errors" [--endpoint GET /api/x] [--repro "..."] [--error "exact text"]
+//             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
+//   found-bug list | found-bug remove <id>   (remove: test reports only)
+// Session defaults to the tmux session you run in. Posts to loopback POST /api/bugs (PORT or 7777); secrets are redacted server-side.
+import { execFileSync } from 'node:child_process';
+const [cmd, ...rest] = process.argv.slice(2);
+const base = `http://127.0.0.1:${process.env.PORT || 7777}`;
+const die = (m, c = 1) => { console.error('found-bug: ' + m); process.exit(c); };
+async function api(method, path, body) {
+  try {
+    const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  } catch (e) { die(`service unreachable (${e.message})`, 5); }
+}
+if (cmd === 'list') { const r = await api('GET', '/api/bugs'); for (const b of r.body.bugs || []) console.log(`${b.id}  ${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`); process.exit(0); }
+if (cmd === 'remove') { if (!rest[0]) die('usage: found-bug remove <id>'); const r = await api('DELETE', '/api/bugs/' + encodeURIComponent(rest[0])); console.log(r.body.ok ? 'removed' : r.body.error); process.exit(r.body.ok ? 0 : 1); }
+const args = process.argv.slice(2), o = {};
+for (let i = 0; i < args.length; i++) {
+  const a = args[i];
+  if (a === '--test') o.test = true;
+  else if (/^--(title|endpoint|repro|error|workaround|blocking|session)$/.test(a)) { if (i + 1 >= args.length) die(`${a} needs a value`); o[a.slice(2)] = args[++i]; }
+  else die(`unknown argument ${a} (found-bug --title ... [--endpoint --repro --error --workaround --blocking yes|no --session])`);
+}
+if (!o.title) die('--title is required');
+if (!o.session) { try { o.session = execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { o.session = 'unknown'; } }
+const r = await api('POST', '/api/bugs', o);
+if (!r.body.ok) die(r.body.error || `HTTP ${r.status}`);
+console.log(r.body.duplicate ? `already filed (${r.body.bug.id}); not filed again` : `filed ${r.body.bug.id}${r.body.bug.blocking ? ' (blocking)' : ''}; the manager will send a worker`);

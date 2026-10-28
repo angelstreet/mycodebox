@@ -54,6 +54,10 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   End the turn with `STATUS: waiting: integration <id>`; a returned request is fixed on your branch and requested again.
   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then `STATUS: waiting: integration <id>`.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
+- Bugs outside your scope (owner, 2026-10-28): when you hit a bug that is not yours (an endpoint that errors, a pre-existing
+  failure, a tool that misbehaves), either fix it in a worktree or file it with `scripts/found-bug --title ... --endpoint ...
+  --repro ... --error "<exact text>" --workaround ... --blocking yes|no`; the manager then sends a worker. Never leave it in a
+  closing line ("could not", "returned an error", "unrelated", "pre-existing"): the done-check asks for the report when you do.
 - Owner-reported bug queues are drained, not negotiated (owner, 2026-10-21): work every reported problem through to
   shipped without stopping to ask "which one next?". Keep the queue explicit, rank it yourself, and take the fixes one
   at a time. Ask only on a hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous
