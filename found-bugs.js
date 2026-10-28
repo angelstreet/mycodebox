@@ -52,8 +52,10 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     const p = chain.then(async () => {
       const r = normalize(input, { now: now() });
       if (r.invalid) return { ok: false, error: r.invalid };
-      const key = (b) => b.session + '\0' + b.title.toLowerCase();
-      const prev = (await all()).find((b) => key(b) === key(r) && !b.removed && now() - Date.parse(b.at) < DEDUPE_MS);
+      const key = (b) => b.session + '\0' + String(b.title ?? '').toLowerCase();
+      // tombstone lines ({ id, removed, at }) have no title: only real reports that were not removed dedupe
+      const rows = await all(), gone = new Set(rows.filter((b) => b.removed).map((b) => b.id));
+      const prev = rows.find((b) => b.title && !b.removed && !gone.has(b.id) && key(b) === key(r) && now() - Date.parse(b.at) < DEDUPE_MS);
       if (prev) return { ok: true, duplicate: true, bug: prev };
       await mkdir(stateDir, { recursive: true });
       await appendFile(file, JSON.stringify(r) + '\n');

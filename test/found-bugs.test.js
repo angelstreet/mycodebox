@@ -82,3 +82,16 @@ test('feed: kind bug carries the bug object; bug-unreported carries items; both 
   assert.deepEqual(r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l).l.kind), ['bug', 'bug-unreported']);
   assert.ok(existsSync(SH));
 });
+
+test('store: filing with every field set still works after a test report was removed (tombstone has no title)', async () => {
+  const fb = createFoundBugs({ stateDir: tmp('ghosty-fb-tomb-') });
+  const t = await fb.add({ title: 'probe', session: 's', test: true });
+  assert.equal((await fb.remove(t.bug.id)).ok, true);
+  const full = { title: 'All Fields', endpoint: 'GET /api/x', repro: 'steps', error: 'exact text', workaround: 'w', blocking: 'yes', session: 's' };
+  const a = await fb.add(full);
+  assert.equal(a.ok, true); assert.equal(a.bug.blocking, true);
+  assert.equal((await fb.add({ ...full, title: 'all fields' })).duplicate, true);
+  // a removed test report does not dedupe a new filing of the same title
+  const again = await fb.add({ title: 'probe', session: 's', test: true });
+  assert.equal(again.duplicate, false);
+});
