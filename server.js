@@ -2508,6 +2508,8 @@ async function handleHttp(req, res) {
     try {
       if (req.method === 'GET' && p === '/api/bugs') return json(res, 200, { ok: true, bugs: await foundBugs.list(), counts: await foundBugs.counts() });
       if (req.method === 'POST' && p === '/api/bugs') { const r = await foundBugs.add(await readJsonBody(req)); return json(res, r.ok ? 200 : 400, r); }
+      const fm = p.match(/^\/api\/bugs\/([^/]+)\/fixed$/);
+      if (fm && req.method === 'POST') { const r = await foundBugs.fixed(decodeURIComponent(fm[1]), (await readJsonBody(req)).note); return json(res, r.ok ? 200 : 404, r); }
       if (req.method === 'DELETE' && p.startsWith('/api/bugs/')) { const r = await foundBugs.remove(decodeURIComponent(p.slice('/api/bugs/'.length))); return json(res, r.ok ? 200 : 404, r); }
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }

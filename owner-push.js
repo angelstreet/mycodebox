@@ -29,6 +29,14 @@ export function floorOf(text) {
 const LEFTOVER_HEAD = /^\W*(?:left to do|leftovers?|remaining(?: work| items| steps)?|still (?:to do|open)|todo|to do|open items?)\W*:|\bopen\s*:\s*\S/im;
 const PROPOSAL = /\bI'?d (?:next |then |also |rather )?(?:add|check|run|fix|build|measure|try|change|replace|implement|write|capture|test|move|split|cache)\b|\bwould (?:settle|fix|confirm|prove|pin (?:it )?down|remove|explain)\b|\b(?:fix(?:es)?|changes?|improvements?) (?:are |were )?proposed\b|\bproposed (?:fix(?:es)?|changes?|improvements?)\b|\bproposals?\b|\bI could (?:also )?(?:add|fix|build|run|write|check|try|implement)\b|\bif you (?:want|like),? I(?:'ll| can| could)\b|^\W*(?:suggestions?|next improvements?|improvement ideas|ideas|follow-?ups?|recommendations?)\W*:/im;
 
+// Bug bug-1f0455fc (2026-10-28): a freeze acknowledgement ("proposal, final names wait for the owner") was read as a proposal the session
+// can implement, and the reply "Implement your own proposals now" contradicted the owner's freeze. Three guards for kind suggestions:
+// a proposal that is deferred or negated is not one; a turn that answers a manager freeze / stop / hold is not pushed; and a push needs
+// an actual list: a heading (Suggestions: ...) or two proposal sentences, never one stray phrase.
+const DEFERRED = /\bwait(?:s|ed|ing)? (?:for|on) (?:the )?(?:owner|jev)\b|\b(?:not|nothing) until\b|\buntil (?:the )?(?:owner|jev)\b|\b(?:pending|after|once|unless) (?:the )?owner\b|\bowner (?:decides|validates|approves|confirms)\b|\b(?:on hold|frozen)\b/i;
+const FREEZE = /\b(?:freeze|frozen)\b|\backnowledg\w*\b[^.\n]{0,80}\b(?:stop|hold|pause|halt)\b|\b(?:stop|hold|pause|halt)(?:ed|ing)? (?:message|order|request|notice)\b|\b(?:holding|pausing|stopping) (?:all|the|my|every|any)\b|\bwill not (?:rename|touch|start|change) (?:anything|any)\b/i;
+const LIST_HEAD = /^\W*(?:suggestions?|next improvements?|improvement ideas|ideas|follow-?ups?|recommendations?|proposals?)\W*:/im;
+
 const statusOf = (lines) => {
   let at = -1, m = null;
   lines.forEach((l, i) => { const s = STATUS.exec(l.trim()); if (s) { at = i; m = s; } });
@@ -76,8 +84,9 @@ export function pushOf(text) {
 
   if (DONE.test(st.kind)) {
     if (LEFTOVER_HEAD.test(tail)) return null;   // done-leftovers.js owns a listed "Left to do"
-    const hits = sentences(tail).filter((s) => PROPOSAL.test(s));
-    if (!hits.length) return null;
+    if (FREEZE.test(raw)) return null;   // the session is answering a freeze / stop: "implement your proposals" would contradict it
+    const hits = sentences(tail).filter((s) => PROPOSAL.test(s) && !DEFERRED.test(s));
+    if (!hits.length || (hits.length < 2 && !LIST_HEAD.test(tail))) return null;
     const items = [], skipped = [];
     for (const s of hits) { const f = floorOf(s); (f ? skipped : items).push(f ? `${clip(s)} (owner: ${f})` : clip(s)); }
     return items.length ? { kind: 'suggestions', items: items.slice(0, 4), skipped, why: 'done with its own proposals' } : null;

@@ -106,7 +106,7 @@ const classify = (text) => {
 test('watcher: a push stop emits one `<session>:push` event with pushKind and reply; leftovers keep their key', async () => {
   const events = [];
   const rows = [
-    { name: 'a', text: "I'd add a retry on the walk.\nSTATUS: done — walk fixed", idleMs: IDLE_MS + 1 },
+    { name: 'a', text: "I'd add a retry on the walk. I'd also add a step that logs each retry.\nSTATUS: done — walk fixed", idleMs: IDLE_MS + 1 },
     { name: 'b', text: 'Left to do:\n- wire the retry counter\nSTATUS: done — merged', idleMs: IDLE_MS + 1 },
     { name: 'c', text: 'STATUS: needs-owner: password for the shop account', idleMs: IDLE_MS + 1 },
     { name: 'd', text: "I'd add a retry.\nSTATUS: done — x", idleMs: IDLE_MS + 1, draft: true },
@@ -127,4 +127,31 @@ test('feed: push events pass with items, pushKind and reply', async () => {
   assert.equal(await ev.record({ key: 'ft:push', title: 'ft: push (routine-ask)', body: 'x', items: ['x'], pushKind: 'routine-ask', reply: 'Yes, option 1: x.' }), true);
   const r = JSON.parse(readFileSync(join(dir, FILE_NAME), 'utf8').trim());
   assert.deepEqual([r.kind, r.session, r.pushKind, r.reply, r.items], ['push', 'ft', 'routine-ask', 'Yes, option 1: x.', ['x']]);
+});
+
+// bug-1f0455fc (2026-10-28): the two acknowledgements of the owner's script-rename freeze, sanitised. The detector filed
+// push(suggestions) from "proposal, final names wait for the owner" and told the sessions to "Implement your own proposals now".
+test('suggestions: a freeze acknowledgement never fires (deferred proposal, answers the freeze, no list)', () => {
+  const a = [
+    'Acknowledged: the script-rename freeze is in effect. I made no renames. My tree-naming table stays a proposal, final names wait for the owner.',
+    'STATUS: done — freeze acknowledged; proposal, final names wait for the owner.',
+  ].join('\n');
+  const b = [
+    'Stop message received. Nothing is renamed and nothing will be until the owner validates the convention; the review notes below are a proposal only.',
+    'STATUS: done — holding all renames; proposal, final names wait for the owner.',
+  ].join('\n');
+  assert.equal(pushOf(a), null);
+  assert.equal(pushOf(b), null);
+});
+
+test('suggestions: each guard alone holds, and real proposals still fire', () => {
+  // deferred only: the single proposal is negated
+  assert.equal(pushOf("I'd add the names table, but not until the owner has validated the convention.\nSTATUS: done — table drafted"), null);
+  // freeze wording alone, even with two proposal sentences
+  assert.equal(pushOf("The freeze is acknowledged. I'd add a cache. I'd also add a retry.\nSTATUS: done — x"), null);
+  // one stray proposal phrase is not a list
+  assert.equal(pushOf("I'd add a cache later.\nSTATUS: done — merged"), null);
+  // a Suggestions heading is a list even with one item; two proposal sentences are a list
+  assert.equal(pushOf('Suggestions: add a retry on the walk\nSTATUS: done — walk fixed').kind, 'suggestions');
+  assert.equal(pushOf("I'd add a cache. I'd also add a retry.\nSTATUS: done — x").kind, 'suggestions');
 });
