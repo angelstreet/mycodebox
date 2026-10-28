@@ -8,6 +8,9 @@ import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
+// Long-lived branches (owner, 2026-10-28): a session that merely sat in a checkout of one (the manager's task44-ai-manager, 13 commits
+// ahead of main by design) is not judged on it: 3 false wakes in a day. manager.json `doneCheckIgnoreBranches`, default below.
+export const DEFAULT_IGNORE_BRANCHES = ['task44-ai-manager'];
 export const POLL_MS = 5 * 60 * 1000;
 const FETCH_EVERY_MS = 30 * 60 * 1000;
 const MAX_NUDGES_PER_TICK = 2;
@@ -66,7 +69,7 @@ export function uncommittedOf(porcelain) {
 
 export function createDoneCheck({
   stateDir, git, listDone, send, record = async () => {}, mode = () => 'live', home = process.env.HOME || '',
-  pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console,
+  pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
 } = {}) {
   const stFile = join(stateDir, 'done-check.json');
   const journal = join(stateDir, 'done-check.jsonl');
@@ -104,8 +107,9 @@ export function createDoneCheck({
       const f = await factsOf(p).catch(() => null);
       if (f && (f.notOnMain.length || f.uncommitted.length)) out.push({ ...f, where: p });
     }
+    const ign = new Set(ignoreBranches());
     for (const b of branches) {
-      if (b === own.branch) continue;
+      if (b === own.branch || ign.has(b)) continue;
       let ref = null;
       for (const r of [`refs/heads/${b}`, `refs/remotes/origin/${b}`]) { try { await git(cwd, ['rev-parse', '-q', '--verify', r]); ref = r; break; } catch {} }
       if (!ref) continue;
@@ -124,6 +128,14 @@ export function createDoneCheck({
     for (const b of ['origin/main', 'origin/master']) { try { await git(cwd, ['rev-parse', '-q', '--verify', b]); base = b; break; } catch {} }
     if (!base) return null;
     const branch = (await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim();
+    // On a long-lived branch, or a detached HEAD that is part of one: nothing to judge (the session did not work here).
+    const ign = ignoreBranches();
+    if (ign.includes(branch)) return { branch, base, notOnMain: [], uncommitted: [], ignored: true };
+    if (branch === 'HEAD') {
+      for (const b of ign) for (const r of [`refs/heads/${b}`, `refs/remotes/origin/${b}`]) {
+        try { await git(cwd, ['rev-parse', '-q', '--verify', r]); await git(cwd, ['merge-base', '--is-ancestor', 'HEAD', r]); return { branch: null, base, notOnMain: [], uncommitted: [], ignored: true }; } catch {}
+      }
+    }
     // Uncommitted files only count in a linked worktree: the repo's main checkout is shared by many sessions (three TASK103
     // sessions sat in it with someone else's 10 uncommitted files, 2026-10-15), so its dirt cannot be attributed.
     const gitDir = (await git(cwd, ['rev-parse', '--path-format=absolute', '--git-dir']).catch(() => '')).trim();
