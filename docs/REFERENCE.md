@@ -1467,7 +1467,8 @@ draft, not working / paused / held, not a manager session, at most 4 per session
 Never a push: a `needs-owner` menu (an approval the owner asked for), any item with an owner-floor word (`ownerFloorMatch`: delete,
 credentials, money, customers, physical) or `FLOOR_EXTRA` (force-push, history rewrite, sudo, production, publish / tags,
 destructive or irreversible, the ghosty-sessions service, reboot, SMS / phone / login / sign-in, provide hardware, bring a box back,
-sideload). `manager.json` `ownerPush`: `"off"` disables these kinds (leftovers stay); `leftovers: "off"` disables the watcher.
+sideload). `manager.json` `ownerPush`: `"off"` disables these kinds (leftovers stay); `leftovers: "off"` disables the watcher. `GET /api/leftovers` shows the
+watcher's last scan: `at`, `found` (`name`, `kind`, `items`), `mode`, `error`.
 
 ## Rules watch (owner, 2026-10-15)
 

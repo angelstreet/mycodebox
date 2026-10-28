@@ -91,7 +91,7 @@ export function createLeftovers({ listIdle, record, classify = leftoversKind, mo
         if (!c || !c.items?.length) { told.delete(s.name); continue; }
         const { kind, items, title, ...extra } = c;
         const sig = createHash('sha1').update(s.name + '\0' + (s.turnAt || '') + '\0' + items.join('\0')).digest('hex').slice(0, 12);
-        found.push({ name: s.name, kind, items });
+        found.push({ name: s.name, kind, items, ...(extra.pushKind ? { pushKind: extra.pushKind } : {}) });
         if (told.get(s.name) === sig) continue;
         const recent = (sent.get(s.name) || []).filter((t) => now() - t < 3600 * 1000);
         if (recent.length >= MAX_PER_HOUR) continue;
