@@ -58,6 +58,8 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
    merge into the target, push the target or run the deploy script yourself. End the turn with \`STATUS: waiting:
    integration <id>\`; the lane tells you the result (a returned request: fix it on your branch, request again).
    Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run \`integrate request\`, then \`STATUS: waiting: integration <id>\`.
+   VirtualPyTest: a new script is a virtual script or a simple test case, never a file under test_scripts/ (deprecated
+   2026-10-28; the commit/push/CI guard refuses one).
    This brief and the repo's AGENTS.md win over older task docs and handovers that say "no push / no merge / no
    deploy" or "the owner merges". Never hand the owner commands to run: run them yourself.
 4. Ask the owner only for: deleting data, credentials or secrets, money, customers, sudoers or system units on hosts,
