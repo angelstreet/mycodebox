@@ -122,3 +122,31 @@ test('store: resolve records state, commit, who and when; unresolved filter and 
   assert.equal((await fb.list({ unresolved: true })).length, 0);
   assert.deepEqual(await fb.counts(), { total: 0, blocking: 0, last24h: 0 });
 });
+
+// Regression (task176-tree-naming reported "Cannot read properties of undefined (reading 'toLowerCase')" with every flag set):
+// the real CLI with the full flag set against a store that already holds tombstone, fixed and resolve marker lines (no title).
+test('CLI: every flag set files cleanly against a store with marker lines', async () => {
+  const { createServer } = await import('node:http');
+  const { createFoundBugs } = await import('../found-bugs.js');
+  const fb = createFoundBugs({ stateDir: tmp('ghosty-fb-cli-') });
+  const old = (await fb.add({ title: 'old', session: 's' })).bug, t = (await fb.add({ title: 'probe', session: 's', test: true })).bug;
+  await fb.remove(t.id); await fb.fixed(old.id, 'n'); await fb.resolve(old.id, { state: 'fixed', commit: 'abc1234' });
+  const srv = createServer(async (req, res) => {
+    let body = ''; for await (const c of req) body += c;
+    const r = await fb.add(JSON.parse(body));
+    res.writeHead(r.ok ? 200 : 400, { 'content-type': 'application/json' }).end(JSON.stringify(r));
+  });
+  await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
+  try {
+    const { promisify } = await import('node:util');
+    const { execFile } = await import('node:child_process');
+    const env = { ...process.env, PORT: String(srv.address().port) };
+    const flags = ['--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
+    const out = await promisify(execFile)(process.execPath, ['scripts/found-bug', ...flags], { env });
+    assert.match(out.stdout, /^filed bug-[0-9a-f]{8}/);
+    const again = await promisify(execFile)(process.execPath, ['scripts/found-bug', ...flags], { env });
+    assert.match(again.stdout, /already filed/);
+    const rows = (await fb.list()).filter((b) => b.session === 'cli-test');
+    assert.equal(rows.length, 1); assert.equal(rows[0].blocking, false); assert.equal(rows[0].workaround, 'none');
+  } finally { srv.close(); }
+});
