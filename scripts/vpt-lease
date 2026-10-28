@@ -75,7 +75,8 @@ def to_epoch(v):
 
 def hhmm(v):
     t = to_epoch(v)
-    return time.strftime("%H:%M", time.localtime(t)) if t else "?"
+    # UTC with a label: the registry host runs in local time (CET), `since` is printed in UTC; unlabeled local time read as an hour late
+    return time.strftime("%H:%M UTC", time.gmtime(t)) if t else "?"
 
 
 def norm_kind(k):

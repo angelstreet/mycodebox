@@ -75,6 +75,13 @@ or `mac:<name>`.
 - **Leases from before the cap** (owner, 2026-10-27: "never 240 min"): the service cuts them back to claim time + 60 minutes; one already
   held longer gets 10 minutes to wrap up, then ends. A long lease does not survive the change.
 
+## What to expect in the queue (owner, 2026-10-28)
+
+- `vpt-lease` prints ETAs as `HH:MM UTC` (the registry host runs in CET; an unlabeled local time looked an hour late).
+- A catch-up deploy (the restart of a host a deploy skipped) never holds a claim or ticket back while it is only queued; it blocks once it runs.
+  After skipping again it waits 10 min before its next try, one pending catch-up per host set (a newer ref replaces an older one), and it yields to a device ticket that has waited over 10 min.
+- A host deploy still holds every host lease while it runs (about 12 min): device tickets on those hosts are granted when it ends.
+
 ## Priority: P2 and P3 leases are short, and yield to a higher priority
 
 Every lease and ticket carries the holder's priority P0 (highest) to P3 (background): `--priority P0|P1|P2|P3` on `claim` and `run`, else the
