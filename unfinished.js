@@ -53,6 +53,15 @@ export function splitRows(rows) {
 
 export const taskRe = (num) => new RegExp(`task[-_ ]?0*${Number(num)}(?!\\d)`, 'i');
 
+// The project dirs list misses worktrees (the worktree scan of a repo with many of them times out): also look at every directory
+// directly under home that has docs/tasks. -> dirs + { path } for each one not already listed.
+export async function withHomeDirs(dirs, home, { fs = { readdir } } = {}) {
+  const seen = new Set((dirs || []).map((d) => d.path)), extra = [];
+  let ents = []; try { ents = await fs.readdir(home, { withFileTypes: true }); } catch { /* no home */ }
+  for (const e of ents) { const path = join(home, e.name); if (e.isDirectory() && !e.name.startsWith('.') && !seen.has(path)) extra.push({ path }); }
+  return [...(dirs || []), ...extra];
+}
+
 // Scan task docs. dirs: [{ path }]. The same doc name in several worktrees is one entry: the newest copy wins.
 export async function scanTaskDocs(dirs, { fs = { readdir, readFile, stat } } = {}) {
   const best = new Map();

@@ -109,7 +109,7 @@ import { createRulesWatch } from './rules-watch.js';
 import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
-import { scanTaskDocs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
+import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
@@ -1036,7 +1036,7 @@ const leftovers = createLeftovers({
 // The scan of the docs is cached 60 s; the join with live sessions and history is recomputed on each call.
 let taskDocsCache = { at: 0, docs: [] };
 async function unfinishedNow() {
-  if (Date.now() - taskDocsCache.at > 60000) taskDocsCache = { at: Date.now(), docs: await scanTaskDocs(await collectDirs()) };
+  if (Date.now() - taskDocsCache.at > 60000) taskDocsCache = { at: Date.now(), docs: await scanTaskDocs(await withHomeDirs(await collectDirs(), HOME)) };
   const live = new Set([...(await listPanes()).entries()].filter(([, p]) => !p.dead).map(([n]) => n));
   return computeUnfinished({ docs: taskDocsCache.docs, instances: history.instances(), live });
 }
