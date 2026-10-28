@@ -23,7 +23,7 @@ check_idle() {
     echo 'NOT restarting: deploy API unavailable' >&2; return 2
   fi
   now=$(date +%s%3N)
-  # Exit 1 means known busy; exit 2 means unknown and must never be retried as idle.
+  # Exit 1 means known busy; exit 3 means the registry is unavailable (retried under --wait, never idle); exit 2 means unknown.
   printf '%s' "$response" | python3 -c '
 import json, math, sys
 try:
@@ -37,6 +37,11 @@ try:
             result[key] = value
         return result
     d = json.loads(raw, object_pairs_hook=unique)
+    # The runner could not read the lease registry (service down, mid-deploy): a transient unknown. Name the cause and let
+    # --wait retry (exit 3); it is never read as idle. A stale timestamp or a missing error text stays a plain refusal.
+    if isinstance(d, dict) and d.get("ok") is False and isinstance(d.get("error"), str) and d["error"] and type(d.get("at")) in (int, float) and 0 <= int(sys.argv[1]) - d["at"] <= 60000:
+        print("NOT restarting: lease registry unavailable (" + d["error"][:200].replace("\n", " ") + ")", file=sys.stderr)
+        sys.exit(3)
     if not isinstance(d, dict) or d.get("ok") is not True or d.get("error") != "": raise ValueError()
     at = d.get("at")
     if type(at) not in (int, float) or not math.isfinite(at) or not 0 <= int(sys.argv[1]) - at <= 60000: raise ValueError()
@@ -74,13 +79,14 @@ while :; do
   else
     status=$?
   fi
-  [ "$status" -eq 1 ] || exit 2
+  { [ "$status" -eq 1 ] || { [ "$status" -eq 3 ] && [ "$WAIT_MIN" -gt 0 ]; }; } || exit 2
   if [ "$(date +%s)" -ge "$deadline" ]; then
+    if [ "$status" -eq 3 ]; then echo 'NOT restarting: the lease registry stayed unavailable for the whole wait' >&2; exit 2; fi
     echo 'NOT restarting: deploy work is running or can start automatically' >&2
     echo 'wait for completion, or use: scripts/safe-restart.sh --wait 15' >&2
     exit 1
   fi
-  echo 'deploy work pending, waiting...' >&2
+  [ "$status" -eq 3 ] && echo 'lease registry unavailable, waiting...' >&2 || echo 'deploy work pending, waiting...' >&2
   sleep 15
 done
 
