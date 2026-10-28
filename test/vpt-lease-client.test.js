@@ -194,11 +194,14 @@ test('release, renew, narrow, heartbeat, mode: output lines and exit codes', asy
 test('claim --ticket: prints the ticket id and ETA, exit 0; ticket (no wait) waiting -> 3, granted -> lease id, --cancel', async () => {
   setup(() => ({ ok: true, ticket: { id: 'T1', position: 2, eta: iso(nowS() + 600), holders: [{ agent: 'mac:me' }] } }));
   let r = await run(['claim', 'env-a', 'host-1', '--agent', 'codebox:x', '--ticket']);
-  assert.equal(r.code, 0); assert.equal(r.out.split('\n')[0], 'T1'); assert.match(r.out, /position=2 eta=\d\d:\d\d held-by=mac:me/);
+  assert.equal(r.code, 0); assert.equal(r.out.split('\n')[0], 'T1'); assert.match(r.out, /position=2 eta=\d\d:\d\d UTC held-by=mac:me/);
   assert.equal(calls[0].body.wait, 'ticket');
+  setup(() => ({ ok: true, ticket: { id: 'T1', state: 'waiting', position: 1, eta: '2025-10-09T08:53:00Z', holders: [{ agent: 'mac:me' }] } }));
+  r = await run(['ticket', 'T1']);
+  assert.equal(r.out, 'waiting #1, eta 08:53 UTC (held by mac:me)\n');   // never the host's local time (CET read as an hour late)
   setup(() => ({ ok: true, ticket: { id: 'T1', state: 'waiting', position: 2, eta: iso(nowS() + 600), holders: [{ agent: 'mac:me' }] } }));
   r = await run(['ticket', 'T1']);
-  assert.equal(r.code, 3); assert.match(r.out, /^waiting #2, eta \d\d:\d\d \(held by mac:me\)\n$/);
+  assert.equal(r.code, 3); assert.match(r.out, /^waiting #2, eta \d\d:\d\d UTC \(held by mac:me\)\n$/);
   setup(() => ({ ok: true, ticket: { id: 'T1', state: 'granted', lease: lease({ id: 'G1' }) } }));
   r = await run(['ticket', 'T1']);
   assert.deepEqual([r.code, r.out], [0, 'G1\n']);
@@ -217,7 +220,7 @@ test('claim --wait: ticket, progress on stderr, then the lease id on stdout', as
   });
   const r = await run(['claim', 'env-a', 'host-1', '--agent', 'codebox:x', '--wait']);
   assert.equal(r.code, 0); assert.equal(r.out.split('\n')[0], 'GRANTED');
-  assert.match(r.err, /waiting #2, eta \d\d:\d\d \(held by mac:me\)/); assert.match(r.err, /waiting #1/);
+  assert.match(r.err, /waiting #2, eta \d\d:\d\d UTC \(held by mac:me\)/); assert.match(r.err, /waiting #1/);
   assert.equal(calls[0].body.wait, 'ticket');
   assert.equal(calls[1].path, '/tickets/T9'); assert.ok(calls[1].query.wait);
 });

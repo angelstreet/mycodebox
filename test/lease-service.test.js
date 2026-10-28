@@ -1035,3 +1035,59 @@ test('priority: P3 (background) is clamped to 10 min and yields to a P2 waiter, 
   assert.equal((await h.svc.renew({ id: bot.id, ttl_min: 10 })).code, 'E_YIELD_REQUIRED');
   assert.equal((await h.claim('p', 'host:host-9', { priority: 'P3', ttl_min: 5 })).lease.ttl_min, 5);
 });
+
+// ---- lease-queue fix (owner 2026-10-28): a queued catch-up never holds device tickets back ----------------------------------
+test('a queued catch-up does not block a device claim or ticket; a running one does', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
+  const c = await h.claim('dev', 'host-1/device1', { kind: 'host' });
+  assert.ok(c.ok, 'queued catch-up: device claim granted at once');
+  await h.svc.release({ agent: 'dev' });
+  assert.ok((await d.start({ id: r.id })).ok);
+  assert.equal((await h.claim('dev2', 'host-1/device1', { kind: 'host' })).code, 'E_DEPLOY_PENDING', 'running catch-up: blocks as before');
+});
+
+test('a ticket granted when the blocking lease ends, with a queued catch-up for its host', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
+  const own = (await h.claim('holder', 'host:host-1', { kind: 'host' })).lease;
+  const tk = (await h.claim('w', 'host-1/device1', { kind: 'host', wait: 'ticket' })).ticket;
+  assert.equal(tk.state, 'waiting');
+  await h.svc.release({ id: own.id, agent: 'holder' });
+  assert.equal((await h.svc.ticket(tk.id)).ticket.state, 'granted');
+});
+
+test('a catch-up yields to a device ticket that waited over 10 minutes (not to a younger one)', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  await h.claim('holder', 'host-1/device1', { kind: 'host', ttl_min: 60 });
+  const tk = (await h.claim('w', 'host-1/device1', { kind: 'host', wait: 'ticket' })).ticket;
+  const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
+  for (let i = 0; i < 5; i++) { await h.advance(MIN); await h.svc.ticket(tk.id); }
+  const young = await d.start({ id: r.id, skip_leased: true });
+  assert.ok(young.ok, 'a ticket waiting 5 min does not hold the catch-up back');
+  await d.finish({ id: r.id, status: 'done' });
+  const r2 = await d.request({ env: 'env-a', scope: 'host', ref: 'abd', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for y: skipped host-1' });
+  for (let i = 0; i < 7; i++) { await h.advance(MIN); await h.svc.ticket(tk.id); }
+  const s = await d.start({ id: r2.id, skip_leased: true });
+  assert.equal(s.code, 'E_HELD');
+  assert.equal(s.reason, 'tickets-first');
+});
+
+test('finish of a catch-up that skipped again: new catch-up has a cooldown, and replaces an older queued one', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
+  assert.ok((await d.start({ id: r.id, skip_leased: true })).ok);
+  const old = await d.request({ env: 'env-a', scope: 'host', ref: 'old', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up: hosts skipped by q (leased): host-1' });
+  const f = await d.finish({ id: r.id, status: 'done', skipped_hosts: 'host-1' });
+  const all = (await d.list({ env: 'env-a', all: true })).deploys;
+  assert.equal(all.find((x) => x.id === old.id).state, 'cancelled', 'the older queued catch-up is superseded');
+  const cu = all.find((x) => x.id === f.catchup);
+  assert.ok(cu && cu.state === 'queued');
+  assert.equal((await d.start({ id: f.catchup })).code, 'E_HELD', 'cooldown');
+  await h.advance(11 * MIN);
+  assert.ok((await d.start({ id: f.catchup })).ok, 'after the cooldown it starts');
+});

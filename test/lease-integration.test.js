@@ -101,9 +101,9 @@ test('claim --ticket then ticket <id> --wait; ticket status and --cancel', async
   let r = await vl(['claim', 'env-a', 'host-3/stb-1', '--agent', B, '--ticket', '--expect', '5']);
   assert.equal(r.code, 0);
   const tid = r.lines[0];
-  assert.match(r.lines[1], /^position=1 eta=\S+ held-by=codebox:alice$/);
+  assert.match(r.lines[1], /^position=1 eta=\S+ UTC held-by=codebox:alice$/);
   r = await vl(['ticket', tid]);
-  assert.equal(r.code, 3); assert.match(r.out, /^waiting #1, eta \S+ \(held by codebox:alice\)/);
+  assert.equal(r.code, 3); assert.match(r.out, /^waiting #1, eta \S+ UTC \(held by codebox:alice\)/);
   const waiting = vl(['ticket', tid, '--wait']);
   await sleep(400);
   await release(held);
@@ -130,7 +130,7 @@ test('queued hint: a free resource with only tickets ahead says "free but N wait
   await release(holder);
   const w = await waiter;
   assert.equal(w.code, 0, w.err);
-  assert.match(w.err, /waiting #1, eta \S+ \(held by codebox:alice\)/);
+  assert.match(w.err, /waiting #1, eta \S+ UTC \(held by codebox:alice\)/);
   await release(w.lines[0]);
 });
 
