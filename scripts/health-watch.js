@@ -466,7 +466,7 @@ export function loadConfig(path) {
   if (!FIX_LEVELS.includes(out.fixLevel)) out.fixLevel = 'report';   // unknown level: do nothing destructive
   return out;
 }
-function loadState(path) { try { const s = JSON.parse(readFileSync(path, 'utf8')); return { samples: s.samples || [], issues: s.issues || {} }; } catch { return { samples: [], issues: {} }; } }
+function loadState(path) { try { const s = JSON.parse(readFileSync(path, 'utf8')); return { samples: s.samples || [], issues: s.issues || {}, gitHygieneAt: s.gitHygieneAt || {} }; } catch { return { samples: [], issues: {} }; } }
 const saveState = (path, s) => writeFileSync(path, JSON.stringify(s) + '\n');
 
 // ---------------------------------------------------------------- investigation
@@ -1013,6 +1013,38 @@ export function runOptionalFixes(ctx, issues) {
   return freedKB;
 }
 
+// ---------------------------------------------------------------- git hygiene (bug-0d0077c5)
+// A stale gc.log (the main one or one per worktree) stops git's auto-gc for good ("Automatic cleanup will not be
+// performed until the file is removed") and the unreachable loose objects of ~90 worktrees pile up. Once a day, for each
+// configured repo: drop gc.log files older than a day and prune loose objects older than two weeks. Never --expire=now,
+// never history. `exec` is injectable for tests.
+export const GIT_HYGIENE_EVERY_MS = 24 * 3600e3, GC_LOG_MIN_AGE_MS = 24 * 3600e3;
+export function gitHygiene({ cfg, state, now, dryRun = false, log = [], exec = sh }) {
+  if (cfg.fixLevel === 'report') return 0;
+  state.gitHygieneAt = state.gitHygieneAt || {};
+  let n = 0;
+  for (const r of configRepos(cfg)) {
+    const gitDir = join(r.path, '.git');
+    let st = null;
+    try { st = lstatSync(gitDir); } catch {}
+    if (!st || !st.isDirectory()) continue;   // a worktree or a missing repo: nothing to maintain here
+    if (now - (state.gitHygieneAt[r.key] || 0) < GIT_HYGIENE_EVERY_MS) continue;
+    const logs = [join(gitDir, 'gc.log')];
+    try { for (const w of readdirSync(join(gitDir, 'worktrees'))) logs.push(join(gitDir, 'worktrees', w, 'gc.log')); } catch {}
+    let removed = 0;
+    for (const f of logs) {
+      try { if (now - statSync(f).mtimeMs < GC_LOG_MIN_AGE_MS) continue; } catch { continue; }
+      if (!dryRun) { try { rmSync(f); } catch { continue; } }
+      removed++;
+    }
+    const o = dryRun ? '' : exec('git', ['-C', r.path, 'prune', '--expire=2.weeks.ago'], 300000);
+    log.push(`- git hygiene ${r.key}: ${dryRun ? 'WOULD remove' : 'removed'} ${removed} stale gc.log, ${dryRun ? 'WOULD run' : o === null ? 'FAILED' : 'ran'} git prune --expire=2.weeks.ago`);
+    if (!dryRun && o !== null) state.gitHygieneAt[r.key] = now;
+    n++;
+  }
+  return n;
+}
+
 // ---------------------------------------------------------------- main
 
 export async function run({ home = homedir(), argv = process.argv.slice(2), now = Date.now(), out = console.log } = {}) {
@@ -1054,6 +1086,9 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   state.samples = [...state.samples, { t: now, load1: l1, load5 }].filter((s) => s.t >= now - (cfg.loadMinutes + 10) * 60000);
   const loadTrip = evalLoad(state.samples, now, cores, cfg.loadPerCore, cfg.loadMinutes).tripped;
   let issues = evaluate(metrics, cfg, loadTrip);
+  const hygieneLog = [];
+  gitHygiene({ cfg, state, now, dryRun, log: hygieneLog });
+  if (hygieneLog.length) out(hygieneLog.join('\n'));
 
   if (!issues.length) {
     state.issues = {};   // everything recovered: a recurrence wakes the manager again
