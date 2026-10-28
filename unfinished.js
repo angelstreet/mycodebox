@@ -11,7 +11,7 @@ export const STALE_MS = 14 * 24 * 3600 * 1000;   // a last session older than th
 export const POLL_MS = 10 * 60 * 1000;
 
 const OPEN = /^\W*(open|blocked|in[ -]progress|todo|not started)\b/i;
-const OWNER_ONLY = /\bowner[- ]only\b|\bneeds[- ]owner\b|\bowner (?:must|has to|to|supplies|decides)\b|\b(?:waiting|waits) (?:for|on) (?:the )?owner\b/i;
+const OWNER_ONLY = /\bowner[- ](?:only|sign-?off|approval|decision|acceptance)\b|\bsign-?off (?:by|from) the owner\b|\bneeds[- ]owner\b|\bowner (?:must|has to|to|supplies|decides)\b|\b(?:waiting|waits) (?:for|on) (?:the )?owner\b/i;
 const clean = (s) => String(s).replace(/[*_`]+/g, '').replace(/\s+/g, ' ').trim();
 
 // Pure. Markdown task doc -> { title, rows: [{ n, goal, state, kind: 'open'|'blocked'|'in-progress', ownerOnly }] }. Only rows whose State cell
@@ -37,7 +37,7 @@ export function parseTaskDoc(text) {
       if (!m) continue;
       const k = m[1].toLowerCase().replace(' ', '-');
       rows.push({ n: clean(c[0]), goal: clean(c[gi >= 0 ? gi : 1] || '').slice(0, 160), state: state.slice(0, 200),
-        kind: k === 'todo' || k === 'not-started' ? 'open' : k, ownerOnly: OWNER_ONLY.test(state) });
+        kind: k === 'todo' || k === 'not-started' ? 'open' : k, ownerOnly: OWNER_ONLY.test(state + ' ' + clean(c[gi >= 0 ? gi : 1] || '')) });
     }
     break;
   }
@@ -76,6 +76,7 @@ export async function scanTaskDocs(dirs, { fs = { readdir, readFile, stat } } = 
         const st = await fs.stat(file), prev = best.get(f);
         if (prev && prev.mtimeMs >= st.mtimeMs) continue;
         const doc = parseTaskDoc(await fs.readFile(file, 'utf8'));
+        if ((best.get(f)?.mtimeMs ?? -1) >= st.mtimeMs) continue;   // another copy won while this one was being read
         best.set(f, { task: `TASK-${m[1]}`, num: Number(m[1]), file, slug: basename(f, '.md'), dir: d.path, mtimeMs: st.mtimeMs, ...doc });
       } catch { /* unreadable doc: skip */ }
     }

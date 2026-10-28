@@ -22,19 +22,20 @@ title: TASK-178 — xtel trees
 | 7 | Localize | coverage | in progress |
 | 8 | Publish | prod | blocked: owner must supply the production login |
 | 9 | Cleanup | done | done |
+| 10 | Owner sign-off | ok | open |
 `;
 const DONE_DOC = '# TASK-5 — finished\n\n| # | Goal | State |\n|---|---|---|\n| 1 | a | done |\n| 2 | b | merged |\n';
 
 test('parseTaskDoc: open / in progress / blocked rows only; owner-only detected; closed rows skipped', () => {
   const d = parseTaskDoc(DOC);
   assert.equal(d.title, 'TASK-178 — xtel trees');
-  assert.deepEqual(d.rows.map((r) => r.n), ['1', '2', '3', '5', '6', '7', '8']);
+  assert.deepEqual(d.rows.map((r) => r.n), ['1', '2', '3', '5', '6', '7', '8', '10']);
   assert.equal(d.rows.find((r) => r.n === '7').kind, 'in-progress');
   assert.equal(d.rows.find((r) => r.n === '8').ownerOnly, true);
   assert.equal(d.rows.find((r) => r.n === '2').ownerOnly, false);
   const s = splitRows(d.rows);
   assert.deepEqual(s.actionable.map((r) => r.n), ['1', '2', '3', '5', '6', '7']);
-  assert.deepEqual(s.ownerOnly.map((r) => r.n), ['8']);   // blocked on the owner: owner-only wins
+  assert.deepEqual(s.ownerOnly.map((r) => r.n), ['8', '10']);   // blocked on the owner: owner-only wins
   assert.deepEqual(s.blocked.map((r) => r.n), []);
   assert.deepEqual(parseTaskDoc(DONE_DOC).rows, []);
   assert.deepEqual(parseTaskDoc('no table here').rows, []);
@@ -50,7 +51,7 @@ test('scanTaskDocs: newest copy of the same doc across worktrees wins', async ()
   writeFileSync(join(a, 'docs', 'tasks', 'README.md'), 'x');
   const docs = await scanTaskDocs([{ path: a }, { path: b }, { path: '/nonexistent-dir' }]);
   assert.equal(docs.length, 1);
-  assert.equal(docs[0].task, 'TASK-178'); assert.equal(docs[0].dir, b); assert.equal(docs[0].rows.length, 7);
+  assert.equal(docs[0].task, 'TASK-178'); assert.equal(docs[0].dir, b); assert.equal(docs[0].rows.length, 8);
 });
 
 const T0 = 1.8e12, H = 3600 * 1000;
@@ -61,7 +62,7 @@ test('computeUnfinished: ended session + open rows = orphaned; finished task nev
   const r = computeUnfinished({ docs: docs(), instances: [inst({ end: T0 - 2 * H, end_reason: 'killed' })], now: T0 });
   assert.deepEqual(r.orphaned.map((o) => o.task), ['TASK-178']);
   assert.deepEqual(r.orphaned[0].open.map((x) => x.n), ['1', '2', '3', '5', '6', '7']);
-  assert.deepEqual(r.orphaned[0].ownerOnly.map((x) => x.n), ['8']);
+  assert.deepEqual(r.orphaned[0].ownerOnly.map((x) => x.n), ['8', '10']);
   assert.match(r.orphaned[0].why, /killed/);
   assert.equal(r.orphaned[0].lastSession.model, 'sonnet');
   assert.ok(![...r.orphaned, ...r.covered, ...r.other].some((o) => o.task === 'TASK-5'));
