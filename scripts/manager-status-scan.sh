@@ -62,6 +62,12 @@ try:
     for x in o.get('overlaps', []):
         hits.append({'session': x['key'], 'status': 'overlap: %s (older %s, first seen %s)' % (', '.join(p['path'] for p in x['paths'][:4]), x['pair'][0], x.get('firstSeen', '?'))})
 except Exception: pass
+# unresolved found-bugs (found-bugs.js; resolve with `found-bug --resolve <id> --commit <sha>`)
+try:
+    b = json.load(urllib.request.urlopen('http://127.0.0.1:%s/api/bugs' % os.environ.get('PORT', '7777'), timeout=5))
+    for x in b.get('bugs', []):
+        if not x.get('resolved') and not x.get('test'): hits.append({'session': x['id'], 'status': 'open-bug: %s (%s)' % (x['title'][:100], x.get('session', '?'))})
+except Exception: pass
 if as_json: print(json.dumps(hits))
 else:
     for h in hits: print(f"{h['session']}: {h['status']}")
