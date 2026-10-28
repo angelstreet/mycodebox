@@ -4,6 +4,8 @@
 // After MAX_ATTEMPTS dispatches in one red streak it stops and asks the owner once (ci-watch:stuck, pushed).
 // Config: <stateDir>/ci-watch.json { repo, workflow, branch, cwd, session, provider, model } (the repo slug stays out of this repo).
 // provider/model go to cbsession -p/-m (default claude, cbsession's model); the owner prefers an existing MiniMax M3 session (2026-10-15).
+// fixWindow (owner, 2026-10-28): { from, to, tz } local hours; the fixer is only started or nudged inside it (from > to wraps midnight).
+// Missing or null = always on. Outside it a red is still detected and fed once, but nothing is dispatched or counted.
 // Switch: manager.json `ciWatch` "live" (default) | "dry" (log what it would do) | "off". Journal: ci-watch.jsonl.
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,6 +14,14 @@ export const POLL_MS = 30 * 60 * 1000;
 export const MAX_ATTEMPTS = 4;           // fixer starts + nudges per red streak before the owner is asked
 const NUDGE_GAP_MS = 25 * 60 * 1000;     // an idle fixer is nudged at most this often
 const PENDING_MAX_MS = 60 * 60 * 1000;   // a newer run still queued after this (offline runner) no longer holds the verdict back
+
+// Pure. True when `ts` falls in the config's local-hour window [from, to). No window = always.
+export function inFixWindow(w, ts) {
+  if (!w || typeof w.from !== 'number' || typeof w.to !== 'number') return true;
+  let h;
+  try { h = Number(new Intl.DateTimeFormat('en-GB', { timeZone: w.tz || 'UTC', hour: '2-digit', hourCycle: 'h23' }).format(ts)); } catch { return true; }
+  return w.from <= w.to ? h >= w.from && h < w.to : h >= w.from || h < w.to;
+}
 
 // Pure. runs: gh run list rows (newest first). Returns the run the verdict is about, or { wait } while a newer run is pending.
 export function verdictRun(runs, now) {
@@ -124,6 +134,10 @@ export function createCiWatch({
         await record({ key: 'ci-watch:red', title: `CI red on ${cfg.branch}`, body: d.reason, url: merged.url, priority: 'default' });
       }
       if (d.type === 'none') return last;
+      if ((d.type === 'start' || d.type === 'nudge') && !inFixWindow(cfg.fixWindow, now())) {
+        const why = `fixer waits for ${String(cfg.fixWindow.from).padStart(2, '0')}:00 (${cfg.fixWindow.tz || 'UTC'})`;
+        return (last = { ...last, verdict: `${last.verdict}; ${why}`, action: { type: 'none', reason: why, red: true } });
+      }
       if (d.type === 'green') {
         await record({ key: 'ci-watch:green', title: `CI green again on ${cfg.branch}`, body: `${d.reason}; red since ${new Date(st.redSince).toISOString()}, ${st.attempts || 0} fixer dispatch(es)`, url: merged.url, priority: 'default' });
         await note(d); st = {}; await save(); return last;
