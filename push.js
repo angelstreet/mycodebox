@@ -239,7 +239,7 @@ export function createAlerts({ push, ntfyTopic = '', ntfyUrl = 'https://ntfy.sh'
       saveDigest();
     }
     if (onFired) {
-      try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority, ...(blockedBy ? { blockedBy } : {}), ...(turn ? { turn } : {}) }); }
+      try { onFired({ at: new Date(t).toISOString(), key, title, body: text.slice(0, 300), url, priority, ...(blockedBy ? { blockedBy } : {}), ...(turn ? { turn } : {}), ...(meta?.bug ? { bug: meta.bug } : {}) }); }
       catch (e) { log.error(`[alerts] onFired: ${e.message}`); }
     }
     return true;

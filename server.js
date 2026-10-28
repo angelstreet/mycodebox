@@ -50,6 +50,7 @@
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
+//   GET|POST|DELETE /api/bugs    → found-bug channel: list + counts / file a bug / remove a test report (loopback; found-bugs.js, scripts/found-bug)
 //   GET  /api/leftovers         → leftovers / owner-push watcher snapshot: last scan, sessions found with kind and items (done-leftovers.js, owner-push.js)
 //   GET  /api/worker-auto-close → worker-auto-close snapshot: sessions the worker auto-close tick closed or skipped (worker-auto-close.js)
 //   GET  /api/handoffs?state=&session= → {handoffs:[...]} the open/overdue rows for a session or all rows filtered by state
@@ -104,6 +105,7 @@ import { normAuthority, createLeaseSource, createSessionTracker, summarize as le
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
+import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
 import { createDoneCheck } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { pushOf, replyFor } from './owner-push.js';
@@ -818,6 +820,11 @@ const mockups = createMockups({
   file: join(STATE_DIR, 'mockups.jsonl'), push, tokenOk: (t) => reporter.tokenOk(t), windowMin: () => managerConfig().mockupWindowMin,
   send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); noteAnswerer(session, by, 'mockup'); },   // the same guarded send as every other owner send
 });
+// Found bugs (found-bugs.js, owner 2026-10-28): a session files a bug outside its scope; owner feed (counter) + manager feed kind `bug`.
+const foundBugs = createFoundBugs({ stateDir: STATE_DIR, onNew: async (b) => {
+  alert(`${b.session}:bug`, { title: `${b.session}: ${b.blocking ? 'BLOCKING bug' : 'bug'} found: ${b.title}`, body: [b.endpoint, b.error].filter(Boolean).join(' · ') || b.title,
+    url: `/?s=${encodeURIComponent(b.session)}`, priority: b.blocking ? 'high' : 'low', ntfyTags: 'bug', meta: { bug: { id: b.id, title: b.title, endpoint: b.endpoint, blocking: b.blocking, ...(b.test ? { test: true } : {}) } } }, 0);
+} });
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 // safety net for manager questions that were typed in chat but never filed (ask-guard.js)
 const askGuard = createAskGuard({
@@ -989,8 +996,11 @@ const doneCheck = createDoneCheck({
 // waiting stops for the pushes the owner used to type (feed kind `push` with pushKind + the reply). manager.json `ownerPush`: live | off.
 const PUSH_STATUSES = new Set(['done', 'needs-owner', 'needs-manager', 'blocked', 'waiting']);
 const ownerPushOn = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).ownerPush !== 'off'; } catch { return true; } };
+const foundBugsRecent = new Set();   // sessions with a found-bug record in the last hour, refreshed on each scan
 const leftovers = createLeftovers({
   listIdle: async () => {
+    foundBugsRecent.clear();
+    for (const b of await foundBugs.list({ limit: 500 })) if (Date.now() - Date.parse(b.at) < 3600 * 1000) foundBugsRecent.add(b.session);
     const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
     for (const [name, p] of panes) {
       if (p.dead) continue;
@@ -1003,7 +1013,10 @@ const leftovers = createLeftovers({
     }
     return out;
   },
-  classify: (text) => {
+  classify: (text, name) => {
+    // closing text that mentions a failure / pre-existing problem / workaround, with no found-bug record in the last hour (found-bugs.js)
+    const ub = unreportedBugOf(text);
+    if (ub && !foundBugsRecent.has(name)) return { kind: 'bug-unreported', items: [ub.sentence], title: 'bug mentioned, not reported' };
     const items = pushableItems(text);
     if (items) return { kind: 'leftovers', items, title: 'done with leftovers' };
     const p = ownerPushOn() ? pushOf(text) : null;
@@ -2303,7 +2316,7 @@ async function handleHttp(req, res) {
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/manager') {
-    return json(res, 200, { ...managerConfig(), today: await todayCounts(), aiStats: await aiSummary() });
+    return json(res, 200, { ...managerConfig(), today: await todayCounts(), aiStats: await aiSummary(), bugs: await foundBugs.counts() });
   }
   if (p.startsWith('/api/push/')) {
     try {
@@ -2451,6 +2464,14 @@ async function handleHttp(req, res) {
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
   if (req.method === 'GET' && p === '/api/done-check') return json(res, 200, doneCheck.snapshot());   // sessions whose STATUS done disagrees with git
+  if (p === '/api/bugs' || p.startsWith('/api/bugs/')) {   // found-bug channel: loopback only (scripts/found-bug)
+    if (!isLoopback(req.socket.remoteAddress)) return json(res, 403, { ok: false, error: 'loopback only' });
+    try {
+      if (req.method === 'GET' && p === '/api/bugs') return json(res, 200, { ok: true, bugs: await foundBugs.list(), counts: await foundBugs.counts() });
+      if (req.method === 'POST' && p === '/api/bugs') { const r = await foundBugs.add(await readJsonBody(req)); return json(res, r.ok ? 200 : 400, r); }
+      if (req.method === 'DELETE' && p.startsWith('/api/bugs/')) { const r = await foundBugs.remove(decodeURIComponent(p.slice('/api/bugs/'.length))); return json(res, r.ok ? 200 : 404, r); }
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
   if (req.method === 'GET' && p === '/api/leftovers') return json(res, 200, leftovers.snapshot());   // the leftovers / push watcher's last scan
   if (req.method === 'GET' && p === '/api/worker-auto-close') return json(res, 200, workerAutoClose.snapshot());   // sessions the worker auto-closed (or skipped) in the last tick
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
