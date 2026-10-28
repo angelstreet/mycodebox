@@ -131,6 +131,35 @@ test('wait never retries unknown status as idle', (t) => {
   assert.equal(restarts(r).length, 0);
   assert.equal(r.calls.filter(([c]) => c === 'sleep').length, 0);
 });
+// bug-cdbffcbb: the lease registry was unreachable ~15 min after a deploy; the snapshot said ok:false + the cause and the guard
+// gave up at once with a generic message. It must name the cause and, under --wait, retry (never treat unknown as idle).
+const UNAVAIL = 'UNAVAILABLE - the lease service cannot be reached ([Errno 111] Connection refused).';
+test('registry unavailable: names the cause, does not restart, no wait means no retry', (t) => {
+  const r = invoke(t, [response(snapshot({ ok: false, error: UNAVAIL }))]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /lease registry unavailable.*Connection refused/);
+  assert.equal(restarts(r).length, 0);
+  assert.equal(r.calls.filter(([c]) => c === 'sleep').length, 0);
+});
+test('registry unavailable under --wait is retried until it recovers, then rechecked', (t) => {
+  const r = invoke(t, [response(snapshot({ ok: false, error: UNAVAIL })), response(snapshot({ ok: false, error: UNAVAIL })), response()], ['--wait', '1']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.calls.filter(([c]) => c === 'sleep').length, 2);
+  assert.equal(restarts(r).length, 1);
+});
+test('registry unavailable for the whole --wait: refuses and still names the cause', (t) => {
+  const r = invoke(t, [response(snapshot({ ok: false, error: UNAVAIL }))], ['--wait', '1']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /Connection refused/);
+  assert.match(r.stderr, /registry/);
+  assert.equal(restarts(r).length, 0);
+  assert.ok(r.calls.filter(([c]) => c === 'sleep').length >= 3);
+});
+test('a stale snapshot with a registry error is still unknown, never retried', (t) => {
+  const r = invoke(t, [response(snapshot({ ok: false, error: UNAVAIL, at: NOW - 120000 }))], ['--wait', '1']);
+  assert.notEqual(r.status, 0);
+  assert.equal(r.calls.filter(([c]) => c === 'sleep').length, 0);
+});
 for (const args of [['--unknown'], ['--wait', '-1'], ['--wait', '1.5'], ['--wait', 'abc'], ['--wait', '1', 'extra'], ['--wait', '999999999999999999999']]) {
   test(`rejects arguments ${args.join(' ')}`, (t) => {
     const r = invoke(t, [response()], args);
