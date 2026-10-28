@@ -296,3 +296,22 @@ test('E37-11 the lane exclusion never swallows an allowed root or a configured r
   assert.ok(!cs.candidates.some((x) => x.dir === direct.dir), 'the configured clone itself is still out');
   assert.ok(!cs.candidates.some((x) => x.dir === root), 'the allowed root itself is not a candidate');
 });
+
+// bug-0d0077c5: stale gc.log blocks git's auto-gc; the daily hygiene removes old ones and prunes with a 2-week expire.
+test('git hygiene: removes gc.log older than a day, prunes with --expire=2.weeks.ago once a day, never in report mode', () => {
+  const repo = tmp('hw-hyg-');
+  mkdirSync(join(repo, '.git/worktrees/wt1'), { recursive: true });
+  const old = new Date(Date.now() - 4 * 24 * HOUR), now = Date.now();
+  const main = join(repo, '.git/gc.log'), wt = join(repo, '.git/worktrees/wt1/gc.log'), fresh = join(repo, '.git/worktrees/gc.log');
+  writeFileSync(main, 'x'); writeFileSync(wt, 'x'); utimesSync(main, old, old); utimesSync(wt, old, old);
+  mkdirSync(join(repo, '.git/worktrees/wt2'), { recursive: true }); const f2 = join(repo, '.git/worktrees/wt2/gc.log'); writeFileSync(f2, 'x');
+  const calls = [], exec = (c, a) => { calls.push([c, ...a]); return ''; };
+  const cfg = { fixLevel: 'cleanup', worktreeRepos: { r: repo } }, state = {}, log = [];
+  assert.equal(hw.gitHygiene({ cfg: { ...cfg, fixLevel: 'report' }, state, now, log, exec }), 0);
+  assert.equal(hw.gitHygiene({ cfg, state, now, log, exec }), 1);
+  assert.equal(existsSync(main), false); assert.equal(existsSync(wt), false); assert.equal(existsSync(f2), true, 'a fresh gc.log stays');
+  assert.deepEqual(calls, [['git', '-C', repo, 'prune', '--expire=2.weeks.ago']]);
+  assert.equal(hw.gitHygiene({ cfg, state, now: now + HOUR, log, exec }), 0, 'once a day');
+  assert.equal(hw.gitHygiene({ cfg, state, now: now + 25 * HOUR, log, exec }), 1);
+  assert.ok(!calls.some((c) => c.includes('--expire=now')));
+});
