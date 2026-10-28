@@ -1451,6 +1451,24 @@ held, not a manager session, at most 4 events per session per hour. Nothing is t
 `scripts/manager-status-scan.sh` prints `<session>: done-with-leftovers: <first item>` for the same sessions.
 `manager.json` `leftovers`: `"off"` disables the event (default live).
 
+## Owner pushes the manager sends (owner, 2026-10-28)
+
+A review of every owner reply of 2026-10-27 (101 messages, 15 of them pushes) found three push shapes besides done-with-leftovers.
+`owner-push.js` reads them from the closing text (`pushOf`, pure; `replyFor` gives the reply), and the leftovers watcher emits one
+feed event `<session>:push` (kind `push`, `pushKind`, `items`, `reply`) per session turn, under the same gates (idle > 10 min, no
+draft, not working / paused / held, not a manager session, at most 4 per session per hour). Nothing is typed: the manager checks and sends.
+
+| pushKind | Stop | Reply |
+|---|---|---|
+| `suggestions` | `STATUS: done` with its own proposals ("I'd add ...", "fixes proposed", "would settle it", "Suggestions:") and no "Left to do" list | implement the ones that fix a bug or add something without breaking anything, verify each, list what was skipped and why |
+| `routine-ask` | `needs-manager` menu whose recommended (or first, "yes") option has no floor word; or `needs-owner` / `needs-manager` asking a routine step: `update_core --hosts` / host catch-up, an allowlisted restart (`routine-restart.js`), a reviewed install (`host-unit-routine.js`), an install / restart of merged code with a rollback line, an additive migration | "Yes, option N" / "Yes, do it", by the normal procedure (lease, deploy queue, rollback line) |
+| `blocked-host` | `STATUS: blocked` on a locked / down / unreachable host, or a waiting stop with a lease wait of 1000 s or more | use a free host of the same kind from `vpt-lease list` (the manager checks before it sends) |
+
+Never a push: a `needs-owner` menu (an approval the owner asked for), any item with an owner-floor word (`ownerFloorMatch`: delete,
+credentials, money, customers, physical) or `FLOOR_EXTRA` (force-push, history rewrite, sudo, production, publish / tags,
+destructive or irreversible, the ghosty-sessions service, reboot, SMS / phone / login / sign-in, provide hardware, bring a box back,
+sideload). `manager.json` `ownerPush`: `"off"` disables these kinds (leftovers stay); `leftovers: "off"` disables the watcher.
+
 ## Rules watch (owner, 2026-10-15)
 
 A session reads AGENTS.md once, at start. `rules-watch.js` checks every 10 min (first check 3 min after start): for each
