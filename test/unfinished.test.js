@@ -136,3 +136,13 @@ test('scripts/resume-task: dry run builds the handover for an orphan; refuses co
     assert.ok(!existsSync(join(home, '.local')));                // a dry run records nothing
   } finally { srv.close(); }
 });
+
+test('withHomeDirs: adds home subdirectories missing from the dirs list, skips dot dirs and files, no duplicates', async () => {
+  const { withHomeDirs } = await import('../unfinished.js');
+  const home = tmp('uf-home2-');
+  for (const d of ['proj-a', 'proj-b', '.hidden']) mkdirSync(join(home, d));
+  writeFileSync(join(home, 'file.txt'), 'x');
+  const r = await withHomeDirs([{ path: join(home, 'proj-a') }], home);
+  assert.deepEqual(r.map((d) => d.path).sort(), [join(home, 'proj-a'), join(home, 'proj-b')]);
+  assert.deepEqual(await withHomeDirs(null, '/nonexistent-home'), []);
+});
