@@ -76,6 +76,7 @@ export async function scanTaskDocs(dirs, { fs = { readdir, readFile, stat } } = 
         const st = await fs.stat(file), prev = best.get(f);
         if (prev && prev.mtimeMs >= st.mtimeMs) continue;
         const doc = parseTaskDoc(await fs.readFile(file, 'utf8'));
+        if ((best.get(f)?.mtimeMs ?? -1) >= st.mtimeMs) continue;   // another copy won while this one was being read
         best.set(f, { task: `TASK-${m[1]}`, num: Number(m[1]), file, slug: basename(f, '.md'), dir: d.path, mtimeMs: st.mtimeMs, ...doc });
       } catch { /* unreadable doc: skip */ }
     }
