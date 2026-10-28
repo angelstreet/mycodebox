@@ -9,32 +9,43 @@ export const MAX_PER_HOUR = 4;
 export const POLL_MS = 2 * 60 * 1000;
 
 // Text that only the owner can act on: names the owner, an account, a purchase, a physical action, money, credentials.
-const OWNER_ONLY = /\b(?:owner|jev|you must|needs? you|account|purchase|buy|bought|pay(?:ment)?|invoice|money|budget|credentials?|secrets?|tokens?|password|api[- ]?key|re-?plug|unplug|plug(?:ged)? in|press(?:ing)? the|power[- ]?cycle|physical(?:ly)?|sudoers?|customer)\b/i;
-const HEADER = /^\s*(?:[-*#>•]+\s*)*\**\s*(?:left to do|leftovers?|remaining(?: work| items| steps)?|still (?:to do|open)|todo|to do|next steps?|open(?: items)?)\s*\**\s*:?\s*\**\s*(.*)$/i;
+const OWNER_ONLY = /\b(?:owner|jev|you must|needs? you|account|purchase|buy|bought|pay(?:ment)?|invoice|money|budget|credentials?|secrets?|tokens?|password|api[- ]?key|re-?\s?plug|unplug|plug(?:ged)? in|press(?:ing)? the|power[- ]?cycle|physical(?:ly)?|sudoers?|customer)\b/i;
+const HEADER = /^\s*(?:[-*#>•]+\s*)*\**\s*(?:left to do|leftovers?|remaining(?: work| items| steps)?|still (?:to do|open)|todo|to do|next steps?|open(?: items)?)(?:,[^:\n]*)?\s*\**\s*:?\s*\**\s*(.*)$/i;
 const BULLET = /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/;
 const STATUS = /^\W*STATUS:\s*([a-z-]+)\s*(.*)$/i;
 const NONE = /^(?:none|nothing|n\/a|-|no\b.*)$/i;
 
 const clean = (s) => String(s).replace(/[*_`]+/g, '').replace(/\s+/g, ' ').replace(/[.;,\s]+$/, '').trim();
 
+// Pane-wrapped lines: an indented non-bullet line directly under a bullet or the STATUS line continues it.
+function unwrap(lines) {
+  const out = [];
+  for (const l of lines) {
+    const prev = out[out.length - 1];
+    if (prev !== undefined && /^\s{2,}\S/.test(l) && !BULLET.test(l) && !STATUS.test(l.trim()) && (BULLET.test(prev) || STATUS.test(prev.trim()) || prev._cont)) out[out.length - 1] = prev.replace(/\s+$/, '') + ' ' + l.trim();
+    else out.push(l);
+  }
+  return out;
+}
+
 // Pure. text: the closing text of a turn (pane excerpt). -> { items: [string], ownerOnly: [string], actionable: [string] } or null
 // when the last STATUS is not done or no leftovers are listed. A list is read from `open:` on the STATUS line (items split on
-// ';') and from a "Left to do / Remaining" header with bullets or inline text below it.
+// ';' and ',') and from a "Left to do / Remaining" header with bullets or inline text below it.
 export function leftoversOf(text) {
-  const lines = String(text || '').split('\n');
+  const lines = unwrap(String(text || '').split('\n'));
   let statusAt = -1, status = null;
   lines.forEach((l, i) => { const m = STATUS.exec(l.trim()); if (m) { statusAt = i; status = m; } });
   if (!status || !/^(?:done|ok|complete|completed|finished)$/i.test(status[1])) return null;
   const items = [];
   const add = (s) => { const c = clean(s); if (c && !NONE.test(c) && !items.includes(c)) items.push(c); };
   const open = /\bopen\s*:\s*(.+)$/i.exec(status[2]);
-  if (open) open[1].split(/;|\s+\band\b\s+(?=[A-Z])/).forEach(add);
+  if (open) open[1].split(/[;,]|\s+\band\b\s+(?=[A-Z])/).forEach(add);
   for (let i = 0; i < lines.length; i++) {
     if (i === statusAt) continue;
     const h = HEADER.exec(lines[i]);
     // a header is the label alone or the label followed by ':' (prose like "remaining time is short" is not a list)
-    if (!h || (h[1] && !/^[\s\-*#>•]*\**\s*[a-z -]+\**\s*:/i.test(lines[i]))) continue;
-    if (h[1]) h[1].split(';').forEach(add);
+    if (!h || (h[1] && !/^[\s\-*#>•]*\**\s*[a-z ,-]+\**\s*:/i.test(lines[i]))) continue;
+    if (h[1]) h[1].split(/[;,]/).forEach(add);
     for (let j = i + 1; j < lines.length && j < i + 15; j++) {
       const b = BULLET.exec(lines[j]);
       if (b) add(b[1]);
