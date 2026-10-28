@@ -11,6 +11,7 @@
 //   jev:down|up                                  → kind = 'jev' (Jev circuit breaker), state
 //   lease:released|expired|narrowed              → kind = 'lease', state (written by lease-watch.js straight to the feed, no push)
 //   handoff:overdue                              → kind = 'handoff', state (written by handoffs.js straight to the feed, no push)
+//   <session>:leftovers                          → kind = 'leftovers', items (done-leftovers.js: a done session idle > 10 min that lists work it can do itself)
 //   openrouter:credits                           → kind = 'credits'
 //   manager-agent:<tag|title>                    → skipped (the agent's own POST /api/alert)
 //   anything else                                → kind = 'other'
@@ -115,6 +116,7 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     if (cls.kind === 'quota') rec.quotaKey = cls.quotaKey;
     if (cls.kind === 'disk') rec.diskPath = cls.diskPath;
     if (cls.kind === 'credits') rec.creditsKey = cls.creditsKey;
+    if (cls.kind === 'leftovers' && Array.isArray(event.items)) rec.items = event.items.slice(0, 8).map((x) => String(x).slice(0, 200));
     rec.title = typeof event.title === 'string' ? event.title : '';
     rec.body = typeof event.body === 'string' ? event.body.slice(0, 300) : '';
     rec.url = typeof event.url === 'string' ? event.url : '/';

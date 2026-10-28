@@ -297,3 +297,12 @@ test('record: routine deploy start/done are not written; kept when a lease block
   assert.deepEqual(lines.map((l) => l.key), ['deploy:b:start', 'deploy:c:failed', 'deploy:d:orphan']);
   assert.deepEqual(lines[0].blockedBy, ['lease']);
 });
+
+test('leftovers events pass the feed filter with their items (done stops stay skipped)', async () => {
+  const dir = tmp();
+  const ev = createManagerEvents({ stateDir: dir });
+  assert.equal(await ev.record({ key: 'ft:done', title: 't', body: 'b' }), false);
+  assert.equal(await ev.record({ key: 'ft:leftovers', title: 'ft: done with leftovers', body: 'a | b', items: ['a', 'b'] }), true);
+  const [r] = readLines(join(dir, FILE_NAME));
+  assert.equal(r.kind, 'leftovers'); assert.equal(r.session, 'ft'); assert.deepEqual(r.items, ['a', 'b']);
+});
