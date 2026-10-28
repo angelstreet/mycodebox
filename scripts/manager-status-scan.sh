@@ -3,6 +3,7 @@
 # needs-manager, needs-owner, blocked or ready-for-gate, and "<session>: done-with-leftovers: <first item>" when the last STATUS is done
 # but the closing text lists work the session can do itself (same rules as done-leftovers.js; owner-only items do not count). A session whose last STATUS is one of these is never "idle".
 #   scripts/manager-status-scan.sh [--json]      (exit code 0 always)
+# Also lists `<TASK-NN>: orphaned-task: ...` for task docs with open rows and no live session (GET /api/unfinished).
 # --json prints [{"session": ..., "status": ...}, ...]. Only reads panes (tmux capture-pane), never types into one.
 JSON=0; [ "$1" = "--json" ] && JSON=1
 LINES_BACK="${STATUS_SCAN_LINES:-300}"
@@ -47,6 +48,13 @@ for s in tmux('list-sessions', '-F', '#{session_name}').splitlines():
     elif last and DONE.match(last):
         item = first_item(pane)
         if item: hits.append({'session': s, 'status': 'done-with-leftovers: ' + item})
+# orphaned tasks: open doc rows, no live session (unfinished.js; scripts/resume-task TASK-NN)
+try:
+    import os, urllib.request
+    u = json.load(urllib.request.urlopen('http://127.0.0.1:%s/api/unfinished' % os.environ.get('PORT', '7777'), timeout=5))
+    for o in u.get('orphaned', []):
+        hits.append({'session': o['task'], 'status': 'orphaned-task: rows %s open, %s' % (','.join(r['n'] for r in o['open']), o['why'])})
+except Exception: pass
 if as_json: print(json.dumps(hits))
 else:
     for h in hits: print(f"{h['session']}: {h['status']}")

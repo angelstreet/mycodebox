@@ -1,0 +1,75 @@
+#!/usr/bin/env node
+// resume-task: start a session for a task whose doc has open rows and no live session (owner, 2026-10-28). The manager runs it
+// (on a feed event `orphaned-task`); ghosty never starts a session by itself.
+//   resume-task TASK-178 [--dry-run] [--force] [--name NAME]
+// Reads GET /api/unfinished (loopback; PORT or 7777). Refuses a task that is not orphaned (live session, only owner-only/blocked rows,
+// recent session) unless --force. Same provider/model/cwd as the last session; the handover names the doc, the open rows, the owner-only
+// rows to skip, and any unmerged branch / dirty tree / lease the old session left. Records the start in manager-children.jsonl.
+import { execFileSync } from 'node:child_process';
+import { writeFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const args = process.argv.slice(2);
+const die = (m, c = 1) => { console.error('resume-task: ' + m); process.exit(c); };
+const flag = (f) => { const i = args.indexOf(f); if (i >= 0) args.splice(i, 1); return i >= 0; };
+const dry = flag('--dry-run'), force = flag('--force');
+let name = null; { const i = args.indexOf('--name'); if (i >= 0) { name = args[i + 1]; args.splice(i, 2); } }
+const m = /^(?:task-?)?0*(\d+)$/i.exec(args[0] || '');
+if (!m) die('usage: resume-task TASK-NN [--dry-run] [--force] [--name NAME]', 2);
+const task = `TASK-${m[1]}`;
+const base = `http://127.0.0.1:${process.env.PORT || 7777}`;
+let data;
+try { data = await (await fetch(base + '/api/unfinished')).json(); } catch (e) { die(`service unreachable (${e.message})`, 5); }
+const sh = (cmd, a, cwd) => { try { return execFileSync(cmd, a, { cwd, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
+
+const hit = (data.orphaned || []).find((o) => o.task === task);
+const e = hit || (force && [...(data.covered || []), ...(data.other || [])].find((o) => o.task === task));
+if (!e) {
+  const other = [...(data.covered || []), ...(data.other || [])].find((o) => o.task === task);
+  die(other ? `${task} is not orphaned (${other.why || 'live session: ' + other.liveSessions.join(', ')}); --force to start anyway` : `${task} has no open rows in any task doc`, 3);
+}
+if (!e.open.length) die(`${task}: no row the session can do itself (owner-only/blocked rows stay with the owner)`, 3);
+
+const last = e.lastSession;
+const provider = last?.provider || 'claude', model = last?.model || '';
+let cwd = last?.cwd && existsSync(last.cwd) ? last.cwd : dirname(dirname(dirname(e.doc)));
+if (!existsSync(cwd)) die(`no working directory (${cwd})`, 4);
+
+// What the old session left behind: tell the new one first.
+const left = [];
+if (last?.cwd && existsSync(last.cwd)) {
+  const br = sh('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd), dirty = sh('git', ['status', '--porcelain'], cwd);
+  const ahead = br && br !== 'HEAD' ? sh('git', ['log', '--oneline', '@{u}..HEAD'], cwd) || sh('git', ['log', '--oneline', 'origin/main..HEAD'], cwd) : '';
+  if (br && !/^(main|master)$/.test(br)) left.push(`Branch \`${br}\` in ${cwd} is checked out${ahead ? ` with commits not on its upstream/main:\n${ahead.split('\n').slice(0, 8).map((l) => '    ' + l).join('\n')}` : ''}. Check whether it was merged (\`git log origin/main..${br}\`) before redoing work.`);
+  if (dirty) left.push(`Uncommitted changes in ${cwd} (git status --porcelain):\n${dirty.split('\n').slice(0, 12).map((l) => '    ' + l).join('\n')}`);
+}
+const leases = sh('vpt-lease', ['list']);
+if (last?.name && leases) { const mine = leases.split('\n').filter((l) => l.includes(last.name)); if (mine.length) left.push(`Leases still named for the old session ${last.name}:\n${mine.slice(0, 6).map((l) => '    ' + l).join('\n')}\nRelease or reuse them per docs/LEASE-RULES.md; never --force.`); }
+
+const rows = (xs) => xs.map((r) => `- row ${r.n}: ${r.goal} — state: ${r.state}`).join('\n');
+const sess = name || `resume-${task.toLowerCase().replace('-', '')}`.slice(0, 40);
+const H = join(homedir(), 'handovers'); mkdirSync(H, { recursive: true });
+const hf = join(H, `${sess}.md`);
+writeFileSync(hf, `# Resume ${task}: ${e.title || ''}
+
+The session working on this task ended${last ? ` (${last.name}, ${last.reason || 'ended'} at ${last.endedAt})` : ''} with rows still open, and nothing else is working on it.
+You are the continuation. The task doc is the source of truth: **${e.doc}**. Read it fully first, including its notes on what the last session learned.
+
+## Open rows you can do (priority = table order)
+${rows(e.open)}
+${e.ownerOnly.length ? `\n## Owner-only rows: do NOT work on these, do not ask about them; leave them open\n${rows(e.ownerOnly)}\n` : ''}${e.blocked.length ? `\n## Blocked rows: check if the blocker is gone; if not, leave them\n${rows(e.blocked)}\n` : ''}
+## What the old session left behind
+${left.length ? left.join('\n\n') : 'Nothing found (clean tree, no leases named for it).'}
+
+## Rules
+Update the State column in the doc as rows close (in a worktree, merged by the integration lane), keep going until every open row above is done or truly blocked, end with one STATUS line. A row that needs the owner (credentials, money, physical action, customers) is the only reason for \`needs-owner\`.
+`);
+const argv = ['-n', sess, '-d', cwd, '-p', provider, ...(model ? ['-m', model] : []), '-H', hf];
+if (dry) { console.log(`dry run: cbsession ${argv.join(' ')}\nhandover: ${hf}`); process.exit(0); }
+const cb = join(dirname(fileURLToPath(import.meta.url)), 'cbsession');
+try { execFileSync(cb, argv, { stdio: 'inherit' }); } catch (err) { die(`cbsession failed (${err.status ?? err.message})`, 6); }
+const state = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
+appendFileSync(join(state, 'manager-children.jsonl'), JSON.stringify({ name: sess, started: new Date().toISOString().slice(0, 16) + 'Z', note: `resume-task ${task}: open rows ${e.open.map((r) => r.n).join(',')}`, worktree: cwd, closed: null }) + '\n');
+console.log(`started ${sess} for ${task} (rows ${e.open.map((r) => r.n).join(', ')}); recorded in manager-children.jsonl`);
