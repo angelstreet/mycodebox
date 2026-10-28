@@ -118,6 +118,7 @@ test('watcher: a push stop emits one `<session>:push` event with pushKind and re
   assert.match(events[0].reply, /^Implement your own proposals now/);
   assert.equal(events[0].title, 'a: push (suggestions)');
   assert.equal(events[1].title, 'b: done with leftovers');
+  assert.deepEqual(w.snapshot().found.map((f) => [f.name, f.kind, f.pushKind]), [['a', 'push', 'suggestions'], ['b', 'leftovers', undefined]].map(([n, k, p]) => [n, k, p]));
 });
 
 test('feed: push events pass with items, pushKind and reply', async () => {
