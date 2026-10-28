@@ -95,3 +95,15 @@ test('store: filing with every field set still works after a test report was rem
   const again = await fb.add({ title: 'probe', session: 's', test: true });
   assert.equal(again.duplicate, false);
 });
+
+test('store: fixed marks a report, keeps it listed with fixed: true and leaves the open counts; unknown ids fail', async () => {
+  const fb = createFoundBugs({ stateDir: tmp('ghosty-fb-fixed-') });
+  const a = await fb.add({ title: 'detector false positive', session: 'manager', blocking: 'yes' });
+  assert.deepEqual(await fb.counts(), { total: 1, blocking: 1, last24h: 1 });
+  assert.equal((await fb.fixed(a.bug.id, 'guards in owner-push.js token=sekret123')).ok, true);
+  const l = (await fb.list())[0];
+  assert.equal(l.fixed, true); assert.doesNotMatch(l.fixedNote, /sekret123/);
+  assert.deepEqual(await fb.counts(), { total: 0, blocking: 0, last24h: 0 });
+  assert.equal((await fb.fixed('bug-00000000')).ok, false);
+  assert.equal((await fb.add({ title: 'next one', session: 'manager' })).ok, true);
+});

@@ -2,7 +2,7 @@
 // found-bug: file a bug you found outside your scope (owner, 2026-10-28) instead of leaving it in a closing line.
 //   found-bug --title "REST list of virtual scripts errors" [--endpoint GET /api/x] [--repro "..."] [--error "exact text"]
 //             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
-//   found-bug list | found-bug remove <id>   (remove: test reports only)
+//   found-bug list | found-bug fixed <id> [note] | found-bug remove <id>   (remove: test reports only)
 // Session defaults to the tmux session you run in. Posts to loopback POST /api/bugs (PORT or 7777); secrets are redacted server-side.
 import { execFileSync } from 'node:child_process';
 const [cmd, ...rest] = process.argv.slice(2);
@@ -14,7 +14,8 @@ async function api(method, path, body) {
     return { status: r.status, body: await r.json().catch(() => ({})) };
   } catch (e) { die(`service unreachable (${e.message})`, 5); }
 }
-if (cmd === 'list') { const r = await api('GET', '/api/bugs'); for (const b of r.body.bugs || []) console.log(`${b.id}  ${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`); process.exit(0); }
+if (cmd === 'list') { const r = await api('GET', '/api/bugs'); for (const b of r.body.bugs || []) console.log(`${b.id}  ${b.fixed ? '[fixed] ' : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`); process.exit(0); }
+if (cmd === 'fixed') { if (!rest[0]) die('usage: found-bug fixed <id> [note]'); const r = await api('POST', `/api/bugs/${encodeURIComponent(rest[0])}/fixed`, { note: rest.slice(1).join(' ') }); console.log(r.body.ok ? 'marked fixed' : r.body.error); process.exit(r.body.ok ? 0 : 1); }
 if (cmd === 'remove') { if (!rest[0]) die('usage: found-bug remove <id>'); const r = await api('DELETE', '/api/bugs/' + encodeURIComponent(rest[0])); console.log(r.body.ok ? 'removed' : r.body.error); process.exit(r.body.ok ? 0 : 1); }
 const args = process.argv.slice(2), o = {};
 for (let i = 0; i < args.length; i++) {

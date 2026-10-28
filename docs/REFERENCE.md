@@ -1654,3 +1654,7 @@ Two sessions changing the same file cost hours on 2026-10-28 (script-naming, mig
 - **Switch.** `manager.json` `overlapGuard`: `"live"` (default) | `"dry"` (detect and journal only) | `"off"`. State `overlap-guard.json`, journal `overlap-guard.jsonl` in the state dir.
 - **Manager.** TASK-44 manual §3 `overlap`: the manager picks the area owner (older / wider task), tells the other session in one message to hand over its slice, and records `areaOwner` in `manager-actions.jsonl`.
 - **Tests.** `test/overlap-guard.test.js`: the real pair (script-naming vs migration-virtual on `vod_radio_offline_check.py`, delete vs edit), a no-overlap case, ignored files, other repo, same checkout, once-per-day, dry mode, busy session retried.
+
+### Push suggestions guards (bug-1f0455fc, 2026-10-28)
+
+`owner-push.js` kind `suggestions` no longer fires on a freeze acknowledgement: a proposal sentence that is deferred or negated ("final names wait for the owner", "not until", "until the owner") is dropped; a closing text that answers a manager freeze / stop / hold (`FREEZE`) is never pushed; and a push needs a list: a heading (`Suggestions:`, `Next improvements:` ...) or two proposal sentences. `found-bug fixed <id> [note]` (`POST /api/bugs/<id>/fixed`) marks a report fixed: it stays listed with `fixed: true` and leaves the open counts.

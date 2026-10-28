@@ -73,19 +73,26 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     await appendFile(file, JSON.stringify({ id, removed: true, at: new Date(now()).toISOString() }) + '\n');
     return { ok: true };
   }
+  // fixed(id, note): marks a report fixed (a marker line; the report stays listed with fixed: true and leaves the open counts).
+  async function fixed(id, note = '') {
+    const b = (await all()).find((x) => x.id === id && x.title);
+    if (!b) return { ok: false, error: 'no such bug' };
+    await appendFile(file, JSON.stringify({ id, fixed: true, note: redact(note).slice(0, 300), at: new Date(now()).toISOString() }) + '\n');
+    return { ok: true };
+  }
   async function list({ limit = 100 } = {}) {
-    const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id));
-    return rows.filter((r) => !r.removed && !gone.has(r.id)).slice(-Math.max(1, Math.min(500, limit)));
+    const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id)), done = new Map(rows.filter((r) => r.fixed).map((r) => [r.id, r]));
+    return rows.filter((r) => r.title && !r.removed && !gone.has(r.id)).map((r) => (done.has(r.id) ? { ...r, fixed: true, fixedNote: done.get(r.id).note, fixedAt: done.get(r.id).at } : r)).slice(-Math.max(1, Math.min(500, limit)));
   }
   async function counts() {
     const rows = await list({ limit: 500 }), day = now() - DEDUPE_MS;
-    const real = rows.filter((b) => !b.test);
+    const real = rows.filter((b) => !b.test && !b.fixed);
     return { total: real.length, blocking: real.filter((b) => b.blocking).length, last24h: real.filter((b) => Date.parse(b.at) >= day).length };
   }
   async function recentBy(session, ms = REPORTED_MS) {
     return (await list({ limit: 500 })).some((b) => b.session === session && now() - Date.parse(b.at) < ms);
   }
-  return { add, remove, list, counts, recentBy, file };
+  return { add, remove, fixed, list, counts, recentBy, file };
 }
 
 // Detector: closing text that mentions a failure, an unrelated/pre-existing problem or a workaround but never filed it.
