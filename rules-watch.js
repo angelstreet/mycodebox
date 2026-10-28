@@ -35,11 +35,14 @@ export function stamp(r) {
   return `${r.hash.slice(0, 9)}, ${new Date(r.at).toISOString().slice(0, 16)}Z: ${r.subject}`;
 }
 
+// Tag at the start: the reply to this message is an acknowledgement, never a question for the manager (4 false wakes in 40 min,
+// 2026-10-28). manager-events.js drops asks / waiting events whose text is only that acknowledgement (isRulesAck).
+export const TAG = '[rules-watch: no reply needed]';
 export function message(r) {
   return [
-    `AGENTS.md on origin/main changed after this session started (${stamp(r)}).`,
-    'Its dated owner rules win over your task doc, handover and brief where they differ. For example, since 2026-10-14 you commit, push, merge your own tested work and deploy by the normal procedure yourself, and you never hand the owner commands to run.',
-    'Read it now (git show origin/main:AGENTS.md). If you were idle with nothing pending, start nothing new because of this message: reply only with a STATUS line. Otherwise adjust what you are doing and continue. End with a STATUS line.',
+    `${TAG} AGENTS.md on origin/main changed after this session started (${stamp(r)}).`,
+    'Its dated owner rules win over your task doc, handover and brief where they differ. For example, since 2026-10-14 you commit, push, merge your own tested work and deploy by the normal procedure yourself, and you never hand the owner commands to run. Since 2026-10-28 a bug outside your scope is fixed or filed with `found-bug`, and a `STATUS: done` line ends with `bugs: none | fixed <what> | reported <id>`.',
+    'Read it now (git show origin/main:AGENTS.md) and carry on with what you were doing. Do not answer this message and do not ask anything about it. If you were idle with nothing pending, start nothing new: write only `STATUS: acknowledged`. If you are waiting on a job, repeat your existing STATUS line unchanged.',
   ].join(' ');
 }
 
