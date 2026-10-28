@@ -246,3 +246,14 @@ test('STATUS waiting on integration <id> or deploy <id> is never flagged as deta
   const u = await h.jobs.watch('sess-noref', { text: 'waiting on the nightly run', stopAt: 's', paneText: pane });
   assert.equal(u.kind, null); assert.equal(h.feed.length, 2, 'no reference at all still flags');
 });
+
+// Regression 2026-10-28 (bug-a26f969c): Claude Code in-session background task ids have no bg_ prefix.
+test('a Claude Code background task id (b + 8 chars) is the harness\'s own job, not an unseen one', async () => {
+  for (const text of ['STATUS: waiting: background tasks brtve275e and b3f170aya (ledger poll b4mriuil9)', 'waiting on task brtve275e']) {
+    const h = harness();
+    const r = await h.jobs.watch('ui-amazon-shop', { text, stopAt: 's' });
+    assert.equal(r.harnessOwned, true, text); assert.equal(r.unseen, false, text); assert.equal(h.feed.length, 0, text);
+  }
+  for (const t of ['waiting on blocking review b1c2d3e4f of the task', 'the background build bootstrap finished']) assert.equal(jobRefs(t).watcher, null, t);
+  assert.equal((await harness().jobs.watch('s', { text: 'waiting on nohup ./run.sh &', stopAt: 's' })).harnessOwned, false);
+});

@@ -16,6 +16,11 @@ const DISPATCH_RUN = /\b(?:dispatch|workflow\s+run)[\s:#=]*(\d{6,20})(?!\d)/i;
 const ACTIONS_RUN = /\/actions\/runs\/(\d{6,20})(?!\d)/;
 // "watcher <id>" and a bare bg_<hex> background-task id (the harness's own background tasks).
 const WATCHER_ID = /\bwatcher\s*(?:id\s*[:#=]?\s*)?((?:bg|watch|wt|task)_[0-9a-z]{3,32}|[0-9a-f]{4,32})(?![0-9a-z-])|\b(bg_[0-9a-f]{3,32})\b/i;
+// Claude Code's own run_in_background task ids: "b" + 8 base-36 chars (brtve275e). Needs a digit and a non-hex letter (not a sha or
+// a word) and a task/background/poll/job word in the same line.
+const CC_TASK_ID = /\bb(?=[a-z]*\d)(?=[0-9a-z]*[g-z])[0-9a-z]{8}\b/i;
+const CC_TASK_CTX = /\b(?:background|tasks?|poll|job|watcher)\b/i;
+const ccTask = (t) => (CC_TASK_CTX.test(t) ? CC_TASK_ID.exec(t)?.[0] ?? null : null);
 const LOG_RE = /`([^`\s]+\.(?:log|out|jsonl))`|(?:^|[\s(=:])((?:~?\/|\.{1,2}\/)?[\w.@+-]+(?:\/[\w.@+-]+)*\.(?:log|out|jsonl))\b/i;
 
 // A harness background task / poll id ("task bopcjbp73", "ledger poll b4mriuil9"): b + 8 alphanumerics with a digit, behind a plain space.
@@ -84,7 +89,7 @@ export function jobRefs(text, kind = null) {
     pid: p ? Number(p[1]) : null,
     path: l ? (l[1] || l[2]).replace(/[.,;:)]+$/, '') : null,
     run: runId(t) || bgTask(t),
-    watcher: w ? (w[1] && idLike(w[1]) ? w[1] : w[2] || null) : null,
+    watcher: (w ? (w[1] && idLike(w[1]) ? w[1] : w[2] || null) : null) || ccTask(t),
     integration: integrationId(t),
     detached: DETACHED_RE.test(t),
   };
