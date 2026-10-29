@@ -115,7 +115,7 @@ import { createDoneCheck, DEFAULT_IGNORE_BRANCHES } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
-import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose } from './worker-auto-close.js';
+import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
 import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
@@ -1066,6 +1066,13 @@ const workerAutoClose = createWorkerAutoClose({
     const panes = await listPanes(), table = await processTable();
     const mgrs = new Set(loadManagerSessions());
     const out = [];
+    let covered = [], leftoverAt = new Map();
+    try { covered = (await unfinishedNow()).covered; } catch { /* no task docs: rule skipped */ }
+    try {
+      for (const e of await managerEvents.tail({ since: new Date(Date.now() - LEFTOVERS_WINDOW_MS).toISOString(), limit: 500 })) {
+        const m = /^(.+):leftovers$/.exec(e.key || ''); if (m) leftoverAt.set(m[1], Math.max(leftoverAt.get(m[1]) || 0, Date.parse(e.at) || 0));
+      }
+    } catch { /* feed unreadable: rule skipped */ }
     for (const [name, p] of panes) {
       if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead) continue;
       const sb = sessionMeta.startedBy(name);
@@ -1087,8 +1094,10 @@ const workerAutoClose = createWorkerAutoClose({
       // Reuse done-check's factsOf (no send, no nudge) by reading the git state through the same helper it would.
       const clean = await gitCleanOf(p.cwd, { exec });
       const agent = st?.agent || 'claude';
-      out.push({ name, startedBy: sb, priority: pri, lastStatusKind: 'done', lastStatusText: sl?.text || null,
+      out.push({ name, startedBy: sb, priority: pri, lastStatusKind: 'done', lastStatusText: [sl?.text, String(ex).slice(-1500)].filter(Boolean).join('\n') || null,
         idleMs, working, scriptBusy, backgroundWork, draft, doneCheckClean: clean, agent,
+        openRows: (covered.find((c) => c.liveSessions.includes(name))?.open || []).length,
+        leftoversAgeMs: leftoverAt.has(name) ? Date.now() - leftoverAt.get(name) : null,
         tmuxSessionExists: true, paneHasProcess: true });
     }
     return out;

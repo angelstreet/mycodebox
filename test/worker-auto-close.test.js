@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldClose, politeClose, createWorkerAutoClose } from '../worker-auto-close.js';
+import { shouldClose, politeClose, createWorkerAutoClose, LEFTOVERS_WINDOW_MS } from '../worker-auto-close.js';
 
 // A complete, ready-to-close facts object. Every test that exercises a single condition mutates one field.
 const ok = () => ({
@@ -290,4 +290,51 @@ test('createWorkerAutoClose: an owner-started candidate never reaches polite (th
   assert.equal(polite, 0, 'owner-started is never closed even if a caller passes it in');
   assert.equal(r.closed.length, 0);
   assert.equal(r.skipped[0].reason.includes('owner-controlled'), true);
+});
+
+// bug-8cddcf53: a done STATUS must not close a session that still has open work.
+test('shouldClose: task doc with open rows keeps the session open', () => {
+  const r = shouldClose({ ...ok(), openRows: 6 });
+  assert.equal(r.close, false);
+  assert.equal(r.openWork, true);
+  assert.match(r.reason, /6 open row/);
+  assert.equal(shouldClose({ ...ok(), openRows: 0 }).close, true);
+});
+
+test('shouldClose: a recent leftovers event keeps the session open, an old one does not', () => {
+  const r = shouldClose({ ...ok(), leftoversAgeMs: 90 * 60 * 1000 });
+  assert.equal(r.close, false);
+  assert.match(r.reason, /leftovers event 90m ago/);
+  assert.equal(shouldClose({ ...ok(), leftoversAgeMs: LEFTOVERS_WINDOW_MS + 1 }).close, true);
+  assert.equal(shouldClose({ ...ok(), leftoversAgeMs: null }).close, true);
+});
+
+test('shouldClose: closing text saying something was not verified / not done keeps the session open', () => {
+  for (const t of ['I did not verify the page in a browser', 'not yet deployed', "haven't tested it on the device", 'unverified in prod', 'did not finish G4']) {
+    const r = shouldClose({ ...ok(), lastStatusText: t });
+    assert.equal(r.close, false, t);
+    assert.equal(r.openWork, true, t);
+  }
+  assert.equal(shouldClose({ ...ok(), lastStatusText: 'STATUS: done, tests pass, merged, deployed' }).close, true);
+});
+
+test('createWorkerAutoClose: a kept-open session is recorded once with its reason, a finished one still closes', async () => {
+  const records = []; let closed = 0;
+  const w = createWorkerAutoClose({
+    listCandidates: async () => [
+      { name: 'resume-task182', startedBy: 'mgr', priority: 'P2', lastStatusKind: 'done', idleMs: 24 * 60000, working: false, scriptBusy: false,
+        backgroundWork: 0, draft: false, doneCheckClean: true, agent: 'claude', openRows: 6 },
+      { name: 'finished', startedBy: 'mgr', priority: 'P2', lastStatusKind: 'done', idleMs: 24 * 60000, working: false, scriptBusy: false,
+        backgroundWork: 0, draft: false, doneCheckClean: true, agent: 'claude', openRows: 0, leftoversAgeMs: null, lastStatusText: 'STATUS: done' },
+    ],
+    polite: async () => { closed++; return { steps: [], killed: false }; },
+    record: async (e) => { records.push(e); },
+    config: () => ({ workerAutoClose: true, workerIdleMin: 20, managerSessions: ['manager'] }),
+    log: { info() {}, error() {} },
+  });
+  const r = await w.tick();
+  assert.equal(closed, 1);
+  assert.deepEqual(records.map((e) => e.key), ['worker-auto-close-kept:resume-task182', 'worker-auto-closed:finished']);
+  assert.match(records[0].body, /6 open row/);
+  assert.match(r.skipped.find((s) => s.name === 'resume-task182').reason, /open row/);
 });
