@@ -1095,7 +1095,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       const open = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.target === c.target && !x.revertOf);
       if (open) return coalesce(open, input, { key, branch, target: c.target, session, worktree, deployScope, explicit: !!input.deploy });
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
-      const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
+      const r = { id: `int-${now().toString(16)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
         deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
@@ -1125,7 +1125,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       const c = repoCfg(o.repo);
       if (!c) throw coded('E_NOT_FOUND', `repo ${o.repo} is not configured`);
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
-      const r = { id: `int-${now().toString(36)}${randomBytes(3).toString('hex')}`, seq, repo: o.repo, branch: `revert-${o.mergeSha.slice(0, 12)}`, target: c.target, session: session ?? o.session,
+      const r = { id: `int-${now().toString(16)}${randomBytes(3).toString('hex')}`, seq, repo: o.repo, branch: `revert-${o.mergeSha.slice(0, 12)}`, target: c.target, session: session ?? o.session,
         deployScope: null, deployExplicit: false, revertOf: o.mergeSha, revertOfRequest: o.id, worktree: null, note: `revert of ${o.branch} (${o.id})`, by: by ? String(by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '', sha: null, branchSha: null, ci: null, deployed: null };
       reqs.set(r.id, r); persist(r);
