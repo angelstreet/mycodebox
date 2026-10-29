@@ -8,6 +8,7 @@
 set -uo pipefail
 S=manager; BASE="${GHOSTY_URL:-http://127.0.0.1:7777}"; H=(-H 'content-type: application/json' -H "origin: $BASE")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+. "$SCRIPT_DIR/pane-has-claude.sh"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 STAMP="$STATE_DIR/manager-watch.last"; EVENTS="$STATE_DIR/manager-events.jsonl"; WAKES="$STATE_DIR/manager-wakes.jsonl"
 STALE_MS=$((75*60*1000)); DEBOUNCE_MS=$((60*60*1000))   # dead-loop threshold, one nudge per hour
@@ -38,7 +39,7 @@ pane=$(tmux display -p -t "=$S:" '#{pane_pid}')
 
 # No claude process under the pane means the agent is dead (bare shell). --now skips the idle wait and the /exit
 # (nothing to exit) and relaunches on top; the command-exists and readiness checks inside still apply.
-if ! pgrep -P "$pane" -f claude >/dev/null; then
+if ! pane_has_claude "$pane"; then
   if [ "$DRY" = 1 ]; then say "dry-run: pane $pane has no claude process, would run manager-fresh.sh --now (relaunch dead manager)"; exit 0; fi
   say "pane $pane has no claude process: relaunching"
   "$SCRIPT_DIR/manager-fresh.sh" --now && say "relaunched dead manager at $(date -u +%FT%TZ)" || say "relaunch failed (manager-fresh.sh exited non-zero)"

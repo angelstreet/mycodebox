@@ -8,6 +8,7 @@
 set -euo pipefail
 S=manager; BASE="${GHOSTY_URL:-http://127.0.0.1:7777}"; H=(-H 'content-type: application/json' -H "origin: $BASE")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+. "$SCRIPT_DIR/pane-has-claude.sh"
 # The timer's PATH may lack the user-local CLI dir the old hard-coded path used.
 export PATH="$HOME/.local/bin:$PATH"
 CMD=$(node "$SCRIPT_DIR/manager-command.js")
@@ -35,7 +36,7 @@ pane=$(tmux display -p -t "=$S:" '#{pane_pid}')
 # failed readiness, or the agent was killed). --now then skips BOTH the idle wait and the /exit (there is nothing to
 # exit, and no point waiting for an "idle" that can never come) and goes straight to trust + launch + readiness + kick.
 # With claude still alive, --now behaves exactly like the normal mode.
-dead=0; pgrep -P "$pane" -f claude >/dev/null || dead=1
+dead=0; pane_has_claude "$pane" || dead=1
 if [ "$NOW" = 1 ] && [ "$dead" = 1 ]; then
   echo "manager pane has no claude process: relaunching now (--now)"
 else
@@ -46,12 +47,12 @@ else
   git -C "$HOME/vpt-manager" fetch -q origin && git -C "$HOME/vpt-manager" checkout -q --detach origin/task44-ai-manager || true
   curl -s -X POST "$BASE/api/send/$S" "${H[@]}" -d '{"keys":"/exit","enter":true}' >/dev/null
   for i in $(seq 1 30); do
-    pgrep -P "$pane" -f claude >/dev/null || break
+    pane_has_claude "$pane" || break
     # /exit with background work (its waits, a scheduled sweep) asks first: option 1 "Exit and stop tasks" is preselected
     tmux capture-pane -p -t "=$S:" | grep -q "Exit and stop tasks" && tmux send-keys -t "=$S:" Enter
     sleep 1
   done
-  pgrep -P "$pane" -f claude >/dev/null && { echo "claude did not exit"; exit 1; }
+  pane_has_claude "$pane" && { echo "claude did not exit"; exit 1; }
 fi
 node --input-type=module -e "import {pathToFileURL} from 'node:url'; const {trustFolder}=await import(pathToFileURL(process.argv[1]).href); await trustFolder('claude', process.argv[2]).catch(()=>{})" "$SCRIPT_DIR/../trust.js" "$(tmux display -p -t "=$S:" '#{pane_current_path}')" || true   # best effort
 tmux send-keys -t "=$S:" -l "$CMD"; sleep 0.3; tmux send-keys -t "=$S:" Enter
@@ -60,7 +61,7 @@ ready=0
 # (https://claude.ai/code/session_...) and the normal prompt footer ("bypass permissions on"). Accept any of them,
 # but only when a claude process is actually running under the pane — a bare shell that happens to show an old
 # link from a previous session must not count, otherwise the kickoff would land in the wrong pane.
-for i in $(seq 1 30); do sleep 2; if pgrep -P "$pane" -f claude >/dev/null && tmux capture-pane -p -t "=$S:" | grep -qE "remote-control is active|claude\.ai/code/session_|bypass permissions on"; then ready=1; break; fi; done
+for i in $(seq 1 30); do sleep 2; if pane_has_claude "$pane" && tmux capture-pane -p -t "=$S:" | grep -qE "remote-control is active|claude\.ai/code/session_|bypass permissions on"; then ready=1; break; fi; done
 # Never type the kickoff into a pane that is not the agent (launch failed, bare shell, login prompt).
 [ "$ready" = 1 ] || { echo "manager did not show readiness in 60s; kickoff NOT sent" >&2; exit 1; }
 sleep 3
