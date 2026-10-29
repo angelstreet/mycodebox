@@ -102,18 +102,19 @@ fs.appendFileSync(path.join(dir, 'calls'), JSON.stringify([cmd, ...args, ...(std
 if (cmd === 'curl' && !args.includes('POST')) process.stdout.write(JSON.stringify({ status: { manager: { state: 'done', stall: {} } } }));
 if (cmd === 'tmux' && args[0] === 'display') console.log('4242');
 if (cmd === 'tmux' && args[0] === 'capture-pane') process.stdout.write(process.env.FAKE_PANE || '');
+if (cmd === 'ps') { console.log('claude'); process.exit(0); }
 if (cmd === 'pgrep') {
   // Simulate: claude has exited (post-/exit) until the new launch command is typed into the pane,
   // then it is running so the readiness pgrep guard in the script can match the pane.
   const callsFile = path.join(dir, 'calls');
   if (fs.existsSync(callsFile)) {
     const calls = fs.readFileSync(callsFile, 'utf8').split('\\n').filter(Boolean).map(JSON.parse);
-    if (calls.some(([c, ...a]) => c === 'tmux' && a.includes('-l'))) process.exit(0);
+    if (calls.some(([c, ...a]) => c === 'tmux' && a.includes('-l'))) { console.log('4243'); process.exit(0); }
   }
   process.exit(1);
 }
 `;
-  for (const c of ['tmux', 'curl', 'pgrep', 'sleep', 'git', ...(withClaude ? ['claude'] : [])]) writeFileSync(join(bin, c), fake, { mode: 0o755 });
+  for (const c of ['tmux', 'curl', 'pgrep', 'ps', 'sleep', 'git', ...(withClaude ? ['claude'] : [])]) writeFileSync(join(bin, c), fake, { mode: 0o755 });
   const r = spawnSync('/bin/bash', [resolve('scripts/manager-fresh.sh')], {
     env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, LANG: 'C.UTF-8', FAKE_DIR: dir, FAKE_PANE: pane, GHOSTY_URL: 'http://localhost:1', ...env },
     encoding: 'utf8', timeout: 20000,

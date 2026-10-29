@@ -409,7 +409,7 @@ export const TMP_PREFIXES = ['scg-', 'owner-ask-', 'owner-ask-2-', 'owner-ask-ba
   'lease-integ-', 'lease-owner-', 'lease-scripts-', 'lease-serve-', 'lease-svc-', 'lfeval-', 'lw-', 'mac-checkout-',
   'mac-hook-', 'merge-pol-', 'meval-origin-', 'meval-reg-', 'meval-state-', 'mk-push-', 'mm-mgr-', 'mmmgr-fake-',
   'mycodebox-restart-', 'p1fix-fresh-', 'og-', 'pk-', 'pk-mm-', 'render-skill-', 'rules-watch-', 'rv2-fresh-', 'self-out-',
-  'self-root-', 'send-ui-shots-', 'send-ui-work-', 'sh-', 'slots-', 'trust-', 'trust-ctl-', 'usage-attr-',
+  'pane-claude-', 'self-root-', 'send-ui-shots-', 'send-ui-work-', 'sh-', 'slots-', 'trust-', 'trust-ctl-', 'usage-attr-',
   'usage-test-', 'v2-acc-fx-', 'v2-acc-runner-', 'v2-acc-state-', 'v2-acceptance-', 'v2-adapters-', 'v2-adverify-',
   'v2-bench-', 'v2-bench-http-', 'v2-bench-http-reap-', 'v2-bench-http-test-', 'v2-bench-out-', 'v2-bench-r4-test-',
   'v2-bench-test-', 'v2-d017-', 'v2-delivery-', 'v2-delivery-verify-', 'v2-gl-', 'v2-glstall-', 'v2-glv-',
