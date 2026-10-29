@@ -14,6 +14,10 @@
 // "STATUS: done" is the agent's own verdict (stall.js statusLine() kind === 'done').
 
 const DEFAULT_IDLE_MIN = 20;
+export const LEFTOVERS_WINDOW_MS = 4 * 3600 * 1000;   // a `leftovers` feed event this recent means the session still has work
+// The closing STATUS/report admits something is not verified or not done (bug-8cddcf53: resume-task182 said it had not checked its page).
+export const UNFINISHED_TEXT = /\b(?:did(?: not|n't)|do(?:es)? not|don't|doesn't|have(?: not|n't)|has(?: not|n't)|not yet|never)\s+(?:\w+\s+){0,2}?(?:verif\w*|test\w*|check\w*|run|ran|finish\w*|complet\w*|done|merg\w*|deploy\w*|look\w*|tried|try)\b|\bnot (?:yet )?(?:verified|tested|checked|done|finished|completed|deployed|merged)\b|\bunverified\b|\buntested\b/i;
+export const unfinishedTextOf = (t) => { const m = UNFINISHED_TEXT.exec(String(t || '')); return m ? m[0] : null; };
 const CTRL_C_DELAY_MS = 1500;
 const EXIT_PROMPT_TIMEOUT_MS = 30000;
 const KILL_AFTER_MS = 10000;
@@ -29,7 +33,7 @@ export function shouldClose(facts) {
   const missing = [];
   const need = (k) => { if (facts[k] === undefined) missing.push(k); };
   for (const k of ['name', 'startedBy', 'priority', 'lastStatusKind', 'idleMs', 'working', 'scriptBusy', 'backgroundWork', 'draft',
-    'managerSessions', 'workerAutoClose', 'workerIdleMin', 'doneCheckClean']) need(k);
+    'managerSessions', 'workerAutoClose', 'workerIdleMin', 'doneCheckClean']) need(k);   // openRows / leftoversAgeMs / lastStatusText are optional
 
   if (facts.name == null) return { close: false, reason: 'missing name', missing: missing.length ? missing : ['name'] };
   if (facts.workerAutoClose !== true) return { close: false, reason: 'workerAutoClose disabled', missing };
@@ -45,6 +49,12 @@ export function shouldClose(facts) {
   if (facts.lastStatusKind !== 'done') return { close: false, reason: `last status is ${facts.lastStatusKind || '<none>'}`, missing };
   // No draft in the input box: a half-typed follow-up would be lost.
   if (facts.draft) return { close: false, reason: 'draft in input', missing };
+  // Open work (bug-8cddcf53): a done STATUS is not enough while the task doc has open rows, a leftovers event fired recently,
+  // or the closing text itself says something was not verified / not done. The owner may still be using the session.
+  if (facts.openRows > 0) return { close: false, reason: `task doc has ${facts.openRows} open row(s)`, openWork: true, missing };
+  if (facts.leftoversAgeMs != null && facts.leftoversAgeMs < LEFTOVERS_WINDOW_MS) return { close: false, reason: `leftovers event ${Math.floor(facts.leftoversAgeMs / 60000)}m ago`, openWork: true, missing };
+  const said = unfinishedTextOf(facts.lastStatusText);
+  if (said) return { close: false, reason: `closing text says "${said}"`, openWork: true, missing };
   // Idle: no pane change, no running agent turn, no background work, not script-driven, for >= workerIdleMin minutes.
   if (facts.working) return { close: false, reason: 'agent turn running', missing };
   if (facts.scriptBusy) return { close: false, reason: 'script driving pane', missing };
@@ -122,8 +132,18 @@ export function createWorkerAutoClose({
           name: c.name, startedBy: c.startedBy, priority: c.priority, lastStatusKind: c.lastStatusKind,
           idleMs: c.idleMs, working: c.working, scriptBusy: c.scriptBusy, backgroundWork: c.backgroundWork, draft: c.draft,
           managerSessions, workerAutoClose: true, workerIdleMin: cfg.workerIdleMin ?? DEFAULT_IDLE_MIN, doneCheckClean: c.doneCheckClean,
+          openRows: c.openRows, leftoversAgeMs: c.leftoversAgeMs, lastStatusText: c.lastStatusText,
         });
-        if (!decision.close) { if (decision.reason) skipped.push({ name: c.name, reason: decision.reason }); continue; }
+        if (!decision.close) {
+          if (decision.reason) skipped.push({ name: c.name, reason: decision.reason });
+          // Visible in the journal and the feed (the feed dedupes the same key for a few hours), so the owner sees why a done session stayed open.
+          if (decision.openWork) {
+            log.info?.(`[worker-auto-close] kept ${c.name}: ${decision.reason}`);
+            try { await record({ key: `worker-auto-close-kept:${c.name}`, title: `kept ${c.name} open`, body: decision.reason, url: '/', priority: 'min' }); }
+            catch (e) { log.error?.('[worker-auto-close] record', e.message); }
+          }
+          continue;
+        }
         try {
           const r = await polite({ name: c.name, agent: c.agent, ...politeDeps(polite) });
           closed.push({ name: c.name, startedBy: c.startedBy, lastStatus: c.lastStatusText || null, result: r });
