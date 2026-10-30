@@ -1057,8 +1057,8 @@ let coveredTasks = [];   // refreshed by each leftovers scan: live sessions whos
 // which is undefined, so the whole worker-auto-close scan died every tick (2026-10-26).
 
 // Worker auto-close (worker-auto-close.js): a session that another session started and that is done + idle + git-clean
-// for >= workerIdleMin minutes is closed politely. manager.json `workerAutoClose`: true (default) | false;
-// `workerIdleMin`: 20 (default, minutes). Reuses done-check's listDone for the STATUS done filter; its own git check
+// for >= workerIdleMin minutes WAS closed politely. Removed 2026-10-30 (owner rule, bug-9e811bf0): never started, never closes;
+// manager.json `workerAutoClose` is ignored. Reuses done-check's listDone for the STATUS done filter; its own git check
 // is the cheap worktree-only one above (so we never block on a busy host the way done-check's nudge would).
 const workerAutoClose = createWorkerAutoClose({
   stateDir: STATE_DIR,
@@ -2953,7 +2953,7 @@ server.listen(PORT, HOST, async () => {
   doneCheck.start();
   leftovers.start();
   unfinished.start();
-  workerAutoClose.start();
+  // workerAutoClose is not started: a session is never auto-closed (owner rule 2026-10-30, bug-9e811bf0).
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   anthropicSpend.start();
