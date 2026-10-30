@@ -1442,6 +1442,16 @@ check, and none while the session works or the host is busy (load above 1.5 per 
 `manager.json` `doneCheck`: `"dry"` (journal `done-check.jsonl` only) or `"off"`; default live. `GET /api/done-check`
 shows the last check and its findings.
 
+## Sessions are never auto-closed (owner, 2026-10-30)
+
+A session is closed only by the owner, by the manager (`DELETE /api/sessions/<s>?confirm=<s>`) or by the agent that spawned it.
+No ghosty tick sends `/exit` or `/quit` or kills a tmux session on its own. This replaces "Worker auto-close" (owner,
+2026-10-18, a done + idle + git-clean worker closed after `workerIdleMin`): `worker-auto-close.js` `shouldClose()` always
+returns `close:false`, `tick()` is a no-op, `server.js` does not start it and `manager.json` `workerAutoClose` is ignored
+(bug-9e811bf0: it typed `/exit` into a session the owner was following). `GET /api/worker-auto-close` stays and reports mode `off`.
+`parking.js` closes only on the explicit `POST /api/sessions/:name/park`; the one automatic path is `autoParkArchived`
+(a session the owner archived in the Claude app), switch `manager.json` `autoParkArchived:false`. `scripts/manager-fresh.sh` only touches the `manager` session.
+
 ## Done with leftovers (owner, 2026-10-28)
 
 A session that ends `STATUS: done` but lists work it can do itself ("Left to do", "Remaining", `open: ...` on the STATUS line)

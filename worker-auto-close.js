@@ -4,7 +4,10 @@
 //   shouldClose(facts)            pure decision: { close, reason, missing } from a single session's facts
 //   createWorkerAutoClose({...})  factory: tick() gathers facts per session, calls shouldClose, then politeClose()
 //   politeClose({...})            async close path: /exit for claude, Ctrl-C twice for mcode/codex, then kill tmux
-// Switch: manager.json workerAutoClose: true (default) | false, workerIdleMin: 20 (default, minutes).
+// REMOVED AS AN AUTOMATIC PATH (owner, 2026-10-30, bug-9e811bf0): a session is NEVER auto-closed by ghosty. Only the owner,
+// the manager, or the agent that spawned it may close a session. shouldClose() always answers close:false, tick() is a
+// no-op whatever manager.json says (workerAutoClose is ignored) and server.js no longer starts the loop. The decision
+// code below stays only as a record of the facts and for the `kept open` diagnostics; politeClose() is not called by ghosty.
 // Event key: 'worker-auto-closed:<name>' (kind 'health') in manager-events.jsonl — the manager feed can show the name,
 // startedBy and last STATUS line so the owner sees what happened.
 //
@@ -36,7 +39,8 @@ export function shouldClose(facts) {
     'managerSessions', 'workerAutoClose', 'workerIdleMin', 'doneCheckClean']) need(k);   // openRows / leftoversAgeMs / lastStatusText are optional
 
   if (facts.name == null) return { close: false, reason: 'missing name', missing: missing.length ? missing : ['name'] };
-  if (facts.workerAutoClose !== true) return { close: false, reason: 'workerAutoClose disabled', missing };
+  // Owner rule 2026-10-30: never automatic, whatever the config says.
+  if (true) return { close: false, reason: 'automatic close removed (owner rule 2026-10-30)', missing };
   // Owner / dashboard / unknown starts are never auto-closed: the owner is the only one who may decide to park them,
   // and an 'unknown' start is one the tick saw before cbsession reported it — wait for the real one to settle.
   const sb = facts.startedBy == null ? '' : String(facts.startedBy);
@@ -122,7 +126,7 @@ export function createWorkerAutoClose({
     busy = true;
     try {
       const cfg = (() => { try { return config() || {}; } catch { return {}; } })();
-      const mode = cfg.workerAutoClose === false ? 'off' : 'live';
+      const mode = 'off';   // owner rule 2026-10-30: the tick never closes anything; manager.json workerAutoClose is ignored
       if (mode === 'off') return (last = { at: Date.now(), mode, checked: 0, closed: [], skipped: [] });
       const candidates = await listCandidates().catch((e) => { log.error?.('[worker-auto-close] listCandidates', e.message); return []; });
       const managerSessions = Array.isArray(cfg.managerSessions) && cfg.managerSessions.length ? cfg.managerSessions : ['manager'];
@@ -164,6 +168,7 @@ export function createWorkerAutoClose({
     tick,
     snapshot: () => last,
     start(firstDelayMs = 60 * 1000) {
+      return;   // owner rule 2026-10-30: no automatic close loop
       if (timer) return;
       setTimeout(() => tick().catch(() => {}), firstDelayMs).unref?.();
       timer = setInterval(() => tick().catch(() => {}), pollMs);

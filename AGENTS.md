@@ -70,6 +70,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 
 ## Safety rules of the product
 
+- Sessions are never auto-closed (owner, 2026-10-30, bug-9e811bf0): no ghosty tick sends `/exit`, `/quit` or kills a session on
+  its own. Only the owner, the manager (`DELETE /api/sessions/<s>?confirm=<s>`) or the agent that spawned the session may close
+  it. The old worker auto-close (2026-10-18) is removed; `workerAutoClose` in `manager.json` is ignored.
+
+
 - Leases (deploys, restarts, test devices): follow [docs/LEASE-RULES.md](docs/LEASE-RULES.md). Never ask the owner about a
   lease: wait with `vpt-lease claim ... --wait` or `vpt-lease run ... -- <cmd>`; never poll, never `--force`.
 
