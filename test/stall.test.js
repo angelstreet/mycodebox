@@ -451,6 +451,23 @@ test('round 13 regression: OWNER_FLOOR matches "rotate the Stripe API key", "buy
   }
 });
 
+test('a STATUS line wrapped over 4 pane rows is still the verdict, not an owner action (2026-10-31)', () => {
+  const pane = [
+    '  The fix is live (merged and deployed at abc1234). Reload the page. If no pill appears after a reload, the',
+    '  cause is something else and I need to look again.',
+    '  STATUS: done — fix/x merged to main at abc1234 and deployed to',
+    '  the frontend, npm test passes, dismiss-then-pill-then-restore checked in a headless',
+    "  browser, your own browser not checked, left: nothing unless the pill doesn't",
+    '  appear · bugs: none',
+  ];
+  const st = statusLine(pane);
+  assert.equal(st?.kind, 'done');
+  assert.match(st.text, /^fix\/x merged .* not checked, left: nothing unless the pill doesn't appear · bugs: none$/);
+  assert.equal(classifyStall({ plain: ['● ok', ...pane], state: 'done' }).case, 'done');
+  // a STATUS line in an earlier paragraph (a short row follows it) is not the closing verdict
+  assert.equal(statusLine(['STATUS: done — fix/x merged to main and deployed to the frontend', 'Then I looked again.', 'The reload does not stick on phones, so this is not finished', 'and needs another look.']), null);
+});
+
 test('the todo panel may be followed by the background-tasks line', () => {
   assert.equal(statusLine([...T33, '  ◐ Tasks · 1 agent active · /tasks details'])?.kind, 'done');
 });
