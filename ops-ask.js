@@ -55,3 +55,13 @@ export function opsAsk(final) {
   return kind;
 }
 export const isLeaseOrDeployAsk = (final) => !!opsAsk(final);
+
+// A system wait (stall.js systemWaitOf, owner 2026-10-31) is a manager item whatever words its plan sentence holds ("... then publish"):
+// no owner push, no hard tag. `blocked` on an owner answer counts only when that answer is already asked in the ledger (final.ownerAskOpen,
+// set by the manager); a `waiting` line always counts. -> 'lease' | 'deploy' | null
+export function systemWaitKind(final) {
+  const sw = final?.systemWait;
+  if (!sw) return null;
+  if (sw === 'owner-answer' && String(final.status || '').toLowerCase() !== 'waiting' && !final.ownerAskOpen) return null;
+  return sw === 'lease' ? 'lease' : 'deploy';
+}

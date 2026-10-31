@@ -132,7 +132,7 @@ test('the hourly scan reports both superseded cases, one line each', async () =>
   const dir = tmp('e22-scan-');
   await writeFile(join(dir, 'manager-owner-asks.jsonl'), NET_ROWS(new Date().toISOString()).join('\n') + '\n');
   const out = execFileSync('bash', [SCAN], { env: { ...process.env, GHOSTY_STATE_DIR: dir } }).toString().trim().split('\n');
-  assert.ok(out.includes('!! ask-superseded-open Q1 Q2 "Synthetic question 2?"'), out.join(' | '));
+  assert.ok(!out.some((l) => l.includes('ask-superseded-open Q1')), 'a superseded ask closed in the ledger is the normal case (2026-10-31)');
   assert.ok(out.includes(`!! ask-superseded-dropped Q3 ${STOP_ID} (not a question in the ledger)`), out.join(' | '));
   assert.ok(out.includes(`!! ask-superseded-dropped Q4 ${STOP_ID} (not a question in the ledger)`), out.join(' | '));
   assert.ok(out.includes('!! ask-not-alerted Q2'), 'the existing line is unchanged');
@@ -149,10 +149,10 @@ test('the server-side guard reports both superseded cases', async () => {
     log: (e) => events.push(e), now: () => Date.now(),
   });
   const done = await g.sweep();
-  assert.deepEqual(done.filter((d) => d.type === 'ask-superseded-open').map((d) => [d.id, d.by]), [['Q1', 'Q2']]);
+  assert.deepEqual(done.filter((d) => d.type === 'ask-superseded-open').map((d) => [d.id, d.by]), [], 'a closed superseded ask is not reported (2026-10-31)');
   assert.deepEqual(done.filter((d) => d.type === 'ask-superseded-dropped').map((d) => [d.id, d.by]), [['Q3', STOP_ID], ['Q4', STOP_ID]]);
   assert.ok(!done.some((d) => d.id === 'Q5'), 'a question the owner answered is not reported');
-  assert.ok(events.some((e) => e.type === 'ask-superseded-open' && e.id === 'Q1'), 'the report reaches the manager log');
+  assert.ok(events.some((e) => e.type === 'ask-superseded-dropped' && e.id === 'Q3'), 'the report reaches the manager log');
   // a dropped question is pushed to the owner: it is closed, so no list of the owner shows it any more
   assert.ok(alerts.some((a) => a.tag === 'ask-Q4'), 'the fresh drop is pushed');
   assert.ok(!alerts.some((a) => a.tag === 'ask-Q3'), 'an old drop is reported, not pushed');

@@ -8,8 +8,8 @@
 //  - "Waiting for you: unchanged (Q1, Q2)" naming an id that is not open is alerted once: `ask-unbacked`
 //  - a ledger-open ask with no alert after ALERT_AFTER_MS is alerted: `ask-alerted-late`
 //  - a superseded ask is reported too: the open set cannot show a closed question, so a question that was dropped
-//    with no replacement was invisible (E24). `ask-superseded-open` (the replacement is still open: the older
-//    question is still waiting) and `ask-superseded-dropped` (the replacement is not a question: it was dropped).
+//    with no replacement was invisible (E24). `ask-superseded-open` (the replacement is open and the older
+//    ask is still open in the ledger too; a closed superseded ask is the normal case, 2026-10-31) and `ask-superseded-dropped` (the replacement is not a question: it was dropped).
 //  - a record with no valid floor never passed the ask gate, so it is never shown to the owner (owner, 2026-10-25:
 //    Q231 reached the owner that way). It is reported to the manager as a defect: `ask-defect`.
 // Alert tag is `ask-<id>` (the push feed carries it, scripts/manager-status-scan.sh reads it).
@@ -175,6 +175,7 @@ export function createAskGuard({ ledgerFile, alertsFile, alert, log = () => {}, 
       reported.add(s.id);
       const state = supersededState(s, view);
       if (state === 'answered') continue;    // the owner answered the replacement: nothing was lost
+      if (state === 'open' && !view.openIds.has(s.id)) continue;   // closed in the ledger, its open replacement carries it: the normal supersede (2026-10-31)
       const type = state === 'open' ? 'ask-superseded-open' : 'ask-superseded-dropped';
       log({ type, id: s.id, by: s.by });
       done.push({ type, id: s.id, by: s.by });

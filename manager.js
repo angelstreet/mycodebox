@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
-import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction } from './stall.js';
+import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction, askHardOf } from './stall.js';
 import { MERGE_DEFAULTS, evaluateMerge, journalRecord, composeReply, repoToplevel } from './merge-policy.js';
 import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, menuRecord, parsePushAsk } from './decide-policy.js';
 import { decidedItems, decidedSummary, failedCount } from './decided.js';
@@ -31,7 +31,7 @@ import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
 import { leaseAsk, answerLeaseAsk } from './lease-ask.js';
 import { routineRestart, answerRoutineRestart, setRoutineRestartUnits } from './routine-restart.js';
-import { opsAsk } from './ops-ask.js';
+import { opsAsk, systemWaitKind } from './ops-ask.js';
 import { selfAsk, answerSelf } from './self-check.js';
 import { mockupRule, WINDOW_DEFAULT_MIN } from './mockups.js';
 import { actorOf } from './api-extras.js';
@@ -113,6 +113,7 @@ let readyWindows = null;                                            // injected:
 let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
 let integration = null;                                            // injected: the integration lane { repoForCwd, enqueue } (merge_wait routing)
 let ownJobs = null;                                                 // injected: own-jobs.js watcher { watch, forget, progressOf } (round 9, item 11). Unset = jobs are not watched
+let hasOpenAskHook = () => false;                                   // injected: (session) -> the owner-asks ledger has an open ask for it
 let managerItemHook = () => {};                                      // injected: ({ session, id, kind: 'lease'|'deploy', case, question, reason }) -> manager event (no owner push)
 let statusHook = () => {};                                          // injected: (session, status, text) for a logged stop whose STATUS is waiting / blocked
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
@@ -123,7 +124,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, ownJobs: ownJobsDep, integration: integrationDep, readyStore } = {}) {
+export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, ownJobs: ownJobsDep, integration: integrationDep, readyStore } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -172,6 +173,7 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (readyStore) readyWindows = readyStore;
   if (onStatus) statusHook = onStatus;
   if (onManagerItem) managerItemHook = onManagerItem;
+  if (hasOpenAsk) hasOpenAskHook = hasOpenAsk;
   if (ownJobsDep) ownJobs = ownJobsDep;
   if (integrationDep) integration = integrationDep;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
@@ -417,13 +419,15 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   // "STATUS: needs-manager: <what the manager must do>": the agent addressed the manager itself, so this is always its item --
   // no topic guard (a push/merge word in the ask must not hand it back to the owner), and no owner fallback at all.
   const tech = technicalStop(final);
-  const opsKind = tech.technical === 'yes' ? 'technical-item' : final.case === 'needs_manager' ? 'manager-item'
-    : config.opsToManager !== false && (!final.topics?.merge || final.case === 'merge_wait') && !final.topics?.push ? opsAsk(final) : null;
+  if (final.systemWait === 'owner-answer') { try { final = { ...final, ownerAskOpen: !!hasOpenAskHook(name) }; } catch { /* no ledger: a real blocker */ } }
+  const sysKind = systemWaitKind(final);   // waiting / blocked on a deploy, lease, integration or a ledger ask: never the owner's (owner, 2026-10-31)
+  const opsKind = sysKind || (tech.technical === 'yes' ? 'technical-item' : final.case === 'needs_manager' ? 'manager-item'
+    : config.opsToManager !== false && (!final.topics?.merge || final.case === 'merge_wait') && !final.topics?.push ? opsAsk(final) : null);
   if (opsKind) {
     managerStops.add(id); if (managerStops.size > 500) managerStops.delete(managerStops.values().next().value);
     escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
     if (isRemoteSession(name)) hookSafe(remoteHooks.escalated, name, id, reason, final);
-    logLater({ type: 'escalated', id, session: name, case: final.case, reason, target: 'manager', kind: opsKind, technical: tech.technical, technicalWhy: tech.why });
+    logLater({ type: 'escalated', id, session: name, case: final.case, reason, target: 'manager', kind: opsKind, technical: tech.technical, technicalWhy: tech.why, ...(sysKind ? { systemWait: final.systemWait } : {}) });
     // A stop carries no owner question: it closes nothing in the owner-asks ledger (E22).
     if (firstEscalation) {
       try { managerItemHook({ session: name, id, kind: opsKind, case: final.case, question: String(final.question || '').slice(0, 300), reason, technical: tech.technical, technicalWhy: tech.why }); } catch (e) { console.error('[manager] manager item', e.message); }
@@ -1515,7 +1519,8 @@ export function observe(s) {
       return;
     }
     const baseWhy = ws.send ? block : humanWhy(final, ws);
-    const hardWhy = final.topics?.hard && !String(baseWhy).includes(final.topics.hard) ? ` [hard: ${final.topics.hard}]` : '';   // name the hard hit even when the first forbidden word was a decidable one
+    const askHard = askHardOf(final);   // from the question / the option asked, never a word of a plan sentence (owner, 2026-10-31)
+    const hardWhy = askHard && !String(baseWhy).includes(askHard) ? ` [hard: ${askHard}]` : '';   // name the hard hit even when the first forbidden word was a decidable one
     const why = (partial.mergeWhy ? (final.topics?.hard ? `${baseWhy} (${partial.mergeWhy})` : partial.mergeWhy) : baseWhy) + hardWhy;
     // To the owner. With AI triage on, the reviewer reads the stop first (rules and Jev already did) so the push carries its proposal.
     let tri = null;

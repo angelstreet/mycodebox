@@ -518,6 +518,34 @@ const requested = (text, re) => { for (const v of [String(text), ...textVariants
 export const deployMatch = (text) => (matchWith(SERVICE_CTL_RE, text) ? null : requested(text, DEPLOY_RE));
 // A plain push (not a force, a rewrite, a delete or a push to prod/staging/live: those stay hard).
 export const pushMatch = (text) => (matchWith(HARD_PUSH_RE, text) || colonHit(text) ? null : requested(text, PUSH_RE));
+// ---- system waits (owner, 2026-10-31) ----------------------------------------------------------------------------------
+// A stop whose STATUS line is `waiting`, or `blocked` on a deploy id, a lease, an integration id or an owner answer, asks nobody
+// anything: a system (deploy queue, lease service, integration lane, the owner-asks ledger) moves it. It must not reach the owner
+// as an "asks you" alert nor carry a [hard: X] tag read off a plan sentence ("... then the full walk and publish").
+// -> 'deploy' | 'lease' | 'integration' | 'owner-answer' | 'waiting' | null. A line that itself asks a question ("?") is not a wait.
+const SW_INTEGRATION = /\bint-[a-z0-9][\w-]*|\bintegration\s+(?:request\s+)?[\w-]*\d/i;
+const SW_DEPLOY = /\bdeploy\s+(?:id\s+)?[\w-]*\d|\bdeploy\s+(?:queue|queued|waiting)|\bqueued\s+(?:host\s+|server\s+|frontend\s+)?deploys?\b|^deploy\b/i;
+const SW_LEASE = /\blease\b|\blease[- ]?id\b|\bvpt-lease\b/i;
+const SW_OWNER = /\bowner(?:'s)?\s+(?:answer|reply|replug|decision)|\b(?:the\s+)?manager\s+(?:tells|says|answers)\b|\bwhen\s+the\s+(?:manager|owner)\s+(?:says|answers|replies)\b|\bQ\d{2,}\b/i;
+export function systemWaitOf(kind, text) {
+  const k = String(kind || '').toLowerCase(), t = String(text || '');
+  if (k !== 'waiting' && k !== 'blocked') return null;
+  if (/\?\s*(?:["')\]]\s*)?(?:$|\s[A-Z])/.test(t.replace(/https?:\S+/g, ''))) return null;   // it asks something: not a wait
+  const sub = SW_INTEGRATION.test(t) ? 'integration' : SW_DEPLOY.test(t) ? 'deploy' : SW_LEASE.test(t) ? 'lease' : SW_OWNER.test(t) ? 'owner-answer' : null;
+  if (k === 'waiting') return sub || 'waiting';
+  return sub;   // blocked: only on one of the four; anything else stays a real blocker
+}
+// The [hard: X] tag of an escalation: read off the QUESTION (its "?" sentences) and the option being asked (the recommended one),
+// never off every word of the status line. A system wait carries none. A needs-owner / blocked line without a "?" is the ask itself.
+export function askHardOf(final) {
+  if (!final || final.systemWait) return null;
+  const q = String(final.question || '');
+  const asks = q.split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => /\?["')\]]*$/.test(x));
+  const opts = (final.options || []).filter((o) => o && o.recommended).map((o) => String(o.text || ''));
+  const text = [...asks, ...opts].join('\n') || (/^(?:needs-owner|blocked)$/i.test(final.status || '') || !final.status ? q : '');
+  return text ? hardMatch(text, { mergePresent: !!final.topics?.merge, pushPresent: !!final.topics?.push, deployPresent: !!final.topics?.deploy }) : null;
+}
+
 export function topicSplit(text) {
   const merge = mergeMatch(text), push = pushMatch(text), deploy = deployMatch(text);
   return { merge, push, deploy, hard: hardMatch(text, { mergePresent: !!merge, pushPresent: !!push, deployPresent: !!deploy }) };
@@ -905,6 +933,8 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }
     else out.case = 'done';
     out.forbiddenText = askText(out, [], close);   // the STATUS line's own text, the option labels and the closing prose around them: the ask the owner answers
+    const sw = out.case === 'merge_wait' ? null : systemWaitOf(st.kind, st.text);
+    if (sw) out.systemWait = sw;   // a system wait: routed to the manager, never an owner "asks" alert or a hard tag (owner, 2026-10-31)
     return finish(out);
   }
   out.question = tailSentences(last, 300);

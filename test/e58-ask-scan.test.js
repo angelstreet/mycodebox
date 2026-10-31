@@ -65,12 +65,22 @@ test('E58: a drop that happened while the scan was off is still caught', () => {
   assert.deepEqual(scan(dir), [`!! ask-superseded-dropped Q1 ${STOP} (not a question in the ledger)`]);
 });
 
-test('E58: a superseded ask whose replacement is still open is still reported', () => {
+test('2026-10-31: a superseded ask closed in the ledger, replacement open, is the normal case: not reported', () => {
   const dir = tmp('e58-open-');
   seed(dir, [
     ask(1), ask(2),
     { at: OLD, id: 'Q1', state: 'superseded', by: 'Q2' },
   ], [{ id: 'Q2', at: Date.now(), via: 'manager-ask' }]);
+  assert.deepEqual(scan(dir), []);
+});
+
+test('a superseded ask that is open again beside its open replacement is still reported', () => {
+  const dir = tmp('e58-reopen-');
+  seed(dir, [
+    ask(1), ask(2),
+    { at: OLD, id: 'Q1', state: 'superseded', by: 'Q2' },
+    { at: OLD, id: 'Q1', action: 'ledger-amend' },
+  ], [{ id: 'Q1', at: Date.now(), via: 'manager-ask' }, { id: 'Q2', at: Date.now(), via: 'manager-ask' }]);
   assert.deepEqual(scan(dir), ['!! ask-superseded-open Q1 Q2 "Synthetic question 2?"']);
 });
 

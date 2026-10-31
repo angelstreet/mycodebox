@@ -80,9 +80,23 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 
 - Routine device-side restart (owner, 2026-10-27): `systemctl restart <unit>` of an allowlisted vpt-* device/host service on a
   lab host the session leases is a routine step, not a forbidden topic or an owner question; it needs the host lease only.
-  Allowlist: `GHOSTY_RESTART_UNITS` (default `vpt-monitor-img,vpt-host,vpt-stream*,vpt-grabber*`). stop, start-only, enable,
+  Allowlist: `GHOSTY_RESTART_UNITS` (default `vpt-monitor-img,vpt-host,vpt-stream*,vpt-grabber*,vpt-kpi,vpt-ble-remote@*,hid-remote@*,
+  vpt-avq,vpt-archiver,vpt-timeline,vpt-audio*,vpt-monitor-audio,vpt-mediamtx`). stop, start-only, enable,
   disable, mask, daemon-reload, unit files, sudoers, `ghosty-sessions`, other units and production hosts stay floor
   ([REFERENCE](docs/REFERENCE.md), `routine-restart.js`).
+  Lab-host service families (owner, 2026-10-31: the owner asked the manager to answer lab-host service restarts itself): vpt-kpi,
+  the per-adapter BLE daemons (`vpt-ble-remote@*`, `hid-remote@*`), vpt-avq, vpt-archiver, vpt-timeline, vpt-audio* / vpt-monitor-audio
+  and vpt-mediamtx joined the default. Same conditions: host lease only, no lease over 60 min, no `--force`, and not while a run holds
+  a device lease on that host unless the unit drives no device (vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline). NOT vpt-vnc,
+  vpt-websockify, lircd, bluetooth.service, vpt-server, databases, nginx, `ghosty-sessions`, nor anything on a production host.
+
+- Ask the owner only when (owner, 2026-10-31): the item is on the hard floor or physical, it blocks you, and you cannot pick a safe
+  default. Before asking for a physical action (replug, power, plug a phone in, release a window on a device) try the software
+  equivalent first (USB re-enumeration under the lease, restart of an allowlisted unit, reading the data another way) and name what
+  you tried in the question. A non-blocking item with a safe "leave as is" is not a question: leave it and mention it in your
+  report. `STATUS: waiting` / `blocked` on a deploy, lease, integration id or an ask already filed is a system wait, not a question:
+  do not repeat the ask. At most one open ask per session; say what happens if the owner does not answer
+  ([REFERENCE](docs/REFERENCE.md#fewer-better-owner-questions-owner-2026-10-31)).
 
 - The server has no login; Tailscale policy is the only user-access gate. Do not expose it publicly.
   The source defaults to loopback (`127.0.0.1`); follow INSTALL for private Tailscale access.
