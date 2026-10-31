@@ -78,16 +78,20 @@ test('seen-keys: an entry within the 6 h window is kept and suppresses the same 
   const lines = readFileSync(seenPath(dir), 'utf8').trim().split('\n').filter(Boolean);
   assert.equal(lines.length, 1);
 });
-test('the deploy runner\'s own lease releases (agent manager:deploy, deploy-finished) are dropped; other lease events and failed deploys pass', () => {
+test('the deploy runner\'s own lease releases (agent manager:deploy, deploy-finished) are dropped; routine released/expired leases are dropped too; other lease events and failed deploys pass', () => {
   const dir = tmp('ghosty-filt-');
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
   const own = ev({ key: 'lease:released', kind: 'lease', state: 'released', title: 'lease released: e/host-a (agent manager:deploy)', body: 'lease 1 by manager:deploy (deploy-finished); purpose: deploy abc' });
   const other = ev({ key: 'lease:released', kind: 'lease', state: 'released', title: 'lease released: e/host-a (agent codebox:run)', body: 'lease 2 by codebox:run (released); purpose: run' });
-  const r = run(env, own + other + deployLine);
+  const expired = ev({ key: 'lease:expired', kind: 'lease', state: 'expired', title: 'lease expired: e/host-b', body: 'lease 3 expired' });
+  const denied = ev({ key: 'lease:denied', kind: 'lease', state: 'denied', title: 'lease denied: e/host-c', body: 'lease 4 denied' });
+  const stuck = ev({ key: 'lease:overdue', kind: 'lease', state: 'overdue', title: 'lease overdue: e/host-d', body: 'lease 5 overdue' });
+  const r = run(env, own + other + expired + denied + stuck + deployLine);
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(kinds(r).sort(), ['deploy', 'lease']);
-  assert.match(r.stdout, /codebox:run/);
-  assert.doesNotMatch(r.stdout, /deploy-finished/);
+  assert.deepEqual(kinds(r).sort(), ['deploy', 'lease', 'lease']);
+  assert.match(r.stdout, /lease denied/);
+  assert.match(r.stdout, /lease overdue/);
+  assert.doesNotMatch(r.stdout, /codebox:run|deploy-finished|lease expired/);
 });
 
 test('residual-risk pin: beside a dropped runner release, a blocked or orphan deploy event of the same deploy still wakes the manager', () => {
