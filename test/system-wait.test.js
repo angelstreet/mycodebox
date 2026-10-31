@@ -38,6 +38,10 @@ test('blocked on an owner answer is a system wait only when the ledger has that 
 });
 
 test('real asks and real blockers are unchanged', () => {
+  // a money block inside a wait is the owner's (task-135 step B): the blocker clause, not a plan sentence
+  const credit = classify('Queued.\nSTATUS: waiting: deploy d-1 (full update_core main, background task t1); step B blocked on AI credit, provider balance $0.27 left, needs about $5');
+  assert.equal(credit.systemWait, undefined);
+  assert.equal(systemWaitKind(credit), null);
   assert.equal(systemWaitOf('blocked', 'the test token is exposed; it must be replaced by the owner'), null);
   assert.equal(systemWaitOf('blocked', 'should I deploy dep-1a2b3c4 now?'), null, 'a question is not a wait');
   assert.equal(systemWaitOf('needs-owner', 'deploy dep-1a2b3c4'), null);

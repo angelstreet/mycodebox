@@ -527,22 +527,26 @@ const SW_INTEGRATION = /\bint-[a-z0-9][\w-]*|\bintegration\s+(?:request\s+)?[\w-
 const SW_DEPLOY = /\bdeploy\s+(?:id\s+)?[\w-]*\d|\bdeploy\s+(?:queue|queued|waiting)|\bqueued\s+(?:host\s+|server\s+|frontend\s+)?deploys?\b|^deploy\b/i;
 const SW_LEASE = /\blease\b|\blease[- ]?id\b|\bvpt-lease\b/i;
 const SW_OWNER = /\bowner(?:'s)?\s+(?:answer|reply|replug|decision)|\b(?:the\s+)?manager\s+(?:tells|says|answers)\b|\bwhen\s+the\s+(?:manager|owner)\s+(?:says|answers|replies)\b|\bQ\d{2,}\b/i;
+const SW_BLOCKER = /\bblocked\s+(?:on|by)\b|\bneeds?\b|\brequires?\b|\btop[- ]?up\b|\bbalance\b|\bwaiting\s+(?:for|on)\s+(?:the\s+)?owner\s+to\b/i;
 export function systemWaitOf(kind, text) {
   const k = String(kind || '').toLowerCase(), t = String(text || '');
   if (k !== 'waiting' && k !== 'blocked') return null;
   if (/\?\s*(?:["')\]]\s*)?(?:$|\s[A-Z])/.test(t.replace(/https?:\S+/g, ''))) return null;   // it asks something: not a wait
+  // a clause that states what blocks the session ("step B blocked on AI credit, needs $5") and hits the floor is a real ask, not a wait;
+  // a plan clause ("then the full walk and publish", "when the manager says ...") is not a blocker
+  for (const c of t.split(/;|\s[—–-]\s|\s\/\s|\.\s|,\s(?=(?:step|but|and)\b)/)) if (SW_BLOCKER.test(c) && (ownerFloorMatch(c) || hardMatch(c, { mergePresent: true, pushPresent: true, deployPresent: true }))) return null;
   const sub = SW_INTEGRATION.test(t) ? 'integration' : SW_DEPLOY.test(t) ? 'deploy' : SW_LEASE.test(t) ? 'lease' : SW_OWNER.test(t) ? 'owner-answer' : null;
   if (k === 'waiting') return sub || 'waiting';
   return sub;   // blocked: only on one of the four; anything else stays a real blocker
 }
 // The [hard: X] tag of an escalation: read off the QUESTION (its "?" sentences) and the option being asked (the recommended one),
-// never off every word of the status line. A system wait carries none. A needs-owner / blocked line without a "?" is the ask itself.
+// never off every word of the status line. A system wait carries none. A line without a "?" (a real blocker) is the ask itself.
 export function askHardOf(final) {
   if (!final || final.systemWait) return null;
   const q = String(final.question || '');
   const asks = q.split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => /\?["')\]]*$/.test(x));
   const opts = (final.options || []).filter((o) => o && o.recommended).map((o) => String(o.text || ''));
-  const text = [...asks, ...opts].join('\n') || (/^(?:needs-owner|blocked)$/i.test(final.status || '') || !final.status ? q : '');
+  const text = [...asks, ...opts].join('\n') || q;   // no "?" sentence: the line itself is the ask (a real blocker, not a system wait)
   return text ? hardMatch(text, { mergePresent: !!final.topics?.merge, pushPresent: !!final.topics?.push, deployPresent: !!final.topics?.deploy }) : null;
 }
 
