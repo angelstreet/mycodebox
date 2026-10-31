@@ -926,6 +926,19 @@ function moveSessionTo(name, to) {
   if (state.mode === 'grid') renderGrid();
   syncAll();
 }
+// Drag-drop: two cards trade places, the rest stay where they are.
+function swapSessions(a, b) {
+  const names = state.sessions.map((s) => s.name);
+  const i = names.indexOf(a), j = names.indexOf(b);
+  if (i < 0 || j < 0 || i === j) return;
+  [names[i], names[j]] = [names[j], names[i]];
+  state.layout.order = names;
+  saveLayout();
+  sortSessions();
+  renderTabStrip();
+  if (state.mode === 'grid') renderGrid();
+  syncAll();
+}
 // Arrow move inside the grid: left/right = ±1, up/down = ± one row.
 function gridCols() {
   const cols = getComputedStyle(els.gridPane).gridTemplateColumns.split(' ').filter(Boolean).length;
@@ -1977,7 +1990,7 @@ function buildCell(s) {
 }
 
 // Desktop drag-to-reorder: grab a card by its header, drop it on another
-// card to take that card's place. (Touch uses the move arrow buttons.)
+// card to swap places with it. (Touch uses the move arrow buttons.)
 function wireDrag(cell, name) {
   const h = cell.querySelector('.h');
   h.draggable = true;
@@ -2004,7 +2017,7 @@ function wireDrag(cell, name) {
     cell.classList.remove('drop-over');
     if (!from || from === name) return;
     e.preventDefault();
-    moveSessionTo(from, state.sessions.findIndex((s) => s.name === name));
+    swapSessions(from, name);
   });
 }
 
