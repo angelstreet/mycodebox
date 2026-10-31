@@ -200,11 +200,34 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine: emit, timeoutMs
   });
 }
 
+// Rolling release (owner 2026-10-31: a host deploy held ~20 hosts for its whole 10-12 min): update_core.sh deploys hosts one at a
+// time and prints `VPT_PROGRESS {"host","role","phase","state"}`. A host is done once it reported health ok|skipped (role host,
+// docker or windows) AND the run has moved on to another host: the secondary-server catch-up of that host runs after its health
+// line, so the health line alone is too early. Feed every log line; returns the hosts to release now (each once).
+export function rollingTracker() {
+  let cur = null;
+  const healthy = new Set(), sent = new Set();
+  return (line) => {
+    const m = /^VPT_PROGRESS (\{.*\})\s*$/.exec(String(line || ''));
+    if (!m) return [];
+    let j; try { j = JSON.parse(m[1]); } catch { return []; }
+    const h = String(j.host || '').trim().toLowerCase();
+    if (!h) return [];
+    const out = [];
+    if (cur && h !== cur && healthy.has(cur) && !sent.has(cur)) { sent.add(cur); out.push(cur); }
+    cur = h;
+    if (j.phase === 'health' && (j.state === 'ok' || j.state === 'skipped') && ['host', 'docker', 'windows'].includes(j.role)) healthy.add(h);
+    else if (j.state === 'start' || j.state === 'failed') healthy.delete(h);      // work on it again (or it failed): not done
+    return out;
+  };
+}
+
 export function createDeployRunner({
   stateDir, alert = () => {}, managerItem = null, onChange = () => {}, isEnabled = () => false,
   registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, pollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
   backoffBaseMs = BACKOFF_BASE_MS,      // the per-host back-off between two catch-up tries (tests shorten it)
+  rolling = process.env.GHOSTY_DEPLOY_ROLLING !== 'off',   // release each finished host of a host deploy at once (rollingTracker)
   // 'registry' is the central client every agent's `vpt-lease deploy request` arrives through (codebox -> registry host); the env replaces the list.
   approveClients = (process.env.DEPLOY_AUTO_APPROVE_CLIENTS ?? 'registry').split(',').map((x) => x.trim()).filter(Boolean),
 } = {}) {
@@ -348,7 +371,14 @@ export function createDeployRunner({
     const out = createWriteStream(join(logDir, `${d.id}.log`), { flags: 'a' });
     const lines = [];
     if (adopt) { try { lines.push(...(await readFile(join(logDir, `${d.id}.log`), 'utf8')).split('\n').filter(Boolean).slice(-400)); } catch {} }
-    const onLine = (l) => { lines.push(l); if (lines.length > 400) lines.shift(); out.write(l + '\n'); };
+    const track = rolling && d.scope === 'host' ? rollingTracker() : null;
+    const onLine = (l) => {
+      lines.push(l); if (lines.length > 400) lines.shift(); out.write(l + '\n');
+      for (const h of track ? track(l) : []) {
+        reg(['deploy', 'release-hosts', d.id, '--hosts', h]).then((r) => !out.writableEnded && out.write(`# rolling: ${r.code === 0 ? `released ${h} (done)` : `could not release ${h}: ${String(r.stderr || `exit ${r.code}`).trim().slice(0, 160)}`}\n`))
+          .catch((e) => log.error?.('[deploy] release-hosts', e.message));
+      }
+    };
     // Requests for the same env + ref that this deploy covers are finished with its result.
     let merged = deploys.filter((x) => mergeable(d, x));
     if (adopt) onLine(`# runner restarted: re-adopted running deploy (wrapper pid ${adopt.pid})`);
