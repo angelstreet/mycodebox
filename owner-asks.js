@@ -454,3 +454,40 @@ export async function fileDecision(file, { session = '', decision, why, undo, at
   await appendRecord(file, record);
   return { ok: true, id: record.decision_id, record };
 }
+
+// ---- an owner tap closes its ask (owner, 2026-10-31) ----
+// The popup types "Owner answer to Q<n> — option <k>: <label>" (public/manager-ask.js answerText) into a session, but
+// nothing closed the ledger line: Q245 (answered 10-29) and Q262 (answered 10-31) stayed open until the manager noticed by
+// hand, and an open ask folds that session's alerts (ask-fold.js). The send itself now records the answer. Only the exact
+// popup wording counts; a relayed "Owner answer to Q21 (relayed by the manager)" is the manager's text, not a tap.
+const OWNER_ANSWER = /^Owner answer to (Q\d+) [—-] option (\S+?): ([\s\S]*)$/;
+export function ownerAnswerOf(text) {
+  const m = OWNER_ANSWER.exec(String(text ?? '').trim());
+  return m ? { id: m[1], option: m[2], label: m[3].trim().slice(0, 300) } : null;
+}
+
+// -> the id it closed, or null (not an owner tap, not the popup wording, or the ask is no longer open).
+export async function recordOwnerAnswer(file, { session = '', by = 'owner', text, now = new Date() } = {}) {
+  if (by !== 'owner') return null;
+  const a = ownerAnswerOf(text);
+  if (!a) return null;
+  return withFileLock(file, async () => {
+    const { records } = await readLedger(file);
+    if (!openAsksFromRecords(records).some((x) => x.id === a.id)) return null;
+    await appendFile(file, JSON.stringify({ at: now.toISOString(), id: a.id, state: 'answered', answer: `option ${a.option}: ${a.label}`, via: 'owner-tap', session: String(session) }) + '\n');
+    return a.id;
+  });
+}
+
+// ---- stale asks (owner, 2026-10-31) ----
+// Q245 and Q246 stayed "open" for 4 days while the world moved on (the login was done, the routes were moved back). An open
+// ask older than `hours` is listed for the manager's sweep to re-verify: still true -> keep or narrow (--supersedes), gone ->
+// manager-ask --resolve with the evidence. -> [{ id, session, ageH, question }], oldest first.
+export const STALE_ASK_HOURS = 48;
+export function staleAsks(records, { now = Date.now(), hours = STALE_ASK_HOURS } = {}) {
+  const t = now instanceof Date ? now.getTime() : now;
+  return openAsksFromRecords(records).filter(showable)
+    .map((a) => ({ id: a.id, session: a.session || '-', ageH: Math.floor((t - Date.parse(a.at)) / 3600_000), question: a.question }))
+    .filter((a) => Number.isFinite(a.ageH) && a.ageH >= hours)
+    .sort((x, y) => y.ageH - x.ageH);
+}
