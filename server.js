@@ -163,7 +163,7 @@ import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
-import { readOpenAsks, readOpenAsksReport } from './owner-asks.js';
+import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer } from './owner-asks.js';
 import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
@@ -1855,6 +1855,10 @@ async function setSessionMeta(session, body) {
 function logSend(session, by, payload) {
   noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
   logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
+  // an owner tap on a NEEDS YOU option closes its ledger line (Q245/Q262 stayed open after the owner answered)
+  if (payload.key === undefined) recordOwnerAnswer(join(STATE_DIR, 'manager-owner-asks.jsonl'), { session, by, text: payload.keys })
+    .then((id) => { if (id) { logEvent({ type: 'owner-ask-answered', session, id }); askFold.refresh(); } })
+    .catch((e) => console.error(`[owner-asks] owner answer not recorded: ${e.message}`));
 }
 
 // What a queued send sees of a session: the last poll status, plus the hold and pause flags, which live off it.

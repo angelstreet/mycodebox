@@ -1507,6 +1507,15 @@ tagged `[hard: publish]` / `[hard: paid]` off a plan sentence. What changed:
   `waiting` alerts are folded into it (no push, no event) until the ask is answered or superseded. An unreadable ledger folds nothing.
 - **Scan:** `!! ask-superseded-open` is printed only when the superseded ask is itself still open (fixes the hourly
   "ask-superseded-open Q257 Q258" for a closed Q257).
+- **An owner tap closes its ask** (`owner-asks.js` `recordOwnerAnswer`, called from the server's send log): a send by the owner whose
+  text is exactly the popup wording `Owner answer to Q<n> — option <k>: <label>` appends `{state:"answered", via:"owner-tap"}` for
+  that ask if it is still open, whatever session it was typed into, and refreshes the alert fold. A manager relay
+  ("Owner answer to Q21 (relayed by the manager)") or any other actor writes nothing. Before this, Q245 (answered 10-29) and Q262
+  (answered 10-31) stayed open until the manager noticed by hand, and kept folding their session's alerts.
+- **Stale asks** (`owner-asks.js` `staleAsks`, `manager-ask.js --stale [hours]`, run by `manager-status-scan.sh`): every open ask older
+  than `GHOSTY_ASK_STALE_H` (default 48 h) prints `!! ask-stale <id> <session> <age>h "<question>"`. The sweep re-verifies it today:
+  gone -> `manager-ask --resolve <id> --answer "<evidence>"`, still true -> keep it, or narrow it with `--supersedes` (Q245 and Q246
+  sat 4 days after the login was done and the routes were moved back).
 
 **Manager rules for owner questions.** The manager manual (`TASK-44-MANAGER.md`) lives in the platform repo, not here; these rules are
 the mycodebox side and win where they differ:
@@ -1521,7 +1530,7 @@ the mycodebox side and win where they differ:
 4. Every question says what happens if the owner does not answer ("if no answer, I leave it as is and retry tomorrow").
 
 Tests: `test/routine-restart.test.js`, `test/system-wait.test.js`, `test/ask-fold.test.js`, `test/e58-ask-scan.test.js`,
-`test/owner-ask-loss.test.js`.
+`test/owner-ask-loss.test.js`, `test/owner-ask-tap-stale.test.js`. Backlog: `docs/tasks/OWNER-ASKS-BACKLOG.md`.
 
 ## Rules watch (owner, 2026-10-15)
 

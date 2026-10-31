@@ -81,4 +81,6 @@ else:
 PY
 # open owner asks with no alert in the push feed (manager-ask-scan.sh); not in --json output
 [ "$JSON" = 0 ] && "$(dirname "$0")/manager-ask-scan.sh"
+# open owner asks older than GHOSTY_ASK_STALE_H (default 48 h): re-verify, then resolve or narrow (manager-ask.js --stale)
+[ "$JSON" = 0 ] && node "$(dirname "$0")/manager-ask.js" --stale
 exit 0

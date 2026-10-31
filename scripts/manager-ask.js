@@ -13,6 +13,7 @@
 //     --floor <floor> --why "<why you: what could be lost, exposed or restarted>" [--jev "..."] \
 //     [--supersedes Q12,Q13]     (only these, or the same question reworded, are closed; other open asks stay open)
 //   node scripts/manager-ask.js --resolve Q12 --answer "..."
+//   node scripts/manager-ask.js --stale [hours]   (open asks older than hours, default 48: '!! ask-stale ...' lines, exit 0)
 //
 // Floors (the only reasons a question may reach the owner, AGENTS.md autonomy by default):
 //   money | credentials | customers | deleting_data | host_units | production_migration | history_rewrite | owner_fact
@@ -22,7 +23,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, appendFile } from 'node:fs/promises';
-import { readLedger, openAsksFromRecords, withFileLock, appendRecord, fileAsk } from '../owner-asks.js';
+import { readLedger, openAsksFromRecords, withFileLock, appendRecord, fileAsk, staleAsks, STALE_ASK_HOURS } from '../owner-asks.js';
 import { askLine } from '../public/manager-ask.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -97,6 +98,17 @@ async function resolve(f) {
   console.log(id);
 }
 
+// The sweep's stale list (manager-status-scan.sh): an old open ask is re-verified, never left open by default.
+async function stale(f) {
+  const h = Number(f.stale);
+  const hours = Number.isFinite(h) && h > 0 ? h : Number(process.env.GHOSTY_ASK_STALE_H) || STALE_ASK_HOURS;
+  const { records } = await readLedger(LEDGER);
+  for (const a of staleAsks(records, { hours })) {
+    const q = a.question.replace(/\s+/g, ' ').slice(0, 80);
+    console.log(`!! ask-stale ${a.id} ${a.session} ${a.ageH}h "${q}": still true today? gone -> manager-ask --resolve ${a.id} --answer "<evidence>"; true -> keep, or narrow with --supersedes ${a.id}`);
+  }
+}
+
 const f = flags(process.argv.slice(2));
-if (f.help) { console.log('usage: manager-ask --session S --question Q --what W --options "1 ..|2 .." --recommendation "1 - why" --floor F --why "why you" [--jev J] [--supersedes Q1,Q2] | --resolve Q<n> --answer A'); process.exit(0); }
-await (f.resolve ? resolve(f) : ask(f));
+if (f.help) { console.log('usage: manager-ask --session S --question Q --what W --options "1 ..|2 .." --recommendation "1 - why" --floor F --why "why you" [--jev J] [--supersedes Q1,Q2] | --resolve Q<n> --answer A | --stale [hours]'); process.exit(0); }
+await (f.stale ? stale(f) : f.resolve ? resolve(f) : ask(f));
