@@ -27,6 +27,29 @@ or `mac:<name>`.
 - Deploys go through the integration lane: `integrate request <branch> --deploy <scope>`. The lane merges, tests, waits for CI and
   then queues the deploy (approved, agent `integration:<id>`) and waits for it; you do not request or run the deploy yourself.
 
+## Never wait on one resource while an equivalent one is free (owner, 2026-10-31)
+
+Hours were lost waiting on one web host while the other was free. When the work can run on any of several hosts or devices
+(any web host, any Android TV of a model), do not name one and queue:
+
+- `vpt-lease inventory <env>` lists the groups of equivalent resources and which members are free now.
+- `vpt-lease claim <env> --any <group> --agent <agent> --kind host --wait` (or `vpt-lease run <env> --any <group> ... -- <cmd>`)
+  is granted the first free member at once; when all are busy, one ticket waits on all of them and gets whichever frees first.
+  stdout line 1 is the lease id, line 2 `resource=<granted>`; `run` passes it to the command as `VPT_LEASE_RESOURCE` and
+  `VPT_LEASE_HOST`. `--alt <resource>` (repeatable) names equivalents that are not in a group.
+- A busy named claim prints `FREE EQUIVALENT NOW: <resource>` when a member of its group is free: claim that one instead. A
+  ticket that has waited 5 minutes while one is free gets the same advice in the session's chat (lease watchdog).
+- Only unique hardware (one Mi box, the Apple TV, a specific set-top box or firmware) is worth a queue. The groups are data on
+  the registry host ([LEASE-INVENTORY](LEASE-INVENTORY.md)); a missing group is fixed there, not by waiting.
+
+## Host lease or device lease
+
+- A device run (scripts, remote keys, take-control on one device) claims `<host>/<device> --kind host`. It never waits for a run
+  on another device of the same host.
+- A host lease (`<host>`) is for work that disturbs every device of the host: a vpt-host restart, a deploy, host maintenance. It
+  waits for the device runs on that host, by design: restarting vpt-host breaks them. A host claim blocked only by device leases
+  prints `HINT: blocked only by device lease(s) on ...`: if you need one device, claim that device instead.
+
 ## How to claim
 
 1. Use `vpt-lease run <claim args> -- <command...>`: it queues if busy, heartbeats while the command runs and releases

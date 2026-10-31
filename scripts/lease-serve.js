@@ -5,6 +5,7 @@
 //   LEASE_PORT  listen port on 127.0.0.1 (default 17777)
 //   LEASE_DIR   state dir: journal, snapshot, clients.json, shadow store (default ~/.local/state/mycodebox-lease)
 //   LEASE_ENVS  comma-separated valid environments (empty: any sane name)
+//   <LEASE_DIR>/inventory.json  groups of equivalent resources for `claim --any <group>` (docs/LEASE-INVENTORY.md); re-read when it changes
 // Tokens: node scripts/lease-token.js add <name> --dir "$LEASE_DIR" [--exempt ...] [--owner]
 import http from 'node:http';
 import os from 'node:os';
@@ -12,11 +13,26 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLeaseService } from '../lease-service.js';
 import { createLeaseRoutes, PREFIX } from '../lease-routes.js';
+import fs from 'node:fs';
+
+// Reads <dir>/inventory.json again whenever its mtime or size changes; a missing or broken file is "no groups" (claims by name still work).
+export function inventoryReader(file, log = console) {
+  let key = null, val = {};
+  return () => {
+    let st; try { st = fs.statSync(file); } catch { key = null; val = {}; return val; }
+    const k = `${st.mtimeMs}:${st.size}`;
+    if (k === key) return val;
+    key = k;
+    try { const j = JSON.parse(fs.readFileSync(file, 'utf8')); val = j && typeof j === 'object' && !Array.isArray(j) ? j : {}; }
+    catch (e) { log.error?.(`[lease] inventory ${file}: ${e.message}`); val = {}; }
+    return val;
+  };
+}
 
 export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs = [], ownServers = {}, log = console } = {}) {
   // No tmux here: liveness is unknown (never releases anything); holders are reclaimed by TTL and declared heartbeats only.
   const service = createLeaseService({ dir, sessions: { isAlive: () => undefined, trackable: () => false },
-    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers } });
+    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers, inventory: inventoryReader(path.join(dir, 'inventory.json'), log) } });
   const routes = createLeaseRoutes({ service, dir });
   const server = http.createServer(async (req, res) => {
     try {

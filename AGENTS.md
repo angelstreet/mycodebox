@@ -75,6 +75,9 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   it. The old worker auto-close (2026-10-18) is removed; `workerAutoClose` in `manager.json` is ignored.
 
 
+- Equivalent resources (owner, 2026-10-31): never wait on a named host or device while an equivalent one is free. Use
+  `vpt-lease claim <env> --any <group> --wait` (groups: `vpt-lease inventory <env>`, data in [docs/LEASE-INVENTORY.md](docs/LEASE-INVENTORY.md)),
+  or claim the free one by name; claim `<host>/<device>` for a device run, `<host>` only to restart or deploy the host.
 - Leases (deploys, restarts, test devices): follow [docs/LEASE-RULES.md](docs/LEASE-RULES.md). Never ask the owner about a
   lease: wait with `vpt-lease claim ... --wait` or `vpt-lease run ... -- <cmd>`; never poll, never `--force`.
 

@@ -98,7 +98,7 @@ import { homedir, hostname, loadavg, cpus } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createHolderReaper } from './lease-holder-reaper.js';
-import { createLeaseNudge } from './lease-nudge.js';
+import { createLeaseNudge, systemResolvable } from './lease-nudge.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
@@ -2929,6 +2929,16 @@ server.listen(PORT, HOST, async () => {
       const key = it.kind === 'manager-item' ? `${it.session}:needs-manager` : it.kind === 'deploy' ? `deploy:${String(it.id || 'ask').replace(/[^\w-]/g, '').slice(0, 24)}:manager-item` : it.kind === 'fix' ? 'lease:manager-fix' : 'lease:manager-item';
       const body = it.kind === 'manager-item' ? `${it.session} needs the manager: ${it.question || it.reason}`.slice(0, 300)
         : `${it.session} ${it.case === 'waiting_deploy' ? 'waits for a deploy' : 'asks'}: ${it.question || it.reason}`.slice(0, 300);
+      // a wait the lease queue or the deploy runner resolves on its own (a live ticket, a running deploy) is journaled, never a wake
+      // (owner 2026-10-31); the lease watchdog (lease-nudge.js) tells the session about a free equivalent
+      const resolvable = (it.kind === 'lease' || it.kind === 'deploy')
+        ? systemResolvable({ session: it.session, kind: it.kind, case: it.case, view: leaseSource.peekView(), deploys: deployRunner.snapshot().deploys || [], sessionOf: (agent) => holderSession(agent, Object.keys(latest?.status || {}), MACHINES) })
+        : null;
+      if (resolvable) {
+        managerEvents.record({ key: 'lease:system-wait', title: `${it.session}: ${it.kind} wait the system resolves`, body: `${body} [${resolvable}]`.slice(0, 400), url: `/?s=${encodeURIComponent(it.session)}`, priority: 'low', session: it.session })
+          .catch((e) => console.error('[manager-item]', e.message));
+        return;
+      }
       managerEvents.record({ key, title: `${it.session}: ${it.kind === 'manager-item' ? 'needs the manager' : `${it.kind} stop for the manager`}`, body, url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
         .catch((e) => console.error('[manager-item]', e.message));
     },

@@ -5,12 +5,17 @@
 //  - a codebox session stopped on a finished turn with nothing typed gets one line through the guarded send (by 'lease-nudge');
 //  - any other holder (Mac, a script) gets a manager event (kind lease) with the same text, for the manager to relay.
 // It never releases or narrows anything. manager.json `leaseNudge`: "live" (default) | "dry" (log only) | "off".
+// Wait watchdog (owner 2026-10-31: "agents are not waiting for a lease or a device when we have another one available"): a ticket
+// that has waited WAIT_MS on a named resource while an equivalent one is free (the service's `equivalents_free`, from the inventory
+// groups), or on a host that only device leases block (`hint`), gets one line in the WAITER's own chat with the command that ends
+// the wait. No AI call; once per ticket per cooldown. systemResolvable() tells server.js a lease/deploy stop the system resolves
+// itself (a live ticket, a running or queued deploy), so it does not wake the manager.
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { effectiveBlockers } from './public/platforms-view.js';
 import { normLease, renewalIdleMin } from './lease-source.js';
 
-export const WAIT_MS = 10 * 60 * 1000;      // a deploy or ticket waits this long before its holders are asked
+export const WAIT_MS = 5 * 60 * 1000;       // a deploy or ticket waits this long before its holders (and the waiter) are told (owner 2026-10-31: 5 min)
 export const IDLE_MIN = 20;                 // no finished turn for this long = idle
 export const COOLDOWN_MS = 30 * 60 * 1000;  // one nudge per (holder, lease)
 export const TICK_MS = 2 * 60 * 1000;
@@ -57,6 +62,21 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
     waits.push({ what: `${clean(t.agent, 40) || 'another agent'}'s claim ${clean(t.id, 16)} on ${clean(t.env, 20)}/${(t.resources || []).map((r) => clean(r, 30)).join(',') || '*'}`, waitedMs, blockers });
   }
   const out = new Map();
+  // the waiter first: a free equivalent ends the wait at once, no holder has to do anything
+  for (const t of view?.ok ? view.tickets || [] : []) {
+    const waitedMs = t.createdMs ? now - t.createdMs : 0;
+    if (!(waitedMs > waitMs) || t.any || !(t.equivalents?.length || t.hint)) continue;
+    const key = `${t.agent}|${t.id}|waiter`;
+    if (now - (last.get(key) || 0) < cooldownMs) continue;
+    const session = /^mac:/i.test(t.agent || '') ? null : sessionOf(t.agent);
+    if (!session) continue;                  // only a chat can act on it; no manager event for this (the system resolves it)
+    const env = clean(t.env, 20), res = (t.resources || []).map((r) => clean(r, 40)).join(',') || '*', waitedMin = mins(waitedMs);
+    const eq = (t.equivalents || []).map((r) => clean(r, 40));
+    const text = eq.length
+      ? `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min, but an equivalent is free now: ${eq.join(', ')}. If it fits your work: vpt-lease ticket ${clean(t.id, 16)} --cancel, then vpt-lease claim ${env} ${eq[0]} --agent ${clean(t.agent, 60)} --kind host --wait (or claim ${env} --any ${clean(t.groups?.[0] || '<group>', 30)}: never waits while a member is free).`
+      : `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min and only device runs block it: ${clean(t.hint, 220)}. If you need one device, vpt-lease ticket ${clean(t.id, 16)} --cancel and claim ${env} <host>/<device> --kind host --wait.`;
+    out.set(key, { key, leaseId: null, ticketId: t.id, waiter: true, agent: t.agent, session, env: t.env, resources: t.resources || [], what: `ticket ${t.id}`, waitedMin, reasons: [eq.length ? `free equivalent ${eq.join(',')}` : 'host blocked only by device leases'], text });
+  }
   for (const w of waits.sort((a, b) => b.waitedMs - a.waitedMs)) {
     for (const l of w.blockers) {
       if (!l.agent || SYSTEM_RE.test(l.agent) || l.deployId) continue;
@@ -75,6 +95,18 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
     }
   }
   return [...out.values()];
+}
+
+// A lease or deploy stop the system resolves without the manager (owner 2026-10-31): the session has a live ticket (the queue grants
+// it, the watchdog points it at a free equivalent), or a deploy is queued or running on its env. -> reason string | null.
+export function systemResolvable({ session, kind, case: stopCase = '', view = null, deploys = [], sessionOf = () => null } = {}) {
+  if (!session || (kind !== 'lease' && kind !== 'deploy')) return null;
+  const mine = (agent) => { const a = String(agent || ''); return a === `codebox:${session}` || a.endsWith(`:${session}`) || sessionOf(a) === session; };
+  const tk = (view?.ok ? view.tickets || [] : []).find((t) => mine(t.agent));
+  if (tk) return `ticket ${tk.id} on ${tk.env}/${(tk.resources || []).join(',') || '*'} is queued: the lease service grants it (watchdog points at free equivalents)`;
+  const d = (deploys || []).find((x) => x.state === 'running' || (x.state === 'queued' && x.approved !== false));
+  if (kind === 'deploy' && stopCase === 'waiting_deploy' && d) return `deploy ${d.id} (${d.scope}) is ${d.state}: the deploy runner finishes it`;
+  return null;
 }
 
 // deps: stateDir, getInputs() -> { deploys, view }, sessionOf, idleMinOf, canSend(session) -> bool (stopped on a finished turn, no draft, no menu),
@@ -102,7 +134,7 @@ export function createLeaseNudge({ stateDir, getInputs, sessionOf = () => null, 
       const plan = planNudges({ now: t, deploys: inp?.deploys, view: inp?.view, sessionOf, idleMinOf, last });
       let sent = 0, events = 0;
       for (const n of plan) {
-        const rec = { at: new Date(t).toISOString(), by: 'lease-nudge', leaseId: n.leaseId, agent: n.agent, session: n.session, env: n.env, reasons: n.reasons, waitedMin: n.waitedMin, via: n.session ? 'session' : 'event', dryRun: m !== 'live' };
+        const rec = { at: new Date(t).toISOString(), by: n.waiter ? 'lease-watchdog' : 'lease-nudge', leaseId: n.leaseId, ...(n.ticketId ? { ticketId: n.ticketId } : {}), agent: n.agent, session: n.session, env: n.env, reasons: n.reasons, waitedMin: n.waitedMin, via: n.session ? 'session' : 'event', dryRun: m !== 'live' };
         if (m === 'live') {
           if (n.session) {
             if (!canSend(n.session)) continue;   // working, a draft, a menu: try again on the next tick
