@@ -104,3 +104,14 @@ test('residual-risk pin: beside a dropped runner release, a blocked or orphan de
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(kinds(r).sort(), ['deploy', 'deploy']);
 });
+
+test('a lease/deploy wait the system resolves (state system-wait: a live ticket, a running deploy) never wakes the manager (owner 2026-10-31)', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const sw = ev({ key: 'lease:system-wait', kind: 'lease', state: 'system-wait', session: 'web', title: 'web: lease wait the system resolves', body: 'ticket t-1 queued' });
+  const item = ev({ key: 'lease:manager-item', kind: 'lease', state: 'manager-item', session: 'web', title: 'web: lease stop for the manager', body: 'no ticket' });
+  const r = run(env, sw + item);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /system resolves/);
+  assert.match(r.stdout, /lease stop for the manager/);
+});

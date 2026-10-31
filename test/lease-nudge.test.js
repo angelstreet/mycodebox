@@ -102,3 +102,32 @@ test('a working session, a draft or a menu gets no send and is retried; dry and 
   const o = harness({ mode: () => 'off' }); await o.n.tick(); assert.equal(o.sent.length + o.events.length, 0);
   assert.equal(existsSync(join(o.dir, 'lease-nudges.jsonl')), false);
 });
+
+// ---- wait watchdog (owner 2026-10-31): the waiter is told about a free equivalent; system-resolvable waits do not wake the manager ----
+test('watchdog: a ticket waiting 5+ min while an equivalent is free gets one line in its own chat with the commands', async () => {
+  const { planNudges, systemResolvable } = await import('../lease-nudge.js');
+  const now = Date.UTC(2026, 9, 31, 18, 0, 0);
+  const tk = (o = {}) => ({ id: 't-1', env: 'node1-vpt', resources: ['host-b'], agent: 'codebox:devinfo', createdMs: now - 6 * 60000, holderIds: [], holders: [], equivalents: ['host-a'], groups: ['web'], any: null, hint: '', ...o });
+  const view = (tickets) => ({ ok: true, leases: [], tickets });
+  const sessionOf = (a) => (a.startsWith('codebox:') ? a.slice(8) : null);
+  const [n] = planNudges({ now, view: view([tk()]), sessionOf });
+  assert.equal(n.session, 'devinfo');
+  assert.ok(n.waiter);
+  assert.match(n.text, /equivalent is free now: host-a/);
+  assert.match(n.text, /vpt-lease ticket t-1 --cancel/);
+  assert.match(n.text, /vpt-lease claim node1-vpt host-a --agent codebox:devinfo --kind host --wait/);
+  assert.match(n.text, /--any web/);
+  assert.equal(planNudges({ now, view: view([tk({ createdMs: now - 3 * 60000 })]), sessionOf }).length, 0, 'under 5 min: nothing');
+  assert.equal(planNudges({ now, view: view([tk({ equivalents: [] })]), sessionOf }).length, 0, 'unique hardware: nothing');
+  assert.equal(planNudges({ now, view: view([tk({ any: 'web' })]), sessionOf }).length, 0, 'an --any ticket already waits on all of them');
+  assert.equal(planNudges({ now, view: view([tk()]), sessionOf, last: new Map([['codebox:devinfo|t-1|waiter', now - 60000]]) }).length, 0, 'cooldown');
+  const [h] = planNudges({ now, view: view([tk({ equivalents: [], hint: 'blocked only by device lease(s) on vpt-x/device5: ...' })]), sessionOf });
+  assert.match(h.text, /only device runs block it/);
+
+  const v = view([tk()]);
+  assert.match(systemResolvable({ session: 'devinfo', kind: 'lease', view: v, sessionOf }), /ticket t-1/);
+  assert.equal(systemResolvable({ session: 'other', kind: 'lease', view: v, sessionOf }), null, 'no ticket of its own: the manager hears it');
+  assert.match(systemResolvable({ session: 'x', kind: 'deploy', case: 'waiting_deploy', view: view([]), deploys: [{ id: 'd1', state: 'running', scope: 'host' }] }), /deploy d1/);
+  assert.equal(systemResolvable({ session: 'x', kind: 'deploy', case: 'decision', deploys: [{ id: 'd1', state: 'running' }] }), null, 'a decision is not a system wait');
+  assert.equal(systemResolvable({ session: 'x', kind: 'manager-item', view: v }), null);
+});

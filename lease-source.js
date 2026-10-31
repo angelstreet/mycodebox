@@ -61,6 +61,10 @@ export function normTicket(t, now) {
     id: String(t.id), env, resources: asList(t.resources ?? t.resource).map((r) => legacyResource(env, r)), agent: t.agent || '', session: t.session || '', purpose: t.purpose || '',
     position: t.position ?? null, etaMs: etaMs(t.eta ?? t.eta_ms ?? t.etaMin, now), holders: asList(t.holders).map((h) => (typeof h === 'string' ? h : h?.agent || '')).filter(Boolean),
     holderIds: asList(t.holders).map((h) => (h && typeof h === 'object' ? String(h.id || '') : '')).filter(Boolean), createdMs: tms(t.created),
+    // equivalent resources (owner 2026-10-31): free members of the ticket's group, the group of an --any ticket, the device-only hint
+    equivalents: asList(t.equivalents_free).map((e) => (e && typeof e === 'object' ? String(e.legacy || e.resource || '') : String(e || ''))).filter(Boolean),
+    groups: [...new Set(asList(t.equivalents_free).map((e) => (e && typeof e === 'object' ? String(e.group || '') : '')).filter(Boolean))],
+    any: t.any || (Array.isArray(t.alternatives) && t.alternatives.length ? 'alternatives' : null), hint: t.hint || '',
   };
 }
 // legacy-shaped rows of the exclusive leases (one per resource): what leaseFor / leasesOfSession / park / triage read

@@ -51,7 +51,9 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
    (2026-10-14): never stop to ask to start a plan you wrote, pick your recommended option, merge your own tested work,
    push, deploy by the normal procedure on a free lease (busy lease: wait and retry), or rerun a test; do it and report
    it. Corrections come at the end. Make a git worktree before changing code in a shared checkout, and claim a lease
-   before using a shared host or device; hold it only while you actively control it, never while you wait.
+   before using a shared host or device; hold it only while you actively control it, never while you wait. Never wait
+   on a named host or device while an equivalent one is free: use \`vpt-lease claim <env> --any <group> --wait\` (groups:
+   \`vpt-lease inventory <env>\`) or the free one by name; only unique hardware is worth a queue (docs/LEASE-RULES.md).
    Run long jobs (runs, suites, builds, deploys) in the foreground of a background shell the harness tracks, so you
    are woken when they end; never nohup, setsid, disown or a trailing & (the harness cannot see those). If you must
    wait on a job anyway, name its pid, log file, run id or deploy id in the STATUS line (STATUS: waiting: run r-12,

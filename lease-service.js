@@ -173,7 +173,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (f.ticket) polls.delete(f.ticket);
         if (f.rkey) S.requests[f.rkey] = { kind: 'lease', ref: l.id, at: f.at };
         pruneRequests(f.at);
-        if (f.ticket && S.tickets[f.ticket]) Object.assign(S.tickets[f.ticket], { state: 'granted', leaseId: l.id, grantedAt: f.at });
+        if (f.ticket && S.tickets[f.ticket]) Object.assign(S.tickets[f.ticket], { state: 'granted', leaseId: l.id, grantedAt: f.at }, S.tickets[f.ticket].alts ? { resources: l.resources } : {});
         if (l.mode === 'exclusive') {
           for (const p of Object.values(S.leases)) {
             if (p.mode === 'pin' && p.id !== l.id && p.env === l.env && leasesConflict(l, p, true)) ev('pin_overlap', p, f.at, { by_lease: l.id, by_agent: l.agent });
@@ -409,8 +409,14 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     if (tk.state === 'waiting') {
       const ahead = aheadOf(tk, tk);
       const t = etaOf(tk, ahead);
-      Object.assign(out, { behind: ahead.map((a) => a.id), position: ahead.length + 1, priority_since: iso(tk.created), eta: iso(t), eta_latest: iso(latestOf(tk)), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: heldConflicts(tk).map(leaseView) });
+      const hs = heldConflicts(tk);
+      Object.assign(out, { behind: ahead.map((a) => a.id), position: ahead.length + 1, priority_since: iso(tk.created), eta: iso(t), eta_latest: iso(latestOf(tk)), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: hs.map(leaseView) });
+      const eqv = freeEquivalents(tk), hint = deviceOnlyHint(tk, hs);
+      if (eqv.length) out.equivalents_free = eqv;
+      if (hint) out.hint = hint;
     }
+    if (tk.alts) out.alternatives = tk.alts;
+    if (tk.anyGroup) out.any = tk.anyGroup;
     if (tk.state === 'granted' && S.leases[tk.leaseId]) out.lease = leaseView(S.leases[tk.leaseId]);
     if (tk.state === 'granted') out.lease_id = tk.leaseId;
     return out;
@@ -422,6 +428,8 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   function deployTouches(d, req) {
     const v = (rs, kind = 'server') => ({ mode: 'exclusive', agent: '\0deploy', shared: false, resources: rs, kind });
     const r = { resources: req.resources, kind: req.kind, resKinds: req.resKinds, agent: req.agent, shared: req.shared, mode: 'exclusive', deployId: req.deployId };
+    // rolling host deploy: a host the running deploy reported done (deploy.releaseHosts) is no longer touched by it
+    if (d.state === 'running' && d.doneHosts?.length && r.resources.length && r.resources.every((c) => { const p = P(c); return (p.type === 'host' || p.type === 'device') && d.doneHosts.includes(p.host); })) return false;
     if (d.scope === 'frontend') return leasesConflict(v(['frontend']), r);
     if (d.scope === 'server') return leasesConflict(v(['server']), r);
     if (d.scope === 'full') return leasesConflict(v(['*']), r);
@@ -561,13 +569,55 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   function grantTickets(emit) {
     const earlier = [];
     for (const tk of waitingTickets()) {
-      const blocked = heldConflicts(tk).length > 0 || earlier.some((e) => e.env === tk.env && leasesConflict(tk, e) && !waitsOnlyOn(e, tk.agent))
-        || (!tk.system && pendingFor(tk.env, tk, tk.deployId).length > 0);
-      if (blocked) { earlier.push(tk); continue; }
+      const blocked = (v) => heldConflicts(v).length > 0 || earlier.some((e) => e.env === v.env && leasesConflict(v, e) && !waitsOnlyOn(e, v.agent))
+        || (!v.system && pendingFor(v.env, v, v.deployId).length > 0);
+      // a ticket over equivalent options is granted the first option that is free (its primary first)
+      let pick = blocked(tk) ? null : tk;
+      if (!pick && tk.alts) for (const resources of tk.alts) { const v = { ...tk, resources }; if (!blocked(v)) { pick = v; break; } }
+      if (!pick) { earlier.push(tk); continue; }
       const t = now();
       // a reservation: the holder has `reserveMs` to collect it (poll the ticket or heartbeat), else it is released and the ticket is `missed`
-      emit({ t: 'grant', lease: makeLease(tk, t, { reservedUntil: t + cfg.reserveMs, ticketId: tk.id }), ticket: tk.id, at: t });
+      emit({ t: 'grant', lease: makeLease(pick, t, { reservedUntil: t + cfg.reserveMs, ticketId: tk.id }), ticket: tk.id, at: t });
     }
+  }
+
+  // ---- equivalent resources (owner 2026-10-31: never wait on one host while an equivalent one is free) -----------------
+  // cfg.inventory: an object or a function returning { "<env>"|"*": { "<group>": ["<resource>", ...] } }, data, not code
+  // (lease-serve.js reads <LEASE_DIR>/inventory.json). A group lists interchangeable resources ("web": every host that runs the web
+  // app). Unique hardware is in no group and stays named.
+  function groupsOf(env) {
+    let inv; try { inv = typeof cfg.inventory === 'function' ? cfg.inventory() : cfg.inventory; } catch { inv = null; }
+    if (!inv || typeof inv !== 'object') return {};
+    const out = {};
+    for (const src of [inv['*'], inv[env]]) {
+      if (!src || typeof src !== 'object') continue;
+      for (const [g, rs] of Object.entries(src)) {
+        if (!Array.isArray(rs)) continue;
+        const ok = rs.map((r) => parseResource(String(r))).filter((p) => p && (p.type === 'host' || p.type === 'device')).map(canonical);
+        if (ok.length) out[g.toLowerCase()] = [...new Set(ok)];
+      }
+    }
+    return out;
+  }
+  // Is the single-resource option `virt` free right now (no holder, no ticket ahead, no deploy in the way)?
+  const freeNow = (virt) => !heldConflicts(virt).length && !aheadOf(virt, null).length && (virt.system || !pendingFor(virt.env, virt, virt.deployId).length);
+  // Free members of the groups a named waiting ticket's resource belongs to: what the watchdog offers the waiter.
+  function freeEquivalents(tk) {
+    if (tk.alts || tk.resources.length !== 1) return [];
+    const c = tk.resources[0], out = [];
+    for (const [g, ms] of Object.entries(groupsOf(tk.env))) {
+      if (!ms.includes(c)) continue;
+      for (const m of ms) if (m !== c && !out.some((x) => x.resource === m) && freeNow({ ...tk, resources: [m] })) out.push({ group: g, resource: m, legacy: legacyName(P(m)) });
+    }
+    return out.slice(0, 5);
+  }
+  // A host claim that only device leases block (fix-appletv-ir, 2026-10-31): say how to claim narrower instead of waiting.
+  function deviceOnlyHint(req, holders) {
+    if (!holders.length || !req.resources.every((c) => P(c).type === 'host')) return null;
+    const devs = holders.flatMap((l) => l.resources.filter((c) => P(c).type === 'device' && req.resources.some((h) => P(h).host === P(c).host)));
+    if (!devs.length || holders.some((l) => l.resources.some((c) => P(c).type !== 'device' && req.resources.some((h) => resourceConflict(P(h), P(c), req.kind, kindOf(l, c)))))) return null;
+    const list = [...new Set(devs.map((c) => legacyName(P(c))))].join(', ');
+    return `blocked only by device lease(s) on ${list}: a host claim means a vpt-host restart or host maintenance and waits for those runs. If your work uses one device, claim <host>/<device> (--kind host) instead and it is granted now unless that device is the leased one`;
   }
 
   // ---- validation --------------------------------------------------------------------------------------------------
@@ -601,7 +651,27 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   function validateClaim(a) {
     if (!a || typeof a !== 'object') return fail('E_INVALID', 'body must be an object');
     const bad = envCheck(a.env); if (bad) return bad;
-    const rs = parseResources(a.resources, typeof a.env === 'string' ? a.env.toLowerCase() : null); if (rs.error) return fail('E_INVALID', rs.error);
+    const envL = typeof a.env === 'string' ? a.env.toLowerCase() : null;
+    // `any`: a group name from the inventory; `alternatives`: explicit resource lists. The claim takes the first free option, and a
+    // ticket waits on all of them at once (granted to whichever frees first), so it never waits on one while another is free.
+    const optLists = [];
+    if (listOf(a.resources).length) optLists.push(listOf(a.resources));
+    let anyGroup = null;
+    if (a.any != null) {
+      anyGroup = String(a.any).trim().toLowerCase();
+      const gs = groupsOf(envL);
+      if (!gs[anyGroup]) return fail('E_INVALID', `unknown resource group ${JSON.stringify(anyGroup.slice(0, 40))} on ${envL} (known: ${Object.keys(gs).join(', ') || 'none: add it to the inventory'})`);
+      for (const m of gs[anyGroup]) optLists.push([m]);
+    }
+    if (a.alternatives != null) {
+      if (!Array.isArray(a.alternatives)) return fail('E_INVALID', 'alternatives must be a list of resource lists');
+      for (const x of a.alternatives) optLists.push(listOf(x));
+    }
+    if (optLists.length > 20) return fail('E_INVALID', 'at most 20 alternatives');
+    const opts = [];
+    for (const ol of optLists) { const p = parseResources(ol, envL); if (p.error) return fail('E_INVALID', p.error); if (!opts.some((o) => o.resources.join() === p.resources.join())) opts.push(p); }
+    const rs = opts[0] || parseResources([], envL); if (rs.error) return fail('E_INVALID', rs.error);
+    const alts = opts.length > 1 ? opts.map((o) => o.resources) : null;
     if (!isStr(a.agent)) return fail('E_INVALID', 'agent required');
     const mode = a.mode ?? 'exclusive';
     if (!MODES.includes(mode)) return fail('E_INVALID', `mode must be ${MODES.join('|')}`);
@@ -657,7 +727,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     }
     return {
       ok: true, wait,
-      req: { env: a.env.toLowerCase(), resources: rs.resources, mode, kind, agent: a.agent, client, session,
+      req: { env: a.env.toLowerCase(), resources: rs.resources, ...(alts ? { alts } : {}), ...(anyGroup ? { anyGroup } : {}), mode, kind, agent: a.agent, client, session,
         purpose: typeof a.purpose === 'string' ? a.purpose.slice(0, 500) : '', provider: typeof a.provider === 'string' ? a.provider.slice(0, 80) : '', shared: !!a.shared,
         ttlMin, heartbeatS, holderPid, holderHost, holderStart, holderSrc, expectMin: a.expect_min ?? null, idleMin: a.idle_min ?? null,
         system,                         // set by the caller's token (clients.json exemptAgents) or in-process, never by the request body
@@ -693,14 +763,39 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (r.kind === 'ticket' && S.tickets[r.ref]) return { ok: true, ticket: ticketView(S.tickets[r.ref]), replay: true };
         return fail('E_NOT_FOUND', 'the grant of this request_id has already ended', { state: 'gone' });
       }
-      const ticketFor = () => {
+      const ticketFor = (primary = req.resources) => {
         const created = req.prioritySince != null ? Math.min(t, Math.max(req.prioritySince, t - 60 * MIN)) : t;
-        const tk = { id: `t-${newId((x) => S.tickets[`t-${x}`])}`, ...req, state: 'waiting', created };
+        const tk = { id: `t-${newId((x) => S.tickets[`t-${x}`])}`, ...req, resources: primary, state: 'waiting', created };
         emit({ t: 'tkt_new', ticket: tk, rkey, at: t });
         polls.set(tk.id, mono());
         return { ok: true, ticket: ticketView(S.tickets[tk.id]) };
       };
       let passed = [];
+      if (req.mode === 'exclusive' && req.alts && !req.deployId) {
+        // equivalent resources: grant the first free option; else one ticket over all of them, its display/ETA on the soonest
+        const evals = req.alts.map((resources) => {
+          const r = { ...req, resources };
+          const pend = req.system ? [] : pendingFor(req.env, r);
+          const holders = heldConflicts(r), ahead = aheadOf(r, null);
+          const pass = !holders.length && ahead.length ? ahead.filter((tk) => canPass(r, tk, t)) : [];
+          const blocking = ahead.filter((tk) => !pass.includes(tk));
+          const eta = pend.length ? t + cfg.runningMaxMin * MIN : etaOf(r, blocking);
+          return { r, pend, holders, blocking, pass, eta, free: !pend.length && !holders.length && !blocking.length };
+        });
+        const pick = evals.find((e) => e.free);
+        if (!pick) {
+          const soon = [...evals].sort((x, y) => x.eta - y.eta)[0];
+          if (v.wait === 'ticket') return ticketFor(soon.r.resources);
+          return fail('E_HELD', `none of ${req.alts.length} equivalent options on ${req.env}${req.anyGroup ? ` (group ${req.anyGroup})` : ''} is free; the soonest is ${soon.r.resources.join(',')}: wait with a ticket (--wait) and it is granted whichever frees first`,
+            { reason: 'held', holders: [...new Map(evals.flatMap((e) => e.holders).map((l) => [l.id, leaseView(l)])).values()], position: soon.blocking.length + 1, eta: iso(soon.eta), eta_in_min: Math.max(0, Math.ceil((soon.eta - t) / MIN)),
+              options: evals.map((e) => ({ resources: e.r.resources, free: false, eta: iso(e.eta), held_by: [...new Set(e.holders.map((h) => h.agent))], deploy: e.pend[0]?.id || null })) });
+        }
+        if (pick.pass.length) emit({ t: 'tkt_pass', ids: pick.pass.map((x) => x.id), at: t });
+        const { alts: _a, ...one } = pick.r;
+        const lease = makeLease(one, t);
+        emit({ t: 'grant', lease, rkey, at: t });
+        return { ok: true, lease: leaseView(S.leases[lease.id]), chosen: lease.resources, ...(req.anyGroup ? { any: req.anyGroup } : {}), ...(req.warnings?.length ? { warnings: req.warnings } : {}) };
+      }
       if (req.mode === 'exclusive') {
         if (req.deployId) {
           const d = findDeploy(req.deployId);
@@ -723,8 +818,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (holders.length || blocking.length) {
           if (v.wait === 'ticket') return ticketFor();
           const eta = etaOf(req, blocking);
+          const hint = deviceOnlyHint(req, holders);
+          const eqv = freeEquivalents(req);
           return fail('E_HELD', holders.length ? `${req.env}/${req.resources.join(',')} is held by ${[...new Set(holders.map((h) => h.agent))].join(', ')}` : `${req.env}/${req.resources.join(',')} is free but ${blocking.length} claim(s) are queued ahead: wait with a ticket`,
-            { reason: holders.length ? 'held' : 'queued', holders: holders.map(leaseView), queued_ahead: blocking.map((x) => ({ id: x.id, agent: x.agent })), position: blocking.length + 1,
+            { reason: holders.length ? 'held' : 'queued', holders: holders.map(leaseView), ...(hint ? { hint } : {}), ...(eqv.length ? { equivalents_free: eqv } : {}), queued_ahead: blocking.map((x) => ({ id: x.id, agent: x.agent })), position: blocking.length + 1,
               eta: iso(eta), eta_latest: iso(latestOf(req)), eta_in_min: Math.max(0, Math.ceil((eta - t) / MIN)) });
         }
       }
@@ -904,6 +1001,16 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       };
     });
   }
+  // GET /inventory: the groups of equivalent resources on an env and which members are free right now (`vpt-lease inventory`).
+  async function inventory(a = {}) {
+    const bad = envCheck(a.env); if (bad) return bad;
+    const env = a.env.toLowerCase();
+    return read(() => {
+      const virt = (c) => ({ env, mode: 'exclusive', agent: '\0inventory', shared: false, resources: [c], kind: 'host' });
+      const groups = Object.entries(groupsOf(env)).map(([group, ms]) => ({ group, members: ms.map((c) => ({ resource: legacyName(P(c)), free: freeNow(virt(c)), held_by: [...new Set(heldConflicts(virt(c)).map((l) => l.agent))] })) }));
+      return { ok: true, env, groups };
+    });
+  }
   async function check(a = {}) {
     const bad = envCheck(a.env); if (bad) return bad;
     const env = a.env.toLowerCase();
@@ -1073,6 +1180,34 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
           purpose: `deploy ${d.id}`, provider: '', shared: false, ttlMin: cfg.deployLeaseMin, heartbeatS: null, system: true, deployId: d.id }, t);
         emit({ t: 'grant', lease, at: t });
         return { ok: true, state: 'running', deploy: deployView(nd), lease_id: lease.id, lease: leaseView(S.leases[lease.id]), granted: resources, leased_hosts: leasedHosts, skipped_hosts: leasedHosts.map((x) => x.host) };
+      });
+    },
+    // Rolling release (owner 2026-10-31): the runner reports each host the running deploy has finished (update_core.sh's health
+    // progress line), and the deploy stops holding it: its lease drops host:<h> and the deploy no longer blocks claims there.
+    async releaseHosts(a = {}) {
+      const hosts = hostList(a.hosts).filter((h) => nameOk(h));
+      if (!hosts.length) return fail('E_INVALID', 'hosts required');
+      return mutate((emit) => {
+        const d = findDeploy(a.id);
+        if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
+        const no = deployAuth(d, a); if (no) return no;
+        if (d.state !== 'running') return fail('E_INVALID', `deploy ${d.id} is ${d.state}, not running`);
+        const t = now();
+        const fresh = hosts.filter((h) => !(d.doneHosts || []).includes(h));
+        if (fresh.length) emit({ t: 'dep_set', deploy: { ...d, doneHosts: [...(d.doneHosts || []), ...fresh] }, at: t });
+        const drop = new Set(hosts.map((h) => `host:${h}`));
+        const released = [];
+        for (const l of Object.values(S.leases).filter((x) => x.deployId === d.id && x.system)) {
+          const keep = l.resources.filter((c) => !drop.has(c));
+          if (keep.length === l.resources.length) continue;
+          released.push(...l.resources.filter((c) => drop.has(c)));
+          if (!keep.length) emit({ t: 'release', ids: [l.id], why: 'released', by: d.runner || RUNNER, reason: 'deploy-hosts-done', at: t });
+          else {
+            const resKinds = l.resKinds ? Object.fromEntries(Object.entries(l.resKinds).filter(([k]) => keep.includes(k))) : null;
+            emit({ t: 'narrow', id: l.id, resources: keep, sensitivity: l.kind, resKinds, count: l.resources.length - keep.length, by: d.runner || RUNNER, reason: `deploy ${d.id}: done on ${hosts.join(',')}`, at: t });
+          }
+        }
+        return { ok: true, deploy: deployView(findDeploy(d.id)), released: released.map((c) => legacyName(P(c))), done_hosts: findDeploy(d.id).doneHosts || [] };
       });
     },
     async finish(a = {}) {
@@ -1309,12 +1444,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const guarded = na ? {
     claim: guard(claim), ticket: guard(ticket), cancelTicket: guard(cancelTicket), release: guard(release), renew: guard(renew), heartbeat: guard(heartbeat),
     narrow: guard(narrow), setMode: guard(setMode), ownerRelease: guard(ownerRelease), importLegacy: guard(importLegacy),
-    get: guard(get), list: guard(list), check: guard(check), events: guard(events),
+    get: guard(get), list: guard(list), check: guard(check), events: guard(events), inventory: guard(inventory),
   } : {};
-  const deployApi = na ? { ...deploy, request: guard(), approve: guard(), cancel: guard(), start: guard(), finish: guard(), record: guard(), list: guard(), wait: guard(), last: guard() } : deploy;
+  const deployApi = na ? { ...deploy, request: guard(), approve: guard(), cancel: guard(), start: guard(), finish: guard(), record: guard(), list: guard(), wait: guard(), last: guard(), releaseHosts: guard() } : deploy;
 
   return {
-    claim, ticket, cancelTicket, get, release, renew, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, activity, tick,
+    claim, ticket, cancelTicket, get, release, renew, inventory, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, activity, tick,
     deploy: deployApi, shadow, importLegacy,
     ...guarded,
     async status() { return { ok: !broken, authority: !na, ...(na ? { authorityNote: `not the authority: ${na.authority || 'the registry host service'} is` } : {}), readOnly: !!broken || cfg.readonly, reason: broken, seq: S.seq, leases: Object.keys(S.leases).length, polls: polls.size, parsed: parsedCache.size }; },

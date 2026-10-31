@@ -1056,6 +1056,14 @@ Develop / test the plugin: `claude plugin validate claude-plugin/ghosty-reporter
 blocking for dev, test and deployment." The design, the conflict matrix, the queue and the cut-over are in
 [LEASES-CENTRAL](v2/LEASES-CENTRAL.md); the rules agents follow are in [LEASE-RULES](LEASE-RULES.md).
 
+Equivalent resources (owner 2026-10-31, [design](tasks/LEASE-EQUIVALENTS.md)): `claim` takes `any: <group>` (groups from
+`<LEASE_DIR>/inventory.json`, [LEASE-INVENTORY](LEASE-INVENTORY.md)) or `alternatives`; one ticket waits on all options. Ticket
+views carry `equivalents_free` and, for a host claim blocked only by device leases, `hint`. `GET /inventory?env=` lists the groups.
+`POST /deploy/release-hosts` (runner client) is the rolling deploy release: the deploy runner (`rollingTracker`,
+`GHOSTY_DEPLOY_ROLLING=off` disables it) calls it for each host update_core.sh has finished. `lease-nudge.js` tells a waiter
+about a free equivalent after 5 min; `systemResolvable` keeps lease/deploy stops with a live ticket or running deploy from
+waking the manager (`lease:system-wait`).
+
 - `lease-service.js`: the single writer of leases, tickets and the deploy queue (journal + snapshot in
   `<state>/leases/`, fail closed). Always constructed; nothing in the fleet uses it until clients point at it.
 - `lease-routes.js`: `/api/lease/v1/*` for lease clients, bearer token per machine (`node scripts/lease-token.js add

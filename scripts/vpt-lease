@@ -285,7 +285,13 @@ def holders_text(holders):
 
 def progress_line(t):
     holders = holders_text(t.get("holders"))
-    return "waiting #%s, eta %s (held by %s)" % (t.get("position", "?"), hhmm(t.get("eta")), holders)
+    line = "waiting #%s, eta %s (held by %s)" % (t.get("position", "?"), hhmm(t.get("eta")), holders)
+    if t.get("any") or t.get("alternatives"):
+        line += "; granted to whichever of %d options frees first" % len(t.get("alternatives") or [])
+    eq = t.get("equivalents_free") or []
+    if eq:
+        line += "; FREE EQUIVALENT NOW: %s (cancel this ticket and claim it, or use --any)" % ", ".join(e.get("legacy") or "?" for e in eq)
+    return line
 
 
 def busy_report(r):
@@ -297,6 +303,24 @@ def busy_report(r):
                % (r.get("position") or "others"))
     if r.get("eta"):
         eprint("expected free around %s; wait with: vpt-lease claim ... --wait" % hhmm(r["eta"]))
+    for line in wait_advice(r):
+        eprint(line)
+
+
+def wait_advice(r):
+    """Never wait on a named resource while an equivalent one is free (owner 2026-10-31)."""
+    out = []
+    eq = r.get("equivalents_free") or []
+    if eq:
+        groups = sorted({e.get("group") for e in eq if e.get("group")})
+        out.append("FREE EQUIVALENT NOW: %s — claim it instead of waiting (or claim --any %s next time)"
+                   % (", ".join(e.get("legacy") or e.get("resource") or "?" for e in eq), "|".join(groups) or "<group>"))
+    if r.get("hint"):
+        out.append("HINT: %s" % r["hint"])
+    for o in r.get("options") or []:
+        out.append("  option %s: eta %s%s" % (",".join(o.get("resources") or []), hhmm(o.get("eta")),
+                   " held by %s" % ", ".join(o["held_by"]) if o.get("held_by") else (" deploy %s" % o["deploy"] if o.get("deploy") else "")))
+    return out
 
 
 def claim_warnings(env, wanted, kind, ttl, long_flag=False):
@@ -381,11 +405,25 @@ def resolve_priority(a):
     return getattr(a, "priority", None) or session_priority(a.agent)
 
 
+def alternatives_of(a):
+    """--alt a,b (repeatable): explicit equivalent options, each a comma-separated resource list."""
+    return [sorted({x.strip().lower() for x in alt.split(",") if x.strip()}) for alt in (getattr(a, "alt", None) or [])]
+
+
+def picks_any(a):
+    return bool(getattr(a, "any", None) or getattr(a, "alt", None))
+
+
 def claim_body(a, wait=None):
     wanted = sorted({r.lower() for r in a.resources})
-    kind = norm_kind(a.kind) if a.kind else default_kind(wanted)
+    alts = [x for x in alternatives_of(a) if x]
+    kind = norm_kind(a.kind) if a.kind else default_kind(wanted or (alts[0] if alts else []))
     body = dict(env=a.env.lower(), resources=wanted, agent=a.agent, purpose=a.purpose, mode=a.mode, kind=kind,
                 ttl_min=a.ttl, shared=a.shared)
+    if getattr(a, "any", None):
+        body["any"] = a.any.lower()      # a group of equivalent resources (vpt-lease inventory): the first free one is granted
+    if alts:
+        body["alternatives"] = alts
     if a.provider:
         body["provider"] = a.provider
     if a.expect:
@@ -418,6 +456,10 @@ def claim_body(a, wait=None):
 def granted(a, r, wanted, kind):
     lease = r["lease"]
     print(lease["id"], flush=True)
+    if picks_any(a):      # which of the equivalent options was granted: a second stdout line, only for --any / --alt claims
+        got = ",".join(lease.get("legacy") or [legacy_res(x, a.env.lower()) for x in lease.get("resources") or []])
+        print("resource=%s" % got, flush=True)
+        eprint("granted %s/%s%s" % (a.env.lower(), got, " (any %s)" % a.any if getattr(a, "any", None) else ""))
     for w in claim_warnings(a.env.lower(), wanted, kind, a.ttl, bool(lease.get("long"))):
         eprint(w)
     if lease.get("ttl_clamped_from"):
@@ -628,10 +670,27 @@ def cmd_list(a):
     show(leases)
     show_deploys(deploys)
     for t in r.get("tickets") or []:
-        print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s%s" % (
+        print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s%s%s%s" % (
             t.get("id"), t.get("env", "?"), ",".join(legacy_res(x, t.get("env", "")) for x in t.get("resources") or []),
             t.get("agent", "?"), t.get("position", "?"), hhmm(t.get("eta")),
-            "  priority=%s" % t["priority"] if t.get("priority") else ""))
+            "  priority=%s" % t["priority"] if t.get("priority") else "",
+            "  any=%s" % t["any"] if t.get("any") else "",
+            "  free-equivalent=%s" % ",".join(e.get("legacy") or "?" for e in t["equivalents_free"]) if t.get("equivalents_free") else ""))
+    return 0
+
+
+def cmd_inventory(a):
+    r = api("GET", "/inventory", query={"env": a.env.lower()})
+    if not r.get("ok"):
+        return fail(r)
+    if a.json:
+        print(json.dumps(r))
+        return 0
+    if not r.get("groups"):
+        print("no groups of equivalent resources on %s (the registry host's inventory.json: docs/LEASE-INVENTORY.md)" % r.get("env"))
+    for g in r.get("groups") or []:
+        print("%s: %s" % (g["group"], "  ".join("%s%s" % (m["resource"], " (free)" if m.get("free") else " (held by %s)" % ",".join(m.get("held_by") or []) or " (busy)")
+                                                for m in g.get("members") or [])))
     return 0
 
 
@@ -965,6 +1024,13 @@ def cmd_deploy(a):
             print("recorded %s: %s %s" % (a.status, a.env.lower(), ",".join(targets) or "-"))
         return 0
     body = {"id": a.deploy_id}
+    if c == "release-hosts":
+        body.update(hosts=[h.strip().lower() for h in a.hosts.split(",") if h.strip()])
+        r = api("POST", "/deploy/release-hosts", body)
+        if not r.get("ok"):
+            return deploy_fail(r, a)
+        print("released %s" % (",".join(r.get("released") or []) or "nothing"))
+        return 0
     if c == "start":
         body.update(agent=a.agent, skip_leased=a.skip_leased)
     elif c == "finish":
@@ -1142,7 +1208,9 @@ def cancel_stale_tickets(a):
     want = sorted(legacy_res(x.lower(), a.env.lower()) for x in a.resources)
     for t in tickets:
         env = t.get("env", "")
-        if t.get("agent") == a.agent and env == a.env.lower() and sorted(legacy_res(x, env) for x in t.get("resources") or []) == want:
+        same = (t.get("any") or None) == (getattr(a, "any", None) or None) and bool(t.get("alternatives")) if picks_any(a) else \
+            sorted(legacy_res(x, env) for x in t.get("resources") or []) == want
+        if t.get("agent") == a.agent and env == a.env.lower() and same:
             code, _ = ssh_call(["ticket", str(t.get("id")), "--cancel"], capture=True, stdin=subprocess.DEVNULL)
             eprint("vpt-lease: cancelled stale ticket %s after the ssh connection dropped" % t.get("id") if code == 0 else
                    "vpt-lease: could not cancel stale ticket %s (exit %d)" % (t.get("id"), code))
@@ -1173,6 +1241,10 @@ def remote_claim_args(a):
         args += ["--expect", str(a.expect)]
     if a.deploy_id:
         args += ["--deploy-id", a.deploy_id]
+    if getattr(a, "any", None):
+        args += ["--any", a.any]
+    for alt in getattr(a, "alt", None) or []:
+        args += ["--alt", alt]
     prio = resolve_priority(a)
     if prio:
         args += ["--priority", prio]
@@ -1189,6 +1261,7 @@ def cmd_run(a, command):
     a.heartbeat_s = 300 if (central or remote) else None
     lease_id, hb = None, None
     child, got = [None], []
+    granted_res = ""      # --any / --alt: the option that was granted, exported to the command as VPT_LEASE_RESOURCE / VPT_LEASE_HOST
 
     def forward(sig, _frm):
         got.append(sig)
@@ -1201,6 +1274,7 @@ def cmd_run(a, command):
             sys.stdout.write(out)
             return code
         lease_id = out.splitlines()[0].strip() if out.strip() else None
+        granted_res = next((x.strip()[len("resource="):] for x in out.splitlines()[1:] if x.strip().startswith("resource=")), "")
         if not lease_id:
             eprint("vpt-lease: the remote claim succeeded but printed no lease id; not running the command")
             return 1
@@ -1214,6 +1288,7 @@ def cmd_run(a, command):
             return res[1]
         lease = res[1]
         lease_id = lease["id"]
+        granted_res = ",".join(lease.get("legacy") or [])
         every = 0.2 if FAST else float(lease.get("heartbeat_s") or 300)
         eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
         hb = HeartbeatThread(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None, renew_ttl=a.ttl)
@@ -1239,7 +1314,11 @@ def cmd_run(a, command):
     code = 1
     try:
         try:
-            child[0] = subprocess.Popen(command)
+            env = None
+            if granted_res:
+                env = dict(os.environ, VPT_LEASE_RESOURCE=granted_res, VPT_LEASE_HOST=granted_res.split(",")[0].split("/")[0])
+                eprint("vpt-lease: granted %s (VPT_LEASE_RESOURCE, VPT_LEASE_HOST)" % granted_res)
+            child[0] = subprocess.Popen(command, env=env)
             if got and child[0].poll() is None:      # a signal / fence that arrived before the child existed
                 with contextlib.suppress(OSError):
                     child[0].send_signal(got[0])
@@ -1298,7 +1377,9 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def claim_args(c):
-        c.add_argument("env"); c.add_argument("resources", nargs="+")
+        c.add_argument("env"); c.add_argument("resources", nargs="*")
+        c.add_argument("--any", default=None, metavar="GROUP", help="any free resource of this group of equivalents (vpt-lease inventory <env>): granted the first free one, a --wait ticket waits on all of them; prints resource=<granted> as a second line")
+        c.add_argument("--alt", action="append", default=None, metavar="RES[,RES]", help="an equivalent option to the named resources (repeatable); same behaviour as --any")
         c.add_argument("--agent", required=True); c.add_argument("--purpose", default="")
         c.add_argument("--ttl", type=int, default=120, help="minutes (default 120, clamped to max 60 per claim: release when the step is done and re-queue)")
         c.add_argument("--provider", default="")
@@ -1343,6 +1424,8 @@ def build_parser():
     for name in ("approve", "cancel"):
         x = dsub.add_parser(name); x.add_argument("deploy_id")
     st = dsub.add_parser("start"); st.add_argument("deploy_id"); st.add_argument("--agent", default="manager:deploy")
+    rh = dsub.add_parser("release-hosts", help="the running deploy is done on these hosts: stop holding them (deploy runner)")
+    rh.add_argument("deploy_id"); rh.add_argument("--hosts", required=True)
     st.add_argument("--skip-leased", action="store_true")
     fi = dsub.add_parser("finish"); fi.add_argument("deploy_id"); fi.add_argument("--status", required=True, choices=("done", "failed"))
     fi.add_argument("--version", default=""); fi.add_argument("--tail-stdin", action="store_true")
@@ -1353,6 +1436,8 @@ def build_parser():
     rc.add_argument("--status", required=True, choices=("done", "failed")); rc.add_argument("--started", default=None)
     rc.add_argument("--note", default=""); rc.add_argument("--deploy-id", default=""); rc.add_argument("--source", default="")
     rc.add_argument("--at", default=None); rc.add_argument("--fail-targets", default=""); rc.add_argument("--skipped-hosts", default="")
+    iv = sub.add_parser("inventory", help="groups of equivalent resources (claim --any <group>) and which members are free")
+    iv.add_argument("env"); iv.add_argument("--json", action="store_true")
     lt = dsub.add_parser("last"); lt.add_argument("env", nargs="?"); lt.add_argument("--json", action="store_true")
     w = dsub.add_parser("wait"); w.add_argument("deploy_id", nargs="?"); w.add_argument("--env")
     w.add_argument("--agent", default=""); w.add_argument("--timeout", type=float, default=120)
@@ -1366,7 +1451,7 @@ def dispatch(a, command=None):
         return cmd_run(a, command)
     return {"claim": cmd_claim, "release": cmd_release, "renew": cmd_renew, "narrow": cmd_narrow, "list": cmd_list,
             "check": cmd_check, "events": cmd_events, "ticket": cmd_ticket, "heartbeat": cmd_heartbeat,
-            "mode": cmd_mode, "validate": cmd_validate}[a.cmd](a)
+            "mode": cmd_mode, "validate": cmd_validate, "inventory": cmd_inventory}[a.cmd](a)
 
 
 def run_central(a, command=None):
@@ -1569,6 +1654,12 @@ def main(argv=None):
         shadow_call(argv, (code, out))
         return code
     a = build_parser().parse_args(argv)
+    if a.cmd in ("claim", "run") and not a.resources and not picks_any(a):
+        eprint("vpt-lease %s: name the resources, or --any <group> / --alt <resource> for any free equivalent one" % a.cmd)
+        return 2
+    if mode in ("legacy", "shadow") and (a.cmd == "inventory" or (a.cmd in ("claim", "run") and picks_any(a))):
+        eprint("vpt-lease %s --any/--alt/inventory needs VPT_LEASE_MODE=central (or central-through-ssh)" % a.cmd)
+        return 1
     if a.cmd == "run" and command is None:
         eprint("vpt-lease run: expected `-- <command...>` after the claim arguments")
         return 2
