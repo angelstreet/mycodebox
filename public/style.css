@@ -1240,6 +1240,7 @@ button.prio{ cursor:pointer; }
    working in a card and wants it pinned. The .on state uses the accent so the
    locked card is unmistakable. */
 .cell .h .lk{ display:none; }
+.grid-pane .cell .h .lk,
 .card-pane .cell .h .lk{
   display:inline-flex; align-items:center; justify-content:center; gap:4px;
   flex-shrink:0; min-width:32px; height:30px; padding:0 6px; border-radius:7px;
@@ -1247,9 +1248,12 @@ button.prio{ cursor:pointer; }
   font-size:12px; line-height:1; cursor:pointer;
 }
 @media (hover:hover) and (pointer:fine){
+  .grid-pane .cell .h .lk:hover,
   .card-pane .cell .h .lk:hover{ color:var(--accent); border-color:var(--accent); }
 }
+.grid-pane .cell .h .lk:active,
 .card-pane .cell .h .lk:active{ color:var(--accent); border-color:var(--accent); }
+.grid-pane .cell .h .lk.on,
 .card-pane .cell .h .lk.on{
   color:var(--accent); border-color:var(--accent);
   background:rgba(232,154,74,0.12);
@@ -1656,6 +1660,8 @@ svg.ico{ display:inline-block; vertical-align:-0.18em; flex-shrink:0; }
 .pz{ display:inline-flex; align-items:center; justify-content:center; }
 .mv button, .jump button, .open{ display:inline-flex; align-items:center; justify-content:center; }
 .state.deploy .st{ display:none; }
+/* owner 2026-10-31: the elapsed time ("23m") in the card header is noise; the dot carries the state */
+.cell .h .state .st{ display:none; }
 .state.deploy{ padding:3px 6px; }
 .state .sticon, .chip .sticon{ color:var(--deploy); }
 
@@ -2429,7 +2435,7 @@ body:not(.res-hidden) .fgrp{ display:none; }
 /* grid cards: when the header is tight the name shortens (ellipsis) instead of pushing the buttons out of the card */
 .grid-pane .cell .h .nm{ flex:0 1 auto; min-width:5ch; max-width:none; }
 .grid-pane .cell .h .nm .name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.grid-pane .cell .h .stw, .grid-pane .cell .h .pp, .grid-pane .cell .h .pz, .grid-pane .cell .h .td, .grid-pane .cell .h .open{ flex-shrink:0; }
+.grid-pane .cell .h .lk, .grid-pane .cell .h .stw, .grid-pane .cell .h .pp, .grid-pane .cell .h .pz, .grid-pane .cell .h .td, .grid-pane .cell .h .open{ flex-shrink:0; }
 .grid-pane .cell .h .proj{ flex-shrink:30; }
 @container (max-width:430px){ .grid-pane .cell .h .ag{ display:none; } }
 .grid-pane .cell .h .rn{ display:none; }   /* the pencil took ~16px from the name; rename = double-tap the name */
