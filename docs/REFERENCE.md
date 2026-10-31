@@ -396,8 +396,9 @@ replacement is gone stays visible.
 
 **A closed question is still reported** (`ask-guard.js`, `scripts/manager-ask-scan.sh`). The safety net reads the whole ledger, not
 only the open asks: a closed question is in no open set, so a question dropped with no replacement used to be invisible (E24). Both
-nets report the superseded asks, one line each: `!! ask-superseded-open <id> <replacement>` (the replacement is still open, so the
-older question is still waiting) and `!! ask-superseded-dropped <id> <replacement>` (the replacement is not a question in the ledger:
+nets report the superseded asks, one line each: `!! ask-superseded-open <id> <replacement>` (the replacement is open and the older
+ask is still open in the ledger too; a superseded ask that is closed in the ledger is the normal one-ask-per-session case and is not
+reported, 2026-10-31) and `!! ask-superseded-dropped <id> <replacement>` (the replacement is not a question in the ledger:
 the question was dropped). The replacement is named, not a bare id: a replacement that is a question is printed with its id and its
 wording, a replacement that is not a question says so plainly. The guard logs both as `ask-superseded-open` / `ask-superseded-dropped`
 and pushes a dropped question to the owner when the drop is less than an hour old (an older drop is reported in the log and by the
@@ -819,12 +820,17 @@ too, which only makes every other caller stricter: a button or a voice answer wh
 the same unit, with or without `sudo -n`, or the prose "restart <unit> on <lab-host>") of an allowlisted unit is not a forbidden
 topic and not an owner question; `routine-restart.js` neutralizes only those fragments before `forbiddenMatch`, `hardMatch`,
 `forbiddenTopics` and `ownerFloorMatch` read the text, so the rest of the floor still applies. Allowlist: `GHOSTY_RESTART_UNITS`
-(comma separated globs, `*` = any characters; default `vpt-monitor-img,vpt-host,vpt-stream*,vpt-grabber*`); set it to extend or narrow.
+(comma separated globs, `*` = any characters; default `vpt-monitor-img,vpt-host,vpt-stream*,vpt-grabber*,vpt-kpi,vpt-ble-remote@*,hid-remote@*,
+vpt-avq,vpt-archiver,vpt-timeline,vpt-audio*,vpt-monitor-audio,vpt-mediamtx`, widened by the owner on 2026-10-31 after Q256-Q258 asked
+"may I restart vpt-kpi / hid-remote@hci1 / hid-remote@hci2"); set it to extend or narrow. Never in the default: vpt-vnc, vpt-websockify,
+lircd, bluetooth.service, vpt-server, databases, nginx.
 Still forbidden exactly as before: `stop`, a bare `start`, `enable`, `disable`, `mask`, `daemon-reload`, unit files, sudoers, a
 restart of anything outside the allowlist or of a second unit riding along, `ghosty-sessions` / the server unit, production or
 customer hosts, reboots and credentials (one such word anywhere cancels the relief). The manager answers such a question from the lease
 source (`answerRoutineRestart`): "yes, go ahead" when the session holds an exclusive lease that covers the host, else "claim the host
-lease first (`--kind host --wait`)". A restart needs the host lease only, never the server or an env-wide lease. Tests: `test/routine-restart.test.js`.
+lease first (`--kind host --wait`)". A restart needs the host lease only, never the server or an env-wide lease. When another session
+holds an exclusive device lease on that host (a run), the answer is "wait for it" unless every unit drives no device
+(`DEVICELESS_UNITS`: vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline). Tests: `test/routine-restart.test.js`.
 
 For a finished turn without a live menu, the manager evaluates every decidable topic present (merge, then push, then
 deploy), answers the passing ones in one reply and escalates the rest with what was already answered:
@@ -1481,6 +1487,41 @@ credentials, money, customers, physical) or `FLOOR_EXTRA` (force-push, history r
 destructive or irreversible, the ghosty-sessions service, reboot, SMS / phone / login / sign-in, provide hardware, bring a box back,
 sideload). `manager.json` `ownerPush`: `"off"` disables these kinds (leftovers stay); `leftovers: "off"` disables the watcher. `GET /api/leftovers` shows the
 watcher's last scan: `at`, `found` (`name`, `kind`, `items`), `mode`, `error`.
+
+## Fewer, better owner questions (owner, 2026-10-31)
+
+The owner asked why there were so many questions. Of 9 owner asks that day (Q253-Q261) four were real (two physical actions, an
+exposed test token, a storage choice); five were avoidable (three restarts of lab-host services, one non-blocking install whose
+"leave it" was safe, one "plug your phone in" asked before the software route was tried). 8 of 11 "asks you" alerts were system waits
+tagged `[hard: publish]` / `[hard: paid]` off a plan sentence. What changed:
+
+- **Restarts:** the routine-restart default allowlist covers the lab-host service families above (see "Routine device-side restart").
+- **System waits** (`stall.js` `systemWaitOf`, `ops-ask.js` `systemWaitKind`): a stop whose STATUS line is `waiting`, or `blocked` on a
+  deploy id, a lease, an integration id (`int-...`) or an owner answer that the ledger already holds open, is routed to the manager as
+  a `deploy` / `lease` item: no owner push, no "asks you", logged `escalated` with `systemWait`. A line that asks something ("?")
+  is not a wait; `blocked` on an owner answer that is not in the ledger is still a real blocker.
+- **Hard tag** (`stall.js` `askHardOf`): the `[hard: X]` of an escalation is read off the question's "?" sentences and the recommended
+  option only (or the whole line of a `needs-owner` / `blocked` ask without a "?"), never off a word in a plan sentence. A system
+  wait has none. Routing (`opsAsk`, `ownerFloorMatch`) is unchanged; `needs-manager` menus work as before.
+- **One open ask per session** (`ask-fold.js`): while `manager-owner-asks.jsonl` has an open ask for a session, its further `asks` /
+  `waiting` alerts are folded into it (no push, no event) until the ask is answered or superseded. An unreadable ledger folds nothing.
+- **Scan:** `!! ask-superseded-open` is printed only when the superseded ask is itself still open (fixes the hourly
+  "ask-superseded-open Q257 Q258" for a closed Q257).
+
+**Manager rules for owner questions.** The manager manual (`TASK-44-MANAGER.md`) lives in the platform repo, not here; these rules are
+the mycodebox side and win where they differ:
+
+1. A NON-BLOCKING item whose "leave as is" option is safe is never asked: the manager picks it, records it in `manager-actions.jsonl`
+   and mentions it in its next report (Q254: "install the fixed hourly BLE unit?" -> leave it, mention it).
+2. Before any question that asks the owner for a physical action, the session or the manager must have tried the software
+   equivalent (USB re-enumeration under the lease, restart of an allowlisted unit, reading the data another way) and the question
+   names what was tried (Q253: a worker got the data without the phone).
+3. At most one open ask per session: a new question for a session supersedes its older one (`supersedeOlder`), and alerts fold
+   into the open one (`ask-fold.js`).
+4. Every question says what happens if the owner does not answer ("if no answer, I leave it as is and retry tomorrow").
+
+Tests: `test/routine-restart.test.js`, `test/system-wait.test.js`, `test/ask-fold.test.js`, `test/e58-ask-scan.test.js`,
+`test/owner-ask-loss.test.js`.
 
 ## Rules watch (owner, 2026-10-15)
 

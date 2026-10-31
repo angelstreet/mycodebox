@@ -12,7 +12,8 @@
 #   "!! ask-defect <id> <session> (no valid floor: this ask never passed the ask gate)"
 # A closed ask is in no open set, so a question that was dropped with no replacement was invisible (E24).
 # The scan reports the superseded asks too, one line each:
-#   "!! ask-superseded-open <id> <replacement>"    the replacement is still open: the older question is still waiting
+#   "!! ask-superseded-open <id> <replacement>"    the replacement is open AND the older ask is still open in the ledger
+#                                                  (a superseded ask closed in the ledger is the normal case: not reported)
 #   "!! ask-superseded-dropped <id> <replacement>" the replacement is not a question in the ledger: it was dropped
 # The replacement is named, not a bare id: a question in the ledger is printed with its id and its wording, a
 # replacement that is not a question says so plainly (E58: a raw stop id told the reader nothing).
@@ -94,7 +95,11 @@ for i, o in state.items():
         continue
     if i not in alerted and f'ask-{i}' not in tags: print(f'!! ask-not-alerted {i}')
 for i, (by, at) in sup.items():
-    if state.get(by) is True and by in asked: print(f'!! ask-superseded-open {i} {replacement(by)}'); continue   # the older question is still waiting
+    if state.get(by) is True and by in asked:
+        # a superseded ask that is closed in the ledger is the normal one-ask-per-session case: its replacement carries it (2026-10-31:
+        # "!! ask-superseded-open Q257 Q258" every hour for a closed Q257). Only an older ask still open beside its replacement is reported.
+        if state.get(i) is True: print(f'!! ask-superseded-open {i} {replacement(by)}')
+        continue
     if by in answered: continue    # the owner answered the replacement: nothing was lost
     ts = at_of(at)
     if i not in reported and (ts is None or ts >= since): print(f'!! ask-superseded-dropped {i} {replacement(by, True)}')

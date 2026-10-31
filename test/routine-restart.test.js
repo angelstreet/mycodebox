@@ -61,3 +61,32 @@ test('restart without a covering lease: claim the host lease first', () => {
   assert.equal(answerRoutineRestart({ text: t, view: { ok: false }, session: 's1' }).covered, false);
   assert.equal(answerRoutineRestart({ text: 'systemctl restart ghosty-sessions', view: { ok: true, leases: [] }, session: 's1' }), null);
 });
+
+// owner 2026-10-31: the lab-host service families that proved routine are answered by the manager (Q256-Q258 were avoidable)
+test('2026-10-31 allowlist: kpi, BLE daemons, avq, archiver, timeline, audio, mediamtx are routine', () => {
+  for (const t of [
+    'May I restart vpt-kpi on <lab-host>?',
+    'sudo -n systemctl restart hid-remote@hci1',
+    'sudo -n systemctl restart hid-remote@hci2.service && systemctl is-active hid-remote@hci2',
+    'systemctl restart vpt-ble-remote@hci0',
+    'systemctl restart vpt-avq', 'systemctl restart vpt-archiver', 'systemctl restart vpt-timeline',
+    'systemctl restart vpt-audio-main', 'systemctl restart vpt-monitor-audio', 'systemctl restart vpt-mediamtx',
+  ]) { assert.equal(forbiddenMatch(t), null, t); assert.equal(hardMatch(t, {}), null, t); assert.equal(routineRestart(t).routine, true, t); }
+  for (const t of ['systemctl restart vpt-vnc', 'systemctl restart vpt-websockify', 'systemctl restart lircd', 'systemctl restart bluetooth',
+    'systemctl restart bluetooth.service', 'systemctl restart vpt-server', 'systemctl restart postgresql', 'systemctl restart nginx',
+    'systemctl restart hid-remote@hci1 on the production host', 'systemctl stop hid-remote@hci1', 'systemctl disable vpt-kpi'])
+    assert.ok(forbiddenMatch(t), t);
+});
+
+test('a run holding a device lease on the host blocks a restart of a device unit, not of a deviceless one', () => {
+  const view = { ok: true, leases: [
+    { id: 'L1', mode: 'exclusive', kind: 'host', agent: 'codebox:s1', resources: ['<lab-host>'] },
+    { id: 'L2', mode: 'exclusive', kind: 'device', agent: 'codebox:run7', resources: ['<lab-host>/device1'] },
+  ] };
+  const ble = answerRoutineRestart({ text: 'restart hid-remote@hci1 on <lab-host>', view, session: 's1' });
+  assert.equal(ble.covered, false);
+  assert.match(ble.text, /device lease/);
+  assert.match(ble.text, /--wait/);
+  const kpi = answerRoutineRestart({ text: 'restart vpt-kpi on <lab-host>', view, session: 's1' });
+  assert.equal(kpi.covered, true);
+});

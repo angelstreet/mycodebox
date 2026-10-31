@@ -164,6 +164,7 @@ import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks, readOpenAsksReport } from './owner-asks.js';
+import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
@@ -1194,8 +1195,12 @@ function voiceItemOf(session, kind, stateHint = null) {
   } catch { return null; }
 }
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
+// one open ask per session (owner, 2026-10-31): an open ledger ask of the session absorbs its further asks / waiting alerts
+const askFold = createAskFold({ file: join(STATE_DIR, 'manager-owner-asks.jsonl') });
+askFold.refresh();
 function notifySession(session, kind, body, meta, stateHint = null) {
   if ((kind === 'waiting' || kind === 'asks') && loadOwnerHiddenSessions().includes(session)) return;   // the manager's own session (and the shadow standby) never pushes the owner
+  if (askFold.folds(session, kind)) return;   // folded into the session's open ask: no new push, no new event until it is answered or superseded
   const waiting = kind === 'waiting' || kind === 'asks';
   // The agent's STATUS verdict + what the turn took (elapsed, tokens) + its own info, first in the body so every cut keeps it.
   const lt = turnMeter.get(session);
@@ -2913,6 +2918,7 @@ server.listen(PORT, HOST, async () => {
     readyStore,   // ready windows: the manager answers a hardware-step ask while one covers the session
     leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
     onStatus: onStopStatus,
+    hasOpenAsk: (session) => !!askFold.openAskOf(session),   // a stop blocked on an owner answer already in the ledger is a system wait
     // a lease, deploy or needs-manager stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
     onManagerItem: (it) => {
       // "STATUS: needs-manager: <what the manager must do>": its own key, so the manager's own wait filter sees it as a session ask.

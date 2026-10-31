@@ -11,7 +11,12 @@
 // stall.js asks neutralizeRoutineRestart() first, like neutralizeRoutineHostUnit(): only the routine restart fragments are
 // replaced by RESTART_OK, so the rest of the floor still reads the same text, and a disguised or extra unit stays a hit.
 
-export const DEFAULT_RESTART_UNITS = ['vpt-monitor-img', 'vpt-host', 'vpt-stream*', 'vpt-grabber*'];
+// owner 2026-10-31: the lab-host service families that proved routine (per-adapter BLE daemons, KPI, AV quality, archiver, timeline,
+// audio, mediamtx) are answered by the manager too. NOT vpt-vnc / vpt-websockify / lircd / bluetooth / vpt-server / databases / nginx.
+export const DEFAULT_RESTART_UNITS = ['vpt-monitor-img', 'vpt-host', 'vpt-stream*', 'vpt-grabber*', 'vpt-kpi', 'vpt-ble-remote@*', 'hid-remote@*',
+  'vpt-avq', 'vpt-archiver', 'vpt-timeline', 'vpt-audio*', 'vpt-monitor-audio', 'vpt-mediamtx'];
+// units that drive no device: a restart of these is fine beside another session's device lease on the same host
+export const DEVICELESS_UNITS = ['vpt-kpi', 'vpt-avq', 'vpt-archiver', 'vpt-timeline'];
 
 const globRe = (g) => `${String(g).trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[\\w.@-]*')}`;
 let unitRe = null, unitGlobs = null;
@@ -99,6 +104,10 @@ export function answerRoutineRestart({ text, view, session = '' } = {}) {
   const own = (view?.ok ? view.leases || [] : []).filter((l) => l.mode === 'exclusive' && mine(l, session));
   const covers = (l, h) => (l.resources || []).some((x) => x === '*' || String(x).toLowerCase().includes(h) || h.includes(String(x).toLowerCase()));
   const covered = view?.ok && own.length > 0 && (hosts.length ? hosts.every((h) => own.some((l) => covers(l, h))) : true);
+  // a run's device lease on that host (another session) blocks a restart of a unit that touches devices
+  const deviceUnits = r.units.filter((u) => !DEVICELESS_UNITS.includes(u));
+  const busy = covered && deviceUnits.length && (view.leases || []).find((l) => l.kind === 'device' && l.mode === 'exclusive' && !mine(l, session) && hosts.some((h) => covers(l, h)));
+  if (busy) return { text: `A run holds a device lease on that host (${busy.id || busy.agent || 'another session'}); ${deviceUnits.join(', ')} touches devices. Wait for it with \`vpt-lease claim ... --wait\`, then restart. Never ask the owner about a lease.`, covered: false, units: r.units, hosts };
   if (covered) return { text: 'Yes, go ahead: this is a routine restart of a device-side service on a host you lease. Release or keep your lease as usual.', covered: true, units: r.units, hosts };
   const why = view?.ok ? 'You do not hold a lease that covers that host.' : 'The lease source is unreachable, so treat the host as busy.';
   return { text: `${why} ${RESTART_LEASE_RULE}`, covered: false, units: r.units, hosts };
