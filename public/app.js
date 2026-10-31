@@ -105,9 +105,9 @@ const state = {
   toastTimer:null,
   side:      false,
   installPrompt: null,
-  // QF-12: when set, focusSession() bails on a different name. Survives reload via LS_LOCKED.
+  // Cards pinned in the grid: a nav tap never replaces them. Survives reload via LS_LOCKED (JSON list).
   // Reset when the locked session disappears from state.sessions.
-  lockedSession: null,
+  lockedSessions: [],
 };
 
 // ---------- localStorage ----------
@@ -764,9 +764,9 @@ function onStatus() {
     if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
     // QF-12: drop the lock when the locked session goes away (killed, renamed, daemon restart
     // before reattach). A stale lock would block focus for every nav tap with no UI for it.
-    if (state.lockedSession && !names.includes(state.lockedSession)) {
-      state.lockedSession = null;
-      lsSet(LS_LOCKED, '');
+    if (state.lockedSessions.some((x) => !names.includes(x))) {
+      state.lockedSessions = state.lockedSessions.filter((x) => names.includes(x));
+      lsSet(LS_LOCKED, JSON.stringify(state.lockedSessions));
     }
     renderAll();
   } else {
@@ -1925,7 +1925,7 @@ function buildCell(s) {
     </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
   cell.querySelector('.td').onclick = (e) => { e.stopPropagation(); toggleTaskDoc(cell, s.name); };
-  // QF-12: lock the card so nav taps keep it focused. Click toggles state.lockedSession;
+  // QF-12: lock the card so nav taps keep it focused. Click toggles n in state.lockedSessions;
   // the actual focus guard lives in focusSession() so every entry point (list row, tab,
   // dock chip, grid card) is covered by the same check.
   cell.querySelector('.lk').onclick = (e) => { e.stopPropagation(); setLock(s.name); };
@@ -2164,14 +2164,14 @@ function syncCell(cell) {
   if (mt.dataset.h !== mh) { mt.dataset.h = mh; mt.innerHTML = mh; }
   const rd = cell.querySelector('.rd');
   rd.textContent = state.reader ? '>_' : 'Aa';
-  // QF-12: lock button reflects state.lockedSession. Icon flips between lock / unlock;
+  // QF-12: lock button reflects state.lockedSessions. Icon flips between lock / unlock;
   // the .on class drives the accent colour and aria-pressed drives screen readers.
   const lk = cell.querySelector('.lk');
-  const locked = state.lockedSession === n;
+  const locked = state.lockedSessions.includes(n);
   lk.classList.toggle('on', locked);
   lk.setAttribute('aria-pressed', locked ? 'true' : 'false');
   lk.setAttribute('aria-label', locked ? 'Unlock card' : 'Lock card');
-  lk.title = locked ? 'Unlock this card' : 'Lock this card so nav taps keep it focused';
+  lk.title = locked ? 'Unlock this card' : 'Lock this card in the grid so picking another session on the left never replaces it';
   lk.innerHTML = icon(locked ? 'unlock' : 'lock', 14);
   if (!inCard && n === state.active) {
     // move arrows: only the directions this card can still go
@@ -2222,35 +2222,8 @@ function headMetaHtml(n) {
       parts.push(`<span class="chip-m hand${overdue ? ' late' : ''}" title="${escapeHtml(title)}">\u21c4 ${escapeHtml(h.resource)} \u2192 ${escapeHtml(other)}${hm ? ` ${escapeHtml(hm)}` : ''}</span>`);
     }
   }
-  // QF-11: drop the live-status segments Claude's footer puts in
-  // `st.activity` ("⠧ Loading 4m7s · ⚡ 5548 tok/s · ...") before the
-  // string lands in the per-card header. The data flow itself is unchanged
-  // — server still ships `st.activity`, the manager / panes log still
-  // read it, the dashboard / status surface (and the card body) can still
-  // subscribe. The header just stops pretending to be a status bar.
-  const act = cleanHeaderActivity(st.activity);
-  if (act) parts.push(`<span class="act">${escapeHtml(act)}</span>`);
+  // owner 2026-10-31: no live activity text ("Running 26s · ...") in the header; the card body shows it
   return parts.join('<span class="sep"> \u00b7 </span>');
-}
-// Strip Claude-Code's footer line ("⠧ Loading 4m7s · ⚡ 5548 tok/s · ...")
-// from a session's activity string so the per-card header stays readable.
-// The text is built by concatenating the visual spinner, the elapsed timer,
-// the reporter throughput and the footer help text into one line; only the
-// first three bits are live status that belongs on a dashboard, not in
-// `.h`. Other activity strings ("Searched for X", "Reading file Y") keep
-// showing.
-function cleanHeaderActivity(raw) {
-  let s = String(raw || '').trim();
-  if (!s) return '';
-  // strip the leading spinner + "Loading <duration>" segment
-  s = s.replace(/^\s*[⠧⠂⠐⠈]\s*Loading\s+\S+(?:\s*·\s*)?/, '');
-  // strip the "⚡ N tok/s" throughput segment (anywhere on the line)
-  s = s.replace(/\s*·\s*⚡\s*\d[\d,.\s]*\s*tok\/s(?:\s*·\s*)?/g, ' \u00b7 ');
-  // strip a stray leading spinner with no useful text behind it
-  s = s.replace(/^\s*[⠧⠂⠐⠈]\s*/, '');
-  // tidy up double separators and trailing dots
-  s = s.replace(/\s*·\s*·\s*/g, ' \u00b7 ').replace(/\s*·\s*$/, '').trim();
-  return s;
 }
 // Centre label of a card header: project · branch · worktree.
 function projHtml(n) {
@@ -2710,21 +2683,24 @@ function syncTitle() {
 }
 function focusSession(name) {
   if (!name) return;
-  // QF-12: a locked card survives nav taps. If the user clicks a different session
-  // while the lock is held, stay on the locked one and toast so they know why nothing
-  // happened. Tapping the locked card itself is a no-op (we're already focused on it).
-  if (state.lockedSession && state.lockedSession !== name) {
-    toast(`${displayName(state.lockedSession)} is locked`, 1600);
-    return;
-  }
+  // Locked cards keep their grid slot: picking a session that is not on screen takes the slot of the
+  // selected card, or of the last unlocked one when the selected card is locked. A card already on
+  // screen can always be selected or opened.
   const prev = state.active;
+  const cellOf = (n) => els.gridPane.querySelector(`[data-session="${cssEscape(n)}"]`);
+  const locked = (n) => state.lockedSessions.includes(n);
+  let slot = null;
+  if (state.mode === 'grid' && !cellOf(name) && state.lockedSessions.length) {
+    const shown = [...els.gridPane.children].map((c) => c.dataset.session);
+    slot = prev && shown.includes(prev) && !locked(prev) ? prev : [...shown].reverse().find((n) => !locked(n));
+    if (!slot) { toast('All cards in the grid are locked', 1600); return; }
+  }
   state.active = name;
   lsSet('ghosty.active', name);   // a refresh comes back on the same focused card
   // grid: a session that isn't on screen takes the slot of the selected card, not the last one
-  if (state.mode === 'grid' && prev && prev !== name
-      && !els.gridPane.querySelector(`[data-session="${cssEscape(name)}"]`)
-      && els.gridPane.querySelector(`[data-session="${cssEscape(prev)}"]`)) {
-    state.gridView = [...els.gridPane.children].map((c) => (c.dataset.session === prev ? name : c.dataset.session));
+  if (state.mode === 'grid' && !cellOf(name) && (slot || (prev && prev !== name && cellOf(prev)))) {
+    const at = slot || prev;
+    state.gridView = [...els.gridPane.children].map((c) => (c.dataset.session === at ? name : c.dataset.session));
   }
   syncTitle();
   connectSession(name);
@@ -2763,15 +2739,10 @@ function openCard(name) {
 // check and is blocked automatically. State is persisted so a soft reload remembers the
 // pin; the locked name is dropped if the session disappears from the next status refresh.
 function setLock(name) {
-  if (state.lockedSession === name) {
-    state.lockedSession = null;
-    lsSet(LS_LOCKED, '');
-    toast('unlocked');
-  } else {
-    state.lockedSession = name;
-    lsSet(LS_LOCKED, name);
-    toast(`${displayName(name)} locked · nav taps won't switch`);
-  }
+  const on = !state.lockedSessions.includes(name);
+  state.lockedSessions = on ? [...state.lockedSessions, name] : state.lockedSessions.filter((x) => x !== name);
+  lsSet(LS_LOCKED, JSON.stringify(state.lockedSessions));
+  toast(on ? `${displayName(name)} locked in the grid` : `${displayName(name)} unlocked`);
   syncAll();
 }
 
@@ -5345,8 +5316,11 @@ if ('serviceWorker' in navigator) {
   if (savedActive) state.active = savedActive;   // validated against the live sessions once they load
   // QF-12: a soft reload comes back with the same card locked. Empty string = no lock.
   // The saved name is validated once state.sessions arrives (drops ghosts automatically).
-  const savedLocked = lsGet(LS_LOCKED, '');
-  if (savedLocked) state.lockedSession = savedLocked;
+  try {
+    const saved = lsGet(LS_LOCKED, '');
+    const v = saved.startsWith('[') ? JSON.parse(saved) : (saved ? [saved] : []);   // older builds stored one bare name
+    state.lockedSessions = Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch { state.lockedSessions = []; }
   if (wanted) { state.active = wanted; state.mode = 'card'; }
   if (new URLSearchParams(location.search).get('review')) startReview();
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
