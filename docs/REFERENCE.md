@@ -1059,8 +1059,7 @@ blocking for dev, test and deployment." The design, the conflict matrix, the que
 Equivalent resources (owner 2026-10-31, [design](tasks/LEASE-EQUIVALENTS.md)): `claim` takes `any: <group>` (groups from
 `<LEASE_DIR>/inventory.json`, [LEASE-INVENTORY](LEASE-INVENTORY.md)) or `alternatives`; one ticket waits on all options. Ticket
 views carry `equivalents_free` and, for a host claim blocked only by device leases, `hint`. `GET /inventory?env=` lists the groups.
-`POST /deploy/release-hosts` (runner client) is the rolling deploy release: the deploy runner (`rollingTracker`,
-`GHOSTY_DEPLOY_ROLLING=off` disables it) calls it for each host update_core.sh has finished. `lease-nudge.js` tells a waiter
+`POST /deploy/release-hosts` (runner client) drops finished hosts from a running deploy's lease (the rolling release). `lease-nudge.js` tells a waiter
 about a free equivalent after 5 min; `systemResolvable` keeps lease/deploy stops with a live ticket or running deploy from
 waking the manager (`lease:system-wait`).
 

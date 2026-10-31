@@ -103,10 +103,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
 - `vpt-lease` prints ETAs as `HH:MM UTC` (the registry host runs in CET; an unlabeled local time looked an hour late).
 - A catch-up deploy (the restart of a host a deploy skipped) never holds a claim or ticket back while it is only queued; it blocks once it runs.
   After skipping again it waits 10 min before its next try, one pending catch-up per host set (a newer ref replaces an older one), and it yields to a device ticket that has waited over 10 min.
-- A host deploy releases each host as soon as it is done with it (rolling, owner 2026-10-31): update_core.sh reports each host's health,
-  and once the run has moved on to the next host the deploy runner drops that host from the deploy lease (`vpt-lease deploy release-hosts`).
-  A host the deploy has not reached yet, or is on now, stays held until it is done. Hosts held by a run are synced and restarted later by
-  the catch-up, as before.
+- A host deploy still holds every host lease while it runs (about 12 min): device tickets on those hosts are granted when it ends.
 
 ## Priority: P2 and P3 leases are short, and yield to a higher priority
 

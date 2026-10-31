@@ -831,38 +831,3 @@ test('cap: a deploy that skips a host already tried 3 times queues no catch-up',
   assert.ok(!reg.calls.some((c) => c.startsWith('deploy request')));
   assert.match(readFileSync(join(stateDir, 'deploys', '9.log'), 'utf8'), /catch-up for host-a not requested: 3 catch-ups at main already skipped it/);
 });
-
-// ---- rolling release (owner 2026-10-31): a host deploy releases each finished host instead of holding all of them to the end ----
-const prog = (host, phase, state, role = 'host') => `VPT_PROGRESS ${JSON.stringify({ host, role, phase, state, ts: '2026-10-31T12:00:00Z', detail: '' })}`;
-test('rollingTracker: a host is released once it is healthy AND the run moved on to the next host', async () => {
-  const { rollingTracker } = await import('../deploy-runner.js');
-  const t = rollingTracker();
-  assert.deepEqual(t(prog('host-a', 'rsync', 'start')), []);
-  assert.deepEqual(t(prog('host-a', 'health', 'ok')), [], 'health alone is too early: the secondary-server catch-up runs after it');
-  assert.deepEqual(t(prog('host-a', 'install', 'ok')), []);
-  assert.deepEqual(t(prog('host-b', 'rsync', 'start')), ['host-a']);
-  assert.deepEqual(t(prog('host-b', 'health', 'failed')), []);
-  assert.deepEqual(t(prog('host-c', 'rsync', 'start')), [], 'a failed host stays held until the end');
-  assert.deepEqual(t(prog('host-c', 'health', 'skipped')), []);
-  assert.deepEqual(t('==> plain log line'), []);
-  assert.deepEqual(t(prog('host-a', 'rsync', 'start')), ['host-c'], 'the move to another host releases host-c');
-  assert.deepEqual(t(prog('host-a', 'health', 'ok')), []);
-  assert.deepEqual(t(prog('srv', 'health', 'ok', 'server')), [], 'host-a was released once already');
-  assert.deepEqual(t(prog('host-d', 'rsync', 'start')), [], 'a server-role health line never counts');
-});
-
-test('a host deploy calls deploy release-hosts for each finished host; other scopes never do', async () => {
-  const reg = fakeRegistry({ deploys: [dep('5', { scope: 'host', ref: 'main' })] });
-  const { runner } = make(reg, { run: async (env, o) => {
-    for (const l of [prog('host-a', 'rsync', 'start'), prog('host-a', 'health', 'ok'), prog('host-b', 'rsync', 'start'), prog('host-b', 'health', 'ok')]) o.onLine(l);
-    await sleep(30); return { code: 0 };
-  } });
-  await runner.tick();
-  await until(() => reg.deploys.find((d) => d.id === '5').state === 'done');
-  assert.deepEqual(reg.calls.filter((c) => c.startsWith('deploy release-hosts')), ['deploy release-hosts 5 --hosts host-a']);
-  const reg2 = fakeRegistry({ deploys: [dep('6', { scope: 'full', ref: 'main' })] });
-  const { runner: r2 } = make(reg2, { run: async (env, o) => { o.onLine(prog('host-a', 'health', 'ok')); o.onLine(prog('host-b', 'rsync', 'start')); return { code: 0 }; } });
-  await r2.tick();
-  await until(() => reg2.deploys.find((d) => d.id === '6').state === 'done');
-  assert.equal(reg2.calls.filter((c) => c.startsWith('deploy release-hosts')).length, 0);
-});
