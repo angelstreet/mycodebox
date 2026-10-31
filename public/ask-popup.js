@@ -270,10 +270,14 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   function render(force) {
     const r = reconcileQueue(q, state.status || {}, state.sessions || [], Date.now(), state.ownerAsks || []);
     q = { items: r.items.filter((i) => !dismissed.has(i.key)), answered: r.answered };
+    const hiddenN = r.items.length - q.items.length;   // still open but dismissed earlier: the strip counts them, so the pill must offer them back
     r.added = r.added.filter((i) => !dismissed.has(i.key));
     if (!q.items.length) {
       curKey = null; ctx = null; renderedKey = '';
-      el.classList.add('hidden'); pill.classList.add('hidden'); body.innerHTML = '';
+      el.classList.add('hidden'); body.innerHTML = '';
+      pill.querySelector('.ap-pill-n').textContent = String(hiddenN);
+      pill.classList.toggle('hidden', !hiddenN);
+      document.body.classList.toggle('has-ask-pill', hiddenN > 0);
       return;
     }
     if (!q.items.some((i) => i.key === curKey)) {
@@ -437,7 +441,10 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.act === 'details') return setDet(!detOpen);
     if (t.dataset.btn) pick(btnById(t.dataset.btn));
   });
-  pill.addEventListener('click', () => setMin(false));
+  pill.addEventListener('click', () => {
+    if (!q.items.length) { dismissed.clear(); saveDismissed(); minimised = false; try { sessionStorage.setItem(MIN_KEY, '0'); } catch {} }   // only dismissed items are left: bring them back
+    setMin(false);
+  });
   // a click anywhere outside the popup hides it (the red pill brings it back)
   document.addEventListener('pointerdown', (e) => {
     if (minimised || el.classList.contains('hidden')) return;
