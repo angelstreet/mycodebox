@@ -859,9 +859,21 @@ const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(needs-manager|done|ne
 const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', 'complete', 'completed', 'finished']);
 // MiniMax (mcode) prints its todo panel under the reply: "✓ ...", "○ ...", "… +17 more · 18/20 done · 1 pending · Ctrl+T expand".
 const TODO_PANEL_END_RE = /\b\d+\/\d+ done\b[^\n]*(?:pending|Ctrl\+T)|^\s*…\s*\+\d+ more\b/;
+// A long STATUS line wraps in the pane: "STATUS: done — ... deployed to" / "the frontend, ..." / "appear · bugs: none".
+// Read from the last 3 rows only, it was missed and the heuristics made "Reload the page." above it an owner action (2026-10-31).
+// A row continues the one above when that row is pane-wide (a short row ends its paragraph).
+const WRAP_MIN = 60, MAX_WRAP_ROWS = 6;
 export function statusLine(lines) {
   const panel = lines.slice(-4).some((l) => TODO_PANEL_END_RE.test(l));   // the STATUS line sits above the panel (and its "◐ Tasks · 1 agent active" line)
-  for (const l of lines.slice(panel ? -14 : -3).reverse()) {
+  const rows = lines.slice(panel ? -14 : -3);
+  if (!panel) {
+    for (let i = lines.length - 1, n = 0; i > 0 && n < MAX_WRAP_ROWS && lines[i - 1].trim().length >= WRAP_MIN; i--, n++) {
+      if (!STATUS_LINE_RE.test(lines[i - 1])) continue;
+      if (i - 1 < lines.length - 3) rows.unshift(lines.slice(i - 1).map((l) => l.trim()).join(' '));
+      break;
+    }
+  }
+  for (const l of rows.reverse()) {
     const m = STATUS_LINE_RE.exec(l);
     if (!m) continue;
     const k = m[1].toLowerCase(), text = stripSeparator(m[2].replace(/[*_`]+\s*$/, '').trim());
