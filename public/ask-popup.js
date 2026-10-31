@@ -42,6 +42,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   const detScroll = { key: null, top: null, atBottom: true, seen: false };   // where the owner scrolled the Details log to
   let expanded = false;                         // the bigger popup (more of the log)
   let detOpen = false;                          // "Details" (tail of the closing text), collapsed by default, remembered like Why
+  const freeDraft = new Map();                  // item.key -> text typed in a manager question's own-answer box
   const picks = new Map();                      // item.key -> { questionN: optionN } (the multi-question form, owner's taps)
   const fqOpen = new Set();                     // `${item.key}|${questionN}`: question whose full option texts are expanded
   const exOpen = new Set();                     // option descriptions expanded: `${item.key}|${button id}`
@@ -240,6 +241,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     // the recommendation. The options below them are how he answers.
     const s = askSummary(a);
     const text = [a.question, s.what, s.why ? `Why you: ${s.why}` : '', mopts.length ? mopts.map((o) => `${o.n}. ${o.label}${o.rec ? ' (recommended)' : ''}`).join('\n') : '', loose ? `Recommends: ${loose}` : ''].filter(Boolean).join('\n');
+    const sig = JSON.stringify(['ask', item.key, idx, q.items.length, expanded, text]);
+    if (renderedKey === sig && body.firstChild) return;   // the 1 s tick must not wipe what the owner is typing
     body.innerHTML = `<div class="ap-head">
         <span class="ap-prio P2">manager</span>
         <span class="ap-name">${esc(a.id || 'question')}</span>
@@ -252,8 +255,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
       <div class="ap-q mdbody">${copyPromptButtonHtml({ text, label: 'Copy question' })}${renderMd(s.what || String(a.question || ''))}${s.why ? `<div class="ap-tldr"><div class="ap-tldr-what">Why you: ${esc(s.why)}</div></div>` : ''}</div>
       ${mopts.length ? `<div class="ap-btns op">${mopts.map((o, i) => `<button type="button" class="ap-b op${o.rec ? ' hl isrec' : ''}" data-mopt="${i}"${o.why ? ` title="${esc(o.why)}"` : ''}><span class="n">${esc(o.n)}</span><span class="t">${esc(o.label)}</span>${o.rec ? '<i class="star">\u2605</i>' : ''}</button>`).join('')}</div>` : ''}
       ${loose ? `<div class="ap-tldr"><div class="ap-tldr-what">Recommends: ${esc(loose)}</div></div>` : ''}
-      <div class="ap-meta">${mopts.length ? 'Tap an answer: it is sent to the manager' : 'Answer in: tell the manager'}</div>`;
-    renderedKey = '';
+      <div class="ap-free"><input type="text" class="ap-free-in" data-free placeholder="${mopts.length ? 'Something else\u2026' : 'Your answer\u2026'}" aria-label="Your own answer" autocomplete="off" value="${esc(freeDraft.get(item.key) || '')}"><button type="button" class="ap-b ap-free-go" data-act="free-send">Send</button></div>
+      <div class="ap-meta">${mopts.length ? 'Tap an answer or type your own: it is sent to the manager' : 'Answer in: tell the manager'}</div>`;
+    renderedKey = sig;
     if (!r.added.length) el.classList.remove('ap-anim');
   }
 
@@ -265,6 +269,18 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (!target) { btn.classList.add('muted'); btn.title = 'The manager session is not running'; return; }
     for (const b of body.querySelectorAll('[data-mopt]')) b.disabled = true;
     Promise.resolve(askSend(target, a.id, { text: answerText(a, opt) }, null)).then(() => { dismissed.add(item.key); saveDismissed(); curKey = null; render(true); });
+  }
+
+  // The owner's own words for a manager question: sent to the manager as the answer, then the question leaves the popup.
+  function answerManagerFree() {
+    const item = cur(); const a = item?.ask; if (!a) return;
+    const input = body.querySelector('[data-free]');
+    const txt = String(input?.value || '').trim();
+    if (!txt) { input?.focus(); return; }
+    const target = a.session && state.status?.[a.session] ? a.session : (state.status?.manager ? 'manager' : null);
+    if (!target) { input.title = 'The manager session is not running'; return; }
+    input.disabled = true;
+    Promise.resolve(askSend(target, a.id, { text: `Owner answer to ${a.id || 'your question'}: ${txt}` }, null)).then(() => { freeDraft.delete(item.key); dismissed.add(item.key); saveDismissed(); curKey = null; render(true); });
   }
 
   function render(force) {
@@ -422,6 +438,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     }
     const t = e.target.closest('button'); if (!t) return;
     if (t.dataset.mopt != null) return answerManagerAsk(t);
+    if (t.dataset.act === 'free-send') return answerManagerFree();
     if (t.dataset.q) {   // a chip: one pick per question (tap again to clear)
       const k = curKey; const pk = { ...(picks.get(k) || {}) };
       if (pk[t.dataset.q] === t.dataset.o) delete pk[t.dataset.q]; else pk[t.dataset.q] = t.dataset.o;
@@ -441,6 +458,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     if (t.dataset.act === 'details') return setDet(!detOpen);
     if (t.dataset.btn) pick(btnById(t.dataset.btn));
   });
+  body.addEventListener('input', (e) => { if (e.target.matches?.('[data-free]') && curKey) freeDraft.set(curKey, e.target.value); });
+  body.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches?.('[data-free]')) { e.preventDefault(); answerManagerFree(); } });
   pill.addEventListener('click', () => {
     if (!q.items.length) { dismissed.clear(); saveDismissed(); minimised = false; try { sessionStorage.setItem(MIN_KEY, '0'); } catch {} }   // only dismissed items are left: bring them back
     setMin(false);
