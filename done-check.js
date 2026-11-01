@@ -4,6 +4,7 @@
 // stamps ignored) and uncommitted tracked files. A mismatch gets one feed line and one message to the session (while it
 // is idle and the host is not busy), once per finding. Switch: manager.json `doneCheck` "live" (default) | "dry" | "off".
 // Journal: done-check.jsonl.
+import { pushableItems } from './done-leftovers.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -56,6 +57,17 @@ export function bugsFieldOf(text) {
 export const BUGS_COOLDOWN_MS = 12 * 3600 * 1000;   // one automatic push per session per 12 h, whatever the next STATUS line looks like
 export function bugsMessage() {
   return 'Done check: your STATUS: done line has no bugs field. Add `bugs: none | fixed <what> | reported <id>` to it (for example `STATUS: done — branch x merged; bugs: none`). If you saw anything outside your scope that errored, misbehaved or that you worked around, fix it or run `found-bug --title ... --error ...` first. End with a STATUS line.';
+}
+
+// Owner rule 2026-11-01: never `STATUS: done` with something left. A done line that lists leftovers or says "not fully confirmed" is sent back to finish.
+export function leftoversMessage(items) {
+  return `Done check: your STATUS says done, but you listed work still left: ${items.slice(0, 3).join(' | ').slice(0, 280)}. Do not write STATUS: done while something is left: finish it now (or keep working / go blocked), and use \`STATUS: not fully confirmed: <what remains>\` (or partial) until it is all done.`;
+}
+export function leftoverItemsOf(text) {
+  const items = pushableItems(text) || [];
+  const m = /^\W*STATUS:\s*(?:done|ok|complete|completed|finished)\b.*?\bnot fully confirmed\b[:\s-]*(.*)$/im.exec(String(text || ''));
+  if (m) items.push(`not fully confirmed${m[1] ? ': ' + m[1].trim() : ''}`);
+  return items;
 }
 
 export function message(f) {
@@ -189,6 +201,20 @@ export function createDoneCheck({
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
         try { await send(s.name, bugsMessage()); st.toldBugs[s.name] = now(); nudged++; await note({ session: s.name, bugsField: 'missing' }); }
         catch (e) { log.error?.('[done-check] send bugs', s.name, e.message); }
+      }
+      // (B) a done STATUS that lists leftovers / "not fully confirmed" is sent back to finish them, once per distinct list
+      st.toldLeft ||= {};
+      for (const n of Object.keys(st.toldLeft)) if (!live.has(n)) delete st.toldLeft[n];
+      for (const s of sessions) {
+        if (s.working) continue;
+        const items = leftoverItemsOf(s.text);
+        if (!items.length) continue;
+        const sig = createHash('sha1').update(items.join('\0')).digest('hex').slice(0, 12);
+        if (st.toldLeft[s.name] === sig) continue;
+        if (m === 'dry') { await note({ dry: true, session: s.name, leftovers: items }); continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, leftoversMessage(items)); st.toldLeft[s.name] = sig; nudged++; await note({ session: s.name, leftovers: items }); }
+        catch (e) { log.error?.('[done-check] send leftovers', s.name, e.message); }
       }
       await save(st);
       return (last = { at: now(), mode: m, checked: sessions.length, missingBugsField: missing, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });

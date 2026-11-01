@@ -129,7 +129,7 @@ case "$cmd" in
       printf 'The request is queued without an approval; a floor that needed it will return it.\n'
     fi
     if [ "$WAIT" = 1 ]; then do_wait "$ID" 60; fi
-    printf 'End your turn with: STATUS: waiting: integration %s\n' "$ID" ;;
+    printf 'Integration %s queued. Keep working on anything that does not depend on it; end the turn with STATUS: waiting: integration %s only when nothing else is left.\n' "$ID" "$ID" ;;
   status)
     if [ -n "$1" ]; then
       api GET "/api/integration/requests/$(urlenc "$1")?format=kv"; [ "$CODE" = 200 ] || fail_http

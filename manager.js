@@ -1176,7 +1176,7 @@ async function mergeHandoff({ s, w, id, h, final, stall }) {
     if (q?.id) {
       await appendJournal({ kind: 'merge_handoff', id, session: name, at: at.toISOString(), repo, branch, pr: ask.pr || null, integration: q.id, position: q.position ?? null });
       logLater({ type: 'merge_handoff', id, session: name, repo, branch, integration: q.id });
-      const text = `Merges are not yours or the owner's: queued integration ${q.id}. End with STATUS: waiting: integration ${q.id}.`;
+      const text = `Merges are not yours or the owner's: queued integration ${q.id}. Keep working on anything that does not depend on it; end with STATUS: waiting: integration ${q.id} only when nothing else is left.`;
       const sent = await tell(text);
       if (!sent) logLater({ type: 'merge_handoff_unsent', id, session: name, integration: q.id });
       // the answer joins "Decided for you" to the lane's own verdict record (lane-merge-<id>, integration-lane.js); no verdict, no item

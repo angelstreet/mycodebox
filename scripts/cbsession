@@ -59,9 +59,9 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
    wait on a job anyway, name its pid, log file, run id or deploy id in the STATUS line (STATUS: waiting: run r-12,
    pid 4242, log /tmp/run.log): the manager then wakes you when it ends. Waiting on your own job is not "blocked".
    Integration: commit on your own branch, push the branch and run \`integrate request <branch> [--deploy <scope>]\`; never
-   merge into the target, push the target or run the deploy script yourself. End the turn with \`STATUS: waiting:
+   merge into the target, push the target or run the deploy script yourself. Then keep working on anything that does not depend on it; only when nothing else is left end the turn with \`STATUS: waiting:
    integration <id>\`; the lane tells you the result (a returned request: fix it on your branch, request again).
-   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run \`integrate request\`, then \`STATUS: waiting: integration <id>\`.
+   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run \`integrate request\`, then continue, or \`STATUS: waiting: integration <id>\` if nothing else is left.
    VirtualPyTest: a new script is a virtual script or a simple test case, never a file under test_scripts/ (deprecated
    2026-10-28; the commit/push/CI guard refuses one).
    Bug outside your scope (owner, 2026-10-28): fix it in a worktree, or run \`found-bug --title ... --repro ... --error ...

@@ -30,9 +30,9 @@ test('the handover prompt keeps the backticked commands as literal text', () => 
   assert.doesNotMatch(r.stderr, /command substitution/, 'bash executed something in the prompt heredoc');
   const p = promptOf('cbp-h');
   assert.match(p, /run `integrate request <branch> \[--deploy <scope>\]`/);
-  assert.match(p, /run `integrate request`, then `STATUS: waiting: integration <id>`/);
+  assert.match(p, /run `integrate request`, then continue, or `STATUS: waiting: integration <id>` if nothing else is left/);
   assert.ok(p.includes('STATUS: waiting: integration <id>'), 'the STATUS line keeps the <id> placeholder');
-  assert.match(p, /End the turn with `STATUS: waiting:/, 'the multi-line backtick pair is literal too');
+  assert.match(p, /end the turn with `STATUS: waiting:/, 'the multi-line backtick pair is literal too');
   assert.match(p, new RegExp(`Read the handover: ${handover.replace(/[/.]/g, '\\$&')},`), 'the handover path is interpolated');
   assert.match(p, new RegExp(`Working directory: ${work.replace(/[/.]/g, '\\$&')}\\.`), 'the working directory is interpolated');
 });
@@ -43,4 +43,10 @@ test('rendering the prompt starts no tmux session', () => {
   const calls = (fs.existsSync(tmuxLog) ? fs.readFileSync(tmuxLog, 'utf8') : '').trim().split('\n').filter(Boolean);
   assert.ok(calls.length > 0 && calls.every((c) => c.startsWith('has-session ')), `only existence checks, no new-session: ${calls}`);
   assert.ok(promptOf('cbp-x').length > 500);
+});
+test('integrate CLI message says keep working, wait only when nothing else is left (2026-11-01)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const s = readFileSync(new URL('../scripts/integrate', import.meta.url), 'utf8');
+  assert.match(s, /Keep working on anything that does not depend on it; end the turn with STATUS: waiting: integration %s only when nothing else is left\./);
+  assert.doesNotMatch(s, /End your turn with: STATUS/);
 });

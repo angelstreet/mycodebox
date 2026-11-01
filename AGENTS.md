@@ -51,8 +51,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 - Integration (round 13): commit on your own branch, push the branch, then hand off to the integration lane with
   `integrate request <branch> [--deploy frontend|server|host|full]`. Never merge into the target branch, push the target
   or run the deploy script yourself; the lane merges, tests, pushes, waits for CI and deploys, then tells you the result.
-  End the turn with `STATUS: waiting: integration <id>`; a returned request is fixed on your branch and requested again.
-  Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then `STATUS: waiting: integration <id>`.
+  After `integrate request`, keep working on the next independent item of your task (validation runs, tests, other fixes, the
+  leases you need); a docs-only or already-pushed integration never blocks device or validation work. Only when nothing is left that
+  does not depend on the result, end the turn with `STATUS: waiting: integration <id>` (the lane wakes you with the result); a returned
+  request is fixed on your branch and requested again.
+  Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then continue, or `STATUS: waiting: integration <id>` if nothing else is left.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
 - Bugs outside your scope (owner, 2026-10-28): when you hit a bug that is not yours (an endpoint that errors, a pre-existing
   failure, a tool that misbehaves), either fix it in a worktree or file it with `found-bug --title ... --endpoint ...
@@ -63,6 +66,8 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   shipped without stopping to ask "which one next?". Keep the queue explicit, rank it yourself, and take the fixes one
   at a time. Ask only on a hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous
   to act on. `STATUS: done` is only honest when the queue is empty.
+- Never `STATUS: done` with leftovers (owner, 2026-11-01): when anything is left, write `STATUS: not fully confirmed: <what remains>` (or `partial`)
+  and keep working or go blocked. The done-check sends a session whose done line lists leftovers or "not fully confirmed" back to finish them.
 - Never write work-in-progress into the live checkout (`~/ghosty-sessions`), including doc edits. It blocks deploys and
   risks committing secrets. Every change, docs included, goes in a worktree.
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.

@@ -124,3 +124,11 @@ test('tick: uncommitted files in the shared main checkout are not blamed on the 
   const r = await h.w.tick();
   assert.deepEqual(r.findings.map((f) => f.name), ['b']);
 });
+
+test('leftovers nudge: a done line with leftovers or "not fully confirmed" is sent back to finish (2026-11-01)', async () => {
+  const { leftoversMessage, leftoverItemsOf } = await import('../done-check.js');
+  assert.deepEqual(leftoverItemsOf('STATUS: done'), []);
+  assert.match(leftoverItemsOf('STATUS: done — merged; not fully confirmed: device run')[0], /not fully confirmed: device run/);
+  assert.match(leftoverItemsOf('Left to do:\n- run the validation\nSTATUS: done')[0], /run the validation/);
+  assert.match(leftoversMessage(['run the validation']), /Do not write STATUS: done while something is left.*STATUS: not fully confirmed: <what remains>/);
+});
