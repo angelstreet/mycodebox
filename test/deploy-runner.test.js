@@ -708,7 +708,7 @@ test('the lease granted at deploy start is read back from the list and handed to
   const { runner, ran } = make(reg);
   await runner.tick();
   await until(() => reg.deploys.find((d) => d.id === '7').state === 'done');
-  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=7 VPT_LEASE_ID=L7 bash update_core.sh main --server --skip-leased');
+  assert.equal(ran[0].remoteCmd, 'VPT_LEASE_AGENT=manager:deploy VPT_DEPLOY_ID=7 DEPLOY_LEASE_TTL_MIN=45 VPT_LEASE_ID=L7 bash update_core.sh main --server --skip-leased');
 });
 
 test('runner on: only the in-process requester (the lane) or a named manager client is auto-approved; any other token goes to the manager', async () => {

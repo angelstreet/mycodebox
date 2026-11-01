@@ -1070,6 +1070,13 @@ views carry `equivalents_free` and, for a host claim blocked only by device leas
 about a free equivalent after 5 min; `systemResolvable` keeps lease/deploy stops with a live ticket or running deploy from
 waking the manager (`lease:system-wait`).
 
+Deploy duration follows progress (owner 2026-11-01): `POST /deploy/progress` (runner client; `vpt-lease deploy progress <id>`) renews the
+running deploy's lease to now + `deployLeaseMin` (12), never past start + `deployCeilingMin` (45); `release-hosts` renews too. The runner calls it
+on each `VPT_PROGRESS` health ok|skipped, restarts its hold clock (`timeoutMs`) there, kills at the hard ceiling (`DEFAULT_HOLD_CEILING_MS`,
+`# TIMEOUT: hold ceiling`), and passes `DEPLOY_LEASE_TTL_MIN=<ceiling>` to update_core.sh (joined lease only) so its own wall-clock guard
+(exit 6) stops at the ceiling. A deploy cut short (hold/ceiling kill or exit 6) requests a catch-up for the hosts of its
+`=== Lease check` list that never reported health (same path as leased-skipped hosts, capped at `CATCHUP_CAP`).
+
 - `lease-service.js`: the single writer of leases, tickets and the deploy queue (journal + snapshot in
   `<state>/leases/`, fail closed). Always constructed; nothing in the fleet uses it until clients point at it.
 - `lease-routes.js`: `/api/lease/v1/*` for lease clients, bearer token per machine (`node scripts/lease-token.js add

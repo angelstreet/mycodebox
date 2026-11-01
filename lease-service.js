@@ -128,7 +128,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
     envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 2 * MIN, goneGraceMs: 2 * MIN,
-    snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12,
+    snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12, deployCeilingMin: 45,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
     defaultPriority: 'P1', lowPriority: 'P2', lowPriorityMaxTtlMin: 10,
@@ -1110,6 +1110,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     if (a.client == null || a.owner === true || a.exempt === true || d.client === a.client || d.runnerClient === a.client) return null;
     return fail('E_AUTH', 'not your deploy: needs the deploy runner client, an owner, or the client that requested it', { status: 403 });
   }
+  function renewDeployLeases(emit, d, t) {
+    const to = Math.min(t + cfg.deployLeaseMin * MIN, (d.started || t) + cfg.deployCeilingMin * MIN);
+    const ids = [];
+    for (const l of Object.values(S.leases).filter((x) => x.deployId === d.id && x.system && x.expires < to)) { emit({ t: 'renew', id: l.id, expires: to, ttlMin: l.ttlMin, at: t, lastHb: l.lastHb }); ids.push(l.id); }
+    return ids;
+  }
   const deploy = {
     async request(a = {}) {
       const bad = envCheck(a.env); if (bad) return bad;
@@ -1184,6 +1190,17 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     },
     // Rolling release (owner 2026-10-31): the runner reports each host the running deploy has finished (update_core.sh's health
     // progress line), and the deploy stops holding it: its lease drops host:<h> and the deploy no longer blocks claims there.
+    // Progress renewal (owner 2026-11-01): the deploy lease's deadline follows progress, not wall time. Every host the run finishes pushes the
+    // deadline to now + deployLeaseMin, never past started + deployCeilingMin (the hard ceiling for the whole deploy).
+    async progress(a = {}) {
+      return mutate((emit) => {
+        const d = findDeploy(a.id);
+        if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
+        const no = deployAuth(d, a); if (no) return no;
+        if (d.state !== 'running') return fail('E_INVALID', `deploy ${d.id} is ${d.state}, not running`);
+        return { ok: true, renewed: renewDeployLeases(emit, d, now()) };
+      });
+    },
     async releaseHosts(a = {}) {
       const hosts = hostList(a.hosts).filter((h) => nameOk(h));
       if (!hosts.length) return fail('E_INVALID', 'hosts required');
@@ -1195,6 +1212,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         const t = now();
         const fresh = hosts.filter((h) => !(d.doneHosts || []).includes(h));
         if (fresh.length) emit({ t: 'dep_set', deploy: { ...d, doneHosts: [...(d.doneHosts || []), ...fresh] }, at: t });
+        renewDeployLeases(emit, d, t);
         const drop = new Set(hosts.map((h) => `host:${h}`));
         const released = [];
         for (const l of Object.values(S.leases).filter((x) => x.deployId === d.id && x.system)) {
@@ -1446,7 +1464,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     narrow: guard(narrow), setMode: guard(setMode), ownerRelease: guard(ownerRelease), importLegacy: guard(importLegacy),
     get: guard(get), list: guard(list), check: guard(check), events: guard(events), inventory: guard(inventory),
   } : {};
-  const deployApi = na ? { ...deploy, request: guard(), approve: guard(), cancel: guard(), start: guard(), finish: guard(), record: guard(), list: guard(), wait: guard(), last: guard(), releaseHosts: guard() } : deploy;
+  const deployApi = na ? { ...deploy, request: guard(), approve: guard(), cancel: guard(), start: guard(), finish: guard(), record: guard(), list: guard(), wait: guard(), last: guard(), releaseHosts: guard(), progress: guard() } : deploy;
 
   return {
     claim, ticket, cancelTicket, get, release, renew, inventory, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone, sessionStatus, activity, tick,

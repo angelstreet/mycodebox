@@ -117,7 +117,7 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
   // The caller's identity always comes from the token: body fields client / exempt / owner are discarded.
   const post = (path, op, fn = (b) => b) => route('POST', path, ({ body, client, who }) => {
     const { client: _c, exempt: _e, owner: _o, ...b } = fn(body, who);
-    const exempt = op === 'claim' ? exemptFor(client, b.agent) : ['deploy.start', 'deploy.finish', 'deploy.cancel', 'deploy.releaseHosts'].includes(op) ? isRunner(client) : undefined;
+    const exempt = op === 'claim' ? exemptFor(client, b.agent) : ['deploy.start', 'deploy.finish', 'deploy.cancel', 'deploy.releaseHosts', 'deploy.progress'].includes(op) ? isRunner(client) : undefined;
     return { op, args: { ...b, client: client.name, ...(exempt === undefined ? {} : { exempt }) } };
   });
   post('/claim', 'claim');
@@ -139,6 +139,7 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
   route('GET', '/status', () => ({ op: 'status', args: {} }));
   for (const name of ['request', 'approve', 'cancel', 'start', 'finish', 'record']) post(`/deploy/${name}`, `deploy.${name}`);
   post('/deploy/release-hosts', 'deploy.releaseHosts');
+  post('/deploy/progress', 'deploy.progress');
   route('GET', '/inventory', ({ query }) => ({ op: 'inventory', args: { env: query.env || undefined } }));
   route('GET', '/deploy/list', ({ query }) => ({ op: 'deploy.list', args: { env: query.env || undefined, all: bool(query.all) } }));
   route('GET', '/deploy/wait', ({ query }) => ({ op: 'deploy.wait', args: { id: query.id || undefined, env: query.env || undefined, agent: query.agent || undefined, timeout_s: Math.min(MAX_WAIT_S, Math.max(0, num(query.timeout) || 0)) } }));

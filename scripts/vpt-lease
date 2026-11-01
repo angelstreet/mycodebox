@@ -1031,6 +1031,12 @@ def cmd_deploy(a):
             return deploy_fail(r, a)
         print("released %s" % (",".join(r.get("released") or []) or "nothing"))
         return 0
+    if c == "progress":
+        r = api("POST", "/deploy/progress", body)
+        if not r.get("ok"):
+            return deploy_fail(r, a)
+        print("renewed %s" % (",".join(r.get("renewed") or []) or "nothing"))
+        return 0
     if c == "start":
         body.update(agent=a.agent, skip_leased=a.skip_leased)
     elif c == "finish":
@@ -1427,6 +1433,8 @@ def build_parser():
     rh = dsub.add_parser("release-hosts", help="the running deploy is done on these hosts: stop holding them (deploy runner)")
     rh.add_argument("deploy_id"); rh.add_argument("--hosts", required=True)
     st.add_argument("--skip-leased", action="store_true")
+    pg = dsub.add_parser("progress", help="the running deploy finished a host: renew its lease deadline, up to the ceiling (deploy runner)")
+    pg.add_argument("deploy_id")
     fi = dsub.add_parser("finish"); fi.add_argument("deploy_id"); fi.add_argument("--status", required=True, choices=("done", "failed"))
     fi.add_argument("--version", default=""); fi.add_argument("--tail-stdin", action="store_true")
     fi.add_argument("--coalesced-into", default=""); fi.add_argument("--skipped-hosts", default="")
