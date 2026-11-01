@@ -1621,6 +1621,12 @@ holders: the holders that are neither a session nor a platform agent).
 - **Waiting on its own job** (`job-refs.js`, `own-jobs.js`): a STATUS `blocked` / `waiting` that names a pid, a log file, a run id or a deploy id is
   case `own_job_wait`, never shown as needs-you; the job is watched (deploy state, `/proc/<pid>` or the pane's process tree, a log file's mtime)
   and when it ends the session gets "your <job> finished at <time>, continue". A detached job (`nohup`, `setsid`, `disown`, `&`) is flagged in the feed.
+  Stale waits (owner, 2026-11-01, `wait-ids.js`): a script run / execution / task uuid (or an 8-hex prefix cut with `...`) is resolved with a read-only
+  GET on the platform server (`/server/run-management/summary/script/<id>`, `JEV_URL` origin, `JEV_API_KEY`, `VPT_TEAM_ID`; never printed); an end state, or
+  "running" longer than `maxRunMin` (120), wakes the session with "your run <id> ended <state> at <time> (<message>), continue". A lease ticket
+  (`t-...`) or lease id is read from the lease view (never `ticket()`, which would collect the reservation) and wakes on granted / dropped / released.
+  Staleness sweep: a session whose STATUS waiting is unresolved (no job identified, or the id is not found), whose pane was quiet for 20 min, with
+  no live child, gets "nothing you wait on is still running: check the result and continue" once, at most every 30 min; logged as `own_job_stale_nudge`.
 - **Remote stops** (`remote-stops.js`, `scripts/mac-stop-hook.sh`, install in [MAC-HOOK](MAC-HOOK.md)): `POST /api/remote/v1/stops` and
   `GET /api/remote/v1/stops/<id>/answer?wait=<s>`, same address allowlist and bearer-token store as the lease API, but the token's client needs
   `remote: true` (`node scripts/lease-token.js add <name> --remote`). A stop enters `manager.js observe()` as the session `mac:<session name>`

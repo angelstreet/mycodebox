@@ -167,6 +167,7 @@ import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer } from './owner-ask
 import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
+import { createScriptRunSource } from './wait-ids.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createQuotaResumer } from './quota-resume.js';
@@ -2881,6 +2882,13 @@ server.listen(PORT, HOST, async () => {
     startedAt: async (pids) => { const m = new Map(); try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const x = l.trim().split(/\s+/); if (x.length === 2) m.set(Number(x[0]), Date.now() - Number(x[1]) * 1000); } } catch {} return m; },
     deployState: (id) => { const d = (deployRunner.snapshot().deploys || []).find((x) => String(x.id) === String(id)); return d ? { state: d.state, finished: d.finished ? d.finished * (d.finished < 1e12 ? 1000 : 1) : null } : null; },
     integrationState: async (id) => integrationLane.get(id),   // the lane's request (GET /api/integration/requests/:id)
+    scriptRun: createScriptRunSource({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', teamId: process.env.VPT_TEAM_ID || '' }),   // platform run rows, read-only GET (same key as Jev)
+    leaseState: async (id, kind) => {   // read-only view: leaseService.ticket() would refresh the poll clock and collect the reservation
+      const v = await leaseSource.view(false);
+      if (kind === 'ticket') { const tk = (v.tickets || []).find((x) => String(x.id).toLowerCase() === id); return tk && tk.state && tk.state !== 'waiting' ? { state: tk.state, leaseId: tk.lease_id || null } : tk ? { state: 'waiting' } : { state: 'gone' }; }
+      return (v.leases || []).some((x) => String(x.id) === id) ? { state: 'held' } : { state: 'released' };
+    },
+    idleMs: (name) => { const st = latest?.status?.[name]; const at = st?.changeAt || st?.doneAt; return at ? Date.now() - at : null; },
     stillWaiting: stillStopped, canSend: canType,
     send: async (name, text) => { await guardSendKeys(name, text, true); countSent(name); },   // a wake counts in the session's hourly cap
     record: (e) => managerEvents.record(e),
