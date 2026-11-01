@@ -90,3 +90,29 @@ test('a run holding a device lease on the host blocks a restart of a device unit
   const kpi = answerRoutineRestart({ text: 'restart vpt-kpi on <lab-host>', view, session: 's1' });
   assert.equal(kpi.covered, true);
 });
+
+test('per-device unit instance: own device lease suffices, only the same device blocks', () => {
+  const L = (id, agent, res, kind = 'host') => ({ id, mode: 'exclusive', kind, agent, resources: [res] });
+  const ask = 'restart hid-remote@hci1 (device5) on <lab-host>';
+  const other4 = [L('A', 'codebox:s1', '<env>/<lab-host>/device5'), L('B', 'codebox:run7', '<env>/<lab-host>/device4')];
+  assert.equal(answerRoutineRestart({ text: ask, view: { ok: true, leases: other4 }, session: 's1' }).covered, true);
+  const same = [L('A', 'codebox:s1', '<env>/<lab-host>/device5'), L('B', 'codebox:run7', '<env>/<lab-host>/device5')];
+  const blocked = answerRoutineRestart({ text: ask, view: { ok: true, leases: same }, session: 's1' });
+  assert.equal(blocked.covered, false); assert.match(blocked.text, /device5/);
+  // own host lease also fine, another device's lease does not block
+  const hostL = [L('H', 'codebox:s1', '<env>/<lab-host>'), L('B', 'codebox:run7', '<env>/<lab-host>/device4', 'device')];
+  assert.equal(answerRoutineRestart({ text: ask, view: { ok: true, leases: hostL }, session: 's1' }).covered, true);
+  // no lease at all: claim the device, not the host
+  const none = answerRoutineRestart({ text: ask, view: { ok: true, leases: [] }, session: 's1' });
+  assert.equal(none.covered, false); assert.match(none.text, /Claim <lab-host>\/device5 first/);
+  // device in the unit suffix
+  assert.equal(answerRoutineRestart({ text: 'restart vpt-stream@device5 on <lab-host>', view: { ok: true, leases: other4 }, session: 's1' }).covered, true);
+});
+
+test('no derivable device or host-wide unit keeps the host rule', () => {
+  const view = { ok: true, leases: [
+    { id: 'L1', mode: 'exclusive', kind: 'host', agent: 'codebox:s1', resources: ['<lab-host>'] },
+    { id: 'L2', mode: 'exclusive', kind: 'device', agent: 'codebox:run7', resources: ['<lab-host>/device4'] } ] };
+  assert.equal(answerRoutineRestart({ text: 'restart hid-remote@hci1 on <lab-host>', view, session: 's1' }).covered, false);
+  assert.equal(answerRoutineRestart({ text: 'restart vpt-host (device5) on <lab-host>', view, session: 's1' }).covered, false);
+});
