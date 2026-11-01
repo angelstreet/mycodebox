@@ -23,9 +23,9 @@ test('texts: merged, deployed, returned (+ tail), ci red, deploy failed', () => 
   assert.equal(integrationText(req()), 'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa.');
   // deployed: the lane sets `deployed = { id, version, env, scope }` only on a successful deploy
   assert.equal(integrationText(req({ state: 'deployed', deployed: { id: 'd-1', version: '1.2.3', env: 'env-a', scope: 'full' } })),
-    'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa, deployed 1.2.3 to env-a.');
+    'Integration int-7f3a: merged feat/x into main at aaaaaaaaaaaa, deployed 1.2.3 to env-a (scope full).');
   const r = integrationText(req({ state: 'returned', reason: 'tests are red', tail: 'FAIL a\n\n  at b\nx\ny\nz\nw' }));
-  assert.match(r, /^Integration int-7f3a returned: tests are red\. Fix it on your branch and run integrate request again\.\nFAIL a\n  at b\nx\ny\nz$/);
+  assert.match(r, /^Integration int-7f3a \(feat\/x\) returned: tests are red\. Fix it on your branch and run integrate request again\.\nFAIL a\n  at b\nx\ny\nz$/);
   assert.match(integrationText(req({ state: 'merged_ci_red', reason: 'unit failed' })), /CI is red.*manager decides/);
   assert.match(integrationText(req({ state: 'merged_ci_superseded', reason: 'superseded by bbbbbbbbbbbb', supersededBy: 'b'.repeat(40) })),
     /superseded by bbbbbbbbbbbb.*CI runs on the newer tip: nothing to fix, do not branch again/);

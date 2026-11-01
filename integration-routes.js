@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import { join } from 'node:path';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, readBody } from './lease-routes.js';
 import { FINAL } from './integration-lane.js';
-import { integrationText } from './integration-notify.js';
+import { integrationText, timeline } from './integration-notify.js';
 
 export const PREFIX = '/api/integration';
 export const MAX_WAIT_S = 30;
@@ -28,7 +28,7 @@ export function describe(r) {
 }
 export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, target: r.target, state: r.state, final: FINAL.includes(r.state),
   exit: FINAL.includes(r.state) ? EXIT[r.state] : null, sha: r.sha || null, version: r.deployed?.version ?? null, reason: r.reason || null,
-  outcome: r.outcome || null, step: r.step || null, position: r.position ?? null, text: describe(r) });
+  outcome: r.outcome || null, step: r.step || null, position: r.position ?? null, text: describe(r), timeline: timeline(r).text, times: { createdAt: r.createdAt || null, startedAt: r.startedAt || null, endedAt: r.endedAt || null, ...(r.times || {}) } });
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
@@ -136,7 +136,7 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
           r = await lane.wait(m[1], t * 1000);
         } else r = lane.get(m[1]);
         if (!r) { fail('E_NOT_FOUND', 'no such request'); return true; }
-        send(res, 200, { ok: true, request: r, ...summary(r), flat: summary(r), tail: r.tail || '' }, fmt);
+        send(res, 200, { ok: true, request: r, ...summary(r), flat: (({ times: _t, ...f }) => f)(summary(r)), tail: r.tail || '' }, fmt);
       } else if (req.method === 'POST' && (m = /^\/requests\/([\w-]{1,64})\/cancel$/.exec(sub))) {
         const r = lane.cancel(m[1], { by: who.by });
         send(res, 200, { ok: true, request: r, ...summary(r), flat: summary(r) }, fmt);

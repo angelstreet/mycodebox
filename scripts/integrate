@@ -133,7 +133,7 @@ case "$cmd" in
   status)
     if [ -n "$1" ]; then
       api GET "/api/integration/requests/$(urlenc "$1")?format=kv"; [ "$CODE" = 200 ] || fail_http
-      printf '%s\n' "$(val text)"; _r=$(val reason); [ -n "$_r" ] && printf 'reason: %s\n' "$_r"; tail_of
+      printf '%s\n' "$(val text)"; _r=$(val reason); [ -n "$_r" ] && printf 'reason: %s\n' "$_r"; _tl=$(val timeline); [ -n "$_tl" ] && printf 'timeline: %s\n' "$_tl"; tail_of
     else
       api GET "/api/integration/requests?limit=10&format=kv"; [ "$CODE" = 200 ] || fail_http
       tail_of
