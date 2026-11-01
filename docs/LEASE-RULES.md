@@ -18,8 +18,10 @@ or `mac:<name>`.
 | Reading archives, frames, logs, copying chunks read-only | nothing, or the resource with `--mode observe` | observe |
 | "Keep this channel or state until I am done" | the resource with `--mode pin` | pin |
 
-- Add `--kind host` when only a restart of your own host breaks you; leave the default when a server restart breaks you
-  (runs started through the server API, the UI, MCP or take-control).
+- Sensitivity (`--kind`): a host or device claim defaults to `host` (only a restart of that host breaks you), so it never
+  holds up a server deploy. Add `--kind server` when a server restart breaks you (a run that needs the server API, the UI,
+  MCP or take-control the whole time); a server-kind lease queues every server deploy of the env until it ends, so keep it
+  short and release it as soon as the run is done (owner, 2026-11-01).
 - A routine restart of a vpt-* service on a lab host (`systemctl restart <unit>`) needs that host's lease (`--kind host`) only, never the server or an env-wide lease, and does not wait for the owner.
 - A frontend change never needs a backend or device lease, and a run on one device never blocks another device.
 - Deploys go through the queue: `vpt-lease deploy request ...`, then `vpt-lease deploy wait ...`. Never run a deploy

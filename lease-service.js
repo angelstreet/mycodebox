@@ -97,7 +97,9 @@ function leasesConflict(a, b, ignoreModes = false) {
 const PRIOS = ['P0', 'P1', 'P2', 'P3'];     // P3 = background (scheduled bots)
 const isPrio = (p) => PRIOS.includes(p);
 const prioRank = (p) => PRIOS.indexOf(p);
-const defaultKind = (parsed) => (parsed.length && parsed.every((r) => r.type === 'device') ? 'host' : 'server');
+// Host and device claims default to host sensitivity (owner 2026-11-01): a whole-host claim held for a 40-min script run defaulted
+// to server and kept every server deploy of the env queued until it expired. A claim a server restart breaks says --kind server.
+const defaultKind = (parsed) => (parsed.length && parsed.every((r) => r.type === 'device' || r.type === 'host') ? 'host' : 'server');
 // Which resources a deploy of this scope disturbs (pending deploys block new claims on these).
 function scopeTouches(scope, hosts, r) {
   if (r.type === 'env' || scope === 'full') return true;
