@@ -517,11 +517,28 @@ def backoff_sleep(state, why):
     time.sleep(state["delay"])
 
 
-def poll_ticket(tid, can_requeue=False):
+SWITCH_AFTER = float(os.environ.get("VPT_LEASE_SWITCH_AFTER") or (1 if FAST else 120))
+
+
+def verify_profile(cmd, env, res):
+    """--verify-profile CMD: optional hook run with VPT_LEASE_CANDIDATE=<resource>; exit 0 = this member has the needed
+    capabilities (app, login, firmware). Without the hook every group member is taken as equivalent."""
+    if not cmd:
+        return True
+    try:
+        r = subprocess.run(shlex.split(cmd), env=dict(os.environ, VPT_LEASE_CANDIDATE=res, VPT_LEASE_ENV=env),
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def poll_ticket(tid, can_requeue=False, switch=None):
     """Long-poll a ticket until granted. Returns ('lease', lease) | ('requeue', priority_since)
     | ('exit', code). Keeps retrying while unavailable. A ticket that was granted but not collected (missed), expired
     or lost is handed back as 'requeue' so the caller queues again with its original place in line."""
     state, last = {}, None
+    t0 = time.monotonic()
     while True:
         try:
             r = api("GET", "/tickets/" + urllib.parse.quote(tid), query={"wait": 1 if FAST else 30},
@@ -553,6 +570,15 @@ def poll_ticket(tid, can_requeue=False):
         if line != last:
             eprint(line)
             last = line
+        if switch is not None and t.get("equivalents_free") and time.monotonic() - t0 >= SWITCH_AFTER:
+            for e in t["equivalents_free"]:     # auto-equivalent: waited long enough and an equivalent member is free
+                res = e.get("legacy") or e.get("resource")
+                if res and verify_profile(switch, t.get("env") or "", res):
+                    return "switch", res
+
+
+def auto_equiv_on(a):
+    return not picks_any(a) and len(a.resources) == 1 and getattr(a, "auto_equivalent", True)
 
 
 def claim_wait(a):
@@ -579,7 +605,14 @@ def claim_wait(a):
                 if a.ticket_id_out is not None:
                     a.ticket_id_out.append(tid)
                 eprint(progress_line(val))
-            res, val = poll_ticket(tid, True)
+            res, val = poll_ticket(tid, True, (getattr(a, "verify_profile", None) or "") if auto_equiv_on(a) else None)
+            if res == "switch":
+                with contextlib.suppress(Exception):
+                    api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
+                eprint("auto-equivalent: waited %ds on %s, took the free equivalent %s instead (--no-auto-equivalent to wait)"
+                       % (SWITCH_AFTER, a.resources[0], val))
+                a.resources, a.auto_equivalent, tid = [val], False, None
+                continue
             if res == "requeue":
                 tid = None
                 a.priority_since = val or getattr(a, "priority_since", None)
@@ -691,7 +724,7 @@ def cmd_inventory(a):
     if not r.get("groups"):
         print("no groups of equivalent resources on %s (the registry host's inventory.json: docs/LEASE-INVENTORY.md)" % r.get("env"))
     for g in r.get("groups") or []:
-        print("%s: %s" % (g["group"], "  ".join("%s%s" % (m["resource"], " (free)" if m.get("free") else " (held by %s)" % ",".join(m.get("held_by") or []) or " (busy)")
+        print("%s: %s" % (g["group"], "  ".join("%s%s" % (m["resource"], " (free)" if m.get("free") else (" (held by %s)" % ",".join(m["held_by"]) if m.get("held_by") else " (busy)"))
                                                 for m in g.get("members") or [])))
     return 0
 
@@ -1388,6 +1421,9 @@ def build_parser():
         c.add_argument("env"); c.add_argument("resources", nargs="*")
         c.add_argument("--any", default=None, metavar="GROUP", help="any free resource of this group of equivalents (vpt-lease inventory <env>): granted the first free one, a --wait ticket waits on all of them; prints resource=<granted> as a second line")
         c.add_argument("--alt", action="append", default=None, metavar="RES[,RES]", help="an equivalent option to the named resources (repeatable); same behaviour as --any")
+        c.add_argument("--auto-equivalent", dest="auto_equivalent", action="store_true", default=True, help="(default on for a single named resource that belongs to an inventory group) after 2 min of waiting, switch to a free group member and print which one was taken")
+        c.add_argument("--no-auto-equivalent", dest="auto_equivalent", action="store_false", help="keep waiting on the named resource (it has its own account/firmware)")
+        c.add_argument("--verify-profile", default=None, metavar="CMD", help="hook run before an auto switch with VPT_LEASE_CANDIDATE=<resource>; exit 0 = the member has the capabilities needed, else it is skipped")
         c.add_argument("--agent", required=True); c.add_argument("--purpose", default="")
         c.add_argument("--ttl", type=int, default=120, help="minutes (default 120, clamped to max 60 per claim: release when the step is done and re-queue)")
         c.add_argument("--provider", default="")

@@ -25,6 +25,13 @@ because it names real hosts.
   same app, the same model and firmware line, the same login state. When in doubt, leave it out: a missing member costs a
   wait, a wrong member costs a wrong result.
 - Unique hardware (a single box of a kind, a device with its own account or firmware) is in no group and stays named.
+- Rule for a group: same app, same model/firmware line, same login state. Split by what the work needs, for example a web
+  group per browser profile that is logged in to the app, one group per set-top-box model, one per Android phone family.
+  Method for building the groups (the survey itself names real hosts, so it stays in the manager's state dir, not here):
+  list every host and device from the backends' host listing, take kind, model and app from it, check login state per
+  member, then count each member's idle share from `vpt-lease events`. Members that match on all three go in one group.
+- Sessions that name one member and wait are moved to a free group member by `vpt-lease` itself after 2 minutes
+  (auto-equivalent, [LEASE-RULES](LEASE-RULES.md)); that makes a wrong member costly, so keep groups strict.
 - A resource may be in several groups (a host that runs both the web app and an Android device).
 
 ## Updating it
