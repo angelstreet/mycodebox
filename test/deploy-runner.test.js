@@ -23,7 +23,7 @@ function fakeRegistry({ leases = [], deploys = [], armCatchUp = false } = {}) {
     }
     if (sub === 'start') {
       if (!d || d.state !== 'queued') return { code: 1, stdout: '', stderr: 'not queued' };
-      if (st.deploys.some((x) => x.env === d.env && x.state === 'running')) return { code: 3, stdout: '', stderr: 'running' };
+      if (st.deploys.some((x) => x.env === d.env && x.state === 'running' && !((x.scope === 'frontend' && d.scope === 'host') || (x.scope === 'host' && d.scope === 'frontend')))) return { code: 3, stdout: '', stderr: 'running' };
       if (st.leases.some((l) => l.env === d.env && l.agent !== 'manager:deploy' && touches(d.scope, l.resource))) return { code: 3, stdout: '', stderr: 'leases' };
       d.state = 'running'; if (st.grantLease) st.leases.push({ id: `L${d.id}`, env: d.env, resource: 'server', agent: 'manager:deploy', deploy_id: d.id }); return { code: 0, stdout: 'running', stderr: '' };
     }
@@ -190,6 +190,18 @@ test('one running per env: a second request waits while the first runs, other en
   release();
   await until(() => reg.deploys[1].state === 'done');
   assert.deepEqual(started.sort(), ['a', 'b', 'c']);
+});
+
+test('frontend and host deploys of one env run in parallel (separate lanes); a second frontend still waits', async () => {
+  const reg = fakeRegistry({ deploys: [dep('1', { scope: 'host', ref: 'h' }), dep('2', { scope: 'frontend', ref: 'f1' }), dep('3', { scope: 'frontend', ref: 'f2' })] });
+  let release; const gate = new Promise((r) => { release = r; });
+  const started = [];
+  const { runner } = make(reg, { run: async (env, o) => { started.push(o.ref); o.onLine('x'); await gate; return { code: 0 }; } });
+  await runner.tick(); await until(() => started.length === 2);
+  assert.deepEqual(started.sort(), ['f1', 'h']);
+  assert.equal(reg.deploys[2].state, 'queued');
+  release();
+  await until(() => reg.deploys[2].state === 'done');
 });
 
 test('failure path: non-zero exit -> failed with tail and alert; timeout -> failed', async () => {
@@ -460,7 +472,7 @@ test('orphan: a deploy tracked in this process\'s running map is left alone', as
   };
   const reg = fakeRegistry({ deploys: [orphan] });
   const { runner } = make(reg);
-  runner._running.set('node1-vpt', 'orphan1');                       // this process still owns it
+  runner._running.set('node1-vpt#frontend', 'orphan1');                       // this process still owns it
   await runner.tick();
   assert.equal(reg.deploys[0].state, 'running');
   assert.ok(!reg.calls.some((c) => c.startsWith('deploy finish orphan1')));
@@ -507,7 +519,7 @@ test('adopt: a child still alive at startup is re-adopted and finished when it e
   const { runner, dir, alerts } = mkAdopt(reg);
   fakeWrapper(dir, '5', 0.4);
   await runner.tick();
-  assert.equal(runner._running.get('node1-vpt'), '5');
+  assert.equal(runner._running.get('node1-vpt#frontend'), '5');
   assert.equal(reg.deploys[0].state, 'running');
   await until(() => reg.deploys[0].state === 'done', 5000);
   assert.equal(reg.deploys[0].version, '4.5.6');
