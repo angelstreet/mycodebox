@@ -28,6 +28,8 @@ const SCOPE_WIDTH = Object.freeze({ frontend: 1, server: 2, host: 3, full: 4 });
 // A queued request waits this long without changing before the lane picks it: a session that pushes commit after commit and
 // re-requests must not restart the target's CI once per commit (2026-10-20: three merges of one branch in three minutes).
 export const DEFAULT_SETTLE_MS = 60_000;
+// A pushed request waits at most this long for a later request's deploy to carry it (one deploy of the latest main instead of one each).
+export const DEFAULT_DEPLOY_COALESCE_MS = 300_000;
 const MAX_SETTLE_MS = 3_600_000;
 const MAX_PUSH_TRIES = 3;
 const MIGRATION_REASON = /^touches a migration: /;   // the path-based floor line the effect-based migration reasons replace
@@ -119,7 +121,8 @@ export function validateConfig(raw) {
     }
     repos[key] = { key, clone: c.clone, remote, target, test: c.test ? c.test.trim() : null, testTimeoutMin: mins(c.testTimeoutMin, 30),
       ci: c.ci ?? null, ciTimeoutMin: mins(c.ciTimeoutMin, 60), deploy, conventions, conventionResolver, unionFiles, regenerate,
-      ...(settle == null ? {} : { settleMs: settle }) };
+      ...(settle == null ? {} : { settleMs: settle }),
+      ...(Number.isInteger(c.deployCoalesceMs) && c.deployCoalesceMs >= 0 ? { deployCoalesceMs: c.deployCoalesceMs } : {}) };
   }
   return { repos, settleMs: globalSettle, errors };
 }
@@ -312,6 +315,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   const live = new Map();          // id -> { step, tail } (memory only: the running step's output)
   const waiters = new Map();       // id -> Set<fn>
   const workers = new Map();       // repo -> Promise
+  const tails = new Set();         // ids of pushed requests finishing CI/deploy outside the lane
+  const tailJobs = new Set();      // their promises (idle())
   const settleTimers = new Map();  // repo -> timer that wakes the picker when a settle window ends
   let stopped = false, started = false;
 
@@ -331,7 +336,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     if (r.state === 'queued') o.position = ahead(r) + 1;
     return o;
   }
-  const ahead = (r) => [...reqs.values()].filter((x) => x.repo === r.repo && (x.state === 'running' || (x.state === 'queued' && x.seq < r.seq))).length;
+  const ahead = (r) => [...reqs.values()].filter((x) => x.repo === r.repo && ((x.state === 'running' && !tails.has(x.id)) || (x.state === 'queued' && x.seq < r.seq))).length;
   const wake = (id) => { for (const f of waiters.get(id) || []) f(); };
 
   // ---- settle window (owner 2026-10-20) ------------------------------------------------------
@@ -343,7 +348,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // The lane is serial per repo (one worker), so a queued request behind a running one already waits for it; this is only the
   // mark that says so, and it survives a restart.
   const markBehind = (r) => {
-    const run = [...reqs.values()].find((x) => x.repo === r.repo && x.state === 'running');
+    const run = [...reqs.values()].find((x) => x.repo === r.repo && x.state === 'running' && !tails.has(x.id));
     r.afterId = run ? run.id : null;
   };
   // Wake the picker for a repo in `ms`, replacing any timer already armed for it (a coalesce moves the window).
@@ -910,50 +915,97 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         }
         await mergeAndPush(r, c, r.branchSha);
       }
-      // from here the merge is on the target: nothing below returns the request or reverts anything
-      if (c.ci && !(r.ci === 'success')) {
-        const ciRes = await waitCi(r, c);
-        if (!ciRes.ok) {
-          // A CANCELLED run on a commit that is no longer the target tip was SUPERSEDED: a newer commit landed on the target
-          // and GitHub cancelled this run. CI runs on that newer tip, so this is not red and the session has nothing to fix.
-          // A cancelled run on the CURRENT tip, a failure, a timeout: the current red behaviour.
-          const tip = ciRes.info?.status === 'cancelled' ? await supersedeTip(r, c, r.sha) : null;
-          if (!tip) { transition(r, 'merged_ci_red', { reason: ciRes.info?.timedOut ? `CI did not finish: ${ciRes.tail}` : 'CI red on the merge commit', tail: ciRes.tail }); return; }
-          r.supersededBy = tip; persist(r);
-          // The deploy gate waits for the newer tip's CI: the tip carries this merge, so the tip is what gets deployed.
-          const wantsDeploy = !!r.deployScope || (c.deploy?.kind === 'self' && !(r.alreadyMerged && !r.deployExplicit));
-          const tipRes = wantsDeploy
-            ? await waitCi(r, c, tip, { name: 'ci-tip', record: false })
-            : { ok: false, info: { status: 'not-watched' }, tail: `CI on the newer tip ${tip.slice(0, 12)} carries the verification` };
-          if (!tipRes.ok) {
-            if (wantsDeploy) r.deployHeld = true;   // the deploy asked for waits for the newer tip's CI
-            transition(r, 'merged_ci_superseded', { reason: `superseded by ${tip.slice(0, 12)}${wantsDeploy ? `: the newer tip's CI is ${tipRes.info?.status || 'not green'}` : ': CI runs on the newer tip'}`, tail: tipRes.tail });
-            return;
-          }
-          r.deploySha = tip;   // the green tip carries this merge: the deploy goes to the tip, not to the cancelled commit
+      // Throughput (owner 2026-11-01): once the merge is pushed the next request may start. CI and a registry deploy wait outside the
+      // lane (`tails`): the deploy has its own queue, and the lane held up to 12 min per request for it. A self deploy restarts this
+      // very service and stays inline.
+      if (r.pushed && c.deploy?.kind !== 'self' && (c.ci || r.deployScope) && !(r.alreadyMerged && !r.deployExplicit)) {
+        tails.add(r.id);
+        const job = afterPush(r, c).catch((e) => failRequest(r, e)).finally(() => { tails.delete(r.id); tailJobs.delete(job); if (!stopped) kick(r.repo); });
+        tailJobs.add(job);
+        return;
+      }
+      await afterPush(r, c);
+    } catch (e) { failRequest(r, e); }
+  }
+
+  function failRequest(r, e) {
+    if (e instanceof Ret) {
+      if (e.reason === 'lane stopped') { /* leave running: resumed at next start */ }
+      else if (r.pushed) transition(r, 'merged', { reason: null, warning: e.reason, tail: e.tail });
+      else transition(r, 'returned', { reason: e.reason, tail: e.tail, ...(e.extra || {}) });
+    } else {
+      log('lane error', r.id, e?.stack || e);
+      if (r.pushed) transition(r, 'merged', { warning: `lane error after push: ${redact(e?.message)}`, tail: tailOf(e?.message) });
+      else transition(r, 'returned', { reason: `lane error: ${redact(e?.message)}`, tail: tailOf(e?.message) });
+    }
+  }
+
+  // The first later request (same repo, equal or wider scope) that has not ended: its deploy will carry request r.
+  const coverOf = (r) => [...reqs.values()].filter((x) => x.repo === r.repo && x.seq > r.seq && !x.revertOf && x.deployScope && !FINAL.includes(x.state)
+    && (SCOPE_WIDTH[x.deployScope] ?? 0) >= (SCOPE_WIDTH[r.deployScope] ?? 0)).sort((a, b) => a.seq - b.seq)[0] || null;
+  function waitFinal(id, ms) {
+    const x = reqs.get(id);
+    if (!x || FINAL.includes(x.state)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const set = waiters.get(id) || new Set(); waiters.set(id, set);
+      const done = () => { clearTimeout(t); set.delete(done); if (!set.size) waiters.delete(id); resolve(); };
+      const t = setTimeout(done, ms); set.add(done); t.unref?.();
+    });
+  }
+  // -> { id, deployed } when a later request's deploy carried this merge, else null (deploy it ourselves).
+  async function coverDeploy(r, c) {
+    if (r.deployId) return null;   // our own deploy is already requested
+    const limit = now() + (c.deployCoalesceMs ?? DEFAULT_DEPLOY_COALESCE_MS);
+    while (!stopped && now() < limit) {
+      const x = coverOf(r);
+      if (!x) return null;
+      await waitFinal(x.id, Math.min(limit - now(), 30_000));
+      const y = reqs.get(x.id);
+      if (y && y.state === 'deployed' && y.deployed && y.pushed) return { id: y.id, deployed: y.deployed };
+      // ended without deploying (returned, red, failed): look for another cover, else deploy ourselves
+    }
+    return null;
+  }
+
+  // The merge is on the target: CI, then the deploy. Nothing here returns the request or reverts anything.
+  async function afterPush(r, c) {
+    // from here the merge is on the target: nothing below returns the request or reverts anything
+    if (c.ci && !(r.ci === 'success')) {
+      const ciRes = await waitCi(r, c);
+      if (!ciRes.ok) {
+        // A CANCELLED run on a commit that is no longer the target tip was SUPERSEDED: a newer commit landed on the target
+        // and GitHub cancelled this run. CI runs on that newer tip, so this is not red and the session has nothing to fix.
+        // A cancelled run on the CURRENT tip, a failure, a timeout: the current red behaviour.
+        const tip = ciRes.info?.status === 'cancelled' ? await supersedeTip(r, c, r.sha) : null;
+        if (!tip) { transition(r, 'merged_ci_red', { reason: ciRes.info?.timedOut ? `CI did not finish: ${ciRes.tail}` : 'CI red on the merge commit', tail: ciRes.tail }); return; }
+        r.supersededBy = tip; persist(r);
+        // The deploy gate waits for the newer tip's CI: the tip carries this merge, so the tip is what gets deployed.
+        const wantsDeploy = !!r.deployScope || (c.deploy?.kind === 'self' && !(r.alreadyMerged && !r.deployExplicit));
+        const tipRes = wantsDeploy
+          ? await waitCi(r, c, tip, { name: 'ci-tip', record: false })
+          : { ok: false, info: { status: 'not-watched' }, tail: `CI on the newer tip ${tip.slice(0, 12)} carries the verification` };
+        if (!tipRes.ok) {
+          if (wantsDeploy) r.deployHeld = true;   // the deploy asked for waits for the newer tip's CI
+          transition(r, 'merged_ci_superseded', { reason: `superseded by ${tip.slice(0, 12)}${wantsDeploy ? `: the newer tip's CI is ${tipRes.info?.status || 'not green'}` : ': CI runs on the newer tip'}`, tail: tipRes.tail });
+          return;
         }
-      }
-      // a re-request of a branch that was already on the target changes nothing: it does not restart the service unless --deploy was explicit
-      if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: null }); return; }
-      if (c.deploy?.kind === 'self') { await selfDeploy(r, c); return; }
-      if (r.deployScope) {
-        const d = await doDeploy(r, c);
-        if (!d.ok) { transition(r, 'deploy_failed', { reason: `deploy failed: ${d.tail}`, tail: d.tail }); return; }
-        journalDeploy(r, c, { env: c.deploy.env, scope: r.deployScope });
-        transition(r, 'deployed', { reason: null }); return;
-      }
-      transition(r, 'merged', { reason: null });
-    } catch (e) {
-      if (e instanceof Ret) {
-        if (e.reason === 'lane stopped') { /* leave running: resumed at next start */ }
-        else if (r.pushed) transition(r, 'merged', { reason: null, warning: e.reason, tail: e.tail });
-        else transition(r, 'returned', { reason: e.reason, tail: e.tail, ...(e.extra || {}) });
-      } else {
-        log('lane error', r.id, e?.stack || e);
-        if (r.pushed) transition(r, 'merged', { warning: `lane error after push: ${redact(e?.message)}`, tail: tailOf(e?.message) });
-        else transition(r, 'returned', { reason: `lane error: ${redact(e?.message)}`, tail: tailOf(e?.message) });
+        r.deploySha = tip;   // the green tip carries this merge: the deploy goes to the tip, not to the cancelled commit
       }
     }
+    // a re-request of a branch that was already on the target changes nothing: it does not restart the service unless --deploy was explicit
+    if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: null }); return; }
+    if (c.deploy?.kind === 'self') { await selfDeploy(r, c); return; }
+    if (r.deployScope) {
+      // Coalesce (owner 2026-11-01): a later request of this repo, still queued or merging, deploys a main that carries this merge.
+      // Wait for it (bounded) and ride its deploy instead of deploying twice; if it does not deploy, deploy ourselves.
+      const cover = await coverDeploy(r, c);
+      if (cover) { journalDeploy(r, c, { env: c.deploy.env, scope: cover.deployed.scope, coveredBy: cover.id }); transition(r, 'deployed', { reason: null, deployed: cover.deployed, coveredBy: cover.id }); return; }
+      const d = await doDeploy(r, c);
+      if (!d.ok) { transition(r, 'deploy_failed', { reason: `deploy failed: ${d.tail}`, tail: d.tail }); return; }
+      journalDeploy(r, c, { env: c.deploy.env, scope: r.deployScope });
+      transition(r, 'deployed', { reason: null }); return;
+    }
+    transition(r, 'merged', { reason: null });
   }
 
   // Approval identity (2026-10-20): only a manager session may claim an approval. A working session once approved its own
@@ -1048,7 +1100,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       // a resumed running request first, then FIFO
       for (;;) {
         if (stopped) return;
-        const r = [...reqs.values()].find((x) => x.repo === repo && x.state === 'running') || nextQueued(repo);
+        const r = [...reqs.values()].find((x) => x.repo === repo && x.state === 'running' && !tails.has(x.id)) || nextQueued(repo);
         if (!r) { const wait = settleWait(repo); if (wait > 0) armSettle(repo, wait); return; }   // a queued request is still settling
         await processRequest(r);
         if (stopped && !FINAL.includes(r.state)) return;
@@ -1068,7 +1120,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     // Stop taking work. Does not wait for a step in flight (a hung test must not hang shutdown): await idle() for that.
     stop() { stopped = true; for (const t of settleTimers.values()) clearTimeout(t); settleTimers.clear(); },
     // Resolves when every worker has gone idle (tests, graceful shutdown).
-    async idle() { while (workers.size) await Promise.allSettled([...workers.values()]); },
+    async idle() { while (workers.size || tailJobs.size) await Promise.allSettled([...workers.values(), ...tailJobs]); },
     config: () => cfgAll(),
     repoKeys: () => Object.keys(cfgAll().repos),
 
