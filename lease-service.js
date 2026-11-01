@@ -100,6 +100,10 @@ const prioRank = (p) => PRIOS.indexOf(p);
 // Host and device claims default to host sensitivity (owner 2026-11-01): a whole-host claim held for a 40-min script run defaulted
 // to server and kept every server deploy of the env queued until it expired. A claim a server restart breaks says --kind server.
 const defaultKind = (parsed) => (parsed.length && parsed.every((r) => r.type === 'device' || r.type === 'host') ? 'host' : 'server');
+// Deploys of these two scopes touch disjoint resources (the frontend vs the hosts) and may run side by side; every other pair is exclusive.
+const independentScopes = (a, b) => (a === 'frontend' && b === 'host') || (a === 'host' && b === 'frontend');
+// Scopes whose queued requests of one env collapse into the newest (host requests carry host lists and catch-up semantics: never merged here).
+const coalescible = (d) => d.scope === 'frontend' || d.scope === 'server' || d.scope === 'full';
 // Which resources a deploy of this scope disturbs (pending deploys block new claims on these).
 function scopeTouches(scope, hosts, r) {
   if (r.type === 'env' || scope === 'full') return true;
@@ -1179,8 +1183,13 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
         const no = deployAuth(d, a); if (no) return no;
         if (d.state !== 'queued') return fail('E_INVALID', `deploy ${d.id} is ${d.state}, not queued`);
-        const other = S.deploys.find((x) => x.env === d.env && x.state === 'running');
+        // One deploy per scope-resource at a time. Only a frontend deploy and a host deploy are independent (frontend vs hosts,
+        // disjoint lease sets); server and full stay exclusive against everything (owner 2026-11-01).
+        const other = S.deploys.find((x) => x.env === d.env && x.state === 'running' && !independentScopes(x.scope, d.scope));
         if (other) return fail('E_HELD', `deploy ${other.id} is already running on ${d.env}`, { running: deployView(other), holders: [] });
+        // Same-scope coalescing: a newer queued deploy of the same env and scope will run instead; this one is covered when it finishes.
+        const newer = coalescible(d) && S.deploys.find((x) => x.id !== d.id && x.env === d.env && x.scope === d.scope && x.state === 'queued' && x.created > d.created);
+        if (newer) return fail('E_HELD', `deploy ${d.id} is covered by the newer ${d.scope} deploy ${newer.id} (${newer.ref}), which runs instead`, { reason: 'covered', covered_by: newer.id, holders: [] });
         const { blockers, leasedHosts } = deployBlockers(d, { skipLeased: !!a.skip_leased, agent });
         if (blockers.length) return fail('E_HELD', 'leases in the way', { holders: blockers.map(leaseView) });
         const t = now();
@@ -1262,6 +1271,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         const failTargets = hostList(a.fail_targets);
         if (typeof a.tail === 'string') nd.tail = a.tail.slice(-6000);
         emit({ t: 'dep_set', deploy: nd, event: 'finish', at: t });
+        // queued same-scope deploys older than this one are covered by it: they end with its result (coalescedInto), like the runner's same-ref merge
+        if (d.state === 'running' && coalescible(d)) {
+          for (const x of S.deploys.filter((y) => y.id !== d.id && y.env === d.env && y.scope === d.scope && y.state === 'queued' && y.created < (d.started || t))) {
+            emit({ t: 'dep_set', deploy: { ...x, state: a.status, finished: t, coalescedInto: d.id, version: nd.version || x.version, reason: `covered by ${d.id} at ${d.ref}` }, event: 'finish', at: t });
+          }
+        }
         const own = Object.values(S.leases).filter((l) => l.deployId === d.id && l.system).map((l) => l.id);
         if (own.length) emit({ t: 'release', ids: own, why: 'released', by: nd.runner || RUNNER, reason: 'deploy-finished', at: t });
         let recorded = null;
