@@ -1,0 +1,79 @@
+// Lane throughput (owner 2026-11-01): the lane is free for the next request once a merge is pushed; the registry deploy
+// (and CI) wait outside the lane, and a later request's deploy carries earlier merges of the same repo.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createIntegrationLane } from '../integration-lane.js';
+import { makeWorld } from './helpers-lane.js';
+import { tmp } from './helpers-tmp.js';
+
+const tick = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, ms = 5000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (fn()) return; await tick(2); }
+  throw new Error('condition not met in time');
+}
+const mk = (w, deploys, cfg = {}) => {
+  const lane = createIntegrationLane({ stateDir: tmp('lane-tp-'), config: { repos: { 'env-a': w.cfg({ deploy: { env: 'env-a', defaultScope: 'server' }, ...cfg }) } },
+    deploys, pollMs: 5, sleep: () => tick(1) });
+  lane.start();
+  return lane;
+};
+
+test('the next request is merged while the previous one still waits for its deploy', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' });
+  let release; const gate = new Promise((r) => { release = r; });
+  const asked = [];
+  const deploys = { request: async (o) => { asked.push(o.sha); return { id: `d${asked.length}` }; }, wait: async () => { await gate; return { ok: true, version: 'v' }; } };
+  const lane = mk(w, deploys, { deployCoalesceMs: 0 });
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'server' });
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'server' });
+  await until(() => lane.get(b.id).sha);                         // b is pushed although a's deploy has not returned
+  assert.equal(lane.get(a.id).state, 'running');
+  assert.equal(lane.get(a.id).step, 'deploy');
+  release();
+  await until(() => lane.get(a.id).state === 'deployed' && lane.get(b.id).state === 'deployed');
+  assert.equal(asked.length, 2, 'coalescing off: one deploy each');
+  assert.ok(asked[0] !== asked[1]);
+  await lane.idle(); lane.stop();
+});
+
+test('a later request with an equal scope carries the earlier one: one deploy of the latest main', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' });
+  const asked = [];
+  const deploys = { request: async (o) => { asked.push(o); return { id: `d${asked.length}` }; }, wait: async () => ({ ok: true, version: 'v1' }) };
+  const lane = mk(w, deploys);
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'server' });
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'server' });
+  await until(() => ['a', 'b'].every((k) => lane.get({ a: a.id, b: b.id }[k]).state === 'deployed'));
+  assert.equal(asked.length, 1, 'one deploy');
+  assert.equal(asked[0].sha, lane.get(b.id).sha, 'of the latest merge');
+  assert.equal(lane.get(a.id).coveredBy, b.id);
+  assert.equal(lane.get(a.id).deployed.version, 'v1');
+  await lane.idle(); lane.stop();
+});
+
+test('a narrower later scope does not cover a wider earlier one', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' });
+  const asked = [];
+  const deploys = { request: async (o) => { asked.push(o.scope); return { id: `d${asked.length}` }; }, wait: async () => ({ ok: true, version: 'v' }) };
+  const lane = mk(w, deploys);
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'full' });
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'frontend' });
+  await until(() => lane.get(a.id).state === 'deployed' && lane.get(b.id).state === 'deployed');
+  assert.deepEqual(asked.sort(), ['frontend', 'full']);
+  await lane.idle(); lane.stop();
+});
+
+test('if the covering request is returned, the earlier one deploys itself', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' });
+  const asked = [];
+  const deploys = { request: async (o) => { asked.push(o.sha); return { id: 'd1' }; }, wait: async () => ({ ok: true, version: 'v' }) };
+  const lane = mk(w, deploys, { test: 'sh -c "test ! -f b.js"' });   // b's tests fail
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'server' });
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'server' });
+  await until(() => lane.get(a.id).state === 'deployed' && lane.get(b.id).state === 'returned');
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0], lane.get(a.id).sha);
+  assert.equal(lane.get(a.id).coveredBy, undefined);
+  await lane.idle(); lane.stop();
+});
