@@ -16,6 +16,7 @@ import { effectiveBlockers } from './public/platforms-view.js';
 import { normLease, renewalIdleMin } from './lease-source.js';
 
 export const WAIT_MS = 5 * 60 * 1000;       // a deploy or ticket waits this long before its holders (and the waiter) are told (owner 2026-10-31: 5 min)
+export const PROBE_MS = 15 * 60 * 1000;     // a ticket on a named resource with no known equivalent waits this long before the waiter is told to probe other hosts (owner 2026-11-01)
 export const IDLE_MIN = 20;                 // no finished turn for this long = idle
 export const COOLDOWN_MS = 30 * 60 * 1000;  // one nudge per (holder, lease)
 export const TICK_MS = 2 * 60 * 1000;
@@ -65,17 +66,22 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
   // the waiter first: a free equivalent ends the wait at once, no holder has to do anything
   for (const t of view?.ok ? view.tickets || [] : []) {
     const waitedMs = t.createdMs ? now - t.createdMs : 0;
-    if (!(waitedMs > waitMs) || t.any || !(t.equivalents?.length || t.hint)) continue;
+    const known = !!(t.equivalents?.length || t.hint);
+    // no group member free and no device-only block: after PROBE_MS the waiter is told to try other hosts of the same kind itself
+    const probe = !known && !t.any && waitedMs > PROBE_MS;
+    if (!(waitedMs > waitMs) || t.any || !(known || probe)) continue;
     const key = `${t.agent}|${t.id}|waiter`;
     if (now - (last.get(key) || 0) < cooldownMs) continue;
     const session = /^mac:/i.test(t.agent || '') ? null : sessionOf(t.agent);
     if (!session) continue;                  // only a chat can act on it; no manager event for this (the system resolves it)
     const env = clean(t.env, 20), res = (t.resources || []).map((r) => clean(r, 40)).join(',') || '*', waitedMin = mins(waitedMs);
     const eq = (t.equivalents || []).map((r) => clean(r, 40));
-    const text = eq.length
+    const text = probe
+      ? `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min and no listed equivalent is free. Do not keep waiting on one host: list the other hosts of the same kind (vpt-lease inventory ${env}, vpt-lease list ${env}), pick a free one, vpt-lease ticket ${clean(t.id, 16)} --cancel, claim it, check read-only that your login/profile/firmware works there, and run on it. Report which hosts work so they join the inventory group (docs/LEASE-INVENTORY.md).`
+      : eq.length
       ? `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min, but an equivalent is free now: ${eq.join(', ')}. If it fits your work: vpt-lease ticket ${clean(t.id, 16)} --cancel, then vpt-lease claim ${env} ${eq[0]} --agent ${clean(t.agent, 60)} --kind host --wait (or claim ${env} --any ${clean(t.groups?.[0] || '<group>', 30)}: never waits while a member is free).`
       : `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min and only device runs block it: ${clean(t.hint, 220)}. If you need one device, vpt-lease ticket ${clean(t.id, 16)} --cancel and claim ${env} <host>/<device> --kind host --wait.`;
-    out.set(key, { key, leaseId: null, ticketId: t.id, waiter: true, agent: t.agent, session, env: t.env, resources: t.resources || [], what: `ticket ${t.id}`, waitedMin, reasons: [eq.length ? `free equivalent ${eq.join(',')}` : 'host blocked only by device leases'], text });
+    out.set(key, { key, leaseId: null, ticketId: t.id, waiter: true, agent: t.agent, session, env: t.env, resources: t.resources || [], what: `ticket ${t.id}`, waitedMin, reasons: [probe ? `no free equivalent after ${waitedMin} min` : eq.length ? `free equivalent ${eq.join(',')}` : 'host blocked only by device leases'], text });
   }
   for (const w of waits.sort((a, b) => b.waitedMs - a.waitedMs)) {
     for (const l of w.blockers) {

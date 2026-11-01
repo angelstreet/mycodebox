@@ -40,3 +40,10 @@ Edit the file on the registry host; the service reads it again on its next claim
 restart. A broken file is logged and counts as "no groups": named claims keep working, `--any` answers
 `unknown resource group ... (known: none)`. Check the result with `vpt-lease inventory <env>`. Journal the change in the
 manager's actions like any other host data change.
+
+## Growing a group
+
+A group that is too small makes sessions wait while compatible hosts sit idle (2026-11-01: only two hosts were in `web`; a
+session waited ~3 h). When a session reports that another host passed the read-only check (same app, same login or browser
+profile, same firmware line), add it to the group. Do not wait for the next incident: sweep each environment's hosts of a kind
+and list them. A host that failed the check stays out; note what is missing (login, profile, driver) in the manager's journal.

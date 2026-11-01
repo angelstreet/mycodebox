@@ -41,6 +41,12 @@ Hours were lost waiting on one web host while the other was free. When the work 
   `VPT_LEASE_HOST`. `--alt <resource>` (repeatable) names equivalents that are not in a group.
 - A busy named claim prints `FREE EQUIVALENT NOW: <resource>` when a member of its group is free: claim that one instead. A
   ticket that has waited 5 minutes while one is free gets the same advice in the session's chat (lease watchdog).
+- A group that lists too few members is not a reason to wait (owner, 2026-11-01: a session waited ~3 h on one web host while other
+  lab hosts were free, because only two hosts were in the `web` group). If every member is busy for more than a few minutes, look at
+  the other hosts of the same kind (`vpt-lease list <env>`), claim a free one, check read-only that the app, login or profile and
+  firmware work there, and run on it. Report the hosts that work so the manager adds them to the group; a host that fails the check
+  is named in one line with what is missing. The lease watchdog sends this advice after 15 minutes on a ticket with no free equivalent.
+- Verification that needs the deploy to finish (integration lane) is not a device wait: do not hold or queue for a device before the deploy is done.
 - Auto-equivalent (owner, 2026-11-01): a `claim --wait` / `run` of ONE named resource that belongs to a group no longer waits
   forever. After 2 minutes of waiting, when a group member is free, the client cancels its ticket, claims that member and
   prints `auto-equivalent: waited ... took the free equivalent <resource>`. Read `VPT_LEASE_RESOURCE` (set by `run`) instead
