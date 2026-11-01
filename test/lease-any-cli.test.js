@@ -31,7 +31,7 @@ before(async () => {
   fs.mkdirSync(home, { recursive: true });
   token = tokenOf('test-machine', ['--owner']);   // deploy approve is owner-only
   fs.writeFileSync(path.join(home, 'token'), token + '\n', { mode: 0o600 });
-  service = createLeaseService({ dir, config: { envs: ['env-a'], inventory: { 'env-a': { web: ['host-1', 'host-2'] } } } });
+  service = createLeaseService({ dir, config: { envs: ['env-a'], inventory: { 'env-a': { web: ['host-1', 'host-2'], web2: ['host-3', 'host-4'] } } } });
   const routes = createLeaseRoutes({ service, dir });
   server = http.createServer((req, res) => { routes.handle(req, res).then((h) => { if (!h) { res.writeHead(404); res.end(); } }, () => { res.writeHead(500); res.end(); }); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -93,4 +93,25 @@ test('deploy release-hosts frees a finished host of the running deploy', async (
   const c = await vl(['claim', 'env-a', 'host-1/device1', '--agent', 'codebox:v', '--kind', 'host']);
   assert.equal(c.code, 0, c.err);
   assert.equal((await vl(['deploy', 'finish', id, '--status', 'done'])).code, 0);
+});
+
+test('auto-equivalent: a named --wait claim switches to a free group member; --no-auto-equivalent and a failing --verify-profile keep waiting', async () => {
+  const c3 = await vl(['claim', 'env-a', 'host-3', '--agent', 'codebox:h3', '--kind', 'host']);
+  assert.equal(c3.code, 0, c3.err);
+  const h3 = c3.out.trim().split('\n')[0];
+  const h4 = (await vl(['claim', 'env-a', 'host-4', '--agent', 'codebox:h4', '--kind', 'host'])).out.trim().split('\n')[0];
+  const sw = vl(['run', 'env-a', 'host-3', '--agent', 'codebox:w', '--kind', 'host', '--', 'sh', '-c', 'echo got=$VPT_LEASE_RESOURCE']);
+  const no = vl(['claim', 'env-a', 'host-3', '--agent', 'codebox:n', '--kind', 'host', '--wait', '--no-auto-equivalent']);
+  const bad = vl(['claim', 'env-a', 'host-3', '--agent', 'codebox:b', '--kind', 'host', '--wait', '--verify-profile', 'false']);
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal((await vl(['release', h4])).code, 0);
+  const r = await sw;
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.err, /auto-equivalent: .*host-4/);
+  assert.match(r.out, /got=host-4/);
+  await new Promise((r2) => setTimeout(r2, 2500));
+  assert.doesNotMatch((await Promise.race([no, new Promise((r3) => setTimeout(() => r3({ err: '' }), 10))])).err || '', /auto-equivalent/);
+  no.child.kill(); bad.child.kill();
+  const rel = await vl(['release', h3]);
+  assert.equal(rel.code, 0, rel.err + ' h3=' + h3);
 });

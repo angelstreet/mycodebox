@@ -251,7 +251,8 @@ export function createDeployRunner({
   const logDir = join(stateDir, 'deploys');
   let envs = {};
   let snap = { ok: false, error: 'not polled yet', deploys: [], lastRef: {}, deployed: {}, at: 0 };
-  const running = new Map();          // env -> deploy id this process is running
+  const running = new Map();          // lane key -> deploy id this process is running: `env` for host/server/full, `env#frontend` for frontend deploys
+  const laneKey = (d) => (d.scope === 'frontend' ? `${d.env}#frontend` : d.env);
   const catchUpTries = new Map();     // `${env}|${ref}|${host}` -> { n, until }: catch-ups that skipped the host again
   const triesOf = (d, h, deploys) => Math.max(catchUpTries.get(`${d.env}|${d.ref}|${h}`)?.n || 0, finishedCatchUps(deploys, d, h));
   const seenAwaiting = new Set();
@@ -478,7 +479,7 @@ export function createDeployRunner({
         else await say(`# catch-up request ${q.stdout.trim()} for ${want.join(',')}`);
       }
     }
-    running.delete(d.env);
+    running.delete(laneKey(d));
     alert(`deploy:${d.id}:${status}`, {
       title: `deploy ${d.env} ${d.scope} ${status}${version ? ` (${version})` : ''}${skipped.length ? `, ${skipped.length} host(s) skipped` : ''}`,
       body: status === 'done' ? `${d.ref} for ${d.agent}; waiters released${skipped.length ? `; skipped (leased): ${skipped.join(',')}` : ''}` : lines.slice(-4).join('\n'),
@@ -519,27 +520,30 @@ export function createDeployRunner({
         // Re-adopt: registry says running + runner == us + this process lost it (restart), but the detached wrapper is
         // still alive or left an exit file: follow it to the end (same finish path). Neither file = the orphan sweep.
         for (const d of deploys) {
-          if (d.state !== 'running' || d.runner !== RUNNER_AGENT || running.has(d.env) || !envs[d.env]) continue;
+          if (d.state !== 'running' || d.runner !== RUNNER_AGENT || running.has(laneKey(d)) || !envs[d.env]) continue;
           const pid = await readInt(pidFile(logDir, d.id));
           const exited = (await readInt(exitFile(logDir, d.id))) != null;
           if (pid == null || !(exited || alive(pid))) continue;
-          running.set(d.env, d.id);
+          running.set(laneKey(d), d.id);
           log.info?.(`[deploy] re-adopted ${d.id} (pid ${pid}${exited ? ', already exited' : ''})`);
-          runDeploy(d, deploys, { pid }).catch((e) => { running.delete(d.env); log.error?.('[deploy] adopt', e.message); });
+          runDeploy(d, deploys, { pid }).catch((e) => { running.delete(laneKey(d)); log.error?.('[deploy] adopt', e.message); });
         }
         // Detect orphans: registry says running + runner == us, but this process no longer tracks it. Skip ones
         // owned by `running`. Gated by `if (deploys)` above so a poll failure does nothing.
         for (const d of deploys) {
           if (d.state !== 'running' || d.runner !== RUNNER_AGENT) continue;
-          if (running.get(d.env) === d.id) continue;
+          if (running.get(laneKey(d)) === d.id) continue;
           if (!envs[d.env]) continue;                 // not an env this runner owns (another runner's log is not here)
           try { await finishOrphan(d); } catch (e) { log.error?.('[deploy] orphan', e.message); }
         }
         checkFreed(deploys);
         if (isEnabled()) {
-          for (const env of Object.keys(envs)) {
-            if (running.has(env) || deploys.some((d) => d.env === env && d.state === 'running')) continue;
-            const queue = deploys.filter((d) => d.env === env && d.state === 'queued' && flagsFor(d.scope)).sort((a, b) => a.created - b.created);
+          // two lanes per env: frontend deploys, and host/server/full (the registry still refuses overlapping scopes)
+          for (const lane of Object.keys(envs).flatMap((env) => [{ env, fe: false }, { env, fe: true }])) {
+            const { env, fe } = lane;
+            const key = fe ? `${env}#frontend` : env;
+            if (running.has(key) || deploys.some((d) => d.env === env && d.state === 'running' && (d.scope === 'frontend') === fe)) continue;
+            const queue = deploys.filter((d) => d.env === env && d.state === 'queued' && (d.scope === 'frontend') === fe && flagsFor(d.scope)).sort((a, b) => a.created - b.created);
             for (const d of queue) {
               if (isCatchUp(d) && d.hosts?.length) {
                 const ent = d.hosts.map((h) => ({ h, e: catchUpTries.get(`${d.env}|${d.ref}|${h}`), n: triesOf(d, h, deploys) }));
@@ -577,8 +581,8 @@ export function createDeployRunner({
                   if (own) leaseIds.set(d.id, String(own.id));
                 } catch { /* no lease id: the child claims by deploy_id (service-side join) */ }
               }
-              running.set(env, d.id);
-              runDeploy(d, deploys).catch((e) => { running.delete(env); log.error?.('[deploy] run', e.message); });
+              running.set(key, d.id);
+              runDeploy(d, deploys).catch((e) => { running.delete(key); log.error?.('[deploy] run', e.message); });
               break;
             }
           }

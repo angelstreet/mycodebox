@@ -1128,3 +1128,61 @@ test('bug-0506a120: an uncollected reservation is released within a minute and a
   await h2.claim('other', 'host-1/device6');
   assert.equal((await h2.claim('other2', 'host-1/device6')).code, 'E_HELD', 'another agent is never merged into someone else lease');
 });
+
+// ---- deploy queue: parallel independent scopes + same-scope coalescing (owner 2026-11-01) ------------------------------
+const qd = (h, scope, ref, o = {}) => h.svc.deploy.request({ env: 'env-a', scope, ref, agent: 'a', approved: true, ...o });
+
+test('deploy queue: a frontend deploy starts while a host deploy runs (and back); server/full/same scope stay exclusive', async () => {
+  const h = harness();
+  const host = await qd(h, 'host', 'r1', { hosts: ['host-1'] });
+  assert.equal((await h.svc.deploy.start({ id: host.id })).state, 'running');
+  const fe = await qd(h, 'frontend', 'r2');
+  assert.equal((await h.svc.deploy.start({ id: fe.id })).state, 'running', 'frontend runs beside the host deploy');
+  const fe2 = await qd(h, 'frontend', 'r3');
+  assert.equal((await h.svc.deploy.start({ id: fe2.id })).code, 'E_HELD', 'one frontend deploy at a time');
+  const host2 = await qd(h, 'host', 'r4', { hosts: ['host-2'] });
+  assert.equal((await h.svc.deploy.start({ id: host2.id })).code, 'E_HELD', 'one host deploy at a time');
+  const sv = await qd(h, 'server', 'r5');
+  assert.equal((await h.svc.deploy.start({ id: sv.id })).code, 'E_HELD', 'server waits for both');
+  await h.svc.deploy.finish({ id: fe.id, status: 'done' });
+  assert.equal((await h.svc.deploy.start({ id: sv.id })).code, 'E_HELD', 'still blocked by the host deploy');
+  const h2 = harness();
+  const s1 = await qd(h2, 'server', 'r1'); await h2.svc.deploy.start({ id: s1.id });
+  const f1 = await qd(h2, 'frontend', 'r2');
+  assert.equal((await h2.svc.deploy.start({ id: f1.id })).code, 'E_HELD', 'frontend does not run beside a server deploy');
+});
+
+test('deploy queue: a leased frontend still blocks a frontend deploy even while a host deploy runs', async () => {
+  const h = harness();
+  const host = await qd(h, 'host', 'r1', { hosts: ['host-1'] }); await h.svc.deploy.start({ id: host.id });
+  assert.ok((await h.claim('x', 'frontend')).ok);
+  const fe = await qd(h, 'frontend', 'r2');
+  assert.equal((await h.svc.deploy.start({ id: fe.id })).code, 'E_HELD');
+});
+
+test('deploy queue: same-scope queued deploys coalesce into the newest ref; the older ones end with its result', async () => {
+  const h = harness();
+  const a = await qd(h, 'frontend', 'old'); await h.advance(1000);
+  const b = await qd(h, 'frontend', 'new');
+  const r = await h.svc.deploy.start({ id: a.id });
+  assert.equal(r.code, 'E_HELD'); assert.equal(r.reason, 'covered'); assert.equal(r.covered_by, b.id);
+  assert.equal((await h.svc.deploy.start({ id: b.id })).state, 'running');
+  await h.advance(1000);
+  const c = await qd(h, 'frontend', 'later');           // arrives after b started: not covered by b
+  await h.svc.deploy.finish({ id: b.id, status: 'done', version: 'v9' });
+  const get = async (id) => (await h.svc.deploy.list({ all: true })).deploys.find((d) => d.id === id);
+  const ga = await get(a.id), gc = await get(c.id);
+  assert.equal(ga.state, 'done'); assert.equal(ga.coalescedInto, b.id);
+  assert.equal(gc.state, 'queued');
+});
+
+test('deploy queue: host deploys are never coalesced; a queued host catch-up does not hold up a frontend deploy', async () => {
+  const h = harness();
+  const x = await qd(h, 'host', 'r1', { hosts: ['host-1'] }); await h.advance(1000);
+  const y = await qd(h, 'host', 'r2', { hosts: ['host-1'] });
+  assert.equal((await h.svc.deploy.start({ id: x.id })).state, 'running');
+  await h.svc.deploy.finish({ id: x.id, status: 'done' });
+  assert.equal((await h.svc.deploy.list({ all: true })).deploys.find((d) => d.id === y.id).state, 'queued');
+  const fe = await qd(h, 'frontend', 'r3');
+  assert.equal((await h.svc.deploy.start({ id: fe.id })).state, 'running');
+});

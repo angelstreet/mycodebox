@@ -47,6 +47,13 @@ Hours were lost waiting on one web host while the other was free. When the work 
   firmware work there, and run on it. Report the hosts that work so the manager adds them to the group; a host that fails the check
   is named in one line with what is missing. The lease watchdog sends this advice after 15 minutes on a ticket with no free equivalent.
 - Verification that needs the deploy to finish (integration lane) is not a device wait: do not hold or queue for a device before the deploy is done.
+- Auto-equivalent (owner, 2026-11-01): a `claim --wait` / `run` of ONE named resource that belongs to a group no longer waits
+  forever. After 2 minutes of waiting, when a group member is free, the client cancels its ticket, claims that member and
+  prints `auto-equivalent: waited ... took the free equivalent <resource>`. Read `VPT_LEASE_RESOURCE` (set by `run`) instead
+  of assuming the name you asked for. Opt out with `--no-auto-equivalent` for work tied to that one unit (its account,
+  firmware, a physical setup). `--verify-profile "<cmd>"` is a hook: before switching, `<cmd>` runs with
+  `VPT_LEASE_CANDIDATE=<resource>`; a non-zero exit skips that member (use it to check the app, login or firmware).
+  `VPT_LEASE_SWITCH_AFTER=<seconds>` changes the 2 minutes. Central mode only. `vpt-lease inventory` shows the holder per member.
 - Only unique hardware (one Mi box, the Apple TV, a specific set-top box or firmware) is worth a queue. The groups are data on
   the registry host ([LEASE-INVENTORY](LEASE-INVENTORY.md)); a missing group is fixed there, not by waiting.
 

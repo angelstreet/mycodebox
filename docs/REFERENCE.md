@@ -1111,7 +1111,7 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
   Only envs in the map are deployed. Scope to flags: `frontend` -> `--frontend`, `host` -> `--host`, `server` -> `--server`,
   `full` -> none. The command runs as `ssh <host> "VPT_LEASE_AGENT=manager:deploy <cmd> <ref> <flags>"` (11 min timeout: the 10-min lease cap plus 1 min grace), output in
   `$GHOSTY_STATE_DIR/deploys/<id>.log`. Without `health`, only update_core's exit code decides done / failed.
-- One running deploy per env. Queued requests with the same env + ref that the running scope covers (`full` covers all; other scopes only
+- One running deploy per scope-resource (owner 2026-11-01): a `frontend` deploy and a `host` deploy of one env may run side by side (disjoint lease sets; the runner has a frontend lane and a host/server/full lane per env); `server`, `full`, a second frontend and a second host deploy stay exclusive. A queued frontend deploy is never held behind queued host catch-ups. Same-scope coalescing in the registry (frontend, server, full; never host): of several queued deploys the newest runs (`deploy start` of an older one is refused with reason `covered`); when it finishes, the older queued ones end with its result (`coalescedInto`). Measured trigger: a frontend deploy waited 14 min behind five other queued/running deploys although it touched no lease. Queued requests with the same env + ref that the running scope covers (`full` covers all; other scopes only
   themselves) are finished with its result (`coalescedInto`).
 - Registry: the default SSH adapter is deployment-specific (see `deploy-runner.js`). Override `DEPLOY_REGISTRY` with a JSON command array for your registry; for example, `DEPLOY_REGISTRY='["python3","/path/vpt-lease"]'` for a local registry. This setting does not configure every other lease adapter.
   `DEPLOY_POLL_MS`, `DEPLOY_TIMEOUT_MS` override the timings.
@@ -1621,6 +1621,12 @@ holders: the holders that are neither a session nor a platform agent).
 - **Waiting on its own job** (`job-refs.js`, `own-jobs.js`): a STATUS `blocked` / `waiting` that names a pid, a log file, a run id or a deploy id is
   case `own_job_wait`, never shown as needs-you; the job is watched (deploy state, `/proc/<pid>` or the pane's process tree, a log file's mtime)
   and when it ends the session gets "your <job> finished at <time>, continue". A detached job (`nohup`, `setsid`, `disown`, `&`) is flagged in the feed.
+  Stale waits (owner, 2026-11-01, `wait-ids.js`): a script run / execution / task uuid (or an 8-hex prefix cut with `...`) is resolved with a read-only
+  GET on the platform server (`/server/run-management/summary/script/<id>`, `JEV_URL` origin, `JEV_API_KEY`, `VPT_TEAM_ID`; never printed); an end state, or
+  "running" longer than `maxRunMin` (120), wakes the session with "your run <id> ended <state> at <time> (<message>), continue". A lease ticket
+  (`t-...`) or lease id is read from the lease view (never `ticket()`, which would collect the reservation) and wakes on granted / dropped / released.
+  Staleness sweep: a session whose STATUS waiting is unresolved (no job identified, or the id is not found), whose pane was quiet for 20 min, with
+  no live child, gets "nothing you wait on is still running: check the result and continue" once, at most every 30 min; logged as `own_job_stale_nudge`.
 - **Remote stops** (`remote-stops.js`, `scripts/mac-stop-hook.sh`, install in [MAC-HOOK](MAC-HOOK.md)): `POST /api/remote/v1/stops` and
   `GET /api/remote/v1/stops/<id>/answer?wait=<s>`, same address allowlist and bearer-token store as the lease API, but the token's client needs
   `remote: true` (`node scripts/lease-token.js add <name> --remote`). A stop enters `manager.js observe()` as the session `mac:<session name>`

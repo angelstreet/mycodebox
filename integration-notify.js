@@ -29,6 +29,7 @@ export function tailLines(tail, { lines = 5, chars = 500 } = {}) {
   const t = (Array.isArray(tail) ? tail.join('\n') : String(tail ?? '')).split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim()).slice(0, lines).join('\n');
   return t.length > chars ? `${t.slice(0, chars - 1)}…` : t;
 }
+const scopeOf = (n) => one(n.deployed?.scope || n.deploy || n.deployScope);
 const where = (r) => `${one(r.branch) || '?'} into ${one(r.target) || 'the target'}${r.sha ? ` at ${sha12(r.sha)}` : ''}`;
 
 // The lane stores some fields under one name and the session side reads them under another (round 13 brief B review).
@@ -52,6 +53,24 @@ export function normRequest(r) {
   return out;
 }
 
+// Milestones of a request and the time between them (ISO strings from the lane: createdAt, startedAt, endedAt and r.times set where the
+// state changes). -> { events: [{ key, label, at (ISO) }], durations: [{ label, ms }], text } ; text is one line for `integrate status`.
+const EVENTS = [['queued', 'queued', (r) => r.createdAt], ['started', 'started', (r) => r.startedAt], ['merged', 'merged', (r) => r.times?.mergedAt],
+  ['ci', 'CI done', (r) => r.times?.ciDoneAt], ['deploy_requested', 'deploy requested', (r) => r.times?.deployRequestedAt], ['deployed', 'deployed', (r) => r.times?.deployDoneAt || r.times?.deployedAt],
+  ['returned', 'returned', (r) => r.times?.returnedAt], ['ended', 'ended', (r) => r.endedAt]];
+const DURATIONS = [['queue wait', 'queued', 'started'], ['merge', 'started', 'merged'], ['CI', 'merged', 'ci'], ['deploy', 'deploy_requested', 'deployed'], ['total', 'queued', 'ended']];
+export const fmtMs = (ms) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` : `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`; };
+export function timeline(r) {
+  const raw = r || {};
+  const at = {}, events = [];
+  for (const [key, label, get] of EVENTS) { const v = get(raw); if (v && toMs(v) != null) { at[key] = v; if (key !== 'ended' || !(at.returned || at.deployed)) events.push({ key, label, at: v }); } }
+  const durations = [];
+  for (const [label, a, b] of DURATIONS) if (at[a] && at[b] && toMs(at[b]) >= toMs(at[a])) durations.push({ label, ms: toMs(at[b]) - toMs(at[a]) });
+  const hhmm = (v) => String(v).slice(11, 19);
+  const text = [events.map((e) => `${e.label} ${hhmm(e.at)}`).join(' > '), durations.length ? `(${durations.map((d) => `${d.label} ${fmtMs(d.ms)}`).join(', ')})` : ''].filter(Boolean).join(' ');
+  return { events, durations, text };
+}
+
 // -> the line for the session (and the own-job wake), or null when the state is not final
 export function integrationText(r) {
   if (!r || !isFinal(r.state)) return null;
@@ -65,14 +84,14 @@ export function integrationText(r) {
   switch (n.state) {
     case 'merged': return `Integration ${id}: merged ${where(n)}.${sup}`;
     case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)})${sd.note ? `, ${one(sd.note)}` : ''}.${rollback}${sup}`;
-      return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}.${sup}`;
+      return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}.${sup}`;
     case 'returned': {
       const t = tailLines(n.tail);
-      return `Integration ${id} returned: ${reason.replace(/[.\s]+$/, '')}. Fix it on your branch and run integrate request again.${t ? `\n${t}` : ''}`;
+      return `Integration ${id} (${one(n.branch) || '?'}) returned: ${reason.replace(/[.\s]+$/, '')}. Fix it on your branch and run integrate request again.${t ? `\n${t}` : ''}`;
     }
     case 'merged_ci_red': return `Integration ${id}: merged ${where(n)} but CI is red (${reason.replace(/[.\s]+$/, '')}). The merge stays on ${one(n.target) || 'the target'}; the manager decides, do not revert it yourself.`;
     case 'merged_ci_superseded': return `Integration ${id}: merged ${where(n)}, but its CI run was superseded by ${sha12(n.supersededBy) || 'a newer commit'} on ${one(n.target) || 'the target'}. CI runs on the newer tip: nothing to fix, do not branch again.${n.deployHeld ? ' The deploy you asked for waits for the newer tip CI.' : ''}`;
-    case 'deploy_failed': return `Integration ${id}: merged ${where(n)} but the ${sd ? 'live ghosty ' : ''}deploy failed (${reason.replace(/[.\s]+$/, '')}). The manager decides what happens next.${rollback}`;
+    case 'deploy_failed': return `Integration ${id}: merged ${where(n)} but the ${sd ? 'live ghosty ' : ''}${scopeOf(n) ? `${scopeOf(n)} ` : ''}deploy failed (${reason.replace(/[.\s]+$/, '')}). The manager decides what happens next.${rollback}`;
     case 'cancelled': return `Integration ${id} cancelled.`;
     default: return null;
   }
