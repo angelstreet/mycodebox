@@ -215,14 +215,15 @@ test('pass-through is capped: a ticket passed more than 3 times, or older than 1
   assert.equal((await h2.claim('s', 'frontend', { expect_min: 1 })).code, 'E_HELD', 'older than 15 min: strict');
 });
 
-test('ticket expires after 2 minutes without a poll (4x the 30s client long-poll); polling keeps it; cancel works', async () => {
+test('ticket expires after 90 s without a poll (3x the 30s client long-poll); polling keeps it; cancel works', async () => {
   const h = harness();
   await h.claim('a', 'frontend');
   const t1 = (await h.claim('b', 'frontend', { wait: 'ticket' })).ticket;
   const t2 = (await h.claim('c', 'frontend', { wait: 'ticket' })).ticket;
   const t3 = (await h.claim('d', 'frontend', { wait: 'ticket' })).ticket;
-  await h.advance(90 * 1000); await h.svc.ticket(t2.id);
-  await h.advance(90 * 1000);
+  await h.advance(60 * 1000); await h.svc.ticket(t2.id);
+  await h.advance(60 * 1000); await h.svc.ticket(t2.id);
+  await h.advance(60 * 1000);
   assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'expired');
   assert.equal((await h.svc.ticket(t2.id)).ticket.state, 'waiting');
   assert.equal((await h.svc.cancelTicket(t3.id)).ticket.state, 'expired', 'already expired by then');
@@ -1090,4 +1091,39 @@ test('finish of a catch-up that skipped again: new catch-up has a cooldown, and 
   assert.equal((await d.start({ id: f.catchup })).code, 'E_HELD', 'cooldown');
   await h.advance(11 * MIN);
   assert.ok((await d.start({ id: f.catchup })).ok, 'after the cooldown it starts');
+});
+
+test('bug-0506a120: a ghost ticket (client killed) is dropped, never granted a lease; the retry adopts its own ticket', async () => {
+  const h = harness();
+  await h.claim('holder', 'host-1/device6');
+  const t1 = (await h.claim('ghost', 'host-1/device6', { wait: 'ticket' })).ticket;
+  await h.advance(60 * 1000);
+  const again = await h.claim('ghost', 'host-1/device6', { wait: 'ticket' });
+  assert.equal(again.ticket.id, t1.id, 'same agent, same resource: same ticket, not a second one');
+  assert.equal((await h.svc.list()).tickets.length, 1);
+  await h.advance(100 * 1000);                                    // nobody polls: dropped after 90 s
+  assert.equal((await h.svc.ticket(t1.id)).ticket.state, 'expired');
+  await h.svc.release({ agent: 'holder' });
+  assert.equal((await h.svc.list()).leases.length, 0, 'nothing is granted to the gone client');
+});
+
+test('bug-0506a120: an uncollected reservation is released within a minute and a second claim by the same agent reuses its own lease', async () => {
+  const h = harness();
+  await h.claim('holder', 'host-1/device6');
+  const t = (await h.claim('ghost', 'host-1/device6', { wait: 'ticket' })).ticket;
+  await h.svc.release({ agent: 'holder' });                       // granted at once, reserved for the (polling) client
+  let leases = (await h.svc.list()).leases;
+  assert.equal(leases.length, 1);
+  const r = await h.claim('ghost', 'host-1/device6');
+  assert.ok(r.ok && r.reused && r.lease.id === leases[0].id, 'no second lease for the same agent and resource');
+  assert.equal((await h.svc.list()).leases.length, 1);
+  assert.equal(t.state, 'waiting');
+  const h2 = harness();
+  await h2.claim('holder', 'host-1/device6');
+  await h2.claim('ghost', 'host-1/device6', { wait: 'ticket' });
+  await h2.svc.release({ agent: 'holder' });
+  await h2.advance(61 * 1000);
+  assert.equal((await h2.svc.list()).leases.length, 0, 'ticket-missed after 60 s');
+  await h2.claim('other', 'host-1/device6');
+  assert.equal((await h2.claim('other2', 'host-1/device6')).code, 'E_HELD', 'another agent is never merged into someone else lease');
 });

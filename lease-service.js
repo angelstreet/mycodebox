@@ -127,7 +127,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const now = () => { const t = nowIn(); if (!Number.isFinite(t)) throw new Error('wall clock is not finite'); return t; };   // wall clock: TTL and display only
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
-    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 2 * MIN, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 2 * MIN, goneGraceMs: 2 * MIN,
+    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 60 * 1000, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 90 * 1000, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12, deployCeilingMin: 45,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
@@ -762,6 +762,22 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         if (r.kind === 'lease' && S.leases[r.ref]) return { ok: true, lease: leaseView(S.leases[r.ref]), replay: true };
         if (r.kind === 'ticket' && S.tickets[r.ref]) return { ok: true, ticket: ticketView(S.tickets[r.ref]), replay: true };
         return fail('E_NOT_FOUND', 'the grant of this request_id has already ended', { state: 'gone' });
+      }
+      // One agent, one grant per resource set (bug-0506a120): a claim by an agent that already holds, has reserved or has queued for the same
+      // resources reuses that lease/ticket. A killed --wait client leaves its ticket behind; the retry adopts it instead of queueing a twin.
+      if (req.mode === 'exclusive' && !req.system && !req.deployId) {
+        const same = (rs) => [req.resources, ...(req.alts || [])].some((o) => o.length === rs.length && o.every((x, i) => x === rs[i]));
+        const own = Object.values(S.leases).find((l) => l.env === req.env && l.agent === req.agent && l.mode === 'exclusive' && !l.system && !l.deployId && same(l.resources));
+        if (own) {
+          if (own.reservedUntil) emit({ t: 'collect', id: own.id });
+          const to = t + req.ttlMin * MIN;
+          if (to > own.expires && to - own.since <= cfg.maxClaimMin * MIN) emit({ t: 'renew', id: own.id, expires: to, ttlMin: req.ttlMin, at: t, lastHb: own.lastHb });
+          return { ok: true, lease: leaseView(S.leases[own.id]), reused: true };
+        }
+        if (v.wait === 'ticket') {
+          const mine = waitingTickets(req.env).find((tk) => tk.agent === req.agent && tk.mode === 'exclusive' && (same(tk.resources) || (tk.alts || []).some(same)));
+          if (mine) { polls.set(mine.id, mono()); return { ok: true, ticket: ticketView(mine), reused: true }; }
+        }
       }
       const ticketFor = (primary = req.resources) => {
         const created = req.prioritySince != null ? Math.min(t, Math.max(req.prioritySince, t - 60 * MIN)) : t;
