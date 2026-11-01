@@ -13,6 +13,7 @@ import { tmpdir, homedir } from 'node:os';
 import { sensitivePath } from './merge-policy.js';
 import { jobRefs, hasRef, waitsOnOwnJob, DETACHED_RE } from './job-refs.js';
 import { integrationText, isFinal, normRequest } from './integration-notify.js';
+import { waitIds, runState } from './wait-ids.js';
 export { jobRefs, hasRef, waitsOnOwnJob };
 
 // Descendants of `pid` in a ps table { children: Map<ppid, pid[]>, args: Map<pid, string> }, nearest first, the agent itself excluded.
@@ -38,10 +39,10 @@ const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 //         integrationState: async (id) => lane request { state, ... } | null (GET /api/integration/requests/:id),
 //         stillWaiting: (session, stopAt) => bool, send: (session, text) => Promise, record: (event) => Promise, log: (rec) => void }
 // Queue-backed kinds: watched by API state (lane request / deploy queue), never by pid or log, so "detached" is meaningless for them.
-const QUEUE_KINDS = new Set(['integration', 'deploy']);
+const QUEUE_KINDS = new Set(['integration', 'deploy', 'script', 'lease']);
 
 export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', table = async () => ({ children: new Map(), args: new Map() }), agentPid = async () => null,
-  deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
+  deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, scriptRun = async () => null, leaseState = async () => null, idleMs = () => null, staleMin = 20, nudgeGapMin = 30, maxRunMin = 120, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
   const watched = new Map();   // session -> { job, stopAt, since, ... }
   // a zombie is finished: /proc/<pid>/stat is "pid (comm) S ...", the state follows the last ")"
   const alive = (pid) => {
@@ -55,6 +56,8 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const job = { text: String(text || '').slice(0, 200), refs, kind: null, pids: [], path: null, id: null, label: null };
     const detached = refs.detached || DETACHED_RE.test(String(paneText));
     if (refs.integration) { job.kind = 'integration'; job.id = refs.integration; job.label = `integration ${refs.integration}`; }
+    else if (waitIds(text).script) { const id = waitIds(text).script; job.kind = 'script'; job.id = id; job.label = `run ${id}`; }
+    else if (waitIds(text).ticket || waitIds(text).lease) { const w = waitIds(text); job.kind = 'lease'; job.id = w.ticket || w.lease; job.leaseKind = w.ticket ? 'ticket' : 'lease'; job.label = `lease ${w.ticket ? 'ticket' : 'id'} ${job.id}`; }
     else if (refs.deploy) { job.kind = 'deploy'; job.id = refs.deploy; job.label = `deploy ${refs.deploy}`; }
     // A bg_<id> handle is the agent harness's OWN background task (mcode "Tasks", claude bg_ jobs). The harness that
     // started it wakes the session when it ends, so ghosty has neither a pid nor a log to watch and must not flag it:
@@ -110,6 +113,20 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       if (isFinal(r.state)) return { state: 'ended', at: Number(r.finishedAt || r.updatedAt) || t, summary: `integration ${j.id} ${r.state}`, text: integrationText(r) };
       return { state: 'running', summary: `integration ${j.id} is ${r.state}${r.step ? ` (${r.step})` : ''}` };
     }
+    if (j.kind === 'script') {
+      let row = null; try { row = await scriptRun(j.id); } catch { /* platform unreachable: unknown, try again next tick */ }
+      const r = runState(row, { now: t, maxRunMin });
+      if (r.state === 'unknown') return { state: 'unknown', summary: `run ${j.id}: not found on the platform` };
+      if (r.state === 'running') return { state: 'running', summary: `run ${j.id} is ${r.status}` };
+      return { state: 'ended', at: r.at || t, summary: `run ${j.id} ended ${r.status}`, text: `your run ${j.id} ended ${r.status} at ${hhmm(r.at || t)}${r.message ? ` (${r.message})` : ''}, continue` };
+    }
+    if (j.kind === 'lease') {
+      let r = null; try { r = await leaseState(j.id, j.leaseKind); } catch { /* unknown */ }
+      if (!r) return { state: 'unknown', summary: `${j.label}: not found` };
+      if (r.state === 'waiting' || r.state === 'held') return { state: 'running', summary: `${j.label} is ${r.state}` };
+      const what = r.state === 'granted' ? 'was granted' : r.state === 'released' ? 'was released' : r.state === 'gone' ? 'is no longer queued (granted or dropped)' : `was dropped (${r.state})`;
+      return { state: 'ended', at: r.at || t, summary: `${j.label} ${what}`, text: `your ${j.label} ${what} at ${hhmm(r.at || t)}${r.leaseId ? ` (lease ${r.leaseId})` : ''}, continue` };
+    }
     if (j.kind === 'deploy') {
       const d = deployState(j.id);
       if (!d) return { state: 'unknown', summary: `deploy ${j.id}: not in the queue` };
@@ -139,12 +156,12 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const woke = [];
     for (const [session, w] of [...watched]) {
       if (!stillWaiting(session, w.stopAt)) { watched.delete(session); continue; }
-      if (!w.job.kind || w.job.unseen) continue;
+      if ((!w.job.kind || w.job.unseen) && !w.job.harnessOwned) { const n = await staleNudge(session, w); if (n) woke.push(n); continue; }
       if (w.job.harnessOwned) continue;   // the agent's own harness wakes it; ghosty has nothing to watch and must not type into it
       if (!canSend(session)) continue;   // a draft in the input box, a paused session: try again next tick
       if (now() - w.since > maxAgeH * 3600e3) { watched.delete(session); log({ type: 'own_job_giveup', session, job: w.job.label }); continue; }
       const s = await stateOf(w);
-      if (s.state !== 'ended') continue;
+      if (s.state !== 'ended') { if (s.state === 'unknown') { const n = await staleNudge(session, w, s); if (n) woke.push(n); } continue; }
       // an integration wake carries the lane's outcome (same text as the guarded send of integration-notify.js)
       const text = s.text || `your ${w.job.label} finished at ${hhmm(s.at || now())}, continue`;
       // the session may have moved on, been paused or started a draft while the state was read: check again right before typing
@@ -156,6 +173,27 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       woke.push({ session, text });
     }
     return woke;
+  }
+
+  // Staleness sweep: STATUS waiting, pane quiet for staleMin, no live child process, nothing in the line still pending -> one nudge,
+  // at most one per nudgeGapMin per session. Never to a session that moved on (stillWaiting) or has a draft (canSend); never while a job is alive.
+  const nudged = new Map();   // session -> ms of the last nudge
+  async function staleNudge(session, w, known = null) {
+    const t = now();
+    if (t - w.since < staleMin * 60000 || t - (nudged.get(session) || 0) < nudgeGapMin * 60000) return null;
+    const idle = idleMs(session);
+    if (idle == null || idle < staleMin * 60000 || !canSend(session)) return null;
+    try {
+      if (known?.state === 'running') return null;
+      if (w.job.kind === 'pid' || w.job.kind === 'tree') { if (w.job.pids.some((p) => alive(p))) return null; }
+      if (await hasLiveChild(session, { text: w.job.text, turnStart: w.stopAt })) return null;
+      if (!stillWaiting(session, w.stopAt) || !canSend(session)) return null;
+      const text = 'nothing you wait on is still running: check the result and continue';
+      await send(session, text);
+      nudged.set(session, t);
+      log({ type: 'own_job_stale_nudge', session, job: w.job.label || 'unknown', idleMin: Math.round(idle / 60000), text });
+      return { session, text };
+    } catch (e) { log({ type: 'own_job_wake_failed', session, job: w.job.label, error: e.message }); return null; }
   }
 
   // For the manager's self-check ("is the run finished?"): what is known about the session's own job right now, or null.
