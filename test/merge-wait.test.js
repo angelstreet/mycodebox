@@ -30,7 +30,7 @@ test('merge_wait with a lane repo: enqueues, tells the session the id, never ask
   await stop('mw1', 'Pushed v2/x.\nSTATUS: waiting — your merge decision on PR #22 (branch v2/x)', (r) => r.type === 'merge_handoff');
   assert.deepEqual(enq[0], { repo: 'mycodebox', branch: 'v2/x', session: 'mw1', by: 'manager' });
   await wait(50);
-  assert.match(sent.find((x) => x.name === 'mw1').text, /queued integration int-fake01.*STATUS: waiting: integration int-fake01/);
+  assert.match(sent.find((x) => x.name === 'mw1').text, /queued integration int-fake01.*STATUS: waiting: integration int-fake01 only when nothing else is left/);
   assert.equal(pushes.length, 0);
   assert.equal(items.length, 0);
   assert.ok(!log().some((r) => r.type === 'escalated' && r.session === 'mw1'));

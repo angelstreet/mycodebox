@@ -118,7 +118,7 @@ test('tick: a busy host holds every message; the message tells an idle session t
   assert.match((await w.tick()).held, /host busy/); assert.equal(sent.length, 0);
   pr = { loadPerCore: 0.5, ramAvailPct: 10 }; await w.tick(); assert.equal(sent.length, 0);
   pr = { loadPerCore: 0.5, ramAvailPct: 50 }; await w.tick(); assert.equal(sent.length, 2, 'two per check');
-  assert.match(message({ hash: H, at: T, subject: 's' }), /idle with nothing pending, start nothing new/);
+  assert.match(message({ hash: H, at: T, subject: 's' }), /idle with nothing pending, write only `STATUS: acknowledged`/);
 });
 
 test('tick: a script-busy session is skipped, logged as "skipped: script pane", and journaled, but is NOT told', async (t) => {
@@ -204,4 +204,16 @@ test('tick: the body names exactly the sessions told, and MAX_SENDS_PER_TICK sti
   assert.deepEqual(h.sent.map((s) => s[0]), ['s0', 's1']);
   assert.equal(e.body, h.sent.map((s) => s[0]).join(', '));
   assert.match(e.title, /is newer than 2 session\(s\)/);
+});
+
+test('nudge text lets sessions with unfinished work continue (2026-11-01)', async () => {
+  const { message } = await import('../rules-watch.js');
+  const m = message({ hash: 'a'.repeat(40), at: 0 });
+  assert.match(m, /If you have unfinished work that does not depend on a job, continue it\. Only if everything left depends on a named job, repeat your STATUS line unchanged\./);
+  assert.doesNotMatch(m, /repeat your existing STATUS line/);
+});
+
+test('nudge text forbids done with leftovers (2026-11-01)', async () => {
+  const { message } = await import('../rules-watch.js');
+  assert.match(message({ hash: 'a'.repeat(40), at: 0 }), /Never write `STATUS: done` while something is left: write `STATUS: not fully confirmed: <what remains>`/);
 });

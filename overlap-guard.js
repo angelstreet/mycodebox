@@ -82,7 +82,7 @@ export function message({ other, paths, newer }) {
     `${TAG} Session ${other} also changes ${list}.${rename}`,
     'Coordinate with it (one message) before your next commit; the one that started later waits or takes a different slice.',
     `${newer ? 'You started later than it: wait for its integration or take another slice.' : 'It started later than you: it should wait or move; keep your slice unless it asks.'}`,
-    'Do not stop your work for this. If you were idle with nothing pending, start nothing new: write only `STATUS: acknowledged`. If you are waiting on a job, repeat your existing STATUS line unchanged.',
+    'Do not stop your work for this. If you have unfinished work that does not depend on a job, continue it. Only if everything left depends on a named job, repeat your STATUS line unchanged. If you were idle with nothing pending, write only `STATUS: acknowledged`.',
   ].join(' ');
 }
 

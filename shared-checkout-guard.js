@@ -35,7 +35,7 @@ export function message({ checkout, reasons, paths }) {
   return [
     `${TAG} The shared checkout ${checkout} is not clean: ${reasons.join('; ')}${list ? ` (${list})` : ''}. You started there and may be the cause.`,
     'Rule: one agent = one worktree. First command: `git worktree list`; create or reuse your worktree; work only there. Move any change of yours out of the shared checkout into your worktree (do not reset or clean it for others).',
-    'Do not stop your work for this. If you were idle with nothing pending, write only `STATUS: acknowledged`. If you are waiting on a job, repeat your existing STATUS line unchanged.',
+    'Do not stop your work for this. If you have unfinished work that does not depend on a job, continue it. Only if everything left depends on a named job, repeat your STATUS line unchanged. If you were idle with nothing pending, write only `STATUS: acknowledged`.',
   ].join(' ');
 }
 
