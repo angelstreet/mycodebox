@@ -68,7 +68,8 @@ test('modes, same agent, shared and sensitivity defaults', async () => {
   const h = harness();
   const a = await h.claim('a', 'host-1/device1');
   assert.equal(a.lease.kind, 'host', 'device lease defaults to host sensitivity');
-  assert.equal((await h.claim('a', 'host-9')).lease.kind, 'server', 'a host lease defaults to server sensitivity');
+  assert.equal((await h.claim('a', 'host-9')).lease.kind, 'host', 'a host lease defaults to host sensitivity');
+  assert.equal((await h.claim('a', ['host-8', 'server'])).lease.kind, 'server', 'a claim that names the server stays server-kind');
   assert.ok((await h.claim('a', 'host-1/device1')).ok, 'same agent never conflicts with itself');
   assert.ok(held(await h.claim('b', 'host-1/device1')));
   assert.ok((await h.claim('b', 'host-1/device1', { mode: 'observe' })).ok, 'observe never conflicts');
@@ -867,20 +868,20 @@ test('an earlier conflicting ticket is never starved by a younger disjoint-then-
   assert.equal((await h.svc.ticket(small.id)).ticket.state, 'waiting');
 });
 
-test('server claim vs host leases: kind=host never blocks it; a default (server-kind) host ticket does, and drags later server-kind host claims behind it', async () => {
+test('server claim vs host leases: kind=host (the default) never blocks it; a server-kind host ticket does, and drags later server-kind host claims behind it', async () => {
   const h = harness();
   const dev = (await h.claim('dev', 'host-1/device1', { kind: 'host' })).lease;       // device lease on a Pi, kind host
   const free = await h.claim('srv', 'server');
   assert.ok(free.ok, 'a server claim is not blocked by a kind=host device lease');
   await h.svc.release({ id: free.lease.id });
-  const hd = (await h.claim('hd', 'host:host-1', { wait: 'ticket' })).ticket;          // default kind = server
+  const hd = (await h.claim('hd', 'host:host-1', { wait: 'ticket', kind: 'server' })).ticket;
   assert.equal(hd.kind, 'server');
   const srv = (await h.claim('srv2', 'server', { wait: 'ticket' })).ticket;
   assert.deepEqual(srv.behind, [hd.id], 'server ticket is behind the server-kind host ticket');
-  const p4 = (await h.claim('p4', 'host:host-4', { wait: 'ticket' })).ticket;
+  const p4 = (await h.claim('p4', 'host:host-4', { wait: 'ticket', kind: 'server' })).ticket;
   assert.deepEqual(p4.behind, [srv.id], 'a server-kind claim on another host is behind the server ticket');
-  const p5 = await h.claim('p5', 'host:host-5', { kind: 'host' });
-  assert.ok(p5.ok, 'the same claim with --kind host is granted at once');
+  const p5 = await h.claim('p5', 'host:host-5');
+  assert.ok(p5.ok, 'the same claim with the default kind (host) is granted at once');
   void dev;
 });
 
