@@ -99,7 +99,9 @@ def is_device(r):
 
 
 def default_kind(wanted):
-    return "host" if wanted and all(is_device(r) for r in wanted) else "server"
+    # host and device claims default to host sensitivity, as in the service (owner 2026-11-01): a whole-host claim that
+    # defaulted to server kept every server deploy of the env queued. A claim a server restart breaks says --kind server.
+    return "host" if wanted and all(r not in ("*", "env:*", "frontend", "server") for r in wanted) else "server"
 
 
 def delays():
