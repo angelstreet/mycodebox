@@ -43,6 +43,7 @@ export const mergeable = (d, x) => x.id !== d.id && x.env === d.env && x.state =
 
 // A catch-up: the runner's own request for hosts a leased deploy skipped ("catch-up: hosts skipped by <id> (leased): ...").
 // The central lease service words its own the same way ("catch-up for <id>: skipped ..."), so both count.
+const GENERIC_HOSTS = ['server', 'frontend', 'hosts'];
 export const isCatchUp = (d) => /^catch-up[ :]/.test(String(d.purpose || ''));
 // Catch-ups the queue already holds for `hosts` in `env`: one catch-up per (env, host set), never a chain of them.
 // The host SET decides, not an overlap: the wanted hosts must be inside the catch-up's host set, so a catch-up for {A}
@@ -98,6 +99,17 @@ export function defaultRegistry() {
 // update_core prints one of these once it holds its lease (or when it needs none): from then on the hold clock runs.
 const HOLD_RE = /^(holding lease \S+ on |restart of .* only: no lease needed|Windows-only deploy: nothing to claim|every requested host is leased by another agent)/;
 const DEFAULT_MAX_MS = 3 * 60 * 60 * 1000;
+// Progress, not wall time (owner 2026-11-01): the hold clock (timeoutMs) restarts every time a host reports health ok|skipped, so a
+// long rollout of healthy hosts is not killed at 11 min; a stuck host still is. HOLD_CEILING_MS is the hard limit for the whole hold.
+export const DEFAULT_HOLD_CEILING_MS = 45 * 60 * 1000;
+const PROGRESS_DONE_RE = /^VPT_PROGRESS (\{.*"phase":"health".*\})\s*$/;
+export const isHostDone = (line) => {
+  const m = PROGRESS_DONE_RE.exec(String(line || '')); if (!m) return null;
+  let j; try { j = JSON.parse(m[1]); } catch { return null; }
+  return (j.state === 'ok' || j.state === 'skipped') && j.host ? { host: String(j.host).trim().toLowerCase(), role: j.role } : null;
+};
+// "=== Lease check (<env>: a b c) [..] ===": the hosts update_core means to walk
+export const leaseCheckHosts = (line) => { const m = /^=== Lease check \([^:)]*: ([^)]*)\)/.exec(String(line || '')); return m ? m[1].trim().split(/\s+/).filter(Boolean).map((x) => x.toLowerCase()) : []; };
 const WRAP = '"$@"; rc=$?; echo $rc > "$0.tmp" && mv "$0.tmp" "$0"; exit $rc';
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 const pidFile = (dir, id) => join(dir, `${id}.pid`);
@@ -109,11 +121,11 @@ const nap = (ms) => new Promise((r) => setTimeout(r, ms));
 // Resolves {code, timedOut}. The consumed offset is kept in `<id>.off` so an adopting runner does not repeat lines.
 // timeoutMs caps the HOLD (the clock starts when update_core reports it holds the lease, see HOLD_RE); maxMs caps the whole
 // deploy including the wait in the registry queue. Resolves timedOut = 'hold' | 'cap' | false.
-export function followDetached(dir, id, { onLine: emit, timeoutMs, maxMs = DEFAULT_MAX_MS, pollMs = 1000, pid }) {
+export function followDetached(dir, id, { onLine: emit, timeoutMs, maxMs = DEFAULT_MAX_MS, holdCeilingMs = DEFAULT_HOLD_CEILING_MS, pollMs = 1000, pid }) {
   return new Promise((resolve) => {
-    let off = 0, buf = '', timedOut = false, done = false, busy = false, t = null, holdStart = null;
+    let off = 0, buf = '', timedOut = false, done = false, busy = false, t = null, holdStart = null, lastProgress = null;
     const started = Date.now();
-    const onLine = (l) => { if (holdStart == null && HOLD_RE.test(l)) holdStart = Date.now(); emit(l); };
+    const onLine = (l) => { if (holdStart == null && HOLD_RE.test(l)) holdStart = Date.now(); else if (holdStart != null && isHostDone(l)) lastProgress = Date.now(); emit(l); };
     const runFile = join(dir, `${id}.run`), offFile = join(dir, `${id}.off`);
     const drain = async () => {
       let fh;
@@ -140,7 +152,7 @@ export function followDetached(dir, id, { onLine: emit, timeoutMs, maxMs = DEFAU
           done = true; clearInterval(t);
           return resolve({ code, timedOut });
         }
-        const over = holdStart != null ? (Date.now() - holdStart > timeoutMs ? 'hold' : null) : (Date.now() - started > maxMs ? 'cap' : null);
+        const over = holdStart != null ? (Date.now() - holdStart > holdCeilingMs ? 'ceiling' : Date.now() - Math.max(holdStart, lastProgress || 0) > timeoutMs ? 'hold' : null) : (Date.now() - started > maxMs ? 'cap' : null);
         if (!timedOut && over) {
           timedOut = over;
           try { process.kill(-pid, 'SIGTERM'); } catch {}
@@ -159,9 +171,13 @@ export function followDetached(dir, id, { onLine: emit, timeoutMs, maxMs = DEFAU
 
 // Runs the deploy command. Streams every output line to onLine; resolves {code, timedOut}.
 // kind 'deploy' is detached (survives a restart, see above); the short health check stays a plain piped child.
-function defaultRun(env, { ref, scope, flags, remoteCmd, onLine: emit, timeoutMs, maxMs = DEFAULT_MAX_MS, kind = 'deploy', id = '', dir, followPollMs }) {
-  let holdTimer = null, capTimer = null;
-  const onLine = kind === 'deploy' ? (l) => { if (!holdTimer && HOLD_RE.test(l)) { clearTimeout(capTimer); holdTimer = setTimeout(() => stop('hold'), timeoutMs); } emit(l); } : emit;
+function defaultRun(env, { ref, scope, flags, remoteCmd, onLine: emit, timeoutMs, maxMs = DEFAULT_MAX_MS, holdCeilingMs = DEFAULT_HOLD_CEILING_MS, kind = 'deploy', id = '', dir, followPollMs }) {
+  let holdTimer = null, capTimer = null, ceilingTimer = null;
+  const onLine = kind === 'deploy' ? (l) => {
+    if (!holdTimer && HOLD_RE.test(l)) { clearTimeout(capTimer); holdTimer = setTimeout(() => stop('hold'), timeoutMs); ceilingTimer = setTimeout(() => stop('ceiling'), holdCeilingMs); }
+    else if (holdTimer && isHostDone(l)) { clearTimeout(holdTimer); holdTimer = setTimeout(() => stop('hold'), timeoutMs); }
+    emit(l);
+  } : emit;
   let stop = () => {};
   if (kind === 'deploy' && dir) {
     mkdirSync(dir, { recursive: true });
@@ -177,7 +193,7 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine: emit, timeoutMs
     return new Promise((resolve) => {
       child.on('error', (e) => { onLine(`spawn error: ${e.message}`); resolve({ code: 255, timedOut: false }); });
       if (!child.pid) return;
-      writeFile(pidFile(dir, id), String(child.pid)).then(() => followDetached(dir, id, { onLine: emit, timeoutMs, maxMs, pollMs: followPollMs, pid: child.pid })).then(resolve);
+      writeFile(pidFile(dir, id), String(child.pid)).then(() => followDetached(dir, id, { onLine: emit, timeoutMs, maxMs, holdCeilingMs, pollMs: followPollMs, pid: child.pid })).then(resolve);
     });
   }
   return new Promise((resolve) => {
@@ -195,8 +211,8 @@ function defaultRun(env, { ref, scope, flags, remoteCmd, onLine: emit, timeoutMs
     let buf = '';
     const feed = (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { onLine(buf.slice(0, i)); buf = buf.slice(i + 1); } };
     child.stdout.on('data', feed); child.stderr.on('data', feed);
-    child.on('error', (e) => { clearTimeout(timer); clearTimeout(capTimer); clearTimeout(holdTimer); onLine(`spawn error: ${e.message}`); resolve({ code: 255, timedOut }); });
-    child.on('close', (code) => { clearTimeout(timer); clearTimeout(capTimer); clearTimeout(holdTimer); if (buf) onLine(buf); resolve({ code: code ?? 255, timedOut }); });
+    child.on('error', (e) => { clearTimeout(timer); clearTimeout(capTimer); clearTimeout(holdTimer); clearTimeout(ceilingTimer); onLine(`spawn error: ${e.message}`); resolve({ code: 255, timedOut }); });
+    child.on('close', (code) => { clearTimeout(timer); clearTimeout(capTimer); clearTimeout(holdTimer); clearTimeout(ceilingTimer); if (buf) onLine(buf); resolve({ code: code ?? 255, timedOut }); });
   });
 }
 
@@ -224,7 +240,7 @@ export function rollingTracker() {
 
 export function createDeployRunner({
   stateDir, alert = () => {}, managerItem = null, onChange = () => {}, isEnabled = () => false,
-  registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, pollMs = 30000,
+  registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, holdCeilingMs = DEFAULT_HOLD_CEILING_MS, pollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
   backoffBaseMs = BACKOFF_BASE_MS,      // the per-host back-off between two catch-up tries (tests shorten it)
   rolling = process.env.GHOSTY_DEPLOY_ROLLING !== 'off',   // release each finished host of a host deploy at once (rollingTracker)
@@ -372,8 +388,17 @@ export function createDeployRunner({
     const lines = [];
     if (adopt) { try { lines.push(...(await readFile(join(logDir, `${d.id}.log`), 'utf8')).split('\n').filter(Boolean).slice(-400)); } catch {} }
     const track = rolling && d.scope === 'host' ? rollingTracker() : null;
+    const planned = [], doneRoles = new Set();   // hosts the run means to walk (lease check line) / hosts that reported health ok|skipped (host role)
+    let renewing = false;
     const onLine = (l) => {
       lines.push(l); if (lines.length > 400) lines.shift(); out.write(l + '\n');
+      planned.push(...leaseCheckHosts(l));
+      const hd = isHostDone(l);
+      if (hd) {
+        if (hd.role === 'host' || hd.role === 'docker' || hd.role === 'windows') doneRoles.add(hd.host);
+        // progress renews the deploy's lease (the registry caps it at the ceiling); rolling already does it with release-hosts
+        if (!(track && hd.role === 'host') && !renewing) { renewing = true; reg(['deploy', 'progress', d.id]).catch(() => {}).finally(() => { renewing = false; }); }
+      }
       for (const h of track ? track(l) : []) {
         reg(['deploy', 'release-hosts', d.id, '--hosts', h]).then((r) => !out.writableEnded && out.write(`# rolling: ${r.code === 0 ? `released ${h} (done)` : `could not release ${h}: ${String(r.stderr || `exit ${r.code}`).trim().slice(0, 160)}`}\n`))
           .catch((e) => log.error?.('[deploy] release-hosts', e.message));
@@ -386,11 +411,12 @@ export function createDeployRunner({
     if (!adopt) alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1', blockedBy: everBlocked.has(d.id) ? ['lease'] : null }, 0);
     let status = 'failed', rc = null, timedOut = false;
     try {
-      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id}${leaseIds.get(d.id) ? ` VPT_LEASE_ID=${shq(leaseIds.get(d.id))}` : ''} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
-      if (adopt) ({ code: rc, timedOut } = await follow(logDir, d.id, { onLine, timeoutMs, maxMs, pollMs: followPollMs, pid: adopt.pid }));
-      else ({ code: rc, timedOut } = await run(envCfg, { dir: logDir, followPollMs, id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs, maxMs }));
+      const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id}${leaseIds.get(d.id) ? ` DEPLOY_LEASE_TTL_MIN=${Math.round(holdCeilingMs / 60000)}` : ''}${leaseIds.get(d.id) ? ` VPT_LEASE_ID=${shq(leaseIds.get(d.id))}` : ''} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
+      if (adopt) ({ code: rc, timedOut } = await follow(logDir, d.id, { onLine, timeoutMs, maxMs, holdCeilingMs, pollMs: followPollMs, pid: adopt.pid }));
+      else ({ code: rc, timedOut } = await run(envCfg, { dir: logDir, followPollMs, id: d.id, ref: d.ref, scope: d.scope, flags, remoteCmd, onLine, timeoutMs, maxMs, holdCeilingMs }));
       if (timedOut === 'cap') onLine(`# TIMEOUT: still not finished ${Math.round(maxMs / 60000)} min after start (queue wait included), killed`);
-      else if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min holding the lease, killed`);
+      else if (timedOut === 'ceiling') onLine(`# TIMEOUT: hold ceiling of ${Math.round(holdCeilingMs / 60000)} min reached, killed`);
+      else if (timedOut) onLine(`# TIMEOUT after ${Math.round(timeoutMs / 60000)} min holding the lease without a host finishing, killed`);
       else onLine(`# update_core exit ${rc}`);
       status = rc === 0 && !timedOut ? 'done' : 'failed';
       if (status === 'done') {
@@ -402,6 +428,11 @@ export function createDeployRunner({
       }
     } catch (e) { onLine(`# runner error: ${e.message}`); }
     const skipped = parseSkipped(lines);
+    // killed by the hold clock / ceiling, or update_core's own lease guard (exit 6): the hosts it had not finished get a catch-up, like leased ones
+    if (timedOut || rc === 6) {
+      const left = [...new Set(planned)].filter((h) => !GENERIC_HOSTS.includes(h) && !doneRoles.has(h) && !skipped.includes(h));
+      if (left.length) { onLine(`# deploy cut short (${timedOut ? `timeout ${timedOut}` : 'lease guard'}): ${left.length} host(s) not finished, catch-up: ${left.join(',')}`); skipped.push(...left); }
+    }
     if (skipped.length) {
       onLine(`# skipped (leased): ${skipped.join(',')}`);
       // a queued request for a skipped host (or any unrestricted host request) must not be closed by this run
