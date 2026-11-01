@@ -79,12 +79,21 @@ test('claim: granted prints the lease id on line 1, sends the contract body and 
 
 test('claim: broad claim warns on stderr and a free-form agent name is flagged', async () => {
   setup(() => ({ ok: true, lease: lease({ id: 'w1' }) }));
-  const r = await run(['claim', 'env-a', 'host-1', '--agent', 'script', '--ttl', '300']);
+  const r = await run(['claim', 'env-a', 'host-1', '--agent', 'script', '--ttl', '300', '--kind', 'server']);
   assert.equal(r.out, 'w1\n');
   assert.match(r.err, /blocks server \+ full deploys/);
   assert.match(r.err, /blocks every device on host-1/);
   assert.match(r.err, /--ttl 300 min is over 4 h/);
   assert.match(r.err, /not codebox:<tmux session> or mac:<name>/);
+});
+
+test('claim: a host claim defaults to kind host and does not warn about server deploys', async () => {
+  let body = null;
+  setup((req) => { body = req.body; return { ok: true, lease: lease({ id: 'w2' }) }; });
+  const r = await run(['claim', 'env-a', 'host-1', '--agent', 'codebox:x']);
+  assert.equal(r.out, 'w2\n');
+  assert.doesNotMatch(r.err, /blocks server \+ full deploys/);
+  assert.equal(body.kind, 'host', 'the claim body carries kind host');
 });
 
 test('claim: busy -> exit 3 with the holders on stderr; deploy pending -> exit 4', async () => {
