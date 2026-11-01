@@ -281,7 +281,10 @@ export function pinOverrideNote(ev, view) {
 
 // --- service events -> feed records, and the one-line note to a codebox session ---------------------------------------------
 const EVENT_KIND = /^(downgraded|pin[-_]?overlap|yield)$/i;
-export const isNoteEvent = (ev) => EVENT_KIND.test(String(ev?.kind || ev?.event || ''));
+// a ticket grant wakes the waiter with the result; a plain claim granted at once (no ticket) is not an event for anyone
+export const isNoteEvent = (ev) => EVENT_KIND.test(String(ev?.kind || ev?.event || '')) || (String(ev?.kind || ev?.event || '') === 'granted' && !!ev.ticket);
+// once per ticket: the key under which a note was sent; `done.has(key)` before sending, `done.add(key)` after a send that went out
+export const noteKey = (ev) => `${String(ev?.kind || ev?.event || '')}:${ev?.ticket || ev?.id || ''}`;
 const where = (ev) => `${ev.env ? `${ev.env}/` : ''}${asList(ev.resources ?? ev.resource).join(',') || '*'}`;
 export function eventRecord(ev) {
   const kind = String(ev?.kind || ev?.event || '').toLowerCase().replace(/_/g, '-');
@@ -298,6 +301,7 @@ export function eventRecord(ev) {
 export function eventNote(ev) {
   const kind = String(ev?.kind || ev?.event || '').toLowerCase().replace(/_/g, '-');
   const w = where(ev);
+  if (kind === 'granted' && ev.ticket) return `Your lease ticket ${ev.ticket} was granted: lease ${ev.id || '?'} on ${w}. Collect it now with vpt-lease ticket ${ev.ticket} --wait (the reservation lapses after about a minute), then continue.`;
   if (kind === 'downgraded') return `Your exclusive lease on ${w} became a pin (${ev.reason || 'no control activity for 20 min'}). Claim again with vpt-lease claim ... --wait when you drive it.`;
   if (kind === 'yield') return `Your ${ev.priority || 'P2'} lease ${ev.id || ''} on ${w} cannot be renewed: a claim of higher priority is waiting. Stop at the next turn boundary and release it (vpt-lease release ${ev.id || '<id>'}); claim again with --wait when you need it.`;
   if (kind === 'pin-overlap') return `Someone else was granted an exclusive lease that overlaps your pin on ${w}${ev.by_agent || ev.by || ev.holder ? ` (${ev.by_agent || ev.by || ev.holder})` : ''}. Your pin does not block them; claim again with vpt-lease claim ... --wait if you need to drive it.`;

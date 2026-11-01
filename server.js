@@ -104,7 +104,7 @@ import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
 import * as managerApi from './manager.js';
 import { createReadyStore } from './ready-window.js';
-import { normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, renewalIdleMin } from './lease-source.js';
+import { noteKey as leaseNoteKey, normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, renewalIdleMin } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
@@ -922,6 +922,7 @@ const leaseNudge = createLeaseNudge({
 // Events of the lease service (central): the feed, the handoffs, and a one-line note to a codebox session whose exclusive lease
 // became a pin (or whose pin was overlapped). The note goes through the guarded send, by 'lease-service', only to a session that is
 // stopped on a finished turn with nothing typed; otherwise the feed event is all there is.
+const leaseNotesSent = new Set();   // `${kind}:${ticket}`: a ticket grant is told once
 async function onLeaseEvent(ev) {
   const rec = eventRecord(ev);
   if (rec) {
@@ -936,10 +937,13 @@ async function onLeaseEvent(ev) {
   const session = eventSession(ev, (a) => agentSession(a, names, MACHINES));
   const note = eventNote(ev);
   if (!session || !note || !noteAllowed(latest?.status?.[session])) return;
+  const nk = String(ev.kind || ev.event) === 'granted' ? leaseNoteKey(ev) : null;
+  if (nk && leaseNotesSent.has(nk)) return;
   try {
     await assertAgentPane(session, 'lease-service');
     await sendKeys(session, note, true);
     logSend(session, 'lease-service', { keys: note });
+    if (nk) { leaseNotesSent.add(nk); if (leaseNotesSent.size > 2000) leaseNotesSent.delete(leaseNotesSent.values().next().value); }
   } catch (e) { console.error('[lease] note', session, e.message); }
 }
 // A stop whose STATUS says waiting / blocked: central -> the service (it downgrades an exclusive hold); legacy -> a feed flag when the session holds one.

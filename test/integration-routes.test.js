@@ -140,7 +140,7 @@ test('describe: the one-line texts', () => {
   const r = { id: 'int-1', branch: 'feat', target: 'main', sha: 'abcdef0123456789', state: 'merged' };
   assert.equal(describe(r), 'Integration int-1: merged feat into main at abcdef012345.');
   assert.match(describe({ ...r, state: 'deployed', deployed: { version: 'v3', env: 'env-a' } }), /deployed v3 to env-a\.$/);
-  assert.equal(describe({ ...r, state: 'returned', reason: 'tests red (exit 1)' }), 'Integration int-1 returned: tests red (exit 1). Fix it on your branch and run integrate request again.');
+  assert.equal(describe({ ...r, state: 'returned', reason: 'tests red (exit 1)' }), 'Integration int-1 (feat) returned: tests red (exit 1). Fix it on your branch and run integrate request again.');
 });
 
 // ---- the CLI ----

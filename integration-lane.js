@@ -325,6 +325,9 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // The repo's own settleMs, else the global one, else the default. 0 means "no settle window".
   const settleOf = (key) => { const all = cfgAll(); const r = all.repos[key]; return (r && r.settleMs != null ? r.settleMs : (all.settleMs != null ? all.settleMs : DEFAULT_SETTLE_MS)); };
   const iso = () => new Date(now()).toISOString();
+  // Per-request milestone times (r.times, ISO): set once, where the state changes. integrate status shows them (integration-notify.js timeline()).
+  const stamp = (r, k) => { r.times = r.times || {}; if (!r.times[k]) r.times[k] = iso(); };
+  const markPushed = (r) => { r.pushed = true; stamp(r, 'mergedAt'); };
   const persist = (r) => { try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.appendFileSync(file, `${JSON.stringify(r)}\n`, { mode: 0o600 }); } catch (e) { log('persist failed', e.message); } };
   let lastTold = Promise.resolve();   // the latest notify call, so a self deploy can let the notice out before its restart
   const emit = (r, event) => {
@@ -372,7 +375,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   function transition(r, state, patch = {}, event = {}) {
     Object.assign(r, patch, { state, updatedAt: iso() });
     const final = FINAL.includes(state);
-    if (final) { r.endedAt = iso(); live.delete(r.id); }
+    if (final) { r.endedAt = iso(); live.delete(r.id); if (state === 'returned') stamp(r, 'returnedAt'); if (state === 'deployed') stamp(r, 'deployedAt'); }
     persist(r);
     emit(r, { kind: final ? 'final' : state === 'running' ? 'running' : 'state', state, final, reason: r.reason ?? null, ...event });
     if (final) wake(r.id);
@@ -622,7 +625,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       if (!targetSha) throw new Ret(`target ${c.remote}/${c.target} not found`);
       r.targetBase = targetSha;
       if (r.revertOf && (await G(r, c, ['merge-base', '--is-ancestor', r.revertOf, targetSha])).code !== 0) throw new Ret(`the merge ${r.revertOf.slice(0, 12)} is not on ${c.remote}/${c.target}: nothing to revert`);
-      if (!r.revertOf && (await G(r, c, ['merge-base', '--is-ancestor', branchSha, targetSha])).code === 0) { r.alreadyMerged = true; r.sha = targetSha; r.pushed = true; return; }
+      if (!r.revertOf && (await G(r, c, ['merge-base', '--is-ancestor', branchSha, targetSha])).code === 0) { r.alreadyMerged = true; r.sha = targetSha; markPushed(r); return; }
       const wt = wtPath(r);
       await dropWorktree(r, c);
       try {
@@ -719,7 +722,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
           const now = await rev(r, c, `${c.remote}/${c.target}`);
           return { ok: false, tail: x.err || x.out, info: { moved: now !== targetSha } };   // lease rejected / target changed: re-merge onto it
         });
-        if (p.ok) { r.pushed = true; persist(r); return; }
+        if (p.ok) { markPushed(r); persist(r); return; }
         if (!p.info.moved) throw new Ret('push failed', p.tail);
         log('target moved, re-merging', r.id);
       } finally { await dropWorktree(r, c); }
@@ -743,6 +746,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         await sleep(pollMs);
       }
     });
+    if (record) { stamp(r, 'ciDoneAt'); persist(r); }
     return res;
   }
 
@@ -753,12 +757,14 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         // a crash between the request and the saved id would re-request: look the deploy up by its agent first
         if (!r.deployId && deploys.find) { const id = await deploys.find({ agent: `integration:${r.id}` }).catch(() => null); if (id) { r.deployId = id; persist(r); } }
         if (!r.deployId) {
+          stamp(r, 'deployRequestedAt');
           const dsha = r.deploySha || r.sha;   // a superseded merge deploys the green tip that carries it
           const q = await deploys.request({ env: c.deploy.env, scope: r.deployScope, ref: dsha || c.target, sha: dsha, agent: `integration:${r.id}` });
           if (!q?.id) return { ok: false, tail: q?.error ?? q?.reason ?? 'deploy request refused' };
           r.deployId = q.id; persist(r);
         }
         const w = await deploys.wait(r.deployId);
+        stamp(r, 'deployDoneAt');
         r.deployVersion = w?.version ?? null;
         r.deployed = w?.ok === true ? { id: r.deployId, version: r.deployVersion, env: c.deploy.env, scope: r.deployScope } : null;
         return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}` : (w?.error || w?.tail || w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
@@ -893,7 +899,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         if (r.mergeSha) {
           let landed = false;
           try { await fetch(r, c); landed = await contains(r, c, r.mergeSha); } catch (e) { if (!(e instanceof Ret)) throw e; landed = (await knownTip(r, c)) === r.mergeSha; }   // fetch down: read the remote tip
-          if (landed) { r.pushed = true; r.sha = r.mergeSha; persist(r); }
+          if (landed) { markPushed(r); r.sha = r.mergeSha; persist(r); }
         }
       }
       if (!r.pushed && r.revertOf) { await fetch(r, c); await mergeAndPush(r, c, null); }
