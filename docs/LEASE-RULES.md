@@ -49,6 +49,9 @@ Hours were lost waiting on one web host while the other was free. When the work 
 - A host lease (`<host>`) is for work that disturbs every device of the host: a vpt-host restart, a deploy, host maintenance. It
   waits for the device runs on that host, by design: restarting vpt-host breaks them. A host claim blocked only by device leases
   prints `HINT: blocked only by device lease(s) on ...`: if you need one device, claim that device instead.
+- Restarting one device's own unit instance (the per-device BLE/HID daemons and per-device stream, grabber and monitor-img
+  instances, see REFERENCE) needs only `<host>/<device>` of that device and is blocked only by another session's lease on the same
+  device. Name the device in the request (`device5`); host-wide units such as vpt-host keep the host lease.
 
 ## How to claim
 

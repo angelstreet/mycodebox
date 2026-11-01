@@ -93,10 +93,25 @@ export const hostsNamed = (text) => {
 };
 
 export const RESTART_LEASE_RULE = 'Claim the host lease first: `vpt-lease claim ... --kind host --wait` (or `vpt-lease run ... -- <cmd>`); a restart needs the host lease only, never the server lease. Never ask the owner about a lease.';
+export const DEVICE_LEASE_RULE = (host, dev) => `Claim ${host ? `${host}/${dev}` : `the host/${dev}`} first: \`vpt-lease claim <env>/${host || '<host>'}/${dev} --kind host --wait\` (or \`vpt-lease run ... -- <cmd>\`); a restart of one device's unit needs that device's lease (or the host lease), never the server lease. Never ask the owner about a lease.`;
 
-// view: lease-source view(); -> { text, covered, units, hosts } | null when the text is not a routine restart.
+// Per-device unit instances (owner 2026-11-01): `<family>@<instance>` of these families only touches one device, so it needs a lease on
+// that device and is blocked only by another session's lease on the SAME device. The instance suffix is usually an adapter (hci1),
+// not a device id, so the device comes from a `deviceN` in the unit suffix or, failing that, from exactly one `deviceN` the asker
+// names in the text ("restart hid-remote@hci1 (device5) on <lab-host>"). Any other restart is host-wide: host lease, any device lease blocks.
+export const PER_DEVICE_FAMILIES = ['hid-remote', 'vpt-ble-remote', 'vpt-stream', 'vpt-grabber', 'vpt-monitor-img'];
+const isInstance = (u) => { const [fam, inst] = String(u).split('@'); return !!inst && PER_DEVICE_FAMILIES.includes(fam); };
+export function deviceOfRestart(text, units) {
+  const named = [...new Set([...String(text || '').matchAll(/\bdevice\s?(\d+)\b/gi)].map((m) => `device${m[1]}`))];
+  const ids = new Set();
+  for (const u of units) { const m = /device(\d+)/i.exec(u.split('@')[1] || ''); if (m) ids.add(`device${m[1]}`); else if (named.length === 1) ids.add(named[0]); else return null; }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+// view: lease-source view(); -> { text, covered, units, hosts, device? } | null when the text is not a routine restart.
 // A restart of a unit on a leased host needs an exclusive lease of this session that covers that host (a host-kind lease, or an
-// env-wide one that names it); without one the answer is "claim the host lease first".
+// env-wide one that names it); without one the answer is "claim the host lease first". A per-device unit instance (see above) needs
+// the host lease or a lease on that device, and only another session's lease on the same device blocks it.
 export function answerRoutineRestart({ text, view, session = '' } = {}) {
   const r = routineRestart(text);
   if (!r.routine) return null;
@@ -104,8 +119,19 @@ export function answerRoutineRestart({ text, view, session = '' } = {}) {
   const own = (view?.ok ? view.leases || [] : []).filter((l) => l.mode === 'exclusive' && mine(l, session));
   const covers = (l, h) => (l.resources || []).some((x) => x === '*' || String(x).toLowerCase().includes(h) || h.includes(String(x).toLowerCase()));
   const covered = view?.ok && own.length > 0 && (hosts.length ? hosts.every((h) => own.some((l) => covers(l, h))) : true);
-  // a run's device lease on that host (another session) blocks a restart of a unit that touches devices
   const deviceUnits = r.units.filter((u) => !DEVICELESS_UNITS.includes(u));
+  // per-device: every device-touching unit is an instance of one device
+  const dev = deviceUnits.length && deviceUnits.every(isInstance) ? deviceOfRestart(text, deviceUnits) : null;
+  if (dev) {
+    const onDev = (l, h) => (l.resources || []).some((x) => { const v = String(x).toLowerCase(); return v.endsWith(`/${dev}`) && (!h || v.includes(h)); });
+    const ownDev = own.some((l) => hosts.length ? hosts.some((h) => onDev(l, h)) : onDev(l, ''));
+    const other = view?.ok && (view.leases || []).find((l) => l.mode === 'exclusive' && !mine(l, session) && (hosts.length ? hosts.some((h) => onDev(l, h)) : onDev(l, '')));
+    if (other) return { text: `Another session holds the lease on ${dev} (${other.id || other.agent || 'another session'}); ${deviceUnits.join(', ')} drives that device. Wait for it with \`vpt-lease claim ... --wait\`, then restart. A lease on a different device of the host does not matter. Never ask the owner about a lease.`, covered: false, units: r.units, hosts, device: dev };
+    if (ownDev || covered) return { text: `Yes, go ahead: this is a routine restart of a per-device service (${dev}) and you hold the lease. Release or keep your lease as usual.`, covered: true, units: r.units, hosts, device: dev };
+    const why = view?.ok ? `You hold no lease on ${dev} or its host.` : 'The lease source is unreachable, so treat the device as busy.';
+    return { text: `${why} ${DEVICE_LEASE_RULE(hosts[0], dev)}`, covered: false, units: r.units, hosts, device: dev };
+  }
+  // a run's device lease on that host (another session) blocks a restart of a unit that touches devices
   const busy = covered && deviceUnits.length && (view.leases || []).find((l) => l.kind === 'device' && l.mode === 'exclusive' && !mine(l, session) && hosts.some((h) => covers(l, h)));
   if (busy) return { text: `A run holds a device lease on that host (${busy.id || busy.agent || 'another session'}); ${deviceUnits.join(', ')} touches devices. Wait for it with \`vpt-lease claim ... --wait\`, then restart. Never ask the owner about a lease.`, covered: false, units: r.units, hosts };
   if (covered) return { text: 'Yes, go ahead: this is a routine restart of a device-side service on a host you lease. Release or keep your lease as usual.', covered: true, units: r.units, hosts };

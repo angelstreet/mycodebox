@@ -830,7 +830,13 @@ customer hosts, reboots and credentials (one such word anywhere cancels the reli
 source (`answerRoutineRestart`): "yes, go ahead" when the session holds an exclusive lease that covers the host, else "claim the host
 lease first (`--kind host --wait`)". A restart needs the host lease only, never the server or an env-wide lease. When another session
 holds an exclusive device lease on that host (a run), the answer is "wait for it" unless every unit drives no device
-(`DEVICELESS_UNITS`: vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline). Tests: `test/routine-restart.test.js`.
+(`DEVICELESS_UNITS`: vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline).
+Per-device instances (owner, 2026-11-01): an instance of `hid-remote@`, `vpt-ble-remote@`, `vpt-stream@`, `vpt-grabber@` or `vpt-monitor-img@` only
+touches one device (`PER_DEVICE_FAMILIES`). It is allowed with your own lease on `<host>/<device>` (or your host lease) and is blocked only by
+another session's lease on the SAME device; without a lease the answer is "claim `<host>/<device>` first". The instance suffix is usually an
+adapter (`hci1`), not a device id, so the device is the `deviceN` in the suffix or the single `deviceN` the asker names ("restart
+hid-remote@hci1 (device5) on `<lab-host>`"); if none can be derived, or the unit is host-wide (`vpt-host`, shared services), the host rule above
+applies. Tests: `test/routine-restart.test.js`.
 
 For a finished turn without a live menu, the manager evaluates every decidable topic present (merge, then push, then
 deploy), answers the passing ones in one reply and escalates the rest with what was already answered:
