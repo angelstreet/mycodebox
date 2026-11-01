@@ -41,6 +41,13 @@ Hours were lost waiting on one web host while the other was free. When the work 
   `VPT_LEASE_HOST`. `--alt <resource>` (repeatable) names equivalents that are not in a group.
 - A busy named claim prints `FREE EQUIVALENT NOW: <resource>` when a member of its group is free: claim that one instead. A
   ticket that has waited 5 minutes while one is free gets the same advice in the session's chat (lease watchdog).
+- Auto-equivalent (owner, 2026-11-01): a `claim --wait` / `run` of ONE named resource that belongs to a group no longer waits
+  forever. After 2 minutes of waiting, when a group member is free, the client cancels its ticket, claims that member and
+  prints `auto-equivalent: waited ... took the free equivalent <resource>`. Read `VPT_LEASE_RESOURCE` (set by `run`) instead
+  of assuming the name you asked for. Opt out with `--no-auto-equivalent` for work tied to that one unit (its account,
+  firmware, a physical setup). `--verify-profile "<cmd>"` is a hook: before switching, `<cmd>` runs with
+  `VPT_LEASE_CANDIDATE=<resource>`; a non-zero exit skips that member (use it to check the app, login or firmware).
+  `VPT_LEASE_SWITCH_AFTER=<seconds>` changes the 2 minutes. Central mode only. `vpt-lease inventory` shows the holder per member.
 - Only unique hardware (one Mi box, the Apple TV, a specific set-top box or firmware) is worth a queue. The groups are data on
   the registry host ([LEASE-INVENTORY](LEASE-INVENTORY.md)); a missing group is fixed there, not by waiting.
 
