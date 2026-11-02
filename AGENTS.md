@@ -57,6 +57,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   request is fixed on your branch and requested again.
   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then continue, or `STATUS: waiting: integration <id>` if nothing else is left.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
+  A branch from a Mac or cloud session (no live session to wake) is queued with `integrate request <branch> --mac <label>`: the result is written to `<state>/integration/external-results/<id>.txt`, the manager relays it (`external-result` event) and the owner is pushed if it does not within 10 min.
 - Bugs outside your scope (owner, 2026-10-28): when you hit a bug that is not yours (an endpoint that errors, a pre-existing
   failure, a tool that misbehaves), either fix it in a worktree or file it with `found-bug --title ... --endpoint ...
   --repro ... --error "<exact text>" --workaround ... --blocking yes|no` (`scripts/found-bug`, on PATH on codebox); the manager then sends a

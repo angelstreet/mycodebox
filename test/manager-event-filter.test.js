@@ -173,3 +173,11 @@ test('an event the lane already delivered to its session (handled: session) does
   const plain = ev({ key: 'integration:int-8:returned', kind: 'int-8:returned', session: 'integration', body: 'no session' });
   assert.deepEqual(kinds(run(env, handled + undelivered + plain)), ['int-7:returned:s1:undelivered', 'int-8:returned']);
 });
+
+test('external-result always wakes the manager (not dropped, not deduped across runs)', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const line = ev({ key: 'int-1a:external-result', kind: 'external-result', session: 'int-1a', body: 'Integration int-1a: merged x into main (label mac-1).' });
+  assert.deepEqual(kinds(run(env, line)), ['external-result']);
+  assert.deepEqual(kinds(run(env, line)), ['external-result']);
+});

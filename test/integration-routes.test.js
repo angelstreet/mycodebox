@@ -23,7 +23,7 @@ async function boot(w, { laneOpts = {}, cfg = {} } = {}) {
   writeFileSync(join(stateDir, 'leases', 'clients.json'), JSON.stringify({ clients: [mk('mac', CLIENT, { integrate: true }), mk('plain', PLAIN, {})] }));
   const events = [];
   const lane = createIntegrationLane({ stateDir, config: { repos: { 'env-a': w.cfg(cfg) } }, notify: (r, e) => events.push({ ...e, id: r.id }), pollMs: 1, sleep: () => new Promise((r) => setTimeout(r, 1)), ...laneOpts }).start();
-  const routes = createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk: (t) => t === REPORTER, sessionCwd: async (n) => (n === 'sess-in-dev' ? w.dev : null), remoteResolve: (n, c) => (c === 'mac' && n === 'mac:known-abc123' ? n : null) });
+  const routes = createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk: (t) => t === REPORTER, sessionCwd: async (n) => (n === 'sess-in-dev' ? w.dev : null), sessionKnown: async (n) => n !== 'mac-nobody', remoteResolve: (n, c) => (c === 'mac' && n === 'mac:known-abc123' ? n : null) });
   const server = http.createServer((req, res) => { routes.handle(req, res).then((ok) => { if (!ok) { res.writeHead(404); res.end(); } }); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -285,4 +285,20 @@ test('INTEGRATION_MANAGER_CLIENT_ONLY=1: the shared reporter token no longer pas
     assert.equal(r.status, 403);
     assert.equal((await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'infra' } })).status, 200, 'a plain request still works');
   } finally { delete process.env.INTEGRATION_MANAGER_CLIENT_ONLY; b.close(); }
+});
+
+test('external origin: --mac label or an unknown --for marks the request; ack is manager-only and needs a result', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' }); w.branch('feat2', { 'n2.js': 'x\n' }); w.branch('feat3', { 'n3.js': 'x\n' });
+  const b = await boot(w);
+  try {
+    const a = await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'feat', mac: 'mac tetris' } });
+    assert.equal(b.lane.get(a.json.id).origin, 'external'); assert.equal(b.lane.get(a.json.id).externalLabel, 'mac tetris');
+    const c = await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'feat2', forSession: 'mac-nobody' } });
+    assert.equal(b.lane.get(c.json.id).origin, 'external');
+    const d = await b.call('POST', `${P}/requests`, { body: { repo: 'env-a', branch: 'feat3' } });
+    assert.equal(b.lane.get(d.json.id).origin, undefined, 'a plain request is not external');
+    // no externalResult wired in this boot: a manager-less / unknown id is a 404 or 403, never a 200
+    const ack = await b.call('POST', `${P}/external-results/${a.json.id}/ack`, { body: {}, headers: { authorization: `Bearer ${CLIENT}` } });
+    assert.equal(ack.status, 403);
+  } finally { b.close(); }
 });
