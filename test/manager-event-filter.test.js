@@ -134,6 +134,46 @@ test('told / unseen:* are dropped; orphaned-task is deduped across runs', () => 
   assert.deepEqual(kinds(run(env, input)), []);
 });
 
+// Policy (owner, 2026-11-02): scripts/manager-event-policy.json + <state>/manager-event-policy.json; `u` marks urgent lines for manager-wait.sh.
+const flags = (r) => r.stdout.split('\n').filter(Boolean).map((l) => { const o = JSON.parse(l); return [o.l.kind, o.u]; });
+
+test('policy: ignore drops before the built-in rules, pass keeps a line a built-in rule would drop, urgent marks the line', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'manager-event-policy.json'), JSON.stringify({ 'lease:released': 'pass', leftovers: 'urgent', 'lease:nudge': 'ignore', bug: 'ignore' }));
+  const released = ev({ key: 'lease:released', kind: 'lease', state: 'released', body: 'routine' });
+  const nudge = ev({ key: 'lease:nudge', kind: 'lease', state: 'nudge', body: 'ask holder' });
+  const left = ev({ key: 'w:leftovers', kind: 'leftovers', session: 'w', body: 'left' });
+  const bug = ev({ key: 'w:bug', kind: 'bug', session: 'w', body: 'b', bug: { blocking: true } });
+  const r = run(env, released + nudge + left + bug + asksLine + deployLine);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(flags(r), [['lease', false], ['leftovers', true], ['asks', true], ['deploy', true]]);
+});
+
+test('policy: without an owner file the defaults apply (asks urgent, leftovers not); a blocking bug and a high-priority line are urgent by themselves; a malformed owner file is ignored', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const left = ev({ key: 'w:leftovers', kind: 'leftovers', session: 'w', body: 'left' });
+  const bug = ev({ key: 'w:bug', kind: 'bug', session: 'w', body: 'b', bug: { blocking: true } });
+  const bug2 = ev({ key: 'x:bug', kind: 'bug', session: 'x', body: 'b2', bug: { blocking: false } });
+  const high = ev({ key: 'integration:int-9:merged', kind: 'int-9:merged', session: 'integration', priority: 'high', body: 'm' });
+  assert.deepEqual(flags(run(env, left + bug + bug2 + high + asksLine)), [['leftovers', false], ['bug', true], ['bug', false], ['int-9:merged', true], ['asks', true]]);
+  const dir2 = tmp('ghosty-filt-');                       // a fresh state dir: the asks line above is in the first dir's cross-run dedupe
+  mkdirSync(dir2, { recursive: true });
+  writeFileSync(join(dir2, 'manager-event-policy.json'), '{ not json');
+  assert.deepEqual(flags(run({ ...process.env, GHOSTY_STATE_DIR: dir2 }, left + asksLine)), [['leftovers', false], ['asks', true]]);
+});
+
+test('an event the lane already delivered to its session (handled: session) does not wake the manager; its undelivered follow-up does', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const handled = ev({ key: 'integration:int-7:returned', kind: 'int-7:returned', session: 'integration', handled: 'session', body: 'fix it' });
+  const undelivered = ev({ key: 'integration:int-7:returned:s1:undelivered', kind: 'int-7:returned:s1:undelivered', session: 'integration', body: 'never told' });
+  const plain = ev({ key: 'integration:int-8:returned', kind: 'int-8:returned', session: 'integration', body: 'no session' });
+  assert.deepEqual(kinds(run(env, handled + undelivered + plain)), ['int-7:returned:s1:undelivered', 'int-8:returned']);
+});
+
 test('external-result always wakes the manager (not dropped, not deduped across runs)', () => {
   const dir = tmp('ghosty-filt-');
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
