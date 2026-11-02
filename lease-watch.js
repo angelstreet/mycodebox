@@ -46,7 +46,7 @@ export function classifyHolders({ leases, sessionNames, knownNames = [], machine
       if (kind === 'server' && act && !act.working && idleMs_ != null && idleMs_ > idleMs && now - since > GRACE_MS) r.plan = { type: 'narrow', reason: `idle ${r.idleMin} min (no finished turn)` };
       out.push(r); continue;
     }
-    const was = holderSession(h.agent, gone, machines);
+    const was = holderSession(h.agent, gone, machines, { strict: true });   // a release needs an exact name: a prefix match released a live agent's lease (bug-f15da6f2)
     if (was) {
       const r = { ...base, status: 'ended', session: was };
       if (now - since > GRACE_MS) r.plan = { type: 'release', reason: 'session-ended' };

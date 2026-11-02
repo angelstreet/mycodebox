@@ -28,7 +28,7 @@ export function agentLocalName(agent, machines) {
 
 // The session a name means: exact (case-insensitive) first, then the same name ignoring punctuation,
 // then a unique prefix match either way (the shorter side >= 8 characters, so `qualiai` does not match `qualiai-pipeline`).
-function matchSession(rest, sessionNames) {
+function matchSession(rest, sessionNames, strict = false) {
   const want = rest.toLowerCase();
   const exact = sessionNames.find((n) => n === rest) ?? sessionNames.find((n) => n.toLowerCase() === want);
   if (exact) return exact;
@@ -37,6 +37,7 @@ function matchSession(rest, sessionNames) {
   const same = sessionNames.filter((n) => normName(n) === w);
   if (same.length === 1) return same[0];
   if (same.length > 1) return null;
+  if (strict) return null;   // destructive callers (release of a lease): irtoy-ours2 is not the ended session irtoy-ours
   const pre = sessionNames.filter((n) => { const x = normName(n); return x && Math.min(x.length, w.length) >= PREFIX_MIN && (x.startsWith(w) || w.startsWith(x)); });
   return pre.length === 1 ? pre[0] : null;
 }
@@ -50,11 +51,11 @@ export function agentSession(agent, sessionNames, machines) {
 
 // The session a lease holder names: `codebox:<session>` (our machines) or a bare session name. Another machine's
 // prefix (`mac:`, another host) is never a session here.
-export function holderSession(agent, sessionNames, machines) {
+export function holderSession(agent, sessionNames, machines, { strict = false } = {}) {
   const a = String(agent || '');
-  if (a.indexOf(':') <= 0) return matchSession(a, sessionNames);   // no machine prefix: the whole id is the name
+  if (a.indexOf(':') <= 0) return matchSession(a, sessionNames, strict);   // no machine prefix: the whole id is the name
   const local = agentLocalName(a, machines);
-  return local ? matchSession(local, sessionNames) : null;
+  return local ? matchSession(local, sessionNames, strict) : null;
 }
 
 // Every session name the agent could mean (exact, normalised or by prefix): more than one is ambiguous, not "none".
