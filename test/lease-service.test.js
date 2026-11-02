@@ -1176,7 +1176,7 @@ test('deploy queue: same-scope queued deploys coalesce into the newest ref; the 
   assert.equal(gc.state, 'queued');
 });
 
-test('deploy queue: host deploys are never coalesced; a queued host catch-up does not hold up a frontend deploy', async () => {
+test('deploy queue: host catch-ups (restricted host sets) are never coalesced; a queued host catch-up does not hold up a frontend deploy', async () => {
   const h = harness();
   const x = await qd(h, 'host', 'r1', { hosts: ['host-1'] }); await h.advance(1000);
   const y = await qd(h, 'host', 'r2', { hosts: ['host-1'] });
@@ -1185,4 +1185,18 @@ test('deploy queue: host deploys are never coalesced; a queued host catch-up doe
   assert.equal((await h.svc.deploy.list({ all: true })).deploys.find((d) => d.id === y.id).state, 'queued');
   const fe = await qd(h, 'frontend', 'r3');
   assert.equal((await h.svc.deploy.start({ id: fe.id })).state, 'running');
+});
+
+test('deploy queue: unrestricted queued host deploys coalesce into the newest ref; a restricted one is left alone', async () => {
+  const h = harness();
+  const a = await qd(h, 'host', 'old'); await h.advance(1000);
+  const cu = await qd(h, 'host', 'old2', { hosts: ['host-1'] }); await h.advance(1000);
+  const b = await qd(h, 'host', 'new');
+  const r = await h.svc.deploy.start({ id: a.id });
+  assert.equal(r.code, 'E_HELD'); assert.equal(r.reason, 'covered'); assert.equal(r.covered_by, b.id);
+  assert.equal((await h.svc.deploy.start({ id: b.id })).state, 'running');
+  await h.svc.deploy.finish({ id: b.id, status: 'done', version: 'v9' });
+  const get = async (id) => (await h.svc.deploy.list({ all: true })).deploys.find((d) => d.id === id);
+  assert.equal((await get(a.id)).state, 'done'); assert.equal((await get(a.id)).coalescedInto, b.id);
+  assert.equal((await get(cu.id)).state, 'queued');
 });
