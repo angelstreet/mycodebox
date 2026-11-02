@@ -75,6 +75,17 @@ try:
     for x in b.get('bugs', []):
         if not x.get('resolved') and not x.get('test'): hits.append({'session': x['id'], 'status': 'open-bug: %s (%s)' % (x['title'][:100], x.get('session', '?'))})
 except Exception: pass
+# routine integration merged/deployed events the wake filter drops (manager-event-filter.sh); one line, last hour
+try:
+    import os, time, datetime
+    f = os.path.join(os.environ.get('GHOSTY_STATE_DIR') or os.path.expanduser('~/.local/state/ghosty'), 'manager-events.jsonl')
+    cut, n = time.time() - 3600, 0
+    for l in open(f):
+        try: e = json.loads(l)
+        except Exception: continue
+        if re.match(r'^int-[0-9a-f]+:(merged|deployed)$', e.get('kind') or '') and datetime.datetime.fromisoformat(e['at'].replace('Z', '+00:00')).timestamp() >= cut: n += 1
+    if n: hits.append({'session': 'integration', 'status': '%d routine integration events skipped (last hour)' % n})
+except Exception: pass
 if as_json: print(json.dumps(hits))
 else:
     for h in hits: print(f"{h['session']}: {h['status']}")

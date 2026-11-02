@@ -115,3 +115,13 @@ test('a lease/deploy wait the system resolves (state system-wait: a live ticket,
   assert.doesNotMatch(r.stdout, /system resolves/);
   assert.match(r.stdout, /lease stop for the manager/);
 });
+
+test('routine integration merged / deployed events are dropped; returned / failed / non-default priority pass', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const e = (id, st, extra = {}) => ev({ key: `integration:int-${id}:${st}`, kind: `int-${id}:${st}`, session: 'integration', priority: 'default', ...extra });
+  const input = e('a1', 'merged') + e('a2', 'deployed') + e('a3', 'returned') + e('a4', 'deploy_failed') + e('a5', 'merged_ci_superseded') + e('a6', 'merged', { priority: 'high' });
+  const r = run(env, input);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(kinds(r), ['int-a3:returned', 'int-a4:deploy_failed', 'int-a5:merged_ci_superseded', 'int-a6:merged']);
+});
