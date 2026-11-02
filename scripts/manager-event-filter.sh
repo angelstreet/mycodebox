@@ -5,6 +5,8 @@
 # Every routine lease released/expired event is dropped (bug-0809f1cc: CI sweep and dispatch leases woke the manager every 2-10 min);
 # lease events that need a human (denied, stuck/overdue, narrowed, ...) still pass. A `system-wait` (a session waiting on a live ticket or
 # a running deploy, owner 2026-10-31) is dropped too: the queue or the runner resolves it, the lease watchdog tells the session.
+# Routine integration success (`int-<id>:merged` / `int-<id>:deployed`, default priority; owner 2026-11-02, wake noise): dropped here, still in
+# manager-events.jsonl; manager-status-scan.sh prints the hourly count. returned / failed / blocked / cancelled / CI-red integrations pass.
 # Residual risk (Codex review 2026-10-22 s4, kept on purpose): the runner's own lease release is dropped even if the runner then crashes,
 # so the release alone is not a wake-up. A safe "failed/blocked event of the same deploy in this batch" rule needs the whole batch
 # (a streaming jq cannot see a later event), so it is not done here; the wake-up for a dead runner is the deploy's failed / orphan /
@@ -35,6 +37,8 @@ jq -c --unbuffered '
     ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="lease") and (.state=="released")) | not
   ) | select(
     ((.kind=="lease") and (.state=="released") and (((.title//"")|test("\\((agent )?manager:deploy\\)")) or ((.body//"")|test("by manager:deploy \\(deploy-finished\\)")))) | not
+  ) | select(
+    ((.kind|test("^int-[0-9a-f]+:(merged|deployed)$")) and ((.priority//"default")=="default")) | not
   ) | select(
     ((.kind=="lease") and (.state=="released" or .state=="expired" or .state=="system-wait")) | not
   ) | {k:((.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end)), l:.}' \
