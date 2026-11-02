@@ -419,6 +419,24 @@ is in `manager.json` `managerSessions` (default `["manager"]`), the agent's own 
 the next append would push it past 5 MB. A freshly-started agent catches up via
 `GET /api/manager/events?since=<ISO>&limit=50` (newest last).
 
+**Wake batch window and event policy (owner, 2026-11-02).** On 2026-11-01 the manager woke 652 times, one wake per filtered event, and
+84 % of the wakes did nothing (`GET /api/manager/wakes`): every wake re-reads the whole context, so idle wakes were most of the manager's
+tokens. `scripts/manager-wait.sh` now keeps collecting for `MANAGER_WAIT_WINDOW` seconds (default 60) after the first delivered event, so
+one wake carries the batch; an **urgent** event closes the window `MANAGER_WAIT_GRACE` seconds (default 2) after it arrived. Which events are
+urgent, routine or ignored is a table, not code: `scripts/manager-event-policy.json` (repo defaults) merged with
+`<state dir>/manager-event-policy.json` (the owner's copy wins per key), `'<kind>'` or `'<kind>:<state>'` -> `pass | ignore | urgent`.
+`ignore` drops the event before the built-in filter rules; `pass` keeps it even where a built-in rule would drop it (for example
+`"lease:released": "pass"`); `urgent` marks the output line (`u: true`, shown as `!!` by `manager-wake-summary.sh`). A blocking bug and a
+`high` / `urgent` priority line are urgent by themselves. Defaults mark urgent: `asks`, `waiting`, `needs-manager`, `hold`, `health`, `disk`,
+`quota`, `credits`, `deploy:failed|orphan|blocked`, `no-progress`; nothing is ignored by default. `node scripts/manager-event-policy.js show`
+prints the effective policy; `... suggest [--days 7] [--min 20]` lists the kinds that woke the manager at least `min` times in the window and
+were never labelled `needed` by the wake shadow (candidates for `ignore`; it prints, the owner or the manager edits the file and journals it).
+**Pass-through**: an integration outcome the session acts on by itself (`returned`, `merged_ci_superseded`, `cancelled`) that was typed into
+the session, or kept for its next stop (`pending-wakes.js`), is written with `handled: "session"` and the filter does not wake the manager
+for it; `merged_ci_red` and `deploy_failed` stay the manager's. A kept wake that is dropped (the session never stopped, or is gone) writes
+`integration:<id>:<state>:<session>:undelivered`, which does wake the manager. Tests: `test/manager-wait.test.js`,
+`test/manager-event-filter.test.js`, `test/manager-event-policy.test.js`, `test/integration-sessions.test.js`.
+
 **Wake shadow (`jev` on each event line).** Each line also carries Jev's opinion on whether that event needed
 waking the manager agent: `jev: { pick, confidence, source, ruleDefault, decision_id, ms }`, where `pick` is
 `ignore | rules_handle | wake_cheap | wake_opus` (the last two mean "wake"), `source` is `jev` (or `forced` when a
@@ -1744,6 +1762,25 @@ A bug a session finds outside its scope is fixed or filed, never left in a closi
 - **Switch.** `manager.json` `sharedCheckoutGuard`: `"live"` (default) | `"dry"` | `"off"`. State `shared-checkout-guard.json`, journal `shared-checkout-guard.jsonl`.
 - **Wording.** `scripts/cbsession` prompts (handover, `-f`, `-t`) and every V2 worker brief (`WORKTREE_NOTE` in `orchestration/roles.js`) start with "first command: `git worktree list`; create or reuse your worktree; work only there".
 - **Manager.** TASK-44 manual: on `shared-checkout-dirty` identify the session from `sessions`, tell it, verify the checkout is clean afterwards.
+
+## Progress watch (owner, 2026-11-02)
+
+A session that never stops is never classified by `stall.js`, and the health watchdog sees processes, not work: a session looping on one tool
+call, or "working" for an hour with nothing to show, burned its plan window and held its device lease unseen (the manager manual's "a session
+loops" row was advice, not code). `progress-watch.js` runs every 10 min (first check 3 min after start) over the live agent sessions (same
+targets as rules-watch), no model call, two rules:
+
+- **loop**: in the session's Claude transcript tail, 4 of the last 10 tool calls are the same tool with the same input, or 4 of the last 10 tool
+  results carry the same error text (Codex / MiniMax have no transcript here: only the second rule applies to them).
+- **no-progress**: `working` for 60 min or more with no busy child process (a tracked job), no commit and no tracked-file change in its checkout
+  since it started working, and no transcript line newer than 20 min.
+
+One feed event `<session>:no-progress` (kind `no-progress`, `items` = the evidence, `progress` = `{kind, workingMin, lastCommitMin,
+lastChangeMin, transcriptMin}` or `{kind: 'loop', what, times}`) per session per 2 h; urgent by the default event policy. Nothing is typed:
+the manager judges (never Esc; Jev's `stop` point with the evidence; one nudge "stop, state what you know, pick another way", or an owner item
+with the cost so far). `GET /api/progress-watch` -> `{ at, mode, checked, found: [{session, kind, evidence}] }`; `scripts/manager-status-scan.sh`
+prints `<session>: no-progress: <evidence>`. `manager.json` `progressWatch`: `"live"` (default) | `"dry"` (journal only) | `"off"`. State
+`progress-watch.json`, journal `progress-watch.jsonl`. Tests: `test/progress-watch.test.js`.
 
 ## Overlap guard (owner, 2026-10-28)
 

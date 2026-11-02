@@ -49,6 +49,7 @@
 //   GET  /api/leases/watch      → lease-watch snapshot: mode, holders {status live|ended|remote|platform|unknown|system, plan}, unknown count
 //   GET  /api/ci-watch          → ci-watch snapshot: mode, last verdict, action, red streak (ci-watch.js)
 //   GET  /api/overlaps          → sessions that change the same file(s) vs origin/main (overlap-guard.js)
+//   GET  /api/progress-watch → { at, mode, checked, found:[{session, kind, evidence}] } looping / no-progress working sessions (progress-watch.js)
 //   GET  /api/shared-checkouts  → shared checkouts that are dirty, off main or ahead of origin/main (shared-checkout-guard.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
@@ -109,6 +110,7 @@ import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
+import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES } from './done-check.js';
@@ -168,7 +170,7 @@ import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createScriptRunSource } from './wait-ids.js';
-import { createPendingWakes } from './pending-wakes.js';
+import { createPendingWakes, MAX_ATTEMPTS as MAX_PENDING_ATTEMPTS } from './pending-wakes.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createQuotaResumer } from './quota-resume.js';
@@ -932,7 +934,15 @@ const pendingWakes = createPendingWakes({
   canForce: (session) => { const s = latest?.status?.[session]?.stall; return !s?.draft && !(s?.options?.length); },   // the timeout path types even into a working session, never over a draft or a menu
   exists: (session) => sessionExists(session),
   send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); },
-  log: (r) => logEvent(r),
+  log: (r) => {
+    logEvent(r);
+    // an integration outcome the lane marked handled (the wake was kept for the session) never reached it: now it is the manager's
+    if ((r.type === 'pending_wake_gave_up' || r.type === 'pending_wake_session_gone') && /^integration:/.test(String(r.key || ''))) {
+      managerEvents.record({ key: `${r.key}:undelivered`, title: `${r.session}: integration result never delivered (${r.type === 'pending_wake_session_gone' ? 'session gone' : 'never stopped'})`,
+        body: `${r.key}: the kept wake was dropped after ${r.attempts ?? MAX_PENDING_ATTEMPTS} attempts; relay the lane result to the session or close the item`, url: `/?s=${encodeURIComponent(r.session)}`, priority: 'default', session: r.session })
+        .catch((e) => console.error('[pending-wake] undelivered event', e.message));
+    }
+  },
 });
 async function onLeaseEvent(ev) {
   const rec = eventRecord(ev);
@@ -2575,6 +2585,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/leftovers') return json(res, 200, leftovers.snapshot());   // the leftovers / push watcher's last scan
   if (req.method === 'GET' && p === '/api/worker-auto-close') return json(res, 200, workerAutoClose.snapshot());   // sessions the worker auto-closed (or skipped) in the last tick
   if (req.method === 'GET' && p === '/api/overlaps') return json(res, 200, overlapGuard.snapshot());   // sessions changing the same file
+  if (req.method === 'GET' && p === '/api/progress-watch') return json(res, 200, progressWatch.snapshot());   // looping / no-progress working sessions (progress-watch.js)
   if (req.method === 'GET' && p === '/api/shared-checkouts') return json(res, 200, sharedCheckoutGuard.snapshot());   // dirty / off-main / ahead shared checkouts
   if (req.method === 'GET' && p === '/api/rules-watch') return json(res, 200, rulesWatch.snapshot());   // sessions on outdated rules, and who was told
   if (req.method === 'GET' && p === '/api/ci-watch') return json(res, 200, ciWatch.snapshot());   // last verdict, action and red streak
@@ -2753,6 +2764,28 @@ const integrationNotify = createIntegrationNotify({
   log: (r) => logEvent(r),
 });
 pendingWakes.restore();   // wakes kept before a restart are armed again
+// Progress watch (progress-watch.js): a looping or no-progress working session -> one `no-progress` manager event per 2 h; never types.
+// manager.json `progressWatch`: "live" (default) | "dry" | "off". `GET /api/progress-watch` shows the last tick.
+const progressWatch = createProgressWatch({
+  stateDir: STATE_DIR,
+  listTargets: () => rulesWatchTargets(),
+  facts: async (names) => {
+    const panes = await listPanes(), table = await processTable(), idx = await claudeIndex.get();
+    const out = new Map();
+    for (const name of names) {
+      const p = panes.get(name);
+      if (!p) continue;
+      const pid = agentPidFromTree(p.pid, table);
+      const c = claudeOfPane(p.pid, table, idx);
+      out.set(name, { workingSinceMs: latest?.status?.[name]?.workingSinceMs || null, busy: !!pid && busyChildren(pid, table).length > 0,
+        transcript: c?.info?.sessionId ? transcriptFile(claudeProjectsDir, c.info.cwd, c.info.sessionId) : null });
+    }
+    return out;
+  },
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).progressWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+  log: console,
+});
 const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
 integrationHooks.notify = integrationNotify;
 integrationHooks.deploys = integrationDeploys;
@@ -3002,6 +3035,7 @@ server.listen(PORT, HOST, async () => {
   ciWatch.start();
   rulesWatch.start();
   overlapGuard.start();
+  progressWatch.start();
   sharedCheckoutGuard.start();
   doneCheck.start();
   leftovers.start();

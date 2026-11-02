@@ -14,7 +14,7 @@ const noise = (i) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(
 const setup = () => {
   const dir = tmp('ghosty-mwait-');
   mkdirSync(join(dir, 'manager-reports'));
-  return { dir, events: join(dir, 'manager-events.jsonl'), cursor: join(dir, 'manager-reports', '.cursor'), env: { ...process.env, GHOSTY_STATE_DIR: dir, MANAGER_WAIT_POLL: '0.1', MANAGER_WAIT_GRACE: '0.5' } };
+  return { dir, events: join(dir, 'manager-events.jsonl'), cursor: join(dir, 'manager-reports', '.cursor'), env: { ...process.env, GHOSTY_STATE_DIR: dir, MANAGER_WAIT_POLL: '0.1', MANAGER_WAIT_GRACE: '0.5', MANAGER_WAIT_WINDOW: '3' } };
 };
 const run = (s) => spawnSync('bash', [SH], { env: s.env, encoding: 'utf8', timeout: 20000 });
 const ids = (out) => out.split('\n').filter(Boolean).map((l) => JSON.parse(l).l.session);
@@ -121,4 +121,46 @@ test('the cursor is written through a pid-suffixed temp file, never a shared .cu
   assert.equal(run(s).status, 0);
   assert.deepEqual(readdirSync(join(s.dir, 'manager-reports')).filter((f) => f.startsWith('.cursor.tmp')), []);
   assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
+});
+
+// Batch window (owner, 2026-11-02): a non-urgent first event keeps the wait open for MANAGER_WAIT_WINDOW so later events ride the same wake;
+// an urgent event (asks, hold, ... per scripts/manager-event-policy.json) closes it after the grace.
+const quiet = (i) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), key: `q${i}:leftovers`, kind: 'leftovers', session: `q${i}`, title: `l${i}`, body: `left ${i}`, items: ['x'] }) + '\n';
+
+test('batch window: three routine events spread over the window come out of ONE wait, which lasts the whole window', async () => {
+  const s = setup();
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, quiet(1));
+  const t0 = Date.now();
+  const p = spawn('bash', [SH], { env: s.env });
+  let out = ''; p.stdout.on('data', (d) => { out += d; });
+  await new Promise((r) => setTimeout(r, 900)); appendFileSync(s.events, quiet(2));
+  await new Promise((r) => setTimeout(r, 900)); appendFileSync(s.events, quiet(3));
+  await new Promise((r) => p.on('close', r));
+  assert.deepEqual(ids(out), ['q1', 'q2', 'q3']);
+  assert.ok(Date.now() - t0 >= 2900, `waited the window (${Date.now() - t0} ms)`);
+  assert.equal(out.split('\n').filter(Boolean).every((l) => JSON.parse(l).u === false), true, 'routine lines are not urgent');
+  assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
+});
+
+test('an urgent event closes the window after the grace, even behind a routine one', async () => {
+  const s = setup();
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, quiet(1) + ev(2));                                // ev = asks: urgent by the default policy
+  const t0 = Date.now();
+  const r = run(s);
+  assert.deepEqual(ids(r.stdout), ['q1', 's2']);
+  assert.ok(Date.now() - t0 < 2500, `closed well before the 3 s window (${Date.now() - t0} ms)`);
+  assert.deepEqual(r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l).u), [false, true]);
+});
+
+test('the owner policy file can make a kind urgent or ignored for the wait', () => {
+  const s = setup();
+  writeFileSync(join(s.dir, 'manager-event-policy.json'), JSON.stringify({ leftovers: 'urgent', asks: 'ignore' }));
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, ev(1) + quiet(2));
+  const t0 = Date.now();
+  const r = run(s);
+  assert.deepEqual(ids(r.stdout), ['q2'], 'asks ignored, leftovers delivered');
+  assert.ok(Date.now() - t0 < 2500, `leftovers is urgent now (${Date.now() - t0} ms)`);
 });

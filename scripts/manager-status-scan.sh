@@ -4,7 +4,7 @@
 # but the closing text lists work the session can do itself (same rules as done-leftovers.js; owner-only items do not count). A session whose last STATUS is one of these is never "idle".
 #   scripts/manager-status-scan.sh [--json]      (exit code 0 always)
 # Also lists `<TASK-NN>: orphaned-task: ...` for task docs with open rows and no live session (GET /api/unfinished).
-# Also lists `<checkout>: shared-checkout-dirty: <paths>` (GET /api/shared-checkouts) and `<a>+<b>: overlap: <paths>` for two sessions changing the same file (GET /api/overlaps).
+# Also lists `<session>: no-progress: <evidence>` (GET /api/progress-watch) and `<checkout>: shared-checkout-dirty: <paths>` (GET /api/shared-checkouts) and `<a>+<b>: overlap: <paths>` for two sessions changing the same file (GET /api/overlaps).
 # --json prints [{"session": ..., "status": ...}, ...]. Only reads panes (tmux capture-pane), never types into one.
 JSON=0; [ "$1" = "--json" ] && JSON=1
 LINES_BACK="${STATUS_SCAN_LINES:-300}"
@@ -68,6 +68,12 @@ try:
     for x in c.get('checkouts', []):
         if not x.get('clean', True) and x.get('confirmed'):
             hits.append({'session': os.path.basename(x['checkout']), 'status': 'shared-checkout-dirty: %s (%s; sessions %s)' % (', '.join(f['path'] for f in x['files'][:4]), '; '.join(x['reasons']), ','.join(x['sessions']) or 'none active')})
+except Exception: pass
+# looping / no-progress working sessions (progress-watch.js; the manager judges, never Esc)
+try:
+    pw = json.load(urllib.request.urlopen('http://127.0.0.1:%s/api/progress-watch' % os.environ.get('PORT', '7777'), timeout=5))
+    for x in pw.get('found', []):
+        hits.append({'session': x['session'], 'status': '%s: %s' % ('no-progress' if x.get('kind') != 'loop' else 'no-progress (loop)', '; '.join(x.get('evidence', [])[:3]))})
 except Exception: pass
 # unresolved found-bugs (found-bugs.js; resolve with `found-bug --resolve <id> --commit <sha>`)
 try:

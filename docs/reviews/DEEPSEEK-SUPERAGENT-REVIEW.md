@@ -88,6 +88,9 @@ in 2026-10 without a benchmark, so nothing to change there.
 
 ## 4. Proposals, ranked by value over cost
 
+**Status (2026-11-02, owner: "implement the 3"):** P1, P2 and P3 are implemented (see `docs/REFERENCE.md` "Wake batch window and event policy"
+and "Progress watch"); P4 to P6 are open.
+
 Cost is tokens on the Claude plan unless said otherwise. "Smallest change" is what a worker should build first; nothing here is
 implemented yet.
 

@@ -20,7 +20,18 @@
 # ${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}/manager-reports/.seen-keys (one "<unix_seconds> <key>" per line);
 # health events dedupe by their key (health:load, health:disk, ...) for 6 h too;
 # deploy / hold / quota / disk / credits keep per-run dedupe only (the awk array, as before).
+# Policy (owner, 2026-11-02; DeepSeek review P1): scripts/manager-event-policy.json (repo defaults) merged with
+# $GHOSTY_STATE_DIR/manager-event-policy.json (the owner's copy wins per key): '<kind>' or '<kind>:<state>' -> pass | ignore | urgent.
+# ignore drops the event before the built-in rules; pass keeps it even where a built-in rule would drop it; urgent marks the output line
+# (`u: true`) so manager-wait.sh closes its batch window at once. An event the lane or a wake already delivered to its session
+# (`handled: "session"`, integration-notify.js) is routine for the manager unless the policy says pass.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
+POLICY_DEFAULT="$HERE/manager-event-policy.json"
+POLICY_OWNER="$STATE_DIR/manager-event-policy.json"
+PD=$(jq -c . "$POLICY_DEFAULT" 2>/dev/null || echo '{}')
+PO=$({ [ -f "$POLICY_OWNER" ] && jq -c . "$POLICY_OWNER" 2>/dev/null; } || echo '{}')
+POLICY=$(jq -c -n --argjson d "$PD" --argjson o "$PO" '$d + $o' 2>/dev/null || echo '{}')
 SEEN_FILE="$STATE_DIR/manager-reports/.seen-keys"
 mkdir -p "$(dirname "$SEEN_FILE")"
 NOW=$(date +%s)
@@ -30,22 +41,20 @@ if [ -f "$SEEN_FILE" ]; then
   awk -v th="$THRESH" 'NF>=2 && ($1+0) >= th { print }' "$SEEN_FILE" > "$SEEN_FILE.tmp" 2>/dev/null && mv "$SEEN_FILE.tmp" "$SEEN_FILE" || rm -f "$SEEN_FILE.tmp"
 fi
 
-jq -c --unbuffered '
-  select(
-    ((.kind=="deploy") and (.state=="start" or .state=="done") and ((.blockedBy//[])|length)==0) | not
-  ) | select(
-    ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan")) | not
-  ) | select(
-    ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="lease") and (.state=="released")) | not
-  ) | select(
-    ((.kind=="lease") and (.state=="released") and (((.title//"")|test("\\((agent )?manager:deploy\\)")) or ((.body//"")|test("by manager:deploy \\(deploy-finished\\)")))) | not
-  ) | select(
-    ((.kind|test("^int-[0-9a-f]+:(merged|deployed)$")) and ((.priority//"default")=="default")) | not
-  ) | select(
-    ((.kind=="told") or ((.kind|tostring)|test("^unseen:"))) | not
-  ) | select(
-    ((.kind=="lease") and (.state=="released" or .state=="expired" or .state=="system-wait")) | not
-  ) | {k:((.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end)), l:.}' \
+jq -c --unbuffered --argjson policy "$POLICY" '
+  def pol: ($policy[((.kind//"")|tostring)+":"+((.state//"")|tostring)] // $policy[((.kind//"")|tostring)] // "default");
+  def routine:
+    ((.kind=="deploy") and (.state=="start" or .state=="done") and ((.blockedBy//[])|length)==0)
+    or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan"))
+    or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="lease") and (.state=="released"))
+    or ((.kind=="lease") and (.state=="released") and (((.title//"")|test("\\((agent )?manager:deploy\\)")) or ((.body//"")|test("by manager:deploy \\(deploy-finished\\)"))))
+    or (((.kind//"")|tostring|test("^int-[0-9a-f]+:(merged|deployed)$")) and ((.priority//"default")=="default"))
+    or ((.kind=="told") or ((.kind//"")|tostring|test("^unseen:")))
+    or ((.kind=="lease") and (.state=="released" or .state=="expired" or .state=="system-wait"))
+    or ((.handled//"")=="session");
+  select(pol != "ignore") | select(pol == "pass" or (routine|not))
+  | {k:((.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end)),
+     u:(pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent") or ((.kind=="bug") and ((.bug.blocking//false)==true))), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
     function persist(k) { printf "%d %s\n", now, k >> seen; fflush(seen) }
     BEGIN {

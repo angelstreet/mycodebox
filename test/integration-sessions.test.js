@@ -121,7 +121,8 @@ test('notify: non-final transitions are ignored; a failing send or feed never th
   const bad = harness({ send: async () => { throw new Error('pane is not an agent'); }, feed: () => { throw new Error('feed down'); } });
   const r = await bad.notify(req({ id: 'int-9' }));
   assert.equal(r.told, false);
-  assert.equal(bad.events.length, 1, 'the manager event is written before the send is tried');
+  assert.equal(bad.events.length, 1, 'the manager event is written even when the send failed');
+  assert.equal(bad.events[0].handled, undefined, 'a failed send is not handled by the session');
 });
 
 test('job refs: "integration <id>" in a STATUS line is the session\'s own job, never a needs-you', () => {
@@ -345,4 +346,32 @@ test('jobRefs: "integration test-2" is a sentence, not a request id; the deploy 
   assert.equal(jobRefs(t).integration, null); assert.equal(jobRefs(t).deploy, '3fa9c1');
   assert.equal(jobRefs('integration tests-9 done').integration, null);
   assert.equal(jobRefs('integration request id: int-lq3k9a0b1c2d').integration, 'int-lq3k9a0b1c2d');
+});
+
+// Pass-through (owner, 2026-11-02): a session-owned outcome (returned, merged_ci_superseded, cancelled) that reached or is kept for
+// the session is marked `handled: "session"` on the manager event, so the wake filter does not wake the manager for it.
+test('notify: returned/superseded/cancelled are handled by the session once told or kept; merged / ci-red / failed never; an untold session is not handled', async () => {
+  const h = harness();
+  await h.notify(req({ id: 'int-r1', state: 'returned', reason: 'tests red', session: 'alpha' }));
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.events.at(-1).handled, 'session');
+  await h.notify(req({ id: 'int-r2', state: 'merged_ci_superseded', session: 'alpha' }));
+  assert.equal(h.events.at(-1).handled, 'session');
+  await h.notify(req({ id: 'int-r3', state: 'cancelled', session: 'alpha' }));
+  assert.equal(h.events.at(-1).handled, undefined, 'cancelled: no line is typed (the session asked for it), nothing was sent or kept');
+  for (const state of ['merged', 'merged_ci_red', 'deploy_failed']) {
+    await h.notify(req({ id: `int-${state}`, state, session: 'alpha' }));
+    assert.equal(h.events.at(-1).handled, undefined, state);
+  }
+  // kept for the next stop (a busy session with a defer hook) counts as handled; a busy session without one does not
+  const kept = harness({ defer: () => true });
+  await kept.notify(req({ id: 'int-k1', state: 'returned', reason: 'x', session: 'busy' }));
+  assert.equal(kept.sent.length, 0);
+  assert.equal(kept.events.at(-1).handled, 'session');
+  const lost = harness();
+  await lost.notify(req({ id: 'int-k2', state: 'returned', reason: 'x', session: 'busy' }));
+  assert.equal(lost.events.at(-1).handled, undefined);
+  const remote = harness();
+  await remote.notify(req({ id: 'int-k3', state: 'returned', reason: 'x', session: 'mac:laptop' }));
+  assert.equal(remote.events.at(-1).handled, undefined, 'a remote session is told through the feed and the manager only');
 });

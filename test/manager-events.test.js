@@ -306,3 +306,18 @@ test('leftovers events pass the feed filter with their items (done stops stay sk
   const [r] = readLines(join(dir, FILE_NAME));
   assert.equal(r.kind, 'leftovers'); assert.equal(r.session, 'ft'); assert.deepEqual(r.items, ['a', 'b']);
 });
+
+test('record: keeps `handled` (the lane delivered it to the session) and the items / progress of a no-progress event', async () => {
+  const dir = tmp();
+  const m = createManagerEvents({ stateDir: dir, managerSessions: () => [], log: quiet });
+  await m.record({ key: 'integration:int-1:returned', title: 't', body: 'b', handled: 'session' });
+  await m.record({ key: 'w1:no-progress', title: 'w1: no progress for 90 min', body: 'b', items: ['working for 90 min', 'no child process running'], progress: { kind: 'no-progress', workingMin: 90 } });
+  await m.record({ key: 'w2:asks', title: 't', body: 'b', handled: 42, items: ['x'] });
+  const lines = readLines(join(dir, FILE_NAME));
+  assert.equal(lines[0].handled, 'session');
+  assert.equal(lines[1].kind, 'no-progress');
+  assert.deepEqual(lines[1].items, ['working for 90 min', 'no child process running']);
+  assert.deepEqual(lines[1].progress, { kind: 'no-progress', workingMin: 90 });
+  assert.equal(lines[2].handled, undefined, 'a non-string handled is dropped');
+  assert.equal(lines[2].items, undefined, 'items only for the kinds that carry them');
+});

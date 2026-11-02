@@ -110,6 +110,11 @@ export function integrationNotice(r) {
   return { title: title.slice(0, 160), body, priority: n.state === 'merged_ci_red' || n.state === 'deploy_failed' ? 'high' : 'default' };
 }
 
+// Final states the requesting session acts on by itself once told (fix and request again; nothing to fix; it asked for the cancel):
+// the manager event is marked handled when the line reached, or is kept for, the session. merged_ci_red and deploy_failed stay the
+// manager's (the merge is on the target and needs a decision); merged / deployed are routine already (the filter drops them).
+export const SESSION_OWNED_STATES = ['returned', 'merged_ci_superseded', 'cancelled'];
+
 // deps: { status: (session) => { state, stall } | undefined, isRemote: (session) => bool, canSend: (status) => bool, send: (session, text) => Promise,
 //         feed: (item) => void, digest: (item) => void, quiet: (state) => bool, managerEvent: (event) => Promise, afterSend: (session, request) => void, log }
 // feed: the owner's push feed (one item, one bell slot). digest: the periodic digest (no slot now).
@@ -134,12 +139,12 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
         // a quiet state (merged, deployed) waits for the digest: it must not take a slot in the owner's feed
         if (quiet(request.state)) digest(item); else feed(item);
       } catch (e) { log({ type: 'integration_feed_failed', id: request.id, error: e.message }); }
-      await Promise.resolve(managerEvent({ key: `integration:${request.id}:${request.state}`, title: n.title, body: n.body, url, priority: n.priority, ...(session ? { session } : {}) })).catch((e) => log({ type: 'integration_event_failed', id: request.id, error: e.message }));
+      const managerEventOf = (handled) => ({ key: `integration:${request.id}:${request.state}`, title: n.title, body: n.body, url, priority: n.priority, ...(session ? { session } : {}), ...(handled ? { handled } : {}) });
       // Who is told: the session named by `--for` (forSession) first, then the requester, once each. Without --for it is the requester only.
       const forSession = request.forSession ? String(request.forSession) : '';
       const targets = [...new Set([forSession, session].filter(Boolean))];
       const tell = async (target) => {
-        let sent = false, why = 'no session';
+        let sent = false, why = 'no session', kept = false;
         if (request.state === 'cancelled') why = 'cancelled (the session asked for it)';
         else if (target) {
           if (isRemote(target)) why = 'remote session (feed and manager only)';
@@ -148,7 +153,7 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
             const wait = !st || !canSend(st);
             if (wait) {
               why = !st ? 'session not listed' : 'session not stopped (own-job wake or the next stop covers it)';
-              let kept = false; try { kept = !!(defer && defer(target, request, integrationText(request))); } catch (e) { log({ type: 'integration_defer_failed', id: request.id, error: String(e?.message || e).slice(0, 160) }); }
+              try { kept = !!(defer && defer(target, request, integrationText(request))); } catch (e) { log({ type: 'integration_defer_failed', id: request.id, error: String(e?.message || e).slice(0, 160) }); }
               if (kept) { why += '; kept for the next stop'; try { afterSend(target, request); } catch { /* best effort */ } }
             } else {
               await send(target, integrationText(request));
@@ -158,10 +163,14 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
           }
         }
         log({ type: 'integration_notify', id: request.id, state: request.state, session: target || null, for: forSession || null, sent, why, event: event?.kind || null });
-        return { sent, why };
+        return { sent, why, kept };
       };
       const results = [];
       for (const t of targets.length ? targets : ['']) { try { results.push({ session: t, ...(await tell(t)) }); } catch (e) { results.push({ session: t, sent: false, why: 'failed', error: e }); } }
+      // Pass-through (owner, 2026-11-02; DeepSeek review P2): a session-owned outcome that reached (or is kept for) every target is
+      // marked `handled: "session"`, so the wake filter does not wake the manager for it; the pending wake's drop writes its own event.
+      const handled = SESSION_OWNED_STATES.includes(request.state) && targets.length > 0 && results.every((r) => r.sent || r.kept) ? 'session' : null;
+      await Promise.resolve(managerEvent(managerEventOf(handled))).catch((e) => log({ type: 'integration_event_failed', id: request.id, error: e.message }));
       if (results[0].error) throw results[0].error;   // the first target's failure is the notify's failure (the requester was still tried)
       const { sent, why } = results[0];
       return { told: true, sent, why, ...(results.length > 1 ? { also: results.slice(1) } : {}) };

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Manager agent: block until its event filter emits a line, print it (plus anything within 2 s), then exit.
+# Manager agent: block until its event filter emits a line, then keep collecting for a batch window and print the batch, then exit.
+# Batch window (owner, 2026-11-02; DeepSeek review P1: 652 wakes on 2026-11-01, one per event, 84 % did nothing): after the first
+# delivered event the wait keeps collecting for MANAGER_WAIT_WINDOW seconds (default 60) so one wake carries the whole batch; an
+# urgent event (`u: true` from the filter's policy: asks, needs-manager, hold, health, a failed deploy, a blocking bug, priority high)
+# closes the window MANAGER_WAIT_GRACE seconds (default 2) after it arrived. A window below the grace is raised to it.
 # Run it with Bash run_in_background: it has no 30-min expiry like a Monitor, so the agent wakes ONLY on a real event.
 #   scripts/manager-wait.sh [filter-command]
 # Default (no argument): reads manager-events.jsonl from a stored byte offset (<state dir>/manager-reports/.cursor), feeds the
@@ -26,6 +30,15 @@ events = os.path.join(state, 'manager-events.jsonl')
 cursor_file = os.path.join(state, 'manager-reports', '.cursor')
 poll = float(os.environ.get('MANAGER_WAIT_POLL', '0.5'))
 grace = float(os.environ.get('MANAGER_WAIT_GRACE', '2'))
+window = max(grace, float(os.environ.get('MANAGER_WAIT_WINDOW', '60')))
+
+def urgent(line):
+    # the filter marks urgent lines with `"u":true` (scripts/manager-event-filter.sh); an unparsable line counts as urgent (never delay the unknown)
+    try:
+        import json
+        return bool(json.loads(line).get('u'))
+    except Exception:
+        return True
 
 def kill(p):
     try: os.killpg(p.pid, signal.SIGTERM)
@@ -95,6 +108,7 @@ def cursored():
         nonlocal last_written
         if n != last_written: write_cursor(n); last_written = n
     first_at = None
+    urgent_at = None                                 # the first urgent line: the window closes `grace` after it
     alive = True
     prev_off = off                                   # what `off` was at the last pump; if a tick fed nothing, the filter has had a full poll to react
     while alive:
@@ -107,9 +121,12 @@ def cursored():
         alive = pump(poll)
         while b'\n' in buf:
             line, _, buf = buf.partition(b'\n')
-            out.append(line.decode() + '\n')
+            text = line.decode()
+            out.append(text + '\n')
             if first_at is None: first_at = time.time()
-        if first_at is not None and time.time() - first_at >= grace: break
+            if urgent_at is None and urgent(text): urgent_at = time.time()
+        if first_at is not None and time.time() - first_at >= window: break
+        if urgent_at is not None and time.time() - urgent_at >= grace: break
         if p.poll() is not None and not alive: break
         if first_at is None and off == prev_off:      # quiet tick, nothing new fed: every fed line has been dropped by the filter, move on
             advance(off)
