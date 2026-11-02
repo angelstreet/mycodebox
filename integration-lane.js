@@ -1074,6 +1074,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     else if (v.deployScope && (SCOPE_WIDTH[v.deployScope] ?? 0) > (SCOPE_WIDTH[r.deployScope] ?? 0)) r.deployScope = v.deployScope;   // the wider scope wins
     // --approved-by / --migration-applied attest to a request; the newest one wins, and a request that no longer carries one loses it.
     if (v.session && !r.session) r.session = v.session;
+    if (v.forSession) r.forSession = v.forSession;   // the newest --for wins
     if (v.worktree && !r.worktree) r.worktree = v.worktree;
     const wasApproved = r.approvedBy;
     const ap = applyApproval(r, input, input.session);
@@ -1146,14 +1147,16 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         if (!SCOPES.has(deployScope)) throw coded('E_INVALID', `deploy scope must be one of ${[...SCOPES].join(', ')}`);
       }
       const session = input.session == null ? null : String(input.session).slice(0, 120);
+      // --for <session>: the session that gets the wake (the route has checked it exists); the requester is told too. Absent = the requester.
+      const forSession = typeof input.forSession === 'string' && /^[\w.:@-]{1,120}$/.test(input.forSession) ? input.forSession : null;
       const worktree = typeof input.worktree === 'string' && path.isAbsolute(input.worktree) ? input.worktree.slice(0, 500) : null;
       // Coalesce (2026-10-20): a second request for a branch whose first is still QUEUED updates that entry instead of queueing a
       // second merge of the same branch (one branch merged 3 times in 3 minutes restarted the target CI three times). Same repo +
       // branch + target only, and never a revert (it merges a different commit by construction).
       const open = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.target === c.target && !x.revertOf);
-      if (open) return coalesce(open, input, { key, branch, target: c.target, session, worktree, deployScope, explicit: !!input.deploy });
+      if (open) return coalesce(open, input, { key, branch, target: c.target, session, forSession, worktree, deployScope, explicit: !!input.deploy });
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
-      const r = { id: `int-${now().toString(16)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session,
+      const r = { id: `int-${now().toString(16)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session, forSession,
         deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,

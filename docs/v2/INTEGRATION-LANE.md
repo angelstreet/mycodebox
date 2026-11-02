@@ -162,3 +162,7 @@ A destructive or unreadable migration still returns the request, with a reason n
 **Still the owner's:** a destructive migration (any DROP, `ALTER ... TYPE/RENAME`, or data write), an unreadable one, and every
 other hard floor (secrets, sudoers, systemd units, red tests, conflicts). The text filter (`FORBIDDEN_RE` in `stall.js`) matches a
 migration only when the text says it is destructive (drop / truncate / delete / irreversible).
+
+## `integrate request --for <session>` (2026-11-02)
+
+`integrate request <branch> --for <session>` (JSON field `forSession`) names the session that gets the result: the wake message, the pending-wake queue (a busy session gets it at its next stop) and the own-job watch (the named session's `STATUS: waiting: integration <id>` line) all go to that session. The requester is told the final state too. The route checks the name against the live tmux sessions; an unknown name falls back to the requester and the answer carries `forNote` (printed by the script). Typical use: the manager queues a branch for a worker, so the worker is woken, not the manager.

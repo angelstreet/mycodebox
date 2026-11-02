@@ -1,7 +1,7 @@
 // HTTP front of the integration lane: /api/integration/* (docs/v2/INTEGRATION-LANE.md). server.js only calls handle() for paths
 // under PREFIX. Who may call: (a) a loopback peer with the reporter token (sessions on the codebox), or (b) a bearer token of a
 // clients.json client flagged `integrate` (lease-token.js add <name> --integrate) from the tailnet/loopback range (the Mac).
-//   POST /requests                    { repo?, origin?, cwd?, branch, session?, deploy?, note?, approvedBy? (manager only, else 403), migrationApplied? (manager only, else 403) } -> { ok, id, position, repo }
+//   POST /requests                    { repo?, origin?, cwd?, branch, session?, forSession? (wake this session instead of the requester; unknown -> requester, `forNote` says so), deploy?, note?, approvedBy? (manager only, else 403), migrationApplied? (manager only, else 403) } -> { ok, id, position, repo }
 //   GET  /requests?repo=&state=&limit=                                                          -> { ok, requests: [...] }
 //   GET  /requests/:id                                                                          -> { ok, request, ...summary }
 //   GET  /requests/:id/wait?timeout=30   long-poll (max 30 s) until a final state               -> { ok, request, final, ...summary }
@@ -32,7 +32,7 @@ export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, targe
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
-export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, remoteResolve = () => null, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
+export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(stateDir, 'leases', 'clients.json');
   let cache = { key: '', clients: [] };
@@ -123,8 +123,15 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         if (!repo) { fail('E_INVALID', `repo not recognised: name it (--repo) — configured: ${lane.repoKeys().join(', ') || 'none'}`); return true; }
         // A remote (client:*) caller's session name is the Mac's: it resolves to ONE registered `mac:` session of that same client (exact or by slug prefix), else null; never a local tmux one.
         const session = who.by.startsWith('client:') ? (typeof body.session === 'string' ? remoteResolve(body.session, who.client) : null) : body.session;
-        const out = lane.enqueue({ repo, branch: body.branch, session, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
-        send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, ...(out.coalesced ? { coalesced: 1 } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
+        // --for <session>: the wake goes to that session; a name that is not a live session falls back to the requester and the answer says so
+        let forSession = null, forNote = null;
+        if (body.forSession != null && body.forSession !== '') {
+          const name = String(body.forSession).slice(0, 120);
+          if (/^[\w.:@-]{1,120}$/.test(name) && await Promise.resolve(sessionKnown(name)).catch(() => false)) forSession = name;
+          else forNote = `--for ${name.replace(/[^\w.:@-]/g, '?')}: no such session, the result goes to the requester`;
+        }
+        const out = lane.enqueue({ repo, branch: body.branch, session, forSession, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
+        send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, ...(out.coalesced ? { coalesced: 1 } : {}), ...(forSession ? { forSession } : {}), ...(forNote ? { forNote } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;
         const requests = lane.list({ repo: q.get('repo') || undefined, state: q.get('state') || undefined, limit: q.get('limit') || 50 });

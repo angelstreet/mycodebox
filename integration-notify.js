@@ -135,26 +135,36 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
         if (quiet(request.state)) digest(item); else feed(item);
       } catch (e) { log({ type: 'integration_feed_failed', id: request.id, error: e.message }); }
       await Promise.resolve(managerEvent({ key: `integration:${request.id}:${request.state}`, title: n.title, body: n.body, url, priority: n.priority, ...(session ? { session } : {}) })).catch((e) => log({ type: 'integration_event_failed', id: request.id, error: e.message }));
-      let sent = false, why = 'no session';
-      if (request.state === 'cancelled') why = 'cancelled (the session asked for it)';
-      else if (session) {
-        if (isRemote(session)) why = 'remote session (feed and manager only)';
-        else {
-          const st = status(session);
-          const wait = !st || !canSend(st);
-          if (wait) {
-            why = !st ? 'session not listed' : 'session not stopped (own-job wake or the next stop covers it)';
-            let kept = false; try { kept = !!(defer && defer(session, request, integrationText(request))); } catch (e) { log({ type: 'integration_defer_failed', id: request.id, error: String(e?.message || e).slice(0, 160) }); }
-            if (kept) { why += '; kept for the next stop'; try { afterSend(session, request); } catch { /* best effort */ } }
-          } else {
-            await send(session, integrationText(request));
-            sent = true; why = 'sent';
-            try { afterSend(session, request); } catch { /* best effort */ }
+      // Who is told: the session named by `--for` (forSession) first, then the requester, once each. Without --for it is the requester only.
+      const forSession = request.forSession ? String(request.forSession) : '';
+      const targets = [...new Set([forSession, session].filter(Boolean))];
+      const tell = async (target) => {
+        let sent = false, why = 'no session';
+        if (request.state === 'cancelled') why = 'cancelled (the session asked for it)';
+        else if (target) {
+          if (isRemote(target)) why = 'remote session (feed and manager only)';
+          else {
+            const st = status(target);
+            const wait = !st || !canSend(st);
+            if (wait) {
+              why = !st ? 'session not listed' : 'session not stopped (own-job wake or the next stop covers it)';
+              let kept = false; try { kept = !!(defer && defer(target, request, integrationText(request))); } catch (e) { log({ type: 'integration_defer_failed', id: request.id, error: String(e?.message || e).slice(0, 160) }); }
+              if (kept) { why += '; kept for the next stop'; try { afterSend(target, request); } catch { /* best effort */ } }
+            } else {
+              await send(target, integrationText(request));
+              sent = true; why = 'sent';
+              try { afterSend(target, request); } catch { /* best effort */ }
+            }
           }
         }
-      }
-      log({ type: 'integration_notify', id: request.id, state: request.state, session: session || null, sent, why, event: event?.kind || null });
-      return { told: true, sent, why };
+        log({ type: 'integration_notify', id: request.id, state: request.state, session: target || null, for: forSession || null, sent, why, event: event?.kind || null });
+        return { sent, why };
+      };
+      const results = [];
+      for (const t of targets.length ? targets : ['']) { try { results.push({ session: t, ...(await tell(t)) }); } catch (e) { results.push({ session: t, sent: false, why: 'failed', error: e }); } }
+      if (results[0].error) throw results[0].error;   // the first target's failure is the notify's failure (the requester was still tried)
+      const { sent, why } = results[0];
+      return { told: true, sent, why, ...(results.length > 1 ? { also: results.slice(1) } : {}) };
     } catch (e) {
       log({ type: 'integration_notify_failed', id: request?.id, error: String(e?.message || e).slice(0, 200) });
       return { told: false, error: e.message };
