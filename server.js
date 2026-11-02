@@ -169,6 +169,7 @@ import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createScriptRunSource } from './wait-ids.js';
 import { createPendingWakes } from './pending-wakes.js';
+import { createExternalResult } from './external-result.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createQuotaResumer } from './quota-resume.js';
@@ -2725,7 +2726,8 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
   sessionKnown: async (name) => (await listPanes()).has(name),   // --for <session>: a live tmux session
-  remoteResolve: (name, client) => remote.resolveFor(name, client) });   // `remote` is created below; called per request only
+  remoteResolve: (name, client) => remote.resolveFor(name, client),
+  externalResult: { ack: (id) => externalResult.ack(id) } });   // `remote` is created below; called per request only
 // start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
 // ===== END INTEGRATION BLOCK =====
 
@@ -2754,7 +2756,9 @@ const integrationNotify = createIntegrationNotify({
 });
 pendingWakes.restore();   // wakes kept before a restart are armed again
 const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
-integrationHooks.notify = integrationNotify;
+const externalResult = createExternalResult({ stateDir: STATE_DIR, managerEvent: (e) => managerEvents.record(e), ownerPush: (item) => push.record(item), log: (r) => logEvent(r) });
+setInterval(() => { try { externalResult.sweep(); } catch { /* best effort */ } }, 60000).unref();
+integrationHooks.notify = async (r, e) => { const out = await integrationNotify(r, e); await externalResult.relay(r); return out; };
 integrationHooks.deploys = integrationDeploys;
 integrationLane.start();   // after the hooks: a request resumed at boot (pushed, mid-deploy) must find notify and deploys wired
 // ===== end integration lane, sessions side =====

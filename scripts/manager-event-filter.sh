@@ -7,7 +7,8 @@
 # a running deploy, owner 2026-10-31) is dropped too: the queue or the runner resolves it, the lease watchdog tells the session.
 # Routine integration success (`int-<id>:merged` / `int-<id>:deployed`, default priority; owner 2026-11-02, wake noise): dropped here, still in
 # manager-events.jsonl; manager-status-scan.sh prints the hourly count. returned / failed / blocked / cancelled / CI-red integrations pass.
-# `told` (rules-watch re-read notice) and `unseen:*` (a session's detached job) are dropped (they stay in manager-events.jsonl; the sessions are told
+# `external-result` (the result of an integration queued for a Mac/cloud session, external-result.js; owner/manager 2026-11-02) ALWAYS wakes: the manager relays it
+# to the session (no drop rule matches it; test/manager-event-filter.test.js pins it). `told` (rules-watch re-read notice) and `unseen:*` (a session's detached job) are dropped (they stay in manager-events.jsonl; the sessions are told
 # directly); `orphaned-task` is deduped across runs for 6 h like asks (owner 2026-11-02, wake noise).
 # Residual risk (Codex review 2026-10-22 s4, kept on purpose): the runner's own lease release is dropped even if the runner then crashes,
 # so the release alone is not a wake-up. A safe "failed/blocked event of the same deploy in this batch" rule needs the whole batch

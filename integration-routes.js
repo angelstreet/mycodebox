@@ -1,11 +1,12 @@
 // HTTP front of the integration lane: /api/integration/* (docs/v2/INTEGRATION-LANE.md). server.js only calls handle() for paths
 // under PREFIX. Who may call: (a) a loopback peer with the reporter token (sessions on the codebox), or (b) a bearer token of a
 // clients.json client flagged `integrate` (lease-token.js add <name> --integrate) from the tailnet/loopback range (the Mac).
-//   POST /requests                    { repo?, origin?, cwd?, branch, session?, forSession? (wake this session instead of the requester; unknown -> requester, `forNote` says so), deploy?, note?, approvedBy? (manager only, else 403), migrationApplied? (manager only, else 403) } -> { ok, id, position, repo }
+//   POST /requests                    { repo?, origin?, cwd?, branch, session?, forSession? (wake this session instead of the requester; unknown -> requester, `forNote` says so), deploy?, note?, mac? (label: the branch belongs to a Mac/cloud session, the result goes to the external-result relay), approvedBy? (manager only, else 403), migrationApplied? (manager only, else 403) } -> { ok, id, position, repo }
 //   GET  /requests?repo=&state=&limit=                                                          -> { ok, requests: [...] }
 //   GET  /requests/:id                                                                          -> { ok, request, ...summary }
 //   GET  /requests/:id/wait?timeout=30   long-poll (max 30 s) until a final state               -> { ok, request, final, ...summary }
 //   POST /requests/:id/cancel            only while queued                                      -> { ok, request }
+//   POST /external-results/:id/ack    manager only: the result of an external-origin request was relayed (external-result.js)
 //   GET  /repos                          configured repositories + queue depth                  -> { ok, repos: [...] }
 // `?format=kv` answers key=value lines (+ `---` and the output tail) for the POSIX-sh CLI, which has no JSON parser.
 import fs from 'node:fs';
@@ -32,7 +33,7 @@ export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, targe
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
-export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
+export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, externalResult = null, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(stateDir, 'leases', 'clients.json');
   let cache = { key: '', clients: [] };
@@ -130,7 +131,10 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
           if (/^[\w.:@-]{1,120}$/.test(name) && await Promise.resolve(sessionKnown(name)).catch(() => false)) forSession = name;
           else forNote = `--for ${name.replace(/[^\w.:@-]/g, '?')}: no such session, the result goes to the requester`;
         }
-        const out = lane.enqueue({ repo, branch: body.branch, session, forSession, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
+        // external origin (Mac/cloud branch queued by the manager or loopback): `mac` label, or a --for name that is not a live session
+        const macLabel = typeof body.mac === 'string' && body.mac.trim() ? body.mac.trim() : null;
+        const external = who.by.startsWith('client:') ? null : macLabel || (forNote && body.forSession ? String(body.forSession) : null);
+        const out = lane.enqueue({ repo, branch: body.branch, session, forSession, external, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
         send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, ...(out.coalesced ? { coalesced: 1 } : {}), ...(forSession ? { forSession } : {}), ...(forNote ? { forNote } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;
@@ -147,6 +151,11 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
       } else if (req.method === 'POST' && (m = /^\/requests\/([\w-]{1,64})\/cancel$/.exec(sub))) {
         const r = lane.cancel(m[1], { by: who.by });
         send(res, 200, { ok: true, request: r, ...summary(r), flat: summary(r) }, fmt);
+      } else if (req.method === 'POST' && (m = /^\/external-results\/([\w-]{1,64})\/ack$/.exec(sub))) {
+        if (!who.manager) { send(res, 403, { ok: false, error: 'only the manager acknowledges an external result' }, fmt); return true; }
+        const ok = externalResult ? externalResult.ack(m[1]) : false;
+        if (!ok) { fail('E_NOT_FOUND', 'no such external result'); return true; }
+        send(res, 200, { ok: true, flat: { id: m[1], acked: 1 } }, fmt);
       } else if (req.method === 'GET' && sub === '/repos') {
         const repos = lane.repoKeys().map((key) => ({ key, queued: lane.list({ repo: key, state: 'queued', limit: 500 }).length, running: lane.list({ repo: key, state: 'running' }).length }));
         send(res, 200, { ok: true, repos }, fmt);
