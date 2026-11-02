@@ -133,3 +133,11 @@ test('told / unseen:* are dropped; orphaned-task is deduped across runs', () => 
   assert.deepEqual(kinds(run(env, input)), ['orphaned-task']);
   assert.deepEqual(kinds(run(env, input)), []);
 });
+
+test('external-result always wakes the manager (not dropped, not deduped across runs)', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const line = ev({ key: 'int-1a:external-result', kind: 'external-result', session: 'int-1a', body: 'Integration int-1a: merged x into main (label mac-1).' });
+  assert.deepEqual(kinds(run(env, line)), ['external-result']);
+  assert.deepEqual(kinds(run(env, line)), ['external-result']);
+});

@@ -1075,6 +1075,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     // --approved-by / --migration-applied attest to a request; the newest one wins, and a request that no longer carries one loses it.
     if (v.session && !r.session) r.session = v.session;
     if (v.forSession) r.forSession = v.forSession;   // the newest --for wins
+    if (input.external && !r.origin) { r.origin = 'external'; r.externalLabel = String(input.external).trim().replace(/[^\w.:@ -]/g, '?').slice(0, 60); }
     if (v.worktree && !r.worktree) r.worktree = v.worktree;
     const wasApproved = r.approvedBy;
     const ap = applyApproval(r, input, input.session);
@@ -1156,7 +1157,9 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       const open = [...reqs.values()].find((x) => x.state === 'queued' && x.repo === key && x.branch === branch && x.target === c.target && !x.revertOf);
       if (open) return coalesce(open, input, { key, branch, target: c.target, session, forSession, worktree, deployScope, explicit: !!input.deploy });
       const seq = Math.max(0, ...[...reqs.values()].map((x) => x.seq || 0)) + 1;
+      const external = typeof input.external === 'string' && input.external.trim() ? input.external.trim().replace(/[^\w.:@ -]/g, '?').slice(0, 60) : null;   // Mac/cloud origin: nobody to wake (external-result.js)
       const r = { id: `int-${now().toString(16)}${randomBytes(3).toString('hex')}`, seq, repo: key, branch, target: c.target, session, forSession,
+        ...(external ? { origin: 'external', externalLabel: external } : {}),
         deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
