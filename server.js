@@ -168,6 +168,7 @@ import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs } from './own-jobs.js';
 import { createScriptRunSource } from './wait-ids.js';
+import { createPendingWakes } from './pending-wakes.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createQuotaResumer } from './quota-resume.js';
@@ -922,7 +923,17 @@ const leaseNudge = createLeaseNudge({
 // Events of the lease service (central): the feed, the handoffs, and a one-line note to a codebox session whose exclusive lease
 // became a pin (or whose pin was overlapped). The note goes through the guarded send, by 'lease-service', only to a session that is
 // stopped on a finished turn with nothing typed; otherwise the feed event is all there is.
-const leaseNotesSent = new Set();   // `${kind}:${ticket}`: a ticket grant is told once
+// Pending wakes (pending-wakes.js): a wake for a session that is busy / not listed is kept (memory + <state>/pending-wakes.json) and typed at its next
+// stop (the reporter's turn.end), or after GHOSTY_PENDING_WAKE_SEC (default 300) and once more, then dropped; exactly once per key.
+const pendingWakes = createPendingWakes({
+  file: join(STATE_DIR, 'pending-wakes.json'),
+  timeoutMs: (Number(process.env.GHOSTY_PENDING_WAKE_SEC) || 300) * 1000,
+  canSend: (session) => noteAllowed(latest?.status?.[session]),
+  canForce: (session) => { const s = latest?.status?.[session]?.stall; return !s?.draft && !(s?.options?.length); },   // the timeout path types even into a working session, never over a draft or a menu
+  exists: (session) => sessionExists(session),
+  send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); },
+  log: (r) => logEvent(r),
+});
 async function onLeaseEvent(ev) {
   const rec = eventRecord(ev);
   if (rec) {
@@ -936,14 +947,15 @@ async function onLeaseEvent(ev) {
   const names = Object.keys(latest?.status || {});
   const session = eventSession(ev, (a) => agentSession(a, names, MACHINES));
   const note = eventNote(ev);
-  if (!session || !note || !noteAllowed(latest?.status?.[session])) return;
-  const nk = String(ev.kind || ev.event) === 'granted' ? leaseNoteKey(ev) : null;
-  if (nk && leaseNotesSent.has(nk)) return;
+  if (!session || !note) return;
+  const nk = String(ev.kind || ev.event) === 'granted' ? leaseNoteKey(ev) : null;   // a ticket grant is told once and kept for the next stop
+  if (nk && pendingWakes.seen(nk)) return;
+  if (!noteAllowed(latest?.status?.[session])) { if (nk) pendingWakes.add({ session, key: nk, text: note, by: 'lease-service' }); return; }
   try {
     await assertAgentPane(session, 'lease-service');
     await sendKeys(session, note, true);
     logSend(session, 'lease-service', { keys: note });
-    if (nk) { leaseNotesSent.add(nk); if (leaseNotesSent.size > 2000) leaseNotesSent.delete(leaseNotesSent.values().next().value); }
+    if (nk) pendingWakes.markDone(nk);
   } catch (e) { console.error('[lease] note', session, e.message); }
 }
 // A stop whose STATUS says waiting / blocked: central -> the service (it downgrades an exclusive hold); legacy -> a feed flag when the session holds one.
@@ -2032,8 +2044,14 @@ async function handleHttp(req, res) {
     if (!isLoopback(req.socket.remoteAddress)) return json(res, 403, { ok: false, error: 'loopback only' });
     if (!reporter.tokenOk(req.headers[TOKEN_HEADER])) return json(res, 401, { ok: false, error: 'bad token' });
     try {
-      const r = reporter.ingest(await readJsonBody(req));
+      const body = await readJsonBody(req);
+      const r = reporter.ingest(body);
       if (r && r.peer) logEvent(r.peer);
+      // the session's turn ended (not a subagent's): deliver the wakes kept for it, once the pane has settled
+      if (body?.event === 'turn.end' && !body.agentId && typeof body.session === 'string' && pendingWakes.has(body.session)) {
+        setTimeout(() => { latest = null; poll().then(() => pendingWakes.onStop(body.session)).catch((e) => console.error('[pending-wake] stop', e.message)); }, 3000).unref?.();
+      }
+      if (body?.event === 'session.end' && typeof body.session === 'string') pendingWakes.forget(body.session);
       const { peer: _peer, ...rest } = r || {};
       return json(res, 200, rest);
     }
@@ -2730,8 +2748,10 @@ const integrationNotify = createIntegrationNotify({
   quiet: (state) => integrationDigestOn() && isQuietState(state),
   managerEvent: (e) => managerEvents.record(e),
   afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
+  defer: (session, r, text) => !!pendingWakes.add({ session, key: `integration:${r.id}:${r.state}`, text, by: 'integration' }).queued,   // not stopped / not listed now: kept for the next stop
   log: (r) => logEvent(r),
 });
+pendingWakes.restore();   // wakes kept before a restart are armed again
 const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
 integrationHooks.notify = integrationNotify;
 integrationHooks.deploys = integrationDeploys;
