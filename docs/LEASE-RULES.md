@@ -111,7 +111,9 @@ Hours were lost waiting on one web host while the other was free. When the work 
   their own limits.
 - **Renewal:** allowed while you heartbeat and nobody waits. When anyone waits (a ticket, a queued deploy) the continuous hold, counted from the
   claim, may not pass 60 minutes: `renew` is clamped to that point, then refused (`hold_cap`, exit 7 like `yield_required`): release and queue
-  again (fair rotation).
+  again (fair rotation). The last clamped renew ends the lease at claim + 60 min, so the next heartbeat gets `E_NOT_FOUND` (bug-11ea0b19, nightly fleet):
+  `vpt-lease run` now prints `HOLD CAP ... ends at <time>` at that renew and reports `LEASE LOST: hold cap reached` instead of a bare `E_NOT_FOUND`. A job that must
+  hold longer than 60 min while others wait has to split into steps (release, re-queue); the nightly fleet's hold-until-05:00Z design cannot work under the cap.
 - **Long work** (a 3 h walk) is split into steps that each claim, run, release, re-queue.
 - **Leases from before the cap** (owner, 2026-10-27: "never 240 min"): the service cuts them back to claim time + 60 minutes; one already
   held longer gets 10 minutes to wrap up, then ends. A long lease does not survive the change.

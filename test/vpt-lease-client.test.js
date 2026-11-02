@@ -746,6 +746,17 @@ test('central run renews the lease every heartbeat so a P2 run outlives its 10 m
   assert.equal(r.code, 0); assert.match(r.err, /YIELD REQUIRED for lease RN2/); assert.match(r.out, /done/);
 });
 
+test('bug-11ea0b19: a renew clamped by the hold cap warns once; the heartbeat refusal after it says hold cap, not a bare E_NOT_FOUND', async () => {
+  let hb = 0;
+  setup((c) => (c.path === '/claim' ? { ok: true, lease: lease({ id: 'HC1', heartbeat_s: 1 }) }
+    : c.path === '/renew' ? { ok: true, lease: lease({ id: 'HC1', expires_at: iso(1760000000) }), warnings: ['ttl clamped from 60 to 4 min: someone waits, continuous hold is capped at 60 min'] }
+    : c.path === '/heartbeat' && ++hb > 1 ? { ok: false, status: 404, code: 'E_NOT_FOUND', error: 'no such active lease' } : { ok: true, lease: lease({ id: 'HC1' }) }));
+  const r = await run(['run', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--', 'sh', '-c', 'sleep 2; echo done']);
+  assert.match(r.err, /HOLD CAP for lease HC1/);
+  assert.match(r.err, /LEASE LOST: hold cap reached/);
+  assert.doesNotMatch(r.err, /heartbeat refused/);
+});
+
 test('priority: --priority accepts P3 and sends it', async () => {
   setup(() => ({ ok: true, lease: lease({ id: 'P3A', priority: 'P3' }) }));
   const r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:bot', '--priority', 'P3']);

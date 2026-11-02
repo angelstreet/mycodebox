@@ -674,6 +674,9 @@ def cmd_renew(a):
         return YIELD if r.get("code") in ("E_YIELD_REQUIRED", "E_HOLD_CAP") else rc
     exp = to_epoch((r.get("lease") or {}).get("expires_at")) or now() + a.ttl * 60
     print("renewed until %s" % fmt(exp))
+    for w in r.get("warnings") or []:
+        if CAP_MARK in w:      # bug-11ea0b19: a renew clamped to the 60 min hold cap ends the lease there; say so, the run can only learn it from here
+            print("HOLD CAP: %s" % w)
     return 0
 
 
@@ -1100,6 +1103,16 @@ def STDIN():
 
 # ---------------------------------------------------------------- run
 
+CAP_MARK = "continuous hold is capped"      # text of the service's renew warning when a waiter clamps the lease to claim + 60 min
+
+
+def cap_lost(capped_until, code):
+    """The heartbeat is refused as 'no such lease' after a renew told us the hold cap ends the lease: that is the cap, not a fault."""
+    if capped_until and code in ("E_NOT_FOUND", 1, 3):
+        return "hold cap reached (the service ended the lease at %s because another claim waits; release and re-queue per step)" % fmt(capped_until)
+    return None
+
+
 class HeartbeatThread(threading.Thread):
     """Heartbeats while the wrapped command runs. A refused heartbeat (fenced / lease gone) or a lease that is no longer
     exclusive is reported loudly and heartbeating stops; run exits non-zero after the command (or kills it: --on-fence
@@ -1110,6 +1123,12 @@ class HeartbeatThread(threading.Thread):
         self.lease_id, self.every, self.on_fence, self.renew_ttl = lease_id, every, on_fence, renew_ttl
         self.stop, self.fenced = threading.Event(), None
         self.yielded = False
+        self.capped_until = None
+
+    def say_cap(self, exp):
+        if not self.capped_until:
+            eprint("vpt-lease: HOLD CAP for lease %s: another claim waits, so the lease ends at %s and cannot be extended. Finish, release and re-queue for the next step." % (self.lease_id, fmt(exp or time.time())))
+        self.capped_until = exp or time.time()
 
     def say_yield(self):
         """The service refuses to extend this lease: tell the wrapped command's operator once. The command is not killed;
@@ -1133,8 +1152,10 @@ class HeartbeatThread(threading.Thread):
                         self.say_yield()
                     elif not rr.get("ok"):
                         eprint("vpt-lease: renew failed (%s); keep going" % rr.get("code"))
+                    elif any(CAP_MARK in w for w in rr.get("warnings") or []):
+                        self.say_cap(to_epoch((rr.get("lease") or {}).get("expires_at")))
                 if not r.get("ok"):
-                    lost = "heartbeat refused (%s)" % r.get("code")
+                    lost = cap_lost(self.capped_until, r.get("code")) or "heartbeat refused (%s)" % r.get("code")
                 elif (r.get("lease") or {}).get("mode") not in (None, "", "exclusive"):
                     lost = "lease was downgraded to %s" % r["lease"]["mode"]
                 if lost:
@@ -1221,11 +1242,14 @@ class SshHeartbeat(HeartbeatThread):
             if code == 0 and "yield_required" in hout:
                 self.say_yield()
             if code in (1, 3):
-                return self.lose("heartbeat refused (exit %d)" % code)
+                return self.lose(cap_lost(self.capped_until, code) or "heartbeat refused (exit %d)" % code)
             if code == 0:
                 last_ok = time.monotonic()
                 if self.renew_ttl:
-                    rcode, _ = ssh_call(["renew", self.lease_id, "--ttl", str(self.renew_ttl)], capture=True, stdin=subprocess.DEVNULL)
+                    rcode, rout = ssh_call(["renew", self.lease_id, "--ttl", str(self.renew_ttl)], capture=True, stdin=subprocess.DEVNULL)
+                    if rcode == 0 and "HOLD CAP" in (rout or ""):
+                        m = re.search(r"renewed until (\d{4}-\d\d-\d\d \d\d:\d\d)", rout)
+                        self.say_cap(to_epoch(m.group(1).replace(" ", "T") + ":00+00:00") if m else time.time())
                     if rcode == YIELD:
                         self.say_yield()
                     elif rcode != 0:
