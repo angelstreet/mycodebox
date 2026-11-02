@@ -26,8 +26,8 @@ import { appendFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join, dirname } from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { loadShare, summarizeShare } from './decision-share.js';
 import { loadLeaseStats } from '../lease-stats.js';
 
@@ -102,7 +102,10 @@ export async function run({ home = homedir(), now = Date.now(), argv = process.a
 
   const results = [];
   if (cfg.error) { R.push(`Config: ${cfg.error}. Nothing ran.`, ''); out(`daily-checks: ${cfg.error}`); }
-  for (const check of cfg.checks.filter((c) => !only || c.id === only)) {
+  // Built in (no config entry needed): installed copies of repo scripts (~/.local/bin/integrate ...) against the repo version.
+  const checks = cfg.checks.some((c) => c.id === 'installed-copies') ? cfg.checks
+    : [...cfg.checks, { id: 'installed-copies', title: 'Installed script copies', command: [process.execPath, join(dirname(fileURLToPath(import.meta.url)), 'installed-copies-check.js')], timeoutSec: 30 }];
+  for (const check of checks.filter((c) => !only || c.id === only)) {
     const t0 = Date.now();
     const res = spawnSync(check.command[0], check.command.slice(1), { encoding: 'utf8', timeout: (check.timeoutSec || 600) * 1000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, HOME: home } });
     const r = { check, ...parseCheckResult(check, res), secs: Math.round((Date.now() - t0) / 1000) };
