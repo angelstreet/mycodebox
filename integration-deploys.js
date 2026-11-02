@@ -107,7 +107,7 @@ export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise
         misses = 0;
         seen = d;
         const fin = FINAL[String(d.state || '').toLowerCase()];
-        if (fin) return { ok: fin === 'done', state: fin, version: fin === 'done' ? await versionOf({ ...d, id }) : null, tail: String(d.tail || d.error || '').slice(-1000) };
+        if (fin) return { ok: fin === 'done', state: fin, version: fin === 'done' ? await versionOf({ ...d, id }) : null, tail: String(d.tail || d.error || '').slice(-1000), ...(d.coalescedInto ? { coalescedInto: String(d.coalescedInto), note: `superseded: covered by the newer ${d.scope} deploy ${d.coalescedInto}, which ran instead` } : {}) };
       } else {
         const fin = await finalById(id, seen);   // finished and gone from the list: its result is not a miss
         if (fin) return fin;

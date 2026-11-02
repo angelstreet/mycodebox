@@ -375,3 +375,9 @@ test('notify: returned/superseded/cancelled are handled by the session once told
   await remote.notify(req({ id: 'int-k3', state: 'returned', reason: 'x', session: 'mac:laptop' }));
   assert.equal(remote.events.at(-1).handled, undefined, 'a remote session is told through the feed and the manager only');
 });
+
+test('a deploy covered by a newer one is followed to its result and says so', async () => {
+  const d = createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: JSON.stringify({ deploys: [{ id: 'd1', env: 'e', scope: 'host', state: 'done', version: 'v1', coalescedInto: 'd2' }] }), stderr: '' }), sleep: async () => {} });
+  const w = await d.wait('d1');
+  assert.equal(w.ok, true); assert.equal(w.coalescedInto, 'd2'); assert.match(w.note, /newer host deploy d2/);
+});

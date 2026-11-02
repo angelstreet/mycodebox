@@ -767,7 +767,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         stamp(r, 'deployDoneAt');
         r.deployVersion = w?.version ?? null;
         r.deployed = w?.ok === true ? { id: r.deployId, version: r.deployVersion, env: c.deploy.env, scope: r.deployScope } : null;
-        return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}` : (w?.error || w?.tail || w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
+        return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}${w.note ? ` (${w.note})` : ''}` : (w?.error || w?.tail || w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
       } catch (e) { return { ok: false, tail: `deploy error: ${e?.message}` }; }   // the merge is on the target: report, never throw
     });
     return res;
