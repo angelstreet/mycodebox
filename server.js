@@ -2724,6 +2724,7 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut
   journal: (rec) => { appendFile(join(STATE_DIR, 'merge-decisions.jsonl'), `${JSON.stringify(rec)}\n`, (e) => { if (e) console.error('[integration] journal', e.message); }); } });
 const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
+  sessionKnown: async (name) => (await listPanes()).has(name),   // --for <session>: a live tmux session
   remoteResolve: (name, client) => remote.resolveFor(name, client) });   // `remote` is created below; called per request only
 // start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
 // ===== END INTEGRATION BLOCK =====
@@ -2748,7 +2749,7 @@ const integrationNotify = createIntegrationNotify({
   quiet: (state) => integrationDigestOn() && isQuietState(state),
   managerEvent: (e) => managerEvents.record(e),
   afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
-  defer: (session, r, text) => !!pendingWakes.add({ session, key: `integration:${r.id}:${r.state}`, text, by: 'integration' }).queued,   // not stopped / not listed now: kept for the next stop
+  defer: (session, r, text) => !!pendingWakes.add({ session, key: `integration:${r.id}:${r.state}:${session}`, text, by: 'integration' }).queued,   // not stopped / not listed now: kept for the next stop
   log: (r) => logEvent(r),
 });
 pendingWakes.restore();   // wakes kept before a restart are armed again

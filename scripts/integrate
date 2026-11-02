@@ -3,6 +3,8 @@
 #   integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait]   queue the branch (default: the current branch)
 #                                                                                        --approved-by: manager session only; skips ONLY the infra-path floor reason (another session's claim is ignored)
 #                                                                                        --migration-applied: accepted and ignored since 2026-10-21 (additive migrations need no flag); it used to attest an ADDITIVE migration's objects already exist in the target DB (Q199)
+#                                                                                        --for SESSION: the wake message, the own-job watch and the pending-wake queue go to that session (a worker you
+#                                                                                        queue for); the requester is told the final state too. An unknown name falls back to the requester and says so.
 #   integrate status [<id>]                                                              one request, or the latest ten
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
 #                                                                                        an unreachable service is retried until the timeout
@@ -92,10 +94,10 @@ do_wait() {   # do_wait ID MINUTES
 cmd=$1; [ $# -gt 0 ] && shift
 case "$cmd" in
   request)
-    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; APPROVER=""; MIGAPPLIED=0; WAIT=0
+    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; APPROVER=""; MIGAPPLIED=0; WAIT=0; FOR=""
     while [ $# -gt 0 ]; do
       case "$1" in
-        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --approved-by) APPROVER=$2; shift 2 ;; --migration-applied) MIGAPPLIED=1; shift ;; --wait) WAIT=1; shift ;;
+        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --approved-by) APPROVER=$2; shift 2 ;; --migration-applied) MIGAPPLIED=1; shift ;; --wait) WAIT=1; shift ;; --for) FOR=$2; shift 2 ;;
         -*) die "unknown option $1" ;; *) BRANCH=$1; shift ;;
       esac
     done
@@ -110,6 +112,7 @@ case "$cmd" in
     WT=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$WT" ] && BODY="$BODY,\"worktree\":\"$(json_esc "$WT")\""
     [ -n "$REPO" ] && BODY="$BODY,\"repo\":\"$(json_esc "$REPO")\""
     [ -n "$DEPLOY" ] && BODY="$BODY,\"deploy\":\"$(json_esc "$DEPLOY")\""
+    [ -n "$FOR" ] && BODY="$BODY,\"forSession\":\"$(json_esc "$FOR")\""
     [ -n "$NOTE" ] && BODY="$BODY,\"note\":\"$(json_esc "$NOTE")\""
     [ -n "$APPROVER" ] && BODY="$BODY,\"approvedBy\":\"$(json_esc "$APPROVER")\""
     [ "$MIGAPPLIED" = 1 ] && [ -n "$APPROVER" ] && BODY="$BODY,\"migrationApplied\":true"
@@ -124,6 +127,8 @@ case "$cmd" in
     else
       printf 'Integration %s queued for %s (position %s).\n' "$ID" "$(val repo)" "$(val position)"
     fi
+    [ -n "$(val forSession)" ] && printf 'The result goes to %s (and to you).\n' "$(val forSession)"
+    _fn=$(val forNote); [ -n "$_fn" ] && printf '%s\n' "$_fn"
     if [ "$(val approvalIgnored)" = 1 ]; then
       printf 'approval ignored: only the manager can approve\n'
       printf 'The request is queued without an approval; a floor that needed it will return it.\n'
@@ -148,5 +153,5 @@ case "$cmd" in
     [ -n "$1" ] || die "usage: integrate cancel <id>"
     api POST "/api/integration/requests/$(urlenc "$1")/cancel?format=kv" "{}"; [ "$CODE" = 200 ] || fail_http
     printf '%s\n' "$(val text)" ;;
-  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] | status [<id>] | wait <id> [--timeout MIN] | cancel <id>\n' >&2; exit 1 ;;
+  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] [--for SESSION] | status [<id>] | wait <id> [--timeout MIN] | cancel <id>\n' >&2; exit 1 ;;
 esac
