@@ -125,3 +125,11 @@ test('routine integration merged / deployed events are dropped; returned / faile
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(kinds(r), ['int-a3:returned', 'int-a4:deploy_failed', 'int-a5:merged_ci_superseded', 'int-a6:merged']);
 });
+
+test('told / unseen:* are dropped; orphaned-task is deduped across runs', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const input = ev({ key: 'rules-watch:told', kind: 'told', body: 'x' }) + ev({ key: 'job:unseen:s', kind: 'unseen:s', body: 'y' }) + ev({ key: 'TASK-1:orphaned-task', kind: 'orphaned-task', body: 'z' });
+  assert.deepEqual(kinds(run(env, input)), ['orphaned-task']);
+  assert.deepEqual(kinds(run(env, input)), []);
+});

@@ -7,6 +7,8 @@
 # a running deploy, owner 2026-10-31) is dropped too: the queue or the runner resolves it, the lease watchdog tells the session.
 # Routine integration success (`int-<id>:merged` / `int-<id>:deployed`, default priority; owner 2026-11-02, wake noise): dropped here, still in
 # manager-events.jsonl; manager-status-scan.sh prints the hourly count. returned / failed / blocked / cancelled / CI-red integrations pass.
+# `told` (rules-watch re-read notice) and `unseen:*` (a session's detached job) are dropped (they stay in manager-events.jsonl; the sessions are told
+# directly); `orphaned-task` is deduped across runs for 6 h like asks (owner 2026-11-02, wake noise).
 # Residual risk (Codex review 2026-10-22 s4, kept on purpose): the runner's own lease release is dropped even if the runner then crashes,
 # so the release alone is not a wake-up. A safe "failed/blocked event of the same deploy in this batch" rule needs the whole batch
 # (a streaming jq cannot see a later event), so it is not done here; the wake-up for a dead runner is the deploy's failed / orphan /
@@ -40,6 +42,8 @@ jq -c --unbuffered '
   ) | select(
     ((.kind|test("^int-[0-9a-f]+:(merged|deployed)$")) and ((.priority//"default")=="default")) | not
   ) | select(
+    ((.kind=="told") or ((.kind|tostring)|test("^unseen:"))) | not
+  ) | select(
     ((.kind=="lease") and (.state=="released" or .state=="expired" or .state=="system-wait")) | not
   ) | {k:((.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end)), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
@@ -56,7 +60,7 @@ jq -c --unbuffered '
       k = substr($0, RSTART+6, RLENGTH-7)
       match($0, /"kind":"[^"]*"/)
       ks = substr($0, RSTART+8, RLENGTH-9)
-      cross = (ks == "asks" || ks == "waiting" || ks == "lease" || ks == "health")
+      cross = (ks == "asks" || ks == "orphaned-task" || ks == "waiting" || ks == "lease" || ks == "health")
       if (cross && (k in seenmap)) next
       if (!(k in runmap)) {
         runmap[k] = 1
