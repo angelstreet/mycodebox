@@ -138,3 +138,33 @@ export function answerRoutineRestart({ text, view, session = '' } = {}) {
   const why = view?.ok ? 'You do not hold a lease that covers that host.' : 'The lease source is unreachable, so treat the host as busy.';
   return { text: `${why} ${RESTART_LEASE_RULE}`, covered: false, units: r.units, hosts };
 }
+
+// ---- hard guard (bug-486f0188) -----------------------------------------------------------------------------------------
+// answerRoutineRestart() only answers a question; an agent that just runs `systemctl restart vpt-host` was never stopped, and
+// it killed a kirby run under another session's vpt-pi3/device2 lease. restartBlocker() is the mechanical check used by the
+// PreToolUse hook (scripts/restart-guard.js): a restart of a device-driving unit on host H is refused while any exclusive lease
+// that is not the caller's covers H or one of its devices. Per-device instances (see above) are blocked by the same device only.
+// No override. Not decidable (no host named, lease source unreachable) -> null: the hook lets it through, the lease rules still apply.
+const leaseResources = (l) => [...(l.resources || []), l.resource, ...(l.legacy || [])].filter(Boolean).map((x) => String(x).toLowerCase());
+export function restartBlocker({ text, leases, session = '' } = {}) {
+  const r = routineRestart(text);
+  if (!r.routine) return null;
+  const units = r.units.filter((u) => !DEVICELESS_UNITS.includes(u));
+  const hosts = hostsNamed(text);
+  if (!units.length || !hosts.length || !Array.isArray(leases)) return null;
+  const dev = units.every(isInstance) ? deviceOfRestart(text, units) : null;
+  for (const l of leases) {
+    if (l.mode && l.mode !== 'exclusive') continue;
+    if (mine(l, session)) continue;
+    const res = leaseResources(l);
+    const hit = hosts.some((h) => res.some((x) => {
+      if (x === h || x === '*') return true;                       // whole host (or env-wide) lease of someone else
+      if (!x.startsWith(`${h}/`)) return false;                    // another host
+      return dev ? x === `${h}/${dev}` : true;                     // a device of this host: any for host-wide units, the same one for instances
+    }));
+    if (!hit) continue;
+    const exp = l.expires_at || (l.expires ? new Date(l.expires * 1000).toISOString() : 'unknown');
+    return `restart-guard: not restarting ${units.join(', ')} on ${hosts.join(', ')}: lease ${l.id || '?'} held by ${l.agent || l.session || 'another session'} on ${[...new Set(res.filter((x) => hosts.some((h) => x === h || x.startsWith(`${h}/`))))].join(', ') || res.join(', ')} (expires ${exp}) would be broken by it. Wait for it: \`vpt-lease claim <env>/${dev ? `${hosts[0]}/${dev}` : hosts[0]} --kind host --wait\` (or \`vpt-lease run ... -- <cmd>\`), then restart. There is no --force.`;
+  }
+  return null;
+}
