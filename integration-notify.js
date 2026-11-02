@@ -113,8 +113,10 @@ export function integrationNotice(r) {
 // deps: { status: (session) => { state, stall } | undefined, isRemote: (session) => bool, canSend: (status) => bool, send: (session, text) => Promise,
 //         feed: (item) => void, digest: (item) => void, quiet: (state) => bool, managerEvent: (event) => Promise, afterSend: (session, request) => void, log }
 // feed: the owner's push feed (one item, one bell slot). digest: the periodic digest (no slot now).
+// defer: (session, request, text) => bool; keeps the wake for the next stop of a session that is not stopped / not listed now (pending-wakes.js).
+//   When it takes the wake, afterSend runs at once (the own-job watch is not needed: the pending wake owns the delivery).
 // quiet: the server decides which states are quiet (manager.json integrationDigest, default on).
-export function createIntegrationNotify({ status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, digest = () => {}, quiet = () => false, managerEvent = async () => {}, afterSend = () => {}, log = () => {} } = {}) {
+export function createIntegrationNotify({ status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, digest = () => {}, quiet = () => false, managerEvent = async () => {}, afterSend = () => {}, defer = null, log = () => {} } = {}) {
   const done = new Set();   // `${id}:${state}`: a transition is told once per process
   return async function notify(request, event = {}) {
     try {
@@ -139,9 +141,12 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
         if (isRemote(session)) why = 'remote session (feed and manager only)';
         else {
           const st = status(session);
-          if (!st) why = 'session not listed';
-          else if (!canSend(st)) why = 'session not stopped (own-job wake or the next stop covers it)';
-          else {
+          const wait = !st || !canSend(st);
+          if (wait) {
+            why = !st ? 'session not listed' : 'session not stopped (own-job wake or the next stop covers it)';
+            let kept = false; try { kept = !!(defer && defer(session, request, integrationText(request))); } catch (e) { log({ type: 'integration_defer_failed', id: request.id, error: String(e?.message || e).slice(0, 160) }); }
+            if (kept) { why += '; kept for the next stop'; try { afterSend(session, request); } catch { /* best effort */ } }
+          } else {
             await send(session, integrationText(request));
             sent = true; why = 'sent';
             try { afterSend(session, request); } catch { /* best effort */ }
