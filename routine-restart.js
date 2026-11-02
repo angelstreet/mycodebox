@@ -142,7 +142,7 @@ export function answerRoutineRestart({ text, view, session = '' } = {}) {
 // ---- hard guard (bug-486f0188) -----------------------------------------------------------------------------------------
 // answerRoutineRestart() only answers a question; an agent that just runs `systemctl restart vpt-host` was never stopped, and
 // it killed a kirby run under another session's vpt-pi3/device2 lease. restartBlocker() is the mechanical check used by the
-// PreToolUse hook (scripts/restart-guard.js): a restart of a device-driving unit on host H is refused while any exclusive lease
+// PreToolUse hook (scripts/lease-guard-hook.js): a restart of a device-driving unit on host H is refused while any exclusive lease
 // that is not the caller's covers H or one of its devices. Per-device instances (see above) are blocked by the same device only.
 // No override. Not decidable (no host named, lease source unreachable) -> null: the hook lets it through, the lease rules still apply.
 const leaseResources = (l) => [...(l.resources || []), l.resource, ...(l.legacy || [])].filter(Boolean).map((x) => String(x).toLowerCase());

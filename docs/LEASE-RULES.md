@@ -67,7 +67,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
 - Restarting one device's own unit instance (the per-device BLE/HID daemons and per-device stream, grabber and monitor-img
   instances, see REFERENCE) needs only `<host>/<device>` of that device and is blocked only by another session's lease on the same
   device. Name the device in the request (`device5`); host-wide units such as vpt-host keep the host lease.
-- Enforced, not just a rule (bug-486f0188): the `scripts/restart-guard.js` PreToolUse hook refuses `systemctl restart` of a device-driving unit on host H while another session's lease covers H or one of its devices (message names lease id, holder, expiry); deviceless units (vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline) stay allowed, there is no `--force`.
+- Enforced, not just a rule (bug-486f0188): the `scripts/lease-guard-hook.js` PreToolUse hook refuses `systemctl restart` of a device-driving unit on host H while another session's lease covers H or one of its devices (message names lease id, holder, expiry); deviceless units (vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline) stay allowed, there is no `--force`.
 
 ## How to claim
 
