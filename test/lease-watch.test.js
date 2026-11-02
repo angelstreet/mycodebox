@@ -36,6 +36,13 @@ test('holder status: live / ended / remote / unknown / system', () => {
   assert.equal(one(L({ agent: 'update_core:x@y' })).status, 'system');
 });
 
+test('a live bare agent that prefix-matches a gone session is never released (bug-f15da6f2)', () => {
+  const r = classifyHolders({ leases: [{ id: 'b', agent: 'irtoy-ours2', env: 'dev', resource: 'vpt-mf1', since: (NOW - 5 * MIN) / 1000 }],
+    sessionNames: [], knownNames: ['irtoy-ours'], machines: M, now: NOW })[0];
+  assert.equal(r.plan, null);
+  assert.equal(r.status, 'unknown');
+});
+
 test('plan: ended -> release; idle server -> narrow; never release a live holder; host/young/working/no-signal -> nothing', () => {
   assert.deepEqual(one(L({ agent: 'codebox:TASK99-gone' })).plan, { type: 'release', reason: 'session-ended' });
   const idle = (turnAt, o = {}) => one(L(o), { activity: () => ({ turnAt, promptAt: 0, working: false }) });
