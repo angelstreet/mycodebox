@@ -618,7 +618,11 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], pro
       const targetSha = mergeRef ? (run('git', ['-C', dir, 'rev-parse', mergeRef.ref]) || '').trim() : '';
       const ancestor = mergeRef ? run('git', ['-C', dir, 'merge-base', '--is-ancestor', 'HEAD', mergeRef.ref]) !== null : false;
       const unstarted = isUnstarted({ headSha, targetSha, forkPoint: branchForkPoint(run, dir, branch) });
-      const merged = ancestor && !unstarted;   // an unstarted branch has no work of its own to be merged
+      // Pushed counts as safe too (owner, 2026-11-03): when the tip is already contained in an origin branch, removing
+      // the worktree loses no commit. The lane's squash/rebase merges leave the tip off origin/main, so "ancestor"
+      // alone kept dozens of finished worktrees (~230M each) forever.
+      const pushed = !ancestor && !!run('git', ['-C', dir, 'for-each-ref', '--count=1', '--contains', 'HEAD', '--format=%(refname)', 'refs/remotes/origin']);
+      const merged = (ancestor || pushed) && !unstarted;   // an unstarted branch has no work of its own to be merged
       // Recent activity: the worktree's own git metadata, or its last commit. "clean" only means "no tracked file is
       // modified", so a worktree whose owner has not written anything yet is still work in progress (E51).
       const gitDir = isWorktree ? worktreeGitDir(dir, readFile) : null;
