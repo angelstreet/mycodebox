@@ -1179,39 +1179,53 @@ def legacy_call(args, stdin_data=None):
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def ssh_argv(args):
+def ssh_argv(args, watch=False):
     """The local command that runs `vpt-lease <args>` on the registry host. With a configured target: ssh that never
     prompts and keeps the connection alive for a long --wait; the remote side is forced to central mode and marked as
     forwarded so it can never forward again. Without a target, VPT_LEASE_LEGACY (an ssh wrapper to that host) is the transport."""
     if not CFG.ssh_target:
         return legacy_argv() + args
     env = "".join("%s=%s " % (k, shlex.quote(os.environ[k])) for k in ("VPT_DEPLOY_ID", "VPT_LEASE_AGENT") if os.environ.get(k))
+    if watch:      # the remote waiter ends (and cancels its ticket) when this stdin pipe closes, i.e. when we die, even by SIGKILL
+        env += "VPT_LEASE_STDIN_WATCH=1 "
     remote = env + "VPT_LEASE_MODE=central VPT_LEASE_FORWARDED=1 " + CFG.remote_cmd + "".join(" " + shlex.quote(x) for x in args)
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=4", CFG.ssh_target, remote]
 
 
-def ssh_call(args, capture=False, stdin=None, interruptible=False):
+SIGNALLED = []     # set when a signal reached an interruptible ssh call: the ssh exit that follows is ours, not a dropped connection
+
+
+def ssh_call(args, capture=False, stdin=None, interruptible=False, watch_stdin=False):
     """Run one forwarded call. Returns (code, stdout or ''); the remote exit code passes through exactly; an ssh connect
     failure (255) is UNAVAILABLE, never "free". stdin=None inherits ours (stdin passthrough)."""
     try:
-        p = subprocess.Popen(ssh_argv(args), stdin=stdin, stdout=subprocess.PIPE if capture else None)
+        p = subprocess.Popen(ssh_argv(args, watch_stdin), stdin=subprocess.PIPE if watch_stdin else stdin, stdout=subprocess.PIPE if capture else None)
     except (OSError, IndexError, ValueError) as e:
         eprint("vpt-lease: cannot run the ssh transport (%s): %s" % (CFG.ssh_target or CFG.legacy, e))
         return 1, ""
     old = {}
+    got = []
     if interruptible:         # a signal while waiting: drop the connection and report it
         def _fwd(sig, _f):
+            got.append(sig)
+            SIGNALLED.append(sig)
             with contextlib.suppress(OSError):
                 p.terminate()
         old = {s: signal.signal(s, _fwd) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
     try:
-        out, _ = p.communicate()
+        if watch_stdin:        # communicate() would close our end of the stdin pipe, which is the remote waiter's "client alive" signal
+            out = p.stdout.read() if capture else None
+            p.wait()
+        else:
+            out, _ = p.communicate()
     finally:
         for s, h in old.items():
             signal.signal(s, h)
     rc = p.returncode
-    if rc == 255:
+    if got:                        # ssh exits 255 on SIGTERM: that is our own kill, never "unreachable"
+        rc = 128 + got[-1]
+    elif rc == 255:
         eprint("UNAVAILABLE — the lease service cannot be reached over ssh (%s). Treat the platform as busy, not free." % (CFG.ssh_target or "transport"))
         rc = UNAVAILABLE
     elif rc < 0:
@@ -1260,33 +1274,47 @@ class SshHeartbeat(HeartbeatThread):
             eprint("vpt-lease: heartbeat failed (exit %d); keep going and retrying" % code)
 
 
-def cancel_stale_tickets(a):
-    """After an ssh drop the remote `claim --wait` may have left a ticket of ours: cancel our queued tickets for this claim
-    (best effort) so the re-claim does not queue behind its own ghost."""
+def our_tickets(a):
+    """The waiting tickets of this agent+env on the resources of this claim, as {id: ticket}; None when the registry cannot be listed."""
     code, out = ssh_call(["list", "--json"], capture=True, stdin=subprocess.DEVNULL)
     if code != 0:
-        return
+        return None
     try:
         tickets = json.loads(out).get("tickets") or []
     except ValueError:
-        return
+        return None
     want = sorted(legacy_res(x.lower(), a.env.lower()) for x in a.resources)
+    mine = {}
     for t in tickets:
         env = t.get("env", "")
         same = (t.get("any") or None) == (getattr(a, "any", None) or None) and bool(t.get("alternatives")) if picks_any(a) else \
             sorted(legacy_res(x, env) for x in t.get("resources") or []) == want
         if t.get("agent") == a.agent and env == a.env.lower() and same:
-            code, _ = ssh_call(["ticket", str(t.get("id")), "--cancel"], capture=True, stdin=subprocess.DEVNULL)
-            eprint("vpt-lease: cancelled stale ticket %s after the ssh connection dropped" % t.get("id") if code == 0 else
-                   "vpt-lease: could not cancel stale ticket %s (exit %d)" % (t.get("id"), code))
+            mine[str(t.get("id"))] = t
+    return mine
+
+
+def cancel_stale_tickets(a):
+    """After an ssh drop or our own kill the remote `claim --wait` may have left a ticket: cancel this agent's waiting tickets on
+    exactly these resources (best effort; a re-claim adopts such a ticket, so it is ours). Other agents' tickets are never touched."""
+    for tid in (our_tickets(a) or {}):
+        code, _ = ssh_call(["ticket", tid, "--cancel"], capture=True, stdin=subprocess.DEVNULL)
+        eprint("vpt-lease: cancelled stale ticket %s after the ssh connection dropped" % tid if code == 0 else
+               "vpt-lease: could not cancel stale ticket %s (exit %d)" % (tid, code))
 
 
 def ssh_claim_wait(a, args, capture):
     """A forwarded `claim --wait`: an ssh drop (255) is not an answer. Back off, cancel the ticket the dropped call left behind and
-    queue again, like the central client waits out an unreachable service. Any other code (and a signal) returns."""
+    queue again, like the central client waits out an unreachable service. Any other code returns. SIGTERM/SIGINT/SIGHUP end the
+    wait at once (the remote waiter also ends when our stdin pipe closes) and leave none of our tickets queued."""
     state = {}
     while True:
-        code, out = ssh_call(args, capture=capture, stdin=subprocess.DEVNULL if capture else None, interruptible=True)
+        del SIGNALLED[:]
+        code, out = ssh_call(args, capture=capture, stdin=None, interruptible=True, watch_stdin=True)
+        if SIGNALLED:
+            cancel_stale_tickets(a)
+            eprint("interrupted; ticket cancelled")
+            return code, out
         if code != UNAVAILABLE:
             return code, out
         backoff_sleep(state, "ssh to the registry host is down during claim --wait")
@@ -1736,6 +1764,13 @@ def main(argv=None):
     if mode in ("legacy", "shadow") and a.cmd in ("ticket", "heartbeat", "mode", "validate"):
         eprint("vpt-lease %s needs VPT_LEASE_MODE=central" % a.cmd)
         return 1
+    if a.cmd == "claim" and a.wait and os.environ.get("VPT_LEASE_STDIN_WATCH") and os.environ.get("VPT_LEASE_FORWARDED"):
+        def _watch():        # forwarded waiter: the ssh client holds our stdin open; EOF = it died, so cancel the ticket and exit
+            with contextlib.suppress(Exception):
+                while sys.stdin.buffer.read(4096):
+                    pass
+            os.kill(os.getpid(), signal.SIGTERM)
+        threading.Thread(target=_watch, daemon=True).start()
     if mode in ("central", "ssh") or a.cmd == "run":     # ssh mode only gets here for run
         def _term(_s, _f):
             raise KeyboardInterrupt        # lets a waiting claim cancel its ticket
